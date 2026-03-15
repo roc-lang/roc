@@ -22,8 +22,8 @@ const RocValue = @This();
 ptr: ?[*]const u8,
 /// Layout describing this value's memory representation.
 lay: Layout,
-/// When non-null, the layout index for this value — used to detect
-/// sentinel types such as `Idx.bool`.
+/// Optional layout index for callers that want to preserve the canonical
+/// layout handle alongside the materialized Layout value.
 layout_idx: ?Idx = null,
 
 /// Wrap an opaque pointer and its layout into a `RocValue`.
@@ -152,12 +152,6 @@ pub fn format(self: RocValue, allocator: std.mem.Allocator, ctx: FormatContext) 
                 return buf.toOwnedSlice();
             },
             .int => {
-                // Check for bool sentinel
-                if (self.layout_idx) |idx| {
-                    if (idx == Idx.bool) {
-                        return try allocator.dupe(u8, if (self.readBool()) "True" else "False");
-                    }
-                }
                 const precision = scalar.data.int;
                 return switch (precision) {
                     .u64, .u128 => try std.fmt.allocPrint(allocator, "{d}", .{self.readU128()}),
@@ -332,10 +326,6 @@ pub fn equals(self: RocValue, other: RocValue, ctx: FormatContext) bool {
             return switch (s_scalar.tag) {
                 .str => self.readStr().eql(other.readStr().*),
                 .int => {
-                    // Check for bool sentinel on both sides
-                    const s_bool = if (self.layout_idx) |idx| idx == Idx.bool else false;
-                    const o_bool = if (other.layout_idx) |idx| idx == Idx.bool else false;
-                    if (s_bool and o_bool) return self.readBool() == other.readBool();
                     // Compare as i128 (widened)
                     return self.readI128() == other.readI128();
                 },
@@ -441,33 +431,12 @@ fn getBoxedData(self: RocValue) ?[*]const u8 {
     return null;
 }
 
-test "format bool true" {
-    const allocator = std.testing.allocator;
-    // Build a bool layout (scalar int u8, with Idx.bool sentinel)
-    const bool_layout = Layout{
-        .tag = .scalar,
-        .data = .{ .scalar = .{ .data = .{ .int = .u8 }, .tag = .int } },
-    };
+test "readBool reads discriminant byte" {
     var true_byte: [1]u8 = .{1};
-    const val = RocValue{ .ptr = &true_byte, .lay = bool_layout, .layout_idx = Idx.bool };
-    const ctx = FormatContext{ .layout_store = undefined, .ident_store = null };
-    const result = try val.format(allocator, ctx);
-    defer allocator.free(result);
-    try std.testing.expectEqualStrings("True", result);
-}
-
-test "format bool false" {
-    const allocator = std.testing.allocator;
-    const bool_layout = Layout{
-        .tag = .scalar,
-        .data = .{ .scalar = .{ .data = .{ .int = .u8 }, .tag = .int } },
-    };
     var false_byte: [1]u8 = .{0};
-    const val = RocValue{ .ptr = &false_byte, .lay = bool_layout, .layout_idx = Idx.bool };
-    const ctx = FormatContext{ .layout_store = undefined, .ident_store = null };
-    const result = try val.format(allocator, ctx);
-    defer allocator.free(result);
-    try std.testing.expectEqualStrings("False", result);
+    const bool_layout = Layout.boolType();
+    try std.testing.expect((RocValue{ .ptr = &true_byte, .lay = bool_layout }).readBool());
+    try std.testing.expect(!(RocValue{ .ptr = &false_byte, .lay = bool_layout }).readBool());
 }
 
 test "format i64" {
@@ -558,21 +527,6 @@ test "format box_of_zst" {
     const result = try val.format(allocator, ctx);
     defer allocator.free(result);
     try std.testing.expectEqualStrings("Box({})", result);
-}
-
-test "equals bool" {
-    const bool_layout = Layout{
-        .tag = .scalar,
-        .data = .{ .scalar = .{ .data = .{ .int = .u8 }, .tag = .int } },
-    };
-    var t: [1]u8 = .{1};
-    var f: [1]u8 = .{0};
-    const vt = RocValue{ .ptr = &t, .lay = bool_layout, .layout_idx = Idx.bool };
-    const vf = RocValue{ .ptr = &f, .lay = bool_layout, .layout_idx = Idx.bool };
-    const ctx = FormatContext{ .layout_store = undefined, .ident_store = null };
-    try std.testing.expect(vt.equals(vt, ctx));
-    try std.testing.expect(vf.equals(vf, ctx));
-    try std.testing.expect(!vt.equals(vf, ctx));
 }
 
 test "equals i64" {

@@ -1119,15 +1119,6 @@ fn emitRcAtPtr(
             const variants = ls.getTagUnionVariants(tu_data);
             if (variants.len == 0) return;
 
-            if (variants.len == 1) {
-                const payload_layout_idx = variants.get(0).payload_layout;
-                const payload_layout = ls.getLayout(payload_layout_idx);
-                if (!ls.layoutContainsRefcounted(payload_layout)) return;
-                if (ls.layoutSizeAlign(payload_layout).size == 0) return;
-                try self.emitRcAtPtr(kind, value_ptr_local, payload_layout_idx, inc_count);
-                return;
-            }
-
             const disc_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalGet(value_ptr_local);
             try self.emitLoadBySize(tu_data.discriminant_size, tu_data.discriminant_offset);
@@ -2088,7 +2079,7 @@ fn bindCellValue(self: *Self, cell: Symbol, layout_idx: layout.Idx, expr_id: Lir
 /// Check whether a layout represents an unsigned integer type.
 fn isUnsignedLayout(layout_idx: layout.Idx) bool {
     return switch (layout_idx) {
-        .u8, .u16, .u32, .u64, .u128, .bool => true,
+        .u8, .u16, .u32, .u64, .u128 => true,
         else => false,
     };
 }

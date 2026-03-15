@@ -563,9 +563,10 @@ pub const Layout = packed struct {
         return Layout.frac(.dec);
     }
 
-    /// Bool layout - just a u8 discriminant for [True, False]
+    /// Canonical layout for any two-nullary tag union.
+    /// The shared layout store reserves tag-union metadata index 0 for this shape.
     pub fn boolType() Layout {
-        return Layout.int(.u8);
+        return Layout.tagUnion(.@"1", .{ .int_idx = 0 });
     }
 
     /// bool layout (alias for consistency)
@@ -738,11 +739,10 @@ test "Layout scalar data access" {
     try testing.expectEqual(ScalarTag.frac, frac_layout.data.scalar.tag);
     try testing.expectEqual(types.Frac.Precision.f64, frac_layout.data.scalar.data.frac);
 
-    // Test bool (now stored as u8)
+    // Test canonical two-nullary enum layout
     const bool_layout = Layout.boolType();
-    try testing.expectEqual(LayoutTag.scalar, bool_layout.tag);
-    try testing.expectEqual(ScalarTag.int, bool_layout.data.scalar.tag);
-    try testing.expectEqual(types.Int.Precision.u8, bool_layout.data.scalar.data.int);
+    try testing.expectEqual(LayoutTag.tag_union, bool_layout.tag);
+    try testing.expectEqual(@as(u16, 0), bool_layout.data.tag_union.idx.int_idx);
 
     // Test str
     const str_layout = Layout.str();
@@ -795,9 +795,8 @@ test "Scalar memory optimization - comprehensive coverage" {
     const testing = std.testing;
 
     const bool_layout = Layout.boolType();
-    try testing.expectEqual(LayoutTag.scalar, bool_layout.tag);
-    try testing.expectEqual(ScalarTag.int, bool_layout.data.scalar.tag);
-    try testing.expectEqual(types.Int.Precision.u8, bool_layout.data.scalar.data.int);
+    try testing.expectEqual(LayoutTag.tag_union, bool_layout.tag);
+    try testing.expectEqual(@as(u16, 0), bool_layout.data.tag_union.idx.int_idx);
 
     const str_layout = Layout.str();
     try testing.expectEqual(LayoutTag.scalar, str_layout.tag);

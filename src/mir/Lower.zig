@@ -85,6 +85,12 @@ current_pattern_scope: u64,
 /// App module index (for resolving `e_lookup_required` from platform modules)
 app_module_idx: ?u32,
 
+/// Optional for-clause type substitutions for lowering platform modules
+/// against concrete app types.
+type_scope: ?*const types.TypeScope,
+type_scope_module_idx: ?u32,
+type_scope_caller_module_idx: ?u32,
+
 /// Map from ((scope_key << 64) | (module_idx << 32 | CIR.Pattern.Idx)) → MIR.Symbol
 /// Used to resolve CIR local lookups to global symbols.
 pattern_symbols: std.AutoHashMap(u128, MIR.Symbol),
@@ -177,6 +183,9 @@ pub fn init(
         .current_module_idx = current_module_idx,
         .current_pattern_scope = 0,
         .app_module_idx = app_module_idx,
+        .type_scope = null,
+        .type_scope_module_idx = null,
+        .type_scope_caller_module_idx = null,
         .pattern_symbols = std.AutoHashMap(u128, MIR.Symbol).init(allocator),
         .type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(allocator),
         .nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(allocator),
@@ -224,6 +233,24 @@ pub fn deinit(self: *Self) void {
     self.scratch_captures.deinit();
     self.scratch_capture_bindings.deinit();
     self.mono_scratches.deinit();
+}
+
+/// Provide platform for-clause type substitutions for the given module so
+/// MIR monotype resolution can use the concrete caller types during lowering.
+pub fn setTypeScope(
+    self: *Self,
+    module_idx: u32,
+    type_scope: *const types.TypeScope,
+    caller_module_idx: u32,
+) Allocator.Error!void {
+    self.type_scope = type_scope;
+    self.type_scope_module_idx = module_idx;
+    self.type_scope_caller_module_idx = caller_module_idx;
+    try self.seedTypeScopeBindingsInStore(
+        self.current_module_idx,
+        self.types_store,
+        &self.type_var_seen,
+    );
 }
 
 const symbol_namespace_local: u64 = 0;
@@ -937,23 +964,17 @@ fn monotypeFromTypeVarInStoreWithBindings(
     module_idx: u32,
     store_types: *const types.Store,
     var_: types.Var,
-    bindings: *const std.AutoHashMap(types.Var, Monotype.Idx),
+    bindings: *std.AutoHashMap(types.Var, Monotype.Idx),
 ) Allocator.Error!Monotype.Idx {
     var local_cycles = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
     defer local_cycles.deinit();
 
-    const saved_ident_store = self.mono_scratches.ident_store;
-    self.mono_scratches.ident_store = self.all_module_envs[module_idx].getIdentStoreConst();
-    defer self.mono_scratches.ident_store = saved_ident_store;
-
-    return self.store.monotype_store.fromTypeVar(
-        self.allocator,
+    return self.monotypeFromTypeVarWithBindings(
+        module_idx,
         store_types,
         var_,
-        ModuleEnv.CommonIdents.find(&self.all_module_envs[module_idx].common),
         bindings,
         &local_cycles,
-        &self.mono_scratches,
     );
 }
 
@@ -1038,6 +1059,130 @@ fn bindTypeVarMonotypesInStore(
         },
         .err => {},
     }
+}
+
+fn seedTypeScopeBindingsInStore(
+    self: *Self,
+    module_idx: u32,
+    store_types: *const types.Store,
+    bindings: *std.AutoHashMap(types.Var, Monotype.Idx),
+) Allocator.Error!void {
+    const type_scope = self.type_scope orelse return;
+    const type_scope_module_idx = self.type_scope_module_idx orelse return;
+    const caller_module_idx = self.type_scope_caller_module_idx orelse return;
+
+    if (module_idx != type_scope_module_idx) return;
+
+    const common_idents = ModuleEnv.CommonIdents.find(&self.all_module_envs[module_idx].common);
+    const caller_types = &self.all_module_envs[caller_module_idx].types;
+
+    for (type_scope.scopes.items) |*scope| {
+        var it = scope.iterator();
+        while (it.next()) |entry| {
+            const platform_var = entry.key_ptr.*;
+            const caller_var = entry.value_ptr.*;
+            const caller_mono = try self.monotypeFromTypeVarInStore(
+                caller_module_idx,
+                caller_types,
+                caller_var,
+            );
+            if (caller_mono.isNone()) continue;
+            const normalized_mono = if (caller_module_idx == module_idx)
+                caller_mono
+            else
+                try self.remapMonotypeBetweenModules(caller_mono, caller_module_idx, module_idx);
+            try self.bindTypeVarMonotypesInStore(
+                store_types,
+                common_idents,
+                bindings,
+                platform_var,
+                normalized_mono,
+            );
+        }
+    }
+}
+
+fn bindNamedTypeScopeMatchInStore(
+    self: *Self,
+    module_idx: u32,
+    store_types: *const types.Store,
+    resolved: types.store.ResolvedVarDesc,
+    bindings: *std.AutoHashMap(types.Var, Monotype.Idx),
+) Allocator.Error!void {
+    const type_scope = self.type_scope orelse return;
+    const type_scope_module_idx = self.type_scope_module_idx orelse return;
+    const caller_module_idx = self.type_scope_caller_module_idx orelse return;
+
+    if (module_idx != type_scope_module_idx) return;
+    if (bindings.contains(resolved.var_)) return;
+
+    const current_name = switch (resolved.desc.content) {
+        .rigid => |rigid| rigid.name,
+        .flex => |flex| flex.name orelse return,
+        else => return,
+    };
+
+    const common_idents = ModuleEnv.CommonIdents.find(&self.all_module_envs[module_idx].common);
+    const caller_types = &self.all_module_envs[caller_module_idx].types;
+
+    for (type_scope.scopes.items) |*scope| {
+        var it = scope.iterator();
+        while (it.next()) |entry| {
+            const platform_resolved = store_types.resolveVar(entry.key_ptr.*);
+            const platform_name = switch (platform_resolved.desc.content) {
+                .rigid => |rigid| rigid.name,
+                .flex => |flex| flex.name orelse continue,
+                else => continue,
+            };
+            if (!platform_name.eql(current_name)) continue;
+
+            const caller_mono = try self.monotypeFromTypeVarInStore(
+                caller_module_idx,
+                caller_types,
+                entry.value_ptr.*,
+            );
+            if (caller_mono.isNone()) continue;
+            const normalized_mono = if (caller_module_idx == module_idx)
+                caller_mono
+            else
+                try self.remapMonotypeBetweenModules(caller_mono, caller_module_idx, module_idx);
+
+            try self.bindTypeVarMonotypesInStore(
+                store_types,
+                common_idents,
+                bindings,
+                resolved.var_,
+                normalized_mono,
+            );
+            return;
+        }
+    }
+}
+
+fn monotypeFromTypeVarWithBindings(
+    self: *Self,
+    module_idx: u32,
+    store_types: *const types.Store,
+    var_: types.Var,
+    bindings: *std.AutoHashMap(types.Var, Monotype.Idx),
+    cycles: *std.AutoHashMap(types.Var, Monotype.Idx),
+) Allocator.Error!Monotype.Idx {
+    const saved_ident_store = self.mono_scratches.ident_store;
+    self.mono_scratches.ident_store = self.all_module_envs[module_idx].getIdentStoreConst();
+    defer self.mono_scratches.ident_store = saved_ident_store;
+
+    try self.seedTypeScopeBindingsInStore(module_idx, store_types, bindings);
+    try self.bindNamedTypeScopeMatchInStore(module_idx, store_types, store_types.resolveVar(var_), bindings);
+
+    return self.store.monotype_store.fromTypeVar(
+        self.allocator,
+        store_types,
+        var_,
+        ModuleEnv.CommonIdents.find(&self.all_module_envs[module_idx].common),
+        bindings,
+        cycles,
+        &self.mono_scratches,
+    );
 }
 
 fn bindFlatTypeMonotypesInStore(
@@ -1512,19 +1657,6 @@ fn lowerStrInspektRecord(
     const save_exprs = self.scratch_expr_ids.top();
     defer self.scratch_expr_ids.clearFrom(save_exprs);
 
-    if (collected.items.len == 1) {
-        const field = collected.items[0];
-        const field_name = type_env.getIdent(field.name);
-        const field_mono = try self.monotypeFromTypeVarInEnv(type_env, field.var_);
-        const field_expr = try self.emitMirStructAccess(value_expr, 0, field_mono, region);
-        const open = try std.fmt.allocPrint(self.allocator, "{{ {s}: ", .{field_name});
-        defer self.allocator.free(open);
-        try self.scratch_expr_ids.append(try self.emitMirStrLiteral(open, region));
-        try self.scratch_expr_ids.append(try self.lowerStrInspektExpr(type_env, field_expr, field.var_, region));
-        try self.scratch_expr_ids.append(try self.emitMirStrLiteral(" }", region));
-        return self.foldMirStrConcat(self.scratch_expr_ids.sliceFromStart(save_exprs), region);
-    }
-
     try self.scratch_expr_ids.append(try self.emitMirStrLiteral("{ ", region));
     for (collected.items, 0..) |field, i| {
         if (i > 0) {
@@ -1567,19 +1699,6 @@ fn lowerStrInspektRecordUnbound(
 
     const save_exprs = self.scratch_expr_ids.top();
     defer self.scratch_expr_ids.clearFrom(save_exprs);
-
-    if (collected.items.len == 1) {
-        const field = collected.items[0];
-        const field_name = type_env.getIdent(field.name);
-        const field_mono = try self.monotypeFromTypeVarInEnv(type_env, field.var_);
-        const field_expr = try self.emitMirStructAccess(value_expr, 0, field_mono, region);
-        const open = try std.fmt.allocPrint(self.allocator, "{{ {s}: ", .{field_name});
-        defer self.allocator.free(open);
-        try self.scratch_expr_ids.append(try self.emitMirStrLiteral(open, region));
-        try self.scratch_expr_ids.append(try self.lowerStrInspektExpr(type_env, field_expr, field.var_, region));
-        try self.scratch_expr_ids.append(try self.emitMirStrLiteral(" }", region));
-        return self.foldMirStrConcat(self.scratch_expr_ids.sliceFromStart(save_exprs), region);
-    }
 
     try self.scratch_expr_ids.append(try self.emitMirStrLiteral("{ ", region));
     for (collected.items, 0..) |field, i| {
@@ -1920,16 +2039,6 @@ fn lowerStrInspektRecordByMonotype(
 
     const save_exprs = self.scratch_expr_ids.top();
     defer self.scratch_expr_ids.clearFrom(save_exprs);
-
-    if (fields.len == 1) {
-        const field_name = module_env.getIdent(fields[0].name);
-        const open = try std.fmt.allocPrint(self.allocator, "{{ {s}: ", .{field_name});
-        defer self.allocator.free(open);
-        try self.scratch_expr_ids.append(try self.emitMirStrLiteral(open, region));
-        try self.scratch_expr_ids.append(try self.lowerStrInspektExprByMonotype(module_env, value_expr, fields[0].type_idx, region));
-        try self.scratch_expr_ids.append(try self.emitMirStrLiteral(" }", region));
-        return self.foldMirStrConcat(self.scratch_expr_ids.sliceFromStart(save_exprs), region);
-    }
 
     try self.scratch_expr_ids.append(try self.emitMirStrLiteral("{ ", region));
     for (0..field_span.len) |i| {
@@ -2373,14 +2482,12 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                 }
             }
 
-            const pattern_monotype = try self.store.monotype_store.fromTypeVar(
-                self.allocator,
+            const pattern_monotype = try self.monotypeFromTypeVarWithBindings(
+                self.current_module_idx,
                 self.types_store,
                 ModuleEnv.varFrom(lookup.pattern_idx),
-                self.currentCommonIdents(),
                 &self.type_var_seen,
                 &self.nominal_cycle_breakers,
-                &self.mono_scratches,
             );
             if (try self.monotypesStructurallyEqual(pattern_monotype, monotype)) {
                 return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, pattern_monotype, region);
@@ -2996,14 +3103,12 @@ fn monotypesStructurallyEqualRec(
 /// Get the monotype for a CIR expression (via its type var).
 fn resolveMonotype(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!Monotype.Idx {
     const type_var = ModuleEnv.varFrom(expr_idx);
-    return try self.store.monotype_store.fromTypeVar(
-        self.allocator,
+    return try self.monotypeFromTypeVarWithBindings(
+        self.current_module_idx,
         self.types_store,
         type_var,
-        self.currentCommonIdents(),
         &self.type_var_seen,
         &self.nominal_cycle_breakers,
-        &self.mono_scratches,
     );
 }
 
@@ -3057,14 +3162,12 @@ fn lowerPatternSpan(self: *Self, module_env: *const ModuleEnv, span: CIR.Pattern
 fn lowerPattern(self: *Self, module_env: *const ModuleEnv, pattern_idx: CIR.Pattern.Idx) Allocator.Error!MIR.PatternId {
     const pattern = module_env.store.getPattern(pattern_idx);
     const type_var = ModuleEnv.varFrom(pattern_idx);
-    const monotype = try self.store.monotype_store.fromTypeVar(
-        self.allocator,
+    const monotype = try self.monotypeFromTypeVarWithBindings(
+        self.current_module_idx,
         self.types_store,
         type_var,
-        self.currentCommonIdents(),
         &self.type_var_seen,
         &self.nominal_cycle_breakers,
-        &self.mono_scratches,
     );
 
     return switch (pattern) {
@@ -3293,14 +3396,12 @@ fn lowerClosure(self: *Self, module_env: *const ModuleEnv, closure: CIR.Expr.Clo
         const outer_symbol = try self.patternToSymbol(cap.pattern_idx);
         // Get the monotype of the captured variable
         const cap_type_var = ModuleEnv.varFrom(cap.pattern_idx);
-        const cap_monotype = try self.store.monotype_store.fromTypeVar(
-            self.allocator,
+        const cap_monotype = try self.monotypeFromTypeVarWithBindings(
+            self.current_module_idx,
             self.types_store,
             cap_type_var,
-            self.currentCommonIdents(),
             &self.type_var_seen,
             &self.nominal_cycle_breakers,
-            &self.mono_scratches,
         );
         try self.mono_scratches.idxs.append(cap_monotype);
 
@@ -3583,6 +3684,10 @@ fn lowerCallWithLoweredFunc(
 ) Allocator.Error!MIR.ExprId {
     const lowered_func = try self.stabilizeEscapingFunctionExpr(lowered_func_input);
     const func_mono = self.store.typeOf(lowered_func);
+    const call_result_monotype = switch (self.store.monotype_store.getMonotype(func_mono)) {
+        .func => |f| f.ret,
+        else => monotype,
+    };
     if (self.store.monotype_store.getMonotype(func_mono) == .func and self.store.getExpr(lowered_func) != .lookup) {
         const func_bind = try self.makeSyntheticBind(func_mono, false);
         try self.registerBoundSymbolDefIfNeeded(func_bind.pattern, lowered_func);
@@ -3599,7 +3704,7 @@ fn lowerCallWithLoweredFunc(
         const call_expr = try self.store.addExpr(self.allocator, .{ .call = .{
             .func = func_lookup,
             .args = args,
-        } }, monotype, region);
+        } }, call_result_monotype, region);
 
         const stmts = try self.store.addStmts(self.allocator, &.{MIR.Stmt{
             .decl_const = .{ .pattern = func_bind.pattern, .expr = lowered_func },
@@ -3608,7 +3713,7 @@ fn lowerCallWithLoweredFunc(
         return try self.store.addExpr(self.allocator, .{ .block = .{
             .stmts = stmts,
             .final_expr = call_expr,
-        } }, monotype, region);
+        } }, call_result_monotype, region);
     }
     const func = lowered_func;
 
@@ -3624,7 +3729,7 @@ fn lowerCallWithLoweredFunc(
     return try self.store.addExpr(self.allocator, .{ .call = .{
         .func = func,
         .args = args,
-    } }, monotype, region);
+    } }, call_result_monotype, region);
 }
 
 fn getCallLowLevelOp(self: *Self, caller_env: *const ModuleEnv, func_expr: CIR.Expr) ?CIR.Expr.LowLevel {
@@ -4704,14 +4809,12 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
         }
 
         var expected_param_monos: []const Monotype.Idx = &.{};
-        const dispatch_func_monotype = try self.store.monotype_store.fromTypeVar(
-            self.allocator,
+        const dispatch_func_monotype = try self.monotypeFromTypeVarWithBindings(
+            self.current_module_idx,
             self.types_store,
             resolved_target.fn_var,
-            self.currentCommonIdents(),
             &self.type_var_seen,
             &self.nominal_cycle_breakers,
-            &self.mono_scratches,
         );
         if (!dispatch_func_monotype.isNone()) {
             const dispatch_mono = self.store.monotype_store.getMonotype(dispatch_func_monotype);
@@ -4754,14 +4857,12 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
         }
 
         const method_func_monotype = blk: {
-            const refined = try self.store.monotype_store.fromTypeVar(
-                self.allocator,
+            const refined = try self.monotypeFromTypeVarWithBindings(
+                self.current_module_idx,
                 self.types_store,
                 resolved_target.fn_var,
-                self.currentCommonIdents(),
                 &self.type_var_seen,
                 &self.nominal_cycle_breakers,
-                &self.mono_scratches,
             );
             if (!refined.isNone()) {
                 const refined_mono = self.store.monotype_store.getMonotype(refined);
@@ -4785,6 +4886,10 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
                 method_effectful,
             );
         };
+        const call_result_monotype = switch (self.store.monotype_store.getMonotype(method_func_monotype)) {
+            .func => |f| f.ret,
+            else => monotype,
+        };
 
         // Ensure the method body is lowered so codegen can find it.
         const lowered_method_symbol = try self.specializeMethod(method_symbol, method_func_monotype);
@@ -4795,7 +4900,7 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
         return try self.store.addExpr(self.allocator, .{ .call = .{
             .func = func_expr,
             .args = args,
-        } }, monotype, region);
+        } }, call_result_monotype, region);
     } else {
         // Field access
         const receiver = try self.lowerExpr(da.receiver);
@@ -5141,14 +5246,12 @@ fn resolveDispatchTargetForDotCall(
 
         if (first_candidate == null) first_candidate = candidate;
 
-        const fn_mono = try self.store.monotype_store.fromTypeVar(
-            self.allocator,
+        const fn_mono = try self.monotypeFromTypeVarWithBindings(
+            self.current_module_idx,
             self.types_store,
             constraint.fn_var,
-            self.currentCommonIdents(),
             &self.type_var_seen,
             &self.nominal_cycle_breakers,
-            &self.mono_scratches,
         );
         if (fn_mono.isNone()) {
             if (!constraint.resolved_target.isNone()) {
@@ -5194,14 +5297,12 @@ fn resolveUnresolvedTypeVarDispatchTarget(
     method_name: Ident.Idx,
     constraint: types.StaticDispatchConstraint,
 ) Allocator.Error!ResolvedDispatchTarget {
-    const desired_func_monotype = try self.store.monotype_store.fromTypeVar(
-        self.allocator,
+    const desired_func_monotype = try self.monotypeFromTypeVarWithBindings(
+        self.current_module_idx,
         self.types_store,
         constraint.fn_var,
-        self.currentCommonIdents(),
         &self.type_var_seen,
         &self.nominal_cycle_breakers,
-        &self.mono_scratches,
     );
     if (desired_func_monotype.isNone()) {
         if (std.debug.runtime_safety) {
@@ -5306,14 +5407,12 @@ fn monotypeFromTypeVarInStore(
     self.mono_scratches.ident_store = self.all_module_envs[module_idx].getIdentStoreConst();
     defer self.mono_scratches.ident_store = saved_ident_store;
 
-    return self.store.monotype_store.fromTypeVar(
-        self.allocator,
+    return self.monotypeFromTypeVarWithBindings(
+        module_idx,
         store_types,
         var_,
-        ModuleEnv.CommonIdents.find(&self.all_module_envs[module_idx].common),
         &local_seen,
         &local_cycles,
-        &self.mono_scratches,
     );
 }
 
@@ -5573,14 +5672,12 @@ fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.E
                 if (!active.isNone()) break :blk active;
             }
 
-            const derived = try self.store.monotype_store.fromTypeVar(
-                self.allocator,
+            const derived = try self.monotypeFromTypeVarWithBindings(
+                self.current_module_idx,
                 self.types_store,
                 target_type_var,
-                self.currentCommonIdents(),
                 &self.type_var_seen,
                 &self.nominal_cycle_breakers,
-                &self.mono_scratches,
             );
             if (!derived.isNone()) break :blk derived;
 
@@ -5620,6 +5717,12 @@ fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.E
     // and rigid vars to an earlier specialization.
     self.type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
     self.nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+
+    try self.seedTypeScopeBindingsInStore(
+        self.current_module_idx,
+        self.types_store,
+        &self.type_var_seen,
+    );
 
     // Pre-bind type_var_seen with the caller's concrete types so that
     // flex/rigid vars in the definition resolve to concrete monotypes instead

@@ -134,11 +134,23 @@ test "fromTypeVar - bool type" {
     const bool_layout = layout.Layout.boolType();
     const bool_layout_idx = try lt.layout_store.insertLayout(bool_layout);
 
+    try testing.expectEqual(layout.Idx.bool, bool_layout_idx);
     const retrieved_layout = lt.layout_store.getLayout(bool_layout_idx);
-    try testing.expect(retrieved_layout.tag == .scalar);
-    try testing.expectEqual(layout.ScalarTag.int, retrieved_layout.data.scalar.tag);
-    try testing.expectEqual(types.Int.Precision.u8, retrieved_layout.data.scalar.data.int);
+    try testing.expect(retrieved_layout.tag == .tag_union);
+    const tu_data = lt.layout_store.getTagUnionData(retrieved_layout.data.tag_union.idx);
+    try testing.expectEqual(@as(u8, 1), tu_data.discriminant_size);
+    try testing.expectEqual(@as(u16, 0), tu_data.discriminant_offset);
+    try testing.expectEqual(@as(u32, 2), tu_data.variants.count);
     try testing.expectEqual(@as(u32, 1), lt.layout_store.layoutSize(retrieved_layout));
+}
+
+test "putTagUnion interns two-nullary enums to canonical bool layout" {
+    var lt = try LayoutTest.init(testing.allocator);
+    try lt.initLayoutStore();
+    defer lt.deinit();
+
+    const enum_layout = try lt.layout_store.putTagUnion(&.{ .zst, .zst });
+    try testing.expectEqual(layout.Idx.bool, enum_layout);
 }
 
 test "fromTypeVar - unresolved boxed type vars use box_of_zst" {
@@ -948,13 +960,20 @@ test "fromTypeVar - recursive nominal with Box has no double-boxing (issue #8916
         }
     }
 
-    // The Suc variant's payload should be Box(Nat), which means its layout should be .box
+    // The Suc variant's payload should be a canonical single-field payload container
+    // whose only field is Box(Nat).
     const suc_payload_layout = lt.layout_store.getLayout(variants.get(suc_variant_idx).payload_layout);
-    try testing.expect(suc_payload_layout.tag == .box);
+    try testing.expect(suc_payload_layout.tag == .struct_);
+
+    const payload_data = lt.layout_store.getStructData(suc_payload_layout.data.struct_.idx);
+    const payload_fields = lt.layout_store.struct_fields.sliceRange(payload_data.getFields());
+    try testing.expectEqual(@as(usize, 1), payload_fields.len);
+    try testing.expectEqual(@as(u16, 0), payload_fields.get(0).index);
+    try testing.expect(lt.layout_store.getLayout(payload_fields.get(0).layout).tag == .box);
 
     // CRITICAL: The element of this Box should be a tag_union, NOT another box.
     // Before the fix, this would be .box (double-boxing bug).
-    const box_elem_idx = suc_payload_layout.data.box;
+    const box_elem_idx = lt.layout_store.getLayout(payload_fields.get(0).layout).data.box;
     const box_elem_layout = lt.layout_store.getLayout(box_elem_idx);
     try testing.expect(box_elem_layout.tag == .tag_union);
 }
@@ -1236,6 +1255,109 @@ test "type and monotype layout resolvers agree for nested ordinary data layouts"
     });
 
     try expectTypeAndMonotypeResolversAgree(testing.allocator, &lt, record_var);
+}
+
+test "type and monotype layout resolvers preserve singleton ordinary-data structs" {
+    var lt = try LayoutTest.initWithIdents(testing.allocator);
+    defer lt.deinit();
+
+    const builtin_module_idx = try lt.module_env.insertIdent(base.Ident.for_text("Builtin"));
+    lt.module_env.idents.builtin_module = builtin_module_idx;
+    try lt.initLayoutStore();
+
+    const unit_var = try lt.type_store.freshFromContent(.{ .structure = .empty_record });
+    const u64_var = try lt.type_store.freshFromContent(try lt.type_store.mkNominal(
+        .{ .ident_idx = lt.module_env.idents.u64_type },
+        unit_var,
+        &[_]types.Var{},
+        builtin_module_idx,
+        false,
+    ));
+
+    const record_fields = try lt.type_store.record_fields.appendSlice(testing.allocator, &[_]types.RecordField{
+        .{ .name = try lt.module_env.insertIdent(Ident.for_text("only")), .var_ = u64_var },
+    });
+    const record_var = try lt.type_store.freshFromContent(.{
+        .structure = .{ .record = .{
+            .fields = record_fields,
+            .ext = try lt.type_store.freshFromContent(.{ .structure = .empty_record }),
+        } },
+    });
+
+    const tuple_vars = try lt.type_store.appendVars(&[_]types.Var{u64_var});
+    const tuple_var = try lt.type_store.freshFromContent(.{
+        .structure = .{ .tuple = .{ .elems = tuple_vars } },
+    });
+
+    try expectTypeAndMonotypeResolversAgree(testing.allocator, &lt, record_var);
+    try expectTypeAndMonotypeResolversAgree(testing.allocator, &lt, tuple_var);
+
+    const record_layout_idx = try resolveTypeVar(&lt, record_var);
+    const record_layout = lt.layout_store.getLayout(record_layout_idx);
+    try testing.expect(record_layout.tag == .struct_);
+    const record_data = lt.layout_store.getStructData(record_layout.data.struct_.idx);
+    const record_layout_fields = lt.layout_store.struct_fields.sliceRange(record_data.getFields());
+    try testing.expectEqual(@as(usize, 1), record_layout_fields.len);
+    try testing.expectEqual(@as(u16, 0), record_layout_fields.get(0).index);
+    try testing.expectEqual(layout.Idx.u64, record_layout_fields.get(0).layout);
+
+    const tuple_layout_idx = try resolveTypeVar(&lt, tuple_var);
+    const tuple_layout = lt.layout_store.getLayout(tuple_layout_idx);
+    try testing.expect(tuple_layout.tag == .struct_);
+    const tuple_data = lt.layout_store.getStructData(tuple_layout.data.struct_.idx);
+    const tuple_layout_fields = lt.layout_store.struct_fields.sliceRange(tuple_data.getFields());
+    try testing.expectEqual(@as(usize, 1), tuple_layout_fields.len);
+    try testing.expectEqual(@as(u16, 0), tuple_layout_fields.get(0).index);
+    try testing.expectEqual(layout.Idx.u64, tuple_layout_fields.get(0).layout);
+}
+
+test "type and monotype layout resolvers preserve singleton tag payload containers" {
+    var lt = try LayoutTest.initWithIdents(testing.allocator);
+    defer lt.deinit();
+
+    const builtin_module_idx = try lt.module_env.insertIdent(base.Ident.for_text("Builtin"));
+    lt.module_env.idents.builtin_module = builtin_module_idx;
+    try lt.initLayoutStore();
+
+    const unit_var = try lt.type_store.freshFromContent(.{ .structure = .empty_record });
+    const u64_var = try lt.type_store.freshFromContent(try lt.type_store.mkNominal(
+        .{ .ident_idx = lt.module_env.idents.u64_type },
+        unit_var,
+        &[_]types.Var{},
+        builtin_module_idx,
+        false,
+    ));
+
+    const only_tag = types.Tag{
+        .name = try lt.module_env.insertIdent(Ident.for_text("Only")),
+        .args = try lt.type_store.appendVars(&[_]types.Var{u64_var}),
+    };
+    const tags_range = try lt.type_store.appendTags(&[_]types.Tag{only_tag});
+    const tag_union = types.TagUnion{
+        .tags = tags_range,
+        .ext = try lt.type_store.freshFromContent(.{ .structure = .empty_tag_union }),
+    };
+    const tag_union_var = try lt.type_store.freshFromContent(.{ .structure = .{ .tag_union = tag_union } });
+
+    try expectTypeAndMonotypeResolversAgree(testing.allocator, &lt, tag_union_var);
+
+    const union_layout_idx = try resolveTypeVar(&lt, tag_union_var);
+    const union_layout = lt.layout_store.getLayout(union_layout_idx);
+    try testing.expect(union_layout.tag == .tag_union);
+
+    const tu_data = lt.layout_store.getTagUnionData(union_layout.data.tag_union.idx);
+    const variants = lt.layout_store.getTagUnionVariants(tu_data);
+    try testing.expectEqual(@as(usize, 1), variants.len);
+
+    const payload_layout_idx = variants.get(0).payload_layout;
+    const payload_layout = lt.layout_store.getLayout(payload_layout_idx);
+    try testing.expect(payload_layout.tag == .struct_);
+
+    const payload_data = lt.layout_store.getStructData(payload_layout.data.struct_.idx);
+    const payload_fields = lt.layout_store.struct_fields.sliceRange(payload_data.getFields());
+    try testing.expectEqual(@as(usize, 1), payload_fields.len);
+    try testing.expectEqual(@as(u16, 0), payload_fields.get(0).index);
+    try testing.expectEqual(layout.Idx.u64, payload_fields.get(0).layout);
 }
 
 test "type and monotype layout resolvers agree for recursive nominal layouts" {

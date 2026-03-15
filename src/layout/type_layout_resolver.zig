@@ -56,7 +56,7 @@ const ResolvedInput = struct {
 /// Unlike the MIR monotype resolver, this one must preserve type-side concerns such as:
 /// - `type_scope` substitutions
 /// - caller-vs-target module ownership for polymorphic substitutions
-/// - builtin nominal recognition (`Str`, `Bool`, `List`, `Box`, numeric builtins)
+/// - builtin nominal recognition (`Str`, `List`, `Box`, numeric builtins)
 /// - recursive nominal cycle handling before MIR erases those distinctions
 pub const Resolver = struct {
     store: *Store,
@@ -212,9 +212,6 @@ pub const Resolver = struct {
     ) std.mem.Allocator.Error!GraphRef {
         if (self.isBuiltinStr(module_idx, nominal_type)) {
             return .{ .canonical = .str };
-        }
-        if (self.isBuiltinBool(module_idx, nominal_type)) {
-            return .{ .canonical = .bool };
         }
         if (self.builtinNumericLayout(module_idx, nominal_type)) |layout_idx| {
             return .{ .canonical = layout_idx };
@@ -434,17 +431,6 @@ pub const Resolver = struct {
         build_state: *BuildState,
     ) std.mem.Allocator.Error!GraphRef {
         if (payload_vars.len == 0) return .{ .canonical = .zst };
-        if (payload_vars.len == 1) {
-            return self.buildRefForVar(
-                module_idx,
-                payload_vars[0],
-                type_scope,
-                caller_module_idx,
-                .ordinary,
-                build_state,
-            );
-        }
-
         var fields = std.ArrayList(GraphField).empty;
         defer fields.deinit(self.allocator);
         try fields.ensureTotalCapacity(self.allocator, payload_vars.len);
@@ -708,12 +694,6 @@ pub const Resolver = struct {
         const env = self.envFor(module_idx);
         return nominal_type.origin_module.eql(env.idents.builtin_module) and
             nominal_type.ident.ident_idx.eql(env.idents.str);
-    }
-
-    fn isBuiltinBool(self: *const Resolver, module_idx: u32, nominal_type: types.NominalType) bool {
-        const env = self.envFor(module_idx);
-        return nominal_type.ident.ident_idx.eql(env.idents.bool_type) or
-            (nominal_type.origin_module.eql(env.idents.builtin_module) and nominal_type.ident.ident_idx.eql(env.idents.bool));
     }
 
     fn isBuiltinList(self: *const Resolver, module_idx: u32, nominal_type: types.NominalType) bool {

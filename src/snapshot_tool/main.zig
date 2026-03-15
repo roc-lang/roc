@@ -3855,6 +3855,52 @@ fn processDevObjectSnapshot(
     var type_layout_resolver = layout_mod.TypeLayoutResolver.init(&layout_store);
     defer type_layout_resolver.deinit();
 
+    const findTypeAliasBodyVar = struct {
+        fn run(module_env: *const can.ModuleEnv, name: base.Ident.Idx) ?types.Var {
+            const stmts_slice = module_env.store.sliceStatements(module_env.all_statements);
+            for (stmts_slice) |stmt_idx| {
+                const stmt = module_env.store.getStatement(stmt_idx);
+                switch (stmt) {
+                    .s_alias_decl => |alias| {
+                        const header = module_env.store.getTypeHeader(alias.header);
+                        if (header.relative_name.eql(name)) {
+                            return can.ModuleEnv.varFrom(alias.anno);
+                        }
+                    },
+                    else => {},
+                }
+            }
+            return null;
+        }
+    }.run;
+
+    var platform_type_scope = types.TypeScope.init(allocator);
+    defer platform_type_scope.deinit();
+
+    if (app_module_idx) |resolved_app_module_idx| {
+        try platform_type_scope.scopes.append(types.VarMap.init(allocator));
+        const rigid_scope = &platform_type_scope.scopes.items[0];
+        const app_env = all_module_envs[resolved_app_module_idx];
+        const platform_env = all_module_envs[platform_module_idx];
+        const all_aliases = platform_env.for_clause_aliases.items.items;
+
+        for (platform_env.requires_types.items.items) |required_type| {
+            const type_aliases_slice = all_aliases[@intFromEnum(required_type.type_aliases.start)..][0..required_type.type_aliases.count];
+            for (type_aliases_slice) |alias| {
+                const alias_stmt = platform_env.store.getStatement(alias.alias_stmt_idx);
+                std.debug.assert(alias_stmt == .s_alias_decl);
+                const alias_body_var = can.ModuleEnv.varFrom(alias_stmt.s_alias_decl.anno);
+                const alias_stmt_var = can.ModuleEnv.varFrom(alias.alias_stmt_idx);
+                const app_alias_name = app_env.common.findIdent(platform_env.getIdentText(alias.alias_name)) orelse continue;
+                const app_var = findTypeAliasBodyVar(app_env, app_alias_name) orelse continue;
+                try rigid_scope.put(alias_body_var, app_var);
+                try rigid_scope.put(alias_stmt_var, app_var);
+            }
+        }
+
+        try mir_lower.setTypeScope(platform_module_idx, &platform_type_scope, resolved_app_module_idx);
+    }
+
     // Match provides entries to platform defs and lower them
     const platform_defs = platform_module.env.store.sliceDefs(platform_module.env.all_defs);
     for (provides_entries) |entry| {
@@ -3869,9 +3915,12 @@ fn processDevObjectSnapshot(
                         const mir_expr_id = mir_lower.lowerExpr(def.expr) catch continue;
 
                         const type_var = can.ModuleEnv.varFrom(def.expr);
-                        var scope = types.TypeScope.init(allocator);
-                        defer scope.deinit();
-                        const ret_layout = type_layout_resolver.resolve(platform_module_idx, type_var, &scope, null) catch continue;
+                        const ret_layout = type_layout_resolver.resolve(
+                            platform_module_idx,
+                            type_var,
+                            &platform_type_scope,
+                            app_module_idx,
+                        ) catch continue;
 
                         pending_entrypoints.append(allocator, .{
                             .ffi_symbol = entry.ffi_symbol,

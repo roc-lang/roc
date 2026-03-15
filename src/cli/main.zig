@@ -3993,6 +3993,53 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     var type_layout_resolver = layout.TypeLayoutResolver.init(&layout_store);
     defer type_layout_resolver.deinit();
 
+    const types_mod = @import("types");
+    const findTypeAliasBodyVar = struct {
+        fn run(module_env: *const can.ModuleEnv, name: base.Ident.Idx) ?types_mod.Var {
+            const stmts_slice = module_env.store.sliceStatements(module_env.all_statements);
+            for (stmts_slice) |stmt_idx| {
+                const stmt = module_env.store.getStatement(stmt_idx);
+                switch (stmt) {
+                    .s_alias_decl => |alias| {
+                        const header = module_env.store.getTypeHeader(alias.header);
+                        if (header.relative_name.eql(name)) {
+                            return can.ModuleEnv.varFrom(alias.anno);
+                        }
+                    },
+                    else => {},
+                }
+            }
+            return null;
+        }
+    }.run;
+
+    var platform_type_scope = types_mod.TypeScope.init(ctx.gpa);
+    defer platform_type_scope.deinit();
+
+    if (app_module_idx) |resolved_app_module_idx| {
+        try platform_type_scope.scopes.append(types_mod.VarMap.init(ctx.gpa));
+        const rigid_scope = &platform_type_scope.scopes.items[0];
+        const app_env = all_module_envs[resolved_app_module_idx];
+        const platform_env = all_module_envs[platform_module_idx];
+        const all_aliases = platform_env.for_clause_aliases.items.items;
+
+        for (platform_env.requires_types.items.items) |required_type| {
+            const type_aliases_slice = all_aliases[@intFromEnum(required_type.type_aliases.start)..][0..required_type.type_aliases.count];
+            for (type_aliases_slice) |alias| {
+                const alias_stmt = platform_env.store.getStatement(alias.alias_stmt_idx);
+                std.debug.assert(alias_stmt == .s_alias_decl);
+                const alias_body_var = can.ModuleEnv.varFrom(alias_stmt.s_alias_decl.anno);
+                const alias_stmt_var = can.ModuleEnv.varFrom(alias.alias_stmt_idx);
+                const app_alias_name = app_env.common.findIdent(platform_env.getIdentText(alias.alias_name)) orelse continue;
+                const app_var = findTypeAliasBodyVar(app_env, app_alias_name) orelse continue;
+                try rigid_scope.put(alias_body_var, app_var);
+                try rigid_scope.put(alias_stmt_var, app_var);
+            }
+        }
+
+        try mir_lower.setTypeScope(platform_module_idx, &platform_type_scope, resolved_app_module_idx);
+    }
+
     const platform_defs = platform_module.env.store.sliceDefs(platform_module.env.all_defs);
 
     for (provides_entries) |entry| {
@@ -4025,10 +4072,13 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
                 const arg_vars = platform_types.sliceVars(func.args);
                 if (arg_vars.len > 0) {
                     var mutable_arg_layouts = try ctx.arena.alloc(layout.Idx, arg_vars.len);
-                    var arg_type_scope = @import("types").TypeScope.init(ctx.gpa);
-                    defer arg_type_scope.deinit();
                     for (arg_vars, 0..) |arg_var, i| {
-                        mutable_arg_layouts[i] = try type_layout_resolver.resolve(platform_module_idx, arg_var, &arg_type_scope, null);
+                        mutable_arg_layouts[i] = try type_layout_resolver.resolve(
+                            platform_module_idx,
+                            arg_var,
+                            &platform_type_scope,
+                            app_module_idx,
+                        );
                     }
                     arg_layouts = mutable_arg_layouts;
                 }
@@ -4094,9 +4144,12 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
             continue;
         };
 
-        var type_scope = @import("types").TypeScope.init(ctx.gpa);
-        defer type_scope.deinit();
-        const ret_layout = type_layout_resolver.resolve(platform_module_idx, pending.ret_type_var, &type_scope, null) catch {
+        const ret_layout = type_layout_resolver.resolve(
+            platform_module_idx,
+            pending.ret_type_var,
+            &platform_type_scope,
+            app_module_idx,
+        ) catch {
             std.log.err("Failed to get layout for entrypoint {s}", .{pending.ffi_symbol});
             continue;
         };

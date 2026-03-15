@@ -127,16 +127,13 @@ pub const Store = struct {
     f32_ident: ?Ident.Idx,
     f64_ident: ?Ident.Idx,
     dec_ident: ?Ident.Idx,
-    bool_ident: ?Ident.Idx,
-    // Identifier for unqualified "Bool" in the Builtin module
-    bool_plain_ident: ?Ident.Idx,
 
     // The target's usize type (32-bit or 64-bit) - used for layout calculations
     // This is critical for cross-compilation (e.g., compiling for wasm32 on a 64-bit host)
     target_usize: target.TargetUsize,
 
-    // Number of primitive types that are pre-populated in the layout store
-    // Must be kept in sync with the sentinel values in layout.zig Idx enum
+    // Number of sentinel layouts that are pre-populated in the layout store.
+    // Must be kept in sync with the sentinel values in layout.zig Idx enum.
     const num_primitives = 16;
 
     /// Get the sentinel Idx for a given scalar type using pure arithmetic - no branches!
@@ -182,6 +179,23 @@ pub const Store = struct {
         const env = all_module_envs[0];
 
         var layouts = collections.SafeList(Layout){};
+        var tag_union_variants = try TagUnionVariant.SafeMultiList.initCapacity(allocator, 64);
+        var tag_union_data = try collections.SafeList(TagUnionData).initCapacity(allocator, 64);
+
+        // Reserve canonical tag-union metadata index 0 for the shared two-nullary enum
+        // representation. `layout.Idx.bool` is just a stable handle to this ordinary
+        // tag-union layout so control-flow code can reference it conveniently.
+        _ = try tag_union_variants.append(allocator, .{ .payload_layout = .zst });
+        _ = try tag_union_variants.append(allocator, .{ .payload_layout = .zst });
+        _ = try tag_union_data.append(allocator, .{
+            .size = 1,
+            .discriminant_offset = 0,
+            .discriminant_size = 1,
+            .variants = .{
+                .start = 0,
+                .count = 2,
+            },
+        });
 
         // Pre-populate primitive type layouts in order matching the Idx enum.
         // Changing the order of these can break things!
@@ -204,15 +218,15 @@ pub const Store = struct {
 
         std.debug.assert(layouts.len() == num_primitives);
 
-        return .{
+        var self = Self{
             .all_module_envs = all_module_envs,
             .allocator = allocator,
             .layouts = layouts,
             .tuple_elems = try collections.SafeList(Idx).initCapacity(allocator, 512),
             .struct_fields = try StructField.SafeMultiList.initCapacity(allocator, 512),
             .struct_data = try collections.SafeList(StructData).initCapacity(allocator, 512),
-            .tag_union_variants = try TagUnionVariant.SafeMultiList.initCapacity(allocator, 64),
-            .tag_union_data = try collections.SafeList(TagUnionData).initCapacity(allocator, 64),
+            .tag_union_variants = tag_union_variants,
+            .tag_union_data = tag_union_data,
             .layouts_by_module_var = std.AutoHashMap(ModuleVarKey, Idx).init(allocator),
             .interned_layouts = std.StringHashMap(Idx).init(allocator),
             .interned_recursive_graphs = std.StringHashMap(Idx).init(allocator),
@@ -237,10 +251,12 @@ pub const Store = struct {
             .f32_ident = env.idents.f32_type,
             .f64_ident = env.idents.f64_type,
             .dec_ident = env.idents.dec_type,
-            .bool_ident = env.idents.bool_type,
-            .bool_plain_ident = env.idents.bool,
             .target_usize = target_usize,
         };
+
+        try self.buildExistingLayoutInternKey(Layout.boolType());
+        try self.rememberScratchInternKey(.bool);
+        return self;
     }
 
     fn getTypesStore(self: *const Self) *const types_store.Store {
@@ -1459,8 +1475,7 @@ pub const Store = struct {
                 .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(target_usize.size())),
             },
             .struct_ => .{
-                // Use pre-computed size from StructData to avoid infinite recursion on recursive types
-                .size = @intCast(self.struct_data.get(@enumFromInt(layout.data.struct_.idx.int_idx)).size),
+                .size = @intCast(self.getStructSize(layout.data.struct_.idx, layout.data.struct_.alignment)),
                 .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.data.struct_.alignment.toByteUnits())),
             },
             .closure => blk: {
@@ -1475,8 +1490,7 @@ pub const Store = struct {
                 };
             },
             .tag_union => .{
-                // Use pre-computed size from TagUnionData to avoid infinite recursion on recursive types
-                .size = @intCast(self.tag_union_data.get(@enumFromInt(layout.data.tag_union.idx.int_idx)).size),
+                .size = @intCast(self.getTagUnionSize(layout.data.tag_union.idx, layout.data.tag_union.alignment)),
                 .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.data.tag_union.alignment.toByteUnits())),
             },
             .zst => .{
@@ -2196,10 +2210,6 @@ pub const Store = struct {
 
             // Declare layout outside the if so it's accessible in container finalization
             var layout: Layout = undefined;
-            // Track when we've identified a Bool nominal type. Layout.boolType() is
-            // Layout.int(.u8) which insertLayout would map to Idx.u8, losing the Bool
-            // distinction. This flag lets us map directly to Idx.bool instead.
-            var is_bool_layout = false;
 
             if (!skip_layout_computation) {
                 // Mark this var as in-progress before processing.
@@ -2232,26 +2242,6 @@ pub const Store = struct {
                             if (is_builtin_str) {
                                 // This is Builtin.Str - use string layout
                                 break :flat_type Layout.str();
-                            }
-
-                            // Special-case Builtin.Bool: it has a tag union backing type [False, True],
-                            // but should have u8 layout.
-                            const is_builtin_bool = blk: {
-                                if (self.bool_ident) |bool_id| {
-                                    if (nominal_type.ident.ident_idx.eql(bool_id)) break :blk true;
-                                }
-                                if (nominal_type.origin_module.eql(self.currentEnv().idents.builtin_module)) {
-                                    if (self.bool_plain_ident) |plain_bool| {
-                                        if (nominal_type.ident.ident_idx.eql(plain_bool)) break :blk true;
-                                    }
-                                }
-                                break :blk false;
-                            };
-                            if (is_builtin_bool) {
-                                // This is Builtin.Bool - use bool layout (u8).
-                                // Set flag so we map to Idx.bool instead of Idx.u8.
-                                is_bool_layout = true;
-                                break :flat_type Layout.boolType();
                             }
 
                             // Special handling for Builtin.Box
@@ -2905,10 +2895,8 @@ pub const Store = struct {
                     .err => Layout.zst(),
                 };
 
-                // We actually resolved a layout that wasn't zero-sized!
-                // Bool needs special handling: Layout.boolType() is Layout.int(.u8),
-                // so insertLayout would produce Idx.u8 instead of Idx.bool.
-                layout_idx = if (is_bool_layout) .bool else try self.insertLayout(layout);
+                // We actually resolved a layout that wasn't zero-sized.
+                layout_idx = try self.insertLayout(layout);
                 const layout_cache_key = ModuleVarKey{ .module_idx = self.current_module_idx, .var_ = current.var_ };
                 // Only cache if the layout doesn't depend on unresolved type parameters.
                 // Layouts that depend on unresolved params (like List(a) where 'a' has no mapping)

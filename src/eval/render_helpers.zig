@@ -111,8 +111,9 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
     const gpa = ctx.allocator;
     var resolved = ctx.runtime_types.resolveVar(rt_var);
 
-    // Check layout first for special rendering cases
-    // Str has .str layout, Bool has .int .u8 layout
+    // Check layout first for special rendering cases.
+    // Str has a dedicated scalar layout; ordinary tag unions, including Bool,
+    // are rendered structurally below using type information.
     if (value.layout.tag == .scalar) {
         const scalar = value.layout.data.scalar;
         if (scalar.tag == .str) {

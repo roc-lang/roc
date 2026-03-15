@@ -105,9 +105,6 @@ pub const Resolver = struct {
                 return .{ .canonical = layout_idx };
             }
         }
-        if (!self.monotype_store.bool_tag_union_idx.isNone() and mono_idx == self.monotype_store.bool_tag_union_idx) {
-            return .{ .canonical = .bool };
-        }
         if (refs_by_mono.get(mono_key)) |cached| return cached;
 
         const mono = self.monotype_store.getMonotype(mono_idx);
@@ -254,7 +251,6 @@ pub const Resolver = struct {
         refs_by_mono: *std.AutoHashMap(u32, GraphRef),
     ) Allocator.Error!GraphRef {
         if (payloads.len == 0) return .{ .canonical = .zst };
-        if (payloads.len == 1) return self.buildRefForMonotype(payloads[0], overrides, graph, refs_by_mono);
         return self.buildStructFromElems(payloads, overrides, graph, refs_by_mono);
     }
 };

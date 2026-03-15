@@ -21,7 +21,7 @@ pub const WasmRepr = union(enum) {
 /// Use wasmReprWithStore for accurate composite sizes.
 pub fn wasmRepr(layout_idx: layout.Idx) WasmRepr {
     return switch (layout_idx) {
-        .bool, .u8, .i8 => .{ .primitive = .i32 },
+        .u8, .i8 => .{ .primitive = .i32 },
         .u16, .i16 => .{ .primitive = .i32 },
         .u32, .i32 => .{ .primitive = .i32 },
         .u64, .i64 => .{ .primitive = .i64 },

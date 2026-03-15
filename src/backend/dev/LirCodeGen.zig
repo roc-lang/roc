@@ -5389,16 +5389,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             var payload_idx: ?layout.Idx = null;
             for (0..variants.len) |i| {
                 const v_payload = variants.get(@intCast(i)).payload_layout;
-                const payload_layout = ls.getLayout(v_payload);
+                const candidate_payload = self.unwrapSingleFieldPayloadLayout(v_payload) orelse v_payload;
+                const payload_layout = ls.getLayout(candidate_payload);
                 switch (payload_layout.tag) {
                     .scalar => {
-                        payload_idx = v_payload;
+                        payload_idx = candidate_payload;
                         break;
                     },
                     else => {},
                 }
-                if (v_payload == .dec) {
-                    payload_idx = v_payload;
+                if (candidate_payload == .dec) {
+                    payload_idx = candidate_payload;
                     break;
                 }
             }
@@ -5454,6 +5455,25 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             return .{ .stack = .{ .offset = result_offset } };
+        }
+
+        fn unwrapSingleFieldPayloadLayout(self: *Self, layout_idx: layout.Idx) ?layout.Idx {
+            const layout_val = self.layout_store.getLayout(layout_idx);
+            if (layout_val.tag != .struct_) return null;
+
+            const struct_data = self.layout_store.getStructData(layout_val.data.struct_.idx);
+            const fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
+            if (fields.len != 1) return null;
+
+            const field = fields.get(0);
+            if (field.index != 0) return null;
+
+            if (builtin.mode == .Debug) {
+                const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(layout_val.data.struct_.idx, 0);
+                std.debug.assert(field_offset == 0);
+            }
+
+            return field.layout;
         }
 
         // ── Float/Dec try_unsafe conversion info ──
@@ -6967,7 +6987,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             var is_list_result = false;
             const result_size: u32 = switch (ite.result_layout) {
                 // Scalar types - size based on type
-                .i8, .u8, .bool => 1,
+                .i8, .u8 => 1,
                 .i16, .u16 => 2,
                 .i32, .u32, .f32 => 4,
                 .i64, .u64, .f64 => 8,
@@ -7303,21 +7323,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const stable_payload_layout_val = ls.getLayout(variant_payload_layout);
 
             for (args, 0..) |arg_pattern_id, arg_idx| {
-                const arg_loc: ValueLocation = if (args.len == 1) blk: {
-                    // Single-arg tag: bind the entire payload value, even if the payload's
-                    // runtime representation is a tuple/struct.
-                    if (builtin.mode == .Debug) {
-                        try self.assertPatternMatchesRuntimeLayout(arg_pattern_id, variant_payload_layout, "match tag payload");
-                    }
-                    break :blk stable_payload_loc;
-                } else blk: {
-                    // Multi-arg tag: payload is a tuple, use tuple element offsets/layouts.
-                    if (builtin.mode == .Debug and stable_payload_layout_val.tag != .struct_) {
-                        std.debug.panic(
-                            "LIR/codegen invariant violated: match tag multi-arg payload requires struct_ layout, got {s}",
-                            .{@tagName(stable_payload_layout_val.tag)},
-                        );
-                    }
+                const arg_loc: ValueLocation = if (stable_payload_layout_val.tag == .struct_) blk: {
                     const payload_base: i32 = switch (stable_payload_loc) {
                         .stack => |s| s.offset,
                         .stack_i128 => |off| off,
@@ -7327,9 +7333,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const elem_offset = ls.getStructFieldOffsetByOriginalIndex(stable_payload_layout_val.data.struct_.idx, @intCast(arg_idx));
                     const elem_layout = ls.getStructFieldLayoutByOriginalIndex(stable_payload_layout_val.data.struct_.idx, @intCast(arg_idx));
                     if (builtin.mode == .Debug) {
-                        try self.assertPatternMatchesRuntimeLayout(arg_pattern_id, elem_layout, "match tag payload tuple element");
+                        try self.assertPatternMatchesRuntimeLayout(arg_pattern_id, elem_layout, "match tag payload field");
                     }
                     break :blk self.stackLocationForLayout(elem_layout, payload_base + @as(i32, @intCast(elem_offset)));
+                } else blk: {
+                    if (builtin.mode == .Debug) {
+                        if (args.len != 1) {
+                            std.debug.panic(
+                                "LIR/codegen invariant violated: non-struct match tag payload can only bind one arg, got {d}",
+                                .{args.len},
+                            );
+                        }
+                        try self.assertPatternMatchesRuntimeLayout(arg_pattern_id, variant_payload_layout, "match tag payload");
+                    }
+                    break :blk stable_payload_loc;
                 };
 
                 try self.bindPattern(arg_pattern_id, arg_loc);
@@ -10561,41 +10578,33 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     const payload_layout = ls.getLayout(variant_payload_layout);
 
-                    // For tags with single arg, bind directly at payload offset
-                    // For tags with multiple args (tuples), need to use tuple element offsets
-                    if (arg_patterns.len == 1) {
+                    if (payload_layout.tag == .struct_) {
+                        const payload_base: i32 = switch (payload_loc) {
+                            .stack => |s| s.offset,
+                            .stack_i128 => |off| off,
+                            .stack_str => |off| off,
+                            else => unreachable,
+                        };
+                        for (arg_patterns, 0..) |arg_pattern_id, i| {
+                            const tuple_elem_offset = ls.getStructFieldOffsetByOriginalIndex(payload_layout.data.struct_.idx, @intCast(i));
+                            const arg_offset = payload_base + @as(i32, @intCast(tuple_elem_offset));
+                            const tuple_elem_layout_idx = ls.getStructFieldLayoutByOriginalIndex(payload_layout.data.struct_.idx, @intCast(i));
+                            if (builtin.mode == .Debug) {
+                                try self.assertPatternMatchesRuntimeLayout(arg_pattern_id, tuple_elem_layout_idx, "tag pattern payload field");
+                            }
+                            try self.bindPattern(arg_pattern_id, self.stackLocationForLayout(tuple_elem_layout_idx, arg_offset));
+                        }
+                    } else {
                         if (builtin.mode == .Debug) {
+                            if (arg_patterns.len != 1) {
+                                std.debug.panic(
+                                    "LIR/codegen invariant violated: non-struct tag payload can only bind one arg, got {d}",
+                                    .{arg_patterns.len},
+                                );
+                            }
                             try self.assertPatternMatchesRuntimeLayout(arg_patterns[0], variant_payload_layout, "tag pattern payload");
                         }
                         try self.bindPattern(arg_patterns[0], payload_loc);
-                    } else {
-                        // Multiple args means payload is a tuple - get offsets from tuple layout
-                        // Patterns are in source order, so use ByOriginalIndex
-                        if (payload_layout.tag == .struct_) {
-                            const payload_base: i32 = switch (payload_loc) {
-                                .stack => |s| s.offset,
-                                .stack_i128 => |off| off,
-                                .stack_str => |off| off,
-                                else => unreachable,
-                            };
-                            for (arg_patterns, 0..) |arg_pattern_id, i| {
-                                const tuple_elem_offset = ls.getStructFieldOffsetByOriginalIndex(payload_layout.data.struct_.idx, @intCast(i));
-                                const arg_offset = payload_base + @as(i32, @intCast(tuple_elem_offset));
-                                const tuple_elem_layout_idx = ls.getStructFieldLayoutByOriginalIndex(payload_layout.data.struct_.idx, @intCast(i));
-                                if (builtin.mode == .Debug) {
-                                    try self.assertPatternMatchesRuntimeLayout(arg_pattern_id, tuple_elem_layout_idx, "tag pattern tuple payload element");
-                                }
-                                try self.bindPattern(arg_pattern_id, self.stackLocationForLayout(tuple_elem_layout_idx, arg_offset));
-                            }
-                        } else {
-                            if (builtin.mode == .Debug) {
-                                std.debug.panic(
-                                    "LIR/codegen invariant violated: tag multi-arg pattern requires struct_ payload layout, got {s}",
-                                    .{@tagName(payload_layout.tag)},
-                                );
-                            }
-                            unreachable;
-                        }
                     }
                 },
                 else => {
@@ -12523,10 +12532,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .immediate_i128 => |v| .{ .immediate_i64 = @truncate(v) },
                     else => loc,
                 },
-                .bool => switch (loc) {
-                    .immediate_i128 => |v| .{ .immediate_i64 = if (v == 0) 0 else 1 },
-                    else => loc,
-                },
                 .i128, .u128, .dec => switch (loc) {
                     .immediate_i64 => |v| .{ .immediate_i128 = v },
                     else => loc,
@@ -12652,7 +12657,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             switch (result_layout) {
-                .i64, .i32, .i16, .u64, .u32, .u16, .bool => {
+                .i64, .i32, .i16, .u64, .u32, .u16 => {
                     const reg = try self.ensureInGeneralReg(loc);
                     try self.emitStoreToMem(saved_ptr_reg, reg);
                 },

@@ -857,7 +857,7 @@ pub const DevEvaluator = struct {
                 executable.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&self.roc_ops));
                 break :blk EvalResult{ .i64_val = result };
             },
-            .u64, .u8, .u16, .u32, .bool => blk: {
+            .u64, .u8, .u16, .u32 => blk: {
                 var result: u64 = undefined;
                 executable.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&self.roc_ops));
                 break :blk EvalResult{ .u64_val = result };
@@ -922,7 +922,19 @@ pub const DevEvaluator = struct {
                     break :blk EvalResult{ .str_val = str_copy };
                 }
             },
-            else => return error.UnsupportedType,
+            else => blk: {
+                const layout_store = code_result.layout_store orelse return error.UnsupportedType;
+                const result_layout = layout_store.getLayout(code_result.result_layout);
+                if (result_layout.tag == .tag_union) {
+                    const tu_data = layout_store.getTagUnionData(result_layout.data.tag_union.idx);
+                    if (tu_data.discriminant_offset == 0 and tu_data.size <= @sizeOf(u64)) {
+                        var result: u64 = 0;
+                        executable.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&self.roc_ops));
+                        break :blk EvalResult{ .u64_val = result };
+                    }
+                }
+                return error.UnsupportedType;
+            },
         };
     }
 };
