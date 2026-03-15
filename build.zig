@@ -1753,9 +1753,10 @@ fn createTestPlatformHostLib(
     configureBackend(lib, target);
     lib.root_module.addImport("builtins", roc_modules.builtins);
     lib.root_module.addImport("build_options", roc_modules.build_options);
-    // Don't bundle compiler-rt in host libraries - roc_shim provides it
-    // Bundling it here causes duplicate symbol errors on Windows
-    lib.bundle_compiler_rt = false;
+    // Bundle compiler-rt when LLVM is used (e.g. x64mac), so that LLVM-generated
+    // symbols like __zig_probe_stack are available at link time. Otherwise skip it
+    // to avoid duplicate symbol errors (e.g. on Windows).
+    lib.bundle_compiler_rt = mustUseLlvm(target);
 
     return lib;
 }
