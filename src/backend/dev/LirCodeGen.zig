@@ -1183,11 +1183,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             self.roc_ops_reg = roc_ops_save_reg;
 
-            // Free arg registers — their values have been saved to callee-saved registers.
-            // This is safe because compileLambdaAsProc now resets its own register state,
-            // so lambda bodies won't inherit these freed registers.
-            self.codegen.freeGeneral(arg0_reg);
-            self.codegen.freeGeneral(arg1_reg);
+            // NOTE: Do NOT free arg0_reg/arg1_reg here. Although their values have
+            // been saved to callee-saved registers, freeing them makes RDI/RSI (or X0/X1)
+            // available to the register allocator as scratch registers. When generating
+            // a lambda call with many args (e.g. 4 Dec params = 8 registers), the call
+            // setup needs these registers for pass-by-ptr arguments. If they've been
+            // reused as temporaries, the generated call code puts wrong values in them,
+            // causing segfaults.
 
             // Remove roc_ops and result_ptr registers from callee_saved_available
             // so the register allocator never uses them as temporaries.
