@@ -514,20 +514,17 @@ test "roc check test/int/app.roc does not panic" {
     try testing.expect(!has_panic_text);
 }
 
-test "roc test/int/app.roc runs successfully (interpreter)" {
-    // Skip on Windows - test/int platform doesn't have Windows host libraries
+fn testRocRunsSuccessfully(opt: []const u8, roc_file: []const u8) !void {
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
-
-    const testing = std.testing;
-    const gpa = testing.allocator;
-
-    const result = try util.runRoc(gpa, &.{ "--opt=interpreter", "--no-cache" }, "test/int/app.roc");
+    const gpa = std.testing.allocator;
+    const result = try util.runRoc(gpa, &.{ opt, "--no-cache" }, roc_file);
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
+    try std.testing.expect(result.term == .Exited and result.term.Exited == 0);
+}
 
-    // Verify that:
-    // 1. Command succeeded (zero exit code)
-    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+test "roc test/int/app.roc runs successfully (interpreter)" {
+    try testRocRunsSuccessfully("--opt=interpreter", "test/int/app.roc");
 }
 
 test "roc test/int/app.roc runs successfully (dev)" {
@@ -536,35 +533,11 @@ test "roc test/int/app.roc runs successfully (dev)" {
 }
 
 test "roc test/str/app.roc runs successfully (interpreter)" {
-    // Skip on Windows - test/str platform doesn't have Windows host libraries
-    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
-
-    const testing = std.testing;
-    const gpa = testing.allocator;
-
-    const result = try util.runRoc(gpa, &.{ "--opt=interpreter", "--no-cache" }, "test/str/app.roc");
-    defer gpa.free(result.stdout);
-    defer gpa.free(result.stderr);
-
-    // Verify that:
-    // 1. Command succeeded (zero exit code)
-    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+    try testRocRunsSuccessfully("--opt=interpreter", "test/str/app.roc");
 }
 
 test "roc test/str/app.roc runs successfully (dev)" {
-    // Skip on Windows - test/str platform doesn't have Windows host libraries
-    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
-
-    const testing = std.testing;
-    const gpa = testing.allocator;
-
-    const result = try util.runRoc(gpa, &.{ "--opt=dev", "--no-cache" }, "test/str/app.roc");
-    defer gpa.free(result.stdout);
-    defer gpa.free(result.stderr);
-
-    // Verify that:
-    // 1. Command succeeded (zero exit code)
-    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+    try testRocRunsSuccessfully("--opt=dev", "test/str/app.roc");
 }
 
 // roc build tests
@@ -796,59 +769,45 @@ test "roc build glibc target gives helpful error on non-Linux" {
     try testing.expect(suggests_musl);
 }
 
-test "roc test caches passing results (interpreter)" {
-    const testing = std.testing;
-    const gpa = testing.allocator;
-
-    // First run - should compile and cache
-    const result1 = try util.runRoc(gpa, &.{ "test", "--opt=interpreter" }, "test/cli/AllPassTests.roc");
+fn testCachesPassingResults(opt: []const u8) !void {
+    const gpa = std.testing.allocator;
+    const result1 = try util.runRoc(gpa, &.{ "test", opt }, "test/cli/AllPassTests.roc");
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
+    try std.testing.expect(result1.term == .Exited and result1.term.Exited == 0);
 
-    // First run should succeed
-    try testing.expect(result1.term == .Exited and result1.term.Exited == 0);
-
-    // Second run - should hit cache
-    const result2 = try util.runRoc(gpa, &.{ "test", "--opt=interpreter" }, "test/cli/AllPassTests.roc");
+    const result2 = try util.runRoc(gpa, &.{ "test", opt }, "test/cli/AllPassTests.roc");
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
-
-    // Second run should also succeed
-    try testing.expect(result2.term == .Exited and result2.term.Exited == 0);
-
-    // Second run's stdout should contain "(cached)"
-    try testing.expect(std.mem.indexOf(u8, result2.stdout, "(cached)") != null);
+    try std.testing.expect(result2.term == .Exited and result2.term.Exited == 0);
+    try std.testing.expect(std.mem.indexOf(u8, result2.stdout, "(cached)") != null);
 }
 
+test "roc test caches passing results (interpreter)" {
+    try testCachesPassingResults("--opt=interpreter");
+}
 test "roc test caches passing results (dev)" {
     // TODO: dev backend compilation fails for test/cli/AllPassTests.roc
     return error.SkipZigTest;
 }
 
-test "roc test caches failing results (interpreter)" {
-    const testing = std.testing;
-    const gpa = testing.allocator;
-
-    // First run - should compile and cache
-    const result1 = try util.runRoc(gpa, &.{ "test", "--opt=interpreter" }, "test/cli/SomeFailTests.roc");
+fn testCachesFailingResults(opt: []const u8) !void {
+    const gpa = std.testing.allocator;
+    const result1 = try util.runRoc(gpa, &.{ "test", opt }, "test/cli/SomeFailTests.roc");
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
+    try std.testing.expect(result1.term == .Exited and result1.term.Exited == 1);
 
-    // First run should fail (exit code 1)
-    try testing.expect(result1.term == .Exited and result1.term.Exited == 1);
-
-    // Second run - should hit cache
-    const result2 = try util.runRoc(gpa, &.{ "test", "--opt=interpreter" }, "test/cli/SomeFailTests.roc");
+    const result2 = try util.runRoc(gpa, &.{ "test", opt }, "test/cli/SomeFailTests.roc");
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
-
-    // Second run should also fail
-    try testing.expect(result2.term == .Exited and result2.term.Exited == 1);
-
-    // Second run's stderr should contain "(cached)"
-    try testing.expect(std.mem.indexOf(u8, result2.stderr, "(cached)") != null);
+    try std.testing.expect(result2.term == .Exited and result2.term.Exited == 1);
+    try std.testing.expect(std.mem.indexOf(u8, result2.stderr, "(cached)") != null);
 }
 
+test "roc test caches failing results (interpreter)" {
+    try testCachesFailingResults("--opt=interpreter");
+}
 test "roc test caches failing results (dev)" {
     // TODO: dev backend compilation fails for test/cli/SomeFailTests.roc
     return error.SkipZigTest;
@@ -917,114 +876,72 @@ test "roc test cache invalidated by source change (dev)" {
     return error.SkipZigTest;
 }
 
-test "roc test --verbose works from cache (interpreter)" {
-    const testing = std.testing;
-    const gpa = testing.allocator;
-
-    // First run (non-verbose) - populates cache
-    const result1 = try util.runRoc(gpa, &.{ "test", "--opt=interpreter" }, "test/cli/AllPassTests.roc");
+fn testVerboseWorksFromCache(opt: []const u8) !void {
+    const gpa = std.testing.allocator;
+    const result1 = try util.runRoc(gpa, &.{ "test", opt }, "test/cli/AllPassTests.roc");
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
+    try std.testing.expect(result1.term == .Exited and result1.term.Exited == 0);
 
-    try testing.expect(result1.term == .Exited and result1.term.Exited == 0);
-
-    // Second run (verbose) - should use cache
-    const result2 = try util.runRoc(gpa, &.{ "test", "--opt=interpreter", "--verbose" }, "test/cli/AllPassTests.roc");
+    const result2 = try util.runRoc(gpa, &.{ "test", opt, "--verbose" }, "test/cli/AllPassTests.roc");
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
-
-    try testing.expect(result2.term == .Exited and result2.term.Exited == 0);
-
-    // Should contain "(cached)" and PASS lines
-    try testing.expect(std.mem.indexOf(u8, result2.stdout, "(cached)") != null);
-    try testing.expect(std.mem.indexOf(u8, result2.stdout, "PASS") != null);
+    try std.testing.expect(result2.term == .Exited and result2.term.Exited == 0);
+    try std.testing.expect(std.mem.indexOf(u8, result2.stdout, "(cached)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result2.stdout, "PASS") != null);
 }
 
+test "roc test --verbose works from cache (interpreter)" {
+    try testVerboseWorksFromCache("--opt=interpreter");
+}
 test "roc test --verbose works from cache (dev)" {
-    const testing = std.testing;
-    const gpa = testing.allocator;
+    try testVerboseWorksFromCache("--opt=dev");
+}
 
-    // First run (non-verbose) - populates cache
-    const result1 = try util.runRoc(gpa, &.{ "test", "--opt=dev" }, "test/cli/AllPassTests.roc");
+fn testVerboseCachesFailureReports(opt: []const u8) !void {
+    const gpa = std.testing.allocator;
+    const result1 = try util.runRoc(gpa, &.{ "test", opt, "--verbose" }, "test/cli/SomeFailTests.roc");
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
+    try std.testing.expect(result1.term == .Exited and result1.term.Exited == 1);
 
-    try testing.expect(result1.term == .Exited and result1.term.Exited == 0);
-
-    // Second run (verbose) - should use cache
-    const result2 = try util.runRoc(gpa, &.{ "test", "--opt=dev", "--verbose" }, "test/cli/AllPassTests.roc");
+    const result2 = try util.runRoc(gpa, &.{ "test", opt, "--verbose" }, "test/cli/SomeFailTests.roc");
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
-
-    try testing.expect(result2.term == .Exited and result2.term.Exited == 0);
-
-    // Should contain "(cached)" and PASS lines
-    try testing.expect(std.mem.indexOf(u8, result2.stdout, "(cached)") != null);
-    try testing.expect(std.mem.indexOf(u8, result2.stdout, "PASS") != null);
+    try std.testing.expect(result2.term == .Exited and result2.term.Exited == 1);
+    try std.testing.expect(std.mem.indexOf(u8, result2.stderr, "(cached)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result1.stderr, "FAIL") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result2.stderr, "FAIL") != null);
 }
 
 test "roc test --verbose caches failure reports (interpreter)" {
-    const testing = std.testing;
-    const gpa = testing.allocator;
-
-    // First run (verbose) - compiles and caches
-    const result1 = try util.runRoc(gpa, &.{ "test", "--opt=interpreter", "--verbose" }, "test/cli/SomeFailTests.roc");
-    defer gpa.free(result1.stdout);
-    defer gpa.free(result1.stderr);
-
-    // Should fail
-    try testing.expect(result1.term == .Exited and result1.term.Exited == 1);
-
-    // Second run (verbose) - should use cache
-    const result2 = try util.runRoc(gpa, &.{ "test", "--opt=interpreter", "--verbose" }, "test/cli/SomeFailTests.roc");
-    defer gpa.free(result2.stdout);
-    defer gpa.free(result2.stderr);
-
-    // Should also fail
-    try testing.expect(result2.term == .Exited and result2.term.Exited == 1);
-
-    // Second run should have "(cached)" in stderr
-    try testing.expect(std.mem.indexOf(u8, result2.stderr, "(cached)") != null);
-
-    // Both runs should report FAIL in stderr
-    try testing.expect(std.mem.indexOf(u8, result1.stderr, "FAIL") != null);
-    try testing.expect(std.mem.indexOf(u8, result2.stderr, "FAIL") != null);
+    try testVerboseCachesFailureReports("--opt=interpreter");
 }
-
 test "roc test --verbose caches failure reports (dev)" {
     // TODO: dev backend compilation fails for test/cli/SomeFailTests.roc
     return error.SkipZigTest;
 }
 
-test "roc test non-verbose run caches verbose failure reports for later verbose run (interpreter)" {
-    const testing = std.testing;
-    const gpa = testing.allocator;
-
-    // First run: non-verbose on failing tests — populates cache with verbose failure reports
-    const result1 = try util.runRoc(gpa, &.{ "test", "--opt=interpreter" }, "test/cli/SomeFailTests.roc");
+fn testNonVerboseCachesVerboseReports(opt: []const u8) !void {
+    const gpa = std.testing.allocator;
+    const result1 = try util.runRoc(gpa, &.{ "test", opt }, "test/cli/SomeFailTests.roc");
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
+    try std.testing.expect(result1.term == .Exited and result1.term.Exited == 1);
+    try std.testing.expect(std.mem.indexOf(u8, result1.stderr, "expect failed") == null);
 
-    try testing.expect(result1.term == .Exited and result1.term.Exited == 1);
-
-    // First run should NOT contain detailed failure report (non-verbose)
-    try testing.expect(std.mem.indexOf(u8, result1.stderr, "expect failed") == null);
-
-    // Second run: verbose — should hit cache and show detailed failure reports
-    const result2 = try util.runRoc(gpa, &.{ "test", "--opt=interpreter", "--verbose" }, "test/cli/SomeFailTests.roc");
+    const result2 = try util.runRoc(gpa, &.{ "test", opt, "--verbose" }, "test/cli/SomeFailTests.roc");
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
-
-    try testing.expect(result2.term == .Exited and result2.term.Exited == 1);
-
-    // Should be a cache hit
-    try testing.expect(std.mem.indexOf(u8, result2.stderr, "(cached)") != null);
-
-    // Should contain detailed failure report text even though first run was non-verbose
-    try testing.expect(std.mem.indexOf(u8, result2.stderr, "expect") != null);
-    try testing.expect(std.mem.indexOf(u8, result2.stderr, "TEST FAILURE") != null);
+    try std.testing.expect(result2.term == .Exited and result2.term.Exited == 1);
+    try std.testing.expect(std.mem.indexOf(u8, result2.stderr, "(cached)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result2.stderr, "expect") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result2.stderr, "TEST FAILURE") != null);
 }
 
+test "roc test non-verbose run caches verbose failure reports for later verbose run (interpreter)" {
+    try testNonVerboseCachesVerboseReports("--opt=interpreter");
+}
 test "roc test non-verbose run caches verbose failure reports for later verbose run (dev)" {
     // TODO: dev backend compilation fails for test/cli/SomeFailTests.roc
     return error.SkipZigTest;
@@ -1377,112 +1294,59 @@ test "roc test polymorphic list reverse with numeric literal does not overflow (
 // --- Echo platform (headerless app) tests ---
 // These test the echo platform path (rocRunDefaultApp) with both backends.
 
-fn expectEchoSuccess(result: util.RocResult, expected_stdout: []const u8) !void {
-    const testing = std.testing;
-
+fn runEchoExpectOutput(opt_args: []const []const u8, roc_file: []const u8, expected_stdout: []const u8) !void {
+    const gpa = std.testing.allocator;
+    const result = try util.runRoc(gpa, opt_args, roc_file);
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
     if (result.term != .Exited or result.term.Exited != 0) {
         std.debug.print("Echo app failed with exit code: {}\nstdout: {s}\nstderr: {s}\n", .{
-            result.term,
-            result.stdout,
-            result.stderr,
+            result.term, result.stdout, result.stderr,
         });
     }
-    try testing.expect(result.term == .Exited and result.term.Exited == 0);
-    try testing.expectEqualStrings(expected_stdout, result.stdout);
+    try std.testing.expect(result.term == .Exited and result.term.Exited == 0);
+    try std.testing.expectEqualStrings(expected_stdout, result.stdout);
 }
 
-fn expectEchoExitCode(result: util.RocResult, expected_code: u32) !void {
-    const testing = std.testing;
-
+fn runEchoExpectExitCode(opt_args: []const []const u8, roc_file: []const u8, expected_code: u32) !void {
+    const gpa = std.testing.allocator;
+    const result = try util.runRoc(gpa, opt_args, roc_file);
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
     if (result.term != .Exited or result.term.Exited != expected_code) {
         std.debug.print("Echo app exited with code {} (expected {})\nstdout: {s}\nstderr: {s}\n", .{
-            result.term,
-            expected_code,
-            result.stdout,
-            result.stderr,
+            result.term, expected_code, result.stdout, result.stderr,
         });
     }
-    try testing.expect(result.term == .Exited and result.term.Exited == expected_code);
+    try std.testing.expect(result.term == .Exited and result.term.Exited == expected_code);
 }
 
 test "echo platform: hello (interpreter)" {
-    const gpa = std.testing.allocator;
-
-    const result = try util.runRoc(gpa, &.{}, "test/echo/hello.roc");
-    defer gpa.free(result.stdout);
-    defer gpa.free(result.stderr);
-
-    try expectEchoSuccess(result, "Hello, World!\n");
+    try runEchoExpectOutput(&.{}, "test/echo/hello.roc", "Hello, World!\n");
 }
-
 test "echo platform: hello (dev backend)" {
-    const gpa = std.testing.allocator;
-
-    const result = try util.runRoc(gpa, &.{"--opt=dev"}, "test/echo/hello.roc");
-    defer gpa.free(result.stdout);
-    defer gpa.free(result.stderr);
-
-    try expectEchoSuccess(result, "Hello, World!\n");
+    try runEchoExpectOutput(&.{"--opt=dev"}, "test/echo/hello.roc", "Hello, World!\n");
 }
 
 test "echo platform: multiple echo calls (interpreter)" {
-    const gpa = std.testing.allocator;
-
-    const result = try util.runRoc(gpa, &.{}, "test/echo/multi.roc");
-    defer gpa.free(result.stdout);
-    defer gpa.free(result.stderr);
-
-    try expectEchoSuccess(result, "Hello, \nWorld!\n");
+    try runEchoExpectOutput(&.{}, "test/echo/multi.roc", "Hello, \nWorld!\n");
 }
-
 test "echo platform: multiple echo calls (dev backend)" {
-    const gpa = std.testing.allocator;
-
-    const result = try util.runRoc(gpa, &.{"--opt=dev"}, "test/echo/multi.roc");
-    defer gpa.free(result.stdout);
-    defer gpa.free(result.stderr);
-
-    try expectEchoSuccess(result, "Hello, \nWorld!\n");
+    try runEchoExpectOutput(&.{"--opt=dev"}, "test/echo/multi.roc", "Hello, \nWorld!\n");
 }
 
 test "echo platform: exit ok (interpreter)" {
-    const gpa = std.testing.allocator;
-
-    const result = try util.runRoc(gpa, &.{}, "test/echo/exit_ok.roc");
-    defer gpa.free(result.stdout);
-    defer gpa.free(result.stderr);
-
-    try expectEchoSuccess(result, "success\n");
+    try runEchoExpectOutput(&.{}, "test/echo/exit_ok.roc", "success\n");
 }
-
 test "echo platform: exit ok (dev backend)" {
-    const gpa = std.testing.allocator;
-
-    const result = try util.runRoc(gpa, &.{"--opt=dev"}, "test/echo/exit_ok.roc");
-    defer gpa.free(result.stdout);
-    defer gpa.free(result.stderr);
-
-    try expectEchoSuccess(result, "success\n");
+    try runEchoExpectOutput(&.{"--opt=dev"}, "test/echo/exit_ok.roc", "success\n");
 }
 
 test "echo platform: exit code (interpreter)" {
-    const gpa = std.testing.allocator;
-
-    const result = try util.runRoc(gpa, &.{}, "test/echo/exit_code.roc");
-    defer gpa.free(result.stdout);
-    defer gpa.free(result.stderr);
-
-    try expectEchoExitCode(result, 255);
+    try runEchoExpectExitCode(&.{}, "test/echo/exit_code.roc", 255);
 }
-
 test "echo platform: exit code (dev backend)" {
-    const gpa = std.testing.allocator;
-
-    const result = try util.runRoc(gpa, &.{"--opt=dev"}, "test/echo/exit_code.roc");
-    defer gpa.free(result.stdout);
-    defer gpa.free(result.stderr);
-
-    try expectEchoExitCode(result, 255);
+    try runEchoExpectExitCode(&.{"--opt=dev"}, "test/echo/exit_code.roc", 255);
 }
 
 // TODO: These tests expose pre-existing bugs and should be re-enabled once fixed:
@@ -1492,38 +1356,20 @@ test "echo platform: exit code (dev backend)" {
 //   in src/backend/dev/LirCodeGen.zig:7402
 // Same issues likely affect exit_custom_inspect.roc and exit_error_payload.roc.
 //
-// test "echo platform: custom error (interpreter)" {
-//     const gpa = std.testing.allocator;
-//
-//     const result = try util.runRoc(gpa, &.{}, "test/echo/exit_custom_error.roc");
-//     defer gpa.free(result.stdout);
-//     defer gpa.free(result.stderr);
-//
-//     try expectEchoExitCode(result, 1);
-// }
-//
-// test "echo platform: custom error (dev backend)" {
-//     const gpa = std.testing.allocator;
-//
-//     const result = try util.runRoc(gpa, &.{"--opt=dev"}, "test/echo/exit_custom_error.roc");
-//     defer gpa.free(result.stdout);
-//     defer gpa.free(result.stderr);
-//
-//     try expectEchoExitCode(result, 1);
-// }
+// test "echo platform: custom error (interpreter)" { try runEchoExpectExitCode(&.{}, "test/echo/exit_custom_error.roc", 1); }
+// test "echo platform: custom error (dev backend)" { try runEchoExpectExitCode(&.{"--opt=dev"}, "test/echo/exit_custom_error.roc", 1); }
 
-test "echo platform: no main is not a default app (interpreter)" {
+fn runEchoExpectFailure(opt_args: []const []const u8, roc_file: []const u8) !void {
     const gpa = std.testing.allocator;
-
-    // A headerless file without main! should not be treated as a default_app.
-    // It should fail since it's not a valid app file.
-    const result = try util.runRoc(gpa, &.{"--opt=interpreter"}, "test/echo/no_main.roc");
+    const result = try util.runRoc(gpa, opt_args, roc_file);
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
-
     try std.testing.expect(result.term == .Exited and result.term.Exited != 0);
 }
 
+test "echo platform: no main is not a default app (interpreter)" {
+    try runEchoExpectFailure(&.{"--opt=interpreter"}, "test/echo/no_main.roc");
+}
 test "echo platform: no main is not a default app (dev)" {
     // TODO: dev backend crashes test runner
     return error.SkipZigTest;
