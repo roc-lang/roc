@@ -809,8 +809,6 @@ generate_zig_file = |hosted_functions, type_table, provides_list| {
 		.concat("\n")
 		.concat(generate_roc_env)
 		.concat("\n")
-		.concat(generate_index_constants(hosted_functions, count))
-		.concat("\n")
 		.concat(generate_element_type_structs(type_table))
 		.concat(generate_tag_union_structs(type_table))
 		.concat(generate_all_record_structs(hosted_functions, type_table))
