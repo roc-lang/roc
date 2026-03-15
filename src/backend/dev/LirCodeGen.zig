@@ -1183,13 +1183,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             self.roc_ops_reg = roc_ops_save_reg;
 
-            // The argument registers' values have been saved to callee-saved registers,
-            // so return them to the free pool. Without this, they remain in limbo
-            // (not free, not callee-saved, not spillable), reducing the available
-            // register count and causing silent corruption when spillAndAllocGeneral
-            // is triggered in register-intensive code paths like i128 comparisons.
-            self.codegen.freeGeneral(arg0_reg);
-            self.codegen.freeGeneral(arg1_reg);
+            // NOTE: Do NOT free arg0_reg/arg1_reg here. Although their values have
+            // been saved to callee-saved registers, freeing them makes X0/X1 available
+            // to the register allocator. When compileLambdaAsProc is called during
+            // expression generation, it inherits this register state. If X0/X1 are
+            // "free", the allocator may use them as temporaries in the lambda body,
+            // conflicting with their role as argument registers in the lambda prologue.
 
             // Remove roc_ops and result_ptr registers from callee_saved_available
             // so the register allocator never uses them as temporaries.

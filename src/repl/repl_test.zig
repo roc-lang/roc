@@ -328,3 +328,14 @@ test "Repl - definition replacement" {
     ;
     try testing.expectEqualStrings(full_source, expected);
 }
+
+test "Repl - 4-arg lambda call (dev)" {
+    // Regression: 4 Dec params fill all 8 arg registers on aarch64,
+    // forcing roc_ops to pass-by-ptr. Previously crashed with segfault.
+    const steps = &[_][2][]const u8{
+        .{ "f = |a, b, c, d| a + b + c + d", "assigned `f`" },
+        .{ "f(10, 20, 30, 40)", "100.0" },
+    };
+    try expectStateful(.interpreter, steps);
+    try expectStateful(.dev, steps);
+}
