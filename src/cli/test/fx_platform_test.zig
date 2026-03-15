@@ -304,6 +304,17 @@ test "fx platform match with wildcard" {
     try checkTestSuccess(result);
 }
 
+test "fx platform zst nested singleton shapes" {
+    const allocator = testing.allocator;
+
+    const spec = fx_test_specs.findByPath("test/fx/zst_nested_singleton_shapes.roc").?;
+    const result = try runRocTest(allocator, spec.roc_file, spec.io_spec);
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try checkTestSuccess(result);
+}
+
 test "fx platform wildcard match on open union" {
     // Tests that wildcard patterns on open tag unions work correctly.
     // Bug: When error propagates through open tag unions [Exit(I64), ..],

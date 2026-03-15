@@ -234,6 +234,11 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Regression test: List.first with function syntax",
     },
     .{
+        .roc_file = "test/fx/zst_nested_singleton_shapes.roc",
+        .io_spec = "1>zst first ok|1>zst get ok|1>zst repeat ok|1>zst pattern ok|1>non-zst distinct ok|1>non-zst first ok|1>non-zst get ok|1>non-zst pattern ok",
+        .description = "Nested singleton record/tag ZSTs behave correctly in lists, equality, and pattern matches",
+    },
+    .{
         .roc_file = "test/fx/stdin_while_uaf.roc",
         .io_spec = "0<123456789012345678901234|1>123456789012345678901234|0<|1>",
         .description = "Regression test: Stdin.line! in while loop with 24 char input (heap-allocated string)",
