@@ -192,7 +192,7 @@ const DevShimLibraries = struct {
 
 /// Embedded pre-compiled builtins object files for each target.
 /// These contain the wrapper functions needed by the dev backend for string/list operations.
-/// Used by `roc build --backend=dev` to link the app object with builtins.
+/// Used by `roc build --opt=dev` to link the app object with builtins.
 /// Now using static libraries instead of object files to include compiler_rt
 /// (needed for 128-bit integer operations used by Dec type).
 const BuiltinsObjects = struct {
@@ -957,7 +957,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
         return rocRunDefaultApp(ctx, args, source);
     }
 
-    switch (args.backend) {
+    switch (args.opt.toBackend()) {
         .dev, .llvm => return rocRunDevShim(ctx, args),
         .interpreter => {},
     }
@@ -1857,7 +1857,7 @@ fn rocRunDefaultApp(ctx: *CliContext, args: cli_args.RunArgs, original_source: [
     var cli_args_list = echo_platform.buildCliArgs(args.app_args, &roc_ops);
     var result_buf: [16]u8 align(16) = undefined;
 
-    switch (args.backend) {
+    switch (args.opt.toBackend()) {
         .dev => {
             runViaDev(
                 ctx.gpa,
@@ -3955,8 +3955,8 @@ fn rocBuild(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         return error.UnsupportedTarget;
     }
 
-    // Select build path based on backend
-    switch (args.backend) {
+    // Select build path based on optimization level
+    switch (args.opt.toBackend()) {
         .dev, .llvm => {
             // Use native code generation backend
             try rocBuildNative(ctx, args);
@@ -5572,7 +5572,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
     }
 
     // Run tests using the selected backend
-    switch (args.backend) {
+    switch (args.opt.toBackend()) {
         .dev, .llvm => {
             // Run tests using dev backend (native code generation)
             var dev_eval = eval.DevEvaluator.init(ctx.gpa, null) catch |err| {
@@ -5998,7 +5998,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
 }
 
 fn rocRepl(ctx: *CliContext, repl_args: cli_args.ReplArgs) !void {
-    return cli_repl.run(ctx, repl_args.backend);
+    return cli_repl.run(ctx, repl_args.opt.toBackend());
 }
 
 const glue = @import("glue");
@@ -6012,7 +6012,7 @@ fn rocGlue(ctx: *CliContext, args: cli_args.GlueArgs) glue.GlueError!void {
         .glue_spec = args.glue_spec,
         .output_dir = args.output_dir,
         .platform_path = args.platform_path,
-        .backend = args.backend,
+        .backend = args.opt.toBackend(),
     }, temp_dir);
 }
 

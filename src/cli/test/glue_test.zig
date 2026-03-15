@@ -12,10 +12,10 @@ test "glue command with DebugGlue succeeds (interpreter)" {
     const tmp_path = tmp_dir.dir.realpathAlloc(allocator, ".") catch unreachable;
     defer allocator.free(tmp_path);
 
-    // Run: roc glue --backend=interpreter src/glue/src/DebugGlue.roc <tmp_path> test/fx/platform/main.roc
+    // Run: roc glue --opt=interpreter src/glue/src/DebugGlue.roc <tmp_path> test/fx/platform/main.roc
     const result = try util.runRocCommand(allocator, &.{
         "glue",
-        "--backend=interpreter",
+        "--opt=interpreter",
         "src/glue/src/DebugGlue.roc",
         tmp_path,
         "test/fx/platform/main.roc",
@@ -57,10 +57,10 @@ test "glue command with CGlue generates expected C header (interpreter)" {
     const tmp_path = tmp_dir.dir.realpathAlloc(allocator, ".") catch unreachable;
     defer allocator.free(tmp_path);
 
-    // Run: roc glue --backend=interpreter src/glue/src/CGlue.roc <tmp_path> test/fx/platform/main.roc
+    // Run: roc glue --opt=interpreter src/glue/src/CGlue.roc <tmp_path> test/fx/platform/main.roc
     const result = try util.runRocCommand(allocator, &.{
         "glue",
-        "--backend=interpreter",
+        "--opt=interpreter",
         "src/glue/src/CGlue.roc",
         tmp_path,
         "test/fx/platform/main.roc",
@@ -135,10 +135,10 @@ test "glue command generated C header compiles with zig cc (interpreter)" {
     const tmp_path = tmp_dir.dir.realpathAlloc(allocator, ".") catch unreachable;
     defer allocator.free(tmp_path);
 
-    // Run: roc glue --backend=interpreter src/glue/src/CGlue.roc <tmp_path> test/fx/platform/main.roc
+    // Run: roc glue --opt=interpreter src/glue/src/CGlue.roc <tmp_path> test/fx/platform/main.roc
     const glue_result = try util.runRocCommand(allocator, &.{
         "glue",
-        "--backend=interpreter",
+        "--opt=interpreter",
         "src/glue/src/CGlue.roc",
         tmp_path,
         "test/fx/platform/main.roc",
@@ -244,10 +244,10 @@ test "glue command with ZigGlue succeeds (interpreter)" {
     const tmp_path = tmp_dir.dir.realpathAlloc(allocator, ".") catch unreachable;
     defer allocator.free(tmp_path);
 
-    // Run: roc glue --backend=interpreter src/glue/src/ZigGlue.roc <tmp_path> test/fx/platform/main.roc
+    // Run: roc glue --opt=interpreter src/glue/src/ZigGlue.roc <tmp_path> test/fx/platform/main.roc
     const result = try util.runRocCommand(allocator, &.{
         "glue",
-        "--backend=interpreter",
+        "--opt=interpreter",
         "src/glue/src/ZigGlue.roc",
         tmp_path,
         "test/fx/platform/main.roc",
@@ -292,13 +292,13 @@ test "glue command with ZigGlue succeeds (dev backend)" {
 test "CGlue.roc expect tests pass (interpreter)" {
     const allocator = std.testing.allocator;
 
-    // Run: roc test --backend=interpreter src/glue/src/CGlue.roc
+    // Run: roc test --opt=interpreter src/glue/src/CGlue.roc
     // --no-cache avoids a cache interaction bug where the module cache
     // populated by earlier glue tests (roc build) is incompatible with
     // what roc test's interpreter expects, causing a .ty_tag_union panic.
     const result = try util.runRocCommand(allocator, &.{
         "test",
-        "--backend=interpreter",
+        "--opt=interpreter",
         "--no-cache",
         "src/glue/src/CGlue.roc",
     });

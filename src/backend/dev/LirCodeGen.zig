@@ -99,7 +99,7 @@ const LayoutIdxSpan = lir.LayoutIdxSpan;
 /// Generation mode determines how builtin function calls are emitted.
 /// This is important because the dev backend can be used in two ways:
 /// 1. In-process execution (dev evaluator): Direct function pointers work
-/// 2. Object file generation (roc build --backend=dev): Need symbol references
+/// 2. Object file generation (roc build --opt=dev): Need symbol references
 pub const GenerationMode = enum {
     /// Code runs in-process (dev evaluator), direct function pointers are valid.
     /// The compiled code calls builtins via absolute addresses embedded in the code.

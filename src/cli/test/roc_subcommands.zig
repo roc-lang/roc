@@ -521,7 +521,7 @@ test "roc test/int/app.roc runs successfully (interpreter)" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{ "--backend=interpreter", "--no-cache" }, "test/int/app.roc");
+    const result = try util.runRoc(gpa, &.{ "--opt=interpreter", "--no-cache" }, "test/int/app.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -542,7 +542,7 @@ test "roc test/str/app.roc runs successfully (interpreter)" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{ "--backend=interpreter", "--no-cache" }, "test/str/app.roc");
+    const result = try util.runRoc(gpa, &.{ "--opt=interpreter", "--no-cache" }, "test/str/app.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -558,7 +558,7 @@ test "roc test/str/app.roc runs successfully (dev)" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{ "--backend=dev", "--no-cache" }, "test/str/app.roc");
+    const result = try util.runRoc(gpa, &.{ "--opt=dev", "--no-cache" }, "test/str/app.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -589,7 +589,7 @@ test "roc build creates executable from test/int/app.roc (interpreter)" {
     const output_arg = try std.fmt.allocPrint(gpa, "--output={s}", .{output_path});
     defer gpa.free(output_arg);
 
-    const result = try util.runRoc(gpa, &.{ "build", "--backend=interpreter", output_arg }, "test/int/app.roc");
+    const result = try util.runRoc(gpa, &.{ "build", "--opt=interpreter", output_arg }, "test/int/app.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -640,7 +640,7 @@ test "roc build executable runs correctly (interpreter)" {
     defer gpa.free(output_arg);
 
     // Build the app
-    const build_result = try util.runRoc(gpa, &.{ "build", "--backend=interpreter", output_arg }, "test/int/app.roc");
+    const build_result = try util.runRoc(gpa, &.{ "build", "--opt=interpreter", output_arg }, "test/int/app.roc");
     defer gpa.free(build_result.stdout);
     defer gpa.free(build_result.stderr);
 
@@ -668,7 +668,7 @@ test "roc build executable runs correctly (interpreter)" {
     try testing.expect(has_success);
 }
 
-test "roc build --backend=dev executable runs correctly for test/int/app.roc" {
+test "roc build --opt=dev executable runs correctly for test/int/app.roc" {
     // Skip on Windows - test/int platform doesn't have Windows host libraries
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
 
@@ -697,7 +697,7 @@ test "roc build --backend=dev executable runs correctly for test/int/app.roc" {
 
     const build_result = try util.runRocWithEnv(
         gpa,
-        &.{ "build", "--backend=dev", "--no-cache", output_arg },
+        &.{ "build", "--opt=dev", "--no-cache", output_arg },
         "test/int/app.roc",
         &env_map,
     );
@@ -705,7 +705,7 @@ test "roc build --backend=dev executable runs correctly for test/int/app.roc" {
     defer gpa.free(build_result.stderr);
 
     if (build_result.term != .Exited or build_result.term.Exited != 0) {
-        std.debug.print("roc build --backend=dev failed with exit code: {}\nstdout: {s}\nstderr: {s}\n", .{
+        std.debug.print("roc build --opt=dev failed with exit code: {}\nstdout: {s}\nstderr: {s}\n", .{
             build_result.term,
             build_result.stdout,
             build_result.stderr,
@@ -801,7 +801,7 @@ test "roc test caches passing results (interpreter)" {
     const gpa = testing.allocator;
 
     // First run - should compile and cache
-    const result1 = try util.runRoc(gpa, &.{ "test", "--backend=interpreter" }, "test/cli/AllPassTests.roc");
+    const result1 = try util.runRoc(gpa, &.{ "test", "--opt=interpreter" }, "test/cli/AllPassTests.roc");
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
 
@@ -809,7 +809,7 @@ test "roc test caches passing results (interpreter)" {
     try testing.expect(result1.term == .Exited and result1.term.Exited == 0);
 
     // Second run - should hit cache
-    const result2 = try util.runRoc(gpa, &.{ "test", "--backend=interpreter" }, "test/cli/AllPassTests.roc");
+    const result2 = try util.runRoc(gpa, &.{ "test", "--opt=interpreter" }, "test/cli/AllPassTests.roc");
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
 
@@ -830,7 +830,7 @@ test "roc test caches failing results (interpreter)" {
     const gpa = testing.allocator;
 
     // First run - should compile and cache
-    const result1 = try util.runRoc(gpa, &.{ "test", "--backend=interpreter" }, "test/cli/SomeFailTests.roc");
+    const result1 = try util.runRoc(gpa, &.{ "test", "--opt=interpreter" }, "test/cli/SomeFailTests.roc");
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
 
@@ -838,7 +838,7 @@ test "roc test caches failing results (interpreter)" {
     try testing.expect(result1.term == .Exited and result1.term.Exited == 1);
 
     // Second run - should hit cache
-    const result2 = try util.runRoc(gpa, &.{ "test", "--backend=interpreter" }, "test/cli/SomeFailTests.roc");
+    const result2 = try util.runRoc(gpa, &.{ "test", "--opt=interpreter" }, "test/cli/SomeFailTests.roc");
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
 
@@ -883,7 +883,7 @@ test "roc test cache invalidated by source change (interpreter)" {
     // First run - populates cache
     const result1 = try std.process.Child.run(.{
         .allocator = gpa,
-        .argv = &.{ roc_path, "test", "--backend=interpreter", temp_file_path },
+        .argv = &.{ roc_path, "test", "--opt=interpreter", temp_file_path },
         .cwd = cwd_path,
         .max_output_bytes = 10 * 1024 * 1024,
     });
@@ -899,7 +899,7 @@ test "roc test cache invalidated by source change (interpreter)" {
     // Second run - should NOT be cached (source changed)
     const result2 = try std.process.Child.run(.{
         .allocator = gpa,
-        .argv = &.{ roc_path, "test", "--backend=interpreter", temp_file_path },
+        .argv = &.{ roc_path, "test", "--opt=interpreter", temp_file_path },
         .cwd = cwd_path,
         .max_output_bytes = 10 * 1024 * 1024,
     });
@@ -922,14 +922,14 @@ test "roc test --verbose works from cache (interpreter)" {
     const gpa = testing.allocator;
 
     // First run (non-verbose) - populates cache
-    const result1 = try util.runRoc(gpa, &.{ "test", "--backend=interpreter" }, "test/cli/AllPassTests.roc");
+    const result1 = try util.runRoc(gpa, &.{ "test", "--opt=interpreter" }, "test/cli/AllPassTests.roc");
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
 
     try testing.expect(result1.term == .Exited and result1.term.Exited == 0);
 
     // Second run (verbose) - should use cache
-    const result2 = try util.runRoc(gpa, &.{ "test", "--backend=interpreter", "--verbose" }, "test/cli/AllPassTests.roc");
+    const result2 = try util.runRoc(gpa, &.{ "test", "--opt=interpreter", "--verbose" }, "test/cli/AllPassTests.roc");
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
 
@@ -945,14 +945,14 @@ test "roc test --verbose works from cache (dev)" {
     const gpa = testing.allocator;
 
     // First run (non-verbose) - populates cache
-    const result1 = try util.runRoc(gpa, &.{ "test", "--backend=dev" }, "test/cli/AllPassTests.roc");
+    const result1 = try util.runRoc(gpa, &.{ "test", "--opt=dev" }, "test/cli/AllPassTests.roc");
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
 
     try testing.expect(result1.term == .Exited and result1.term.Exited == 0);
 
     // Second run (verbose) - should use cache
-    const result2 = try util.runRoc(gpa, &.{ "test", "--backend=dev", "--verbose" }, "test/cli/AllPassTests.roc");
+    const result2 = try util.runRoc(gpa, &.{ "test", "--opt=dev", "--verbose" }, "test/cli/AllPassTests.roc");
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
 
@@ -968,7 +968,7 @@ test "roc test --verbose caches failure reports (interpreter)" {
     const gpa = testing.allocator;
 
     // First run (verbose) - compiles and caches
-    const result1 = try util.runRoc(gpa, &.{ "test", "--backend=interpreter", "--verbose" }, "test/cli/SomeFailTests.roc");
+    const result1 = try util.runRoc(gpa, &.{ "test", "--opt=interpreter", "--verbose" }, "test/cli/SomeFailTests.roc");
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
 
@@ -976,7 +976,7 @@ test "roc test --verbose caches failure reports (interpreter)" {
     try testing.expect(result1.term == .Exited and result1.term.Exited == 1);
 
     // Second run (verbose) - should use cache
-    const result2 = try util.runRoc(gpa, &.{ "test", "--backend=interpreter", "--verbose" }, "test/cli/SomeFailTests.roc");
+    const result2 = try util.runRoc(gpa, &.{ "test", "--opt=interpreter", "--verbose" }, "test/cli/SomeFailTests.roc");
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
 
@@ -1001,7 +1001,7 @@ test "roc test non-verbose run caches verbose failure reports for later verbose 
     const gpa = testing.allocator;
 
     // First run: non-verbose on failing tests — populates cache with verbose failure reports
-    const result1 = try util.runRoc(gpa, &.{ "test", "--backend=interpreter" }, "test/cli/SomeFailTests.roc");
+    const result1 = try util.runRoc(gpa, &.{ "test", "--opt=interpreter" }, "test/cli/SomeFailTests.roc");
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
 
@@ -1011,7 +1011,7 @@ test "roc test non-verbose run caches verbose failure reports for later verbose 
     try testing.expect(std.mem.indexOf(u8, result1.stderr, "expect failed") == null);
 
     // Second run: verbose — should hit cache and show detailed failure reports
-    const result2 = try util.runRoc(gpa, &.{ "test", "--backend=interpreter", "--verbose" }, "test/cli/SomeFailTests.roc");
+    const result2 = try util.runRoc(gpa, &.{ "test", "--opt=interpreter", "--verbose" }, "test/cli/SomeFailTests.roc");
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
 
@@ -1037,7 +1037,7 @@ test "roc test with nested list chunks does not panic on layout upgrade (interpr
     // This test verifies that nested list operations with layout upgrades
     // (from list_of_zst to concrete list types) don't cause integer overflow panics.
     // The expect in the test file is designed to fail, but execution should not panic.
-    const result = try util.runRoc(gpa, &.{ "test", "--backend=interpreter" }, "test/cli/issue8699.roc");
+    const result = try util.runRoc(gpa, &.{ "test", "--opt=interpreter" }, "test/cli/issue8699.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1126,7 +1126,7 @@ test "roc run returns exit code 2 for warnings (interpreter)" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{ "--backend=interpreter", "--no-cache" }, "test/fx/run_warning_only.roc");
+    const result = try util.runRoc(gpa, &.{ "--opt=interpreter", "--no-cache" }, "test/fx/run_warning_only.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1140,11 +1140,11 @@ test "roc run returns exit code 2 for warnings (interpreter)" {
     try testing.expect(has_warning);
 }
 
-test "roc run --backend=dev returns exit code 2 for warnings" {
+test "roc run --opt=dev returns exit code 2 for warnings" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{ "--backend=dev", "--no-cache" }, "test/fx/run_warning_only.roc");
+    const result = try util.runRoc(gpa, &.{ "--opt=dev", "--no-cache" }, "test/fx/run_warning_only.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1155,11 +1155,11 @@ test "roc run --backend=dev returns exit code 2 for warnings" {
     try testing.expect(has_warning);
 }
 
-test "roc run --backend=dev rejects non executable targets" {
+test "roc run --opt=dev rejects non executable targets" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{ "--backend=dev", "--target=wasm32" }, "test/wasm/app.roc");
+    const result = try util.runRoc(gpa, &.{ "--opt=dev", "--target=wasm32" }, "test/wasm/app.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1188,7 +1188,7 @@ test "roc build returns exit code 2 for warnings (interpreter)" {
     const output_arg = try std.fmt.allocPrint(gpa, "--output={s}", .{output_path});
     defer gpa.free(output_arg);
 
-    const result = try util.runRoc(gpa, &.{ "build", "--backend=interpreter", output_arg }, "test/fx/run_warning_only.roc");
+    const result = try util.runRoc(gpa, &.{ "build", "--opt=interpreter", output_arg }, "test/fx/run_warning_only.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1319,7 +1319,7 @@ test "roc test runs expects in Parser type module (interpreter)" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{ "test", "--backend=interpreter", "--no-cache" }, "test/package_simple_parser/Parser.roc");
+    const result = try util.runRoc(gpa, &.{ "test", "--opt=interpreter", "--no-cache" }, "test/package_simple_parser/Parser.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1352,7 +1352,7 @@ test "roc test polymorphic list reverse with numeric literal does not overflow (
     // Calling a polymorphic function (List(a) -> List(a)) from another module
     // with a numeric literal argument caused an integer overflow in
     // from_numeral_flex_count during runtime unification.
-    const result = try util.runRoc(gpa, &.{ "test", "--backend=interpreter" }, "test/cli/polymorphic_list_reverse.roc");
+    const result = try util.runRoc(gpa, &.{ "test", "--opt=interpreter" }, "test/cli/polymorphic_list_reverse.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1418,7 +1418,7 @@ test "echo platform: hello (interpreter)" {
 test "echo platform: hello (dev backend)" {
     const gpa = std.testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{"--backend=dev"}, "test/echo/hello.roc");
+    const result = try util.runRoc(gpa, &.{"--opt=dev"}, "test/echo/hello.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1438,7 +1438,7 @@ test "echo platform: multiple echo calls (interpreter)" {
 test "echo platform: multiple echo calls (dev backend)" {
     const gpa = std.testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{"--backend=dev"}, "test/echo/multi.roc");
+    const result = try util.runRoc(gpa, &.{"--opt=dev"}, "test/echo/multi.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1458,7 +1458,7 @@ test "echo platform: exit ok (interpreter)" {
 test "echo platform: exit ok (dev backend)" {
     const gpa = std.testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{"--backend=dev"}, "test/echo/exit_ok.roc");
+    const result = try util.runRoc(gpa, &.{"--opt=dev"}, "test/echo/exit_ok.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1478,7 +1478,7 @@ test "echo platform: exit code (interpreter)" {
 test "echo platform: exit code (dev backend)" {
     const gpa = std.testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{"--backend=dev"}, "test/echo/exit_code.roc");
+    const result = try util.runRoc(gpa, &.{"--opt=dev"}, "test/echo/exit_code.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1505,7 +1505,7 @@ test "echo platform: exit code (dev backend)" {
 // test "echo platform: custom error (dev backend)" {
 //     const gpa = std.testing.allocator;
 //
-//     const result = try util.runRoc(gpa, &.{"--backend=dev"}, "test/echo/exit_custom_error.roc");
+//     const result = try util.runRoc(gpa, &.{"--opt=dev"}, "test/echo/exit_custom_error.roc");
 //     defer gpa.free(result.stdout);
 //     defer gpa.free(result.stderr);
 //
@@ -1517,7 +1517,7 @@ test "echo platform: no main is not a default app (interpreter)" {
 
     // A headerless file without main! should not be treated as a default_app.
     // It should fail since it's not a valid app file.
-    const result = try util.runRoc(gpa, &.{"--backend=interpreter"}, "test/echo/no_main.roc");
+    const result = try util.runRoc(gpa, &.{"--opt=interpreter"}, "test/echo/no_main.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
