@@ -40,6 +40,109 @@ print_file_diff() {
     git diff "$base_branch".."$pr_branch" -- "$file" 2>/dev/null | sed 's/^/    /'
 }
 
+exit_code_is_benchmarkable() {
+    local exit_code="$1"
+    local extra_args="$2"
+
+    if [ "$exit_code" -eq 0 ]; then
+        return 0
+    fi
+
+    if [[ "$extra_args" =~ --ignore-failure=([^[:space:]]+) ]]; then
+        local ignore_codes="${BASH_REMATCH[1]}"
+        local old_ifs="$IFS"
+        IFS=','
+        for code in $ignore_codes; do
+            if [ "$exit_code" -eq "$code" ]; then
+                IFS="$old_ifs"
+                return 0
+            fi
+        done
+        IFS="$old_ifs"
+    fi
+
+    if [[ "$extra_args" =~ --discard-failure=([^[:space:]]+) ]]; then
+        local discard_codes="${BASH_REMATCH[1]}"
+        local old_ifs="$IFS"
+        IFS=','
+        for code in $discard_codes; do
+            if [ "$exit_code" -eq "$code" ]; then
+                IFS="$old_ifs"
+                return 0
+            fi
+        done
+        IFS="$old_ifs"
+    fi
+
+    return 1
+}
+
+probe_command() {
+    local roc_bin="$1"
+    local fx_file="$2"
+    local roc_extra_args="$3"
+    local label="$4"
+    local filename
+    filename=$(basename "$fx_file")
+    local probe_log="/tmp/bench_probe_${filename%.roc}_${label}.log"
+
+    local -a cmd=("$roc_bin" "$fx_file" "--no-cache")
+    if [ -n "$roc_extra_args" ]; then
+        local -a extra_arg_array=()
+        read -r -a extra_arg_array <<< "$roc_extra_args"
+        cmd+=("${extra_arg_array[@]}")
+    fi
+
+    set +e
+    "${cmd[@]}" >"$probe_log" 2>&1
+    PROBE_EXIT_CODE=$?
+    set -e
+    PROBE_LOG="$probe_log"
+}
+
+preflight_benchmark() {
+    local extra_args="$1"
+    local main_roc="$2"
+    local pr_roc="$3"
+    local fx_file="$4"
+    local roc_extra_args="$5"
+
+    local filename
+    filename=$(basename "$fx_file")
+
+    probe_command "$main_roc" "$fx_file" "$roc_extra_args" "main"
+    local main_exit_code="$PROBE_EXIT_CODE"
+    local main_log="$PROBE_LOG"
+
+    probe_command "$pr_roc" "$fx_file" "$roc_extra_args" "pr"
+    local pr_exit_code="$PROBE_EXIT_CODE"
+    local pr_log="$PROBE_LOG"
+
+    if exit_code_is_benchmarkable "$main_exit_code" "$extra_args"; then
+        if exit_code_is_benchmarkable "$pr_exit_code" "$extra_args"; then
+            return 0
+        fi
+
+        echo "ERROR: PR command is not benchmarkable for $filename"
+        echo "  main exit code: $main_exit_code"
+        echo "  pr exit code: $pr_exit_code"
+        echo "  PR log:"
+        sed 's/^/    /' "$pr_log"
+        return 1
+    fi
+
+    echo "Skipping $filename (main baseline is not benchmarkable here)"
+    echo "  main exit code: $main_exit_code"
+    echo "  pr exit code: $pr_exit_code"
+    echo "  main log:"
+    sed 's/^/    /' "$main_log"
+    if ! exit_code_is_benchmarkable "$pr_exit_code" "$extra_args"; then
+        echo "  pr log:"
+        sed 's/^/    /' "$pr_log"
+    fi
+    return 2
+}
+
 # Run hyperfine benchmark and return percentage change via global variable
 # Returns 0 on success, 1 on failure
 # Sets BENCH_PCT_CHANGE on success
@@ -119,6 +222,7 @@ echo "=== Running benchmarks ==="
 SLOWER_DETECTED=0
 SLOWER_FILES=""
 CHANGED_FILES=""  # Files that differ between branches
+SKIPPED_FILES=""
 
 for fx_file in $FX_FILES; do
     filename=$(basename "$fx_file")
@@ -147,6 +251,19 @@ for fx_file in $FX_FILES; do
             ROC_EXTRA_ARGS="--allow-errors"
             ;;
     esac
+
+    if preflight_benchmark "$EXTRA_ARGS" "$MAIN_ROC" "$PR_ROC" "$fx_file" "$ROC_EXTRA_ARGS"; then
+        :
+    else
+        preflight_status=$?
+        if [ "$preflight_status" -eq 2 ]; then
+            SKIPPED_FILES="$SKIPPED_FILES $filename"
+            echo ""
+            continue
+        fi
+        echo "ERROR: Preflight failed for $filename"
+        exit 1
+    fi
 
     # Run hyperfine comparison
     # Using median for robustness against outliers.
@@ -197,6 +314,13 @@ done
 
 # Summary
 echo "=== FX Benchmark Summary ==="
+if [ -n "$SKIPPED_FILES" ]; then
+    echo "Skipped benchmarks because the main baseline command was not benchmarkable:"
+    for f in $SKIPPED_FILES; do
+        echo "  - $f"
+    done
+    echo ""
+fi
 if [ "$SLOWER_DETECTED" = "1" ]; then
     echo "SLOWER EXECUTION detected in the following files:"
     for f in $SLOWER_FILES; do
