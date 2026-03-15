@@ -704,12 +704,25 @@ Builtin :: [].{
 			Item.join_with(list, joiner)
 		}
 
-		replace : List(item), U64, item -> { list : List(item), value : item }
+		## Replaces the element at the given index with a new item, also returning the old value.
+		##
+		## Returns `Ok` with a record containing:
+		##   - `list`: the list with the element replaced
+		##   - `prev`: the element that was at the index before replacement
+		##
+		## Returns `Err(OutOfBounds)` if the index is out of bounds
+		##
+		## ```roc
+		## expect List.replace([1, 2, 3], 1, 4) == Ok({ list: [1, 4, 3], prev: 2 })
+		## expect List.replace(["a", "b", "c"], 0, "z") == Ok({ list: ["z", "b", "c"], prev: "a" })
+		## expect List.replace([1, 2, 3], 5, 4) == Err(OutOfBounds)
+		## ```
+		replace : List(item), U64, item -> Try({ list : List(item), prev : item }, [OutOfBounds, ..])
 		replace = |list, index, item| {
 			if index < list.len() {
-				list_replace_unsafe(list, index, item)
+				Try.Ok(list_replace_unsafe(list, index, item))
 			} else {
-				{ list, value: item }
+				Try.Err(OutOfBounds)
 			}
 		}
 
@@ -2070,7 +2083,7 @@ range_until = |var $current, end| {
 list_get_unsafe : List(item), U64 -> item
 
 # Implemented by the compiler, does not perform bounds checks
-list_replace_unsafe : List(item), U64, item -> { list : List(item), value : item }
+list_replace_unsafe : List(item), U64, item -> { list : List(item), prev : item }
 
 # Implemented by the compiler, does not perform bounds checks
 list_append_unsafe : List(item), item -> List(item)
