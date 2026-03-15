@@ -247,7 +247,7 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
     const all_module_envs = [_]*ModuleEnv{ @constCast(builtin_module_env), module_env };
 
     // Generate code using Mono IR pipeline
-    var code_result = dev_eval.generateCode(module_env, expr_idx, &all_module_envs) catch {
+    var code_result = dev_eval.generateCode(module_env, expr_idx, &all_module_envs, null) catch {
         return error.GenerateCodeFailed;
     };
     defer code_result.deinit();
