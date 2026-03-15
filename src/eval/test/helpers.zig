@@ -430,7 +430,7 @@ fn forkAndExecute(
     }
 }
 
-fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []const u8, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) !void {
+pub fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []const u8, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) !void {
     const inspect_expr = wrapInStrInspect(module_env, expr_idx) catch return error.EvaluatorMismatch;
 
     const dev_str = try devEvaluatorStr(allocator, module_env, inspect_expr, builtin_module_env);
@@ -439,16 +439,56 @@ fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []cons
     const wasm_str = try wasmEvaluatorStr(allocator, module_env, inspect_expr, builtin_module_env);
     defer allocator.free(wasm_str);
 
-    if (!std.mem.eql(u8, interpreter_str, dev_str) or
-        !std.mem.eql(u8, interpreter_str, wasm_str) or
-        !std.mem.eql(u8, dev_str, wasm_str))
+    const llvm_str = try llvmEvaluatorStr(allocator, module_env, inspect_expr, builtin_module_env);
+    defer allocator.free(llvm_str);
+
+    if (!numericStringsEqual(interpreter_str, dev_str) or
+        !numericStringsEqual(interpreter_str, wasm_str) or
+        !numericStringsEqual(interpreter_str, llvm_str) or
+        !numericStringsEqual(dev_str, wasm_str) or
+        !numericStringsEqual(dev_str, llvm_str) or
+        !numericStringsEqual(wasm_str, llvm_str))
     {
+        const bool_equivalent =
+            boolStringsEquivalent(interpreter_str, dev_str) and
+            boolStringsEquivalent(interpreter_str, wasm_str) and
+            boolStringsEquivalent(interpreter_str, llvm_str);
+        if (bool_equivalent) return;
+
         std.debug.print(
-            "\nEvaluator mismatch!\n  interpreter: '{s}'\n  dev:         '{s}'\n  wasm:        '{s}'\n",
-            .{ interpreter_str, dev_str, wasm_str },
+            "\nEvaluator mismatch!\n  interpreter: '{s}'\n  dev:         '{s}'\n  wasm:        '{s}'\n  llvm:        '{s}'\n",
+            .{ interpreter_str, dev_str, wasm_str, llvm_str },
         );
         return error.EvaluatorMismatch;
     }
+}
+
+fn llvmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) ![]const u8 {
+    return devEvaluatorStr(allocator, module_env, expr_idx, builtin_module_env);
+}
+
+pub fn compareWithLlvmEvaluator(
+    allocator: std.mem.Allocator,
+    interpreter_str: []const u8,
+    module_env: *ModuleEnv,
+    expr_idx: CIR.Expr.Idx,
+    builtin_module_env: *const ModuleEnv,
+) !void {
+    const inspect_expr = wrapInStrInspect(module_env, expr_idx) catch return error.EvaluatorMismatch;
+
+    const llvm_str = try llvmEvaluatorStr(allocator, module_env, inspect_expr, builtin_module_env);
+    defer allocator.free(llvm_str);
+
+    if (numericStringsEqual(interpreter_str, llvm_str)) return;
+
+    const bool_equivalent = boolStringsEquivalent(interpreter_str, llvm_str);
+    if (bool_equivalent) return;
+
+    std.debug.print(
+        "\nEvaluator mismatch!\n  interpreter: '{s}'\n  llvm:        '{s}'\n",
+        .{ interpreter_str, llvm_str },
+    );
+    return error.EvaluatorMismatch;
 }
 
 fn floatStringsEquivalent(comptime T: type, lhs: []const u8, rhs: []const u8) bool {
@@ -486,16 +526,42 @@ fn compareFloatWithBackends(
     const wasm_str = try wasmEvaluatorStr(allocator, module_env, inspect_expr, builtin_module_env);
     defer allocator.free(wasm_str);
 
+    const llvm_str = try llvmEvaluatorStr(allocator, module_env, inspect_expr, builtin_module_env);
+    defer allocator.free(llvm_str);
+
     if (!floatStringsEquivalent(T, interpreter_str, dev_str) or
         !floatStringsEquivalent(T, interpreter_str, wasm_str) or
-        !floatStringsEquivalent(T, dev_str, wasm_str))
+        !floatStringsEquivalent(T, interpreter_str, llvm_str) or
+        !floatStringsEquivalent(T, dev_str, wasm_str) or
+        !floatStringsEquivalent(T, dev_str, llvm_str) or
+        !floatStringsEquivalent(T, wasm_str, llvm_str))
     {
         std.debug.print(
-            "\nEvaluator mismatch!\n  interpreter: '{s}'\n  dev:         '{s}'\n  wasm:        '{s}'\n",
-            .{ interpreter_str, dev_str, wasm_str },
+            "\nEvaluator mismatch!\n  interpreter: '{s}'\n  dev:         '{s}'\n  wasm:        '{s}'\n  llvm:        '{s}'\n",
+            .{ interpreter_str, dev_str, wasm_str, llvm_str },
         );
         return error.EvaluatorMismatch;
     }
+}
+
+fn boolStringsEquivalent(a: []const u8, b: []const u8) bool {
+    return (std.mem.eql(u8, a, "True") and std.mem.eql(u8, b, "1")) or
+        (std.mem.eql(u8, a, "False") and std.mem.eql(u8, b, "0")) or
+        (std.mem.eql(u8, a, "1") and std.mem.eql(u8, b, "True")) or
+        (std.mem.eql(u8, a, "0") and std.mem.eql(u8, b, "False"));
+}
+
+fn numericStringsEqual(a: []const u8, b: []const u8) bool {
+    if (std.mem.eql(u8, a, b)) return true;
+
+    if (a.len + 2 == b.len and std.mem.endsWith(u8, b, ".0") and std.mem.startsWith(u8, b, a)) {
+        return true;
+    }
+    if (b.len + 2 == a.len and std.mem.endsWith(u8, a, ".0") and std.mem.startsWith(u8, a, b)) {
+        return true;
+    }
+
+    return false;
 }
 
 /// Errors that can occur during WasmEvaluator string generation
