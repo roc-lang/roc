@@ -3559,10 +3559,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .general_reg = result_reg };
         }
 
-        /// Call a C wrapper: fn(a_f0, a_f1, a_f2, b_f0, b_f1, b_f2) -> scalar
-        /// Used for (str, str) -> bool ops
+        /// Call a C wrapper: fn(a_f0, a_f1, a_f2, b_f0, b_f1, b_f2) -> bool
+        /// Used for (str, str) -> bool comparison ops (equal, contains, starts_with, etc.)
         fn callStr2ToScalar(self: *Self, a_off: i32, b_off: i32, fn_addr: usize, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
-            // fn(a_bytes, a_len, a_cap, b_bytes, b_len, b_cap) -> scalar - 6 args
+            // fn(a_bytes, a_len, a_cap, b_bytes, b_len, b_cap) -> bool - 6 args
             const base_ptr = frame_ptr;
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             try builder.addMemArg(base_ptr, a_off);
@@ -3579,6 +3579,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.codegen.emit.movRegReg(.w64, result_reg, .X0);
             } else {
                 try self.codegen.emit.movRegReg(.w64, result_reg, .RAX);
+                // x86_64 ABI: for bool return values, only the low byte (AL) is
+                // guaranteed valid. Upper bytes of RAX may contain garbage from the
+                // callee (e.g. LLVM may use SETZ AL without clearing upper bytes).
+                // Mask to bit 0 so subsequent 64-bit comparisons work correctly.
+                try self.codegen.emit.andRegImm8(result_reg, 1);
             }
             return .{ .general_reg = result_reg };
         }
