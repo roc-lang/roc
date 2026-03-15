@@ -289,7 +289,7 @@ pub const ModuleType = enum {
     can,
     check,
     tracy,
-    fs,
+    io,
     build_options,
     layout,
     eval,
@@ -316,7 +316,7 @@ pub const ModuleType = enum {
         return switch (self) {
             .build_options => &.{},
             .builtins => &.{.tracy},
-            .fs => &.{},
+            .io => &.{},
             .tracy => &.{.build_options},
             .collections => &.{},
             .base => &.{ .collections, .builtins },
@@ -327,16 +327,16 @@ pub const ModuleType = enum {
             .can => &.{ .tracy, .builtins, .collections, .types, .base, .parse, .reporting, .build_options },
             .check => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .reporting },
             .layout => &.{ .tracy, .collections, .base, .types, .builtins, .can },
-            .eval => &.{ .tracy, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .build_options, .reporting, .backend, .mono, .roc_target, .sljmp },
-            .compile => &.{ .tracy, .build_options, .fs, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .eval, .unbundle, .roc_target },
+            .eval => &.{ .tracy, .io, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .build_options, .reporting, .backend, .mono, .roc_target, .sljmp },
+            .compile => &.{ .tracy, .build_options, .io, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .eval, .unbundle, .roc_target },
             .ipc => &.{},
             .repl => &.{ .base, .collections, .compile, .parse, .types, .can, .check, .builtins, .layout, .eval, .backend, .roc_target },
-            .fmt => &.{ .base, .parse, .collections, .can, .fs, .tracy },
+            .fmt => &.{ .base, .parse, .collections, .can, .io, .tracy },
             .watch => &.{.build_options},
             .bundle => &.{ .base, .collections, .base58, .unbundle },
             .unbundle => &.{ .base, .collections, .base58 },
             .base58 => &.{},
-            .lsp => &.{ .compile, .reporting, .build_options, .fs, .base, .parse, .can, .types, .fmt, .roc_target },
+            .lsp => &.{ .compile, .reporting, .build_options, .io, .base, .parse, .can, .types, .fmt, .roc_target },
             .backend => &.{ .base, .layout, .builtins, .can, .mono, .lir, .roc_target },
             .mir => &.{ .base, .can, .types, .builtins, .parse, .check, .collections, .reporting, .build_options, .tracy },
             .lir => &.{ .base, .layout, .types, .mir, .can },
@@ -363,7 +363,7 @@ pub const RocModules = struct {
     can: *Module,
     check: *Module,
     tracy: *Module,
-    fs: *Module,
+    io: *Module,
     build_options: *Module,
     layout: *Module,
     eval: *Module,
@@ -401,7 +401,7 @@ pub const RocModules = struct {
             .can = b.addModule("can", .{ .root_source_file = b.path("src/canonicalize/mod.zig") }),
             .check = b.addModule("check", .{ .root_source_file = b.path("src/check/mod.zig") }),
             .tracy = b.addModule("tracy", .{ .root_source_file = b.path("src/build/tracy.zig") }),
-            .fs = b.addModule("fs", .{ .root_source_file = b.path("src/fs/mod.zig") }),
+            .io = b.addModule("io", .{ .root_source_file = b.path("src/io/mod.zig") }),
             .build_options = b.addModule(
                 "build_options",
                 .{ .root_source_file = build_options_step.getOutput() },
@@ -451,7 +451,7 @@ pub const RocModules = struct {
             .can,
             .check,
             .tracy,
-            .fs,
+            .io,
             .build_options,
             .layout,
             .eval,
@@ -498,7 +498,7 @@ pub const RocModules = struct {
         step.root_module.addImport("check", self.check);
         step.root_module.addImport("tracy", self.tracy);
         step.root_module.addImport("builtins", self.builtins);
-        step.root_module.addImport("fs", self.fs);
+        step.root_module.addImport("io", self.io);
         step.root_module.addImport("build_options", self.build_options);
         step.root_module.addImport("layout", self.layout);
         step.root_module.addImport("eval", self.eval);
@@ -544,7 +544,7 @@ pub const RocModules = struct {
             .can => self.can,
             .check => self.check,
             .tracy => self.tracy,
-            .fs => self.fs,
+            .io => self.io,
             .build_options => self.build_options,
             .layout => self.layout,
             .eval => self.eval,
@@ -595,7 +595,7 @@ pub const RocModules = struct {
             .parse,
             .can,
             .check,
-            .fs,
+            .io,
             .layout,
             .eval,
             .ipc,

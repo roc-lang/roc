@@ -34,7 +34,7 @@ const base = @import("base");
 const reporting = @import("reporting");
 const parse = @import("parse");
 const tracy = @import("tracy");
-const fs_mod = @import("fs");
+const io_mod = @import("io");
 const compile = @import("compile");
 const can = @import("can");
 const check = @import("check");
@@ -81,7 +81,7 @@ const llvm_available = builder.isLLVMAvailable();
 const Can = can.Can;
 const Check = check.Check;
 const SharedMemoryAllocator = ipc.SharedMemoryAllocator;
-const Filesystem = fs_mod.Filesystem;
+const FsIo = io_mod.Io;
 const ModuleEnv = can.ModuleEnv;
 const BuildEnv = compile.BuildEnv;
 const Coordinator = compile.coordinator.Coordinator;
@@ -460,7 +460,7 @@ fn generateRandomSuffix(ctx: *CliContext) ![]u8 {
 /// Uses system temp directory to avoid race conditions when cache is cleared.
 pub fn createUniqueTempDir(ctx: *CliContext) ![]const u8 {
     // Get the version-specific temp directory: {temp}/roc/{version}
-    const version_temp_dir = try cache_config_mod.getVersionTempDir(Filesystem.default(), ctx.arena);
+    const version_temp_dir = try cache_config_mod.getVersionTempDir(FsIo.default(), ctx.arena);
 
     // Ensure the roc/{version} directory exists
     // makePath automatically handles PathAlreadyExists internally
@@ -523,7 +523,7 @@ pub fn writeFdCoordinationFile(ctx: *CliContext, temp_exe_path: []const u8, shm_
 /// The exe_display_name is the name that will appear in `ps` output (e.g., "app.roc").
 pub fn createTempDirStructure(allocs: *Allocators, exe_path: []const u8, exe_display_name: []const u8, shm_handle: SharedMemoryHandle, _: ?[]const u8) ![]const u8 {
     // Get the version-specific temp directory: {temp}/roc/{version}
-    const version_temp_dir = try cache_config_mod.getVersionTempDir(Filesystem.default(), allocs.arena);
+    const version_temp_dir = try cache_config_mod.getVersionTempDir(FsIo.default(), allocs.arena);
 
     // Ensure the roc/{version} directory exists
     // makePath automatically handles PathAlreadyExists internally
@@ -668,7 +668,7 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
     //
     // Uses page_allocator instead of GPA to avoid leak detection false positives
     // (the thread may still be running when the main thread's leak check fires).
-    if (compile.CacheCleanup.startBackgroundCleanup(std.heap.page_allocator, Filesystem.default())) |_| {
+    if (compile.CacheCleanup.startBackgroundCleanup(std.heap.page_allocator, FsIo.default())) |_| {
         // Thread started successfully, will run in background
     } else |_| {
         // Non-fatal: cleanup failure shouldn't prevent compilation
@@ -910,7 +910,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
         .enabled = !args.no_cache,
         .verbose = false,
     };
-    var cache_manager = CacheManager.init(ctx.gpa, cache_config, Filesystem.default());
+    var cache_manager = CacheManager.init(ctx.gpa, cache_config, FsIo.default());
 
     // Create cache directory for linked interpreter executables
     const exe_cache_dir = cache_manager.config.getExeCacheDir(ctx.arena) catch |err| {
@@ -1320,32 +1320,33 @@ fn readDefaultAppSource(ctx: *CliContext, file_path: []const u8) ?[]const u8 {
     return source;
 }
 
-/// Virtual file provider for the echo platform.
-/// Intercepts reads for the synthetic app source and embedded platform files,
-/// delegating all other reads to the real filesystem.
-const EchoFileProvider = struct {
+/// State for the CLI echo platform's virtual I/O context.
+/// Intercepts reads for the synthetic app source and embedded platform files.
+const CliEchoState = struct {
     app_abs_path: []const u8,
     synthetic_app_source: []const u8,
     platform_main_path: []const u8,
     echo_module_path: []const u8,
-
-    const FileProvider = compile.package.FileProvider;
-
-    fn read(ctx_ptr: ?*anyopaque, path: []const u8, gpa: std.mem.Allocator) std.mem.Allocator.Error!?[]u8 {
-        const self: *@This() = @ptrCast(@alignCast(ctx_ptr.?));
-        if (std.mem.eql(u8, path, self.app_abs_path))
-            return try gpa.dupe(u8, self.synthetic_app_source);
-        if (std.mem.eql(u8, path, self.platform_main_path))
-            return try gpa.dupe(u8, echo_platform.platform_main_source);
-        if (std.mem.eql(u8, path, self.echo_module_path))
-            return try gpa.dupe(u8, echo_platform.echo_module_source);
-        return FileProvider.filesystem.read(null, path, gpa);
-    }
-
-    fn provider(self: *@This()) FileProvider {
-        return .{ .ctx = @ptrCast(self), .read = &@This().read };
-    }
 };
+
+fn cliEchoReadFile(ctx: ?*anyopaque, path: []const u8, gpa: std.mem.Allocator) FsIo.ReadError![]u8 {
+    const self: *CliEchoState = @ptrCast(@alignCast(ctx.?));
+    if (std.mem.eql(u8, path, self.app_abs_path))
+        return gpa.dupe(u8, self.synthetic_app_source) catch error.OutOfMemory;
+    if (std.mem.eql(u8, path, self.platform_main_path))
+        return gpa.dupe(u8, echo_platform.platform_main_source) catch error.OutOfMemory;
+    if (std.mem.eql(u8, path, self.echo_module_path))
+        return gpa.dupe(u8, echo_platform.echo_module_source) catch error.OutOfMemory;
+    return FsIo.os().readFile(path, gpa);
+}
+
+fn cliEchoFileExists(ctx: ?*anyopaque, path: []const u8) bool {
+    const self: *CliEchoState = @ptrCast(@alignCast(ctx.?));
+    if (std.mem.eql(u8, path, self.app_abs_path)) return true;
+    if (std.mem.eql(u8, path, self.platform_main_path)) return true;
+    if (std.mem.eql(u8, path, self.echo_module_path)) return true;
+    return FsIo.os().fileExists(path);
+}
 
 /// Run a default_app (headerless file with main! and echo platform).
 /// This compiles the app with real platform .roc files through the standard
@@ -1385,13 +1386,17 @@ fn rocRunDefaultApp(ctx: *CliContext, args: cli_args.RunArgs, original_source: [
     var build_env = try BuildEnv.init(ctx.gpa, .single_threaded, 1, target, cwd);
     defer build_env.deinit();
 
-    var echo_fp = EchoFileProvider{
+    // Set up a custom Io that intercepts reads for synthetic echo platform files.
+    var cli_echo_state = CliEchoState{
         .app_abs_path = app_abs,
         .synthetic_app_source = synthetic_source,
         .platform_main_path = platform_main_path,
         .echo_module_path = echo_module_path,
     };
-    build_env.setFileProvider(echo_fp.provider());
+    var cli_echo_vtable = FsIo.os().vtable;
+    cli_echo_vtable.readFile = &cliEchoReadFile;
+    cli_echo_vtable.fileExists = &cliEchoFileExists;
+    build_env.filesystem = .{ .ctx = @ptrCast(&cli_echo_state), .vtable = cli_echo_vtable };
 
     build_env.discoverDependencies(args.path) catch |err| {
         _ = build_env.renderDiagnostics(ctx.io.stderr());
@@ -2882,58 +2887,50 @@ fn resolveUrlPlatform(ctx: *CliContext, url: []const u8) (CliError || error{OutO
     const package_dir_path = try std.fs.path.join(ctx.arena, &.{ cache_dir_path, base58_hash });
 
     // 3. Check if already cached
-    var package_dir = std.fs.cwd().openDir(package_dir_path, .{}) catch |err| switch (err) {
-        error.FileNotFound => blk: {
-            // Not cached - need to download
-            std.log.info("Downloading platform from {s}...", .{url});
+    const already_cached = blk: {
+        var d = std.fs.cwd().openDir(package_dir_path, .{}) catch |err| switch (err) {
+            error.FileNotFound => break :blk false,
+            else => return ctx.fail(.{ .directory_not_found = .{ .path = package_dir_path } }),
+        };
+        d.close();
+        break :blk true;
+    };
 
-            // Create cache directory structure
-            std.fs.cwd().makePath(cache_dir_path) catch |make_err| {
+    if (!already_cached) {
+        // Not cached - need to download
+        std.log.info("Downloading platform from {s}...", .{url});
+
+        // Create cache directory structure
+        std.fs.cwd().makePath(cache_dir_path) catch |make_err| {
+            return ctx.fail(.{ .directory_create_failed = .{
+                .path = cache_dir_path,
+                .err = make_err,
+            } });
+        };
+
+        // Create package directory
+        std.fs.cwd().makeDir(package_dir_path) catch |make_err| switch (make_err) {
+            error.PathAlreadyExists => {}, // Race condition, another process created it
+            else => {
                 return ctx.fail(.{ .directory_create_failed = .{
-                    .path = cache_dir_path,
+                    .path = package_dir_path,
                     .err = make_err,
                 } });
-            };
+            },
+        };
 
-            // Create package directory
-            std.fs.cwd().makeDir(package_dir_path) catch |make_err| switch (make_err) {
-                error.PathAlreadyExists => {}, // Race condition, another process created it
-                else => {
-                    return ctx.fail(.{ .directory_create_failed = .{
-                        .path = package_dir_path,
-                        .err = make_err,
-                    } });
-                },
-            };
-
-            var new_package_dir = std.fs.cwd().openDir(package_dir_path, .{}) catch {
-                return ctx.fail(.{ .directory_not_found = .{
-                    .path = package_dir_path,
-                } });
-            };
-
-            // Download and extract
-            var gpa_copy = ctx.gpa;
-            download.downloadAndExtract(&gpa_copy, url, new_package_dir) catch |download_err| {
-                // Clean up failed download
-                new_package_dir.close();
-                std.fs.cwd().deleteTree(package_dir_path) catch {};
-                return ctx.fail(.{ .download_failed = .{
-                    .url = url,
-                    .err = download_err,
-                } });
-            };
-
-            std.log.info("Platform cached at {s}", .{package_dir_path});
-            break :blk new_package_dir;
-        },
-        else => {
-            return ctx.fail(.{ .directory_not_found = .{
-                .path = package_dir_path,
+        // Download and extract (path-based, no Dir handle needed)
+        var gpa_copy = ctx.gpa;
+        download.downloadAndExtract(&gpa_copy, url, package_dir_path) catch |download_err| {
+            std.fs.cwd().deleteTree(package_dir_path) catch {};
+            return ctx.fail(.{ .download_failed = .{
+                .url = url,
+                .err = download_err,
             } });
-        },
-    };
-    defer package_dir.close();
+        };
+
+        std.log.info("Platform cached at {s}", .{package_dir_path});
+    }
 
     // Platforms must have a main.roc entry point
     const platform_source_path = try std.fs.path.join(ctx.arena, &.{ package_dir_path, "main.roc" });
@@ -3540,7 +3537,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         .enabled = true,
         .verbose = false,
     };
-    var cache_manager = CacheManager.init(ctx.gpa, cache_config, Filesystem.default());
+    var cache_manager = CacheManager.init(ctx.gpa, cache_config, FsIo.default());
     const cache_dir = try cache_manager.config.getCacheEntriesDir(ctx.arena);
     const build_cache_dir = try std.fs.path.join(ctx.arena, &.{ cache_dir, "roc_build" });
 
@@ -3566,7 +3563,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         build_cache_manager.* = CacheManager.init(ctx.gpa, .{
             .enabled = true,
             .verbose = args.verbose,
-        }, Filesystem.default());
+        }, FsIo.default());
         build_env.setCacheManager(build_cache_manager);
     }
 
@@ -4020,7 +4017,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         .enabled = true,
         .verbose = false,
     };
-    var cache_manager = CacheManager.init(ctx.gpa, cache_config, Filesystem.default());
+    var cache_manager = CacheManager.init(ctx.gpa, cache_config, FsIo.default());
     const cache_dir = try cache_manager.config.getCacheEntriesDir(ctx.arena);
     const build_cache_dir = try std.fs.path.join(ctx.arena, &.{ cache_dir, "roc_build" });
 
@@ -4046,7 +4043,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         build_cache_manager.* = CacheManager.init(ctx.gpa, .{
             .enabled = true,
             .verbose = args.verbose,
-        }, Filesystem.default());
+        }, FsIo.default());
         build_env.setCacheManager(build_cache_manager);
     }
 
@@ -4744,7 +4741,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
             const test_cache_dir = cache_config.getTestCacheDir(ctx.gpa) catch null;
             if (test_cache_dir) |dir| {
                 defer ctx.gpa.free(dir);
-                var test_cache_manager = CacheManager.init(ctx.gpa, cache_config, Filesystem.default());
+                var test_cache_manager = CacheManager.init(ctx.gpa, cache_config, FsIo.default());
                 if (test_cache_manager.loadRawBytes(cache_key, dir)) |cached_data| {
                     defer ctx.gpa.free(cached_data);
                     replayTestCache(ctx.gpa, cached_data, args, stdout, stderr, src, start_time) catch |err| switch (err) {
@@ -4783,7 +4780,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
             try stderr.print("Failed to create cache manager: {}\n", .{err});
             return err;
         };
-        cache_manager.* = CacheManager.init(ctx.gpa, cache_config, Filesystem.default());
+        cache_manager.* = CacheManager.init(ctx.gpa, cache_config, FsIo.default());
         build_env.setCacheManager(cache_manager);
     }
 
@@ -4899,6 +4896,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
         builtin_module_env,
         &import_mapping,
         RocTarget.detectNative(),
+        null,
     ) catch |err| {
         try stderr.print("Failed to create compile-time evaluator: {}\n", .{err});
         return err;
@@ -5110,7 +5108,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
                 if (cache_config.getTestCacheDir(ctx.gpa)) |dir| {
                     defer ctx.gpa.free(dir);
                     const cache_key = CacheManager.generateCacheKey(src, build_options.compiler_version);
-                    var store_cache_manager = CacheManager.init(ctx.gpa, cache_config, Filesystem.default());
+                    var store_cache_manager = CacheManager.init(ctx.gpa, cache_config, FsIo.default());
                     store_cache_manager.storeRawBytes(cache_key, blob, dir);
                 } else |_| {}
             } else |_| {}
@@ -5449,7 +5447,7 @@ fn checkFileWithBuildEnvPreserved(
     // Set up cache manager if caching is enabled
     if (cache_config.enabled) {
         const cache_manager = try ctx.gpa.create(CacheManager);
-        cache_manager.* = CacheManager.init(ctx.gpa, cache_config, Filesystem.default());
+        cache_manager.* = CacheManager.init(ctx.gpa, cache_config, FsIo.default());
         build_env.setCacheManager(cache_manager);
         // Note: BuildEnv.deinit() will clean up the cache manager when caller calls deinit
     }
@@ -5559,7 +5557,7 @@ fn checkFileWithBuildEnv(
     // Set up cache manager if caching is enabled
     if (cache_config.enabled) {
         const cache_manager = try ctx.gpa.create(CacheManager);
-        cache_manager.* = CacheManager.init(ctx.gpa, cache_config, Filesystem.default());
+        cache_manager.* = CacheManager.init(ctx.gpa, cache_config, FsIo.default());
         build_env.setCacheManager(cache_manager);
         // Note: BuildEnv.deinit() will clean up the cache manager
     }

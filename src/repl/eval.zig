@@ -111,7 +111,7 @@ pub const Repl = struct {
         // Initialize DevEvaluator if using dev backend
         var dev_evaluator: ?DevEvaluator = null;
         if (backend == .dev) {
-            dev_evaluator = DevEvaluator.init(allocator) catch null;
+            dev_evaluator = DevEvaluator.init(allocator, null) catch null;
         }
 
         return Repl{

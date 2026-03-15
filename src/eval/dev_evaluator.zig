@@ -14,6 +14,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
+const Io = @import("io").Io;
 const can = @import("can");
 const layout = @import("layout");
 const types = @import("types");
@@ -252,16 +253,19 @@ const DevRocEnv = struct {
     crash_message: ?[]const u8 = null,
     /// Jump buffer for unwinding from roc_crashed back to the call site.
     jmp_buf: JmpBuf = undefined,
+    /// Io context for routing [dbg] output
+    io: Io = Io.default(),
 
     const AllocInfo = struct {
         len: usize,
         alignment: usize,
     };
 
-    fn init(allocator: Allocator) DevRocEnv {
+    fn init(allocator: Allocator, io: ?Io) DevRocEnv {
         return .{
             .allocator = allocator,
             .allocations = std.AutoHashMap(usize, AllocInfo).init(allocator),
+            .io = io orelse Io.default(),
         };
     }
 
@@ -382,20 +386,18 @@ const DevRocEnv = struct {
     }
 
     /// Debug output function.
-    fn rocDbgFn(roc_dbg: *const RocDbg, _: *anyopaque) callconv(.c) void {
-        // On freestanding (WASM), skip debug output to avoid thread locking
-        if (builtin.os.tag != .freestanding) {
-            const msg = roc_dbg.utf8_bytes[0..roc_dbg.len];
-            std.debug.print("[dbg] {s}\n", .{msg});
-        }
+    fn rocDbgFn(roc_dbg: *const RocDbg, env: *anyopaque) callconv(.c) void {
+        const self: *DevRocEnv = @ptrCast(@alignCast(env));
+        const msg = roc_dbg.utf8_bytes[0..roc_dbg.len];
+        var buf: [256]u8 = undefined;
+        const line = std.fmt.bufPrint(&buf, "[dbg] {s}\n", .{msg}) catch "[dbg] (message too long)\n";
+        self.io.writeStderr(line) catch {};
     }
 
     /// Expect failed function.
-    fn rocExpectFailedFn(_: *const RocExpectFailed, _: *anyopaque) callconv(.c) void {
-        // On freestanding (WASM), skip debug output to avoid thread locking
-        if (builtin.os.tag != .freestanding) {
-            std.debug.print("[expect failed]\n", .{});
-        }
+    fn rocExpectFailedFn(_: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
+        const self: *DevRocEnv = @ptrCast(@alignCast(env));
+        self.io.writeStderr("[expect failed]\n") catch {};
     }
 
     /// Crash function — records the crash and longjmps back to the call site.
@@ -466,7 +468,7 @@ pub const DevEvaluator = struct {
     };
 
     /// Initialize the evaluator with builtin modules
-    pub fn init(allocator: Allocator) Error!DevEvaluator {
+    pub fn init(allocator: Allocator, io: ?Io) Error!DevEvaluator {
         // Load compiled builtins
         const compiled_builtins = @import("compiled_builtins");
 
@@ -491,7 +493,7 @@ pub const DevEvaluator = struct {
 
         // Heap-allocate the RocOps environment so the pointer remains stable
         const roc_env = allocator.create(DevRocEnv) catch return error.OutOfMemory;
-        roc_env.* = DevRocEnv.init(allocator);
+        roc_env.* = DevRocEnv.init(allocator, io);
 
         // Create RocOps with function pointers to the DevRocEnv handlers
         // Use a static dummy array for hosted_fns since count=0 means no hosted functions
@@ -908,7 +910,7 @@ pub const DevEvaluator = struct {
 // Tests
 
 test "dev evaluator initialization" {
-    var runner = DevEvaluator.init(std.testing.allocator) catch |err| {
+    var runner = DevEvaluator.init(std.testing.allocator, null) catch |err| {
         return switch (err) {
             error.OutOfMemory => error.SkipZigTest,
             else => err,

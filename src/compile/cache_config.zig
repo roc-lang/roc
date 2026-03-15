@@ -6,7 +6,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
-const Filesystem = @import("fs").Filesystem;
+const Io = @import("io").Io;
 
 const Allocator = std.mem.Allocator;
 
@@ -35,7 +35,7 @@ pub const CacheConfig = struct {
     max_size_mb: u32 = 1024, // 1GB default
     max_age_days: u32 = 30, // 30 days default
     verbose: bool = false, // Print cache statistics
-    filesystem: Filesystem = Filesystem.default(),
+    io: Io = Io.default(),
 
     const Self = @This();
 
@@ -47,7 +47,7 @@ pub const CacheConfig = struct {
     /// - Uses "roc" on Unix and "Roc" on Windows as the cache dir name
     pub fn getDefaultCacheDir(self: Self, allocator: Allocator) ![]u8 {
         // Respect XDG_CACHE_HOME if set
-        if (self.filesystem.getEnvVar("XDG_CACHE_HOME", allocator)) |xdg_cache| {
+        if (self.io.getEnvVar("XDG_CACHE_HOME", allocator)) |xdg_cache| {
             defer allocator.free(xdg_cache);
             return std.fs.path.join(allocator, &[_][]const u8{ xdg_cache, getCacheDirName() });
         } else |_| {
@@ -57,7 +57,7 @@ pub const CacheConfig = struct {
                 else => "HOME",
             };
 
-            const home_dir = self.filesystem.getEnvVar(home_env, allocator) catch {
+            const home_dir = self.io.getEnvVar(home_env, allocator) catch {
                 return error.NoHomeDirectory;
             };
             defer allocator.free(home_dir);
@@ -202,12 +202,12 @@ pub fn getCacheDirName() []const u8 {
 
 /// Get the temporary directory for runtime executables.
 /// This is in the system temp dir, not the persistent cache.
-pub fn getTempDir(filesystem: Filesystem, allocator: Allocator) ![]u8 {
+pub fn getTempDir(io: Io, allocator: Allocator) ![]u8 {
     const temp_base = switch (builtin.target.os.tag) {
-        .windows => filesystem.getEnvVar("TEMP", allocator) catch
-            filesystem.getEnvVar("TMP", allocator) catch
+        .windows => io.getEnvVar("TEMP", allocator) catch
+            io.getEnvVar("TMP", allocator) catch
             try allocator.dupe(u8, "C:\\Windows\\Temp"),
-        else => filesystem.getEnvVar("TMPDIR", allocator) catch
+        else => io.getEnvVar("TMPDIR", allocator) catch
             try allocator.dupe(u8, "/tmp"),
     };
     defer allocator.free(temp_base);
@@ -216,8 +216,8 @@ pub fn getTempDir(filesystem: Filesystem, allocator: Allocator) ![]u8 {
 }
 
 /// Get the version-specific temporary directory for runtime executables.
-pub fn getVersionTempDir(filesystem: Filesystem, allocator: Allocator) ![]u8 {
-    const temp_base = try getTempDir(filesystem, allocator);
+pub fn getVersionTempDir(io: Io, allocator: Allocator) ![]u8 {
+    const temp_base = try getTempDir(io, allocator);
     defer allocator.free(temp_base);
 
     const version_dir = try getCompilerVersionDir(allocator);
