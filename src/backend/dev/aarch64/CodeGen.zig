@@ -38,9 +38,13 @@ pub fn CodeGen(comptime target: RocTarget) type {
         pub const roc_target = target;
 
         /// Number of general-purpose registers
-        const NUM_GENERAL_REGS = 32;
+        pub const NUM_GENERAL_REGS = 32;
         /// Number of float registers
-        const NUM_FLOAT_REGS = 32;
+        pub const NUM_FLOAT_REGS = 32;
+
+        /// Initial free register masks (caller-saved registers available at function entry)
+        pub const INITIAL_FREE_GENERAL: u32 = CC.CALLER_SAVED_GENERAL_MASK;
+        pub const INITIAL_FREE_FLOAT: u32 = CC.CALLER_SAVED_FLOAT_MASK;
 
         /// Size of callee-saved area in bytes (5 pairs * 16 bytes = 80)
         /// Used by MonoExprCodeGen to reserve stack space for callee-saved registers

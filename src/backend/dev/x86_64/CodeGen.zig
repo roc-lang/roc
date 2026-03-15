@@ -41,9 +41,13 @@ pub fn CodeGen(comptime target: RocTarget) type {
         pub const roc_target = target;
 
         /// Number of general-purpose registers
-        const NUM_GENERAL_REGS = 16;
+        pub const NUM_GENERAL_REGS = 16;
         /// Number of float registers
-        const NUM_FLOAT_REGS = 16;
+        pub const NUM_FLOAT_REGS = 16;
+
+        /// Initial free register masks (caller-saved registers available at function entry)
+        pub const INITIAL_FREE_GENERAL: u32 = CC.CALLER_SAVED_GENERAL_MASK;
+        pub const INITIAL_FREE_FLOAT: u32 = CC.CALLER_SAVED_FLOAT_MASK;
 
         /// Bitmask of callee-saved general registers available for allocation
         /// System V: RBX, R12, R13, R14, R15 (not RBP - it's the frame pointer)

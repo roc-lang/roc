@@ -1183,12 +1183,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             self.roc_ops_reg = roc_ops_save_reg;
 
-            // NOTE: Do NOT free arg0_reg/arg1_reg here. Although their values have
-            // been saved to callee-saved registers, freeing them makes X0/X1 available
-            // to the register allocator. When compileLambdaAsProc is called during
-            // expression generation, it inherits this register state. If X0/X1 are
-            // "free", the allocator may use them as temporaries in the lambda body,
-            // conflicting with their role as argument registers in the lambda prologue.
+            // Free arg registers — their values have been saved to callee-saved registers.
+            // This is safe because compileLambdaAsProc now resets its own register state,
+            // so lambda bodies won't inherit these freed registers.
+            self.codegen.freeGeneral(arg0_reg);
+            self.codegen.freeGeneral(arg1_reg);
 
             // Remove roc_ops and result_ptr registers from callee_saved_available
             // so the register allocator never uses them as temporaries.
@@ -11553,11 +11552,23 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const saved_stack_offset = self.codegen.stack_offset;
             const saved_callee_saved_used = self.codegen.callee_saved_used;
             const saved_callee_saved_available = self.codegen.callee_saved_available;
+            const saved_free_general = self.codegen.free_general;
+            const saved_general_owners = self.codegen.general_owners;
+            const saved_free_float = self.codegen.free_float;
+            const saved_float_owners = self.codegen.float_owners;
             const saved_roc_ops_reg = self.roc_ops_reg;
             const saved_binding_symbol = self.current_binding_symbol;
             const saved_lambda_expr_id = self.current_lambda_expr_id;
 
+            // Reset register state for new function scope — each RC helper is a
+            // separate callable with its own prologue/epilogue, so it starts with
+            // a full set of registers regardless of what the parent is using.
             self.codegen.callee_saved_used = 0;
+            self.codegen.callee_saved_available = CodeGen.CALLEE_SAVED_GENERAL_MASK;
+            self.codegen.free_general = CodeGen.INITIAL_FREE_GENERAL;
+            self.codegen.general_owners = [_]?u32{null} ** CodeGen.NUM_GENERAL_REGS;
+            self.codegen.free_float = CodeGen.INITIAL_FREE_FLOAT;
+            self.codegen.float_owners = [_]?u32{null} ** CodeGen.NUM_FLOAT_REGS;
             self.current_binding_symbol = null;
             self.current_lambda_expr_id = null;
             self.roc_ops_reg = null;
@@ -11577,6 +11588,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.codegen.stack_offset = saved_stack_offset;
                 self.codegen.callee_saved_used = saved_callee_saved_used;
                 self.codegen.callee_saved_available = saved_callee_saved_available;
+                self.codegen.free_general = saved_free_general;
+                self.codegen.general_owners = saved_general_owners;
+                self.codegen.free_float = saved_free_float;
+                self.codegen.float_owners = saved_float_owners;
                 self.roc_ops_reg = saved_roc_ops_reg;
                 self.current_binding_symbol = saved_binding_symbol;
                 self.current_lambda_expr_id = saved_lambda_expr_id;
@@ -11680,6 +11695,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.stack_offset = saved_stack_offset;
             self.codegen.callee_saved_used = saved_callee_saved_used;
             self.codegen.callee_saved_available = saved_callee_saved_available;
+            self.codegen.free_general = saved_free_general;
+            self.codegen.general_owners = saved_general_owners;
+            self.codegen.free_float = saved_free_float;
+            self.codegen.float_owners = saved_float_owners;
             self.roc_ops_reg = saved_roc_ops_reg;
             self.current_binding_symbol = saved_binding_symbol;
             self.current_lambda_expr_id = saved_lambda_expr_id;
@@ -13349,6 +13368,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const saved_stack_offset = self.codegen.stack_offset;
             const saved_callee_saved_used = self.codegen.callee_saved_used;
             const saved_callee_saved_available = self.codegen.callee_saved_available;
+            const saved_free_general = self.codegen.free_general;
+            const saved_general_owners = self.codegen.general_owners;
+            const saved_free_float = self.codegen.free_float;
+            const saved_float_owners = self.codegen.float_owners;
             const saved_roc_ops_reg = self.roc_ops_reg;
             var saved_symbol_locations = self.symbol_locations.clone() catch return error.OutOfMemory;
             defer saved_symbol_locations.deinit();
@@ -13359,11 +13382,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.symbol_locations.clearRetainingCapacity();
             self.mutable_var_slots.clearRetainingCapacity();
             self.codegen.callee_saved_used = 0;
-            // NOTE: Do NOT reset callee_saved_available to the full mask here!
-            // The main procedure has reserved R12 (roc_ops) and RBX (result_ptr) which
-            // must remain protected. The lambda shares the same roc_ops register, so if
-            // we made R12 available, the lambda might allocate it as a scratch register
-            // and overwrite the roc_ops pointer, causing crashes when calling builtins.
+            // Reset register pools — the lambda is a separate function and should
+            // not inherit register pressure from the parent's expression context.
+            self.codegen.free_general = CodeGen.INITIAL_FREE_GENERAL;
+            self.codegen.general_owners = [_]?u32{null} ** CodeGen.NUM_GENERAL_REGS;
+            self.codegen.free_float = CodeGen.INITIAL_FREE_FLOAT;
+            self.codegen.float_owners = [_]?u32{null} ** CodeGen.NUM_FLOAT_REGS;
+            // Reset callee_saved_available to the full mask — each lambda is a
+            // separate function with its own prologue/epilogue that saves/restores
+            // callee-saved registers, so inheriting the parent's depleted pool would
+            // artificially reduce the available register set. R12/X20 is explicitly
+            // protected below (removed from the pool) since the lambda uses it for roc_ops.
+            self.codegen.callee_saved_available = CodeGen.CALLEE_SAVED_GENERAL_MASK;
 
             // Mark R12/X20 as used so the prologue will save/restore it.
             // The lambda uses R12/X20 to hold roc_ops (inherited from the caller).
@@ -13423,6 +13453,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.codegen.stack_offset = saved_stack_offset;
                 self.codegen.callee_saved_used = saved_callee_saved_used;
                 self.codegen.callee_saved_available = saved_callee_saved_available;
+                self.codegen.free_general = saved_free_general;
+                self.codegen.general_owners = saved_general_owners;
+                self.codegen.free_float = saved_free_float;
+                self.codegen.float_owners = saved_float_owners;
                 self.roc_ops_reg = saved_roc_ops_reg;
                 self.ret_ptr_slot = saved_ret_ptr_slot;
                 self.symbol_locations.deinit();
@@ -13549,6 +13583,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.codegen.stack_offset = saved_stack_offset;
                 self.codegen.callee_saved_used = saved_callee_saved_used;
                 self.codegen.callee_saved_available = saved_callee_saved_available;
+                self.codegen.free_general = saved_free_general;
+                self.codegen.general_owners = saved_general_owners;
+                self.codegen.free_float = saved_free_float;
+                self.codegen.float_owners = saved_float_owners;
                 self.roc_ops_reg = saved_roc_ops_reg;
                 self.ret_ptr_slot = saved_ret_ptr_slot;
                 self.symbol_locations.deinit();
@@ -13620,6 +13658,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.codegen.stack_offset = saved_stack_offset;
                 self.codegen.callee_saved_used = saved_callee_saved_used;
                 self.codegen.callee_saved_available = saved_callee_saved_available;
+                self.codegen.free_general = saved_free_general;
+                self.codegen.general_owners = saved_general_owners;
+                self.codegen.free_float = saved_free_float;
+                self.codegen.float_owners = saved_float_owners;
                 self.roc_ops_reg = saved_roc_ops_reg;
                 self.ret_ptr_slot = saved_ret_ptr_slot;
                 self.symbol_locations.deinit();
