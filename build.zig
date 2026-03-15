@@ -2090,10 +2090,11 @@ pub fn build(b: *std.Build) void {
             .abi = if (builtin.target.os.tag == .linux) .musl else null,
         };
 
-        // Use baseline x86_64 CPU for Valgrind compatibility on CI (Valgrind 3.18.1 doesn't support AVX-512)
-        const is_ci = std.process.getEnvVarOwned(b.allocator, "CI") catch null;
-        if (is_ci != null and builtin.target.cpu.arch == .x86_64 and builtin.target.os.tag == .linux) {
-            default_target_query.cpu_model = .{ .explicit = &std.Target.x86.cpu.x86_64 };
+        // Use x86_64_v3 (AVX2, no AVX-512) for Valgrind compatibility.
+        // Valgrind 3.22 can't emulate AVX-512 EVEX instructions in musl startup code.
+        // This matches the release target (getReleaseTargetQuery) which also uses x86_64_v3.
+        if (builtin.target.cpu.arch == .x86_64) {
+            default_target_query.cpu_model = .{ .explicit = &std.Target.x86.cpu.x86_64_v3 };
         }
 
         break :blk b.standardTargetOptions(.{ .default_target = default_target_query });
