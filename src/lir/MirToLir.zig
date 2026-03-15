@@ -1791,6 +1791,17 @@ fn isBorrowAtomicExpr(self: *const Self, expr_id: LirExprId) bool {
     const expr = self.lir_store.getExpr(expr_id);
     return switch (expr) {
         .str_literal => |str_idx| self.lir_store.getString(str_idx).len < (3 * @sizeOf(usize)),
+        .lookup => |lookup| {
+            // Lookups to symbols that have a local binding mode are managed
+            // by an enclosing scope and safe to use inline.  Lookups to
+            // module-level definitions (no binding mode) whose layouts
+            // contain refcounted data are NOT atomic — the code generator
+            // will lazily heap-allocate the value, and without a binding
+            // the RC pass cannot emit a decref, causing a leak.
+            if (self.symbol_binding_modes.get(lookup.symbol.raw()) != null) return true;
+            const layout_val = self.layout_store.getLayout(lookup.layout_idx);
+            return !self.layout_store.layoutContainsRefcounted(layout_val);
+        },
         else => isAtomicExpr(expr),
     };
 }
@@ -6449,6 +6460,10 @@ test "borrow-only low-level lookup arg stays as plain low_level" {
 
     var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.lambda_set_store, env.module_env.idents.true_tag);
     defer translator.deinit();
+
+    // Register the list symbol as a local binding so isBorrowAtomicExpr
+    // treats it as locally managed (wouldn't need a scoped_borrow wrapper).
+    try translator.symbol_binding_modes.put(sym_list.raw(), .owned);
 
     const lir_id = try translator.lower(ll_expr);
     const lir_expr = env.lir_store.getExpr(lir_id);
