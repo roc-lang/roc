@@ -114,6 +114,18 @@ test "Repl - !Bool.False" {
     try expectBoth("!Bool.False", "True");
 }
 
+test "Repl - I8.mod_by negative positive" {
+    try expectBoth("I8.mod_by(-10, 3)", "2");
+}
+
+test "Repl - I8.mod_by positive negative" {
+    try expectBoth("I8.mod_by(10, -3)", "-2");
+}
+
+test "Repl - I8.mod_by negative negative" {
+    try expectBoth("I8.mod_by(-10, -3)", "-1");
+}
+
 test "Repl - Str.is_empty" {
     try expectBoth("Str.is_empty(\"\")", "True");
     try expectBoth("Str.is_empty(\"a\")", "False");

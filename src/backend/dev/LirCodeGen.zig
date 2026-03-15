@@ -4768,21 +4768,23 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         // Start with hardware remainder (sign of dividend), and add
                         // the divisor back only when the remainder is non-zero and
                         // its sign differs from the divisor's sign.
+                        const divisor_reg = try self.allocTempGeneral();
+                        try self.emitMovRegReg(divisor_reg, rhs_reg);
                         try self.codegen.emitSMod(.w64, result_reg, lhs_reg, rhs_reg);
                         const sign_check_reg = try self.allocTempGeneral();
                         try self.emitCmpImm(result_reg, 0);
                         const zero_patch = try self.emitJumpIfEqual();
 
                         if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.eorRegRegReg(.w64, sign_check_reg, result_reg, rhs_reg);
+                            try self.codegen.emit.eorRegRegReg(.w64, sign_check_reg, result_reg, divisor_reg);
                         } else {
                             try self.emitMovRegReg(sign_check_reg, result_reg);
-                            try self.codegen.emit.xorRegReg(.w64, sign_check_reg, rhs_reg);
+                            try self.codegen.emit.xorRegReg(.w64, sign_check_reg, divisor_reg);
                         }
 
                         try self.emitCmpImm(sign_check_reg, 0);
                         const same_sign_patch = try self.codegen.emitCondJump(condGreaterOrEqual());
-                        try self.emitAddRegs(.w64, result_reg, result_reg, rhs_reg);
+                        try self.emitAddRegs(.w64, result_reg, result_reg, divisor_reg);
                         const done_patch = try self.codegen.emitJump();
 
                         const skip_adjust_offset = self.codegen.currentOffset();
@@ -4790,6 +4792,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         self.codegen.patchJump(zero_patch, skip_adjust_offset);
                         self.codegen.patchJump(done_patch, self.codegen.currentOffset());
                         self.codegen.freeGeneral(sign_check_reg);
+                        self.codegen.freeGeneral(divisor_reg);
                     }
                 },
                 .num_shift_left_by => try self.emitShlReg(.w64, result_reg, lhs_reg, rhs_reg),
