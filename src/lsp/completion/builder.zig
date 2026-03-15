@@ -79,7 +79,7 @@ pub const CompletionBuilder = struct {
         const module_ident = module_env.qualified_module_ident;
         if (self.cached_scope != null and
             !self.cached_scope_module_ident.isNone() and
-            @as(u32, @bitCast(self.cached_scope_module_ident)) == @as(u32, @bitCast(module_ident)))
+            self.cached_scope_module_ident.eql(module_ident))
         {
             return &self.cached_scope.?;
         }
@@ -1187,7 +1187,7 @@ pub const CompletionBuilder = struct {
         const entries = module_env.method_idents.entries.items;
         for (entries) |entry| {
             // Check if this method is for our type
-            if (entry.key.type_ident == type_ident) {
+            if (entry.key.type_ident.eql(type_ident)) {
                 const method_ident = entry.key.method_ident;
                 const method_name = module_env.getIdentText(method_ident);
 
@@ -1266,7 +1266,7 @@ pub const CompletionBuilder = struct {
                 else => continue,
             };
 
-            if (ident_idx == qualified_ident) {
+            if (ident_idx.eql(qualified_ident)) {
                 return doc_comments.extractDocForDef(
                     self.allocator,
                     module_env.common.source,
@@ -1293,7 +1293,7 @@ pub const CompletionBuilder = struct {
                 else => continue,
             };
 
-            if (ident_idx == qualified_ident) {
+            if (ident_idx.eql(qualified_ident)) {
                 return doc_comments.extractDocForStatement(
                     self.allocator,
                     module_env.common.source,
@@ -1321,7 +1321,7 @@ pub const CompletionBuilder = struct {
                 else => continue,
             };
 
-            if (ident_idx == qualified_ident) {
+            if (ident_idx.eql(qualified_ident)) {
                 return ModuleEnv.varFrom(def.pattern);
             }
         }
@@ -1343,7 +1343,7 @@ pub const CompletionBuilder = struct {
                 else => continue,
             };
 
-            if (ident_idx == qualified_ident) {
+            if (ident_idx.eql(qualified_ident)) {
                 return ModuleEnv.varFrom(pattern_idx);
             }
         }

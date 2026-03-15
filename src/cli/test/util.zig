@@ -10,8 +10,38 @@ pub const RocResult = struct {
     term: std.process.Child.Term,
 };
 
+fn runChild(
+    allocator: std.mem.Allocator,
+    argv: []const []const u8,
+    cwd_path: []const u8,
+    extra_env: ?*const std.process.EnvMap,
+) !RocResult {
+    const result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = argv,
+        .cwd = cwd_path,
+        .env_map = extra_env,
+        .max_output_bytes = 10 * 1024 * 1024, // 10MB
+    });
+
+    return RocResult{
+        .stdout = result.stdout,
+        .stderr = result.stderr,
+        .term = result.term,
+    };
+}
+
 /// Helper to run roc with arguments that don't require a test file
 pub fn runRocCommand(allocator: std.mem.Allocator, args: []const []const u8) !RocResult {
+    return runRocCommandWithEnv(allocator, args, null);
+}
+
+/// Run a roc CLI command with optional extra environment variables.
+pub fn runRocCommandWithEnv(
+    allocator: std.mem.Allocator,
+    args: []const []const u8,
+    extra_env: ?*const std.process.EnvMap,
+) !RocResult {
     // Get absolute path to roc binary from current working directory
     const cwd_path = try std.fs.cwd().realpathAlloc(allocator, ".");
     defer allocator.free(cwd_path);
@@ -26,23 +56,21 @@ pub fn runRocCommand(allocator: std.mem.Allocator, args: []const []const u8) !Ro
     });
     defer allocator.free(argv);
 
-    // Run roc and capture output
-    const result = try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = argv,
-        .cwd = cwd_path,
-        .max_output_bytes = 10 * 1024 * 1024, // 10MB
-    });
-
-    return RocResult{
-        .stdout = result.stdout,
-        .stderr = result.stderr,
-        .term = result.term,
-    };
+    return runChild(allocator, argv, cwd_path, extra_env);
 }
 
 /// Helper to set up and run roc with arbitrary arguments
 pub fn runRoc(allocator: std.mem.Allocator, args: []const []const u8, test_file_path: []const u8) !RocResult {
+    return runRocWithEnv(allocator, args, test_file_path, null);
+}
+
+/// Run roc on a test file with optional extra environment variables.
+pub fn runRocWithEnv(
+    allocator: std.mem.Allocator,
+    args: []const []const u8,
+    test_file_path: []const u8,
+    extra_env: ?*const std.process.EnvMap,
+) !RocResult {
     // Get absolute path to roc binary from current working directory
     const cwd_path = try std.fs.cwd().realpathAlloc(allocator, ".");
     defer allocator.free(cwd_path);
@@ -61,19 +89,7 @@ pub fn runRoc(allocator: std.mem.Allocator, args: []const []const u8, test_file_
     });
     defer allocator.free(argv);
 
-    // Run roc and capture output
-    const result = try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = argv,
-        .cwd = cwd_path,
-        .max_output_bytes = 10 * 1024 * 1024, // 10MB
-    });
-
-    return RocResult{
-        .stdout = result.stdout,
-        .stderr = result.stderr,
-        .term = result.term,
-    };
+    return runChild(allocator, argv, cwd_path, extra_env);
 }
 
 /// Helper to run roc with stdin input (for REPL testing)

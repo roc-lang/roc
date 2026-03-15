@@ -55,6 +55,8 @@ x = {
 ~~~
 # EXPECTED
 MISSING METHOD - multiline_string_complex.md:40:5:40:8
+MISSING METHOD - multiline_string_complex.md:37:3:37:9
+TYPE MISMATCH - multiline_string_complex.md:37:3:37:4
 # PROBLEMS
 **MISSING METHOD**
 This **not** method is being called on a value whose type doesn't have that method:
@@ -69,6 +71,39 @@ The value's type, which does not have a method named **not**, is:
     Str
 
 **Hint:** For this to work, the type would need to have a method named **not** associated with it in the type's declaration.
+
+**MISSING METHOD**
+The value before this **-** operator has a type that doesn't have a **minus** method:
+**multiline_string_complex.md:37:3:37:9:**
+```roc
+		0 - \\
+```
+		^^^^^^
+
+The value's type, which does not have a method named **minus**, is:
+
+    Str
+
+**Hint:** This numeric literal was given the type **Dec** because it was never used as any concrete number type. To use a different numeric type, add a suffix or a type annotation.
+
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
+**multiline_string_complex.md:37:3:37:4:**
+```roc
+		0 - \\
+```
+		^
+
+The type was determined to be non-numeric here:
+**multiline_string_complex.md:37:7:37:9:**
+```roc
+		0 - \\
+```
+		    ^^
+
+Other code expects this to have the type:
+
+    Error
 
 # TOKENS
 ~~~zig
@@ -306,13 +341,13 @@ x = {
 		(patt (type "Str"))
 		(patt (type "Str"))
 		(patt (type "Str"))
-		(patt (type "{ a: Str, b: (Str, Str), c: List(Str), d: Str, e: Error }"))
+		(patt (type "{ a: Str, b: (Str, Str), c: List(Str), d: Error, e: Error }"))
 		(patt (type "Str")))
 	(expressions
 		(expr (type "Str"))
 		(expr (type "Str"))
 		(expr (type "Str"))
 		(expr (type "Str"))
-		(expr (type "{ a: Str, b: (Str, Str), c: List(Str), d: Str, e: Error }"))
+		(expr (type "{ a: Str, b: (Str, Str), c: List(Str), d: Error, e: Error }"))
 		(expr (type "Str"))))
 ~~~

@@ -67,6 +67,7 @@ pub const OptLevel = enum {
 pub const RunArgs = struct {
     path: []const u8, // the path of the roc file to be executed
     opt: OptLevel = .dev, // the optimization level
+    backend: Backend = .interpreter, // code generation backend (interpreter or dev)
     target: ?[]const u8 = null, // the target to compile for (e.g., x64musl, x64glibc)
     app_args: []const []const u8 = &[_][]const u8{}, // any arguments to be passed to roc application being run
     no_cache: bool = false, // bypass the executable cache
@@ -101,12 +102,17 @@ pub const BuildArgs = struct {
     z_bench_tokenize: ?[]const u8 = null, // benchmark tokenizer on a file or directory
     z_bench_parse: ?[]const u8 = null, // benchmark parser on a file or directory
     z_dump_linker: bool = false, // dump linker inputs to temp directory for debugging
+    exit_on_warnings: bool = true, // exit with code 2 when warnings are emitted
+    warning_count_out: ?*usize = null, // optionally receive the total warning count
+    require_executable_output: bool = false, // reject static/shared library targets
+    suppress_build_status: bool = false, // suppress "Built..." output (used by roc run)
 };
 
 /// Arguments for `roc test`
 pub const TestArgs = struct {
     path: []const u8, // the path to the file to be tested
     opt: OptLevel, // the optimization level to be used for test execution
+    backend: Backend = .interpreter, // evaluation backend (interpreter or dev)
     main: ?[]const u8, // the path to a roc file with an app header to be used to resolve dependencies
     verbose: bool = false, // enable verbose output showing individual test results
     no_cache: bool = false, // disable compilation caching, force re-run all tests
@@ -216,10 +222,11 @@ const main_help =
     \\  [ARGS_FOR_APP]...  Arguments to pass into the app being run
     \\                     e.g. `roc run -- arg1 arg2`
     \\Options:
-    \\      --opt=<size|speed|dev> Optimize the build process for binary size, execution speed, or compilation speed. Defaults to compilation speed (dev)
-    \\      --target=<target>      Target to compile for (e.g., x64musl, x64glibc, arm64musl). Defaults to native target with musl for static linking
-    \\      --no-cache             Force a rebuild of the interpreted host (useful for compiler and platform developers)
-    \\      --allow-errors         Allow execution even if there are type errors (warnings are always allowed)
+    \\      --opt=<size|speed|dev>         Optimize the build process for binary size, execution speed, or compilation speed. Defaults to compilation speed (dev)
+    \\      --backend=<interpreter|dev>    Code generation backend: interpreter (default) or dev (native machine code)
+    \\      --target=<target>              Target to compile for (e.g., x64musl, x64glibc, arm64musl). Defaults to native target with musl for static linking
+    \\      --no-cache                     Force a rebuild of the interpreted host (useful for compiler and platform developers)
+    \\      --allow-errors                 Allow execution even if there are type errors (warnings are always allowed)
     \\
 ;
 
@@ -620,6 +627,7 @@ fn parseFormat(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator
 fn parseTest(args: []const []const u8) CliArgs {
     var path: ?[]const u8 = null;
     var opt: OptLevel = .dev;
+    var backend: Backend = .interpreter;
     var main: ?[]const u8 = null;
     var verbose: bool = false;
     var no_cache: bool = false;
@@ -635,14 +643,24 @@ fn parseTest(args: []const []const u8) CliArgs {
             \\  [ROC_FILE] The .roc file to test [default: main.roc]
             \\
             \\Options:
-            \\      --opt=<size|speed|dev>  Optimize the build process for binary size, execution speed, or compilation speed. Defaults to compilation speed (dev)
-            \\      --main <main>           The .roc file of the main app/package module to resolve dependencies from
-            \\      --verbose               Enable verbose output showing individual test results
-            \\      --no-cache              Disable compilation caching, force re-run all tests
-            \\  -j, --jobs=<N>              Max worker threads for parallel compilation (default: auto-detect CPU count)
-            \\  -h, --help                  Print help
+            \\      --opt=<size|speed|dev>          Optimize the build process for binary size, execution speed, or compilation speed. Defaults to compilation speed (dev)
+            \\      --backend=<interpreter|dev>     Evaluation backend (default: interpreter)
+            \\      --main <main>                   The .roc file of the main app/package module to resolve dependencies from
+            \\      --verbose                       Enable verbose output showing individual test results
+            \\      --no-cache                      Disable compilation caching, force re-run all tests
+            \\  -j, --jobs=<N>                      Max worker threads for parallel compilation (default: auto-detect CPU count)
+            \\  -h, --help                          Print help
             \\
         };
+        } else if (mem.startsWith(u8, arg, "--backend=")) {
+            const value = arg["--backend=".len..];
+            backend = Backend.fromString(value) orelse {
+                return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{
+                    .value = value,
+                    .flag = "--backend",
+                    .valid_options = "interpreter, dev",
+                } } };
+            };
         } else if (mem.startsWith(u8, arg, "--main")) {
             if (getFlagValue(arg)) |value| {
                 main = value;
@@ -687,7 +705,7 @@ fn parseTest(args: []const []const u8) CliArgs {
             path = arg;
         }
     }
-    return CliArgs{ .test_cmd = TestArgs{ .path = path orelse "main.roc", .opt = opt, .main = main, .verbose = verbose, .no_cache = no_cache, .max_threads = max_threads } };
+    return CliArgs{ .test_cmd = TestArgs{ .path = path orelse "main.roc", .opt = opt, .backend = backend, .main = main, .verbose = verbose, .no_cache = no_cache, .max_threads = max_threads } };
 }
 
 fn parseRepl(args: []const []const u8) CliArgs {
@@ -945,6 +963,7 @@ fn parseExperimentalLsp(args: []const []const u8) CliArgs {
 fn parseRun(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
     var path: ?[]const u8 = null;
     var opt: OptLevel = .dev;
+    var backend: Backend = .interpreter;
     var target: ?[]const u8 = null;
     var no_cache: bool = false;
     var allow_errors: bool = false;
@@ -993,6 +1012,16 @@ fn parseRun(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Er
             }
         } else if (mem.eql(u8, arg, "--no-cache")) {
             no_cache = true;
+        } else if (mem.startsWith(u8, arg, "--backend=")) {
+            const value = arg["--backend=".len..];
+            backend = Backend.fromString(value) orelse {
+                app_args.deinit();
+                return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{
+                    .value = value,
+                    .flag = "--backend",
+                    .valid_options = "interpreter, dev",
+                } } };
+            };
         } else if (mem.eql(u8, arg, "--allow-errors")) {
             allow_errors = true;
         } else {
@@ -1003,7 +1032,7 @@ fn parseRun(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Er
             }
         }
     }
-    return CliArgs{ .run = RunArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .app_args = try app_args.toOwnedSlice(), .no_cache = no_cache, .allow_errors = allow_errors } };
+    return CliArgs{ .run = RunArgs{ .path = path orelse "main.roc", .opt = opt, .backend = backend, .target = target, .app_args = try app_args.toOwnedSlice(), .no_cache = no_cache, .allow_errors = allow_errors } };
 }
 
 fn isHelpFlag(arg: []const u8) bool {

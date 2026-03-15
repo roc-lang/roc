@@ -389,20 +389,9 @@ pub fn CodeGen(comptime target: RocTarget) type {
 
         pub fn allocStack(self: *Self, size: u32) i32 {
             const aligned_size: i32 = @intCast((size + 15) & ~@as(u32, 15)); // 16-byte align
-
-            // For aarch64 procedure frames, stack_offset is positive and grows upward.
-            // We return the current offset and increment for the next allocation.
-            // For main expression frames, stack_offset is negative and grows downward.
-            if (self.stack_offset >= 0) {
-                // Procedure frame: return current offset, then increment
-                const offset = self.stack_offset;
-                self.stack_offset += aligned_size;
-                return offset;
-            } else {
-                // Main expression frame: decrement, then return (standard downward growth)
-                self.stack_offset -= aligned_size;
-                return self.stack_offset;
-            }
+            const offset = self.stack_offset;
+            self.stack_offset += aligned_size;
+            return offset;
         }
 
         /// Alias for allocStack - allocate a stack slot of the given size
@@ -589,6 +578,10 @@ pub fn CodeGen(comptime target: RocTarget) type {
         /// Emit float64 negation: dst = -src
         pub fn emitNegF64(self: *Self, dst: FloatReg, src: FloatReg) !void {
             try self.emit.fnegRegReg(.double, dst, src);
+        }
+
+        pub fn emitAbsF64(self: *Self, dst: FloatReg, src: FloatReg) !void {
+            try self.emit.fabsRegReg(.double, dst, src);
         }
 
         /// Emit float32 addition: dst = a + b

@@ -14,8 +14,6 @@ const Allocators = base.Allocators;
 const Can = can.Can;
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
-const ClosureTransformer = can.ClosureTransformer;
-
 const Check = @import("../Check.zig");
 
 const testing = std.testing;
@@ -134,15 +132,19 @@ const MonoTestEnv = struct {
         module_env.qualified_module_ident = module_env.display_module_name_idx;
         try module_env.common.calcLineStarts(gpa);
 
-        try Can.populateModuleEnvs(&module_envs, module_env, builtin_module.env, builtin_indices);
-
         const parse_ast = try parse.parse(&allocators, &module_env.common);
         errdefer parse_ast.deinit();
         parse_ast.store.emptyScratch();
 
         try module_env.initCIRFields(module_name);
 
-        can_instance.* = try Can.init(&allocators, module_env, parse_ast, &module_envs);
+        can_instance.* = try Can.initModule(&allocators, module_env, parse_ast, .{
+            .builtin_types = .{
+                .builtin_module_env = builtin_module.env,
+                .builtin_indices = builtin_indices,
+            },
+            .imported_modules = &module_envs,
+        });
         errdefer can_instance.deinit();
 
         try can_instance.canonicalizeFile();
@@ -237,15 +239,19 @@ const MonoTestEnv = struct {
             .qualified_type_ident = other_qualified_ident,
         });
 
-        try Can.populateModuleEnvs(&module_envs, module_env, builtin_env, builtin_indices);
-
         const parse_ast = try parse.parse(&allocators, &module_env.common);
         errdefer parse_ast.deinit();
         parse_ast.store.emptyScratch();
 
         try module_env.initCIRFields(module_name);
 
-        can_instance.* = try Can.init(&allocators, module_env, parse_ast, &module_envs);
+        can_instance.* = try Can.initModule(&allocators, module_env, parse_ast, .{
+            .builtin_types = .{
+                .builtin_module_env = builtin_env,
+                .builtin_indices = builtin_indices,
+            },
+            .imported_modules = &module_envs,
+        });
         errdefer can_instance.deinit();
 
         try can_instance.canonicalizeFile();
@@ -352,15 +358,19 @@ const MonoTestEnv = struct {
             });
         }
 
-        try Can.populateModuleEnvs(&module_envs, module_env, builtin_env, builtin_indices);
-
         const parse_ast = try parse.parse(&allocators, &module_env.common);
         errdefer parse_ast.deinit();
         parse_ast.store.emptyScratch();
 
         try module_env.initCIRFields(module_name);
 
-        can_instance.* = try Can.init(&allocators, module_env, parse_ast, &module_envs);
+        can_instance.* = try Can.initModule(&allocators, module_env, parse_ast, .{
+            .builtin_types = .{
+                .builtin_module_env = builtin_env,
+                .builtin_indices = builtin_indices,
+            },
+            .imported_modules = &module_envs,
+        });
         errdefer can_instance.deinit();
 
         try can_instance.canonicalizeFile();
@@ -414,11 +424,6 @@ const MonoTestEnv = struct {
             .owns_builtin_module = false,
             .imported_envs_list = imported_envs_list,
         };
-    }
-
-    /// Create a ClosureTransformer for this module
-    pub fn createClosureTransformer(self: *Self) ClosureTransformer {
-        return ClosureTransformer.init(self.gpa, self.module_env);
     }
 
     pub fn deinit(self: *Self) void {
@@ -486,38 +491,6 @@ test "cross-module mono: importing module can reference methods from imported ty
     // Module B should have parsed and type-checked successfully with the import
     const a_ident_in_b = env_b.module_env.common.findIdent("A");
     try testing.expect(a_ident_in_b != null);
-}
-
-test "cross-module mono: closure transformer tracks unspecialized closures" {
-    // Module A defines a type with a method
-    const source_a =
-        \\A := [A(U64)].{
-        \\  get_value : A -> U64
-        \\  get_value = |A.A(val)| val
-        \\}
-    ;
-    var env_a = try MonoTestEnv.init("A", source_a);
-    defer env_a.deinit();
-
-    // Module B imports A and uses polymorphic dispatch
-    const source_b =
-        \\import A
-        \\
-        \\# Polymorphic function that uses static dispatch
-        \\call_get : a -> U64 where [a.get_value : a -> U64]
-        \\call_get = |x|
-        \\    T : x
-        \\    T.get_value()
-    ;
-    var env_b = try MonoTestEnv.initWithImport("B", source_b, "A", &env_a);
-    defer env_b.deinit();
-
-    // Create closure transformer for module B
-    var transformer = env_b.createClosureTransformer();
-    defer transformer.deinit();
-
-    // The transformer should be initialized and ready
-    _ = &transformer;
 }
 
 test "cross-module mono: static dispatch method registration in type module" {
@@ -635,15 +608,19 @@ test "type checker catches polymorphic recursion (infinite type)" {
     module_env.qualified_module_ident = module_env.display_module_name_idx;
     try module_env.common.calcLineStarts(gpa);
 
-    try Can.populateModuleEnvs(&module_envs, module_env, builtin_module.env, builtin_indices);
-
     const parse_ast = try parse.parse(&allocators, &module_env.common);
     defer parse_ast.deinit();
     parse_ast.store.emptyScratch();
 
     try module_env.initCIRFields("Test");
 
-    can_instance.* = try Can.init(&allocators, module_env, parse_ast, &module_envs);
+    can_instance.* = try Can.initModule(&allocators, module_env, parse_ast, .{
+        .builtin_types = .{
+            .builtin_module_env = builtin_module.env,
+            .builtin_indices = builtin_indices,
+        },
+        .imported_modules = &module_envs,
+    });
     defer can_instance.deinit();
 
     try can_instance.canonicalizeFile();

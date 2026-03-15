@@ -29,3 +29,9 @@ pub const Condition = if (!is_freestanding) std.Thread.Condition else struct {
     pub fn signal(_: *@This()) void {}
     pub fn broadcast(_: *@This()) void {}
 };
+
+/// Returns the number of available CPU cores, falling back to 1 on error or freestanding targets.
+pub fn getCpuCount() usize {
+    if (comptime is_freestanding) return 1;
+    return std.Thread.getCpuCount() catch 1;
+}

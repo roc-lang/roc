@@ -70,19 +70,12 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
         .builtin_indices = builtin_indices,
     };
 
-    // Create module_envs map for canonicalization (enables qualified calls to Str, List, etc.)
-    var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
-    defer module_envs_map.deinit();
-
-    // Use shared function to populate ALL builtin types - ensures Builtin.roc is single source of truth
-    try Can.populateModuleEnvs(
-        &module_envs_map,
-        module_env,
-        builtin_module.env,
-        builtin_indices,
-    );
-
-    var czer = try Can.init(&allocators, module_env, parse_ast, &module_envs_map);
+    var czer = try Can.initModule(&allocators, module_env, parse_ast, .{
+        .builtin_types = .{
+            .builtin_module_env = builtin_module.env,
+            .builtin_indices = builtin_indices,
+        },
+    });
     defer czer.deinit();
 
     try czer.canonicalizeFile();
@@ -1092,7 +1085,7 @@ test "low_level - List.sublist requesting beyond end of list gives you input lis
 test "low_level - Dec.to_str returns string representation of decimal" {
     const src =
         \\a : Dec
-        \\a = 123.45dec
+        \\a = 123.45.Dec
         \\x = Dec.to_str(a)
     ;
     const value = try evalModuleAndGetString(src, 1, test_allocator);
@@ -1103,7 +1096,7 @@ test "low_level - Dec.to_str returns string representation of decimal" {
 test "low_level - Dec.to_str with negative decimal" {
     const src =
         \\a : Dec
-        \\a = -456.78dec
+        \\a = -456.78.Dec
         \\x = Dec.to_str(a)
     ;
     const value = try evalModuleAndGetString(src, 1, test_allocator);
@@ -1114,7 +1107,7 @@ test "low_level - Dec.to_str with negative decimal" {
 test "low_level - Dec.to_str with zero" {
     const src =
         \\a : Dec
-        \\a = 0.0dec
+        \\a = 0.0.Dec
         \\x = Dec.to_str(a)
     ;
     const value = try evalModuleAndGetString(src, 1, test_allocator);
@@ -1127,7 +1120,7 @@ test "low_level - Dec.to_str with zero" {
 test "low_level - U8.to_str" {
     const src =
         \\a : U8
-        \\a = 42u8
+        \\a = 42.U8
         \\x = U8.to_str(a)
     ;
     const value = try evalModuleAndGetString(src, 1, test_allocator);
@@ -1138,7 +1131,7 @@ test "low_level - U8.to_str" {
 test "low_level - I8.to_str with negative" {
     const src =
         \\a : I8
-        \\a = -42i8
+        \\a = -42.I8
         \\x = I8.to_str(a)
     ;
     const value = try evalModuleAndGetString(src, 1, test_allocator);
@@ -1149,7 +1142,7 @@ test "low_level - I8.to_str with negative" {
 test "low_level - U16.to_str" {
     const src =
         \\a : U16
-        \\a = 1000u16
+        \\a = 1000.U16
         \\x = U16.to_str(a)
     ;
     const value = try evalModuleAndGetString(src, 1, test_allocator);
@@ -1160,7 +1153,7 @@ test "low_level - U16.to_str" {
 test "low_level - I16.to_str with negative" {
     const src =
         \\a : I16
-        \\a = -500i16
+        \\a = -500.I16
         \\x = I16.to_str(a)
     ;
     const value = try evalModuleAndGetString(src, 1, test_allocator);
@@ -1171,7 +1164,7 @@ test "low_level - I16.to_str with negative" {
 test "low_level - U32.to_str" {
     const src =
         \\a : U32
-        \\a = 100000u32
+        \\a = 100000.U32
         \\x = U32.to_str(a)
     ;
     const value = try evalModuleAndGetString(src, 1, test_allocator);
@@ -1182,7 +1175,7 @@ test "low_level - U32.to_str" {
 test "low_level - I32.to_str with negative" {
     const src =
         \\a : I32
-        \\a = -12345i32
+        \\a = -12345.I32
         \\x = I32.to_str(a)
     ;
     const value = try evalModuleAndGetString(src, 1, test_allocator);
@@ -1193,7 +1186,7 @@ test "low_level - I32.to_str with negative" {
 test "low_level - U64.to_str" {
     const src =
         \\a : U64
-        \\a = 9876543210u64
+        \\a = 9876543210.U64
         \\x = U64.to_str(a)
     ;
     const value = try evalModuleAndGetString(src, 1, test_allocator);
@@ -1204,7 +1197,7 @@ test "low_level - U64.to_str" {
 test "low_level - I64.to_str with negative" {
     const src =
         \\a : I64
-        \\a = -9876543210i64
+        \\a = -9876543210.I64
         \\x = I64.to_str(a)
     ;
     const value = try evalModuleAndGetString(src, 1, test_allocator);
@@ -1215,7 +1208,7 @@ test "low_level - I64.to_str with negative" {
 test "low_level - U128.to_str" {
     const src =
         \\a : U128
-        \\a = 12345678901234567890u128
+        \\a = 12345678901234567890.U128
         \\x = U128.to_str(a)
     ;
     const value = try evalModuleAndGetString(src, 1, test_allocator);
@@ -1226,7 +1219,7 @@ test "low_level - U128.to_str" {
 test "low_level - I128.to_str with negative" {
     const src =
         \\a : I128
-        \\a = -12345678901234567890i128
+        \\a = -12345678901234567890.I128
         \\x = I128.to_str(a)
     ;
     const value = try evalModuleAndGetString(src, 1, test_allocator);
@@ -1239,7 +1232,7 @@ test "low_level - I128.to_str with negative" {
 test "low_level - F32.to_str" {
     const src =
         \\a : F32
-        \\a = 3.14f32
+        \\a = 3.14.F32
         \\x = F32.to_str(a)
     ;
     const value = try evalModuleAndGetString(src, 1, test_allocator);
@@ -1251,7 +1244,7 @@ test "low_level - F32.to_str" {
 test "low_level - F64.to_str" {
     const src =
         \\a : F64
-        \\a = 3.14159265359f64
+        \\a = 3.14159265359.F64
         \\x = F64.to_str(a)
     ;
     const value = try evalModuleAndGetString(src, 1, test_allocator);
@@ -1263,7 +1256,7 @@ test "low_level - F64.to_str" {
 test "low_level - F32.to_str with negative" {
     const src =
         \\a : F32
-        \\a = -2.5f32
+        \\a = -2.5.F32
         \\x = F32.to_str(a)
     ;
     const value = try evalModuleAndGetString(src, 1, test_allocator);
@@ -1274,7 +1267,7 @@ test "low_level - F32.to_str with negative" {
 test "low_level - F64.to_str with negative" {
     const src =
         \\a : F64
-        \\a = -123.456f64
+        \\a = -123.456.F64
         \\x = F64.to_str(a)
     ;
     const value = try evalModuleAndGetString(src, 1, test_allocator);
@@ -1550,7 +1543,7 @@ test "low_level - Str.drop_suffix suffix longer than string" {
 test "low_level - U8.to_i16 safe widening" {
     const src =
         \\a : U8
-        \\a = 200u8
+        \\a = 200.U8
         \\x = U8.to_i16(a)
     ;
     const value = try evalModuleAndGetInt(src, 1);
@@ -1560,7 +1553,7 @@ test "low_level - U8.to_i16 safe widening" {
 test "low_level - U8.to_i32 safe widening" {
     const src =
         \\a : U8
-        \\a = 255u8
+        \\a = 255.U8
         \\x = U8.to_i32(a)
     ;
     const value = try evalModuleAndGetInt(src, 1);
@@ -1570,7 +1563,7 @@ test "low_level - U8.to_i32 safe widening" {
 test "low_level - U8.to_i64 safe widening" {
     const src =
         \\a : U8
-        \\a = 128u8
+        \\a = 128.U8
         \\x = U8.to_i64(a)
     ;
     const value = try evalModuleAndGetInt(src, 1);
@@ -1580,7 +1573,7 @@ test "low_level - U8.to_i64 safe widening" {
 test "low_level - U8.to_i128 safe widening" {
     const src =
         \\a : U8
-        \\a = 100u8
+        \\a = 100.U8
         \\x = U8.to_i128(a)
     ;
     const value = try evalModuleAndGetInt(src, 1);
@@ -1590,7 +1583,7 @@ test "low_level - U8.to_i128 safe widening" {
 test "low_level - U8.to_u16 safe widening" {
     const src =
         \\a : U8
-        \\a = 200u8
+        \\a = 200.U8
         \\x = U8.to_u16(a)
     ;
     const value = try evalModuleAndGetInt(src, 1);
@@ -1600,7 +1593,7 @@ test "low_level - U8.to_u16 safe widening" {
 test "low_level - U8.to_u32 safe widening" {
     const src =
         \\a : U8
-        \\a = 255u8
+        \\a = 255.U8
         \\x = U8.to_u32(a)
     ;
     const value = try evalModuleAndGetInt(src, 1);
@@ -1610,7 +1603,7 @@ test "low_level - U8.to_u32 safe widening" {
 test "low_level - U8.to_u64 safe widening" {
     const src =
         \\a : U8
-        \\a = 128u8
+        \\a = 128.U8
         \\x = U8.to_u64(a)
     ;
     const value = try evalModuleAndGetInt(src, 1);
@@ -1620,7 +1613,7 @@ test "low_level - U8.to_u64 safe widening" {
 test "low_level - U8.to_u128 safe widening" {
     const src =
         \\a : U8
-        \\a = 50u8
+        \\a = 50.U8
         \\x = U8.to_u128(a)
     ;
     const value = try evalModuleAndGetInt(src, 1);
@@ -1630,7 +1623,7 @@ test "low_level - U8.to_u128 safe widening" {
 test "low_level - U8.to_i8_wrap in range" {
     const src =
         \\a : U8
-        \\a = 100u8
+        \\a = 100.U8
         \\x = U8.to_i8_wrap(a)
     ;
     const value = try evalModuleAndGetInt(src, 1);
@@ -1640,7 +1633,7 @@ test "low_level - U8.to_i8_wrap in range" {
 test "low_level - U8.to_i8_wrap out of range wraps" {
     const src =
         \\a : U8
-        \\a = 200u8
+        \\a = 200.U8
         \\x = U8.to_i8_wrap(a)
     ;
     const value = try evalModuleAndGetInt(src, 1);
@@ -1651,7 +1644,7 @@ test "low_level - U8.to_i8_wrap out of range wraps" {
 test "low_level - U8.to_i8_try in range returns Ok" {
     const src =
         \\a : U8
-        \\a = 100u8
+        \\a = 100.U8
         \\x = U8.to_i8_try(a)
     ;
     const value = try evalModuleAndGetString(src, 1, test_allocator);
@@ -1662,7 +1655,7 @@ test "low_level - U8.to_i8_try in range returns Ok" {
 test "low_level - U8.to_i8_try out of range returns Err" {
     const src =
         \\a : U8
-        \\a = 200u8
+        \\a = 200.U8
         \\x = U8.to_i8_try(a)
     ;
     const value = try evalModuleAndGetString(src, 1, test_allocator);
@@ -1673,7 +1666,7 @@ test "low_level - U8.to_i8_try out of range returns Err" {
 test "low_level - U8.to_f32" {
     const src =
         \\a : U8
-        \\a = 42u8
+        \\a = 42.U8
         \\x = U8.to_f32(a)
     ;
     const value = try evalModuleAndGetString(src, 1, test_allocator);
@@ -1684,7 +1677,7 @@ test "low_level - U8.to_f32" {
 test "low_level - U8.to_f64" {
     const src =
         \\a : U8
-        \\a = 255u8
+        \\a = 255.U8
         \\x = U8.to_f64(a)
     ;
     const value = try evalModuleAndGetString(src, 1, test_allocator);
@@ -1695,7 +1688,7 @@ test "low_level - U8.to_f64" {
 test "low_level - U8.to_dec" {
     const src =
         \\a : U8
-        \\a = 123u8
+        \\a = 123.U8
         \\x = U8.to_dec(a)
         \\y = Dec.to_str(x)
     ;
@@ -1709,7 +1702,7 @@ test "low_level - U8.to_dec" {
 test "low_level - I8.to_i16 safe widening positive" {
     const src =
         \\a : I8
-        \\a = 100i8
+        \\a = 100.I8
         \\x = I8.to_i16(a)
     ;
     const value = try evalModuleAndGetInt(src, 1);
@@ -1719,7 +1712,7 @@ test "low_level - I8.to_i16 safe widening positive" {
 test "low_level - I8.to_i16 safe widening negative" {
     const src =
         \\a : I8
-        \\a = -50i8
+        \\a = -50.I8
         \\x = I8.to_i16(a)
     ;
     const value = try evalModuleAndGetInt(src, 1);
@@ -1729,7 +1722,7 @@ test "low_level - I8.to_i16 safe widening negative" {
 test "low_level - I8.to_i32 safe widening" {
     const src =
         \\a : I8
-        \\a = -128i8
+        \\a = -128.I8
         \\x = I8.to_i32(a)
     ;
     const value = try evalModuleAndGetInt(src, 1);
@@ -1739,7 +1732,7 @@ test "low_level - I8.to_i32 safe widening" {
 test "low_level - I8.to_i64 safe widening" {
     const src =
         \\a : I8
-        \\a = 127i8
+        \\a = 127.I8
         \\x = I8.to_i64(a)
     ;
     const value = try evalModuleAndGetInt(src, 1);
@@ -1749,7 +1742,7 @@ test "low_level - I8.to_i64 safe widening" {
 test "low_level - I8.to_i128 safe widening" {
     const src =
         \\a : I8
-        \\a = -1i8
+        \\a = -1.I8
         \\x = I8.to_i128(a)
     ;
     const value = try evalModuleAndGetInt(src, 1);
@@ -1759,7 +1752,7 @@ test "low_level - I8.to_i128 safe widening" {
 test "low_level - I8.to_u8_wrap in range" {
     const src =
         \\a : I8
-        \\a = 50i8
+        \\a = 50.I8
         \\x = I8.to_u8_wrap(a)
     ;
     const value = try evalModuleAndGetInt(src, 1);
@@ -1769,7 +1762,7 @@ test "low_level - I8.to_u8_wrap in range" {
 test "low_level - I8.to_u8_wrap negative wraps" {
     const src =
         \\a : I8
-        \\a = -1i8
+        \\a = -1.I8
         \\x = I8.to_u8_wrap(a)
     ;
     const value = try evalModuleAndGetInt(src, 1);
@@ -1780,7 +1773,7 @@ test "low_level - I8.to_u8_wrap negative wraps" {
 test "low_level - I8.to_u8_try in range returns Ok" {
     const src =
         \\a : I8
-        \\a = 100i8
+        \\a = 100.I8
         \\x = I8.to_u8_try(a)
     ;
     const value = try evalModuleAndGetString(src, 1, test_allocator);
@@ -1791,7 +1784,7 @@ test "low_level - I8.to_u8_try in range returns Ok" {
 test "low_level - I8.to_u8_try negative returns Err" {
     const src =
         \\a : I8
-        \\a = -10i8
+        \\a = -10.I8
         \\x = I8.to_u8_try(a)
     ;
     const value = try evalModuleAndGetString(src, 1, test_allocator);
@@ -1802,7 +1795,7 @@ test "low_level - I8.to_u8_try negative returns Err" {
 test "low_level - I8.to_u16_wrap positive" {
     const src =
         \\a : I8
-        \\a = 100i8
+        \\a = 100.I8
         \\x = I8.to_u16_wrap(a)
     ;
     const value = try evalModuleAndGetInt(src, 1);
@@ -1812,7 +1805,7 @@ test "low_level - I8.to_u16_wrap positive" {
 test "low_level - I8.to_u16_wrap negative wraps" {
     const src =
         \\a : I8
-        \\a = -1i8
+        \\a = -1.I8
         \\x = I8.to_u16_wrap(a)
     ;
     const value = try evalModuleAndGetInt(src, 1);
@@ -1823,7 +1816,7 @@ test "low_level - I8.to_u16_wrap negative wraps" {
 test "low_level - I8.to_u16_try in range returns Ok" {
     const src =
         \\a : I8
-        \\a = 50i8
+        \\a = 50.I8
         \\x = I8.to_u16_try(a)
     ;
     const value = try evalModuleAndGetString(src, 1, test_allocator);
@@ -1834,7 +1827,7 @@ test "low_level - I8.to_u16_try in range returns Ok" {
 test "low_level - I8.to_u16_try negative returns Err" {
     const src =
         \\a : I8
-        \\a = -5i8
+        \\a = -5.I8
         \\x = I8.to_u16_try(a)
     ;
     const value = try evalModuleAndGetString(src, 1, test_allocator);
@@ -1845,7 +1838,7 @@ test "low_level - I8.to_u16_try negative returns Err" {
 test "low_level - I8.to_u32_try negative returns Err" {
     const src =
         \\a : I8
-        \\a = -100i8
+        \\a = -100.I8
         \\x = I8.to_u32_try(a)
     ;
     const value = try evalModuleAndGetString(src, 1, test_allocator);
@@ -1856,7 +1849,7 @@ test "low_level - I8.to_u32_try negative returns Err" {
 test "low_level - I8.to_u64_try positive returns Ok" {
     const src =
         \\a : I8
-        \\a = 127i8
+        \\a = 127.I8
         \\x = I8.to_u64_try(a)
     ;
     const value = try evalModuleAndGetString(src, 1, test_allocator);
@@ -1867,7 +1860,7 @@ test "low_level - I8.to_u64_try positive returns Ok" {
 test "low_level - I8.to_u128_try zero returns Ok" {
     const src =
         \\a : I8
-        \\a = 0i8
+        \\a = 0.I8
         \\x = I8.to_u128_try(a)
     ;
     const value = try evalModuleAndGetString(src, 1, test_allocator);
@@ -1878,7 +1871,7 @@ test "low_level - I8.to_u128_try zero returns Ok" {
 test "low_level - I8.to_f32 positive" {
     const src =
         \\a : I8
-        \\a = 42i8
+        \\a = 42.I8
         \\x = I8.to_f32(a)
     ;
     const value = try evalModuleAndGetString(src, 1, test_allocator);
@@ -1889,7 +1882,7 @@ test "low_level - I8.to_f32 positive" {
 test "low_level - I8.to_f64 negative" {
     const src =
         \\a : I8
-        \\a = -100i8
+        \\a = -100.I8
         \\x = I8.to_f64(a)
     ;
     const value = try evalModuleAndGetString(src, 1, test_allocator);
@@ -1900,7 +1893,7 @@ test "low_level - I8.to_f64 negative" {
 test "low_level - I8.to_dec positive" {
     const src =
         \\a : I8
-        \\a = 50i8
+        \\a = 50.I8
         \\x = I8.to_dec(a)
         \\y = Dec.to_str(x)
     ;
@@ -1912,7 +1905,7 @@ test "low_level - I8.to_dec positive" {
 test "low_level - I8.to_dec negative" {
     const src =
         \\a : I8
-        \\a = -25i8
+        \\a = -25.I8
         \\x = I8.to_dec(a)
         \\y = Dec.to_str(x)
     ;
@@ -2760,28 +2753,6 @@ test "low_level - List.sort_with single element" {
     try testing.expectEqualStrings("Ok(42.0)", first_value);
 }
 
-test "low_level - List.sort_with with duplicates" {
-    // TODO: This test is skipped due to stack memory accumulation across eval() calls.
-    // The interpreter stores return values in stack memory, and bindings hold references
-    // to this memory. When evaluating multiple declarations (x, then first, then len),
-    // the stack grows without being freed, eventually causing overflow.
-    // See: https://github.com/roc-lang/roc/issues/XXXX (architectural issue)
-    if (true) return error.SkipZigTest;
-
-    const src =
-        \\x = List.sort_with([3, 1, 2, 1, 3], |a, b| if a < b LT else if a > b GT else EQ)
-        \\first = List.first(x)
-        \\len = List.len(x)
-    ;
-
-    const first_value = try evalModuleAndGetString(src, 1, test_allocator);
-    defer test_allocator.free(first_value);
-    try testing.expectEqualStrings("Ok(1.0)", first_value);
-
-    const len_value = try evalModuleAndGetInt(src, 2);
-    try testing.expectEqual(@as(i128, 5), len_value);
-}
-
 test "low_level - List.sort_with already sorted" {
     const src =
         \\x = List.sort_with([1, 2, 3, 4, 5], |a, b| if a < b LT else if a > b GT else EQ)
@@ -3107,9 +3078,9 @@ test "issue 8765: Box.unbox with record containing numeric literal" {
 test "issue 8555: method call syntax list.first() with match on Result" {
     const src =
         \\list : List(U8)
-        \\list = [8u8, 7u8]
+        \\list = [8.U8, 7.U8]
         \\val = match list.first() {
-        \\    Err(_) => 0u8
+        \\    Err(_) => 0.U8
         \\    Ok(first) => first
         \\}
     ;

@@ -105,15 +105,12 @@ pub const WorkerTask = union(enum) {
     canonicalize: CanonicalizeTask,
     /// Type-check a canonicalized module
     type_check: TypeCheckTask,
-    /// Signal worker to shut down
-    shutdown: void,
 
     pub fn getPackageName(self: WorkerTask) ?[]const u8 {
         return switch (self) {
             .parse => |t| t.package_name,
             .canonicalize => |t| t.package_name,
             .type_check => |t| t.package_name,
-            .shutdown => null,
         };
     }
 
@@ -122,7 +119,6 @@ pub const WorkerTask = union(enum) {
             .parse => |t| t.module_id,
             .canonicalize => |t| t.module_id,
             .type_check => |t| t.module_id,
-            .shutdown => null,
         };
     }
 
@@ -131,7 +127,6 @@ pub const WorkerTask = union(enum) {
             .parse => |t| t.module_name,
             .canonicalize => |t| t.module_name,
             .type_check => |t| t.module_name,
-            .shutdown => null,
         };
     }
 };
@@ -395,10 +390,4 @@ test "WorkerResult accessors" {
     try std.testing.expectEqualStrings("app", result.getPackageName());
     try std.testing.expectEqual(@as(ModuleId, 1), result.getModuleId());
     try std.testing.expectEqualStrings("Foo", result.getModuleName());
-}
-
-test "shutdown task" {
-    const task = WorkerTask{ .shutdown = {} };
-    try std.testing.expect(task.getPackageName() == null);
-    try std.testing.expect(task.getModuleId() == null);
 }

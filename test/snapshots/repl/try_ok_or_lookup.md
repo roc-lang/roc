@@ -9,8 +9,8 @@ type=repl
 » Try.ok_or(Try.Err("oops"), 99)
 ~~~
 # OUTPUT
-42
+42.0
 ---
-99
+99.0
 # PROBLEMS
 NIL

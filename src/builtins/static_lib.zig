@@ -30,7 +30,6 @@ comptime {
     @export(&dw.roc_builtins_str_contains, .{ .name = "roc_builtins_str_contains" });
     @export(&dw.roc_builtins_str_starts_with, .{ .name = "roc_builtins_str_starts_with" });
     @export(&dw.roc_builtins_str_ends_with, .{ .name = "roc_builtins_str_ends_with" });
-    @export(&dw.roc_builtins_str_is_empty, .{ .name = "roc_builtins_str_is_empty" });
     @export(&dw.roc_builtins_str_equal, .{ .name = "roc_builtins_str_equal" });
     @export(&dw.roc_builtins_str_count_utf8_bytes, .{ .name = "roc_builtins_str_count_utf8_bytes" });
     @export(&dw.roc_builtins_str_caseless_ascii_equals, .{ .name = "roc_builtins_str_caseless_ascii_equals" });
@@ -47,7 +46,6 @@ comptime {
     @export(&dw.roc_builtins_str_drop_suffix, .{ .name = "roc_builtins_str_drop_suffix" });
     @export(&dw.roc_builtins_str_with_ascii_lowercased, .{ .name = "roc_builtins_str_with_ascii_lowercased" });
     @export(&dw.roc_builtins_str_with_ascii_uppercased, .{ .name = "roc_builtins_str_with_ascii_uppercased" });
-    @export(&dw.roc_builtins_str_with_prefix, .{ .name = "roc_builtins_str_with_prefix" });
     @export(&dw.roc_builtins_str_from_utf8_lossy, .{ .name = "roc_builtins_str_from_utf8_lossy" });
     @export(&dw.roc_builtins_str_escape_and_quote, .{ .name = "roc_builtins_str_escape_and_quote" });
     @export(&dw.roc_builtins_list_with_capacity, .{ .name = "roc_builtins_list_with_capacity" });
@@ -58,6 +56,13 @@ comptime {
     @export(&dw.roc_builtins_list_replace, .{ .name = "roc_builtins_list_replace" });
     @export(&dw.roc_builtins_list_reserve, .{ .name = "roc_builtins_list_reserve" });
     @export(&dw.roc_builtins_list_release_excess_capacity, .{ .name = "roc_builtins_list_release_excess_capacity" });
+    @export(&dw.roc_builtins_list_decref_str, .{ .name = "roc_builtins_list_decref_str" });
+    @export(&dw.roc_builtins_list_decref_flat_list, .{ .name = "roc_builtins_list_decref_flat_list" });
+    @export(&dw.roc_builtins_list_decref_with, .{ .name = "roc_builtins_list_decref_with" });
+    @export(&dw.roc_builtins_list_free_flat_list, .{ .name = "roc_builtins_list_free_flat_list" });
+    @export(&dw.roc_builtins_list_free_with, .{ .name = "roc_builtins_list_free_with" });
+    @export(&dw.roc_builtins_box_decref_with, .{ .name = "roc_builtins_box_decref_with" });
+    @export(&dw.roc_builtins_box_free_with, .{ .name = "roc_builtins_box_free_with" });
     @export(&dw.roc_builtins_allocate_with_refcount, .{ .name = "roc_builtins_allocate_with_refcount" });
     @export(&dw.roc_builtins_incref_data_ptr, .{ .name = "roc_builtins_incref_data_ptr" });
     @export(&dw.roc_builtins_decref_data_ptr, .{ .name = "roc_builtins_decref_data_ptr" });

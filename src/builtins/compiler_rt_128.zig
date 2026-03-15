@@ -596,7 +596,11 @@ fn u128_to_str_inner(buf: []u8, val: u128) FormatResult {
 /// Buffer must be at least 40 bytes (max i128 is 39 digits + sign).
 pub fn i128_to_str(buf: []u8, val: i128) FormatResult {
     if (val < 0) {
-        const result = u128_to_str_inner(buf, @abs(val));
+        const abs: u128 = if (val == std.math.minInt(i128))
+            @as(u128, @bitCast(val))
+        else
+            @intCast(-val);
+        const result = u128_to_str_inner(buf, abs);
         const sign_pos = result.start - 1;
         buf[sign_pos] = '-';
         return .{ .str = buf[sign_pos..], .start = sign_pos };

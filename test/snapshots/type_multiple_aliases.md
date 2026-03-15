@@ -175,28 +175,24 @@ NO CHANGE
 				(ty-lookup (name "UserName") (local)))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-closure
-			(captures
-				(capture (ident "create_user"))
-				(capture (ident "get_user_name")))
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-block
-					(s-let
-						(p-assign (ident "user"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "create_user")))
-							(e-num (value "123"))
-							(e-string
-								(e-literal (string "Alice")))
-							(e-num (value "25"))))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-block
+				(s-let
+					(p-assign (ident "user"))
 					(e-call
 						(e-lookup-local
-							(p-assign (ident "get_user_name")))
-						(e-lookup-local
-							(p-assign (ident "user"))))))))
+							(p-assign (ident "create_user")))
+						(e-num (value "123"))
+						(e-string
+							(e-literal (string "Alice")))
+						(e-num (value "25"))))
+				(e-call
+					(e-lookup-local
+						(p-assign (ident "get_user_name")))
+					(e-lookup-local
+						(p-assign (ident "user")))))))
 	(s-alias-decl
 		(ty-header (name "UserId"))
 		(ty-lookup (name "U64") (builtin)))

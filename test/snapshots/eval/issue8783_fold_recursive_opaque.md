@@ -161,24 +161,21 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "process_child"))
-		(e-closure
-			(captures
-				(capture (ident "process")))
-			(e-lambda
-				(args
-					(p-assign (ident "acc"))
-					(p-assign (ident "child")))
-				(e-string
-					(e-literal (string ""))
+		(e-lambda
+			(args
+				(p-assign (ident "acc"))
+				(p-assign (ident "child")))
+			(e-string
+				(e-literal (string ""))
+				(e-lookup-local
+					(p-assign (ident "acc")))
+				(e-literal (string " "))
+				(e-call
 					(e-lookup-local
-						(p-assign (ident "acc")))
-					(e-literal (string " "))
-					(e-call
-						(e-lookup-local
-							(p-assign (ident "process")))
-						(e-lookup-local
-							(p-assign (ident "child"))))
-					(e-literal (string "")))))
+						(p-assign (ident "process")))
+					(e-lookup-local
+						(p-assign (ident "child"))))
+				(e-literal (string ""))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Str") (builtin))
@@ -186,45 +183,42 @@ NO CHANGE
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "process"))
-		(e-closure
-			(captures
-				(capture (ident "process_child")))
-			(e-lambda
-				(args
-					(p-assign (ident "elem")))
-				(e-match
-					(match
-						(cond
-							(e-lookup-local
-								(p-assign (ident "elem"))))
-						(branches
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag)))
-								(value
-									(e-string
-										(e-literal (string ""))
-										(e-lookup-local
-											(p-assign (ident "tag")))
-										(e-literal (string ":"))
-										(e-call
-											(e-lookup-external
-												(builtin))
-											(e-lookup-local
-												(p-assign (ident "children")))
-											(e-string
-												(e-literal (string "")))
-											(e-lookup-local
-												(p-assign (ident "process_child"))))
-										(e-literal (string "")))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag)))
-								(value
+		(e-lambda
+			(args
+				(p-assign (ident "elem")))
+			(e-match
+				(match
+					(cond
+						(e-lookup-local
+							(p-assign (ident "elem"))))
+					(branches
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-applied-tag)))
+							(value
+								(e-string
+									(e-literal (string ""))
 									(e-lookup-local
-										(p-assign (ident "content"))))))))))
+										(p-assign (ident "tag")))
+									(e-literal (string ":"))
+									(e-call
+										(e-lookup-external
+											(builtin))
+										(e-lookup-local
+											(p-assign (ident "children")))
+										(e-string
+											(e-literal (string "")))
+										(e-lookup-local
+											(p-assign (ident "process_child"))))
+									(e-literal (string "")))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-applied-tag)))
+							(value
+								(e-lookup-local
+									(p-assign (ident "content")))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Elem") (local))

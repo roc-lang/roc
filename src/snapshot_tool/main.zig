@@ -20,6 +20,82 @@ const repl = @import("repl");
 const eval_mod = @import("eval");
 const docs_mod = @import("docs");
 const tracy = @import("tracy");
+const sljmp = @import("sljmp");
+
+/// Custom panic handler that enables catching Zig panics (e.g., `unreachable` in
+/// the dev backend) during snapshot testing. When `panic_jmp` is set, longjmps back
+/// to the saved point instead of aborting; otherwise falls through to the default handler.
+pub const panic = std.debug.FullPanic(panicHandler);
+
+threadlocal var panic_jmp: ?*sljmp.JmpBuf = null;
+threadlocal var panic_msg: ?[]const u8 = null;
+
+fn panicHandler(msg: []const u8, ret_addr: ?usize) noreturn {
+    if (panic_jmp) |jmp| {
+        panic_msg = msg;
+        if (verbose_log) {
+            std.debug.print("  PANIC TRACE: {s}\n", .{msg});
+            if (ret_addr) |addr| {
+                std.debug.print("  return address: 0x{x}\n", .{addr});
+            }
+            std.debug.dumpCurrentStackTrace(ret_addr);
+        }
+        panic_jmp = null; // prevent re-entry
+        sljmp.longjmp(jmp, 1);
+    }
+    // No protection active — use default behavior.
+    std.debug.defaultPanic(msg, @returnAddress());
+}
+
+/// Unix signal handler for catching segfaults and illegal instructions from
+/// generated code. Uses the same panic_jmp mechanism as the panic handler.
+/// Not available on Windows (no POSIX signals).
+fn crashSignalHandler(_: i32) callconv(.c) void {
+    if (panic_jmp) |jmp| {
+        panic_msg = "signal: segfault or illegal instruction in generated code";
+        panic_jmp = null;
+        sljmp.longjmp(jmp, 2);
+    }
+    // No protection active — reset to default handler and re-raise.
+    const dfl = std.posix.Sigaction{
+        .handler = .{ .handler = std.posix.SIG.DFL },
+        .mask = std.posix.sigemptyset(),
+        .flags = 0,
+    };
+    std.posix.sigaction(std.posix.SIG.SEGV, &dfl, null);
+    std.posix.sigaction(std.posix.SIG.BUS, &dfl, null);
+    std.posix.sigaction(std.posix.SIG.ILL, &dfl, null);
+}
+
+/// SIGALRM handler for catching infinite loops in generated code.
+fn alarmSignalHandler(_: i32) callconv(.c) void {
+    if (panic_jmp) |jmp| {
+        panic_msg = "timeout: dev backend execution exceeded time limit";
+        panic_jmp = null;
+        sljmp.longjmp(jmp, 3);
+    }
+}
+
+fn installCrashSignalHandlers() void {
+    const native_os = @import("builtin").os.tag;
+    if (comptime native_os == .windows) return;
+
+    const sa = std.posix.Sigaction{
+        .handler = .{ .handler = &crashSignalHandler },
+        .mask = std.posix.sigemptyset(),
+        .flags = std.os.linux.SA.NODEFER,
+    };
+    std.posix.sigaction(std.posix.SIG.SEGV, &sa, null);
+    std.posix.sigaction(std.posix.SIG.BUS, &sa, null);
+    std.posix.sigaction(std.posix.SIG.ILL, &sa, null);
+
+    const alarm_sa = std.posix.Sigaction{
+        .handler = .{ .handler = &alarmSignalHandler },
+        .mask = std.posix.sigemptyset(),
+        .flags = std.os.linux.SA.NODEFER,
+    };
+    std.posix.sigaction(std.posix.SIG.ALRM, &alarm_sa, null);
+}
 
 const Repl = repl.Repl;
 const CrashContext = eval_mod.CrashContext;
@@ -37,7 +113,6 @@ const RocAlloc = builtins.host_abi.RocAlloc;
 const RocOps = builtins.host_abi.RocOps;
 const RocDbg = builtins.host_abi.RocDbg;
 const ModuleEnv = can.ModuleEnv;
-const LambdaLifter = can.LambdaLifter;
 const Allocator = std.mem.Allocator;
 const SExprTree = base.SExprTree;
 const LineColMode = base.SExprTree.LineColMode;
@@ -985,14 +1060,14 @@ fn processSnapshotContent(
         },
         .snippet, .mono => {
             // Snippet and mono tests are full modules
-            var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
-            defer module_envs.deinit();
+            const builtin_env = config.builtin_module orelse return error.MissingBuiltinModule;
 
-            if (config.builtin_module) |builtin_env| {
-                try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
-            }
-
-            var czer = try Can.init(&allocators, can_ir, parse_ast, &module_envs);
+            var czer = try Can.initModule(&allocators, can_ir, parse_ast, .{
+                .builtin_types = .{
+                    .builtin_module_env = builtin_env,
+                    .builtin_indices = config.builtin_indices,
+                },
+            });
             defer czer.deinit();
             try czer.canonicalizeFile();
         },
@@ -1001,15 +1076,14 @@ fn processSnapshotContent(
         },
         .expr, .statement => {
             // Expr and statement tests use different canonicalization methods
-            // Auto-inject builtin types (Bool, Try, List, Dict, Set, Str, and numeric types) as available imports
-            var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
-            defer module_envs.deinit();
+            const builtin_env = config.builtin_module orelse return error.MissingBuiltinModule;
 
-            if (config.builtin_module) |builtin_env| {
-                try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
-            }
-
-            var czer = try Can.init(&allocators, can_ir, parse_ast, &module_envs);
+            var czer = try Can.initModule(&allocators, can_ir, parse_ast, .{
+                .builtin_types = .{
+                    .builtin_module_env = builtin_env,
+                    .builtin_indices = config.builtin_indices,
+                },
+            });
             defer czer.deinit();
 
             switch (content.meta.node_type) {
@@ -1234,141 +1308,10 @@ fn processSnapshotContent(
         }
     }
 
-    // Run closure transformation for mono tests
-    // This transforms closures to tags and generates dispatch match expressions
-    var has_closure_transforms = false;
+    // Lambda lifting and lambda set inference are now handled during CIR→MIR and MIR→LIR lowering
 
-    // Lambda lifting storage - will be populated if we have closures
-    var lifter: ?LambdaLifter = null;
-    defer {
-        if (lifter) |*l| l.deinit();
-    }
-
+    // Run constant folding for mono tests
     if (content.meta.node_type == .mono) {
-        const ClosureTransformer = can.ClosureTransformer;
-        var transformer = ClosureTransformer.init(allocator, can_ir);
-        defer transformer.deinit();
-
-        // First pass: mark all top-level patterns
-        // Top-level constants don't need to be captured since they're always in scope
-        const defs = can_ir.store.sliceDefs(can_ir.all_defs);
-        for (defs) |def_idx| {
-            const def = can_ir.store.getDef(def_idx);
-            try transformer.markTopLevel(def.pattern);
-        }
-
-        // Second pass: transform all top-level definitions
-        for (defs) |def_idx| {
-            const def = can_ir.store.getDef(def_idx);
-
-            // Get name hint from pattern
-            const pattern = can_ir.store.getPattern(def.pattern);
-            const name_hint: ?base.Ident.Idx = switch (pattern) {
-                .assign => |a| a.ident,
-                else => null,
-            };
-
-            // Transform the definition expression
-            const old_expr = def.expr;
-            const result = try transformer.transformExprWithLambdaSet(def.expr, name_hint);
-
-            // If the expression changed, compute the correct type for the new expression
-            // based on its structure (e.g., tag union for closure transforms)
-            // Note: We don't modify the pattern's type here to avoid breaking type unification.
-            // Instead, the type will be computed from the expression in generateMonoSection.
-            if (old_expr != result.expr) {
-                _ = try computeTransformedExprType(can_ir, result.expr);
-            }
-
-            // Track the lambda set for this pattern
-            if (result.lambda_set) |lambda_set| {
-                try transformer.pattern_lambda_sets.put(def.pattern, lambda_set);
-                has_closure_transforms = true;
-            }
-
-            // If the expression is a lambda with a return set, track what it returns when called
-            // This allows propagating closure information through calls to this lambda
-            if (transformer.lambda_return_sets.get(result.expr)) |return_set| {
-                // Clone the return set to avoid double-free issues
-                const cloned = try return_set.clone(allocator);
-                try transformer.pattern_lambda_return_sets.put(def.pattern, cloned);
-            }
-
-            // Update the definition to use the transformed expression
-            can_ir.store.setDefExpr(def_idx, result.expr);
-        }
-
-        // Also check if any closures were transformed (even nested inside pure lambdas)
-        // This is important because nested closures may not produce a lambda_set at the top level
-        has_closure_transforms = has_closure_transforms or transformer.closures.count() > 0;
-
-        // Validate that all lambda sets have been fully resolved.
-        // Any remaining unspecialized closures indicate a failure to resolve static dispatch implementations.
-        const validation_result = transformer.validateAllResolved();
-        if (!validation_result.is_valid) {
-            // Log the validation failure
-            if (validation_result.first_error) |err| {
-                std.log.err("Lambda set validation failed: {d} unresolved closures. First error: {s}", .{
-                    validation_result.unresolved_count,
-                    @tagName(err.kind),
-                });
-            } else {
-                std.log.err("Lambda set validation failed: {d} unresolved closures", .{
-                    validation_result.unresolved_count,
-                });
-            }
-            return error.UnresolvedLambdaSets;
-        }
-
-        // Phase 4 & 5: Lambda lifting - extract closures to top-level function definitions
-        // After the ClosureTransformer has identified all closures, use LambdaLifter
-        // to create lifted function definitions for each one.
-        const has_any_closures = transformer.closures.count() > 0 or
-            transformer.pattern_lambda_sets.count() > 0;
-
-        if (has_any_closures) {
-            lifter = LambdaLifter.init(allocator, can_ir, &transformer.top_level_patterns);
-
-            // Iterate over all transformed closures (closures with captures)
-            var closure_iter = transformer.closures.iterator();
-            while (closure_iter.next()) |entry| {
-                const closure_idx = entry.key_ptr.*;
-                const closure_info = entry.value_ptr.*;
-
-                // Lift this closure to a top-level function
-                try lifter.?.liftClosure(closure_idx, closure_info.tag_name);
-            }
-
-            // Also lift closures from pattern_lambda_sets (pure lambdas converted to tags)
-            var lambda_set_iter = transformer.pattern_lambda_sets.iterator();
-            while (lambda_set_iter.next()) |entry| {
-                const lambda_set = entry.value_ptr;
-                for (lambda_set.closures.items) |closure_info| {
-                    // Check if this closure was already lifted via transformer.closures
-                    // (closures with captures are in both places)
-                    var already_lifted = false;
-                    var check_iter = transformer.closures.iterator();
-                    while (check_iter.next()) |check_entry| {
-                        if (check_entry.value_ptr.tag_name == closure_info.tag_name) {
-                            already_lifted = true;
-                            break;
-                        }
-                    }
-
-                    if (!already_lifted) {
-                        // Lift this pure lambda using the info-based method
-                        try lifter.?.liftFromInfo(closure_info);
-                    }
-                }
-            }
-        }
-    }
-
-    // Run constant folding for mono tests (skip if we have closure transformations)
-    // This evaluates expressions at compile time and folds results back into the CIR.
-    // We skip this when closures have been transformed because the comptime evaluator
-    // doesn't yet know how to handle the closure tag format.
-    if (content.meta.node_type == .mono and !has_closure_transforms) {
         if (config.builtin_module) |builtin_env| {
             const BuiltinTypes = eval_mod.BuiltinTypes;
             const ComptimeEvaluator = eval_mod.ComptimeEvaluator;
@@ -1420,8 +1363,7 @@ fn processSnapshotContent(
 
     if (content.meta.node_type == .mono) {
         // Mono tests: MONO and FORMATTED come right after SOURCE
-        const lifted_funcs = if (lifter) |l| l.getLiftedFunctions() else &[_]LambdaLifter.LiftedFunction{};
-        try generateMonoSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx), output_path, config, lifted_funcs);
+        try generateMonoSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx), output_path, config);
         try generateFormattedSection(&output, &content, parse_ast);
         success = try generateExpectedSection(&output, output_path, &content, &generated_reports, config) and success;
         try generateProblemsSection(&output, &generated_reports);
@@ -2954,19 +2896,18 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
         return false;
     };
 
-    // Set up module_envs with builtin types if available
-    var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
-    defer module_envs.deinit();
-
-    if (config.builtin_module) |builtin_env| {
-        Can.populateModuleEnvs(&module_envs, &validation_env, builtin_env, config.builtin_indices) catch |err| {
-            std.log.err("MONO VALIDATION ERROR in {s}: Failed to populate module envs: {}", .{ source_path, err });
-            return false;
-        };
-    }
+    const builtin_env = config.builtin_module orelse {
+        std.log.err("MONO VALIDATION ERROR in {s}: Missing builtin module context", .{source_path});
+        return false;
+    };
 
     // Canonicalize the parsed MONO output
-    var czer = Can.init(&allocators, &validation_env, validation_ast, &module_envs) catch |err| {
+    var czer = Can.initModule(&allocators, &validation_env, validation_ast, .{
+        .builtin_types = .{
+            .builtin_module_env = builtin_env,
+            .builtin_indices = config.builtin_indices,
+        },
+    }) catch |err| {
         std.log.err("MONO VALIDATION ERROR in {s}: Failed to initialize canonicalizer: {}", .{ source_path, err });
         return false;
     };
@@ -3024,12 +2965,20 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
         .builtin_indices = config.builtin_indices,
     };
 
+    var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
+    defer module_envs_map.deinit();
+
+    Can.populateModuleEnvs(&module_envs_map, &validation_env, builtin_env, config.builtin_indices) catch |err| {
+        std.log.err("MONO VALIDATION ERROR in {s}: Failed to populate auto-imported types: {}", .{ source_path, err });
+        return false;
+    };
+
     var checker = Check.init(
         allocator,
         &validation_env.types,
         &validation_env,
         &.{}, // No imported modules
-        &module_envs,
+        &module_envs_map,
         &validation_env.store.regions,
         builtin_ctx,
     ) catch |err| {
@@ -3060,7 +3009,7 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
     // Check for type-checking problems
     const type_problems = checker.problems.problems.items;
     if (type_problems.len > 0) {
-        std.log.err("MONO TYPE ERROR in {s}: {d} type error(s) in generated MONO output:", .{ source_path, type_problems.len });
+        std.log.err("TYPE ERROR IN GENERATED ROC SOURCE in {s}: {d} type error(s) in generated MONO output:", .{ source_path, type_problems.len });
         for (type_problems) |problem| {
             const tag_name = @tagName(problem);
             std.log.err("  - {s}", .{tag_name});
@@ -3123,8 +3072,41 @@ fn parseAndFormat(gpa: std.mem.Allocator, input: []const u8) ![]const u8 {
     return try result.toOwnedSlice();
 }
 
+/// Check if a type string contains type variables (single lowercase letters like 'a', 'b').
+/// This indicates a polymorphic type that hasn't been fully monomorphized.
+fn typeStringIsPolymorphic(type_str: []const u8) bool {
+    var i: usize = 0;
+    while (i < type_str.len) : (i += 1) {
+        const c = type_str[i];
+        if (c >= 'a' and c <= 'z') {
+            // Check if this is a standalone single letter (not part of a word)
+            const prev_is_ident = i > 0 and (std.ascii.isAlphanumeric(type_str[i - 1]) or type_str[i - 1] == '_');
+            const next_is_ident = i + 1 < type_str.len and (std.ascii.isAlphanumeric(type_str[i + 1]) or type_str[i + 1] == '_');
+            if (!prev_is_ident and !next_is_ident) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/// Check if an identifier name appears as a reference in the given text.
+/// Checks for whole-word matches (not substrings of other identifiers).
+fn isIdentReferencedIn(name: []const u8, text: []const u8) bool {
+    if (name.len == 0) return false;
+    var pos: usize = 0;
+    while (std.mem.indexOfPos(u8, text, pos, name)) |idx| {
+        const before_ok = idx == 0 or (!std.ascii.isAlphanumeric(text[idx - 1]) and text[idx - 1] != '_');
+        const after_idx = idx + name.len;
+        const after_ok = after_idx >= text.len or (!std.ascii.isAlphanumeric(text[after_idx]) and text[after_idx] != '_');
+        if (before_ok and after_ok) return true;
+        pos = idx + 1;
+    }
+    return false;
+}
+
 /// Generate MONO section for mono tests - emits monomorphized type module
-fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx, source_path: []const u8, config: *const Config, lifted_functions: []const LambdaLifter.LiftedFunction) !void {
+fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx, source_path: []const u8, config: *const Config) !void {
     // First, build the mono source in a buffer for validation
     var mono_buffer = std.ArrayList(u8).empty;
     defer mono_buffer.deinit(output.gpa);
@@ -3133,60 +3115,26 @@ fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx
     var emitter = can.RocEmitter.init(output.gpa, can_ir);
     defer emitter.deinit();
 
-    // Phase 5: Output lifted function definitions first (before regular definitions)
-    // These are the closures that have been lifted to top-level functions.
-    // Dispatch now calls these functions instead of inlining the lambda bodies.
-    for (lifted_functions) |lifted_fn| {
-        // Get the function name and convert to a valid Roc identifier
-        const fn_name = can_ir.getIdent(lifted_fn.name);
+    const defs = can_ir.store.sliceDefs(can_ir.all_defs);
 
-        // Convert # prefix to 'c' (for compiler-generated closures like #1_foo -> c1_foo)
-        // or uppercase first char to lowercase for backwards compatibility
-        var fn_name_lower = try output.gpa.alloc(u8, fn_name.len);
-        defer output.gpa.free(fn_name_lower);
-        @memcpy(fn_name_lower, fn_name);
-        if (fn_name_lower.len > 0 and fn_name_lower[0] == '#') {
-            fn_name_lower[0] = 'c';
-        } else if (fn_name_lower.len > 0 and fn_name_lower[0] >= 'A' and fn_name_lower[0] <= 'Z') {
-            fn_name_lower[0] = fn_name_lower[0] + ('a' - 'A');
+    // Two-pass approach: first emit all defs to collect their text,
+    // then skip unreferenced polymorphic defs (dead code from constant folding).
+    const DefInfo = struct {
+        pattern_output: []const u8,
+        expr_output: []const u8,
+        type_str: []const u8,
+        is_polymorphic: bool,
+    };
+    var def_infos = std.ArrayList(DefInfo).empty;
+    defer {
+        for (def_infos.items) |info| {
+            output.gpa.free(info.pattern_output);
+            output.gpa.free(info.expr_output);
+            output.gpa.free(info.type_str);
         }
-
-        // Output as a proper definition
-        try mono_buffer.appendSlice(output.gpa, fn_name_lower);
-        try mono_buffer.appendSlice(output.gpa, " = |");
-
-        // Emit the original lambda arguments
-        const args = can_ir.store.slicePatterns(lifted_fn.args);
-        for (args, 0..) |arg_pattern, i| {
-            if (i > 0) {
-                try mono_buffer.appendSlice(output.gpa, ", ");
-            }
-            emitter.reset();
-            try emitter.emitPattern(arg_pattern);
-            try mono_buffer.appendSlice(output.gpa, emitter.getOutput());
-        }
-
-        // Add the captures parameter if there are captures
-        if (lifted_fn.captures_pattern) |captures_pat| {
-            if (args.len > 0) {
-                try mono_buffer.appendSlice(output.gpa, ", ");
-            }
-            emitter.reset();
-            try emitter.emitPattern(captures_pat);
-            try mono_buffer.appendSlice(output.gpa, emitter.getOutput());
-        }
-
-        try mono_buffer.appendSlice(output.gpa, "| ");
-
-        // Emit the transformed body
-        emitter.reset();
-        try emitter.emitExpr(lifted_fn.body);
-        try mono_buffer.appendSlice(output.gpa, emitter.getOutput());
-        try mono_buffer.appendSlice(output.gpa, "\n\n");
+        def_infos.deinit(output.gpa);
     }
 
-    const defs = can_ir.store.sliceDefs(can_ir.all_defs);
-    const has_lifted_functions = lifted_functions.len > 0;
     for (defs) |def_idx| {
         const def = can_ir.store.getDef(def_idx);
 
@@ -3194,37 +3142,54 @@ fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx
         emitter.reset();
         try emitter.emitPattern(def.pattern);
         const pattern_output = try output.gpa.dupe(u8, emitter.getOutput());
-        defer output.gpa.free(pattern_output);
 
         // Emit the expression (right side of =)
         emitter.reset();
         try emitter.emitExpr(def.expr);
+        const expr_output = try output.gpa.dupe(u8, emitter.getOutput());
 
-        // For closure transforms, skip type annotations since computing them correctly
-        // is complex (transformed expressions have new indices without proper type vars).
-        // For non-closure transforms, emit type annotations using the pattern's type.
-        if (has_lifted_functions) {
-            // Skip type annotations - just emit: name = expr
-            try mono_buffer.appendSlice(output.gpa, pattern_output);
-            try mono_buffer.appendSlice(output.gpa, " = ");
-            try mono_buffer.appendSlice(output.gpa, emitter.getOutput());
-            try mono_buffer.appendSlice(output.gpa, "\n\n");
-        } else {
-            // Use the pattern's type from type checking (not computed from expression)
-            const pattern_type = ModuleEnv.varFrom(def.pattern);
-            const type_str = try getDefaultedTypeString(output.gpa, can_ir, pattern_type);
-            defer output.gpa.free(type_str);
+        // Use the pattern's type from type checking (not computed from expression)
+        const pattern_type = ModuleEnv.varFrom(def.pattern);
+        const type_str = try getDefaultedTypeString(output.gpa, can_ir, pattern_type);
 
-            // Build the mono source: name : Type\nname = expr\n
-            try mono_buffer.appendSlice(output.gpa, pattern_output);
-            try mono_buffer.appendSlice(output.gpa, " : ");
-            try mono_buffer.appendSlice(output.gpa, type_str);
-            try mono_buffer.appendSlice(output.gpa, "\n");
-            try mono_buffer.appendSlice(output.gpa, pattern_output);
-            try mono_buffer.appendSlice(output.gpa, " = ");
-            try mono_buffer.appendSlice(output.gpa, emitter.getOutput());
-            try mono_buffer.appendSlice(output.gpa, "\n\n");
+        // Check if the type is polymorphic (contains type variables like 'a', 'b', etc.)
+        const is_polymorphic = typeStringIsPolymorphic(type_str);
+
+        try def_infos.append(output.gpa, .{
+            .pattern_output = pattern_output,
+            .expr_output = expr_output,
+            .type_str = type_str,
+            .is_polymorphic = is_polymorphic,
+        });
+    }
+
+    // Build a combined string of all non-polymorphic expressions to check references
+    var all_exprs = std.ArrayList(u8).empty;
+    defer all_exprs.deinit(output.gpa);
+    for (def_infos.items) |info| {
+        if (!info.is_polymorphic) {
+            try all_exprs.appendSlice(output.gpa, info.expr_output);
+            try all_exprs.append(output.gpa, '\n');
         }
+    }
+
+    for (def_infos.items) |info| {
+        // Skip polymorphic defs that are unreferenced by any other def's expression.
+        // These are dead code from constant folding (e.g., func was called but the
+        // result was folded to a constant, leaving func's polymorphic type unresolvable).
+        if (info.is_polymorphic) {
+            if (!isIdentReferencedIn(info.pattern_output, all_exprs.items)) continue;
+        }
+
+        // Build the mono source: name : Type\nname = expr\n
+        try mono_buffer.appendSlice(output.gpa, info.pattern_output);
+        try mono_buffer.appendSlice(output.gpa, " : ");
+        try mono_buffer.appendSlice(output.gpa, info.type_str);
+        try mono_buffer.appendSlice(output.gpa, "\n");
+        try mono_buffer.appendSlice(output.gpa, info.pattern_output);
+        try mono_buffer.appendSlice(output.gpa, " = ");
+        try mono_buffer.appendSlice(output.gpa, info.expr_output);
+        try mono_buffer.appendSlice(output.gpa, "\n\n");
     }
 
     // Trim trailing newline (we added one too many at the end)
@@ -3963,59 +3928,9 @@ fn processDevObjectSnapshot(
         module.imports.resolveImports(module, all_module_envs);
     }
 
-    const compiled_module_envs = all_module_envs[1..];
+    // Lambda lifting and lambda set inference are now handled during CIR→MIR and MIR→LIR lowering
 
-    // 5. Closure pipeline
-    for (compiled_module_envs) |module| {
-        if (!module.is_lambda_lifted) {
-            var top_level_patterns = std.AutoHashMap(can.CIR.Pattern.Idx, void).init(allocator);
-            defer top_level_patterns.deinit();
-
-            const stmts = module.store.sliceStatements(module.all_statements);
-            for (stmts) |stmt_idx| {
-                const stmt = module.store.getStatement(stmt_idx);
-                switch (stmt) {
-                    .s_decl => |decl| {
-                        top_level_patterns.put(decl.pattern, {}) catch {};
-                    },
-                    else => {},
-                }
-            }
-
-            var lifter = can.LambdaLifter.init(allocator, module, &top_level_patterns);
-            defer lifter.deinit();
-            module.is_lambda_lifted = true;
-        }
-    }
-
-    // Lambda set inference
-    var lambda_inference = can.LambdaSetInference.init(allocator);
-    defer lambda_inference.deinit();
-
-    var mutable_envs = try allocator.alloc(*ModuleEnv, compiled_module_envs.len);
-    defer allocator.free(mutable_envs);
-    for (compiled_module_envs, 0..) |env, i| {
-        mutable_envs[i] = env;
-    }
-    lambda_inference.inferAll(mutable_envs) catch {
-        std.log.err("Lambda set inference failed", .{});
-        return false;
-    };
-
-    // Closure transformer
-    for (mutable_envs) |module| {
-        if (!module.is_defunctionalized) {
-            var transformer = can.ClosureTransformer.initWithInference(allocator, module, &lambda_inference);
-            defer transformer.deinit();
-            module.is_defunctionalized = true;
-        }
-    }
-
-    // 6. Process hosted functions
-    const mono = @import("mono");
-    var hosted_functions = mono.Lower.HostedFunctionMap.init(allocator);
-    defer hosted_functions.deinit();
-
+    // 6. Process hosted functions (write hosted_index into CIR node payloads)
     {
         const HostedCompiler = can.HostedCompiler;
         var all_hosted_fns = std.ArrayList(HostedCompiler.HostedFunctionInfo).empty;
@@ -4063,8 +3978,8 @@ fn processDevObjectSnapshot(
             }
             all_hosted_fns.shrinkRetainingCapacity(write_idx);
 
-            // Register hosted functions
-            for (modules, 0..) |mod, global_module_idx| {
+            // Write hosted_index into CIR node payloads (mir.Lower reads e_hosted_lambda.index directly)
+            for (modules) |mod| {
                 if (!mod.is_platform_sibling) continue;
                 const plat_env = mod.env;
 
@@ -4094,11 +4009,6 @@ fn processDevObjectSnapshot(
                                 payload.index = hosted_index;
                                 expr_node.setPayload(.{ .expr_hosted_lambda = payload });
                                 plat_env.store.nodes.set(expr_node_idx, expr_node);
-
-                                const mod_idx: u16 = @intCast(global_module_idx + 1);
-                                hosted_functions.put(mono.Lower.hostedFunctionKey(mod_idx, @intFromEnum(def_idx)), hosted_index) catch {};
-                                hosted_functions.put(mono.Lower.hostedFunctionKey(mod_idx, @intFromEnum(def.pattern)), hosted_index) catch {};
-                                hosted_functions.put(mono.Lower.hostedFunctionKey(mod_idx, @intFromEnum(def.expr)), hosted_index) catch {};
                                 break;
                             }
                         }
@@ -4122,7 +4032,11 @@ fn processDevObjectSnapshot(
     };
     defer layout_store.deinit();
 
-    // 8. Find app module index and lower to Mono IR
+    // 8. Find app module index and lower CIR → MIR → LIR
+    const mir_mod = @import("mir");
+    const MIR = mir_mod.MIR;
+    const lir_mod = @import("lir");
+
     var app_module_idx: ?u32 = null;
     for (modules, 0..) |mod, i| {
         if (mod.is_app) {
@@ -4131,15 +4045,24 @@ fn processDevObjectSnapshot(
         }
     }
 
-    var mono_store = mono.MonoExprStore.init(allocator);
-    defer mono_store.deinit();
+    const platform_module_idx: u32 = @intCast(platform_idx + 1);
+    const platform_types = &all_module_envs[platform_module_idx].types;
 
-    var lowerer = mono.Lower.init(allocator, &mono_store, all_module_envs, &lambda_inference, &layout_store, app_module_idx, &hosted_functions);
-    defer lowerer.deinit();
+    var mir_store = MIR.Store.init(allocator) catch {
+        std.log.err("Failed to create MIR store", .{});
+        return false;
+    };
+    defer mir_store.deinit(allocator);
+
+    var mir_lower = mir_mod.Lower.init(allocator, &mir_store, all_module_envs, platform_types, platform_module_idx, app_module_idx) catch {
+        std.log.err("Failed to create MIR lowerer", .{});
+        return false;
+    };
+    defer mir_lower.deinit();
 
     // Use provides entries from build pipeline (centralized in CompiledModuleInfo)
-    const backend = @import("backend");
-    var entrypoints = std.ArrayList(backend.Entrypoint).empty;
+    const backend_mod = @import("backend");
+    var entrypoints = std.ArrayList(backend_mod.Entrypoint).empty;
     defer {
         for (entrypoints.items) |ep| {
             allocator.free(ep.symbol_name);
@@ -4153,6 +4076,63 @@ fn processDevObjectSnapshot(
         return false;
     }
 
+    const PendingEntrypoint = struct {
+        ffi_symbol: []const u8,
+        mir_expr_id: MIR.ExprId,
+        ret_layout: layout_mod.Idx,
+    };
+    var pending_entrypoints = std.ArrayList(PendingEntrypoint).empty;
+    defer pending_entrypoints.deinit(allocator);
+
+    var type_layout_resolver = layout_mod.TypeLayoutResolver.init(&layout_store);
+    defer type_layout_resolver.deinit();
+
+    const findTypeAliasBodyVar = struct {
+        fn run(module_env: *const can.ModuleEnv, name: base.Ident.Idx) ?types.Var {
+            const stmts_slice = module_env.store.sliceStatements(module_env.all_statements);
+            for (stmts_slice) |stmt_idx| {
+                const stmt = module_env.store.getStatement(stmt_idx);
+                switch (stmt) {
+                    .s_alias_decl => |alias| {
+                        const header = module_env.store.getTypeHeader(alias.header);
+                        if (header.relative_name.eql(name)) {
+                            return can.ModuleEnv.varFrom(alias.anno);
+                        }
+                    },
+                    else => {},
+                }
+            }
+            return null;
+        }
+    }.run;
+
+    var platform_type_scope = types.TypeScope.init(allocator);
+    defer platform_type_scope.deinit();
+
+    if (app_module_idx) |resolved_app_module_idx| {
+        try platform_type_scope.scopes.append(types.VarMap.init(allocator));
+        const rigid_scope = &platform_type_scope.scopes.items[0];
+        const app_env = all_module_envs[resolved_app_module_idx];
+        const platform_env = all_module_envs[platform_module_idx];
+        const all_aliases = platform_env.for_clause_aliases.items.items;
+
+        for (platform_env.requires_types.items.items) |required_type| {
+            const type_aliases_slice = all_aliases[@intFromEnum(required_type.type_aliases.start)..][0..required_type.type_aliases.count];
+            for (type_aliases_slice) |alias| {
+                const alias_stmt = platform_env.store.getStatement(alias.alias_stmt_idx);
+                std.debug.assert(alias_stmt == .s_alias_decl);
+                const alias_body_var = can.ModuleEnv.varFrom(alias_stmt.s_alias_decl.anno);
+                const alias_stmt_var = can.ModuleEnv.varFrom(alias.alias_stmt_idx);
+                const app_alias_name = app_env.common.findIdent(platform_env.getIdentText(alias.alias_name)) orelse continue;
+                const app_var = findTypeAliasBodyVar(app_env, app_alias_name) orelse continue;
+                try rigid_scope.put(alias_body_var, app_var);
+                try rigid_scope.put(alias_stmt_var, app_var);
+            }
+        }
+
+        try mir_lower.setTypeScope(platform_module_idx, &platform_type_scope, resolved_app_module_idx);
+    }
+
     // Match provides entries to platform defs and lower them
     const platform_defs = platform_module.env.store.sliceDefs(platform_module.env.all_defs);
     for (provides_entries) |entry| {
@@ -4163,17 +4143,20 @@ fn processDevObjectSnapshot(
                 .assign => |assign| {
                     const ident_name = platform_module.env.getIdent(assign.ident);
                     if (std.mem.eql(u8, ident_name, entry.roc_ident)) {
-                        const mono_expr_id = lowerer.lowerExpr(@intCast(platform_idx + 1), def.expr) catch continue;
-                        const type_var = can.ModuleEnv.varFrom(def.expr);
-                        var scope = types.TypeScope.init(allocator);
-                        defer scope.deinit();
-                        const ret_layout = layout_store.fromTypeVar(@intCast(platform_idx + 1), type_var, &scope, null) catch continue;
+                        // Lower CIR → MIR.
+                        const mir_expr_id = mir_lower.lowerExpr(def.expr) catch continue;
 
-                        const symbol_name = std.fmt.allocPrint(allocator, "roc__{s}", .{entry.ffi_symbol}) catch continue;
-                        entrypoints.append(allocator, .{
-                            .symbol_name = symbol_name,
-                            .body_expr = mono_expr_id,
-                            .arg_layouts = &[_]layout_mod.Idx{},
+                        const type_var = can.ModuleEnv.varFrom(def.expr);
+                        const ret_layout = type_layout_resolver.resolve(
+                            platform_module_idx,
+                            type_var,
+                            &platform_type_scope,
+                            app_module_idx,
+                        ) catch continue;
+
+                        pending_entrypoints.append(allocator, .{
+                            .ffi_symbol = entry.ffi_symbol,
+                            .mir_expr_id = mir_expr_id,
                             .ret_layout = ret_layout,
                         }) catch continue;
                         break;
@@ -4184,20 +4167,62 @@ fn processDevObjectSnapshot(
         }
     }
 
-    if (entrypoints.items.len == 0) {
+    if (pending_entrypoints.items.len == 0) {
         std.log.err("No entrypoints found in platform module", .{});
         return false;
     }
 
+    // Run lambda set inference after MIR lowering so all symbol defs are visible.
+    const mir_module = @import("mir");
+    var lambda_set_store = mir_module.LambdaSet.infer(allocator, &mir_store, all_module_envs) catch {
+        std.log.err("Failed to run lambda set inference", .{});
+        return false;
+    };
+    defer lambda_set_store.deinit(allocator);
+
+    var lir_store = lir_mod.LirExprStore.init(allocator);
+    defer lir_store.deinit();
+
+    var mir_to_lir = lir_mod.MirToLir.init(
+        allocator,
+        &mir_store,
+        &lir_store,
+        &layout_store,
+        &lambda_set_store,
+        all_module_envs[0].idents.true_tag,
+    );
+    defer mir_to_lir.deinit();
+
+    for (pending_entrypoints.items) |pending| {
+        const lir_expr_id = mir_to_lir.lower(pending.mir_expr_id) catch continue;
+        const symbol_name = std.fmt.allocPrint(allocator, "roc__{s}", .{pending.ffi_symbol}) catch continue;
+        entrypoints.append(allocator, .{
+            .symbol_name = symbol_name,
+            .body_expr = lir_expr_id,
+            .arg_layouts = &[_]layout_mod.Idx{},
+            .ret_layout = pending.ret_layout,
+        }) catch continue;
+    }
+
+    if (entrypoints.items.len == 0) {
+        std.log.err("Failed to lower any entrypoints to LIR", .{});
+        return false;
+    }
+
     // 9. RC insertion
-    var rc_pass = try mono.RcInsert.RcInsertPass.init(allocator, &mono_store, &layout_store);
+    var rc_pass = lir_mod.RcInsert.RcInsertPass.init(allocator, &lir_store, &layout_store) catch {
+        std.log.err("Failed to create RC insertion pass", .{});
+        return false;
+    };
     defer rc_pass.deinit();
 
     for (entrypoints.items) |*ep| {
         ep.body_expr = rc_pass.insertRcOps(ep.body_expr) catch ep.body_expr;
     }
 
-    const procs = mono_store.getProcs();
+    lir_mod.RcInsert.insertRcOpsIntoSymbolDefsBestEffort(allocator, &lir_store, &layout_store);
+
+    const procs = lir_store.getProcs();
 
     // 10. Cross-compile for all targets and hash
     const RocTarget = roc_target.RocTarget;
@@ -4206,7 +4231,7 @@ fn processDevObjectSnapshot(
 
     var hash_results: [roc_target_fields.len]TargetHashResult = undefined;
 
-    var object_compiler = backend.ObjectFileCompiler.init(allocator);
+    var object_compiler = backend_mod.ObjectFileCompiler.init(allocator);
 
     inline for (roc_target_fields, 0..) |field, i| {
         const target: RocTarget = @enumFromInt(field.value);
@@ -4215,7 +4240,7 @@ fn processDevObjectSnapshot(
         const arch = target.toCpuArch();
         if (arch == .x86_64 or arch == .aarch64 or arch == .aarch64_be) {
             if (object_compiler.compileToObjectFile(
-                &mono_store,
+                &lir_store,
                 &layout_store,
                 entrypoints.items,
                 procs,
@@ -4467,6 +4492,72 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
         try actual_outputs.append(repl_output);
     }
 
+    // Run dev backend for comparison with panic protection.
+    // The dev backend may hit `unreachable` or other panics for unimplemented
+    // features. The custom panic handler longjmps back here instead of aborting,
+    // so we can report the failure and continue with the next snapshot.
+    // Install signal handlers for SIGSEGV/SIGBUS/SIGILL from generated code.
+    installCrashSignalHandlers();
+    var dev_snapshot_ops = SnapshotOps.init(output.gpa);
+    defer dev_snapshot_ops.deinit();
+    if (Repl.initWithBackend(output.gpa, dev_snapshot_ops.get_ops(), dev_snapshot_ops.crashContextPtr(), .dev)) |dev_repl_val| {
+        var dev_repl = dev_repl_val;
+        defer dev_repl.deinit();
+
+        for (inputs.items, 0..) |input, i| {
+            // Set up panic protection via setjmp. If the dev backend panics,
+            // the custom panic handler longjmps back here with jmp_result != 0.
+            var jmp_buf: sljmp.JmpBuf = undefined;
+            const jmp_result = sljmp.setjmp(&jmp_buf);
+            if (jmp_result != 0) {
+                // Returned from a panic — report it and stop this snapshot's dev run.
+                // The dev_repl state is corrupted after a panic, so we can't continue.
+                const msg = panic_msg orelse "unknown";
+                std.debug.print("Dev REPL panic at input {d} in {s}: {s}\n", .{ i, snapshot_path, msg });
+                panic_msg = null;
+                break;
+            }
+            panic_jmp = &jmp_buf;
+            defer {
+                panic_jmp = null;
+            }
+
+            // Set a 10-second timeout to catch infinite loops in generated code.
+            // Note: alarm() is process-wide — in parallel mode, SIGALRM may be
+            // delivered to the wrong thread. The handler checks threadlocal panic_jmp,
+            // so it's harmless if the receiving thread isn't evaluating.
+            _ = std.c.alarm(10);
+            defer _ = std.c.alarm(0);
+
+            const dev_output = dev_repl.step(input) catch |err| {
+                std.debug.print("Dev REPL error at input {d} in {s}: {}\n", .{ i, snapshot_path, err });
+                continue;
+            };
+            defer output.gpa.free(dev_output);
+
+            // Cap dev output to prevent flooding terminal with corrupted string data.
+            const max_output_len = 4096;
+            const dev_display = if (dev_output.len > max_output_len)
+                dev_output[0..max_output_len]
+            else
+                dev_output;
+
+            if (i < actual_outputs.items.len) {
+                const interp_output = actual_outputs.items[i];
+                if (!std.mem.eql(u8, interp_output, dev_output)) {
+                    std.debug.print(
+                        "REPL backend mismatch at input {d} in {s}:\n  interpreter: '{s}'\n  dev:         '{s}'{s}\n",
+                        .{ i, snapshot_path, interp_output, dev_display, if (dev_output.len > max_output_len) "... (truncated)" else "" },
+                    );
+                    success = false;
+                }
+            }
+        }
+    } else |err| {
+        std.debug.print("Dev REPL init failed in {s}: {}\n", .{ snapshot_path, err });
+        success = false;
+    }
+
     switch (config.output_section_command) {
         .update => {
             try output.begin_section("OUTPUT");
@@ -4700,10 +4791,6 @@ test "TODO: cross-module function calls - string_interpolation_comparison" {}
 test "TODO: cross-module function calls - string_multiline_comparison" {}
 
 test "TODO: cross-module function calls - string_ordering_unsupported" {}
-
-test "LambdaLifter" {
-    std.testing.refAllDecls(LambdaLifter);
-}
 
 /// An implementation of RocOps for snapshot testing.
 pub const SnapshotOps = struct {

@@ -6,8 +6,6 @@
 //! - Calling conventions (SystemV, WindowsFastcall)
 
 const std = @import("std");
-const builtin = @import("builtin");
-const RocTarget = @import("roc_target").RocTarget;
 
 pub const GeneralReg = @import("Registers.zig").GeneralReg;
 pub const FloatReg = @import("Registers.zig").FloatReg;
@@ -23,12 +21,6 @@ pub const WinEmit = Emit(.x64win);
 /// Emit type for macOS x86_64 target
 pub const MacEmit = Emit(.x64mac);
 
-/// Convenience: native Emit for host compilation (uses LinuxEmit as fallback for non-x86_64 hosts)
-pub const NativeEmit = if (builtin.cpu.arch == .x86_64)
-    Emit(RocTarget.detectNative())
-else
-    LinuxEmit;
-
 pub const SystemV = @import("SystemV.zig");
 pub const WindowsFastcall = @import("WindowsFastcall.zig");
 
@@ -41,12 +33,6 @@ pub const LinuxCodeGen = CodeGen(.x64linux);
 pub const WinCodeGen = CodeGen(.x64win);
 /// CodeGen type for macOS x86_64 target
 pub const MacCodeGen = CodeGen(.x64mac);
-
-/// Convenience: native CodeGen for host compilation (uses LinuxCodeGen as fallback for non-x86_64 hosts)
-pub const NativeCodeGen = if (builtin.cpu.arch == .x86_64)
-    CodeGen(RocTarget.detectNative())
-else
-    LinuxCodeGen;
 
 test "x86_64 module imports" {
     std.testing.refAllDecls(@This());

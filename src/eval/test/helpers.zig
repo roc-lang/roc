@@ -7,10 +7,13 @@ const base = @import("base");
 const can = @import("can");
 const check = @import("check");
 const builtins = @import("builtins");
-const i128h = builtins.compiler_rt_128;
 const compiled_builtins = @import("compiled_builtins");
 
 const layout = @import("layout");
+const interpreter_layout = @import("interpreter_layout");
+const interpreter_values = @import("interpreter_values");
+const mir = @import("mir");
+const lir = @import("lir");
 const roc_target = @import("roc_target");
 const eval_mod = @import("../mod.zig");
 const builtin_loading_mod = eval_mod.builtin_loading;
@@ -28,27 +31,141 @@ const WasmEvaluator = eval_mod.WasmEvaluator;
 
 const posix = std.posix;
 
-const has_fork = switch (builtin.os.tag) {
-    .macos, .linux, .freebsd, .openbsd, .netbsd => true,
-    else => false,
-};
+const has_fork = builtin.os.tag != .windows;
+const enable_dev_eval_leak_checks = true;
 
 const Check = check.Check;
 const Can = can.Can;
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
 const Allocators = base.Allocators;
+const MIR = mir.MIR;
+const LambdaSet = mir.LambdaSet;
+const LirExprStore = lir.LirExprStore;
+
+/// Convert a StackValue to a RocValue for formatting.
+fn stackValueToRocValue(result: StackValue, layout_idx_hint: ?interpreter_layout.Idx) interpreter_values.RocValue {
+    return .{
+        .ptr = if (result.ptr) |p| @ptrCast(p) else null,
+        .lay = result.layout,
+        .layout_idx = layout_idx_hint,
+    };
+}
+
+/// Build FormatContext from interpreter state.
+fn interpreterFormatCtx(layout_cache: *const interpreter_layout.Store) interpreter_values.RocValue.FormatContext {
+    return .{
+        .layout_store = layout_cache,
+        .ident_store = layout_cache.getEnv().common.getIdentStore(),
+    };
+}
+
+/// Wrap a CIR expression in `Str.inspect(expr)` by creating an `e_run_low_level(.str_inspekt, [expr])` node.
+fn wrapInStrInspect(module_env: *ModuleEnv, inner_expr: CIR.Expr.Idx) !CIR.Expr.Idx {
+    const top = module_env.store.scratchExprTop();
+    try module_env.store.addScratchExpr(inner_expr);
+    const args_span = try module_env.store.exprSpanFrom(top);
+    const region = module_env.store.getExprRegion(inner_expr);
+    return module_env.addExpr(.{ .e_run_low_level = .{
+        .op = .str_inspekt,
+        .args = args_span,
+    } }, region);
+}
 
 // Use std.testing.allocator for dev backend tests (tracks leaks)
 const test_allocator = std.testing.allocator;
 
-/// Use page_allocator for interpreter tests (doesn't track leaks).
-/// The interpreter has known memory leak issues that we're not fixing now.
-/// We want to focus on getting the dev backend working without leaks.
-/// Exported so other test files can use it.
-pub const interpreter_allocator = std.heap.page_allocator;
+/// Use std.testing.allocator for interpreter tests so leaks fail tests.
+pub const interpreter_allocator = test_allocator;
 
-const TestParseError = parse.Parser.Error || error{ TokenizeError, SyntaxError };
+const ParsedExprResources = struct {
+    module_env: *ModuleEnv,
+    parse_ast: *parse.AST,
+    can: *Can,
+    checker: *Check,
+    expr_idx: CIR.Expr.Idx,
+    bool_stmt: CIR.Statement.Idx,
+    builtin_module: LoadedModule,
+    builtin_indices: CIR.BuiltinIndices,
+    builtin_types: BuiltinTypes,
+};
+
+fn renderReportToMarkdownBuffer(buf: *std.array_list.Managed(u8), report: anytype) !void {
+    buf.clearRetainingCapacity();
+    var unmanaged = buf.moveToUnmanaged();
+    defer buf.* = unmanaged.toManaged(buf.allocator);
+
+    var writer_alloc = std.Io.Writer.Allocating.fromArrayList(buf.allocator, &unmanaged);
+    defer unmanaged = writer_alloc.toArrayList();
+
+    report.render(&writer_alloc.writer, .markdown) catch |err| switch (err) {
+        error.WriteFailed => return error.OutOfMemory,
+        else => return err,
+    };
+}
+
+fn failWithRenderedDiagnostic(kind: []const u8, rendered: []const u8) noreturn {
+    std.debug.panic("{s} unexpectedly reported errors:\n\n{s}", .{ kind, rendered });
+}
+
+fn failWithReport(kind: []const u8, allocator: std.mem.Allocator, report: anytype) noreturn {
+    var report_buf = std.array_list.Managed(u8).initCapacity(allocator, 256) catch @panic("OOM rendering diagnostic");
+    defer report_buf.deinit();
+
+    renderReportToMarkdownBuffer(&report_buf, report) catch @panic("failed rendering diagnostic");
+    failWithRenderedDiagnostic(kind, report_buf.items);
+}
+
+fn reportFilename(module_env: *ModuleEnv) []const u8 {
+    return if (module_env.module_name.len == 0) "test" else module_env.module_name;
+}
+
+fn assertNoParseDiagnostics(allocator: std.mem.Allocator, module_env: *ModuleEnv, parse_ast: *parse.AST) !void {
+    const filename = reportFilename(module_env);
+    for (parse_ast.tokenize_diagnostics.items) |tok_diag| {
+        var report = try parse_ast.tokenizeDiagnosticToReport(tok_diag, allocator, filename);
+        defer report.deinit();
+        failWithReport("Parse", allocator, &report);
+    }
+
+    for (parse_ast.parse_diagnostics.items) |diag| {
+        var report = try parse_ast.parseDiagnosticToReport(&module_env.common, diag, allocator, filename);
+        defer report.deinit();
+        failWithReport("Parse", allocator, &report);
+    }
+}
+
+fn assertNoCanonicalizeDiagnostics(allocator: std.mem.Allocator, module_env: *ModuleEnv) !void {
+    const diagnostics = try module_env.getDiagnostics();
+    defer allocator.free(diagnostics);
+
+    for (diagnostics) |diagnostic| {
+        var report = try module_env.diagnosticToReport(diagnostic, allocator, module_env.module_name);
+        defer report.deinit();
+        failWithReport("Canonicalization", allocator, &report);
+    }
+}
+
+fn assertNoTypeProblems(allocator: std.mem.Allocator, module_env: *ModuleEnv, checker: *Check) !void {
+    var report_builder = try check.ReportBuilder.init(
+        allocator,
+        module_env,
+        module_env,
+        &checker.snapshots,
+        &checker.problems,
+        module_env.module_name,
+        &.{},
+        &checker.import_mapping,
+        &checker.regions,
+    );
+    defer report_builder.deinit();
+
+    for (checker.problems.problems.items) |problem| {
+        var report = try report_builder.build(problem);
+        defer report.deinit();
+        failWithReport("Type checking", allocator, &report);
+    }
+}
 
 const TraceWriter = struct {
     buffer: [256]u8 = undefined,
@@ -116,71 +233,8 @@ const DevEvalError = error{
 };
 
 /// Resolve a ZST type variable to its display string.
-/// Unwraps aliases, but stops at nominal/opaque types (rendering them as
-/// `<nominal>` or `<opaque>`). For bare tag unions, returns the tag name.
-fn resolveZstName(module_env: *ModuleEnv, expr_type_var: types.Var) []const u8 {
-    var resolved = module_env.types.resolveVar(expr_type_var);
-
-    // Unwrap aliases only — nominal/opaque types are NOT unwrapped
-    for (0..100) |_| {
-        switch (resolved.desc.content) {
-            .alias => |al| {
-                const backing = module_env.types.getAliasBackingVar(al);
-                resolved = module_env.types.resolveVar(backing);
-            },
-            else => break,
-        }
-    }
-
-    switch (resolved.desc.content) {
-        .structure => |st| switch (st) {
-            .nominal_type => |nt| {
-                return if (nt.is_opaque) "<opaque>" else "<nominal>";
-            },
-            .tag_union => |tu| {
-                const tags = module_env.types.getTagsSlice(tu.tags);
-                if (tags.len == 1) {
-                    const tag_name_idx = tags.items(.name)[0];
-                    return module_env.getIdent(tag_name_idx);
-                }
-                return "{}";
-            },
-            .empty_record => return "{}",
-            else => return "{}",
-        },
-        else => return "{}",
-    }
-}
-
-/// Resolve the element type of a List type variable to its ZST display string.
-/// The type is expected to be `List(item)` where `item` is a ZST type.
-fn resolveListElemZstName(module_env: *ModuleEnv, expr_type_var: types.Var) []const u8 {
-    var resolved = module_env.types.resolveVar(expr_type_var);
-
-    // Unwrap aliases to find the nominal List type
-    for (0..100) |_| {
-        switch (resolved.desc.content) {
-            .alias => |al| {
-                const backing = module_env.types.getAliasBackingVar(al);
-                resolved = module_env.types.resolveVar(backing);
-            },
-            .structure => |st| switch (st) {
-                .nominal_type => |nt| {
-                    // This should be the List nominal - get the element type arg
-                    const args = module_env.types.sliceNominalArgs(nt);
-                    if (args.len >= 1) {
-                        return resolveZstName(module_env, args[0]);
-                    }
-                    return "{}";
-                },
-                else => break,
-            },
-            else => break,
-        }
-    }
-    return "{}";
-}
-
+/// Unwraps aliases and nominal types, then returns the tag name for single-tag unions
+/// or "{}" for empty records.
 /// Evaluate an expression using the DevEvaluator and return the result as a string.
 fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) DevEvalError![]const u8 {
     // Initialize DevEvaluator
@@ -189,12 +243,11 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
     };
     defer dev_eval.deinit();
 
-    // Create module envs array for code generation
-    // Note: generateCode expects []const *ModuleEnv (mutable pointers in immutable slice)
-    const all_module_envs = [_]*ModuleEnv{ module_env, @constCast(builtin_module_env) };
+    // Keep module order aligned with resolveImports/getResolvedModule indices.
+    const all_module_envs = [_]*ModuleEnv{ @constCast(builtin_module_env), module_env };
 
     // Generate code using Mono IR pipeline
-    var code_result = dev_eval.generateCode(module_env, expr_idx, &all_module_envs) catch {
+    var code_result = dev_eval.generateCode(module_env, expr_idx, &all_module_envs, null) catch {
         return error.GenerateCodeFailed;
     };
     defer code_result.deinit();
@@ -217,23 +270,20 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
     defer executable.deinit();
 
     if (has_fork) {
-        return forkAndExecute(allocator, &dev_eval, &executable, &code_result, module_env, expr_idx);
+        return forkAndExecute(allocator, &dev_eval, &executable);
     } else {
-        return executeAndFormat(allocator, &dev_eval, &executable, &code_result, module_env, expr_idx);
+        return executeAndFormat(allocator, &dev_eval, &executable);
     }
 }
 
 /// Execute compiled code and format the result as a string.
-/// This is the core execution + formatting logic extracted from devEvaluatorStr.
+/// The expression has already been wrapped in Str.inspect, so the result is always a RocStr.
 /// Marked noinline to prevent optimizer from inlining across fork() boundary,
 /// which can cause register state issues in the child process.
 noinline fn executeAndFormat(
     alloc: std.mem.Allocator,
     dev_eval: *DevEvaluator,
     executable: *backend.ExecutableMemory,
-    code_result: *DevEvaluator.CodeResult,
-    module_env: *ModuleEnv,
-    expr_idx: CIR.Expr.Idx,
 ) DevEvalError![]const u8 {
     // Compiler barrier: std.debug.print with empty string acts as a full
     // memory barrier, ensuring all struct fields are properly materialized
@@ -241,223 +291,34 @@ noinline fn executeAndFormat(
     // This is necessary for fork-based test isolation in ReleaseFast builds.
     std.debug.print("", .{});
 
-    // Check if this is a tuple
-    if (code_result.tuple_len > 1) {
-        // Allocate buffer for tuple elements
-        // Unsuffixed numeric literals default to Dec (i128 = 16 bytes each)
-        var result_buf: [32]i128 align(16) = @splat(0);
-        try dev_eval.callWithCrashProtection(executable, @ptrCast(&result_buf));
+    if (comptime builtin.mode == .Debug and enable_dev_eval_leak_checks) {
+        builtins.utils.DebugRefcountTracker.enable();
+    }
+    defer if (comptime builtin.mode == .Debug and enable_dev_eval_leak_checks) {
+        builtins.utils.DebugRefcountTracker.disable();
+    };
 
-        // Format as "(elem1, elem2, ...)"
-        var output = std.array_list.Managed(u8).initCapacity(alloc, 64) catch
-            return error.OutOfMemory;
-        errdefer output.deinit();
-        output.append('(') catch return error.OutOfMemory;
+    // Execute with result pointer
+    var result_buf: [512]u8 align(16) = undefined;
+    try dev_eval.callWithCrashProtection(executable, @ptrCast(&result_buf));
 
-        for (0..code_result.tuple_len) |i| {
-            if (i > 0) {
-                try output.appendSlice(", ");
-            }
-            const raw_val = result_buf[i];
-            // Detect if this is a Dec-scaled value or a raw integer
-            // Dec values for small integers like 10 would be 10 * 10^18 = 10^19
-            // Raw integers would be much smaller (< 10^17)
-            const abs_val: u128 = if (raw_val < 0) @intCast(-raw_val) else @intCast(raw_val);
-            const one_point_zero: u128 = 1_000_000_000_000_000_000;
+    // Result is always a Str (expression was wrapped in Str.inspect)
+    const roc_str: *const builtins.str.RocStr = @ptrCast(@alignCast(&result_buf));
+    const result = alloc.dupe(u8, roc_str.asSlice()) catch return error.OutOfMemory;
 
-            if (abs_val < one_point_zero / 10) {
-                // This is a raw integer, not Dec-scaled - format as "N.0"
-                var fmt_buf: [40]u8 = undefined;
-                const num_str = i128h.i128_to_str(&fmt_buf, raw_val).str;
-                try output.appendSlice(num_str);
-                try output.appendSlice(".0");
-            } else {
-                // This is a Dec-scaled value - format as Dec
-                const dec_val = builtins.dec.RocDec{ .num = raw_val };
-                var dec_buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
-                const elem_str = dec_val.format_to_buf(&dec_buf);
-                try output.appendSlice(elem_str);
-            }
-        }
-
-        try output.append(')');
-        return output.toOwnedSlice();
+    // Decref the RocStr
+    if (!roc_str.isSmallStr()) {
+        @constCast(roc_str).decref(&dev_eval.roc_ops);
     }
 
-    // Execute with result pointer and format result as string based on layout
-    const layout_mod = @import("layout");
-    return switch (code_result.result_layout) {
-        layout_mod.Idx.i64, layout_mod.Idx.i8, layout_mod.Idx.i16, layout_mod.Idx.i32 => blk: {
-            var result: i64 = 0;
-            try dev_eval.callWithCrashProtection(executable, @ptrCast(&result));
-            break :blk std.fmt.allocPrint(alloc, "{}", .{result});
-        },
-        layout_mod.Idx.u64, layout_mod.Idx.u8, layout_mod.Idx.u16, layout_mod.Idx.u32, layout_mod.Idx.bool => blk: {
-            var result: u64 = 0;
-            try dev_eval.callWithCrashProtection(executable, @ptrCast(&result));
-            break :blk std.fmt.allocPrint(alloc, "{}", .{result});
-        },
-        layout_mod.Idx.f64 => blk: {
-            var result: f64 = 0;
-            try dev_eval.callWithCrashProtection(executable, @ptrCast(&result));
-            var fbuf: [400]u8 = undefined;
-            break :blk alloc.dupe(u8, i128h.f64_to_str(&fbuf, result));
-        },
-        layout_mod.Idx.f32 => blk: {
-            // F32 stores 4 bytes, cast to f64 for consistent display precision
-            var result: f32 = 0;
-            try dev_eval.callWithCrashProtection(executable, @ptrCast(&result));
-            var fbuf: [400]u8 = undefined;
-            break :blk alloc.dupe(u8, i128h.f64_to_str(&fbuf, @as(f64, result)));
-        },
-        layout_mod.Idx.i128, layout_mod.Idx.u128 => blk: {
-            var result: i128 align(16) = 0; // Initialize to 0 and ensure 16-byte alignment
-            try dev_eval.callWithCrashProtection(executable, @ptrCast(&result));
-            var str_buf: [40]u8 = undefined;
-            break :blk alloc.dupe(u8, i128h.i128_to_str(&str_buf, result).str);
-        },
-        layout_mod.Idx.dec => blk: {
-            var result: i128 align(16) = 0; // Initialize to 0 and ensure 16-byte alignment
-            try dev_eval.callWithCrashProtection(executable, @ptrCast(&result));
-            const dec = builtins.dec.RocDec{ .num = result };
-            var buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
-            const slice = dec.format_to_buf(&buf);
-            break :blk alloc.dupe(u8, slice);
-        },
-        layout_mod.Idx.str => blk: {
-            // RocStr is 24 bytes - use a properly aligned struct
-            const RocStrResult = extern struct {
-                bytes: ?[*]u8,
-                length: usize,
-                capacity_or_alloc_ptr: usize,
-            };
-            var result: RocStrResult align(8) = .{
-                .bytes = null,
-                .length = 0,
-                .capacity_or_alloc_ptr = 0,
-            };
-            try dev_eval.callWithCrashProtection(executable, @ptrCast(&result));
+    if (comptime builtin.mode == .Debug and enable_dev_eval_leak_checks) {
+        if (builtins.utils.DebugRefcountTracker.reportLeaks() != 0) {
+            alloc.free(result);
+            return error.ChildExecFailed;
+        }
+    }
 
-            // Check if small string (capacity_or_alloc_ptr is negative when cast to signed)
-            if (@as(isize, @bitCast(result.capacity_or_alloc_ptr)) < 0) {
-                // Small string: length is in the last byte of the struct XOR'd with 0x80
-                const result_bytes: *const [@sizeOf(builtins.str.RocStr)]u8 = @ptrCast(&result);
-                const len = result_bytes[@sizeOf(builtins.str.RocStr) - 1] ^ 0x80;
-                // Return the string content directly (no quotes in result)
-                break :blk std.fmt.allocPrint(alloc, "{s}", .{result_bytes[0..len]});
-            } else {
-                // Large string (heap allocated)
-                const str_bytes = result.bytes.?[0..result.length];
-                const formatted = std.fmt.allocPrint(alloc, "{s}", .{str_bytes});
-
-                // Decref the heap-allocated string data after copying
-                // This will free the memory when refcount reaches 0
-                // Strings have 1-byte alignment, elements_refcounted = false
-                // Only decref if the pointer looks valid (non-null and reasonable address)
-                if (result.bytes != null and result.length > 0) {
-                    builtins.utils.decrefDataPtrC(result.bytes, 1, false, @constCast(&dev_eval.roc_ops));
-                }
-
-                break :blk formatted;
-            }
-        },
-        else => blk: {
-            const ls = code_result.layout_store orelse unreachable; // non-scalar layout must have layout store
-            const stored_layout = ls.getLayout(code_result.result_layout);
-            switch (stored_layout.tag) {
-                .list_of_zst => {
-                    const ListResultBuffer = extern struct {
-                        ptr: ?[*]const u8,
-                        len: usize,
-                        capacity: usize,
-                    };
-                    var result: ListResultBuffer align(8) = .{
-                        .ptr = null,
-                        .len = 0,
-                        .capacity = 0,
-                    };
-                    try dev_eval.callWithCrashProtection(executable, @ptrCast(&result));
-
-                    // Resolve the element type for proper ZST rendering
-                    const type_var = can.ModuleEnv.varFrom(expr_idx);
-                    const elem_name = resolveListElemZstName(module_env, type_var);
-
-                    // Format as [ElemName, ElemName, ...] based on the length
-                    var output = std.array_list.Managed(u8).initCapacity(alloc, 64) catch
-                        return error.OutOfMemory;
-                    errdefer output.deinit();
-                    output.append('[') catch return error.OutOfMemory;
-
-                    for (0..result.len) |i| {
-                        if (i > 0) {
-                            try output.appendSlice(", ");
-                        }
-                        try output.appendSlice(elem_name);
-                    }
-
-                    try output.append(']');
-                    break :blk output.toOwnedSlice();
-                },
-                .list => {
-                    const ListResultBuffer = extern struct {
-                        ptr: [*]const i64,
-                        len: usize,
-                        capacity: usize,
-                    };
-                    var result: ListResultBuffer align(8) = .{
-                        .ptr = undefined,
-                        .len = 0,
-                        .capacity = 0,
-                    };
-                    try dev_eval.callWithCrashProtection(executable, @ptrCast(&result));
-
-                    var output = std.array_list.Managed(u8).initCapacity(alloc, 64) catch
-                        return error.OutOfMemory;
-                    errdefer output.deinit();
-                    output.append('[') catch return error.OutOfMemory;
-
-                    if (result.len > 0) {
-                        const elements = result.ptr[0..result.len];
-                        for (elements, 0..) |elem, i| {
-                            if (i > 0) {
-                                try output.appendSlice(", ");
-                            }
-                            const elem_str = try std.fmt.allocPrint(alloc, "{}", .{elem});
-                            defer alloc.free(elem_str);
-                            try output.appendSlice(elem_str);
-                        }
-                    }
-
-                    try output.append(']');
-
-                    if (result.len > 0) {
-                        builtins.utils.decrefDataPtrC(@ptrCast(@constCast(result.ptr)), 8, false, @constCast(&dev_eval.roc_ops));
-                    }
-
-                    break :blk output.toOwnedSlice();
-                },
-                .record => {
-                    const record_idx = stored_layout.data.record.idx.int_idx;
-                    const record_data = ls.record_data.items.items[record_idx];
-                    // Empty record (size 0) - resolve via type info
-                    if (record_data.size == 0) {
-                        const type_var = can.ModuleEnv.varFrom(expr_idx);
-                        const zst_name = resolveZstName(module_env, type_var);
-                        break :blk try alloc.dupe(u8, zst_name);
-                    }
-                    const field_count = record_data.fields.count;
-                    break :blk std.fmt.allocPrint(alloc, "{{record with {d} fields}}", .{field_count});
-                },
-                .zst => {
-                    // Resolve the type to render the correct ZST representation
-                    const type_var = can.ModuleEnv.varFrom(expr_idx);
-                    const zst_name = resolveZstName(module_env, type_var);
-                    break :blk try alloc.dupe(u8, zst_name);
-                },
-                else => @panic("TODO: devEvaluatorStr for unsupported layout tag"),
-            }
-        },
-    };
+    return result;
 }
 
 /// Fork a child process to execute compiled code, isolating segfaults from the test process.
@@ -467,9 +328,6 @@ fn forkAndExecute(
     allocator: std.mem.Allocator,
     dev_eval: *DevEvaluator,
     executable: *backend.ExecutableMemory,
-    code_result: *DevEvaluator.CodeResult,
-    module_env: *ModuleEnv,
-    expr_idx: CIR.Expr.Idx,
 ) DevEvalError![]const u8 {
     const pipe_fds = posix.pipe() catch {
         return error.PipeCreationFailed;
@@ -491,7 +349,17 @@ fn forkAndExecute(
         // meaningless since we exit via _exit and no defers run.
         const child_alloc = std.heap.page_allocator;
 
-        const result_str = executeAndFormat(child_alloc, dev_eval, executable, code_result, module_env, expr_idx) catch {
+        const result_str = executeAndFormat(child_alloc, dev_eval, executable) catch |err| {
+            std.debug.print("child executeAndFormat error: {}", .{err});
+            switch (err) {
+                error.RocCrashed => {
+                    if (dev_eval.getCrashMessage()) |msg| {
+                        std.debug.print(" msg={s}", .{msg});
+                    }
+                },
+                else => {},
+            }
+            std.debug.print("\n", .{});
             posix.close(pipe_write);
             posix.exit(1);
         };
@@ -562,20 +430,69 @@ fn forkAndExecute(
     }
 }
 
-/// Compare Interpreter result string with DevEvaluator result string.
-/// Compares ALL expressions - no exceptions. If DevEvaluator can't handle
-/// an expression, the test will fail (which is the desired behavior to
-/// track what still needs to be implemented).
 fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []const u8, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) !void {
-    const dev_str = try devEvaluatorStr(allocator, module_env, expr_idx, builtin_module_env);
+    const inspect_expr = wrapInStrInspect(module_env, expr_idx) catch return error.EvaluatorMismatch;
+
+    const dev_str = try devEvaluatorStr(allocator, module_env, inspect_expr, builtin_module_env);
     defer allocator.free(dev_str);
 
-    // Compare strings, handling numeric formatting differences
-    // e.g., "42" vs "42.0" should be considered equal
-    if (!numericStringsEqual(interpreter_str, dev_str)) {
+    const wasm_str = try wasmEvaluatorStr(allocator, module_env, inspect_expr, builtin_module_env);
+    defer allocator.free(wasm_str);
+
+    if (!std.mem.eql(u8, interpreter_str, dev_str) or
+        !std.mem.eql(u8, interpreter_str, wasm_str) or
+        !std.mem.eql(u8, dev_str, wasm_str))
+    {
         std.debug.print(
-            "\nEvaluator mismatch! Interpreter: {s}, DevEvaluator: {s}\n",
-            .{ interpreter_str, dev_str },
+            "\nEvaluator mismatch!\n  interpreter: '{s}'\n  dev:         '{s}'\n  wasm:        '{s}'\n",
+            .{ interpreter_str, dev_str, wasm_str },
+        );
+        return error.EvaluatorMismatch;
+    }
+}
+
+fn floatStringsEquivalent(comptime T: type, lhs: []const u8, rhs: []const u8) bool {
+    const lhs_val = std.fmt.parseFloat(f64, lhs) catch return false;
+    const rhs_val = std.fmt.parseFloat(f64, rhs) catch return false;
+
+    if (std.math.isNan(lhs_val) or std.math.isNan(rhs_val)) {
+        return std.math.isNan(lhs_val) and std.math.isNan(rhs_val);
+    }
+
+    if (std.math.isInf(lhs_val) or std.math.isInf(rhs_val)) {
+        return lhs_val == rhs_val;
+    }
+
+    const diff = @abs(lhs_val - rhs_val);
+    const magnitude = @max(@abs(lhs_val), @abs(rhs_val));
+    const base_epsilon: f64 = if (T == f32) 1e-6 else 1e-12;
+    const epsilon = if (magnitude > 1.0) magnitude * base_epsilon else base_epsilon;
+    return diff <= epsilon;
+}
+
+fn compareFloatWithBackends(
+    allocator: std.mem.Allocator,
+    interpreter_str: []const u8,
+    module_env: *ModuleEnv,
+    expr_idx: CIR.Expr.Idx,
+    builtin_module_env: *const ModuleEnv,
+    comptime T: type,
+) !void {
+    const inspect_expr = wrapInStrInspect(module_env, expr_idx) catch return error.EvaluatorMismatch;
+
+    const dev_str = try devEvaluatorStr(allocator, module_env, inspect_expr, builtin_module_env);
+    defer allocator.free(dev_str);
+
+    const wasm_str = try wasmEvaluatorStr(allocator, module_env, inspect_expr, builtin_module_env);
+    defer allocator.free(wasm_str);
+
+    if (!floatStringsEquivalent(T, interpreter_str, dev_str) or
+        !floatStringsEquivalent(T, interpreter_str, wasm_str) or
+        !floatStringsEquivalent(T, dev_str, wasm_str))
+    {
+        std.debug.print(
+            "\nEvaluator mismatch!\n  interpreter: '{s}'\n  dev:         '{s}'\n  wasm:        '{s}'\n",
+            .{ interpreter_str, dev_str, wasm_str },
         );
         return error.EvaluatorMismatch;
     }
@@ -600,7 +517,8 @@ fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
     };
     defer wasm_eval.deinit();
 
-    const all_module_envs = [_]*ModuleEnv{ module_env, @constCast(builtin_module_env) };
+    // Keep module order aligned with resolveImports/getResolvedModule indices.
+    const all_module_envs = [_]*ModuleEnv{ @constCast(builtin_module_env), module_env };
 
     var wasm_result = wasm_eval.generateWasm(module_env, expr_idx, &all_module_envs) catch {
         return error.WasmGenerateCodeFailed;
@@ -947,148 +865,30 @@ fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
         return error.WasmExecFailed;
     };
 
-    // Format the result based on layout
-    // Note: wasm has only i32, i64, f32, f64 value types. Sub-32-bit integers
-    // (u8, i8, u16, i16) are represented as i32 in wasm.
-    const layout_mod = @import("layout");
-    return switch (wasm_result.result_layout) {
-        layout_mod.Idx.i64 => blk: {
-            const val = returns[0].I64;
-            break :blk std.fmt.allocPrint(allocator, "{}", .{val});
-        },
-        layout_mod.Idx.i8, layout_mod.Idx.i16, layout_mod.Idx.i32 => blk: {
-            // These are i32 in wasm — sign-extend to i64 for display
-            const val: i32 = returns[0].I32;
-            const val64: i64 = val;
-            break :blk std.fmt.allocPrint(allocator, "{}", .{val64});
-        },
-        layout_mod.Idx.u64 => blk: {
-            const val: u64 = @bitCast(returns[0].I64);
-            break :blk std.fmt.allocPrint(allocator, "{}", .{val});
-        },
-        layout_mod.Idx.u8, layout_mod.Idx.u16, layout_mod.Idx.u32 => blk: {
-            // These are i32 in wasm — zero-extend to u64 for display
-            const val: u32 = @bitCast(returns[0].I32);
-            const val64: u64 = val;
-            break :blk std.fmt.allocPrint(allocator, "{}", .{val64});
-        },
-        layout_mod.Idx.bool => blk: {
-            const val = returns[0].I32;
-            break :blk std.fmt.allocPrint(allocator, "{}", .{val});
-        },
-        layout_mod.Idx.f64 => blk: {
-            const val: f64 = @bitCast(returns[0].I64);
-            var fbuf: [400]u8 = undefined;
-            break :blk allocator.dupe(u8, i128h.f64_to_str(&fbuf, val));
-        },
-        layout_mod.Idx.f32 => blk: {
-            const val: f32 = @bitCast(returns[0].I32);
-            var fbuf: [400]u8 = undefined;
-            break :blk allocator.dupe(u8, i128h.f64_to_str(&fbuf, @as(f64, val)));
-        },
-        layout_mod.Idx.dec => blk: {
-            // Dec is i128 stored in linear memory. The function returned an i32 pointer.
-            const ptr: u32 = @bitCast(returns[0].I32);
-            const mem_slice = module_instance.memoryAll();
-            if (ptr > mem_slice.len or mem_slice.len - ptr < 16) return error.WasmExecFailed;
-            const low: i64 = @bitCast(mem_slice[ptr..][0..8].*);
-            const high: i64 = @bitCast(mem_slice[ptr + 8 ..][0..8].*);
-            const val: i128 = @as(i128, high) << 64 | @as(i128, @as(u64, @bitCast(low)));
-            const dec = builtins.dec.RocDec{ .num = val };
-            var buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
-            const slice = dec.format_to_buf(&buf);
-            break :blk allocator.dupe(u8, slice);
-        },
-        layout_mod.Idx.i128 => blk: {
-            const ptr: u32 = @bitCast(returns[0].I32);
-            const mem_slice = module_instance.memoryAll();
-            if (ptr > mem_slice.len or mem_slice.len - ptr < 16) return error.WasmExecFailed;
-            const low: i64 = @bitCast(mem_slice[ptr..][0..8].*);
-            const high: i64 = @bitCast(mem_slice[ptr + 8 ..][0..8].*);
-            const val: i128 = @as(i128, high) << 64 | @as(i128, @as(u64, @bitCast(low)));
-            break :blk std.fmt.allocPrint(allocator, "{}", .{val});
-        },
-        layout_mod.Idx.u128 => blk: {
-            const ptr: u32 = @bitCast(returns[0].I32);
-            const mem_slice = module_instance.memoryAll();
-            if (ptr > mem_slice.len or mem_slice.len - ptr < 16) return error.WasmExecFailed;
-            const low: u64 = @bitCast(mem_slice[ptr..][0..8].*);
-            const high: u64 = @bitCast(mem_slice[ptr + 8 ..][0..8].*);
-            const val: u128 = @as(u128, high) << 64 | @as(u128, low);
-            break :blk std.fmt.allocPrint(allocator, "{}", .{val});
-        },
-        layout_mod.Idx.str => blk: {
-            // RocStr is 12 bytes on wasm32: { ptr/bytes[0..3], len/bytes[4..7], cap/bytes[8..11] }
-            const str_ptr: u32 = @bitCast(returns[0].I32);
-            const mem_slice = module_instance.memoryAll();
-            if (str_ptr + 12 > mem_slice.len) {
-                return error.WasmExecFailed;
-            }
+    // Result is always a Str (expression was wrapped in Str.inspect).
+    // RocStr is 12 bytes on wasm32: { ptr/bytes[0..3], len/bytes[4..7], cap/bytes[8..11] }
+    const str_ptr: u32 = @bitCast(returns[0].I32);
+    const mem_slice = module_instance.memoryAll();
+    if (str_ptr + 12 > mem_slice.len) {
+        return error.WasmExecFailed;
+    }
 
-            // Check SSO: high bit of byte 11
-            const byte11 = mem_slice[str_ptr + 11];
-            if (byte11 & 0x80 != 0) {
-                // Small string: bytes stored inline, length in byte 11 (masked)
-                const sso_len: u32 = byte11 & 0x7F;
-                if (sso_len > 11) return error.WasmExecFailed;
-                const str_data = mem_slice[str_ptr..][0..sso_len];
-                break :blk allocator.dupe(u8, str_data);
-            } else {
-                // Large string: ptr at offset 0, len at offset 4
-                const data_ptr: u32 = @bitCast(mem_slice[str_ptr..][0..4].*);
-                const data_len: u32 = @bitCast(mem_slice[str_ptr + 4 ..][0..4].*);
-                if (data_ptr + data_len > mem_slice.len) return error.WasmExecFailed;
-                const str_data = mem_slice[data_ptr..][0..data_len];
-                break :blk allocator.dupe(u8, str_data);
-            }
-        },
-        else => blk: {
-            // Non-sentinel layout — use layout store to determine type
-            const ls = wasm_eval.global_layout_store orelse break :blk error.UnsupportedLayout;
-            const l = ls.getLayout(wasm_result.result_layout);
-            const mem_slice = module_instance.memoryAll();
-
-            switch (l.tag) {
-                .tag_union => {
-                    // Small tag union that fits in i32 — return discriminant as integer
-                    const tu_size = ls.layoutSize(l);
-                    if (tu_size <= 4) {
-                        const val = returns[0].I32;
-                        break :blk std.fmt.allocPrint(allocator, "{}", .{val});
-                    }
-                    // Larger tag union — discriminant from memory
-                    const ptr: u32 = @bitCast(returns[0].I32);
-                    if (ptr + tu_size > mem_slice.len) break :blk error.WasmExecFailed;
-                    const tu_data = ls.getTagUnionData(l.data.tag_union.idx);
-                    const disc_offset = tu_data.discriminant_offset;
-                    const disc: u32 = switch (tu_data.discriminant_size) {
-                        1 => mem_slice[ptr + disc_offset],
-                        2 => @as(u32, @as(u16, @bitCast(mem_slice[ptr + disc_offset ..][0..2].*))),
-                        4 => @bitCast(mem_slice[ptr + disc_offset ..][0..4].*),
-                        else => break :blk error.UnsupportedLayout,
-                    };
-                    break :blk std.fmt.allocPrint(allocator, "{}", .{disc});
-                },
-                .scalar => {
-                    // Non-sentinel scalar — determine from scalar data
-                    const sa = ls.layoutSizeAlign(l);
-                    if (sa.size <= 4) {
-                        const val = returns[0].I32;
-                        break :blk std.fmt.allocPrint(allocator, "{}", .{val});
-                    } else if (sa.size <= 8) {
-                        const val = returns[0].I64;
-                        break :blk std.fmt.allocPrint(allocator, "{}", .{val});
-                    }
-                    break :blk error.UnsupportedLayout;
-                },
-                .zst => {
-                    // Zero-sized type — return 0
-                    break :blk std.fmt.allocPrint(allocator, "0", .{});
-                },
-                else => break :blk error.UnsupportedLayout,
-            }
-        },
+    // Check SSO: high bit of byte 11
+    const byte11 = mem_slice[str_ptr + 11];
+    const str_data: []const u8 = if (byte11 & 0x80 != 0) sd: {
+        // Small string: bytes stored inline, length in byte 11 (masked)
+        const sso_len: u32 = byte11 & 0x7F;
+        if (sso_len > 11) return error.WasmExecFailed;
+        break :sd mem_slice[str_ptr..][0..sso_len];
+    } else sd: {
+        // Large string: ptr at offset 0, len at offset 4
+        const data_ptr: u32 = @bitCast(mem_slice[str_ptr..][0..4].*);
+        const data_len: u32 = @bitCast(mem_slice[str_ptr + 4 ..][0..4].*);
+        if (data_ptr + data_len > mem_slice.len) return error.WasmExecFailed;
+        break :sd mem_slice[data_ptr..][0..data_len];
     };
+
+    return allocator.dupe(u8, str_data);
 }
 
 /// Host function: Dec multiply — called by wasm module for Dec * Dec.
@@ -2176,39 +1976,6 @@ fn hostStrFromUtf8(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]c
     }
 }
 
-/// Compare Interpreter result string with WasmEvaluator result string.
-/// If the wasm evaluator can't handle the expression (unsupported expr type),
-/// we skip silently since not all expressions are supported yet.
-fn compareWithWasmEvaluator(allocator: std.mem.Allocator, interpreter_str: []const u8, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) !void {
-    const wasm_str = try wasmEvaluatorStr(allocator, module_env, expr_idx, builtin_module_env);
-    defer allocator.free(wasm_str);
-
-    if (!numericStringsEqual(interpreter_str, wasm_str)) {
-        std.debug.print(
-            "\nWasm evaluator mismatch! Interpreter: '{s}' (len={}), WasmEvaluator: '{s}' (len={})\n",
-            .{ interpreter_str, interpreter_str.len, wasm_str, wasm_str.len },
-        );
-        return error.EvaluatorMismatch;
-    }
-}
-
-/// Check if two strings represent the same numeric value.
-/// Handles cases like "42" vs "42.0" or "-5" vs "-5.0".
-fn numericStringsEqual(a: []const u8, b: []const u8) bool {
-    // Fast path: exact match
-    if (std.mem.eql(u8, a, b)) return true;
-
-    // Check if one is the other with ".0" suffix (integer vs Dec format)
-    if (a.len + 2 == b.len and std.mem.endsWith(u8, b, ".0") and std.mem.startsWith(u8, b, a)) {
-        return true;
-    }
-    if (b.len + 2 == a.len and std.mem.endsWith(u8, a, ".0") and std.mem.startsWith(u8, a, b)) {
-        return true;
-    }
-
-    return false;
-}
-
 /// Helper function to run an expression and expect a specific error.
 pub fn runExpectError(src: []const u8, expected_error: anyerror, should_trace: enum { trace, no_trace }) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
@@ -2238,25 +2005,40 @@ pub fn runExpectError(src: []const u8, expected_error: anyerror, should_trace: e
     try std.testing.expect(false);
 }
 
+/// Helper for tests that intentionally expect parse/canonicalize/type problems.
+pub fn runExpectProblem(src: []const u8) !void {
+    const resources = try parseAndCanonicalizeExprAllowProblems(test_allocator, src);
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    const can_diags_slice = try resources.module_env.getDiagnostics();
+    defer test_allocator.free(can_diags_slice);
+    const can_diags = can_diags_slice.len;
+    const type_problems = resources.checker.problems.problems.items.len;
+
+    try std.testing.expect(can_diags + type_problems > 0);
+}
+
 /// Helper function to verify type mismatch error and runtime crash.
 /// This tests both compile-time behavior (type mismatch reported) and
 /// runtime behavior (crash encountered instead of successfully evaluating).
 pub fn runExpectTypeMismatchAndCrash(src: []const u8) !void {
-    const resources = try parseAndCanonicalizeExpr(test_allocator, src);
+    const resources = try parseAndCanonicalizeExprAllowProblems(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
-    // Step 1: Verify that the type checker detected a type mismatch
+    // Step 1: Verify that the type checker detected a type-level dispatch failure.
+    // Depending on where the failure is reported, this may surface as either
+    // `type_mismatch` or `static_dispatch`.
     const problems = resources.checker.problems.problems.items;
-    var found_type_mismatch = false;
+    var found_dispatch_failure = false;
     for (problems) |problem| {
-        if (problem == .type_mismatch) {
-            found_type_mismatch = true;
+        if (problem == .type_mismatch or problem == .static_dispatch) {
+            found_dispatch_failure = true;
             break;
         }
     }
 
-    if (!found_type_mismatch) {
-        std.debug.print("Expected TYPE MISMATCH error, but found {} problems:\n", .{problems.len});
+    if (!found_dispatch_failure) {
+        std.debug.print("Expected TYPE MISMATCH/STATIC DISPATCH error, but found {} problems:\n", .{problems.len});
         for (problems, 0..) |problem, i| {
             std.debug.print("  Problem {}: {s}\n", .{ i, @tagName(problem) });
         }
@@ -2317,23 +2099,22 @@ pub fn runExpectI64(src: []const u8, expected_int: i128, should_trace: enum { tr
 
     // Check if this is an integer or Dec
     const int_value = if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) blk: {
-        // Suffixed integer literals (e.g., 255u8, 42i32) remain as integers
+        // Suffixed integer literals (e.g., 255.U8, 42.I32) remain as integers
         break :blk result.asI128();
     } else blk: {
         // Unsuffixed numeric literals default to Dec, so extract the integer value
         const dec_value = result.asDec(ops);
         const RocDec = builtins.dec.RocDec;
         // Convert Dec to integer by dividing by the decimal scale factor
-        break :blk i128h.divTrunc_i128(dec_value.num, RocDec.one_point_zero_i128);
+        break :blk @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
     };
 
-    // Compare with DevEvaluator using integer string representation
-    // DevEvaluator uses integer layouts, so we compare as integers
-    var str_buf: [40]u8 = undefined;
-    const int_str = try test_allocator.dupe(u8, i128h.i128_to_str(&str_buf, int_value).str);
-    defer test_allocator.free(int_str);
-    try compareWithDevEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
-    try compareWithWasmEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    // Compare with DevEvaluator using canonical RocValue.format()
+    const roc_val = stackValueToRocValue(result, null);
+    const fmt_ctx = interpreterFormatCtx(&interpreter.runtime_layout_store);
+    const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
+    defer test_allocator.free(interpreter_str);
+    try compareFloatWithBackends(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env, f32);
 
     try std.testing.expectEqual(expected_int, int_value);
 }
@@ -2375,11 +2156,12 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
         break :blk @as(i64, bool_ptr.*);
     };
 
-    // Compare with DevEvaluator using string representation
-    const int_str = try std.fmt.allocPrint(test_allocator, "{}", .{int_val});
-    defer test_allocator.free(int_str);
-    try compareWithDevEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
-    try compareWithWasmEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    // Compare with DevEvaluator using canonical RocValue.format()
+    const roc_val = stackValueToRocValue(result, interpreter_layout.Idx.bool);
+    const fmt_ctx = interpreterFormatCtx(&interpreter.runtime_layout_store);
+    const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
+    defer test_allocator.free(interpreter_str);
+    try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     const bool_val = int_val != 0;
     try std.testing.expectEqual(expected_bool, bool_val);
@@ -2412,16 +2194,17 @@ pub fn runExpectF32(src: []const u8, expected_f32: f32, should_trace: enum { tra
 
     const actual = result.asF32();
 
-    // Compare with DevEvaluator using string representation
-    var float_buf: [400]u8 = undefined;
-    const float_str = i128h.f64_to_str(&float_buf, @as(f64, actual));
-    try compareWithDevEvaluator(test_allocator, float_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
-    try compareWithWasmEvaluator(test_allocator, float_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    // Compare with DevEvaluator using canonical RocValue.format()
+    const roc_val = stackValueToRocValue(result, null);
+    const fmt_ctx = interpreterFormatCtx(&interpreter.runtime_layout_store);
+    const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
+    defer test_allocator.free(interpreter_str);
+    try compareFloatWithBackends(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env, f32);
 
     const epsilon: f32 = 0.0001;
     const diff = @abs(actual - expected_f32);
     if (diff > epsilon) {
-        std.debug.print("Expected {d}, got {d}, diff {d}\n", .{ @as(f64, expected_f32), @as(f64, actual), @as(f64, diff) });
+        std.debug.print("Expected {d}, got {d}, diff {d}\n", .{ expected_f32, actual, diff });
         return error.TestExpectedEqual;
     }
 }
@@ -2453,11 +2236,12 @@ pub fn runExpectF64(src: []const u8, expected_f64: f64, should_trace: enum { tra
 
     const actual = result.asF64();
 
-    // Compare with DevEvaluator using string representation
-    var float_buf2: [400]u8 = undefined;
-    const float_str = i128h.f64_to_str(&float_buf2, actual);
-    try compareWithDevEvaluator(test_allocator, float_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
-    try compareWithWasmEvaluator(test_allocator, float_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    // Compare with DevEvaluator using canonical RocValue.format()
+    const roc_val = stackValueToRocValue(result, null);
+    const fmt_ctx = interpreterFormatCtx(&interpreter.runtime_layout_store);
+    const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
+    defer test_allocator.free(interpreter_str);
+    try compareFloatWithBackends(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env, f64);
 
     const epsilon: f64 = 0.000000001;
     const diff = @abs(actual - expected_f64);
@@ -2498,19 +2282,16 @@ pub fn runExpectIntDec(src: []const u8, expected_int: i128, should_trace: enum {
 
     const actual_dec = result.asDec(ops);
 
-    // Compare with DevEvaluator using Dec string representation
-    var buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
-    const dec_slice = actual_dec.format_to_buf(&buf);
-    const dec_str = try test_allocator.dupe(u8, dec_slice);
-    defer test_allocator.free(dec_str);
-    try compareWithDevEvaluator(test_allocator, dec_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
-    try compareWithWasmEvaluator(test_allocator, dec_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    // Compare with DevEvaluator using canonical RocValue.format()
+    const roc_val = stackValueToRocValue(result, null);
+    const fmt_ctx = interpreterFormatCtx(&interpreter.runtime_layout_store);
+    const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
+    defer test_allocator.free(interpreter_str);
+    try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     const expected_dec = expected_int * dec_scale;
     if (actual_dec.num != expected_dec) {
-        var exp_buf: [40]u8 = undefined;
-        var act_buf: [40]u8 = undefined;
-        std.debug.print("Expected Dec({s}), got Dec({s})\n", .{ i128h.i128_to_str(&exp_buf, expected_dec).str, i128h.i128_to_str(&act_buf, actual_dec.num).str });
+        std.debug.print("Expected Dec({d}), got Dec({d})\n", .{ expected_dec, actual_dec.num });
         return error.TestExpectedEqual;
     }
 }
@@ -2544,18 +2325,15 @@ pub fn runExpectDec(src: []const u8, expected_dec_num: i128, should_trace: enum 
 
     const actual_dec = result.asDec(ops);
 
-    // Compare with DevEvaluator using Dec string representation
-    var buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
-    const dec_slice = actual_dec.format_to_buf(&buf);
-    const dec_str = try test_allocator.dupe(u8, dec_slice);
-    defer test_allocator.free(dec_str);
-    try compareWithDevEvaluator(test_allocator, dec_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
-    try compareWithWasmEvaluator(test_allocator, dec_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    // Compare with DevEvaluator using canonical RocValue.format()
+    const roc_val = stackValueToRocValue(result, null);
+    const fmt_ctx = interpreterFormatCtx(&interpreter.runtime_layout_store);
+    const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
+    defer test_allocator.free(interpreter_str);
+    try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     if (actual_dec.num != expected_dec_num) {
-        var exp_buf2: [40]u8 = undefined;
-        var act_buf2: [40]u8 = undefined;
-        std.debug.print("Expected Dec({s}), got Dec({s})\n", .{ i128h.i128_to_str(&exp_buf2, expected_dec_num).str, i128h.i128_to_str(&act_buf2, actual_dec.num).str });
+        std.debug.print("Expected Dec({d}), got Dec({d})\n", .{ expected_dec_num, actual_dec.num });
         return error.TestExpectedEqual;
     }
 }
@@ -2590,9 +2368,12 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
     const roc_str: *const builtins.str.RocStr = @ptrCast(@alignCast(result.ptr.?));
     const str_slice = roc_str.asSlice();
 
-    // Compare with DevEvaluator
-    try compareWithDevEvaluator(test_allocator, str_slice, resources.module_env, resources.expr_idx, resources.builtin_module.env);
-    try compareWithWasmEvaluator(test_allocator, str_slice, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    // Compare with DevEvaluator using canonical RocValue.format()
+    const roc_val = stackValueToRocValue(result, null);
+    const fmt_ctx = interpreterFormatCtx(&interpreter.runtime_layout_store);
+    const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
+    defer test_allocator.free(interpreter_str);
+    try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     try std.testing.expectEqualStrings(expected_str, str_slice);
 
@@ -2641,17 +2422,13 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
     defer result.decref(layout_cache, ops);
     defer interpreter.bindings.items.len = 0;
 
-    // Verify we got a tuple layout
-    try std.testing.expect(result.layout.tag == .tuple);
+    // Verify we got a struct layout (tuples are now structs)
+    try std.testing.expect(result.layout.tag == .struct_);
 
     // Use the TupleAccessor to safely access tuple elements
     const tuple_accessor = try result.asTuple(layout_cache);
 
     try std.testing.expectEqual(expected_elements.len, tuple_accessor.getElementCount());
-
-    // Build string representation for comparison with DevEvaluator
-    var tuple_parts_storage: [32][]const u8 = undefined;
-    var tuple_count: usize = 0;
 
     for (expected_elements) |expected_element| {
         // Get the element at the specified index
@@ -2660,48 +2437,25 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
 
         // Check if this is an integer or Dec
         try std.testing.expect(element.layout.tag == .scalar);
-        const is_dec = element.layout.data.scalar.tag != .int;
-        const int_val = if (!is_dec) blk: {
+        const int_val = if (element.layout.data.scalar.tag == .int) blk: {
             // Suffixed integer literals remain as integers
             break :blk element.asI128();
         } else blk: {
             // Unsuffixed numeric literals default to Dec
             const dec_value = element.asDec(ops);
             const RocDec = builtins.dec.RocDec;
-            break :blk i128h.divTrunc_i128(dec_value.num, RocDec.one_point_zero_i128);
+            break :blk @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
         };
-
-        // Store formatted string for comparison
-        tuple_parts_storage[tuple_count] = if (is_dec) blk: {
-            const dec_value = element.asDec(ops);
-            var dec_buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
-            const dec_slice = dec_value.format_to_buf(&dec_buf);
-            break :blk try test_allocator.dupe(u8, dec_slice);
-        } else blk: {
-            var fmt_buf: [40]u8 = undefined;
-            break :blk try test_allocator.dupe(u8, i128h.i128_to_str(&fmt_buf, int_val).str);
-        };
-        tuple_count += 1;
 
         try std.testing.expectEqual(expected_element.value, int_val);
     }
 
-    // Clean up tuple parts at the end
-    defer for (tuple_parts_storage[0..tuple_count]) |part| {
-        test_allocator.free(part);
-    };
-
-    // Format tuple string based on count
-    const tuple_str = switch (tuple_count) {
-        1 => try std.fmt.allocPrint(test_allocator, "({s})", .{tuple_parts_storage[0]}),
-        2 => try std.fmt.allocPrint(test_allocator, "({s}, {s})", .{ tuple_parts_storage[0], tuple_parts_storage[1] }),
-        3 => try std.fmt.allocPrint(test_allocator, "({s}, {s}, {s})", .{ tuple_parts_storage[0], tuple_parts_storage[1], tuple_parts_storage[2] }),
-        else => try std.fmt.allocPrint(test_allocator, "(tuple with {} elements)", .{tuple_count}),
-    };
-    defer test_allocator.free(tuple_str);
-
-    // Compare with DevEvaluator
-    try compareWithDevEvaluator(test_allocator, tuple_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    // Compare with DevEvaluator using canonical RocValue.format()
+    const roc_val = stackValueToRocValue(result, null);
+    const fmt_ctx = interpreterFormatCtx(&interpreter.runtime_layout_store);
+    const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
+    defer test_allocator.free(interpreter_str);
+    try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 }
 
 /// Helpers to setup and run an interpreter expecting a record result.
@@ -2729,30 +2483,26 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     defer result.decref(layout_cache, ops);
     defer interpreter.bindings.items.len = 0;
 
-    // Verify we got a record layout
-    try std.testing.expect(result.layout.tag == .record);
+    // Verify we got a struct layout (records are now structs)
+    try std.testing.expect(result.layout.tag == .struct_);
 
-    const record_data = layout_cache.getRecordData(result.layout.data.record.idx);
-    const sorted_fields = layout_cache.record_fields.sliceRange(record_data.getFields());
+    const struct_data = layout_cache.getStructData(result.layout.data.struct_.idx);
+    const sorted_fields = layout_cache.struct_fields.sliceRange(struct_data.getFields());
 
     try std.testing.expectEqual(expected_fields.len, sorted_fields.len);
-
-    // Collect field values for string building
-    var field_values: [16]i128 = undefined;
-    var field_count: usize = 0;
 
     for (expected_fields) |expected_field| {
         var found = false;
         var i: u32 = 0;
         while (i < sorted_fields.len) : (i += 1) {
             const sorted_field = sorted_fields.get(i);
-            const field_name = resources.module_env.getIdent(sorted_field.name);
+            const field_name = layout_cache.getFieldName(sorted_field.name);
             if (std.mem.eql(u8, field_name, expected_field.name)) {
                 found = true;
                 const field_layout = layout_cache.getLayout(sorted_field.layout);
                 try std.testing.expect(field_layout.tag == .scalar);
 
-                const offset = layout_cache.getRecordFieldOffset(result.layout.data.record.idx, i);
+                const offset = layout_cache.getStructFieldOffset(result.layout.data.struct_.idx, i);
                 const field_ptr = @as([*]u8, @ptrCast(result.ptr.?)) + offset;
                 const field_value = StackValue{
                     .layout = field_layout,
@@ -2768,11 +2518,8 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
                     // Unsuffixed numeric literals default to Dec
                     const dec_value = field_value.asDec(ops);
                     const RocDec = builtins.dec.RocDec;
-                    break :blk i128h.divTrunc_i128(dec_value.num, RocDec.one_point_zero_i128);
+                    break :blk @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
                 };
-
-                field_values[field_count] = int_val;
-                field_count += 1;
 
                 try std.testing.expectEqual(expected_field.value, int_val);
                 break;
@@ -2781,13 +2528,12 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
         try std.testing.expect(found);
     }
 
-    // Build string representation for comparison with DevEvaluator
-    // Simple format: just show field count for now since exact format needs to match DevEvaluator
-    const record_str = try std.fmt.allocPrint(test_allocator, "{{record with {} fields}}", .{field_count});
-    defer test_allocator.free(record_str);
-
-    // Compare with DevEvaluator
-    try compareWithDevEvaluator(test_allocator, record_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    // Compare with DevEvaluator using canonical RocValue.format()
+    const roc_val = stackValueToRocValue(result, null);
+    const fmt_ctx = interpreterFormatCtx(&interpreter.runtime_layout_store);
+    const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
+    defer test_allocator.free(interpreter_str);
+    try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 }
 
 /// Helpers to setup and run an interpreter expecting a list of zst result.
@@ -2820,31 +2566,17 @@ pub fn runExpectListZst(src: []const u8, expected_element_count: usize, should_t
         return error.TestExpectedEqual;
     }
 
-    // Get the element layout
-    const elem_layout_idx = result.layout.data.list;
-    const elem_layout = layout_cache.getLayout(elem_layout_idx);
-
-    // Use the ListAccessor to safely access list elements
+    // Use the ListAccessor to verify element count
+    const elem_layout = interpreter_layout.Layout.zst();
     const list_accessor = try result.asList(layout_cache, elem_layout, ops);
-
     try std.testing.expectEqual(expected_element_count, list_accessor.len());
 
-    // Build string representation for comparison with DevEvaluator
-    // Resolve element type for proper ZST rendering
-    const type_var = can.ModuleEnv.varFrom(resources.expr_idx);
-    const elem_name = resolveListElemZstName(resources.module_env, type_var);
-
-    var list_str: std.ArrayList(u8) = .empty;
-    defer list_str.deinit(test_allocator);
-    try list_str.appendSlice(test_allocator, "[");
-    for (0..expected_element_count) |i| {
-        if (i > 0) try list_str.appendSlice(test_allocator, ", ");
-        try list_str.appendSlice(test_allocator, elem_name);
-    }
-    try list_str.appendSlice(test_allocator, "]");
-
-    // Compare with DevEvaluator
-    try compareWithDevEvaluator(test_allocator, list_str.items, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    // Compare with DevEvaluator using canonical RocValue.format()
+    const roc_val = stackValueToRocValue(result, null);
+    const fmt_ctx = interpreterFormatCtx(&interpreter.runtime_layout_store);
+    const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
+    defer test_allocator.free(interpreter_str);
+    try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 }
 
 /// Helpers to setup and run an interpreter expecting a list of i64 result.
@@ -2887,11 +2619,6 @@ pub fn runExpectListI64(src: []const u8, expected_elements: []const i64, should_
 
     try std.testing.expectEqual(expected_elements.len, list_accessor.len());
 
-    // Build string representation for comparison with DevEvaluator
-    var list_str: std.ArrayList(u8) = .empty;
-    defer list_str.deinit(test_allocator);
-    try list_str.appendSlice(test_allocator, "[");
-
     for (expected_elements, 0..) |expected_val, i| {
         // Use the result's rt_var since we're accessing elements of the evaluated expression
         const element = try list_accessor.getElement(i, result.rt_var);
@@ -2901,22 +2628,19 @@ pub fn runExpectListI64(src: []const u8, expected_elements: []const i64, should_
         try std.testing.expect(element.layout.data.scalar.tag == .int);
         const int_val = element.asI128();
 
-        if (i > 0) try list_str.appendSlice(test_allocator, ", ");
-        var fmt_buf: [40]u8 = undefined;
-        const elem_str = try test_allocator.dupe(u8, i128h.i128_to_str(&fmt_buf, int_val).str);
-        defer test_allocator.free(elem_str);
-        try list_str.appendSlice(test_allocator, elem_str);
-
         try std.testing.expectEqual(@as(i128, expected_val), int_val);
     }
-    try list_str.appendSlice(test_allocator, "]");
 
-    // Compare with DevEvaluator
-    try compareWithDevEvaluator(test_allocator, list_str.items, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    // Compare with DevEvaluator using canonical RocValue.format()
+    const roc_val = stackValueToRocValue(result, null);
+    const fmt_ctx = interpreterFormatCtx(&interpreter.runtime_layout_store);
+    const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
+    defer test_allocator.free(interpreter_str);
+    try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 }
 
 /// Like runExpectListI64 but expects an empty list with .list_of_zst layout.
-/// This is for cases like List.repeat(7i64, 0) which returns an empty list.
+/// This is for cases like List.repeat(7.I64, 0) which returns an empty list.
 pub fn runExpectEmptyListI64(src: []const u8, should_trace: enum { trace, no_trace }) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
@@ -2947,23 +2671,22 @@ pub fn runExpectEmptyListI64(src: []const u8, should_trace: enum { trace, no_tra
         return error.TestExpectedEqual;
     }
 
-    // Get the element layout and verify it's i64
-    const elem_layout_idx = result.layout.data.list;
-    const elem_layout = layout_cache.getLayout(elem_layout_idx);
-    try std.testing.expect(elem_layout.tag == .scalar);
-    try std.testing.expect(elem_layout.data.scalar.tag == .int);
-
     // Use the ListAccessor to verify the list is empty
+    const elem_layout = interpreter_layout.Layout.zst();
     const list_accessor = try result.asList(layout_cache, elem_layout, ops);
     try std.testing.expectEqual(@as(usize, 0), list_accessor.len());
 
-    // Compare with DevEvaluator - empty list is "[]"
-    try compareWithDevEvaluator(test_allocator, "[]", resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    // Compare with DevEvaluator using canonical RocValue.format()
+    const roc_val = stackValueToRocValue(result, null);
+    const fmt_ctx = interpreterFormatCtx(&interpreter.runtime_layout_store);
+    const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
+    defer test_allocator.free(interpreter_str);
+    try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 }
 
 /// Helper function to run an expression and expect a unit/ZST result.
 /// This tests expressions that return `{}` (the unit type / empty record).
-/// Accepts both .zst layout and .record layout with size 0 (empty record).
+/// Accepts both .zst layout and .struct_ layout with size 0 (empty record).
 pub fn runExpectUnit(src: []const u8, should_trace: enum { trace, no_trace }) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
@@ -2990,18 +2713,44 @@ pub fn runExpectUnit(src: []const u8, should_trace: enum { trace, no_trace }) !v
 
     // Verify we got a ZST layout or an empty record (both represent unit/`{}`)
     const is_zst = result.layout.tag == .zst;
-    const is_empty_record = result.layout.tag == .record and blk: {
-        const record_data = layout_cache.getRecordData(result.layout.data.record.idx);
-        break :blk record_data.size == 0;
+    const is_empty_struct = result.layout.tag == .struct_ and blk: {
+        const struct_data = layout_cache.getStructData(result.layout.data.struct_.idx);
+        break :blk struct_data.size == 0;
     };
 
-    if (!is_zst and !is_empty_record) {
-        std.debug.print("\nExpected .zst or empty .record layout but got .{s}\n", .{@tagName(result.layout.tag)});
+    if (!is_zst and !is_empty_struct) {
+        std.debug.print("\nExpected .zst or empty .struct_ layout but got .{s}\n", .{@tagName(result.layout.tag)});
         return error.TestExpectedEqual;
     }
 
-    // Compare with DevEvaluator using exact match
-    try compareWithDevEvaluator(test_allocator, "{}", resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    // Compare with DevEvaluator using canonical RocValue.format()
+    const roc_val = stackValueToRocValue(result, null);
+    const fmt_ctx = interpreterFormatCtx(&interpreter.runtime_layout_store);
+    const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
+    defer test_allocator.free(interpreter_str);
+    try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+}
+
+/// Run an expression through the dev evaluator only and assert on the formatted string output.
+/// The dev evaluator currently expects expressions to be wrapped in Str.inspect before execution.
+pub fn runDevOnlyExpectStr(src: []const u8, expected_str: []const u8) !void {
+    const resources = try parseAndCanonicalizeExpr(test_allocator, src);
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    const inspect_expr = wrapInStrInspect(resources.module_env, resources.expr_idx) catch return error.EvaluatorMismatch;
+    const dev_str = devEvaluatorStr(test_allocator, resources.module_env, inspect_expr, resources.builtin_module.env) catch |err| {
+        std.debug.print("\nDev evaluator failed for '{s}': {}\n", .{ src, err });
+        return err;
+    };
+    defer test_allocator.free(dev_str);
+
+    std.testing.expectEqualStrings(expected_str, dev_str) catch |err| {
+        std.debug.print(
+            "\nDev evaluator output mismatch for '{s}':\n  expected: {s}\n  got:      {s}\n",
+            .{ src, expected_str, dev_str },
+        );
+        return err;
+    };
 }
 
 /// Parse and canonicalize an expression.
@@ -3051,7 +2800,7 @@ fn rewriteNumericLiteralExpr(
     const f64_value: f64 = switch (current_expr) {
         .e_dec => |dec| blk: {
             // Dec is stored as i128 scaled by 10^18
-            const scaled = builtins.compiler_rt_128.i128_to_f64(dec.value.num);
+            const scaled = @as(f64, @floatFromInt(dec.value.num));
             break :blk scaled / 1e18;
         },
         .e_dec_small => |small| blk: {
@@ -3117,18 +2866,11 @@ fn rewriteNumericLiteralExpr(
     // For Dec type, keep the original e_dec/e_dec_small expression
 }
 
-/// Parses and canonicalizes a Roc expression for testing, returning all necessary context.
-pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) TestParseError!struct {
-    module_env: *ModuleEnv,
-    parse_ast: *parse.AST,
-    can: *Can,
-    checker: *Check,
-    expr_idx: CIR.Expr.Idx,
-    bool_stmt: CIR.Statement.Idx,
-    builtin_module: LoadedModule,
-    builtin_indices: CIR.BuiltinIndices,
-    builtin_types: BuiltinTypes,
-} {
+fn parseAndCanonicalizeExprInternal(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    enforce_no_reports: bool,
+) !ParsedExprResources {
     // Load Builtin module once - Bool, Try, and Str are all types within this module
     const builtin_indices = try deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
     var builtin_module = try loadCompiledModule(allocator, compiled_builtins.builtin_bin, "Builtin", compiled_builtins.builtin_source);
@@ -3147,18 +2889,16 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     // NOTE: allocators is not freed here - caller handles cleanup via cleanupTestResources
     const parse_ast = try parse.parseExpr(&allocators, &module_env.common);
 
-    // Check for parse errors in test code
-    // NOTE: This is TEST-ONLY behavior! In production, the parser continues and collects
-    // diagnostics to provide better error messages. But for tests, we want to fail early
-    // on syntax errors to catch issues like semicolons that shouldn't be in Roc code.
-    if (parse_ast.tokenize_diagnostics.items.len > 0) {
-        // Found tokenization errors in test code
-        return error.TokenizeError;
-    }
+    if (enforce_no_reports) {
+        try assertNoParseDiagnostics(allocator, module_env, parse_ast);
+    } else {
+        if (parse_ast.tokenize_diagnostics.items.len > 0) {
+            return error.TokenizeError;
+        }
 
-    if (parse_ast.parse_diagnostics.items.len > 0) {
-        // Found parse errors in test code
-        return error.SyntaxError;
+        if (parse_ast.parse_diagnostics.items.len > 0) {
+            return error.SyntaxError;
+        }
     }
 
     // Empty scratch space (required before canonicalization)
@@ -3184,33 +2924,33 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
         .builtin_indices = builtin_indices,
     };
 
-    // Create module_envs map for canonicalization (enables qualified calls)
-    var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
-    defer module_envs_map.deinit();
-
-    // Use the shared populateModuleEnvs function to set up auto-imported types
-    // This ensures test and production code use identical module setup logic
-    try Can.populateModuleEnvs(&module_envs_map, module_env, builtin_module.env, builtin_indices);
-
-    // Create czer with module_envs_map for qualified name resolution (following REPL pattern)
     const czer = try allocator.create(Can);
-    czer.* = try Can.init(&allocators, module_env, parse_ast, &module_envs_map);
+    czer.* = try Can.initModule(&allocators, module_env, parse_ast, .{
+        .builtin_types = .{
+            .builtin_module_env = builtin_module.env,
+            .builtin_indices = builtin_indices,
+        },
+    });
 
     // Canonicalize the expression (following REPL pattern)
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
     const canonical_expr = try czer.canonicalizeExpr(expr_idx) orelse {
+        if (enforce_no_reports) {
+            try assertNoCanonicalizeDiagnostics(allocator, module_env);
+            std.debug.panic("Canonicalization unexpectedly failed without a diagnostic report.", .{});
+        }
+
         // If canonicalization fails, create a runtime error
         const diagnostic_idx = try module_env.store.addDiagnostic(.{ .not_implemented = .{
             .feature = try module_env.insertString("canonicalization failed"),
             .region = base.Region.zero(),
         } });
         const checker = try allocator.create(Check);
-        // Pass user module and Builtin as imported modules
-        // Order must match all_module_envs in devEvaluatorStr
-        const imported_envs = [_]*const ModuleEnv{ module_env, builtin_module.env };
+        // Keep imported module order aligned with resolveImports/getResolvedModule.
+        const imported_envs = [_]*const ModuleEnv{ builtin_module.env, module_env };
         // Resolve imports - map each import to its index in imported_envs
         module_env.imports.resolveImports(module_env, &imported_envs);
-        checker.* = try Check.init(allocator, &module_env.types, module_env, &imported_envs, &module_envs_map, &module_env.store.regions, builtin_ctx);
+        checker.* = try Check.init(allocator, &module_env.types, module_env, &imported_envs, null, &module_env.store.regions, builtin_ctx);
         const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
         return .{
             .module_env = module_env,
@@ -3228,34 +2968,38 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     };
     const canonical_expr_idx = canonical_expr.get_idx();
 
+    if (enforce_no_reports) {
+        try assertNoCanonicalizeDiagnostics(allocator, module_env);
+    }
+
     // Set up all_defs from scratch defs so type checker can process them
     // This is critical for local type declarations whose associated block defs
     // need to be type-checked before they can be used
     module_env.all_defs = try module_env.store.defSpanFrom(0);
 
-    // Create type checker - pass Builtin as imported module
-    // IMPORTANT: The order here MUST match all_module_envs in devEvaluatorStr:
-    // index 0 = user module, index 1 = builtin module
-    // This ensures external lookups resolve to the correct module index.
-    const imported_envs = [_]*const ModuleEnv{ module_env, builtin_module.env };
+    // Keep imported module order aligned with resolveImports/getResolvedModule.
+    const imported_envs = [_]*const ModuleEnv{ builtin_module.env, module_env };
 
     // Resolve imports - map each import to its index in imported_envs
     module_env.imports.resolveImports(module_env, &imported_envs);
 
     const checker = try allocator.create(Check);
-    checker.* = try Check.init(allocator, &module_env.types, module_env, &imported_envs, &module_envs_map, &module_env.store.regions, builtin_ctx);
+    checker.* = try Check.init(allocator, &module_env.types, module_env, &imported_envs, null, &module_env.store.regions, builtin_ctx);
 
     // Type check the expression (including any defs from local type declarations)
     _ = try checker.checkExprReplWithDefs(canonical_expr_idx);
 
+    if (enforce_no_reports) {
+        try assertNoTypeProblems(allocator, module_env, checker);
+    }
+
     // Rewrite deferred numeric literals to match their inferred types
     try rewriteDeferredNumericLiterals(module_env, &module_env.types, &checker.import_mapping);
 
-    // Note: We do NOT run ClosureTransformer, LambdaLifter, or RC insertion here.
+    // Note: We do NOT run RC insertion here.
     // The interpreter handles closures natively (e_lambda, e_closure) and does
-    // its own runtime reference counting. The transformations are designed for
-    // code generation backends (dev backend, LLVM) where closures need to be
-    // lowered to tagged unions with capture records.
+    // its own runtime reference counting. Lambda lifting and lambda set inference
+    // happen during CIR→MIR and MIR→LIR lowering for code generation backends.
 
     const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
     return .{
@@ -3269,6 +3013,15 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
         .builtin_indices = builtin_indices,
         .builtin_types = builtin_types,
     };
+}
+
+/// Parses and canonicalizes a Roc expression for testing, returning all necessary context.
+pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) !ParsedExprResources {
+    return parseAndCanonicalizeExprInternal(allocator, source, true);
+}
+
+fn parseAndCanonicalizeExprAllowProblems(allocator: std.mem.Allocator, source: []const u8) !ParsedExprResources {
+    return parseAndCanonicalizeExprInternal(allocator, source, false);
 }
 
 /// Cleanup resources allocated by parseAndCanonicalizeExpr.
@@ -3288,6 +3041,2396 @@ pub fn cleanupParseAndCanonical(allocator: std.mem.Allocator, resources: anytype
 
 test "eval runtime error - returns crash error" {
     try runExpectError("{ crash \"test feature\" 0 }", error.Crash, .no_trace);
+}
+
+test "dev lowering: imported List.any directly calls passed predicate member" {
+    const resources = try parseAndCanonicalizeExpr(test_allocator, "List.any([1.I64, 2.I64, 3.I64], |x| x == 2.I64)");
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(resources.builtin_module.env),
+        resources.module_env,
+    };
+
+    var lower = try mir.Lower.init(
+        test_allocator,
+        &mir_store,
+        all_module_envs[0..],
+        &resources.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    const mir_expr = try lower.lowerExpr(resources.expr_idx);
+    const FindCall = struct {
+        fn findCall(store: *const MIR.Store, expr_id: MIR.ExprId) ?MIR.ExprId {
+            const expr = store.getExpr(expr_id);
+            return switch (expr) {
+                .call => expr_id,
+                .block => findCall(store, expr.block.final_expr),
+                .borrow_scope => findCall(store, expr.borrow_scope.body),
+                .dbg_expr => findCall(store, expr.dbg_expr.expr),
+                .expect => findCall(store, expr.expect.body),
+                else => null,
+            };
+        }
+    };
+
+    const root_expr_id = FindCall.findCall(&mir_store, mir_expr) orelse return error.TestUnexpectedResult;
+    const root_expr = mir_store.getExpr(root_expr_id);
+    try std.testing.expect(root_expr == .call);
+
+    const root_args = mir_store.getExprSpan(root_expr.call.args);
+    try std.testing.expectEqual(@as(usize, 2), root_args.len);
+
+    const root_callee = mir_store.getExpr(root_expr.call.func);
+    try std.testing.expect(root_callee == .lookup);
+    const any_sym = root_callee.lookup;
+    const any_def = mir_store.getSymbolDef(any_sym) orelse return error.TestUnexpectedResult;
+
+    var lambda_def = any_def;
+    var params: MIR.PatternSpan = undefined;
+    var lambda_body: MIR.ExprId = undefined;
+    while (true) {
+        switch (mir_store.getExpr(lambda_def)) {
+            .lambda => |lam| {
+                params = lam.params;
+                lambda_body = lam.body;
+                break;
+            },
+            .block => |block| lambda_def = block.final_expr,
+            else => return error.TestUnexpectedResult,
+        }
+    }
+
+    const param_ids = mir_store.getPatternSpan(params);
+    const predicate_pat = mir_store.getPattern(param_ids[1]);
+    try std.testing.expect(predicate_pat == .bind);
+    const predicate_sym = predicate_pat.bind;
+
+    var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
+    defer lambda_set_store.deinit(test_allocator);
+
+    const callee_ls = lambda_set_store.getExprLambdaSet(root_expr.call.func) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!callee_ls.isNone());
+
+    const arg_ls = lambda_set_store.getExprLambdaSet(root_args[1]) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!arg_ls.isNone());
+    const arg_members = lambda_set_store.getMembers(lambda_set_store.getLambdaSet(arg_ls).members);
+    try std.testing.expectEqual(@as(usize, 1), arg_members.len);
+    const predicate_member_sym = arg_members[0].fn_symbol;
+
+    const predicate_ls = lambda_set_store.getSymbolLambdaSet(predicate_sym) orelse return error.TestUnexpectedResult;
+    const predicate_members = lambda_set_store.getMembers(lambda_set_store.getLambdaSet(predicate_ls).members);
+    try std.testing.expectEqual(@as(usize, 1), predicate_members.len);
+    try std.testing.expectEqual(predicate_member_sym, predicate_members[0].fn_symbol);
+
+    var layout_store = try layout.Store.init(
+        all_module_envs[0..],
+        resources.builtin_module.env.idents.builtin_str,
+        test_allocator,
+        base.target.TargetUsize.native,
+    );
+    defer layout_store.deinit();
+
+    var lir_store = LirExprStore.init(test_allocator);
+    defer lir_store.deinit();
+
+    var translator = lir.MirToLir.init(
+        test_allocator,
+        &mir_store,
+        &lir_store,
+        &layout_store,
+        &lambda_set_store,
+        resources.module_env.idents.true_tag,
+    );
+    defer translator.deinit();
+
+    const any_lir = try translator.lower(any_def);
+    var rc_pass = try lir.RcInsert.RcInsertPass.init(test_allocator, &lir_store, &layout_store);
+    defer rc_pass.deinit();
+    const any_lir_with_rc = try rc_pass.insertRcOps(any_lir);
+
+    const Search = struct {
+        fn containsCallTo(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, target: lir.LIR.Symbol) bool {
+            const expr = store.getExpr(expr_id);
+            switch (expr) {
+                .call => |call| {
+                    const fn_expr = store.getExpr(call.fn_expr);
+                    if (fn_expr == .lookup and fn_expr.lookup.symbol.eql(target)) return true;
+                    if (containsCallTo(store, call.fn_expr, target)) return true;
+                    for (store.getExprSpan(call.args)) |arg| {
+                        if (containsCallTo(store, arg, target)) return true;
+                    }
+                    return false;
+                },
+                .lambda => |lam| return containsCallTo(store, lam.body, target),
+                .block => |block| {
+                    for (store.getStmts(block.stmts)) |stmt| {
+                        switch (stmt) {
+                            .decl, .mutate => |binding| {
+                                if (containsCallTo(store, binding.expr, target)) return true;
+                            },
+                            .cell_init, .cell_store => |binding| {
+                                if (containsCallTo(store, binding.expr, target)) return true;
+                            },
+                            .cell_drop => {},
+                        }
+                    }
+                    return containsCallTo(store, block.final_expr, target);
+                },
+                .if_then_else => |ite| {
+                    for (store.getIfBranches(ite.branches)) |branch| {
+                        if (containsCallTo(store, branch.cond, target)) return true;
+                        if (containsCallTo(store, branch.body, target)) return true;
+                    }
+                    return containsCallTo(store, ite.final_else, target);
+                },
+                .match_expr => |match_expr| {
+                    if (containsCallTo(store, match_expr.value, target)) return true;
+                    for (store.getMatchBranches(match_expr.branches)) |branch| {
+                        if (!branch.guard.isNone() and containsCallTo(store, branch.guard, target)) return true;
+                        if (containsCallTo(store, branch.body, target)) return true;
+                    }
+                    return false;
+                },
+                .early_return => |ret| return containsCallTo(store, ret.expr, target),
+                .low_level => |ll| {
+                    for (store.getExprSpan(ll.args)) |arg| {
+                        if (containsCallTo(store, arg, target)) return true;
+                    }
+                    return false;
+                },
+                .dbg => |dbg| return containsCallTo(store, dbg.expr, target),
+                .expect => |expect| return containsCallTo(store, expect.cond, target) or containsCallTo(store, expect.body, target),
+                .nominal => |nom| return containsCallTo(store, nom.backing_expr, target),
+                .struct_ => |s| {
+                    for (store.getExprSpan(s.fields)) |field| {
+                        if (containsCallTo(store, field, target)) return true;
+                    }
+                    return false;
+                },
+                .struct_access => |sa| return containsCallTo(store, sa.struct_expr, target),
+                .tag => |tag| {
+                    for (store.getExprSpan(tag.args)) |arg| {
+                        if (containsCallTo(store, arg, target)) return true;
+                    }
+                    return false;
+                },
+                .list => |list| {
+                    for (store.getExprSpan(list.elems)) |elem| {
+                        if (containsCallTo(store, elem, target)) return true;
+                    }
+                    return false;
+                },
+                .str_concat => |args| {
+                    for (store.getExprSpan(args)) |arg| {
+                        if (containsCallTo(store, arg, target)) return true;
+                    }
+                    return false;
+                },
+                .int_to_str => |its| return containsCallTo(store, its.value, target),
+                .float_to_str => |fts| return containsCallTo(store, fts.value, target),
+                .dec_to_str => |arg| return containsCallTo(store, arg, target),
+                .str_escape_and_quote => |arg| return containsCallTo(store, arg, target),
+                .discriminant_switch => |ds| {
+                    if (containsCallTo(store, ds.value, target)) return true;
+                    for (store.getExprSpan(ds.branches)) |branch| {
+                        if (containsCallTo(store, branch, target)) return true;
+                    }
+                    return false;
+                },
+                .tag_payload_access => |tpa| return containsCallTo(store, tpa.value, target),
+                .for_loop => |loop| return containsCallTo(store, loop.list_expr, target) or containsCallTo(store, loop.body, target),
+                .while_loop => |loop| return containsCallTo(store, loop.cond, target) or containsCallTo(store, loop.body, target),
+                .hosted_call => |call| {
+                    for (store.getExprSpan(call.args)) |arg| {
+                        if (containsCallTo(store, arg, target)) return true;
+                    }
+                    return false;
+                },
+                .incref => |rc| return containsCallTo(store, rc.value, target),
+                .decref => |rc| return containsCallTo(store, rc.value, target),
+                .free => |rc| return containsCallTo(store, rc.value, target),
+                else => return false,
+            }
+        }
+
+        fn containsEarlyReturn(store: *const LirExprStore, expr_id: lir.LIR.LirExprId) bool {
+            const expr = store.getExpr(expr_id);
+            switch (expr) {
+                .early_return => return true,
+                .lambda => |lam| return containsEarlyReturn(store, lam.body),
+                .block => |block| {
+                    for (store.getStmts(block.stmts)) |stmt| {
+                        switch (stmt) {
+                            .decl, .mutate => |binding| {
+                                if (containsEarlyReturn(store, binding.expr)) return true;
+                            },
+                            .cell_init, .cell_store => |binding| {
+                                if (containsEarlyReturn(store, binding.expr)) return true;
+                            },
+                            .cell_drop => {},
+                        }
+                    }
+                    return containsEarlyReturn(store, block.final_expr);
+                },
+                .if_then_else => |ite| {
+                    for (store.getIfBranches(ite.branches)) |branch| {
+                        if (containsEarlyReturn(store, branch.cond)) return true;
+                        if (containsEarlyReturn(store, branch.body)) return true;
+                    }
+                    return containsEarlyReturn(store, ite.final_else);
+                },
+                .match_expr => |match_expr| {
+                    if (containsEarlyReturn(store, match_expr.value)) return true;
+                    for (store.getMatchBranches(match_expr.branches)) |branch| {
+                        if (!branch.guard.isNone() and containsEarlyReturn(store, branch.guard)) return true;
+                        if (containsEarlyReturn(store, branch.body)) return true;
+                    }
+                    return false;
+                },
+                .call => |call| {
+                    if (containsEarlyReturn(store, call.fn_expr)) return true;
+                    for (store.getExprSpan(call.args)) |arg| {
+                        if (containsEarlyReturn(store, arg)) return true;
+                    }
+                    return false;
+                },
+                .low_level => |ll| {
+                    for (store.getExprSpan(ll.args)) |arg| {
+                        if (containsEarlyReturn(store, arg)) return true;
+                    }
+                    return false;
+                },
+                .dbg => |dbg| return containsEarlyReturn(store, dbg.expr),
+                .expect => |expect| return containsEarlyReturn(store, expect.cond) or containsEarlyReturn(store, expect.body),
+                .nominal => |nom| return containsEarlyReturn(store, nom.backing_expr),
+                .struct_ => |s| {
+                    for (store.getExprSpan(s.fields)) |field| {
+                        if (containsEarlyReturn(store, field)) return true;
+                    }
+                    return false;
+                },
+                .struct_access => |sa| return containsEarlyReturn(store, sa.struct_expr),
+                .tag => |tag| {
+                    for (store.getExprSpan(tag.args)) |arg| {
+                        if (containsEarlyReturn(store, arg)) return true;
+                    }
+                    return false;
+                },
+                .list => |list| {
+                    for (store.getExprSpan(list.elems)) |elem| {
+                        if (containsEarlyReturn(store, elem)) return true;
+                    }
+                    return false;
+                },
+                .str_concat => |args| {
+                    for (store.getExprSpan(args)) |arg| {
+                        if (containsEarlyReturn(store, arg)) return true;
+                    }
+                    return false;
+                },
+                .int_to_str => |its| return containsEarlyReturn(store, its.value),
+                .float_to_str => |fts| return containsEarlyReturn(store, fts.value),
+                .dec_to_str => |arg| return containsEarlyReturn(store, arg),
+                .str_escape_and_quote => |arg| return containsEarlyReturn(store, arg),
+                .discriminant_switch => |ds| {
+                    if (containsEarlyReturn(store, ds.value)) return true;
+                    for (store.getExprSpan(ds.branches)) |branch| {
+                        if (containsEarlyReturn(store, branch)) return true;
+                    }
+                    return false;
+                },
+                .tag_payload_access => |tpa| return containsEarlyReturn(store, tpa.value),
+                .for_loop => |loop| return containsEarlyReturn(store, loop.list_expr) or containsEarlyReturn(store, loop.body),
+                .while_loop => |loop| return containsEarlyReturn(store, loop.cond) or containsEarlyReturn(store, loop.body),
+                .hosted_call => |call| {
+                    for (store.getExprSpan(call.args)) |arg| {
+                        if (containsEarlyReturn(store, arg)) return true;
+                    }
+                    return false;
+                },
+                .incref => |rc| return containsEarlyReturn(store, rc.value),
+                .decref => |rc| return containsEarlyReturn(store, rc.value),
+                .free => |rc| return containsEarlyReturn(store, rc.value),
+                else => return false,
+            }
+        }
+
+        fn firstEarlyReturnLayout(store: *const LirExprStore, expr_id: lir.LIR.LirExprId) ?layout.Idx {
+            const expr = store.getExpr(expr_id);
+            switch (expr) {
+                .early_return => |ret| return ret.ret_layout,
+                .lambda => |lam| return firstEarlyReturnLayout(store, lam.body),
+                .block => |block| {
+                    for (store.getStmts(block.stmts)) |stmt| {
+                        switch (stmt) {
+                            .decl, .mutate => |binding| {
+                                if (firstEarlyReturnLayout(store, binding.expr)) |found| return found;
+                            },
+                            .cell_init, .cell_store => |binding| {
+                                if (firstEarlyReturnLayout(store, binding.expr)) |found| return found;
+                            },
+                            .cell_drop => {},
+                        }
+                    }
+                    return firstEarlyReturnLayout(store, block.final_expr);
+                },
+                .if_then_else => |ite| {
+                    for (store.getIfBranches(ite.branches)) |branch| {
+                        if (firstEarlyReturnLayout(store, branch.cond)) |found| return found;
+                        if (firstEarlyReturnLayout(store, branch.body)) |found| return found;
+                    }
+                    return firstEarlyReturnLayout(store, ite.final_else);
+                },
+                .match_expr => |match_expr| {
+                    if (firstEarlyReturnLayout(store, match_expr.value)) |found| return found;
+                    for (store.getMatchBranches(match_expr.branches)) |branch| {
+                        if (!branch.guard.isNone()) {
+                            if (firstEarlyReturnLayout(store, branch.guard)) |found| return found;
+                        }
+                        if (firstEarlyReturnLayout(store, branch.body)) |found| return found;
+                    }
+                    return null;
+                },
+                .call => |call| {
+                    if (firstEarlyReturnLayout(store, call.fn_expr)) |found| return found;
+                    for (store.getExprSpan(call.args)) |arg| {
+                        if (firstEarlyReturnLayout(store, arg)) |found| return found;
+                    }
+                    return null;
+                },
+                .low_level => |ll| {
+                    for (store.getExprSpan(ll.args)) |arg| {
+                        if (firstEarlyReturnLayout(store, arg)) |found| return found;
+                    }
+                    return null;
+                },
+                .dbg => |dbg| return firstEarlyReturnLayout(store, dbg.expr),
+                .expect => |expect| return firstEarlyReturnLayout(store, expect.cond) orelse firstEarlyReturnLayout(store, expect.body),
+                .nominal => |nom| return firstEarlyReturnLayout(store, nom.backing_expr),
+                .struct_ => |s| {
+                    for (store.getExprSpan(s.fields)) |field| {
+                        if (firstEarlyReturnLayout(store, field)) |found| return found;
+                    }
+                    return null;
+                },
+                .struct_access => |sa| return firstEarlyReturnLayout(store, sa.struct_expr),
+                .tag => |tag| {
+                    for (store.getExprSpan(tag.args)) |arg| {
+                        if (firstEarlyReturnLayout(store, arg)) |found| return found;
+                    }
+                    return null;
+                },
+                .list => |list| {
+                    for (store.getExprSpan(list.elems)) |elem| {
+                        if (firstEarlyReturnLayout(store, elem)) |found| return found;
+                    }
+                    return null;
+                },
+                .str_concat => |args| {
+                    for (store.getExprSpan(args)) |arg| {
+                        if (firstEarlyReturnLayout(store, arg)) |found| return found;
+                    }
+                    return null;
+                },
+                .int_to_str => |its| return firstEarlyReturnLayout(store, its.value),
+                .float_to_str => |fts| return firstEarlyReturnLayout(store, fts.value),
+                .dec_to_str => |arg| return firstEarlyReturnLayout(store, arg),
+                .str_escape_and_quote => |arg| return firstEarlyReturnLayout(store, arg),
+                .discriminant_switch => |ds| {
+                    if (firstEarlyReturnLayout(store, ds.value)) |found| return found;
+                    for (store.getExprSpan(ds.branches)) |branch| {
+                        if (firstEarlyReturnLayout(store, branch)) |found| return found;
+                    }
+                    return null;
+                },
+                .tag_payload_access => |tpa| return firstEarlyReturnLayout(store, tpa.value),
+                .for_loop => |loop| {
+                    return firstEarlyReturnLayout(store, loop.list_expr) orelse
+                        firstEarlyReturnLayout(store, loop.body);
+                },
+                .while_loop => |loop| {
+                    return firstEarlyReturnLayout(store, loop.cond) orelse
+                        firstEarlyReturnLayout(store, loop.body);
+                },
+                .hosted_call => |call| {
+                    for (store.getExprSpan(call.args)) |arg| {
+                        if (firstEarlyReturnLayout(store, arg)) |found| return found;
+                    }
+                    return null;
+                },
+                .incref => |rc| return firstEarlyReturnLayout(store, rc.value),
+                .decref => |rc| return firstEarlyReturnLayout(store, rc.value),
+                .free => |rc| return firstEarlyReturnLayout(store, rc.value),
+                else => return null,
+            }
+        }
+    };
+
+    var specialized_predicate_sym: ?lir.LIR.Symbol = null;
+    var specialization_it = translator.specialized_direct_callees.iterator();
+    while (specialization_it.next()) |entry| {
+        const callee_key = std.mem.bytesToValue(u64, entry.key_ptr.*[0..@sizeOf(u64)]);
+        if (callee_key == predicate_member_sym.raw()) {
+            specialized_predicate_sym = entry.value_ptr.symbol;
+            break;
+        }
+    }
+    try std.testing.expect(specialized_predicate_sym != null);
+    try std.testing.expect(Search.containsCallTo(&lir_store, any_lir_with_rc, specialized_predicate_sym.?));
+    try std.testing.expect(!Search.containsCallTo(&lir_store, any_lir_with_rc, predicate_member_sym));
+    try std.testing.expect(Search.containsEarlyReturn(&lir_store, any_lir_with_rc));
+    try std.testing.expectEqual(layout.Idx.bool, Search.firstEarlyReturnLayout(&lir_store, any_lir_with_rc).?);
+}
+
+test "dev lowering: local any-style HOF directly calls passed predicate member" {
+    const resources = try parseAndCanonicalizeExpr(test_allocator,
+        \\{
+        \\    f = |list, pred| {
+        \\        for item in list {
+        \\            if pred(item) { return True }
+        \\        }
+        \\        False
+        \\    }
+        \\    f([1.I64, 2.I64, 3.I64], |_x| True)
+        \\}
+    );
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(resources.builtin_module.env),
+        resources.module_env,
+    };
+
+    var lower = try mir.Lower.init(
+        test_allocator,
+        &mir_store,
+        all_module_envs[0..],
+        &resources.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    const mir_expr = try lower.lowerExpr(resources.expr_idx);
+    const root_expr = mir_store.getExpr(mir_expr);
+    try std.testing.expect(root_expr == .block);
+
+    const final_expr = mir_store.getExpr(root_expr.block.final_expr);
+    try std.testing.expect(final_expr == .call);
+
+    const root_args = mir_store.getExprSpan(final_expr.call.args);
+    try std.testing.expectEqual(@as(usize, 2), root_args.len);
+
+    const root_callee = mir_store.getExpr(final_expr.call.func);
+    try std.testing.expect(root_callee == .lookup);
+    const any_sym = root_callee.lookup;
+    const any_def = mir_store.getSymbolDef(any_sym) orelse return error.TestUnexpectedResult;
+
+    var lambda_def = any_def;
+    var params: MIR.PatternSpan = undefined;
+    while (true) {
+        switch (mir_store.getExpr(lambda_def)) {
+            .lambda => |lam| {
+                params = lam.params;
+                break;
+            },
+            .block => |block| lambda_def = block.final_expr,
+            else => return error.TestUnexpectedResult,
+        }
+    }
+
+    const param_ids = mir_store.getPatternSpan(params);
+    const predicate_pat = mir_store.getPattern(param_ids[1]);
+    try std.testing.expect(predicate_pat == .bind);
+    const predicate_sym = predicate_pat.bind;
+
+    var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
+    defer lambda_set_store.deinit(test_allocator);
+
+    const arg_ls = lambda_set_store.getExprLambdaSet(root_args[1]) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!arg_ls.isNone());
+    const arg_members = lambda_set_store.getMembers(lambda_set_store.getLambdaSet(arg_ls).members);
+    try std.testing.expectEqual(@as(usize, 1), arg_members.len);
+    const predicate_member_sym = arg_members[0].fn_symbol;
+
+    const predicate_ls = lambda_set_store.getSymbolLambdaSet(predicate_sym) orelse return error.TestUnexpectedResult;
+    const predicate_members = lambda_set_store.getMembers(lambda_set_store.getLambdaSet(predicate_ls).members);
+    try std.testing.expectEqual(@as(usize, 1), predicate_members.len);
+    try std.testing.expectEqual(predicate_member_sym, predicate_members[0].fn_symbol);
+
+    var layout_store = try layout.Store.init(
+        all_module_envs[0..],
+        resources.builtin_module.env.idents.builtin_str,
+        test_allocator,
+        base.target.TargetUsize.native,
+    );
+    defer layout_store.deinit();
+
+    var lir_store = LirExprStore.init(test_allocator);
+    defer lir_store.deinit();
+
+    var translator = lir.MirToLir.init(
+        test_allocator,
+        &mir_store,
+        &lir_store,
+        &layout_store,
+        &lambda_set_store,
+        resources.module_env.idents.true_tag,
+    );
+    defer translator.deinit();
+
+    const any_lir = try translator.lower(any_def);
+    var rc_pass = try lir.RcInsert.RcInsertPass.init(test_allocator, &lir_store, &layout_store);
+    defer rc_pass.deinit();
+    const any_lir_with_rc = try rc_pass.insertRcOps(any_lir);
+
+    const Search = struct {
+        fn containsCallTo(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, target: lir.LIR.Symbol) bool {
+            const expr = store.getExpr(expr_id);
+            switch (expr) {
+                .call => |call| {
+                    const fn_expr = store.getExpr(call.fn_expr);
+                    if (fn_expr == .lookup and fn_expr.lookup.symbol.eql(target)) return true;
+                    if (containsCallTo(store, call.fn_expr, target)) return true;
+                    for (store.getExprSpan(call.args)) |arg| {
+                        if (containsCallTo(store, arg, target)) return true;
+                    }
+                    return false;
+                },
+                .lambda => |lam| return containsCallTo(store, lam.body, target),
+                .block => |block| {
+                    for (store.getStmts(block.stmts)) |stmt| {
+                        switch (stmt) {
+                            .decl, .mutate => |binding| {
+                                if (containsCallTo(store, binding.expr, target)) return true;
+                            },
+                            .cell_init, .cell_store => |binding| {
+                                if (containsCallTo(store, binding.expr, target)) return true;
+                            },
+                            .cell_drop => {},
+                        }
+                    }
+                    return containsCallTo(store, block.final_expr, target);
+                },
+                .if_then_else => |ite| {
+                    for (store.getIfBranches(ite.branches)) |branch| {
+                        if (containsCallTo(store, branch.cond, target)) return true;
+                        if (containsCallTo(store, branch.body, target)) return true;
+                    }
+                    return containsCallTo(store, ite.final_else, target);
+                },
+                .match_expr => |match_expr| {
+                    if (containsCallTo(store, match_expr.value, target)) return true;
+                    for (store.getMatchBranches(match_expr.branches)) |branch| {
+                        if (!branch.guard.isNone() and containsCallTo(store, branch.guard, target)) return true;
+                        if (containsCallTo(store, branch.body, target)) return true;
+                    }
+                    return false;
+                },
+                .early_return => |ret| return containsCallTo(store, ret.expr, target),
+                .low_level => |ll| {
+                    for (store.getExprSpan(ll.args)) |arg| {
+                        if (containsCallTo(store, arg, target)) return true;
+                    }
+                    return false;
+                },
+                .hosted_call => |hc| {
+                    for (store.getExprSpan(hc.args)) |arg| {
+                        if (containsCallTo(store, arg, target)) return true;
+                    }
+                    return false;
+                },
+                .for_loop => |loop| {
+                    if (containsCallTo(store, loop.list_expr, target)) return true;
+                    return containsCallTo(store, loop.body, target);
+                },
+                else => return false,
+            }
+        }
+    };
+
+    var specialized_predicate_sym: ?lir.LIR.Symbol = null;
+    var specialization_it = translator.specialized_direct_callees.iterator();
+    while (specialization_it.next()) |entry| {
+        const callee_key = std.mem.bytesToValue(u64, entry.key_ptr.*[0..@sizeOf(u64)]);
+        if (callee_key == predicate_member_sym.raw()) {
+            specialized_predicate_sym = entry.value_ptr.symbol;
+            break;
+        }
+    }
+    try std.testing.expect(specialized_predicate_sym != null);
+    try std.testing.expect(Search.containsCallTo(&lir_store, any_lir_with_rc, specialized_predicate_sym.?));
+    try std.testing.expect(!Search.containsCallTo(&lir_store, any_lir_with_rc, predicate_member_sym));
+}
+
+test "dev lowering: list rest pattern emits two list decrefs" {
+    const ListRcCounts = struct {
+        increfs: u32,
+        decrefs: u32,
+    };
+
+    const resources = try parseAndCanonicalizeExpr(
+        test_allocator,
+        "match [1, 2, 3, 4] { [first, .. as rest] => match rest { [second, ..] => first + second, _ => 0 }, _ => 0 }",
+    );
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(resources.builtin_module.env),
+        resources.module_env,
+    };
+
+    var lower = try mir.Lower.init(
+        test_allocator,
+        &mir_store,
+        all_module_envs[0..],
+        &resources.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    const mir_expr = try lower.lowerExpr(resources.expr_idx);
+
+    var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
+    defer lambda_set_store.deinit(test_allocator);
+
+    var layout_store = try layout.Store.init(
+        all_module_envs[0..],
+        resources.builtin_module.env.idents.builtin_str,
+        test_allocator,
+        base.target.TargetUsize.native,
+    );
+    defer layout_store.deinit();
+
+    var lir_store = LirExprStore.init(test_allocator);
+    defer lir_store.deinit();
+
+    var translator = lir.MirToLir.init(
+        test_allocator,
+        &mir_store,
+        &lir_store,
+        &layout_store,
+        &lambda_set_store,
+        resources.module_env.idents.true_tag,
+    );
+    defer translator.deinit();
+
+    const lowered = try translator.lower(mir_expr);
+    var rc_pass = try lir.RcInsert.RcInsertPass.init(test_allocator, &lir_store, &layout_store);
+    defer rc_pass.deinit();
+    const with_rc = try rc_pass.insertRcOps(lowered);
+
+    const Count = struct {
+        fn walk(store: *const LirExprStore, ls: *const layout.Store, expr_id: lir.LIR.LirExprId, counts: *ListRcCounts) void {
+            if (expr_id.isNone()) return;
+
+            const expr = store.getExpr(expr_id);
+            switch (expr) {
+                .block => |block| {
+                    for (store.getStmts(block.stmts)) |stmt| {
+                        switch (stmt) {
+                            .decl, .mutate => |binding| walk(store, ls, binding.expr, counts),
+                            .cell_init, .cell_store => |binding| walk(store, ls, binding.expr, counts),
+                            .cell_drop => {},
+                        }
+                    }
+                    walk(store, ls, block.final_expr, counts);
+                },
+                .if_then_else => |ite| {
+                    for (store.getIfBranches(ite.branches)) |branch| {
+                        walk(store, ls, branch.cond, counts);
+                        walk(store, ls, branch.body, counts);
+                    }
+                    walk(store, ls, ite.final_else, counts);
+                },
+                .match_expr => |m| {
+                    walk(store, ls, m.value, counts);
+                    for (store.getMatchBranches(m.branches)) |branch| {
+                        walk(store, ls, branch.guard, counts);
+                        walk(store, ls, branch.body, counts);
+                    }
+                },
+                .lambda => |lam| walk(store, ls, lam.body, counts),
+                .for_loop => |fl| {
+                    walk(store, ls, fl.list_expr, counts);
+                    walk(store, ls, fl.body, counts);
+                },
+                .while_loop => |wl| {
+                    walk(store, ls, wl.cond, counts);
+                    walk(store, ls, wl.body, counts);
+                },
+                .discriminant_switch => |ds| {
+                    walk(store, ls, ds.value, counts);
+                    for (store.getExprSpan(ds.branches)) |branch_id| {
+                        walk(store, ls, branch_id, counts);
+                    }
+                },
+                .call => |call| {
+                    walk(store, ls, call.fn_expr, counts);
+                    for (store.getExprSpan(call.args)) |arg| walk(store, ls, arg, counts);
+                },
+                .low_level => |ll| for (store.getExprSpan(ll.args)) |arg| walk(store, ls, arg, counts),
+                .list => |list_expr| for (store.getExprSpan(list_expr.elems)) |elem| walk(store, ls, elem, counts),
+                .struct_ => |s| for (store.getExprSpan(s.fields)) |field| walk(store, ls, field, counts),
+                .tag => |t| for (store.getExprSpan(t.args)) |arg| walk(store, ls, arg, counts),
+                .struct_access => |sa| walk(store, ls, sa.struct_expr, counts),
+                .tag_payload_access => |tpa| walk(store, ls, tpa.value, counts),
+                .nominal => |n| walk(store, ls, n.backing_expr, counts),
+                .early_return => |ret| walk(store, ls, ret.expr, counts),
+                .dbg => |d| walk(store, ls, d.expr, counts),
+                .expect => |e| {
+                    walk(store, ls, e.cond, counts);
+                    walk(store, ls, e.body, counts);
+                },
+                .str_concat => |parts| for (store.getExprSpan(parts)) |part| walk(store, ls, part, counts),
+                .int_to_str => |its| walk(store, ls, its.value, counts),
+                .float_to_str => |fts| walk(store, ls, fts.value, counts),
+                .dec_to_str => |d| walk(store, ls, d, counts),
+                .str_escape_and_quote => |s| walk(store, ls, s, counts),
+                .hosted_call => |hc| for (store.getExprSpan(hc.args)) |arg| walk(store, ls, arg, counts),
+                .incref => |inc| {
+                    if (ls.getLayout(inc.layout_idx).tag == .list or ls.getLayout(inc.layout_idx).tag == .list_of_zst) {
+                        counts.increfs += 1;
+                    }
+                    walk(store, ls, inc.value, counts);
+                },
+                .decref => |dec| {
+                    if (ls.getLayout(dec.layout_idx).tag == .list or ls.getLayout(dec.layout_idx).tag == .list_of_zst) {
+                        counts.decrefs += 1;
+                    }
+                    walk(store, ls, dec.value, counts);
+                },
+                .free => |free_expr| walk(store, ls, free_expr.value, counts),
+                .lookup,
+                .cell_load,
+                .i64_literal,
+                .i128_literal,
+                .f64_literal,
+                .f32_literal,
+                .dec_literal,
+                .str_literal,
+                .bool_literal,
+                .empty_list,
+                .zero_arg_tag,
+                .crash,
+                .runtime_error,
+                .break_expr,
+                => {},
+            }
+        }
+    };
+
+    var counts = ListRcCounts{ .increfs = 0, .decrefs = 0 };
+    Count.walk(&lir_store, &layout_store, with_rc, &counts);
+
+    const SymbolCounts = struct {
+        symbol: lir.LIR.Symbol,
+        decrefs: u32,
+    };
+
+    const SymbolInspector = struct {
+        fn exprUsesSymbol(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, symbol: lir.LIR.Symbol) bool {
+            if (expr_id.isNone()) return false;
+            const key = @as(u64, @bitCast(symbol));
+            const expr = store.getExpr(expr_id);
+            return switch (expr) {
+                .lookup => |lookup| !lookup.symbol.isNone() and @as(u64, @bitCast(lookup.symbol)) == key,
+                .cell_load => |load| @as(u64, @bitCast(load.cell)) == key,
+                .block => |block| blk: {
+                    for (store.getStmts(block.stmts)) |stmt| {
+                        switch (stmt) {
+                            .decl, .mutate => |binding| {
+                                if (exprUsesSymbol(store, binding.expr, symbol)) break :blk true;
+                            },
+                            .cell_init, .cell_store => |binding| {
+                                if (exprUsesSymbol(store, binding.expr, symbol)) break :blk true;
+                            },
+                            .cell_drop => {},
+                        }
+                    }
+                    break :blk exprUsesSymbol(store, block.final_expr, symbol);
+                },
+                .if_then_else => |ite| blk: {
+                    for (store.getIfBranches(ite.branches)) |branch| {
+                        if (exprUsesSymbol(store, branch.cond, symbol) or exprUsesSymbol(store, branch.body, symbol)) break :blk true;
+                    }
+                    break :blk exprUsesSymbol(store, ite.final_else, symbol);
+                },
+                .match_expr => |m| blk: {
+                    if (exprUsesSymbol(store, m.value, symbol)) break :blk true;
+                    for (store.getMatchBranches(m.branches)) |branch| {
+                        if (exprUsesSymbol(store, branch.guard, symbol) or exprUsesSymbol(store, branch.body, symbol)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .lambda => |lam| exprUsesSymbol(store, lam.body, symbol),
+                .for_loop => |fl| exprUsesSymbol(store, fl.list_expr, symbol) or exprUsesSymbol(store, fl.body, symbol),
+                .while_loop => |wl| exprUsesSymbol(store, wl.cond, symbol) or exprUsesSymbol(store, wl.body, symbol),
+                .discriminant_switch => |ds| blk: {
+                    if (exprUsesSymbol(store, ds.value, symbol)) break :blk true;
+                    for (store.getExprSpan(ds.branches)) |branch_id| {
+                        if (exprUsesSymbol(store, branch_id, symbol)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .call => |call| blk: {
+                    if (exprUsesSymbol(store, call.fn_expr, symbol)) break :blk true;
+                    for (store.getExprSpan(call.args)) |arg| {
+                        if (exprUsesSymbol(store, arg, symbol)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .low_level => |ll| blk: {
+                    for (store.getExprSpan(ll.args)) |arg| {
+                        if (exprUsesSymbol(store, arg, symbol)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .list => |list_expr| blk: {
+                    for (store.getExprSpan(list_expr.elems)) |elem| {
+                        if (exprUsesSymbol(store, elem, symbol)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .struct_ => |s| blk: {
+                    for (store.getExprSpan(s.fields)) |field| {
+                        if (exprUsesSymbol(store, field, symbol)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .tag => |t| blk: {
+                    for (store.getExprSpan(t.args)) |arg| {
+                        if (exprUsesSymbol(store, arg, symbol)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .struct_access => |sa| exprUsesSymbol(store, sa.struct_expr, symbol),
+                .tag_payload_access => |tpa| exprUsesSymbol(store, tpa.value, symbol),
+                .nominal => |n| exprUsesSymbol(store, n.backing_expr, symbol),
+                .early_return => |ret| exprUsesSymbol(store, ret.expr, symbol),
+                .dbg => |d| exprUsesSymbol(store, d.expr, symbol),
+                .expect => |e| exprUsesSymbol(store, e.cond, symbol) or exprUsesSymbol(store, e.body, symbol),
+                .str_concat => |parts| blk: {
+                    for (store.getExprSpan(parts)) |part| {
+                        if (exprUsesSymbol(store, part, symbol)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .int_to_str => |its| exprUsesSymbol(store, its.value, symbol),
+                .float_to_str => |fts| exprUsesSymbol(store, fts.value, symbol),
+                .dec_to_str => |d| exprUsesSymbol(store, d, symbol),
+                .str_escape_and_quote => |s| exprUsesSymbol(store, s, symbol),
+                .hosted_call => |hc| blk: {
+                    for (store.getExprSpan(hc.args)) |arg| {
+                        if (exprUsesSymbol(store, arg, symbol)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .incref => |inc| exprUsesSymbol(store, inc.value, symbol),
+                .decref => |dec| exprUsesSymbol(store, dec.value, symbol),
+                .free => |free_expr| exprUsesSymbol(store, free_expr.value, symbol),
+                else => false,
+            };
+        }
+
+        fn countDecrefsForSymbol(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, symbol: lir.LIR.Symbol) u32 {
+            if (expr_id.isNone()) return 0;
+
+            const key = @as(u64, @bitCast(symbol));
+            const expr = store.getExpr(expr_id);
+            return switch (expr) {
+                .block => |block| blk: {
+                    var total: u32 = 0;
+                    for (store.getStmts(block.stmts)) |stmt| {
+                        switch (stmt) {
+                            .decl, .mutate => |binding| total += countDecrefsForSymbol(store, binding.expr, symbol),
+                            .cell_init, .cell_store => |binding| total += countDecrefsForSymbol(store, binding.expr, symbol),
+                            .cell_drop => {},
+                        }
+                    }
+                    total += countDecrefsForSymbol(store, block.final_expr, symbol);
+                    break :blk total;
+                },
+                .if_then_else => |ite| blk: {
+                    var total: u32 = 0;
+                    for (store.getIfBranches(ite.branches)) |branch| {
+                        total += countDecrefsForSymbol(store, branch.cond, symbol);
+                        total += countDecrefsForSymbol(store, branch.body, symbol);
+                    }
+                    total += countDecrefsForSymbol(store, ite.final_else, symbol);
+                    break :blk total;
+                },
+                .match_expr => |m| blk: {
+                    var total: u32 = countDecrefsForSymbol(store, m.value, symbol);
+                    for (store.getMatchBranches(m.branches)) |branch| {
+                        total += countDecrefsForSymbol(store, branch.guard, symbol);
+                        total += countDecrefsForSymbol(store, branch.body, symbol);
+                    }
+                    break :blk total;
+                },
+                .lambda => |lam| countDecrefsForSymbol(store, lam.body, symbol),
+                .for_loop => |fl| countDecrefsForSymbol(store, fl.list_expr, symbol) + countDecrefsForSymbol(store, fl.body, symbol),
+                .while_loop => |wl| countDecrefsForSymbol(store, wl.cond, symbol) + countDecrefsForSymbol(store, wl.body, symbol),
+                .discriminant_switch => |ds| blk: {
+                    var total: u32 = countDecrefsForSymbol(store, ds.value, symbol);
+                    for (store.getExprSpan(ds.branches)) |branch_id| total += countDecrefsForSymbol(store, branch_id, symbol);
+                    break :blk total;
+                },
+                .call => |call| blk: {
+                    var total: u32 = countDecrefsForSymbol(store, call.fn_expr, symbol);
+                    for (store.getExprSpan(call.args)) |arg| total += countDecrefsForSymbol(store, arg, symbol);
+                    break :blk total;
+                },
+                .low_level => |ll| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(ll.args)) |arg| total += countDecrefsForSymbol(store, arg, symbol);
+                    break :blk total;
+                },
+                .list => |list_expr| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(list_expr.elems)) |elem| total += countDecrefsForSymbol(store, elem, symbol);
+                    break :blk total;
+                },
+                .struct_ => |s| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(s.fields)) |field| total += countDecrefsForSymbol(store, field, symbol);
+                    break :blk total;
+                },
+                .tag => |t| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(t.args)) |arg| total += countDecrefsForSymbol(store, arg, symbol);
+                    break :blk total;
+                },
+                .struct_access => |sa| countDecrefsForSymbol(store, sa.struct_expr, symbol),
+                .tag_payload_access => |tpa| countDecrefsForSymbol(store, tpa.value, symbol),
+                .nominal => |n| countDecrefsForSymbol(store, n.backing_expr, symbol),
+                .early_return => |ret| countDecrefsForSymbol(store, ret.expr, symbol),
+                .dbg => |d| countDecrefsForSymbol(store, d.expr, symbol),
+                .expect => |e| countDecrefsForSymbol(store, e.cond, symbol) + countDecrefsForSymbol(store, e.body, symbol),
+                .str_concat => |parts| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(parts)) |part| total += countDecrefsForSymbol(store, part, symbol);
+                    break :blk total;
+                },
+                .int_to_str => |its| countDecrefsForSymbol(store, its.value, symbol),
+                .float_to_str => |fts| countDecrefsForSymbol(store, fts.value, symbol),
+                .dec_to_str => |d| countDecrefsForSymbol(store, d, symbol),
+                .str_escape_and_quote => |s| countDecrefsForSymbol(store, s, symbol),
+                .hosted_call => |hc| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(hc.args)) |arg| total += countDecrefsForSymbol(store, arg, symbol);
+                    break :blk total;
+                },
+                .decref => |dec| blk: {
+                    const dec_expr = store.getExpr(dec.value);
+                    break :blk if (dec_expr == .lookup and @as(u64, @bitCast(dec_expr.lookup.symbol)) == key) 1 else 0;
+                },
+                else => 0,
+            };
+        }
+
+        fn collectListBindSymbols(store: *const LirExprStore, layout_store_: *const layout.Store, root_expr_id: lir.LIR.LirExprId, expr_id: lir.LIR.LirExprId, out: *std.ArrayList(SymbolCounts)) !void {
+            if (expr_id.isNone()) return;
+            const expr = store.getExpr(expr_id);
+            switch (expr) {
+                .block => |block| {
+                    for (store.getStmts(block.stmts)) |stmt| {
+                        switch (stmt) {
+                            .decl, .mutate => |binding| {
+                                const pat = store.getPattern(binding.pattern);
+                                switch (pat) {
+                                    .bind => |bind| {
+                                        const layout_val = layout_store_.getLayout(bind.layout_idx);
+                                        if (layout_val.tag == .list or layout_val.tag == .list_of_zst) {
+                                            try out.append(test_allocator, .{
+                                                .symbol = bind.symbol,
+                                                .decrefs = countDecrefsForSymbol(store, root_expr_id, bind.symbol),
+                                            });
+                                        }
+                                    },
+                                    else => {},
+                                }
+                                try collectListBindSymbols(store, layout_store_, root_expr_id, binding.expr, out);
+                            },
+                            .cell_init, .cell_store => |binding| try collectListBindSymbols(store, layout_store_, root_expr_id, binding.expr, out),
+                            .cell_drop => {},
+                        }
+                    }
+                    try collectListBindSymbols(store, layout_store_, root_expr_id, block.final_expr, out);
+                },
+                .if_then_else => |ite| {
+                    for (store.getIfBranches(ite.branches)) |branch| {
+                        try collectListBindSymbols(store, layout_store_, root_expr_id, branch.cond, out);
+                        try collectListBindSymbols(store, layout_store_, root_expr_id, branch.body, out);
+                    }
+                    try collectListBindSymbols(store, layout_store_, root_expr_id, ite.final_else, out);
+                },
+                .match_expr => |m| {
+                    try collectListBindSymbols(store, layout_store_, root_expr_id, m.value, out);
+                    for (store.getMatchBranches(m.branches)) |branch| {
+                        try collectListBindSymbols(store, layout_store_, root_expr_id, branch.guard, out);
+                        try collectListBindSymbols(store, layout_store_, root_expr_id, branch.body, out);
+                    }
+                },
+                .lambda => |lam| try collectListBindSymbols(store, layout_store_, root_expr_id, lam.body, out),
+                else => {},
+            }
+        }
+
+        fn printBindingBlocks(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, symbol: lir.LIR.Symbol) void {
+            if (expr_id.isNone()) return;
+            const expr = store.getExpr(expr_id);
+            switch (expr) {
+                .block => |block| {
+                    for (store.getStmts(block.stmts)) |stmt| {
+                        switch (stmt) {
+                            .decl, .mutate => |binding| {
+                                const pat = store.getPattern(binding.pattern);
+                                if (pat == .bind and pat.bind.symbol.eql(symbol)) {
+                                    std.debug.print(
+                                        "binding block for symbol={d}: final_expr_tag={s} final_uses_symbol={any}\n",
+                                        .{ symbol.raw(), @tagName(store.getExpr(block.final_expr)), exprUsesSymbol(store, block.final_expr, symbol) },
+                                    );
+                                }
+                                printBindingBlocks(store, binding.expr, symbol);
+                            },
+                            .cell_init, .cell_store => |binding| printBindingBlocks(store, binding.expr, symbol),
+                            .cell_drop => {},
+                        }
+                    }
+                    printBindingBlocks(store, block.final_expr, symbol);
+                },
+                .if_then_else => |ite| {
+                    for (store.getIfBranches(ite.branches)) |branch| {
+                        printBindingBlocks(store, branch.cond, symbol);
+                        printBindingBlocks(store, branch.body, symbol);
+                    }
+                    printBindingBlocks(store, ite.final_else, symbol);
+                },
+                .match_expr => |m| {
+                    printBindingBlocks(store, m.value, symbol);
+                    for (store.getMatchBranches(m.branches)) |branch| {
+                        printBindingBlocks(store, branch.guard, symbol);
+                        printBindingBlocks(store, branch.body, symbol);
+                    }
+                },
+                .lambda => |lam| printBindingBlocks(store, lam.body, symbol),
+                else => {},
+            }
+        }
+    };
+
+    var list_symbols = std.ArrayList(SymbolCounts).empty;
+    defer list_symbols.deinit(test_allocator);
+    try SymbolInspector.collectListBindSymbols(&lir_store, &layout_store, with_rc, with_rc, &list_symbols);
+    try std.testing.expect(list_symbols.items.len > 0);
+    try std.testing.expect(counts.increfs >= 1);
+    try std.testing.expect(counts.decrefs >= 1);
+}
+
+test "dev lowering: mutable loop append decrefs mutable result binding once" {
+    const Search = struct {
+        fn containsCellLoad(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, symbol: lir.LIR.Symbol) bool {
+            const expr = store.getExpr(expr_id);
+            const key: u64 = @bitCast(symbol);
+            return switch (expr) {
+                .cell_load => |load| @as(u64, @bitCast(load.cell)) == key,
+                .block => |block| blk: {
+                    for (store.getStmts(block.stmts)) |stmt| {
+                        switch (stmt) {
+                            .decl, .mutate => |binding| if (containsCellLoad(store, binding.expr, symbol)) break :blk true,
+                            .cell_init, .cell_store => |binding| if (containsCellLoad(store, binding.expr, symbol)) break :blk true,
+                            .cell_drop => {},
+                        }
+                    }
+                    break :blk containsCellLoad(store, block.final_expr, symbol);
+                },
+                .if_then_else => |ite| blk: {
+                    for (store.getIfBranches(ite.branches)) |branch| {
+                        if (containsCellLoad(store, branch.cond, symbol) or containsCellLoad(store, branch.body, symbol)) break :blk true;
+                    }
+                    break :blk containsCellLoad(store, ite.final_else, symbol);
+                },
+                .match_expr => |match_expr| blk: {
+                    if (containsCellLoad(store, match_expr.value, symbol)) break :blk true;
+                    for (store.getMatchBranches(match_expr.branches)) |branch| {
+                        if ((!branch.guard.isNone() and containsCellLoad(store, branch.guard, symbol)) or containsCellLoad(store, branch.body, symbol)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .lambda => |lam| containsCellLoad(store, lam.body, symbol),
+                .for_loop => |loop| containsCellLoad(store, loop.list_expr, symbol) or containsCellLoad(store, loop.body, symbol),
+                .while_loop => |loop| containsCellLoad(store, loop.cond, symbol) or containsCellLoad(store, loop.body, symbol),
+                .call => |call| blk: {
+                    if (containsCellLoad(store, call.fn_expr, symbol)) break :blk true;
+                    for (store.getExprSpan(call.args)) |arg| if (containsCellLoad(store, arg, symbol)) break :blk true;
+                    break :blk false;
+                },
+                .low_level => |ll| blk: {
+                    for (store.getExprSpan(ll.args)) |arg| if (containsCellLoad(store, arg, symbol)) break :blk true;
+                    break :blk false;
+                },
+                .list => |list_expr| blk: {
+                    for (store.getExprSpan(list_expr.elems)) |elem| if (containsCellLoad(store, elem, symbol)) break :blk true;
+                    break :blk false;
+                },
+                .struct_ => |s| blk: {
+                    for (store.getExprSpan(s.fields)) |field| if (containsCellLoad(store, field, symbol)) break :blk true;
+                    break :blk false;
+                },
+                .tag => |t| blk: {
+                    for (store.getExprSpan(t.args)) |arg| if (containsCellLoad(store, arg, symbol)) break :blk true;
+                    break :blk false;
+                },
+                .struct_access => |sa| containsCellLoad(store, sa.struct_expr, symbol),
+                .tag_payload_access => |tpa| containsCellLoad(store, tpa.value, symbol),
+                .nominal => |n| containsCellLoad(store, n.backing_expr, symbol),
+                .early_return => |ret| containsCellLoad(store, ret.expr, symbol),
+                .dbg => |d| containsCellLoad(store, d.expr, symbol),
+                .expect => |e| containsCellLoad(store, e.cond, symbol) or containsCellLoad(store, e.body, symbol),
+                .str_concat => |parts| blk: {
+                    for (store.getExprSpan(parts)) |part| if (containsCellLoad(store, part, symbol)) break :blk true;
+                    break :blk false;
+                },
+                .int_to_str => |its| containsCellLoad(store, its.value, symbol),
+                .float_to_str => |fts| containsCellLoad(store, fts.value, symbol),
+                .dec_to_str => |d| containsCellLoad(store, d, symbol),
+                .str_escape_and_quote => |s| containsCellLoad(store, s, symbol),
+                .discriminant_switch => |ds| blk: {
+                    if (containsCellLoad(store, ds.value, symbol)) break :blk true;
+                    for (store.getExprSpan(ds.branches)) |branch| if (containsCellLoad(store, branch, symbol)) break :blk true;
+                    break :blk false;
+                },
+                .hosted_call => |hc| blk: {
+                    for (store.getExprSpan(hc.args)) |arg| if (containsCellLoad(store, arg, symbol)) break :blk true;
+                    break :blk false;
+                },
+                else => false,
+            };
+        }
+
+        fn countCellDrops(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, symbol: lir.LIR.Symbol) u32 {
+            const expr = store.getExpr(expr_id);
+            const key: u64 = @bitCast(symbol);
+            return switch (expr) {
+                .block => |block| blk: {
+                    var total: u32 = 0;
+                    for (store.getStmts(block.stmts)) |stmt| {
+                        total += switch (stmt) {
+                            .decl, .mutate => |binding| countCellDrops(store, binding.expr, symbol),
+                            .cell_init, .cell_store => |binding| countCellDrops(store, binding.expr, symbol),
+                            .cell_drop => |drop| if (@as(u64, @bitCast(drop.cell)) == key) 1 else 0,
+                        };
+                    }
+                    total += countCellDrops(store, block.final_expr, symbol);
+                    break :blk total;
+                },
+                .if_then_else => |ite| blk: {
+                    var total: u32 = 0;
+                    for (store.getIfBranches(ite.branches)) |branch| {
+                        total += countCellDrops(store, branch.cond, symbol);
+                        total += countCellDrops(store, branch.body, symbol);
+                    }
+                    total += countCellDrops(store, ite.final_else, symbol);
+                    break :blk total;
+                },
+                .match_expr => |m| blk: {
+                    var total: u32 = countCellDrops(store, m.value, symbol);
+                    for (store.getMatchBranches(m.branches)) |branch| {
+                        total += countCellDrops(store, branch.guard, symbol);
+                        total += countCellDrops(store, branch.body, symbol);
+                    }
+                    break :blk total;
+                },
+                .lambda => |lam| countCellDrops(store, lam.body, symbol),
+                .for_loop => |fl| countCellDrops(store, fl.list_expr, symbol) + countCellDrops(store, fl.body, symbol),
+                .while_loop => |wl| countCellDrops(store, wl.cond, symbol) + countCellDrops(store, wl.body, symbol),
+                .discriminant_switch => |ds| blk: {
+                    var total: u32 = countCellDrops(store, ds.value, symbol);
+                    for (store.getExprSpan(ds.branches)) |branch_id| total += countCellDrops(store, branch_id, symbol);
+                    break :blk total;
+                },
+                .call => |call| blk: {
+                    var total: u32 = countCellDrops(store, call.fn_expr, symbol);
+                    for (store.getExprSpan(call.args)) |arg| total += countCellDrops(store, arg, symbol);
+                    break :blk total;
+                },
+                .low_level => |ll| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(ll.args)) |arg| total += countCellDrops(store, arg, symbol);
+                    break :blk total;
+                },
+                .list => |list_expr| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(list_expr.elems)) |elem| total += countCellDrops(store, elem, symbol);
+                    break :blk total;
+                },
+                .struct_ => |s| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(s.fields)) |field| total += countCellDrops(store, field, symbol);
+                    break :blk total;
+                },
+                .tag => |t| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(t.args)) |arg| total += countCellDrops(store, arg, symbol);
+                    break :blk total;
+                },
+                .struct_access => |sa| countCellDrops(store, sa.struct_expr, symbol),
+                .tag_payload_access => |tpa| countCellDrops(store, tpa.value, symbol),
+                .nominal => |n| countCellDrops(store, n.backing_expr, symbol),
+                .early_return => |ret| countCellDrops(store, ret.expr, symbol),
+                .dbg => |d| countCellDrops(store, d.expr, symbol),
+                .expect => |e| countCellDrops(store, e.cond, symbol) + countCellDrops(store, e.body, symbol),
+                .str_concat => |parts| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(parts)) |part| total += countCellDrops(store, part, symbol);
+                    break :blk total;
+                },
+                .int_to_str => |its| countCellDrops(store, its.value, symbol),
+                .float_to_str => |fts| countCellDrops(store, fts.value, symbol),
+                .dec_to_str => |d| countCellDrops(store, d, symbol),
+                .str_escape_and_quote => |s| countCellDrops(store, s, symbol),
+                .hosted_call => |hc| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(hc.args)) |arg| total += countCellDrops(store, arg, symbol);
+                    break :blk total;
+                },
+                else => 0,
+            };
+        }
+
+        fn countDecrefsForSymbol(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, symbol: lir.LIR.Symbol) u32 {
+            if (expr_id.isNone()) return 0;
+
+            const key = @as(u64, @bitCast(symbol));
+            const expr = store.getExpr(expr_id);
+            return switch (expr) {
+                .block => |block| blk: {
+                    var total: u32 = 0;
+                    for (store.getStmts(block.stmts)) |stmt| {
+                        switch (stmt) {
+                            .decl, .mutate => |binding| total += countDecrefsForSymbol(store, binding.expr, symbol),
+                            .cell_init, .cell_store => |binding| total += countDecrefsForSymbol(store, binding.expr, symbol),
+                            .cell_drop => {},
+                        }
+                    }
+                    total += countDecrefsForSymbol(store, block.final_expr, symbol);
+                    break :blk total;
+                },
+                .if_then_else => |ite| blk: {
+                    var total: u32 = 0;
+                    for (store.getIfBranches(ite.branches)) |branch| {
+                        total += countDecrefsForSymbol(store, branch.cond, symbol);
+                        total += countDecrefsForSymbol(store, branch.body, symbol);
+                    }
+                    total += countDecrefsForSymbol(store, ite.final_else, symbol);
+                    break :blk total;
+                },
+                .match_expr => |match_expr| blk: {
+                    var total: u32 = countDecrefsForSymbol(store, match_expr.value, symbol);
+                    for (store.getMatchBranches(match_expr.branches)) |branch| {
+                        total += countDecrefsForSymbol(store, branch.guard, symbol);
+                        total += countDecrefsForSymbol(store, branch.body, symbol);
+                    }
+                    break :blk total;
+                },
+                .lambda => |lam| countDecrefsForSymbol(store, lam.body, symbol),
+                .for_loop => |fl| countDecrefsForSymbol(store, fl.list_expr, symbol) + countDecrefsForSymbol(store, fl.body, symbol),
+                .while_loop => |wl| countDecrefsForSymbol(store, wl.cond, symbol) + countDecrefsForSymbol(store, wl.body, symbol),
+                .discriminant_switch => |ds| blk: {
+                    var total: u32 = countDecrefsForSymbol(store, ds.value, symbol);
+                    for (store.getExprSpan(ds.branches)) |branch_id| total += countDecrefsForSymbol(store, branch_id, symbol);
+                    break :blk total;
+                },
+                .call => |call| blk: {
+                    var total: u32 = countDecrefsForSymbol(store, call.fn_expr, symbol);
+                    for (store.getExprSpan(call.args)) |arg| total += countDecrefsForSymbol(store, arg, symbol);
+                    break :blk total;
+                },
+                .low_level => |ll| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(ll.args)) |arg| total += countDecrefsForSymbol(store, arg, symbol);
+                    break :blk total;
+                },
+                .list => |list_expr| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(list_expr.elems)) |elem| total += countDecrefsForSymbol(store, elem, symbol);
+                    break :blk total;
+                },
+                .struct_ => |s| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(s.fields)) |field| total += countDecrefsForSymbol(store, field, symbol);
+                    break :blk total;
+                },
+                .tag => |t| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(t.args)) |arg| total += countDecrefsForSymbol(store, arg, symbol);
+                    break :blk total;
+                },
+                .struct_access => |sa| countDecrefsForSymbol(store, sa.struct_expr, symbol),
+                .tag_payload_access => |tpa| countDecrefsForSymbol(store, tpa.value, symbol),
+                .nominal => |n| countDecrefsForSymbol(store, n.backing_expr, symbol),
+                .early_return => |ret| countDecrefsForSymbol(store, ret.expr, symbol),
+                .dbg => |d| countDecrefsForSymbol(store, d.expr, symbol),
+                .expect => |e| countDecrefsForSymbol(store, e.cond, symbol) + countDecrefsForSymbol(store, e.body, symbol),
+                .str_concat => |parts| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(parts)) |part| total += countDecrefsForSymbol(store, part, symbol);
+                    break :blk total;
+                },
+                .int_to_str => |its| countDecrefsForSymbol(store, its.value, symbol),
+                .float_to_str => |fts| countDecrefsForSymbol(store, fts.value, symbol),
+                .dec_to_str => |d| countDecrefsForSymbol(store, d, symbol),
+                .str_escape_and_quote => |s| countDecrefsForSymbol(store, s, symbol),
+                .hosted_call => |hc| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(hc.args)) |arg| total += countDecrefsForSymbol(store, arg, symbol);
+                    break :blk total;
+                },
+                .decref => |dec| blk: {
+                    const dec_expr = store.getExpr(dec.value);
+                    break :blk if (dec_expr == .lookup and @as(u64, @bitCast(dec_expr.lookup.symbol)) == key) 1 else 0;
+                },
+                .incref => |rc| countDecrefsForSymbol(store, rc.value, symbol),
+                .free => |rc| countDecrefsForSymbol(store, rc.value, symbol),
+                else => 0,
+            };
+        }
+    };
+
+    const resources = try parseAndCanonicalizeExpr(test_allocator,
+        \\{
+        \\    list = [1.I64, 2.I64, 3.I64]
+        \\    var $result = List.with_capacity(List.len(list))
+        \\    for item in list {
+        \\        $result = List.append($result, item)
+        \\    }
+        \\    $result
+        \\}
+    );
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(resources.builtin_module.env),
+        resources.module_env,
+    };
+
+    var lower = try mir.Lower.init(
+        test_allocator,
+        &mir_store,
+        all_module_envs[0..],
+        &resources.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    const mir_expr = try lower.lowerExpr(resources.expr_idx);
+
+    var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
+    defer lambda_set_store.deinit(test_allocator);
+
+    var layout_store = try layout.Store.init(
+        all_module_envs[0..],
+        resources.builtin_module.env.idents.builtin_str,
+        test_allocator,
+        base.target.TargetUsize.native,
+    );
+    defer layout_store.deinit();
+
+    var lir_store = LirExprStore.init(test_allocator);
+    defer lir_store.deinit();
+
+    var translator = lir.MirToLir.init(
+        test_allocator,
+        &mir_store,
+        &lir_store,
+        &layout_store,
+        &lambda_set_store,
+        resources.module_env.idents.true_tag,
+    );
+    defer translator.deinit();
+
+    const lowered = try translator.lower(mir_expr);
+    var rc_pass = try lir.RcInsert.RcInsertPass.init(test_allocator, &lir_store, &layout_store);
+    defer rc_pass.deinit();
+    const with_rc = try rc_pass.insertRcOps(lowered);
+
+    const root = lir_store.getExpr(with_rc);
+    try std.testing.expect(root == .block);
+
+    const stmts = lir_store.getStmts(root.block.stmts);
+    var found_mutable_result = false;
+    var found_cell_result = false;
+    for (stmts) |stmt| {
+        switch (stmt) {
+            .decl, .mutate => |binding| {
+                const pat = lir_store.getPattern(binding.pattern);
+                if (pat != .bind) continue;
+                if (!pat.bind.reassignable) continue;
+
+                const layout_val = layout_store.getLayout(pat.bind.layout_idx);
+                if (layout_val.tag != .list and layout_val.tag != .list_of_zst) continue;
+
+                found_mutable_result = true;
+                try std.testing.expectEqual(@as(u32, 1), Search.countDecrefsForSymbol(&lir_store, with_rc, pat.bind.symbol));
+            },
+            .cell_init => |cell| {
+                const layout_val = layout_store.getLayout(cell.layout_idx);
+                if (layout_val.tag != .list and layout_val.tag != .list_of_zst) continue;
+                found_cell_result = true;
+                try std.testing.expect(Search.containsCellLoad(&lir_store, with_rc, cell.cell));
+                try std.testing.expectEqual(@as(u32, 1), Search.countCellDrops(&lir_store, with_rc, cell.cell));
+            },
+            .cell_store, .cell_drop => {},
+        }
+    }
+
+    try std.testing.expect(found_mutable_result or found_cell_result);
+}
+
+test "dev lowering: mutable list reassignment keeps both decrefs on the reassigned symbol" {
+    const Search = struct {
+        fn countDecrefsForSymbol(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, symbol: lir.LIR.Symbol) u32 {
+            const expr = store.getExpr(expr_id);
+            return switch (expr) {
+                .block => |block| blk: {
+                    var total: u32 = 0;
+                    for (store.getStmts(block.stmts)) |stmt| {
+                        total += switch (stmt) {
+                            .decl, .mutate => |binding| countDecrefsForSymbol(store, binding.expr, symbol),
+                            .cell_init, .cell_store => |binding| countDecrefsForSymbol(store, binding.expr, symbol),
+                            .cell_drop => 0,
+                        };
+                    }
+                    total += countDecrefsForSymbol(store, block.final_expr, symbol);
+                    break :blk total;
+                },
+                .if_then_else => |ite| blk: {
+                    var total: u32 = 0;
+                    for (store.getIfBranches(ite.branches)) |branch| {
+                        total += countDecrefsForSymbol(store, branch.cond, symbol);
+                        total += countDecrefsForSymbol(store, branch.body, symbol);
+                    }
+                    total += countDecrefsForSymbol(store, ite.final_else, symbol);
+                    break :blk total;
+                },
+                .match_expr => |m| blk: {
+                    var total: u32 = countDecrefsForSymbol(store, m.value, symbol);
+                    for (store.getMatchBranches(m.branches)) |branch| {
+                        total += countDecrefsForSymbol(store, branch.guard, symbol);
+                        total += countDecrefsForSymbol(store, branch.body, symbol);
+                    }
+                    break :blk total;
+                },
+                .lambda => |lam| countDecrefsForSymbol(store, lam.body, symbol),
+                .for_loop => |fl| countDecrefsForSymbol(store, fl.list_expr, symbol) + countDecrefsForSymbol(store, fl.body, symbol),
+                .while_loop => |wl| countDecrefsForSymbol(store, wl.cond, symbol) + countDecrefsForSymbol(store, wl.body, symbol),
+                .discriminant_switch => |ds| blk: {
+                    var total: u32 = countDecrefsForSymbol(store, ds.value, symbol);
+                    for (store.getExprSpan(ds.branches)) |branch_id| total += countDecrefsForSymbol(store, branch_id, symbol);
+                    break :blk total;
+                },
+                .call => |call| blk: {
+                    var total: u32 = countDecrefsForSymbol(store, call.fn_expr, symbol);
+                    for (store.getExprSpan(call.args)) |arg| total += countDecrefsForSymbol(store, arg, symbol);
+                    break :blk total;
+                },
+                .low_level => |ll| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(ll.args)) |arg| total += countDecrefsForSymbol(store, arg, symbol);
+                    break :blk total;
+                },
+                .list => |list_expr| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(list_expr.elems)) |elem| total += countDecrefsForSymbol(store, elem, symbol);
+                    break :blk total;
+                },
+                .struct_ => |s| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(s.fields)) |field| total += countDecrefsForSymbol(store, field, symbol);
+                    break :blk total;
+                },
+                .tag => |t| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(t.args)) |arg| total += countDecrefsForSymbol(store, arg, symbol);
+                    break :blk total;
+                },
+                .struct_access => |sa| countDecrefsForSymbol(store, sa.struct_expr, symbol),
+                .tag_payload_access => |tpa| countDecrefsForSymbol(store, tpa.value, symbol),
+                .nominal => |n| countDecrefsForSymbol(store, n.backing_expr, symbol),
+                .early_return => |ret| countDecrefsForSymbol(store, ret.expr, symbol),
+                .dbg => |d| countDecrefsForSymbol(store, d.expr, symbol),
+                .expect => |e| countDecrefsForSymbol(store, e.cond, symbol) + countDecrefsForSymbol(store, e.body, symbol),
+                .str_concat => |parts| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(parts)) |part| total += countDecrefsForSymbol(store, part, symbol);
+                    break :blk total;
+                },
+                .int_to_str => |its| countDecrefsForSymbol(store, its.value, symbol),
+                .float_to_str => |fts| countDecrefsForSymbol(store, fts.value, symbol),
+                .dec_to_str => |d| countDecrefsForSymbol(store, d, symbol),
+                .str_escape_and_quote => |s| countDecrefsForSymbol(store, s, symbol),
+                .hosted_call => |hc| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(hc.args)) |arg| total += countDecrefsForSymbol(store, arg, symbol);
+                    break :blk total;
+                },
+                .decref => |rc| blk: {
+                    const value = store.getExpr(rc.value);
+                    if (value == .lookup and value.lookup.symbol.eql(symbol)) break :blk 1;
+                    break :blk countDecrefsForSymbol(store, rc.value, symbol);
+                },
+                .incref => |rc| countDecrefsForSymbol(store, rc.value, symbol),
+                .free => |rc| countDecrefsForSymbol(store, rc.value, symbol),
+                else => 0,
+            };
+        }
+
+        fn countCellDecrefs(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, cell: lir.LIR.Symbol) u32 {
+            if (expr_id.isNone()) return 0;
+            const expr = store.getExpr(expr_id);
+            return switch (expr) {
+                .block => |block| blk: {
+                    var total: u32 = 0;
+                    for (store.getStmts(block.stmts)) |stmt| {
+                        total += switch (stmt) {
+                            .decl, .mutate => |binding| countCellDecrefs(store, binding.expr, cell),
+                            .cell_init, .cell_store => |binding| countCellDecrefs(store, binding.expr, cell),
+                            .cell_drop => 0,
+                        };
+                    }
+                    total += countCellDecrefs(store, block.final_expr, cell);
+                    break :blk total;
+                },
+                .if_then_else => |ite| blk: {
+                    var total: u32 = 0;
+                    for (store.getIfBranches(ite.branches)) |branch| {
+                        total += countCellDecrefs(store, branch.cond, cell);
+                        total += countCellDecrefs(store, branch.body, cell);
+                    }
+                    total += countCellDecrefs(store, ite.final_else, cell);
+                    break :blk total;
+                },
+                .match_expr => |m| blk: {
+                    var total: u32 = countCellDecrefs(store, m.value, cell);
+                    for (store.getMatchBranches(m.branches)) |branch| {
+                        total += countCellDecrefs(store, branch.guard, cell);
+                        total += countCellDecrefs(store, branch.body, cell);
+                    }
+                    break :blk total;
+                },
+                .lambda => |lam| countCellDecrefs(store, lam.body, cell),
+                .for_loop => |fl| countCellDecrefs(store, fl.list_expr, cell) + countCellDecrefs(store, fl.body, cell),
+                .while_loop => |wl| countCellDecrefs(store, wl.cond, cell) + countCellDecrefs(store, wl.body, cell),
+                .discriminant_switch => |ds| blk: {
+                    var total: u32 = countCellDecrefs(store, ds.value, cell);
+                    for (store.getExprSpan(ds.branches)) |branch_id| total += countCellDecrefs(store, branch_id, cell);
+                    break :blk total;
+                },
+                .call => |call| blk: {
+                    var total: u32 = countCellDecrefs(store, call.fn_expr, cell);
+                    for (store.getExprSpan(call.args)) |arg| total += countCellDecrefs(store, arg, cell);
+                    break :blk total;
+                },
+                .low_level => |ll| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(ll.args)) |arg| total += countCellDecrefs(store, arg, cell);
+                    break :blk total;
+                },
+                .list => |list_expr| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(list_expr.elems)) |elem| total += countCellDecrefs(store, elem, cell);
+                    break :blk total;
+                },
+                .struct_ => |s| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(s.fields)) |field| total += countCellDecrefs(store, field, cell);
+                    break :blk total;
+                },
+                .tag => |t| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(t.args)) |arg| total += countCellDecrefs(store, arg, cell);
+                    break :blk total;
+                },
+                .struct_access => |sa| countCellDecrefs(store, sa.struct_expr, cell),
+                .tag_payload_access => |tpa| countCellDecrefs(store, tpa.value, cell),
+                .nominal => |n| countCellDecrefs(store, n.backing_expr, cell),
+                .early_return => |ret| countCellDecrefs(store, ret.expr, cell),
+                .dbg => |d| countCellDecrefs(store, d.expr, cell),
+                .expect => |e| countCellDecrefs(store, e.cond, cell) + countCellDecrefs(store, e.body, cell),
+                .str_concat => |parts| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(parts)) |part| total += countCellDecrefs(store, part, cell);
+                    break :blk total;
+                },
+                .int_to_str => |its| countCellDecrefs(store, its.value, cell),
+                .float_to_str => |fts| countCellDecrefs(store, fts.value, cell),
+                .dec_to_str => |d| countCellDecrefs(store, d, cell),
+                .str_escape_and_quote => |s| countCellDecrefs(store, s, cell),
+                .hosted_call => |hc| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(hc.args)) |arg| total += countCellDecrefs(store, arg, cell);
+                    break :blk total;
+                },
+                .decref => |rc| blk: {
+                    const value = store.getExpr(rc.value);
+                    if (value == .cell_load and value.cell_load.cell.eql(cell)) break :blk 1;
+                    break :blk countCellDecrefs(store, rc.value, cell);
+                },
+                .incref => |rc| countCellDecrefs(store, rc.value, cell),
+                .free => |rc| countCellDecrefs(store, rc.value, cell),
+                else => 0,
+            };
+        }
+
+        fn countCellDrops(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, cell: lir.LIR.Symbol) u32 {
+            if (expr_id.isNone()) return 0;
+            const expr = store.getExpr(expr_id);
+            const key: u64 = @bitCast(cell);
+            return switch (expr) {
+                .block => |block| blk: {
+                    var total: u32 = 0;
+                    for (store.getStmts(block.stmts)) |stmt| {
+                        total += switch (stmt) {
+                            .decl, .mutate => |binding| countCellDrops(store, binding.expr, cell),
+                            .cell_init, .cell_store => |binding| countCellDrops(store, binding.expr, cell),
+                            .cell_drop => |drop| if (@as(u64, @bitCast(drop.cell)) == key) 1 else 0,
+                        };
+                    }
+                    total += countCellDrops(store, block.final_expr, cell);
+                    break :blk total;
+                },
+                .if_then_else => |ite| blk: {
+                    var total: u32 = 0;
+                    for (store.getIfBranches(ite.branches)) |branch| {
+                        total += countCellDrops(store, branch.cond, cell);
+                        total += countCellDrops(store, branch.body, cell);
+                    }
+                    total += countCellDrops(store, ite.final_else, cell);
+                    break :blk total;
+                },
+                .match_expr => |m| blk: {
+                    var total: u32 = countCellDrops(store, m.value, cell);
+                    for (store.getMatchBranches(m.branches)) |branch| {
+                        total += countCellDrops(store, branch.guard, cell);
+                        total += countCellDrops(store, branch.body, cell);
+                    }
+                    break :blk total;
+                },
+                .lambda => |lam| countCellDrops(store, lam.body, cell),
+                .for_loop => |fl| countCellDrops(store, fl.list_expr, cell) + countCellDrops(store, fl.body, cell),
+                .while_loop => |wl| countCellDrops(store, wl.cond, cell) + countCellDrops(store, wl.body, cell),
+                .discriminant_switch => |ds| blk: {
+                    var total: u32 = countCellDrops(store, ds.value, cell);
+                    for (store.getExprSpan(ds.branches)) |branch_id| total += countCellDrops(store, branch_id, cell);
+                    break :blk total;
+                },
+                .call => |call| blk: {
+                    var total: u32 = countCellDrops(store, call.fn_expr, cell);
+                    for (store.getExprSpan(call.args)) |arg| total += countCellDrops(store, arg, cell);
+                    break :blk total;
+                },
+                .low_level => |ll| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(ll.args)) |arg| total += countCellDrops(store, arg, cell);
+                    break :blk total;
+                },
+                .list => |list_expr| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(list_expr.elems)) |elem| total += countCellDrops(store, elem, cell);
+                    break :blk total;
+                },
+                .struct_ => |s| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(s.fields)) |field| total += countCellDrops(store, field, cell);
+                    break :blk total;
+                },
+                .tag => |t| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(t.args)) |arg| total += countCellDrops(store, arg, cell);
+                    break :blk total;
+                },
+                .struct_access => |sa| countCellDrops(store, sa.struct_expr, cell),
+                .tag_payload_access => |tpa| countCellDrops(store, tpa.value, cell),
+                .nominal => |n| countCellDrops(store, n.backing_expr, cell),
+                .early_return => |ret| countCellDrops(store, ret.expr, cell),
+                .dbg => |d| countCellDrops(store, d.expr, cell),
+                .expect => |e| countCellDrops(store, e.cond, cell) + countCellDrops(store, e.body, cell),
+                .str_concat => |parts| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(parts)) |part| total += countCellDrops(store, part, cell);
+                    break :blk total;
+                },
+                .int_to_str => |its| countCellDrops(store, its.value, cell),
+                .float_to_str => |fts| countCellDrops(store, fts.value, cell),
+                .dec_to_str => |d| countCellDrops(store, d, cell),
+                .str_escape_and_quote => |s| countCellDrops(store, s, cell),
+                .hosted_call => |hc| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(hc.args)) |arg| total += countCellDrops(store, arg, cell);
+                    break :blk total;
+                },
+                else => 0,
+            };
+        }
+    };
+
+    const resources = try parseAndCanonicalizeExpr(test_allocator,
+        \\{
+        \\    var $x = [1, 2]
+        \\    $x = [3, 4]
+        \\    match $x { [a, b] => a + b, _ => 0 }
+        \\}
+    );
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(resources.builtin_module.env),
+        resources.module_env,
+    };
+
+    var lower = try mir.Lower.init(
+        test_allocator,
+        &mir_store,
+        all_module_envs[0..],
+        &resources.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    const mir_expr = try lower.lowerExpr(resources.expr_idx);
+
+    var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
+    defer lambda_set_store.deinit(test_allocator);
+
+    var layout_store = try layout.Store.init(
+        all_module_envs[0..],
+        resources.builtin_module.env.idents.builtin_str,
+        test_allocator,
+        base.target.TargetUsize.native,
+    );
+    defer layout_store.deinit();
+
+    var lir_store = LirExprStore.init(test_allocator);
+    defer lir_store.deinit();
+
+    var translator = lir.MirToLir.init(
+        test_allocator,
+        &mir_store,
+        &lir_store,
+        &layout_store,
+        &lambda_set_store,
+        resources.module_env.idents.true_tag,
+    );
+    defer translator.deinit();
+
+    const lowered = try translator.lower(mir_expr);
+    var rc_pass = try lir.RcInsert.RcInsertPass.init(test_allocator, &lir_store, &layout_store);
+    defer rc_pass.deinit();
+    const with_rc = try rc_pass.insertRcOps(lowered);
+
+    const root = lir_store.getExpr(with_rc);
+    try std.testing.expect(root == .block);
+
+    const stmts = lir_store.getStmts(root.block.stmts);
+    var found_reassignable_list = false;
+    var found_list_cell = false;
+    for (stmts) |stmt| {
+        switch (stmt) {
+            .decl, .mutate => |binding| {
+                const pat = lir_store.getPattern(binding.pattern);
+                if (pat != .bind or !pat.bind.reassignable) continue;
+                const layout_val = layout_store.getLayout(pat.bind.layout_idx);
+                if (layout_val.tag != .list and layout_val.tag != .list_of_zst) continue;
+
+                found_reassignable_list = true;
+                try std.testing.expectEqual(@as(u32, 2), Search.countDecrefsForSymbol(&lir_store, with_rc, pat.bind.symbol));
+            },
+            .cell_init => |cell| {
+                const layout_val = layout_store.getLayout(cell.layout_idx);
+                if (layout_val.tag != .list and layout_val.tag != .list_of_zst) continue;
+
+                found_list_cell = true;
+                try std.testing.expectEqual(@as(u32, 2), Search.countCellDecrefs(&lir_store, with_rc, cell.cell));
+                try std.testing.expectEqual(@as(u32, 1), Search.countCellDrops(&lir_store, with_rc, cell.cell));
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expect(found_reassignable_list or found_list_cell);
+}
+
+test "lambda sets distinguish closure record fields with different captures" {
+    const resources = try parseAndCanonicalizeExpr(test_allocator,
+        \\{
+        \\    a = 10
+        \\    b = 20
+        \\    rec = { add_a: |x| x + a, add_b: |x| x + b }
+        \\    add_a = rec.add_a
+        \\    add_b = rec.add_b
+        \\    add_a(5) + add_b(5)
+        \\}
+    );
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(resources.builtin_module.env),
+        resources.module_env,
+    };
+
+    var lower = try mir.Lower.init(
+        test_allocator,
+        &mir_store,
+        all_module_envs[0..],
+        &resources.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    const mir_expr = try lower.lowerExpr(resources.expr_idx);
+    const root_expr = mir_store.getExpr(mir_expr);
+    try std.testing.expect(root_expr == .block);
+
+    const stmts = mir_store.getStmts(root_expr.block.stmts);
+    try std.testing.expect(stmts.len >= 5);
+
+    const add_a_binding = switch (stmts[3]) {
+        .decl_const, .decl_var, .mutate_var => |b| b,
+    };
+    const add_b_binding = switch (stmts[4]) {
+        .decl_const, .decl_var, .mutate_var => |b| b,
+    };
+
+    var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
+    defer lambda_set_store.deinit(test_allocator);
+
+    const add_a_ls = lambda_set_store.getExprLambdaSet(add_a_binding.expr) orelse return error.TestUnexpectedResult;
+    const add_b_ls = lambda_set_store.getExprLambdaSet(add_b_binding.expr) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!add_a_ls.isNone());
+    try std.testing.expect(!add_b_ls.isNone());
+
+    const add_a_members = lambda_set_store.getMembers(lambda_set_store.getLambdaSet(add_a_ls).members);
+    const add_b_members = lambda_set_store.getMembers(lambda_set_store.getLambdaSet(add_b_ls).members);
+    try std.testing.expectEqual(@as(usize, 1), add_a_members.len);
+    try std.testing.expectEqual(@as(usize, 1), add_b_members.len);
+    try std.testing.expect(!add_a_members[0].fn_symbol.eql(add_b_members[0].fn_symbol));
+
+    const add_a_pat = mir_store.getPattern(add_a_binding.pattern);
+    const add_b_pat = mir_store.getPattern(add_b_binding.pattern);
+    try std.testing.expect(add_a_pat == .bind);
+    try std.testing.expect(add_b_pat == .bind);
+    const add_a_sym = add_a_pat.bind;
+    const add_b_sym = add_b_pat.bind;
+    const add_a_sym_ls = lambda_set_store.getSymbolLambdaSet(add_a_sym) orelse return error.TestUnexpectedResult;
+    const add_b_sym_ls = lambda_set_store.getSymbolLambdaSet(add_b_sym) orelse return error.TestUnexpectedResult;
+    const add_a_sym_members = lambda_set_store.getMembers(lambda_set_store.getLambdaSet(add_a_sym_ls).members);
+    const add_b_sym_members = lambda_set_store.getMembers(lambda_set_store.getLambdaSet(add_b_sym_ls).members);
+    try std.testing.expectEqual(@as(usize, 1), add_a_sym_members.len);
+    try std.testing.expectEqual(@as(usize, 1), add_b_sym_members.len);
+    try std.testing.expect(!add_a_sym_members[0].fn_symbol.eql(add_b_sym_members[0].fn_symbol));
+}
+
+test "LIR record field closures keep distinct field indices and payload layouts" {
+    const findStructAccessExpr = struct {
+        fn go(store: *const LirExprStore, expr_id: lir.LIR.LirExprId) ?lir.LIR.LirExprId {
+            return goDepth(store, expr_id, 32);
+        }
+
+        fn goDepth(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, remaining: usize) ?lir.LIR.LirExprId {
+            if (remaining == 0) return null;
+
+            const expr = store.getExpr(expr_id);
+            switch (expr) {
+                .struct_access => return expr_id,
+                .block => {
+                    const stmts = store.getStmts(expr.block.stmts);
+                    for (stmts) |stmt| {
+                        switch (stmt) {
+                            .decl, .mutate => |binding| {
+                                if (goDepth(store, binding.expr, remaining - 1)) |found| return found;
+                            },
+                            .cell_init, .cell_store => |binding| {
+                                if (goDepth(store, binding.expr, remaining - 1)) |found| return found;
+                            },
+                            .cell_drop => {},
+                        }
+                    }
+                    return goDepth(store, expr.block.final_expr, remaining - 1);
+                },
+                .lookup => {
+                    if (store.getSymbolDef(expr.lookup.symbol)) |def_expr| {
+                        return goDepth(store, def_expr, remaining - 1);
+                    }
+                    return null;
+                },
+                .dbg => return goDepth(store, expr.dbg.expr, remaining - 1),
+                .nominal => return goDepth(store, expr.nominal.backing_expr, remaining - 1),
+                else => return null,
+            }
+        }
+    }.go;
+
+    const resources = try parseAndCanonicalizeExpr(test_allocator,
+        \\{
+        \\    a = 10
+        \\    b = 20
+        \\    rec = { add_a: |x| x + a, add_b: |x| x + b }
+        \\    add_a = rec.add_a
+        \\    add_b = rec.add_b
+        \\    add_a(5) + add_b(5)
+        \\}
+    );
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(resources.builtin_module.env),
+        resources.module_env,
+    };
+
+    var lower = try mir.Lower.init(
+        test_allocator,
+        &mir_store,
+        all_module_envs[0..],
+        &resources.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    const mir_expr = try lower.lowerExpr(resources.expr_idx);
+    var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
+    defer lambda_set_store.deinit(test_allocator);
+
+    var layout_store = try layout.Store.init(
+        all_module_envs[0..],
+        resources.builtin_module.env.idents.builtin_str,
+        test_allocator,
+        base.target.TargetUsize.native,
+    );
+    defer layout_store.deinit();
+
+    var lir_store = LirExprStore.init(test_allocator);
+    defer lir_store.deinit();
+
+    var translator = lir.MirToLir.init(
+        test_allocator,
+        &mir_store,
+        &lir_store,
+        &layout_store,
+        &lambda_set_store,
+        resources.module_env.idents.true_tag,
+    );
+    defer translator.deinit();
+
+    const lir_expr = try translator.lower(mir_expr);
+    const root = lir_store.getExpr(lir_expr);
+    try std.testing.expect(root == .block);
+
+    const stmts = lir_store.getStmts(root.block.stmts);
+    try std.testing.expect(stmts.len >= 5);
+
+    const add_a_expr = findStructAccessExpr(&lir_store, stmts[3].binding().expr) orelse return error.TestUnexpectedResult;
+    const add_b_expr = findStructAccessExpr(&lir_store, stmts[4].binding().expr) orelse return error.TestUnexpectedResult;
+    const add_a_lir = lir_store.getExpr(add_a_expr);
+    const add_b_lir = lir_store.getExpr(add_b_expr);
+    try std.testing.expect(add_a_lir == .struct_access);
+    try std.testing.expect(add_b_lir == .struct_access);
+    try std.testing.expectEqual(@as(u16, 0), add_a_lir.struct_access.field_idx);
+    try std.testing.expectEqual(@as(u16, 1), add_b_lir.struct_access.field_idx);
+    try std.testing.expect(add_a_lir.struct_access.field_layout != layout.Idx.none);
+    try std.testing.expect(add_b_lir.struct_access.field_layout != layout.Idx.none);
+
+    const rec_stmt = stmts[2].binding().expr;
+    var rec_expr_id = rec_stmt;
+    while (lir_store.getExpr(rec_expr_id) == .block) {
+        rec_expr_id = lir_store.getExpr(rec_expr_id).block.final_expr;
+    }
+    const rec_lir = lir_store.getExpr(rec_expr_id);
+    try std.testing.expect(rec_lir == .struct_);
+
+    const rec_layout = layout_store.getLayout(rec_lir.struct_.struct_layout);
+    try std.testing.expect(rec_layout.tag == .struct_);
+    const rec_struct_idx = rec_layout.data.struct_.idx;
+    const add_a_struct_layout = layout_store.getLayout(add_a_lir.struct_access.struct_layout);
+    const add_b_struct_layout = layout_store.getLayout(add_b_lir.struct_access.struct_layout);
+    try std.testing.expect(add_a_struct_layout.tag == .struct_);
+    try std.testing.expect(add_b_struct_layout.tag == .struct_);
+    try std.testing.expectEqual(layout_store.layoutSize(rec_layout), layout_store.layoutSize(add_a_struct_layout));
+    try std.testing.expectEqual(layout_store.layoutSize(rec_layout), layout_store.layoutSize(add_b_struct_layout));
+    try std.testing.expectEqual(
+        layout_store.getStructFieldOffset(rec_struct_idx, add_a_lir.struct_access.field_idx),
+        layout_store.getStructFieldOffset(add_a_struct_layout.data.struct_.idx, add_a_lir.struct_access.field_idx),
+    );
+    try std.testing.expectEqual(
+        layout_store.getStructFieldOffset(rec_struct_idx, add_b_lir.struct_access.field_idx),
+        layout_store.getStructFieldOffset(add_b_struct_layout.data.struct_.idx, add_b_lir.struct_access.field_idx),
+    );
+
+    const add_a_size = layout_store.layoutSize(layout_store.getLayout(add_a_lir.struct_access.field_layout));
+    const add_b_size = layout_store.layoutSize(layout_store.getLayout(add_b_lir.struct_access.field_layout));
+    try std.testing.expectEqual(add_a_size, layout_store.getStructFieldSize(rec_struct_idx, add_a_lir.struct_access.field_idx));
+    try std.testing.expectEqual(add_b_size, layout_store.getStructFieldSize(rec_struct_idx, add_b_lir.struct_access.field_idx));
+}
+
+test "LIR parenthesized record field closure call registers synthetic closure binding" {
+    const findStructAccessExpr = struct {
+        fn go(store: *const LirExprStore, expr_id: lir.LIR.LirExprId) ?lir.LIR.LirExprId {
+            return goDepth(store, expr_id, 32);
+        }
+
+        fn goDepth(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, remaining: usize) ?lir.LIR.LirExprId {
+            if (remaining == 0) return null;
+
+            const expr = store.getExpr(expr_id);
+            switch (expr) {
+                .struct_access => return expr_id,
+                .block => {
+                    const stmts = store.getStmts(expr.block.stmts);
+                    for (stmts) |stmt| {
+                        switch (stmt) {
+                            .decl, .mutate => |binding| {
+                                if (goDepth(store, binding.expr, remaining - 1)) |found| return found;
+                            },
+                            .cell_init, .cell_store => |binding| {
+                                if (goDepth(store, binding.expr, remaining - 1)) |found| return found;
+                            },
+                            .cell_drop => {},
+                        }
+                    }
+                    return goDepth(store, expr.block.final_expr, remaining - 1);
+                },
+                .lookup => {
+                    if (store.getSymbolDef(expr.lookup.symbol)) |def_expr| {
+                        return goDepth(store, def_expr, remaining - 1);
+                    }
+                    return null;
+                },
+                .dbg => return goDepth(store, expr.dbg.expr, remaining - 1),
+                .nominal => return goDepth(store, expr.nominal.backing_expr, remaining - 1),
+                else => return null,
+            }
+        }
+    }.go;
+
+    const resources = try parseAndCanonicalizeExpr(test_allocator,
+        \\{
+        \\    a = 10
+        \\    b = 20
+        \\    rec = { add_a: |x| x + a, add_b: |x| x + b }
+        \\    (rec.add_b)(5)
+        \\}
+    );
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(resources.builtin_module.env),
+        resources.module_env,
+    };
+
+    var lower = try mir.Lower.init(
+        test_allocator,
+        &mir_store,
+        all_module_envs[0..],
+        &resources.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    const mir_expr = try lower.lowerExpr(resources.expr_idx);
+    var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
+    defer lambda_set_store.deinit(test_allocator);
+
+    var layout_store = try layout.Store.init(
+        all_module_envs[0..],
+        resources.builtin_module.env.idents.builtin_str,
+        test_allocator,
+        base.target.TargetUsize.native,
+    );
+    defer layout_store.deinit();
+
+    var lir_store = LirExprStore.init(test_allocator);
+    defer lir_store.deinit();
+
+    var translator = lir.MirToLir.init(
+        test_allocator,
+        &mir_store,
+        &lir_store,
+        &layout_store,
+        &lambda_set_store,
+        resources.module_env.idents.true_tag,
+    );
+    defer translator.deinit();
+
+    const lir_expr = try translator.lower(mir_expr);
+    const root = lir_store.getExpr(lir_expr);
+    try std.testing.expect(root == .block);
+
+    const outer_final = lir_store.getExpr(root.block.final_expr);
+    try std.testing.expect(outer_final == .block);
+
+    const inner_stmts = lir_store.getStmts(outer_final.block.stmts);
+    try std.testing.expectEqual(@as(usize, 1), inner_stmts.len);
+
+    const synthetic_def_expr = findStructAccessExpr(&lir_store, inner_stmts[0].binding().expr) orelse return error.TestUnexpectedResult;
+    const synthetic_def = lir_store.getExpr(synthetic_def_expr);
+    try std.testing.expect(synthetic_def == .struct_access);
+    try std.testing.expectEqual(@as(u16, 1), synthetic_def.struct_access.field_idx);
+
+    const call_expr = lir_store.getExpr(outer_final.block.final_expr);
+    try std.testing.expect(call_expr == .call);
+    const call_args = lir_store.getExprSpan(call_expr.call.args);
+    try std.testing.expectEqual(@as(usize, 2), call_args.len);
+
+    const lifted_lookup = lir_store.getExpr(call_expr.call.fn_expr);
+    try std.testing.expect(lifted_lookup == .lookup);
+    const lifted_def = lir_store.getSymbolDef(lifted_lookup.lookup.symbol) orelse return error.TestUnexpectedResult;
+    const lifted_expr = lir_store.getExpr(lifted_def);
+    try std.testing.expect(lifted_expr == .lambda);
+
+    const captures_lookup = lir_store.getExpr(call_args[1]);
+    try std.testing.expect(captures_lookup == .lookup);
+    const captures_def = lir_store.getSymbolDef(captures_lookup.lookup.symbol) orelse return error.TestUnexpectedResult;
+    var captures_value_expr = captures_def;
+    while (lir_store.getExpr(captures_value_expr) == .block) {
+        captures_value_expr = lir_store.getExpr(captures_value_expr).block.final_expr;
+    }
+    const captures_value = lir_store.getExpr(captures_value_expr);
+    try std.testing.expect(captures_value == .struct_access);
+    try std.testing.expectEqual(@as(u16, 1), captures_value.struct_access.field_idx);
+}
+
+test "MIR record closure fields capture distinct outer symbols" {
+    const resources = try parseAndCanonicalizeExpr(test_allocator,
+        \\{
+        \\    a = 10
+        \\    b = 20
+        \\    rec = { add_a: |x| x + a, add_b: |x| x + b }
+        \\    add_a = rec.add_a
+        \\    add_b = rec.add_b
+        \\    add_a(5) + add_b(5)
+        \\}
+    );
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(resources.builtin_module.env),
+        resources.module_env,
+    };
+
+    var lower = try mir.Lower.init(
+        test_allocator,
+        &mir_store,
+        all_module_envs[0..],
+        &resources.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    const mir_expr = try lower.lowerExpr(resources.expr_idx);
+    const root = mir_store.getExpr(mir_expr);
+    try std.testing.expect(root == .block);
+
+    const stmts = mir_store.getStmts(root.block.stmts);
+    try std.testing.expect(stmts.len >= 3);
+
+    const rec_binding = switch (stmts[2]) {
+        .decl_const, .decl_var, .mutate_var => |b| b,
+    };
+    const rec_expr = mir_store.getExpr(rec_binding.expr);
+    try std.testing.expect(rec_expr == .struct_);
+
+    const rec_fields = mir_store.getExprSpan(rec_expr.struct_.fields);
+    try std.testing.expectEqual(@as(usize, 2), rec_fields.len);
+    try std.testing.expect(mir_store.getExprClosureMember(rec_fields[0]) != null);
+    try std.testing.expect(mir_store.getExprClosureMember(rec_fields[1]) != null);
+
+    const add_a_tuple = mir_store.getExpr(rec_fields[0]);
+    const add_b_tuple = mir_store.getExpr(rec_fields[1]);
+    try std.testing.expect(add_a_tuple == .struct_);
+    try std.testing.expect(add_b_tuple == .struct_);
+
+    const add_a_elems = mir_store.getExprSpan(add_a_tuple.struct_.fields);
+    const add_b_elems = mir_store.getExprSpan(add_b_tuple.struct_.fields);
+    try std.testing.expectEqual(@as(usize, 1), add_a_elems.len);
+    try std.testing.expectEqual(@as(usize, 1), add_b_elems.len);
+
+    const add_a_capture = mir_store.getExpr(add_a_elems[0]);
+    const add_b_capture = mir_store.getExpr(add_b_elems[0]);
+    try std.testing.expect(add_a_capture == .lookup);
+    try std.testing.expect(add_b_capture == .lookup);
+    try std.testing.expect(!add_a_capture.lookup.eql(add_b_capture.lookup));
+}
+
+test "LIR lifted closure with function-valued captures keeps both capture slots" {
+    const resources = try parseAndCanonicalizeExpr(test_allocator,
+        \\{
+        \\    compose = |f, g| |x| f(g(x))
+        \\    a = 3
+        \\    b = 7
+        \\    add_a = |x| x + a
+        \\    add_b = |x| x + b
+        \\    add_both = compose(add_a, add_b)
+        \\    add_both(10)
+        \\}
+    );
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(resources.builtin_module.env),
+        resources.module_env,
+    };
+
+    var lower = try mir.Lower.init(
+        test_allocator,
+        &mir_store,
+        all_module_envs[0..],
+        &resources.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    const mir_expr = try lower.lowerExpr(resources.expr_idx);
+    const root = mir_store.getExpr(mir_expr);
+    try std.testing.expect(root == .block);
+
+    const stmts = mir_store.getStmts(root.block.stmts);
+    try std.testing.expect(stmts.len >= 6);
+    const compose_binding = switch (stmts[0]) {
+        .decl_const, .decl_var, .mutate_var => |bnd| bnd,
+    };
+    const final_expr = mir_store.getExpr(root.block.final_expr);
+    try std.testing.expect(final_expr == .call);
+    const final_callee = mir_store.getExpr(final_expr.call.func);
+    try std.testing.expect(final_callee == .lookup);
+    const add_both_sym = final_callee.lookup;
+    var add_both_binding: ?MIR.Stmt.Binding = null;
+    for (stmts) |stmt| {
+        const binding = switch (stmt) {
+            .decl_const, .decl_var, .mutate_var => |bnd| bnd,
+        };
+        const pat = mir_store.getPattern(binding.pattern);
+        if (pat != .bind) continue;
+        if (!pat.bind.eql(add_both_sym)) continue;
+        add_both_binding = binding;
+        break;
+    }
+    try std.testing.expect(add_both_binding != null);
+    var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
+    defer lambda_set_store.deinit(test_allocator);
+
+    const add_both_ls = lambda_set_store.getExprLambdaSet(add_both_binding.?.expr) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!add_both_ls.isNone());
+    const compose_pat = mir_store.getPattern(compose_binding.pattern);
+    try std.testing.expect(compose_pat == .bind);
+    const compose_sym = compose_pat.bind;
+    const compose_ls = lambda_set_store.getSymbolLambdaSet(compose_sym) orelse return error.TestUnexpectedResult;
+    const compose_members = lambda_set_store.getMembers(lambda_set_store.getLambdaSet(compose_ls).members);
+    try std.testing.expectEqual(@as(usize, 1), compose_members.len);
+    const compose_return_ls = lambda_set_store.getMemberReturnLambdaSet(compose_members[0].fn_symbol) orelse return error.TestUnexpectedResult;
+    const compose_return_members = lambda_set_store.getMembers(lambda_set_store.getLambdaSet(compose_return_ls).members);
+    try std.testing.expectEqual(@as(usize, 1), compose_return_members.len);
+    try std.testing.expect(!compose_return_members[0].closure_member.isNone());
+    const compose_return_closure = mir_store.getClosureMember(compose_return_members[0].closure_member);
+    try std.testing.expectEqual(@as(usize, 2), mir_store.getCaptureBindings(compose_return_closure.capture_bindings).len);
+
+    const members = lambda_set_store.getMembers(lambda_set_store.getLambdaSet(add_both_ls).members);
+    try std.testing.expectEqual(@as(usize, 1), members.len);
+    try std.testing.expect(!members[0].closure_member.isNone());
+    const closure_member = mir_store.getClosureMember(members[0].closure_member);
+    const add_both_sym_ls = lambda_set_store.getSymbolLambdaSet(add_both_sym) orelse return error.TestUnexpectedResult;
+    const sym_members = lambda_set_store.getMembers(lambda_set_store.getLambdaSet(add_both_sym_ls).members);
+    try std.testing.expectEqual(@as(usize, 1), sym_members.len);
+    try std.testing.expectEqual(sym_members[0].fn_symbol, members[0].fn_symbol);
+    try std.testing.expectEqual(@as(usize, 2), mir_store.getCaptureBindings(closure_member.capture_bindings).len);
+
+    var layout_store = try layout.Store.init(
+        all_module_envs[0..],
+        resources.builtin_module.env.idents.builtin_str,
+        test_allocator,
+        base.target.TargetUsize.native,
+    );
+    defer layout_store.deinit();
+
+    var lir_store = LirExprStore.init(test_allocator);
+    defer lir_store.deinit();
+
+    var translator = lir.MirToLir.init(
+        test_allocator,
+        &mir_store,
+        &lir_store,
+        &layout_store,
+        &lambda_set_store,
+        resources.module_env.idents.true_tag,
+    );
+    defer translator.deinit();
+
+    _ = try translator.lower(mir_expr);
+
+    var specialized_closure_sym: ?lir.LIR.Symbol = null;
+    var specialization_it = translator.specialized_direct_callees.iterator();
+    while (specialization_it.next()) |entry| {
+        const callee_key = std.mem.bytesToValue(u64, entry.key_ptr.*[0..@sizeOf(u64)]);
+        if (callee_key == members[0].fn_symbol.raw()) {
+            specialized_closure_sym = entry.value_ptr.symbol;
+            break;
+        }
+    }
+    const lifted_def = lir_store.getSymbolDef(specialized_closure_sym orelse return error.TestUnexpectedResult) orelse return error.TestUnexpectedResult;
+    const lifted_lir = lir_store.getExpr(lifted_def);
+    try std.testing.expect(lifted_lir == .lambda);
+
+    const params = lir_store.getPatternSpan(lifted_lir.lambda.params);
+    try std.testing.expect(params.len >= 2);
+    const captures_param = lir_store.getPattern(params[params.len - 1]);
+    try std.testing.expect(captures_param == .bind);
+    const captures_layout = layout_store.getLayout(captures_param.bind.layout_idx);
+    try std.testing.expect(captures_layout.tag == .struct_);
+    const capture_fields = layout_store.struct_fields.sliceRange(layout_store.getStructData(captures_layout.data.struct_.idx).getFields());
+    try std.testing.expectEqual(@as(usize, 2), capture_fields.len);
+    try std.testing.expect(capture_fields.get(0).layout != .zst);
+    try std.testing.expect(capture_fields.get(1).layout != .zst);
 }
 
 test "eval tag - already primitive" {
@@ -3351,7 +5494,7 @@ test "interpreter reuse across multiple evaluations" {
                     try std.testing.expect(result.layout.data.scalar.data.frac == .dec);
                     const dec_value = result.asDec(ops);
                     // Dec stores values scaled by 10^18, divide to get the integer part
-                    break :blk i128h.divTrunc_i128(dec_value.num, builtins.dec.RocDec.one_point_zero_i128);
+                    break :blk @divTrunc(dec_value.num, builtins.dec.RocDec.one_point_zero_i128);
                 },
                 else => unreachable,
             };
@@ -3360,5 +5503,45 @@ test "interpreter reuse across multiple evaluations" {
         }
 
         try std.testing.expectEqual(@as(usize, 0), interpreter.bindings.items.len);
+    }
+}
+
+test "parse diagnostic reporting crashes if module name is uninitialized" {
+    const source =
+        \\{
+        \\    test_fn = |l| {
+        \\        var $total = 0
+        \\        for e in l {
+        \\            var _$temp = [e]
+        \\            $total = $total + e
+        \\        }
+        \\        $total
+        \\    }
+        \\    test_fn([1, 2])
+        \\}
+    ;
+
+    const module_env = try test_allocator.create(ModuleEnv);
+    defer {
+        module_env.deinit();
+        test_allocator.destroy(module_env);
+    }
+    module_env.* = try ModuleEnv.init(test_allocator, source);
+    module_env.common.source = source;
+    try module_env.common.calcLineStarts(module_env.gpa);
+
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(test_allocator);
+    defer allocators.deinit();
+
+    const parse_ast = try parse.parseExpr(&allocators, &module_env.common);
+    defer parse_ast.deinit();
+
+    try std.testing.expect(parse_ast.parse_diagnostics.items.len > 0);
+
+    const filename = reportFilename(module_env);
+    for (parse_ast.parse_diagnostics.items) |diag| {
+        var report = try parse_ast.parseDiagnosticToReport(&module_env.common, diag, test_allocator, filename);
+        defer report.deinit();
     }
 }

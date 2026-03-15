@@ -18,7 +18,6 @@ green = Green
 ~~~
 # EXPECTED
 PARSE ERROR - nominal_import_wildcard.md:1:13:1:15
-MODULE NOT FOUND - nominal_import_wildcard.md:1:1:1:13
 UNDECLARED TYPE - nominal_import_wildcard.md:3:7:3:12
 UNDECLARED TYPE - nominal_import_wildcard.md:6:8:6:13
 UNDECLARED TYPE - nominal_import_wildcard.md:9:9:9:14
@@ -32,17 +31,6 @@ This is an unexpected parsing error. Please check your syntax.
 import Color.*
 ```
             ^^
-
-
-**MODULE NOT FOUND**
-The module `Color` was not found in this Roc project.
-
-You're attempting to use this module here:
-**nominal_import_wildcard.md:1:1:1:13:**
-```roc
-import Color.*
-```
-^^^^^^^^^^^^
 
 
 **UNDECLARED TYPE**

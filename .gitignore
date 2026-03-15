@@ -152,7 +152,6 @@ src/snapshots/**/*.html
 kcov-output/
 
 .direnv
-
 .mcp.json
 
 # Generated glue output files

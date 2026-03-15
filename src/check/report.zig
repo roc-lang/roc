@@ -656,6 +656,7 @@ pub const ReportBuilder = struct {
                     .if_condition => self.buildIfConditionReport(mismatch.types),
                     .if_branch => |ctx| self.buildIfBranchReport(mismatch.types, ctx),
                     .match_pattern => |ctx| self.buildMatchPatternReport(mismatch.types, ctx),
+                    .match_alt_binder => |ctx| self.buildMatchAltBinderReport(mismatch.types, ctx),
                     .match_branch => |ctx| self.buildMatchBranchReport(mismatch.types, ctx),
                     .list_entry => |ctx| self.buildListEntryReport(mismatch.types, ctx),
                     .fn_call_arity => |ctx| self.buildIncompatibleFnCallArity(mismatch.types, ctx),
@@ -958,6 +959,57 @@ pub const ReportBuilder = struct {
                 &.{
                     D.bytes("To learn about tags, see"),
                     D.link("https://www.roc-lang.org/tutorial#tags"),
+                },
+            },
+        );
+    }
+
+    fn buildMatchAltBinderReport(self: *Self, types: TypePair, ctx: Context.MatchAltBinderContext) !Report {
+        const branch_index = ctx.branch_index + 1;
+        const pattern_index = ctx.pattern_index + 1;
+        const first_pattern_index = ctx.first_pattern_index + 1;
+
+        return try self.makeMismatchReport(
+            ProblemRegion{ .focused = .{
+                .outer = regionIdxFrom(ctx.match_expr),
+                .highlight = regionIdxFrom(types.actual_var),
+            } },
+            &.{
+                D.bytes("The"),
+                D.ident(ctx.binder_ident).withAnnotation(.inline_code),
+                D.bytes("binding in the"),
+                D.num_ord(pattern_index),
+                D.bytes("pattern of the"),
+                D.num_ord(branch_index),
+                D.bytes("branch of this"),
+                D.bytes("match").withAnnotation(.inline_code),
+                D.bytes("does not match the same binding in the"),
+                D.num_ord(first_pattern_index),
+                D.bytes("pattern:"),
+            },
+            &.{
+                D.bytes("In the"),
+                D.num_ord(pattern_index),
+                D.bytes("pattern,"),
+                D.ident(ctx.binder_ident).withAnnotation(.inline_code),
+                D.bytes("is:"),
+            },
+            types.actual_snapshot,
+            &.{
+                D.bytes("But in the"),
+                D.num_ord(first_pattern_index),
+                D.bytes("pattern,"),
+                D.ident(ctx.binder_ident).withAnnotation(.inline_code),
+                D.bytes("is:"),
+            },
+            types.expected_snapshot,
+            &.{
+                &.{
+                    D.bytes("A name shared across"),
+                    D.bytes("|").withAnnotation(.inline_code),
+                    D.bytes("patterns in the same"),
+                    D.bytes("match").withAnnotation(.inline_code),
+                    D.bytes("branch must have one compatible type."),
                 },
             },
         );
@@ -1333,7 +1385,7 @@ pub const ReportBuilder = struct {
             while (iter.next()) |tag_index| {
                 const cur_expected_tag = self.snapshots.tags.get(tag_index);
 
-                if (actual_tag.name == cur_expected_tag.name) {
+                if (actual_tag.name.eql(cur_expected_tag.name)) {
                     const cur_expected_tag_str = try report.addOwnedString(snapshot.Store.getFormattedTagString(cur_expected_tag));
 
                     try report.document.addLineBreak();
@@ -1705,8 +1757,8 @@ pub const ReportBuilder = struct {
         }
 
         try D.renderSlice(&.{
-            D.bytes("The value's type, which does not have a method named"),
-            D.ident(data.method_name).withAnnotation(.emphasized),
+            D.bytes("The value's type, which does not have a method named "),
+            D.ident(data.method_name).withAnnotation(.emphasized).withNoPrecedingSpace(),
             D.bytes(",").withNoPrecedingSpace(),
             D.bytes("is:"),
         }, self, &report);
@@ -1776,8 +1828,8 @@ pub const ReportBuilder = struct {
         }
 
         try D.renderSlice(&.{
-            D.bytes("The value's type, which does not have a method named"),
-            D.ident(data.method_name).withAnnotation(.emphasized),
+            D.bytes("The value's type, which does not have a method named "),
+            D.ident(data.method_name).withAnnotation(.emphasized).withNoPrecedingSpace(),
             D.bytes(",").withNoPrecedingSpace(),
             D.bytes("is:"),
         }, self, &report);
@@ -1787,9 +1839,21 @@ pub const ReportBuilder = struct {
 
         try report.document.addLineBreak();
         try report.document.addLineBreak();
+
+        if (data.defaulted_from_numeric_literal) {
+            try D.renderSlice(&.{
+                D.bytes("Hint:").withAnnotation(.emphasized),
+                D.bytes("This numeric literal was given the type"),
+                D.bytes("Dec").withAnnotation(.emphasized),
+                D.bytes("because it was never used as any concrete number type. To use a different numeric type, add a suffix or a type annotation."),
+            }, self, &report);
+        }
+
         switch (data.dispatcher_type) {
             .nominal => {
-                if (is_from_binop) {
+                if (data.defaulted_from_numeric_literal) {
+                    // Already provided a more specific hint above
+                } else if (is_from_binop) {
                     if (mb_operator) |operator| {
                         try D.renderSlice(&.{
                             D.bytes("Hint:").withAnnotation(.emphasized),
@@ -2210,7 +2274,7 @@ pub const ReportBuilder = struct {
                     .record => |fields| blk: {
                         const slice = self.diff_fields.sliceRange(fields);
                         for (slice.items(.name), slice.items(.content)) |name, content| {
-                            if (name == ctx.field_name) break :blk SnapshotRecordField{
+                            if (name.eql(ctx.field_name)) break :blk SnapshotRecordField{
                                 .name = name,
                                 .content = content,
                             };
@@ -2233,7 +2297,7 @@ pub const ReportBuilder = struct {
                 const mb_expected_field = blk: {
                     const slice = self.diff_fields.sliceRange(expected_fields);
                     for (slice.items(.name), slice.items(.content)) |name, content| {
-                        if (name == ctx.field_name) break :blk SnapshotRecordField{
+                        if (name.eql(ctx.field_name)) break :blk SnapshotRecordField{
                             .name = name,
                             .content = content,
                         };
@@ -3181,19 +3245,19 @@ pub const ReportBuilder = struct {
     /// Maps method idents like plus, minus, times, div_by to their corresponding operator symbols.
     fn getOperatorForMethod(self: *const Self, method_ident: Ident.Idx) ?[]const u8 {
         const idents = self.can_ir.idents;
-        if (method_ident == idents.plus) return "+";
-        if (method_ident == idents.minus) return "-";
-        if (method_ident == idents.times) return "*";
-        if (method_ident == idents.div_by) return "/";
-        if (method_ident == idents.div_trunc_by) return "//";
-        if (method_ident == idents.rem_by) return "%";
-        if (method_ident == idents.negate) return "-";
-        if (method_ident == idents.is_eq) return "==";
-        if (method_ident == idents.is_lt) return "<";
-        if (method_ident == idents.is_lte) return "<=";
-        if (method_ident == idents.is_gt) return ">";
-        if (method_ident == idents.is_gte) return ">=";
-        if (method_ident == idents.not) return "not";
+        if (method_ident.eql(idents.plus)) return "+";
+        if (method_ident.eql(idents.minus)) return "-";
+        if (method_ident.eql(idents.times)) return "*";
+        if (method_ident.eql(idents.div_by)) return "/";
+        if (method_ident.eql(idents.div_trunc_by)) return "//";
+        if (method_ident.eql(idents.rem_by)) return "%";
+        if (method_ident.eql(idents.negate)) return "-";
+        if (method_ident.eql(idents.is_eq)) return "==";
+        if (method_ident.eql(idents.is_lt)) return "<";
+        if (method_ident.eql(idents.is_lte)) return "<=";
+        if (method_ident.eql(idents.is_gt)) return ">";
+        if (method_ident.eql(idents.is_gte)) return ">=";
+        if (method_ident.eql(idents.not)) return "not";
         return null;
     }
 };

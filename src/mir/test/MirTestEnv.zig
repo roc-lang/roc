@@ -75,8 +75,8 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .external_decls = serialized_ptr.external_decls.deserializeInto(base_ptr),
         .imports = try serialized_ptr.imports.deserializeInto(base_ptr, gpa),
         .module_name = module_name,
-        .display_module_name_idx = base.Ident.Idx.NONE,
-        .qualified_module_ident = base.Ident.Idx.NONE,
+        .display_module_name_idx = ModuleEnv.CommonIdents.find(&common).builtin_module,
+        .qualified_module_ident = ModuleEnv.CommonIdents.find(&common).builtin_module,
         .diagnostics = serialized_ptr.diagnostics,
         .store = serialized_ptr.store.deserializeInto(base_ptr, gpa),
         .evaluation_order = null,
@@ -162,13 +162,6 @@ pub fn initFull(module_name: []const u8, source: []const u8) !MirTestEnv {
     module_env.qualified_module_ident = module_env.display_module_name_idx;
     try module_env.common.calcLineStarts(gpa);
 
-    try Can.populateModuleEnvs(
-        &module_envs,
-        module_env,
-        builtin_module.env,
-        builtin_indices,
-    );
-
     // Parse
     const parse_ast = try parse.parse(&allocators, &module_env.common);
     errdefer parse_ast.deinit();
@@ -177,7 +170,13 @@ pub fn initFull(module_name: []const u8, source: []const u8) !MirTestEnv {
     // Canonicalize
     try module_env.initCIRFields(module_name);
 
-    can_ptr.* = try Can.init(&allocators, module_env, parse_ast, &module_envs);
+    can_ptr.* = try Can.initModule(&allocators, module_env, parse_ast, .{
+        .builtin_types = .{
+            .builtin_module_env = builtin_module.env,
+            .builtin_indices = builtin_indices,
+        },
+        .imported_modules = &module_envs,
+    });
     errdefer can_ptr.deinit();
 
     try can_ptr.canonicalizeFile();
@@ -236,7 +235,6 @@ pub fn initFull(module_name: []const u8, source: []const u8) !MirTestEnv {
         mir_store,
         @as([]const *ModuleEnv, all_module_envs_slice),
         &module_env.types,
-        builtin_indices,
         1, // current_module_idx = test module (Builtin is at index 0)
         null,
     );
@@ -353,13 +351,6 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
         .qualified_type_ident = other_qualified_ident,
     });
 
-    try Can.populateModuleEnvs(
-        &module_envs,
-        module_env,
-        builtin_env,
-        builtin_indices,
-    );
-
     // Parse
     const parse_ast = try parse.parse(&allocators, &module_env.common);
     errdefer parse_ast.deinit();
@@ -368,7 +359,13 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     // Canonicalize
     try module_env.initCIRFields(module_name);
 
-    can_ptr.* = try Can.init(&allocators, module_env, parse_ast, &module_envs);
+    can_ptr.* = try Can.initModule(&allocators, module_env, parse_ast, .{
+        .builtin_types = .{
+            .builtin_module_env = builtin_env,
+            .builtin_indices = builtin_indices,
+        },
+        .imported_modules = &module_envs,
+    });
     errdefer can_ptr.deinit();
 
     try can_ptr.canonicalizeFile();
@@ -433,7 +430,6 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
         mir_store,
         @as([]const *ModuleEnv, all_module_envs_slice),
         &module_env.types,
-        builtin_indices,
         2, // current_module_idx = this module
         null,
     );

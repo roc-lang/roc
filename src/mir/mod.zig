@@ -9,12 +9,13 @@ const std = @import("std");
 pub const MIR = @import("MIR.zig");
 pub const Monotype = @import("Monotype.zig");
 pub const Lower = @import("Lower.zig");
+pub const LambdaSet = @import("LambdaSet.zig");
 
 /// Re-export of MIR expression type
 pub const Expr = MIR.Expr;
 /// Re-export of MIR pattern type
 pub const Pattern = MIR.Pattern;
-/// Globally unique symbol identifier (module + ident)
+/// Globally unique opaque symbol identifier
 pub const Symbol = MIR.Symbol;
 /// Index into the MIR expression store
 pub const ExprId = MIR.ExprId;
@@ -28,5 +29,6 @@ test "mir tests" {
     std.testing.refAllDecls(MIR);
     std.testing.refAllDecls(Monotype);
     std.testing.refAllDecls(Lower);
+    std.testing.refAllDecls(LambdaSet);
     std.testing.refAllDecls(@import("test/lower_test.zig"));
 }

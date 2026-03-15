@@ -192,15 +192,6 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
         .qualified_type_ident = other_qualified_ident,
     });
 
-    // Populate module_envs with Bool, Try, Dict, Set using shared function
-    // This ensures production and tests use identical logic
-    try Can.populateModuleEnvs(
-        &module_envs,
-        module_env,
-        builtin_env,
-        builtin_indices,
-    );
-
     // Parse the AST
     const parse_ast = try parse.parse(&allocators, &module_env.common);
     errdefer parse_ast.deinit();
@@ -209,7 +200,13 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     // Canonicalize
     try module_env.initCIRFields(module_name);
 
-    can.* = try Can.init(&allocators, module_env, parse_ast, &module_envs);
+    can.* = try Can.initModule(&allocators, module_env, parse_ast, .{
+        .builtin_types = .{
+            .builtin_module_env = builtin_env,
+            .builtin_indices = builtin_indices,
+        },
+        .imported_modules = &module_envs,
+    });
     errdefer can.deinit();
 
     try can.canonicalizeFile();
@@ -315,15 +312,6 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
     module_env.qualified_module_ident = module_env.display_module_name_idx;
     try module_env.common.calcLineStarts(gpa);
 
-    // Populate module_envs with Bool, Try, Dict, Set using shared function
-    // This ensures production and tests use identical logic
-    try Can.populateModuleEnvs(
-        &module_envs,
-        module_env,
-        builtin_module.env,
-        builtin_indices,
-    );
-
     // Parse the AST
     const parse_ast = try parse.parse(&allocators, &module_env.common);
     errdefer parse_ast.deinit();
@@ -332,7 +320,13 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
     // Canonicalize
     try module_env.initCIRFields(module_name);
 
-    can.* = try Can.init(&allocators, module_env, parse_ast, &module_envs);
+    can.* = try Can.initModule(&allocators, module_env, parse_ast, .{
+        .builtin_types = .{
+            .builtin_module_env = builtin_module.env,
+            .builtin_indices = builtin_indices,
+        },
+        .imported_modules = &module_envs,
+    });
     errdefer can.deinit();
 
     try can.canonicalizeFile();

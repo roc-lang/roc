@@ -8,6 +8,6 @@ type=repl
 » List.take_last([0, 1, 2, 3, 4, 5, 6], 2)
 ~~~
 # OUTPUT
-[5, 6]
+[5.0, 6.0]
 # PROBLEMS
 NIL

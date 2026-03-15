@@ -1037,19 +1037,16 @@ main = |_| {
 											(p-assign (ident "num"))))))))))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-closure
-			(captures
-				(capture (ident "container1")))
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-block
-					(e-binop (op "add")
-						(e-dot-access (field "value")
-							(receiver
-								(e-lookup-local
-									(p-assign (ident "container1")))))
-						(e-num (value "10"))))))))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-block
+				(e-binop (op "add")
+					(e-dot-access (field "value")
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "container1")))))
+					(e-num (value "10")))))))
 ~~~
 # TYPES
 ~~~clojure

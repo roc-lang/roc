@@ -17,23 +17,19 @@ test = |{}| {
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - nominal_local.md:9:22:9:25
+MISSING METHOD - nominal_local.md:9:5:9:15
 # PROBLEMS
-**TYPE MISMATCH**
-The `encode_str` method on `Utf8Format` has an incompatible type:
-**nominal_local.md:9:22:9:25:**
+**MISSING METHOD**
+This **encode_str** method is being called on a value whose type doesn't have that method:
+**nominal_local.md:9:5:9:15:**
 ```roc
     Str.encode("hi", fmt)
 ```
-                     ^^^
+    ^^^^^^^^^^
 
-The method `encode_str` has the type:
+The value's type, which does not have a method named **encode_str**, is:
 
-    Utf8Format, Str -> List(U8)
-
-But I need it to have the type:
-
-    Utf8Format, Str -> Try(encoded, err)
+    [Utf8Format, ..]
 
 # TOKENS
 ~~~zig
@@ -156,8 +152,7 @@ test = |{}| {
 					(ty-record))
 				(s-let
 					(p-assign (ident "fmt"))
-					(e-nominal (nominal "Utf8Format")
-						(e-empty_record)))
+					(e-tag (name "Utf8Format")))
 				(e-call
 					(e-lookup-external
 						(builtin))
@@ -175,14 +170,14 @@ test = |{}| {
 	(defs
 		(patt (type "Str => {}"))
 		(patt (type "_arg -> {}"))
-		(patt (type "Error"))
+		(patt (type "Utf8Format, Str -> List(U8)"))
 		(patt (type "{ .. } -> Error")))
 	(type_decls
-		(nominal (type "Error")
+		(nominal (type "Utf8Format")
 			(ty-header (name "Utf8Format"))))
 	(expressions
 		(expr (type "Str => {}"))
 		(expr (type "_arg -> {}"))
-		(expr (type "Error, Error -> List(U8)"))
+		(expr (type "Utf8Format, Str -> List(U8)"))
 		(expr (type "{ .. } -> Error"))))
 ~~~

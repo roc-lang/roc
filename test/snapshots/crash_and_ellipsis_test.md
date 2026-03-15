@@ -233,34 +233,29 @@ main! = |_| {
 				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-closure
-			(captures
-				(capture (ident "testEllipsis"))
-				(capture (ident "testCrash"))
-				(capture (ident "testCrashSimple")))
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-block
-					(s-let
-						(p-assign (ident "result1"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "testEllipsis")))
-							(e-num (value "42"))))
-					(s-let
-						(p-assign (ident "result2"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "testCrash")))
-							(e-num (value "42"))))
-					(s-let
-						(p-assign (ident "result3"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "testCrashSimple")))
-							(e-num (value "42"))))
-					(e-empty_list))))))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-block
+				(s-let
+					(p-assign (ident "result1"))
+					(e-call
+						(e-lookup-local
+							(p-assign (ident "testEllipsis")))
+						(e-num (value "42"))))
+				(s-let
+					(p-assign (ident "result2"))
+					(e-call
+						(e-lookup-local
+							(p-assign (ident "testCrash")))
+						(e-num (value "42"))))
+				(s-let
+					(p-assign (ident "result3"))
+					(e-call
+						(e-lookup-local
+							(p-assign (ident "testCrashSimple")))
+						(e-num (value "42"))))
+				(e-empty_list)))))
 ~~~
 # TYPES
 ~~~clojure

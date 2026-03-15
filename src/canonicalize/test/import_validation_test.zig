@@ -12,6 +12,7 @@ const parse = @import("parse");
 const Can = @import("../Can.zig");
 const ModuleEnv = @import("../ModuleEnv.zig");
 const CIR = @import("../CIR.zig");
+const BuiltinTestContext = @import("./BuiltinTestContext.zig").BuiltinTestContext;
 
 const Allocators = base.Allocators;
 const testing = std.testing;
@@ -26,6 +27,7 @@ fn parseAndCanonicalizeSource(
     parse_env: *ModuleEnv,
     ast: *parse.AST,
     can: *Can,
+    builtin_ctx: BuiltinTestContext,
 } {
     var allocators: Allocators = undefined;
     allocators.initInPlace(allocator);
@@ -41,13 +43,23 @@ fn parseAndCanonicalizeSource(
     // Initialize CIR fields
     try parse_env.initCIRFields("Test");
 
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    errdefer builtin_ctx.deinit();
+
     const can = try allocator.create(Can);
-    can.* = try Can.init(&allocators, parse_env, ast, module_envs);
+    can.* = try Can.initModule(&allocators, parse_env, ast, .{
+        .builtin_types = .{
+            .builtin_module_env = builtin_ctx.builtin_module.env,
+            .builtin_indices = builtin_ctx.builtin_indices,
+        },
+        .imported_modules = module_envs,
+    });
 
     return .{
         .parse_env = parse_env,
         .ast = ast,
         .can = can,
+        .builtin_ctx = builtin_ctx,
     };
 }
 
@@ -134,7 +146,16 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     try module_envs.put(utils_module_ident, .{ .env = utils_env, .qualified_type_ident = utils_qualified_ident });
 
     // Canonicalize with module validation
-    var can = try Can.init(&allocators, parse_env, ast, &module_envs);
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+
+    var can = try Can.initModule(&allocators, parse_env, ast, .{
+        .builtin_types = .{
+            .builtin_module_env = builtin_ctx.builtin_module.env,
+            .builtin_indices = builtin_ctx.builtin_indices,
+        },
+        .imported_modules = &module_envs,
+    });
     defer can.deinit();
     _ = try can.canonicalizeFile();
     // Collect all diagnostics
@@ -211,8 +232,11 @@ test "import validation - no module_envs provided" {
     defer ast.deinit();
     // Initialize CIR fields
     try parse_env.initCIRFields("Test");
-    // Create czer with null module_envs
-    var can = try Can.init(&allocators, parse_env, ast, null);
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+
+    // Create czer without any explicit import envs
+    var can = try Can.initModule(&allocators, parse_env, ast, builtin_ctx.canInitContext());
     defer can.deinit();
     _ = try can.canonicalizeFile();
     const diagnostics = try parse_env.getDiagnostics();
@@ -255,14 +279,15 @@ test "import interner - Import.Idx functionality" {
     defer {
         result.can.deinit();
         allocator.destroy(result.can);
+        result.builtin_ctx.deinit();
         result.ast.deinit();
         result.parse_env.deinit();
         allocator.destroy(result.parse_env);
     }
     _ = try result.can.canonicalizeFile();
-    // Check that we have the correct number of unique imports (duplicates are deduplicated)
-    // Expected: List, Dict, Json, Set (4 unique)
-    try expectEqual(@as(usize, 4), result.parse_env.imports.imports.len());
+    // Check that the explicit user imports are deduplicated.
+    // Builtin is also present as an implicit compiler-owned import.
+    var explicit_import_count: usize = 0;
     // Verify each unique module has an Import.Idx by checking the imports list
     var found_list = false;
     var found_dict = false;
@@ -270,6 +295,9 @@ test "import interner - Import.Idx functionality" {
     var found_set = false;
     for (result.parse_env.imports.imports.items.items) |import_string_idx| {
         const module_name = result.parse_env.getString(import_string_idx);
+        if (std.mem.eql(u8, module_name, "Builtin")) continue;
+
+        explicit_import_count += 1;
         if (std.mem.eql(u8, module_name, "List")) {
             found_list = true;
         } else if (std.mem.eql(u8, module_name, "Dict")) {
@@ -280,6 +308,7 @@ test "import interner - Import.Idx functionality" {
             found_set = true;
         }
     }
+    try expectEqual(@as(usize, 4), explicit_import_count);
     // Verify all expected modules were found
     try expectEqual(true, found_list);
     try expectEqual(true, found_dict);
@@ -315,20 +344,24 @@ test "import interner - comprehensive usage example" {
     defer {
         result.can.deinit();
         allocator.destroy(result.can);
+        result.builtin_ctx.deinit();
         result.ast.deinit();
         result.parse_env.deinit();
         allocator.destroy(result.parse_env);
     }
     _ = try result.can.canonicalizeFile();
-    // Check that we have the correct number of unique imports
-    // Expected: List, Dict, Try (3 unique)
-    try expectEqual(@as(usize, 3), result.parse_env.imports.imports.len());
+    // Check that the explicit user imports are present once each.
+    // Builtin is also present as an implicit compiler-owned import.
+    var explicit_import_count: usize = 0;
     // Verify each unique module was imported
     var found_list = false;
     var found_dict = false;
     var found_result = false;
     for (result.parse_env.imports.imports.items.items) |import_string_idx| {
         const module_name = result.parse_env.getString(import_string_idx);
+        if (std.mem.eql(u8, module_name, "Builtin")) continue;
+
+        explicit_import_count += 1;
         if (std.mem.eql(u8, module_name, "List")) {
             found_list = true;
         } else if (std.mem.eql(u8, module_name, "Dict")) {
@@ -337,6 +370,7 @@ test "import interner - comprehensive usage example" {
             found_result = true;
         }
     }
+    try expectEqual(@as(usize, 3), explicit_import_count);
     // Verify all expected modules were found
     try expectEqual(true, found_list);
     try expectEqual(true, found_dict);
@@ -365,6 +399,7 @@ test "module scopes - imports work in module scope" {
     defer {
         result.can.deinit();
         allocator.destroy(result.can);
+        result.builtin_ctx.deinit();
         result.ast.deinit();
         result.parse_env.deinit();
         allocator.destroy(result.parse_env);
@@ -405,6 +440,7 @@ test "module-qualified lookups with e_lookup_external" {
     defer {
         result.can.deinit();
         allocator.destroy(result.can);
+        result.builtin_ctx.deinit();
         result.ast.deinit();
         result.parse_env.deinit();
         allocator.destroy(result.parse_env);
@@ -473,6 +509,7 @@ test "exposed_items - tracking CIR node indices for exposed items" {
     defer {
         result.can.deinit();
         allocator.destroy(result.can);
+        result.builtin_ctx.deinit();
         result.ast.deinit();
         result.parse_env.deinit();
         allocator.destroy(result.parse_env);

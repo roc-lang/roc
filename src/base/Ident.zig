@@ -86,8 +86,17 @@ pub const Idx = packed struct(u32) {
     /// Sentinel value representing no/unset ident
     pub const NONE: Idx = .{ .attributes = .{ .effectful = true, .ignored = true, .reassignable = true }, .idx = std.math.maxInt(u29) };
 
+    pub fn eql(self: Idx, other: Idx) bool {
+        if (comptime builtin.mode == .Debug) {
+            if (self.idx == other.idx) {
+                std.debug.assert(@as(u3, @bitCast(self.attributes)) == @as(u3, @bitCast(other.attributes)));
+            }
+        }
+        return @as(u32, @bitCast(self)) == @as(u32, @bitCast(other));
+    }
+
     pub fn isNone(self: Idx) bool {
-        return self.idx == NONE.idx and @as(u3, @bitCast(self.attributes)) == @as(u3, @bitCast(NONE.attributes));
+        return self.eql(NONE);
     }
 
     /// Custom formatter for std.fmt - allows printing with `{}`

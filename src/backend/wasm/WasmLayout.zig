@@ -21,7 +21,7 @@ pub const WasmRepr = union(enum) {
 /// Use wasmReprWithStore for accurate composite sizes.
 pub fn wasmRepr(layout_idx: layout.Idx) WasmRepr {
     return switch (layout_idx) {
-        .bool, .u8, .i8 => .{ .primitive = .i32 },
+        .u8, .i8 => .{ .primitive = .i32 },
         .u16, .i16 => .{ .primitive = .i32 },
         .u32, .i32 => .{ .primitive = .i32 },
         .u64, .i64 => .{ .primitive = .i64 },
@@ -30,7 +30,6 @@ pub fn wasmRepr(layout_idx: layout.Idx) WasmRepr {
         .i128, .u128 => .{ .stack_memory = 16 },
         .dec => .{ .stack_memory = 16 },
         .str => .{ .stack_memory = 12 }, // wasm32: ptr(4) + len(4) + cap(4)
-        .opaque_ptr => .{ .primitive = .i32 }, // pointers are i32 on wasm32
         else => .{ .stack_memory = 0 }, // composite — use wasmReprWithStore for size
     };
 }
@@ -48,8 +47,7 @@ pub fn wasmReprWithStore(layout_idx: layout.Idx, ls: *const layout.Store) WasmRe
             const l = ls.getLayout(layout_idx);
             return switch (l.tag) {
                 .scalar => .{ .primitive = scalarValType(l) },
-                .record => .{ .stack_memory = ls.layoutSize(l) },
-                .tuple => .{ .stack_memory = ls.layoutSize(l) },
+                .struct_ => .{ .stack_memory = ls.layoutSize(l) },
                 .tag_union => blk: {
                     const size2 = ls.layoutSize(l);
                     const tu_data = ls.getTagUnionData(l.data.tag_union.idx);
@@ -91,7 +89,6 @@ fn scalarValType(l: layout.Layout) ValType {
             .dec => .i32, // pointer to stack memory
         },
         .str => .i32, // pointer
-        .opaque_ptr => .i32,
     };
 }
 

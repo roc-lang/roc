@@ -29,7 +29,7 @@ pub const NominalKey = struct {
 /// it moves to the resolved list. When all are resolved, the container is finalized.
 pub const Work = struct {
     pending_containers: std.MultiArrayList(PendingContainerItem),
-    pending_record_fields: std.MultiArrayList(types.RecordField),
+    pending_record_fields: std.MultiArrayList(PendingRecordField),
     resolved_record_fields: std.MultiArrayList(ResolvedRecordField),
     pending_tags: std.MultiArrayList(types.Tag),
     resolved_tags: std.MultiArrayList(ResolvedTag),
@@ -78,13 +78,18 @@ pub const Work = struct {
         var_: types.Var,
     };
 
+    pub const PendingRecordField = struct {
+        index: u16,
+        var_: types.Var,
+    };
+
     pub const ResolvedTag = struct {
         field_name: Ident.Idx,
         field_idx: layout.Idx,
     };
 
     pub const ResolvedRecordField = struct {
-        field_name: Ident.Idx,
+        field_index: u16,
         field_idx: layout.Idx,
     };
 
@@ -149,7 +154,7 @@ pub const Work = struct {
         var pending_containers = std.MultiArrayList(PendingContainerItem){};
         try pending_containers.ensureTotalCapacity(allocator, capacity);
 
-        var pending_record_fields = std.MultiArrayList(types.RecordField){};
+        var pending_record_fields = std.MultiArrayList(PendingRecordField){};
         try pending_record_fields.ensureTotalCapacity(allocator, capacity);
 
         var resolved_record_fields = std.MultiArrayList(ResolvedRecordField){};

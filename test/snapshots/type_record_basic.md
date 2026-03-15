@@ -115,22 +115,19 @@ main! = |_| getName({ namee: "luke", age: 21 })
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-closure
-			(captures
-				(capture (ident "getName")))
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-call
-					(e-lookup-local
-						(p-assign (ident "getName")))
-					(e-record
-						(fields
-							(field (name "namee")
-								(e-string
-									(e-literal (string "luke"))))
-							(field (name "age")
-								(e-num (value "21"))))))))))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-call
+				(e-lookup-local
+					(p-assign (ident "getName")))
+				(e-record
+					(fields
+						(field (name "namee")
+							(e-string
+								(e-literal (string "luke"))))
+						(field (name "age")
+							(e-num (value "21")))))))))
 ~~~
 # TYPES
 ~~~clojure

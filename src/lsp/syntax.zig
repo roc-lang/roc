@@ -998,7 +998,7 @@ pub const SyntaxChecker = struct {
     ) ?[]const u8 {
         const entries = module_env.method_idents.entries.items;
         for (entries) |entry| {
-            if (entry.key.type_ident != type_ident) continue;
+            if (!entry.key.type_ident.eql(type_ident)) continue;
 
             const entry_method_name = module_env.getIdentText(entry.key.method_ident);
             if (!std.mem.eql(u8, entry_method_name, method_name)) continue;
@@ -1071,7 +1071,7 @@ pub const SyntaxChecker = struct {
                 else => continue,
             };
 
-            if (ident_idx == qualified_ident) {
+            if (ident_idx.eql(qualified_ident)) {
                 return doc_comments.extractDocForDef(allocator, source, store, def) catch null;
             }
         }
@@ -1092,7 +1092,7 @@ pub const SyntaxChecker = struct {
                 else => continue,
             };
 
-            if (ident_idx == qualified_ident) {
+            if (ident_idx.eql(qualified_ident)) {
                 return doc_comments.extractDocForStatement(allocator, source, store, stmt, stmt_idx) catch null;
             }
         }
