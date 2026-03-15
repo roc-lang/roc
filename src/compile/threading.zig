@@ -30,6 +30,7 @@ pub const Condition = if (!is_freestanding) std.Thread.Condition else struct {
     pub fn broadcast(_: *@This()) void {}
 };
 
+/// Return the host CPU count on native targets, or `1` on freestanding targets.
 pub fn getCpuCount() usize {
     if (comptime is_freestanding) return 1;
     return std.Thread.getCpuCount() catch 1;

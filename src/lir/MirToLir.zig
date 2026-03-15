@@ -297,6 +297,13 @@ fn registerSpecializedMonotypeLayout(
     try self.saveMonotypeOverrideIfNeeded(saved, mono_key);
     const monotype = self.mir_store.monotype_store.getMonotype(mono_idx);
 
+    if (monotype == .func) {
+        // Function monotypes keep their callable layout. Specialization may refine the
+        // runtime value layout of a function value (e.g. empty captures -> zst), but that
+        // must not poison later `layoutFromMonotype(.func)` queries used for call/lambda nodes.
+        return;
+    }
+
     if (self.specialized_monotype_layouts.get(mono_key)) |existing| {
         if (existing == layout_idx) return;
         if (builtin.mode == .Debug) {

@@ -16,14 +16,11 @@ const builtin = @import("builtin");
 const is_windows = builtin.target.os.tag == .windows;
 const is_freestanding = builtin.target.os.tag == .freestanding;
 
-var stderr_file_writer: if (is_freestanding) void else std.fs.File.Writer = if (is_freestanding)
-    {}
-else
-    .{
-        .interface = std.fs.File.Writer.initInterface(&.{}),
-        .file = if (is_windows) undefined else std.fs.File.stderr(),
-        .mode = .streaming,
-    };
+var stderr_file_writer: if (is_freestanding) void else std.fs.File.Writer = if (is_freestanding) {} else .{
+    .interface = std.fs.File.Writer.initInterface(&.{}),
+    .file = if (is_windows) undefined else std.fs.File.stderr(),
+    .mode = .streaming,
+};
 
 fn stderrWriter() ?*std.Io.Writer {
     if (comptime is_freestanding) return null;
