@@ -4970,23 +4970,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             self.codegen.freeGeneral(temp2);
                         } else {
                             // x86_64: Use MUL which gives RDX:RAX = RAX * src
-                            // IMPORTANT: MUL clobbers both RAX and RDX. We do 3 MUL operations.
-                            // All input/output registers that are RAX or RDX will be clobbered!
+                            // MUL clobbers RAX and RDX in each of 3 steps.
+                            // We write results directly to result_low/result_high
+                            // (no separate temp accumulators) to reduce register pressure.
                             //
-                            // Usage pattern:
-                            // Step 1: lhs_parts.low, rhs_parts.low -> clobbers RAX, RDX
-                            // Step 2: lhs_parts.low, rhs_parts.high -> clobbers RAX, RDX
-                            // Step 3: lhs_parts.high, rhs_parts.low -> clobbers RAX, RDX
-                            //
-                            // We must save any input in RAX/RDX before they get clobbered.
+                            // result_low/result_high are guaranteed not RAX/RDX because
+                            // getI128Parts allocates RAX, RCX, RDX first for the inputs,
+                            // so the result registers are always allocated beyond RDX.
+                            std.debug.assert(result_low != .RAX and result_low != .RDX);
+                            std.debug.assert(result_high != .RAX and result_high != .RDX);
 
                             // Mark RAX and RDX as in-use so allocGeneralFor won't return them
                             self.codegen.markRegisterInUse(.RAX);
                             self.codegen.markRegisterInUse(.RDX);
-
-                            // Allocate temp registers for accumulation (guaranteed not RAX/RDX)
-                            const temp_low = try self.codegen.allocGeneralFor(0xFFFE);
-                            const temp_high = try self.codegen.allocGeneralFor(0xFFFF);
 
                             // Helper to save a register if it's RAX or RDX
                             const SavedReg = struct {
@@ -4995,9 +4991,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             };
 
                             const saveIfClobbered = struct {
-                                fn f(s: *Self, reg: GeneralReg) !SavedReg {
+                                fn f(s: *Self, reg: GeneralReg, sentinel: u32) !SavedReg {
                                     if (reg == .RAX or reg == .RDX) {
-                                        const saved = try s.codegen.allocGeneralFor(0xFFFC);
+                                        const saved = try s.codegen.allocGeneralFor(sentinel);
                                         try s.codegen.emit.movRegReg(.w64, saved, reg);
                                         return .{ .reg = saved, .needs_free = true };
                                     }
@@ -5005,43 +5001,33 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 }
                             }.f;
 
-                            // Save all inputs that are in RAX/RDX
-                            // lhs_parts.low: used in steps 1, 2
-                            const lhs_low = try saveIfClobbered(self, lhs_parts.low);
-                            // lhs_parts.high: used in step 3
-                            const lhs_high = try saveIfClobbered(self, lhs_parts.high);
-                            // rhs_parts.low: used in steps 1, 3
-                            const rhs_low = try saveIfClobbered(self, rhs_parts.low);
-                            // rhs_parts.high: used in step 2
-                            const rhs_high = try saveIfClobbered(self, rhs_parts.high);
+                            // Save inputs in RAX/RDX (at most 2 of 4 can be)
+                            const lhs_low = try saveIfClobbered(self, lhs_parts.low, 0xFFFC);
+                            const lhs_high = try saveIfClobbered(self, lhs_parts.high, 0xFFFD);
+                            const rhs_low = try saveIfClobbered(self, rhs_parts.low, 0xFFFE);
+                            const rhs_high = try saveIfClobbered(self, rhs_parts.high, 0xFFFF);
 
                             // Restore RAX/RDX to free pool (MUL will use them)
                             self.codegen.freeGeneral(.RAX);
                             self.codegen.freeGeneral(.RDX);
 
-                            // 1. a_lo * b_lo -> RAX (low), RDX (high)
+                            // 1. a_lo * b_lo -> result_low, result_high
                             try self.codegen.emit.movRegReg(.w64, .RAX, lhs_low.reg);
                             try self.codegen.emit.mulReg(.w64, rhs_low.reg);
-                            try self.codegen.emit.movRegReg(.w64, temp_low, .RAX);
-                            try self.codegen.emit.movRegReg(.w64, temp_high, .RDX);
+                            try self.codegen.emit.movRegReg(.w64, result_low, .RAX);
+                            try self.codegen.emit.movRegReg(.w64, result_high, .RDX);
 
-                            // 2. a_lo * b_hi -> add low part to temp_high
+                            // 2. a_lo * b_hi -> add low part to result_high
                             try self.codegen.emit.movRegReg(.w64, .RAX, lhs_low.reg);
                             try self.codegen.emit.mulReg(.w64, rhs_high.reg);
-                            try self.codegen.emit.addRegReg(.w64, temp_high, .RAX);
+                            try self.codegen.emit.addRegReg(.w64, result_high, .RAX);
 
-                            // 3. a_hi * b_lo -> add low part to temp_high
+                            // 3. a_hi * b_lo -> add low part to result_high
                             try self.codegen.emit.movRegReg(.w64, .RAX, lhs_high.reg);
                             try self.codegen.emit.mulReg(.w64, rhs_low.reg);
-                            try self.codegen.emit.addRegReg(.w64, temp_high, .RAX);
+                            try self.codegen.emit.addRegReg(.w64, result_high, .RAX);
 
-                            // Move results to actual output registers
-                            try self.codegen.emit.movRegReg(.w64, result_low, temp_low);
-                            try self.codegen.emit.movRegReg(.w64, result_high, temp_high);
-
-                            // Cleanup temp registers
-                            self.codegen.freeGeneral(temp_low);
-                            self.codegen.freeGeneral(temp_high);
+                            // Cleanup saved registers
                             if (lhs_low.needs_free) self.codegen.freeGeneral(lhs_low.reg);
                             if (lhs_high.needs_free) self.codegen.freeGeneral(lhs_high.reg);
                             if (rhs_low.needs_free) self.codegen.freeGeneral(rhs_low.reg);
