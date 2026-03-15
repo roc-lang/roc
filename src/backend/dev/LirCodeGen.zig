@@ -16275,7 +16275,7 @@ pub const HostLirCodeGen = blk: {
     if (arch == .x86_64 or arch == .aarch64 or arch == .aarch64_be) {
         break :blk LirCodeGen(native_target);
     } else {
-        @compileError("HostLirCodeGen requires x86_64, aarch64, or aarch64_be host architecture");
+        break :blk void;
     }
 };
 

@@ -674,6 +674,8 @@ pub const DevEvaluator = struct {
         all_module_envs: []const *ModuleEnv,
         app_module_env: ?*ModuleEnv,
     ) Error!CodeResult {
+        if (comptime backend.HostLirCodeGen == void) return error.RuntimeError;
+
         // Reset the static bump allocator so each evaluation starts fresh
         DevRocEnv.StaticAlloc.reset();
 
@@ -809,6 +811,8 @@ pub const DevEvaluator = struct {
         arg_layouts: []const layout.Idx,
         ret_layout: layout.Idx,
     ) Error!CodeResult {
+        if (comptime backend.HostLirCodeGen == void) return error.RuntimeError;
+
         // Reset the static bump allocator so each evaluation starts fresh
         DevRocEnv.StaticAlloc.reset();
 
