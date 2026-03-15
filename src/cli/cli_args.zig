@@ -167,6 +167,7 @@ pub const GlueArgs = struct {
     glue_spec: []const u8, // path to the glue spec .roc file (REQUIRED)
     output_dir: []const u8, // path to the output directory for generated glue files (REQUIRED)
     platform_path: []const u8, // path to the platform .roc file (default: main.roc)
+    backend: Backend = .interpreter,
 };
 
 /// Parse a list of arguments.
@@ -743,6 +744,7 @@ fn parseGlue(args: []const []const u8) CliArgs {
     var glue_spec: ?[]const u8 = null;
     var output_dir: ?[]const u8 = null;
     var platform_path: ?[]const u8 = null;
+    var backend_arg: Backend = .interpreter;
 
     for (args) |arg| {
         if (isHelpFlag(arg)) {
@@ -757,9 +759,19 @@ fn parseGlue(args: []const []const u8) CliArgs {
             \\  [ROC_FILE]   The platform .roc file to analyze [default: main.roc]
             \\
             \\Options:
-            \\  -h, --help  Print help
+            \\      --backend=<interpreter|dev>  Evaluation backend (default: interpreter)
+            \\  -h, --help                       Print help
             \\
         };
+        } else if (mem.startsWith(u8, arg, "--backend=")) {
+            const value = arg["--backend=".len..];
+            backend_arg = Backend.fromString(value) orelse {
+                return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{
+                    .value = value,
+                    .flag = "--backend",
+                    .valid_options = "interpreter, dev",
+                } } };
+            };
         } else {
             if (glue_spec == null) {
                 glue_spec = arg;
@@ -817,6 +829,7 @@ fn parseGlue(args: []const []const u8) CliArgs {
         .glue_spec = glue_spec.?,
         .output_dir = output_dir.?,
         .platform_path = platform_path orelse "main.roc",
+        .backend = backend_arg,
     } };
 }
 

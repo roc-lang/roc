@@ -1279,3 +1279,153 @@ test "roc test polymorphic list reverse with numeric literal does not overflow" 
     const has_passed = std.mem.indexOf(u8, result.stdout, "passed") != null;
     try testing.expect(has_passed);
 }
+
+// --- Echo platform (headerless app) tests ---
+// These test the echo platform path (rocRunDefaultApp) with both backends.
+
+fn expectEchoSuccess(result: util.RocResult, expected_stdout: []const u8) !void {
+    const testing = std.testing;
+
+    if (result.term != .Exited or result.term.Exited != 0) {
+        std.debug.print("Echo app failed with exit code: {}\nstdout: {s}\nstderr: {s}\n", .{
+            result.term,
+            result.stdout,
+            result.stderr,
+        });
+    }
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+    try testing.expectEqualStrings(expected_stdout, result.stdout);
+}
+
+fn expectEchoExitCode(result: util.RocResult, expected_code: u32) !void {
+    const testing = std.testing;
+
+    if (result.term != .Exited or result.term.Exited != expected_code) {
+        std.debug.print("Echo app exited with code {} (expected {})\nstdout: {s}\nstderr: {s}\n", .{
+            result.term,
+            expected_code,
+            result.stdout,
+            result.stderr,
+        });
+    }
+    try testing.expect(result.term == .Exited and result.term.Exited == expected_code);
+}
+
+test "echo platform: hello (interpreter)" {
+    const gpa = std.testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{}, "test/echo/hello.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectEchoSuccess(result, "Hello, World!\n");
+}
+
+test "echo platform: hello (dev backend)" {
+    const gpa = std.testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{"--backend=dev"}, "test/echo/hello.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectEchoSuccess(result, "Hello, World!\n");
+}
+
+test "echo platform: multiple echo calls (interpreter)" {
+    const gpa = std.testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{}, "test/echo/multi.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectEchoSuccess(result, "Hello, \nWorld!\n");
+}
+
+test "echo platform: multiple echo calls (dev backend)" {
+    const gpa = std.testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{"--backend=dev"}, "test/echo/multi.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectEchoSuccess(result, "Hello, \nWorld!\n");
+}
+
+test "echo platform: exit ok (interpreter)" {
+    const gpa = std.testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{}, "test/echo/exit_ok.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectEchoSuccess(result, "success\n");
+}
+
+test "echo platform: exit ok (dev backend)" {
+    const gpa = std.testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{"--backend=dev"}, "test/echo/exit_ok.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectEchoSuccess(result, "success\n");
+}
+
+test "echo platform: exit code (interpreter)" {
+    const gpa = std.testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{}, "test/echo/exit_code.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectEchoExitCode(result, 255);
+}
+
+test "echo platform: exit code (dev backend)" {
+    const gpa = std.testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{"--backend=dev"}, "test/echo/exit_code.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectEchoExitCode(result, 255);
+}
+
+// TODO: These tests expose pre-existing bugs and should be re-enabled once fixed:
+// - Interpreter: "unreachable; tag unions must be formatted via formatTagUnion with type info"
+//   in src/interpreter_values/RocValue.zig:339
+// - Dev backend: "LIR/codegen invariant violated: match tag payload field bind layout mismatch"
+//   in src/backend/dev/LirCodeGen.zig:7402
+// Same issues likely affect exit_custom_inspect.roc and exit_error_payload.roc.
+//
+// test "echo platform: custom error (interpreter)" {
+//     const gpa = std.testing.allocator;
+//
+//     const result = try util.runRoc(gpa, &.{}, "test/echo/exit_custom_error.roc");
+//     defer gpa.free(result.stdout);
+//     defer gpa.free(result.stderr);
+//
+//     try expectEchoExitCode(result, 1);
+// }
+//
+// test "echo platform: custom error (dev backend)" {
+//     const gpa = std.testing.allocator;
+//
+//     const result = try util.runRoc(gpa, &.{"--backend=dev"}, "test/echo/exit_custom_error.roc");
+//     defer gpa.free(result.stdout);
+//     defer gpa.free(result.stderr);
+//
+//     try expectEchoExitCode(result, 1);
+// }
+
+test "echo platform: no main is not a default app" {
+    const gpa = std.testing.allocator;
+
+    // A headerless file without main! should not be treated as a default_app.
+    // It should fail since it's not a valid app file.
+    const result = try util.runRoc(gpa, &.{}, "test/echo/no_main.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try std.testing.expect(result.term == .Exited and result.term.Exited != 0);
+}
