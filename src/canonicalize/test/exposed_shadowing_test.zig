@@ -509,3 +509,80 @@ test "exposed_items handles identifiers with different attributes" {
     const foo_effectful_u32 = @as(u32, @bitCast(foo_effectful_idx));
     try testing.expect(foo_u32 != foo_effectful_u32);
 }
+
+test "platform provides entries are extracted" {
+    const allocator = testing.allocator;
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+    const source =
+        \\platform ""
+        \\    requires {} { main! : () => {} }
+        \\    exposes []
+        \\    packages {}
+        \\    provides { main_for_host!: "main" }
+    ;
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(allocator);
+    defer allocators.deinit();
+
+    const ast = try parse.parse(&allocators, &env.common);
+    defer ast.deinit();
+
+    var czer = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
+    defer czer.deinit();
+    try czer.canonicalizeFile();
+
+    // Should have exactly one provides entry
+    try testing.expectEqual(@as(u64, 1), env.provides_entries.len());
+
+    // Verify the entry has the correct ident and FFI symbol
+    const entry = env.provides_entries.items.items[0];
+    const ident_text = env.getIdent(entry.ident);
+    const ffi_text = env.getString(entry.ffi_symbol);
+    try testing.expectEqualStrings("main_for_host!", ident_text);
+    try testing.expectEqualStrings("main", ffi_text);
+}
+
+test "platform provides entries with multiple entries" {
+    const allocator = testing.allocator;
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+    const source =
+        \\platform ""
+        \\    requires {} { main! : () => {} }
+        \\    exposes []
+        \\    packages {}
+        \\    provides { init_for_host: "init", update_for_host: "update" }
+    ;
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(allocator);
+    defer allocators.deinit();
+
+    const ast = try parse.parse(&allocators, &env.common);
+    defer ast.deinit();
+
+    var czer = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
+    defer czer.deinit();
+    try czer.canonicalizeFile();
+
+    // Should have exactly two provides entries
+    try testing.expectEqual(@as(u64, 2), env.provides_entries.len());
+
+    // Verify both entries
+    const entries = env.provides_entries.items.items;
+    const ident0 = env.getIdent(entries[0].ident);
+    const ffi0 = env.getString(entries[0].ffi_symbol);
+    const ident1 = env.getIdent(entries[1].ident);
+    const ffi1 = env.getString(entries[1].ffi_symbol);
+
+    try testing.expectEqualStrings("init_for_host", ident0);
+    try testing.expectEqualStrings("init", ffi0);
+    try testing.expectEqualStrings("update_for_host", ident1);
+    try testing.expectEqualStrings("update", ffi1);
+}

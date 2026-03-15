@@ -410,7 +410,7 @@ const Unifier = struct {
             .flex => |b_flex| {
                 // If both have from_numeral, two vars merge into one — decrement
                 if (self.flexHasFromNumeral(a_flex) and self.flexHasFromNumeral(b_flex)) {
-                    self.types_store.from_numeral_flex_count -= 1;
+                    self.types_store.from_numeral_flex_count -|= 1;
                 }
 
                 const mb_ident = blk: {
@@ -442,7 +442,7 @@ const Unifier = struct {
             },
             .structure => {
                 if (self.flexHasFromNumeral(a_flex)) {
-                    self.types_store.from_numeral_flex_count -= 1;
+                    self.types_store.from_numeral_flex_count -|= 1;
                 }
                 try self.recordDeferredConstraint(vars, a_flex.constraints);
                 self.merge(vars, b_content);

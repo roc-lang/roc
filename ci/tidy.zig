@@ -593,6 +593,7 @@ const DeadFilesDetector = struct {
             "main.zig", // CLI, playground_wasm, interpreter_shim, etc.
             "static_lib.zig", // Builtins static library
             "tracy.zig", // Profiler module (added via b.addModule)
+            "tracy_stub.zig", // No-op tracy stub for standalone static library builds (added via b.addModule)
             "fuzz_sort.zig", // Fuzzing entry point
             "watch.zig", // File watcher entry point
             "fx_platform_test.zig", // FX platform tests
@@ -601,6 +602,7 @@ const DeadFilesDetector = struct {
             "roc_subcommands.zig", // CLI subcommand tests
             "test_runner.zig", // Test runner executable
             "llvm_evaluator.zig", // LLVM evaluator executable
+            "echo.zig", // Echo platform WASM entry point
         };
         for (entry_points) |entry_point| {
             if (std.mem.startsWith(u8, &file, entry_point)) return true;

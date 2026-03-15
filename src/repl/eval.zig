@@ -703,6 +703,7 @@ pub const Repl = struct {
             .e_dec_small,
             .e_typed_int,
             .e_typed_frac,
+            .e_bytes_literal,
             .e_str_segment,
             .e_str,
             .e_lookup_local,

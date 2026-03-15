@@ -14,14 +14,19 @@ const CacheConfig = @import("cache_config.zig").CacheConfig;
 const builtin = @import("builtin");
 
 const is_windows = builtin.target.os.tag == .windows;
+const is_freestanding = builtin.target.os.tag == .freestanding;
 
-var stderr_file_writer: std.fs.File.Writer = .{
-    .interface = std.fs.File.Writer.initInterface(&.{}),
-    .file = if (is_windows) undefined else std.fs.File.stderr(),
-    .mode = .streaming,
-};
+var stderr_file_writer: if (is_freestanding) void else std.fs.File.Writer = if (is_freestanding)
+    {}
+else
+    .{
+        .interface = std.fs.File.Writer.initInterface(&.{}),
+        .file = if (is_windows) undefined else std.fs.File.stderr(),
+        .mode = .streaming,
+    };
 
-fn stderrWriter() *std.Io.Writer {
+fn stderrWriter() ?*std.Io.Writer {
+    if (comptime is_freestanding) return null;
     if (is_windows) stderr_file_writer.file = std.fs.File.stderr();
     return &stderr_file_writer.interface;
 }
@@ -387,7 +392,7 @@ pub const CacheManager = struct {
     pub fn printStats(self: *const Self, allocator: Allocator) void {
         if (!self.config.verbose) return;
 
-        const stderr = stderrWriter();
+        const stderr = stderrWriter() orelse return;
         CacheReporting.renderCacheStatsToTerminal(allocator, self.stats, stderr) catch {
             // If we can't print stats, just continue
         };

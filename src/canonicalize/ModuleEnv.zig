@@ -409,6 +409,9 @@ requires_types: RequiredType.SafeList,
 /// Type alias mappings from for-clauses in requires declarations.
 /// Stores (alias_name, rigid_name) pairs like (Model, model).
 for_clause_aliases: ForClauseAlias.SafeList,
+/// Platform provides entries mapping Roc identifiers to FFI symbols.
+/// Populated during canonicalization for platform modules. Empty for non-platform modules.
+provides_entries: ProvidesEntry.SafeList,
 /// Rigid type variable mappings from platform for-clause after unification.
 /// Maps rigid names (e.g., "model") to their resolved type variables in the app's type store.
 /// Populated during checkPlatformRequirements when the platform has a for-clause.
@@ -485,6 +488,19 @@ pub const ForClauseAlias = struct {
     pub const SafeList = collections.SafeList(@This());
 };
 
+/// Platform provides entry mapping a Roc identifier to its FFI symbol.
+/// Populated during canonicalization for platform modules from the provides clause.
+/// For example, `{ main_for_host!: "main" }` creates an entry with ident="main_for_host!"
+/// and ffi_symbol pointing to the interned string "main".
+pub const ProvidesEntry = struct {
+    /// The Roc identifier (e.g., "main_for_host!")
+    ident: Ident.Idx,
+    /// The FFI symbol string (e.g., "main")
+    ffi_symbol: StringLiteral.Idx,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
 /// Required type for platform modules - maps an identifier to its expected type annotation.
 /// Used to enforce that apps provide values matching the platform's required types.
 pub const RequiredType = struct {
@@ -510,6 +526,7 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.external_decls.relocate(offset);
     self.requires_types.relocate(offset);
     self.for_clause_aliases.relocate(offset);
+    self.provides_entries.relocate(offset);
     self.imports.relocate(offset);
     self.store.relocate(offset);
     self.deferred_numeric_literals.relocate(offset);
@@ -566,6 +583,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .exports = .{ .span = .{ .start = 0, .len = 0 } },
         .requires_types = try RequiredType.SafeList.initCapacity(gpa, 4),
         .for_clause_aliases = try ForClauseAlias.SafeList.initCapacity(gpa, 4),
+        .provides_entries = try ProvidesEntry.SafeList.initCapacity(gpa, 4),
         .rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, TypeVar){},
         .builtin_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .external_decls = try CIR.ExternalDecl.SafeList.initCapacity(gpa, 16),
@@ -590,6 +608,7 @@ pub fn deinit(self: *Self) void {
     self.external_decls.deinit(self.gpa);
     self.requires_types.deinit(self.gpa);
     self.for_clause_aliases.deinit(self.gpa);
+    self.provides_entries.deinit(self.gpa);
     self.rigid_vars.deinit(self.gpa);
     self.imports.deinit(self.gpa);
     self.deferred_numeric_literals.deinit(self.gpa);
@@ -1512,6 +1531,42 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .file_import_not_found => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            const path_text = self.common.getString(data.path);
+            break :blk try CIR.Diagnostic.buildFileImportNotFoundReport(
+                allocator,
+                path_text,
+                region_info,
+                filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+        },
+        .file_import_io_error => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            const path_text = self.common.getString(data.path);
+            break :blk try CIR.Diagnostic.buildFileImportIOErrorReport(
+                allocator,
+                path_text,
+                region_info,
+                filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+        },
+        .file_import_not_utf8 => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            const path_text = self.common.getString(data.path);
+            break :blk try CIR.Diagnostic.buildFileImportNotUtf8Report(
+                allocator,
+                path_text,
+                region_info,
+                filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+        },
         .module_not_found => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
@@ -2299,6 +2354,7 @@ pub const Serialized = extern struct {
     exports: CIR.Def.Span,
     requires_types: RequiredType.SafeList.Serialized,
     for_clause_aliases: ForClauseAlias.SafeList.Serialized,
+    provides_entries: ProvidesEntry.SafeList.Serialized,
     rigid_vars_reserved: [4]u64, // Reserved space for rigid_vars (AutoHashMapUnmanaged is ~32 bytes), initialized at runtime
     builtin_statements: CIR.Statement.Span,
     external_decls: CIR.ExternalDecl.SafeList.Serialized,
@@ -2337,6 +2393,7 @@ pub const Serialized = extern struct {
 
         try self.requires_types.serialize(&env.requires_types, allocator, writer);
         try self.for_clause_aliases.serialize(&env.for_clause_aliases, allocator, writer);
+        try self.provides_entries.serialize(&env.provides_entries, allocator, writer);
         try self.external_decls.serialize(&env.external_decls, allocator, writer);
         try self.imports.serialize(&env.imports, allocator, writer);
 
@@ -2394,6 +2451,7 @@ pub const Serialized = extern struct {
             .exports = self.exports,
             .requires_types = self.requires_types.deserializeInto(base_addr),
             .for_clause_aliases = self.for_clause_aliases.deserializeInto(base_addr),
+            .provides_entries = self.provides_entries.deserializeInto(base_addr),
             .builtin_statements = self.builtin_statements,
             .external_decls = self.external_decls.deserializeInto(base_addr),
             .imports = try self.imports.deserializeInto(base_addr, gpa),
@@ -2439,6 +2497,7 @@ pub const Serialized = extern struct {
             .exports = self.exports,
             .requires_types = self.requires_types.deserializeInto(base_addr),
             .for_clause_aliases = self.for_clause_aliases.deserializeInto(base_addr),
+            .provides_entries = self.provides_entries.deserializeInto(base_addr),
             .builtin_statements = self.builtin_statements,
             .external_decls = self.external_decls.deserializeInto(base_addr),
             .imports = try self.imports.deserializeInto(base_addr, gpa),

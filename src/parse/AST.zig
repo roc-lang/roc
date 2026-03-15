@@ -693,6 +693,10 @@ pub const Diagnostic = struct {
         expected_expr_close_curly,
         expr_dot_suffix_not_allowed,
         incomplete_import,
+        file_import_expected_as,
+        file_import_expected_name,
+        file_import_expected_type,
+        file_import_invalid_type,
         nominal_associated_cannot_have_final_expression,
         type_alias_cannot_have_associated,
 
@@ -738,6 +742,24 @@ pub const TokenizedRegion = struct {
         };
     }
 };
+
+/// Check whether the parsed file has a top-level `main!` declaration.
+/// Used to distinguish default_app modules (headerless files that provide
+/// a main! entry point) from plain type modules.
+pub fn hasMainBangDecl(self: *const AST) bool {
+    const file = self.store.getFile();
+    for (self.store.statementSlice(file.statements)) |stmt_id| {
+        const stmt = self.store.getStatement(stmt_id);
+        if (stmt == .decl) {
+            const pattern = self.store.getPattern(stmt.decl.pattern);
+            if (pattern == .ident) {
+                const ident_text = self.resolve(pattern.ident.ident_tok);
+                if (std.mem.eql(u8, ident_text, "main!")) return true;
+            }
+        }
+    }
+    return false;
+}
 
 /// Resolve a token index to a string slice from the source code.
 pub fn resolve(self: *const AST, token: Token.Idx) []const u8 {
@@ -936,6 +958,15 @@ pub const Statement = union(enum) {
         nested_import: bool,
         region: TokenizedRegion,
     },
+    /// File import: `import "path" as name : Type`
+    /// Embeds file contents as Str or List(U8).
+    file_import: struct {
+        path_tok: Token.Idx,
+        name_tok: Token.Idx,
+        type_tok: Token.Idx,
+        is_bytes: bool,
+        region: TokenizedRegion,
+    },
     type_decl: struct {
         header: TypeHeader.Idx,
         anno: TypeAnno.Idx,
@@ -1029,6 +1060,18 @@ pub const Statement = union(enum) {
                     }
                     try tree.endNode(exposed, attrs2);
                 }
+                try tree.endNode(begin, attrs);
+            },
+            .file_import => |fi| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("s-file-import");
+                try ast.appendRegionInfoToSexprTree(env, tree, fi.region);
+                const attrs = tree.beginNode();
+
+                try tree.pushStringPair("path", ast.resolve(fi.path_tok));
+                try tree.pushStringPair("name", ast.resolve(fi.name_tok));
+                try tree.pushStringPair("type", if (fi.is_bytes) "List(U8)" else "Str");
+
                 try tree.endNode(begin, attrs);
             },
             .type_decl => |a| {
@@ -1218,6 +1261,7 @@ pub const Statement = union(enum) {
             .@"break" => |s| s.region,
             .type_anno => |s| s.region,
             .malformed => |m| m.region,
+            .file_import => |fi| fi.region,
         };
     }
 };

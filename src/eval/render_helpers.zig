@@ -251,16 +251,33 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                                 }
                             }
                         } else if (value.layout.tag == .list_of_zst) {
-                            // list_of_zst - elements have no data, just render count if non-empty
+                            // list_of_zst - elements may have no data (true ZST), or the list
+                            // may have been incorrectly classified as list_of_zst when the element
+                            // type resolved to flex during type translation (e.g., List(Package.Idx)
+                            // where Idx is an opaque type from another module). In the latter case,
+                            // the list has real data bytes that we can render.
                             const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(value.ptr.?));
                             const len = roc_list.len();
                             if (len > 0) {
-                                // For ZST lists, render each element using type info
-                                const elem_layout = layout.Layout.zst();
+                                // Try to compute real element layout from the type var.
+                                // If the element type has a concrete layout with non-zero size,
+                                // use actual data bytes for rendering instead of null pointers.
+                                const computed_elem_layout = if (roc_list.bytes != null) blk: {
+                                    const elem_layout_idx = ctx.layout_store.fromTypeVar(0, elem_type_var, ctx.type_scope, null) catch break :blk null;
+                                    const el = ctx.layout_store.getLayout(elem_layout_idx);
+                                    const el_size = ctx.layout_store.layoutSize(el);
+                                    if (el_size > 0) break :blk el else break :blk null;
+                                } else null;
+
                                 var i: usize = 0;
                                 while (i < len) : (i += 1) {
-                                    const elem_val = StackValue{
-                                        .layout = elem_layout,
+                                    const elem_val = if (computed_elem_layout) |el| StackValue{
+                                        .layout = el,
+                                        .ptr = @ptrCast(roc_list.bytes.? + i * ctx.layout_store.layoutSize(el)),
+                                        .is_initialized = true,
+                                        .rt_var = elem_type_var,
+                                    } else StackValue{
+                                        .layout = layout.Layout.zst(),
                                         .ptr = null,
                                         .is_initialized = true,
                                         .rt_var = elem_type_var,

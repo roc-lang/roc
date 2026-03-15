@@ -66,7 +66,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "{  } -> U64")))
+		(patt (type "{} -> U64")))
 	(expressions
-		(expr (type "{  } -> U64"))))
+		(expr (type "{} -> U64"))))
 ~~~

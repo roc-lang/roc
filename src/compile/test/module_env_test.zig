@@ -98,6 +98,7 @@ test "ModuleEnv.Serialized roundtrip" {
         .exports = deserialized_ptr.exports,
         .requires_types = deserialized_ptr.requires_types.deserializeInto(@intFromPtr(buffer.ptr)),
         .for_clause_aliases = deserialized_ptr.for_clause_aliases.deserializeInto(@intFromPtr(buffer.ptr)),
+        .provides_entries = deserialized_ptr.provides_entries.deserializeInto(@intFromPtr(buffer.ptr)),
         .builtin_statements = deserialized_ptr.builtin_statements,
         .external_decls = deserialized_ptr.external_decls.deserializeInto(@intFromPtr(buffer.ptr)),
         .imports = try deserialized_ptr.imports.deserializeInto(@intFromPtr(buffer.ptr), deser_alloc),

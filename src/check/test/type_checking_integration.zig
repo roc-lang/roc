@@ -1532,7 +1532,7 @@ test "check type - if else - invalid condition 1" {
         source,
         .fail_with,
         \\**TYPE MISMATCH**
-        \\This `if` condition must evaluate to a `Bool`–either `True` or `False`:
+        \\This `if` condition must evaluate to a `Bool` – either `True` or `False`:
         \\**test:2:8:2:13:**
         \\```roc
         \\x = if 5.I64 "true" else "false"
@@ -1878,7 +1878,7 @@ test "check type - record - access func polymorphic" {
     const source =
         \\x = |r| r.my_field
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "{ .., my_field: a } -> a");
+    try checkTypesModule(source, .{ .pass = .last_def }, "{ my_field: a, .. } -> a");
 }
 
 test "check type - record - access - not a record" {
@@ -1899,7 +1899,7 @@ test "check type - record - update 1" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "update_data" } },
-        "{ ..a, data: b }, b -> { ..a, data: b }",
+        "{ data: a, ..b }, a -> { data: a, ..b }",
     );
 }
 
@@ -2108,6 +2108,28 @@ test "check type - record - update - fail 2" {
         \\    Str
         \\
         \\
+    );
+}
+
+test "check type - record - pattern destructure rest 1" {
+    const source =
+        \\strip_name = |{ name: _, ..rest}| rest
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "strip_name" } },
+        "{ name: _field, .. } -> a",
+    );
+}
+
+test "check type - record - pattern destructure rest 2" {
+    const source =
+        \\strip_name = |{ name: _, ..rest}| rest.age
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "strip_name" } },
+        "{ age: a, name: _field, .. } -> a",
     );
 }
 
@@ -2372,7 +2394,7 @@ test "check type - expect not bool" {
         source,
         .fail_with,
         \\**TYPE MISMATCH**
-        \\This `expect` statement must evaluate to a `Bool`–either `True` or `False`:
+        \\This `expect` statement must evaluate to a `Bool` – either `True` or `False`:
         \\**test:3:10:3:11:**
         \\```roc
         \\  expect x
@@ -3459,7 +3481,7 @@ test "check type - recursive type - recursive alias" {
         \\```
         \\                              ^^^^^^^^^^^^^
         \\
-        \\Type aliases cannot be recursive. If you need a recursive type, use a nominal type `:=` instead of an alias`:`.
+        \\Type aliases cannot be recursive. If you need a recursive type, use a nominal type `:=` instead of an alias `:`.
         \\
         \\
     );
@@ -3774,7 +3796,7 @@ test "check type - effectful zero-arg function annotation" {
     // If the parser bug exists, this would fail with TYPE MISMATCH because:
     // - annotation parses as: (()) => {} (one empty-tuple arg)
     // - lambda infers as: ({}) -> {} (zero args, pure)
-    try checkTypesModule(source, .{ .pass = .last_def }, "({}) => {  }");
+    try checkTypesModule(source, .{ .pass = .last_def }, "({}) => {}");
 }
 
 test "check type - pure zero-arg function annotation" {
@@ -3785,7 +3807,7 @@ test "check type - pure zero-arg function annotation" {
         \\foo = || {}
     ;
     // Expected: zero-arg pure function returning empty record
-    try checkTypesModule(source, .{ .pass = .last_def }, "({}) -> {  }");
+    try checkTypesModule(source, .{ .pass = .last_def }, "({}) -> {}");
 }
 
 test "qualified imports don't produce MODULE NOT FOUND during canonicalization" {
@@ -3863,7 +3885,7 @@ test "check type - try return with match and error propagation should type-check
         \\}
     ;
     // Expected: should pass type-checking with combined error type (open tag union)
-    try checkTypesModule(source, .{ .pass = .last_def }, "{  } -> Try(Str, [Impossible, ListWasEmpty, ..])");
+    try checkTypesModule(source, .{ .pass = .last_def }, "{} -> Try(Str, [Impossible, ListWasEmpty, ..])");
 }
 
 test "check type - try operator on method call should apply to whole expression (#8646)" {
@@ -3890,7 +3912,7 @@ test "check type - record extension - basic open record annotation" {
         \\getName : { name: Str, ..others } -> Str
         \\getName = |record| record.name
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "{ ..others, name: Str } -> Str");
+    try checkTypesModule(source, .{ .pass = .last_def }, "{ name: Str, ..others } -> Str");
 }
 
 test "check type - record extension - closed record satisfies open record" {
@@ -3910,7 +3932,7 @@ test "check type - record extension - multiple fields with extension" {
         \\getFullName : { first: Str, last: Str, ..others } -> Str
         \\getFullName = |record| Str.concat(Str.concat(record.first, " "), record.last)
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "{ ..others, first: Str, last: Str } -> Str");
+    try checkTypesModule(source, .{ .pass = .last_def }, "{ first: Str, last: Str, ..others } -> Str");
 }
 
 test "check type - record extension - nested records with extension" {
@@ -3919,7 +3941,7 @@ test "check type - record extension - nested records with extension" {
         \\getPersonName : { person: { name: Str, ..inner }, ..outer } -> Str
         \\getPersonName = |record| record.person.name
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "{ ..outer, person: { ..inner, name: Str } } -> Str");
+    try checkTypesModule(source, .{ .pass = .last_def }, "{ person: { name: Str, ..inner }, ..outer } -> Str");
 }
 
 test "check type - record extension - empty record with extension" {
@@ -3929,6 +3951,19 @@ test "check type - record extension - empty record with extension" {
         \\takeAnyRecord = |_record| "got a record"
     ;
     try checkTypesModule(source, .{ .pass = .last_def }, "{ ..others } -> Str");
+}
+
+test "check type - record extension - named flex ext from instantiation" {
+    // When a function with a named extension annotation (..others) is aliased
+    // by another def, rigid vars become flex vars with names during instantiation.
+    // Verify the extension prints correctly after fields (no trailing comma).
+    const source =
+        \\use_record : { name: Str, ..others } -> Str
+        \\use_record = |record| record.name
+        \\
+        \\bar = use_record
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "bar" } }, "{ name: Str, ..others } -> Str");
 }
 
 test "check type - record extension - mismatch should fail" {
@@ -3990,7 +4025,7 @@ test "check type - nested error in function return should use annotation" {
         \\get_nested : {} -> Try(Try(I64, Str), Bool)
         \\get_nested = |{}| Ok(Err("inner error"))
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "{  } -> Try(Try(I64, Str), Bool)");
+    try checkTypesModule(source, .{ .pass = .last_def }, "{} -> Try(Try(I64, Str), Bool)");
 }
 
 // List.first method syntax tests - REGRESSION TEST for cycle detection bug
@@ -5052,7 +5087,7 @@ test "check type - zulip repro" {
         \\
         \\But `use_record` needs the first argument to be:
         \\
-        \\    { .., blah: Str }
+        \\    { blah: Str, .. }
         \\
         \\**Hint:** This record is missing the field: `blah`
         \\

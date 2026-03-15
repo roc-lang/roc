@@ -1728,3 +1728,77 @@ test "type and monotype layout resolvers agree for recursive nominal layouts" {
     const nat_var = try lt.type_store.freshFromContent(nat_content);
     try expectTypeAndMonotypeResolversAgree(testing.allocator, &lt, nat_var);
 }
+
+test "fromTypeVar - no-payload nominal tag union gets scalar layout, not box" {
+    var lt = try LayoutTest.init(testing.allocator);
+    defer lt.deinit();
+
+    const my_enum_ident_idx = try lt.module_env.insertIdent(Ident.for_text("MyEnum"));
+    _ = try lt.module_env.insertIdent(Ident.for_text("Box"));
+    const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
+    lt.module_env.idents.builtin_module = builtin_module_idx;
+    try lt.initLayoutStore();
+
+    const a_tag = types.Tag{
+        .name = try lt.module_env.insertIdent(Ident.for_text("A")),
+        .args = try lt.type_store.appendVars(&[_]types.Var{}),
+    };
+    const b_tag = types.Tag{
+        .name = try lt.module_env.insertIdent(Ident.for_text("B")),
+        .args = try lt.type_store.appendVars(&[_]types.Var{}),
+    };
+    const c_tag = types.Tag{
+        .name = try lt.module_env.insertIdent(Ident.for_text("C")),
+        .args = try lt.type_store.appendVars(&[_]types.Var{}),
+    };
+    const enum_tags = try lt.type_store.appendTags(&[_]types.Tag{ a_tag, b_tag, c_tag });
+    const enum_tag_union = types.TagUnion{
+        .tags = enum_tags,
+        .ext = try lt.type_store.freshFromContent(.{ .structure = .empty_tag_union }),
+    };
+    const enum_backing_var = try lt.type_store.freshFromContent(.{ .structure = .{ .tag_union = enum_tag_union } });
+
+    const my_enum_content = try lt.type_store.mkNominal(
+        .{ .ident_idx = my_enum_ident_idx },
+        enum_backing_var,
+        &[_]types.Var{},
+        builtin_module_idx,
+        false,
+    );
+    const my_enum_var = try lt.type_store.freshFromContent(my_enum_content);
+
+    const index_var = try lt.type_store.freshFromContent(.{ .structure = .empty_record });
+    const record_fields = try lt.type_store.record_fields.appendSlice(lt.gpa, &[_]types.RecordField{
+        .{ .name = try lt.module_env.insertIdent(Ident.for_text("index")), .var_ = index_var },
+        .{ .name = try lt.module_env.insertIdent(Ident.for_text("value")), .var_ = my_enum_var },
+    });
+    const record_var = try lt.type_store.freshFromContent(.{
+        .structure = .{ .record = .{
+            .fields = record_fields,
+            .ext = try lt.type_store.freshFromContent(.{ .structure = .empty_record }),
+        } },
+    });
+
+    const foo_tag = types.Tag{
+        .name = try lt.module_env.insertIdent(Ident.for_text("Foo")),
+        .args = try lt.type_store.appendVars(&[_]types.Var{record_var}),
+    };
+    const bar_tag = types.Tag{
+        .name = try lt.module_env.insertIdent(Ident.for_text("Bar")),
+        .args = try lt.type_store.appendVars(&[_]types.Var{}),
+    };
+    const outer_tags = try lt.type_store.appendTags(&[_]types.Tag{ foo_tag, bar_tag });
+    const outer_tag_union = types.TagUnion{
+        .tags = outer_tags,
+        .ext = try lt.type_store.freshFromContent(.{ .structure = .empty_tag_union }),
+    };
+    const outer_tag_union_var = try lt.type_store.freshFromContent(.{ .structure = .{ .tag_union = outer_tag_union } });
+
+    const result_idx = try resolveTypeVar(&lt, outer_tag_union_var);
+    const result_layout = lt.layout_store.getLayout(result_idx);
+    try testing.expect(result_layout.tag == .tag_union);
+
+    const enum_layout_idx = try resolveTypeVar(&lt, my_enum_var);
+    const enum_layout = lt.layout_store.getLayout(enum_layout_idx);
+    try testing.expect(enum_layout.tag == .scalar);
+}

@@ -18,6 +18,7 @@ const reporting = @import("reporting");
 const eval = @import("eval");
 const check = @import("check");
 const unbundle = @import("unbundle");
+const Filesystem = @import("fs").Filesystem;
 
 const Report = reporting.Report;
 const ReportBuilder = check.ReportBuilder;
@@ -47,11 +48,26 @@ const trace_build = if (@hasDecl(build_options, "trace_build")) build_options.tr
 
 // Threading features aren't available when targeting WebAssembly,
 // so we disable them at comptime to prevent builds from failing.
-const threads_available = builtin.target.cpu.arch != .wasm32;
+const threading = @import("threading.zig");
+const is_freestanding = threading.is_freestanding;
 
-const Thread = if (threads_available) std.Thread else struct {};
-const Mutex = if (threads_available) std.Thread.Mutex else struct {};
-const ThreadCondition = if (threads_available) std.Thread.Condition else struct {};
+const Mutex = threading.Mutex;
+const ThreadCondition = threading.Condition;
+
+/// Native fetchUrl implementation that downloads a tar.zst bundle via HTTP
+/// and extracts it into the destination directory. Used by the CLI to wire up
+/// real download support through the Filesystem vtable.
+pub const nativeFetchUrl: ?*const fn (?*anyopaque, Allocator, []const u8, std.fs.Dir) Filesystem.FetchUrlError!void = if (!is_freestanding)
+    &nativeFetchUrlImpl
+else
+    null;
+
+fn nativeFetchUrlImpl(_: ?*anyopaque, allocator: Allocator, url: []const u8, dest_dir: std.fs.Dir) Filesystem.FetchUrlError!void {
+    var alloc = allocator;
+    unbundle.download.downloadAndExtract(&alloc, url, dest_dir) catch {
+        return error.DownloadFailed;
+    };
+}
 
 fn freeSlice(gpa: Allocator, s: []u8) void {
     gpa.free(s);
@@ -125,6 +141,10 @@ pub const BuildEnv = struct {
     cache_manager: ?*CacheManager = null,
     // File provider for reading sources (defaults to filesystem)
     file_provider: FileProvider = FileProvider.filesystem,
+    // Filesystem abstraction for OS operations (getEnvVar, readFile, etc.)
+    filesystem: Filesystem = Filesystem.default(),
+    // Explicit working directory for resolving relative paths
+    cwd: []const u8,
 
     // Builtin modules (Bool, Try, Str) shared across all packages (heap-allocated to prevent moves)
     builtin_modules: *BuiltinModules,
@@ -150,7 +170,7 @@ pub const BuildEnv = struct {
         import_name: []const u8, // e.g., "pf.Stdout"
     };
 
-    pub fn init(gpa: Allocator, mode: Mode, max_threads: usize, target: roc_target.RocTarget) !BuildEnv {
+    pub fn init(gpa: Allocator, mode: Mode, max_threads: usize, target: roc_target.RocTarget, cwd: []const u8) !BuildEnv {
         // Allocate builtin modules on heap to prevent moves that would invalidate internal pointers
         const builtin_modules = try gpa.create(BuiltinModules);
         errdefer gpa.destroy(builtin_modules);
@@ -158,11 +178,12 @@ pub const BuildEnv = struct {
         builtin_modules.* = try BuiltinModules.init(gpa);
         errdefer builtin_modules.deinit();
 
-        return .{
+        var env = BuildEnv{
             .gpa = gpa,
             .mode = mode,
             .max_threads = max_threads,
             .target = target,
+            .cwd = cwd,
             .workspace_roots = std.array_list.Managed([]const u8).init(gpa),
             .sink = OrderedSink.init(gpa),
             .builtin_modules = builtin_modules,
@@ -171,6 +192,14 @@ pub const BuildEnv = struct {
             .schedule_ctxs = std.array_list.Managed(*ScheduleCtx).init(gpa),
             .pending_known_modules = std.array_list.Managed(PendingKnownModule).init(gpa),
         };
+
+        // On native targets, enable HTTP downloads for URL packages.
+        // On freestanding (WASM), fetchUrl remains the default stub (returns error.Unsupported).
+        if (nativeFetchUrl) |fetch_fn| {
+            env.filesystem.vtable.fetchUrl = fetch_fn;
+        }
+
+        return env;
     }
 
     pub fn deinit(self: *BuildEnv) void {
@@ -1505,9 +1534,8 @@ pub const BuildEnv = struct {
                 // Hosted headers are like modules but for platform-specific code
             },
             .type_module => {
-                info.kind = .type_module;
-                // Type modules are headerless files with a top-level type matching the filename
-                // They don't have package dependencies
+                // Check if file has a main! function, making it a default app
+                info.kind = if (ast.hasMainBangDecl()) .default_app else .type_module;
             },
             .default_app => {
                 info.kind = .default_app;
@@ -1552,11 +1580,7 @@ pub const BuildEnv = struct {
 
     fn makeAbsolute(self: *BuildEnv, path: []const u8) ![]const u8 {
         if (std.fs.path.isAbsolute(path)) return try std.fs.path.resolve(self.gpa, &.{path});
-
-        // Resolve relative to process cwd, then canonicalize
-        const cwd_tmp = try std.process.getCwdAlloc(std.heap.page_allocator);
-        defer std.heap.page_allocator.free(cwd_tmp);
-        return try std.fs.path.resolve(self.gpa, &.{ cwd_tmp, path });
+        return try std.fs.path.resolve(self.gpa, &.{ self.cwd, path });
     }
 
     fn readFile(self: *BuildEnv, path: []const u8, max_bytes: usize) ![]u8 {
@@ -1571,33 +1595,33 @@ pub const BuildEnv = struct {
     }
 
     /// Cross-platform environment variable lookup.
-    /// Uses std.process.getEnvVarOwned which works on both POSIX and Windows,
-    /// unlike std.posix.getenv which only works on POSIX systems.
-    fn getEnvVar(allocator: Allocator, key: []const u8) ?[]const u8 {
-        return std.process.getEnvVarOwned(allocator, key) catch null;
+    /// Uses the filesystem vtable which works on both POSIX, Windows, and wasm
+    /// (unlike std.posix.getenv which only works on POSIX systems).
+    fn getEnvVar(self: *BuildEnv, allocator: Allocator, key: []const u8) ?[]const u8 {
+        return self.filesystem.getEnvVar(key, allocator) catch null;
     }
 
     /// Get the roc cache directory for downloaded packages.
     /// Standard cache locations by platform:
     /// - Linux/macOS: ~/.cache/roc/packages/ (respects XDG_CACHE_HOME if set)
     /// - Windows: %LOCALAPPDATA%\roc\packages\
-    fn getRocCacheDir(allocator: Allocator) ![]const u8 {
+    fn getRocCacheDir(self: *BuildEnv, allocator: Allocator) ![]const u8 {
         // Check XDG_CACHE_HOME first (Linux/macOS)
-        if (getEnvVar(allocator, "XDG_CACHE_HOME")) |xdg_cache| {
+        if (self.getEnvVar(allocator, "XDG_CACHE_HOME")) |xdg_cache| {
             defer allocator.free(xdg_cache);
             return std.fs.path.join(allocator, &.{ xdg_cache, "roc", "packages" });
         }
 
         // Fall back to %LOCALAPPDATA%\roc\packages (Windows)
         if (comptime builtin.os.tag == .windows) {
-            if (getEnvVar(allocator, "LOCALAPPDATA")) |local_app_data| {
+            if (self.getEnvVar(allocator, "LOCALAPPDATA")) |local_app_data| {
                 defer allocator.free(local_app_data);
                 return std.fs.path.join(allocator, &.{ local_app_data, "roc", "packages" });
             }
         }
 
         // Fall back to ~/.cache/roc/packages (Unix)
-        if (getEnvVar(allocator, "HOME")) |home| {
+        if (self.getEnvVar(allocator, "HOME")) |home| {
             defer allocator.free(home);
             return std.fs.path.join(allocator, &.{ home, ".cache", "roc", "packages" });
         }
@@ -1608,6 +1632,8 @@ pub const BuildEnv = struct {
     /// Resolve a URL package by downloading and caching it.
     /// Returns the local path to the cached package's main.roc or platform.roc file.
     fn resolveUrlPackage(self: *BuildEnv, url: []const u8) ![]const u8 {
+        if (comptime is_freestanding)
+            return error.DownloadFailed;
         const download = unbundle.download;
 
         // Validate URL and extract hash
@@ -1617,7 +1643,7 @@ pub const BuildEnv = struct {
         };
 
         // Get cache directory
-        const cache_dir_path = getRocCacheDir(self.gpa) catch {
+        const cache_dir_path = self.getRocCacheDir(self.gpa) catch {
             std.log.err("Could not determine cache directory", .{});
             return error.NoCacheDir;
         };
@@ -1652,13 +1678,12 @@ pub const BuildEnv = struct {
                     return error.FileError;
                 };
 
-                // Download and extract
-                var gpa_copy = self.gpa;
-                download.downloadAndExtract(&gpa_copy, url, new_package_dir) catch |download_err| {
+                // Download and extract via filesystem vtable
+                self.filesystem.fetchUrl(self.gpa, url, new_package_dir) catch |fetch_err| {
                     // Clean up failed download
                     new_package_dir.close();
                     std.fs.cwd().deleteTree(package_dir_path) catch {};
-                    std.log.err("Failed to download package: {}", .{download_err});
+                    std.log.err("Failed to download package: {} (url: {s})", .{ fetch_err, url });
                     return error.DownloadFailed;
                 };
 
@@ -2361,6 +2386,286 @@ pub const BuildEnv = struct {
         }
         return null;
     }
+
+    /// Drain reports and render them to a writer. Returns error/warning counts.
+    /// Replaces the repeated drain → iterate → render boilerplate pattern.
+    pub fn renderDiagnostics(self: *BuildEnv, writer: anytype) RenderDiagnosticsResult {
+        const drained = self.drainReports() catch &[_]DrainedModuleReports{};
+        defer self.freeDrainedReports(drained);
+
+        var total_error_count: usize = 0;
+        var total_warning_count: usize = 0;
+
+        for (drained) |mod| {
+            for (mod.reports) |*report| {
+                switch (report.severity) {
+                    .info => {},
+                    .runtime_error, .fatal => total_error_count += 1,
+                    .warning => total_warning_count += 1,
+                }
+                const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
+                const config = reporting.ReportingConfig.initColorTerminal();
+                reporting.renderReportToTerminal(report, writer, palette, config) catch {};
+            }
+        }
+
+        return .{
+            .errors = total_error_count,
+            .warnings = total_warning_count,
+        };
+    }
+
+    pub const RenderDiagnosticsResult = struct {
+        errors: usize,
+        warnings: usize,
+    };
+
+    /// Get compiled module envs ready for backend use: Builtin at [0], imports resolved.
+    /// Replaces the repeated pattern of getCompiledModules + build array + resolveImports.
+    pub fn getResolvedModuleEnvs(self: *BuildEnv, allocator: Allocator) !ResolvedModules {
+        const modules = try self.getCompiledModules(allocator);
+        if (modules.len == 0) return error.NoModulesCompiled;
+
+        const builtin_env = self.builtin_modules.builtin_module.env;
+        var all_module_envs = try allocator.alloc(*ModuleEnv, modules.len + 1);
+        all_module_envs[0] = builtin_env;
+        for (modules, 0..) |mod, i| {
+            all_module_envs[i + 1] = mod.env;
+        }
+
+        // Re-resolve imports against the unified all_module_envs array
+        for (all_module_envs) |module| {
+            module.imports.resolveImports(module, all_module_envs);
+        }
+
+        return .{
+            .all_module_envs = all_module_envs,
+            .compiled_modules = modules,
+        };
+    }
+
+    /// Result of getResolvedModuleEnvs: compiled modules with Builtin at [0] and imports resolved.
+    pub const ResolvedModules = struct {
+        /// Module envs array with Builtin at index 0, ready for backend use.
+        all_module_envs: []*ModuleEnv,
+        /// Metadata for each compiled module (indices correspond to all_module_envs[1..]).
+        compiled_modules: []CompiledModuleInfo,
+
+        /// Get module envs excluding Builtin (for closure pipeline, etc.)
+        pub fn compiledModuleEnvs(self: *const ResolvedModules) []*ModuleEnv {
+            return self.all_module_envs[1..];
+        }
+
+        /// Find the platform module and validate it has provides entries.
+        /// Returns the platform module index, info, and app module env.
+        pub fn getPlatformModule(self: *const ResolvedModules) !PlatformModuleInfo {
+            const platform_idx = findPrimaryModuleIndex(self.compiled_modules) orelse
+                return error.NoPlatformModule;
+            const platform_module = self.compiled_modules[platform_idx];
+            const provides_entries = platform_module.provides_entries;
+            if (provides_entries.len == 0) return error.NoEntrypointFound;
+
+            var app_module_env: ?*ModuleEnv = null;
+            var app_module_idx: ?u32 = null;
+            for (self.compiled_modules, 0..) |mod, i| {
+                if (mod.is_app) {
+                    app_module_env = mod.env;
+                    app_module_idx = @intCast(i + 1); // +1 for Builtin at [0]
+                    break;
+                }
+            }
+
+            return .{
+                .platform_idx = platform_idx,
+                .module = platform_module,
+                .provides_entries = provides_entries,
+                .app_module_env = app_module_env,
+                .app_module_idx = app_module_idx,
+            };
+        }
+
+        pub const PlatformModuleInfo = struct {
+            platform_idx: usize,
+            module: CompiledModuleInfo,
+            provides_entries: []const ProvidesEntry,
+            app_module_env: ?*ModuleEnv,
+            /// App module index in all_module_envs (with Builtin at [0])
+            app_module_idx: ?u32,
+        };
+
+        /// A map from (module_idx, node_idx) packed as u64 to hosted function global index.
+        /// Compatible with mono.Lower.HostedFunctionMap.
+        pub const HostedFunctionMap = std.AutoHashMap(u64, u32);
+
+        /// Pack a module index and node index into a hosted function map key.
+        /// Compatible with mono.Lower.hostedFunctionKey.
+        pub fn hostedFunctionKey(global_module_idx: u32, node_idx: u32) u64 {
+            return @as(u64, global_module_idx) << 32 | node_idx;
+        }
+
+        /// Process hosted functions across platform sibling modules.
+        /// Collects, sorts, deduplicates, and assigns global CIR indices.
+        /// If `hosted_function_map` is non-null, also populates it for lowering lookups.
+        pub fn processHostedFunctions(
+            self: *const ResolvedModules,
+            gpa: Allocator,
+            hosted_function_map: ?*HostedFunctionMap,
+        ) !void {
+            const HostedCompiler = can.HostedCompiler;
+            var all_hosted_fns = std.ArrayList(HostedCompiler.HostedFunctionInfo).empty;
+            defer all_hosted_fns.deinit(gpa);
+
+            // Collect from platform sibling modules
+            for (self.compiled_modules) |mod| {
+                if (!mod.is_platform_sibling) continue;
+
+                var module_fns = HostedCompiler.collectAndSortHostedFunctions(mod.env) catch continue;
+                defer module_fns.deinit(mod.env.gpa);
+
+                for (module_fns.items) |fn_info| {
+                    const name_copy = gpa.dupe(u8, fn_info.name_text) catch continue;
+                    mod.env.gpa.free(fn_info.name_text);
+                    all_hosted_fns.append(gpa, .{
+                        .symbol_name = fn_info.symbol_name,
+                        .expr_idx = fn_info.expr_idx,
+                        .name_text = name_copy,
+                    }) catch {
+                        gpa.free(name_copy);
+                        continue;
+                    };
+                }
+            }
+
+            if (all_hosted_fns.items.len == 0) return;
+
+            // Sort globally by qualified name
+            const SortContext = struct {
+                pub fn lessThan(_: void, a: HostedCompiler.HostedFunctionInfo, b: HostedCompiler.HostedFunctionInfo) bool {
+                    return std.mem.order(u8, a.name_text, b.name_text) == .lt;
+                }
+            };
+            std.mem.sort(HostedCompiler.HostedFunctionInfo, all_hosted_fns.items, {}, SortContext.lessThan);
+
+            // Deduplicate
+            var write_idx: usize = 0;
+            for (all_hosted_fns.items, 0..) |fn_info, read_idx| {
+                if (write_idx == 0 or !std.mem.eql(u8, all_hosted_fns.items[write_idx - 1].name_text, fn_info.name_text)) {
+                    if (write_idx != read_idx) {
+                        all_hosted_fns.items[write_idx] = fn_info;
+                    }
+                    write_idx += 1;
+                } else {
+                    gpa.free(fn_info.name_text);
+                }
+            }
+            all_hosted_fns.shrinkRetainingCapacity(write_idx);
+
+            // Assign global indices in the CIR e_hosted_lambda nodes
+            for (self.compiled_modules, 0..) |mod, global_module_idx| {
+                if (!mod.is_platform_sibling) continue;
+                const platform_env = mod.env;
+
+                const mod_all_defs = platform_env.store.sliceDefs(platform_env.all_defs);
+                for (mod_all_defs) |def_idx| {
+                    const def = platform_env.store.getDef(def_idx);
+                    const expr = platform_env.store.getExpr(def.expr);
+
+                    if (expr == .e_hosted_lambda) {
+                        const hosted = expr.e_hosted_lambda;
+                        const local_name = platform_env.getIdent(hosted.symbol_name);
+                        const plat_module_name = base.module_path.getModuleName(platform_env.module_name);
+                        const qualified_name = std.fmt.allocPrint(gpa, "{s}.{s}", .{ plat_module_name, local_name }) catch continue;
+                        defer gpa.free(qualified_name);
+
+                        const stripped_name = if (std.mem.endsWith(u8, qualified_name, "!"))
+                            qualified_name[0 .. qualified_name.len - 1]
+                        else
+                            qualified_name;
+
+                        for (all_hosted_fns.items, 0..) |fn_info, idx| {
+                            if (std.mem.eql(u8, fn_info.name_text, stripped_name)) {
+                                const hosted_index: u32 = @intCast(idx);
+
+                                // Update the CIR expression with the global index
+                                const expr_node_idx = @as(@TypeOf(platform_env.store.nodes).Idx, @enumFromInt(@intFromEnum(def.expr)));
+                                var expr_node = platform_env.store.nodes.get(expr_node_idx);
+                                var payload = expr_node.getPayload().expr_hosted_lambda;
+                                payload.index = hosted_index;
+                                expr_node.setPayload(.{ .expr_hosted_lambda = payload });
+                                platform_env.store.nodes.set(expr_node_idx, expr_node);
+
+                                // Register in the hosted function map for lowering lookup
+                                if (hosted_function_map) |hfm| {
+                                    const mod_idx: u16 = @intCast(global_module_idx + 1);
+                                    hfm.put(hostedFunctionKey(mod_idx, @intFromEnum(def_idx)), hosted_index) catch {};
+                                    hfm.put(hostedFunctionKey(mod_idx, @intFromEnum(def.pattern)), hosted_index) catch {};
+                                    hfm.put(hostedFunctionKey(mod_idx, @intFromEnum(def.expr)), hosted_index) catch {};
+                                }
+
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Free name_text strings
+            for (all_hosted_fns.items) |fn_info| {
+                gpa.free(fn_info.name_text);
+            }
+        }
+
+        /// Find the entrypoint expression from platform provides entries.
+        /// Returns the platform module index, the entrypoint CIR expression, and the app module env.
+        pub fn findEntrypoint(self: *const ResolvedModules) !EntrypointInfo {
+            const platform_idx = findPrimaryModuleIndex(self.compiled_modules) orelse
+                return error.NoModulesCompiled;
+            const platform_module = self.compiled_modules[platform_idx];
+            const provides_entries = platform_module.provides_entries;
+            if (provides_entries.len == 0) return error.NoModulesCompiled;
+
+            // Find app module env
+            var app_module_env: ?*ModuleEnv = null;
+            for (self.compiled_modules) |mod| {
+                if (mod.is_app) {
+                    app_module_env = mod.env;
+                    break;
+                }
+            }
+
+            // Find main_for_host! CIR expression from platform provides entries
+            const platform_defs = platform_module.env.store.sliceDefs(platform_module.env.all_defs);
+
+            for (provides_entries) |entry| {
+                for (platform_defs) |def_idx| {
+                    const def = platform_module.env.store.getDef(def_idx);
+                    const pattern = platform_module.env.store.getPattern(def.pattern);
+                    if (pattern == .assign) {
+                        const ident_name = platform_module.env.getIdent(pattern.assign.ident);
+                        if (std.mem.eql(u8, ident_name, entry.roc_ident)) {
+                            return .{
+                                .platform_idx = platform_idx,
+                                .platform_env = platform_module.env,
+                                .entrypoint_expr = def.expr,
+                                .app_module_env = app_module_env,
+                                .provides_entries = provides_entries,
+                            };
+                        }
+                    }
+                }
+            }
+
+            return error.NoModulesCompiled;
+        }
+    };
+
+    pub const EntrypointInfo = struct {
+        platform_idx: usize,
+        platform_env: *ModuleEnv,
+        entrypoint_expr: can.CIR.Expr.Idx,
+        app_module_env: ?*ModuleEnv,
+        provides_entries: []const ProvidesEntry,
+    };
 };
 
 // OrderedSink buffers reports and emits them in a deterministic global order.

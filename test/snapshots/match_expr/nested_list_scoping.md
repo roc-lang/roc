@@ -7,7 +7,7 @@ type=expr
 ~~~roc
 match nestedList {
     [[x], [y]] => x + y
-    [[x, y]] => x - y  
+    [[x, y]] => x - y
     [x, [y]] => x * y
 }
 ~~~

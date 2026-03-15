@@ -881,7 +881,7 @@ The type _List_ expects 1 argument, but got 0 instead.
 
 
 **TYPE MISMATCH**
-This `if` condition must evaluate to a `Bool`–either `True` or `False`:
+This `if` condition must evaluate to a `Bool` – either `True` or `False`:
 **fuzz_crash_027.md:50:5:50:8:**
 ```roc
 	if num {
@@ -1023,7 +1023,7 @@ It has the type:
 
 But the function's return type is:
 
-    Try({  }, _d)
+    Try({}, _d)
 
 **Hint:** All `return` statements and the final expression in a function must have the same type.
 
@@ -2028,7 +2028,7 @@ expect {
 												(sub-pattern
 													(p-num (value "2"))))
 											(record-destruct (label "rest") (ident "rest")
-												(required
+												(rest-pattern
 													(p-assign (ident "rest"))))))))
 							(value
 								(e-call
@@ -2499,7 +2499,7 @@ expect {
 		(patt (type "Bool -> Dec"))
 		(patt (type "U64 -> U64"))
 		(patt (type "[Red, Blue, ..], _arg -> Error"))
-		(patt (type "List(Error) -> Try({  }, _d)"))
+		(patt (type "List(Error) -> Try({}, _d)"))
 		(patt (type "{}"))
 		(patt (type "Error")))
 	(type_decls
@@ -2536,7 +2536,7 @@ expect {
 		(expr (type "Bool -> Dec"))
 		(expr (type "U64 -> U64"))
 		(expr (type "[Red, Blue, ..], _arg -> Error"))
-		(expr (type "List(Error) -> Try({  }, _d)"))
+		(expr (type "List(Error) -> Try({}, _d)"))
 		(expr (type "{}"))
 		(expr (type "Error"))))
 ~~~

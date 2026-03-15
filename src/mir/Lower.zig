@@ -2329,6 +2329,8 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
             const mir_str = try self.copyStringToMir(module_env, seg.literal);
             break :blk try self.store.addExpr(self.allocator, .{ .str = mir_str }, monotype, region);
         },
+        // bytes_literal (List(U8) file import) - not yet supported in MIR/LLVM backend
+        .e_bytes_literal => try self.store.addExpr(self.allocator, .{ .runtime_err_anno_only = {} }, monotype, region),
         .e_str => |str_expr| {
             const span = module_env.store.sliceExpr(str_expr.span);
             if (span.len == 0) {
@@ -2788,6 +2790,7 @@ fn collectPatternBindings(
                 switch (destruct.kind) {
                     .Required => |sub_pattern_idx| try self.collectPatternBindings(module_env, sub_pattern_idx, out),
                     .SubPattern => |sub_pattern_idx| try self.collectPatternBindings(module_env, sub_pattern_idx, out),
+                    .Rest => |sub_pattern_idx| try self.collectPatternBindings(module_env, sub_pattern_idx, out),
                 }
             }
         },

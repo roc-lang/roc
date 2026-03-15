@@ -33,6 +33,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const threading = @import("threading.zig");
 const can = @import("can");
 const parse = @import("parse");
 const reporting = @import("reporting");
@@ -80,8 +81,9 @@ const FileProvider = compile_package.FileProvider;
 const Mode = compile_package.Mode;
 
 /// Threading features aren't available when targeting WebAssembly
-const threads_available = builtin.target.cpu.arch != .wasm32;
-const Thread = if (threads_available) std.Thread else struct {};
+const is_freestanding = threading.is_freestanding;
+const threads_available = !is_freestanding;
+const Thread = threading.Thread;
 
 /// Allocators for a worker thread. Each worker has its own instance.
 /// This ensures thread-safe allocations without contention.
@@ -635,7 +637,7 @@ pub const Coordinator = struct {
         try self.workers.ensureTotalCapacity(self.gpa, n);
         var i: usize = 0;
         while (i < n) : (i += 1) {
-            const th = try std.Thread.spawn(.{}, workerThread, .{self});
+            const th = try Thread.spawn(.{}, workerThread, .{self});
             try self.workers.append(self.gpa, th);
         }
     }
@@ -763,50 +765,52 @@ pub const Coordinator = struct {
             } else {
                 iterations_without_progress += 1;
                 if (iterations_without_progress > 1000) {
-                    const task_count = self.task_channel.len();
-                    std.debug.print("Coordinator stuck: remaining={}, tasks={}, inflight={}\n", .{
-                        self.total_remaining,
-                        task_count,
-                        self.inflight.load(.acquire),
-                    });
-                    // Print package/module states with detailed diagnostics
-                    var pkg_it = self.packages.iterator();
-                    while (pkg_it.next()) |entry| {
-                        const pkg = entry.value_ptr.*;
-                        std.debug.print("  Package {s}: remaining={}, modules={}\n", .{
-                            pkg.name,
-                            pkg.remaining_modules,
-                            pkg.modules.items.len,
+                    if (comptime !threading.is_freestanding) {
+                        const task_count = self.task_channel.len();
+                        std.debug.print("Coordinator stuck: remaining={}, tasks={}, inflight={}\n", .{
+                            self.total_remaining,
+                            task_count,
+                            self.inflight.load(.acquire),
                         });
-                        for (pkg.modules.items, 0..) |mod, i| {
-                            std.debug.print("    Module {}: {s} phase=.{s} ext_imports={}\n", .{
-                                i,
-                                mod.name,
-                                @tagName(mod.phase),
-                                mod.external_imports.items.len,
+                        // Print package/module states with detailed diagnostics
+                        var pkg_it = self.packages.iterator();
+                        while (pkg_it.next()) |entry| {
+                            const pkg = entry.value_ptr.*;
+                            std.debug.print("  Package {s}: remaining={}, modules={}\n", .{
+                                pkg.name,
+                                pkg.remaining_modules,
+                                pkg.modules.items.len,
                             });
-                            // For non-Done modules, print additional diagnostics
-                            if (mod.phase != .Done) {
-                                // Print local imports and their status
-                                if (mod.imports.items.len > 0) {
-                                    std.debug.print("      local_imports ({}):", .{mod.imports.items.len});
-                                    for (mod.imports.items) |imp_id| {
-                                        if (pkg.getModule(imp_id)) |imp_mod| {
-                                            std.debug.print(" {s}(.{s})", .{ imp_mod.name, @tagName(imp_mod.phase) });
-                                        } else {
-                                            std.debug.print(" <invalid id={}>", .{imp_id});
+                            for (pkg.modules.items, 0..) |mod, i| {
+                                std.debug.print("    Module {}: {s} phase=.{s} ext_imports={}\n", .{
+                                    i,
+                                    mod.name,
+                                    @tagName(mod.phase),
+                                    mod.external_imports.items.len,
+                                });
+                                // For non-Done modules, print additional diagnostics
+                                if (mod.phase != .Done) {
+                                    // Print local imports and their status
+                                    if (mod.imports.items.len > 0) {
+                                        std.debug.print("      local_imports ({}):", .{mod.imports.items.len});
+                                        for (mod.imports.items) |imp_id| {
+                                            if (pkg.getModule(imp_id)) |imp_mod| {
+                                                std.debug.print(" {s}(.{s})", .{ imp_mod.name, @tagName(imp_mod.phase) });
+                                            } else {
+                                                std.debug.print(" <invalid id={}>", .{imp_id});
+                                            }
                                         }
+                                        std.debug.print("\n", .{});
                                     }
-                                    std.debug.print("\n", .{});
-                                }
-                                // Print external imports and their readiness
-                                if (mod.external_imports.items.len > 0) {
-                                    std.debug.print("      ext_imports ({}):", .{mod.external_imports.items.len});
-                                    for (mod.external_imports.items) |ext_name| {
-                                        const ready = self.isExternalReady(pkg.name, ext_name);
-                                        std.debug.print(" {s}(ready={})", .{ ext_name, ready });
+                                    // Print external imports and their readiness
+                                    if (mod.external_imports.items.len > 0) {
+                                        std.debug.print("      ext_imports ({}):", .{mod.external_imports.items.len});
+                                        for (mod.external_imports.items) |ext_name| {
+                                            const ready = self.isExternalReady(pkg.name, ext_name);
+                                            std.debug.print(" {s}(ready={})", .{ ext_name, ready });
+                                        }
+                                        std.debug.print("\n", .{});
                                     }
-                                    std.debug.print("\n", .{});
                                 }
                             }
                         }
@@ -2188,6 +2192,7 @@ pub const Coordinator = struct {
             task.package_name,
             null, // Coordinator handles import resolution separately
             known_modules.items,
+            self.file_provider,
         ) catch {};
 
         const canon_end = if (threads_available) std.time.nanoTimestamp() else 0;
@@ -2605,7 +2610,7 @@ test "Coordinator isComplete with multi_threaded max_threads=0 (inline fallback)
 test "Coordinator shutdown does not drain buffered tasks" {
     // When shutdown() is called with tasks still in the channel, workers
     // must exit promptly instead of processing the remaining work.
-    if (builtin.target.cpu.arch == .wasm32) return error.SkipZigTest;
+    if (is_freestanding) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
 
@@ -2655,7 +2660,7 @@ test "Coordinator shutdown does not drain buffered tasks" {
 test "Coordinator shutdown stops spawned workers promptly" {
     // With real workers running, shutdown must cause them to exit even
     // though the task channel still has buffered items.
-    if (builtin.target.cpu.arch == .wasm32) return error.SkipZigTest;
+    if (is_freestanding) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
 
@@ -2704,7 +2709,7 @@ test "Coordinator shutdown stops spawned workers promptly" {
 
 test "Channel in coordinator context" {
     // Skip on wasm
-    if (builtin.target.cpu.arch == .wasm32) return error.SkipZigTest;
+    if (is_freestanding) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
 

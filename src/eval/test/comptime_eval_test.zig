@@ -3174,6 +3174,104 @@ test "issue 8979: nested while - inner break does not save outer loop" {
     try testing.expectEqual(@as(u32, 1), summary.crashed);
 }
 
+test "tag union matching with payload inside function - single module" {
+    // Regression test: opaque-wrapped tag union matching with payloads.
+    // Single-module version (works). See also cross-module version below.
+    const src =
+        \\MyTag := [Foo({x: U64, y: U64}), Bar, Baz(Str)]
+        \\
+        \\lookup = |items, idx| {
+        \\    match List.get(items, idx) {
+        \\        Ok(val) =>
+        \\            match val {
+        \\                Foo(rec) => rec.x
+        \\                Baz(_) => 99
+        \\                _ => 0
+        \\            }
+        \\        Err(_) => 0
+        \\    }
+        \\}
+        \\
+        \\expect {
+        \\    items = [MyTag.Foo({x: 42, y: 7})]
+        \\    r = match List.get(items, 0) {
+        \\        Ok(val) => match val { Foo(rec) => rec.x, _ => 0 }
+        \\        Err(_) => 0
+        \\    }
+        \\    r == 42
+        \\}
+        \\
+        \\expect lookup([MyTag.Foo({x: 42, y: 7})], 0) == 42
+    ;
+
+    var res = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&res);
+
+    const summary = try res.evaluator.evalAll();
+
+    try testing.expect(summary.evaluated >= 1);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+    try testing.expectEqual(@as(usize, 0), res.problems.len());
+}
+
+test "tag union matching with payload inside function - cross module" {
+    // Regression test: opaque-wrapped tag union matching with payloads fails
+    // when the opaque type is defined in another module and the match occurs
+    // inside a called function. See bug-report-interpreter-tag-matching.md
+    const src_a =
+        \\module [MyTag]
+        \\
+        \\MyTag := [Foo({x: U64, y: U64}), Bar, Baz(Str)]
+    ;
+
+    var result_a = try parseCheckAndEvalModuleWithName(src_a, "A");
+    defer cleanupEvalModule(&result_a);
+
+    const summary_a = try result_a.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 0), summary_a.crashed);
+
+    const src_b =
+        \\module []
+        \\
+        \\import A exposing [MyTag]
+        \\
+        \\lookup = |items, idx| {
+        \\    match List.get(items, idx) {
+        \\        Ok(val) =>
+        \\            match val {
+        \\                Foo(rec) => rec.x
+        \\                Baz(_) => 99
+        \\                _ => 0
+        \\            }
+        \\        Err(_) => 0
+        \\    }
+        \\}
+        \\
+        \\# Inline version (should work)
+        \\expect {
+        \\    items = [MyTag.Foo({x: 42, y: 7})]
+        \\    r = match List.get(items, 0) {
+        \\        Ok(val) => match val { Foo(rec) => rec.x, _ => 0 }
+        \\        Err(_) => 0
+        \\    }
+        \\    r == 42
+        \\}
+        \\
+        \\# Function version (the bug - should also give 42)
+        \\expect lookup([MyTag.Foo({x: 42, y: 7})], 0) == 42
+    ;
+
+    var result_b = try parseCheckAndEvalModuleWithImport(src_b, "A", result_a.module_env);
+    defer cleanupEvalModuleWithImport(&result_b);
+
+    const summary_b = try result_b.evaluator.evalAll();
+
+    // Both expects should pass - 0 problems means no expect failures
+    try testing.expect(summary_b.evaluated >= 1);
+    try testing.expectEqual(@as(u32, 0), summary_b.crashed);
+    try testing.expectEqual(@as(usize, 0), result_b.problems.len());
+}
+
 // Note: List.repeat test temporarily disabled while investigating
 // why List.repeat triggers the infinite loop check. List.repeat
 // is implemented with recursion in Roc, not while loops.

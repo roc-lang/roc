@@ -416,6 +416,18 @@ Builtin :: [].{
 			Try.Err(OutOfBounds)
 		}
 
+		## Returns the reversed list.
+		## ```roc
+		## expect List.rev([1, 2, 3]) == [3, 2, 1]
+		## expect List.rev([]) == []
+		## ```
+		rev : List(item) -> List(item)
+		rev = |list| {
+			# TODO: Optimize with in-place update when list is unique
+			empty_list = List.with_capacity(list.len())
+			list.fold_rev(empty_list, |item, newlist| list_append_unsafe(newlist, item))
+		}
+
 		for_each! : List(item), (item => {}) => {}
 		for_each! = |items, cb!| for item in items {
 			cb!(item)

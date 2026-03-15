@@ -202,7 +202,7 @@ destructuring = || {
 	tup = ("Roc", 1)
 	(str, num) = tup
 
-	rec = { x: 1, y: str } # TODO implement tuple access with `.index` ?
+	rec = { x: 1, y: tup.1 } # tuple access with `.index`
 	{ x, y } = rec
 
 	(str, num, x, y)
@@ -414,3 +414,10 @@ main! = || {
 
 # Top level expects only run when using `roc test file.roc`
 expect Bool.True != Bool.False
+
+# Multi-line expect
+expect {
+	x = 4
+	y = 5
+	x + y == 9
+}

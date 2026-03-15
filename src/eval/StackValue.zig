@@ -109,6 +109,37 @@ fn increfLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
         }
         return;
     }
+    if (layout.tag == .closure) {
+        const closure_raw_ptr = ptr orelse return;
+
+        // Use the captures_layout_idx from the passed-in layout, not from the raw
+        // memory header. The layout parameter is authoritative.
+        const captures_layout_idx = layout.data.closure.captures_layout_idx;
+        const idx_as_usize = @intFromEnum(captures_layout_idx);
+        std.debug.assert(idx_as_usize < layout_cache.layouts.len());
+
+        const captures_layout = layout_cache.getLayout(captures_layout_idx);
+
+        // Only incref if there are actual captures (struct with fields).
+        if (captures_layout.tag == .struct_) {
+            const struct_data = layout_cache.getStructData(captures_layout.data.struct_.idx);
+            if (struct_data.fields.count > 0) {
+                if (comptime trace_refcount) {
+                    traceRefcount("INCREF closure captures (increfLayoutPtr) ptr=0x{x} fields={}", .{
+                        @intFromPtr(closure_raw_ptr),
+                        struct_data.fields.count,
+                    });
+                }
+                const header_size = @sizeOf(layout_mod.Closure);
+                const cap_align = captures_layout.alignment(layout_cache.targetUsize());
+                const aligned_off = std.mem.alignForward(usize, header_size, @intCast(cap_align.toByteUnits()));
+                const base_ptr: [*]u8 = @ptrCast(closure_raw_ptr);
+                const struct_ptr: *anyopaque = @ptrCast(base_ptr + aligned_off);
+                increfLayoutPtr(captures_layout, struct_ptr, layout_cache, roc_ops, null);
+            }
+        }
+        return;
+    }
     if (layout.tag == .tag_union) {
         if (ptr == null) return;
         const base_ptr = @as([*]const u8, @ptrCast(ptr.?));

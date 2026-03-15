@@ -11,11 +11,12 @@
 //! - Graceful shutdown via close()
 
 const std = @import("std");
-const builtin = @import("builtin");
+const threading = @import("threading.zig");
 
 const Allocator = std.mem.Allocator;
-const Mutex = std.Thread.Mutex;
-const Condition = std.Thread.Condition;
+
+const Mutex = threading.Mutex;
+const Condition = threading.Condition;
 
 /// Default channel capacity
 pub const DEFAULT_CAPACITY: usize = 1024;
@@ -442,7 +443,7 @@ test "Channel with struct type" {
 
 test "Channel multi-producer single-consumer" {
     // Skip on wasm where threads aren't available
-    if (builtin.target.cpu.arch == .wasm32) return error.SkipZigTest;
+    if (threading.is_freestanding) return error.SkipZigTest;
 
     var ch = try Channel(u32).init(std.testing.allocator, 16);
     defer ch.deinit();
@@ -483,7 +484,7 @@ test "Channel multi-producer single-consumer" {
 
 test "Channel blocking recv with timeout" {
     // Skip on wasm where threads aren't available
-    if (builtin.target.cpu.arch == .wasm32) return error.SkipZigTest;
+    if (threading.is_freestanding) return error.SkipZigTest;
 
     var ch = try Channel(u32).init(std.testing.allocator, 4);
     defer ch.deinit();
@@ -499,7 +500,7 @@ test "Channel blocking recv with timeout" {
 
 test "Channel producer-consumer coordination" {
     // Skip on wasm where threads aren't available
-    if (builtin.target.cpu.arch == .wasm32) return error.SkipZigTest;
+    if (threading.is_freestanding) return error.SkipZigTest;
 
     var ch = try Channel(u32).init(std.testing.allocator, 2); // Small buffer to test blocking
     defer ch.deinit();

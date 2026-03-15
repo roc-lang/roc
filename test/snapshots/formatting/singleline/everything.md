@@ -531,7 +531,7 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "e -> e"))
-		(patt (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c)), ..j], [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c)), ..j] -> c")))
+		(patt (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i, ..j }), Z4(List(c)), ..k], [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i, ..j }), Z4(List(c)), ..k] -> c")))
 	(type_decls
 		(alias (type "A(a)")
 			(ty-header (name "A")
@@ -559,5 +559,5 @@ NO CHANGE
 			(ty-header (name "G"))))
 	(expressions
 		(expr (type "e -> e"))
-		(expr (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c)), ..j], [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c)), ..j] -> c"))))
+		(expr (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i, ..j }), Z4(List(c)), ..k], [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i, ..j }), Z4(List(c)), ..k] -> c"))))
 ~~~

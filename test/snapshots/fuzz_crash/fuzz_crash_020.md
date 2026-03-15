@@ -2158,7 +2158,7 @@ expect {
 		(patt (type "[Blue, ..] -> Error"))
 		(patt (type "Error"))
 		(patt (type "_arg -> Error"))
-		(patt (type "{  }"))
+		(patt (type "{}"))
 		(patt (type "{}"))
 		(patt (type "Error")))
 	(type_decls
@@ -2195,7 +2195,7 @@ expect {
 		(expr (type "[Blue, ..] -> Error"))
 		(expr (type "Error"))
 		(expr (type "_arg -> Error"))
-		(expr (type "{  }"))
+		(expr (type "{}"))
 		(expr (type "{}"))
 		(expr (type "Error"))))
 ~~~
