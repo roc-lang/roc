@@ -13,17 +13,21 @@ const CacheStats = @import("cache_config.zig").CacheStats;
 const CacheConfig = @import("cache_config.zig").CacheConfig;
 const builtin = @import("builtin");
 
+/// Freestanding-safe log wrapper (no stderr on wasm32-freestanding).
+fn logDebug(comptime fmt: []const u8, args: anytype) void {
+    if (comptime builtin.os.tag == .freestanding) return;
+    std.log.debug(fmt, args);
+}
+
 const is_windows = builtin.target.os.tag == .windows;
 const is_freestanding = builtin.target.os.tag == .freestanding;
 
 var stderr_file_writer: if (is_freestanding) void else std.fs.File.Writer = if (is_freestanding)
-    {}
-else
-    .{
-        .interface = std.fs.File.Writer.initInterface(&.{}),
-        .file = if (is_windows) undefined else std.fs.File.stderr(),
-        .mode = .streaming,
-    };
+{} else .{
+    .interface = std.fs.File.Writer.initInterface(&.{}),
+    .file = if (is_windows) undefined else std.fs.File.stderr(),
+    .mode = .streaming,
+};
 
 fn stderrWriter() ?*std.Io.Writer {
     if (comptime is_freestanding) return null;
@@ -149,7 +153,7 @@ pub const CacheManager = struct {
         // Read cache data using memory mapping for better performance
         const mapped_cache = CacheModule.readFromFileMapped(self.allocator, cache_path, self.filesystem) catch |err| {
             if (self.config.verbose) {
-                std.log.debug("Failed to read cache file {s}: {}", .{ cache_path, err });
+                logDebug("Failed to read cache file {s}: {}", .{ cache_path, err });
             }
             self.stats.recordMiss();
             return CacheResult{ .miss = .{
@@ -166,7 +170,7 @@ pub const CacheManager = struct {
             module_name,
         ) catch |err| {
             if (self.config.verbose) {
-                std.log.debug("Failed to restore from cache {s}: {}", .{ cache_path, err });
+                logDebug("Failed to restore from cache {s}: {}", .{ cache_path, err });
             }
             self.stats.recordInvalidation();
             return CacheResult{ .miss = .{
@@ -190,7 +194,7 @@ pub const CacheManager = struct {
         // Ensure cache subdirectory exists
         self.ensureCacheSubdir(cache_key) catch |err| {
             if (self.config.verbose) {
-                std.log.debug("Failed to create cache subdirectory: {}", .{err});
+                logDebug("Failed to create cache subdirectory: {}", .{err});
             }
             self.stats.recordStoreFailure();
             return;
@@ -202,7 +206,7 @@ pub const CacheManager = struct {
 
         const cache_data = CacheModule.create(self.allocator, arena.allocator(), module_env, module_env, error_count, warning_count) catch |err| {
             if (self.config.verbose) {
-                std.log.debug("Failed to serialize cache data: {}", .{err});
+                logDebug("Failed to serialize cache data: {}", .{err});
             }
             self.stats.recordStoreFailure();
             return;
@@ -226,7 +230,7 @@ pub const CacheManager = struct {
         // Write to temp file
         self.filesystem.writeFile(temp_path, cache_data) catch |err| {
             if (self.config.verbose) {
-                std.log.debug("Failed to write cache temp file {s}: {}", .{ temp_path, err });
+                logDebug("Failed to write cache temp file {s}: {}", .{ temp_path, err });
             }
             self.stats.recordStoreFailure();
             return;
@@ -235,7 +239,7 @@ pub const CacheManager = struct {
         // Move temp file to final location (atomic operation)
         self.filesystem.rename(temp_path, cache_path) catch |err| {
             if (self.config.verbose) {
-                std.log.debug("Failed to rename cache file {s} -> {s}: {}", .{ temp_path, cache_path, err });
+                logDebug("Failed to rename cache file {s} -> {s}: {}", .{ temp_path, cache_path, err });
             }
             self.stats.recordStoreFailure();
             return;
@@ -312,7 +316,7 @@ pub const CacheManager = struct {
         // Ensure cache subdirectory exists
         self.ensureCacheSubdirIn(cache_key, entries_dir) catch |err| {
             if (self.config.verbose) {
-                std.log.debug("Failed to create cache subdirectory: {}", .{err});
+                logDebug("Failed to create cache subdirectory: {}", .{err});
             }
             self.stats.recordStoreFailure();
             return;
@@ -335,7 +339,7 @@ pub const CacheManager = struct {
         // Write to temp file
         self.filesystem.writeFile(temp_path, data) catch |err| {
             if (self.config.verbose) {
-                std.log.debug("Failed to write cache temp file {s}: {}", .{ temp_path, err });
+                logDebug("Failed to write cache temp file {s}: {}", .{ temp_path, err });
             }
             self.stats.recordStoreFailure();
             return;
@@ -344,7 +348,7 @@ pub const CacheManager = struct {
         // Move temp file to final location (atomic operation)
         self.filesystem.rename(temp_path, cache_path) catch |err| {
             if (self.config.verbose) {
-                std.log.debug("Failed to rename cache file {s} -> {s}: {}", .{ temp_path, cache_path, err });
+                logDebug("Failed to rename cache file {s} -> {s}: {}", .{ temp_path, cache_path, err });
             }
             self.stats.recordStoreFailure();
             return;
@@ -373,7 +377,7 @@ pub const CacheManager = struct {
         // Read cache data
         const data = self.filesystem.readFile(cache_path, self.allocator) catch |err| {
             if (self.config.verbose) {
-                std.log.debug("Failed to read cache file {s}: {}", .{ cache_path, err });
+                logDebug("Failed to read cache file {s}: {}", .{ cache_path, err });
             }
             self.stats.recordMiss();
             return null;
@@ -601,7 +605,7 @@ pub const CacheManager = struct {
         // Ensure cache subdirectory exists
         self.ensureCacheSubdir(source_hash) catch |err| {
             if (self.config.verbose) {
-                std.log.debug("Failed to create metadata cache subdirectory: {}", .{err});
+                logDebug("Failed to create metadata cache subdirectory: {}", .{err});
             }
             return;
         };

@@ -246,7 +246,7 @@ const CheckTypeCheckerPatternsStep = struct {
         // because ident indices are module-local — the same field name from different
         // modules has different Ident.Idx values, so we must compare the underlying strings.
         // This exclusion can go away once the deprecated interpreter is finally removed.
-        .{ .file = "StackValue.zig", .start = 1150, .end = 1190 },
+        .{ .file = "StackValue.zig", .start = 1150, .end = 1220 },
     };
 
     fn isInExcludedRange(file_path: []const u8, line_number: usize) bool {

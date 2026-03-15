@@ -293,9 +293,17 @@ fn registerSpecializedMonotypeLayout(
 ) Allocator.Error!void {
     if (mono_idx.isNone()) return;
 
+    const monotype = self.mir_store.monotype_store.getMonotype(mono_idx);
+
+    // .func monotypes always resolve to their canonical closure layout.
+    // They must not be overridden with a data layout from a containing
+    // composite type, because lowerLambda/lowerHosted rely on
+    // layoutFromMonotype returning a callable (closure) layout for the
+    // lambda's fn_layout field.
+    if (monotype == .func) return;
+
     const mono_key = @intFromEnum(mono_idx);
     try self.saveMonotypeOverrideIfNeeded(saved, mono_key);
-    const monotype = self.mir_store.monotype_store.getMonotype(mono_idx);
 
     if (self.specialized_monotype_layouts.get(mono_key)) |existing| {
         if (existing == layout_idx) return;

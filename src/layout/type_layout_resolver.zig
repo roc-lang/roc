@@ -402,6 +402,26 @@ pub const Resolver = struct {
         try self.collectTags(module_idx, tag_union_type, &tags);
         if (tags.items.len == 0) return .{ .canonical = .zst };
 
+        // Pure enum (all tags have zero args): represent as just the discriminant scalar.
+        if (tags.items.len > 1) {
+            const ts = self.getTypesStore(module_idx);
+            var all_no_payload = true;
+            for (tags.items) |tag| {
+                if (ts.sliceVars(tag.args).len > 0) {
+                    all_no_payload = false;
+                    break;
+                }
+            }
+            if (all_no_payload) {
+                return .{ .canonical = if (tags.items.len <= 256)
+                    layout_mod.Idx.u8
+                else if (tags.items.len <= 65536)
+                    layout_mod.Idx.u16
+                else
+                    layout_mod.Idx.u32 };
+            }
+        }
+
         const ident_store = self.envFor(module_idx).getIdentStoreConst();
         std.mem.sort(types.Tag, tags.items, ident_store, types.Tag.sortByNameAsc);
 
