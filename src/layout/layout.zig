@@ -253,7 +253,9 @@ pub const TagUnionData = struct {
     size: u32,
     /// Offset of the discriminant within the union (usually after payload)
     discriminant_offset: u16,
-    /// Size of the discriminant in bytes (1, 2, 4, or 8)
+    /// Size of the discriminant in bytes (0, 1, 2, 4, or 8).
+    /// A size of 0 means the tag union has exactly one variant, so the
+    /// discriminant is implicit and always 0.
     discriminant_size: u8,
     /// Range of variants in the tag_union_variants list
     variants: collections.NonEmptyRange,
@@ -265,6 +267,7 @@ pub const TagUnionData = struct {
     /// Read the discriminant value from memory at the given base pointer.
     /// Adds discriminant_offset internally to find the discriminant location.
     pub fn readDiscriminant(self: TagUnionData, base_ptr: [*]const u8) u32 {
+        if (self.discriminant_size == 0) return 0;
         return self.readDiscriminantFromPtr(base_ptr + self.discriminant_offset);
     }
 
@@ -272,17 +275,19 @@ pub const TagUnionData = struct {
     /// Use this when you have a pre-computed discriminant pointer (e.g., from getTagUnionDiscriminantOffset).
     pub fn readDiscriminantFromPtr(self: TagUnionData, disc_ptr: [*]const u8) u32 {
         return switch (self.discriminant_size) {
+            0 => 0,
             1 => disc_ptr[0],
             2 => @as(u32, disc_ptr[0]) | (@as(u32, disc_ptr[1]) << 8),
             4 => @as(u32, disc_ptr[0]) | (@as(u32, disc_ptr[1]) << 8) | (@as(u32, disc_ptr[2]) << 16) | (@as(u32, disc_ptr[3]) << 24),
             8 => @as(u32, disc_ptr[0]) | (@as(u32, disc_ptr[1]) << 8) | (@as(u32, disc_ptr[2]) << 16) | (@as(u32, disc_ptr[3]) << 24), // truncate to u32
-            else => unreachable, // discriminant_size is 1, 2, 4, or 8
+            else => unreachable, // discriminant_size is 0, 1, 2, 4, or 8
         };
     }
 
     /// Write a discriminant value to memory at the given base pointer.
     /// Adds discriminant_offset internally to find the discriminant location.
     pub fn writeDiscriminant(self: TagUnionData, base_ptr: [*]u8, value: u32) void {
+        if (self.discriminant_size == 0) return;
         self.writeDiscriminantToPtr(base_ptr + self.discriminant_offset, value);
     }
 
@@ -290,6 +295,7 @@ pub const TagUnionData = struct {
     /// Use this when you have a pre-computed discriminant pointer (e.g., from getTagUnionDiscriminantOffset).
     pub fn writeDiscriminantToPtr(self: TagUnionData, disc_ptr: [*]u8, value: u32) void {
         switch (self.discriminant_size) {
+            0 => {},
             1 => disc_ptr[0] = @intCast(value),
             2 => {
                 disc_ptr[0] = @intCast(value & 0xFF);
@@ -311,7 +317,7 @@ pub const TagUnionData = struct {
                 disc_ptr[6] = 0;
                 disc_ptr[7] = 0;
             },
-            else => unreachable, // discriminant_size is 1, 2, 4, or 8
+            else => unreachable, // discriminant_size is 0, 1, 2, 4, or 8
         }
     }
 
@@ -324,11 +330,12 @@ pub const TagUnionData = struct {
     /// Can be called before a TagUnionData is created.
     pub fn alignmentForDiscriminantSize(size: u8) std.mem.Alignment {
         return switch (size) {
+            0 => .@"1",
             1 => .@"1",
             2 => .@"2",
             4 => .@"4",
             8 => .@"8",
-            else => unreachable, // discriminant_size is 1, 2, 4, or 8
+            else => unreachable, // discriminant_size is 0, 1, 2, 4, or 8
         };
     }
 
@@ -341,11 +348,12 @@ pub const TagUnionData = struct {
     /// Can be called before a TagUnionData is created.
     pub fn precisionForDiscriminantSize(size: u8) types.Int.Precision {
         return switch (size) {
+            0 => .u8,
             1 => .u8,
             2 => .u16,
             4 => .u32,
             8 => .u64,
-            else => unreachable, // discriminant_size is 1, 2, 4, or 8
+            else => unreachable, // discriminant_size is 0, 1, 2, 4, or 8
         };
     }
 };

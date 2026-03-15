@@ -640,8 +640,9 @@ pub const Store = struct {
             max_payload_alignment = max_payload_alignment.max(variant_alignment);
         }
 
-        // Discriminant size from variant count
-        const discriminant_size: u8 = if (variant_layouts.len <= 256) 1 else if (variant_layouts.len <= 65536) 2 else if (variant_layouts.len <= (1 << 32)) 4 else 8;
+        // Single-variant tag unions keep their tag_union layout but use an implicit
+        // discriminant, so they do not reserve any discriminant bytes in memory.
+        const discriminant_size: u8 = tagUnionDiscriminantSize(variant_layouts.len);
         const disc_align = TagUnionData.alignmentForDiscriminantSize(discriminant_size);
 
         // Canonical layout: payload at offset 0, discriminant after (aligned)
@@ -736,7 +737,7 @@ pub const Store = struct {
             max_payload_alignment = max_payload_alignment.max(variant_alignment);
         }
 
-        const discriminant_size: u8 = if (variant_layouts.len <= 256) 1 else if (variant_layouts.len <= 65536) 2 else if (variant_layouts.len <= (1 << 32)) 4 else 8;
+        const discriminant_size: u8 = tagUnionDiscriminantSize(variant_layouts.len);
         const disc_align = TagUnionData.alignmentForDiscriminantSize(discriminant_size);
         const discriminant_offset: u16 = @intCast(
             std.mem.alignForward(u32, max_payload_size, @intCast(disc_align.toByteUnits())),
@@ -1907,9 +1908,8 @@ pub const Store = struct {
             max_payload_alignment = max_payload_alignment.max(variant_alignment);
         }
 
-        // Calculate discriminant info from the stored discriminant layout
-        const discriminant_layout = self.getLayout(pending.discriminant_layout);
-        const discriminant_size: u8 = @intCast(self.layoutSize(discriminant_layout));
+        // Single-variant tag unions use an implicit discriminant and reserve no bytes for it.
+        const discriminant_size: u8 = tagUnionDiscriminantSize(pending.num_variants);
         const discriminant_alignment = TagUnionData.alignmentForDiscriminantSize(discriminant_size);
 
         // Calculate total size: payload at offset 0, discriminant at aligned offset after payload
@@ -1931,6 +1931,19 @@ pub const Store = struct {
             discriminant_size,
             variant_layouts,
         ));
+    }
+
+    fn tagUnionDiscriminantSize(variant_count: usize) u8 {
+        return if (variant_count <= 1)
+            0
+        else if (variant_count <= 256)
+            1
+        else if (variant_count <= 65536)
+            2
+        else if (variant_count <= (1 << 32))
+            4
+        else
+            8;
     }
 
     /// Note: the caller must verify ahead of time that the given variable does not
@@ -2579,6 +2592,10 @@ pub const Store = struct {
                             }
 
                             if (!has_payload) {
+                                if (num_tags == 1) {
+                                    const zst_idx = try self.ensureZstLayout();
+                                    break :flat_type self.getLayout(try self.putTagUnion(&.{zst_idx}));
+                                }
                                 // Simple tag union with no payloads - just use discriminant
                                 break :flat_type self.getLayout(discriminant_layout_idx);
                             }

@@ -126,6 +126,153 @@ fn resolveTypeVar(lt: *LayoutTest, type_var: types.Var) !layout.Idx {
     return type_layout_resolver.resolve(0, type_var, &lt.type_scope, null);
 }
 
+const ZstLeaf = enum {
+    unit,
+    u64,
+    str,
+};
+
+const ZstWrapper = enum {
+    record1,
+    record2_zst,
+    tuple1,
+    tuple2_zst,
+    tag1,
+    tag1_pair_with_zst,
+};
+
+const ZstMatrixCase = struct {
+    name: []const u8,
+    wrappers: []const ZstWrapper,
+    leaf: ZstLeaf,
+    expect_zero_sized: bool,
+};
+
+fn mkBuiltinType0(lt: *LayoutTest, builtin_ident_idx: base.Ident.Idx, builtin_module_idx: base.Ident.Idx) !types.Var {
+    const unit_var = try lt.type_store.freshFromContent(.{ .structure = .empty_record });
+    const nominal = try lt.type_store.mkNominal(
+        .{ .ident_idx = builtin_ident_idx },
+        unit_var,
+        &.{},
+        builtin_module_idx,
+        false,
+    );
+    return try lt.type_store.freshFromContent(nominal);
+}
+
+fn mkLeafVar(lt: *LayoutTest, builtin_module_idx: base.Ident.Idx, leaf: ZstLeaf) !types.Var {
+    return switch (leaf) {
+        .unit => try lt.type_store.freshFromContent(.{ .structure = .empty_record }),
+        .u64 => try mkBuiltinType0(lt, lt.module_env.idents.u64_type, builtin_module_idx),
+        .str => try mkBuiltinType0(lt, lt.module_env.idents.str, builtin_module_idx),
+    };
+}
+
+fn wrapZstShape(lt: *LayoutTest, inner: types.Var, wrapper: ZstWrapper) !types.Var {
+    const empty_record_var = try lt.type_store.freshFromContent(.{ .structure = .empty_record });
+
+    return switch (wrapper) {
+        .record1 => blk: {
+            const fields = try lt.type_store.record_fields.appendSlice(lt.gpa, &[_]types.RecordField{
+                .{ .name = try lt.module_env.insertIdent(Ident.for_text("value")), .var_ = inner },
+            });
+            break :blk try lt.type_store.freshFromContent(.{ .structure = .{ .record = .{
+                .fields = fields,
+                .ext = try lt.type_store.freshFromContent(.{ .structure = .empty_record }),
+            } } });
+        },
+        .record2_zst => blk: {
+            const fields = try lt.type_store.record_fields.appendSlice(lt.gpa, &[_]types.RecordField{
+                .{ .name = try lt.module_env.insertIdent(Ident.for_text("value")), .var_ = inner },
+                .{ .name = try lt.module_env.insertIdent(Ident.for_text("phantom")), .var_ = empty_record_var },
+            });
+            break :blk try lt.type_store.freshFromContent(.{ .structure = .{ .record = .{
+                .fields = fields,
+                .ext = try lt.type_store.freshFromContent(.{ .structure = .empty_record }),
+            } } });
+        },
+        .tuple1 => blk: {
+            const elems = try lt.type_store.vars.appendSlice(lt.gpa, &[_]types.Var{inner});
+            break :blk try lt.type_store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = elems } } });
+        },
+        .tuple2_zst => blk: {
+            const elems = try lt.type_store.vars.appendSlice(lt.gpa, &[_]types.Var{ inner, empty_record_var });
+            break :blk try lt.type_store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = elems } } });
+        },
+        .tag1 => blk: {
+            const tag = types.Tag{
+                .name = try lt.module_env.insertIdent(Ident.for_text("Only")),
+                .args = try lt.type_store.appendVars(&[_]types.Var{inner}),
+            };
+            const tags = try lt.type_store.appendTags(&[_]types.Tag{tag});
+            break :blk try lt.type_store.freshFromContent(.{ .structure = .{ .tag_union = .{
+                .tags = tags,
+                .ext = try lt.type_store.freshFromContent(.{ .structure = .empty_tag_union }),
+            } } });
+        },
+        .tag1_pair_with_zst => blk: {
+            const tag = types.Tag{
+                .name = try lt.module_env.insertIdent(Ident.for_text("Pair")),
+                .args = try lt.type_store.appendVars(&[_]types.Var{ inner, empty_record_var }),
+            };
+            const tags = try lt.type_store.appendTags(&[_]types.Tag{tag});
+            break :blk try lt.type_store.freshFromContent(.{ .structure = .{ .tag_union = .{
+                .tags = tags,
+                .ext = try lt.type_store.freshFromContent(.{ .structure = .empty_tag_union }),
+            } } });
+        },
+    };
+}
+
+fn buildWrappedZstCase(
+    lt: *LayoutTest,
+    builtin_module_idx: base.Ident.Idx,
+    leaf: ZstLeaf,
+    wrappers: []const ZstWrapper,
+) !types.Var {
+    var current = try mkLeafVar(lt, builtin_module_idx, leaf);
+    for (wrappers) |wrapper| {
+        current = try wrapZstShape(lt, current, wrapper);
+    }
+    return current;
+}
+
+fn expectZstContainerSpecialization(
+    lt: *LayoutTest,
+    builtin_module_idx: base.Ident.Idx,
+    list_ident_idx: base.Ident.Idx,
+    box_ident_idx: base.Ident.Idx,
+    type_var: types.Var,
+    expect_zero_sized: bool,
+) !void {
+    const resolved_idx = try resolveTypeVar(lt, type_var);
+    const resolved_layout = lt.layout_store.getLayout(resolved_idx);
+    try testing.expectEqual(expect_zero_sized, lt.layout_store.layoutSize(resolved_layout) == 0);
+
+    const list_content = try lt.type_store.mkNominal(
+        .{ .ident_idx = list_ident_idx },
+        type_var,
+        &[_]types.Var{type_var},
+        builtin_module_idx,
+        false,
+    );
+    const list_var = try lt.type_store.freshFromContent(list_content);
+    const list_idx = try resolveTypeVar(lt, list_var);
+    const list_layout = lt.layout_store.getLayout(list_idx);
+    try testing.expectEqual(
+        if (expect_zero_sized) layout.LayoutTag.list_of_zst else layout.LayoutTag.list,
+        list_layout.tag,
+    );
+
+    const box_var = try lt.mkBoxType(type_var, box_ident_idx, builtin_module_idx);
+    const box_idx = try resolveTypeVar(lt, box_var);
+    const box_layout = lt.layout_store.getLayout(box_idx);
+    try testing.expectEqual(
+        if (expect_zero_sized) layout.LayoutTag.box_of_zst else layout.LayoutTag.box,
+        box_layout.tag,
+    );
+}
+
 test "fromTypeVar - bool type" {
     var lt = try LayoutTest.init(testing.allocator);
     try lt.initLayoutStore();
@@ -260,6 +407,71 @@ test "fromTypeVar - record with only zero-sized fields" {
     try testing.expect(lt.layout_store.getLayout(box_idx).tag == .box_of_zst);
 }
 
+test "single-tag union with zero-sized payload keeps tag_union layout and size 0" {
+    var lt = try LayoutTest.init(testing.allocator);
+    defer lt.deinit();
+    try lt.initLayoutStore();
+
+    const empty_record_var = try lt.type_store.freshFromContent(.{ .structure = .empty_record });
+    const singleton_tag = types.Tag{
+        .name = try lt.module_env.insertIdent(Ident.for_text("OneTag")),
+        .args = try lt.type_store.appendVars(&[_]types.Var{empty_record_var}),
+    };
+    const tag_range = try lt.type_store.appendTags(&[_]types.Tag{singleton_tag});
+    const tag_union_var = try lt.type_store.freshFromContent(.{ .structure = .{ .tag_union = .{
+        .tags = tag_range,
+        .ext = try lt.type_store.freshFromContent(.{ .structure = .empty_tag_union }),
+    } } });
+
+    const tag_union_idx = try resolveTypeVar(&lt, tag_union_var);
+    const tag_union_layout = lt.layout_store.getLayout(tag_union_idx);
+    try testing.expectEqual(layout.LayoutTag.tag_union, tag_union_layout.tag);
+    try testing.expectEqual(@as(u32, 0), lt.layout_store.layoutSize(tag_union_layout));
+
+    const tu_data = lt.layout_store.getTagUnionData(tag_union_layout.data.tag_union.idx);
+    try testing.expectEqual(@as(u8, 0), tu_data.discriminant_size);
+    try testing.expectEqual(@as(u16, 0), tu_data.discriminant_offset);
+    try testing.expectEqual(@as(u32, 1), tu_data.variants.count);
+}
+
+test "single-tag union with non-zero-sized payload keeps tag_union layout and payload size" {
+    var lt = try LayoutTest.initWithIdents(testing.allocator);
+    defer lt.deinit();
+
+    const builtin_module_idx = try lt.module_env.insertIdent(base.Ident.for_text("Builtin"));
+    lt.module_env.idents.builtin_module = builtin_module_idx;
+    try lt.initLayoutStore();
+
+    const unit_var = try lt.type_store.freshFromContent(.{ .structure = .empty_record });
+    const u64_var = try lt.type_store.freshFromContent(try lt.type_store.mkNominal(
+        .{ .ident_idx = lt.module_env.idents.u64_type },
+        unit_var,
+        &[_]types.Var{},
+        builtin_module_idx,
+        false,
+    ));
+
+    const singleton_tag = types.Tag{
+        .name = try lt.module_env.insertIdent(Ident.for_text("OneTag")),
+        .args = try lt.type_store.appendVars(&[_]types.Var{u64_var}),
+    };
+    const tag_range = try lt.type_store.appendTags(&[_]types.Tag{singleton_tag});
+    const tag_union_var = try lt.type_store.freshFromContent(.{ .structure = .{ .tag_union = .{
+        .tags = tag_range,
+        .ext = try lt.type_store.freshFromContent(.{ .structure = .empty_tag_union }),
+    } } });
+
+    const tag_union_idx = try resolveTypeVar(&lt, tag_union_var);
+    const tag_union_layout = lt.layout_store.getLayout(tag_union_idx);
+    try testing.expectEqual(layout.LayoutTag.tag_union, tag_union_layout.tag);
+    try testing.expectEqual(@as(u32, 8), lt.layout_store.layoutSize(tag_union_layout));
+
+    const tu_data = lt.layout_store.getTagUnionData(tag_union_layout.data.tag_union.idx);
+    try testing.expectEqual(@as(u8, 0), tu_data.discriminant_size);
+    try testing.expectEqual(@as(u16, 8), tu_data.discriminant_offset);
+    try testing.expectEqual(@as(u32, 1), tu_data.variants.count);
+}
+
 test "record extension with empty_record succeeds" {
     var lt: LayoutTest = undefined;
     lt.gpa = testing.allocator;
@@ -368,6 +580,58 @@ test "nested ZST detection - List of record with ZST field" {
     try testing.expect(lt.layout_store.getLayout(list_idx).tag == .list_of_zst);
 }
 
+test "nested ZST detection - singleton record wrapping singleton tag becomes list_of_zst" {
+    // Test: List({ one_field : [OneTag({})] }) should still canonicalize to list_of_zst.
+    // This is currently the desired long-term behavior even though the current compiler
+    // preserves singleton records and singleton tag unions as real containers.
+    var lt: LayoutTest = undefined;
+    lt.gpa = testing.allocator;
+    lt.module_env = try ModuleEnv.init(lt.gpa, "");
+    lt.type_store = try types_store.Store.init(lt.gpa);
+
+    const list_ident_idx = try lt.module_env.insertIdent(Ident.for_text("List"));
+    _ = try lt.module_env.insertIdent(Ident.for_text("Box"));
+    const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
+    lt.module_env.idents.builtin_module = builtin_module_idx;
+
+    lt.module_env_ptr[0] = &lt.module_env;
+    lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
+    lt.type_scope = TypeScope.init(lt.gpa);
+    defer lt.deinit();
+
+    const empty_record_var = try lt.type_store.freshFromContent(.{ .structure = .empty_record });
+
+    const singleton_tag = types.Tag{
+        .name = try lt.module_env.insertIdent(Ident.for_text("OneTag")),
+        .args = try lt.type_store.appendVars(&[_]types.Var{empty_record_var}),
+    };
+    const tag_range = try lt.type_store.appendTags(&[_]types.Tag{singleton_tag});
+    const tag_union_var = try lt.type_store.freshFromContent(.{ .structure = .{ .tag_union = .{
+        .tags = tag_range,
+        .ext = try lt.type_store.freshFromContent(.{ .structure = .empty_tag_union }),
+    } } });
+
+    const record_fields = try lt.type_store.record_fields.appendSlice(lt.gpa, &[_]types.RecordField{
+        .{ .name = try lt.module_env.insertIdent(Ident.for_text("one_field")), .var_ = tag_union_var },
+    });
+    const record_var = try lt.type_store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = record_fields,
+        .ext = try lt.type_store.freshFromContent(.{ .structure = .empty_record }),
+    } } });
+
+    const list_content = try lt.type_store.mkNominal(
+        .{ .ident_idx = list_ident_idx },
+        record_var,
+        &[_]types.Var{record_var},
+        builtin_module_idx,
+        false,
+    );
+    const list_var = try lt.type_store.freshFromContent(list_content);
+
+    const list_idx = try resolveTypeVar(&lt, list_var);
+    try testing.expectEqual(layout.LayoutTag.list_of_zst, lt.layout_store.getLayout(list_idx).tag);
+}
+
 test "nested ZST detection - Box of tuple with ZST elements" {
     // Test: Box(((), ())) should be box_of_zst
     var lt: LayoutTest = undefined;
@@ -446,6 +710,71 @@ test "nested ZST detection - deeply nested" {
 
     // Since the entire nested structure is ZST, the list should be list_of_zst
     try testing.expect(lt.layout_store.getLayout(list_idx).tag == .list_of_zst);
+}
+
+test "zst combinatorics matrix for nested singleton ordinary-data wrappers" {
+    const cases = [_]ZstMatrixCase{
+        .{
+            .name = "unit leaf through single-field record and single-tag union stays zero-sized",
+            .wrappers = &.{ .record1, .tag1 },
+            .leaf = .unit,
+            .expect_zero_sized = true,
+        },
+        .{
+            .name = "unit leaf through tuple singleton and multi-payload single-tag stays zero-sized",
+            .wrappers = &.{ .tuple1, .tag1_pair_with_zst, .record2_zst },
+            .leaf = .unit,
+            .expect_zero_sized = true,
+        },
+        .{
+            .name = "unit leaf through deeper nested singleton wrappers stays zero-sized",
+            .wrappers = &.{ .record1, .tag1, .tuple2_zst, .record2_zst, .tag1_pair_with_zst },
+            .leaf = .unit,
+            .expect_zero_sized = true,
+        },
+        .{
+            .name = "u64 leaf through single-field record and single-tag union stays non-zero-sized",
+            .wrappers = &.{ .record1, .tag1 },
+            .leaf = .u64,
+            .expect_zero_sized = false,
+        },
+        .{
+            .name = "u64 leaf through deeper singleton wrappers stays non-zero-sized",
+            .wrappers = &.{ .record1, .tag1, .tuple2_zst, .record2_zst, .tag1_pair_with_zst },
+            .leaf = .u64,
+            .expect_zero_sized = false,
+        },
+        .{
+            .name = "str leaf through mixed singleton wrappers stays non-zero-sized",
+            .wrappers = &.{ .tuple1, .record2_zst, .tag1, .tuple2_zst },
+            .leaf = .str,
+            .expect_zero_sized = false,
+        },
+    };
+
+    var lt = try LayoutTest.initWithIdents(testing.allocator);
+    defer lt.deinit();
+
+    const list_ident_idx = try lt.module_env.insertIdent(Ident.for_text("List"));
+    const box_ident_idx = try lt.module_env.insertIdent(Ident.for_text("Box"));
+    const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
+    lt.module_env.idents.builtin_module = builtin_module_idx;
+    try lt.initLayoutStore();
+
+    for (cases) |case| {
+        std.debug.print("running zst combinatorics case: {s}\n", .{case.name});
+
+        const type_var = try buildWrappedZstCase(&lt, builtin_module_idx, case.leaf, case.wrappers);
+        try expectTypeAndMonotypeResolversAgree(testing.allocator, &lt, type_var);
+        try expectZstContainerSpecialization(
+            &lt,
+            builtin_module_idx,
+            list_ident_idx,
+            box_ident_idx,
+            type_var,
+            case.expect_zero_sized,
+        );
+    }
 }
 
 test "fromTypeVar - flex var with method constraint returning open tag union" {

@@ -6029,7 +6029,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const disc_use_w32 = (disc_offset + 8 > @as(i32, @intCast(total_size)));
             const lhs_disc = try self.allocTempGeneral();
             const rhs_disc = try self.allocTempGeneral();
-            if (disc_use_w32) {
+            if (disc_size == 0) {
+                try self.codegen.emitLoadImm(lhs_disc, 0);
+                try self.codegen.emitLoadImm(rhs_disc, 0);
+            } else if (disc_use_w32) {
                 try self.codegen.emitLoadStack(.w32, lhs_disc, lhs_base + disc_offset);
                 try self.codegen.emitLoadStack(.w32, rhs_disc, rhs_base + disc_offset);
             } else {
@@ -6038,7 +6041,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             // Mask discriminants to their actual size
-            if (disc_size < 8) {
+            if (disc_size != 0 and disc_size < 8) {
                 const disc_mask: u64 = (@as(u64, 1) << @intCast(disc_size * 8)) - 1;
                 const disc_mask_reg = try self.allocTempGeneral();
                 try self.codegen.emitLoadImm(disc_mask_reg, @bitCast(disc_mask));
@@ -7175,6 +7178,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             tu_disc_size: u8,
         ) Allocator.Error!GeneralReg {
             const disc_reg = try self.allocTempGeneral();
+            if (tu_disc_size == 0) {
+                try self.codegen.emitLoadImm(disc_reg, 0);
+                return disc_reg;
+            }
             switch (value_loc) {
                 .stack_str, .stack_i128 => |base_offset| {
                     if (comptime target.toCpuArch() == .aarch64) {
@@ -7217,7 +7224,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             // Mask to actual discriminant size — memory loads may include padding bytes
-            if (tu_disc_size < 4) {
+            if (tu_disc_size != 0 and tu_disc_size < 4) {
                 const mask: i32 = (@as(i32, 1) << @as(u5, @intCast(tu_disc_size * 8))) - 1;
                 if (comptime target.toCpuArch() == .aarch64) {
                     const mask_reg = try self.allocTempGeneral();
@@ -9960,15 +9967,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // Tag union in memory — load discriminant from its offset
                 const tu_data = ls.getTagUnionData(union_layout.data.tag_union.idx);
                 const disc_offset: i32 = @intCast(tu_data.discriminant_offset);
-                const disc_size = ValueSize.fromByteCount(tu_data.discriminant_size);
+                if (tu_data.discriminant_size == 0) {
+                    try self.codegen.emitLoadImm(tag_reg, 0);
+                } else {
+                    const disc_size = ValueSize.fromByteCount(tu_data.discriminant_size);
 
-                const base_offset: i32 = switch (value_loc) {
-                    .stack => |s| s.offset,
-                    .stack_str => |off| off,
-                    else => unreachable,
-                };
+                    const base_offset: i32 = switch (value_loc) {
+                        .stack => |s| s.offset,
+                        .stack_str => |off| off,
+                        else => unreachable,
+                    };
 
-                try self.emitSizedLoadStack(tag_reg, base_offset + disc_offset, disc_size);
+                    try self.emitSizedLoadStack(tag_reg, base_offset + disc_offset, disc_size);
+                }
             } else if (union_layout.tag == .scalar or union_layout.tag == .zst) {
                 // Scalar/ZST — the value itself IS the discriminant
                 switch (value_loc) {
@@ -10130,6 +10141,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Store a discriminant value at the given offset
         fn storeDiscriminant(self: *Self, offset: i32, value: u16, disc_size: u8) Allocator.Error!void {
+            if (disc_size == 0) return;
+
             const reg = try self.allocTempGeneral();
             try self.codegen.emitLoadImm(reg, value);
 

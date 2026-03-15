@@ -1120,8 +1120,13 @@ fn emitRcAtPtr(
             if (variants.len == 0) return;
 
             const disc_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            try self.emitLocalGet(value_ptr_local);
-            try self.emitLoadBySize(tu_data.discriminant_size, tu_data.discriminant_offset);
+            if (tu_data.discriminant_size == 0) {
+                self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+            } else {
+                try self.emitLocalGet(value_ptr_local);
+                try self.emitLoadBySize(tu_data.discriminant_size, tu_data.discriminant_offset);
+            }
             try self.emitLocalSet(disc_local);
 
             for (0..variants.len) |variant_i| {
@@ -1697,10 +1702,15 @@ fn generateMatchBranches(self: *Self, branches: []const LIR.LirMatchBranch, valu
                 const tu_data = ls.getTagUnionData(l.data.tag_union.idx);
                 const disc_offset = tu_data.discriminant_offset;
                 const disc_size: u32 = tu_data.discriminant_size;
-                // Load discriminant: value_local[disc_offset]
-                self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-                WasmModule.leb128WriteU32(self.allocator, &self.body, value_local) catch return error.OutOfMemory;
-                try self.emitLoadOpSized(.i32, disc_size, disc_offset);
+                if (disc_size == 0) {
+                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+                } else {
+                    // Load discriminant: value_local[disc_offset]
+                    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, value_local) catch return error.OutOfMemory;
+                    try self.emitLoadOpSized(.i32, disc_size, disc_offset);
+                }
             } else {
                 // Value is the discriminant itself
                 self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
@@ -2464,14 +2474,24 @@ fn compareTagUnionByLayout(self: *Self, lhs_local: u32, rhs_local: u32, layout_i
     const result_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
 
     // Load LHS discriminant
-    try self.emitLocalGet(lhs_local);
-    try self.emitLoadBySize(disc_size, disc_offset);
+    if (disc_size == 0) {
+        self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+        WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+    } else {
+        try self.emitLocalGet(lhs_local);
+        try self.emitLoadBySize(disc_size, disc_offset);
+    }
     const lhs_disc = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(lhs_disc);
 
     // Load RHS discriminant
-    try self.emitLocalGet(rhs_local);
-    try self.emitLoadBySize(disc_size, disc_offset);
+    if (disc_size == 0) {
+        self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+        WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+    } else {
+        try self.emitLocalGet(rhs_local);
+        try self.emitLoadBySize(disc_size, disc_offset);
+    }
     const rhs_disc = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(rhs_disc);
 
@@ -2992,6 +3012,11 @@ fn emitBytewiseEqAtOffset(self: *Self, lhs_local: u32, rhs_local: u32, base_offs
 /// Loads an unsigned integer of disc_size bytes at the given offset from the address on the stack.
 fn emitLoadBySize(self: *Self, disc_size: u8, offset: u16) Allocator.Error!void {
     switch (disc_size) {
+        0 => {
+            self.body.append(self.allocator, Op.drop) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+        },
         1 => {
             self.body.append(self.allocator, Op.i32_load8_u) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
@@ -5470,9 +5495,14 @@ fn generateCFMatchBranches(self: *Self, branches: []const LIR.CFMatchBranch, val
                 const tu_data = ls.getTagUnionData(l.data.tag_union.idx);
                 const disc_offset = tu_data.discriminant_offset;
                 const disc_size: u32 = tu_data.discriminant_size;
-                self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-                WasmModule.leb128WriteU32(self.allocator, &self.body, value_local) catch return error.OutOfMemory;
-                try self.emitLoadOpSized(.i32, disc_size, disc_offset);
+                if (disc_size == 0) {
+                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+                } else {
+                    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, value_local) catch return error.OutOfMemory;
+                    try self.emitLoadOpSized(.i32, disc_size, disc_offset);
+                }
             } else {
                 self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
                 WasmModule.leb128WriteU32(self.allocator, &self.body, value_local) catch return error.OutOfMemory;
@@ -5807,6 +5837,29 @@ fn emitLoadOp(self: *Self, vt: ValType, mem_offset: u32) Allocator.Error!void {
 /// Emit a size-aware load instruction for a field with a known byte size.
 /// For sub-32-bit fields (1 or 2 bytes), uses i32.load8_u/i32.load16_u.
 fn emitLoadOpSized(self: *Self, vt: ValType, byte_size: u32, mem_offset: u32) Allocator.Error!void {
+    if (byte_size == 0) {
+        self.body.append(self.allocator, Op.drop) catch return error.OutOfMemory;
+        switch (vt) {
+            .i32 => {
+                self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+            },
+            .i64 => {
+                self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+                WasmModule.leb128WriteI64(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+            },
+            .f32 => {
+                self.body.append(self.allocator, Op.f32_const) catch return error.OutOfMemory;
+                try self.body.appendSlice(self.allocator, std.mem.asBytes(&@as(f32, 0)));
+            },
+            .f64 => {
+                self.body.append(self.allocator, Op.f64_const) catch return error.OutOfMemory;
+                try self.body.appendSlice(self.allocator, std.mem.asBytes(&@as(f64, 0)));
+            },
+        }
+        return;
+    }
+
     if (vt == .i32 and byte_size < 4) {
         // Sub-word load for i32 values in small fields
         const op: u8 = if (byte_size == 1) Op.i32_load8_u else Op.i32_load16_u;
@@ -5860,6 +5913,13 @@ fn emitStoreToMem(self: *Self, base_local: u32, field_offset: u32, vt: ValType) 
 
 /// Store a value into memory with size-aware opcodes for sub-32-bit fields.
 fn emitStoreToMemSized(self: *Self, base_local: u32, field_offset: u32, vt: ValType, byte_size: u32) Allocator.Error!void {
+    if (byte_size == 0) {
+        const temp = self.storage.allocAnonymousLocal(vt) catch return error.OutOfMemory;
+        self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+        WasmModule.leb128WriteU32(self.allocator, &self.body, temp) catch return error.OutOfMemory;
+        return;
+    }
+
     const temp = self.storage.allocAnonymousLocal(vt) catch return error.OutOfMemory;
     self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
     WasmModule.leb128WriteU32(self.allocator, &self.body, temp) catch return error.OutOfMemory;
@@ -6372,9 +6432,11 @@ fn generateZeroArgTag(self: *Self, z: anytype) Allocator.Error!void {
         const disc_offset = tu_data.discriminant_offset;
         const disc_size: u32 = tu_data.discriminant_size;
         // Push discriminant value
-        self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-        WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(z.discriminant)) catch return error.OutOfMemory;
-        try self.emitStoreToMemSized(base_local, disc_offset, .i32, disc_size);
+        if (disc_size != 0) {
+            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(z.discriminant)) catch return error.OutOfMemory;
+            try self.emitStoreToMemSized(base_local, disc_offset, .i32, disc_size);
+        }
 
         // Push base pointer
         self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
@@ -6443,9 +6505,11 @@ fn generateTag(self: *Self, t: anytype) Allocator.Error!void {
 
     // Store discriminant AFTER payload (so it can't be overwritten)
     const disc_size: u32 = tu_data.discriminant_size;
-    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(t.discriminant)) catch return error.OutOfMemory;
-    try self.emitStoreToMemSized(base_local, disc_offset, .i32, disc_size);
+    if (disc_size != 0) {
+        self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+        WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(t.discriminant)) catch return error.OutOfMemory;
+        try self.emitStoreToMemSized(base_local, disc_offset, .i32, disc_size);
+    }
 
     // Push base pointer
     self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
@@ -6494,9 +6558,14 @@ fn generateDiscriminantSwitch(self: *Self, ds: anytype) Allocator.Error!void {
             const ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, ptr_local) catch return error.OutOfMemory;
-            self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, &self.body, ptr_local) catch return error.OutOfMemory;
-            try self.emitLoadOpSized(.i32, disc_size, disc_offset);
+            if (disc_size == 0) {
+                self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+            } else {
+                self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                WasmModule.leb128WriteU32(self.allocator, &self.body, ptr_local) catch return error.OutOfMemory;
+                try self.emitLoadOpSized(.i32, disc_size, disc_offset);
+            }
             self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, disc_local) catch return error.OutOfMemory;
         }
