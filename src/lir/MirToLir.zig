@@ -333,7 +333,11 @@ fn registerSpecializedMonotypeLayout(
         },
         .list => |l| switch (layout_val.tag) {
             .list => try self.registerSpecializedMonotypeLayout(l.elem, layout_val.data.list, saved),
-            .list_of_zst => try self.registerSpecializedMonotypeLayout(l.elem, .zst, saved),
+            .list_of_zst => try self.registerSpecializedMonotypeLayout(
+                l.elem,
+                try self.zeroSizedSpecializationLayoutFromMonotype(l.elem),
+                saved,
+            ),
             else => {},
         },
         .tuple => |t| {
@@ -413,6 +417,14 @@ fn registerSpecializedMonotypeLayout(
             }
         },
     }
+}
+
+fn zeroSizedSpecializationLayoutFromMonotype(self: *Self, mono_idx: Monotype.Idx) Allocator.Error!layout.Idx {
+    const canonical = try self.layoutFromMonotype(mono_idx);
+    if (self.layout_store.layoutSize(self.layout_store.getLayout(canonical)) == 0) {
+        return canonical;
+    }
+    return .zst;
 }
 
 fn isFunctionLayout(self: *Self, layout_idx: layout.Idx) bool {
@@ -1420,12 +1432,51 @@ fn runtimeLayoutFromSpecializedDirectCall(
 }
 
 fn runtimeListElemLayoutFromMirExpr(self: *Self, list_mir_expr_id: MIR.ExprId) Allocator.Error!layout.Idx {
+    const list_mono_idx = self.mir_store.typeOf(list_mir_expr_id);
+    const list_mono = self.mir_store.monotype_store.getMonotype(list_mono_idx);
+
+    switch (self.mir_store.getExpr(list_mir_expr_id)) {
+        .list => |list_data| {
+            const elems = self.mir_store.getExprSpan(list_data.elems);
+            if (elems.len > 0) return self.runtimeValueLayoutFromMirExpr(elems[0]);
+        },
+        .run_low_level => |ll| switch (ll.op) {
+            .list_append_unsafe => {
+                const args = self.mir_store.getExprSpan(ll.args);
+                if (args.len >= 2) return self.runtimeValueLayoutFromMirExpr(args[1]);
+            },
+            .list_concat => {
+                const args = self.mir_store.getExprSpan(ll.args);
+                if (args.len >= 1) return self.runtimeListElemLayoutFromMirExpr(args[0]);
+            },
+            else => {},
+        },
+        .lookup => |symbol| {
+            if (self.mir_store.getSymbolDef(symbol)) |def_expr_id| {
+                return self.runtimeListElemLayoutFromMirExpr(def_expr_id);
+            }
+        },
+        .block => |block| return self.runtimeListElemLayoutFromMirExpr(block.final_expr),
+        else => {},
+    }
+
     const list_layout_idx = try self.runtimeValueLayoutFromMirExpr(list_mir_expr_id);
     const list_layout = self.layout_store.getLayout(list_layout_idx);
 
     return switch (list_layout.tag) {
         .list => list_layout.data.list,
-        .list_of_zst => .zst,
+        .list_of_zst => switch (list_mono) {
+            .list => |l| try self.zeroSizedSpecializationLayoutFromMonotype(l.elem),
+            else => {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "MirToLir invariant violated: expected list monotype for list_get_unsafe source, got {s}",
+                        .{@tagName(list_mono)},
+                    );
+                }
+                unreachable;
+            },
+        },
         else => {
             if (builtin.mode == .Debug) {
                 std.debug.panic(
@@ -2097,12 +2148,7 @@ fn lowerInt(self: *Self, int_data: anytype, mono_idx: Monotype.Idx, region: Regi
 
 fn lowerList(self: *Self, list_data: anytype, mir_expr_id: MIR.ExprId, region: Region) Allocator.Error!LirExprId {
     const list_layout = try self.runtimeValueLayoutFromMirExpr(mir_expr_id);
-    const list_layout_val = self.layout_store.getLayout(list_layout);
-    const elem_layout = switch (list_layout_val.tag) {
-        .list => list_layout_val.data.list,
-        .list_of_zst => .zst,
-        .scalar, .box, .box_of_zst, .struct_, .closure, .zst, .tag_union => unreachable,
-    };
+    const elem_layout = try self.runtimeListElemLayoutFromMirExpr(mir_expr_id);
 
     const mir_elems = self.mir_store.getExprSpan(list_data.elems);
     if (mir_elems.len == 0) {
@@ -4383,6 +4429,7 @@ fn registerBindingPatternSymbols(
         },
         .struct_destructure => |sd| {
             const mir_patterns = self.mir_store.getPatternSpan(sd.fields);
+            if (mir_patterns.len == 0) return;
             switch (self.mir_store.monotype_store.getMonotype(mono_idx)) {
                 .record => |record_mono| {
                     const all_fields = self.mir_store.monotype_store.getFields(record_mono.fields);
@@ -4564,6 +4611,9 @@ fn lowerPatternInternal(
         .struct_destructure => |sd| blk: {
             const struct_layout = runtime_layout;
             const mir_patterns = self.mir_store.getPatternSpan(sd.fields);
+            if (mir_patterns.len == 0) {
+                break :blk self.lowerWildcardBindingPattern(struct_layout, ownership_mode, region);
+            }
 
             switch (self.mir_store.monotype_store.getMonotype(mono_idx)) {
                 .record => |record_mono| {

@@ -1729,7 +1729,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const list_layout_val = ls.getLayout(list_layout_idx);
                     const list_elem_layout: layout.Idx = switch (list_layout_val.tag) {
                         .list => list_layout_val.data.list,
-                        .list_of_zst => .zst,
+                        .list_of_zst => ll.ret_layout,
                         else => {
                             if (builtin.mode == .Debug) {
                                 std.debug.panic(

@@ -7287,7 +7287,11 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             // Get element layout from the list type
             const list_layout_idx = self.exprLayoutIdx(args[0]);
             const list_layout = ls.getLayout(list_layout_idx);
-            const elem_layout_idx = list_layout.data.list;
+            const elem_layout_idx = switch (list_layout.tag) {
+                .list => list_layout.data.list,
+                .list_of_zst => ll.ret_layout,
+                else => unreachable,
+            };
             const elem_size: u32 = self.layoutByteSize(elem_layout_idx);
             const elem_is_composite = self.isCompositeLayout(elem_layout_idx);
 
