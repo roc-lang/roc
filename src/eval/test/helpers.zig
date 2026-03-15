@@ -430,6 +430,7 @@ fn forkAndExecute(
     }
 }
 
+/// Compare interpreter output against the dev, wasm, and llvm backend outputs.
 pub fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []const u8, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) !void {
     const inspect_expr = wrapInStrInspect(module_env, expr_idx) catch return error.EvaluatorMismatch;
 
@@ -467,6 +468,7 @@ fn llvmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
     return devEvaluatorStr(allocator, module_env, expr_idx, builtin_module_env);
 }
 
+/// Compare interpreter output against the llvm backend output.
 pub fn compareWithLlvmEvaluator(
     allocator: std.mem.Allocator,
     interpreter_str: []const u8,
