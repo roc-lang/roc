@@ -412,13 +412,11 @@ fn modify_refcount_erased_help<'ctx>(
     builder.new_build_conditional_branch(refcounter_is_null, noop_block, call_refcounter_block);
     {
         builder.position_at_end(call_refcounter_block);
-        let opaque_ptr_type = erased::opaque_ptr_type(env);
-        let value = erased::load(env, arg_val, ErasedField::Value, opaque_ptr_type);
+        let ptr_type = erased::ptr_type(env);
+        let value = erased::load(env, arg_val, ErasedField::Value, ptr_type);
 
         builder.new_build_indirect_call(
-            env.context
-                .void_type()
-                .fn_type(&[opaque_ptr_type.into()], false),
+            env.context.void_type().fn_type(&[ptr_type.into()], false),
             refcounter,
             &[value.into()],
             "call_refcounter",

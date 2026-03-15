@@ -316,23 +316,20 @@ main! = |_| processComplex(Ok([Some(42), None]))
 				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-closure
-			(captures
-				(capture (ident "processComplex")))
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-call
-					(e-lookup-local
-						(p-assign (ident "processComplex")))
-					(e-tag (name "Ok")
-						(args
-							(e-list
-								(elems
-									(e-tag (name "Some")
-										(args
-											(e-num (value "42"))))
-									(e-tag (name "None"))))))))))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-call
+				(e-lookup-local
+					(p-assign (ident "processComplex")))
+				(e-tag (name "Ok")
+					(args
+						(e-list
+							(elems
+								(e-tag (name "Some")
+									(args
+										(e-num (value "42"))))
+								(e-tag (name "None")))))))))
 	(s-alias-decl
 		(ty-header (name "ComplexType")
 			(ty-args

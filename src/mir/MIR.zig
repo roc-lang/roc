@@ -6,8 +6,7 @@
 //! - **Monomorphic**: All types are concrete. No type variables or extensions.
 //! - **Desugared**: No `if` (just `match`), no binops, no static dispatch.
 //!   Everything is fully resolved function calls.
-//! - **Globally unique**: Symbols are (module_idx, ident_idx) pairs, not
-//!   module-local indices.
+//! - **Globally unique**: Symbols are opaque 64-bit IDs, not module-local indices.
 //! - **Lambda-aware**: Lambdas are still present as first-class values.
 //!   Lambda set inference happens later on top of MIR.
 //!
@@ -28,33 +27,37 @@ const CIR = @import("can").CIR;
 
 // --- ID types ---
 
-/// Global identifier — combines module index with local identifier.
-/// References are globally unique (not module-local), enabling
-/// cross-module code generation without index collisions.
+/// Global identifier (opaque 64-bit id).
 pub const Symbol = packed struct(u64) {
-    module_idx: u32,
-    ident_idx: Ident.Idx,
+    id: u64,
 
     comptime {
         std.debug.assert(@sizeOf(Symbol) == @sizeOf(u64));
         std.debug.assert(@alignOf(Symbol) == @alignOf(u64));
     }
 
+    pub fn fromRaw(id: u64) Symbol {
+        return .{ .id = id };
+    }
+
+    pub fn raw(self: Symbol) u64 {
+        return self.id;
+    }
+
     pub fn eql(a: Symbol, b: Symbol) bool {
-        return @as(u64, @bitCast(a)) == @as(u64, @bitCast(b));
+        return a.id == b.id;
     }
 
     pub fn hash(self: Symbol) u64 {
-        return @bitCast(self);
+        return self.id;
     }
 
     pub const none: Symbol = .{
-        .module_idx = std.math.maxInt(u32),
-        .ident_idx = Ident.Idx.NONE,
+        .id = std.math.maxInt(u64),
     };
 
     pub fn isNone(self: Symbol) bool {
-        return self.module_idx == std.math.maxInt(u32);
+        return self.id == std.math.maxInt(u64);
     }
 };
 
@@ -87,6 +90,17 @@ pub const RestIndex = enum(u32) {
 
     pub fn isNone(self: RestIndex) bool {
         return self == .none;
+    }
+};
+
+/// Index into Store.closure_members
+pub const ClosureMemberId = enum(u32) {
+    _,
+
+    pub const none: ClosureMemberId = @enumFromInt(std.math.maxInt(u32));
+
+    pub fn isNone(self: ClosureMemberId) bool {
+        return self == none;
     }
 };
 
@@ -176,16 +190,30 @@ pub const CaptureSpan = extern struct {
     }
 };
 
-/// Span of field names (Ident.Idx) stored in extra_data.
-pub const FieldNameSpan = extern struct {
+/// Span of CaptureBinding values stored in capture_bindings array.
+pub const CaptureBindingSpan = extern struct {
     start: u32,
     len: u16,
 
-    pub fn empty() FieldNameSpan {
+    pub fn empty() CaptureBindingSpan {
         return .{ .start = 0, .len = 0 };
     }
 
-    pub fn isEmpty(self: FieldNameSpan) bool {
+    pub fn isEmpty(self: CaptureBindingSpan) bool {
+        return self.len == 0;
+    }
+};
+
+/// Span of borrow bindings stored in borrow_bindings array.
+pub const BorrowBindingSpan = extern struct {
+    start: u32,
+    len: u16,
+
+    pub fn empty() BorrowBindingSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+
+    pub fn isEmpty(self: BorrowBindingSpan) bool {
         return self.len == 0;
     }
 };
@@ -207,6 +235,12 @@ pub const Stmt = union(enum) {
     };
 };
 
+/// A binding introduced for the duration of a borrow scope.
+pub const BorrowBinding = struct {
+    pattern: PatternId,
+    expr: ExprId,
+};
+
 /// A branch in a match expression.
 pub const Branch = struct {
     /// Patterns to match (multiple for `|` alternatives)
@@ -226,6 +260,24 @@ pub const BranchPattern = struct {
 /// A captured variable in a closure.
 pub const Capture = struct {
     symbol: Symbol,
+};
+
+/// One capture slot of a lifted closure, described without committing to a layout.
+pub const CaptureBinding = struct {
+    /// Local symbol introduced in the lifted function body for this capture slot.
+    local_symbol: Symbol,
+    /// The source expression captured at the closure creation site.
+    source_expr: ExprId,
+    /// Monotype of the captured value.
+    monotype: Monotype.Idx,
+};
+
+/// Semantic closure member information for a lifted closure value.
+pub const ClosureMember = struct {
+    /// Symbol of the lifted function (registered in symbol_defs)
+    fn_symbol: Symbol,
+    /// Capture slots in the order used by the closure payload.
+    capture_bindings: CaptureBindingSpan,
 };
 
 // --- Expression ---
@@ -258,15 +310,11 @@ pub const Expr = union(enum) {
         elems: ExprSpan,
     },
 
-    /// Record literal (fields sorted by name)
-    record: struct {
+    /// Structural product literal.
+    /// For records, fields are in canonical closed-record order.
+    /// For tuples, fields are in element-index order.
+    struct_: struct {
         fields: ExprSpan,
-        field_names: FieldNameSpan,
-    },
-
-    /// Tuple literal
-    tuple: struct {
-        elems: ExprSpan,
     },
 
     /// Tag application (zero-arg tag is just len=0 args)
@@ -313,21 +361,26 @@ pub const Expr = union(enum) {
         final_expr: ExprId,
     },
 
-    // --- Access ---
-
-    /// Record field access (resolved to concrete field name)
-    record_access: struct {
-        record: ExprId,
-        field_name: Ident.Idx,
+    /// Borrow scope with compiler-generated lexical bindings.
+    borrow_scope: struct {
+        bindings: BorrowBindingSpan,
+        body: ExprId,
     },
 
-    /// Tuple element access by index
-    tuple_access: struct {
-        tuple: ExprId,
-        elem_index: u32,
+    // --- Access ---
+
+    /// Structural product field access by semantic field index.
+    /// For records this is canonical closed-record field order.
+    /// For tuples this is the tuple element index.
+    struct_access: struct {
+        struct_: ExprId,
+        field_idx: u32,
     },
 
     // --- Low-level ---
+
+    /// Escape and quote a string for inspect output
+    str_escape_and_quote: ExprId,
 
     /// Low-level builtin operation
     run_low_level: struct {
@@ -429,15 +482,11 @@ pub const Pattern = union(enum) {
     /// Match a specific f64
     frac_f64_literal: f64,
 
-    /// Destructure a record (field-name-sorted order)
-    record_destructure: struct {
-        destructs: PatternSpan,
-        field_names: FieldNameSpan,
-    },
-
-    /// Destructure a tuple
-    tuple_destructure: struct {
-        elems: PatternSpan,
+    /// Structural product destructure.
+    /// Records use full canonical closed-record order.
+    /// Tuples use element-index order.
+    struct_destructure: struct {
+        fields: PatternSpan,
     },
 
     /// Destructure a list
@@ -485,14 +534,38 @@ pub const Store = struct {
     /// Statements (let bindings in blocks)
     stmts: std.ArrayListUnmanaged(Stmt),
 
+    /// Borrow-scope bindings
+    borrow_bindings: std.ArrayListUnmanaged(BorrowBinding),
+
     /// Captures (closure captured variables)
     captures: std.ArrayListUnmanaged(Capture),
+
+    /// Capture bindings for lifted closures
+    capture_bindings: std.ArrayListUnmanaged(CaptureBinding),
 
     /// The monotype store (owns all monotypes)
     monotype_store: Monotype.Store,
 
     /// Map from global symbol key (u64 bitcast) to its definition ExprId
     symbol_defs: std.AutoHashMapUnmanaged(u64, ExprId),
+
+    /// Explicit mutability metadata for symbols.
+    /// `true` means symbol is reassignable (mutable), `false` means immutable.
+    symbol_reassignable: std.AutoHashMapUnmanaged(u64, bool),
+
+    /// Closure members produced by closure lifting.
+    closure_members: std.ArrayListUnmanaged(ClosureMember),
+
+    /// Maps a closure-valued ExprId to its lifted closure member.
+    expr_closure_members: std.AutoHashMapUnmanaged(u32, ClosureMemberId),
+
+    /// Maps a lifted function symbol to its closure member.
+    fn_closure_members: std.AutoHashMapUnmanaged(u64, ClosureMemberId),
+
+    /// String literals copied from CIR during lowering.
+    /// MIR owns its own string data so downstream passes (LIR, codegen)
+    /// never need to reach back into CIR module envs.
+    strings: StringLiteral.Store,
 
     pub fn init(allocator: Allocator) Allocator.Error!Store {
         return .{
@@ -505,9 +578,16 @@ pub const Store = struct {
             .branches = .empty,
             .branch_patterns = .empty,
             .stmts = .empty,
+            .borrow_bindings = .empty,
             .captures = .empty,
+            .capture_bindings = .empty,
             .monotype_store = try Monotype.Store.init(allocator),
+            .closure_members = .empty,
+            .expr_closure_members = .empty,
+            .fn_closure_members = .empty,
             .symbol_defs = .empty,
+            .symbol_reassignable = .empty,
+            .strings = .{},
         };
     }
 
@@ -521,9 +601,16 @@ pub const Store = struct {
         self.branches.deinit(allocator);
         self.branch_patterns.deinit(allocator);
         self.stmts.deinit(allocator);
+        self.borrow_bindings.deinit(allocator);
         self.captures.deinit(allocator);
+        self.capture_bindings.deinit(allocator);
         self.monotype_store.deinit(allocator);
+        self.closure_members.deinit(allocator);
+        self.expr_closure_members.deinit(allocator);
+        self.fn_closure_members.deinit(allocator);
         self.symbol_defs.deinit(allocator);
+        self.symbol_reassignable.deinit(allocator);
+        self.strings.deinit(allocator);
     }
 
     /// Add an expression with its monotype and region. Returns the ExprId.
@@ -551,6 +638,11 @@ pub const Store = struct {
     /// Get the region of an expression.
     pub fn getRegion(self: *const Store, id: ExprId) Region {
         return self.expr_regions.items[@intFromEnum(id)];
+    }
+
+    /// Get a string literal by its index.
+    pub fn getString(self: *const Store, idx: StringLiteral.Idx) []const u8 {
+        return self.strings.get(idx);
     }
 
     /// Add a pattern with its monotype. Returns the PatternId.
@@ -609,23 +701,6 @@ pub const Store = struct {
         return @ptrCast(raw);
     }
 
-    /// Store field names (Ident.Idx) in extra_data and return a FieldNameSpan.
-    pub fn addFieldNameSpan(self: *Store, allocator: Allocator, names: []const Ident.Idx) !FieldNameSpan {
-        if (names.len == 0) return FieldNameSpan.empty();
-        const start: u32 = @intCast(self.extra_data.items.len);
-        for (names) |name| {
-            try self.extra_data.append(allocator, @bitCast(name));
-        }
-        return .{ .start = start, .len = @intCast(names.len) };
-    }
-
-    /// Retrieve field names from a FieldNameSpan.
-    pub fn getFieldNameSpan(self: *const Store, span: FieldNameSpan) []const Ident.Idx {
-        if (span.len == 0) return &.{};
-        const raw = self.extra_data.items[span.start..][0..span.len];
-        return @ptrCast(raw);
-    }
-
     /// Add branches and return a BranchSpan.
     pub fn addBranches(self: *Store, allocator: Allocator, branch_list: []const Branch) !BranchSpan {
         if (branch_list.len == 0) return BranchSpan.empty();
@@ -668,6 +743,20 @@ pub const Store = struct {
         return self.stmts.items[span.start..][0..span.len];
     }
 
+    /// Add borrow bindings and return a BorrowBindingSpan.
+    pub fn addBorrowBindings(self: *Store, allocator: Allocator, binding_list: []const BorrowBinding) !BorrowBindingSpan {
+        if (binding_list.len == 0) return BorrowBindingSpan.empty();
+        const start: u32 = @intCast(self.borrow_bindings.items.len);
+        try self.borrow_bindings.appendSlice(allocator, binding_list);
+        return .{ .start = start, .len = @intCast(binding_list.len) };
+    }
+
+    /// Get borrow bindings from a BorrowBindingSpan.
+    pub fn getBorrowBindings(self: *const Store, span: BorrowBindingSpan) []const BorrowBinding {
+        if (span.len == 0) return &.{};
+        return self.borrow_bindings.items[span.start..][0..span.len];
+    }
+
     /// Add captures and return a CaptureSpan.
     pub fn addCaptures(self: *Store, allocator: Allocator, capture_list: []const Capture) !CaptureSpan {
         if (capture_list.len == 0) return CaptureSpan.empty();
@@ -682,13 +771,100 @@ pub const Store = struct {
         return self.captures.items[span.start..][0..span.len];
     }
 
+    /// Add capture bindings and return a CaptureBindingSpan.
+    pub fn addCaptureBindings(self: *Store, allocator: Allocator, binding_list: []const CaptureBinding) !CaptureBindingSpan {
+        if (binding_list.len == 0) return CaptureBindingSpan.empty();
+        const start: u32 = @intCast(self.capture_bindings.items.len);
+        try self.capture_bindings.appendSlice(allocator, binding_list);
+        return .{ .start = start, .len = @intCast(binding_list.len) };
+    }
+
+    /// Get capture bindings from a CaptureBindingSpan.
+    pub fn getCaptureBindings(self: *const Store, span: CaptureBindingSpan) []const CaptureBinding {
+        if (span.len == 0) return &.{};
+        return self.capture_bindings.items[span.start..][0..span.len];
+    }
+
+    /// Register a lifted closure member.
+    pub fn addClosureMember(self: *Store, allocator: Allocator, member: ClosureMember) !ClosureMemberId {
+        const idx: u32 = @intCast(self.closure_members.items.len);
+        try self.closure_members.append(allocator, member);
+        const member_id: ClosureMemberId = @enumFromInt(idx);
+        try self.fn_closure_members.put(allocator, member.fn_symbol.raw(), member_id);
+        return member_id;
+    }
+
+    /// Get a closure member by ID.
+    pub fn getClosureMember(self: *const Store, id: ClosureMemberId) ClosureMember {
+        return self.closure_members.items[@intFromEnum(id)];
+    }
+
+    /// Look up a lifted closure member by its function symbol.
+    pub fn getClosureMemberForFn(self: *const Store, symbol: Symbol) ?ClosureMemberId {
+        return self.fn_closure_members.get(symbol.raw());
+    }
+
+    /// Register a closure-valued expression's member identity.
+    pub fn registerExprClosureMember(self: *Store, allocator: Allocator, expr_id: ExprId, member_id: ClosureMemberId) !void {
+        try self.expr_closure_members.put(allocator, @intFromEnum(expr_id), member_id);
+    }
+
+    /// Look up the closure member for a closure-valued expression, if any.
+    pub fn getExprClosureMember(self: *const Store, expr_id: ExprId) ?ClosureMemberId {
+        return self.expr_closure_members.get(@intFromEnum(expr_id));
+    }
+
     /// Register a symbol definition.
     pub fn registerSymbolDef(self: *Store, allocator: Allocator, symbol: Symbol, expr_id: ExprId) !void {
-        try self.symbol_defs.put(allocator, @bitCast(symbol), expr_id);
+        const key: u64 = @bitCast(symbol);
+        const gop = try self.symbol_defs.getOrPut(allocator, key);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = expr_id;
+            return;
+        }
+
+        if (std.debug.runtime_safety) {
+            std.debug.panic(
+                "MIR duplicate symbol definition for symbol key {d}: existing expr {}, new expr {}",
+                .{ key, @intFromEnum(gop.value_ptr.*), @intFromEnum(expr_id) },
+            );
+        }
+        unreachable;
     }
 
     /// Look up a symbol definition.
     pub fn getSymbolDef(self: *const Store, symbol: Symbol) ?ExprId {
         return self.symbol_defs.get(@bitCast(symbol));
+    }
+
+    /// Register mutability metadata for a symbol.
+    pub fn registerSymbolReassignable(self: *Store, allocator: Allocator, symbol: Symbol, reassignable: bool) !void {
+        const key = symbol.raw();
+        const gop = try self.symbol_reassignable.getOrPut(allocator, key);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = reassignable;
+            return;
+        }
+
+        if (std.debug.runtime_safety and gop.value_ptr.* != reassignable) {
+            std.debug.panic(
+                "MIR symbol mutability mismatch for symbol key {d}: existing={any}, new={any}",
+                .{ key, gop.value_ptr.*, reassignable },
+            );
+        }
+    }
+
+    /// Query mutability metadata for a symbol.
+    pub fn isSymbolReassignable(self: *const Store, symbol: Symbol) bool {
+        if (symbol.isNone()) return false;
+        return self.symbol_reassignable.get(symbol.raw()) orelse {
+            if (std.debug.runtime_safety) {
+                std.debug.panic(
+                    "Missing MIR symbol mutability metadata for symbol key {d}",
+                    .{symbol.raw()},
+                );
+            }
+            unreachable;
+        };
     }
 };

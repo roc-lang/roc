@@ -169,13 +169,8 @@ test "fx platform IO spec tests" {
 
     var passed: usize = 0;
     var failed: usize = 0;
-    var skipped: usize = 0;
 
     for (fx_test_specs.io_spec_tests) |spec| {
-        if (spec.skip.len > 0) {
-            skipped += 1;
-            continue;
-        }
         const result = runRocTest(allocator, spec.roc_file, spec.io_spec) catch |err| {
             std.debug.print("\n[FAIL] {s}: failed to run: {}\n", .{ spec.roc_file, err });
             failed += 1;
@@ -199,7 +194,7 @@ test "fx platform IO spec tests" {
     // Print summary
     const total = passed + failed;
     if (failed > 0) {
-        std.debug.print("\n{}/{} IO spec tests passed ({} failed, {} skipped)\n", .{ passed, total, failed, skipped });
+        std.debug.print("\n{}/{} IO spec tests passed ({} failed)\n", .{ passed, total, failed });
         return error.SomeTestsFailed;
     }
 }
@@ -260,18 +255,18 @@ test "fx platform all_syntax_test.roc prints expected output" {
         "Line 3\n" ++
         "Unicode escape sequence: \u{00A0}\n" ++
         "This is an effectful function!\n" ++
-        "Try.Ok(1)\n" ++
+        "Ok(1)\n" ++
         "15.0\n" ++
         "False\n" ++
         "10.0\n" ++
         "42.0\n" ++
         "NotOneTwoNotFive\n" ++
         "(\"Roc\", 1.0)\n" ++
-        "Builtin.List.[\"a\", \"b\"]\n" ++
+        "[\"a\", \"b\"]\n" ++
         "(\"Roc\", 1.0, 1.0, 1.0)\n" ++
         "10.0\n" ++
         "{ age: 31, name: \"Alice\" }\n" ++
-        "{ binary: 5.0, explicit_i128: 5, explicit_i16: 5, explicit_i32: 5, explicit_i64: 5, explicit_i8: 5, explicit_u128: 5, explicit_u16: 5, explicit_u32: 5, explicit_u64: 5, explicit_u8: 5, hex: 5.0, octal: 5.0, usage_based: 5.0 }\n" ++
+        "(5, 5, 5.0, 5.0, 5, 5.0, 5.0, 5, 5.0, 5.0, 5, 5.0, 5.0, 5.0)\n" ++
         "<opaque>\n" ++
         "\"The secret key is: my_secret_key\"\n" ++
         "False\n" ++
@@ -303,6 +298,17 @@ test "fx platform match with wildcard" {
     const allocator = testing.allocator;
 
     const result = try runRocTest(allocator, "test/fx/match_with_wildcard.roc", "1>0");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try checkTestSuccess(result);
+}
+
+test "fx platform zst nested singleton shapes" {
+    const allocator = testing.allocator;
+
+    const spec = fx_test_specs.findByPath("test/fx/zst_nested_singleton_shapes.roc").?;
+    const result = try runRocTest(allocator, spec.roc_file, spec.io_spec);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
@@ -1153,10 +1159,9 @@ test "fx platform fold_rev static dispatch regression" {
 }
 
 test "external platform memory alignment regression" {
-    // SKIPPED: This test is currently failing due to an interpreter bug where an opaque_ptr
-    // (closure/function pointer) is incorrectly passed to extractNumericValue().
+    // SKIPPED: aoc_day2.roc crashes at runtime due to a dev backend bug with
+    // mutable variables + for loops + closures (.contains/.append).
     // See https://github.com/roc-lang/roc/issues/8946
-    // TODO: Re-enable this test once the interpreter bug is fixed.
     return error.SkipZigTest;
 
     // This test verifies that external platforms with the memory alignment fix work correctly.
@@ -1164,11 +1169,11 @@ test "external platform memory alignment regression" {
     // `roc_dealloc.alignment` directly instead of `@max(roc_dealloc.alignment, @alignOf(usize))`.
     // Fixed in https://github.com/lukewilliamboswell/roc-platform-template-zig/releases/tag/0.6
     // const allocator = testing.allocator;
-    //
+
     // const run_result = try runRoc(allocator, "test/fx/aoc_day2.roc", .{});
     // defer allocator.free(run_result.stdout);
     // defer allocator.free(run_result.stderr);
-    //
+
     // try checkSuccess(run_result);
 }
 

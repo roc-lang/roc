@@ -5,8 +5,8 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const mono = @import("mono");
-const Symbol = mono.MonoIR.Symbol;
+const lir = @import("lir");
+const Symbol = lir.LIR.Symbol;
 const WasmModule = @import("WasmModule.zig");
 const ValType = WasmModule.ValType;
 
@@ -65,6 +65,12 @@ pub fn getLocal(self: *const Self, symbol: Symbol) ?u32 {
         return info.idx;
     }
     return null;
+}
+
+/// Look up the full local info for a previously-allocated symbol.
+pub fn getLocalInfo(self: *const Self, symbol: Symbol) ?LocalInfo {
+    const key: u64 = @bitCast(symbol);
+    return self.locals.get(key);
 }
 
 /// Reset for a new function scope (keeps allocated memory).

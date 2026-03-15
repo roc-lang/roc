@@ -13,6 +13,9 @@ pub const LoadedModule = struct {
     gpa: std.mem.Allocator,
 
     pub fn deinit(self: *LoadedModule) void {
+        // If runtime inserts were enabled, free interner-owned heap memory first.
+        self.env.common.idents.interner.deinit(self.gpa);
+
         // For builtins loaded via deserializeInto (not deserializeWithMutableTypes),
         // most data points into the buffer. Only the imports hashmap was heap-allocated.
         self.env.imports.deinitMapOnly(self.gpa);

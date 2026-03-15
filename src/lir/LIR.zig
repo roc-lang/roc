@@ -2,17 +2,14 @@
 //!
 //! This module defines the IR used after monomorphization and lambda set inference,
 //! before code generation. The key innovation is that all symbol references are
-//! globally unique (module + ident), solving cross-module index collision issues.
+//! globally unique opaque IDs, solving cross-module index collision issues.
 //!
 //! Pipeline position:
 //! ```
-//! CIR -> Monomorphization -> Lambda Lifting -> Lambda Set Inference -> ClosureTransformer
+//! CIR -> MIR (with lambda lifting) -> Lambda Set Inference -> LIR (with dispatch generation)
 //!                                                                           |
 //!                                                                           v
-//!                                                                      LIR Lowering
-//!                                                                           |
-//!                                                                           v
-//!                                                                         LIR
+//!                                                                     Code Generation
 //!                                                                           |
 //!                                                     +---------------------+---------------------+
 //!                                                     |                                           |
@@ -22,7 +19,7 @@
 //! ```
 //!
 //! Key properties:
-//! - All lookups use global Symbol (module_idx + ident_idx) - never module-local indices
+//! - All lookups use global opaque Symbol IDs - never module-local indices
 //! - Every expression has concrete type info via layout.Idx - no type variables
 //! - Flat storage in LirExprStore with LirExprId indices
 //! - No scope/bindings system - all references are global symbols
@@ -33,7 +30,6 @@ const layout = @import("layout");
 const types = @import("types");
 const mir = @import("mir");
 
-const Ident = base.Ident;
 const StringLiteral = base.StringLiteral;
 const CalledVia = base.CalledVia;
 
@@ -46,17 +42,6 @@ pub const LirExprId = enum(u32) {
     pub const none: LirExprId = @enumFromInt(std.math.maxInt(u32));
 
     pub fn isNone(self: LirExprId) bool {
-        return self == none;
-    }
-};
-
-/// Index into LirExprStore.closure_data
-pub const ClosureDataId = enum(u32) {
-    _,
-
-    pub const none: ClosureDataId = @enumFromInt(std.math.maxInt(u32));
-
-    pub fn isNone(self: ClosureDataId) bool {
         return self == none;
     }
 };
@@ -120,100 +105,6 @@ pub const LirCaptureSpan = extern struct {
 pub const LirCapture = struct {
     symbol: Symbol,
     layout_idx: layout.Idx,
-};
-
-/// How a closure is represented at runtime (like Roc's ClosureRepresentation).
-/// The representation is chosen based on the lambda set shape:
-/// - Number of functions that share the same call site
-/// - Whether they have captures and how many
-pub const ClosureRepresentation = union(enum) {
-    /// 1 function, 1 capture → no wrapper, capture passed directly.
-    /// Zero overhead - the closure IS the captured value.
-    unwrapped_capture: struct {
-        capture_layout: layout.Idx,
-    },
-
-    /// 1 function, N captures → struct with captures sorted by alignment.
-    /// Captures stored largest-alignment-first for memory efficiency.
-    struct_captures: struct {
-        /// Captures in alignment order (largest first)
-        captures: LirCaptureSpan,
-        /// Total layout of the capture struct
-        struct_layout: layout.Idx,
-    },
-
-    /// N functions, 0 captures → small tag (Bool for 2 fns, U8 for 3+).
-    /// No payload needed, just Bool (2 fns) or U8 (3+ fns).
-    enum_dispatch: struct {
-        /// Number of functions in the set
-        num_functions: u16,
-        /// This function's tag value (position in lambda set)
-        tag: u16,
-        /// All members of the lambda set (for dispatch at call sites)
-        lambda_set: LambdaSetMemberSpan,
-    },
-
-    /// N functions, some with captures → tagged union.
-    /// Tag identifies which function, payload contains captures.
-    union_repr: struct {
-        /// This function's tag value
-        tag: u16,
-        /// Captures for this variant (may be empty)
-        captures: LirCaptureSpan,
-        /// Layout of the full union (tag + max payload)
-        union_layout: layout.Idx,
-        /// All members of the lambda set (for dispatch at call sites)
-        lambda_set: LambdaSetMemberSpan,
-    },
-
-    /// No representation needed - function is called directly.
-    /// Used when a lambda is immediately called and never stored.
-    direct_call: void,
-};
-
-/// Closure data stored in a side table (LirExprStore.closure_data) to reduce
-/// LirExpr union size. Referenced by ClosureDataId.
-pub const ClosureData = struct {
-    /// Layout of the closure type (includes captures)
-    closure_layout: layout.Idx,
-    /// The underlying lambda expression
-    lambda: LirExprId,
-    /// Captured symbols and their layouts
-    captures: LirCaptureSpan,
-    /// How this closure is represented at runtime
-    representation: ClosureRepresentation,
-    /// Whether this closure is recursive (calls itself)
-    recursion: Recursive,
-    /// Whether this closure captures itself (for recursive closures)
-    self_recursive: SelfRecursive,
-    /// Whether this closure is bound to a variable (vs. used directly as an argument).
-    is_bound_to_variable: bool,
-};
-
-/// A member of a lambda set
-pub const LambdaSetMember = struct {
-    /// Global symbol for this lambda (from LambdaSetInference)
-    lambda_symbol: Symbol,
-    /// Captures for this member
-    captures: LirCaptureSpan,
-    /// The lambda body expression
-    lambda_body: LirExprId,
-    /// This member's tag in the lambda set (for dispatch)
-    tag: u16,
-};
-
-/// Span of lambda set members
-pub const LambdaSetMemberSpan = extern struct {
-    start: u32,
-    len: u16,
-
-    pub fn empty() LambdaSetMemberSpan {
-        return .{ .start = 0, .len = 0 };
-    }
-
-    pub fn isEmpty(self: LambdaSetMemberSpan) bool {
-        return self.len == 0;
-    }
 };
 
 /// Whether a closure is recursive (like Roc's Recursive enum in expr.rs).
@@ -306,26 +197,53 @@ pub const LirStmtSpan = extern struct {
 pub const LirStmt = union(enum) {
     decl: Binding,
     mutate: Binding,
+    cell_init: CellBinding,
+    cell_store: CellBinding,
+    cell_drop: CellDrop,
+
+    pub const BindingSemantics = enum {
+        owned,
+        borrow_alias,
+        scoped_borrow,
+        retained,
+
+        pub fn usesBorrowOnly(self: BindingSemantics) bool {
+            return switch (self) {
+                .borrow_alias, .scoped_borrow => true,
+                .owned, .retained => false,
+            };
+        }
+
+        pub fn introducesOwner(self: BindingSemantics) bool {
+            return switch (self) {
+                .owned, .scoped_borrow, .retained => true,
+                .borrow_alias => false,
+            };
+        }
+    };
 
     pub const Binding = struct {
         pattern: LirPatternId,
         expr: LirExprId,
+        semantics: BindingSemantics = .owned,
+    };
+
+    pub const CellBinding = struct {
+        cell: Symbol,
+        layout_idx: layout.Idx,
+        expr: LirExprId,
+    };
+
+    pub const CellDrop = struct {
+        cell: Symbol,
+        layout_idx: layout.Idx,
     };
 
     pub fn binding(self: LirStmt) Binding {
         return switch (self) {
             .decl, .mutate => |b| b,
+            else => std.debug.panic("binding() called on non-binding stmt {s}", .{@tagName(self)}),
         };
-    }
-};
-
-/// Span of field names (Ident.Idx) for records
-pub const LirFieldNameSpan = extern struct {
-    start: u32,
-    len: u16,
-
-    pub fn empty() LirFieldNameSpan {
-        return .{ .start = 0, .len = 0 };
     }
 };
 
@@ -334,11 +252,19 @@ pub const LirFieldNameSpan = extern struct {
 pub const LirExpr = union(enum) {
     // Layout is implied by the value type
 
-    /// Integer literal that fits in i64
-    i64_literal: i64,
+    /// Integer literal that fits in i64.
+    /// Carries the concrete integer layout (u8/i8/u16/i16/u32/i32/u64/i64).
+    i64_literal: struct {
+        value: i64,
+        layout_idx: layout.Idx,
+    },
 
-    /// Integer literal that requires i128
-    i128_literal: i128,
+    /// Integer literal that requires i128.
+    /// Carries the concrete integer layout (u128/i128).
+    i128_literal: struct {
+        value: i128,
+        layout_idx: layout.Idx,
+    },
 
     /// Float literal (f64)
     f64_literal: f64,
@@ -358,6 +284,12 @@ pub const LirExpr = union(enum) {
     /// Lookup a symbol - globally unique identifier + its layout
     lookup: struct {
         symbol: Symbol,
+        layout_idx: layout.Idx,
+    },
+
+    /// Load the current value of a mutable cell into a fresh owned value.
+    cell_load: struct {
+        cell: Symbol,
         layout_idx: layout.Idx,
     },
 
@@ -387,56 +319,33 @@ pub const LirExpr = union(enum) {
         ret_layout: layout.Idx,
     },
 
-    /// Closure (function with captured environment).
-    /// Data stored in LirExprStore.closure_data side table to reduce LirExpr size.
-    closure: ClosureDataId,
-
     /// Empty list `[]`
     empty_list: struct {
+        list_layout: layout.Idx,
         elem_layout: layout.Idx,
     },
 
     /// List with elements
     list: struct {
+        list_layout: layout.Idx,
         elem_layout: layout.Idx,
         elems: LirExprSpan,
     },
 
-    /// Empty record `{}`
-    empty_record: void,
-
-    /// Record with fields (fields are in sorted order by field name)
-    record: struct {
-        record_layout: layout.Idx,
+    /// Struct literal (unified representation for records, tuples, and empty records).
+    /// Fields are in layout order (sorted by alignment).
+    struct_: struct {
+        struct_layout: layout.Idx,
         fields: LirExprSpan,
-        /// Field names in the same order as fields (for compile-time lookup)
-        field_names: LirFieldNameSpan,
     },
 
-    /// Tuple
-    tuple: struct {
-        tuple_layout: layout.Idx,
-        elems: LirExprSpan,
-    },
-
-    /// Record field access by index
-    field_access: struct {
-        record_expr: LirExprId,
-        record_layout: layout.Idx,
+    /// Struct field access by sorted field index.
+    struct_access: struct {
+        struct_expr: LirExprId,
+        struct_layout: layout.Idx,
         field_layout: layout.Idx,
-        /// Field index within the record layout (for runtime access)
+        /// Field index within the sorted layout fields
         field_idx: u16,
-        /// Field name for compile-time lookup in record literals
-        field_name: base.Ident.Idx,
-    },
-
-    /// Tuple element access by index
-    tuple_access: struct {
-        tuple_expr: LirExprId,
-        tuple_layout: layout.Idx,
-        elem_layout: layout.Idx,
-        /// Element index (0-based)
-        elem_idx: u16,
     },
 
     /// Zero-argument tag (just the discriminant)
@@ -485,26 +394,6 @@ pub const LirExpr = union(enum) {
     /// Break out of the enclosing loop (for_loop or while_loop)
     break_expr: void,
 
-    /// Binary operation (specialized, not a method call)
-    binop: struct {
-        op: BinOp,
-        lhs: LirExprId,
-        rhs: LirExprId,
-        result_layout: layout.Idx,
-        operand_layout: layout.Idx,
-    },
-
-    /// Unary minus/negation
-    unary_minus: struct {
-        expr: LirExprId,
-        result_layout: layout.Idx,
-    },
-
-    /// Unary not (boolean negation)
-    unary_not: struct {
-        expr: LirExprId,
-    },
-
     /// Low-level builtin operation
     low_level: struct {
         op: LowLevel,
@@ -514,7 +403,6 @@ pub const LirExpr = union(enum) {
 
     /// Debug expression (prints and returns value)
     dbg: struct {
-        msg: StringLiteral.Idx,
         expr: LirExprId,
         result_layout: layout.Idx,
     },
@@ -529,10 +417,13 @@ pub const LirExpr = union(enum) {
     /// Crash with message
     crash: struct {
         msg: StringLiteral.Idx,
+        ret_layout: layout.Idx,
     },
 
     /// Runtime error (unreachable code)
-    runtime_error: void,
+    runtime_error: struct {
+        ret_layout: layout.Idx,
+    },
 
     /// Nominal wrapper (transparent at runtime)
     nominal: struct {
@@ -541,7 +432,6 @@ pub const LirExpr = union(enum) {
     },
 
     /// Concatenate multiple strings into one
-    /// Used by str_inspekt to build output strings
     str_concat: LirExprSpan,
 
     /// Format integer as string
@@ -652,397 +542,7 @@ pub const LirExpr = union(enum) {
         ret_layout: layout.Idx,
     },
 
-    /// Binary operation types
-    pub const BinOp = enum {
-        // Arithmetic
-        add,
-        sub,
-        mul,
-        div,
-        div_trunc, // Truncating division (integer division)
-        rem, // Remainder (truncates toward zero, like C's %)
-        mod, // Modulo (result has sign of divisor, like Python's %)
-
-        // Bitwise shifts
-        shl, // Shift left
-        shr, // Arithmetic shift right (sign-extending)
-        shr_zf, // Logical shift right (zero-filling)
-
-        // Comparison
-        eq,
-        neq,
-        lt,
-        lte,
-        gt,
-        gte,
-
-        // Boolean
-        @"and",
-        @"or",
-    };
-
-    /// Low-level operations (subset of CIR.Expr.LowLevel that we need)
-    /// These are operations implemented directly by the backend.
-    pub const LowLevel = enum {
-        // String operations
-        str_is_empty,
-        str_is_eq,
-        str_concat,
-        str_contains,
-        str_starts_with,
-        str_ends_with,
-        str_count_utf8_bytes,
-        str_caseless_ascii_equals,
-        str_to_utf8,
-        str_from_utf8,
-        str_repeat,
-        str_trim,
-        str_trim_start,
-        str_trim_end,
-        str_split,
-        str_join_with,
-        str_reserve,
-        str_release_excess_capacity,
-        str_with_capacity,
-        str_drop_prefix,
-        str_drop_suffix,
-        str_with_ascii_lowercased,
-        str_with_ascii_uppercased,
-        str_with_prefix,
-        str_from_utf8_lossy,
-        str_inspekt,
-
-        // List operations
-        list_len,
-        list_is_empty,
-        list_get,
-        list_set,
-        list_append,
-        list_prepend,
-        list_concat,
-        list_first,
-        list_last,
-        list_drop_first,
-        list_drop_last,
-        list_take_first,
-        list_take_last,
-        list_contains,
-        list_reverse,
-        list_reserve,
-        list_release_excess_capacity,
-        list_with_capacity,
-        list_repeat,
-        list_split_first,
-        list_split_last,
-        list_sort_with,
-        list_drop_at,
-        list_sublist,
-
-        // Numeric operations
-        num_add,
-        num_sub,
-        num_mul,
-        num_div,
-        num_mod,
-        num_neg,
-        num_abs,
-        num_pow,
-        num_sqrt,
-        num_log,
-        num_round,
-        num_floor,
-        num_ceiling,
-        num_to_str,
-        num_from_str,
-        num_from_numeral,
-        num_is_zero,
-        num_abs_diff,
-        num_shift_left_by,
-        num_shift_right_by,
-        num_shift_right_zf_by,
-
-        // Numeric conversion operations (U8)
-        u8_to_i8_wrap,
-        u8_to_i8_try,
-        u8_to_i16,
-        u8_to_i32,
-        u8_to_i64,
-        u8_to_i128,
-        u8_to_u16,
-        u8_to_u32,
-        u8_to_u64,
-        u8_to_u128,
-        u8_to_f32,
-        u8_to_f64,
-        u8_to_dec,
-
-        // Numeric conversion operations (I8)
-        i8_to_i16,
-        i8_to_i32,
-        i8_to_i64,
-        i8_to_i128,
-        i8_to_u8_wrap,
-        i8_to_u8_try,
-        i8_to_u16_wrap,
-        i8_to_u16_try,
-        i8_to_u32_wrap,
-        i8_to_u32_try,
-        i8_to_u64_wrap,
-        i8_to_u64_try,
-        i8_to_u128_wrap,
-        i8_to_u128_try,
-        i8_to_f32,
-        i8_to_f64,
-        i8_to_dec,
-
-        // Numeric conversion operations (U16)
-        u16_to_i8_wrap,
-        u16_to_i8_try,
-        u16_to_i16_wrap,
-        u16_to_i16_try,
-        u16_to_i32,
-        u16_to_i64,
-        u16_to_i128,
-        u16_to_u8_wrap,
-        u16_to_u8_try,
-        u16_to_u32,
-        u16_to_u64,
-        u16_to_u128,
-        u16_to_f32,
-        u16_to_f64,
-        u16_to_dec,
-
-        // Numeric conversion operations (I16)
-        i16_to_i8_wrap,
-        i16_to_i8_try,
-        i16_to_i32,
-        i16_to_i64,
-        i16_to_i128,
-        i16_to_u8_wrap,
-        i16_to_u8_try,
-        i16_to_u16_wrap,
-        i16_to_u16_try,
-        i16_to_u32_wrap,
-        i16_to_u32_try,
-        i16_to_u64_wrap,
-        i16_to_u64_try,
-        i16_to_u128_wrap,
-        i16_to_u128_try,
-        i16_to_f32,
-        i16_to_f64,
-        i16_to_dec,
-
-        // Numeric conversion operations (U32)
-        u32_to_i8_wrap,
-        u32_to_i8_try,
-        u32_to_i16_wrap,
-        u32_to_i16_try,
-        u32_to_i32_wrap,
-        u32_to_i32_try,
-        u32_to_i64,
-        u32_to_i128,
-        u32_to_u8_wrap,
-        u32_to_u8_try,
-        u32_to_u16_wrap,
-        u32_to_u16_try,
-        u32_to_u64,
-        u32_to_u128,
-        u32_to_f32,
-        u32_to_f64,
-        u32_to_dec,
-
-        // Numeric conversion operations (I32)
-        i32_to_i8_wrap,
-        i32_to_i8_try,
-        i32_to_i16_wrap,
-        i32_to_i16_try,
-        i32_to_i64,
-        i32_to_i128,
-        i32_to_u8_wrap,
-        i32_to_u8_try,
-        i32_to_u16_wrap,
-        i32_to_u16_try,
-        i32_to_u32_wrap,
-        i32_to_u32_try,
-        i32_to_u64_wrap,
-        i32_to_u64_try,
-        i32_to_u128_wrap,
-        i32_to_u128_try,
-        i32_to_f32,
-        i32_to_f64,
-        i32_to_dec,
-
-        // Numeric conversion operations (U64)
-        u64_to_i8_wrap,
-        u64_to_i8_try,
-        u64_to_i16_wrap,
-        u64_to_i16_try,
-        u64_to_i32_wrap,
-        u64_to_i32_try,
-        u64_to_i64_wrap,
-        u64_to_i64_try,
-        u64_to_i128,
-        u64_to_u8_wrap,
-        u64_to_u8_try,
-        u64_to_u16_wrap,
-        u64_to_u16_try,
-        u64_to_u32_wrap,
-        u64_to_u32_try,
-        u64_to_u128,
-        u64_to_f32,
-        u64_to_f64,
-        u64_to_dec,
-
-        // Numeric conversion operations (I64)
-        i64_to_i8_wrap,
-        i64_to_i8_try,
-        i64_to_i16_wrap,
-        i64_to_i16_try,
-        i64_to_i32_wrap,
-        i64_to_i32_try,
-        i64_to_i128,
-        i64_to_u8_wrap,
-        i64_to_u8_try,
-        i64_to_u16_wrap,
-        i64_to_u16_try,
-        i64_to_u32_wrap,
-        i64_to_u32_try,
-        i64_to_u64_wrap,
-        i64_to_u64_try,
-        i64_to_u128_wrap,
-        i64_to_u128_try,
-        i64_to_f32,
-        i64_to_f64,
-        i64_to_dec,
-
-        // Numeric conversion operations (U128)
-        u128_to_i8_wrap,
-        u128_to_i8_try,
-        u128_to_i16_wrap,
-        u128_to_i16_try,
-        u128_to_i32_wrap,
-        u128_to_i32_try,
-        u128_to_i64_wrap,
-        u128_to_i64_try,
-        u128_to_i128_wrap,
-        u128_to_i128_try,
-        u128_to_u8_wrap,
-        u128_to_u8_try,
-        u128_to_u16_wrap,
-        u128_to_u16_try,
-        u128_to_u32_wrap,
-        u128_to_u32_try,
-        u128_to_u64_wrap,
-        u128_to_u64_try,
-        u128_to_f32,
-        u128_to_f64,
-        u128_to_dec_try_unsafe,
-
-        // Numeric conversion operations (I128)
-        i128_to_i8_wrap,
-        i128_to_i8_try,
-        i128_to_i16_wrap,
-        i128_to_i16_try,
-        i128_to_i32_wrap,
-        i128_to_i32_try,
-        i128_to_i64_wrap,
-        i128_to_i64_try,
-        i128_to_u8_wrap,
-        i128_to_u8_try,
-        i128_to_u16_wrap,
-        i128_to_u16_try,
-        i128_to_u32_wrap,
-        i128_to_u32_try,
-        i128_to_u64_wrap,
-        i128_to_u64_try,
-        i128_to_u128_wrap,
-        i128_to_u128_try,
-        i128_to_f32,
-        i128_to_f64,
-        i128_to_dec_try_unsafe,
-
-        // Numeric conversion operations (F32)
-        f32_to_i8_trunc,
-        f32_to_i8_try_unsafe,
-        f32_to_i16_trunc,
-        f32_to_i16_try_unsafe,
-        f32_to_i32_trunc,
-        f32_to_i32_try_unsafe,
-        f32_to_i64_trunc,
-        f32_to_i64_try_unsafe,
-        f32_to_i128_trunc,
-        f32_to_i128_try_unsafe,
-        f32_to_u8_trunc,
-        f32_to_u8_try_unsafe,
-        f32_to_u16_trunc,
-        f32_to_u16_try_unsafe,
-        f32_to_u32_trunc,
-        f32_to_u32_try_unsafe,
-        f32_to_u64_trunc,
-        f32_to_u64_try_unsafe,
-        f32_to_u128_trunc,
-        f32_to_u128_try_unsafe,
-        f32_to_f64,
-
-        // Numeric conversion operations (F64)
-        f64_to_i8_trunc,
-        f64_to_i8_try_unsafe,
-        f64_to_i16_trunc,
-        f64_to_i16_try_unsafe,
-        f64_to_i32_trunc,
-        f64_to_i32_try_unsafe,
-        f64_to_i64_trunc,
-        f64_to_i64_try_unsafe,
-        f64_to_i128_trunc,
-        f64_to_i128_try_unsafe,
-        f64_to_u8_trunc,
-        f64_to_u8_try_unsafe,
-        f64_to_u16_trunc,
-        f64_to_u16_try_unsafe,
-        f64_to_u32_trunc,
-        f64_to_u32_try_unsafe,
-        f64_to_u64_trunc,
-        f64_to_u64_try_unsafe,
-        f64_to_u128_trunc,
-        f64_to_u128_try_unsafe,
-        f64_to_f32_wrap,
-        f64_to_f32_try_unsafe,
-
-        // Numeric conversion operations (Dec)
-        dec_to_i8_trunc,
-        dec_to_i8_try_unsafe,
-        dec_to_i16_trunc,
-        dec_to_i16_try_unsafe,
-        dec_to_i32_trunc,
-        dec_to_i32_try_unsafe,
-        dec_to_i64_trunc,
-        dec_to_i64_try_unsafe,
-        dec_to_i128_trunc,
-        dec_to_i128_try_unsafe,
-        dec_to_u8_trunc,
-        dec_to_u8_try_unsafe,
-        dec_to_u16_trunc,
-        dec_to_u16_try_unsafe,
-        dec_to_u32_trunc,
-        dec_to_u32_try_unsafe,
-        dec_to_u64_trunc,
-        dec_to_u64_try_unsafe,
-        dec_to_u128_trunc,
-        dec_to_u128_try_unsafe,
-        dec_to_f32_wrap,
-        dec_to_f32_try_unsafe,
-        dec_to_f64,
-
-        // Box operations
-        box_box,
-        box_unbox,
-
-        // Comparison
-        compare,
-
-        // Crash/panic
-        crash,
-    };
+    pub const LowLevel = base.LowLevel;
 };
 
 /// Lowered pattern - simplified for runtime matching.
@@ -1052,6 +552,7 @@ pub const LirPattern = union(enum) {
     bind: struct {
         symbol: Symbol,
         layout_idx: layout.Idx,
+        reassignable: bool = false,
     },
 
     /// Underscore/wildcard (always matches, doesn't bind).
@@ -1086,22 +587,16 @@ pub const LirPattern = union(enum) {
         args: LirPatternSpan,
     },
 
-    /// Destructure a record
-    record: struct {
-        record_layout: layout.Idx,
+    /// Destructure a struct (record or tuple)
+    struct_: struct {
+        struct_layout: layout.Idx,
         /// Pattern for each field, in layout order
         fields: LirPatternSpan,
     },
 
-    /// Destructure a tuple
-    tuple: struct {
-        tuple_layout: layout.Idx,
-        /// Pattern for each element
-        elems: LirPatternSpan,
-    },
-
     /// Destructure a list with known prefix, optional rest, and suffix
     list: struct {
+        list_layout: layout.Idx,
         elem_layout: layout.Idx,
         /// Patterns for known prefix elements (before ..)
         prefix: LirPatternSpan,
@@ -1115,6 +610,7 @@ pub const LirPattern = union(enum) {
     as_pattern: struct {
         symbol: Symbol,
         layout_idx: layout.Idx,
+        reassignable: bool = false,
         inner: LirPatternId,
     },
 };
@@ -1302,12 +798,9 @@ test "Symbol size and alignment" {
 }
 
 test "Symbol equality" {
-    const ident1 = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 42 };
-    const ident2 = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 42 };
-
-    const sym1 = Symbol{ .module_idx = 0, .ident_idx = ident1 };
-    const sym2 = Symbol{ .module_idx = 0, .ident_idx = ident2 };
-    const sym3 = Symbol{ .module_idx = 1, .ident_idx = ident1 };
+    const sym1 = Symbol.fromRaw(123);
+    const sym2 = Symbol.fromRaw(123);
+    const sym3 = Symbol.fromRaw(456);
 
     try std.testing.expect(sym1.eql(sym2));
     try std.testing.expect(!sym1.eql(sym3));

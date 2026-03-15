@@ -200,8 +200,6 @@ PARSE ERROR - everything.md:56:40:56:42
 MALFORMED WHERE CLAUSE - everything.md:56:12:56:17
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:12:1:13:7
 UNDECLARED TYPE - everything.md:43:5:43:6
-MODULE NOT FOUND - everything.md:2:1:5:2
-MODULE NOT FOUND - everything.md:6:1:9:2
 UNUSED VARIABLE - everything.md:88:5:88:6
 UNUSED VARIABLE - everything.md:93:4:93:5
 UNUSED VARIABLE - everything.md:98:5:98:6
@@ -1207,32 +1205,6 @@ This type is referenced here:
     ^
 
 
-**MODULE NOT FOUND**
-The module `I1` was not found in this Roc project.
-
-You're attempting to use this module here:
-**everything.md:2:1:5:2:**
-```roc
-import I1 exposing [
-	I11,
-	I12
-]
-```
-
-
-**MODULE NOT FOUND**
-The module `I2` was not found in this Roc project.
-
-You're attempting to use this module here:
-**everything.md:6:1:9:2:**
-```roc
-import I2 exposing [
-	I21 as Ias1,
-	I22 as Ias2
-]
-```
-
-
 **UNUSED VARIABLE**
 Variable `b` is not used anywhere in your code.
 
@@ -1770,100 +1742,97 @@ h = |x, y| {
 				(malformed))))
 	(d-let
 		(p-assign (ident "h"))
-		(e-closure
-			(captures
-				(capture (ident "h")))
-			(e-lambda
-				(args
-					(p-assign (ident "x"))
-					(p-assign (ident "y")))
-				(e-block
-					(s-let
-						(p-assign (ident "h1"))
-						(e-record
-							(fields
-								(field (name "h11")
-									(e-lookup-local
-										(p-assign (ident "x"))))
-								(field (name "h12")
-									(e-lookup-local
-										(p-assign (ident "x"))))
-								(field (name "h13")
-									(e-record
-										(fields
-											(field (name "h131")
-												(e-lookup-local
-													(p-assign (ident "x"))))
-											(field (name "h132")
-												(e-lookup-local
-													(p-assign (ident "y"))))))))))
-					(s-let
-						(p-assign (ident "h2"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "h")))
+		(e-lambda
+			(args
+				(p-assign (ident "x"))
+				(p-assign (ident "y")))
+			(e-block
+				(s-let
+					(p-assign (ident "h1"))
+					(e-record
+						(fields
+							(field (name "h11")
+								(e-lookup-local
+									(p-assign (ident "x"))))
+							(field (name "h12")
+								(e-lookup-local
+									(p-assign (ident "x"))))
+							(field (name "h13")
+								(e-record
+									(fields
+										(field (name "h131")
+											(e-lookup-local
+												(p-assign (ident "x"))))
+										(field (name "h132")
+											(e-lookup-local
+												(p-assign (ident "y"))))))))))
+				(s-let
+					(p-assign (ident "h2"))
+					(e-call
+						(e-lookup-local
+							(p-assign (ident "h")))
+						(e-lookup-local
+							(p-assign (ident "x")))
+						(e-lookup-local
+							(p-assign (ident "y")))))
+				(s-let
+					(p-assign (ident "h3"))
+					(e-tag (name "A")
+						(args
 							(e-lookup-local
 								(p-assign (ident "x")))
 							(e-lookup-local
-								(p-assign (ident "y")))))
-					(s-let
-						(p-assign (ident "h3"))
-						(e-tag (name "A")
-							(args
-								(e-lookup-local
-									(p-assign (ident "x")))
-								(e-lookup-local
-									(p-assign (ident "y"))))))
-					(s-let
-						(p-assign (ident "h4"))
-						(e-list
-							(elems
-								(e-lookup-local
-									(p-assign (ident "x")))
-								(e-lookup-local
-									(p-assign (ident "y"))))))
-					(s-let
-						(p-assign (ident "h5"))
-						(e-tuple
-							(elems
-								(e-lookup-local
-									(p-assign (ident "x")))
-								(e-lookup-local
-									(p-assign (ident "y"))))))
-					(e-match
-						(match
-							(cond
-								(e-lookup-local
-									(p-assign (ident "x"))))
-							(branches
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag)))
-									(value
-										(e-lookup-local
-											(p-assign (ident "a")))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag)))
-									(value
-										(e-lookup-local
-											(p-assign (ident "a")))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag)))
-									(value
-										(e-lookup-local
-											(p-assign (ident "a")))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag)))
-									(value
-										(e-lookup-local
-											(p-assign (ident "a"))))))))))))
+								(p-assign (ident "y"))))))
+				(s-let
+					(p-assign (ident "h4"))
+					(e-list
+						(elems
+							(e-lookup-local
+								(p-assign (ident "x")))
+							(e-lookup-local
+								(p-assign (ident "y"))))))
+				(s-let
+					(p-assign (ident "h5"))
+					(e-tuple
+						(elems
+							(e-lookup-local
+								(p-assign (ident "x")))
+							(e-lookup-local
+								(p-assign (ident "y"))))))
+				(e-match
+					(match
+						(cond
+							(e-lookup-local
+								(p-assign (ident "x"))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag)))
+								(value
+									(e-lookup-local
+										(p-assign (ident "a")))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag)))
+								(value
+									(e-lookup-local
+										(p-assign (ident "a")))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag)))
+								(value
+									(e-lookup-local
+										(p-assign (ident "a")))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag)))
+								(value
+									(e-lookup-local
+										(p-assign (ident "a")))))))))))
 	(s-alias-decl
 		(ty-header (name "A")
 			(ty-args

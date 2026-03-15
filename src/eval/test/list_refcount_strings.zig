@@ -111,7 +111,7 @@ test "list refcount strings - empty list then string list" {
     // Multiple lists with different types
     try runExpectStr(
         \\{
-        \\    empty = []
+        \\    _empty = []
         \\    strings = ["x", "y"]
         \\    match strings { [first, ..] => first, _ => "" }
         \\}
@@ -133,19 +133,19 @@ test "list refcount strings - string list aliased return from original" {
     try runExpectStr(
         \\{
         \\    lst1 = ["a", "b"]
-        \\    lst2 = lst1
+        \\    _lst2 = lst1
         \\    match lst1 { [first, ..] => first, _ => "" }
         \\}
     , "a", .no_trace);
 }
 
-test "list refcount strings - string list shadowed" {
-    // Shadow a string list - old list and its strings should be decreffed
+test "list refcount strings - string list reassigned" {
+    // Reassign a mutable string list - old list and its strings should be decreffed
     try runExpectStr(
         \\{
-        \\    lst = ["old1", "old2"]
-        \\    lst = ["new1", "new2"]
-        \\    match lst { [first, ..] => first, _ => "" }
+        \\    var $lst = ["old1", "old2"]
+        \\    $lst = ["new1", "new2"]
+        \\    match $lst { [first, ..] => first, _ => "" }
         \\}
     , "new1", .no_trace);
 }
@@ -153,9 +153,9 @@ test "list refcount strings - string list shadowed" {
 test "list refcount strings - three string lists" {
     try runExpectStr(
         \\{
-        \\    a = ["a1", "a2"]
+        \\    _a = ["a1", "a2"]
         \\    b = ["b1", "b2"]
-        \\    c = ["c1", "c2"]
+        \\    _c = ["c1", "c2"]
         \\    match b { [first, ..] => first, _ => "" }
         \\}
     , "b1", .no_trace);
@@ -166,7 +166,7 @@ test "list refcount strings - extract string from nested match" {
         \\{
         \\    lst = ["x", "y", "z"]
         \\    match lst {
-        \\        [first, .. as rest] => match rest {
+        \\        [_first, .. as rest] => match rest {
         \\            [second, ..] => second,
         \\            _ => ""
         \\        },

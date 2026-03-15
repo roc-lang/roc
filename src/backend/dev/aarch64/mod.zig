@@ -6,8 +6,6 @@
 //! - Calling convention (Call - AAPCS64)
 
 const std = @import("std");
-const builtin = @import("builtin");
-const RocTarget = @import("roc_target").RocTarget;
 
 pub const GeneralReg = @import("Registers.zig").GeneralReg;
 pub const FloatReg = @import("Registers.zig").FloatReg;
@@ -23,12 +21,6 @@ pub const WinEmit = Emit(.arm64win);
 /// Emit type for macOS aarch64 target
 pub const MacEmit = Emit(.arm64mac);
 
-/// Convenience: native Emit for host compilation (uses LinuxEmit as fallback for non-aarch64 hosts)
-pub const NativeEmit = if (builtin.cpu.arch == .aarch64 or builtin.cpu.arch == .aarch64_be)
-    Emit(RocTarget.detectNative())
-else
-    LinuxEmit;
-
 pub const Call = @import("Call.zig");
 
 /// Target-parameterized CodeGen function. Use CodeGen(target) to get a specialized type.
@@ -40,12 +32,6 @@ pub const LinuxCodeGen = CodeGen(.arm64linux);
 pub const WinCodeGen = CodeGen(.arm64win);
 /// CodeGen type for macOS aarch64 target
 pub const MacCodeGen = CodeGen(.arm64mac);
-
-/// Convenience: native CodeGen for host compilation (uses LinuxCodeGen as fallback for non-aarch64 hosts)
-pub const NativeCodeGen = if (builtin.cpu.arch == .aarch64 or builtin.cpu.arch == .aarch64_be)
-    CodeGen(RocTarget.detectNative())
-else
-    LinuxCodeGen;
 
 test "aarch64 module imports" {
     std.testing.refAllDecls(@This());

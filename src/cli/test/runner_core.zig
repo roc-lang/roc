@@ -36,6 +36,31 @@ pub const TestStats = struct {
     }
 };
 
+fn runRocChild(allocator: Allocator, argv: []const []const u8) !std.process.Child.RunResult {
+    var env_map = try std.process.getEnvMap(allocator);
+    defer env_map.deinit();
+
+    // Test runs may execute inside a sandbox where the default cache dir is not writable.
+    // ROC_CACHE_DIR overrides Roc's cache location on all platforms (Linux, macOS, Windows).
+    const temp_base = switch (builtin.target.os.tag) {
+        .windows => std.process.getEnvVarOwned(allocator, "TEMP") catch
+            std.process.getEnvVarOwned(allocator, "TMP") catch
+            try allocator.dupe(u8, "C:\\Windows\\Temp"),
+        else => std.process.getEnvVarOwned(allocator, "TMPDIR") catch
+            try allocator.dupe(u8, "/tmp"),
+    };
+    defer allocator.free(temp_base);
+    const cache_dir = try std.fs.path.join(allocator, &.{ temp_base, "roc" });
+    defer allocator.free(cache_dir);
+    try env_map.put("ROC_CACHE_DIR", cache_dir);
+
+    return std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = argv,
+        .env_map = &env_map,
+    });
+}
+
 /// Cross-compile a Roc app to a specific target.
 /// Returns true if compilation succeeded.
 pub fn crossCompile(
@@ -72,10 +97,7 @@ pub fn crossCompile(
     argv_buf[argc] = roc_file;
     argc += 1;
 
-    const result = std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = argv_buf[0..argc],
-    }) catch |err| {
+    const result = runRocChild(allocator, argv_buf[0..argc]) catch |err| {
         std.debug.print("FAIL (spawn error: {})\n", .{err});
         return .failed;
     };
@@ -115,10 +137,7 @@ pub fn buildNative(
     argv_buf[argc] = roc_file;
     argc += 1;
 
-    const result = std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = argv_buf[0..argc],
-    }) catch |err| {
+    const result = runRocChild(allocator, argv_buf[0..argc]) catch |err| {
         std.debug.print("FAIL (spawn error: {})\n", .{err});
         return .failed;
     };
@@ -143,6 +162,13 @@ pub fn runNative(
     };
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
+
+    // Check for memory errors in stderr (GPA errors or Roc runtime leak detection)
+    if (hasMemoryErrors(result.stderr)) |msg| {
+        std.debug.print("FAIL ({s})\n", .{msg});
+        printTruncatedOutput(result.stderr, 10, "       ");
+        return .failed;
+    }
 
     switch (result.term) {
         .Exited => |code| {
@@ -190,14 +216,11 @@ pub fn runWithIoSpec(
     const test_arg = try std.fmt.allocPrint(allocator, "--test={s}", .{io_spec});
     defer allocator.free(test_arg);
 
-    const result = std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &[_][]const u8{
-            roc_binary,
-            "run",
-            test_arg,
-            roc_file,
-        },
+    const result = runRocChild(allocator, &[_][]const u8{
+        roc_binary,
+        "run",
+        test_arg,
+        roc_file,
     }) catch |err| {
         std.debug.print("FAIL (spawn error: {})\n", .{err});
         return .failed;
@@ -205,10 +228,9 @@ pub fn runWithIoSpec(
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
-    // Check for GPA (General Purpose Allocator) errors in stderr
-    // These indicate memory bugs like alignment mismatches, double frees, etc.
-    if (std.mem.indexOf(u8, result.stderr, "error(gpa):") != null) {
-        std.debug.print("FAIL (memory error detected)\n", .{});
+    // Check for memory errors in stderr (GPA errors or Roc runtime leak detection)
+    if (hasMemoryErrors(result.stderr)) |msg| {
+        std.debug.print("FAIL ({s})\n", .{msg});
         printTruncatedOutput(result.stderr, 10, "       ");
         return .failed;
     }
@@ -279,9 +301,9 @@ fn runWithIoSpecBuildAndExec(
     // Clean up the built executable
     cleanup(output_name);
 
-    // Check for GPA errors
-    if (std.mem.indexOf(u8, result.stderr, "error(gpa):") != null) {
-        std.debug.print("FAIL (memory error detected)\n", .{});
+    // Check for memory errors in stderr (GPA errors or Roc runtime leak detection)
+    if (hasMemoryErrors(result.stderr)) |msg| {
+        std.debug.print("FAIL ({s})\n", .{msg});
         printTruncatedOutput(result.stderr, 10, "       ");
         return .failed;
     }
@@ -323,14 +345,11 @@ pub fn runWithValgrind(
         return .skipped;
     }
 
-    const result = std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &[_][]const u8{
-            "./ci/custom_valgrind.sh",
-            roc_binary,
-            "--no-cache",
-            roc_file,
-        },
+    const result = runRocChild(allocator, &[_][]const u8{
+        "./ci/custom_valgrind.sh",
+        roc_binary,
+        "--no-cache",
+        roc_file,
     }) catch |err| {
         std.debug.print("FAIL (spawn error: {})\n", .{err});
         return .failed;
@@ -426,11 +445,24 @@ pub fn printResultLine(status: []const u8, target: []const u8, message: []const 
 
 // --- Internal helpers ---
 
+/// Check stderr for memory-related errors:
+/// - GPA (General Purpose Allocator) errors: alignment mismatches, double frees, etc.
+/// - Roc runtime leak detection: allocations not freed
+/// Returns a description string if an error is found, null otherwise.
+fn hasMemoryErrors(stderr: []const u8) ?[]const u8 {
+    if (std.mem.indexOf(u8, stderr, "error(gpa):") != null) {
+        return "memory error detected";
+    }
+    if (std.mem.indexOf(u8, stderr, "allocation(s) not freed") != null) {
+        return "memory leak detected";
+    }
+    return null;
+}
+
 fn handleProcessResult(result: std.process.Child.RunResult, output_name: []const u8) TestResult {
-    // Check for GPA (General Purpose Allocator) errors in stderr
-    // These indicate memory bugs like alignment mismatches, double frees, etc.
-    if (std.mem.indexOf(u8, result.stderr, "error(gpa):") != null) {
-        std.debug.print("FAIL (memory error detected)\n", .{});
+    // Check for memory errors in stderr (GPA errors or Roc runtime leak detection)
+    if (hasMemoryErrors(result.stderr)) |msg| {
+        std.debug.print("FAIL ({s})\n", .{msg});
         printTruncatedOutput(result.stderr, 10, "       ");
         cleanup(output_name);
         return .failed;
@@ -469,10 +501,9 @@ fn handleProcessResult(result: std.process.Child.RunResult, output_name: []const
 }
 
 fn handleProcessResultNoCleanup(result: std.process.Child.RunResult, output_name: []const u8) TestResult {
-    // Check for GPA (General Purpose Allocator) errors in stderr
-    // These indicate memory bugs like alignment mismatches, double frees, etc.
-    if (std.mem.indexOf(u8, result.stderr, "error(gpa):") != null) {
-        std.debug.print("FAIL (memory error detected)\n", .{});
+    // Check for memory errors in stderr (GPA errors or Roc runtime leak detection)
+    if (hasMemoryErrors(result.stderr)) |msg| {
+        std.debug.print("FAIL ({s})\n", .{msg});
         printTruncatedOutput(result.stderr, 10, "       ");
         return .failed;
     }

@@ -46,47 +46,11 @@ else
 // Static data interner for string literals and other static data
 pub const StaticDataInterner = @import("StaticDataInterner.zig");
 
-// MonoExprCodeGen - parameterized by RocTarget for cross-compilation support
-const MonoExprCodeGenMod = @import("MonoExprCodeGen.zig");
-
 // LirCodeGen - LIR-based code generator parameterized by RocTarget
-/// LIR code generator parameterized by target
 pub const LirCodeGenMod = @import("LirCodeGen.zig");
 
-/// Mono IR code generator parameterized by target (use MonoExprCodeGen(target) to instantiate)
-pub const MonoExprCodeGen = MonoExprCodeGenMod.MonoExprCodeGen;
-
-/// Pre-instantiated MonoExprCodeGen for the host platform (the machine running the compiler)
-pub const HostMonoExprCodeGen = MonoExprCodeGenMod.HostMonoExprCodeGen;
-
-/// x86_64 Linux with glibc
-pub const X64GlibcMonoExprCodeGen = MonoExprCodeGenMod.X64GlibcMonoExprCodeGen;
-/// x86_64 Linux with musl
-pub const X64MuslMonoExprCodeGen = MonoExprCodeGenMod.X64MuslMonoExprCodeGen;
-/// x86_64 Windows
-pub const X64WinMonoExprCodeGen = MonoExprCodeGenMod.X64WinMonoExprCodeGen;
-/// x86_64 macOS
-pub const X64MacMonoExprCodeGen = MonoExprCodeGenMod.X64MacMonoExprCodeGen;
-/// ARM64 Linux with glibc
-pub const Arm64GlibcMonoExprCodeGen = MonoExprCodeGenMod.Arm64GlibcMonoExprCodeGen;
-/// ARM64 Linux with musl
-pub const Arm64MuslMonoExprCodeGen = MonoExprCodeGenMod.Arm64MuslMonoExprCodeGen;
-/// ARM64 Windows
-pub const Arm64WinMonoExprCodeGen = MonoExprCodeGenMod.Arm64WinMonoExprCodeGen;
-/// ARM64 macOS
-pub const Arm64MacMonoExprCodeGen = MonoExprCodeGenMod.Arm64MacMonoExprCodeGen;
-/// ARM64 Linux (generic)
-pub const Arm64LinuxMonoExprCodeGen = MonoExprCodeGenMod.Arm64LinuxMonoExprCodeGen;
-/// x86_64 FreeBSD
-pub const X64FreebsdMonoExprCodeGen = MonoExprCodeGenMod.X64FreebsdMonoExprCodeGen;
-/// x86_64 OpenBSD
-pub const X64OpenbsdMonoExprCodeGen = MonoExprCodeGenMod.X64OpenbsdMonoExprCodeGen;
-/// x86_64 NetBSD
-pub const X64NetbsdMonoExprCodeGen = MonoExprCodeGenMod.X64NetbsdMonoExprCodeGen;
-/// x86_64 Linux (generic)
-pub const X64LinuxMonoExprCodeGen = MonoExprCodeGenMod.X64LinuxMonoExprCodeGen;
-/// x86_64 ELF (generic)
-pub const X64ElfMonoExprCodeGen = MonoExprCodeGenMod.X64ElfMonoExprCodeGen;
+/// Pre-instantiated LirCodeGen for the host platform (the machine running the compiler)
+pub const HostLirCodeGen = LirCodeGenMod.HostLirCodeGen;
 
 /// Object file compiler for generating object files from Mono IR.
 /// Supports cross-compilation to any RocTarget.
@@ -225,19 +189,21 @@ pub fn Storage(
         }
 
         /// Claim a general-purpose register for a symbol.
-        /// Panics if no registers are free (spilling not yet implemented).
+        /// Panics if no registers are free.
+        /// TODO: Implement register spilling/reload.
         pub fn claimGeneralReg(self: *Self, symbol: u32) !GeneralReg {
             const reg = self.general_free.popOrNull() orelse
-                @panic("No free general registers - spilling not implemented");
+                @panic("TODO: no free general registers; spilling/reload is not implemented");
             try self.symbol_storage.put(symbol, .{ .general_reg = reg });
             return reg;
         }
 
         /// Claim a floating-point register for a symbol.
-        /// Panics if no registers are free (spilling not yet implemented).
+        /// Panics if no registers are free.
+        /// TODO: Implement register spilling/reload.
         pub fn claimFloatReg(self: *Self, symbol: u32) !FloatReg {
             const reg = self.float_free.popOrNull() orelse
-                @panic("No free float registers - spilling not implemented");
+                @panic("TODO: no free float registers; spilling/reload is not implemented");
             try self.symbol_storage.put(symbol, .{ .float_reg = reg });
             return reg;
         }

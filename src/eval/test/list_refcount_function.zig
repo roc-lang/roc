@@ -47,7 +47,7 @@ test "list refcount function - function called multiple times" {
         \\    f = |lst| lst
         \\    x = [1, 2]
         \\    a = f(x)
-        \\    b = f(x)
+        \\    _b = f(x)
         \\    match a { [first, ..] => first, _ => 0 }
         \\}
     , 1, .no_trace);
@@ -65,7 +65,7 @@ test "list refcount function - string list through function" {
 }
 
 test "list refcount function - function extracts from list" {
-    // Simplified: Inline match instead of function with match
+    // Simplified: Direct match instead of function with match
     try runExpectI64(
         \\{
         \\    x = [10, 20, 30]
@@ -104,7 +104,7 @@ test "list refcount function - same list twice in tuple returned from function" 
         \\    make_pair = |lst| (lst, lst)
         \\    x = [1, 2]
         \\    t = make_pair(x)
-        \\    match t { (first, _) => match first { [a, b] => a + b, _ => 0 }, _ => 0 }
+        \\    match t { (first, _) => match first { [a, b] => a + b, _ => 0 } }
         \\}
     , 3, .no_trace);
 }

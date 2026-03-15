@@ -14,21 +14,15 @@ result = func(10, 20)
 ~~~
 # MONO
 ~~~roc
-c2_add_y = |b, captures| b + captures.y
-
-c1_add_x = |a, captures| a + captures.x
-
+func : Dec, Dec -> Dec
 func = |x, y| {
-	add_x = C1_add_x({ x: x })
-	add_y = C2_add_y({ y: y })
-	match add_x {
-		C1_add_x(captures) => c1_add_x(5, captures)
-	} + match add_y {
-		C2_add_y(captures) => c2_add_y(5, captures)
-	}
+	add_x = |a| a + x
+	add_y = |b| b + y
+	add_x(5) + add_y(5)
 }
 
-result = func(10, 20)
+result : Dec
+result = 40
 ~~~
 # FORMATTED
 ~~~roc
@@ -103,72 +97,50 @@ EndOfFile,
 			(e-block
 				(s-let
 					(p-assign (ident "add_x"))
-					(e-tag (name "#1_add_x")
-						(args
-							(e-record
-								(fields
-									(field (name "x")
-										(e-lookup-local
-											(p-assign (ident "x")))))))))
+					(e-closure
+						(captures
+							(capture (ident "x")))
+						(e-lambda
+							(args
+								(p-assign (ident "a")))
+							(e-binop (op "add")
+								(e-lookup-local
+									(p-assign (ident "a")))
+								(e-lookup-local
+									(p-assign (ident "x")))))))
 				(s-let
 					(p-assign (ident "add_y"))
-					(e-tag (name "#2_add_y")
-						(args
-							(e-record
-								(fields
-									(field (name "y")
-										(e-lookup-local
-											(p-assign (ident "y")))))))))
+					(e-closure
+						(captures
+							(capture (ident "y")))
+						(e-lambda
+							(args
+								(p-assign (ident "b")))
+							(e-binop (op "add")
+								(e-lookup-local
+									(p-assign (ident "b")))
+								(e-lookup-local
+									(p-assign (ident "y")))))))
 				(e-binop (op "add")
-					(e-match
-						(match
-							(cond
-								(e-lookup-local
-									(p-assign (ident "add_x"))))
-							(branches
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag)))
-									(value
-										(e-call
-											(e-lookup-local
-												(p-assign (ident "c1_add_x")))
-											(e-num (value "5"))
-											(e-lookup-local
-												(p-assign (ident "captures")))))))))
-					(e-match
-						(match
-							(cond
-								(e-lookup-local
-									(p-assign (ident "add_y"))))
-							(branches
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag)))
-									(value
-										(e-call
-											(e-lookup-local
-												(p-assign (ident "c2_add_y")))
-											(e-num (value "5"))
-											(e-lookup-local
-												(p-assign (ident "captures")))))))))))))
+					(e-call
+						(e-lookup-local
+							(p-assign (ident "add_x")))
+						(e-num (value "5")))
+					(e-call
+						(e-lookup-local
+							(p-assign (ident "add_y")))
+						(e-num (value "5")))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call
-			(e-lookup-local
-				(p-assign (ident "func")))
-			(e-num (value "10"))
-			(e-num (value "20")))))
+		(e-num (value "40"))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Dec, _arg -> Dec"))
+		(patt (type "Dec, Dec -> Dec"))
 		(patt (type "Dec")))
 	(expressions
-		(expr (type "Dec, _arg -> []"))
-		(expr (type "[]"))))
+		(expr (type "Dec, Dec -> Dec"))
+		(expr (type "Dec"))))
 ~~~

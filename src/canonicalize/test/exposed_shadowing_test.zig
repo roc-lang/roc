@@ -10,12 +10,15 @@ const base = @import("base");
 
 const Can = @import("../Can.zig");
 const ModuleEnv = @import("../ModuleEnv.zig");
+const BuiltinTestContext = @import("./BuiltinTestContext.zig").BuiltinTestContext;
 
 const Allocators = base.Allocators;
 const testing = std.testing;
 
 test "exposed but not implemented - values" {
     const allocator = testing.allocator;
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
 
     const source =
         \\module [foo, bar]
@@ -34,7 +37,7 @@ test "exposed but not implemented - values" {
     const ast = try parse.parse(&allocators, &env.common);
     defer ast.deinit();
 
-    var czer = try Can.init(&allocators, &env, ast, null);
+    var czer = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
     defer czer.deinit();
 
     try czer.canonicalizeFile();
@@ -59,6 +62,8 @@ test "exposed but not implemented - values" {
 
 test "exposed but not implemented - types" {
     const allocator = testing.allocator;
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
 
     const source =
         \\module [MyType, OtherType]
@@ -77,7 +82,7 @@ test "exposed but not implemented - types" {
     const ast = try parse.parse(&allocators, &env.common);
     defer ast.deinit();
 
-    var czer = try Can.init(&allocators, &env, ast, null);
+    var czer = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
     defer czer.deinit();
 
     try czer.canonicalizeFile();
@@ -102,6 +107,8 @@ test "exposed but not implemented - types" {
 
 test "redundant exposed entries" {
     const allocator = testing.allocator;
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
     const source =
         \\module [foo, bar, foo, MyType, bar]
         \\
@@ -119,7 +126,7 @@ test "redundant exposed entries" {
     const ast = try parse.parse(&allocators, &env.common);
     defer ast.deinit();
 
-    var czer = try Can.init(&allocators, &env, ast, null);
+    var czer = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
     defer czer.deinit();
     try czer
         .canonicalizeFile();
@@ -147,6 +154,8 @@ test "redundant exposed entries" {
 
 test "shadowing with exposed items" {
     const allocator = testing.allocator;
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
     const source =
         \\module [x, y]
         \\
@@ -166,7 +175,7 @@ test "shadowing with exposed items" {
     const ast = try parse.parse(&allocators, &env.common);
     defer ast.deinit();
 
-    var czer = try Can.init(&allocators, &env, ast, null);
+    var czer = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
     defer czer.deinit();
     try czer
         .canonicalizeFile();
@@ -186,6 +195,8 @@ test "shadowing with exposed items" {
 
 test "shadowing non-exposed items" {
     const allocator = testing.allocator;
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
     const source =
         \\module []
         \\
@@ -203,7 +214,7 @@ test "shadowing non-exposed items" {
     const ast = try parse.parse(&allocators, &env.common);
     defer ast.deinit();
 
-    var czer = try Can.init(&allocators, &env, ast, null);
+    var czer = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
     defer czer.deinit();
     try czer
         .canonicalizeFile();
@@ -227,6 +238,8 @@ test "shadowing non-exposed items" {
 
 test "exposed items correctly tracked across shadowing" {
     const allocator = testing.allocator;
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
     const source =
         \\module [x, y, z]
         \\
@@ -247,7 +260,7 @@ test "exposed items correctly tracked across shadowing" {
     const ast = try parse.parse(&allocators, &env.common);
     defer ast.deinit();
 
-    var czer = try Can.init(&allocators, &env, ast, null);
+    var czer = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
     defer czer.deinit();
     try czer
         .canonicalizeFile();
@@ -287,6 +300,8 @@ test "exposed items correctly tracked across shadowing" {
 
 test "complex case with redundant, shadowing, and not implemented" {
     const allocator = testing.allocator;
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
     const source =
         \\module [a, b, a, c, NotImplemented]
         \\
@@ -307,7 +322,7 @@ test "complex case with redundant, shadowing, and not implemented" {
     const ast = try parse.parse(&allocators, &env.common);
     defer ast.deinit();
 
-    var czer = try Can.init(&allocators, &env, ast, null);
+    var czer = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
     defer czer.deinit();
     try czer
         .canonicalizeFile();
@@ -346,6 +361,8 @@ test "complex case with redundant, shadowing, and not implemented" {
 
 test "exposed_items is populated correctly" {
     const allocator = testing.allocator;
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
     const source =
         \\module [foo, bar, MyType, foo]
         \\
@@ -363,7 +380,7 @@ test "exposed_items is populated correctly" {
     const ast = try parse.parse(&allocators, &env.common);
     defer ast.deinit();
 
-    var czer = try Can.init(&allocators, &env, ast, null);
+    var czer = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
     defer czer.deinit();
     try czer
         .canonicalizeFile();
@@ -382,6 +399,8 @@ test "exposed_items is populated correctly" {
 
 test "exposed_items persists after canonicalization" {
     const allocator = testing.allocator;
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
     const source =
         \\module [x, y, z]
         \\
@@ -399,7 +418,7 @@ test "exposed_items persists after canonicalization" {
     const ast = try parse.parse(&allocators, &env.common);
     defer ast.deinit();
 
-    var czer = try Can.init(&allocators, &env, ast, null);
+    var czer = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
     defer czer.deinit();
     try czer
         .canonicalizeFile();
@@ -416,6 +435,8 @@ test "exposed_items persists after canonicalization" {
 
 test "exposed_items never has entries removed" {
     const allocator = testing.allocator;
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
     const source =
         \\module [foo, bar, foo, baz]
         \\
@@ -433,7 +454,7 @@ test "exposed_items never has entries removed" {
     const ast = try parse.parse(&allocators, &env.common);
     defer ast.deinit();
 
-    var czer = try Can.init(&allocators, &env, ast, null);
+    var czer = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
     defer czer.deinit();
     try czer
         .canonicalizeFile();
@@ -452,6 +473,8 @@ test "exposed_items never has entries removed" {
 
 test "exposed_items handles identifiers with different attributes" {
     const allocator = testing.allocator;
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
     // Module exposing foo and foo! - these should be treated as different identifiers
     // Note: Using foo and foo! to test that attributes are properly included in the key
     const source =
@@ -470,7 +493,7 @@ test "exposed_items handles identifiers with different attributes" {
     const ast = try parse.parse(&allocators, &env.common);
     defer ast.deinit();
 
-    var czer = try Can.init(&allocators, &env, ast, null);
+    var czer = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
     defer czer.deinit();
     try czer
         .canonicalizeFile();
@@ -489,6 +512,8 @@ test "exposed_items handles identifiers with different attributes" {
 
 test "platform provides entries are extracted" {
     const allocator = testing.allocator;
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
     const source =
         \\platform ""
         \\    requires {} { main! : () => {} }
@@ -506,7 +531,7 @@ test "platform provides entries are extracted" {
     const ast = try parse.parse(&allocators, &env.common);
     defer ast.deinit();
 
-    var czer = try Can.init(&allocators, &env, ast, null);
+    var czer = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
     defer czer.deinit();
     try czer.canonicalizeFile();
 
@@ -523,6 +548,8 @@ test "platform provides entries are extracted" {
 
 test "platform provides entries with multiple entries" {
     const allocator = testing.allocator;
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
     const source =
         \\platform ""
         \\    requires {} { main! : () => {} }
@@ -540,7 +567,7 @@ test "platform provides entries with multiple entries" {
     const ast = try parse.parse(&allocators, &env.common);
     defer ast.deinit();
 
-    var czer = try Can.init(&allocators, &env, ast, null);
+    var czer = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
     defer czer.deinit();
     try czer.canonicalizeFile();
 

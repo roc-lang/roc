@@ -5,6 +5,7 @@ pub const SExprTree = @import("SExprTree.zig");
 pub const Ident = @import("Ident.zig");
 pub const Region = @import("Region.zig");
 pub const StringLiteral = @import("StringLiteral.zig");
+pub const LowLevel = @import("LowLevel.zig").LowLevel;
 pub const RegionInfo = @import("RegionInfo.zig");
 pub const Scratch = @import("Scratch.zig").Scratch;
 pub const parallel = @import("parallel.zig");

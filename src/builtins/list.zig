@@ -2498,6 +2498,29 @@ test "edge case: listSublist entire list" {
     try std.testing.expectEqual(@as(i16, 30), elements[2]);
 }
 
+test "listSublist transfers ownership from a non-unique source to the returned slice" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const data = [_]u8{ 1, 2, 3, 4 };
+    const list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
+
+    try std.testing.expectEqual(@as(usize, 1), test_env.getAllocationCount());
+
+    list.incref(1, false, test_env.getOps());
+    try std.testing.expectEqual(@as(usize, 1), test_env.getAllocationCount());
+
+    const sublist = listSublist(list, @alignOf(u8), @sizeOf(u8), false, 1, 2, null, rcNone, test_env.getOps());
+    try std.testing.expect(sublist.isSeamlessSlice());
+    try std.testing.expectEqual(@as(usize, 1), test_env.getAllocationCount());
+
+    list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
+    try std.testing.expectEqual(@as(usize, 1), test_env.getAllocationCount());
+
+    sublist.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
+    try std.testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());
+}
+
 test "edge case: listPrepend to large list" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();

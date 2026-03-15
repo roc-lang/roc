@@ -72,9 +72,6 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     // Add all low-level operations to the map using full qualified names
     // Associated items are stored as defs with qualified names like "Builtin.Str.is_empty"
     // We need to find the actual ident that was created during canonicalization
-    if (env.common.findIdent("Builtin.Str.is_empty")) |str_is_empty_ident| {
-        try low_level_map.put(str_is_empty_ident, .str_is_empty);
-    }
     if (env.common.findIdent("Builtin.Str.is_eq")) |str_is_eq_ident| {
         try low_level_map.put(str_is_eq_ident, .str_is_eq);
     }
@@ -110,9 +107,6 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     }
     if (env.common.findIdent("Builtin.Str.repeat")) |str_repeat_ident| {
         try low_level_map.put(str_repeat_ident, .str_repeat);
-    }
-    if (env.common.findIdent("Builtin.Str.with_prefix")) |str_with_prefix_ident| {
-        try low_level_map.put(str_with_prefix_ident, .str_with_prefix);
     }
     if (env.common.findIdent("Builtin.Str.drop_prefix")) |str_drop_prefix_ident| {
         try low_level_map.put(str_drop_prefix_ident, .str_drop_prefix);
@@ -153,14 +147,8 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     if (env.common.findIdent("Builtin.List.len")) |list_len_ident| {
         try low_level_map.put(list_len_ident, .list_len);
     }
-    if (env.common.findIdent("Builtin.List.is_empty")) |list_is_empty_ident| {
-        try low_level_map.put(list_is_empty_ident, .list_is_empty);
-    }
     if (env.common.findIdent("Builtin.List.concat")) |list_concat_ident| {
         try low_level_map.put(list_concat_ident, .list_concat);
-    }
-    if (env.common.findIdent("Builtin.List.append")) |list_append_ident| {
-        try low_level_map.put(list_append_ident, .list_append);
     }
     if (env.common.findIdent("Builtin.List.with_capacity")) |list_with_capacity_ident| {
         try low_level_map.put(list_with_capacity_ident, .list_with_capacity);
@@ -180,40 +168,8 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     if (env.common.findIdent("Builtin.List.sublist")) |list_sublist_ident| {
         try low_level_map.put(list_sublist_ident, .list_sublist);
     }
-    if (env.common.findIdent("Builtin.Bool.is_eq")) |bool_is_eq_ident| {
-        try low_level_map.put(bool_is_eq_ident, .bool_is_eq);
-    }
-
-    // Numeric type checking operations (all numeric types)
     const numeric_types = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64" };
-    for (numeric_types) |num_type| {
-        var buf: [256]u8 = undefined;
-
-        // is_zero (all types)
-        const is_zero = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.is_zero", .{num_type});
-        if (env.common.findIdent(is_zero)) |ident| {
-            try low_level_map.put(ident, .num_is_zero);
-        }
-    }
-
-    // Numeric sign checking operations (signed types only)
     const signed_types = [_][]const u8{ "I8", "I16", "I32", "I64", "I128", "Dec", "F32", "F64" };
-    for (signed_types) |num_type| {
-        var buf: [256]u8 = undefined;
-
-        // is_negative
-        const is_negative = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.is_negative", .{num_type});
-        if (env.common.findIdent(is_negative)) |ident| {
-            try low_level_map.put(ident, .num_is_negative);
-        }
-
-        // is_positive
-        const is_positive = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.is_positive", .{num_type});
-        if (env.common.findIdent(is_positive)) |ident| {
-            try low_level_map.put(ident, .num_is_positive);
-        }
-    }
-
     // Numeric equality operations (integer types + Dec only, NOT F32/F64)
     const eq_types = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec" };
     for (eq_types) |num_type| {
@@ -1640,8 +1596,7 @@ fn compileModule(
         gpa.destroy(can_result);
     }
 
-    // When compiling Builtin itself, pass null for module_envs so setupAutoImportedBuiltinTypes doesn't run
-    can_result.* = try Can.init(&allocators, module_env, parse_ast, null);
+    can_result.* = try Can.initBuiltin(&allocators, module_env, parse_ast);
 
     try can_result.canonicalizeFile();
     try can_result.validateForChecking();

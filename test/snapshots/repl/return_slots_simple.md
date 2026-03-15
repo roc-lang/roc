@@ -9,8 +9,8 @@ type=repl
 » (|x| x + 1)(5)
 ~~~
 # OUTPUT
-5
+5.0
 ---
-6
+6.0
 # PROBLEMS
 NIL

@@ -508,7 +508,10 @@ pub const PackageEnv = struct {
 
     fn runMultiThread(self: *PackageEnv) !void {
         const options = parallel.ProcessOptions{
-            .max_threads = if (self.max_threads == 0) (std.Thread.getCpuCount() catch 1) else self.max_threads,
+            .max_threads = if (self.max_threads == 0)
+                threading.getCpuCount()
+            else
+                self.max_threads,
             .use_per_thread_arenas = false,
         };
 
@@ -1063,16 +1066,14 @@ pub const PackageEnv = struct {
         module_envs_out: *std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType),
         source_dir: ?[]const u8,
     ) !Check {
-        // Populate module_envs with Bool, Try, Dict, Set using shared function
-        try Can.populateModuleEnvs(
-            module_envs_out,
-            env,
-            builtin_module_env,
-            builtin_indices,
-        );
-
         // Canonicalize
-        var czer = try Can.init(allocators, env, parse_ast, module_envs_out);
+        var czer = try Can.initModule(allocators, env, parse_ast, .{
+            .builtin_types = .{
+                .builtin_module_env = builtin_module_env,
+                .builtin_indices = builtin_indices,
+            },
+            .imported_modules = module_envs_out,
+        });
         czer.source_dir = source_dir;
         try czer.canonicalizeFile();
         try czer.validateForChecking();
@@ -1128,17 +1129,9 @@ pub const PackageEnv = struct {
     ) !void {
         const gpa = allocators.gpa;
 
-        // Create module_envs map for auto-importing builtin types
+        // Create module_envs map for explicit imported modules used during canonicalization
         var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
         defer module_envs_map.deinit();
-
-        // Populate module_envs with Bool, Try, Dict, Set using shared function
-        try Can.populateModuleEnvs(
-            &module_envs_map,
-            env,
-            builtin_module_env,
-            builtin_indices,
-        );
 
         // Add sibling modules - use placeholder-based approach for all paths.
         // In canonicalize-first mode, modules use placeholders during canonicalization.
@@ -1255,7 +1248,13 @@ pub const PackageEnv = struct {
             }
         }
 
-        var czer = try Can.init(allocators, env, parse_ast, &module_envs_map);
+        var czer = try Can.initModule(allocators, env, parse_ast, .{
+            .builtin_types = .{
+                .builtin_module_env = builtin_module_env,
+                .builtin_indices = builtin_indices,
+            },
+            .imported_modules = &module_envs_map,
+        });
         czer.source_dir = root_dir;
         try czer.canonicalizeFile();
         try czer.validateForChecking();
@@ -1284,17 +1283,9 @@ pub const PackageEnv = struct {
             .builtin_indices = builtin_indices,
         };
 
-        // Create module_envs map for auto-importing builtin types
+        // Create module_envs map for explicit imported modules used during canonicalization
         var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
         errdefer module_envs_map.deinit();
-
-        // Populate module_envs with Bool, Try, Dict, Set using shared function
-        try Can.populateModuleEnvs(
-            &module_envs_map,
-            env,
-            builtin_module_env,
-            builtin_indices,
-        );
 
         var checker = try Check.init(
             gpa,
@@ -1325,13 +1316,6 @@ pub const PackageEnv = struct {
         module_envs_map.deinit();
 
         return checker;
-    }
-
-    /// Resolve all pending lookups in a module's CIR.
-    /// Called before type-checking, when all dependencies are canonicalized.
-    /// This converts e_lookup_pending to e_lookup_external (or error).
-    fn resolvePendingLookups(env: *ModuleEnv, imported_envs: []const *ModuleEnv) void {
-        env.store.resolvePendingLookups(env, imported_envs);
     }
 
     fn doTypeCheck(self: *PackageEnv, module_id: ModuleId) !void {
@@ -1381,7 +1365,7 @@ pub const PackageEnv = struct {
 
         // Resolve pending lookups that were deferred during canonicalization
         // This converts e_lookup_pending to e_lookup_external now that all dependencies are available
-        resolvePendingLookups(env, imported_envs.items);
+        env.store.resolvePendingLookups(env, imported_envs.items);
 
         const check_start = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
         var checker = try typeCheckModule(self.gpa, env, self.builtin_modules.builtin_module.env, imported_envs.items, self.target, self.io);

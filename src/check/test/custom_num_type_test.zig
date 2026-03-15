@@ -20,6 +20,23 @@ test "Custom number type with from_numeral: integer literal unifies" {
     try test_env.assertNoErrors();
 }
 
+test "Custom number type with from_numeral: typed integer suffix unifies" {
+    const source =
+        \\  MyNum := [].{
+        \\    from_numeral : Numeral -> Try(MyNum, [InvalidNumeral(Str)])
+        \\    from_numeral = |_| Err(InvalidNumeral("not supported"))
+        \\  }
+        \\
+        \\  x : MyNum
+        \\  x = 123.MyNum
+    ;
+
+    var test_env = try TestEnv.init("MyNum", source);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
 test "Custom number type with from_numeral: decimal literal unifies" {
     const source =
         \\  MyDecimal := [].{
@@ -35,6 +52,23 @@ test "Custom number type with from_numeral: decimal literal unifies" {
     defer test_env.deinit();
 
     // Should type-check successfully - MyDecimal has from_numeral so it can accept decimal literals
+    try test_env.assertNoErrors();
+}
+
+test "Custom number type with from_numeral: typed decimal suffix unifies" {
+    const source =
+        \\  MyDecimal := [].{
+        \\    from_numeral : Numeral -> Try(MyDecimal, [InvalidNumeral(Str)])
+        \\    from_numeral = |_| Err(InvalidNumeral("not implemented"))
+        \\  }
+        \\
+        \\  x : MyDecimal
+        \\  x = 3.14.MyDecimal
+    ;
+
+    var test_env = try TestEnv.init("MyDecimal", source);
+    defer test_env.deinit();
+
     try test_env.assertNoErrors();
 }
 

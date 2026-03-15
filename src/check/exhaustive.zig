@@ -63,24 +63,24 @@ pub const BuiltinIdents = struct {
     /// Numeric types have [] as backing but are inhabited primitives.
     pub fn isBuiltinNumericType(self: BuiltinIdents, nominal: types.NominalType) bool {
         // First check if it's from the Builtin module
-        if (nominal.origin_module != self.builtin_module) {
+        if (!nominal.origin_module.eql(self.builtin_module)) {
             return false;
         }
         // Then check if it's one of the numeric types
         const ident = nominal.ident.ident_idx;
-        return ident == self.u8_type or
-            ident == self.i8_type or
-            ident == self.u16_type or
-            ident == self.i16_type or
-            ident == self.u32_type or
-            ident == self.i32_type or
-            ident == self.u64_type or
-            ident == self.i64_type or
-            ident == self.u128_type or
-            ident == self.i128_type or
-            ident == self.f32_type or
-            ident == self.f64_type or
-            ident == self.dec_type;
+        return ident.eql(self.u8_type) or
+            ident.eql(self.i8_type) or
+            ident.eql(self.u16_type) or
+            ident.eql(self.i16_type) or
+            ident.eql(self.u32_type) or
+            ident.eql(self.i32_type) or
+            ident.eql(self.u64_type) or
+            ident.eql(self.i64_type) or
+            ident.eql(self.u128_type) or
+            ident.eql(self.i128_type) or
+            ident.eql(self.f32_type) or
+            ident.eql(self.f64_type) or
+            ident.eql(self.dec_type);
     }
 };
 
@@ -1367,17 +1367,14 @@ fn isOpenExtension(type_store: *TypeStore, ext: Var) bool {
 }
 
 /// Find the tag_id for a tag name within a union.
-/// Compares only the string index, not attributes, since the same tag name
-/// from a pattern vs a type definition may have different attributes.
+/// Uses Ident.Idx equality directly.
 fn findTagId(union_info: Union, tag_name: Ident.Idx) ?TagId {
     for (union_info.alternatives) |alt| {
         const alt_ident = switch (alt.name) {
-            .tag => |t| if (t == Ident.Idx.NONE) continue else t,
+            .tag => |t| if (t.eql(Ident.Idx.NONE)) continue else t,
             .opaque_type => |o| o,
         };
-        // Compare just the idx (interned string index), not the full Ident.Idx
-        // which includes attributes that may differ between pattern and type
-        if (alt_ident.idx == tag_name.idx) {
+        if (alt_ident.eql(tag_name)) {
             // Return the stored tag_id, not the array position.
             // The tag_id preserves the original index for getCtorArgTypes.
             return alt.tag_id;
@@ -1698,8 +1695,7 @@ fn getRecordFieldTypeByName(type_store: *TypeStore, record_type: Var, field_name
                     const field_vars = fields_slice.items(.var_);
 
                     for (field_names, field_vars) |name, var_| {
-                        // Compare by idx (interned string index), not the full Ident.Idx
-                        if (name.idx == field_name.idx) {
+                        if (name.eql(field_name)) {
                             return var_;
                         }
                     }
@@ -1713,7 +1709,7 @@ fn getRecordFieldTypeByName(type_store: *TypeStore, record_type: Var, field_name
                     const field_vars = fields_slice.items(.var_);
 
                     for (field_names, field_vars) |name, var_| {
-                        if (name.idx == field_name.idx) {
+                        if (name.eql(field_name)) {
                             return var_;
                         }
                     }
@@ -2036,7 +2032,7 @@ fn collectCtorsSketched(
                             // Add if not already present
                             var already_present = false;
                             for (all_record_fields.items) |existing| {
-                                if (existing.idx == field.idx) {
+                                if (existing.eql(field)) {
                                     already_present = true;
                                     break;
                                 }
@@ -2185,7 +2181,7 @@ fn specializeByConstructorSketched(
                             // Find this field in the pattern's field list
                             var found = false;
                             for (pat_fields, 0..) |pat_field, j| {
-                                if (pat_field.idx == target_field.idx) {
+                                if (pat_field.eql(target_field)) {
                                     // Found the field - use the pattern's arg
                                     new_row[i] = if (j < kc.args.len) kc.args[j] else .anything;
                                     found = true;
@@ -2593,7 +2589,7 @@ pub fn isUsefulSketched(
                                         for (mat_fields) |field| {
                                             var already_present = false;
                                             for (all_fields.items) |existing| {
-                                                if (existing.idx == field.idx) {
+                                                if (existing.eql(field)) {
                                                     already_present = true;
                                                     break;
                                                 }
@@ -2658,7 +2654,7 @@ pub fn isUsefulSketched(
                     for (merged_fields, 0..) |merged_field, i| {
                         var found = false;
                         for (current_fields, 0..) |cur_field, j| {
-                            if (cur_field.idx == merged_field.idx) {
+                            if (cur_field.eql(merged_field)) {
                                 row[i] = if (j < kc.args.len) kc.args[j] else .anything;
                                 found = true;
                                 break;
@@ -3192,7 +3188,7 @@ fn formatPatternInto(
                     const alt = c.union_info.alternatives[c.tag_id.toInt()];
                     switch (alt.name) {
                         .tag => |t| {
-                            if (t == Ident.Idx.NONE) {
+                            if (t.eql(Ident.Idx.NONE)) {
                                 // This is the #Open synthetic tag - show as wildcard
                                 try writer.writeAll("_");
                                 return;

@@ -8,6 +8,6 @@ type=repl
 » List.drop_last([0, 1, 2, 3, 4, 5, 6], 4)
 ~~~
 # OUTPUT
-[0, 1, 2]
+[0.0, 1.0, 2.0]
 # PROBLEMS
 NIL

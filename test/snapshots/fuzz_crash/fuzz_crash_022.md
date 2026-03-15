@@ -226,16 +226,13 @@ ain! = |_| getUser(900)
 			(e-runtime-error (tag "if_condition_not_canonicalized"))))
 	(d-let
 		(p-assign (ident "ain!"))
-		(e-closure
-			(captures
-				(capture (ident "getUser")))
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-call
-					(e-lookup-local
-						(p-assign (ident "getUser")))
-					(e-num (value "900"))))))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-call
+				(e-lookup-local
+					(p-assign (ident "getUser")))
+				(e-num (value "900")))))
 	(s-alias-decl
 		(ty-header (name "UserId"))
 		(ty-lookup (name "U64") (builtin))))

@@ -40,6 +40,129 @@ print_file_diff() {
     git diff "$base_branch".."$pr_branch" -- "$file" 2>/dev/null | sed 's/^/    /'
 }
 
+print_probe_log() {
+    local label="$1"
+    local probe_log="$2"
+
+    echo "  $label:"
+    if [ -s "$probe_log" ]; then
+        tail -n 40 "$probe_log" | sed 's/^/    /'
+    else
+        echo "    <no output>"
+    fi
+}
+
+exit_code_is_benchmarkable() {
+    local exit_code="$1"
+    local extra_args="$2"
+
+    if [ "$exit_code" -eq 0 ]; then
+        return 0
+    fi
+
+    if [[ "$extra_args" =~ --ignore-failure=([^[:space:]]+) ]]; then
+        local ignore_codes="${BASH_REMATCH[1]}"
+        local old_ifs="$IFS"
+        IFS=','
+        for code in $ignore_codes; do
+            if [ "$exit_code" -eq "$code" ]; then
+                IFS="$old_ifs"
+                return 0
+            fi
+        done
+        IFS="$old_ifs"
+    fi
+
+    if [[ "$extra_args" =~ --discard-failure=([^[:space:]]+) ]]; then
+        local discard_codes="${BASH_REMATCH[1]}"
+        local old_ifs="$IFS"
+        IFS=','
+        for code in $discard_codes; do
+            if [ "$exit_code" -eq "$code" ]; then
+                IFS="$old_ifs"
+                return 0
+            fi
+        done
+        IFS="$old_ifs"
+    fi
+
+    return 1
+}
+
+probe_command() {
+    local roc_bin="$1"
+    local fx_file="$2"
+    local roc_extra_args="$3"
+    local label="$4"
+    local filename
+    filename=$(basename "$fx_file")
+    local probe_log="/tmp/bench_probe_${filename%.roc}_${label}.log"
+
+    local -a cmd=("$roc_bin" "$fx_file" "--no-cache")
+    if [ -n "$roc_extra_args" ]; then
+        local -a extra_arg_array=()
+        read -r -a extra_arg_array <<< "$roc_extra_args"
+        cmd+=("${extra_arg_array[@]}")
+    fi
+
+    set +e
+    "${cmd[@]}" >"$probe_log" 2>&1
+    PROBE_EXIT_CODE=$?
+    set -e
+    PROBE_LOG="$probe_log"
+}
+
+preflight_benchmark() {
+    local extra_args="$1"
+    local main_roc="$2"
+    local pr_roc="$3"
+    local fx_file="$4"
+    local roc_extra_args="$5"
+
+    local filename
+    filename=$(basename "$fx_file")
+
+    probe_command "$main_roc" "$fx_file" "$roc_extra_args" "main"
+    local main_exit_code="$PROBE_EXIT_CODE"
+    local main_log="$PROBE_LOG"
+
+    probe_command "$pr_roc" "$fx_file" "$roc_extra_args" "pr"
+    local pr_exit_code="$PROBE_EXIT_CODE"
+    local pr_log="$PROBE_LOG"
+
+    if exit_code_is_benchmarkable "$main_exit_code" "$extra_args"; then
+        if exit_code_is_benchmarkable "$pr_exit_code" "$extra_args"; then
+            if cmp -s "$main_log" "$pr_log"; then
+                return 0
+            fi
+
+            echo "Skipping $filename (main and PR outputs differ, so this is not a comparable benchmark)"
+            echo "  main exit code: $main_exit_code"
+            echo "  pr exit code: $pr_exit_code"
+            print_probe_log "main output" "$main_log"
+            print_probe_log "pr output" "$pr_log"
+            PRECHECK_SKIP_REASON="output_diff"
+            return 2
+        fi
+
+        echo "ERROR: PR command is not benchmarkable for $filename"
+        echo "  main exit code: $main_exit_code"
+        echo "  pr exit code: $pr_exit_code"
+        print_probe_log "pr output" "$pr_log"
+        return 1
+    fi
+
+    echo "Skipping $filename (main baseline is not benchmarkable here)"
+    echo "  main exit code: $main_exit_code"
+    echo "  pr exit code: $pr_exit_code"
+    print_probe_log "main output" "$main_log"
+    if ! exit_code_is_benchmarkable "$pr_exit_code" "$extra_args"; then
+        print_probe_log "pr output" "$pr_log"
+    fi
+    PRECHECK_SKIP_REASON="main_unbenchmarkable"
+    return 2
+}
+
 # Run hyperfine benchmark and return percentage change via global variable
 # Returns 0 on success, 1 on failure
 # Sets BENCH_PCT_CHANGE on success
@@ -76,6 +199,7 @@ run_benchmark() {
 
         if [ -n "$main_median" ] && [ -n "$pr_median" ] && [ "$main_median" != "null" ] && [ "$pr_median" != "null" ]; then
             BENCH_PCT_CHANGE=$(awk "BEGIN {printf \"%.2f\", (($pr_median - $main_median) / $main_median) * 100}")
+            BENCH_ABS_DELTA_MS=$(awk "BEGIN {printf \"%.2f\", ($pr_median - $main_median) * 1000}")
             return 0
         fi
     fi
@@ -119,6 +243,8 @@ echo "=== Running benchmarks ==="
 SLOWER_DETECTED=0
 SLOWER_FILES=""
 CHANGED_FILES=""  # Files that differ between branches
+SKIPPED_BASELINE_FILES=""
+SKIPPED_OUTPUT_DIFF_FILES=""
 
 for fx_file in $FX_FILES; do
     filename=$(basename "$fx_file")
@@ -148,6 +274,26 @@ for fx_file in $FX_FILES; do
             ;;
     esac
 
+    if preflight_benchmark "$EXTRA_ARGS" "$MAIN_ROC" "$PR_ROC" "$fx_file" "$ROC_EXTRA_ARGS"; then
+        :
+    else
+        preflight_status=$?
+        if [ "$preflight_status" -eq 2 ]; then
+            case "${PRECHECK_SKIP_REASON:-}" in
+                output_diff)
+                    SKIPPED_OUTPUT_DIFF_FILES="$SKIPPED_OUTPUT_DIFF_FILES $filename"
+                    ;;
+                *)
+                    SKIPPED_BASELINE_FILES="$SKIPPED_BASELINE_FILES $filename"
+                    ;;
+            esac
+            echo ""
+            continue
+        fi
+        echo "ERROR: Preflight failed for $filename"
+        exit 1
+    fi
+
     # Run hyperfine comparison
     # Using median for robustness against outliers.
     # Note: Our "Change" percentage may differ slightly from hyperfine's "X times faster"
@@ -158,12 +304,13 @@ for fx_file in $FX_FILES; do
     fi
 
     pct_change="$BENCH_PCT_CHANGE"
-    echo "  Change: ${pct_change}%"
+    abs_delta_ms="$BENCH_ABS_DELTA_MS"
+    echo "  Change: ${pct_change}% (${abs_delta_ms} ms)"
 
-    # Check for >4% slower execution - requires confirmation run
-    is_slower=$(awk "BEGIN {print ($pct_change > 4) ? 1 : 0}")
+    # Check for meaningful slower execution - requires both relative and absolute slowdown.
+    is_slower=$(awk "BEGIN {print ($pct_change > 4 && $abs_delta_ms > 5) ? 1 : 0}")
     if [ "$is_slower" = "1" ]; then
-        echo "  Potential slowdown detected (${pct_change}%), running confirmation..."
+        echo "  Potential slowdown detected (${pct_change}%, ${abs_delta_ms} ms), running confirmation..."
 
         if ! run_benchmark "/tmp/bench_${filename}_confirm.json" "$EXTRA_ARGS" "$MAIN_ROC" "$PR_ROC" "$fx_file" "$ROC_EXTRA_ARGS"; then
             echo "ERROR: Confirmation benchmark failed for $filename"
@@ -171,12 +318,13 @@ for fx_file in $FX_FILES; do
         fi
 
         confirm_pct_change="$BENCH_PCT_CHANGE"
-        echo "  Confirmation change: ${confirm_pct_change}%"
+        confirm_abs_delta_ms="$BENCH_ABS_DELTA_MS"
+        echo "  Confirmation change: ${confirm_pct_change}% (${confirm_abs_delta_ms} ms)"
 
-        # Only report slowdown if both runs show >4% slower
-        confirm_is_slower=$(awk "BEGIN {print ($confirm_pct_change > 4) ? 1 : 0}")
+        # Only report slowdown if both runs exceed both thresholds.
+        confirm_is_slower=$(awk "BEGIN {print ($confirm_pct_change > 4 && $confirm_abs_delta_ms > 5) ? 1 : 0}")
         if [ "$confirm_is_slower" = "1" ]; then
-            echo "  SLOWER EXECUTION CONFIRMED in $filename (${pct_change}% then ${confirm_pct_change}%)"
+            echo "  SLOWER EXECUTION CONFIRMED in $filename (${pct_change}% / ${abs_delta_ms} ms then ${confirm_pct_change}% / ${confirm_abs_delta_ms} ms)"
             SLOWER_DETECTED=1
             SLOWER_FILES="$SLOWER_FILES $filename"
 
@@ -189,7 +337,7 @@ for fx_file in $FX_FILES; do
             fi
             unset check_result
         else
-            echo "  Slowdown NOT confirmed (first: ${pct_change}%, second: ${confirm_pct_change}%)"
+            echo "  Slowdown NOT confirmed (first: ${pct_change}% / ${abs_delta_ms} ms, second: ${confirm_pct_change}% / ${confirm_abs_delta_ms} ms)"
         fi
     fi
     echo ""
@@ -197,6 +345,20 @@ done
 
 # Summary
 echo "=== FX Benchmark Summary ==="
+if [ -n "$SKIPPED_BASELINE_FILES" ]; then
+    echo "Skipped benchmarks because the main baseline command was not benchmarkable:"
+    for f in $SKIPPED_BASELINE_FILES; do
+        echo "  - $f"
+    done
+    echo ""
+fi
+if [ -n "$SKIPPED_OUTPUT_DIFF_FILES" ]; then
+    echo "Skipped benchmarks because the main and PR outputs differed:"
+    for f in $SKIPPED_OUTPUT_DIFF_FILES; do
+        echo "  - $f"
+    done
+    echo ""
+fi
 if [ "$SLOWER_DETECTED" = "1" ]; then
     echo "SLOWER EXECUTION detected in the following files:"
     for f in $SLOWER_FILES; do
@@ -211,5 +373,5 @@ if [ "$SLOWER_DETECTED" = "1" ]; then
     echo "Ask Richard, Anton, or Luke to override this failure if you believe it is justified."
     exit 1
 else
-    echo "No significant slowdowns detected (threshold: >4%)"
+    echo "No significant slowdowns detected (threshold: >4% and >5 ms)"
 fi

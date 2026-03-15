@@ -527,58 +527,49 @@ main! = |_| {
 				(p-assign (ident "param")))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-closure
-			(captures
-				(capture (ident "identity"))
-				(capture (ident "anotherIdentity"))
-				(capture (ident "combine"))
-				(capture (ident "yetAnotherIdentity"))
-				(capture (ident "finalIdentity"))
-				(capture (ident "a"))
-				(capture (ident "f")))
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-block
-					(s-let
-						(p-assign (ident "result1"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "identity")))
-							(e-num (value "123"))))
-					(s-let
-						(p-assign (ident "result2"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "anotherIdentity")))
-							(e-string
-								(e-literal (string "test")))))
-					(s-let
-						(p-assign (ident "result3"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "combine")))
-							(e-lookup-local
-								(p-assign (ident "result1")))
-							(e-lookup-local
-								(p-assign (ident "result2")))))
-					(s-let
-						(p-assign (ident "result4"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "yetAnotherIdentity")))
-							(e-tag (name "True"))))
-					(s-let
-						(p-assign (ident "result5"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "finalIdentity")))
-							(e-dec-small (numerator "314") (denominator-power-of-ten "2") (value "3.14"))))
-					(e-binop (op "add")
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-block
+				(s-let
+					(p-assign (ident "result1"))
+					(e-call
 						(e-lookup-local
-							(p-assign (ident "a")))
+							(p-assign (ident "identity")))
+						(e-num (value "123"))))
+				(s-let
+					(p-assign (ident "result2"))
+					(e-call
 						(e-lookup-local
-							(p-assign (ident "f")))))))))
+							(p-assign (ident "anotherIdentity")))
+						(e-string
+							(e-literal (string "test")))))
+				(s-let
+					(p-assign (ident "result3"))
+					(e-call
+						(e-lookup-local
+							(p-assign (ident "combine")))
+						(e-lookup-local
+							(p-assign (ident "result1")))
+						(e-lookup-local
+							(p-assign (ident "result2")))))
+				(s-let
+					(p-assign (ident "result4"))
+					(e-call
+						(e-lookup-local
+							(p-assign (ident "yetAnotherIdentity")))
+						(e-tag (name "True"))))
+				(s-let
+					(p-assign (ident "result5"))
+					(e-call
+						(e-lookup-local
+							(p-assign (ident "finalIdentity")))
+						(e-dec-small (numerator "314") (denominator-power-of-ten "2") (value "3.14"))))
+				(e-binop (op "add")
+					(e-lookup-local
+						(p-assign (ident "a")))
+					(e-lookup-local
+						(p-assign (ident "f"))))))))
 ~~~
 # TYPES
 ~~~clojure

@@ -238,6 +238,15 @@ const CheckTypeCheckerPatternsStep = struct {
         // This is necessary because origin_module is an ident from the type's defining module,
         // while module_name is from the importing module's ident store - no way to compare without strings
         .{ .file = "Check.zig", .start = 5530, .end = 5547 },
+        // Cross-module nominal type matching in store.zig requires string comparison
+        // because ident indices are module-local — same nominal from different modules
+        // has different Ident.Idx values, so we must compare the underlying strings
+        .{ .file = "store.zig", .start = 340, .end = 355 },
+        // Interpreter record field lookup by name in StackValue.zig requires string comparison
+        // because ident indices are module-local — the same field name from different
+        // modules has different Ident.Idx values, so we must compare the underlying strings.
+        // This exclusion can go away once the deprecated interpreter is finally removed.
+        .{ .file = "StackValue.zig", .start = 1150, .end = 1220 },
     };
 
     fn isInExcludedRange(file_path: []const u8, line_number: usize) bool {
@@ -1744,9 +1753,10 @@ fn createTestPlatformHostLib(
     configureBackend(lib, target);
     lib.root_module.addImport("builtins", roc_modules.builtins);
     lib.root_module.addImport("build_options", roc_modules.build_options);
-    // Don't bundle compiler-rt in host libraries - roc_shim provides it
-    // Bundling it here causes duplicate symbol errors on Windows
-    lib.bundle_compiler_rt = false;
+    // Bundle compiler-rt when LLVM is used (e.g. x64mac), so that LLVM-generated
+    // symbols like __zig_probe_stack are available at link time. Otherwise skip it
+    // to avoid duplicate symbol errors (e.g. on Windows).
+    lib.bundle_compiler_rt = mustUseLlvm(target);
 
     return lib;
 }
@@ -1817,8 +1827,8 @@ const FixArchivePaddingStep = struct {
         _ = options;
         const self: *FixArchivePaddingStep = @fieldParentPtr("step", step);
 
-        const file = std.fs.cwd().openFile(self.archive_path, .{ .mode = .read_write }) catch |err| {
-            std.debug.print("Warning: Could not open archive {s}: {s}\n", .{ self.archive_path, @errorName(err) });
+        const file = std.fs.cwd().openFile(self.archive_path, .{ .mode = .read_write }) catch {
+            // Archive doesn't exist yet (e.g. cross-compilation target not built) — skip silently.
             return;
         };
         defer file.close();
@@ -2087,6 +2097,9 @@ fn setupTestPlatforms(
 }
 
 pub fn build(b: *std.Build) void {
+    // Ensure zig-out/bin exists — Zig's install step can silently fail after `rm -rf zig-out`
+    std.fs.cwd().makePath("zig-out/bin") catch {};
+
     // build steps
     const run_step = b.step("run", "Build and run the roc cli");
     const roc_step = b.step("roc", "Build the roc compiler without running it");
@@ -2102,7 +2115,7 @@ pub fn build(b: *std.Build) void {
     const serialization_size_step = b.step("test-serialization-sizes", "Verify Serialized types have platform-independent sizes");
     const wasm_static_lib_test_step = b.step("test-wasm-static-lib", "Test WASM static library builds with bytebox");
     const test_cli_step = b.step("test-cli", "Test the roc CLI by running test programs");
-    const test_cli_dev_step = b.step("test-cli-dev", "Test the roc CLI with --backend=dev (informational, not in CI)");
+
     const test_platforms_step = b.step("test-platforms", "Build test platform host libraries");
     const coverage_step = b.step("coverage", "Run parser tests with kcov code coverage");
     const release_step = b.step("release", "Build optimized release binary for distribution");
@@ -2319,6 +2332,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/cli/test/test_runner.zig"),
             .target = target,
             .optimize = optimize,
+            .imports = &.{},
         }),
     });
     b.installArtifact(test_runner_exe);
@@ -2351,6 +2365,39 @@ pub fn build(b: *std.Build) void {
         run_str_tests.step.dependOn(&install_runner.step);
         run_str_tests.step.dependOn(test_platforms_step);
         test_cli_step.dependOn(&run_str_tests.step);
+
+        // Test int platform with dev backend
+        const run_int_dev_tests = b.addRunArtifact(test_runner_exe);
+        run_int_dev_tests.addArg("zig-out/bin/roc");
+        run_int_dev_tests.addArg("int");
+        run_int_dev_tests.addArg("--mode=native");
+        run_int_dev_tests.addArg("--backend=dev");
+        run_int_dev_tests.step.dependOn(&install.step);
+        run_int_dev_tests.step.dependOn(&install_runner.step);
+        run_int_dev_tests.step.dependOn(test_platforms_step);
+        test_cli_step.dependOn(&run_int_dev_tests.step);
+
+        // Test str platform with dev backend
+        const run_str_dev_tests = b.addRunArtifact(test_runner_exe);
+        run_str_dev_tests.addArg("zig-out/bin/roc");
+        run_str_dev_tests.addArg("str");
+        run_str_dev_tests.addArg("--mode=native");
+        run_str_dev_tests.addArg("--backend=dev");
+        run_str_dev_tests.step.dependOn(&install.step);
+        run_str_dev_tests.step.dependOn(&install_runner.step);
+        run_str_dev_tests.step.dependOn(test_platforms_step);
+        test_cli_step.dependOn(&run_str_dev_tests.step);
+
+        // Test fx platform with dev backend
+        const run_fx_dev_tests = b.addRunArtifact(test_runner_exe);
+        run_fx_dev_tests.addArg("zig-out/bin/roc");
+        run_fx_dev_tests.addArg("fx");
+        run_fx_dev_tests.addArg("--mode=native");
+        run_fx_dev_tests.addArg("--backend=dev");
+        run_fx_dev_tests.step.dependOn(&install.step);
+        run_fx_dev_tests.step.dependOn(&install_runner.step);
+        run_fx_dev_tests.step.dependOn(test_platforms_step);
+        test_cli_step.dependOn(&run_fx_dev_tests.step);
 
         // Roc subcommands integration test
         const roc_subcommands_test = b.addTest(.{
@@ -2389,16 +2436,6 @@ pub fn build(b: *std.Build) void {
         run_glue_test.step.dependOn(&install.step);
         run_glue_test_step = &run_glue_test.step;
         test_cli_step.dependOn(&run_glue_test.step);
-        // Tests fx platform with --backend=dev to track dev backend progress
-        const run_fx_dev_tests = b.addRunArtifact(test_runner_exe);
-        run_fx_dev_tests.addArg("zig-out/bin/roc");
-        run_fx_dev_tests.addArg("fx");
-        run_fx_dev_tests.addArg("--mode=native");
-        run_fx_dev_tests.addArg("--backend=dev");
-        run_fx_dev_tests.step.dependOn(&install.step);
-        run_fx_dev_tests.step.dependOn(&install_runner.step);
-        run_fx_dev_tests.step.dependOn(test_platforms_step);
-        test_cli_dev_step.dependOn(&run_fx_dev_tests.step);
     }
 
     // Manual rebuild command: zig build rebuild-builtins
@@ -2505,7 +2542,10 @@ pub fn build(b: *std.Build) void {
         configureBackend(echo_wasm, echo_wasm_target);
         echo_wasm.entry = .disabled;
         echo_wasm.rdynamic = true;
-        roc_modules.addAll(echo_wasm);
+        echo_wasm.root_module.addImport("compile", roc_modules.compile);
+        echo_wasm.root_module.addImport("echo_platform", roc_modules.echo_platform);
+        echo_wasm.root_module.addImport("reporting", roc_modules.reporting);
+        echo_wasm.root_module.addImport("roc_target", roc_modules.roc_target);
         echo_wasm.root_module.addImport("compiled_builtins", compiled_builtins_module);
         echo_wasm.root_module.addImport("WasmFilesystem.zig", b.createModule(.{
             .root_source_file = b.path("src/playground_wasm/WasmFilesystem.zig"),
@@ -2648,8 +2688,8 @@ pub fn build(b: *std.Build) void {
     const module_tests_result = roc_modules.createModuleTests(b, target, optimize, zstd, test_filters);
     const tests_summary = TestsSummaryStep.create(b, test_filters, module_tests_result.forced_passes);
     for (module_tests_result.tests) |module_test| {
-        // Add compiled builtins to check, repl, eval, compile, and lsp module tests
-        if (std.mem.eql(u8, module_test.test_step.name, "check") or std.mem.eql(u8, module_test.test_step.name, "repl") or std.mem.eql(u8, module_test.test_step.name, "eval") or std.mem.eql(u8, module_test.test_step.name, "compile") or std.mem.eql(u8, module_test.test_step.name, "lsp") or std.mem.eql(u8, module_test.test_step.name, "mir")) {
+        // Add compiled builtins to tests that canonicalize ordinary modules.
+        if (std.mem.eql(u8, module_test.test_step.name, "can") or std.mem.eql(u8, module_test.test_step.name, "check") or std.mem.eql(u8, module_test.test_step.name, "repl") or std.mem.eql(u8, module_test.test_step.name, "eval") or std.mem.eql(u8, module_test.test_step.name, "compile") or std.mem.eql(u8, module_test.test_step.name, "lsp") or std.mem.eql(u8, module_test.test_step.name, "mir")) {
             module_test.test_step.root_module.addImport("compiled_builtins", compiled_builtins_module);
             module_test.test_step.step.dependOn(&write_compiled_builtins.step);
         }
@@ -3293,10 +3333,11 @@ fn addMainExe(
         }
     }
 
-    // Create builtins static library at build time with minimal dependencies
-    // Using a static library instead of object so we can bundle compiler_rt
-    // (needed for 128-bit integer operations used by Dec type)
-    const builtins_obj = b.addLibrary(.{
+    // Create builtins object file at build time with minimal dependencies.
+    // This is a plain .o (not a .a archive) since we don't bundle compiler_rt here
+    // (compiler_rt is bundled in the shim instead). Using .o avoids ar archive format
+    // issues and is simpler since we pass it directly to the linker.
+    const builtins_obj = b.addObject(.{
         .name = "roc_builtins",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/builtins/static_lib.zig"),
@@ -3306,7 +3347,6 @@ fn addMainExe(
             .omit_frame_pointer = omit_frame_pointer,
             .pic = true, // Enable Position Independent Code for PIE compatibility
         }),
-        .linkage = .static,
     });
     // Provide a no-op tracy stub so host_abi.zig can do @import("tracy") without
     // pulling in the real tracy module (which requires build_options).
@@ -3337,8 +3377,8 @@ fn addMainExe(
     // Add compiled builtins module for loading builtin types
     shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
     shim_lib.step.dependOn(&write_compiled_builtins.step);
-    // Link against the pre-built builtins library
-    shim_lib.linkLibrary(builtins_obj);
+    // Include the pre-built builtins object
+    shim_lib.addObjectFile(builtins_obj.getEmittedBin());
     shim_lib.bundle_compiler_rt = true;
     // Install shim library to the output directory
     const install_shim = b.addInstallArtifact(shim_lib, .{});
@@ -3351,15 +3391,43 @@ fn addMainExe(
     copy_shim.addCopyFileToSource(shim_lib.getEmittedBin(), b.pathJoin(&.{ "src/cli", interpreter_shim_filename }));
     exe.step.dependOn(&copy_shim.step);
 
-    // Copy builtins library for the host target for embedding into CLI
+    // Copy builtins object for the host target for embedding into CLI
     // This is used by `roc build --backend=dev` to link the app object with builtins
     const copy_builtins = b.addUpdateSourceFiles();
-    const host_builtins_filename = if (target.result.os.tag == .windows) "roc_builtins.lib" else "libroc_builtins.a";
+    const host_builtins_filename = if (target.result.os.tag == .windows) "roc_builtins.obj" else "roc_builtins.o";
     copy_builtins.addCopyFileToSource(builtins_obj.getEmittedBin(), b.pathJoin(&.{ "src/cli", host_builtins_filename }));
     exe.step.dependOn(&copy_builtins.step);
 
     // Add tracy support (required by parse/can/check modules)
     add_tracy(b, roc_modules.build_options, shim_lib, b.graph.host, false, flag_enable_tracy);
+
+    // Create dev shim static library - uses DevEvaluator for JIT compilation
+    // instead of the interpreter. Only supports x86_64/aarch64 (no wasm32).
+    const dev_shim_lib = b.addLibrary(.{
+        .name = "roc_dev_shim",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/dev_shim/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = strip,
+            .omit_frame_pointer = omit_frame_pointer,
+            .pic = true,
+        }),
+        .linkage = .static,
+    });
+    configureBackend(dev_shim_lib, target);
+    roc_modules.addAll(dev_shim_lib);
+    dev_shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
+    dev_shim_lib.step.dependOn(&write_compiled_builtins.step);
+    dev_shim_lib.addObjectFile(builtins_obj.getEmittedBin());
+    dev_shim_lib.bundle_compiler_rt = true;
+    const install_dev_shim = b.addInstallArtifact(dev_shim_lib, .{});
+    b.getInstallStep().dependOn(&install_dev_shim.step);
+    const copy_dev_shim = b.addUpdateSourceFiles();
+    const dev_shim_filename = if (target.result.os.tag == .windows) "roc_dev_shim.lib" else "libroc_dev_shim.a";
+    copy_dev_shim.addCopyFileToSource(dev_shim_lib.getEmittedBin(), b.pathJoin(&.{ "src/cli", dev_shim_filename }));
+    exe.step.dependOn(&copy_dev_shim.step);
+    add_tracy(b, roc_modules.build_options, dev_shim_lib, b.graph.host, false, flag_enable_tracy);
 
     // Cross-compile interpreter shim for all supported targets
     // This allows `roc build --target=X` to work for cross-compilation
@@ -3378,8 +3446,8 @@ fn addMainExe(
     for (cross_compile_shim_targets) |cross_target| {
         const cross_resolved_target = b.resolveTargetQuery(cross_target.query);
 
-        // Build builtins library for this target (with compiler_rt for 128-bit ops)
-        const cross_builtins_obj = b.addLibrary(.{
+        // Build builtins object file for this target
+        const cross_builtins_obj = b.addObject(.{
             .name = b.fmt("roc_builtins_{s}", .{cross_target.name}),
             .root_module = b.createModule(.{
                 .root_source_file = b.path("src/builtins/static_lib.zig"),
@@ -3389,7 +3457,6 @@ fn addMainExe(
                 .omit_frame_pointer = omit_frame_pointer,
                 .pic = true,
             }),
-            .linkage = .static,
         });
         // Provide a no-op tracy stub (same as for host builtins above)
         cross_builtins_obj.root_module.addImport("tracy", b.addModule(
@@ -3440,7 +3507,7 @@ fn addMainExe(
         }
         cross_shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
         cross_shim_lib.step.dependOn(&write_compiled_builtins.step);
-        cross_shim_lib.linkLibrary(cross_builtins_obj);
+        cross_shim_lib.addObjectFile(cross_builtins_obj.getEmittedBin());
         cross_shim_lib.bundle_compiler_rt = true;
 
         // Copy to target-specific directory for embedding
@@ -3453,15 +3520,47 @@ fn addMainExe(
         );
         exe.step.dependOn(&copy_cross_shim.step);
 
-        // Copy builtins library for this target for embedding into CLI
+        // Copy builtins object for this target for embedding into CLI
         // Used by `roc build --backend=dev --target=X` to link the app object with builtins
-        const builtins_ext = if (cross_target.query.os_tag == .windows) "roc_builtins.lib" else "libroc_builtins.a";
+        const builtins_ext = if (cross_target.query.os_tag == .windows) "roc_builtins.obj" else "roc_builtins.o";
         const copy_cross_builtins = b.addUpdateSourceFiles();
         copy_cross_builtins.addCopyFileToSource(
             cross_builtins_obj.getEmittedBin(),
             b.pathJoin(&.{ "src/cli/targets", cross_target.name, builtins_ext }),
         );
         exe.step.dependOn(&copy_cross_builtins.step);
+
+        // Build dev shim for this cross target (skip wasm32 - dev backend is x86_64/aarch64 only)
+        if (cross_target.query.cpu_arch != .wasm32) {
+            const cross_dev_shim_lib = b.addLibrary(.{
+                .name = b.fmt("roc_dev_shim_{s}", .{cross_target.name}),
+                .root_module = b.createModule(.{
+                    .root_source_file = b.path("src/dev_shim/main.zig"),
+                    .target = cross_resolved_target,
+                    .optimize = optimize,
+                    .strip = strip,
+                    .omit_frame_pointer = omit_frame_pointer,
+                    .pic = true,
+                }),
+                .linkage = .static,
+            });
+            configureBackend(cross_dev_shim_lib, cross_resolved_target);
+            roc_modules.addAll(cross_dev_shim_lib);
+            cross_dev_shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
+            cross_dev_shim_lib.step.dependOn(&write_compiled_builtins.step);
+            cross_dev_shim_lib.addObjectFile(cross_builtins_obj.getEmittedBin());
+            cross_dev_shim_lib.bundle_compiler_rt = true;
+
+            const dev_shim_ext = if (cross_target.query.os_tag == .windows) "roc_dev_shim.lib" else "libroc_dev_shim.a";
+            const copy_cross_dev_shim = b.addUpdateSourceFiles();
+            copy_cross_dev_shim.addCopyFileToSource(
+                cross_dev_shim_lib.getEmittedBin(),
+                b.pathJoin(&.{ "src/cli/targets", cross_target.name, dev_shim_ext }),
+            );
+            exe.step.dependOn(&copy_cross_dev_shim.step);
+
+            add_tracy(b, roc_modules.build_options, cross_dev_shim_lib, b.graph.host, false, flag_enable_tracy);
+        }
     }
 
     const config = b.addOptions();

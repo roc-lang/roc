@@ -1410,7 +1410,7 @@ test "check type - nominal w/ polymorphic function" {
 
 // nominal types //
 
-test "check type - nominal - local - fail" {
+test "check type - nominal - local record value - fail" {
     const source =
         \\main! = |_| {}
         \\
@@ -1419,7 +1419,40 @@ test "check type - nominal - local - fail" {
         \\    encode_str : Utf8Format, Str -> List(U8)
         \\    encode_str = |_fmt, s| Str.to_utf8(s)
         \\  }
-        \\  fmt = Utf8Format
+        \\  fmt = {}
+        \\  Str.encode("hi", fmt)
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .fail_with,
+        \\**MISSING METHOD**
+        \\This **encode_str** method is being called on a value whose type doesn't have that method:
+        \\**test:9:3:9:13:**
+        \\```roc
+        \\  Str.encode("hi", fmt)
+        \\```
+        \\  ^^^^^^^^^^
+        \\
+        \\The value's type, which does not have a method named **encode_str**, is:
+        \\
+        \\    {}
+        \\
+        \\
+        ,
+    );
+}
+
+test "check type - nominal - local method type - fail" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\test = |{}| {
+        \\  Utf8Format := [Fmt].{
+        \\    encode_str : Utf8Format, Str -> List(U8)
+        \\    encode_str = |_fmt, s| Str.to_utf8(s)
+        \\  }
+        \\  fmt = Utf8Format.Fmt
         \\  Str.encode("hi", fmt)
         \\}
     ;
@@ -1638,6 +1671,53 @@ test "check type - match - diff branch types" {
     ;
     // Number literal 100 used where Str is expected
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+test "check type - match alternative binders unify when compatible" {
+    const source =
+        \\value = if True Ok(1.U8) else Err(2.U8)
+        \\result =
+        \\  match value {
+        \\    Ok(v) | Err(v) => v
+        \\  }
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "result" } }, "U8");
+}
+
+test "check type - match alternative binders reject incompatible types" {
+    const source =
+        \\value = if True A(1.U8) else B("x")
+        \\result =
+        \\  match value {
+        \\    A(v) | B(v) => v
+        \\  }
+    ;
+    try checkTypesModule(
+        source,
+        .fail_with,
+        \\**TYPE MISMATCH**
+        \\The `v` binding in the second pattern of the first branch of this `match` does not match the same binding in the first pattern:
+        \\**test:3:3:**
+        \\```roc
+        \\  match value {
+        \\    A(v) | B(v) => v
+        \\  }
+        \\```
+        \\             ^
+        \\
+        \\In the second pattern, `v` is:
+        \\
+        \\    Str
+        \\
+        \\But in the first pattern, `v` is:
+        \\
+        \\    U8
+        \\
+        \\A name shared across `|` patterns in the same `match` branch must have one compatible type.
+        \\
+        \\
+        ,
+    );
 }
 
 // unary not
@@ -3040,7 +3120,7 @@ test "check type - comprehensive: polymorphism + lambdas + dispatch + annotation
         \\# Fifth layer: combine everything
         \\main = {
         \\  # Let-polymorphism layer 1
-        \\  # TODO INLINE ANNOS
+        \\  # TODO LOCAL ANNOS
         \\  # id : a -> a
         \\  id = |x| x
         \\
@@ -3441,13 +3521,15 @@ test "check type - recursive type - anonymous recursion" {
 
 test "check type - equirecursive static dispatch" {
     // Tests that method dispatch works with numeric literals
-    // The expression (|x| x.plus(5))(7) should type-check successfully
+    // The expression (|x| x.plus(5))(7) should type-check successfully.
+    // Both 5 and 7 are from_numeral flex vars that default to Dec,
+    // and Dec.plus : Dec, Dec -> Dec, so the result is Dec.
     const source = "(|x| x.plus(5))(7)";
 
     try checkTypesExpr(
         source,
         .pass,
-        "_a",
+        "Dec",
     );
 }
 
@@ -3502,6 +3584,98 @@ test "check type - static dispatch method type mismatch - REGRESSION TEST" {
 
     // This should pass - both calls use the same types
     try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
+}
+
+// --- Bool diagnostic tests ---
+// These tests verify type-checking of Bool expressions from failing REPL snapshots.
+// If all pass, the Bool inversion bug is in LIR lowering or codegen, not type-checking.
+
+test "check type - bool diagnostic - Bool.True" {
+    try checkTypesExpr("Bool.True", .pass, "Bool");
+}
+
+test "check type - bool diagnostic - Bool.False" {
+    try checkTypesExpr("Bool.False", .pass, "Bool");
+}
+
+test "check type - bool diagnostic - Bool.not(True)" {
+    try checkTypesExpr("Bool.not(True)", .pass, "Bool");
+}
+
+test "check type - bool diagnostic - Bool.not(False)" {
+    try checkTypesExpr("Bool.not(False)", .pass, "Bool");
+}
+
+test "check type - bool diagnostic - !Bool.True" {
+    const source =
+        \\x = !Bool.True
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
+}
+
+test "check type - bool diagnostic - !Bool.False" {
+    const source =
+        \\x = !Bool.False
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
+}
+
+test "check type - bool diagnostic - Bool.True and Bool.False" {
+    try checkTypesExpr("Bool.True and Bool.False", .pass, "Bool");
+}
+
+test "check type - bool diagnostic - !Bool.True or !Bool.True" {
+    const source =
+        \\x = !Bool.True or !Bool.True
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
+}
+
+test "check type - bool diagnostic - lambda negation applied to Bool.True" {
+    try checkTypesExpr("(|x| !x)(Bool.True)", .pass, "Bool");
+}
+
+// --- Nominal Bool vs structural tag union tests ---
+// CRITICAL DISTINCTION: In Roc, bare tags like `True` and `False` are structural tag unions,
+// NOT Bool primitives. They only become nominal `Bool` when unified with a Bool annotation
+// or a qualified reference like `Bool.True`. This is by design.
+// See also: corresponding MIR tests in lower_test.zig.
+
+test "check type - nominal Bool - annotated True is Bool" {
+    const source =
+        \\x : Bool
+        \\x = True
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
+}
+
+test "check type - nominal Bool - annotated False is Bool" {
+    const source =
+        \\x : Bool
+        \\x = False
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
+}
+
+test "check type - structural tag - bare True is open tag union" {
+    const source =
+        \\x = True
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "[True, ..]");
+}
+
+test "check type - structural tag - bare False is open tag union" {
+    const source =
+        \\x = False
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "[False, ..]");
+}
+
+test "check type - structural tag - if True True else False is open tag union" {
+    const source =
+        \\x = if True True else False
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "[True, False, ..]");
 }
 
 // helpers - module //

@@ -209,6 +209,9 @@ pub const DispatcherDoesNotImplMethod = struct {
     origin: types_mod.StaticDispatchConstraint.Origin,
     /// Optional numeric literal info for from_numeral constraints
     num_literal: ?types_mod.NumeralInfo = null,
+    /// True when the dispatcher was a numeric literal that was defaulted to Dec
+    /// because no type annotation was given. Used to add explanatory text in errors.
+    defaulted_from_numeric_literal: bool = false,
 
     /// Type of the dispatcher
     pub const DispatcherType = enum { nominal, rigid };
