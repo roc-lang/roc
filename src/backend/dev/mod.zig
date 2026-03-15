@@ -59,9 +59,6 @@ pub const ObjectFileCompiler = if (builtin.os.tag == .freestanding) void else @i
 pub const Entrypoint = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").Entrypoint;
 pub const CompilationResult = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").CompilationResult;
 
-/// Object file reader for extracting code sections from ELF/Mach-O/COFF
-pub const object_reader = @import("object_reader.zig");
-
 /// Generic development backend parameterized by architecture-specific types.
 ///
 /// This struct provides the common code generation logic shared across
