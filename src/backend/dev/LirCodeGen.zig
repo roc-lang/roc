@@ -4682,7 +4682,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate code for a symbol lookup
-        fn generateLookup(self: *Self, symbol: Symbol, _: layout.Idx) Allocator.Error!ValueLocation {
+        fn generateLookup(self: *Self, symbol: Symbol, layout_idx: layout.Idx) Allocator.Error!ValueLocation {
             // Check if we have a location for this symbol
             const symbol_key: u64 = @bitCast(symbol);
             if (self.symbol_locations.get(symbol_key)) |loc| {
@@ -4694,8 +4694,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (self.getSymbolDefRelaxed(symbol)) |def_expr_id| {
                 // Generate code for the definition
                 const loc = try self.generateExpr(def_expr_id);
-                // Cache the location
-                try self.symbol_locations.put(symbol_key, loc);
+                // Refcounted top-level defs must not be cached as a single shared owner
+                // inside the current frame. Each lookup needs its own lifetime so RC
+                // insertion can clean it up after the surrounding use.
+                const layout_val = self.layout_store.getLayout(layout_idx);
+                if (!self.layout_store.layoutContainsRefcounted(layout_val)) {
+                    try self.symbol_locations.put(symbol_key, loc);
+                }
                 return loc;
             }
 
@@ -9221,75 +9226,93 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 self.codegen.freeGeneral(reg);
             } else {
-                // Large string: needs heap allocation
-                const roc_ops_reg = self.roc_ops_reg orelse unreachable;
-                const fn_addr: usize = @intFromPtr(&allocateWithRefcountC);
+                if (self.generation_mode == .native_execution and self.static_interner != null) {
+                    const interner = self.static_interner.?;
+                    const interned = try interner.internString(str_bytes);
+                    const ptr_reg = try self.allocTempGeneral();
 
-                // Allocate stack slot to save the heap pointer
-                const heap_ptr_slot: i32 = self.codegen.allocStackSlot(8);
+                    try self.codegen.emitLoadImm(ptr_reg, @intCast(@intFromPtr(interned.ptr)));
+                    try self.codegen.emitStoreStack(.w64, base_offset, ptr_reg);
 
-                // Allocate string using CallBuilder with automatic R12 handling
-                // Align up to 8 bytes: tail write below stores a full 8-byte word
-                const alloc_size = std.mem.alignForward(usize, str_bytes.len, 8);
-                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                try builder.addImmArg(@intCast(alloc_size));
-                try builder.addImmArg(1); // byte alignment
-                try builder.addImmArg(0); // elements_refcounted = false
-                try builder.addRegArg(roc_ops_reg);
-                try self.callBuiltin(&builder, fn_addr, .allocate_with_refcount);
+                    try self.codegen.emitLoadImm(ptr_reg, @intCast(interned.len));
+                    try self.codegen.emitStoreStack(.w64, base_offset + 8, ptr_reg);
+                    try self.codegen.emitStoreStack(.w64, base_offset + 16, ptr_reg);
 
-                // Save heap pointer from return register to stack slot
-                try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
+                    self.codegen.freeGeneral(ptr_reg);
+                } else {
+                    // Object-file mode cannot use the in-process static interner directly.
+                    // The final executable does not share the compiler's arena memory, so
+                    // large literals still need the runtime-allocation path here until
+                    // dev object files gain real rodata emission for RocStr payloads.
+                    const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+                    const fn_addr: usize = @intFromPtr(&allocateWithRefcountC);
 
-                // Copy string bytes to heap memory
-                // Load heap pointer, then copy bytes
-                const heap_ptr = try self.allocTempGeneral();
-                try self.emitLoad(.w64, heap_ptr, frame_ptr, heap_ptr_slot);
+                    // Allocate stack slot to save the heap pointer
+                    const heap_ptr_slot: i32 = self.codegen.allocStackSlot(8);
 
-                // Copy string data in 8-byte chunks, then remaining bytes
-                var remaining: usize = str_bytes.len;
-                var str_offset: usize = 0;
-                const temp_reg = try self.allocTempGeneral();
+                    // Allocate string using CallBuilder with automatic R12 handling
+                    // Align up to 8 bytes: tail write below stores a full 8-byte word
+                    const alloc_size = std.mem.alignForward(usize, str_bytes.len, 8);
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    try builder.addImmArg(@intCast(alloc_size));
+                    try builder.addImmArg(1); // byte alignment
+                    try builder.addImmArg(0); // elements_refcounted = false
+                    try builder.addRegArg(roc_ops_reg);
+                    try self.callBuiltin(&builder, fn_addr, .allocate_with_refcount);
 
-                while (remaining >= 8) {
-                    const chunk: u64 = @bitCast(str_bytes[str_offset..][0..8].*);
-                    try self.codegen.emitLoadImm(temp_reg, @bitCast(chunk));
-                    try self.emitStore(.w64, heap_ptr, @intCast(str_offset), temp_reg);
-                    str_offset += 8;
-                    remaining -= 8;
-                }
+                    // Save heap pointer from return register to stack slot
+                    try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
 
-                // Handle remaining bytes (1-7 bytes)
-                if (remaining > 0) {
-                    var last_chunk: u64 = 0;
-                    for (0..remaining) |j| {
-                        last_chunk |= @as(u64, str_bytes[str_offset + j]) << @intCast(j * 8);
+                    // Copy string bytes to heap memory
+                    // Load heap pointer, then copy bytes
+                    const heap_ptr = try self.allocTempGeneral();
+                    try self.emitLoad(.w64, heap_ptr, frame_ptr, heap_ptr_slot);
+
+                    // Copy string data in 8-byte chunks, then remaining bytes
+                    var remaining: usize = str_bytes.len;
+                    var str_offset: usize = 0;
+                    const temp_reg = try self.allocTempGeneral();
+
+                    while (remaining >= 8) {
+                        const chunk: u64 = @bitCast(str_bytes[str_offset..][0..8].*);
+                        try self.codegen.emitLoadImm(temp_reg, @bitCast(chunk));
+                        try self.emitStore(.w64, heap_ptr, @intCast(str_offset), temp_reg);
+                        str_offset += 8;
+                        remaining -= 8;
                     }
-                    try self.codegen.emitLoadImm(temp_reg, @bitCast(last_chunk));
-                    // Store partial - for simplicity, store as full 8 bytes (heap has space)
-                    try self.emitStore(.w64, heap_ptr, @intCast(str_offset), temp_reg);
+
+                    // Handle remaining bytes (1-7 bytes)
+                    if (remaining > 0) {
+                        var last_chunk: u64 = 0;
+                        for (0..remaining) |j| {
+                            last_chunk |= @as(u64, str_bytes[str_offset + j]) << @intCast(j * 8);
+                        }
+                        try self.codegen.emitLoadImm(temp_reg, @bitCast(last_chunk));
+                        // Store partial - for simplicity, store as full 8 bytes (heap has space)
+                        try self.emitStore(.w64, heap_ptr, @intCast(str_offset), temp_reg);
+                    }
+
+                    self.codegen.freeGeneral(temp_reg);
+                    self.codegen.freeGeneral(heap_ptr);
+
+                    // Construct RocStr struct on stack: {pointer, length, capacity}
+                    // Reload heap pointer for struct construction
+                    const ptr_reg = try self.allocTempGeneral();
+                    try self.emitLoad(.w64, ptr_reg, frame_ptr, heap_ptr_slot);
+
+                    // Store pointer (first 8 bytes)
+                    try self.codegen.emitStoreStack(.w64, base_offset, ptr_reg);
+
+                    // Store length (second 8 bytes)
+                    try self.codegen.emitLoadImm(ptr_reg, @intCast(str_bytes.len));
+                    try self.codegen.emitStoreStack(.w64, base_offset + 8, ptr_reg);
+
+                    // Store capacity (third 8 bytes) - same as length for immutable strings
+                    // No need to reload, length is still in ptr_reg
+                    try self.codegen.emitStoreStack(.w64, base_offset + 16, ptr_reg);
+
+                    self.codegen.freeGeneral(ptr_reg);
                 }
-
-                self.codegen.freeGeneral(temp_reg);
-                self.codegen.freeGeneral(heap_ptr);
-
-                // Construct RocStr struct on stack: {pointer, length, capacity}
-                // Reload heap pointer for struct construction
-                const ptr_reg = try self.allocTempGeneral();
-                try self.emitLoad(.w64, ptr_reg, frame_ptr, heap_ptr_slot);
-
-                // Store pointer (first 8 bytes)
-                try self.codegen.emitStoreStack(.w64, base_offset, ptr_reg);
-
-                // Store length (second 8 bytes)
-                try self.codegen.emitLoadImm(ptr_reg, @intCast(str_bytes.len));
-                try self.codegen.emitStoreStack(.w64, base_offset + 8, ptr_reg);
-
-                // Store capacity (third 8 bytes) - same as length for immutable strings
-                // No need to reload, length is still in ptr_reg
-                try self.codegen.emitStoreStack(.w64, base_offset + 16, ptr_reg);
-
-                self.codegen.freeGeneral(ptr_reg);
             }
 
             return .{ .stack_str = base_offset };

@@ -81,15 +81,15 @@ fn runCleanup(allocator: Allocator, filesystem: Filesystem) void {
     // END OF LEGACY CLEANUP - REMOVE ABOVE FOR 0.1.0
 
     // Clean up temp directories (5 minute threshold)
-    cleanupTempDirs(allocator, null, filesystem);
+    cleanupTempDirs(allocator, null);
 
     // Clean up persistent cache (30 day threshold)
     cleanupPersistentCache(allocator, null, filesystem);
 }
 
 /// Clean up temporary runtime directories older than 5 minutes.
-fn cleanupTempDirs(allocator: Allocator, maybe_stats: ?*CleanupStats, filesystem: Filesystem) void {
-    const temp_base = cache_config.getTempDir(filesystem, allocator) catch return;
+fn cleanupTempDirs(allocator: Allocator, maybe_stats: ?*CleanupStats) void {
+    const temp_base = cache_config.getTempDir(allocator) catch return;
     defer allocator.free(temp_base);
 
     const now = std.time.nanoTimestamp();

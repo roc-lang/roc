@@ -11,6 +11,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const builtins = @import("builtins");
 
 const Self = @This();
 
@@ -157,9 +158,6 @@ pub const MemoryBackend = struct {
         };
     }
 
-    /// Static refcount marker (isize::MIN) - RC operations skip values with this refcount
-    const REFCOUNT_STATIC: isize = std.math.minInt(isize);
-
     fn alloc(ptr: *anyopaque, data: []const u8, alignment: usize) Allocator.Error!InternedData {
         const self: *MemoryBackend = @ptrCast(@alignCast(ptr));
         const allocator = self.arena.allocator();
@@ -172,7 +170,7 @@ pub const MemoryBackend = struct {
 
         // Write static refcount at the start
         const refcount_ptr: *isize = @ptrCast(@alignCast(allocated.ptr));
-        refcount_ptr.* = REFCOUNT_STATIC;
+        refcount_ptr.* = builtins.utils.REFCOUNT_STATIC_DATA;
 
         // Copy data after refcount
         const data_ptr = allocated.ptr + @sizeOf(isize);

@@ -107,9 +107,6 @@ pub const RcInsertPass = struct {
     /// deterministic RC op ordering regardless of HashMap iteration order.
     scratch_keys: base.Scratch(u64),
 
-    /// Synthetic symbol source for RC-inserted result temporaries.
-    next_synthetic_symbol: u64,
-
     ownership: ?OwnershipNormalize.Result,
 
     const LiveRcSymbol = struct {
@@ -153,7 +150,6 @@ pub const RcInsertPass = struct {
             .scratch_uses = std.AutoHashMap(u64, u32).init(allocator),
             .scratch_consumed_uses = std.AutoHashMap(u64, u32).init(allocator),
             .scratch_keys = try base.Scratch(u64).init(allocator),
-            .next_synthetic_symbol = 0xf000_0000_0000_0000,
             .ownership = null,
         };
     }
@@ -198,7 +194,6 @@ pub const RcInsertPass = struct {
         self.pending_branch_rc_adj.clearRetainingCapacity();
         self.scratch_uses.clearRetainingCapacity();
         self.scratch_consumed_uses.clearRetainingCapacity();
-        self.next_synthetic_symbol = 0xf000_0000_0000_0000;
         self.early_return_scope_base = 0;
         self.early_return_cell_scope_base = 0;
         if (self.ownership) |*ownership| ownership.deinit();
@@ -461,9 +456,7 @@ pub const RcInsertPass = struct {
     }
 
     fn freshSyntheticSymbol(self: *RcInsertPass) Symbol {
-        const symbol = Symbol.fromRaw(self.next_synthetic_symbol);
-        self.next_synthetic_symbol += 1;
-        return symbol;
+        return self.store.freshSyntheticSymbol();
     }
 
     fn freshResultPattern(self: *RcInsertPass, layout_idx: LayoutIdx, region: Region) Allocator.Error!struct { symbol: Symbol, pattern: LirPatternId } {
@@ -579,6 +572,31 @@ pub const RcInsertPass = struct {
         if (expr_id.isNone()) return false;
         if (self.store.getExpr(expr_id) == .lookup) return false;
         return self.layoutNeedsRc(self.exprResultLayout(expr_id));
+    }
+
+    fn shouldMaterializeBorrowedUse(self: *const RcInsertPass, expr_id: LirExprId) bool {
+        if (expr_id.isNone()) return false;
+
+        const layout_idx = self.exprResultLayout(expr_id);
+        if (!self.layoutNeedsRc(layout_idx)) return false;
+
+        return switch (self.store.getExpr(expr_id)) {
+            .lookup => |lookup| !lookup.symbol.isNone() and self.store.getSymbolDef(lookup.symbol) != null,
+            else => false,
+        };
+    }
+
+    fn materializeBorrowedUse(
+        self: *RcInsertPass,
+        expr_id: LirExprId,
+        region: Region,
+        prelude: *std.ArrayList(LirStmt),
+    ) Allocator.Error!LirExprId {
+        if (!self.shouldMaterializeBorrowedUse(expr_id)) return expr_id;
+
+        const layout_idx = self.exprResultLayout(expr_id);
+        const temp = try self.bindExprToFreshLookup(prelude, expr_id, layout_idx, region);
+        return temp.lookup;
     }
 
     fn shouldMaterializeRcCellLoad(self: *const RcInsertPass, expr_id: LirExprId) bool {
@@ -1475,21 +1493,59 @@ pub const RcInsertPass = struct {
             },
             .low_level => |ll| {
                 const args_res = try self.normalizeBorrowedLoopSourceSpan(ll.args);
-                if (!args_res.changed) return expr_id;
-                return self.store.addExpr(.{ .low_level = .{
+                const args = self.store.getExprSpan(args_res.span);
+                const arg_ownership = ll.op.getArgOwnership();
+
+                var prelude = std.ArrayList(LirStmt).empty;
+                defer prelude.deinit(self.allocator);
+
+                var changed = args_res.changed;
+                var new_args = std.ArrayList(LirExprId).empty;
+                defer new_args.deinit(self.allocator);
+
+                for (args, 0..) |arg_id, i| {
+                    var new_arg = arg_id;
+                    if (arg_ownership[i] == .borrow) {
+                        new_arg = try self.materializeBorrowedUse(arg_id, region, &prelude);
+                    }
+                    changed = changed or new_arg != arg_id;
+                    try new_args.append(self.allocator, new_arg);
+                }
+
+                if (!changed and prelude.items.len == 0) return expr_id;
+
+                const rebuilt = try self.store.addExpr(.{ .low_level = .{
                     .op = ll.op,
-                    .args = args_res.span,
+                    .args = try self.store.addExprSpan(new_args.items),
                     .ret_layout = ll.ret_layout,
                 } }, region);
+                return self.wrapPreludeAroundExpr(rebuilt, ll.ret_layout, region, prelude.items);
             },
             .hosted_call => |hc| {
                 const args_res = try self.normalizeBorrowedLoopSourceSpan(hc.args);
-                if (!args_res.changed) return expr_id;
-                return self.store.addExpr(.{ .hosted_call = .{
+                const args = self.store.getExprSpan(args_res.span);
+
+                var prelude = std.ArrayList(LirStmt).empty;
+                defer prelude.deinit(self.allocator);
+
+                var changed = args_res.changed;
+                var new_args = std.ArrayList(LirExprId).empty;
+                defer new_args.deinit(self.allocator);
+
+                for (args) |arg_id| {
+                    const new_arg = try self.materializeBorrowedUse(arg_id, region, &prelude);
+                    changed = changed or new_arg != arg_id;
+                    try new_args.append(self.allocator, new_arg);
+                }
+
+                if (!changed and prelude.items.len == 0) return expr_id;
+
+                const rebuilt = try self.store.addExpr(.{ .hosted_call = .{
                     .index = hc.index,
-                    .args = args_res.span,
+                    .args = try self.store.addExprSpan(new_args.items),
                     .ret_layout = hc.ret_layout,
                 } }, region);
+                return self.wrapPreludeAroundExpr(rebuilt, hc.ret_layout, region, prelude.items);
             },
             .str_concat => |parts| {
                 const parts_res = try self.normalizeBorrowedLoopSourceSpan(parts);
@@ -5329,7 +5385,7 @@ pub const RcInsertPass = struct {
             .count = count,
         } }, region);
 
-        const wildcard = try self.store.addPattern(.{ .wildcard = .{ .layout_idx = layout_idx } }, region);
+        const wildcard = try self.store.addPattern(.{ .wildcard = .{ .layout_idx = .zst } }, region);
         try stmts.append(self.allocator, .{ .decl = .{
             .pattern = wildcard,
             .expr = incref_id,
@@ -5348,7 +5404,7 @@ pub const RcInsertPass = struct {
             .layout_idx = layout_idx,
         } }, region);
 
-        const wildcard = try self.store.addPattern(.{ .wildcard = .{ .layout_idx = layout_idx } }, region);
+        const wildcard = try self.store.addPattern(.{ .wildcard = .{ .layout_idx = .zst } }, region);
         try stmts.append(self.allocator, .{ .decl = .{
             .pattern = wildcard,
             .expr = decref_id,
@@ -5407,6 +5463,82 @@ pub fn insertRcOpsIntoSymbolDefsBestEffort(
 test "RcInsertPass compiles" {
     const T = RcInsertPass;
     std.debug.assert(@sizeOf(T) > 0);
+}
+
+fn firstBlockBindSymbol(store: *const LirExprStore, expr_id: LirExprId) ?Symbol {
+    if (expr_id.isNone()) return null;
+    const expr = store.getExpr(expr_id);
+    if (expr != .block) return null;
+
+    for (store.getStmts(expr.block.stmts)) |stmt| {
+        switch (stmt) {
+            .decl => |binding| {
+                const pattern = store.getPattern(binding.pattern);
+                if (pattern == .bind) return pattern.bind.symbol;
+            },
+            .mutate, .cell_init, .cell_store, .cell_drop => {},
+        }
+    }
+
+    return null;
+}
+
+fn firstRcWildcardLayout(store: *const LirExprStore, expr_id: LirExprId) ?LayoutIdx {
+    if (expr_id.isNone()) return null;
+
+    const expr = store.getExpr(expr_id);
+    switch (expr) {
+        .block => |block| {
+            for (store.getStmts(block.stmts)) |stmt| {
+                switch (stmt) {
+                    .decl => |binding| {
+                        const binding_expr = store.getExpr(binding.expr);
+                        if (binding_expr == .incref or binding_expr == .decref or binding_expr == .free) {
+                            const pattern = store.getPattern(binding.pattern);
+                            if (pattern == .wildcard) return pattern.wildcard.layout_idx;
+                        }
+
+                        if (firstRcWildcardLayout(store, binding.expr)) |layout_idx| return layout_idx;
+                    },
+                    .mutate => |binding| {
+                        if (firstRcWildcardLayout(store, binding.expr)) |layout_idx| return layout_idx;
+                    },
+                    .cell_init, .cell_store => |binding| {
+                        if (firstRcWildcardLayout(store, binding.expr)) |layout_idx| return layout_idx;
+                    },
+                    .cell_drop => {},
+                }
+            }
+
+            return firstRcWildcardLayout(store, block.final_expr);
+        },
+        else => return null,
+    }
+}
+
+fn findFirstLowLevelExpr(store: *const LirExprStore, expr_id: LirExprId) ?LirExprId {
+    if (expr_id.isNone()) return null;
+
+    const expr = store.getExpr(expr_id);
+    switch (expr) {
+        .low_level => return expr_id,
+        .block => |block| {
+            for (store.getStmts(block.stmts)) |stmt| {
+                switch (stmt) {
+                    .decl, .mutate => |binding| {
+                        if (findFirstLowLevelExpr(store, binding.expr)) |found| return found;
+                    },
+                    .cell_init, .cell_store => |binding| {
+                        if (findFirstLowLevelExpr(store, binding.expr)) |found| return found;
+                    },
+                    .cell_drop => {},
+                }
+            }
+
+            return findFirstLowLevelExpr(store, block.final_expr);
+        },
+        else => return null,
+    }
 }
 
 // --- Test helpers (same pattern as MirToLir.zig) ---
@@ -6434,6 +6566,147 @@ test "RC hosted_call borrows string arg and tail-cleans original owner" {
 
     try std.testing.expectEqual(@as(u32, 0), countIncrefsForSymbol(&env.lir_store, result, sym_msg));
     try std.testing.expectEqual(@as(u32, 1), countDecrefsForSymbol(&env.lir_store, result, sym_msg));
+}
+
+test "RC borrow-only low-level materializes refcounted top-level lookup" {
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const str_layout: LayoutIdx = .str;
+    const u64_layout: LayoutIdx = .u64;
+
+    const sym_data = makeSymbol(100);
+    const str_idx = try env.lir_store.insertString("this is definitely longer than a small string");
+    const def_expr = try env.lir_store.addExpr(.{ .str_literal = str_idx }, Region.zero());
+    try env.lir_store.registerSymbolDef(sym_data, def_expr);
+
+    const lookup_data = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_data,
+        .layout_idx = str_layout,
+    } }, Region.zero());
+
+    const len_expr = try env.lir_store.addExpr(.{ .low_level = .{
+        .op = .str_count_utf8_bytes,
+        .args = try env.lir_store.addExprSpan(&.{lookup_data}),
+        .ret_layout = u64_layout,
+    } }, Region.zero());
+
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(len_expr);
+    const root = env.lir_store.getExpr(result);
+    try std.testing.expect(root == .block);
+
+    const stmts = env.lir_store.getStmts(root.block.stmts);
+    try std.testing.expectEqual(@as(usize, 1), stmts.len);
+    try std.testing.expect(stmts[0] == .decl);
+    try std.testing.expectEqual(lookup_data, stmts[0].decl.expr);
+
+    const low_level_id = findFirstLowLevelExpr(&env.lir_store, root.block.final_expr) orelse return error.TestUnexpectedResult;
+    const final_expr = env.lir_store.getExpr(low_level_id);
+    try std.testing.expect(final_expr == .low_level);
+    const final_args = env.lir_store.getExprSpan(final_expr.low_level.args);
+    try std.testing.expectEqual(@as(usize, 1), final_args.len);
+    try std.testing.expect(final_args[0] != lookup_data);
+    try std.testing.expect(env.lir_store.getExpr(final_args[0]) == .lookup);
+}
+
+test "RC synthetic symbols stay unique across passes on one store" {
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const str_layout: LayoutIdx = .str;
+    const u64_layout: LayoutIdx = .u64;
+
+    const sym_data = makeSymbol(100);
+    const str_idx = try env.lir_store.insertString("this is definitely longer than a small string");
+    const def_expr = try env.lir_store.addExpr(.{ .str_literal = str_idx }, Region.zero());
+    try env.lir_store.registerSymbolDef(sym_data, def_expr);
+
+    const lookup_one = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_data,
+        .layout_idx = str_layout,
+    } }, Region.zero());
+    const expr_one = try env.lir_store.addExpr(.{ .low_level = .{
+        .op = .str_count_utf8_bytes,
+        .args = try env.lir_store.addExprSpan(&.{lookup_one}),
+        .ret_layout = u64_layout,
+    } }, Region.zero());
+
+    const lookup_two = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_data,
+        .layout_idx = str_layout,
+    } }, Region.zero());
+    const expr_two = try env.lir_store.addExpr(.{ .low_level = .{
+        .op = .str_count_utf8_bytes,
+        .args = try env.lir_store.addExprSpan(&.{lookup_two}),
+        .ret_layout = u64_layout,
+    } }, Region.zero());
+
+    var pass_one = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass_one.deinit();
+    const result_one = try pass_one.insertRcOps(expr_one);
+
+    var pass_two = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass_two.deinit();
+    const result_two = try pass_two.insertRcOps(expr_two);
+
+    const symbol_one = firstBlockBindSymbol(&env.lir_store, result_one) orelse return error.TestUnexpectedResult;
+    const symbol_two = firstBlockBindSymbol(&env.lir_store, result_two) orelse return error.TestUnexpectedResult;
+
+    try std.testing.expect(symbol_one != symbol_two);
+}
+
+test "RC op wildcard decls use zst layout" {
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const str_layout: LayoutIdx = .str;
+    const u64_layout: LayoutIdx = .u64;
+
+    const sym_data = makeSymbol(100);
+    const str_idx = try env.lir_store.insertString("this is definitely longer than a small string");
+    const def_expr = try env.lir_store.addExpr(.{ .str_literal = str_idx }, Region.zero());
+    try env.lir_store.registerSymbolDef(sym_data, def_expr);
+
+    const lookup_data = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_data,
+        .layout_idx = str_layout,
+    } }, Region.zero());
+    const len_expr = try env.lir_store.addExpr(.{ .low_level = .{
+        .op = .str_count_utf8_bytes,
+        .args = try env.lir_store.addExprSpan(&.{lookup_data}),
+        .ret_layout = u64_layout,
+    } }, Region.zero());
+    const zero = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 0, .layout_idx = .i64 } }, Region.zero());
+    const pat_len = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = makeSymbol(101),
+        .layout_idx = u64_layout,
+    } }, Region.zero());
+    const stmts = try env.lir_store.addStmts(&.{
+        .{ .decl = .{ .pattern = pat_len, .expr = len_expr } },
+    });
+    const block_expr = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = zero,
+        .result_layout = .i64,
+    } }, Region.zero());
+
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+    const result = try pass.insertRcOps(block_expr);
+
+    try std.testing.expectEqual(LayoutIdx.zst, firstRcWildcardLayout(&env.lir_store, result).?);
 }
 
 test "RC explicit retained list element keeps outer binding cleanup" {

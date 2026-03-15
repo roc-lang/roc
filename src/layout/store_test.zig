@@ -1729,7 +1729,7 @@ test "type and monotype layout resolvers agree for recursive nominal layouts" {
     try expectTypeAndMonotypeResolversAgree(testing.allocator, &lt, nat_var);
 }
 
-test "fromTypeVar - no-payload nominal tag union gets scalar layout, not box" {
+test "fromTypeVar - no-payload nominal tag union gets canonical tag_union layout, not box" {
     var lt = try LayoutTest.init(testing.allocator);
     defer lt.deinit();
 
@@ -1800,5 +1800,5 @@ test "fromTypeVar - no-payload nominal tag union gets scalar layout, not box" {
 
     const enum_layout_idx = try resolveTypeVar(&lt, my_enum_var);
     const enum_layout = lt.layout_store.getLayout(enum_layout_idx);
-    try testing.expect(enum_layout.tag == .scalar);
+    try testing.expect(enum_layout.tag == .tag_union);
 }

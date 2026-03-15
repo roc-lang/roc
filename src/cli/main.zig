@@ -459,7 +459,7 @@ fn generateRandomSuffix(ctx: *CliContext) ![]u8 {
 /// Uses system temp directory to avoid race conditions when cache is cleared.
 pub fn createUniqueTempDir(ctx: *CliContext) ![]const u8 {
     // Get the version-specific temp directory: {temp}/roc/{version}
-    const version_temp_dir = try cache_config_mod.getVersionTempDir(Filesystem.default(), ctx.arena);
+    const version_temp_dir = try cache_config_mod.getVersionTempDir(ctx.arena);
 
     // Ensure the roc/{version} directory exists
     // makePath automatically handles PathAlreadyExists internally
@@ -522,7 +522,7 @@ pub fn writeFdCoordinationFile(ctx: *CliContext, temp_exe_path: []const u8, shm_
 /// The exe_display_name is the name that will appear in `ps` output (e.g., "app.roc").
 pub fn createTempDirStructure(allocs: *Allocators, exe_path: []const u8, exe_display_name: []const u8, shm_handle: SharedMemoryHandle, _: ?[]const u8) ![]const u8 {
     // Get the version-specific temp directory: {temp}/roc/{version}
-    const version_temp_dir = try cache_config_mod.getVersionTempDir(Filesystem.default(), allocs.arena);
+    const version_temp_dir = try cache_config_mod.getVersionTempDir(allocs.arena);
 
     // Ensure the roc/{version} directory exists
     // makePath automatically handles PathAlreadyExists internally

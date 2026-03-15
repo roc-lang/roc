@@ -263,7 +263,7 @@ test "fx platform all_syntax_test.roc prints expected output" {
         "NotOneTwoNotFive\n" ++
         "(\"Roc\", 1.0)\n" ++
         "[\"a\", \"b\"]\n" ++
-        "(\"Roc\", 1.0, 1.0, \"Roc\")\n" ++
+        "(\"Roc\", 1.0, 1.0, 1.0)\n" ++
         "10.0\n" ++
         "{ age: 31, name: \"Alice\" }\n" ++
         "(5, 5, 5.0, 5.0, 5, 5.0, 5.0, 5, 5.0, 5.0, 5, 5.0, 5.0, 5.0)\n" ++

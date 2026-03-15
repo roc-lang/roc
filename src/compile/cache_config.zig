@@ -208,8 +208,7 @@ pub fn getCacheDirName() []const u8 {
 
 /// Get the temporary directory for runtime executables.
 /// This is in the system temp dir, not the persistent cache.
-pub fn getTempDir(filesystem: Filesystem, allocator: Allocator) ![]u8 {
-    _ = filesystem;
+pub fn getTempDir(allocator: Allocator) ![]u8 {
     const temp_base = try os_temp_dir.getOsTempDir(allocator);
     defer allocator.free(temp_base);
 
@@ -217,8 +216,8 @@ pub fn getTempDir(filesystem: Filesystem, allocator: Allocator) ![]u8 {
 }
 
 /// Get the version-specific temporary directory for runtime executables.
-pub fn getVersionTempDir(filesystem: Filesystem, allocator: Allocator) ![]u8 {
-    const temp_base = try getTempDir(filesystem, allocator);
+pub fn getVersionTempDir(allocator: Allocator) ![]u8 {
+    const temp_base = try getTempDir(allocator);
     defer allocator.free(temp_base);
 
     const version_dir = try getCompilerVersionDir(allocator);

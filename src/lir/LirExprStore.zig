@@ -97,6 +97,11 @@ strings: base.StringLiteral.Store,
 /// Allocator used for this store
 allocator: Allocator,
 
+/// Store-global synthetic symbol counter for later lowering passes.
+/// This must be shared across all passes that mutate the same store so
+/// generated symbol ids never collide.
+next_synthetic_symbol: u64,
+
 /// Initialize an empty LirExprStore
 pub fn init(allocator: Allocator) Self {
     return .{
@@ -116,7 +121,15 @@ pub fn init(allocator: Allocator) Self {
         .symbol_defs = std.AutoHashMap(u64, LirExprId).init(allocator),
         .strings = base.StringLiteral.Store{},
         .allocator = allocator,
+        .next_synthetic_symbol = 0xf000_0000_0000_0000,
     };
+}
+
+/// Allocate a fresh synthetic symbol in the store-global reserved namespace.
+pub fn freshSyntheticSymbol(self: *Self) Symbol {
+    const symbol = Symbol.fromRaw(self.next_synthetic_symbol);
+    self.next_synthetic_symbol += 1;
+    return symbol;
 }
 
 /// Initialize with pre-allocated capacity
