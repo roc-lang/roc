@@ -183,6 +183,10 @@ pub const Result = struct {
         return &self.proc_templates.items[@intFromEnum(proc_template_id)];
     }
 
+    pub fn getProcInst(self: *const Result, proc_inst_id: ProcInstId) *const ProcInst {
+        return &self.proc_insts.items[@intFromEnum(proc_inst_id)];
+    }
+
     pub fn getLocalProcTemplate(self: *const Result, module_idx: u32, pattern_idx: CIR.Pattern.Idx) ?ProcTemplateId {
         return self.proc_template_ids_by_source.get(packLocalPatternSourceKey(module_idx, pattern_idx));
     }
@@ -409,7 +413,7 @@ pub const Pass = struct {
         if (self.visited_exprs.contains(visit_key)) return;
         try self.visited_exprs.put(self.allocator, visit_key, {});
 
-        try self.scanExprChildren(result, module_idx, expr);
+        try self.scanExprChildren(result, module_idx, expr_idx, expr);
     }
 
     fn scanCallableBodyChildren(self: *Pass, result: *Result, module_idx: u32, expr_idx: CIR.Expr.Idx) Allocator.Error!void {
@@ -420,10 +424,10 @@ pub const Pass = struct {
         if (self.visited_exprs.contains(visit_key)) return;
         try self.visited_exprs.put(self.allocator, visit_key, {});
 
-        try self.scanExprChildren(result, module_idx, expr);
+        try self.scanExprChildren(result, module_idx, expr_idx, expr);
     }
 
-    fn scanExprChildren(self: *Pass, result: *Result, module_idx: u32, expr: CIR.Expr) Allocator.Error!void {
+    fn scanExprChildren(self: *Pass, result: *Result, module_idx: u32, expr_idx: CIR.Expr.Idx, expr: CIR.Expr) Allocator.Error!void {
         const module_env = self.all_module_envs[module_idx];
 
         switch (expr) {
@@ -495,6 +499,7 @@ pub const Pass = struct {
             .e_call => |call_expr| {
                 try self.scanExpr(result, module_idx, call_expr.func);
                 try self.scanExprSpan(result, module_idx, module_env.store.sliceExpr(call_expr.args));
+                try self.resolveDirectCallSite(result, module_idx, expr_idx, call_expr.func);
             },
             .e_record => |record_expr| {
                 if (record_expr.ext) |ext_expr| {
@@ -561,6 +566,193 @@ pub const Pass = struct {
         for (exprs) |child_expr| {
             try self.scanExpr(result, module_idx, child_expr);
         }
+    }
+
+    fn resolveDirectCallSite(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        call_expr_idx: CIR.Expr.Idx,
+        callee_expr_idx: CIR.Expr.Idx,
+    ) Allocator.Error!void {
+        const template_id = try self.lookupDirectCalleeTemplate(result, module_idx, callee_expr_idx) orelse return;
+        const fn_monotype = try self.resolveExprMonotype(result, module_idx, callee_expr_idx);
+        if (fn_monotype.isNone()) return;
+
+        const proc_inst_id = try self.ensureProcInst(result, template_id, fn_monotype);
+        try result.call_site_proc_insts.put(
+            self.allocator,
+            Result.callSiteKey(module_idx, call_expr_idx),
+            proc_inst_id,
+        );
+    }
+
+    fn lookupDirectCalleeTemplate(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        callee_expr_idx: CIR.Expr.Idx,
+    ) Allocator.Error!?ProcTemplateId {
+        const module_env = self.all_module_envs[module_idx];
+        return switch (module_env.store.getExpr(callee_expr_idx)) {
+            .e_lookup_local => |lookup| result.getLocalProcTemplate(module_idx, lookup.pattern_idx),
+            .e_lookup_external => |lookup| blk: {
+                const target_module_idx = self.resolveImportedModuleIdx(module_env, lookup.module_idx) orelse break :blk null;
+                break :blk result.getExternalProcTemplate(target_module_idx, lookup.target_node_idx);
+            },
+            .e_lambda, .e_closure, .e_hosted_lambda => result.getExprProcTemplate(module_idx, callee_expr_idx),
+            else => null,
+        };
+    }
+
+    fn ensureProcInst(
+        self: *Pass,
+        result: *Result,
+        template_id: ProcTemplateId,
+        fn_monotype: Monotype.Idx,
+    ) Allocator.Error!ProcInstId {
+        for (result.proc_insts.items, 0..) |existing_proc_inst, idx| {
+            if (existing_proc_inst.template != template_id) continue;
+            if (try self.monotypesStructurallyEqual(result, existing_proc_inst.fn_monotype, fn_monotype)) {
+                return @enumFromInt(idx);
+            }
+        }
+
+        const proc_inst_id: ProcInstId = @enumFromInt(result.proc_insts.items.len);
+        try result.proc_insts.append(self.allocator, .{
+            .template = template_id,
+            .subst = .none,
+            .fn_monotype = fn_monotype,
+        });
+        return proc_inst_id;
+    }
+
+    fn resolveExprMonotype(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) Allocator.Error!Monotype.Idx {
+        const module_env = self.all_module_envs[module_idx];
+
+        var specializations = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+        defer specializations.deinit();
+
+        var nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+        defer nominal_cycle_breakers.deinit();
+
+        var scratches = try Monotype.Store.Scratches.init(self.allocator);
+        defer scratches.deinit();
+
+        scratches.ident_store = module_env.getIdentStoreConst();
+        scratches.module_env = module_env;
+        scratches.all_module_envs = self.all_module_envs;
+
+        return result.monotype_store.fromTypeVar(
+            self.allocator,
+            &module_env.types,
+            ModuleEnv.varFrom(expr_idx),
+            module_env.idents,
+            &specializations,
+            &nominal_cycle_breakers,
+            &scratches,
+        );
+    }
+
+    fn monotypesStructurallyEqual(
+        self: *Pass,
+        result: *const Result,
+        lhs: Monotype.Idx,
+        rhs: Monotype.Idx,
+    ) Allocator.Error!bool {
+        if (lhs == rhs) return true;
+
+        var seen = std.AutoHashMap(u64, void).init(self.allocator);
+        defer seen.deinit();
+
+        return self.monotypesStructurallyEqualRec(result, lhs, rhs, &seen);
+    }
+
+    fn monotypesStructurallyEqualRec(
+        self: *Pass,
+        result: *const Result,
+        lhs: Monotype.Idx,
+        rhs: Monotype.Idx,
+        seen: *std.AutoHashMap(u64, void),
+    ) Allocator.Error!bool {
+        if (lhs == rhs) return true;
+
+        const lhs_u32: u32 = @intFromEnum(lhs);
+        const rhs_u32: u32 = @intFromEnum(rhs);
+        const key: u64 = (@as(u64, lhs_u32) << 32) | @as(u64, rhs_u32);
+
+        if (seen.contains(key)) return true;
+        try seen.put(key, {});
+
+        const lhs_mono = result.monotype_store.getMonotype(lhs);
+        const rhs_mono = result.monotype_store.getMonotype(rhs);
+        if (std.meta.activeTag(lhs_mono) != std.meta.activeTag(rhs_mono)) return false;
+
+        return switch (lhs_mono) {
+            .recursive_placeholder => unreachable,
+            .unit => true,
+            .prim => |lhs_prim| lhs_prim == rhs_mono.prim,
+            .list => |lhs_list| try self.monotypesStructurallyEqualRec(result, lhs_list.elem, rhs_mono.list.elem, seen),
+            .box => |lhs_box| try self.monotypesStructurallyEqualRec(result, lhs_box.inner, rhs_mono.box.inner, seen),
+            .tuple => |lhs_tuple| blk: {
+                const lhs_elems = result.monotype_store.getIdxSpan(lhs_tuple.elems);
+                const rhs_elems = result.monotype_store.getIdxSpan(rhs_mono.tuple.elems);
+                if (lhs_elems.len != rhs_elems.len) break :blk false;
+                for (lhs_elems, rhs_elems) |lhs_elem, rhs_elem| {
+                    if (!try self.monotypesStructurallyEqualRec(result, lhs_elem, rhs_elem, seen)) {
+                        break :blk false;
+                    }
+                }
+                break :blk true;
+            },
+            .func => |lhs_func| blk: {
+                const rhs_func = rhs_mono.func;
+                const lhs_args = result.monotype_store.getIdxSpan(lhs_func.args);
+                const rhs_args = result.monotype_store.getIdxSpan(rhs_func.args);
+                if (lhs_func.effectful != rhs_func.effectful) break :blk false;
+                if (lhs_args.len != rhs_args.len) break :blk false;
+                for (lhs_args, rhs_args) |lhs_arg, rhs_arg| {
+                    if (!try self.monotypesStructurallyEqualRec(result, lhs_arg, rhs_arg, seen)) {
+                        break :blk false;
+                    }
+                }
+                break :blk try self.monotypesStructurallyEqualRec(result, lhs_func.ret, rhs_func.ret, seen);
+            },
+            .record => |lhs_record| blk: {
+                const lhs_fields = result.monotype_store.getFields(lhs_record.fields);
+                const rhs_fields = result.monotype_store.getFields(rhs_mono.record.fields);
+                if (lhs_fields.len != rhs_fields.len) break :blk false;
+                for (lhs_fields, rhs_fields) |lhs_field, rhs_field| {
+                    if (lhs_field.name != rhs_field.name) break :blk false;
+                    if (!try self.monotypesStructurallyEqualRec(result, lhs_field.type_idx, rhs_field.type_idx, seen)) {
+                        break :blk false;
+                    }
+                }
+                break :blk true;
+            },
+            .tag_union => |lhs_union| blk: {
+                const lhs_tags = result.monotype_store.getTags(lhs_union.tags);
+                const rhs_tags = result.monotype_store.getTags(rhs_mono.tag_union.tags);
+                if (lhs_tags.len != rhs_tags.len) break :blk false;
+                for (lhs_tags, rhs_tags) |lhs_tag, rhs_tag| {
+                    const lhs_payloads = result.monotype_store.getIdxSpan(lhs_tag.payloads);
+                    const rhs_payloads = result.monotype_store.getIdxSpan(rhs_tag.payloads);
+                    if (lhs_tag.name != rhs_tag.name) break :blk false;
+                    if (lhs_payloads.len != rhs_payloads.len) break :blk false;
+                    for (lhs_payloads, rhs_payloads) |lhs_payload, rhs_payload| {
+                        if (!try self.monotypesStructurallyEqualRec(result, lhs_payload, rhs_payload, seen)) {
+                            break :blk false;
+                        }
+                    }
+                }
+                break :blk true;
+            },
+        };
     }
 
     fn resolveImportedModuleIdx(self: *Pass, caller_env: *const ModuleEnv, import_idx: CIR.Import.Idx) ?u32 {
