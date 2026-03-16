@@ -14,6 +14,7 @@ const types = @import("types");
 
 const Ident = base.Ident;
 const Allocator = std.mem.Allocator;
+const ModuleEnv = can.ModuleEnv;
 const CommonIdents = can.ModuleEnv.CommonIdents;
 const StaticDispatchConstraint = types.StaticDispatchConstraint;
 
@@ -183,6 +184,11 @@ pub const FieldSpan = extern struct {
     }
 };
 
+const NamedSpecialization = struct {
+    name_text: []const u8,
+    type_idx: Idx,
+};
+
 /// Flat storage for monomorphic types.
 pub const Store = struct {
     monotypes: std.ArrayListUnmanaged(Monotype),
@@ -204,15 +210,21 @@ pub const Store = struct {
         fields: base.Scratch(Field),
         tags: base.Scratch(Tag),
         idxs: base.Scratch(Idx),
+        named_specializations: base.Scratch(NamedSpecialization),
         /// Ident store for sorting tag names alphabetically.
         /// Updated when switching modules during cross-module lowering.
         ident_store: ?*const Ident.Store = null,
+        /// Module env owning the current `types_store` / `ident_store`.
+        module_env: ?*const ModuleEnv = null,
+        /// Shared module env slice used to resolve nominal definitions by origin module.
+        all_module_envs: ?[]const *ModuleEnv = null,
 
         pub fn init(allocator: Allocator) Allocator.Error!Scratches {
             return .{
                 .fields = try base.Scratch(Field).init(allocator),
                 .tags = try base.Scratch(Tag).init(allocator),
                 .idxs = try base.Scratch(Idx).init(allocator),
+                .named_specializations = try base.Scratch(NamedSpecialization).init(allocator),
             };
         }
 
@@ -220,6 +232,7 @@ pub const Store = struct {
             self.fields.deinit();
             self.tags.deinit();
             self.idxs.deinit();
+            self.named_specializations.deinit();
         }
     };
 
@@ -360,11 +373,15 @@ pub const Store = struct {
 
         return switch (resolved.desc.content) {
             .flex => |flex| {
+                if (flex.name) |name| {
+                    if (lookupNamedSpecialization(scratches, name)) |specialized| return specialized;
+                }
                 if (hasNumeralConstraint(types_store, flex.constraints))
                     return self.primIdx(.dec);
                 return self.unit_idx;
             },
             .rigid => |rigid| {
+                if (lookupNamedSpecialization(scratches, rigid.name)) |specialized| return specialized;
                 if (hasNumeralConstraint(types_store, rigid.constraints))
                     return self.primIdx(.dec);
                 return self.unit_idx;
@@ -472,6 +489,10 @@ pub const Store = struct {
                                 },
                             },
                             .flex => {
+                                if (findNamedRowExtensionMonotype(scratches, ext_var, types_store)) |specialized| {
+                                    try self.appendSpecializedRecordFields(specialized, scratch_top, scratches);
+                                    break :rows;
+                                }
                                 if (std.debug.runtime_safety) {
                                     std.debug.panic(
                                         "Monotype.fromTypeVar(record): unresolved flex row extension tail",
@@ -481,6 +502,10 @@ pub const Store = struct {
                                 unreachable;
                             },
                             .rigid => {
+                                if (findNamedRowExtensionMonotype(scratches, ext_var, types_store)) |specialized| {
+                                    try self.appendSpecializedRecordFields(specialized, scratch_top, scratches);
+                                    break :rows;
+                                }
                                 if (std.debug.runtime_safety) {
                                     std.debug.panic(
                                         "Monotype.fromTypeVar(record): unresolved rigid row extension tail",
@@ -592,8 +617,18 @@ pub const Store = struct {
                                     unreachable;
                                 },
                             },
-                            .flex => break :rows, // Open tag union — treat as closed with collected tags
-                            .rigid => break :rows, // Rigid tag union — treat as closed with collected tags
+                            .flex => {
+                                if (findNamedRowExtensionMonotype(scratches, ext_var, types_store)) |specialized| {
+                                    try self.appendSpecializedTagUnionTags(specialized, scratches);
+                                }
+                                break :rows; // Open tag union — treat as closed with collected tags
+                            },
+                            .rigid => {
+                                if (findNamedRowExtensionMonotype(scratches, ext_var, types_store)) |specialized| {
+                                    try self.appendSpecializedTagUnionTags(specialized, scratches);
+                                }
+                                break :rows; // Rigid tag union — treat as closed with collected tags
+                            },
                             .err => {
                                 if (std.debug.runtime_safety) {
                                     std.debug.panic(
@@ -722,6 +757,17 @@ pub const Store = struct {
         const placeholder_idx = try self.addMonotype(allocator, .recursive_placeholder);
         try nominal_cycle_breakers.put(nominal_var, placeholder_idx);
 
+        const named_specializations_top = try self.pushNominalArgSpecializations(
+            allocator,
+            types_store,
+            nominal,
+            common_idents,
+            specializations,
+            nominal_cycle_breakers,
+            scratches,
+        );
+        defer scratches.named_specializations.clearFrom(named_specializations_top);
+
         const backing_var = types_store.getNominalBackingVar(nominal);
         const backing_idx = try self.fromTypeVar(allocator, types_store, backing_var, common_idents, specializations, nominal_cycle_breakers, scratches);
 
@@ -734,5 +780,182 @@ pub const Store = struct {
             std.debug.assert(self.monotypes.items[@intFromEnum(placeholder_idx)] != .recursive_placeholder);
         }
         return placeholder_idx;
+    }
+
+    fn lookupNamedSpecialization(scratches: *const Scratches, name: Ident.Idx) ?Idx {
+        const ident_store = scratches.ident_store orelse return null;
+        const name_text = ident_store.getText(name);
+        const items = scratches.named_specializations.items.items;
+
+        var i = items.len;
+        while (i > 0) {
+            i -= 1;
+            if (std.mem.eql(u8, items[i].name_text, name_text)) {
+                return items[i].type_idx;
+            }
+        }
+        return null;
+    }
+
+    fn findNamedRowExtensionMonotype(scratches: *const Scratches, ext_var: types.Var, types_store: *const types.Store) ?Idx {
+        const resolved = types_store.resolveVar(ext_var);
+        return switch (resolved.desc.content) {
+            .flex => |flex| if (flex.name) |name| lookupNamedSpecialization(scratches, name) else null,
+            .rigid => |rigid| lookupNamedSpecialization(scratches, rigid.name),
+            else => null,
+        };
+    }
+
+    fn appendSpecializedRecordFields(
+        self: *Store,
+        specialized: Idx,
+        scratch_top: u32,
+        scratches: *Scratches,
+    ) Allocator.Error!void {
+        const mono = self.getMonotype(specialized);
+        switch (mono) {
+            .record => |record| {
+                for (self.getFields(record.fields)) |field| {
+                    var seen_name = false;
+                    for (scratches.fields.sliceFromStart(scratch_top)) |existing| {
+                        if (existing.name.eql(field.name)) {
+                            seen_name = true;
+                            break;
+                        }
+                    }
+                    if (seen_name) continue;
+                    try scratches.fields.append(field);
+                }
+            },
+            .unit => {},
+            else => {
+                if (std.debug.runtime_safety) {
+                    std.debug.panic(
+                        "Monotype.fromTypeVar(record): nominal row specialization must be record or unit, found '{s}'",
+                        .{@tagName(mono)},
+                    );
+                }
+                unreachable;
+            },
+        }
+    }
+
+    fn appendSpecializedTagUnionTags(
+        self: *Store,
+        specialized: Idx,
+        scratches: *Scratches,
+    ) Allocator.Error!void {
+        const mono = self.getMonotype(specialized);
+        switch (mono) {
+            .tag_union => |tag_union| {
+                for (self.getTags(tag_union.tags)) |tag| {
+                    try scratches.tags.append(tag);
+                }
+            },
+            else => {
+                if (std.debug.runtime_safety) {
+                    std.debug.panic(
+                        "Monotype.fromTypeVar(tag_union): nominal row specialization must be tag_union, found '{s}'",
+                        .{@tagName(mono)},
+                    );
+                }
+                unreachable;
+            },
+        }
+    }
+
+    fn pushNominalArgSpecializations(
+        self: *Store,
+        allocator: Allocator,
+        types_store: *const types.Store,
+        nominal: types.NominalType,
+        common_idents: CommonIdents,
+        specializations: *const std.AutoHashMap(types.Var, Idx),
+        nominal_cycle_breakers: *std.AutoHashMap(types.Var, Idx),
+        scratches: *Scratches,
+    ) Allocator.Error!u32 {
+        const top = scratches.named_specializations.top();
+
+        const source_env = scratches.module_env orelse return top;
+        const all_module_envs = scratches.all_module_envs orelse return top;
+        const definition_env = findNominalDefinitionEnv(source_env, all_module_envs, nominal.origin_module) orelse return top;
+        const type_name = source_env.getIdent(nominal.ident.ident_idx);
+        const definition_nominal = findDefinitionNominal(definition_env, type_name) orelse return top;
+
+        const formal_args = definition_env.types.sliceNominalArgs(definition_nominal);
+        const actual_args = types_store.sliceNominalArgs(nominal);
+        if (formal_args.len != actual_args.len) {
+            if (std.debug.runtime_safety) {
+                std.debug.panic(
+                    "Monotype.fromNominalType: arg arity mismatch for nominal '{s}' (formal={d}, actual={d})",
+                    .{ type_name, formal_args.len, actual_args.len },
+                );
+            }
+            unreachable;
+        }
+
+        for (formal_args, actual_args) |formal_arg, actual_arg| {
+            const formal_name_text = resolvedTypeVarNameText(&definition_env.types, definition_env, formal_arg) orelse continue;
+            const actual_mono = try self.fromTypeVar(
+                allocator,
+                types_store,
+                actual_arg,
+                common_idents,
+                specializations,
+                nominal_cycle_breakers,
+                scratches,
+            );
+            try scratches.named_specializations.append(.{
+                .name_text = formal_name_text,
+                .type_idx = actual_mono,
+            });
+        }
+
+        return top;
+    }
+
+    fn resolvedTypeVarNameText(
+        types_store: *const types.Store,
+        module_env: *const ModuleEnv,
+        var_: types.Var,
+    ) ?[]const u8 {
+        const resolved = types_store.resolveVar(var_);
+        return switch (resolved.desc.content) {
+            .rigid => |rigid| module_env.getIdent(rigid.name),
+            .flex => |flex| if (flex.name) |name| module_env.getIdent(name) else null,
+            else => null,
+        };
+    }
+
+    fn findNominalDefinitionEnv(
+        source_env: *const ModuleEnv,
+        all_module_envs: []const *ModuleEnv,
+        origin_module: Ident.Idx,
+    ) ?*const ModuleEnv {
+        const origin_name = source_env.getIdent(origin_module);
+        for (all_module_envs) |candidate_env| {
+            const candidate_name = candidate_env.getIdent(candidate_env.qualified_module_ident);
+            if (std.mem.eql(u8, origin_name, candidate_name)) return candidate_env;
+        }
+        return null;
+    }
+
+    fn findDefinitionNominal(definition_env: *const ModuleEnv, type_name: []const u8) ?types.NominalType {
+        for (definition_env.store.sliceStatements(definition_env.all_statements)) |stmt_idx| {
+            const stmt = definition_env.store.getStatement(stmt_idx);
+            switch (stmt) {
+                .s_nominal_decl => |nominal_decl| {
+                    const header = definition_env.store.getTypeHeader(nominal_decl.header);
+                    if (!std.mem.eql(u8, definition_env.getIdent(header.relative_name), type_name)) continue;
+
+                    const resolved = definition_env.types.resolveVar(ModuleEnv.varFrom(stmt_idx));
+                    if (resolved.desc.content == .structure and resolved.desc.content.structure == .nominal_type) {
+                        return resolved.desc.content.structure.nominal_type;
+                    }
+                },
+                else => {},
+            }
+        }
+        return null;
     }
 };
