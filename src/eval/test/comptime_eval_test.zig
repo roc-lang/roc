@@ -8,6 +8,7 @@ const can = @import("can");
 const check = @import("check");
 const compiled_builtins = @import("compiled_builtins");
 const ComptimeEvaluator = @import("../comptime_evaluator.zig").ComptimeEvaluator;
+const DevEvaluator = @import("../mod.zig").DevEvaluator;
 const BuiltinTypes = @import("../builtins.zig").BuiltinTypes;
 const builtin_loading = @import("../builtin_loading.zig");
 const roc_target = @import("roc_target");
@@ -3275,3 +3276,32 @@ test "tag union matching with payload inside function - cross module" {
 // Note: List.repeat test temporarily disabled while investigating
 // why List.repeat triggers the infinite loop check. List.repeat
 // is implemented with recursion in Roc, not while loops.
+
+test "issue 9262: dev evaluator panics on opaque function field lookup" {
+    const src =
+        \\W(a) := { f : {} -> [V(a)] }.{
+        \\    run : W(a) -> [V(a)]
+        \\    run = |w| (w.f)({})
+        \\
+        \\    mk : a -> W(a)
+        \\    mk = |val| { f: |_| V(val) }
+        \\}
+        \\
+        \\result = W.run(W.mk("x")) == V("x")
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
+    const target_def = result.module_env.store.getDef(defs[defs.len - 1]);
+
+    var dev_eval = try DevEvaluator.init(test_allocator, null);
+    defer dev_eval.deinit();
+
+    const all_module_envs = [_]*ModuleEnv{ result.builtin_module.env, result.module_env };
+    var code_result = try dev_eval.generateCode(result.module_env, target_def.expr, &all_module_envs, null);
+    defer code_result.deinit();
+
+    std.debug.panic("issue 9262 did not reproduce; convert this test to a success assertion", .{});
+}
