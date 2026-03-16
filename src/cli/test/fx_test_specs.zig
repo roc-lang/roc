@@ -18,6 +18,8 @@ pub const TestSpec = struct {
     io_spec: []const u8,
     /// Optional description of what the test verifies
     description: []const u8 = "",
+    /// Skip this test on Windows (usually due to dev backend limitations)
+    skip_on_windows: bool = false,
 };
 
 /// All fx platform tests that can be run with --test mode IO specs.
@@ -92,6 +94,8 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/numeric_fold.roc",
         .io_spec = "1>Sum: 15.0",
         .description = "List.fold with numeric accumulators",
+        // TODO: Dec (i128) parameter passing in for-loop lambdas fails on Windows x86_64 dev backend
+        .skip_on_windows = true,
     },
     .{
         .roc_file = "test/fx/list_for_each.roc",

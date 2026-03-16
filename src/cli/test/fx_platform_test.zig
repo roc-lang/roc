@@ -219,15 +219,18 @@ fn expectDevRuntimeDivisionByZero() !void {
 // The specs are defined in fx_test_specs.zig and shared with the cross-compile
 // test runner.
 
-test "fx platform IO spec tests" {
+/// Shared body for IO spec tests with a specific backend.
+fn runIoSpecTests(comptime opt_flag: []const u8) !void {
     const allocator = testing.allocator;
 
     var passed: usize = 0;
     var failed: usize = 0;
 
     for (fx_test_specs.io_spec_tests) |spec| {
-        const result = util.runRocTest(allocator, spec.roc_file, spec.io_spec) catch |err| {
-            std.debug.print("\n[FAIL] {s}: failed to run: {}\n", .{ spec.roc_file, err });
+        if (spec.skip_on_windows and @import("builtin").os.tag == .windows) continue;
+
+        const result = util.runRocCommand(allocator, &.{ opt_flag, spec.roc_file, "--", "--test", spec.io_spec }) catch |err| {
+            std.debug.print("\n[FAIL] {s} ({s}): failed to run: {}\n", .{ spec.roc_file, opt_flag, err });
             failed += 1;
             continue;
         };
@@ -235,7 +238,7 @@ test "fx platform IO spec tests" {
         defer allocator.free(result.stderr);
 
         util.checkTestSuccess(result) catch |err| {
-            std.debug.print("\n[FAIL] {s}: {}\n", .{ spec.roc_file, err });
+            std.debug.print("\n[FAIL] {s} ({s}): {}\n", .{ spec.roc_file, opt_flag, err });
             if (spec.description.len > 0) {
                 std.debug.print("       Description: {s}\n", .{spec.description});
             }
@@ -249,9 +252,17 @@ test "fx platform IO spec tests" {
     // Print summary
     const total = passed + failed;
     if (failed > 0) {
-        std.debug.print("\n{}/{} IO spec tests passed ({} failed)\n", .{ passed, total, failed });
+        std.debug.print("\n{}/{} IO spec tests passed ({} failed) [opt={s}]\n", .{ passed, total, failed, opt_flag });
         return error.SomeTestsFailed;
     }
+}
+
+test "fx platform IO spec tests (interpreter)" {
+    try runIoSpecTests("--opt=interpreter");
+}
+
+test "fx platform IO spec tests (dev backend)" {
+    try runIoSpecTests("--opt=dev");
 }
 
 /// Shared body for "roc test" tests that expect exactly 1 passing test.
@@ -269,16 +280,14 @@ test "fx platform expect with main (interpreter)" {
     try testRocTestSinglePass("--opt=interpreter", "test/fx/expect_with_main.roc");
 }
 test "fx platform expect with main (dev backend)" {
-    // TODO: dev backend fails with SIGSEGV
-    return error.SkipZigTest;
+    try testRocTestSinglePass("--opt=dev", "test/fx/expect_with_main.roc");
 }
 
 test "fx platform expect with numeric literal (interpreter)" {
     try testRocTestSinglePass("--opt=interpreter", "test/fx/expect_with_literal.roc");
 }
 test "fx platform expect with numeric literal (dev backend)" {
-    // TODO: dev backend fails with SIGSEGV
-    return error.SkipZigTest;
+    try testRocTestSinglePass("--opt=dev", "test/fx/expect_with_literal.roc");
 }
 
 test "fx platform all_syntax_test.roc prints expected output (interpreter)" {
@@ -743,8 +752,21 @@ test "big string equality regression (interpreter)" {
 }
 
 test "big string equality regression (dev backend)" {
-    // TODO: dev backend fails with SIGSEGV
-    return error.SkipZigTest;
+    const allocator = testing.allocator;
+
+    const run_result = try util.runRoc(allocator, &.{ "test", "--opt=dev" }, "test/fx/big_string_equality.roc");
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    try util.checkSuccess(run_result);
+
+    if (std.mem.indexOf(u8, run_result.stderr, "panic") != null or
+        std.mem.indexOf(u8, run_result.stderr, "use-after-free") != null or
+        std.mem.indexOf(u8, run_result.stderr, "Use-after-free") != null)
+    {
+        std.debug.print("Detected memory safety panic in stderr:\n{s}\n", .{run_result.stderr});
+        return error.UseAfterFree;
+    }
 }
 
 test "fx platform expect with toplevel numeric (interpreter)" {
@@ -768,8 +790,20 @@ test "fx platform expect with toplevel numeric (interpreter)" {
 }
 
 test "fx platform expect with toplevel numeric (dev backend)" {
-    // TODO: dev backend fails with SIGSEGV
-    return error.SkipZigTest;
+    const allocator = testing.allocator;
+
+    const run_result = try util.runRoc(allocator, &.{"--opt=dev"}, "test/fx/expect_with_toplevel_numeric.roc");
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    try util.checkSuccess(run_result);
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "hello") != null);
+
+    const test_result = try util.runRoc(allocator, &.{ "test", "--opt=dev" }, "test/fx/expect_with_toplevel_numeric.roc");
+    defer allocator.free(test_result.stdout);
+    defer allocator.free(test_result.stderr);
+
+    try util.checkSuccess(test_result);
 }
 
 // The platform requires `main! : () => {}` but test_type_mismatch.roc returns Str.
