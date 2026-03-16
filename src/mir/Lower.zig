@@ -3888,9 +3888,10 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
                 try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = wildcard, .expr = expr } });
             },
             .s_expect => |s_expect| {
-                const expr = try self.lowerExpr(s_expect.body);
-                const expr_type = self.store.typeOf(expr);
-                const wildcard = try self.store.addPattern(self.allocator, .wildcard, expr_type);
+                const body = try self.lowerExpr(s_expect.body);
+                const unit_monotype = self.store.monotype_store.unit_idx;
+                const expr = try self.store.addExpr(self.allocator, .{ .expect = .{ .body = body } }, unit_monotype, stmt_region);
+                const wildcard = try self.store.addPattern(self.allocator, .wildcard, unit_monotype);
                 try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = wildcard, .expr = expr } });
             },
             .s_crash => |s_crash| {
