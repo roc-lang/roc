@@ -183,46 +183,22 @@ fn evalToInt(allocator: std.mem.Allocator, source: []const u8) !i128 {
     defer interpreter.bindings.items.len = 0;
 
     // Check if this is an integer or Dec
-    if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) {
-        return result.asI128();
-    } else if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .frac) {
+    const result_int: i128 = if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int)
+        result.asI128()
+    else if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .frac) blk: {
         // Unsuffixed numeric literals default to Dec
         const dec_value = result.asDec(ops);
         const RocDec = builtins.dec.RocDec;
-        return i128h.divTrunc_i128(dec_value.num, RocDec.one_point_zero_i128);
-    }
-    return error.NotAnInteger;
-}
+        break :blk i128h.divTrunc_i128(dec_value.num, RocDec.one_point_zero_i128);
+    } else return error.NotAnInteger;
 
-/// Helper to evaluate an expression and get its boolean result
-fn evalToBool(allocator: std.mem.Allocator, source: []const u8) !bool {
-    const resources = try helpers.parseAndCanonicalizeExpr(allocator, source);
-    defer helpers.cleanupParseAndCanonical(allocator, resources);
+    // Backend comparison
+    const int_str = try std.fmt.allocPrint(allocator, "{}", .{result_int});
+    defer allocator.free(int_str);
+    try helpers.compareWithDevEvaluator(allocator, int_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    try helpers.compareWithLlvmEvaluator(allocator, int_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
-    var test_env_instance = TestEnv.init(allocator);
-    defer test_env_instance.deinit();
-
-    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
-    var interpreter = try Interpreter.init(allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
-    defer interpreter.deinit();
-
-    const ops = test_env_instance.get_ops();
-    const result = try interpreter.eval(resources.expr_idx, ops);
-    const layout_cache = &interpreter.runtime_layout_store;
-    defer result.decref(layout_cache, ops);
-    defer interpreter.bindings.items.len = 0;
-
-    // Boolean represented as integer (discriminant)
-    if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) {
-        const int_val = result.asI128();
-        return int_val != 0;
-    } else if (result.ptr != null) {
-        // Try reading as raw byte (for boolean tag values)
-        const bool_ptr: *const u8 = @ptrCast(@alignCast(result.ptr.?));
-        return bool_ptr.* != 0;
-    }
-    return error.NotABool;
+    return result_int;
 }
 
 test "roundtrip: integer literal produces same result" {
@@ -282,37 +258,28 @@ test "roundtrip: if expression produces same result" {
 test "roundtrip: boolean True produces same result" {
     const source = "True";
 
-    // Get original result
-    const original_result = try evalToBool(test_allocator, source);
-
-    // Emit and re-parse
+    // Standalone True currently roundtrips as a Bool value.
+    const original_result = try evalToInt(test_allocator, source);
     const emitted = try emitFromSource(test_allocator, source);
     defer test_allocator.free(emitted);
+    const emitted_result = try evalToInt(test_allocator, emitted);
 
-    // Get result from emitted code
-    const emitted_result = try evalToBool(test_allocator, emitted);
-
-    // Verify they match
     try testing.expectEqual(original_result, emitted_result);
-    try testing.expectEqual(true, emitted_result);
+    try testing.expectEqual(@as(i128, 1), emitted_result);
 }
 
 test "roundtrip: boolean False produces same result" {
     const source = "False";
 
-    // Get original result
-    const original_result = try evalToBool(test_allocator, source);
-
-    // Emit and re-parse
+    // Standalone False has type [False]* (open single-tag union), not Bool.
+    // In [False]*, False is at discriminant 0 (only tag in the union).
+    const original_result = try evalToInt(test_allocator, source);
     const emitted = try emitFromSource(test_allocator, source);
     defer test_allocator.free(emitted);
+    const emitted_result = try evalToInt(test_allocator, emitted);
 
-    // Get result from emitted code
-    const emitted_result = try evalToBool(test_allocator, emitted);
-
-    // Verify they match
     try testing.expectEqual(original_result, emitted_result);
-    try testing.expectEqual(false, emitted_result);
+    try testing.expectEqual(@as(i128, 0), emitted_result);
 }
 
 test "roundtrip: complex arithmetic produces same result" {

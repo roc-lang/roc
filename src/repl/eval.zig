@@ -109,9 +109,9 @@ pub const Repl = struct {
         var builtin_module = try builtin_loading.loadCompiledModule(allocator, compiled_builtins.builtin_bin, "Builtin", builtin_source);
         errdefer builtin_module.deinit();
 
-        // Initialize DevEvaluator if using dev backend
+        // Initialize DevEvaluator if using a native-code backend
         var dev_evaluator: ?DevEvaluator = null;
-        if (backend == .dev) {
+        if (backend == .dev or backend == .llvm) {
             dev_evaluator = DevEvaluator.init(allocator, null) catch null;
         }
 
@@ -741,7 +741,7 @@ pub const Repl = struct {
             => {},
         }
 
-        if (self.backend == .dev) {
+        if (self.backend == .dev or self.backend == .llvm) {
             if (try self.getDeferredCompileCrash(module_env, final_expr_idx)) |crash_msg| {
                 return .{ .eval_error = crash_msg };
             }
@@ -753,16 +753,18 @@ pub const Repl = struct {
         };
 
         if (comptime builtin.os.tag != .freestanding) {
-            if (self.backend == .dev) {
+            if (self.backend == .dev or self.backend == .llvm) {
                 if (self.dev_evaluator) |*dev_eval| {
                     const all_module_envs: []const *ModuleEnv = &.{ self.builtin_module.env, module_env };
                     var code_result = dev_eval.generateCode(module_env, inspect_expr, all_module_envs, null) catch |err| {
-                        return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Dev backend codegen error: {s}", .{@errorName(err)}) };
+                        const backend_name = if (self.backend == .llvm) "LLVM" else "Dev";
+                        return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "{s} backend codegen error: {s}", .{ backend_name, @errorName(err) }) };
                     };
                     defer code_result.deinit();
 
                     var executable = eval_mod.ExecutableMemory.initWithEntryOffset(code_result.code, code_result.entry_offset) catch |err| {
-                        return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Dev backend executable error: {s}", .{@errorName(err)}) };
+                        const backend_name = if (self.backend == .llvm) "LLVM" else "Dev";
+                        return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "{s} backend executable error: {s}", .{ backend_name, @errorName(err) }) };
                     };
                     defer executable.deinit();
 

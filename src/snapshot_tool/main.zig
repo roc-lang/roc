@@ -4505,70 +4505,75 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
         try actual_outputs.append(repl_output);
     }
 
-    // Run dev backend for comparison with panic protection.
-    // The dev backend may hit `unreachable` or other panics for unimplemented
+    // Run native-code backends for comparison with panic protection.
+    // These backends may hit `unreachable` or other panics for unimplemented
     // features. The custom panic handler longjmps back here instead of aborting,
     // so we can report the failure and continue with the next snapshot.
     // Install signal handlers for SIGSEGV/SIGBUS/SIGILL from generated code.
     installCrashSignalHandlers();
-    var dev_snapshot_ops = SnapshotOps.init(output.gpa);
-    defer dev_snapshot_ops.deinit();
-    if (Repl.initWithBackend(output.gpa, dev_snapshot_ops.get_ops(), dev_snapshot_ops.crashContextPtr(), .dev)) |dev_repl_val| {
-        var dev_repl = dev_repl_val;
-        defer dev_repl.deinit();
+    inline for (.{
+        .{ .backend = repl.Backend.dev, .label = "dev" },
+        .{ .backend = repl.Backend.llvm, .label = "llvm" },
+    }) |cfg| {
+        var backend_snapshot_ops = SnapshotOps.init(output.gpa);
+        defer backend_snapshot_ops.deinit();
+        if (Repl.initWithBackend(output.gpa, backend_snapshot_ops.get_ops(), backend_snapshot_ops.crashContextPtr(), cfg.backend)) |backend_repl_val| {
+            var backend_repl = backend_repl_val;
+            defer backend_repl.deinit();
 
-        for (inputs.items, 0..) |input, i| {
-            // Set up panic protection via setjmp. If the dev backend panics,
-            // the custom panic handler longjmps back here with jmp_result != 0.
-            var jmp_buf: sljmp.JmpBuf = undefined;
-            const jmp_result = sljmp.setjmp(&jmp_buf);
-            if (jmp_result != 0) {
-                // Returned from a panic — report it and stop this snapshot's dev run.
-                // The dev_repl state is corrupted after a panic, so we can't continue.
-                const msg = panic_msg orelse "unknown";
-                std.debug.print("Dev REPL panic at input {d} in {s}: {s}\n", .{ i, snapshot_path, msg });
-                panic_msg = null;
-                break;
-            }
-            panic_jmp = &jmp_buf;
-            defer {
-                panic_jmp = null;
-            }
+            for (inputs.items, 0..) |input, i| {
+                // Set up panic protection via setjmp. If the backend panics,
+                // the custom panic handler longjmps back here with jmp_result != 0.
+                var jmp_buf: sljmp.JmpBuf = undefined;
+                const jmp_result = sljmp.setjmp(&jmp_buf);
+                if (jmp_result != 0) {
+                    // Returned from a panic — report it and stop this snapshot's run.
+                    // The backend REPL state is corrupted after a panic, so we can't continue.
+                    const msg = panic_msg orelse "unknown";
+                    std.debug.print("{s} REPL panic at input {d} in {s}: {s}\n", .{ cfg.label, i, snapshot_path, msg });
+                    panic_msg = null;
+                    break;
+                }
+                panic_jmp = &jmp_buf;
+                defer {
+                    panic_jmp = null;
+                }
 
-            // Set a 10-second timeout to catch infinite loops in generated code.
-            // Note: alarm() is process-wide — in parallel mode, SIGALRM may be
-            // delivered to the wrong thread. The handler checks threadlocal panic_jmp,
-            // so it's harmless if the receiving thread isn't evaluating.
-            _ = std.c.alarm(10);
-            defer _ = std.c.alarm(0);
+                // Set a 10-second timeout to catch infinite loops in generated code.
+                // Note: alarm() is process-wide — in parallel mode, SIGALRM may be
+                // delivered to the wrong thread. The handler checks threadlocal panic_jmp,
+                // so it's harmless if the receiving thread isn't evaluating.
+                _ = std.c.alarm(10);
+                defer _ = std.c.alarm(0);
 
-            const dev_output = dev_repl.step(input) catch |err| {
-                std.debug.print("Dev REPL error at input {d} in {s}: {}\n", .{ i, snapshot_path, err });
-                continue;
-            };
-            defer output.gpa.free(dev_output);
+                const backend_output = backend_repl.step(input) catch |err| {
+                    std.debug.print("{s} REPL error at input {d} in {s}: {}\n", .{ cfg.label, i, snapshot_path, err });
+                    continue;
+                };
+                defer output.gpa.free(backend_output);
 
-            // Cap dev output to prevent flooding terminal with corrupted string data.
-            const max_output_len = 4096;
-            const dev_display = if (dev_output.len > max_output_len)
-                dev_output[0..max_output_len]
-            else
-                dev_output;
+                // Cap backend output to prevent flooding terminal with corrupted string data.
+                const max_output_len = 4096;
+                const backend_display = if (backend_output.len > max_output_len)
+                    backend_output[0..max_output_len]
+                else
+                    backend_output;
 
-            if (i < actual_outputs.items.len) {
-                const interp_output = actual_outputs.items[i];
-                if (!std.mem.eql(u8, interp_output, dev_output)) {
-                    std.debug.print(
-                        "REPL backend mismatch at input {d} in {s}:\n  interpreter: '{s}'\n  dev:         '{s}'{s}\n",
-                        .{ i, snapshot_path, interp_output, dev_display, if (dev_output.len > max_output_len) "... (truncated)" else "" },
-                    );
-                    success = false;
+                if (i < actual_outputs.items.len) {
+                    const interp_output = actual_outputs.items[i];
+                    if (!std.mem.eql(u8, interp_output, backend_output)) {
+                        std.debug.print(
+                            "REPL backend mismatch at input {d} in {s}:\n  interpreter: '{s}'\n  {s}:         '{s}'{s}\n",
+                            .{ i, snapshot_path, interp_output, cfg.label, backend_display, if (backend_output.len > max_output_len) "... (truncated)" else "" },
+                        );
+                        success = false;
+                    }
                 }
             }
+        } else |err| {
+            std.debug.print("{s} REPL init failed in {s}: {}\n", .{ cfg.label, snapshot_path, err });
+            success = false;
         }
-    } else |err| {
-        std.debug.print("Dev REPL init failed in {s}: {}\n", .{ snapshot_path, err });
-        success = false;
     }
 
     switch (config.output_section_command) {

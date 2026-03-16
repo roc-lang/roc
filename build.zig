@@ -466,21 +466,6 @@ const CheckEnumFromIntZeroStep = struct {
         line_content: []const u8,
     };
 
-    // Files in backend/llvm that are copies from Zig's stdlib and should be excluded
-    const stdlib_copies = [_][]const u8{
-        "backend/llvm/Builder.zig",
-        "backend/llvm/ir.zig",
-        "backend/llvm/bitcode_writer.zig",
-        "backend/llvm/BitcodeReader.zig",
-    };
-
-    fn isStdlibCopy(path: []const u8) bool {
-        for (stdlib_copies) |excluded| {
-            if (std.mem.endsWith(u8, path, excluded)) return true;
-        }
-        return false;
-    }
-
     fn scanDirectoryForEnumFromIntZero(
         allocator: std.mem.Allocator,
         dir: std.fs.Dir,
@@ -495,9 +480,6 @@ const CheckEnumFromIntZeroStep = struct {
             if (!std.mem.endsWith(u8, entry.path, ".zig")) continue;
 
             const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ path_prefix, entry.path });
-
-            // Skip Zig stdlib copies in backend/llvm
-            if (isStdlibCopy(full_path)) continue;
 
             const file = dir.openFile(entry.path, .{}) catch continue;
             defer file.close();
@@ -614,21 +596,6 @@ const CheckUnusedSuppressionStep = struct {
         line_content: []const u8,
     };
 
-    // Files in backend/llvm that are copies from Zig's stdlib and should be excluded
-    const stdlib_copies = [_][]const u8{
-        "backend/llvm/Builder.zig",
-        "backend/llvm/ir.zig",
-        "backend/llvm/bitcode_writer.zig",
-        "backend/llvm/BitcodeReader.zig",
-    };
-
-    fn isStdlibCopy(path: []const u8) bool {
-        for (stdlib_copies) |excluded| {
-            if (std.mem.endsWith(u8, path, excluded)) return true;
-        }
-        return false;
-    }
-
     fn scanDirectoryForUnusedSuppression(
         allocator: std.mem.Allocator,
         dir: std.fs.Dir,
@@ -643,9 +610,6 @@ const CheckUnusedSuppressionStep = struct {
             if (!std.mem.endsWith(u8, entry.path, ".zig")) continue;
 
             const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ path_prefix, entry.path });
-
-            // Skip Zig stdlib copies in backend/llvm
-            if (isStdlibCopy(full_path)) continue;
 
             const file = dir.openFile(entry.path, .{}) catch continue;
             defer file.close();
@@ -1686,12 +1650,18 @@ const TidyStep = struct {
     }
 };
 
+const BuiltinCompilerRun = struct {
+    run: *Step.Run,
+    builtin_bin: std.Build.LazyPath,
+    builtin_indices_bin: std.Build.LazyPath,
+};
+
 fn createAndRunBuiltinCompiler(
     b: *std.Build,
     roc_modules: modules.RocModules,
     flag_enable_tracy: ?[]const u8,
     roc_files: []const []const u8,
-) *Step.Run {
+) BuiltinCompilerRun {
     // Build and run the compiler
     const builtin_compiler_exe = b.addExecutable(.{
         .name = "builtin_compiler",
@@ -1725,7 +1695,14 @@ fn createAndRunBuiltinCompiler(
         run_builtin_compiler.addFileArg(b.path(roc_path));
     }
 
-    return run_builtin_compiler;
+    const builtin_bin = run_builtin_compiler.addOutputFileArg("Builtin.bin");
+    const builtin_indices_bin = run_builtin_compiler.addOutputFileArg("builtin_indices.bin");
+
+    return .{
+        .run = run_builtin_compiler,
+        .builtin_bin = builtin_bin,
+        .builtin_indices_bin = builtin_indices_bin,
+    };
 }
 
 fn createTestPlatformHostLib(
@@ -2126,10 +2103,11 @@ pub fn build(b: *std.Build) void {
             .abi = if (builtin.target.os.tag == .linux) .musl else null,
         };
 
-        // Use baseline x86_64 CPU for Valgrind compatibility on CI (Valgrind 3.18.1 doesn't support AVX-512)
-        const is_ci = std.process.getEnvVarOwned(b.allocator, "CI") catch null;
-        if (is_ci != null and builtin.target.cpu.arch == .x86_64 and builtin.target.os.tag == .linux) {
-            default_target_query.cpu_model = .{ .explicit = &std.Target.x86.cpu.x86_64 };
+        // Use x86_64_v3 (AVX2, no AVX-512) for Valgrind compatibility.
+        // Valgrind 3.22 can't emulate AVX-512 EVEX instructions in musl startup code.
+        // This matches the release target (getReleaseTargetQuery) which also uses x86_64_v3.
+        if (builtin.target.cpu.arch == .x86_64) {
+            default_target_query.cpu_model = .{ .explicit = &std.Target.x86.cpu.x86_64_v3 };
         }
 
         break :blk b.standardTargetOptions(.{ .default_target = default_target_query });
@@ -2238,12 +2216,12 @@ pub fn build(b: *std.Build) void {
     const write_compiled_builtins = b.addWriteFiles();
 
     // Always regenerate .bin files to ensure they match the current compiler
-    const run_builtin_compiler = createAndRunBuiltinCompiler(b, roc_modules, flag_enable_tracy, &.{builtin_roc_path});
-    write_compiled_builtins.step.dependOn(&run_builtin_compiler.step);
+    const builtin_compiler = createAndRunBuiltinCompiler(b, roc_modules, flag_enable_tracy, &.{builtin_roc_path});
+    write_compiled_builtins.step.dependOn(&builtin_compiler.run.step);
 
-    // Copy Builtin.bin from zig-out/builtins/
+    // Copy tracked outputs from the builtin compiler run step.
     _ = write_compiled_builtins.addCopyFile(
-        .{ .cwd_relative = "zig-out/builtins/Builtin.bin" },
+        builtin_compiler.builtin_bin,
         "Builtin.bin",
     );
 
@@ -2255,7 +2233,7 @@ pub fn build(b: *std.Build) void {
 
     // Copy builtin_indices.bin
     _ = write_compiled_builtins.addCopyFile(
-        .{ .cwd_relative = "zig-out/builtins/builtin_indices.bin" },
+        builtin_compiler.builtin_indices_bin,
         "builtin_indices.bin",
     );
 
@@ -2459,9 +2437,9 @@ pub fn build(b: *std.Build) void {
     };
 
     const run_builtin_compiler_force = createAndRunBuiltinCompiler(b, roc_modules, flag_enable_tracy, roc_files_force);
-    run_builtin_compiler_force.step.dependOn(&clean_out_step.step);
-    run_builtin_compiler_force.step.dependOn(clear_roc_cache_step);
-    rebuild_builtins_step.dependOn(&run_builtin_compiler_force.step);
+    run_builtin_compiler_force.run.step.dependOn(&clean_out_step.step);
+    run_builtin_compiler_force.run.step.dependOn(clear_roc_cache_step);
+    rebuild_builtins_step.dependOn(&run_builtin_compiler_force.run.step);
 
     // Add the compiled builtins module to roc exe and make it depend on the builtins being ready
     roc_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
@@ -2481,17 +2459,11 @@ pub fn build(b: *std.Build) void {
     roc_modules.addAll(snapshot_exe);
     snapshot_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
     snapshot_exe.step.dependOn(&write_compiled_builtins.step);
-
-    // Add LLVM support to snapshot tool for dual-mode testing
-    const llvm_paths = llvmPaths(b, target, use_system_llvm, user_llvm_path) orelse return;
-    snapshot_exe.addLibraryPath(.{ .cwd_relative = llvm_paths.lib });
-    snapshot_exe.addIncludePath(.{ .cwd_relative = llvm_paths.include });
-    try addStaticLlvmOptionsToModule(snapshot_exe.root_module);
-    // Add llvm_compile module for LLVM compilation pipeline
-    snapshot_exe.root_module.addAnonymousImport("llvm_compile", .{
-        .root_source_file = b.path("src/llvm_compile/mod.zig"),
-        .imports = &.{.{ .name = "builtins", .module = roc_modules.builtins }},
-    });
+    if (snapshot_exe.root_module.resolved_target.?.result.os.tag != .windows or
+        snapshot_exe.root_module.resolved_target.?.result.abi != .msvc)
+    {
+        snapshot_exe.root_module.link_libcpp = true;
+    }
 
     add_tracy(b, roc_modules.build_options, snapshot_exe, target, true, flag_enable_tracy);
     install_and_run(b, no_bin, snapshot_exe, snapshot_step, snapshot_step, run_args);
@@ -2735,16 +2707,11 @@ pub fn build(b: *std.Build) void {
         roc_modules.addAll(snapshot_test);
         snapshot_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
         snapshot_test.step.dependOn(&write_compiled_builtins.step);
-
-        // Add LLVM support for dual-mode testing
-        const llvm_paths_test = llvmPaths(b, target, use_system_llvm, user_llvm_path) orelse return;
-        snapshot_test.addLibraryPath(.{ .cwd_relative = llvm_paths_test.lib });
-        snapshot_test.addIncludePath(.{ .cwd_relative = llvm_paths_test.include });
-        try addStaticLlvmOptionsToModule(snapshot_test.root_module);
-        snapshot_test.root_module.addAnonymousImport("llvm_compile", .{
-            .root_source_file = b.path("src/llvm_compile/mod.zig"),
-            .imports = &.{.{ .name = "builtins", .module = roc_modules.builtins }},
-        });
+        if (snapshot_test.root_module.resolved_target.?.result.os.tag != .windows or
+            snapshot_test.root_module.resolved_target.?.result.abi != .msvc)
+        {
+            snapshot_test.root_module.link_libcpp = true;
+        }
 
         add_tracy(b, roc_modules.build_options, snapshot_test, target, true, flag_enable_tracy);
 
