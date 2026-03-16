@@ -1805,10 +1805,17 @@ fn rocRunDefaultApp(ctx: *CliContext, args: cli_args.RunArgs, original_source: [
     const echo_module_path = std.fs.path.join(ctx.gpa, &.{ app_dir, ".roc_echo_platform", "Echo.roc" }) catch return error.OutOfMemory;
     defer ctx.gpa.free(echo_module_path);
 
+    // On Windows, platform_main_path contains backslashes which the Roc parser
+    // would interpret as escape sequences. Use forward slashes instead — the
+    // compiler's path resolution normalizes them back to native separators.
+    const platform_roc_path = ctx.gpa.dupe(u8, platform_main_path) catch return error.OutOfMemory;
+    defer ctx.gpa.free(platform_roc_path);
+    std.mem.replaceScalar(u8, platform_roc_path, '\\', '/');
+
     const header = std.fmt.allocPrint(
         ctx.gpa,
         "app [main!] {{ pf: platform \"{s}\" }}\n\nimport pf.Echo\n\necho! = |msg| Echo.line!(msg)\n\n",
-        .{platform_main_path},
+        .{platform_roc_path},
     ) catch return error.OutOfMemory;
     defer ctx.gpa.free(header);
 
