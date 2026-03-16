@@ -834,6 +834,11 @@ pub const Store = struct {
         return self.procs.items[@intFromEnum(id)];
     }
 
+    /// Get a mutable MIR proc by id.
+    pub fn getProcPtr(self: *Store, id: ProcId) *Proc {
+        return &self.procs.items[@intFromEnum(id)];
+    }
+
     /// Get all MIR procs.
     pub fn getProcs(self: *const Store) []const Proc {
         return self.procs.items;
