@@ -285,8 +285,8 @@ pub const CaptureBinding = struct {
 
 /// Semantic closure member information for a lifted closure value.
 pub const ClosureMember = struct {
-    /// Symbol of the lifted function (currently also registered in value_defs)
-    fn_symbol: Symbol,
+    /// Proc identity of the lifted function.
+    proc: ProcId,
     /// Capture slots in the order used by the closure payload.
     capture_bindings: CaptureBindingSpan,
 };
@@ -369,12 +369,13 @@ pub const Expr = union(enum) {
 
     // --- Functions ---
 
-    /// Lambda (no separate closure variant — captures list is empty for pure lambdas).
-    /// Lambda set inference happens later on top of MIR.
-    lambda: struct {
-        params: PatternSpan,
-        body: ExprId,
-        captures: CaptureSpan,
+    /// Zero-capture function value referring directly to a MIR proc.
+    proc_ref: ProcId,
+
+    /// Captured closure value backed by a MIR proc plus runtime capture data.
+    closure_make: struct {
+        proc: ProcId,
+        captures: ExprId,
     },
 
     /// Function call (fully resolved — no static dispatch, no dot-call syntax)
@@ -592,8 +593,8 @@ pub const Store = struct {
     /// Maps a closure-valued ExprId to its lifted closure member.
     expr_closure_members: std.AutoHashMapUnmanaged(u32, ClosureMemberId),
 
-    /// Maps a lifted function symbol to its closure member.
-    fn_closure_members: std.AutoHashMapUnmanaged(u64, ClosureMemberId),
+    /// Maps a MIR proc to its closure member.
+    proc_closure_members: std.AutoHashMapUnmanaged(u32, ClosureMemberId),
 
     /// String literals copied from CIR during lowering.
     /// MIR owns its own string data so downstream passes (LIR, codegen)
@@ -618,7 +619,7 @@ pub const Store = struct {
             .monotype_store = try Monotype.Store.init(allocator),
             .closure_members = .empty,
             .expr_closure_members = .empty,
-            .fn_closure_members = .empty,
+            .proc_closure_members = .empty,
             .value_defs = .empty,
             .symbol_reassignable = .empty,
             .strings = .{},
@@ -642,7 +643,7 @@ pub const Store = struct {
         self.monotype_store.deinit(allocator);
         self.closure_members.deinit(allocator);
         self.expr_closure_members.deinit(allocator);
-        self.fn_closure_members.deinit(allocator);
+        self.proc_closure_members.deinit(allocator);
         self.value_defs.deinit(allocator);
         self.symbol_reassignable.deinit(allocator);
         self.strings.deinit(allocator);
@@ -847,7 +848,7 @@ pub const Store = struct {
         const idx: u32 = @intCast(self.closure_members.items.len);
         try self.closure_members.append(allocator, member);
         const member_id: ClosureMemberId = @enumFromInt(idx);
-        try self.fn_closure_members.put(allocator, member.fn_symbol.raw(), member_id);
+        try self.proc_closure_members.put(allocator, @intFromEnum(member.proc), member_id);
         return member_id;
     }
 
@@ -856,9 +857,9 @@ pub const Store = struct {
         return self.closure_members.items[@intFromEnum(id)];
     }
 
-    /// Look up a lifted closure member by its function symbol.
-    pub fn getClosureMemberForFn(self: *const Store, symbol: Symbol) ?ClosureMemberId {
-        return self.fn_closure_members.get(symbol.raw());
+    /// Look up a lifted closure member by its proc id.
+    pub fn getClosureMemberForProc(self: *const Store, proc: ProcId) ?ClosureMemberId {
+        return self.proc_closure_members.get(@intFromEnum(proc));
     }
 
     /// Register a closure-valued expression's member identity.

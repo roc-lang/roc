@@ -2982,27 +2982,9 @@ fn makeSyntheticSymbol(self: *Self, original: MIR.Symbol) Allocator.Error!MIR.Sy
     return self.internSymbol(symbolMetadataModuleIdx(original_meta), synthetic_ident);
 }
 
-fn hoistAnonymousFunctionExpr(self: *Self, expr: MIR.ExprId) Allocator.Error!MIR.ExprId {
-    const ident = self.makeSyntheticIdent(.{ .idx = 0, .attributes = .{ .effectful = false, .ignored = false, .reassignable = false } });
-    const sym = try self.internSymbol(self.current_module_idx, ident);
-    try self.store.registerValueDef(self.allocator, sym, expr);
-    return self.store.addExpr(self.allocator, .{ .lookup = sym }, self.store.typeOf(expr), self.store.getRegion(expr));
-}
-
-/// Function values embedded into composites or passed around first-class need a
-/// stable symbol identity before lambda-set inference runs. Named lookups and
-/// lifted closures already have that identity; anonymous lambda expressions do not.
-fn stabilizeEscapingFunctionExpr(self: *Self, expr: MIR.ExprId) Allocator.Error!MIR.ExprId {
-    if (self.store.monotype_store.getMonotype(self.store.typeOf(expr)) != .func) return expr;
-    if (self.store.getExprClosureMember(expr) != null) return expr;
-
-    return switch (self.store.getExpr(expr)) {
-        .lookup => expr,
-        else => if (isLambdaExpr(self.store, expr))
-            try self.hoistAnonymousFunctionExpr(expr)
-        else
-            expr,
-    };
+/// Function values are already proc-backed, so no extra identity stabilization is needed.
+fn stabilizeEscapingFunctionExpr(_: *Self, expr: MIR.ExprId) Allocator.Error!MIR.ExprId {
+    return expr;
 }
 
 fn stabilizeEscapingFunctionSpan(self: *Self, expr_span: MIR.ExprSpan) Allocator.Error!MIR.ExprSpan {
@@ -3021,15 +3003,6 @@ fn stabilizeEscapingFunctionSpan(self: *Self, expr_span: MIR.ExprSpan) Allocator
 
     if (!changed) return expr_span;
     return try self.store.addExprSpan(self.allocator, self.scratch_expr_ids.sliceFromStart(scratch_top));
-}
-
-fn isLambdaExpr(mir_store: *const MIR.Store, expr_id: MIR.ExprId) bool {
-    const expr = mir_store.getExpr(expr_id);
-    return switch (expr) {
-        .block => |block| isLambdaExpr(mir_store, block.final_expr),
-        .lambda => true,
-        else => false,
-    };
 }
 
 /// Compute the composite cache key for polymorphic specializations.
@@ -3422,15 +3395,25 @@ fn lowerMatch(self: *Self, module_env: *const ModuleEnv, match_expr: CIR.Expr.Ma
     } }, monotype, region);
 }
 
-/// Lower `e_lambda` to MIR lambda (no captures).
+/// Lower `e_lambda` to a proc-backed MIR function value (no captures).
 fn lowerLambda(self: *Self, module_env: *const ModuleEnv, lambda: CIR.Expr.Lambda, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
     const params = try self.lowerPatternSpan(module_env, lambda.args);
     const body = try self.lowerExpr(lambda.body);
-    return try self.store.addExpr(self.allocator, .{ .lambda = .{
+    const ret_monotype = switch (self.store.monotype_store.getMonotype(monotype)) {
+        .func => |func| func.ret,
+        else => unreachable,
+    };
+    const proc_id = try self.store.addProc(self.allocator, .{
         .params = params,
         .body = body,
-        .captures = MIR.CaptureSpan.empty(),
-    } }, monotype, region);
+        .ret_monotype = ret_monotype,
+        .debug_name = MIR.Symbol.none,
+        .source_region = region,
+        .capture_bindings = MIR.CaptureBindingSpan.empty(),
+        .captures_param = .none,
+        .recursion = .not_recursive,
+    });
+    return try self.store.addExpr(self.allocator, .{ .proc_ref = proc_id }, monotype, region);
 }
 
 /// Lower `e_closure` by lifting it to a top-level function with an explicit captures tuple parameter.
@@ -3581,28 +3564,8 @@ fn lowerClosure(self: *Self, module_env: *const ModuleEnv, closure: CIR.Expr.Clo
     try self.scratch_pattern_ids.append(captures_param_pattern);
     const all_params = try self.store.addPatternSpan(self.allocator, self.scratch_pattern_ids.sliceFromStart(pat_top));
 
-    // Build the lifted function's monotype: func(orig_args..., captures_tuple) -> ret
     const orig_monotype = self.store.monotype_store.getMonotype(monotype);
     const orig_func = orig_monotype.func;
-    const orig_arg_monos = self.store.monotype_store.getIdxSpan(orig_func.args);
-    const arg_top = self.mono_scratches.idxs.top();
-    defer self.mono_scratches.idxs.clearFrom(arg_top);
-    for (orig_arg_monos) |am| {
-        try self.mono_scratches.idxs.append(am);
-    }
-    try self.mono_scratches.idxs.append(captures_tuple_monotype);
-    const lifted_func_monotype = try self.buildFuncMonotype(
-        self.mono_scratches.idxs.sliceFromStart(arg_top),
-        orig_func.ret,
-        orig_func.effectful,
-    );
-
-    // Create the lifted lambda expression
-    const lifted_lambda_expr = try self.store.addExpr(self.allocator, .{ .lambda = .{
-        .params = all_params,
-        .body = lifted_body,
-        .captures = MIR.CaptureSpan.empty(),
-    } }, lifted_func_monotype, region);
 
     const binding_top = self.scratch_capture_bindings.top();
     defer self.scratch_capture_bindings.clearFrom(binding_top);
@@ -3617,20 +3580,34 @@ fn lowerClosure(self: *Self, module_env: *const ModuleEnv, closure: CIR.Expr.Clo
     }
     const capture_binding_span = try self.store.addCaptureBindings(self.allocator, self.scratch_capture_bindings.sliceFromStart(binding_top));
 
-    // --- Step 10: Register the lifted function and its semantic closure member ---
-    try self.store.registerValueDef(self.allocator, lifted_fn_symbol, lifted_lambda_expr);
+    const proc_id = try self.store.addProc(self.allocator, .{
+        .params = all_params,
+        .body = lifted_body,
+        .ret_monotype = orig_func.ret,
+        .debug_name = lifted_fn_symbol,
+        .source_region = region,
+        .capture_bindings = capture_binding_span,
+        .captures_param = captures_param_pattern,
+        .recursion = .not_recursive,
+    });
+
+    // --- Step 10: Register the lifted proc and its semantic closure member ---
     const member_id = try self.store.addClosureMember(self.allocator, .{
-        .fn_symbol = lifted_fn_symbol,
+        .proc = proc_id,
         .capture_bindings = capture_binding_span,
     });
 
-    // --- Step 11: At the use site, return a tuple of capture values ---
+    // --- Step 11: At the use site, return a proc-backed closure value ---
     const captures_tuple_span = try self.store.addExprSpan(self.allocator, capture_lookup_exprs_snapshot.items);
     const captures_tuple_expr = try self.emitMirStructExprFromSpan(captures_tuple_span, captures_tuple_monotype, region);
+    const closure_expr = try self.store.addExpr(self.allocator, .{ .closure_make = .{
+        .proc = proc_id,
+        .captures = captures_tuple_expr,
+    } }, monotype, region);
 
-    try self.store.registerExprClosureMember(self.allocator, captures_tuple_expr, member_id);
+    try self.store.registerExprClosureMember(self.allocator, closure_expr, member_id);
 
-    return captures_tuple_expr;
+    return closure_expr;
 }
 
 fn lowerDeferredBlockLambda(
