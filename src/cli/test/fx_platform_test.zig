@@ -1109,6 +1109,53 @@ test "fx platform inline expect succeeds as expected" {
     try checkTestSuccess(result);
 }
 
+test "fx platform inline expect fails in dev backend binary" {
+    // Regression test for #9261: the dev backend (object file compilation) must
+    // evaluate inline expect expressions. Previously, the MIR lowering of s_expect
+    // statements did not wrap the condition in an .expect node, causing the dev
+    // backend to silently skip the assertion.
+    const allocator = testing.allocator;
+
+    // Build with dev backend to produce a native binary
+    const build_result = try runRoc(allocator, "test/fx/issue8517.roc", .{
+        .extra_args = &[_][]const u8{ "build", "--backend=dev" },
+    });
+    defer allocator.free(build_result.stdout);
+    defer allocator.free(build_result.stderr);
+    try checkSuccess(build_result);
+
+    // Run the built binary
+    const run_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{"./issue8517"},
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    // Should exit with non-zero code (expect failure)
+    switch (run_result.term) {
+        .Exited => |code| {
+            if (code == 0) {
+                std.debug.print("ERROR: dev backend binary exited with 0 but expect 1 == 2 should fail\n", .{});
+                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+                return error.UnexpectedSuccess;
+            }
+        },
+        .Signal => |sig| {
+            std.debug.print("ERROR: dev backend binary crashed with signal {} instead of clean expect failure\n", .{sig});
+            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+            return error.SegFault;
+        },
+        else => {
+            std.debug.print("ERROR: dev backend binary terminated abnormally: {}\n", .{run_result.term});
+            return error.RunFailed;
+        },
+    }
+
+    // Should report a crash
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Roc crashed") != null);
+}
+
 test "fx platform index out of bounds in instantiate regression" {
     // Regression test: A specific combination of features causes an index out of bounds
     // panic in the type instantiation code (instantiate.zig:344). The panic occurs during
