@@ -2757,16 +2757,6 @@ fn lowerExprWithMonotypeOverride(
 
         // --- Lookups ---
         .e_lookup_local => |lookup| {
-            if (self.deferred_block_callables.get(@intFromEnum(lookup.pattern_idx))) |deferred| {
-                return try self.lowerDeferredBlockCallable(deferred, monotype);
-            }
-            if (try self.localCallableTemplate(module_env, lookup.pattern_idx)) |template| {
-                return try self.instantiateCallableTemplate(
-                    template,
-                    try self.selectCallableTemplateMonotype(template, monotype),
-                );
-            }
-
             const symbol = try self.patternToSymbol(lookup.pattern_idx);
             const symbol_key: u64 = @bitCast(symbol);
 
@@ -2854,12 +2844,6 @@ fn lowerExprWithMonotypeOverride(
             }
 
             const symbol = try self.internExternalDefSymbol(target_module_idx, ext.target_node_idx);
-            if (self.externalCallableTemplate(target_module_idx, ext.target_node_idx, symbol)) |template| {
-                return try self.instantiateCallableTemplate(
-                    template,
-                    try self.selectCallableTemplateMonotype(template, monotype),
-                );
-            }
 
             // Ensure the external definition is lowered.
             const symbol_key: u64 = @bitCast(symbol);
@@ -3011,7 +2995,7 @@ fn lowerExprWithMonotypeOverride(
         .e_hosted_lambda => |hosted| if (monotype_override != null)
             try self.lowerHostedLambdaWithBoundMonotype(module_env, hosted, monotype, region)
         else
-            try self.lowerHostedLambdaSpecialized(module_env, hosted, monotype, region, null),
+            try self.lowerHostedLambdaSpecialized(module_env, hosted, monotype, region),
         .e_run_low_level => |run_ll| {
             if (run_ll.op == .str_inspekt) {
                 return try self.lowerStrInspekt(module_env, run_ll, region);
@@ -3263,58 +3247,6 @@ fn stabilizeEscapingFunctionSpan(self: *Self, expr_span: MIR.ExprSpan) Allocator
 /// Compute the composite cache key for proc-backed callable instantiations.
 fn callableSpecKey(source_key: u64, monotype: Monotype.Idx) u128 {
     return (@as(u128, source_key) << 32) | @as(u128, @intFromEnum(monotype));
-}
-
-fn lookupCallableSpecializationInMap(
-    self: *Self,
-    map: *const std.AutoHashMap(u128, MIR.ExprId),
-    source_key: u64,
-    caller_monotype: Monotype.Idx,
-) Allocator.Error!?MIR.ExprId {
-    const exact_key = callableSpecKey(source_key, caller_monotype);
-    if (map.get(exact_key)) |exact| return exact;
-
-    // Monotype IDs are not globally canonicalized. Reuse an existing specialization
-    // when its cached caller monotype is structurally equal to this call site.
-    var it = map.iterator();
-    while (it.next()) |entry| {
-        const cache_key = entry.key_ptr.*;
-        const cached_source_key: u64 = @intCast(cache_key >> 32);
-        if (cached_source_key != source_key) continue;
-
-        const cached_mono_raw: u32 = @truncate(cache_key);
-        const cached_mono: Monotype.Idx = @enumFromInt(cached_mono_raw);
-        if (try self.monotypesStructurallyEqual(cached_mono, caller_monotype)) {
-            return entry.value_ptr.*;
-        }
-    }
-
-    return null;
-}
-
-fn lookupCallableSpecialization(self: *Self, source_key: u64, caller_monotype: Monotype.Idx) Allocator.Error!?MIR.ExprId {
-    if (try self.lookupCallableSpecializationInMap(&self.callable_specializations, source_key, caller_monotype)) |expr| {
-        return expr;
-    }
-    return try self.lookupCallableSpecializationInMap(&self.in_progress_callable_specializations, source_key, caller_monotype);
-}
-
-fn lookupAnyCallableSpecialization(self: *Self, source_key: u64) ?MIR.ExprId {
-    var it = self.callable_specializations.iterator();
-    while (it.next()) |entry| {
-        const cache_key = entry.key_ptr.*;
-        const cached_source_key: u64 = @intCast(cache_key >> 32);
-        if (cached_source_key == source_key) return entry.value_ptr.*;
-    }
-
-    var in_progress_it = self.in_progress_callable_specializations.iterator();
-    while (in_progress_it.next()) |entry| {
-        const cache_key = entry.key_ptr.*;
-        const cached_source_key: u64 = @intCast(cache_key >> 32);
-        if (cached_source_key == source_key) return entry.value_ptr.*;
-    }
-
-    return null;
 }
 
 fn monotypesStructurallyEqual(self: *Self, lhs: Monotype.Idx, rhs: Monotype.Idx) Allocator.Error!bool {
@@ -3682,7 +3614,7 @@ fn lowerMatch(self: *Self, module_env: *const ModuleEnv, match_expr: CIR.Expr.Ma
 
 /// Lower `e_lambda` to a proc-backed MIR function value (no captures).
 fn lowerLambda(self: *Self, module_env: *const ModuleEnv, lambda: CIR.Expr.Lambda, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
-    return self.lowerLambdaSpecialized(module_env, lambda, monotype, region, null);
+    return self.lowerLambdaSpecialized(module_env, lambda, monotype, region);
 }
 
 fn lowerLambdaWithBoundMonotype(
@@ -3692,28 +3624,7 @@ fn lowerLambdaWithBoundMonotype(
     monotype: Monotype.Idx,
     region: Region,
 ) Allocator.Error!MIR.ExprId {
-    const saved_type_var_seen = self.type_var_seen;
-    const saved_nominal_cycle_breakers = self.nominal_cycle_breakers;
-    self.type_var_seen = try saved_type_var_seen.clone();
-    errdefer self.type_var_seen.deinit();
-    self.nominal_cycle_breakers = try saved_nominal_cycle_breakers.clone();
-    defer {
-        self.type_var_seen.deinit();
-        self.type_var_seen = saved_type_var_seen;
-        self.nominal_cycle_breakers.deinit();
-        self.nominal_cycle_breakers = saved_nominal_cycle_breakers;
-    }
-
-    try self.bindLambdaArgMonotypes(module_env, lambda.args, monotype);
-    if (!monotype.isNone()) {
-        const func = switch (self.store.monotype_store.getMonotype(monotype)) {
-            .func => |func| func,
-            else => return self.lowerLambdaSpecialized(module_env, lambda, monotype, region, null),
-        };
-        try self.bindTypeVarMonotypes(ModuleEnv.varFrom(lambda.body), func.ret);
-    }
-
-    return self.lowerLambdaSpecialized(module_env, lambda, monotype, region, null);
+    return self.lowerLambdaSpecialized(module_env, lambda, monotype, region);
 }
 
 fn lowerLambdaSpecialized(
@@ -3722,7 +3633,6 @@ fn lowerLambdaSpecialized(
     lambda: CIR.Expr.Lambda,
     monotype: Monotype.Idx,
     region: Region,
-    template: ?CallableTemplate,
 ) Allocator.Error!MIR.ExprId {
     const ret_monotype = switch (self.store.monotype_store.getMonotype(monotype)) {
         .func => |func| func.ret,
@@ -3733,7 +3643,7 @@ fn lowerLambdaSpecialized(
         .params = MIR.PatternSpan.empty(),
         .body = MIR.ExprId.none,
         .ret_monotype = ret_monotype,
-        .debug_name = if (template) |t| t.debug_name else MIR.Symbol.none,
+        .debug_name = MIR.Symbol.none,
         .source_region = region,
         .capture_bindings = MIR.CaptureBindingSpan.empty(),
         .captures_param = .none,
@@ -3741,12 +3651,6 @@ fn lowerLambdaSpecialized(
         .hosted = null,
     });
     const proc_expr = try self.store.addExpr(self.allocator, .{ .proc_ref = proc_id }, monotype, region);
-
-    const spec_key = if (template) |t| callableSpecKey(t.source_key, monotype) else null;
-    if (spec_key) |key| {
-        try self.in_progress_callable_specializations.put(key, proc_expr);
-        errdefer _ = self.in_progress_callable_specializations.remove(key);
-    }
 
     const saved_pattern_scope = self.current_pattern_scope;
     self.current_pattern_scope = @intFromEnum(proc_id);
@@ -3760,18 +3664,13 @@ fn lowerLambdaSpecialized(
         .params = params,
         .body = body,
         .ret_monotype = ret_monotype,
-        .debug_name = if (template) |t| t.debug_name else MIR.Symbol.none,
+        .debug_name = MIR.Symbol.none,
         .source_region = region,
         .capture_bindings = MIR.CaptureBindingSpan.empty(),
         .captures_param = .none,
         .recursion = .not_recursive,
         .hosted = null,
     };
-
-    if (spec_key) |key| {
-        _ = self.in_progress_callable_specializations.remove(key);
-        try self.callable_specializations.put(key, proc_expr);
-    }
 
     return proc_expr;
 }
@@ -3780,7 +3679,7 @@ fn lowerLambdaSpecialized(
 /// At the use site, returns a tuple of the captured values and registers explicit
 /// MIR closure-member metadata for downstream analysis and lowering.
 fn lowerClosure(self: *Self, module_env: *const ModuleEnv, closure: CIR.Expr.Closure, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
-    return self.lowerClosureSpecialized(module_env, closure, monotype, region, null);
+    return self.lowerClosureSpecialized(module_env, closure, monotype, region);
 }
 
 fn lowerClosureWithBoundMonotype(
@@ -3790,29 +3689,7 @@ fn lowerClosureWithBoundMonotype(
     monotype: Monotype.Idx,
     region: Region,
 ) Allocator.Error!MIR.ExprId {
-    const lambda = module_env.store.getExpr(closure.lambda_idx).e_lambda;
-    const saved_type_var_seen = self.type_var_seen;
-    const saved_nominal_cycle_breakers = self.nominal_cycle_breakers;
-    self.type_var_seen = try saved_type_var_seen.clone();
-    errdefer self.type_var_seen.deinit();
-    self.nominal_cycle_breakers = try saved_nominal_cycle_breakers.clone();
-    defer {
-        self.type_var_seen.deinit();
-        self.type_var_seen = saved_type_var_seen;
-        self.nominal_cycle_breakers.deinit();
-        self.nominal_cycle_breakers = saved_nominal_cycle_breakers;
-    }
-
-    try self.bindLambdaArgMonotypes(module_env, lambda.args, monotype);
-    if (!monotype.isNone()) {
-        const func = switch (self.store.monotype_store.getMonotype(monotype)) {
-            .func => |func| func,
-            else => return self.lowerClosureSpecialized(module_env, closure, monotype, region, null),
-        };
-        try self.bindTypeVarMonotypes(ModuleEnv.varFrom(lambda.body), func.ret);
-    }
-
-    return self.lowerClosureSpecialized(module_env, closure, monotype, region, null);
+    return self.lowerClosureSpecialized(module_env, closure, monotype, region);
 }
 
 fn lowerClosureSpecialized(
@@ -3821,7 +3698,6 @@ fn lowerClosureSpecialized(
     closure: CIR.Expr.Closure,
     monotype: Monotype.Idx,
     region: Region,
-    template: ?CallableTemplate,
 ) Allocator.Error!MIR.ExprId {
     const inner_lambda_expr = module_env.store.getExpr(closure.lambda_idx);
     const lambda = inner_lambda_expr.e_lambda;
@@ -3830,18 +3706,14 @@ fn lowerClosureSpecialized(
     var cir_capture_indices_filtered = std.ArrayList(CaptureIdx).empty;
     defer cir_capture_indices_filtered.deinit(self.allocator);
 
-    // Captures that point at deferred block callables are function references, not
-    // tuple captures for closure lifting. Keep those as symbol lookups.
     for (cir_capture_indices_all) |cap_idx| {
-        const cap = module_env.store.getCapture(cap_idx);
-        if (self.deferred_block_callables.contains(@intFromEnum(cap.pattern_idx))) continue;
         try cir_capture_indices_filtered.append(self.allocator, cap_idx);
     }
     const cir_capture_indices = cir_capture_indices_filtered.items;
 
     if (cir_capture_indices.len == 0) {
         // No captures — just lower as a plain lambda (no lifting needed).
-        return self.lowerLambdaSpecialized(module_env, lambda, monotype, region, template);
+        return self.lowerLambdaSpecialized(module_env, lambda, monotype, region);
     }
 
     // --- Step 1: Collect outer-scope capture symbols and their monotypes ---
@@ -3895,7 +3767,7 @@ fn lowerClosureSpecialized(
         .params = MIR.PatternSpan.empty(),
         .body = MIR.ExprId.none,
         .ret_monotype = orig_func.ret,
-        .debug_name = if (template) |t| t.debug_name else MIR.Symbol.none,
+        .debug_name = MIR.Symbol.none,
         .source_region = region,
         .capture_bindings = MIR.CaptureBindingSpan.empty(),
         .captures_param = .none,
@@ -3913,12 +3785,6 @@ fn lowerClosureSpecialized(
         .proc = proc_id,
         .captures = captures_tuple_expr,
     } }, monotype, region);
-
-    const spec_key = if (template) |t| callableSpecKey(t.source_key, monotype) else null;
-    if (spec_key) |key| {
-        try self.in_progress_callable_specializations.put(key, closure_expr);
-        errdefer _ = self.in_progress_callable_specializations.remove(key);
-    }
 
     // --- Step 4: Enter a new scope for the lifted function body ---
     const saved_pattern_scope = self.current_pattern_scope;
@@ -4007,7 +3873,7 @@ fn lowerClosureSpecialized(
         .params = all_params,
         .body = lifted_body,
         .ret_monotype = orig_func.ret,
-        .debug_name = if (template) |t| t.debug_name else MIR.Symbol.none,
+        .debug_name = MIR.Symbol.none,
         .source_region = region,
         .capture_bindings = capture_binding_span,
         .captures_param = captures_param_pattern,
@@ -4023,11 +3889,6 @@ fn lowerClosureSpecialized(
 
     try self.store.registerExprClosureMember(self.allocator, closure_expr, member_id);
 
-    if (spec_key) |key| {
-        _ = self.in_progress_callable_specializations.remove(key);
-        try self.callable_specializations.put(key, closure_expr);
-    }
-
     return closure_expr;
 }
 
@@ -4037,7 +3898,6 @@ fn lowerHostedLambdaSpecialized(
     hosted: anytype,
     monotype: Monotype.Idx,
     region: Region,
-    template: ?CallableTemplate,
 ) Allocator.Error!MIR.ExprId {
     const ret_monotype = switch (self.store.monotype_store.getMonotype(monotype)) {
         .func => |func| func.ret,
@@ -4048,7 +3908,7 @@ fn lowerHostedLambdaSpecialized(
         .params = MIR.PatternSpan.empty(),
         .body = MIR.ExprId.none,
         .ret_monotype = ret_monotype,
-        .debug_name = if (template) |t| t.debug_name else MIR.Symbol.none,
+        .debug_name = MIR.Symbol.none,
         .source_region = region,
         .capture_bindings = MIR.CaptureBindingSpan.empty(),
         .captures_param = .none,
@@ -4059,11 +3919,6 @@ fn lowerHostedLambdaSpecialized(
         },
     });
     const proc_expr = try self.store.addExpr(self.allocator, .{ .proc_ref = proc_id }, monotype, region);
-
-    const spec_key = if (template) |t| callableSpecKey(t.source_key, monotype) else null;
-    if (spec_key) |key| {
-        try self.callable_specializations.put(key, proc_expr);
-    }
 
     const saved_pattern_scope = self.current_pattern_scope;
     self.current_pattern_scope = @intFromEnum(proc_id);
@@ -4077,7 +3932,7 @@ fn lowerHostedLambdaSpecialized(
         .params = params,
         .body = body,
         .ret_monotype = ret_monotype,
-        .debug_name = if (template) |t| t.debug_name else MIR.Symbol.none,
+        .debug_name = MIR.Symbol.none,
         .source_region = region,
         .capture_bindings = MIR.CaptureBindingSpan.empty(),
         .captures_param = .none,
@@ -4098,28 +3953,7 @@ fn lowerHostedLambdaWithBoundMonotype(
     monotype: Monotype.Idx,
     region: Region,
 ) Allocator.Error!MIR.ExprId {
-    const saved_type_var_seen = self.type_var_seen;
-    const saved_nominal_cycle_breakers = self.nominal_cycle_breakers;
-    self.type_var_seen = try saved_type_var_seen.clone();
-    errdefer self.type_var_seen.deinit();
-    self.nominal_cycle_breakers = try saved_nominal_cycle_breakers.clone();
-    defer {
-        self.type_var_seen.deinit();
-        self.type_var_seen = saved_type_var_seen;
-        self.nominal_cycle_breakers.deinit();
-        self.nominal_cycle_breakers = saved_nominal_cycle_breakers;
-    }
-
-    try self.bindLambdaArgMonotypes(module_env, hosted.args, monotype);
-    if (!monotype.isNone()) {
-        const func = switch (self.store.monotype_store.getMonotype(monotype)) {
-            .func => |func| func,
-            else => return self.lowerHostedLambdaSpecialized(module_env, hosted, monotype, region, null),
-        };
-        try self.bindTypeVarMonotypes(ModuleEnv.varFrom(hosted.body), func.ret);
-    }
-
-    return self.lowerHostedLambdaSpecialized(module_env, hosted, monotype, region, null);
+    return self.lowerHostedLambdaSpecialized(module_env, hosted, monotype, region);
 }
 
 fn isCallableCirExpr(expr: CIR.Expr) bool {
@@ -4129,408 +3963,11 @@ fn isCallableCirExpr(expr: CIR.Expr) bool {
     };
 }
 
-fn cirExprNeedsCallableOverrideIsolation(
-    self: *Self,
-    module_env: *const ModuleEnv,
-    expr_idx: CIR.Expr.Idx,
-) Allocator.Error!bool {
+fn cirExprNeedsCallableOverrideIsolation(module_env: *const ModuleEnv, expr_idx: CIR.Expr.Idx) Allocator.Error!bool {
     return switch (module_env.store.getExpr(expr_idx)) {
         .e_lambda, .e_closure, .e_hosted_lambda => true,
-        .e_lookup_local => |lookup|
-            self.deferred_block_callables.contains(@intFromEnum(lookup.pattern_idx)) or
-            (try self.localCallableTemplate(module_env, lookup.pattern_idx)) != null,
-        .e_lookup_external => |lookup| blk: {
-            const target_module_idx = self.resolveImportedModuleIdx(module_env, lookup.module_idx) orelse break :blk false;
-            const symbol = try self.internExternalDefSymbol(target_module_idx, lookup.target_node_idx);
-            break :blk self.externalCallableTemplate(target_module_idx, lookup.target_node_idx, symbol) != null;
-        },
         else => false,
     };
-}
-
-fn instantiateCallableTemplate(
-    self: *Self,
-    template: CallableTemplate,
-    caller_monotype: Monotype.Idx,
-) Allocator.Error!MIR.ExprId {
-    if (try self.lookupCallableSpecialization(template.source_key, caller_monotype)) |cached| return cached;
-
-    const switching_module = template.module_idx != self.current_module_idx;
-    const saved_module_idx = self.current_module_idx;
-    const saved_types_store = self.types_store;
-    const saved_pattern_scope = self.current_pattern_scope;
-    const saved_type_var_seen = self.type_var_seen;
-    const saved_nominal_cycle_breakers = self.nominal_cycle_breakers;
-    const saved_ident_store = self.mono_scratches.ident_store;
-    const saved_module_env = self.mono_scratches.module_env;
-    if (switching_module) {
-        self.current_module_idx = template.module_idx;
-        self.types_store = &self.all_module_envs[template.module_idx].types;
-        self.mono_scratches.ident_store = self.all_module_envs[template.module_idx].getIdentStoreConst();
-        self.mono_scratches.module_env = self.all_module_envs[template.module_idx];
-    }
-
-    self.current_pattern_scope = saved_pattern_scope;
-    self.type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
-    self.nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
-    defer {
-        self.type_var_seen.deinit();
-        self.type_var_seen = saved_type_var_seen;
-        self.nominal_cycle_breakers.deinit();
-        self.nominal_cycle_breakers = saved_nominal_cycle_breakers;
-        self.current_pattern_scope = saved_pattern_scope;
-        if (switching_module) {
-            self.current_module_idx = saved_module_idx;
-            self.types_store = saved_types_store;
-            self.mono_scratches.ident_store = saved_ident_store;
-            self.mono_scratches.module_env = saved_module_env;
-        }
-    }
-
-    try self.seedTypeScopeBindingsInStore(
-        self.current_module_idx,
-        self.types_store,
-        &self.type_var_seen,
-    );
-
-    try self.bindCallableTemplateMonotypes(template, caller_monotype);
-
-    const module_env = self.all_module_envs[template.module_idx];
-    const region = module_env.store.getExprRegion(template.cir_expr);
-    return switch (module_env.store.getExpr(template.cir_expr)) {
-        .e_lambda => |lambda| self.lowerLambdaSpecialized(module_env, lambda, caller_monotype, region, template),
-        .e_closure => |closure| self.lowerClosureSpecialized(module_env, closure, caller_monotype, region, template),
-        .e_hosted_lambda => |hosted| self.lowerHostedLambdaSpecialized(module_env, hosted, caller_monotype, region, template),
-        else => unreachable,
-    };
-}
-
-fn callableTemplateBaseMonotype(self: *Self, template: CallableTemplate) Allocator.Error!Monotype.Idx {
-    return self.monotypeFromTypeVarInStore(
-        template.module_idx,
-        &self.all_module_envs[template.module_idx].types,
-        template.type_root,
-    );
-}
-
-fn callableTemplateNeedsInstantiation(self: *Self, template: CallableTemplate) bool {
-    return self.all_module_envs[template.module_idx].types.needsInstantiation(template.type_root);
-}
-
-fn inferCallableTemplateMonotypeFromPartial(
-    self: *Self,
-    template: CallableTemplate,
-    partial_arg_monotypes: []const Monotype.Idx,
-    ret_monotype: Monotype.Idx,
-    caller_module_idx: u32,
-) Allocator.Error!Monotype.Idx {
-    const base_func_monotype = try self.callableTemplateBaseMonotype(template);
-    if (!self.callableTemplateNeedsInstantiation(template)) return base_func_monotype;
-
-    const switching_module = template.module_idx != caller_module_idx;
-    const saved_module_idx = self.current_module_idx;
-    const saved_types_store = self.types_store;
-    const saved_type_var_seen = self.type_var_seen;
-    const saved_nominal_cycle_breakers = self.nominal_cycle_breakers;
-    const saved_ident_store = self.mono_scratches.ident_store;
-    const saved_module_env = self.mono_scratches.module_env;
-    if (switching_module) {
-        self.current_module_idx = template.module_idx;
-        self.types_store = &self.all_module_envs[template.module_idx].types;
-        self.mono_scratches.ident_store = self.all_module_envs[template.module_idx].getIdentStoreConst();
-        self.mono_scratches.module_env = self.all_module_envs[template.module_idx];
-    }
-
-    self.type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
-    self.nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
-    defer {
-        self.type_var_seen.deinit();
-        self.type_var_seen = saved_type_var_seen;
-        self.nominal_cycle_breakers.deinit();
-        self.nominal_cycle_breakers = saved_nominal_cycle_breakers;
-        if (switching_module) {
-            self.current_module_idx = saved_module_idx;
-            self.types_store = saved_types_store;
-            self.mono_scratches.ident_store = saved_ident_store;
-            self.mono_scratches.module_env = saved_module_env;
-        }
-    }
-
-    try self.seedTypeScopeBindingsInStore(
-        self.current_module_idx,
-        self.types_store,
-        &self.type_var_seen,
-    );
-
-    const base_func = switch (self.store.monotype_store.getMonotype(base_func_monotype)) {
-        .func => |func| func,
-        else => unreachable,
-    };
-    const base_arg_monotypes = self.store.monotype_store.getIdxSpan(base_func.args);
-
-    const mono_top = self.mono_scratches.idxs.top();
-    defer self.mono_scratches.idxs.clearFrom(mono_top);
-    for (base_arg_monotypes, 0..) |base_arg_monotype, i| {
-        var normalized_arg = if (i < partial_arg_monotypes.len) partial_arg_monotypes[i] else Monotype.Idx.none;
-        if (switching_module and !normalized_arg.isNone()) {
-            normalized_arg = try self.remapMonotypeBetweenModules(
-                normalized_arg,
-                caller_module_idx,
-                template.module_idx,
-            );
-        }
-        if (!normalized_arg.isNone() and
-            (try self.monotypesStructurallyEqual(base_arg_monotype, normalized_arg) or
-                try self.monotypeCanRefine(base_arg_monotype, normalized_arg)))
-        {
-            try self.mono_scratches.idxs.append(normalized_arg);
-        } else {
-            try self.mono_scratches.idxs.append(Monotype.Idx.none);
-        }
-    }
-
-    var normalized_ret = ret_monotype;
-    if (switching_module and !normalized_ret.isNone()) {
-        normalized_ret = try self.remapMonotypeBetweenModules(
-            normalized_ret,
-            caller_module_idx,
-            template.module_idx,
-        );
-    }
-    const compatible_ret = if (!normalized_ret.isNone() and
-        (try self.monotypesStructurallyEqual(base_func.ret, normalized_ret) or
-            try self.monotypeCanRefine(base_func.ret, normalized_ret)))
-        normalized_ret
-    else
-        Monotype.Idx.none;
-
-    const partial_caller_monotype = try self.buildFuncMonotype(
-        self.mono_scratches.idxs.sliceFromStart(mono_top),
-        compatible_ret,
-        base_func.effectful,
-    );
-    try self.bindCallableTemplateMonotypes(template, partial_caller_monotype);
-
-    return self.monotypeFromTypeVarWithBindings(
-        self.current_module_idx,
-        self.types_store,
-        template.type_root,
-        &self.type_var_seen,
-        &self.nominal_cycle_breakers,
-    );
-}
-
-fn selectCallableTemplateMonotype(
-    self: *Self,
-    template: CallableTemplate,
-    caller_monotype: ?Monotype.Idx,
-) Allocator.Error!Monotype.Idx {
-    const base_func_monotype = try self.callableTemplateBaseMonotype(template);
-    if (!self.callableTemplateNeedsInstantiation(template)) return base_func_monotype;
-
-    const requested = if (caller_monotype) |cm| cm else return base_func_monotype;
-    if (requested.isNone()) return base_func_monotype;
-
-    const requested_func = switch (self.store.monotype_store.getMonotype(requested)) {
-        .func => |func| func,
-        else => return base_func_monotype,
-    };
-    const requested_args = self.store.monotype_store.getIdxSpan(requested_func.args);
-    const inferred = try self.inferCallableTemplateMonotypeFromPartial(
-        template,
-        requested_args,
-        requested_func.ret,
-        self.current_module_idx,
-    );
-    if (try self.monotypesStructurallyEqual(inferred, base_func_monotype)) return base_func_monotype;
-    return inferred;
-}
-
-fn bindCallableTemplateMonotypes(
-    self: *Self,
-    template: CallableTemplate,
-    caller_monotype: Monotype.Idx,
-) Allocator.Error!void {
-    const module_env = self.all_module_envs[template.module_idx];
-    const args_span, const body_expr = callableTemplateArgsAndBody(module_env, template.cir_expr);
-
-    try self.bindLambdaArgMonotypes(module_env, args_span, caller_monotype);
-    if (caller_monotype.isNone()) return;
-
-    const func = switch (self.store.monotype_store.getMonotype(caller_monotype)) {
-        .func => |func| func,
-        else => return,
-    };
-    try self.bindTypeVarMonotypes(ModuleEnv.varFrom(body_expr), func.ret);
-}
-
-fn callableTemplateArgsAndBody(
-    module_env: *const ModuleEnv,
-    cir_expr: CIR.Expr.Idx,
-) struct { CIR.Pattern.Span, CIR.Expr.Idx } {
-    return switch (module_env.store.getExpr(cir_expr)) {
-        .e_lambda => |lambda| .{ lambda.args, lambda.body },
-        .e_closure => |closure| blk: {
-            const lambda = module_env.store.getExpr(closure.lambda_idx).e_lambda;
-            break :blk .{ lambda.args, lambda.body };
-        },
-        .e_hosted_lambda => |hosted| .{ hosted.args, hosted.body },
-        else => unreachable,
-    };
-}
-
-fn callableTemplateExpectedArgMonotype(
-    self: *Self,
-    template: CallableTemplate,
-    partial_arg_monotypes: []const Monotype.Idx,
-    ret_monotype: Monotype.Idx,
-    param_i: usize,
-) Allocator.Error!Monotype.Idx {
-    const caller_module_idx = self.current_module_idx;
-    const switching_module = template.module_idx != caller_module_idx;
-    const saved_module_idx = caller_module_idx;
-    const saved_types_store = self.types_store;
-    const saved_type_var_seen = self.type_var_seen;
-    const saved_nominal_cycle_breakers = self.nominal_cycle_breakers;
-    const saved_ident_store = self.mono_scratches.ident_store;
-    const saved_module_env = self.mono_scratches.module_env;
-    if (switching_module) {
-        self.current_module_idx = template.module_idx;
-        self.types_store = &self.all_module_envs[template.module_idx].types;
-        self.mono_scratches.ident_store = self.all_module_envs[template.module_idx].getIdentStoreConst();
-        self.mono_scratches.module_env = self.all_module_envs[template.module_idx];
-    }
-
-    self.type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
-    self.nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
-    defer {
-        self.type_var_seen.deinit();
-        self.type_var_seen = saved_type_var_seen;
-        self.nominal_cycle_breakers.deinit();
-        self.nominal_cycle_breakers = saved_nominal_cycle_breakers;
-        if (switching_module) {
-            self.current_module_idx = saved_module_idx;
-            self.types_store = saved_types_store;
-            self.mono_scratches.ident_store = saved_ident_store;
-            self.mono_scratches.module_env = saved_module_env;
-        }
-    }
-
-    try self.seedTypeScopeBindingsInStore(
-        self.current_module_idx,
-        self.types_store,
-        &self.type_var_seen,
-    );
-
-    const base_func_monotype = try self.callableTemplateBaseMonotype(template);
-    const base_func = switch (self.store.monotype_store.getMonotype(base_func_monotype)) {
-        .func => |func| func,
-        else => unreachable,
-    };
-    const base_arg_monotypes = self.store.monotype_store.getIdxSpan(base_func.args);
-
-    const mono_top = self.mono_scratches.idxs.top();
-    defer self.mono_scratches.idxs.clearFrom(mono_top);
-    for (partial_arg_monotypes, 0..) |arg_monotype, i| {
-        var normalized_arg = arg_monotype;
-        if (switching_module and !normalized_arg.isNone()) {
-            normalized_arg = try self.remapMonotypeBetweenModules(
-                normalized_arg,
-                caller_module_idx,
-                template.module_idx,
-            );
-        }
-        if (i < base_arg_monotypes.len and
-            !normalized_arg.isNone() and
-            (try self.monotypesStructurallyEqual(base_arg_monotypes[i], normalized_arg) or
-                try self.monotypeCanRefine(base_arg_monotypes[i], normalized_arg)))
-        {
-            try self.mono_scratches.idxs.append(normalized_arg);
-        } else {
-            try self.mono_scratches.idxs.append(Monotype.Idx.none);
-        }
-    }
-
-    var normalized_ret = ret_monotype;
-    if (switching_module and !normalized_ret.isNone()) {
-        normalized_ret = try self.remapMonotypeBetweenModules(
-            normalized_ret,
-            caller_module_idx,
-            template.module_idx,
-        );
-    }
-    const compatible_ret = if (!normalized_ret.isNone() and
-        (try self.monotypesStructurallyEqual(base_func.ret, normalized_ret) or
-            try self.monotypeCanRefine(base_func.ret, normalized_ret)))
-        normalized_ret
-    else
-        Monotype.Idx.none;
-
-    const partial_caller_monotype = try self.buildFuncMonotype(
-        self.mono_scratches.idxs.sliceFromStart(mono_top),
-        compatible_ret,
-        base_func.effectful,
-    );
-    try self.bindCallableTemplateMonotypes(template, partial_caller_monotype);
-
-    const module_env = self.all_module_envs[template.module_idx];
-    const args_span, _ = callableTemplateArgsAndBody(module_env, template.cir_expr);
-    const arg_patterns = module_env.store.slicePatterns(args_span);
-    if (param_i >= arg_patterns.len) return Monotype.Idx.none;
-
-    return self.monotypeFromTypeVarWithBindings(
-        self.current_module_idx,
-        self.types_store,
-        ModuleEnv.varFrom(arg_patterns[param_i]),
-        &self.type_var_seen,
-        &self.nominal_cycle_breakers,
-    );
-}
-
-fn refineTemplateCallerMonotype(
-    self: *Self,
-    base_func_monotype: Monotype.Idx,
-    normalized_caller_monotype: Monotype.Idx,
-) Allocator.Error!Monotype.Idx {
-    const aligned_caller_monotype = try self.alignMonotypeNamesToTemplate(
-        base_func_monotype,
-        normalized_caller_monotype,
-    );
-    const selected = if (self.monotypeIsWellFormed(aligned_caller_monotype))
-        aligned_caller_monotype
-    else
-        normalized_caller_monotype;
-    if (try self.monotypesStructurallyEqual(base_func_monotype, selected)) {
-        return base_func_monotype;
-    }
-    return selected;
-}
-
-fn bindLambdaArgMonotypes(
-    self: *Self,
-    module_env: *const ModuleEnv,
-    args_span: CIR.Pattern.Span,
-    caller_monotype: Monotype.Idx,
-) Allocator.Error!void {
-    if (caller_monotype.isNone()) return;
-
-    const func = switch (self.store.monotype_store.getMonotype(caller_monotype)) {
-        .func => |func| func,
-        else => return,
-    };
-
-    const arg_patterns = module_env.store.slicePatterns(args_span);
-    const arg_monotypes = self.store.monotype_store.getIdxSpan(func.args);
-    if (arg_patterns.len != arg_monotypes.len) {
-        typeBindingInvariant("bindLambdaArgMonotypes: arity mismatch (patterns={d}, monotype_args={d})", .{
-            arg_patterns.len,
-            arg_monotypes.len,
-        });
-    }
-
-    for (arg_patterns, arg_monotypes) |arg_pattern, arg_monotype| {
-        try self.bindTypeVarMonotypes(ModuleEnv.varFrom(arg_pattern), arg_monotype);
-    }
 }
 
 fn monotypeCanRefine(
@@ -4615,123 +4052,12 @@ fn monotypeCanRefine(
     };
 }
 
-fn bindTypeVarMonotypesRefining(
-    self: *Self,
-    type_var: types.Var,
-    monotype: Monotype.Idx,
-) Allocator.Error!void {
-    if (monotype.isNone()) return;
-
-    const resolved = self.types_store.resolveVar(type_var);
-    if (self.type_var_seen.get(resolved.var_)) |existing| {
-        if (try self.monotypesStructurallyEqual(existing, monotype)) return;
-        if (try self.monotypeCanRefine(existing, monotype)) {
-            try self.type_var_seen.put(resolved.var_, monotype);
-            return;
-        }
-        if (try self.monotypeCanRefine(monotype, existing)) {
-            return;
-        }
-    }
-
-    try self.bindTypeVarMonotypes(type_var, monotype);
-}
-
-fn localCallableTemplate(
-    self: *Self,
-    module_env: *const ModuleEnv,
-    pattern_idx: CIR.Pattern.Idx,
-) Allocator.Error!?CallableTemplate {
-    const defs = module_env.store.sliceDefs(module_env.all_defs);
-    for (defs) |def_idx| {
-        const def = module_env.store.getDef(def_idx);
-        if (def.pattern != pattern_idx) continue;
-        const cir_expr = module_env.store.getExpr(def.expr);
-        if (!isCallableCirExpr(cir_expr)) return null;
-
-        const saved_scope = self.current_pattern_scope;
-        self.current_pattern_scope = 0;
-        defer self.current_pattern_scope = saved_scope;
-        const debug_name = try self.patternToSymbol(pattern_idx);
-        return .{
-            .source_key = packLocalCallableSourceKey(self.current_module_idx, pattern_idx),
-            .module_idx = self.current_module_idx,
-            .cir_expr = def.expr,
-            .type_root = ModuleEnv.varFrom(def.pattern),
-            .debug_name = debug_name,
-        };
-    }
-
-    return null;
-}
-
-fn externalCallableTemplate(
-    self: *Self,
-    target_module_idx: u32,
-    def_node_idx: u16,
-    debug_name: MIR.Symbol,
-) ?CallableTemplate {
-    const target_env = self.all_module_envs[target_module_idx];
-    if (!target_env.store.isDefNode(def_node_idx)) return null;
-    const def_idx: CIR.Def.Idx = @enumFromInt(def_node_idx);
-    const def = target_env.store.getDef(def_idx);
-    const cir_expr = target_env.store.getExpr(def.expr);
-    if (!isCallableCirExpr(cir_expr)) return null;
-
-    return .{
-        .source_key = packExternalCallableSourceKey(target_module_idx, def_node_idx),
-        .module_idx = target_module_idx,
-        .cir_expr = def.expr,
-        .type_root = ModuleEnv.varFrom(def.pattern),
-        .debug_name = debug_name,
-    };
-}
-
-fn lowerDeferredBlockCallable(
-    self: *Self,
-    deferred: DeferredBlockCallable,
-    caller_monotype: Monotype.Idx,
-) Allocator.Error!MIR.ExprId {
-    if (try self.lookupCallableSpecialization(deferred.source_key, caller_monotype)) |cached| return cached;
-
-    const template: CallableTemplate = .{
-        .source_key = deferred.source_key,
-        .module_idx = deferred.module_idx,
-        .cir_expr = deferred.cir_expr,
-        .type_root = deferred.type_root,
-        .debug_name = deferred.debug_name,
-    };
-
-    const saved_type_var_seen = self.type_var_seen;
-    const saved_nominal_cycle_breakers = self.nominal_cycle_breakers;
-    self.type_var_seen = try saved_type_var_seen.clone();
-    errdefer self.type_var_seen.deinit();
-    self.nominal_cycle_breakers = try saved_nominal_cycle_breakers.clone();
-    defer {
-        self.type_var_seen.deinit();
-        self.type_var_seen = saved_type_var_seen;
-        self.nominal_cycle_breakers.deinit();
-        self.nominal_cycle_breakers = saved_nominal_cycle_breakers;
-    }
-
-    try self.bindCallableTemplateMonotypes(template, caller_monotype);
-
-    const module_env = self.all_module_envs[deferred.module_idx];
-    const region = module_env.store.getExprRegion(deferred.cir_expr);
-    return switch (module_env.store.getExpr(deferred.cir_expr)) {
-        .e_lambda => |lambda| self.lowerLambdaSpecialized(module_env, lambda, caller_monotype, region, template),
-        .e_closure => |closure| self.lowerClosureSpecialized(module_env, closure, caller_monotype, region, template),
-        .e_hosted_lambda => |hosted| self.lowerHostedLambdaSpecialized(module_env, hosted, caller_monotype, region, template),
-        else => unreachable,
-    };
-}
 
 /// Lower `e_call` to MIR call.
 /// If the call target is a lookup to a low-level builtin wrapper
 /// (e.g., List.concat, Str.concat), emit `run_low_level` instead of `call`.
 fn lowerCall(self: *Self, module_env: *const ModuleEnv, call: anytype, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
-    const func_cir = module_env.store.getExpr(call.func);
-    if (self.getCallLowLevelOp(module_env, func_cir)) |ll_op| {
+    if (self.getCallLowLevelOp(module_env, module_env.store.getExpr(call.func))) |ll_op| {
         if (ll_op == .list_append_unsafe) {
             const arg_exprs = module_env.store.sliceExpr(call.args);
             if (arg_exprs.len == 2) {
@@ -4765,51 +4091,7 @@ fn lowerCall(self: *Self, module_env: *const ModuleEnv, call: anytype, monotype:
         } }, monotype, region);
     }
 
-    const call_func_monotype = blk: {
-        const resolved_func_mono = try self.resolveMonotype(call.func);
-        const effectful = switch (self.store.monotype_store.getMonotype(resolved_func_mono)) {
-            .func => |func| func.effectful,
-            else => false,
-        };
-        const mono_top = self.mono_scratches.idxs.top();
-        defer self.mono_scratches.idxs.clearFrom(mono_top);
-        for (module_env.store.sliceExpr(call.args)) |arg_idx| {
-            try self.mono_scratches.idxs.append(try self.resolveMonotype(arg_idx));
-        }
-        break :blk try self.buildFuncMonotype(
-            self.mono_scratches.idxs.sliceFromStart(mono_top),
-            monotype,
-            effectful,
-        );
-    };
-
-    const lowered_func = switch (func_cir) {
-        .e_lookup_local => |lookup| blk: {
-            if (self.deferred_block_callables.get(@intFromEnum(lookup.pattern_idx))) |deferred| {
-                break :blk try self.lowerDeferredBlockCallable(deferred, call_func_monotype);
-            }
-            if (try self.localCallableTemplate(module_env, lookup.pattern_idx)) |template| {
-                const selected_monotype = try self.selectCallableTemplateMonotype(template, call_func_monotype);
-                if (self.store.getValueDef(template.debug_name)) |existing_expr| {
-                    if (try self.monotypesStructurallyEqual(self.store.typeOf(existing_expr), selected_monotype)) {
-                        break :blk existing_expr;
-                    }
-                }
-                break :blk try self.instantiateCallableTemplate(template, selected_monotype);
-            }
-            break :blk try self.lowerExpr(call.func);
-        },
-        .e_lookup_external => |lookup| blk: {
-            const target_module_idx = self.resolveImportedModuleIdx(module_env, lookup.module_idx) orelse unreachable;
-            const symbol = try self.internExternalDefSymbol(target_module_idx, lookup.target_node_idx);
-            if (self.externalCallableTemplate(target_module_idx, lookup.target_node_idx, symbol)) |template| {
-                const selected_monotype = try self.selectCallableTemplateMonotype(template, call_func_monotype);
-                break :blk try self.instantiateCallableTemplate(template, selected_monotype);
-            }
-            break :blk try self.lowerExpr(call.func);
-        },
-        else => try self.lowerExpr(call.func),
-    };
+    const lowered_func = try self.lowerExpr(call.func);
 
     return self.lowerCallWithLoweredFunc(
         lowered_func,
@@ -4930,63 +4212,15 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
     const stmts_top = self.scratch_stmts.top();
     defer self.scratch_stmts.clearFrom(stmts_top);
 
-    const DeferredDeclSlot = struct {
-        insert_idx: u32,
-        order: u32,
-        pattern: MIR.PatternId,
-        pattern_idx: CIR.Pattern.Idx,
-        symbol: MIR.Symbol,
-        cir_expr: CIR.Expr.Idx,
-    };
-
-    var deferred_decl_slots: std.ArrayList(DeferredDeclSlot) = .empty;
-    defer deferred_decl_slots.deinit(self.allocator);
-    defer {
-        for (deferred_decl_slots.items) |slot| {
-            _ = self.deferred_block_callables.remove(@intFromEnum(slot.pattern_idx));
-        }
-    }
-
-    var deferred_order: u32 = 0;
-
     for (cir_stmt_indices) |stmt_idx| {
         const cir_stmt = module_env.store.getStatement(stmt_idx);
         const stmt_region = module_env.store.getStatementRegion(stmt_idx);
         switch (cir_stmt) {
             .s_decl => |decl| {
                 const pat = try self.lowerPattern(module_env, decl.pattern);
-
-                // Polymorphic lambda/closure: defer lowering until a call site
-                // provides concrete type information. This prevents flex type
-                // vars from prematurely defaulting to Dec.
-                const cir_expr = module_env.store.getExpr(decl.expr);
-                const is_lambda = cir_expr == .e_lambda or cir_expr == .e_closure;
-                const needs_inst = if (is_lambda) self.types_store.needsInstantiation(ModuleEnv.varFrom(decl.expr)) else false;
-                if (is_lambda and needs_inst) {
-                    const symbol = try self.patternToSymbol(decl.pattern);
-                    deferred_order += 1;
-                    // Track insertion order; materialize with concrete expression later.
-                    try deferred_decl_slots.append(self.allocator, .{
-                        .insert_idx = @intCast(self.scratch_stmts.items.items.len),
-                        .order = deferred_order,
-                        .pattern = pat,
-                        .pattern_idx = decl.pattern,
-                        .symbol = symbol,
-                        .cir_expr = decl.expr,
-                    });
-                    try self.deferred_block_callables.put(@intFromEnum(decl.pattern), .{
-                        .pattern_idx = decl.pattern,
-                        .cir_expr = decl.expr,
-                        .module_idx = self.current_module_idx,
-                        .source_key = packLocalCallableSourceKey(self.current_module_idx, decl.pattern),
-                        .type_root = ModuleEnv.varFrom(decl.pattern),
-                        .debug_name = symbol,
-                    });
-                } else {
-                    const expr = try self.lowerExpr(decl.expr);
-                    try self.registerBoundSymbolDefIfNeeded(pat, expr);
-                    try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = pat, .expr = expr } });
-                }
+                const expr = try self.lowerExpr(decl.expr);
+                try self.registerBoundSymbolDefIfNeeded(pat, expr);
+                try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = pat, .expr = expr } });
             },
             .s_var => |var_decl| {
                 const pat = try self.lowerPattern(module_env, var_decl.pattern_idx);
@@ -5077,38 +4311,7 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
         }
     }
 
-    // Lower the final expression BEFORE committing stmts. Call sites in the
-    // final expression trigger deferred callable instantiation via e_lookup_local.
     const final_expr = try self.lowerExpr(block.final_expr);
-
-    // Insert deferred declarations in reverse insertion order so earlier
-    // insertions do not disturb later indices.
-    std.mem.sort(DeferredDeclSlot, deferred_decl_slots.items, {}, struct {
-        fn lessThan(_: void, a: DeferredDeclSlot, b: DeferredDeclSlot) bool {
-            if (a.insert_idx == b.insert_idx) return a.order > b.order;
-            return a.insert_idx > b.insert_idx;
-        }
-    }.lessThan);
-
-    for (deferred_decl_slots.items) |slot| {
-        const pattern_monotype = self.store.patternTypeOf(slot.pattern);
-        const source_key = packLocalCallableSourceKey(self.current_module_idx, slot.pattern_idx);
-        const lowered = (try self.lookupCallableSpecialization(source_key, pattern_monotype)) orelse
-            self.lookupAnyCallableSpecialization(source_key) orelse
-            continue;
-
-        const lowered_monotype = self.store.typeOf(lowered);
-        const stmt_pattern = if (try self.monotypesStructurallyEqual(pattern_monotype, lowered_monotype))
-            slot.pattern
-        else
-            try self.store.addPattern(self.allocator, .{ .bind = slot.symbol }, lowered_monotype);
-
-        try self.registerBoundSymbolDefIfNeeded(stmt_pattern, lowered);
-        try self.scratch_stmts.items.insert(
-            @intCast(slot.insert_idx),
-            .{ .decl_const = .{ .pattern = stmt_pattern, .expr = lowered } },
-        );
-    }
 
     const stmt_span = try self.store.addStmts(self.allocator, self.scratch_stmts.sliceFromStart(stmts_top));
 
@@ -5863,7 +5066,6 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
         else
             try self.resolveDispatchTargetForExpr(module_env, expr_idx, da.field_name);
         const method_symbol = try self.resolvedDispatchTargetToSymbol(module_env, resolved_target);
-        const method_template = self.callableTemplateForSymbol(method_symbol);
 
         // Build args as either:
         // - [receiver] ++ explicit_args for instance methods
@@ -5922,63 +5124,10 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
         defer self.scratch_expr_ids.clearFrom(args_top);
         if (uses_runtime_receiver) {
             try self.scratch_expr_ids.append(receiver);
-            if (!receiver_monotype.isNone()) {
-                try self.bindTypeVarMonotypesRefining(ModuleEnv.varFrom(da.receiver), receiver_monotype);
-                if (fn_arg_vars.len > 0) {
-                    const receiver_param_mono = try self.monotypeFromTypeVarWithBindings(
-                        self.current_module_idx,
-                        self.types_store,
-                        fn_arg_vars[0],
-                        &self.type_var_seen,
-                        &self.nominal_cycle_breakers,
-                    );
-                    if (receiver_param_mono.isNone() or
-                        (try self.monotypesStructurallyEqual(receiver_param_mono, receiver_monotype)) or
-                        (try self.monotypeCanRefine(receiver_param_mono, receiver_monotype)))
-                    {
-                        try self.bindTypeVarMonotypesRefining(fn_arg_vars[0], receiver_monotype);
-                    }
-                }
-                if (module_env.store.getExpr(da.receiver) == .e_lookup_local) {
-                    const receiver_lookup = module_env.store.getExpr(da.receiver).e_lookup_local;
-                    try self.bindTypeVarMonotypesRefining(ModuleEnv.varFrom(receiver_lookup.pattern_idx), receiver_monotype);
-                }
-            }
         }
         for (explicit_args, 0..) |arg_idx, i| {
             const param_i = i + receiver_param_offset;
             const expected_param_mono = blk: {
-                if (method_template) |template| {
-                    const mono_top = self.mono_scratches.idxs.top();
-                    defer self.mono_scratches.idxs.clearFrom(mono_top);
-
-                    if (uses_runtime_receiver) {
-                        try self.mono_scratches.idxs.append(receiver_monotype);
-                    }
-
-                    const already_lowered_args = self.scratch_expr_ids.sliceFromStart(args_top);
-                    const lowered_explicit_args = if (uses_runtime_receiver and already_lowered_args.len > 0)
-                        already_lowered_args[1..]
-                    else
-                        already_lowered_args;
-
-                    for (lowered_explicit_args) |lowered_arg_expr| {
-                        try self.mono_scratches.idxs.append(self.store.typeOf(lowered_arg_expr));
-                    }
-
-                    const total_arg_count = receiver_param_offset + explicit_args.len;
-                    while (self.mono_scratches.idxs.sliceFromStart(mono_top).len < total_arg_count) {
-                        try self.mono_scratches.idxs.append(Monotype.Idx.none);
-                    }
-
-                    const template_expected = try self.callableTemplateExpectedArgMonotype(
-                        template,
-                        self.mono_scratches.idxs.sliceFromStart(mono_top),
-                        monotype,
-                        param_i,
-                    );
-                    if (!template_expected.isNone()) break :blk template_expected;
-                }
                 const dispatch_func_monotype = try self.monotypeFromTypeVarWithBindings(
                     self.current_module_idx,
                     self.types_store,
@@ -6011,7 +5160,7 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
                 }
                 break :blk Monotype.Idx.none;
             };
-            const isolate_override = !arg_override.isNone() and try self.cirExprNeedsCallableOverrideIsolation(module_env, arg_idx);
+            const isolate_override = !arg_override.isNone() and try cirExprNeedsCallableOverrideIsolation(module_env, arg_idx);
             const lowered_arg = if (!arg_override.isNone() and isolate_override)
                 try self.lowerExprWithMonotypeOverrideIsolated(arg_idx, arg_override)
             else if (!arg_override.isNone())
@@ -6020,11 +5169,6 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
                 try self.lowerExpr(arg_idx);
             const arg = try self.stabilizeEscapingFunctionExpr(lowered_arg);
             try self.scratch_expr_ids.append(arg);
-
-            const arg_mono = self.store.typeOf(arg);
-            if (method_template == null and param_i < fn_arg_vars.len and !arg_mono.isNone()) {
-                try self.bindTypeVarMonotypesRefining(fn_arg_vars[param_i], arg_mono);
-            }
         }
         const lowered_call_args = self.scratch_expr_ids.sliceFromStart(args_top);
 
@@ -6454,12 +5598,18 @@ fn resolvedDispatchTargetMatchesMonotype(
     if (desired_func_monotype.isNone()) return true;
 
     const symbol = try self.resolvedDispatchTargetToSymbol(source_env, target);
-    const template = self.callableTemplateForSymbol(symbol) orelse return true;
-    var candidate_mono = try self.callableTemplateBaseMonotype(template);
-    if (template.module_idx != self.current_module_idx) {
+    const symbol_meta = self.getSymbolMetadata(symbol);
+    const symbol_module_idx = symbolMetadataModuleIdx(symbol_meta);
+    const def_expr = self.findDefExprByMetadata(symbol_meta) orelse return true;
+    var candidate_mono = try self.monotypeFromTypeVarInStore(
+        symbol_module_idx,
+        &self.all_module_envs[symbol_module_idx].types,
+        ModuleEnv.varFrom(def_expr),
+    );
+    if (symbol_module_idx != self.current_module_idx) {
         candidate_mono = try self.remapMonotypeBetweenModules(
             candidate_mono,
-            template.module_idx,
+            symbol_module_idx,
             self.current_module_idx,
         );
     }
@@ -6726,40 +5876,12 @@ fn findDefExprByMetadata(self: *Self, symbol_meta: SymbolMetadata) ?CIR.Expr.Idx
     };
 }
 
-fn callableTemplateForSymbol(self: *Self, symbol: MIR.Symbol) ?CallableTemplate {
-    const symbol_meta = self.getSymbolMetadata(symbol);
-    return switch (symbol_meta) {
-        .local_ident => |local| blk: {
-            const def = self.findDefBySymbol(local.module_idx, local.ident_idx) orelse break :blk null;
-            const cir_expr = self.all_module_envs[local.module_idx].store.getExpr(def.expr);
-            if (!isCallableCirExpr(cir_expr)) break :blk null;
-
-            break :blk .{
-                .source_key = packLocalCallableSourceKey(local.module_idx, def.pattern),
-                .module_idx = local.module_idx,
-                .cir_expr = def.expr,
-                .type_root = ModuleEnv.varFrom(def.pattern),
-                .debug_name = symbol,
-            };
-        },
-        .external_def => |ext| self.externalCallableTemplate(ext.module_idx, ext.def_node_idx, symbol),
-    };
-}
-
 /// Ensure a method definition is lowered (for cross-module dispatch),
 /// returning the proc-backed function value to call.
 fn specializeMethod(self: *Self, symbol: MIR.Symbol, caller_func_monotype: ?Monotype.Idx) Allocator.Error!MIR.ExprId {
     const symbol_meta = self.getSymbolMetadata(symbol);
     const symbol_module_idx = symbolMetadataModuleIdx(symbol_meta);
     const symbol_display_name = symbolMetadataDisplayName(self, symbol_meta);
-
-    if (self.callableTemplateForSymbol(symbol)) |template| {
-        const instance_monotype = try self.selectCallableTemplateMonotype(
-            template,
-            caller_func_monotype,
-        );
-        return try self.instantiateCallableTemplate(template, instance_monotype);
-    }
 
     if (caller_func_monotype) |caller_monotype| {
         if (!caller_monotype.isNone()) {

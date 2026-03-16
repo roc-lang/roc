@@ -73,12 +73,22 @@ pub const ProcTemplateKind = enum {
 };
 
 pub const ProcTemplate = struct {
+    source_key: u64,
     module_idx: u32,
     cir_expr: CIR.Expr.Idx,
     type_root: types.Var,
     debug_name: MIR.Symbol,
-    kind: ProcTemplateKind,
-    source_region: Region,
+    kind: ProcTemplateKind = .top_level_def,
+    source_region: Region = Region.zero(),
+};
+
+pub const DeferredLocalCallable = struct {
+    pattern_idx: CIR.Pattern.Idx,
+    cir_expr: CIR.Expr.Idx,
+    module_idx: u32,
+    source_key: u64,
+    type_root: types.Var,
+    debug_name: MIR.Symbol,
 };
 
 pub const TypeSubst = struct {
