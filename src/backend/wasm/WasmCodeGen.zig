@@ -5646,18 +5646,14 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
             const def_expr = self.store.getExpr(def_expr_id);
             break :blk switch (def_expr) {
                 .lambda => |lambda| try self.compileLambda(def_expr_id, lambda),
-                .nominal => |nom| blk2: {
-                    const inner = self.store.getExpr(nom.backing_expr);
-                    if (inner == .lambda) break :blk2 try self.compileLambda(nom.backing_expr, inner.lambda);
-                    if (std.debug.runtime_safety) std.debug.panic(
-                        "generateCall: nominal callable def wrapping unexpected expr '{s}'",
-                        .{@tagName(inner)},
-                    );
-                    unreachable;
+                .runtime_error => {
+                    try self.generateExpr(def_expr_id);
+                    return;
                 },
                 else => {
                     if (std.debug.runtime_safety) std.debug.panic(
-                        "generateCall: unexpected callable def expr type '{s}' for direct call.",
+                        "generateCall: unexpected callable def expr type '{s}' for direct call. " ++
+                            "Direct-call symbols must resolve through callable_defs to lambda/runtime_error leaves.",
                         .{@tagName(def_expr)},
                     );
                     unreachable;

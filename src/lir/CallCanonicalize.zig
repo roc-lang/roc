@@ -29,7 +29,7 @@ const LocalLookup = union(enum) {
     binding: CallCanonicalizePass.LocalBinding,
 };
 
-/// Rewrites backend-visible calls to use explicit direct callees where possible.
+/// Rewrites backend-visible callable expressions to explicit canonical targets.
 pub const CallCanonicalizePass = struct {
     allocator: Allocator,
     store: *LirExprStore,
@@ -68,6 +68,7 @@ pub const CallCanonicalizePass = struct {
     }
 
     pub fn run(self: *Self, roots: []const LirExprId) Allocator.Error!void {
+        self.store.clearExprCallableTargets();
         try self.rebuildCallableDefs();
 
         for (roots) |root| {
@@ -272,6 +273,10 @@ pub const CallCanonicalizePass = struct {
             .runtime_error,
             => {},
         }
+
+        if (self.resolveCanonicalCallee(expr_id, scope_mark)) |target| {
+            try self.store.setExprCallableTarget(expr_id, target);
+        }
     }
 
     fn resolveCanonicalCallee(self: *Self, expr_id: LirExprId, scope_mark: usize) ?CallTarget {
@@ -279,13 +284,7 @@ pub const CallCanonicalizePass = struct {
 
         return switch (self.store.getExpr(expr_id)) {
             .lambda => .{ .expr = expr_id },
-            .nominal => |nominal| blk: {
-                const backing_target = self.resolveCanonicalCallee(nominal.backing_expr, scope_mark) orelse break :blk null;
-                break :blk switch (backing_target) {
-                    .direct => |symbol| .{ .direct = symbol },
-                    .expr => .{ .expr = expr_id },
-                };
-            },
+            .nominal => |nominal| self.resolveCanonicalCallee(nominal.backing_expr, scope_mark),
             .lookup => |lookup| blk: {
                 if (self.resolveLocalBinding(lookup.symbol, scope_mark)) |local| {
                     break :blk switch (local) {
@@ -446,11 +445,12 @@ pub const CallCanonicalizePass = struct {
 
         return switch (self.store.getExpr(expr_id)) {
             .lambda => expr_id,
+            .runtime_error => expr_id,
             .nominal => |nominal| blk: {
                 const backing_target = self.resolveCanonicalCallee(nominal.backing_expr, scope_mark) orelse break :blk null;
                 break :blk switch (backing_target) {
                     .direct => |symbol| self.resolveCallableDefForGlobalSymbol(symbol),
-                    .expr => |target_expr| if (self.resolveCallableDefExpr(target_expr, scope_mark) != null) expr_id else null,
+                    .expr => |target_expr| self.resolveCallableDefExpr(target_expr, scope_mark),
                 };
             },
             .block => |block| blk: {
@@ -626,6 +626,9 @@ test "canonicalizes local lambda alias call to lambda expr" {
     const canonical_call = store.getExpr(call_expr).call;
     try std.testing.expect(canonical_call.callee == .expr);
     try std.testing.expectEqual(lambda_expr, canonical_call.callee.expr);
+    const lookup_target = store.getExprCallableTarget(tmp_lookup) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(lookup_target == .expr);
+    try std.testing.expectEqual(lambda_expr, lookup_target.expr);
 }
 
 test "canonicalizes record field call to direct symbol" {
@@ -683,4 +686,120 @@ test "canonicalizes record field call to direct symbol" {
     try std.testing.expect(canonical_call.callee == .direct);
     try std.testing.expect(canonical_call.callee.direct.eql(fn_symbol));
     try std.testing.expectEqual(lambda_expr, store.getCallableDef(fn_symbol).?);
+    const field_target = store.getExprCallableTarget(field_expr) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(field_target == .direct);
+    try std.testing.expect(field_target.direct.eql(fn_symbol));
+}
+
+test "canonicalizes nominal callable wrappers to lambda exprs and lambda leaves" {
+    var store = LirExprStore.init(std.testing.allocator);
+    defer store.deinit();
+
+    const wildcard_pat = try store.addPattern(.{ .wildcard = .{ .layout_idx = .zst } }, Region.zero());
+    const lambda_params = try store.addPatternSpan(&.{wildcard_pat});
+    const unit_expr = try store.addExpr(.{ .struct_ = .{ .struct_layout = .zst, .fields = LIR.LirExprSpan.empty() } }, Region.zero());
+    const lambda_expr = try store.addExpr(.{ .lambda = .{
+        .fn_layout = .zst,
+        .params = lambda_params,
+        .body = unit_expr,
+        .ret_layout = .zst,
+    } }, Region.zero());
+    const nominal_expr = try store.addExpr(.{ .nominal = .{
+        .backing_expr = lambda_expr,
+        .nominal_layout = .zst,
+    } }, Region.zero());
+
+    const local_symbol = Symbol.fromRaw(20);
+    const local_pat = try store.addPattern(.{ .bind = .{ .symbol = local_symbol, .layout_idx = .zst } }, Region.zero());
+    const local_lookup = try store.addExpr(.{ .lookup = .{ .symbol = local_symbol, .layout_idx = .zst } }, Region.zero());
+    const call_expr = try store.addExpr(.{ .call = .{
+        .callee = .{ .expr = local_lookup },
+        .fn_layout = .zst,
+        .args = LIR.LirExprSpan.empty(),
+        .ret_layout = .zst,
+        .called_via = .apply,
+    } }, Region.zero());
+    const local_block = try store.addExpr(.{ .block = .{
+        .stmts = try store.addStmts(&.{
+            .{ .decl = .{ .pattern = local_pat, .expr = nominal_expr } },
+        }),
+        .final_expr = call_expr,
+        .result_layout = .zst,
+    } }, Region.zero());
+
+    const global_symbol = Symbol.fromRaw(21);
+    try store.registerSymbolDef(global_symbol, nominal_expr);
+    const global_lookup = try store.addExpr(.{ .lookup = .{ .symbol = global_symbol, .layout_idx = .zst } }, Region.zero());
+
+    try canonicalizeDirectCalls(std.testing.allocator, &store, &.{ local_block, global_lookup });
+
+    const canonical_call = store.getExpr(call_expr).call;
+    try std.testing.expect(canonical_call.callee == .expr);
+    try std.testing.expectEqual(lambda_expr, canonical_call.callee.expr);
+    try std.testing.expectEqual(lambda_expr, store.getCallableDef(global_symbol).?);
+    const global_target = store.getExprCallableTarget(global_lookup) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(global_target == .direct);
+    try std.testing.expect(global_target.direct.eql(global_symbol));
+}
+
+test "canonicalizes field wrapper callable defs to lambda leaves and records backend root targets" {
+    var store = LirExprStore.init(std.testing.allocator);
+    defer store.deinit();
+
+    const wildcard_pat = try store.addPattern(.{ .wildcard = .{ .layout_idx = .zst } }, Region.zero());
+    const lambda_params = try store.addPatternSpan(&.{wildcard_pat});
+    const unit_expr = try store.addExpr(.{ .struct_ = .{ .struct_layout = .zst, .fields = LIR.LirExprSpan.empty() } }, Region.zero());
+    const lambda_expr = try store.addExpr(.{ .lambda = .{
+        .fn_layout = .zst,
+        .params = lambda_params,
+        .body = unit_expr,
+        .ret_layout = .zst,
+    } }, Region.zero());
+
+    const fn_symbol = Symbol.fromRaw(30);
+    try store.registerSymbolDef(fn_symbol, lambda_expr);
+    const fn_lookup = try store.addExpr(.{ .lookup = .{ .symbol = fn_symbol, .layout_idx = .zst } }, Region.zero());
+
+    const record_expr = try store.addExpr(.{ .struct_ = .{
+        .struct_layout = .zst,
+        .fields = try store.addExprSpan(&.{fn_lookup}),
+    } }, Region.zero());
+    const record_symbol = Symbol.fromRaw(31);
+    try store.registerSymbolDef(record_symbol, record_expr);
+    const record_lookup = try store.addExpr(.{ .lookup = .{ .symbol = record_symbol, .layout_idx = .zst } }, Region.zero());
+
+    const field_expr = try store.addExpr(.{ .struct_access = .{
+        .struct_expr = record_lookup,
+        .struct_layout = .zst,
+        .field_layout = .zst,
+        .field_idx = 0,
+    } }, Region.zero());
+    const wrapper_nominal = try store.addExpr(.{ .nominal = .{
+        .backing_expr = field_expr,
+        .nominal_layout = .zst,
+    } }, Region.zero());
+    const wrapper_symbol = Symbol.fromRaw(32);
+    try store.registerSymbolDef(wrapper_symbol, wrapper_nominal);
+    const wrapper_lookup = try store.addExpr(.{ .lookup = .{ .symbol = wrapper_symbol, .layout_idx = .zst } }, Region.zero());
+
+    const tmp_symbol = Symbol.fromRaw(33);
+    const tmp_pat = try store.addPattern(.{ .bind = .{ .symbol = tmp_symbol, .layout_idx = .zst } }, Region.zero());
+    const tmp_lookup = try store.addExpr(.{ .lookup = .{ .symbol = tmp_symbol, .layout_idx = .zst } }, Region.zero());
+    const block_root = try store.addExpr(.{ .block = .{
+        .stmts = try store.addStmts(&.{
+            .{ .decl = .{ .pattern = tmp_pat, .expr = lambda_expr } },
+        }),
+        .final_expr = tmp_lookup,
+        .result_layout = .zst,
+    } }, Region.zero());
+
+    try canonicalizeDirectCalls(std.testing.allocator, &store, &.{ wrapper_lookup, block_root });
+
+    try std.testing.expectEqual(lambda_expr, store.getCallableDef(wrapper_symbol).?);
+    const wrapper_target = store.getExprCallableTarget(wrapper_lookup) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(wrapper_target == .direct);
+    try std.testing.expect(wrapper_target.direct.eql(fn_symbol));
+    const block_target = store.getExprCallableTarget(block_root) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(block_target == .expr);
+    try std.testing.expectEqual(lambda_expr, block_target.expr);
 }

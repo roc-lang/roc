@@ -20,6 +20,7 @@ const Allocator = std.mem.Allocator;
 
 const LirExpr = ir.LirExpr;
 const LirPattern = ir.LirPattern;
+const CallTarget = ir.CallTarget;
 const LirExprId = ir.LirExprId;
 const LirPatternId = ir.LirPatternId;
 const LirExprSpan = ir.LirExprSpan;
@@ -95,6 +96,11 @@ symbol_defs: std.AutoHashMap(u64, LirExprId),
 /// value-level wrapper structure.
 callable_defs: std.AutoHashMap(u64, LirExprId),
 
+/// Canonical callable targets for backend-visible expressions.
+/// Populated by post-RC canonicalization so backends never need to
+/// rediscover callable identity from expression structure.
+expr_callable_targets: std.AutoHashMap(u32, CallTarget),
+
 /// String literal store for strings generated during lowering (e.g., by str_inspekt)
 /// This allows us to add new string literals without needing mutable module envs.
 strings: base.StringLiteral.Store,
@@ -125,6 +131,7 @@ pub fn init(allocator: Allocator) Self {
         .procs = std.ArrayList(LirProc).empty,
         .symbol_defs = std.AutoHashMap(u64, LirExprId).init(allocator),
         .callable_defs = std.AutoHashMap(u64, LirExprId).init(allocator),
+        .expr_callable_targets = std.AutoHashMap(u32, CallTarget).init(allocator),
         .strings = base.StringLiteral.Store{},
         .allocator = allocator,
         .next_synthetic_symbol = 0xf000_0000_0000_0000,
@@ -167,6 +174,7 @@ pub fn deinit(self: *Self) void {
     self.procs.deinit(self.allocator);
     self.symbol_defs.deinit();
     self.callable_defs.deinit();
+    self.expr_callable_targets.deinit();
     self.strings.deinit(self.allocator);
 }
 
@@ -435,6 +443,21 @@ pub fn setCallableDef(self: *Self, symbol: Symbol, expr_id: LirExprId) Allocator
 /// Look up a direct-callable definition.
 pub fn getCallableDef(self: *const Self, symbol: Symbol) ?LirExprId {
     return self.callable_defs.get(@bitCast(symbol));
+}
+
+/// Remove all canonical callable targets so a later pass can rebuild them.
+pub fn clearExprCallableTargets(self: *Self) void {
+    self.expr_callable_targets.clearRetainingCapacity();
+}
+
+/// Set or replace a canonical callable target for an expression.
+pub fn setExprCallableTarget(self: *Self, expr_id: LirExprId, target: CallTarget) Allocator.Error!void {
+    try self.expr_callable_targets.put(@intFromEnum(expr_id), target);
+}
+
+/// Look up the canonical callable target for an expression.
+pub fn getExprCallableTarget(self: *const Self, expr_id: LirExprId) ?CallTarget {
+    return self.expr_callable_targets.get(@intFromEnum(expr_id));
 }
 
 /// Insert a string literal and return its index
