@@ -94,7 +94,7 @@ fn runDevBackendHostSelfTest(
 fn expectInterpreterRuntimeStackOverflow() !void {
     const allocator = testing.allocator;
 
-    const run_result = try util.runRoc(allocator, &.{}, "test/fx/stack_overflow_runtime.roc");
+    const run_result = try util.runRoc(allocator, &.{"--opt=interpreter"}, "test/fx/stack_overflow_runtime.roc");
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
 
@@ -155,7 +155,7 @@ fn expectDevRuntimeStackOverflow() !void {
 fn expectInterpreterRuntimeDivisionByZero() !void {
     const allocator = testing.allocator;
 
-    const run_result = try util.runRoc(allocator, &.{}, "test/fx/division_by_zero.roc");
+    const run_result = try util.runRoc(allocator, &.{"--opt=interpreter"}, "test/fx/division_by_zero.roc");
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
 
@@ -1065,12 +1065,10 @@ test "fx platform inline expect fails in dev backend binary" {
     const allocator = testing.allocator;
 
     // Build with dev backend to produce a native binary
-    const build_result = try runRoc(allocator, "test/fx/issue8517.roc", .{
-        .extra_args = &[_][]const u8{ "build", "--backend=dev" },
-    });
+    const build_result = try util.runRoc(allocator, &.{ "build", "--opt=dev" }, "test/fx/issue8517.roc");
     defer allocator.free(build_result.stdout);
     defer allocator.free(build_result.stderr);
-    try checkSuccess(build_result);
+    try util.checkSuccess(build_result);
 
     // Run the built binary
     const run_result = try std.process.Child.run(.{

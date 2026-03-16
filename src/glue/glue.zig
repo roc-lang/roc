@@ -417,7 +417,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     var result_buf: ResultListFileStr = undefined;
 
     switch (args.backend) {
-        .dev => {
+        .dev, .llvm => {
             runViaDev(
                 gpa,
                 entry.platform_env,

@@ -1865,7 +1865,7 @@ fn rocRunDefaultApp(ctx: *CliContext, args: cli_args.RunArgs, original_source: [
     var result_buf: [16]u8 align(16) = undefined;
 
     switch (args.opt.toBackend()) {
-        .dev => {
+        .dev, .llvm => {
             runViaDev(
                 ctx.gpa,
                 entry.platform_env,
