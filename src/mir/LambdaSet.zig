@@ -193,7 +193,7 @@ fn seedSymbolDefs(
     store: *Store,
     lambda_expr_symbols: *std.AutoHashMapUnmanaged(u32, MIR.Symbol),
 ) Allocator.Error!void {
-    var it = mir_store.symbol_defs.iterator();
+    var it = mir_store.value_defs.iterator();
     while (it.next()) |entry| {
         const symbol = MIR.Symbol.fromRaw(entry.key_ptr.*);
         const expr_id = entry.value_ptr.*;
@@ -503,7 +503,7 @@ fn propagateCapturedFunctionLocals(allocator: Allocator, mir_store: *const MIR.S
 fn propagateMemberReturnSets(allocator: Allocator, mir_store: *const MIR.Store, store: *Store) Allocator.Error!bool {
     var changed = false;
 
-    var it = mir_store.symbol_defs.iterator();
+    var it = mir_store.value_defs.iterator();
     while (it.next()) |entry| {
         const fn_symbol = MIR.Symbol.fromRaw(entry.key_ptr.*);
         const def_expr_id = entry.value_ptr.*;
@@ -525,7 +525,7 @@ fn propagateMemberReturnSets(allocator: Allocator, mir_store: *const MIR.Store, 
 }
 
 fn paramsForMember(mir_store: *const MIR.Store, member: Member) ?MIR.PatternSpan {
-    const def_expr_id = mir_store.getSymbolDef(member.fn_symbol) orelse return null;
+    const def_expr_id = mir_store.getValueDef(member.fn_symbol) orelse return null;
     return resolveToLambdaParams(mir_store, def_expr_id);
 }
 
@@ -574,7 +574,7 @@ fn resolveStructFieldExpr(
             break :blk fields[field_idx];
         },
         .lookup => |symbol| blk: {
-            const def_expr = mir_store.getSymbolDef(symbol) orelse break :blk null;
+            const def_expr = mir_store.getValueDef(symbol) orelse break :blk null;
             break :blk resolveStructFieldExpr(mir_store, def_expr, field_idx);
         },
         .block => |block| resolveStructFieldExpr(mir_store, block.final_expr, field_idx),
@@ -615,7 +615,7 @@ fn resolveTagPayloadExpr(
             break :blk args[payload_idx];
         },
         .lookup => |symbol| blk: {
-            const def_expr = mir_store.getSymbolDef(symbol) orelse break :blk null;
+            const def_expr = mir_store.getValueDef(symbol) orelse break :blk null;
             break :blk resolveTagPayloadExpr(mir_store, def_expr, tag_name, payload_idx);
         },
         .block => |block| resolveTagPayloadExpr(mir_store, block.final_expr, tag_name, payload_idx),
@@ -636,7 +636,7 @@ fn resolveListElementExpr(
             break :blk elems[elem_idx];
         },
         .lookup => |symbol| blk: {
-            const def_expr = mir_store.getSymbolDef(symbol) orelse break :blk null;
+            const def_expr = mir_store.getValueDef(symbol) orelse break :blk null;
             break :blk resolveListElementExpr(mir_store, def_expr, elem_idx);
         },
         .block => |block| resolveListElementExpr(mir_store, block.final_expr, elem_idx),

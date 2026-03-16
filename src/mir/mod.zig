@@ -21,6 +21,10 @@ pub const Symbol = MIR.Symbol;
 pub const ExprId = MIR.ExprId;
 /// Index into the MIR pattern store
 pub const PatternId = MIR.PatternId;
+/// Index into the MIR proc store
+pub const ProcId = MIR.ProcId;
+/// MIR proc metadata
+pub const Proc = MIR.Proc;
 /// MIR expression and pattern store with parallel type mapping
 pub const Store = MIR.Store;
 

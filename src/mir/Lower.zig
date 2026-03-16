@@ -887,8 +887,8 @@ fn registerPatternSymbolMonotypes(self: *Self, pattern_id: MIR.PatternId) Alloca
 
 fn registerBoundSymbolDefIfNeeded(self: *Self, pattern: MIR.PatternId, expr: MIR.ExprId) Allocator.Error!void {
     if (self.patternBoundSymbol(pattern)) |symbol| {
-        if (self.store.getSymbolDef(symbol) == null) {
-            try self.store.registerSymbolDef(self.allocator, symbol, expr);
+        if (self.store.getValueDef(symbol) == null) {
+            try self.store.registerValueDef(self.allocator, symbol, expr);
         }
     }
 }
@@ -2534,7 +2534,7 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                         _ = self.in_progress_defs.remove(spec_symbol_key);
 
                         try self.lowered_symbols.put(spec_symbol_key, spec_lowered);
-                        try self.store.registerSymbolDef(self.allocator, spec_symbol, spec_lowered);
+                        try self.store.registerValueDef(self.allocator, spec_symbol, spec_lowered);
                         try self.poly_specializations.put(spec_key, spec_symbol);
 
                         // Emit a decl_const for the specialization in the current block.
@@ -2985,7 +2985,7 @@ fn makeSyntheticSymbol(self: *Self, original: MIR.Symbol) Allocator.Error!MIR.Sy
 fn hoistAnonymousFunctionExpr(self: *Self, expr: MIR.ExprId) Allocator.Error!MIR.ExprId {
     const ident = self.makeSyntheticIdent(.{ .idx = 0, .attributes = .{ .effectful = false, .ignored = false, .reassignable = false } });
     const sym = try self.internSymbol(self.current_module_idx, ident);
-    try self.store.registerSymbolDef(self.allocator, sym, expr);
+    try self.store.registerValueDef(self.allocator, sym, expr);
     return self.store.addExpr(self.allocator, .{ .lookup = sym }, self.store.typeOf(expr), self.store.getRegion(expr));
 }
 
@@ -3618,7 +3618,7 @@ fn lowerClosure(self: *Self, module_env: *const ModuleEnv, closure: CIR.Expr.Clo
     const capture_binding_span = try self.store.addCaptureBindings(self.allocator, self.scratch_capture_bindings.sliceFromStart(binding_top));
 
     // --- Step 10: Register the lifted function and its semantic closure member ---
-    try self.store.registerSymbolDef(self.allocator, lifted_fn_symbol, lifted_lambda_expr);
+    try self.store.registerValueDef(self.allocator, lifted_fn_symbol, lifted_lambda_expr);
     const member_id = try self.store.addClosureMember(self.allocator, .{
         .fn_symbol = lifted_fn_symbol,
         .capture_bindings = capture_binding_span,
@@ -3685,8 +3685,8 @@ fn lowerDeferredBlockLambda(
     const lowered = try self.lowerExpr(deferred.cir_expr);
 
     try self.lowered_symbols.put(symbol_key, lowered);
-    if (self.store.getSymbolDef(symbol) == null) {
-        try self.store.registerSymbolDef(self.allocator, symbol, lowered);
+    if (self.store.getValueDef(symbol) == null) {
+        try self.store.registerValueDef(self.allocator, symbol, lowered);
     }
 
     _ = self.in_progress_defs.remove(symbol_key);
@@ -5838,7 +5838,7 @@ fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.E
 
     // Cache the result and register the symbol definition
     try self.lowered_symbols.put(symbol_key, result);
-    try self.store.registerSymbolDef(self.allocator, symbol, result);
+    try self.store.registerValueDef(self.allocator, symbol, result);
 
     _ = self.in_progress_defs.remove(symbol_key);
     _ = self.in_progress_symbol_monotypes.remove(symbol_key);

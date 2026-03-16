@@ -877,7 +877,7 @@ fn lambdaSetForExpr(self: *Self, mir_expr_id: MIR.ExprId) ?LambdaSet.Idx {
     return switch (self.mir_store.getExpr(mir_expr_id)) {
         .lookup => |sym| blk: {
             if (self.lambda_set_store.getSymbolLambdaSet(sym)) |ls_idx| break :blk ls_idx;
-            const def_expr = self.mir_store.getSymbolDef(sym) orelse break :blk null;
+            const def_expr = self.mir_store.getValueDef(sym) orelse break :blk null;
             break :blk self.lambdaSetForExpr(def_expr);
         },
         .block => |block| self.lambdaSetForExpr(block.final_expr),
@@ -899,7 +899,7 @@ fn lambdaSetForStructField(self: *Self, expr_id: MIR.ExprId, field_idx: u32) ?La
         },
         .lookup => |symbol| blk: {
             if (self.lambda_set_store.getSymbolFieldLambdaSet(symbol, field_idx)) |ls_idx| break :blk ls_idx;
-            const def_expr = self.mir_store.getSymbolDef(symbol) orelse break :blk null;
+            const def_expr = self.mir_store.getValueDef(symbol) orelse break :blk null;
             break :blk self.lambdaSetForStructField(def_expr, field_idx);
         },
         .block => |block| self.lambdaSetForStructField(block.final_expr, field_idx),
@@ -963,7 +963,7 @@ fn runtimeLayoutForStructField(self: *Self, expr_id: MIR.ExprId, field_idx: u32)
                     break :blk field_info.field_layout;
                 }
             }
-            const def_expr = self.mir_store.getSymbolDef(symbol) orelse break :blk null;
+            const def_expr = self.mir_store.getValueDef(symbol) orelse break :blk null;
             break :blk try self.runtimeLayoutForStructField(def_expr, field_idx);
         },
         .block => |block| try self.runtimeLayoutForStructField(block.final_expr, field_idx),
@@ -989,7 +989,7 @@ fn runtimeValueLayoutFromMirExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator
                 if (self.lambda_set_store.getSymbolLambdaSet(sym)) |ls_idx| {
                     return self.closureValueLayoutFromLambdaSet(ls_idx);
                 }
-                if (self.mir_store.getSymbolDef(sym)) |def_expr_id| {
+                if (self.mir_store.getValueDef(sym)) |def_expr_id| {
                     return self.runtimeValueLayoutFromMirExpr(def_expr_id);
                 }
             },
@@ -1030,7 +1030,7 @@ fn runtimeValueLayoutFromMirExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator
         .call => |call_data| {
             const func_expr = self.mir_store.getExpr(call_data.func);
             if (func_expr == .lookup) {
-                if (self.mir_store.getSymbolDef(func_expr.lookup)) |def_expr_id| {
+                if (self.mir_store.getValueDef(func_expr.lookup)) |def_expr_id| {
                     if (self.mir_store.getExpr(def_expr_id) == .runtime_err_anno_only) {
                         if (try self.annotationOnlyIntrinsicForFunc(self.mir_store.typeOf(call_data.func))) |intrinsic| {
                             return self.layoutFromMonotype(intrinsic.result_mono);
@@ -1091,7 +1091,7 @@ fn runtimeValueLayoutFromMirExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator
             if (self.symbol_layouts.get(sym.raw())) |layout_idx| {
                 return try self.runtimeLayoutForBindingSymbol(sym, mono_idx, layout_idx);
             }
-            if (self.mir_store.getSymbolDef(sym)) |def_expr_id| {
+            if (self.mir_store.getValueDef(sym)) |def_expr_id| {
                 return self.runtimeValueLayoutFromMirExpr(def_expr_id);
             }
             return self.layoutFromMonotype(mono_idx);
@@ -1163,7 +1163,7 @@ fn resolveToLambda(self: *Self, expr_id: MIR.ExprId) ?struct { params: MIR.Patte
         .lambda => |lam| .{ .params = lam.params, .body = lam.body },
         .block => |block| self.resolveToLambda(block.final_expr),
         .lookup => |sym| blk: {
-            const def_expr_id = self.mir_store.getSymbolDef(sym) orelse break :blk null;
+            const def_expr_id = self.mir_store.getValueDef(sym) orelse break :blk null;
             break :blk self.resolveToLambda(def_expr_id);
         },
         else => null,
@@ -1176,7 +1176,7 @@ fn resolveToLambdaExprId(self: *Self, expr_id: MIR.ExprId) ?MIR.ExprId {
         .lambda => expr_id,
         .block => |block| self.resolveToLambdaExprId(block.final_expr),
         .lookup => |sym| blk: {
-            const def_expr_id = self.mir_store.getSymbolDef(sym) orelse break :blk null;
+            const def_expr_id = self.mir_store.getValueDef(sym) orelse break :blk null;
             break :blk self.resolveToLambdaExprId(def_expr_id);
         },
         else => null,
@@ -1506,7 +1506,7 @@ fn runtimeLayoutFromSpecializedDirectCall(
         var resolved_ret_layout: ?layout.Idx = null;
 
         for (members.items, 0..) |member, branch_index| {
-            const lifted_def = self.mir_store.getSymbolDef(member.fn_symbol) orelse {
+            const lifted_def = self.mir_store.getValueDef(member.fn_symbol) orelse {
                 if (builtin.mode == .Debug) {
                     std.debug.panic(
                         "MirToLir invariant violated: missing def for specialized direct-call member symbol {d}",
@@ -1577,7 +1577,7 @@ fn runtimeListElemLayoutFromMirExpr(self: *Self, list_mir_expr_id: MIR.ExprId) A
             else => {},
         },
         .lookup => |symbol| {
-            if (self.mir_store.getSymbolDef(symbol)) |def_expr_id| {
+            if (self.mir_store.getValueDef(symbol)) |def_expr_id| {
                 return self.runtimeListElemLayoutFromMirExpr(def_expr_id);
             }
         },
@@ -2548,7 +2548,7 @@ fn lowerTag(self: *Self, tag_data: anytype, mono_idx: Monotype.Idx, mir_expr_id:
 fn lowerLookup(self: *Self, sym: Symbol, mono_idx: Monotype.Idx, _: MIR.ExprId, region: Region) Allocator.Error!LirExprId {
     // Propagate MIR symbol definition to LIR store (if exists and not already done)
     if (self.lir_store.getSymbolDef(sym) == null) {
-        if (self.mir_store.getSymbolDef(sym)) |mir_def_id| {
+        if (self.mir_store.getValueDef(sym)) |mir_def_id| {
             const key: u64 = @bitCast(sym);
             if (!self.propagating_defs.contains(key)) {
                 try self.propagating_defs.put(key, {});
@@ -2570,7 +2570,7 @@ fn lowerLookup(self: *Self, sym: Symbol, mono_idx: Monotype.Idx, _: MIR.ExprId, 
                 break :blk try self.closureValueLayoutFromLambdaSet(ls_idx);
             }
         }
-        if (self.mir_store.getSymbolDef(sym)) |mir_def_id| {
+        if (self.mir_store.getValueDef(sym)) |mir_def_id| {
             break :blk try self.runtimeValueLayoutFromMirExpr(mir_def_id);
         }
         if (self.mir_store.monotype_store.getMonotype(mono_idx) == .func) {
@@ -2849,7 +2849,7 @@ fn lowerCall(self: *Self, call_data: anytype, mir_expr_id: MIR.ExprId, region: R
     const func_mir_expr = self.mir_store.getExpr(call_data.func);
     if (func_mir_expr == .lookup) {
         const sym = func_mir_expr.lookup;
-        if (self.mir_store.getSymbolDef(sym)) |def_expr_id| {
+        if (self.mir_store.getValueDef(sym)) |def_expr_id| {
             if (self.mir_store.getExpr(def_expr_id) == .runtime_err_anno_only) {
                 if (try self.lowerAnnotationOnlyIntrinsicCall(call_data, mono_idx, region)) |lowered| {
                     return lowered;
@@ -2907,7 +2907,7 @@ fn lowerCall(self: *Self, call_data: anytype, mir_expr_id: MIR.ExprId, region: R
     // with lambda defs should have lambda sets and go through lowerClosureCall.
     if (func_mir_expr == .lookup and std.debug.runtime_safety) {
         const sym = func_mir_expr.lookup;
-        if (self.mir_store.getSymbolDef(sym)) |def_id| {
+        if (self.mir_store.getValueDef(sym)) |def_id| {
             if (LambdaSet.isLambdaExpr(self.mir_store, def_id)) {
                 std.debug.panic("MirToLir: lookup callee with lambda def reached direct call fallback, symbol key={d}", .{sym.raw()});
             }
@@ -3083,7 +3083,7 @@ fn resolveToLambdaParams(self: *Self, expr_id: MIR.ExprId) ?MIR.PatternSpan {
         .lambda => |lam| lam.params,
         .block => |block| self.resolveToLambdaParams(block.final_expr),
         .lookup => |sym| blk: {
-            const def_expr_id = self.mir_store.getSymbolDef(sym) orelse break :blk null;
+            const def_expr_id = self.mir_store.getValueDef(sym) orelse break :blk null;
             break :blk self.resolveToLambdaParams(def_expr_id);
         },
         else => null,
@@ -3250,7 +3250,7 @@ fn lowerClosureCall(
 
     if (members.items.len == 1) {
         const member = members.items[0];
-        const lifted_def = self.mir_store.getSymbolDef(member.fn_symbol) orelse {
+        const lifted_def = self.mir_store.getValueDef(member.fn_symbol) orelse {
             if (std.debug.runtime_safety) {
                 std.debug.panic("MirToLir: missing def for lifted fn symbol key={d}", .{member.fn_symbol.raw()});
             }
@@ -3325,7 +3325,7 @@ fn lowerClosureCall(
     defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_exprs);
 
     for (members.items, 0..) |member, branch_index| {
-        const lifted_def = self.mir_store.getSymbolDef(member.fn_symbol) orelse {
+        const lifted_def = self.mir_store.getValueDef(member.fn_symbol) orelse {
             if (std.debug.runtime_safety) {
                 std.debug.panic("MirToLir: missing def for lifted fn symbol key={d}", .{member.fn_symbol.raw()});
             }
@@ -4360,7 +4360,7 @@ fn runtimeLayoutForBindingSymbol(
     }
 
     var layout_idx = existing_layout orelse fallback_layout;
-    const has_callable_def = if (self.mir_store.getSymbolDef(sym)) |def_id|
+    const has_callable_def = if (self.mir_store.getValueDef(sym)) |def_id|
         LambdaSet.isLambdaExpr(self.mir_store, def_id)
     else
         false;
@@ -5810,7 +5810,7 @@ test "MIR lookup propagates symbol def to LIR store" {
     const int_42 = try env.mir_store.addExpr(allocator, .{ .int = .{
         .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 },
     } }, i64_mono, Region.zero());
-    try env.mir_store.registerSymbolDef(allocator, sym_x, int_42);
+    try env.mir_store.registerValueDef(allocator, sym_x, int_42);
 
     // LIR store should NOT have the def yet
     try testing.expect(env.lir_store.getSymbolDef(sym_x) == null);
@@ -6151,7 +6151,7 @@ test "MIR function lookup uses symbol lambda set before wrapper def layout" {
 
     const ident_f = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 3 };
     const sym_f = try testMirSymbol(&env.mir_store, allocator, ident_f);
-    try env.mir_store.registerSymbolDef(allocator, sym_f, hosted_expr);
+    try env.mir_store.registerValueDef(allocator, sym_f, hosted_expr);
 
     const members = try env.lambda_set_store.addMembers(allocator, &.{.{
         .fn_symbol = sym_f,

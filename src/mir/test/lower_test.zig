@@ -155,8 +155,8 @@ test "MIR Store: symbol def registration" {
     } }, monotype, Region.zero());
     const symbol = testSymbolFromIdent(Ident.Idx.NONE);
 
-    try store.registerSymbolDef(test_allocator, symbol, expr_id);
-    const result = store.getSymbolDef(symbol);
+    try store.registerValueDef(test_allocator, symbol, expr_id);
+    const result = store.getValueDef(symbol);
     try testing.expect(result != null);
     try testing.expectEqual(expr_id, result.?);
 }
@@ -583,7 +583,7 @@ test "lambda set: closure-returning binding keeps resolvable lifted member" {
 
     const members = ls_store.getMembers(ls_store.getLambdaSet(returned_closure_ls).members);
     try testing.expectEqual(@as(usize, 1), members.len);
-    try testing.expect(env.mir_store.getSymbolDef(members[0].fn_symbol) != null);
+    try testing.expect(env.mir_store.getValueDef(members[0].fn_symbol) != null);
     const returned_closure_member = env.mir_store.getClosureMember(members[0].closure_member);
     try testing.expectEqual(@as(usize, 1), env.mir_store.getCaptureBindings(returned_closure_member.capture_bindings).len);
 
@@ -598,7 +598,7 @@ test "lambda set: closure-returning binding keeps resolvable lifted member" {
 
     const callee_members = ls_store.getMembers(ls_store.getLambdaSet(callee_ls).members);
     try testing.expectEqual(@as(usize, 1), callee_members.len);
-    try testing.expect(env.mir_store.getSymbolDef(callee_members[0].fn_symbol) != null);
+    try testing.expect(env.mir_store.getValueDef(callee_members[0].fn_symbol) != null);
 }
 
 test "lambda set: higher-order closure param propagation keeps member defs stable" {
@@ -634,7 +634,7 @@ test "lambda set: higher-order closure param propagation keeps member defs stabl
 
     const members = ls_store.getMembers(ls_store.getLambdaSet(callee_ls).members);
     try testing.expectEqual(@as(usize, 1), members.len);
-    try testing.expect(env.mir_store.getSymbolDef(members[0].fn_symbol) != null);
+    try testing.expect(env.mir_store.getValueDef(members[0].fn_symbol) != null);
 }
 
 test "lambda set: exact closure factory program keeps symbol defs stable" {
@@ -662,7 +662,7 @@ test "lambda set: exact closure factory program keeps symbol defs stable" {
 
     try testing.expect(ls_store.lambda_sets.items.len > 0);
     try testing.expect(ls_store.members.items.len > 0);
-    try testing.expect(env.mir_store.getSymbolDef(ls_store.members.items[0].fn_symbol) != null);
+    try testing.expect(env.mir_store.getValueDef(ls_store.members.items[0].fn_symbol) != null);
 }
 
 test "lambda set: factory-produced closure alias keeps captured symbol lambda set" {
@@ -756,7 +756,7 @@ test "lambda set: closure extracted from record field keeps member defs stable" 
     const f_ls = ls_store.getSymbolLambdaSet(resolved_f_sym) orelse return error.TestUnexpectedResult;
     const members = ls_store.getMembers(ls_store.getLambdaSet(f_ls).members);
     try testing.expectEqual(@as(usize, 1), members.len);
-    try testing.expect(env.mir_store.getSymbolDef(members[0].fn_symbol) != null);
+    try testing.expect(env.mir_store.getValueDef(members[0].fn_symbol) != null);
     const closure_member = env.mir_store.getClosureMember(members[0].closure_member);
     try testing.expectEqual(@as(usize, 1), env.mir_store.getCaptureBindings(closure_member.capture_bindings).len);
 }
@@ -799,7 +799,7 @@ test "lambda set: plain lambda extracted from record field gets symbol identity"
     const members = ls_store.getMembers(ls_store.getLambdaSet(f_ls).members);
     try testing.expectEqual(@as(usize, 1), members.len);
     try testing.expect(members[0].closure_member.isNone());
-    const lifted_def = env.mir_store.getSymbolDef(members[0].fn_symbol) orelse return error.TestUnexpectedResult;
+    const lifted_def = env.mir_store.getValueDef(members[0].fn_symbol) orelse return error.TestUnexpectedResult;
     try testing.expect(LambdaSet.isLambdaExpr(env.mir_store, lifted_def));
 }
 
@@ -841,7 +841,7 @@ test "lambda set: plain lambda extracted from tuple field gets symbol identity" 
     const members = ls_store.getMembers(ls_store.getLambdaSet(f_ls).members);
     try testing.expectEqual(@as(usize, 1), members.len);
     try testing.expect(members[0].closure_member.isNone());
-    const lifted_def = env.mir_store.getSymbolDef(members[0].fn_symbol) orelse return error.TestUnexpectedResult;
+    const lifted_def = env.mir_store.getValueDef(members[0].fn_symbol) orelse return error.TestUnexpectedResult;
     try testing.expect(LambdaSet.isLambdaExpr(env.mir_store, lifted_def));
 }
 
@@ -884,7 +884,7 @@ test "lambda set: plain lambda extracted from tag payload gets symbol identity" 
     const members = ls_store.getMembers(ls_store.getLambdaSet(f_ls).members);
     try testing.expectEqual(@as(usize, 1), members.len);
     try testing.expect(members[0].closure_member.isNone());
-    const lifted_def = env.mir_store.getSymbolDef(members[0].fn_symbol) orelse return error.TestUnexpectedResult;
+    const lifted_def = env.mir_store.getValueDef(members[0].fn_symbol) orelse return error.TestUnexpectedResult;
     try testing.expect(LambdaSet.isLambdaExpr(env.mir_store, lifted_def));
 }
 
@@ -927,7 +927,7 @@ test "lambda set: plain lambda extracted from list element gets symbol identity"
     const members = ls_store.getMembers(ls_store.getLambdaSet(f_ls).members);
     try testing.expectEqual(@as(usize, 1), members.len);
     try testing.expect(members[0].closure_member.isNone());
-    const lifted_def = env.mir_store.getSymbolDef(members[0].fn_symbol) orelse return error.TestUnexpectedResult;
+    const lifted_def = env.mir_store.getValueDef(members[0].fn_symbol) orelse return error.TestUnexpectedResult;
     try testing.expect(LambdaSet.isLambdaExpr(env.mir_store, lifted_def));
 }
 
@@ -960,7 +960,7 @@ test "lambda set: higher-order param receives both closure members" {
         break;
     }
     const resolved_apply_sym = apply_sym orelse return error.TestUnexpectedResult;
-    const apply_def = env.mir_store.getSymbolDef(resolved_apply_sym) orelse return error.TestUnexpectedResult;
+    const apply_def = env.mir_store.getValueDef(resolved_apply_sym) orelse return error.TestUnexpectedResult;
     const apply_expr = env.mir_store.getExpr(apply_def);
     try testing.expect(apply_expr == .lambda);
 
@@ -1023,7 +1023,7 @@ test "lambda set: higher-order closure captures monotype stays numeric tuple" {
         break;
     }
     const resolved_apply_sym = apply_sym orelse return error.TestUnexpectedResult;
-    const apply_def = env.mir_store.getSymbolDef(resolved_apply_sym) orelse return error.TestUnexpectedResult;
+    const apply_def = env.mir_store.getValueDef(resolved_apply_sym) orelse return error.TestUnexpectedResult;
     const apply_expr = env.mir_store.getExpr(apply_def);
     try testing.expect(apply_expr == .lambda);
 
@@ -1058,7 +1058,7 @@ test "lambda set: imported List.any receives predicate lambda set" {
     const callee_expr = env.mir_store.getExpr(root_expr.call.func);
     try testing.expect(callee_expr == .lookup);
     const any_sym = callee_expr.lookup;
-    const any_def = env.mir_store.getSymbolDef(any_sym) orelse return error.TestUnexpectedResult;
+    const any_def = env.mir_store.getValueDef(any_sym) orelse return error.TestUnexpectedResult;
 
     var lambda_def = any_def;
     var params: MIR.PatternSpan = undefined;
@@ -1147,7 +1147,7 @@ test "lambda set: imported List.any receives predicate lambda set" {
     const members = ls_store.getMembers(ls_store.getLambdaSet(predicate_ls).members);
     try testing.expectEqual(@as(usize, 1), members.len);
     try testing.expectEqual(arg_members[0].fn_symbol, members[0].fn_symbol);
-    try testing.expect(env.mir_store.getSymbolDef(members[0].fn_symbol) != null);
+    try testing.expect(env.mir_store.getValueDef(members[0].fn_symbol) != null);
     try testing.expect(members[0].closure_member.isNone());
 }
 
@@ -1365,7 +1365,7 @@ test "lambda set: opaque function field call through param gets field lambda set
         var field_access_expr = func_expr;
 
         if (field_access_expr == .lookup) {
-            const def_expr_id = env.mir_store.getSymbolDef(field_access_expr.lookup) orelse continue;
+            const def_expr_id = env.mir_store.getValueDef(field_access_expr.lookup) orelse continue;
             const def_expr = env.mir_store.getExpr(def_expr_id);
             if (def_expr != .struct_access) continue;
             field_access_expr_id = def_expr_id;
@@ -1515,7 +1515,7 @@ test "cross-module: imported value call uses target def identity" {
     try testing.expect(result == .call);
     const func = env_app.mir_store.getExpr(result.call.func);
     try testing.expect(func == .lookup);
-    try testing.expect(env_app.mir_store.getSymbolDef(func.lookup) != null);
+    try testing.expect(env_app.mir_store.getValueDef(func.lookup) != null);
 }
 
 test "cross-module: imported top-level value call uses target def identity" {
@@ -1557,7 +1557,7 @@ test "cross-module: imported top-level value call uses target def identity" {
     try testing.expect(result == .call);
     const func = env_app.mir_store.getExpr(result.call.func);
     try testing.expect(func == .lookup);
-    try testing.expect(env_app.mir_store.getSymbolDef(func.lookup) != null);
+    try testing.expect(env_app.mir_store.getValueDef(func.lookup) != null);
 }
 
 // --- Additional Lower code path tests ---
@@ -1746,7 +1746,7 @@ test "cross-module: dot-access method call ensures method is lowered" {
     try testing.expect(!method_sym.isNone());
 
     // The cross-module method body must have been lowered into the MIR store
-    try testing.expect(env_b.mir_store.getSymbolDef(method_sym) != null);
+    try testing.expect(env_b.mir_store.getValueDef(method_sym) != null);
 }
 
 // --- Gap #10: Recursive symbol monotype patching ---
@@ -2536,7 +2536,7 @@ test "cross-module type resolution: U32.to dispatches with concrete U32 function
     // Verify the function DEFINITION body was also lowered with concrete types.
     const method_symbol = func_expr.lookup;
     const sym_key: u64 = @bitCast(method_symbol);
-    const def_expr_id = env.mir_store.symbol_defs.get(sym_key) orelse
+    const def_expr_id = env.mir_store.value_defs.get(sym_key) orelse
         return error.TestUnexpectedResult;
     const def_mono_idx = env.mir_store.typeOf(def_expr_id);
     const def_mono = env.mir_store.monotype_store.getMonotype(def_mono_idx);

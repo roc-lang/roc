@@ -104,6 +104,17 @@ pub const ClosureMemberId = enum(u32) {
     }
 };
 
+/// Index into Store.procs
+pub const ProcId = enum(u32) {
+    _,
+
+    pub const none: ProcId = @enumFromInt(std.math.maxInt(u32));
+
+    pub fn isNone(self: ProcId) bool {
+        return self == none;
+    }
+};
+
 // --- Span types ---
 
 /// Span of ExprId values stored in extra_data.
@@ -274,10 +285,29 @@ pub const CaptureBinding = struct {
 
 /// Semantic closure member information for a lifted closure value.
 pub const ClosureMember = struct {
-    /// Symbol of the lifted function (registered in symbol_defs)
+    /// Symbol of the lifted function (currently also registered in value_defs)
     fn_symbol: Symbol,
     /// Capture slots in the order used by the closure payload.
     capture_bindings: CaptureBindingSpan,
+};
+
+pub const ProcRecursion = enum {
+    not_recursive,
+    recursive,
+    tail_recursive,
+};
+
+/// Proc metadata for proc-backed callable identity.
+/// Callable bodies will move here instead of being discovered through value defs.
+pub const Proc = struct {
+    params: PatternSpan,
+    body: ExprId,
+    ret_monotype: Monotype.Idx,
+    debug_name: Symbol,
+    source_region: Region,
+    capture_bindings: CaptureBindingSpan,
+    captures_param: PatternId,
+    recursion: ProcRecursion,
 };
 
 // --- Expression ---
@@ -543,11 +573,14 @@ pub const Store = struct {
     /// Capture bindings for lifted closures
     capture_bindings: std.ArrayListUnmanaged(CaptureBinding),
 
+    /// Proc table for explicit callable identity.
+    procs: std.ArrayListUnmanaged(Proc),
+
     /// The monotype store (owns all monotypes)
     monotype_store: Monotype.Store,
 
-    /// Map from global symbol key (u64 bitcast) to its definition ExprId
-    symbol_defs: std.AutoHashMapUnmanaged(u64, ExprId),
+    /// Map from global symbol key (u64 bitcast) to its value definition ExprId
+    value_defs: std.AutoHashMapUnmanaged(u64, ExprId),
 
     /// Explicit mutability metadata for symbols.
     /// `true` means symbol is reassignable (mutable), `false` means immutable.
@@ -581,11 +614,12 @@ pub const Store = struct {
             .borrow_bindings = .empty,
             .captures = .empty,
             .capture_bindings = .empty,
+            .procs = .empty,
             .monotype_store = try Monotype.Store.init(allocator),
             .closure_members = .empty,
             .expr_closure_members = .empty,
             .fn_closure_members = .empty,
-            .symbol_defs = .empty,
+            .value_defs = .empty,
             .symbol_reassignable = .empty,
             .strings = .{},
         };
@@ -604,11 +638,12 @@ pub const Store = struct {
         self.borrow_bindings.deinit(allocator);
         self.captures.deinit(allocator);
         self.capture_bindings.deinit(allocator);
+        self.procs.deinit(allocator);
         self.monotype_store.deinit(allocator);
         self.closure_members.deinit(allocator);
         self.expr_closure_members.deinit(allocator);
         self.fn_closure_members.deinit(allocator);
-        self.symbol_defs.deinit(allocator);
+        self.value_defs.deinit(allocator);
         self.symbol_reassignable.deinit(allocator);
         self.strings.deinit(allocator);
     }
@@ -785,6 +820,28 @@ pub const Store = struct {
         return self.capture_bindings.items[span.start..][0..span.len];
     }
 
+    /// Register one MIR proc and return its id.
+    pub fn addProc(self: *Store, allocator: Allocator, proc: Proc) !ProcId {
+        const idx: u32 = @intCast(self.procs.items.len);
+        try self.procs.append(allocator, proc);
+        return @enumFromInt(idx);
+    }
+
+    /// Get one MIR proc by id.
+    pub fn getProc(self: *const Store, id: ProcId) Proc {
+        return self.procs.items[@intFromEnum(id)];
+    }
+
+    /// Get all MIR procs.
+    pub fn getProcs(self: *const Store) []const Proc {
+        return self.procs.items;
+    }
+
+    /// Get the number of MIR procs.
+    pub fn procCount(self: *const Store) usize {
+        return self.procs.items.len;
+    }
+
     /// Register a lifted closure member.
     pub fn addClosureMember(self: *Store, allocator: Allocator, member: ClosureMember) !ClosureMemberId {
         const idx: u32 = @intCast(self.closure_members.items.len);
@@ -814,10 +871,10 @@ pub const Store = struct {
         return self.expr_closure_members.get(@intFromEnum(expr_id));
     }
 
-    /// Register a symbol definition.
-    pub fn registerSymbolDef(self: *Store, allocator: Allocator, symbol: Symbol, expr_id: ExprId) !void {
+    /// Register a value definition.
+    pub fn registerValueDef(self: *Store, allocator: Allocator, symbol: Symbol, expr_id: ExprId) !void {
         const key: u64 = @bitCast(symbol);
-        const gop = try self.symbol_defs.getOrPut(allocator, key);
+        const gop = try self.value_defs.getOrPut(allocator, key);
         if (!gop.found_existing) {
             gop.value_ptr.* = expr_id;
             return;
@@ -825,16 +882,16 @@ pub const Store = struct {
 
         if (std.debug.runtime_safety) {
             std.debug.panic(
-                "MIR duplicate symbol definition for symbol key {d}: existing expr {}, new expr {}",
+                "MIR duplicate value definition for symbol key {d}: existing expr {}, new expr {}",
                 .{ key, @intFromEnum(gop.value_ptr.*), @intFromEnum(expr_id) },
             );
         }
         unreachable;
     }
 
-    /// Look up a symbol definition.
-    pub fn getSymbolDef(self: *const Store, symbol: Symbol) ?ExprId {
-        return self.symbol_defs.get(@bitCast(symbol));
+    /// Look up a value definition.
+    pub fn getValueDef(self: *const Store, symbol: Symbol) ?ExprId {
+        return self.value_defs.get(@bitCast(symbol));
     }
 
     /// Register mutability metadata for a symbol.

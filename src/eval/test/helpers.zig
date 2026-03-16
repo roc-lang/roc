@@ -3177,7 +3177,7 @@ test "dev lowering: imported List.any directly calls passed predicate member" {
     const root_callee = mir_store.getExpr(root_expr.call.func);
     try std.testing.expect(root_callee == .lookup);
     const any_sym = root_callee.lookup;
-    const any_def = mir_store.getSymbolDef(any_sym) orelse return error.TestUnexpectedResult;
+    const any_def = mir_store.getValueDef(any_sym) orelse return error.TestUnexpectedResult;
 
     var lambda_def = any_def;
     var params: MIR.PatternSpan = undefined;
@@ -3626,7 +3626,7 @@ test "dev lowering: local any-style HOF directly calls passed predicate member" 
     const root_callee = mir_store.getExpr(final_expr.call.func);
     try std.testing.expect(root_callee == .lookup);
     const any_sym = root_callee.lookup;
-    const any_def = mir_store.getSymbolDef(any_sym) orelse return error.TestUnexpectedResult;
+    const any_def = mir_store.getValueDef(any_sym) orelse return error.TestUnexpectedResult;
 
     var lambda_def = any_def;
     var params: MIR.PatternSpan = undefined;
