@@ -250,8 +250,8 @@ fn testRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) cal
     const formatted = std.fmt.allocPrint(test_env.allocator, "Expect failed: {s}", .{trimmed}) catch {
         std.debug.panic("failed to allocate expect failure message in test env", .{});
     };
+    defer test_env.allocator.free(formatted);
     test_env.crash.recordCrash(formatted) catch |err| {
-        test_env.allocator.free(formatted);
         std.debug.panic("failed to store expect failure in test env: {}", .{err});
     };
 }
