@@ -76,6 +76,8 @@ pub const CFMatchBranch = LIR.CFMatchBranch;
 pub const CFMatchBranchSpan = LIR.CFMatchBranchSpan;
 /// Layout index span type
 pub const LayoutIdxSpan = LIR.LayoutIdxSpan;
+/// LIR procedure ID type
+pub const LirProcId = LIR.LirProcId;
 /// LIR procedure type
 pub const LirProc = LIR.LirProc;
 

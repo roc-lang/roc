@@ -4352,11 +4352,6 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     defer entrypoints.deinit(ctx.gpa);
 
     for (pending_entrypoints.items) |pending| {
-        const lir_expr_id = mir_to_lir.lower(pending.mir_expr_id) catch |err| {
-            std.log.err("Failed to lower MIR to LIR for entrypoint {s}: {}", .{ pending.ffi_symbol, err });
-            continue;
-        };
-
         const ret_layout = type_layout_resolver.resolve(
             platform_module_idx,
             pending.ret_type_var,
@@ -4367,9 +4362,14 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
             continue;
         };
 
+        const entry_proc = mir_to_lir.lowerEntrypointProc(pending.mir_expr_id, pending.arg_layouts, ret_layout) catch |err| {
+            std.log.err("Failed to lower entrypoint proc {s}: {}", .{ pending.ffi_symbol, err });
+            continue;
+        };
+
         try entrypoints.append(ctx.gpa, .{
             .symbol_name = try std.fmt.allocPrint(ctx.arena, "roc__{s}", .{pending.ffi_symbol}),
-            .body_expr = lir_expr_id,
+            .proc = entry_proc,
             .arg_layouts = pending.arg_layouts,
             .ret_layout = ret_layout,
         });
@@ -4378,17 +4378,6 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     if (entrypoints.items.len == 0) {
         std.log.err("No entrypoints could be lowered to LIR", .{});
         return error.NoEntrypointsLowered;
-    }
-
-    // Run RC insertion pass
-    var rc_pass = lir.RcInsert.RcInsertPass.init(ctx.gpa, &lir_store, &layout_store) catch {
-        std.log.err("Failed to create RC insertion pass", .{});
-        return error.OutOfMemory;
-    };
-    defer rc_pass.deinit();
-
-    for (entrypoints.items) |*ep| {
-        ep.body_expr = rc_pass.insertRcOps(ep.body_expr) catch ep.body_expr;
     }
 
     lir.RcInsert.insertRcOpsIntoSymbolDefsBestEffort(ctx.gpa, &lir_store, &layout_store);

@@ -4194,11 +4194,11 @@ fn processDevObjectSnapshot(
     defer mir_to_lir.deinit();
 
     for (pending_entrypoints.items) |pending| {
-        const lir_expr_id = mir_to_lir.lower(pending.mir_expr_id) catch continue;
+        const entry_proc = mir_to_lir.lowerEntrypointProc(pending.mir_expr_id, &[_]layout_mod.Idx{}, pending.ret_layout) catch continue;
         const symbol_name = std.fmt.allocPrint(allocator, "roc__{s}", .{pending.ffi_symbol}) catch continue;
         entrypoints.append(allocator, .{
             .symbol_name = symbol_name,
-            .body_expr = lir_expr_id,
+            .proc = entry_proc,
             .arg_layouts = &[_]layout_mod.Idx{},
             .ret_layout = pending.ret_layout,
         }) catch continue;
@@ -4207,17 +4207,6 @@ fn processDevObjectSnapshot(
     if (entrypoints.items.len == 0) {
         std.log.err("Failed to lower any entrypoints to LIR", .{});
         return false;
-    }
-
-    // 9. RC insertion
-    var rc_pass = lir_mod.RcInsert.RcInsertPass.init(allocator, &lir_store, &layout_store) catch {
-        std.log.err("Failed to create RC insertion pass", .{});
-        return false;
-    };
-    defer rc_pass.deinit();
-
-    for (entrypoints.items) |*ep| {
-        ep.body_expr = rc_pass.insertRcOps(ep.body_expr) catch ep.body_expr;
     }
 
     lir_mod.RcInsert.insertRcOpsIntoSymbolDefsBestEffort(allocator, &lir_store, &layout_store);

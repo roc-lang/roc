@@ -43,8 +43,6 @@ stack_frame_size: u32 = 0,
 uses_stack_memory: bool = false,
 /// Local index of the frame pointer ($fp) - only valid when uses_stack_memory is true.
 fp_local: u32 = 0,
-/// Map from lambda expression ID → compiled wasm function index.
-compiled_lambdas: std.AutoHashMap(u32, u32),
 /// Map from proc symbol key → compiled wasm function index (for LirProc compilation).
 registered_procs: std.AutoHashMap(u64, u32),
 /// Type index for the RocOps function signature: (i32, i32) -> void.
@@ -140,7 +138,6 @@ pub fn init(allocator: Allocator, store: *const LirExprStore, layout_store: *con
         .stack_frame_size = 0,
         .uses_stack_memory = false,
         .fp_local = 0,
-        .compiled_lambdas = std.AutoHashMap(u32, u32).init(allocator),
         .registered_procs = std.AutoHashMap(u64, u32).init(allocator),
         .join_point_depths = std.AutoHashMap(u32, u32).init(allocator),
         .join_point_param_locals = std.AutoHashMap(u32, []u32).init(allocator),
@@ -152,7 +149,6 @@ pub fn deinit(self: *Self) void {
     self.module.deinit();
     self.body.deinit(self.allocator);
     self.storage.deinit();
-    self.compiled_lambdas.deinit();
     self.registered_procs.deinit();
     self.join_point_depths.deinit();
     // Free allocated param local arrays
@@ -896,15 +892,6 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
         .early_return => |er| {
             try self.generateExpr(er.expr);
             self.body.append(self.allocator, Op.@"return") catch return error.OutOfMemory;
-        },
-        .lambda => |lambda| {
-            // Compile lambda as a separate wasm function.
-            // In the new pipeline, lambdas as first-class values produce their function index.
-            _ = try self.compileLambda(expr_id, lambda);
-            // Push a placeholder value — in the new pipeline, lambda values are dispatched
-            // at call sites via MIR→LIR generated code, not stored as runtime values.
-            try self.body.append(self.allocator, Op.i32_const);
-            try WasmModule.leb128WriteI32(self.allocator, &self.body, 0);
         },
         .proc_call => |c| {
             try self.generateCall(c);
@@ -2157,7 +2144,6 @@ fn exprLayoutIdx(self: *Self, expr_id: LirExprId) layout.Idx {
         .discriminant_switch => |ds| ds.result_layout,
         .early_return => |er| er.ret_layout,
         .cell_load => |l| l.layout_idx,
-        .lambda => |l| l.fn_layout,
         .for_loop, .while_loop => layout.Idx.zst,
         .break_expr, .crash, .runtime_error => {
             if (builtin.mode == .Debug) {
@@ -2190,7 +2176,6 @@ fn exprValType(self: *Self, expr_id: LirExprId) ValType {
         .nominal => |nom| self.exprValType(nom.backing_expr),
         .empty_list => .i32, // pointer to 12-byte RocList
         .proc_call => |c| self.resolveValType(c.ret_layout),
-        .lambda => .i32, // function reference (index)
         .struct_ => .i32, // pointer to stack memory
         .struct_access => |sa| self.resolveValType(sa.field_layout),
         .zero_arg_tag => .i32, // discriminant or pointer
@@ -2264,7 +2249,6 @@ fn isCompositeExpr(self: *const Self, expr_id: LirExprId) bool {
         .hosted_call => |hc| self.isCompositeLayout(hc.ret_layout),
         .early_return => |er| self.isCompositeLayout(er.ret_layout),
         .i64_literal, .f64_literal, .f32_literal, .bool_literal => false, // scalars
-        .lambda => false, // function value, not composite data
         .for_loop, .while_loop, .break_expr, .crash, .runtime_error => false, // unit/noreturn
     };
 }
@@ -4809,176 +4793,6 @@ fn emitConversion(self: *Self, source: ValType, target: ValType) Allocator.Error
     if (op) |opcode| {
         self.body.append(self.allocator, opcode) catch return error.OutOfMemory;
     }
-}
-
-/// Compile a lambda expression as a separate wasm function.
-/// Returns the wasm function index.
-fn compileLambda(self: *Self, expr_id: LirExprId, lambda: anytype) Allocator.Error!u32 {
-    // Check if already compiled
-    const expr_key: u32 = @intFromEnum(expr_id);
-    if (self.compiled_lambdas.get(expr_key)) |existing| {
-        return existing;
-    }
-
-    // Build parameter types: roc_ops_ptr first, then regular params
-    const params = self.store.getPatternSpan(lambda.params);
-    var param_types: std.ArrayList(ValType) = .empty;
-    defer param_types.deinit(self.allocator);
-
-    // First parameter: roc_ops_ptr (i32)
-    param_types.append(self.allocator, .i32) catch return error.OutOfMemory;
-
-    for (params) |param_id| {
-        const pat = self.store.getPattern(param_id);
-        switch (pat) {
-            .bind => |bind| {
-                param_types.append(self.allocator, self.resolveValType(bind.layout_idx)) catch return error.OutOfMemory;
-            },
-            .wildcard => |wc| {
-                param_types.append(self.allocator, self.resolveValType(wc.layout_idx)) catch return error.OutOfMemory;
-            },
-            .struct_, .list => {
-                // Struct/list destructuring param — passed as i32 pointer
-                param_types.append(self.allocator, .i32) catch return error.OutOfMemory;
-            },
-            else => unreachable,
-        }
-    }
-
-    // Determine return type. For unwrapped_capture closures, the runtime return
-    // value is the capture itself, not a closure pointer.
-    const ret_vt = if (self.getUnwrappedCaptureLayout(lambda.body)) |cap_layout|
-        self.resolveValType(cap_layout)
-    else
-        self.resolveValType(lambda.ret_layout);
-
-    // Add function type and function to the module
-    const type_idx = self.module.addFuncType(param_types.items, &.{ret_vt}) catch return error.OutOfMemory;
-    const func_idx = self.module.addFunction(type_idx) catch return error.OutOfMemory;
-
-    // Cache the compiled function EARLY (before body compilation) to support
-    // mutual recursion: if this lambda's body calls another lambda that calls
-    // back to this one, the recursive lookup will find this func_idx.
-    self.compiled_lambdas.put(expr_key, func_idx) catch return error.OutOfMemory;
-
-    // Save current codegen state
-    const saved = self.saveState() catch return error.OutOfMemory;
-
-    // Initialize fresh state for the lambda body
-    self.body = .empty;
-    self.storage.locals = std.AutoHashMap(u64, Storage.LocalInfo).init(self.allocator);
-    self.storage.next_local_idx = 0;
-    self.storage.local_types = .empty;
-    self.stack_frame_size = 0;
-    self.uses_stack_memory = false;
-    self.fp_local = 0;
-    self.in_proc = true;
-
-    // Local 0 = roc_ops_ptr parameter
-    self.roc_ops_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-
-    // Bind parameters
-    for (params) |param_id| {
-        const pat = self.store.getPattern(param_id);
-        switch (pat) {
-            .bind => |bind| {
-                const vt = self.resolveValType(bind.layout_idx);
-                _ = self.storage.allocLocal(bind.symbol, vt) catch return error.OutOfMemory;
-            },
-            .wildcard => |wc| {
-                _ = self.storage.allocAnonymousLocal(self.resolveValType(wc.layout_idx)) catch return error.OutOfMemory;
-            },
-            .struct_ => |s| {
-                const ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-                try self.bindStructPattern(ptr, s);
-            },
-            .list => |list_pat| {
-                const ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-                try self.bindListPattern(ptr, list_pat);
-            },
-            else => unreachable,
-        }
-    }
-
-    // Pre-allocate frame pointer local (after params, so it doesn't conflict)
-    self.fp_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-
-    // Generate the body expression
-    self.generateExpr(lambda.body) catch |err| {
-        self.restoreState(saved);
-        return err;
-    };
-
-    // Build function body: locals declaration + prologue + instructions + epilogue + end
-    var func_body: std.ArrayList(u8) = .empty;
-    defer func_body.deinit(self.allocator);
-
-    // Pre-allocate result_tmp BEFORE encoding locals (so it's included in the declaration)
-    const result_tmp = if (self.uses_stack_memory)
-        self.storage.allocAnonymousLocal(ret_vt) catch return error.OutOfMemory
-    else
-        0;
-
-    // Locals declaration — only for locals beyond the parameters (1 roc_ops_ptr + forwarded captures + params)
-    try self.encodeLocalsDecl(&func_body, @intCast(1 + params.len));
-
-    if (self.uses_stack_memory) {
-        // Prologue: allocate stack frame
-        // global.get $__stack_pointer
-        func_body.append(self.allocator, Op.global_get) catch return error.OutOfMemory;
-        WasmModule.leb128WriteU32(self.allocator, &func_body, 0) catch return error.OutOfMemory;
-        // i32.const frame_size
-        func_body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-        WasmModule.leb128WriteI32(self.allocator, &func_body, @intCast(self.stack_frame_size)) catch return error.OutOfMemory;
-        // i32.sub
-        func_body.append(self.allocator, Op.i32_sub) catch return error.OutOfMemory;
-        // local.tee $fp
-        func_body.append(self.allocator, Op.local_tee) catch return error.OutOfMemory;
-        WasmModule.leb128WriteU32(self.allocator, &func_body, self.fp_local) catch return error.OutOfMemory;
-        // global.set $__stack_pointer
-        func_body.append(self.allocator, Op.global_set) catch return error.OutOfMemory;
-        WasmModule.leb128WriteU32(self.allocator, &func_body, 0) catch return error.OutOfMemory;
-    }
-
-    // Body instructions
-    func_body.appendSlice(self.allocator, self.body.items) catch return error.OutOfMemory;
-
-    if (self.uses_stack_memory) {
-        // Epilogue: restore stack pointer
-        // Save result to temp local
-        func_body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
-        WasmModule.leb128WriteU32(self.allocator, &func_body, result_tmp) catch return error.OutOfMemory;
-        // local.get $fp
-        func_body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-        WasmModule.leb128WriteU32(self.allocator, &func_body, self.fp_local) catch return error.OutOfMemory;
-        // i32.const frame_size
-        func_body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-        WasmModule.leb128WriteI32(self.allocator, &func_body, @intCast(self.stack_frame_size)) catch return error.OutOfMemory;
-        // i32.add
-        func_body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-        // global.set $__stack_pointer
-        func_body.append(self.allocator, Op.global_set) catch return error.OutOfMemory;
-        WasmModule.leb128WriteU32(self.allocator, &func_body, 0) catch return error.OutOfMemory;
-        // Push result back
-        func_body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-        WasmModule.leb128WriteU32(self.allocator, &func_body, result_tmp) catch return error.OutOfMemory;
-    }
-
-    // End opcode
-    func_body.append(self.allocator, Op.end) catch return error.OutOfMemory;
-
-    self.module.setFunctionBody(func_idx, func_body.items) catch return error.OutOfMemory;
-
-    // Propagate stack memory usage to outer scope (so module enables memory/globals)
-    const lambda_used_stack_memory = self.uses_stack_memory;
-
-    // Restore previous codegen state
-    self.restoreState(saved);
-
-    // If the lambda used stack memory, the outer scope needs to know
-    if (lambda_used_stack_memory) self.uses_stack_memory = true;
-
-    return func_idx;
 }
 
 /// Compile all LirProcs as separate wasm functions.

@@ -3244,7 +3244,6 @@ test "dev lowering: imported List.any directly calls passed predicate member" {
                     }
                     return false;
                 },
-                .lambda => |lam| return hasDirectUnaryProcCall(store, lam.body),
                 .block => |block| {
                     for (store.getStmts(block.stmts)) |stmt| {
                         switch (stmt) {
@@ -3336,7 +3335,6 @@ test "dev lowering: imported List.any directly calls passed predicate member" {
             const expr = store.getExpr(expr_id);
             switch (expr) {
                 .early_return => return true,
-                .lambda => |lam| return containsEarlyReturn(store, lam.body),
                 .block => |block| {
                     for (store.getStmts(block.stmts)) |stmt| {
                         switch (stmt) {
@@ -3440,7 +3438,6 @@ test "dev lowering: imported List.any directly calls passed predicate member" {
             const expr = store.getExpr(expr_id);
             switch (expr) {
                 .early_return => |ret| return ret.ret_layout,
-                .lambda => |lam| return firstEarlyReturnLayout(store, lam.body),
                 .block => |block| {
                     for (store.getStmts(block.stmts)) |stmt| {
                         switch (stmt) {
@@ -3668,7 +3665,6 @@ test "dev lowering: local any-style HOF directly calls passed predicate member" 
                     }
                     return false;
                 },
-                .lambda => |lam| return hasDirectUnaryProcCall(store, lam.body),
                 .block => |block| {
                     for (store.getStmts(block.stmts)) |stmt| {
                         switch (stmt) {
@@ -4129,7 +4125,6 @@ test "dev lowering: list rest pattern emits two list decrefs" {
                         walk(store, ls, branch.body, counts);
                     }
                 },
-                .lambda => |lam| walk(store, ls, lam.body, counts),
                 .for_loop => |fl| {
                     walk(store, ls, fl.list_expr, counts);
                     walk(store, ls, fl.body, counts);
@@ -4244,7 +4239,6 @@ test "dev lowering: list rest pattern emits two list decrefs" {
                     }
                     break :blk false;
                 },
-                .lambda => |lam| exprUsesSymbol(store, lam.body, symbol),
                 .for_loop => |fl| exprUsesSymbol(store, fl.list_expr, symbol) or exprUsesSymbol(store, fl.body, symbol),
                 .while_loop => |wl| exprUsesSymbol(store, wl.cond, symbol) or exprUsesSymbol(store, wl.body, symbol),
                 .discriminant_switch => |ds| blk: {
@@ -4351,7 +4345,6 @@ test "dev lowering: list rest pattern emits two list decrefs" {
                     }
                     break :blk total;
                 },
-                .lambda => |lam| countDecrefsForSymbol(store, lam.body, symbol),
                 .for_loop => |fl| countDecrefsForSymbol(store, fl.list_expr, symbol) + countDecrefsForSymbol(store, fl.body, symbol),
                 .while_loop => |wl| countDecrefsForSymbol(store, wl.cond, symbol) + countDecrefsForSymbol(store, wl.body, symbol),
                 .discriminant_switch => |ds| blk: {
@@ -4458,7 +4451,6 @@ test "dev lowering: list rest pattern emits two list decrefs" {
                         try collectListBindSymbols(store, layout_store_, root_expr_id, branch.body, out);
                     }
                 },
-                .lambda => |lam| try collectListBindSymbols(store, layout_store_, root_expr_id, lam.body, out),
                 else => {},
             }
         }
@@ -4500,7 +4492,6 @@ test "dev lowering: list rest pattern emits two list decrefs" {
                         printBindingBlocks(store, branch.body, symbol);
                     }
                 },
-                .lambda => |lam| printBindingBlocks(store, lam.body, symbol),
                 else => {},
             }
         }
@@ -4544,7 +4535,6 @@ test "dev lowering: mutable loop append decrefs mutable result binding once" {
                     }
                     break :blk false;
                 },
-                .lambda => |lam| containsCellLoad(store, lam.body, symbol),
                 .for_loop => |loop| containsCellLoad(store, loop.list_expr, symbol) or containsCellLoad(store, loop.body, symbol),
                 .while_loop => |loop| containsCellLoad(store, loop.cond, symbol) or containsCellLoad(store, loop.body, symbol),
                 .proc_call => |call| blk: {
@@ -4630,7 +4620,6 @@ test "dev lowering: mutable loop append decrefs mutable result binding once" {
                     }
                     break :blk total;
                 },
-                .lambda => |lam| countCellDrops(store, lam.body, symbol),
                 .for_loop => |fl| countCellDrops(store, fl.list_expr, symbol) + countCellDrops(store, fl.body, symbol),
                 .while_loop => |wl| countCellDrops(store, wl.cond, symbol) + countCellDrops(store, wl.body, symbol),
                 .discriminant_switch => |ds| blk: {
@@ -4725,7 +4714,6 @@ test "dev lowering: mutable loop append decrefs mutable result binding once" {
                     }
                     break :blk total;
                 },
-                .lambda => |lam| countDecrefsForSymbol(store, lam.body, symbol),
                 .for_loop => |fl| countDecrefsForSymbol(store, fl.list_expr, symbol) + countDecrefsForSymbol(store, fl.body, symbol),
                 .while_loop => |wl| countDecrefsForSymbol(store, wl.cond, symbol) + countDecrefsForSymbol(store, wl.body, symbol),
                 .discriminant_switch => |ds| blk: {
@@ -4920,7 +4908,6 @@ test "dev lowering: mutable list reassignment keeps both decrefs on the reassign
                     }
                     break :blk total;
                 },
-                .lambda => |lam| countDecrefsForSymbol(store, lam.body, symbol),
                 .for_loop => |fl| countDecrefsForSymbol(store, fl.list_expr, symbol) + countDecrefsForSymbol(store, fl.body, symbol),
                 .while_loop => |wl| countDecrefsForSymbol(store, wl.cond, symbol) + countDecrefsForSymbol(store, wl.body, symbol),
                 .discriminant_switch => |ds| blk: {
@@ -5020,7 +5007,6 @@ test "dev lowering: mutable list reassignment keeps both decrefs on the reassign
                     }
                     break :blk total;
                 },
-                .lambda => |lam| countCellDecrefs(store, lam.body, cell),
                 .for_loop => |fl| countCellDecrefs(store, fl.list_expr, cell) + countCellDecrefs(store, fl.body, cell),
                 .while_loop => |wl| countCellDecrefs(store, wl.cond, cell) + countCellDecrefs(store, wl.body, cell),
                 .discriminant_switch => |ds| blk: {
@@ -5121,7 +5107,6 @@ test "dev lowering: mutable list reassignment keeps both decrefs on the reassign
                     }
                     break :blk total;
                 },
-                .lambda => |lam| countCellDrops(store, lam.body, cell),
                 .for_loop => |fl| countCellDrops(store, fl.list_expr, cell) + countCellDrops(store, fl.body, cell),
                 .while_loop => |wl| countCellDrops(store, wl.cond, cell) + countCellDrops(store, wl.body, cell),
                 .discriminant_switch => |ds| blk: {

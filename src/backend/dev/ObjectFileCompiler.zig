@@ -28,8 +28,8 @@ const StaticDataInterner = @import("StaticDataInterner.zig");
 pub const Entrypoint = struct {
     /// The exported symbol name (e.g., "roc__main")
     symbol_name: []const u8,
-    /// The LIR expression ID for the entrypoint body
-    body_expr: lir.LirExprId,
+    /// The synthetic LIR proc to invoke for this entrypoint
+    proc: lir.LirProcId,
     /// Layouts of the arguments
     arg_layouts: []const layout.Idx,
     /// Layout of the return value
@@ -160,7 +160,7 @@ fn compileWithCodeGen(
     for (entrypoints) |entrypoint| {
         const export_info = codegen.generateEntrypointWrapper(
             entrypoint.symbol_name,
-            entrypoint.body_expr,
+            entrypoint.proc,
             entrypoint.arg_layouts,
             entrypoint.ret_layout,
         ) catch return CompilationError.OutOfMemory;

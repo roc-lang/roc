@@ -252,6 +252,70 @@ pub fn lower(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirExprId {
     return lowered;
 }
 
+/// Lower a MIR expression into a synthetic top-level LIR proc suitable for
+/// backend entrypoint wrapping. The backend then exports/calls this proc id
+/// instead of trying to recover a callable from an arbitrary expression.
+pub fn lowerEntrypointProc(
+    self: *Self,
+    mir_expr_id: MIR.ExprId,
+    arg_layouts: []const layout.Idx,
+    ret_layout: layout.Idx,
+) Allocator.Error!LirProcId {
+    const region = Region.zero();
+    const proc_name = self.freshSymbol();
+
+    const save_patterns = self.scratch_lir_pattern_ids.items.len;
+    defer self.scratch_lir_pattern_ids.shrinkRetainingCapacity(save_patterns);
+
+    const save_args = self.scratch_lir_expr_ids.items.len;
+    defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_args);
+
+    for (arg_layouts) |arg_layout| {
+        const fresh = try self.freshBindPattern(arg_layout, false, region);
+        try self.scratch_lir_pattern_ids.append(self.allocator, fresh.pattern);
+        const arg_lookup = try self.lir_store.addExpr(.{ .lookup = .{
+            .symbol = fresh.symbol,
+            .layout_idx = arg_layout,
+        } }, region);
+        try self.scratch_lir_expr_ids.append(self.allocator, arg_lookup);
+    }
+
+    const lir_params = if (arg_layouts.len == 0)
+        LirPatternSpan.empty()
+    else
+        try self.lir_store.addPatternSpan(self.scratch_lir_pattern_ids.items[save_patterns..]);
+    const lir_args = if (arg_layouts.len == 0)
+        LirExprSpan.empty()
+    else
+        try self.lir_store.addExprSpan(self.scratch_lir_expr_ids.items[save_args..]);
+    const lir_arg_layouts = if (arg_layouts.len == 0)
+        LayoutIdxSpan.empty()
+    else
+        try self.lir_store.addLayoutIdxSpan(arg_layouts);
+
+    var body_expr = if (arg_layouts.len == 0)
+        try self.lowerExpr(mir_expr_id)
+    else
+        try self.lowerEntrypointApply(mir_expr_id, lir_args, arg_layouts, ret_layout, region);
+    self.verifyFunctionLayouts(body_expr);
+
+    var proc_rc_pass = try RcInsert.RcInsertPass.init(self.allocator, self.lir_store, self.layout_store);
+    defer proc_rc_pass.deinit();
+    body_expr = try proc_rc_pass.insertRcOpsForProcBody(body_expr, lir_params, ret_layout);
+
+    const body_stmt = try self.retStmtForExpr(body_expr);
+    return self.lir_store.addProc(.{
+        .name = proc_name,
+        .args = lir_params,
+        .arg_layouts = lir_arg_layouts,
+        .body = body_stmt,
+        .ret_layout = ret_layout,
+        .closure_data_layout = null,
+        .force_pass_by_ptr = false,
+        .is_self_recursive = .not_self_recursive,
+    });
+}
+
 /// Copy a string literal from the source CIR module env to the LIR store.
 /// Copy a string from MIR's string store into LIR's string store.
 /// MIR already owns its own copy of all string data (copied from CIR
@@ -2985,6 +3049,165 @@ fn lowerProcWithParamLayouts(
         .force_pass_by_ptr = force_pass_by_ptr,
         .is_self_recursive = selfRecursiveForProc(proc),
     };
+}
+
+fn lowerEntrypointApply(
+    self: *Self,
+    func_mir_expr_id: MIR.ExprId,
+    lir_args: LirExprSpan,
+    arg_layouts: []const layout.Idx,
+    ret_layout: layout.Idx,
+    region: Region,
+) Allocator.Error!LirExprId {
+    if (self.lambdaSetForExpr(func_mir_expr_id)) |ls_idx| {
+        var members = try self.snapshotLambdaSetMembers(ls_idx);
+        defer members.deinit(self.allocator);
+
+        if (members.items.len == 0) {
+            if (std.debug.runtime_safety) {
+                std.debug.panic(
+                    "MirToLir invariant violated: empty lambda set for entrypoint expr {d}",
+                    .{@intFromEnum(func_mir_expr_id)},
+                );
+            }
+            unreachable;
+        }
+
+        var acc = self.startLetAccumulator();
+
+        if (members.items.len == 1) {
+            const member = members.items[0];
+            const save_layouts = self.scratch_layout_idxs.items.len;
+            defer self.scratch_layout_idxs.shrinkRetainingCapacity(save_layouts);
+            try self.scratch_layout_idxs.appendSlice(self.allocator, arg_layouts);
+
+            if (!self.memberHasCaptures(member)) {
+                const specialization = try self.ensureSpecializedDirectCallee(
+                    specializationIdentityForProc(member.proc),
+                    member.proc,
+                    self.scratch_layout_idxs.items[save_layouts..],
+                    false,
+                );
+                return self.lir_store.addExpr(.{ .proc_call = .{
+                    .proc = specialization.proc,
+                    .args = lir_args,
+                    .ret_layout = specialization.ret_layout,
+                    .called_via = .apply,
+                } }, region);
+            }
+
+            const closure_val_raw = try self.lowerExpr(func_mir_expr_id);
+            const closure_layout = try self.runtimeValueLayoutFromMirExpr(func_mir_expr_id);
+            const closure_val = try acc.ensureSymbol(closure_val_raw, closure_layout, region);
+            const captures_arg = try acc.bindRetained(closure_val, closure_layout, region);
+            try self.scratch_layout_idxs.append(self.allocator, closure_layout);
+            const specialization = try self.ensureSpecializedDirectCallee(
+                specializationIdentityForProc(member.proc),
+                member.proc,
+                self.scratch_layout_idxs.items[save_layouts..],
+                false,
+            );
+
+            const user_args = self.lir_store.getExprSpan(lir_args);
+            const save_exprs = self.scratch_lir_expr_ids.items.len;
+            defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_exprs);
+            for (user_args) |arg_id| {
+                try self.scratch_lir_expr_ids.append(self.allocator, arg_id);
+            }
+            try self.scratch_lir_expr_ids.append(self.allocator, captures_arg);
+            const all_args = try self.lir_store.addExprSpan(self.scratch_lir_expr_ids.items[save_exprs..]);
+
+            const call_expr = try self.lir_store.addExpr(.{ .proc_call = .{
+                .proc = specialization.proc,
+                .args = all_args,
+                .ret_layout = specialization.ret_layout,
+                .called_via = .apply,
+            } }, region);
+            return acc.finish(call_expr, specialization.ret_layout, region);
+        }
+
+        const closure_val_raw = try self.lowerExpr(func_mir_expr_id);
+        const closure_layout = try self.runtimeClosureDispatchLayoutForExpr(func_mir_expr_id, ls_idx);
+        const closure_val = try acc.ensureSymbol(closure_val_raw, closure_layout, region);
+
+        const save_exprs = self.scratch_lir_expr_ids.items.len;
+        defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_exprs);
+
+        for (members.items, 0..) |member, branch_index| {
+            const branch_save_layouts = self.scratch_layout_idxs.items.len;
+            defer self.scratch_layout_idxs.shrinkRetainingCapacity(branch_save_layouts);
+            try self.scratch_layout_idxs.appendSlice(self.allocator, arg_layouts);
+
+            const inner_save = self.scratch_lir_expr_ids.items.len;
+            const user_args = self.lir_store.getExprSpan(lir_args);
+            for (user_args) |arg_id| {
+                try self.scratch_lir_expr_ids.append(self.allocator, arg_id);
+            }
+
+            var branch_acc = self.startLetAccumulator();
+            if (self.memberHasCaptures(member)) {
+                const captures_layout = try self.closureVariantPayloadLayout(closure_layout, branch_index);
+                const payload_expr = try self.lir_store.addExpr(.{ .tag_payload_access = .{
+                    .value = closure_val,
+                    .union_layout = closure_layout,
+                    .payload_layout = captures_layout,
+                } }, region);
+                const payload_arg = try branch_acc.bindRetained(payload_expr, captures_layout, region);
+                try self.scratch_lir_expr_ids.append(self.allocator, payload_arg);
+                try self.scratch_layout_idxs.append(self.allocator, captures_layout);
+            }
+
+            const branch_args = try self.lir_store.addExprSpan(self.scratch_lir_expr_ids.items[inner_save..]);
+            self.scratch_lir_expr_ids.shrinkRetainingCapacity(inner_save);
+
+            const specialization = try self.ensureSpecializedDirectCallee(
+                specializationIdentityForProc(member.proc),
+                member.proc,
+                self.scratch_layout_idxs.items[branch_save_layouts..],
+                false,
+            );
+            const branch_call = try self.lir_store.addExpr(.{ .proc_call = .{
+                .proc = specialization.proc,
+                .args = branch_args,
+                .ret_layout = specialization.ret_layout,
+                .called_via = .apply,
+            } }, region);
+            const branch_expr = try branch_acc.finish(branch_call, specialization.ret_layout, region);
+            try self.scratch_lir_expr_ids.append(self.allocator, branch_expr);
+        }
+
+        const branch_exprs = try self.lir_store.addExprSpan(self.scratch_lir_expr_ids.items[save_exprs..]);
+        const switch_expr = try self.lir_store.addExpr(.{ .discriminant_switch = .{
+            .value = closure_val,
+            .union_layout = closure_layout,
+            .branches = branch_exprs,
+            .result_layout = ret_layout,
+        } }, region);
+        return acc.finish(switch_expr, ret_layout, region);
+    }
+
+    if (self.resolveToProcId(func_mir_expr_id)) |callee_proc| {
+        const specialization = try self.ensureSpecializedDirectCallee(
+            specializationIdentityForProc(callee_proc),
+            callee_proc,
+            arg_layouts,
+            false,
+        );
+        return self.lir_store.addExpr(.{ .proc_call = .{
+            .proc = specialization.proc,
+            .args = lir_args,
+            .ret_layout = specialization.ret_layout,
+            .called_via = .apply,
+        } }, region);
+    }
+
+    if (std.debug.runtime_safety) {
+        std.debug.panic(
+            "MirToLir invariant violated: entrypoint expr {d} is not proc-backed",
+            .{@intFromEnum(func_mir_expr_id)},
+        );
+    }
+    unreachable;
 }
 
 fn lowerCall(self: *Self, call_data: anytype, mir_expr_id: MIR.ExprId, region: Region) Allocator.Error!LirExprId {

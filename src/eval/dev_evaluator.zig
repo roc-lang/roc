@@ -797,8 +797,8 @@ pub const DevEvaluator = struct {
 
     /// Generate code for an entrypoint using the RocCall ABI: fn(roc_ops, ret_ptr, args_ptr).
     ///
-    /// Uses `generateEntrypointWrapper` which handles argument unpacking from args_ptr,
-    /// lambda/lookup/nominal resolution, and proper ABI slot sizing.
+    /// Uses `generateEntrypointWrapper` which handles argument unpacking from args_ptr
+    /// and invokes a synthetic entrypoint proc using the RocCall ABI.
     /// This is for `roc run` where the host passes its own RocOps.
     pub fn generateEntrypointCode(
         self: *DevEvaluator,
@@ -882,13 +882,9 @@ pub const DevEvaluator = struct {
         var mir_to_lir = lir.MirToLir.init(self.allocator, &mir_store, &lir_store, layout_store_ptr, &lambda_set_store, module_env.idents.true_tag);
         defer mir_to_lir.deinit();
 
-        const lir_expr_id = mir_to_lir.lower(mir_expr_id) catch {
+        const entry_proc = mir_to_lir.lowerEntrypointProc(mir_expr_id, arg_layouts, ret_layout) catch {
             return error.RuntimeError;
         };
-        // Run RC insertion pass
-        var rc_pass = lir.RcInsert.RcInsertPass.init(self.allocator, &lir_store, layout_store_ptr) catch return error.OutOfMemory;
-        defer rc_pass.deinit();
-        const final_expr_id = rc_pass.insertRcOps(lir_expr_id) catch lir_expr_id;
 
         lir.RcInsert.insertRcOpsIntoSymbolDefsBestEffort(self.allocator, &lir_store, layout_store_ptr);
 
@@ -910,7 +906,7 @@ pub const DevEvaluator = struct {
         }
 
         // Generate entrypoint wrapper using RocCall ABI
-        const exported = codegen.generateEntrypointWrapper("", final_expr_id, arg_layouts, ret_layout) catch {
+        const exported = codegen.generateEntrypointWrapper("", entry_proc, arg_layouts, ret_layout) catch {
             return error.RuntimeError;
         };
 
