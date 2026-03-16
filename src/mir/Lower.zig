@@ -208,6 +208,8 @@ pub fn init(
         .mono_scratches = blk: {
             var ms = try Monotype.Store.Scratches.init(allocator);
             ms.ident_store = all_module_envs[current_module_idx].getIdentStoreConst();
+            ms.module_env = all_module_envs[current_module_idx];
+            ms.all_module_envs = all_module_envs;
             break :blk ms;
         },
     };
@@ -5407,8 +5409,13 @@ fn monotypeFromTypeVarInStore(
     defer local_cycles.deinit();
 
     const saved_ident_store = self.mono_scratches.ident_store;
+    const saved_module_env = self.mono_scratches.module_env;
     self.mono_scratches.ident_store = self.all_module_envs[module_idx].getIdentStoreConst();
-    defer self.mono_scratches.ident_store = saved_ident_store;
+    self.mono_scratches.module_env = self.all_module_envs[module_idx];
+    defer {
+        self.mono_scratches.ident_store = saved_ident_store;
+        self.mono_scratches.module_env = saved_module_env;
+    }
 
     return self.monotypeFromTypeVarWithBindings(
         module_idx,
@@ -5708,11 +5715,13 @@ fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.E
     const saved_type_var_seen = self.type_var_seen;
     const saved_nominal_cycle_breakers = self.nominal_cycle_breakers;
     const saved_ident_store = self.mono_scratches.ident_store;
+    const saved_module_env = self.mono_scratches.module_env;
     self.current_pattern_scope = symbol_key;
     if (switching_module) {
         self.current_module_idx = symbol_module_idx;
         self.types_store = &self.all_module_envs[symbol_module_idx].types;
         self.mono_scratches.ident_store = self.all_module_envs[symbol_module_idx].getIdentStoreConst();
+        self.mono_scratches.module_env = self.all_module_envs[symbol_module_idx];
     }
 
     // Always isolate type_var_seen per external definition lowering.
@@ -5751,6 +5760,7 @@ fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.E
             self.types_store = saved_types_store;
             self.current_module_idx = saved_module_idx;
             self.mono_scratches.ident_store = saved_ident_store;
+            self.mono_scratches.module_env = saved_module_env;
         }
     }
 

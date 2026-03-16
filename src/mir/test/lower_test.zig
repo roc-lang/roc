@@ -1291,6 +1291,42 @@ test "fromTypeVar: recursive binary tree type completes without hanging" {
     try testing.expect(monotype == .tag_union);
 }
 
+test "fromTypeVar: polymorphic opaque with function field propagates nominal args into backing type" {
+    var env = try MirTestEnv.initModule("Test",
+        \\W(a) := { f : {} -> [V(a)] }.{
+        \\    mk : a -> W(a)
+        \\    mk = |val| { f: |_| V(val) }
+        \\}
+        \\
+        \\w : W(Str)
+        \\w = W.mk("x")
+    );
+    defer env.deinit();
+
+    const expr = try env.lowerNamedDef("w");
+    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
+
+    try testing.expect(monotype == .record);
+
+    const fields = env.mir_store.monotype_store.getFields(monotype.record.fields);
+    try testing.expectEqual(@as(usize, 1), fields.len);
+
+    const field_type = env.mir_store.monotype_store.getMonotype(fields[0].type_idx);
+    try testing.expect(field_type == .func);
+
+    const ret_type = env.mir_store.monotype_store.getMonotype(field_type.func.ret);
+    try testing.expect(ret_type == .tag_union);
+
+    const tags = env.mir_store.monotype_store.getTags(ret_type.tag_union.tags);
+    try testing.expectEqual(@as(usize, 1), tags.len);
+    try testing.expectEqual(@as(usize, 1), tags[0].payloads.len);
+
+    const payloads = env.mir_store.monotype_store.getIdxSpan(tags[0].payloads);
+    const payload_type = env.mir_store.monotype_store.getMonotype(payloads[0]);
+    try testing.expect(payload_type == .prim);
+    try testing.expectEqual(Monotype.Prim.str, payload_type.prim);
+}
+
 // --- Gap #26: lowerExternalDef recursion guard ---
 
 test "lowerExternalDef: recursion guard returns lookup placeholder" {
