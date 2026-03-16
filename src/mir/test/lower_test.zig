@@ -40,6 +40,14 @@ fn procIdFromValueDef(mir_store: *const MIR.Store, symbol: MIR.Symbol) ?MIR.Proc
     return procIdFromExpr(mir_store, def_expr);
 }
 
+fn procIdFromCallableExpr(mir_store: *const MIR.Store, expr_id: MIR.ExprId) ?MIR.ProcId {
+    const expr = mir_store.getExpr(expr_id);
+    return switch (expr) {
+        .lookup => |sym| procIdFromValueDef(mir_store, sym),
+        else => procIdFromExpr(mir_store, expr_id),
+    };
+}
+
 // --- MIR Store tests ---
 
 test "MIR Store: add and get expression" {
@@ -1066,12 +1074,7 @@ test "lambda set: imported List.any receives predicate lambda set" {
     const root_args = env.mir_store.getExprSpan(root_expr.call.args);
     try testing.expectEqual(@as(usize, 2), root_args.len);
 
-    const callee_expr = env.mir_store.getExpr(root_expr.call.func);
-    try testing.expect(callee_expr == .lookup);
-    const any_sym = callee_expr.lookup;
-    const any_def = env.mir_store.getValueDef(any_sym) orelse return error.TestUnexpectedResult;
-
-    const any_proc_id = procIdFromExpr(env.mir_store, any_def) orelse return error.TestUnexpectedResult;
+    const any_proc_id = procIdFromCallableExpr(env.mir_store, root_expr.call.func) orelse return error.TestUnexpectedResult;
     const any_proc = env.mir_store.getProc(any_proc_id);
     const params = any_proc.params;
     const lambda_body = any_proc.body;
@@ -1512,9 +1515,8 @@ test "cross-module: imported value call uses target def identity" {
     try testing.expect(result != .runtime_err_type);
 
     try testing.expect(result == .call);
-    const func = env_app.mir_store.getExpr(result.call.func);
-    try testing.expect(func == .lookup);
-    try testing.expect(env_app.mir_store.getValueDef(func.lookup) != null);
+    const proc_id = procIdFromCallableExpr(env_app.mir_store, result.call.func) orelse return error.TestUnexpectedResult;
+    try testing.expect(!proc_id.isNone());
 }
 
 test "cross-module: imported top-level value call uses target def identity" {
@@ -1554,9 +1556,8 @@ test "cross-module: imported top-level value call uses target def identity" {
     try testing.expect(result != .runtime_err_type);
 
     try testing.expect(result == .call);
-    const func = env_app.mir_store.getExpr(result.call.func);
-    try testing.expect(func == .lookup);
-    try testing.expect(env_app.mir_store.getValueDef(func.lookup) != null);
+    const proc_id = procIdFromCallableExpr(env_app.mir_store, result.call.func) orelse return error.TestUnexpectedResult;
+    try testing.expect(!proc_id.isNone());
 }
 
 // --- Additional Lower code path tests ---
@@ -1737,15 +1738,8 @@ test "cross-module: dot-access method call ensures method is lowered" {
 
     // The result should be a call to a cross-module method
     try testing.expect(result == .call);
-    const func = env_b.mir_store.getExpr(result.call.func);
-    try testing.expect(func == .lookup);
-    const method_sym = func.lookup;
-
-    // Symbol IDs are opaque; we only require that lowering resolved a real symbol.
-    try testing.expect(!method_sym.isNone());
-
-    // The cross-module method body must have been lowered into the MIR store
-    try testing.expect(env_b.mir_store.getValueDef(method_sym) != null);
+    const method_proc = procIdFromCallableExpr(env_b.mir_store, result.call.func) orelse return error.TestUnexpectedResult;
+    try testing.expect(!method_proc.isNone());
 }
 
 // --- Gap #10: Recursive symbol monotype patching ---
@@ -2518,8 +2512,7 @@ test "cross-module type resolution: U32.to dispatches with concrete U32 function
     try testing.expect(top == .call);
 
     // The call's function should be a lookup whose monotype is a func
-    const func_expr = env.mir_store.getExpr(top.call.func);
-    try testing.expect(func_expr == .lookup);
+    const proc_id = procIdFromCallableExpr(env.mir_store, top.call.func) orelse return error.TestUnexpectedResult;
 
     const func_monotype_idx = env.mir_store.typeOf(top.call.func);
     const func_mono = env.mir_store.monotype_store.getMonotype(func_monotype_idx);
@@ -2532,13 +2525,9 @@ test "cross-module type resolution: U32.to dispatches with concrete U32 function
     const elem_mono = env.mir_store.monotype_store.getMonotype(ret_mono.list.elem);
     try testing.expectEqual(Monotype.Monotype{ .prim = .u32 }, elem_mono);
 
-    // Verify the function DEFINITION body was also lowered with concrete types.
-    const method_symbol = func_expr.lookup;
-    const sym_key: u64 = @bitCast(method_symbol);
-    const def_expr_id = env.mir_store.value_defs.get(sym_key) orelse
-        return error.TestUnexpectedResult;
-    const def_mono_idx = env.mir_store.typeOf(def_expr_id);
-    const def_mono = env.mir_store.monotype_store.getMonotype(def_mono_idx);
+    // Verify the specialized proc body was lowered with concrete types.
+    const proc = env.mir_store.getProc(proc_id);
+    const def_mono = env.mir_store.monotype_store.getMonotype(proc.fn_monotype);
     try testing.expect(def_mono == .func);
     const def_ret_mono = env.mir_store.monotype_store.getMonotype(def_mono.func.ret);
     try testing.expect(def_ret_mono == .list);

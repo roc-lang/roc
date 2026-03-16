@@ -160,6 +160,10 @@ test "Repl - Str.from_utf8 Ok" {
     try expectBoth("Str.from_utf8([72, 105])", "Ok(\"Hi\")");
 }
 
+test "Repl - Str.from_utf8 ok_or" {
+    try expectBoth("Str.from_utf8([72, 105]).ok_or(\"fallback\")", "\"Hi\"");
+}
+
 test "Repl - U8.from_str result format" {
     try expectBoth("U8.from_str(\"42\")", "Ok(42)");
 }

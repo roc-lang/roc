@@ -11862,11 +11862,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer self.scratch_arg_infos.clearFrom(arg_infos_start);
 
             for (args, 0..) |arg_id, arg_index| {
-                const arg_loc = try self.generateExpr(arg_id);
                 const arg_layout: ?layout.Idx = if (arg_index < proc_arg_layouts.len)
                     proc_arg_layouts[arg_index]
                 else
                     self.exprLayout(arg_id);
+                const raw_arg_loc = try self.generateExpr(arg_id);
+                const arg_loc = if (arg_layout) |layout_idx|
+                    self.coerceImmediateToLayout(raw_arg_loc, layout_idx)
+                else
+                    raw_arg_loc;
                 const num_regs: u8 = self.calcArgRegCount(arg_loc, arg_layout);
                 try self.scratch_arg_infos.append(.{ .loc = arg_loc, .layout_idx = arg_layout, .num_regs = num_regs });
             }

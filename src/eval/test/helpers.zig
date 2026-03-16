@@ -60,6 +60,13 @@ fn mirProcIdFromValueDef(mir_store: *const MIR.Store, symbol: MIR.Symbol) ?MIR.P
     const def_expr = mir_store.getValueDef(symbol) orelse return null;
     return mirProcIdFromExpr(mir_store, def_expr);
 }
+
+fn mirProcIdFromCallableExpr(mir_store: *const MIR.Store, expr_id: MIR.ExprId) ?MIR.ProcId {
+    return switch (mir_store.getExpr(expr_id)) {
+        .lookup => |sym| mirProcIdFromValueDef(mir_store, sym),
+        else => mirProcIdFromExpr(mir_store, expr_id),
+    };
+}
 const Allocators = base.Allocators;
 const MIR = mir.MIR;
 const LambdaSet = mir.LambdaSet;
@@ -3177,10 +3184,7 @@ test "dev lowering: imported List.any directly calls passed predicate member" {
     const root_args = mir_store.getExprSpan(root_expr.call.args);
     try std.testing.expectEqual(@as(usize, 2), root_args.len);
 
-    const root_callee = mir_store.getExpr(root_expr.call.func);
-    try std.testing.expect(root_callee == .lookup);
-    const any_sym = root_callee.lookup;
-    const any_proc_id = mirProcIdFromValueDef(&mir_store, any_sym) orelse return error.TestUnexpectedResult;
+    const any_proc_id = mirProcIdFromCallableExpr(&mir_store, root_expr.call.func) orelse return error.TestUnexpectedResult;
     const params = mir_store.getProc(any_proc_id).params;
 
     const param_ids = mir_store.getPatternSpan(params);
@@ -3600,10 +3604,7 @@ test "dev lowering: local any-style HOF directly calls passed predicate member" 
     const root_args = mir_store.getExprSpan(final_expr.call.args);
     try std.testing.expectEqual(@as(usize, 2), root_args.len);
 
-    const root_callee = mir_store.getExpr(final_expr.call.func);
-    try std.testing.expect(root_callee == .lookup);
-    const any_sym = root_callee.lookup;
-    const any_proc_id = mirProcIdFromValueDef(&mir_store, any_sym) orelse return error.TestUnexpectedResult;
+    const any_proc_id = mirProcIdFromCallableExpr(&mir_store, final_expr.call.func) orelse return error.TestUnexpectedResult;
     const params = mir_store.getProc(any_proc_id).params;
 
     const param_ids = mir_store.getPatternSpan(params);
@@ -5587,13 +5588,23 @@ test "LIR parenthesized record field closure call registers synthetic closure bi
     try std.testing.expect(!lifted_proc.body.isNone());
     try std.testing.expect(lifted_proc.closure_data_layout != null);
 
-    const captures_lookup = lir_store.getExpr(call_args[1]);
-    try std.testing.expect(captures_lookup == .lookup);
-    const captures_def = lir_store.getSymbolDef(captures_lookup.lookup.symbol) orelse return error.TestUnexpectedResult;
-    var captures_value_expr = captures_def;
-    while (lir_store.getExpr(captures_value_expr) == .block) {
-        captures_value_expr = lir_store.getExpr(captures_value_expr).block.final_expr;
-    }
+    const captures_root_expr = switch (lir_store.getExpr(call_args[1])) {
+        .lookup => |lookup| blk: {
+            for (inner_stmts) |stmt| {
+                const binding = switch (stmt) {
+                    .decl, .mutate => |binding| binding,
+                    .cell_init, .cell_store, .cell_drop => continue,
+                };
+                const pat = lir_store.getPattern(binding.pattern);
+                if (pat == .bind and pat.bind.symbol.eql(lookup.symbol)) {
+                    break :blk binding.expr;
+                }
+            }
+            return error.TestUnexpectedResult;
+        },
+        else => call_args[1],
+    };
+    const captures_value_expr = findStructAccessExpr(&lir_store, captures_root_expr) orelse return error.TestUnexpectedResult;
     const captures_value = lir_store.getExpr(captures_value_expr);
     try std.testing.expect(captures_value == .struct_access);
     try std.testing.expectEqual(@as(u16, 1), captures_value.struct_access.field_idx);

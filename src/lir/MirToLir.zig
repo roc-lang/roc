@@ -431,28 +431,22 @@ fn registerSpecializedMonotypeLayout(
 
     if (self.specialized_monotype_layouts.get(mono_key)) |existing| {
         if (existing == layout_idx) return;
-        if (builtin.mode == .Debug) {
-            const existing_layout = self.layout_store.getLayout(existing);
-            const new_layout = self.layout_store.getLayout(layout_idx);
-            std.debug.panic(
-                "MirToLir specialized monotype layout mismatch: mono_idx={d} mono={any} existing={d}/{s} new={d}/{s}",
-                .{
-                    mono_key,
-                    monotype,
-                    @intFromEnum(existing),
-                    @tagName(existing_layout.tag),
-                    @intFromEnum(layout_idx),
-                    @tagName(new_layout.tag),
-                },
-            );
-        }
-        return;
+        // Proc/body layout inference is re-entrant. An inner specialized proc can
+        // legitimately need a different temporary layout override for the same MIR
+        // monotype than an outer inference context. `saved` already snapshots the
+        // previous value, so treat this as another scoped override instead of a
+        // hard conflict.
+        try self.specialized_monotype_layouts.put(mono_key, layout_idx);
+        self.monotype_layout_resolver.clearOverrideCache();
+        self.specialized_capture_layout_cache.clearRetainingCapacity();
+        self.specialized_closure_value_layout_cache.clearRetainingCapacity();
     }
-
-    try self.specialized_monotype_layouts.put(mono_key, layout_idx);
-    self.monotype_layout_resolver.clearOverrideCache();
-    self.specialized_capture_layout_cache.clearRetainingCapacity();
-    self.specialized_closure_value_layout_cache.clearRetainingCapacity();
+    else {
+        try self.specialized_monotype_layouts.put(mono_key, layout_idx);
+        self.monotype_layout_resolver.clearOverrideCache();
+        self.specialized_capture_layout_cache.clearRetainingCapacity();
+        self.specialized_closure_value_layout_cache.clearRetainingCapacity();
+    }
     const layout_val = self.layout_store.getLayout(layout_idx);
 
     switch (monotype) {
@@ -1670,6 +1664,12 @@ fn runtimeLayoutForProcBodyWithParamLayouts(
         try self.registerBindingPatternSymbols(param_pat_id, param_layout);
     }
     for (func_args, param_layouts[0..func_args.len]) |param_mono_idx, param_layout| {
+        if (self.mir_store.monotype_store.getMonotype(param_mono_idx) == .list and self.layout_store.getLayout(param_layout).tag == .scalar) {
+            std.debug.print(
+                "runtimeLayoutForProcBodyWithParamLayouts debug_name={d} mono_idx={d} layout_idx={d}\n",
+                .{ proc.debug_name.raw(), @intFromEnum(param_mono_idx), @intFromEnum(param_layout) },
+            );
+        }
         try self.registerSpecializedMonotypeLayout(param_mono_idx, param_layout, &saved_monotype_layouts);
     }
     if (!proc.captures_param.isNone()) {
@@ -3413,6 +3413,15 @@ fn lowerCall(self: *Self, call_data: anytype, mir_expr_id: MIR.ExprId, region: R
 
     // Some annotation-only methods are compiler intrinsics. Lower those directly.
     const func_mir_expr = self.mir_store.getExpr(call_data.func);
+    if (func_mir_expr == .runtime_err_anno_only) {
+        if (try self.lowerAnnotationOnlyIntrinsicCall(call_data, mono_idx, region)) |lowered| {
+            return lowered;
+        }
+        if (std.debug.runtime_safety) {
+            std.debug.panic("MirToLir unsupported: direct call to annotation-only intrinsic", .{});
+        }
+        unreachable;
+    }
     if (func_mir_expr == .lookup) {
         const sym = func_mir_expr.lookup;
         if (self.mir_store.getValueDef(sym)) |def_expr_id| {
@@ -3478,6 +3487,13 @@ fn lowerCall(self: *Self, call_data: anytype, mir_expr_id: MIR.ExprId, region: R
     }
 
     if (std.debug.runtime_safety) {
+        if (func_mir_expr == .lookup) {
+            const sym = func_mir_expr.lookup;
+            std.debug.panic(
+                "MirToLir invariant violated: non-proc callee reached direct call lowering (lookup sym={d})",
+                .{sym.raw()},
+            );
+        }
         std.debug.panic(
             "MirToLir invariant violated: non-proc callee reached direct call lowering (expr={s})",
             .{@tagName(func_mir_expr)},
