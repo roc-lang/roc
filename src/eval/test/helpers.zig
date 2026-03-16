@@ -46,7 +46,7 @@ fn callCalleeExprId(_: anytype) ?LirExprId {
 }
 
 fn callTargetsSymbol(store: *const LirExprStore, call: anytype, target: LirSymbol) bool {
-    return store.getProc(call.proc).name.eql(target);
+    return store.getProcSpec(call.proc).name.eql(target);
 }
 
 fn mirProcIdFromExpr(mir_store: *const MIR.Store, expr_id: MIR.ExprId) ?MIR.ProcId {
@@ -3547,12 +3547,12 @@ test "dev lowering: imported List.any directly calls passed predicate member" {
 
     };
 
-    var any_lir_proc: ?lir.LIR.LirProc = null;
-    var specialization_it = translator.specialized_direct_callees.iterator();
+    var any_lir_proc: ?lir.LIR.LirProcSpec = null;
+    var specialization_it = translator.direct_proc_specs.iterator();
     while (specialization_it.next()) |entry| {
         const callee_key = std.mem.bytesToValue(u64, entry.key_ptr.*[0..@sizeOf(u64)]);
         if (callee_key == ((@as(u64, 1) << 63) | @as(u64, @intFromEnum(any_proc_id)))) {
-            any_lir_proc = lir_store.getProc(entry.value_ptr.proc);
+            any_lir_proc = lir_store.getProcSpec(entry.value_ptr.proc);
             break;
         }
     }
@@ -3712,12 +3712,12 @@ test "dev lowering: local any-style HOF directly calls passed predicate member" 
         }
     };
 
-    var any_lir_proc: ?lir.LIR.LirProc = null;
-    var specialization_it = translator.specialized_direct_callees.iterator();
+    var any_lir_proc: ?lir.LIR.LirProcSpec = null;
+    var specialization_it = translator.direct_proc_specs.iterator();
     while (specialization_it.next()) |entry| {
         const callee_key = std.mem.bytesToValue(u64, entry.key_ptr.*[0..@sizeOf(u64)]);
         if (callee_key == ((@as(u64, 1) << 63) | @as(u64, @intFromEnum(any_proc_id)))) {
-            any_lir_proc = lir_store.getProc(entry.value_ptr.proc);
+            any_lir_proc = lir_store.getProcSpec(entry.value_ptr.proc);
             break;
         }
     }
@@ -3939,7 +3939,7 @@ test "dev lowering: list identity proc keeps ownership transfer in LIR" {
             };
         }
 
-        fn findFirstProcCall(store: *const LirExprStore, expr_id: lir.LIR.LirExprId) ?lir.LIR.LirProcId {
+        fn findFirstProcCall(store: *const LirExprStore, expr_id: lir.LIR.LirExprId) ?lir.LIR.LirProcSpecId {
             if (expr_id.isNone()) return null;
             const expr = store.getExpr(expr_id);
             return switch (expr) {
@@ -4017,7 +4017,7 @@ test "dev lowering: list identity proc keeps ownership transfer in LIR" {
     };
 
     const proc_id = Search.findFirstProcCall(&lir_store, lowered) orelse return error.TestUnexpectedResult;
-    const proc = lir_store.getProc(proc_id);
+    const proc = lir_store.getProcSpec(proc_id);
     const proc_params = lir_store.getPatternSpan(proc.args);
     try std.testing.expectEqual(@as(usize, 1), proc_params.len);
     const proc_param = lir_store.getPattern(proc_params[0]);
@@ -5589,7 +5589,7 @@ test "LIR parenthesized record field closure call registers synthetic closure bi
     const call_args = lir_store.getExprSpan(call_expr.proc_call.args);
     try std.testing.expectEqual(@as(usize, 2), call_args.len);
 
-    const lifted_proc = lir_store.getProc(call_expr.proc_call.proc);
+    const lifted_proc = lir_store.getProcSpec(call_expr.proc_call.proc);
     try std.testing.expect(!lifted_proc.body.isNone());
     try std.testing.expect(lifted_proc.closure_data_layout != null);
 
@@ -5801,8 +5801,8 @@ test "LIR lifted closure with function-valued captures keeps both capture slots"
 
     _ = try translator.lower(mir_expr);
 
-    var specialized_proc_id: ?lir.LIR.LirProcId = null;
-    var specialization_it = translator.specialized_direct_callees.iterator();
+    var specialized_proc_id: ?lir.LIR.LirProcSpecId = null;
+    var specialization_it = translator.direct_proc_specs.iterator();
     while (specialization_it.next()) |entry| {
         const callee_key = std.mem.bytesToValue(u64, entry.key_ptr.*[0..@sizeOf(u64)]);
         if (callee_key == ((@as(u64, 1) << 63) | @as(u64, @intFromEnum(members[0].proc)))) {
@@ -5810,7 +5810,7 @@ test "LIR lifted closure with function-valued captures keeps both capture slots"
             break;
         }
     }
-    const lifted_proc = lir_store.getProc(specialized_proc_id orelse return error.TestUnexpectedResult);
+    const lifted_proc = lir_store.getProcSpec(specialized_proc_id orelse return error.TestUnexpectedResult);
     try std.testing.expect(!lifted_proc.body.isNone());
 
     const params = lir_store.getPatternSpan(lifted_proc.args);

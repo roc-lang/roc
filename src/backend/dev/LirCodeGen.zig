@@ -644,7 +644,7 @@ fn wrapListSortWith(
     };
 }
 
-const LirProc = lir.LirProc;
+const LirProcSpec = lir.LirProcSpec;
 
 const Allocator = std.mem.Allocator;
 
@@ -779,7 +779,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Map from JoinPointId to parameter patterns (for rebinding to correct stack slots)
         join_point_param_patterns: std.AutoHashMap(u32, lir.LirPatternSpan),
 
-        /// Tracks positions of BL/CALL instructions to compiled nested procs.
+        /// Tracks positions of BL/CALL instructions to compiled nested proc_specs.
         /// When deferred-prologue compilation shifts a proc body (extract, prepend prologue,
         /// re-append), BL instructions targeting code outside the body become
         /// incorrect. This list lets us re-patch those instructions after shifts.
@@ -1146,13 +1146,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             result_layout: layout.Idx,
             tuple_len: usize,
         ) Allocator.Error!CodeResult {
-            // Clear any leftover state from compileAllProcs
+            // Clear any leftover state from compileAllProcSpecs
             self.symbol_locations.clearRetainingCapacity();
             self.mutable_var_slots.clearRetainingCapacity();
             self.codegen.callee_saved_used = 0;
 
             // Initialize stack_offset to reserve space for callee-saved area
-            // (same convention as compileProc — positive offsets, deferred prologue)
+            // (same convention as compileProcSpec — positive offsets, deferred prologue)
             if (comptime target.toCpuArch() == .x86_64) {
                 self.codegen.stack_offset = -CodeGen.CALLEE_SAVED_AREA_SIZE;
             } else {
@@ -11652,10 +11652,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn procCodeOffsetWithOptions(
             self: *Self,
-            proc_id: lir.LIR.LirProcId,
+            proc_id: lir.LIR.LirProcSpecId,
             _: LambdaProcOptions,
         ) Allocator.Error!CompiledProc {
-            const proc = self.store.getProc(proc_id);
+            const proc = self.store.getProcSpec(proc_id);
             const proc_key: u64 = @bitCast(proc.name);
             if (self.proc_registry.get(proc_key)) |compiled| return compiled;
 
@@ -11667,7 +11667,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Resolve the pre-lowered comparator proc for list_sort_with to a compiled code offset.
-        fn resolveComparatorOffset(self: *Self, proc_id: lir.LIR.LirProcId) Allocator.Error!usize {
+        fn resolveComparatorOffset(self: *Self, proc_id: lir.LIR.LirProcSpecId) Allocator.Error!usize {
             const compiled = try self.procCodeOffsetWithOptions(proc_id, .{});
             if (compiled.code_start == unresolved_proc_code_start) {
                 if (std.debug.runtime_safety) {
@@ -11803,7 +11803,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate a call to an already-compiled procedure.
-        /// This is used for recursive functions that were compiled via compileAllProcs.
+        /// This is used for recursive functions that were compiled via compileAllProcSpecs.
         const PassByPtrPlan = struct {
             start: u32,
             slice: []bool,
@@ -12830,8 +12830,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Compile all procedures first, before generating any calls.
         /// This ensures all call targets are known before we need to patch calls.
-        pub fn compileAllProcs(self: *Self, procs: []const LirProc) Allocator.Error!void {
-            for (procs) |proc| {
+        pub fn compileAllProcSpecs(self: *Self, proc_specs: []const LirProcSpec) Allocator.Error!void {
+            for (proc_specs) |proc| {
                 const key: u64 = @bitCast(proc.name);
                 try self.proc_registry.put(key, .{
                     .code_start = unresolved_proc_code_start,
@@ -12841,15 +12841,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 });
             }
 
-            for (procs) |proc| {
-                try self.compileProc(proc);
+            for (proc_specs) |proc| {
+                try self.compileProcSpec(proc);
             }
         }
 
         /// Compile a single procedure as a complete unit.
         /// Uses deferred prologue pattern: generates body first to determine which
         /// callee-saved registers are used, then prepends prologue and adjusts relocations.
-        fn compileProc(self: *Self, proc: LirProc) Allocator.Error!void {
+        fn compileProcSpec(self: *Self, proc: LirProcSpec) Allocator.Error!void {
             const key: u64 = @bitCast(proc.name);
 
             // Save current state - procedure has its own scope that shouldn't pollute caller
@@ -13934,7 +13934,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     else => {
                         if (builtin.mode == .Debug) {
                             std.debug.panic(
-                                "LIR/codegen invariant violated: unsupported complex parameter pattern in bindLambdaParams (compileProc path), got {s}",
+                                "LIR/codegen invariant violated: unsupported complex parameter pattern in bindLambdaParams (compileProcSpec path), got {s}",
                                 .{@tagName(pattern)},
                             );
                         }
@@ -15419,7 +15419,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         pub fn generateEntrypointWrapper(
             self: *Self,
             name: []const u8,
-            entry_proc: lir.LIR.LirProcId,
+            entry_proc: lir.LIR.LirProcSpecId,
             arg_layouts: []const layout.Idx,
             ret_layout: layout.Idx,
         ) Allocator.Error!ExportedSymbol {
@@ -15766,7 +15766,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn generateEntrypointProcCall(
             self: *Self,
-            entry_proc: lir.LIR.LirProcId,
+            entry_proc: lir.LIR.LirProcSpecId,
             arg_layouts: []const layout.Idx,
             ret_layout: layout.Idx,
             ret_ptr_reg: GeneralReg,

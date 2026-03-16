@@ -145,7 +145,7 @@ pub const TailRecursionPass = struct {
         const expr = self.store.getExpr(expr_id);
         switch (expr) {
             .proc_call => |call| {
-                const proc = self.store.getProc(call.proc);
+                const proc = self.store.getProcSpec(call.proc);
                 if (proc.name.eql(self.target_symbol)) {
                     return call.args;
                 }
@@ -453,8 +453,8 @@ fn symbolFromIdent(ident: @import("base").Ident.Idx) Symbol {
     return Symbol.fromRaw(@as(u64, @as(u32, @bitCast(ident))));
 }
 
-fn testProcForSymbol(store: *LirExprStore, symbol: Symbol) !ir.LirProcId {
-    return store.addProc(.{
+fn testProcForSymbol(store: *LirExprStore, symbol: Symbol) !ir.LirProcSpecId {
+    return store.addProcSpec(.{
         .name = symbol,
         .args = LirPatternSpan.empty(),
         .arg_layouts = LayoutIdxSpan.empty(),

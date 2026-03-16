@@ -773,9 +773,9 @@ pub const DevEvaluator = struct {
         // Compile all procedures first (for recursive functions)
         // This ensures recursive closures are compiled as complete procedures
         // before we generate calls to them.
-        const procs = lir_store.getProcs();
+        const procs = lir_store.getProcSpecs();
         if (procs.len > 0) {
-            codegen.compileAllProcs(procs) catch {
+            codegen.compileAllProcSpecs(procs) catch {
                 return error.RuntimeError;
             };
         }
@@ -898,9 +898,9 @@ pub const DevEvaluator = struct {
         defer codegen.deinit();
 
         // Compile all procedures first
-        const procs = lir_store.getProcs();
+        const procs = lir_store.getProcSpecs();
         if (procs.len > 0) {
-            codegen.compileAllProcs(procs) catch {
+            codegen.compileAllProcSpecs(procs) catch {
                 return error.RuntimeError;
             };
         }

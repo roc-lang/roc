@@ -4211,7 +4211,7 @@ fn processDevObjectSnapshot(
 
     lir_mod.RcInsert.insertRcOpsIntoSymbolDefsBestEffort(allocator, &lir_store, &layout_store);
 
-    const procs = lir_store.getProcs();
+    const procs = lir_store.getProcSpecs();
 
     // 10. Cross-compile for all targets and hash
     const RocTarget = roc_target.RocTarget;

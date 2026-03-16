@@ -23,7 +23,7 @@ const Op = WasmModule.Op;
 const ValType = WasmModule.ValType;
 const BlockType = WasmModule.BlockType;
 
-const LirProc = LIR.LirProc;
+const LirProcSpec = LIR.LirProcSpec;
 const CFStmtId = LIR.CFStmtId;
 const RcOpKind = enum { incref, decref, free };
 
@@ -43,7 +43,7 @@ stack_frame_size: u32 = 0,
 uses_stack_memory: bool = false,
 /// Local index of the frame pointer ($fp) - only valid when uses_stack_memory is true.
 fp_local: u32 = 0,
-/// Map from proc symbol key → compiled wasm function index (for LirProc compilation).
+/// Map from proc symbol key → compiled wasm function index (for LirProcSpec compilation).
 registered_procs: std.AutoHashMap(u64, u32),
 /// Type index for the RocOps function signature: (i32, i32) -> void.
 roc_ops_type_idx: u32 = 0,
@@ -316,9 +316,9 @@ pub fn generateModule(self: *Self, expr_id: LirExprId, result_layout: layout.Idx
     self.registerHostImports() catch return error.OutOfMemory;
 
     // Compile any procedures (recursive functions) before the main expression
-    const procs = self.store.getProcs();
-    if (procs.len > 0) {
-        self.compileAllProcs(procs) catch return error.OutOfMemory;
+    const proc_specs = self.store.getProcSpecs();
+    if (proc_specs.len > 0) {
+        self.compileAllProcSpecs(proc_specs) catch return error.OutOfMemory;
     }
 
     // Determine return type from the expression's actual wasm type.
@@ -4796,24 +4796,24 @@ fn emitConversion(self: *Self, source: ValType, target: ValType) Allocator.Error
 }
 
 /// Compile all LirProcs as separate wasm functions.
-/// Must be called before generateExpr so that call sites can find compiled procs.
-pub fn compileAllProcs(self: *Self, procs: []const LirProc) Allocator.Error!void {
+/// Must be called before generateExpr so that call sites can find compiled proc_specs.
+pub fn compileAllProcSpecs(self: *Self, proc_specs: []const LirProcSpec) Allocator.Error!void {
     // Two-pass compilation to support mutual recursion.
-    // Pass 1: Register ALL procs (create function types, get func_idx).
-    // This ensures that when compiling any proc body, all sibling procs
+    // Pass 1: Register ALL proc_specs (create function types, get func_idx).
+    // This ensures that when compiling any proc body, all sibling proc_specs
     // are already known and can be called without triggering recursive compilation.
-    for (procs) |proc| {
-        try self.registerProc(proc);
+    for (proc_specs) |proc| {
+        try self.registerProcSpec(proc);
     }
     // Pass 2: Compile proc bodies.
-    for (procs) |proc| {
-        try self.compileProcBody(proc);
+    for (proc_specs) |proc| {
+        try self.compileProcSpecBody(proc);
     }
 }
 
-/// Compile a single LirProc as a wasm function.
-/// Does NOT compile the body — that's done by compileProcBody.
-fn registerProc(self: *Self, proc: LirProc) Allocator.Error!void {
+/// Compile a single LirProcSpec as a wasm function.
+/// Does NOT compile the body — that's done by compileProcSpecBody.
+fn registerProcSpec(self: *Self, proc: LirProcSpec) Allocator.Error!void {
     const key: u64 = @bitCast(proc.name);
 
     // Build parameter types: roc_ops_ptr first, then arg_layouts
@@ -4834,11 +4834,11 @@ fn registerProc(self: *Self, proc: LirProc) Allocator.Error!void {
     self.registered_procs.put(key, func_idx) catch return error.OutOfMemory;
 }
 
-/// Compile a proc body. The proc must already be registered via registerProc.
-fn compileProcBody(self: *Self, proc: LirProc) Allocator.Error!void {
+/// Compile a proc body. The proc must already be registered via registerProcSpec.
+fn compileProcSpecBody(self: *Self, proc: LirProcSpec) Allocator.Error!void {
     const key: u64 = @bitCast(proc.name);
 
-    // Get the pre-registered func_idx (must exist — registerProc runs in pass 1)
+    // Get the pre-registered func_idx (must exist — registerProcSpec runs in pass 1)
     const func_idx = self.registered_procs.get(key) orelse unreachable;
 
     const arg_layouts = self.store.getLayoutIdxSpan(proc.arg_layouts);
@@ -4847,12 +4847,12 @@ fn compileProcBody(self: *Self, proc: LirProc) Allocator.Error!void {
     // Save current codegen state
     const saved = self.saveState() catch return error.OutOfMemory;
 
-    // Initialize fresh state with ALL registered procs (for mutual recursion)
+    // Initialize fresh state with ALL registered proc_specs (for mutual recursion)
     self.body = .empty;
     self.storage.locals = std.AutoHashMap(u64, Storage.LocalInfo).init(self.allocator);
     self.storage.next_local_idx = 0;
     self.storage.local_types = .empty;
-    // Note: registered_procs is NOT cleared — all pre-registered procs remain
+    // Note: registered_procs is NOT cleared — all pre-registered proc_specs remain
     // visible. This is critical for mutual recursion: when compiling is_even's
     // body, calls to is_odd must find its func_idx without re-compilation.
     self.stack_frame_size = 0;
@@ -5028,7 +5028,7 @@ fn restoreState(self: *Self, saved: SavedState) void {
     self.in_proc = saved.in_proc;
 }
 
-/// Generate code for a control flow statement (used in LirProc bodies).
+/// Generate code for a control flow statement (used in LirProcSpec bodies).
 fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
     if (stmt_id.isNone()) return;
     const stmt = self.store.getCFStmt(stmt_id);
@@ -5446,7 +5446,7 @@ fn bindCFLetPattern(self: *Self, pat: LirPattern, value_expr: LirExprId) Allocat
 /// just handles explicit direct-call symbols plus the residual runtime
 /// function-value expression path. No closure-specific dispatch.
 fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
-    const proc = self.store.getProc(c.proc);
+    const proc = self.store.getProcSpec(c.proc);
     const proc_key: u64 = @bitCast(proc.name);
     const func_idx = self.registered_procs.get(proc_key) orelse {
         if (std.debug.runtime_safety) {

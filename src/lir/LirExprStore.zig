@@ -22,7 +22,7 @@ const LirExpr = ir.LirExpr;
 const LirPattern = ir.LirPattern;
 const LirExprId = ir.LirExprId;
 const LirPatternId = ir.LirPatternId;
-const LirProcId = ir.LirProcId;
+const LirProcSpecId = ir.LirProcSpecId;
 const LirExprSpan = ir.LirExprSpan;
 const LirPatternSpan = ir.LirPatternSpan;
 const LirCaptureSpan = ir.LirCaptureSpan;
@@ -43,7 +43,7 @@ const CFSwitchBranchSpan = ir.CFSwitchBranchSpan;
 const CFMatchBranch = ir.CFMatchBranch;
 const CFMatchBranchSpan = ir.CFMatchBranchSpan;
 const LayoutIdxSpan = ir.LayoutIdxSpan;
-const LirProc = ir.LirProc;
+const LirProcSpec = ir.LirProcSpec;
 
 const Self = @This();
 
@@ -84,8 +84,8 @@ cf_switch_branches: std.ArrayList(CFSwitchBranch),
 /// Control flow match branches (pattern matching)
 cf_match_branches: std.ArrayList(CFMatchBranch),
 
-/// Complete procedures (for two-pass compilation)
-procs: std.ArrayList(LirProc),
+/// Complete proc specs (for two-pass compilation)
+proc_specs: std.ArrayList(LirProcSpec),
 
 /// Map from global symbol to its definition expression
 /// Used for looking up top-level definitions
@@ -118,7 +118,7 @@ pub fn init(allocator: Allocator) Self {
         .cf_stmts = std.ArrayList(CFStmt).empty,
         .cf_switch_branches = std.ArrayList(CFSwitchBranch).empty,
         .cf_match_branches = std.ArrayList(CFMatchBranch).empty,
-        .procs = std.ArrayList(LirProc).empty,
+        .proc_specs = std.ArrayList(LirProcSpec).empty,
         .symbol_defs = std.AutoHashMap(u64, LirExprId).init(allocator),
         .strings = base.StringLiteral.Store{},
         .allocator = allocator,
@@ -159,7 +159,7 @@ pub fn deinit(self: *Self) void {
     self.cf_stmts.deinit(self.allocator);
     self.cf_switch_branches.deinit(self.allocator);
     self.cf_match_branches.deinit(self.allocator);
-    self.procs.deinit(self.allocator);
+    self.proc_specs.deinit(self.allocator);
     self.symbol_defs.deinit();
     self.strings.deinit(self.allocator);
 }
@@ -505,31 +505,31 @@ pub fn getLayoutIdxSpan(self: *const Self, span: LayoutIdxSpan) []const layout.I
     return @ptrCast(slice);
 }
 
-/// Add a procedure and return its index
-pub fn addProc(self: *Self, proc: LirProc) Allocator.Error!LirProcId {
+/// Add a proc spec and return its index
+pub fn addProcSpec(self: *Self, proc: LirProcSpec) Allocator.Error!LirProcSpecId {
     std.debug.assert(proc.args.len == proc.arg_layouts.len);
-    const idx = self.procs.items.len;
-    try self.procs.append(self.allocator, proc);
+    const idx = self.proc_specs.items.len;
+    try self.proc_specs.append(self.allocator, proc);
     return @enumFromInt(@as(u32, @intCast(idx)));
 }
 
-/// Get a procedure by index
-pub fn getProc(self: *const Self, idx: LirProcId) LirProc {
-    return self.procs.items[@intFromEnum(idx)];
+/// Get a proc spec by index
+pub fn getProcSpec(self: *const Self, idx: LirProcSpecId) LirProcSpec {
+    return self.proc_specs.items[@intFromEnum(idx)];
 }
 
-pub fn getProcPtr(self: *Self, idx: LirProcId) *LirProc {
-    return &self.procs.items[@intFromEnum(idx)];
+pub fn getProcSpecPtr(self: *Self, idx: LirProcSpecId) *LirProcSpec {
+    return &self.proc_specs.items[@intFromEnum(idx)];
 }
 
-/// Get all procedures
-pub fn getProcs(self: *const Self) []const LirProc {
-    return self.procs.items;
+/// Get all proc specs
+pub fn getProcSpecs(self: *const Self) []const LirProcSpec {
+    return self.proc_specs.items;
 }
 
-/// Get the number of procedures
-pub fn procCount(self: *const Self) usize {
-    return self.procs.items.len;
+/// Get the number of proc specs
+pub fn procSpecCount(self: *const Self) usize {
+    return self.proc_specs.items.len;
 }
 
 /// Get the number of expressions in the store

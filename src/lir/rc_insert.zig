@@ -6386,8 +6386,8 @@ fn makeSymbol(idx: u29) LIR.Symbol {
     return LIR.Symbol.fromRaw(@as(u64, @as(u32, @bitCast(ident))));
 }
 
-fn makeProc(store: *LirExprStore, symbol: LIR.Symbol, ret_layout: LayoutIdx) !LIR.LirProcId {
-    return store.addProc(.{
+fn makeProc(store: *LirExprStore, symbol: LIR.Symbol, ret_layout: LayoutIdx) !LIR.LirProcSpecId {
+    return store.addProcSpec(.{
         .name = symbol,
         .args = LIR.LirPatternSpan.empty(),
         .arg_layouts = LIR.LayoutIdxSpan.empty(),

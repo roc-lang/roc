@@ -76,10 +76,10 @@ pub const CFMatchBranch = LIR.CFMatchBranch;
 pub const CFMatchBranchSpan = LIR.CFMatchBranchSpan;
 /// Layout index span type
 pub const LayoutIdxSpan = LIR.LayoutIdxSpan;
-/// LIR procedure ID type
-pub const LirProcId = LIR.LirProcId;
-/// LIR procedure type
-pub const LirProc = LIR.LirProc;
+/// LIR proc-spec ID type
+pub const LirProcSpecId = LIR.LirProcSpecId;
+/// LIR proc-spec type
+pub const LirProcSpec = LIR.LirProcSpec;
 
 test "lir tests" {
     std.testing.refAllDecls(@This());

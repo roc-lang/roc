@@ -4383,7 +4383,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     lir.RcInsert.insertRcOpsIntoSymbolDefsBestEffort(ctx.gpa, &lir_store, &layout_store);
 
     // Get procedures from the LIR store
-    const procs = lir_store.getProcs();
+    const procs = lir_store.getProcSpecs();
 
     // Compile to object file
     std.log.debug("Generating native code...", .{});

@@ -57,13 +57,13 @@ pub const LirPatternId = enum(u32) {
     }
 };
 
-/// Index into the LIR proc table.
-pub const LirProcId = enum(u32) {
+/// Index into the LIR proc-spec table.
+pub const LirProcSpecId = enum(u32) {
     _,
 
-    pub const none: LirProcId = @enumFromInt(std.math.maxInt(u32));
+    pub const none: LirProcSpecId = @enumFromInt(std.math.maxInt(u32));
 
-    pub fn isNone(self: LirProcId) bool {
+    pub fn isNone(self: LirProcSpecId) bool {
         return self == none;
     }
 };
@@ -307,7 +307,7 @@ pub const LirExpr = union(enum) {
     /// Explicit direct procedure call.
     proc_call: struct {
         /// The compiled procedure/proc-spec to call.
-        proc: LirProcId,
+        proc: LirProcSpecId,
         /// Arguments to the procedure.
         args: LirExprSpan,
         /// Layout of the return type.
@@ -398,7 +398,7 @@ pub const LirExpr = union(enum) {
         ret_layout: layout.Idx,
         /// Explicit proc used by low-level ops that need a backend-visible callable root,
         /// such as List.sort_with's comparator trampoline.
-        callable_proc: LirProcId = LirProcId.none,
+        callable_proc: LirProcSpecId = LirProcSpecId.none,
     },
 
     /// Debug expression (prints and returns value)
@@ -768,20 +768,19 @@ pub const CFStmt = union(enum) {
     },
 };
 
-/// A complete procedure/function ready for code generation
-/// This mirrors Roc's Proc struct in ir.rs
+/// A complete lowered proc spec ready for code generation.
 ///
-/// Key insight: procedures are compiled as complete units BEFORE any
-/// calls to them are processed. This ensures the function is fully
+/// Key insight: proc specs are compiled as complete units BEFORE any
+/// calls to them are processed. This ensures the callable is fully
 /// defined (including RET instruction) before recursion can occur.
-pub const LirProc = struct {
-    /// The symbol this procedure is bound to
+pub const LirProcSpec = struct {
+    /// The symbol this proc spec is bound to
     name: Symbol,
     /// Parameter patterns
     args: LirPatternSpan,
     /// Layout of each argument
     arg_layouts: LayoutIdxSpan,
-    /// The procedure body as a control flow statement
+    /// The proc body as a control flow statement
     body: CFStmtId,
     /// Return type layout
     ret_layout: layout.Idx,

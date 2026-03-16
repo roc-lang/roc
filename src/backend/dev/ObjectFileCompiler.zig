@@ -17,7 +17,7 @@ const Allocator = std.mem.Allocator;
 const layout = @import("layout");
 const lir = @import("lir");
 const LirExprStore = lir.LirExprStore;
-const LirProc = lir.LirProc;
+const LirProcSpec = lir.LirProcSpec;
 const RocTarget = @import("roc_target").RocTarget;
 
 const ObjectWriter = @import("ObjectWriter.zig");
@@ -29,7 +29,7 @@ pub const Entrypoint = struct {
     /// The exported symbol name (e.g., "roc__main")
     symbol_name: []const u8,
     /// The synthetic LIR proc to invoke for this entrypoint
-    proc: lir.LirProcId,
+    proc: lir.LirProcSpecId,
     /// Layouts of the arguments
     arg_layouts: []const layout.Idx,
     /// Layout of the return value
@@ -78,10 +78,10 @@ pub const ObjectFileCompiler = struct {
         lir_store: *const LirExprStore,
         layout_store: *const layout.Store,
         entrypoints: []const Entrypoint,
-        procs: []const LirProc,
+        proc_specs: []const LirProcSpec,
         target: RocTarget,
     ) CompilationError!CompilationResult {
-        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, procs, target);
+        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, proc_specs, target);
     }
 
     /// Compile to an object file and write it to a path.
@@ -90,7 +90,7 @@ pub const ObjectFileCompiler = struct {
         lir_store: *const LirExprStore,
         layout_store: *const layout.Store,
         entrypoints: []const Entrypoint,
-        procs: []const LirProc,
+        proc_specs: []const LirProcSpec,
         target: RocTarget,
         output_path: []const u8,
     ) CompilationError!void {
@@ -98,7 +98,7 @@ pub const ObjectFileCompiler = struct {
             lir_store,
             layout_store,
             entrypoints,
-            procs,
+            proc_specs,
             target,
         );
         defer result.deinit();
@@ -120,7 +120,7 @@ fn compileWithCodeGen(
     lir_store: *const LirExprStore,
     layout_store: *const layout.Store,
     entrypoints: []const Entrypoint,
-    procs: []const LirProc,
+    proc_specs: []const LirProcSpec,
     target: RocTarget,
 ) CompilationError!CompilationResult {
     if (entrypoints.len == 0) {
@@ -148,8 +148,8 @@ fn compileWithCodeGen(
     codegen.generation_mode = .object_file;
 
     // Compile all procedures first
-    if (procs.len > 0) {
-        codegen.compileAllProcs(procs) catch return CompilationError.OutOfMemory;
+    if (proc_specs.len > 0) {
+        codegen.compileAllProcSpecs(proc_specs) catch return CompilationError.OutOfMemory;
     }
 
     // Track symbols for object file generation
@@ -266,7 +266,7 @@ fn crossCompileDispatch(
     lir_store: *const LirExprStore,
     layout_store: *const layout.Store,
     entrypoints: []const Entrypoint,
-    procs: []const LirProc,
+    proc_specs: []const LirProcSpec,
     target: RocTarget,
 ) CompilationError!CompilationResult {
     const enum_info = @typeInfo(RocTarget).@"enum";
@@ -281,7 +281,7 @@ fn crossCompileDispatch(
                     lir_store,
                     layout_store,
                     entrypoints,
-                    procs,
+                    proc_specs,
                     comptime_target,
                 );
             } else {
