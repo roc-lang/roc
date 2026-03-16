@@ -4997,46 +4997,6 @@ pub fn compileAllProcs(self: *Self, procs: []const LirProc) Allocator.Error!void
     }
 }
 
-fn resolveBlockLocalExpr(self: *const Self, stmts: LIR.LirStmtSpan, symbol: Symbol) ?LirExprId {
-    const bindings = self.store.getStmts(stmts);
-    var i = bindings.len;
-    while (i > 0) {
-        i -= 1;
-        const binding = switch (bindings[i]) {
-            .decl, .mutate => |b| b,
-            .cell_init, .cell_store, .cell_drop => continue,
-        };
-        switch (self.store.getPattern(binding.pattern)) {
-            .bind => |bind| if (bind.symbol.eql(symbol)) return binding.expr,
-            .as_pattern => |as_pat| if (as_pat.symbol.eql(symbol)) return binding.expr,
-            else => {},
-        }
-    }
-    return null;
-}
-
-/// Peel through nominal/block wrappers to find the underlying lambda.
-/// Direct symbol discovery should have been canonicalized before codegen.
-/// Returns null for non-callable expressions.
-fn peelToLambda(self: *const Self, expr_id: LirExprId) ?LirExprId {
-    const expr = self.store.getExpr(expr_id);
-    return switch (expr) {
-        .lambda => expr_id,
-        .nominal => |n| self.peelToLambda(n.backing_expr),
-        .block => |b| blk: {
-            if (self.store.getExpr(b.final_expr) == .lookup) {
-                const lookup = self.store.getExpr(b.final_expr).lookup;
-                if (self.resolveBlockLocalExpr(b.stmts, lookup.symbol)) |bound_expr| {
-                    break :blk self.peelToLambda(bound_expr);
-                }
-            }
-            break :blk self.peelToLambda(b.final_expr);
-        },
-        .lookup => null,
-        else => null,
-    };
-}
-
 /// Compile a single LirProc as a wasm function.
 /// Does NOT compile the body — that's done by compileProcBody.
 fn registerProc(self: *Self, proc: LirProc) Allocator.Error!void {
@@ -5705,16 +5665,18 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
             };
         },
         .expr => |callee_expr_id| blk: {
-            const lambda_expr_id = self.peelToLambda(callee_expr_id) orelse {
-                const callee_expr = self.store.getExpr(callee_expr_id);
-                if (std.debug.runtime_safety) std.debug.panic(
-                    "generateCall: unexpected callee expr type '{s}'. " ++
-                        "Direct calls must use explicit callee symbols or resolve through lambda lowering.",
-                    .{@tagName(callee_expr)},
-                );
-                unreachable;
-            };
-            break :blk try self.compileLambda(lambda_expr_id, self.store.getExpr(lambda_expr_id).lambda);
+            const callee_expr = self.store.getExpr(callee_expr_id);
+            switch (callee_expr) {
+                .lambda => |lambda| break :blk try self.compileLambda(callee_expr_id, lambda),
+                else => {
+                    if (std.debug.runtime_safety) std.debug.panic(
+                        "generateCall: unexpected callee expr type '{s}'. " ++
+                            "Direct calls must use explicit callee symbols or direct lambda exprs.",
+                        .{@tagName(callee_expr)},
+                    );
+                    unreachable;
+                },
+            }
         },
     };
 
