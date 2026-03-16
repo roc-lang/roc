@@ -4099,6 +4099,18 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
 
     std.log.debug("Target: {s}, Link type: {s}", .{ @tagName(target), @tagName(link_type) });
 
+    // glibc targets require a full libc for linking, which is only available on Linux hosts
+    if (target.isDynamic() and builtin.target.os.tag != .linux) {
+        const result = platform_validation.targets_validator.ValidationResult{
+            .unsupported_glibc_cross = .{
+                .target = target,
+                .host_os = @tagName(builtin.target.os.tag),
+            },
+        };
+        _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+        return error.UnsupportedCrossCompilation;
+    }
+
     // Check if dev backend supports this target architecture
     const target_arch = target.toCpuArch();
     const target_os = target.toOsTag();
