@@ -1,3 +1,5 @@
+//! Canonicalize direct-call targets after MIR lowering and RC insertion.
+
 const std = @import("std");
 const base = @import("base");
 
@@ -24,9 +26,10 @@ const CachedDirectSymbol = union(enum) {
 
 const LocalLookup = union(enum) {
     shadowed,
-    target: CallTarget,
+    binding: CallCanonicalizePass.LocalBinding,
 };
 
+/// Rewrites backend-visible calls to use explicit direct callees where possible.
 pub const CallCanonicalizePass = struct {
     allocator: Allocator,
     store: *LirExprStore,
@@ -41,6 +44,7 @@ pub const CallCanonicalizePass = struct {
     const LocalBinding = struct {
         symbol: Symbol,
         target: ?CallTarget,
+        expr_id: ?LirExprId,
     };
 
     pub fn init(allocator: Allocator, store: *LirExprStore) Self {
@@ -82,7 +86,7 @@ pub const CallCanonicalizePass = struct {
         for (self.store.getProcs()) |proc| {
             const mark = self.local_bindings.items.len;
             for (self.store.getPatternSpan(proc.args)) |arg_pat| {
-                try self.recordPatternBindings(arg_pat, null);
+                try self.recordPatternBindings(arg_pat, null, null);
             }
             try self.visitCFStmt(proc.body, mark);
             self.local_bindings.shrinkRetainingCapacity(mark);
@@ -116,14 +120,14 @@ pub const CallCanonicalizePass = struct {
             .let_stmt => |let_stmt| {
                 try self.visitExpr(let_stmt.value, scope_mark);
                 const inner_mark = self.local_bindings.items.len;
-                try self.recordPatternBindings(let_stmt.pattern, self.resolveCanonicalCallee(let_stmt.value, scope_mark));
+                try self.recordPatternBindings(let_stmt.pattern, self.resolveCanonicalCallee(let_stmt.value, scope_mark), let_stmt.value);
                 try self.visitCFStmt(let_stmt.next, scope_mark);
                 self.local_bindings.shrinkRetainingCapacity(inner_mark);
             },
             .join => |join| {
                 const body_mark = self.local_bindings.items.len;
                 for (self.store.getPatternSpan(join.params)) |param_pat| {
-                    try self.recordPatternBindings(param_pat, null);
+                    try self.recordPatternBindings(param_pat, null, null);
                 }
                 try self.visitCFStmt(join.body, body_mark);
                 self.local_bindings.shrinkRetainingCapacity(body_mark);
@@ -149,7 +153,7 @@ pub const CallCanonicalizePass = struct {
                 try self.visitExpr(match_stmt.value, scope_mark);
                 for (self.store.getCFMatchBranches(match_stmt.branches)) |branch| {
                     const branch_mark = self.local_bindings.items.len;
-                    try self.recordPatternBindings(branch.pattern, null);
+                    try self.recordPatternBindings(branch.pattern, null, null);
                     if (!branch.guard.isNone()) try self.visitExpr(branch.guard, scope_mark);
                     try self.visitCFStmt(branch.body, scope_mark);
                     self.local_bindings.shrinkRetainingCapacity(branch_mark);
@@ -169,7 +173,7 @@ pub const CallCanonicalizePass = struct {
                     switch (stmt) {
                         .decl, .mutate => |binding| {
                             try self.visitExpr(binding.expr, scope_mark);
-                            try self.recordPatternBindings(binding.pattern, self.resolveCanonicalCallee(binding.expr, scope_mark));
+                            try self.recordPatternBindings(binding.pattern, self.resolveCanonicalCallee(binding.expr, scope_mark), binding.expr);
                         },
                         .cell_init, .cell_store => |binding| try self.visitExpr(binding.expr, scope_mark),
                         .cell_drop => {},
@@ -181,7 +185,7 @@ pub const CallCanonicalizePass = struct {
             .lambda => |lambda| {
                 const lambda_mark = self.local_bindings.items.len;
                 for (self.store.getPatternSpan(lambda.params)) |param_pat| {
-                    try self.recordPatternBindings(param_pat, null);
+                    try self.recordPatternBindings(param_pat, null, null);
                 }
                 try self.visitExpr(lambda.body, scope_mark);
                 self.local_bindings.shrinkRetainingCapacity(lambda_mark);
@@ -197,7 +201,7 @@ pub const CallCanonicalizePass = struct {
                 try self.visitExpr(match_expr.value, scope_mark);
                 for (self.store.getMatchBranches(match_expr.branches)) |branch| {
                     const branch_mark = self.local_bindings.items.len;
-                    try self.recordPatternBindings(branch.pattern, null);
+                    try self.recordPatternBindings(branch.pattern, null, null);
                     if (!branch.guard.isNone()) try self.visitExpr(branch.guard, scope_mark);
                     try self.visitExpr(branch.body, scope_mark);
                     self.local_bindings.shrinkRetainingCapacity(branch_mark);
@@ -206,7 +210,7 @@ pub const CallCanonicalizePass = struct {
             .for_loop => |for_loop| {
                 try self.visitExpr(for_loop.list_expr, scope_mark);
                 const loop_mark = self.local_bindings.items.len;
-                try self.recordPatternBindings(for_loop.elem_pattern, null);
+                try self.recordPatternBindings(for_loop.elem_pattern, null, null);
                 try self.visitExpr(for_loop.body, scope_mark);
                 self.local_bindings.shrinkRetainingCapacity(loop_mark);
             },
@@ -286,14 +290,14 @@ pub const CallCanonicalizePass = struct {
                 if (self.resolveLocalBinding(lookup.symbol, scope_mark)) |local| {
                     break :blk switch (local) {
                         .shadowed => null,
-                        .target => |target| target,
+                        .binding => |binding| binding.target orelse null,
                     };
-                }
-                if (self.resolveCanonicalCalleeFromSymbolDef(lookup.symbol, scope_mark)) |target| {
-                    break :blk target;
                 }
                 if (self.resolveDirectSymbolForGlobalSymbol(lookup.symbol)) |symbol| {
                     break :blk .{ .direct = symbol };
+                }
+                if (self.resolveCanonicalCalleeFromSymbolDef(lookup.symbol, scope_mark)) |target| {
+                    break :blk target;
                 }
                 break :blk null;
             },
@@ -303,7 +307,7 @@ pub const CallCanonicalizePass = struct {
 
                 for (self.store.getStmts(block.stmts)) |stmt| {
                     switch (stmt) {
-                        .decl, .mutate => |binding| self.recordPatternBindings(binding.pattern, self.resolveCanonicalCallee(binding.expr, scope_mark)) catch return null,
+                        .decl, .mutate => |binding| self.recordPatternBindings(binding.pattern, self.resolveCanonicalCallee(binding.expr, scope_mark), binding.expr) catch return null,
                         .cell_init, .cell_store, .cell_drop => {},
                     }
                 }
@@ -336,7 +340,7 @@ pub const CallCanonicalizePass = struct {
 
                 for (self.store.getStmts(block.stmts)) |stmt| {
                     switch (stmt) {
-                        .decl, .mutate => |binding| self.recordPatternBindings(binding.pattern, self.resolveCanonicalCallee(binding.expr, scope_mark)) catch return null,
+                        .decl, .mutate => |binding| self.recordPatternBindings(binding.pattern, self.resolveCanonicalCallee(binding.expr, scope_mark), binding.expr) catch return null,
                         .cell_init, .cell_store, .cell_drop => {},
                     }
                 }
@@ -347,7 +351,10 @@ pub const CallCanonicalizePass = struct {
                 if (self.resolveLocalBinding(lookup.symbol, scope_mark)) |local| {
                     break :blk switch (local) {
                         .shadowed => null,
-                        .target => null,
+                        .binding => |binding| if (binding.expr_id) |bound_expr|
+                            self.resolveCanonicalStructField(bound_expr, field_idx, scope_mark)
+                        else
+                            null,
                     };
                 }
 
@@ -359,6 +366,32 @@ pub const CallCanonicalizePass = struct {
         };
     }
 
+    fn resolveCallableDefForLocalBinding(self: *Self, binding: LocalBinding, scope_mark: usize) ?LirExprId {
+        if (binding.target) |target| {
+            return switch (target) {
+                .direct => |symbol| self.resolveCallableDefForGlobalSymbol(symbol),
+                .expr => |target_expr| self.resolveCallableDefExpr(target_expr, scope_mark),
+            };
+        }
+        if (binding.expr_id) |expr_id| {
+            return self.resolveCallableDefExpr(expr_id, scope_mark);
+        }
+        return null;
+    }
+
+    fn resolveDirectSymbolForLocalBinding(self: *Self, binding: LocalBinding, scope_mark: usize) ?Symbol {
+        if (binding.target) |target| {
+            return switch (target) {
+                .direct => |symbol| symbol,
+                .expr => |target_expr| self.resolveUnderlyingDirectSymbol(target_expr, scope_mark),
+            };
+        }
+        if (binding.expr_id) |expr_id| {
+            return self.resolveUnderlyingDirectSymbol(expr_id, scope_mark);
+        }
+        return null;
+    }
+
     fn resolveLocalBinding(self: *Self, symbol: Symbol, scope_mark: usize) ?LocalLookup {
         var i = self.local_bindings.items.len;
         while (i > scope_mark) {
@@ -366,8 +399,8 @@ pub const CallCanonicalizePass = struct {
             const binding = self.local_bindings.items[i];
             if (!binding.symbol.eql(symbol)) continue;
 
-            if (binding.target) |target| {
-                return .{ .target = target };
+            if (binding.target != null or binding.expr_id != null) {
+                return .{ .binding = binding };
             }
             return .shadowed;
         }
@@ -426,7 +459,7 @@ pub const CallCanonicalizePass = struct {
 
                 for (self.store.getStmts(block.stmts)) |stmt| {
                     switch (stmt) {
-                        .decl, .mutate => |binding| self.recordPatternBindings(binding.pattern, self.resolveCanonicalCallee(binding.expr, scope_mark)) catch return null,
+                        .decl, .mutate => |binding| self.recordPatternBindings(binding.pattern, self.resolveCanonicalCallee(binding.expr, scope_mark), binding.expr) catch return null,
                         .cell_init, .cell_store, .cell_drop => {},
                     }
                 }
@@ -437,10 +470,7 @@ pub const CallCanonicalizePass = struct {
                 if (self.resolveLocalBinding(lookup.symbol, scope_mark)) |local| {
                     break :blk switch (local) {
                         .shadowed => null,
-                        .target => |target| switch (target) {
-                            .direct => |symbol| self.resolveCallableDefForGlobalSymbol(symbol),
-                            .expr => |target_expr| self.resolveCallableDefExpr(target_expr, scope_mark),
-                        },
+                        .binding => |binding| self.resolveCallableDefForLocalBinding(binding, scope_mark),
                     };
                 }
                 break :blk self.resolveCallableDefForGlobalSymbol(lookup.symbol);
@@ -488,10 +518,7 @@ pub const CallCanonicalizePass = struct {
                 if (self.resolveLocalBinding(lookup.symbol, scope_mark)) |local| {
                     break :blk switch (local) {
                         .shadowed => null,
-                        .target => |target| switch (target) {
-                            .direct => |symbol| symbol,
-                            .expr => |target_expr| self.resolveUnderlyingDirectSymbol(target_expr, scope_mark),
-                        },
+                        .binding => |binding| self.resolveDirectSymbolForLocalBinding(binding, scope_mark),
                     };
                 }
                 break :blk self.resolveDirectSymbolForGlobalSymbol(lookup.symbol);
@@ -502,7 +529,7 @@ pub const CallCanonicalizePass = struct {
 
                 for (self.store.getStmts(block.stmts)) |stmt| {
                     switch (stmt) {
-                        .decl, .mutate => |binding| self.recordPatternBindings(binding.pattern, self.resolveCanonicalCallee(binding.expr, scope_mark)) catch return null,
+                        .decl, .mutate => |binding| self.recordPatternBindings(binding.pattern, self.resolveCanonicalCallee(binding.expr, scope_mark), binding.expr) catch return null,
                         .cell_init, .cell_store, .cell_drop => {},
                     }
                 }
@@ -524,20 +551,21 @@ pub const CallCanonicalizePass = struct {
         self: *Self,
         pattern_id: LirPatternId,
         target: ?CallTarget,
+        expr_id: ?LirExprId,
     ) Allocator.Error!void {
         const pattern = self.store.getPattern(pattern_id);
         switch (pattern) {
-            .bind => |bind| try self.local_bindings.append(self.allocator, .{ .symbol = bind.symbol, .target = target }),
+            .bind => |bind| try self.local_bindings.append(self.allocator, .{ .symbol = bind.symbol, .target = target, .expr_id = expr_id }),
             .as_pattern => |as_pattern| {
-                try self.local_bindings.append(self.allocator, .{ .symbol = as_pattern.symbol, .target = target });
-                try self.recordPatternBindings(as_pattern.inner, null);
+                try self.local_bindings.append(self.allocator, .{ .symbol = as_pattern.symbol, .target = target, .expr_id = expr_id });
+                try self.recordPatternBindings(as_pattern.inner, null, null);
             },
-            .tag => |tag_pat| for (self.store.getPatternSpan(tag_pat.args)) |arg_pat| try self.recordPatternBindings(arg_pat, null),
-            .struct_ => |struct_pat| for (self.store.getPatternSpan(struct_pat.fields)) |field_pat| try self.recordPatternBindings(field_pat, null),
+            .tag => |tag_pat| for (self.store.getPatternSpan(tag_pat.args)) |arg_pat| try self.recordPatternBindings(arg_pat, null, null),
+            .struct_ => |struct_pat| for (self.store.getPatternSpan(struct_pat.fields)) |field_pat| try self.recordPatternBindings(field_pat, null, null),
             .list => |list_pat| {
-                for (self.store.getPatternSpan(list_pat.prefix)) |prefix_pat| try self.recordPatternBindings(prefix_pat, null);
-                if (!list_pat.rest.isNone()) try self.recordPatternBindings(list_pat.rest, null);
-                for (self.store.getPatternSpan(list_pat.suffix)) |suffix_pat| try self.recordPatternBindings(suffix_pat, null);
+                for (self.store.getPatternSpan(list_pat.prefix)) |prefix_pat| try self.recordPatternBindings(prefix_pat, null, null);
+                if (!list_pat.rest.isNone()) try self.recordPatternBindings(list_pat.rest, null, null);
+                for (self.store.getPatternSpan(list_pat.suffix)) |suffix_pat| try self.recordPatternBindings(suffix_pat, null, null);
             },
             .wildcard,
             .int_literal,
@@ -548,6 +576,7 @@ pub const CallCanonicalizePass = struct {
     }
 };
 
+/// Canonicalize direct-call targets across the provided roots and all symbol/proc defs.
 pub fn canonicalizeDirectCalls(
     allocator: Allocator,
     store: *LirExprStore,

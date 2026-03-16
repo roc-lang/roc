@@ -38,6 +38,25 @@ const Check = check.Check;
 const Can = can.Can;
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
+const LirExprId = lir.LIR.LirExprId;
+const LirSymbol = lir.LIR.Symbol;
+
+fn callCalleeExprId(call: anytype) ?LirExprId {
+    return switch (call.callee) {
+        .expr => |expr_id| expr_id,
+        .direct => null,
+    };
+}
+
+fn callTargetsSymbol(store: *const LirExprStore, call: anytype, target: LirSymbol) bool {
+    return switch (call.callee) {
+        .direct => |symbol| symbol.eql(target),
+        .expr => |expr_id| blk: {
+            const callee_expr = store.getExpr(expr_id);
+            break :blk callee_expr == .lookup and callee_expr.lookup.symbol.eql(target);
+        },
+    };
+}
 const Allocators = base.Allocators;
 const MIR = mir.MIR;
 const LambdaSet = mir.LambdaSet;
@@ -3228,9 +3247,10 @@ test "dev lowering: imported List.any directly calls passed predicate member" {
             const expr = store.getExpr(expr_id);
             switch (expr) {
                 .call => |call| {
-                    const fn_expr = store.getExpr(call.fn_expr);
-                    if (fn_expr == .lookup and fn_expr.lookup.symbol.eql(target)) return true;
-                    if (containsCallTo(store, call.fn_expr, target)) return true;
+                    if (callTargetsSymbol(store, call, target)) return true;
+                    if (callCalleeExprId(call)) |callee_expr| {
+                        if (containsCallTo(store, callee_expr, target)) return true;
+                    }
                     for (store.getExprSpan(call.args)) |arg| {
                         if (containsCallTo(store, arg, target)) return true;
                     }
@@ -3363,7 +3383,9 @@ test "dev lowering: imported List.any directly calls passed predicate member" {
                     return false;
                 },
                 .call => |call| {
-                    if (containsEarlyReturn(store, call.fn_expr)) return true;
+                    if (callCalleeExprId(call)) |callee_expr| {
+                        if (containsEarlyReturn(store, callee_expr)) return true;
+                    }
                     for (store.getExprSpan(call.args)) |arg| {
                         if (containsEarlyReturn(store, arg)) return true;
                     }
@@ -3467,7 +3489,9 @@ test "dev lowering: imported List.any directly calls passed predicate member" {
                     return null;
                 },
                 .call => |call| {
-                    if (firstEarlyReturnLayout(store, call.fn_expr)) |found| return found;
+                    if (callCalleeExprId(call)) |callee_expr| {
+                        if (firstEarlyReturnLayout(store, callee_expr)) |found| return found;
+                    }
                     for (store.getExprSpan(call.args)) |arg| {
                         if (firstEarlyReturnLayout(store, arg)) |found| return found;
                     }
@@ -3667,9 +3691,10 @@ test "dev lowering: local any-style HOF directly calls passed predicate member" 
             const expr = store.getExpr(expr_id);
             switch (expr) {
                 .call => |call| {
-                    const fn_expr = store.getExpr(call.fn_expr);
-                    if (fn_expr == .lookup and fn_expr.lookup.symbol.eql(target)) return true;
-                    if (containsCallTo(store, call.fn_expr, target)) return true;
+                    if (callTargetsSymbol(store, call, target)) return true;
+                    if (callCalleeExprId(call)) |callee_expr| {
+                        if (containsCallTo(store, callee_expr, target)) return true;
+                    }
                     for (store.getExprSpan(call.args)) |arg| {
                         if (containsCallTo(store, arg, target)) return true;
                     }
@@ -3848,7 +3873,9 @@ test "dev lowering: list rest pattern emits two list decrefs" {
                     }
                 },
                 .call => |call| {
-                    walk(store, ls, call.fn_expr, counts);
+                    if (callCalleeExprId(call)) |callee_expr| {
+                        walk(store, ls, callee_expr, counts);
+                    }
                     for (store.getExprSpan(call.args)) |arg| walk(store, ls, arg, counts);
                 },
                 .low_level => |ll| for (store.getExprSpan(ll.args)) |arg| walk(store, ls, arg, counts),
@@ -3956,7 +3983,9 @@ test "dev lowering: list rest pattern emits two list decrefs" {
                     break :blk false;
                 },
                 .call => |call| blk: {
-                    if (exprUsesSymbol(store, call.fn_expr, symbol)) break :blk true;
+                    if (callCalleeExprId(call)) |callee_expr| {
+                        if (exprUsesSymbol(store, callee_expr, symbol)) break :blk true;
+                    }
                     for (store.getExprSpan(call.args)) |arg| {
                         if (exprUsesSymbol(store, arg, symbol)) break :blk true;
                     }
@@ -4059,7 +4088,10 @@ test "dev lowering: list rest pattern emits two list decrefs" {
                     break :blk total;
                 },
                 .call => |call| blk: {
-                    var total: u32 = countDecrefsForSymbol(store, call.fn_expr, symbol);
+                    var total: u32 = 0;
+                    if (callCalleeExprId(call)) |callee_expr| {
+                        total += countDecrefsForSymbol(store, callee_expr, symbol);
+                    }
                     for (store.getExprSpan(call.args)) |arg| total += countDecrefsForSymbol(store, arg, symbol);
                     break :blk total;
                 },
@@ -4244,7 +4276,9 @@ test "dev lowering: mutable loop append decrefs mutable result binding once" {
                 .for_loop => |loop| containsCellLoad(store, loop.list_expr, symbol) or containsCellLoad(store, loop.body, symbol),
                 .while_loop => |loop| containsCellLoad(store, loop.cond, symbol) or containsCellLoad(store, loop.body, symbol),
                 .call => |call| blk: {
-                    if (containsCellLoad(store, call.fn_expr, symbol)) break :blk true;
+                    if (callCalleeExprId(call)) |callee_expr| {
+                        if (containsCellLoad(store, callee_expr, symbol)) break :blk true;
+                    }
                     for (store.getExprSpan(call.args)) |arg| if (containsCellLoad(store, arg, symbol)) break :blk true;
                     break :blk false;
                 },
@@ -4333,7 +4367,10 @@ test "dev lowering: mutable loop append decrefs mutable result binding once" {
                     break :blk total;
                 },
                 .call => |call| blk: {
-                    var total: u32 = countCellDrops(store, call.fn_expr, symbol);
+                    var total: u32 = 0;
+                    if (callCalleeExprId(call)) |callee_expr| {
+                        total += countCellDrops(store, callee_expr, symbol);
+                    }
                     for (store.getExprSpan(call.args)) |arg| total += countCellDrops(store, arg, symbol);
                     break :blk total;
                 },
@@ -4425,7 +4462,10 @@ test "dev lowering: mutable loop append decrefs mutable result binding once" {
                     break :blk total;
                 },
                 .call => |call| blk: {
-                    var total: u32 = countDecrefsForSymbol(store, call.fn_expr, symbol);
+                    var total: u32 = 0;
+                    if (callCalleeExprId(call)) |callee_expr| {
+                        total += countDecrefsForSymbol(store, callee_expr, symbol);
+                    }
                     for (store.getExprSpan(call.args)) |arg| total += countDecrefsForSymbol(store, arg, symbol);
                     break :blk total;
                 },
@@ -4617,7 +4657,10 @@ test "dev lowering: mutable list reassignment keeps both decrefs on the reassign
                     break :blk total;
                 },
                 .call => |call| blk: {
-                    var total: u32 = countDecrefsForSymbol(store, call.fn_expr, symbol);
+                    var total: u32 = 0;
+                    if (callCalleeExprId(call)) |callee_expr| {
+                        total += countDecrefsForSymbol(store, callee_expr, symbol);
+                    }
                     for (store.getExprSpan(call.args)) |arg| total += countDecrefsForSymbol(store, arg, symbol);
                     break :blk total;
                 },
@@ -4714,7 +4757,10 @@ test "dev lowering: mutable list reassignment keeps both decrefs on the reassign
                     break :blk total;
                 },
                 .call => |call| blk: {
-                    var total: u32 = countCellDecrefs(store, call.fn_expr, cell);
+                    var total: u32 = 0;
+                    if (callCalleeExprId(call)) |callee_expr| {
+                        total += countCellDecrefs(store, callee_expr, cell);
+                    }
                     for (store.getExprSpan(call.args)) |arg| total += countCellDecrefs(store, arg, cell);
                     break :blk total;
                 },
@@ -4812,7 +4858,10 @@ test "dev lowering: mutable list reassignment keeps both decrefs on the reassign
                     break :blk total;
                 },
                 .call => |call| blk: {
-                    var total: u32 = countCellDrops(store, call.fn_expr, cell);
+                    var total: u32 = 0;
+                    if (callCalleeExprId(call)) |callee_expr| {
+                        total += countCellDrops(store, callee_expr, cell);
+                    }
                     for (store.getExprSpan(call.args)) |arg| total += countCellDrops(store, arg, cell);
                     break :blk total;
                 },
@@ -5283,9 +5332,11 @@ test "LIR parenthesized record field closure call registers synthetic closure bi
     const call_args = lir_store.getExprSpan(call_expr.call.args);
     try std.testing.expectEqual(@as(usize, 2), call_args.len);
 
-    const lifted_lookup = lir_store.getExpr(call_expr.call.fn_expr);
-    try std.testing.expect(lifted_lookup == .lookup);
-    const lifted_def = lir_store.getSymbolDef(lifted_lookup.lookup.symbol) orelse return error.TestUnexpectedResult;
+    const lifted_symbol = switch (call_expr.call.callee) {
+        .direct => |symbol| symbol,
+        .expr => return error.TestUnexpectedResult,
+    };
+    const lifted_def = lir_store.getCallableDef(lifted_symbol) orelse return error.TestUnexpectedResult;
     const lifted_expr = lir_store.getExpr(lifted_def);
     try std.testing.expect(lifted_expr == .lambda);
 
