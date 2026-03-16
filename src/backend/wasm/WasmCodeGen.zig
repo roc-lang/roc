@@ -4615,13 +4615,6 @@ fn emitI128TryToI128(self: *Self) Allocator.Error!void {
 /// This is the safe way to map layout indices that might be dynamically allocated
 /// (not one of the well-known sentinel values like .bool, .i32, etc.).
 /// If a lambda's body returns an unwrapped_capture closure, get the capture's layout.
-/// The runtime return value is the capture itself, not a closure pointer.
-/// In the new pipeline, closures are lambda-lifted and represented as generic LIR
-/// constructs. There are no unwrapped capture closures in LIR anymore.
-fn getUnwrappedCaptureLayout(_: *const Self, _: LirExprId) ?layout.Idx {
-    return null;
-}
-
 fn resolveValType(self: *const Self, layout_idx: layout.Idx) ValType {
     return WasmLayout.resultValTypeWithStore(layout_idx, self.getLayoutStore());
 }

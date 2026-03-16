@@ -291,12 +291,14 @@ pub const ClosureMember = struct {
     capture_bindings: CaptureBindingSpan,
 };
 
+/// Whether a proc is recursive, and if so whether the recursion is tail-recursive.
 pub const ProcRecursion = enum {
     not_recursive,
     recursive,
     tail_recursive,
 };
 
+/// Hosted proc metadata used to link proc-backed calls to platform-provided implementations.
 pub const HostedProc = struct {
     symbol_name: Ident.Idx,
     index: u32,

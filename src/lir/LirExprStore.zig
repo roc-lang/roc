@@ -518,6 +518,7 @@ pub fn getProcSpec(self: *const Self, idx: LirProcSpecId) LirProcSpec {
     return self.proc_specs.items[@intFromEnum(idx)];
 }
 
+/// Get a mutable proc spec by index.
 pub fn getProcSpecPtr(self: *Self, idx: LirProcSpecId) *LirProcSpec {
     return &self.proc_specs.items[@intFromEnum(idx)];
 }

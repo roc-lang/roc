@@ -43,10 +43,8 @@ const LirPatternSpan = LIR.LirPatternSpan;
 const LirProcSpec = LIR.LirProcSpec;
 const LirProcSpecId = LIR.LirProcSpecId;
 const LirStmt = LIR.LirStmt;
-const LirStmtSpan = LIR.LirStmtSpan;
 const LirMatchBranch = LIR.LirMatchBranch;
 const LirCapture = LIR.LirCapture;
-const CFStmt = LIR.CFStmt;
 const CFStmtId = LIR.CFStmtId;
 const LayoutIdxSpan = LIR.LayoutIdxSpan;
 const SelfRecursive = LIR.SelfRecursive;
@@ -559,14 +557,6 @@ fn zeroSizedSpecializationLayoutFromMonotype(self: *Self, mono_idx: Monotype.Idx
         return canonical;
     }
     return .zst;
-}
-
-fn isFunctionLayout(self: *Self, layout_idx: layout.Idx) bool {
-    if (layout_idx == layout.Idx.none) return false;
-    if (layout_idx == layout.Idx.named_fn) return true;
-    const idx_int = @intFromEnum(layout_idx);
-    if (idx_int >= self.layout_store.layouts.len()) unreachable;
-    return self.layout_store.getLayout(layout_idx).tag == .closure;
 }
 
 fn selfRecursiveForProc(proc: MIR.Proc) SelfRecursive {
@@ -3638,12 +3628,6 @@ fn monotypesStructurallyEqualRec(
     };
 }
 
-/// Follow lookups/blocks/closure origins to recover the proc parameter span.
-fn resolveToLambdaParams(self: *Self, expr_id: MIR.ExprId) ?MIR.PatternSpan {
-    const proc_id = self.resolveToProcId(expr_id) orelse return null;
-    return self.mir_store.getProc(proc_id).params;
-}
-
 fn functionParamSymbol(self: *Self, param_pat_id: MIR.PatternId) ?MIR.Symbol {
     const param_pat = self.mir_store.getPattern(param_pat_id);
     return switch (param_pat) {
@@ -5694,7 +5678,7 @@ fn testMirProc(
     body: MIR.ExprId,
     ret_monotype: Monotype.Idx,
 ) !MIR.ProcId {
-    return mir_store.addProcSpec(allocator, .{
+    return mir_store.addProc(allocator, .{
         .fn_monotype = fn_monotype,
         .params = params,
         .body = body,

@@ -39,14 +39,9 @@ const Can = can.Can;
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
 const LirExprId = lir.LIR.LirExprId;
-const LirSymbol = lir.LIR.Symbol;
 
 fn callCalleeExprId(_: anytype) ?LirExprId {
     return null;
-}
-
-fn callTargetsSymbol(store: *const LirExprStore, call: anytype, target: LirSymbol) bool {
-    return store.getProcSpec(call.proc).name.eql(target);
 }
 
 fn mirProcIdFromExpr(mir_store: *const MIR.Store, expr_id: MIR.ExprId) ?MIR.ProcId {
@@ -3544,7 +3539,6 @@ test "dev lowering: imported List.any directly calls passed predicate member" {
                 else => return null,
             }
         }
-
     };
 
     var any_lir_proc: ?lir.LIR.LirProcSpec = null;
