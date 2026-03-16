@@ -214,9 +214,20 @@ pub const WasmEvaluator = struct {
         var mir_store = MIR.Store.init(self.allocator) catch return error.OutOfMemory;
         defer mir_store.deinit(self.allocator);
 
+        var monomorphization = mir.Monomorphize.runExpr(
+            self.allocator,
+            all_module_envs,
+            &module_env.types,
+            module_idx,
+            null,
+            expr_idx,
+        ) catch return error.OutOfMemory;
+        defer monomorphization.deinit(self.allocator);
+
         var mir_lower = mir.Lower.init(
             self.allocator,
             &mir_store,
+            &monomorphization,
             all_module_envs,
             &module_env.types,
             module_idx,

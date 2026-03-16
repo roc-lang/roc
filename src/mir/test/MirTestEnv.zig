@@ -14,6 +14,7 @@ const Allocators = base.Allocators;
 const Check = @import("check").Check;
 
 const MIR = @import("../MIR.zig");
+const Monomorphize = @import("../Monomorphize.zig");
 const Lower = @import("../Lower.zig");
 
 const testing = std.testing;
@@ -102,6 +103,7 @@ checker: Check,
 builtin_indices: CIR.BuiltinIndices,
 
 mir_store: *MIR.Store,
+monomorphization: *Monomorphize.Result,
 lower: *Lower,
 
 builtin_module: LoadedModule,
@@ -228,11 +230,17 @@ pub fn initFull(module_name: []const u8, source: []const u8) !MirTestEnv {
     all_module_envs_slice[0] = @constCast(builtin_module.env);
     all_module_envs_slice[1] = module_env;
 
+    const monomorphization = try gpa.create(Monomorphize.Result);
+    errdefer gpa.destroy(monomorphization);
+    monomorphization.* = try Monomorphize.Result.init(gpa, 1, null);
+    errdefer monomorphization.deinit(gpa);
+
     const lower = try gpa.create(Lower);
     errdefer gpa.destroy(lower);
     lower.* = try Lower.init(
         gpa,
         mir_store,
+        monomorphization,
         @as([]const *ModuleEnv, all_module_envs_slice),
         &module_env.types,
         1, // current_module_idx = test module (Builtin is at index 0)
@@ -248,6 +256,7 @@ pub fn initFull(module_name: []const u8, source: []const u8) !MirTestEnv {
         .checker = checker,
         .builtin_indices = builtin_indices,
         .mir_store = mir_store,
+        .monomorphization = monomorphization,
         .lower = lower,
         .builtin_module = builtin_module,
     };
@@ -423,11 +432,17 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     all_module_envs_slice[1] = other_env.module_env;
     all_module_envs_slice[2] = module_env;
 
+    const monomorphization = try gpa.create(Monomorphize.Result);
+    errdefer gpa.destroy(monomorphization);
+    monomorphization.* = try Monomorphize.Result.init(gpa, 2, null);
+    errdefer monomorphization.deinit(gpa);
+
     const lower = try gpa.create(Lower);
     errdefer gpa.destroy(lower);
     lower.* = try Lower.init(
         gpa,
         mir_store,
+        monomorphization,
         @as([]const *ModuleEnv, all_module_envs_slice),
         &module_env.types,
         2, // current_module_idx = this module
@@ -443,6 +458,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
         .checker = checker,
         .builtin_indices = builtin_indices,
         .mir_store = mir_store,
+        .monomorphization = monomorphization,
         .lower = lower,
         .builtin_module = other_env.builtin_module,
         .owns_builtin_module = false,
@@ -455,6 +471,8 @@ pub fn deinit(self: *MirTestEnv) void {
 
     self.lower.deinit();
     self.gpa.destroy(self.lower);
+    self.monomorphization.deinit(self.gpa);
+    self.gpa.destroy(self.monomorphization);
     self.mir_store.deinit(self.gpa);
     self.gpa.destroy(self.mir_store);
     self.gpa.free(all_module_envs_ptr);

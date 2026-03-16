@@ -4054,7 +4054,17 @@ fn processDevObjectSnapshot(
     };
     defer mir_store.deinit(allocator);
 
-    var mir_lower = mir_mod.Lower.init(allocator, &mir_store, all_module_envs, platform_types, platform_module_idx, app_module_idx) catch {
+    var monomorphization = mir_mod.Monomorphize.Result.init(
+        allocator,
+        platform_module_idx,
+        null,
+    ) catch {
+        std.log.err("Failed to create monomorphization result", .{});
+        return false;
+    };
+    defer monomorphization.deinit(allocator);
+
+    var mir_lower = mir_mod.Lower.init(allocator, &mir_store, &monomorphization, all_module_envs, platform_types, platform_module_idx, app_module_idx) catch {
         std.log.err("Failed to create MIR lowerer", .{});
         return false;
     };

@@ -8,6 +8,7 @@ const std = @import("std");
 
 pub const MIR = @import("MIR.zig");
 pub const Monotype = @import("Monotype.zig");
+pub const Monomorphize = @import("Monomorphize.zig");
 pub const Lower = @import("Lower.zig");
 pub const LambdaSet = @import("LambdaSet.zig");
 
@@ -32,6 +33,7 @@ test "mir tests" {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(MIR);
     std.testing.refAllDecls(Monotype);
+    std.testing.refAllDecls(Monomorphize);
     std.testing.refAllDecls(Lower);
     std.testing.refAllDecls(LambdaSet);
     std.testing.refAllDecls(@import("test/lower_test.zig"));

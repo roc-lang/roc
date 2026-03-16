@@ -10,6 +10,7 @@ const types = @import("types");
 const MIR = @import("../MIR.zig");
 const LambdaSet = @import("../LambdaSet.zig");
 const Monotype = @import("../Monotype.zig");
+const Monomorphize = @import("../Monomorphize.zig");
 const Lower = @import("../Lower.zig");
 const MirTestEnv = @import("MirTestEnv.zig");
 
@@ -406,9 +407,13 @@ test "Lower: init and deinit" {
 
     const all_module_envs = [_]*ModuleEnv{module_env};
 
+    var monomorphization = try Monomorphize.Result.init(test_allocator, 0, null);
+    defer monomorphization.deinit(test_allocator);
+
     var lower = try Lower.init(
         test_allocator,
         &store,
+        &monomorphization,
         @as([]const *ModuleEnv, &all_module_envs),
         &module_env.types,
         0,

@@ -1,7 +1,8 @@
 //! CIR → MIR Lowering Pass
 //!
 //! Converts polymorphic, sugar-rich CIR expressions into monomorphic,
-//! desugared MIR expressions. This replaces the Monomorphizer.
+//! desugared MIR expressions. Callable instantiation must already be decided
+//! by explicit monomorphization before this pass runs.
 //!
 //! Key transformations:
 //! - `e_if` → `match` on Bool
@@ -20,6 +21,7 @@ const types = @import("types");
 
 const MIR = @import("MIR.zig");
 const Monotype = @import("Monotype.zig");
+const Monomorphize = @import("Monomorphize.zig");
 
 const Ident = base.Ident;
 const Region = base.Region;
@@ -30,23 +32,6 @@ const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
 
 const Self = @This();
-
-const DeferredBlockCallable = struct {
-    pattern_idx: CIR.Pattern.Idx,
-    cir_expr: CIR.Expr.Idx,
-    module_idx: u32,
-    source_key: u64,
-    type_root: types.Var,
-    debug_name: MIR.Symbol,
-};
-
-const CallableTemplate = struct {
-    source_key: u64,
-    module_idx: u32,
-    cir_expr: CIR.Expr.Idx,
-    type_root: types.Var,
-    debug_name: MIR.Symbol,
-};
 
 const ResolvedDispatchTarget = struct {
     origin: Ident.Idx,
@@ -78,6 +63,9 @@ allocator: Allocator,
 
 /// Target MIR store
 store: *MIR.Store,
+
+/// Explicit callable-instantiation decisions computed before lowering.
+monomorphization: *const Monomorphize.Result,
 
 /// All module environments (indexed by module_idx)
 all_module_envs: []const *ModuleEnv,
@@ -123,14 +111,6 @@ nominal_cycle_breakers: std.AutoHashMap(types.Var, Monotype.Idx),
 /// Key is @bitCast(MIR.Symbol) → u64.
 lowered_symbols: std.AutoHashMap(u64, MIR.ExprId),
 
-/// Proc-backed callable instantiations keyed by (template source key, caller monotype).
-/// The stored expression is always a proc-backed MIR value (`proc_ref`/`closure_make`).
-callable_specializations: std.AutoHashMap(u128, MIR.ExprId),
-
-/// In-progress proc-backed callable instantiations keyed by (template source key, caller monotype).
-/// Used so recursive lookups can reuse the same proc-backed callable value during lowering.
-in_progress_callable_specializations: std.AutoHashMap(u128, MIR.ExprId),
-
 /// Metadata for opaque symbol IDs; populated at symbol construction time.
 symbol_metadata: std.AutoHashMap(u64, SymbolMetadata),
 
@@ -144,11 +124,6 @@ in_progress_defs: std.AutoHashMap(u64, void),
 /// Monotype currently being lowered for each in-progress symbol.
 /// Used to detect in-progress calls that need a distinct specialization symbol.
 in_progress_symbol_monotypes: std.AutoHashMap(u64, Monotype.Idx),
-
-/// Block-local polymorphic callable defs waiting for call-site type information.
-/// Key is CIR Pattern.Idx (as u32). Value holds the CIR expression and type root.
-/// Populated by `lowerBlock`, consumed by `e_lookup_local`.
-deferred_block_callables: std.AutoHashMap(u32, DeferredBlockCallable),
 
 /// Pre-resolved static dispatch targets keyed by (module_idx, expr_idx).
 /// Filled from type-checker constraints so MIR lowering uses authoritative
@@ -170,6 +145,7 @@ mono_scratches: Monotype.Store.Scratches,
 pub fn init(
     allocator: Allocator,
     store: *MIR.Store,
+    monomorphization: *const Monomorphize.Result,
     all_module_envs: []const *ModuleEnv,
     types_store: *const types.Store,
     current_module_idx: u32,
@@ -195,6 +171,7 @@ pub fn init(
     return .{
         .allocator = allocator,
         .store = store,
+        .monomorphization = monomorphization,
         .all_module_envs = all_module_envs,
         .types_store = types_store,
         .current_module_idx = current_module_idx,
@@ -208,13 +185,10 @@ pub fn init(
         .type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(allocator),
         .nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(allocator),
         .lowered_symbols = std.AutoHashMap(u64, MIR.ExprId).init(allocator),
-        .callable_specializations = std.AutoHashMap(u128, MIR.ExprId).init(allocator),
-        .in_progress_callable_specializations = std.AutoHashMap(u128, MIR.ExprId).init(allocator),
         .symbol_metadata = std.AutoHashMap(u64, SymbolMetadata).init(allocator),
         .next_synthetic_ident = Ident.Idx.NONE.idx - 1,
         .in_progress_defs = std.AutoHashMap(u64, void).init(allocator),
         .in_progress_symbol_monotypes = std.AutoHashMap(u64, Monotype.Idx).init(allocator),
-        .deferred_block_callables = std.AutoHashMap(u32, DeferredBlockCallable).init(allocator),
         .resolved_dispatch_targets = resolved_dispatch_targets,
         .scratch_expr_ids = try base.Scratch(MIR.ExprId).init(allocator),
         .scratch_pattern_ids = try base.Scratch(MIR.PatternId).init(allocator),
@@ -240,12 +214,9 @@ pub fn deinit(self: *Self) void {
     self.type_var_seen.deinit();
     self.nominal_cycle_breakers.deinit();
     self.lowered_symbols.deinit();
-    self.callable_specializations.deinit();
-    self.in_progress_callable_specializations.deinit();
     self.symbol_metadata.deinit();
     self.in_progress_defs.deinit();
     self.in_progress_symbol_monotypes.deinit();
-    self.deferred_block_callables.deinit();
     self.resolved_dispatch_targets.deinit();
     self.scratch_expr_ids.deinit();
     self.scratch_pattern_ids.deinit();
@@ -2790,7 +2761,10 @@ fn lowerExprWithMonotypeOverride(
                 return try self.lowerDeferredBlockCallable(deferred, monotype);
             }
             if (try self.localCallableTemplate(module_env, lookup.pattern_idx)) |template| {
-                return try self.instantiateCallableTemplate(template, try self.callableTemplateBaseMonotype(template));
+                return try self.instantiateCallableTemplate(
+                    template,
+                    try self.selectCallableTemplateMonotype(template, monotype),
+                );
             }
 
             const symbol = try self.patternToSymbol(lookup.pattern_idx);
@@ -2881,7 +2855,10 @@ fn lowerExprWithMonotypeOverride(
 
             const symbol = try self.internExternalDefSymbol(target_module_idx, ext.target_node_idx);
             if (self.externalCallableTemplate(target_module_idx, ext.target_node_idx, symbol)) |template| {
-                return try self.instantiateCallableTemplate(template, try self.callableTemplateBaseMonotype(template));
+                return try self.instantiateCallableTemplate(
+                    template,
+                    try self.selectCallableTemplateMonotype(template, monotype),
+                );
             }
 
             // Ensure the external definition is lowered.
@@ -4240,6 +4217,135 @@ fn callableTemplateNeedsInstantiation(self: *Self, template: CallableTemplate) b
     return self.all_module_envs[template.module_idx].types.needsInstantiation(template.type_root);
 }
 
+fn inferCallableTemplateMonotypeFromPartial(
+    self: *Self,
+    template: CallableTemplate,
+    partial_arg_monotypes: []const Monotype.Idx,
+    ret_monotype: Monotype.Idx,
+    caller_module_idx: u32,
+) Allocator.Error!Monotype.Idx {
+    const base_func_monotype = try self.callableTemplateBaseMonotype(template);
+    if (!self.callableTemplateNeedsInstantiation(template)) return base_func_monotype;
+
+    const switching_module = template.module_idx != caller_module_idx;
+    const saved_module_idx = self.current_module_idx;
+    const saved_types_store = self.types_store;
+    const saved_type_var_seen = self.type_var_seen;
+    const saved_nominal_cycle_breakers = self.nominal_cycle_breakers;
+    const saved_ident_store = self.mono_scratches.ident_store;
+    const saved_module_env = self.mono_scratches.module_env;
+    if (switching_module) {
+        self.current_module_idx = template.module_idx;
+        self.types_store = &self.all_module_envs[template.module_idx].types;
+        self.mono_scratches.ident_store = self.all_module_envs[template.module_idx].getIdentStoreConst();
+        self.mono_scratches.module_env = self.all_module_envs[template.module_idx];
+    }
+
+    self.type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+    self.nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+    defer {
+        self.type_var_seen.deinit();
+        self.type_var_seen = saved_type_var_seen;
+        self.nominal_cycle_breakers.deinit();
+        self.nominal_cycle_breakers = saved_nominal_cycle_breakers;
+        if (switching_module) {
+            self.current_module_idx = saved_module_idx;
+            self.types_store = saved_types_store;
+            self.mono_scratches.ident_store = saved_ident_store;
+            self.mono_scratches.module_env = saved_module_env;
+        }
+    }
+
+    try self.seedTypeScopeBindingsInStore(
+        self.current_module_idx,
+        self.types_store,
+        &self.type_var_seen,
+    );
+
+    const base_func = switch (self.store.monotype_store.getMonotype(base_func_monotype)) {
+        .func => |func| func,
+        else => unreachable,
+    };
+    const base_arg_monotypes = self.store.monotype_store.getIdxSpan(base_func.args);
+
+    const mono_top = self.mono_scratches.idxs.top();
+    defer self.mono_scratches.idxs.clearFrom(mono_top);
+    for (base_arg_monotypes, 0..) |base_arg_monotype, i| {
+        var normalized_arg = if (i < partial_arg_monotypes.len) partial_arg_monotypes[i] else Monotype.Idx.none;
+        if (switching_module and !normalized_arg.isNone()) {
+            normalized_arg = try self.remapMonotypeBetweenModules(
+                normalized_arg,
+                caller_module_idx,
+                template.module_idx,
+            );
+        }
+        if (!normalized_arg.isNone() and
+            (try self.monotypesStructurallyEqual(base_arg_monotype, normalized_arg) or
+                try self.monotypeCanRefine(base_arg_monotype, normalized_arg)))
+        {
+            try self.mono_scratches.idxs.append(normalized_arg);
+        } else {
+            try self.mono_scratches.idxs.append(Monotype.Idx.none);
+        }
+    }
+
+    var normalized_ret = ret_monotype;
+    if (switching_module and !normalized_ret.isNone()) {
+        normalized_ret = try self.remapMonotypeBetweenModules(
+            normalized_ret,
+            caller_module_idx,
+            template.module_idx,
+        );
+    }
+    const compatible_ret = if (!normalized_ret.isNone() and
+        (try self.monotypesStructurallyEqual(base_func.ret, normalized_ret) or
+            try self.monotypeCanRefine(base_func.ret, normalized_ret)))
+        normalized_ret
+    else
+        Monotype.Idx.none;
+
+    const partial_caller_monotype = try self.buildFuncMonotype(
+        self.mono_scratches.idxs.sliceFromStart(mono_top),
+        compatible_ret,
+        base_func.effectful,
+    );
+    try self.bindCallableTemplateMonotypes(template, partial_caller_monotype);
+
+    return self.monotypeFromTypeVarWithBindings(
+        self.current_module_idx,
+        self.types_store,
+        template.type_root,
+        &self.type_var_seen,
+        &self.nominal_cycle_breakers,
+    );
+}
+
+fn selectCallableTemplateMonotype(
+    self: *Self,
+    template: CallableTemplate,
+    caller_monotype: ?Monotype.Idx,
+) Allocator.Error!Monotype.Idx {
+    const base_func_monotype = try self.callableTemplateBaseMonotype(template);
+    if (!self.callableTemplateNeedsInstantiation(template)) return base_func_monotype;
+
+    const requested = if (caller_monotype) |cm| cm else return base_func_monotype;
+    if (requested.isNone()) return base_func_monotype;
+
+    const requested_func = switch (self.store.monotype_store.getMonotype(requested)) {
+        .func => |func| func,
+        else => return base_func_monotype,
+    };
+    const requested_args = self.store.monotype_store.getIdxSpan(requested_func.args);
+    const inferred = try self.inferCallableTemplateMonotypeFromPartial(
+        template,
+        requested_args,
+        requested_func.ret,
+        self.current_module_idx,
+    );
+    if (try self.monotypesStructurallyEqual(inferred, base_func_monotype)) return base_func_monotype;
+    return inferred;
+}
+
 fn bindCallableTemplateMonotypes(
     self: *Self,
     template: CallableTemplate,
@@ -4280,8 +4386,9 @@ fn callableTemplateExpectedArgMonotype(
     ret_monotype: Monotype.Idx,
     param_i: usize,
 ) Allocator.Error!Monotype.Idx {
-    const switching_module = template.module_idx != self.current_module_idx;
-    const saved_module_idx = self.current_module_idx;
+    const caller_module_idx = self.current_module_idx;
+    const switching_module = template.module_idx != caller_module_idx;
+    const saved_module_idx = caller_module_idx;
     const saved_types_store = self.types_store;
     const saved_type_var_seen = self.type_var_seen;
     const saved_nominal_cycle_breakers = self.nominal_cycle_breakers;
@@ -4315,10 +4422,54 @@ fn callableTemplateExpectedArgMonotype(
         &self.type_var_seen,
     );
 
+    const base_func_monotype = try self.callableTemplateBaseMonotype(template);
+    const base_func = switch (self.store.monotype_store.getMonotype(base_func_monotype)) {
+        .func => |func| func,
+        else => unreachable,
+    };
+    const base_arg_monotypes = self.store.monotype_store.getIdxSpan(base_func.args);
+
+    const mono_top = self.mono_scratches.idxs.top();
+    defer self.mono_scratches.idxs.clearFrom(mono_top);
+    for (partial_arg_monotypes, 0..) |arg_monotype, i| {
+        var normalized_arg = arg_monotype;
+        if (switching_module and !normalized_arg.isNone()) {
+            normalized_arg = try self.remapMonotypeBetweenModules(
+                normalized_arg,
+                caller_module_idx,
+                template.module_idx,
+            );
+        }
+        if (i < base_arg_monotypes.len and
+            !normalized_arg.isNone() and
+            (try self.monotypesStructurallyEqual(base_arg_monotypes[i], normalized_arg) or
+                try self.monotypeCanRefine(base_arg_monotypes[i], normalized_arg)))
+        {
+            try self.mono_scratches.idxs.append(normalized_arg);
+        } else {
+            try self.mono_scratches.idxs.append(Monotype.Idx.none);
+        }
+    }
+
+    var normalized_ret = ret_monotype;
+    if (switching_module and !normalized_ret.isNone()) {
+        normalized_ret = try self.remapMonotypeBetweenModules(
+            normalized_ret,
+            caller_module_idx,
+            template.module_idx,
+        );
+    }
+    const compatible_ret = if (!normalized_ret.isNone() and
+        (try self.monotypesStructurallyEqual(base_func.ret, normalized_ret) or
+            try self.monotypeCanRefine(base_func.ret, normalized_ret)))
+        normalized_ret
+    else
+        Monotype.Idx.none;
+
     const partial_caller_monotype = try self.buildFuncMonotype(
-        partial_arg_monotypes,
-        ret_monotype,
-        false,
+        self.mono_scratches.idxs.sliceFromStart(mono_top),
+        compatible_ret,
+        base_func.effectful,
     );
     try self.bindCallableTemplateMonotypes(template, partial_caller_monotype);
 
@@ -4638,15 +4789,7 @@ fn lowerCall(self: *Self, module_env: *const ModuleEnv, call: anytype, monotype:
                 break :blk try self.lowerDeferredBlockCallable(deferred, call_func_monotype);
             }
             if (try self.localCallableTemplate(module_env, lookup.pattern_idx)) |template| {
-                const selected_monotype = if (!self.callableTemplateNeedsInstantiation(template))
-                    try self.callableTemplateBaseMonotype(template)
-                else blk_selected: {
-                    const base_func_monotype = try self.callableTemplateBaseMonotype(template);
-                    if (try self.monotypesStructurallyEqual(base_func_monotype, call_func_monotype)) {
-                        break :blk_selected base_func_monotype;
-                    }
-                    break :blk_selected call_func_monotype;
-                };
+                const selected_monotype = try self.selectCallableTemplateMonotype(template, call_func_monotype);
                 if (self.store.getValueDef(template.debug_name)) |existing_expr| {
                     if (try self.monotypesStructurallyEqual(self.store.typeOf(existing_expr), selected_monotype)) {
                         break :blk existing_expr;
@@ -4660,14 +4803,7 @@ fn lowerCall(self: *Self, module_env: *const ModuleEnv, call: anytype, monotype:
             const target_module_idx = self.resolveImportedModuleIdx(module_env, lookup.module_idx) orelse unreachable;
             const symbol = try self.internExternalDefSymbol(target_module_idx, lookup.target_node_idx);
             if (self.externalCallableTemplate(target_module_idx, lookup.target_node_idx, symbol)) |template| {
-                const base_func_monotype = try self.callableTemplateBaseMonotype(template);
-                const selected_monotype = blk_selected: {
-                    const normalized_func_monotype = try self.normalizeCallerMonotypeForSymbolModule(target_module_idx, call_func_monotype);
-                    break :blk_selected try self.refineTemplateCallerMonotype(
-                        base_func_monotype,
-                        normalized_func_monotype,
-                    );
-                };
+                const selected_monotype = try self.selectCallableTemplateMonotype(template, call_func_monotype);
                 break :blk try self.instantiateCallableTemplate(template, selected_monotype);
             }
             break :blk try self.lowerExpr(call.func);
@@ -5669,6 +5805,28 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
     if (da.args) |args_span| {
         const uses_runtime_receiver = dotCallUsesRuntimeReceiver(module_env, da.receiver);
 
+        if (uses_runtime_receiver and std.mem.eql(u8, module_env.getIdent(da.field_name), "contains")) {
+            const explicit_args = module_env.store.sliceExpr(args_span);
+            if (explicit_args.len == 1) {
+                const receiver_monotype = try self.resolveMonotype(da.receiver);
+                if (!receiver_monotype.isNone()) switch (self.store.monotype_store.getMonotype(receiver_monotype)) {
+                    .list => |list_mono| {
+                        const receiver = try self.lowerExpr(da.receiver);
+                        const lowered_arg = if (!list_mono.elem.isNone() and self.monotypeIsWellFormed(list_mono.elem))
+                            try self.lowerExprWithMonotypeOverride(explicit_args[0], list_mono.elem)
+                        else
+                            try self.lowerExpr(explicit_args[0]);
+                        const args = try self.store.addExprSpan(self.allocator, &.{ receiver, lowered_arg });
+                        return try self.store.addExpr(self.allocator, .{ .run_low_level = .{
+                            .op = .list_contains,
+                            .args = args,
+                        } }, monotype, region);
+                    },
+                    else => {},
+                };
+            }
+        }
+
         // Structural types: .is_eq() is decomposed field-by-field in MIR.
         structural_eq: {
             if (!uses_runtime_receiver) break :structural_eq;
@@ -6596,19 +6754,10 @@ fn specializeMethod(self: *Self, symbol: MIR.Symbol, caller_func_monotype: ?Mono
     const symbol_display_name = symbolMetadataDisplayName(self, symbol_meta);
 
     if (self.callableTemplateForSymbol(symbol)) |template| {
-        const base_func_monotype = try self.callableTemplateBaseMonotype(template);
-        const instance_monotype = if (caller_func_monotype) |caller_monotype| blk: {
-            const normalized_caller_monotype = try self.normalizeCallerMonotypeForSymbolModule(
-                symbol_module_idx,
-                caller_monotype,
-            );
-            break :blk try self.refineTemplateCallerMonotype(
-                base_func_monotype,
-                normalized_caller_monotype,
-            );
-        } else blk: {
-            break :blk base_func_monotype;
-        };
+        const instance_monotype = try self.selectCallableTemplateMonotype(
+            template,
+            caller_func_monotype,
+        );
         return try self.instantiateCallableTemplate(template, instance_monotype);
     }
 

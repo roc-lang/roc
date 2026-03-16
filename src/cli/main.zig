@@ -4185,7 +4185,17 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     };
     defer mir_store.deinit(ctx.gpa);
 
-    var mir_lower = mir.Lower.init(ctx.gpa, &mir_store, all_module_envs, platform_types, platform_module_idx, app_module_idx) catch {
+    var monomorphization = mir.Monomorphize.Result.init(
+        ctx.gpa,
+        platform_module_idx,
+        null,
+    ) catch {
+        std.log.err("Failed to create monomorphization result", .{});
+        return error.OutOfMemory;
+    };
+    defer monomorphization.deinit(ctx.gpa);
+
+    var mir_lower = mir.Lower.init(ctx.gpa, &mir_store, &monomorphization, all_module_envs, platform_types, platform_module_idx, app_module_idx) catch {
         std.log.err("Failed to create MIR lowerer", .{});
         return error.OutOfMemory;
     };

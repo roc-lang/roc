@@ -7423,20 +7423,71 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             WasmModule.leb128WriteU32(self.allocator, &self.body, result_local) catch return error.OutOfMemory;
         },
 
-        .list_contains => {
+        .list_contains => blk: {
             // list_contains(list, needle) -> Bool
-            // Linear scan through list elements
+            // Linear scan through list elements using layout-aware equality.
             try self.generateExpr(args[0]);
             const list_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, list_local) catch return error.OutOfMemory;
 
-            // Generate needle
-            try self.generateExpr(args[1]);
-            const needle_vt = self.exprValType(args[1]);
-            const needle_local = self.storage.allocAnonymousLocal(needle_vt) catch return error.OutOfMemory;
-            self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, &self.body, needle_local) catch return error.OutOfMemory;
+            const ls = self.getLayoutStore();
+            const list_layout_idx = self.exprLayoutIdx(args[0]);
+            const list_layout = ls.getLayout(list_layout_idx);
+            const list_info = switch (list_layout.tag) {
+                .list => ls.getListInfo(list_layout),
+                .list_of_zst => {
+                    // contains for ZST elements is true iff the list is non-empty
+                    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, list_local) catch return error.OutOfMemory;
+                    try self.emitLoadOp(.i32, 4);
+                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i32_ne) catch return error.OutOfMemory;
+                    break :blk;
+                },
+                else => unreachable,
+            };
+            const elem_layout_idx = list_info.elem_layout_idx;
+            const elem_byte_size = list_info.elem_size;
+            const elem_is_composite = self.isCompositeLayout(elem_layout_idx);
+
+            const needle_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            if (elem_is_composite) {
+                try self.generateExpr(args[1]);
+
+                if (self.exprNeedsCompositeCallStabilization(args[1])) {
+                    const src_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                    try self.emitLocalSet(src_local);
+                    const dst_offset = try self.allocStackMemory(elem_byte_size, 4);
+                    const dst_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                    try self.emitFpOffset(dst_offset);
+                    try self.emitLocalSet(dst_local);
+                    try self.emitMemCopy(dst_local, 0, src_local, elem_byte_size);
+                    try self.emitLocalGet(dst_local);
+                }
+
+                self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+                WasmModule.leb128WriteU32(self.allocator, &self.body, needle_ptr_local) catch return error.OutOfMemory;
+            } else {
+                try self.generateExpr(args[1]);
+                const needle_vt = self.exprValType(args[1]);
+                const needle_tmp = self.storage.allocAnonymousLocal(needle_vt) catch return error.OutOfMemory;
+                self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+                WasmModule.leb128WriteU32(self.allocator, &self.body, needle_tmp) catch return error.OutOfMemory;
+
+                const alignment: u32 = if (elem_byte_size >= 8) 8 else if (elem_byte_size >= 4) 4 else if (elem_byte_size >= 2) 2 else 1;
+                const needle_offset = try self.allocStackMemory(elem_byte_size, alignment);
+                try self.emitFpOffset(needle_offset);
+                const needle_addr_tmp = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                try self.emitLocalSet(needle_addr_tmp);
+                try self.emitLocalGet(needle_addr_tmp);
+                try self.emitLocalGet(needle_tmp);
+                try self.emitStoreOpSized(needle_vt, elem_byte_size, 0);
+                try self.emitLocalGet(needle_addr_tmp);
+                self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+                WasmModule.leb128WriteU32(self.allocator, &self.body, needle_ptr_local) catch return error.OutOfMemory;
+            }
 
             // Load list ptr and len
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
@@ -7452,14 +7503,6 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const len_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, len_local) catch return error.OutOfMemory;
-
-            // Determine element size
-            const elem_byte_size: u32 = blk: {
-                const ls = self.getLayoutStore();
-                const list_layout_idx = self.exprLayoutIdx(args[0]);
-                const info = ls.getListInfo(ls.getLayout(list_layout_idx));
-                break :blk info.elem_size;
-            };
 
             // result = 0 (not found)
             const result_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -7499,18 +7542,12 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(elem_byte_size)) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-            try self.emitLoadOpSized(needle_vt, elem_byte_size, 0);
+            const elem_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, elem_ptr_local) catch return error.OutOfMemory;
 
-            // Compare with needle
-            self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, &self.body, needle_local) catch return error.OutOfMemory;
-            const eq_op: u8 = switch (needle_vt) {
-                .i32 => Op.i32_eq,
-                .i64 => Op.i64_eq,
-                .f32 => Op.f32_eq,
-                .f64 => Op.f64_eq,
-            };
-            self.body.append(self.allocator, eq_op) catch return error.OutOfMemory;
+            // Compare with needle using layout-aware equality
+            try self.compareFieldByLayout(elem_ptr_local, needle_ptr_local, 0, elem_byte_size, elem_layout_idx);
 
             // if equal: set result = 1, br 1 (exit)
             self.body.append(self.allocator, Op.@"if") catch return error.OutOfMemory;
