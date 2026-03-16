@@ -1686,12 +1686,18 @@ const TidyStep = struct {
     }
 };
 
+const BuiltinCompilerRun = struct {
+    run: *Step.Run,
+    builtin_bin: std.Build.LazyPath,
+    builtin_indices_bin: std.Build.LazyPath,
+};
+
 fn createAndRunBuiltinCompiler(
     b: *std.Build,
     roc_modules: modules.RocModules,
     flag_enable_tracy: ?[]const u8,
     roc_files: []const []const u8,
-) *Step.Run {
+) BuiltinCompilerRun {
     // Build and run the compiler
     const builtin_compiler_exe = b.addExecutable(.{
         .name = "builtin_compiler",
@@ -1725,7 +1731,14 @@ fn createAndRunBuiltinCompiler(
         run_builtin_compiler.addFileArg(b.path(roc_path));
     }
 
-    return run_builtin_compiler;
+    const builtin_bin = run_builtin_compiler.addOutputFileArg("Builtin.bin");
+    const builtin_indices_bin = run_builtin_compiler.addOutputFileArg("builtin_indices.bin");
+
+    return .{
+        .run = run_builtin_compiler,
+        .builtin_bin = builtin_bin,
+        .builtin_indices_bin = builtin_indices_bin,
+    };
 }
 
 fn createTestPlatformHostLib(
@@ -2238,12 +2251,12 @@ pub fn build(b: *std.Build) void {
     const write_compiled_builtins = b.addWriteFiles();
 
     // Always regenerate .bin files to ensure they match the current compiler
-    const run_builtin_compiler = createAndRunBuiltinCompiler(b, roc_modules, flag_enable_tracy, &.{builtin_roc_path});
-    write_compiled_builtins.step.dependOn(&run_builtin_compiler.step);
+    const builtin_compiler = createAndRunBuiltinCompiler(b, roc_modules, flag_enable_tracy, &.{builtin_roc_path});
+    write_compiled_builtins.step.dependOn(&builtin_compiler.run.step);
 
-    // Copy Builtin.bin from zig-out/builtins/
+    // Copy tracked outputs from the builtin compiler run step.
     _ = write_compiled_builtins.addCopyFile(
-        .{ .cwd_relative = "zig-out/builtins/Builtin.bin" },
+        builtin_compiler.builtin_bin,
         "Builtin.bin",
     );
 
@@ -2255,7 +2268,7 @@ pub fn build(b: *std.Build) void {
 
     // Copy builtin_indices.bin
     _ = write_compiled_builtins.addCopyFile(
-        .{ .cwd_relative = "zig-out/builtins/builtin_indices.bin" },
+        builtin_compiler.builtin_indices_bin,
         "builtin_indices.bin",
     );
 
@@ -2459,9 +2472,9 @@ pub fn build(b: *std.Build) void {
     };
 
     const run_builtin_compiler_force = createAndRunBuiltinCompiler(b, roc_modules, flag_enable_tracy, roc_files_force);
-    run_builtin_compiler_force.step.dependOn(&clean_out_step.step);
-    run_builtin_compiler_force.step.dependOn(clear_roc_cache_step);
-    rebuild_builtins_step.dependOn(&run_builtin_compiler_force.step);
+    run_builtin_compiler_force.run.step.dependOn(&clean_out_step.step);
+    run_builtin_compiler_force.run.step.dependOn(clear_roc_cache_step);
+    rebuild_builtins_step.dependOn(&run_builtin_compiler_force.run.step);
 
     // Add the compiled builtins module to roc exe and make it depend on the builtins being ready
     roc_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
