@@ -4721,7 +4721,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             // Symbol not found - it might be a top-level definition
-            if (self.getSymbolDefRelaxed(symbol)) |def_expr_id| {
+            if (self.store.getSymbolDef(symbol)) |def_expr_id| {
                 // Generate code for the definition
                 const loc = try self.generateExpr(def_expr_id);
                 // Refcounted top-level defs must not be cached as a single shared owner
@@ -4735,15 +4735,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             unreachable;
-        }
-
-        /// Look up a symbol definition.
-        fn getSymbolDefRelaxed(self: *Self, symbol: Symbol) ?LirExprId {
-            return self.store.getSymbolDef(symbol);
-        }
-
-        fn getCallableDefRelaxed(self: *Self, symbol: Symbol) ?LirExprId {
-            return self.store.getCallableDef(symbol);
         }
 
         /// Generate integer binary operation
@@ -11757,13 +11748,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .nominal => |nom| try self.resolveLambdaCodeOffset(nom.backing_expr),
                 .lookup => |lookup| {
-                    if (self.getCallableDefRelaxed(lookup.symbol)) |def_id| {
+                    if (self.store.getCallableDef(lookup.symbol)) |def_id| {
                         const saved_binding_symbol = self.current_binding_symbol;
                         self.current_binding_symbol = lookup.symbol;
                         defer self.current_binding_symbol = saved_binding_symbol;
                         return try self.resolveLambdaCodeOffset(def_id);
                     }
-                    if (self.getSymbolDefRelaxed(lookup.symbol)) |def_id| {
+                    if (self.store.getSymbolDef(lookup.symbol)) |def_id| {
                         const saved_binding_symbol = self.current_binding_symbol;
                         self.current_binding_symbol = lookup.symbol;
                         defer self.current_binding_symbol = saved_binding_symbol;
@@ -11818,10 +11809,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .nominal => |nom| self.resolveStructFieldExpr(nom.backing_expr, field_idx),
                 .lookup => |lookup| blk: {
-                    if (self.getCallableDefRelaxed(lookup.symbol)) |def_id| {
+                    if (self.store.getCallableDef(lookup.symbol)) |def_id| {
                         break :blk self.resolveStructFieldExpr(def_id, field_idx);
                     }
-                    const def_id = self.getSymbolDefRelaxed(lookup.symbol) orelse break :blk null;
+                    const def_id = self.store.getSymbolDef(lookup.symbol) orelse break :blk null;
                     break :blk self.resolveStructFieldExpr(def_id, field_idx);
                 },
                 else => null,
@@ -11845,13 +11836,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .nominal => |nom| try self.resolveLambdaCodeOffsetWithOpts(nom.backing_expr, opts),
                 .lookup => |lookup| {
-                    if (self.getCallableDefRelaxed(lookup.symbol)) |def_id| {
+                    if (self.store.getCallableDef(lookup.symbol)) |def_id| {
                         const saved_binding_symbol = self.current_binding_symbol;
                         self.current_binding_symbol = lookup.symbol;
                         defer self.current_binding_symbol = saved_binding_symbol;
                         return try self.resolveLambdaCodeOffsetWithOpts(def_id, opts);
                     }
-                    if (self.getSymbolDefRelaxed(lookup.symbol)) |def_id| {
+                    if (self.store.getSymbolDef(lookup.symbol)) |def_id| {
                         const saved_binding_symbol = self.current_binding_symbol;
                         self.current_binding_symbol = lookup.symbol;
                         defer self.current_binding_symbol = saved_binding_symbol;
@@ -12049,7 +12040,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Check if the function was compiled as a procedure
             if (self.proc_registry.get(symbol_key)) |proc| {
                 if (builtin.mode == .Debug) {
-                    if (self.getCallableDefRelaxed(symbol)) |def_expr_id| {
+                    if (self.store.getCallableDef(symbol)) |def_expr_id| {
                         const def_expr = self.store.getExpr(def_expr_id);
                         const lambda_ret_layout = switch (def_expr) {
                             .lambda => |lambda| lambda.ret_layout,
@@ -12071,7 +12062,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 return try self.generateCallToCompiledProc(proc, args_span, ret_layout);
             }
 
-            if (self.getCallableDefRelaxed(symbol)) |def_expr_id| {
+            if (self.store.getCallableDef(symbol)) |def_expr_id| {
                 const def_expr = self.store.getExpr(def_expr_id);
                 switch (def_expr) {
                     .lambda => |lambda| {
