@@ -4246,15 +4246,7 @@ fn bindCallableTemplateMonotypes(
     caller_monotype: Monotype.Idx,
 ) Allocator.Error!void {
     const module_env = self.all_module_envs[template.module_idx];
-    const args_span: CIR.Pattern.Span, const body_expr: CIR.Expr.Idx = switch (module_env.store.getExpr(template.cir_expr)) {
-        .e_lambda => |lambda| .{ lambda.args, lambda.body },
-        .e_closure => |closure| blk: {
-            const lambda = module_env.store.getExpr(closure.lambda_idx).e_lambda;
-            break :blk .{ lambda.args, lambda.body };
-        },
-        .e_hosted_lambda => |hosted| .{ hosted.args, hosted.body },
-        else => unreachable,
-    };
+    const args_span, const body_expr = callableTemplateArgsAndBody(module_env, template.cir_expr);
 
     try self.bindLambdaArgMonotypes(module_env, args_span, caller_monotype);
     if (caller_monotype.isNone()) return;
@@ -4264,6 +4256,84 @@ fn bindCallableTemplateMonotypes(
         else => return,
     };
     try self.bindTypeVarMonotypes(ModuleEnv.varFrom(body_expr), func.ret);
+}
+
+fn callableTemplateArgsAndBody(
+    module_env: *const ModuleEnv,
+    cir_expr: CIR.Expr.Idx,
+) struct { CIR.Pattern.Span, CIR.Expr.Idx } {
+    return switch (module_env.store.getExpr(cir_expr)) {
+        .e_lambda => |lambda| .{ lambda.args, lambda.body },
+        .e_closure => |closure| blk: {
+            const lambda = module_env.store.getExpr(closure.lambda_idx).e_lambda;
+            break :blk .{ lambda.args, lambda.body };
+        },
+        .e_hosted_lambda => |hosted| .{ hosted.args, hosted.body },
+        else => unreachable,
+    };
+}
+
+fn callableTemplateExpectedArgMonotype(
+    self: *Self,
+    template: CallableTemplate,
+    partial_arg_monotypes: []const Monotype.Idx,
+    ret_monotype: Monotype.Idx,
+    param_i: usize,
+) Allocator.Error!Monotype.Idx {
+    const switching_module = template.module_idx != self.current_module_idx;
+    const saved_module_idx = self.current_module_idx;
+    const saved_types_store = self.types_store;
+    const saved_type_var_seen = self.type_var_seen;
+    const saved_nominal_cycle_breakers = self.nominal_cycle_breakers;
+    const saved_ident_store = self.mono_scratches.ident_store;
+    const saved_module_env = self.mono_scratches.module_env;
+    if (switching_module) {
+        self.current_module_idx = template.module_idx;
+        self.types_store = &self.all_module_envs[template.module_idx].types;
+        self.mono_scratches.ident_store = self.all_module_envs[template.module_idx].getIdentStoreConst();
+        self.mono_scratches.module_env = self.all_module_envs[template.module_idx];
+    }
+
+    self.type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+    self.nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+    defer {
+        self.type_var_seen.deinit();
+        self.type_var_seen = saved_type_var_seen;
+        self.nominal_cycle_breakers.deinit();
+        self.nominal_cycle_breakers = saved_nominal_cycle_breakers;
+        if (switching_module) {
+            self.current_module_idx = saved_module_idx;
+            self.types_store = saved_types_store;
+            self.mono_scratches.ident_store = saved_ident_store;
+            self.mono_scratches.module_env = saved_module_env;
+        }
+    }
+
+    try self.seedTypeScopeBindingsInStore(
+        self.current_module_idx,
+        self.types_store,
+        &self.type_var_seen,
+    );
+
+    const partial_caller_monotype = try self.buildFuncMonotype(
+        partial_arg_monotypes,
+        ret_monotype,
+        false,
+    );
+    try self.bindCallableTemplateMonotypes(template, partial_caller_monotype);
+
+    const module_env = self.all_module_envs[template.module_idx];
+    const args_span, _ = callableTemplateArgsAndBody(module_env, template.cir_expr);
+    const arg_patterns = module_env.store.slicePatterns(args_span);
+    if (param_i >= arg_patterns.len) return Monotype.Idx.none;
+
+    return self.monotypeFromTypeVarWithBindings(
+        self.current_module_idx,
+        self.types_store,
+        ModuleEnv.varFrom(arg_patterns[param_i]),
+        &self.type_var_seen,
+        &self.nominal_cycle_breakers,
+    );
 }
 
 fn refineTemplateCallerMonotype(
@@ -4471,38 +4541,6 @@ fn lowerDeferredBlockCallable(
     deferred: DeferredBlockCallable,
     caller_monotype: Monotype.Idx,
 ) Allocator.Error!MIR.ExprId {
-    const debug_name = symbolMetadataDisplayName(self, self.getSymbolMetadata(deferred.debug_name));
-    const caller_func = switch (self.store.monotype_store.getMonotype(caller_monotype)) {
-        .func => |func| func,
-        else => unreachable,
-    };
-    const caller_args = self.store.monotype_store.getIdxSpan(caller_func.args);
-    const a0_elem: ?u32 = if (caller_args.len > 0) switch (self.store.monotype_store.getMonotype(caller_args[0])) {
-        .list => |list| @intFromEnum(list.elem),
-        else => null,
-    } else null;
-    const a1_elem: ?u32 = if (caller_args.len > 1) switch (self.store.monotype_store.getMonotype(caller_args[1])) {
-        .list => |list| @intFromEnum(list.elem),
-        else => null,
-    } else null;
-    const ret_elem: ?u32 = switch (self.store.monotype_store.getMonotype(caller_func.ret)) {
-        .list => |list| @intFromEnum(list.elem),
-        else => null,
-    };
-    std.debug.print(
-        "lowerDeferredBlockCallable debug_name={s} symbol={d} caller_monotype={d} a0={?d}/{?d} a1={?d}/{?d} ret={d}/{?d}\n",
-        .{
-            debug_name,
-            deferred.debug_name.raw(),
-            @intFromEnum(caller_monotype),
-            if (caller_args.len > 0) @intFromEnum(caller_args[0]) else null,
-            a0_elem,
-            if (caller_args.len > 1) @intFromEnum(caller_args[1]) else null,
-            a1_elem,
-            @intFromEnum(caller_func.ret),
-            ret_elem,
-        },
-    );
     if (try self.lookupCallableSpecialization(deferred.source_key, caller_monotype)) |cached| return cached;
 
     const template: CallableTemplate = .{
@@ -5667,6 +5705,7 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
         else
             try self.resolveDispatchTargetForExpr(module_env, expr_idx, da.field_name);
         const method_symbol = try self.resolvedDispatchTargetToSymbol(module_env, resolved_target);
+        const method_template = self.callableTemplateForSymbol(method_symbol);
 
         // Build args as either:
         // - [receiver] ++ explicit_args for instance methods
@@ -5727,11 +5766,61 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
             try self.scratch_expr_ids.append(receiver);
             if (!receiver_monotype.isNone()) {
                 try self.bindTypeVarMonotypesRefining(ModuleEnv.varFrom(da.receiver), receiver_monotype);
+                if (fn_arg_vars.len > 0) {
+                    const receiver_param_mono = try self.monotypeFromTypeVarWithBindings(
+                        self.current_module_idx,
+                        self.types_store,
+                        fn_arg_vars[0],
+                        &self.type_var_seen,
+                        &self.nominal_cycle_breakers,
+                    );
+                    if (receiver_param_mono.isNone() or
+                        (try self.monotypesStructurallyEqual(receiver_param_mono, receiver_monotype)) or
+                        (try self.monotypeCanRefine(receiver_param_mono, receiver_monotype)))
+                    {
+                        try self.bindTypeVarMonotypesRefining(fn_arg_vars[0], receiver_monotype);
+                    }
+                }
+                if (module_env.store.getExpr(da.receiver) == .e_lookup_local) {
+                    const receiver_lookup = module_env.store.getExpr(da.receiver).e_lookup_local;
+                    try self.bindTypeVarMonotypesRefining(ModuleEnv.varFrom(receiver_lookup.pattern_idx), receiver_monotype);
+                }
             }
         }
         for (explicit_args, 0..) |arg_idx, i| {
             const param_i = i + receiver_param_offset;
             const expected_param_mono = blk: {
+                if (method_template) |template| {
+                    const mono_top = self.mono_scratches.idxs.top();
+                    defer self.mono_scratches.idxs.clearFrom(mono_top);
+
+                    if (uses_runtime_receiver) {
+                        try self.mono_scratches.idxs.append(receiver_monotype);
+                    }
+
+                    const already_lowered_args = self.scratch_expr_ids.sliceFromStart(args_top);
+                    const lowered_explicit_args = if (uses_runtime_receiver and already_lowered_args.len > 0)
+                        already_lowered_args[1..]
+                    else
+                        already_lowered_args;
+
+                    for (lowered_explicit_args) |lowered_arg_expr| {
+                        try self.mono_scratches.idxs.append(self.store.typeOf(lowered_arg_expr));
+                    }
+
+                    const total_arg_count = receiver_param_offset + explicit_args.len;
+                    while (self.mono_scratches.idxs.sliceFromStart(mono_top).len < total_arg_count) {
+                        try self.mono_scratches.idxs.append(Monotype.Idx.none);
+                    }
+
+                    const template_expected = try self.callableTemplateExpectedArgMonotype(
+                        template,
+                        self.mono_scratches.idxs.sliceFromStart(mono_top),
+                        monotype,
+                        param_i,
+                    );
+                    if (!template_expected.isNone()) break :blk template_expected;
+                }
                 const dispatch_func_monotype = try self.monotypeFromTypeVarWithBindings(
                     self.current_module_idx,
                     self.types_store,
@@ -5775,31 +5864,13 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
             try self.scratch_expr_ids.append(arg);
 
             const arg_mono = self.store.typeOf(arg);
-            if (param_i < fn_arg_vars.len and !arg_mono.isNone()) {
+            if (method_template == null and param_i < fn_arg_vars.len and !arg_mono.isNone()) {
                 try self.bindTypeVarMonotypesRefining(fn_arg_vars[param_i], arg_mono);
             }
         }
         const lowered_call_args = self.scratch_expr_ids.sliceFromStart(args_top);
 
         const method_func_monotype = blk: {
-            const refined = try self.monotypeFromTypeVarWithBindings(
-                self.current_module_idx,
-                self.types_store,
-                resolved_target.fn_var,
-                &self.type_var_seen,
-                &self.nominal_cycle_breakers,
-            );
-            if (!refined.isNone()) {
-                const refined_mono = self.store.monotype_store.getMonotype(refined);
-                if (refined_mono != .func) {
-                    typeBindingInvariant(
-                        "lowerDotAccess: refined dispatch fn_var monotype is not function (method='{s}', monotype='{s}')",
-                        .{ module_env.getIdent(da.field_name), @tagName(refined_mono) },
-                    );
-                }
-                break :blk refined;
-            }
-
             const mono_top = self.mono_scratches.idxs.top();
             defer self.mono_scratches.idxs.clearFrom(mono_top);
             for (lowered_call_args) |arg_expr| {
@@ -5811,10 +5882,7 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
                 method_effectful,
             );
         };
-        const call_result_monotype = switch (self.store.monotype_store.getMonotype(method_func_monotype)) {
-            .func => |f| f.ret,
-            else => monotype,
-        };
+        const call_result_monotype = monotype;
 
         // Ensure the method body is lowered so codegen can find it.
         const func_expr = try self.specializeMethod(method_symbol, method_func_monotype);
