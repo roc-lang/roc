@@ -4375,6 +4375,13 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         });
     }
 
+    const pre_rc_root_exprs = try ctx.gpa.alloc(lir.LirExprId, entrypoints.items.len);
+    defer ctx.gpa.free(pre_rc_root_exprs);
+    for (entrypoints.items, 0..) |entrypoint, i| {
+        pre_rc_root_exprs[i] = entrypoint.body_expr;
+    }
+    try lir.CallCanonicalize.canonicalizeDirectCalls(ctx.gpa, &lir_store, pre_rc_root_exprs);
+
     if (entrypoints.items.len == 0) {
         std.log.err("No entrypoints could be lowered to LIR", .{});
         return error.NoEntrypointsLowered;
@@ -4392,6 +4399,13 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     }
 
     lir.RcInsert.insertRcOpsIntoSymbolDefsBestEffort(ctx.gpa, &lir_store, &layout_store);
+
+    const root_exprs = try ctx.gpa.alloc(lir.LirExprId, entrypoints.items.len);
+    defer ctx.gpa.free(root_exprs);
+    for (entrypoints.items, 0..) |entrypoint, i| {
+        root_exprs[i] = entrypoint.body_expr;
+    }
+    try lir.CallCanonicalize.canonicalizeDirectCalls(ctx.gpa, &lir_store, root_exprs);
 
     // Get procedures from the LIR store
     const procs = lir_store.getProcs();

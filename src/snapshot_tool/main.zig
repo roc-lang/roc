@@ -4209,6 +4209,13 @@ fn processDevObjectSnapshot(
         return false;
     }
 
+    const pre_rc_root_exprs = try allocator.alloc(lir_mod.LirExprId, entrypoints.items.len);
+    defer allocator.free(pre_rc_root_exprs);
+    for (entrypoints.items, 0..) |ep, i| {
+        pre_rc_root_exprs[i] = ep.body_expr;
+    }
+    try lir_mod.CallCanonicalize.canonicalizeDirectCalls(allocator, &lir_store, pre_rc_root_exprs);
+
     // 9. RC insertion
     var rc_pass = lir_mod.RcInsert.RcInsertPass.init(allocator, &lir_store, &layout_store) catch {
         std.log.err("Failed to create RC insertion pass", .{});
@@ -4221,6 +4228,12 @@ fn processDevObjectSnapshot(
     }
 
     lir_mod.RcInsert.insertRcOpsIntoSymbolDefsBestEffort(allocator, &lir_store, &layout_store);
+    const root_exprs = try allocator.alloc(lir_mod.LirExprId, entrypoints.items.len);
+    defer allocator.free(root_exprs);
+    for (entrypoints.items, 0..) |ep, i| {
+        root_exprs[i] = ep.body_expr;
+    }
+    try lir_mod.CallCanonicalize.canonicalizeDirectCalls(allocator, &lir_store, root_exprs);
 
     const procs = lir_store.getProcs();
 

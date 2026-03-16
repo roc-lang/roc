@@ -90,6 +90,11 @@ procs: std.ArrayList(LirProc),
 /// Used for looking up top-level definitions
 symbol_defs: std.AutoHashMap(u64, LirExprId),
 
+/// Map from direct-callable symbol to its callable definition expression.
+/// This is separate from symbol_defs so direct calls never depend on
+/// value-level wrapper structure.
+callable_defs: std.AutoHashMap(u64, LirExprId),
+
 /// String literal store for strings generated during lowering (e.g., by str_inspekt)
 /// This allows us to add new string literals without needing mutable module envs.
 strings: base.StringLiteral.Store,
@@ -119,6 +124,7 @@ pub fn init(allocator: Allocator) Self {
         .cf_match_branches = std.ArrayList(CFMatchBranch).empty,
         .procs = std.ArrayList(LirProc).empty,
         .symbol_defs = std.AutoHashMap(u64, LirExprId).init(allocator),
+        .callable_defs = std.AutoHashMap(u64, LirExprId).init(allocator),
         .strings = base.StringLiteral.Store{},
         .allocator = allocator,
         .next_synthetic_symbol = 0xf000_0000_0000_0000,
@@ -160,6 +166,7 @@ pub fn deinit(self: *Self) void {
     self.cf_match_branches.deinit(self.allocator);
     self.procs.deinit(self.allocator);
     self.symbol_defs.deinit();
+    self.callable_defs.deinit();
     self.strings.deinit(self.allocator);
 }
 
@@ -395,6 +402,39 @@ pub fn registerSymbolDef(self: *Self, symbol: Symbol, expr_id: LirExprId) Alloca
 /// Look up a top-level symbol definition
 pub fn getSymbolDef(self: *const Self, symbol: Symbol) ?LirExprId {
     return self.symbol_defs.get(@bitCast(symbol));
+}
+
+/// Set or replace a top-level symbol definition.
+pub fn setSymbolDef(self: *Self, symbol: Symbol, expr_id: LirExprId) Allocator.Error!void {
+    try self.symbol_defs.put(@bitCast(symbol), expr_id);
+}
+
+/// Register a direct-callable definition.
+pub fn registerCallableDef(self: *Self, symbol: Symbol, expr_id: LirExprId) Allocator.Error!void {
+    const key: u64 = @bitCast(symbol);
+    const gop = try self.callable_defs.getOrPut(key);
+    if (!gop.found_existing) {
+        gop.value_ptr.* = expr_id;
+        return;
+    }
+
+    if (std.debug.runtime_safety) {
+        std.debug.panic(
+            "LIR duplicate callable definition for symbol key {d}: existing expr {}, new expr {}",
+            .{ key, @intFromEnum(gop.value_ptr.*), @intFromEnum(expr_id) },
+        );
+    }
+    unreachable;
+}
+
+/// Set or replace a direct-callable definition.
+pub fn setCallableDef(self: *Self, symbol: Symbol, expr_id: LirExprId) Allocator.Error!void {
+    try self.callable_defs.put(@bitCast(symbol), expr_id);
+}
+
+/// Look up a direct-callable definition.
+pub fn getCallableDef(self: *const Self, symbol: Symbol) ?LirExprId {
+    return self.callable_defs.get(@bitCast(symbol));
 }
 
 /// Insert a string literal and return its index

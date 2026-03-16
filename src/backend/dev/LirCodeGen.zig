@@ -4742,6 +4742,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return self.store.getSymbolDef(symbol);
         }
 
+        fn getCallableDefRelaxed(self: *Self, symbol: Symbol) ?LirExprId {
+            return self.store.getCallableDef(symbol);
+        }
+
         /// Generate integer binary operation
         fn generateIntBinop(
             self: *Self,
@@ -11718,15 +11722,47 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return final_offset;
         }
 
+        fn resolveBlockLocalExpr(self: *Self, stmts: lir.LIR.LirStmtSpan, symbol: Symbol) ?LirExprId {
+            const bindings = self.store.getStmts(stmts);
+            var i = bindings.len;
+            while (i > 0) {
+                i -= 1;
+                const binding = switch (bindings[i]) {
+                    .decl, .mutate => |b| b,
+                    .cell_init, .cell_store, .cell_drop => continue,
+                };
+                switch (self.store.getPattern(binding.pattern)) {
+                    .bind => |bind| if (bind.symbol.eql(symbol)) return binding.expr,
+                    .as_pattern => |as_pat| if (as_pat.symbol.eql(symbol)) return binding.expr,
+                    else => {},
+                }
+            }
+            return null;
+        }
+
         /// Resolve a LIR expression to a compiled lambda's code offset.
         /// Peels through nominal wrappers and lookups to find the lambda.
         fn resolveLambdaCodeOffset(self: *Self, expr_id: LirExprId) Allocator.Error!?usize {
             const expr = self.store.getExpr(expr_id);
             return switch (expr) {
                 .lambda => |lam| try self.compileLambdaAsProc(expr_id, lam),
-                .block => |block| try self.resolveLambdaCodeOffset(block.final_expr),
+                .block => |block| blk: {
+                    if (self.store.getExpr(block.final_expr) == .lookup) {
+                        const lookup = self.store.getExpr(block.final_expr).lookup;
+                        if (self.resolveBlockLocalExpr(block.stmts, lookup.symbol)) |bound_expr| {
+                            break :blk try self.resolveLambdaCodeOffset(bound_expr);
+                        }
+                    }
+                    break :blk try self.resolveLambdaCodeOffset(block.final_expr);
+                },
                 .nominal => |nom| try self.resolveLambdaCodeOffset(nom.backing_expr),
                 .lookup => |lookup| {
+                    if (self.getCallableDefRelaxed(lookup.symbol)) |def_id| {
+                        const saved_binding_symbol = self.current_binding_symbol;
+                        self.current_binding_symbol = lookup.symbol;
+                        defer self.current_binding_symbol = saved_binding_symbol;
+                        return try self.resolveLambdaCodeOffset(def_id);
+                    }
                     if (self.getSymbolDefRelaxed(lookup.symbol)) |def_id| {
                         const saved_binding_symbol = self.current_binding_symbol;
                         self.current_binding_symbol = lookup.symbol;
@@ -11743,6 +11779,26 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             };
         }
 
+        /// Resolve an already-canonicalized inline callee expression to a
+        /// compiled lambda code offset. This only peels local wrapper shapes.
+        fn resolveInlineLambdaCodeOffset(self: *Self, expr_id: LirExprId) Allocator.Error!?usize {
+            const expr = self.store.getExpr(expr_id);
+            return switch (expr) {
+                .lambda => |lam| try self.compileLambdaAsProc(expr_id, lam),
+                .block => |block| blk: {
+                    if (self.store.getExpr(block.final_expr) == .lookup) {
+                        const lookup = self.store.getExpr(block.final_expr).lookup;
+                        if (self.resolveBlockLocalExpr(block.stmts, lookup.symbol)) |bound_expr| {
+                            break :blk try self.resolveInlineLambdaCodeOffset(bound_expr);
+                        }
+                    }
+                    break :blk try self.resolveInlineLambdaCodeOffset(block.final_expr);
+                },
+                .nominal => |nom| try self.resolveInlineLambdaCodeOffset(nom.backing_expr),
+                else => null,
+            };
+        }
+
         fn resolveStructFieldExpr(self: *Self, expr_id: LirExprId, field_idx: u16) ?LirExprId {
             const expr = self.store.getExpr(expr_id);
             return switch (expr) {
@@ -11751,9 +11807,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (field_idx >= fields.len) break :blk null;
                     break :blk fields[field_idx];
                 },
-                .block => |block| self.resolveStructFieldExpr(block.final_expr, field_idx),
+                .block => |block| blk: {
+                    if (self.store.getExpr(block.final_expr) == .lookup) {
+                        const lookup = self.store.getExpr(block.final_expr).lookup;
+                        if (self.resolveBlockLocalExpr(block.stmts, lookup.symbol)) |bound_expr| {
+                            break :blk self.resolveStructFieldExpr(bound_expr, field_idx);
+                        }
+                    }
+                    break :blk self.resolveStructFieldExpr(block.final_expr, field_idx);
+                },
                 .nominal => |nom| self.resolveStructFieldExpr(nom.backing_expr, field_idx),
                 .lookup => |lookup| blk: {
+                    if (self.getCallableDefRelaxed(lookup.symbol)) |def_id| {
+                        break :blk self.resolveStructFieldExpr(def_id, field_idx);
+                    }
                     const def_id = self.getSymbolDefRelaxed(lookup.symbol) orelse break :blk null;
                     break :blk self.resolveStructFieldExpr(def_id, field_idx);
                 },
@@ -11767,9 +11834,23 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const expr = self.store.getExpr(expr_id);
             return switch (expr) {
                 .lambda => |lam| try self.compileLambdaAsProcWithOptions(expr_id, lam, opts),
-                .block => |block| try self.resolveLambdaCodeOffsetWithOpts(block.final_expr, opts),
+                .block => |block| blk: {
+                    if (self.store.getExpr(block.final_expr) == .lookup) {
+                        const lookup = self.store.getExpr(block.final_expr).lookup;
+                        if (self.resolveBlockLocalExpr(block.stmts, lookup.symbol)) |bound_expr| {
+                            break :blk try self.resolveLambdaCodeOffsetWithOpts(bound_expr, opts);
+                        }
+                    }
+                    break :blk try self.resolveLambdaCodeOffsetWithOpts(block.final_expr, opts);
+                },
                 .nominal => |nom| try self.resolveLambdaCodeOffsetWithOpts(nom.backing_expr, opts),
                 .lookup => |lookup| {
+                    if (self.getCallableDefRelaxed(lookup.symbol)) |def_id| {
+                        const saved_binding_symbol = self.current_binding_symbol;
+                        self.current_binding_symbol = lookup.symbol;
+                        defer self.current_binding_symbol = saved_binding_symbol;
+                        return try self.resolveLambdaCodeOffsetWithOpts(def_id, opts);
+                    }
                     if (self.getSymbolDefRelaxed(lookup.symbol)) |def_id| {
                         const saved_binding_symbol = self.current_binding_symbol;
                         self.current_binding_symbol = lookup.symbol;
@@ -11796,29 +11877,51 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Generate code for a function call.
         /// In the new pipeline, MIR→LIR generates all closure dispatch as generic LIR
         /// constructs (discriminant_switch, tag_payload_access, direct calls). The backend
-        /// just handles: direct lambda calls and lookup calls. No closure-specific dispatch.
+        /// just handles explicit direct-call symbols plus the residual runtime
+        /// function-value expression path. No closure-specific dispatch.
         fn generateCall(self: *Self, call: anytype) Allocator.Error!ValueLocation {
-            const fn_expr = self.store.getExpr(call.fn_expr);
-
-            return switch (fn_expr) {
-                // Direct lambda call: compile the lambda as a proc, then call it.
-                .lambda => |lambda| {
-                    const code_offset = try self.compileLambdaAsProc(call.fn_expr, lambda);
-                    return try self.callCompiledOffset(code_offset, call.args, call.ret_layout);
-                },
-
-                // Lookup call: resolve the function symbol and call it.
-                .lookup => |lookup| {
-                    return try self.generateLookupCall(lookup, call.args, call.ret_layout);
-                },
-
-                else => {
-                    if (std.debug.runtime_safety) std.debug.panic(
-                        "generateCall: unexpected fn_expr type '{s}'. " ++
-                            "In the new pipeline, MIR→LIR resolves all closure dispatch to direct calls.",
-                        .{@tagName(fn_expr)},
-                    );
-                    unreachable;
+            return switch (call.callee) {
+                .direct => |symbol| try self.generateDirectSymbolCall(symbol, call.args, call.ret_layout),
+                .expr => |callee_expr_id| {
+                    if (try self.resolveInlineLambdaCodeOffset(callee_expr_id)) |code_offset| {
+                        return try self.callCompiledOffset(code_offset, call.args, call.ret_layout);
+                    }
+                    const callee_expr = self.store.getExpr(callee_expr_id);
+                    switch (callee_expr) {
+                        .lambda => |lambda| {
+                            const code_offset = try self.compileLambdaAsProc(callee_expr_id, lambda);
+                            return try self.callCompiledOffset(code_offset, call.args, call.ret_layout);
+                        },
+                        .nominal => |nom| {
+                            const inner = self.store.getExpr(nom.backing_expr);
+                            if (inner == .lambda) {
+                                const code_offset = try self.compileLambdaAsProc(nom.backing_expr, inner.lambda);
+                                return try self.callCompiledOffset(code_offset, call.args, call.ret_layout);
+                            }
+                            if (std.debug.runtime_safety) std.debug.panic(
+                                "generateCall: nominal callee wrapping unexpected expr '{s}'",
+                                .{@tagName(inner)},
+                            );
+                            unreachable;
+                        },
+                        .lookup => |lookup| {
+                            if (std.debug.runtime_safety) std.debug.panic(
+                                "generateCall: unexpected lookup callee after direct-call canonicalization symbol={d}",
+                                .{
+                                    lookup.symbol.raw(),
+                                },
+                            );
+                            unreachable;
+                        },
+                        else => {
+                            if (std.debug.runtime_safety) std.debug.panic(
+                                "generateCall: unexpected callee expr type '{s}'. " ++
+                                    "Direct calls must use explicit callee symbols.",
+                                .{@tagName(callee_expr)},
+                            );
+                            unreachable;
+                        },
+                    }
                 },
             };
         }
@@ -11907,9 +12010,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        /// Generate code for calling a looked-up function definition.
-        /// In the new pipeline, MIR→LIR has already generated closure dispatch as generic
-        /// LIR constructs. The backend just needs to find the function def and call it.
+        /// Generate code for calling an explicit direct-callee symbol.
+        /// Direct calls resolve through callable_defs, not value defs.
         fn lowLevelWrapperParamSymbol(self: *Self, pat_id: lir.LirPatternId) ?Symbol {
             return switch (self.store.getPattern(pat_id)) {
                 .bind => |bind| bind.symbol,
@@ -11941,13 +12043,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return true;
         }
 
-        fn generateLookupCall(self: *Self, lookup: anytype, args_span: anytype, ret_layout: layout.Idx) Allocator.Error!ValueLocation {
-            const symbol_key: u64 = @bitCast(lookup.symbol);
+        fn generateDirectSymbolCall(self: *Self, symbol: Symbol, args_span: anytype, ret_layout: layout.Idx) Allocator.Error!ValueLocation {
+            const symbol_key: u64 = @bitCast(symbol);
 
             // Check if the function was compiled as a procedure
             if (self.proc_registry.get(symbol_key)) |proc| {
                 if (builtin.mode == .Debug) {
-                    if (self.getSymbolDefRelaxed(lookup.symbol)) |def_expr_id| {
+                    if (self.getCallableDefRelaxed(symbol)) |def_expr_id| {
                         const def_expr = self.store.getExpr(def_expr_id);
                         const lambda_ret_layout = switch (def_expr) {
                             .lambda => |lambda| lambda.ret_layout,
@@ -11960,8 +12062,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         };
                         if (!try self.layoutsStructurallyCompatible(ret_layout, lambda_ret_layout)) {
                             std.debug.panic(
-                                "LIR/codegen invariant violated: lookup call ret_layout {d} disagrees with compiled lambda ret_layout {d} for symbol {d}",
-                                .{ @intFromEnum(ret_layout), @intFromEnum(lambda_ret_layout), lookup.symbol.raw() },
+                                "LIR/codegen invariant violated: direct call ret_layout {d} disagrees with compiled lambda ret_layout {d} for symbol {d}",
+                                .{ @intFromEnum(ret_layout), @intFromEnum(lambda_ret_layout), symbol.raw() },
                             );
                         }
                     }
@@ -11969,8 +12071,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 return try self.generateCallToCompiledProc(proc, args_span, ret_layout);
             }
 
-            // Look up the function in top-level definitions
-            if (self.getSymbolDefRelaxed(lookup.symbol)) |def_expr_id| {
+            if (self.getCallableDefRelaxed(symbol)) |def_expr_id| {
                 const def_expr = self.store.getExpr(def_expr_id);
                 switch (def_expr) {
                     .lambda => |lambda| {
@@ -11996,22 +12097,24 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             }
                         }
                     },
+                    .runtime_error => {
+                        try self.emitRocCrash("hit a runtime error in call (dead code path)");
+                        try self.emitTrap();
+                        return .noreturn;
+                    },
                     else => {},
                 }
 
-                if (try self.resolveLambdaCodeOffset(def_expr_id)) |code_offset| {
-                    return try self.callCompiledOffset(code_offset, args_span, ret_layout);
-                }
                 return switch (def_expr) {
                     .lambda => |lambda| {
                         if (builtin.mode == .Debug and !try self.layoutsStructurallyCompatible(ret_layout, lambda.ret_layout)) {
                             std.debug.panic(
-                                "LIR/codegen invariant violated: lookup call ret_layout {d} disagrees with lambda ret_layout {d} for symbol {d}",
-                                .{ @intFromEnum(ret_layout), @intFromEnum(lambda.ret_layout), lookup.symbol.raw() },
+                                "LIR/codegen invariant violated: direct call ret_layout {d} disagrees with lambda ret_layout {d} for symbol {d}",
+                                .{ @intFromEnum(ret_layout), @intFromEnum(lambda.ret_layout), symbol.raw() },
                             );
                         }
                         const saved_binding_symbol = self.current_binding_symbol;
-                        self.current_binding_symbol = lookup.symbol;
+                        self.current_binding_symbol = symbol;
                         defer self.current_binding_symbol = saved_binding_symbol;
                         const code_offset = try self.compileLambdaAsProc(def_expr_id, lambda);
                         return try self.callCompiledOffset(code_offset, args_span, ret_layout);
@@ -12022,32 +12125,26 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         if (inner == .lambda) {
                             if (builtin.mode == .Debug and !try self.layoutsStructurallyCompatible(ret_layout, inner.lambda.ret_layout)) {
                                 std.debug.panic(
-                                    "LIR/codegen invariant violated: lookup call ret_layout {d} disagrees with nominal lambda ret_layout {d} for symbol {d}",
-                                    .{ @intFromEnum(ret_layout), @intFromEnum(inner.lambda.ret_layout), lookup.symbol.raw() },
+                                    "LIR/codegen invariant violated: direct call ret_layout {d} disagrees with nominal lambda ret_layout {d} for symbol {d}",
+                                    .{ @intFromEnum(ret_layout), @intFromEnum(inner.lambda.ret_layout), symbol.raw() },
                                 );
                             }
                             const saved_binding_symbol = self.current_binding_symbol;
-                            self.current_binding_symbol = lookup.symbol;
+                            self.current_binding_symbol = symbol;
                             defer self.current_binding_symbol = saved_binding_symbol;
                             const code_offset = try self.compileLambdaAsProc(nom.backing_expr, inner.lambda);
                             return try self.callCompiledOffset(code_offset, args_span, ret_layout);
                         }
                         if (std.debug.runtime_safety) std.debug.panic(
-                            "generateLookupCall: nominal wrapping unexpected expr '{s}'",
+                            "generateDirectSymbolCall: nominal wrapping unexpected expr '{s}'",
                             .{@tagName(inner)},
                         );
                         unreachable;
                     },
-                    .runtime_error => {
-                        // Dead code path in a call — emit roc_crashed and trap.
-                        try self.emitRocCrash("hit a runtime error in call (dead code path)");
-                        try self.emitTrap();
-                        return .noreturn;
-                    },
                     else => {
                         if (std.debug.runtime_safety) std.debug.panic(
-                            "generateLookupCall: unexpected def expr type '{s}'. " ++
-                                "In the new pipeline, MIR→LIR resolves all closure dispatch to direct calls.",
+                            "generateDirectSymbolCall: unexpected callable def expr type '{s}'. " ++
+                                "Direct-call symbols must resolve through callable_defs to lambda-like defs.",
                             .{@tagName(def_expr)},
                         );
                         unreachable;
@@ -12056,13 +12153,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             if (std.debug.runtime_safety) {
-                const sym: Symbol = @bitCast(symbol_key);
                 std.debug.panic(
-                    "generateLookupCall: unresolved symbol={} layout={}",
-                    .{
-                        sym.raw(),
-                        @intFromEnum(lookup.layout_idx),
-                    },
+                    "generateDirectSymbolCall: unresolved direct callee symbol={}",
+                    .{symbol.raw()},
                 );
             }
             unreachable;

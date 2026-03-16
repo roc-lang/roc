@@ -3277,7 +3277,7 @@ test "tag union matching with payload inside function - cross module" {
 // why List.repeat triggers the infinite loop check. List.repeat
 // is implemented with recursion in Roc, not while loops.
 
-test "issue 9262: dev evaluator panics on opaque function field lookup" {
+test "issue 9262: dev evaluator handles opaque function field lookup" {
     const src =
         \\W(a) := { f : {} -> [V(a)] }.{
         \\    run : W(a) -> [V(a)]
@@ -3303,5 +3303,7 @@ test "issue 9262: dev evaluator panics on opaque function field lookup" {
     var code_result = try dev_eval.generateCode(result.module_env, target_def.expr, &all_module_envs, null);
     defer code_result.deinit();
 
-    std.debug.panic("issue 9262 did not reproduce; convert this test to a success assertion", .{});
+    try testing.expectEqual(@as(usize, 0), result.problems.len());
+    try testing.expect(code_result.code.len > 0);
+    try testing.expect(code_result.entry_offset < code_result.code.len);
 }

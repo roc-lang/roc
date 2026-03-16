@@ -360,7 +360,10 @@ const Analyzer = struct {
                 }
             },
             .call => |call| {
-                try self.analyzeExpr(call.fn_expr);
+                switch (call.callee) {
+                    .expr => |callee_expr| try self.analyzeExpr(callee_expr),
+                    .direct => {},
+                }
                 for (self.store.getExprSpan(call.args)) |arg| try self.analyzeExpr(arg);
             },
             .lambda => |lam| {

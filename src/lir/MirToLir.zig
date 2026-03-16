@@ -40,6 +40,7 @@ const LirExprSpan = LIR.LirExprSpan;
 const LirPatternId = LIR.LirPatternId;
 const LirPatternSpan = LIR.LirPatternSpan;
 const LirStmt = LIR.LirStmt;
+const LirStmtSpan = LIR.LirStmtSpan;
 const LirMatchBranch = LIR.LirMatchBranch;
 const LirCapture = LIR.LirCapture;
 const Symbol = LIR.Symbol;
@@ -468,6 +469,44 @@ fn isCallableExpr(self: *Self, expr_id: LirExprId, depth: u16) bool {
     };
 }
 
+fn resolveBlockBindingExpr(self: *Self, stmts: LirStmtSpan, symbol: Symbol) ?LirExprId {
+    const bindings = self.lir_store.getStmts(stmts);
+    var i = bindings.len;
+    while (i > 0) {
+        i -= 1;
+        const binding = switch (bindings[i]) {
+            .decl, .mutate => |b| b,
+            .cell_init, .cell_store, .cell_drop => continue,
+        };
+        switch (self.lir_store.getPattern(binding.pattern)) {
+            .bind => |bind| if (bind.symbol.eql(symbol)) return binding.expr,
+            .as_pattern => |as_pat| if (as_pat.symbol.eql(symbol)) return binding.expr,
+            else => {},
+        }
+    }
+    return null;
+}
+
+fn callTargetForExpr(self: *Self, expr_id: LirExprId) Allocator.Error!LIR.CallTarget {
+    return switch (self.lir_store.getExpr(expr_id)) {
+        .lookup => |lookup| blk: {
+            if (self.lir_store.getCallableDef(lookup.symbol) != null) {
+                break :blk .{ .direct = lookup.symbol };
+            }
+            if (self.lir_store.getSymbolDef(lookup.symbol)) |def_expr_id| {
+                if (self.resolveCallableDefExpr(def_expr_id, 0)) |callable_def| {
+                    if (self.lir_store.getCallableDef(lookup.symbol) == null) {
+                        try self.lir_store.registerCallableDef(lookup.symbol, callable_def);
+                    }
+                    break :blk .{ .direct = lookup.symbol };
+                }
+            }
+            break :blk .{ .expr = expr_id };
+        },
+        else => .{ .expr = expr_id },
+    };
+}
+
 fn verifyFunctionLayouts(self: *Self, _: LirExprId) void {
     var i: usize = 0;
     const count = self.lir_store.exprCount();
@@ -859,6 +898,7 @@ fn lambdaSetForStructField(self: *Self, expr_id: MIR.ExprId, field_idx: u32) ?La
             break :blk self.lambdaSetForExpr(fields[field_idx]);
         },
         .lookup => |symbol| blk: {
+            if (self.lambda_set_store.getSymbolFieldLambdaSet(symbol, field_idx)) |ls_idx| break :blk ls_idx;
             const def_expr = self.mir_store.getSymbolDef(symbol) orelse break :blk null;
             break :blk self.lambdaSetForStructField(def_expr, field_idx);
         },
@@ -1143,6 +1183,75 @@ fn resolveToLambdaExprId(self: *Self, expr_id: MIR.ExprId) ?MIR.ExprId {
     };
 }
 
+fn resolveCallableStructFieldExpr(self: *Self, expr_id: LirExprId, field_idx: u16, depth: u16) ?LirExprId {
+    if (depth > 256) std.debug.panic(
+        "resolveCallableStructFieldExpr: debug-only heuristic detected likely infinite recursion (depth > 256) at expr {}",
+        .{@intFromEnum(expr_id)},
+    );
+
+    return switch (self.lir_store.getExpr(expr_id)) {
+        .struct_ => |struct_expr| blk: {
+            const fields = self.lir_store.getExprSpan(struct_expr.fields);
+            if (field_idx >= fields.len) break :blk null;
+            break :blk fields[field_idx];
+        },
+        .block => |block| blk: {
+            if (self.lir_store.getExpr(block.final_expr) == .lookup) {
+                const lookup = self.lir_store.getExpr(block.final_expr).lookup;
+                if (self.resolveBlockBindingExpr(block.stmts, lookup.symbol)) |bound_expr| {
+                    break :blk self.resolveCallableStructFieldExpr(bound_expr, field_idx, depth + 1);
+                }
+            }
+            break :blk self.resolveCallableStructFieldExpr(block.final_expr, field_idx, depth + 1);
+        },
+        .nominal => |nom| self.resolveCallableStructFieldExpr(nom.backing_expr, field_idx, depth + 1),
+        .lookup => |lookup| blk: {
+            if (self.lir_store.getCallableDef(lookup.symbol)) |callable_def| break :blk self.resolveCallableStructFieldExpr(callable_def, field_idx, depth + 1);
+            const def_expr_id = self.lir_store.getSymbolDef(lookup.symbol) orelse break :blk null;
+            break :blk self.resolveCallableStructFieldExpr(def_expr_id, field_idx, depth + 1);
+        },
+        else => null,
+    };
+}
+
+fn resolveCallableDefExpr(self: *Self, expr_id: LirExprId, depth: u16) ?LirExprId {
+    if (depth > 256) std.debug.panic(
+        "resolveCallableDefExpr: debug-only heuristic detected likely infinite recursion (depth > 256) at expr {}",
+        .{@intFromEnum(expr_id)},
+    );
+
+    return switch (self.lir_store.getExpr(expr_id)) {
+        .lambda => expr_id,
+        .nominal => |nom| if (self.resolveCallableDefExpr(nom.backing_expr, depth + 1) != null) expr_id else null,
+        .block => |block| blk: {
+            if (self.lir_store.getExpr(block.final_expr) == .lookup) {
+                const lookup = self.lir_store.getExpr(block.final_expr).lookup;
+                if (self.resolveBlockBindingExpr(block.stmts, lookup.symbol)) |bound_expr| {
+                    break :blk self.resolveCallableDefExpr(bound_expr, depth + 1);
+                }
+            }
+            break :blk self.resolveCallableDefExpr(block.final_expr, depth + 1);
+        },
+        .lookup => |lookup| blk: {
+            if (self.lir_store.getCallableDef(lookup.symbol)) |callable_def| break :blk callable_def;
+            const def_expr_id = self.lir_store.getSymbolDef(lookup.symbol) orelse break :blk null;
+            break :blk self.resolveCallableDefExpr(def_expr_id, depth + 1);
+        },
+        .struct_access => |sa| blk: {
+            const field_expr = self.resolveCallableStructFieldExpr(sa.struct_expr, sa.field_idx, depth + 1) orelse break :blk null;
+            break :blk self.resolveCallableDefExpr(field_expr, depth + 1);
+        },
+        else => null,
+    };
+}
+
+fn registerCallableDefIfNeeded(self: *Self, symbol: Symbol, expr_id: LirExprId) Allocator.Error!void {
+    const callable_def = self.resolveCallableDefExpr(expr_id, 0) orelse return;
+    if (self.lir_store.getCallableDef(symbol) == null) {
+        try self.lir_store.registerCallableDef(symbol, callable_def);
+    }
+}
+
 fn specializationKeyBytes(self: *Self, callee_key: u64, param_layouts: []const layout.Idx) Allocator.Error![]const u8 {
     self.scratch_specialization_key.clearRetainingCapacity();
 
@@ -1233,6 +1342,7 @@ fn ensureSpecializedDirectCallee(
         Region.zero(),
     );
     try self.lir_store.registerSymbolDef(resolved_symbol, lir_def);
+    try self.lir_store.registerCallableDef(resolved_symbol, lir_def);
 
     const lowered = self.lir_store.getExpr(lir_def);
     const lowered_ret_layout = switch (lowered) {
@@ -1940,6 +2050,9 @@ fn appendBindingStmt(
     const bp = try self.freshBindPattern(expr_layout, false, region);
     try self.symbol_layouts.put(bp.symbol.raw(), expr_layout);
     try self.symbol_binding_modes.put(bp.symbol.raw(), bindingModeForSemantics(semantics));
+    if (self.resolveCallableDefExpr(expr_id, 0)) |callable_def| {
+        try self.lir_store.registerCallableDef(bp.symbol, callable_def);
+    }
     try stmts.append(self.allocator, .{ .decl = .{
         .pattern = bp.pattern,
         .expr = expr_id,
@@ -2443,6 +2556,7 @@ fn lowerLookup(self: *Self, sym: Symbol, mono_idx: Monotype.Idx, _: MIR.ExprId, 
                 try self.prepareLiftedDefCaptureLayout(sym, mir_def_id);
                 const lir_def_id = try self.lowerExpr(mir_def_id);
                 try self.lir_store.registerSymbolDef(sym, lir_def_id);
+                try self.registerCallableDefIfNeeded(sym, lir_def_id);
             }
         }
     }
@@ -2778,13 +2892,8 @@ fn lowerCall(self: *Self, call_data: anytype, mir_expr_id: MIR.ExprId, region: R
             lambda_expr_id,
             self.scratch_layout_idxs.items[save_layouts..],
         );
-        const fn_expr = try self.lir_store.addExpr(.{ .lookup = .{
-            .symbol = specialization.symbol,
-            .layout_idx = fn_layout,
-        } }, region);
-
         const call_expr = try self.lir_store.addExpr(.{ .call = .{
-            .fn_expr = fn_expr,
+            .callee = .{ .direct = specialization.symbol },
             .fn_layout = fn_layout,
             .args = lir_args,
             .ret_layout = specialization.ret_layout,
@@ -2810,12 +2919,13 @@ fn lowerCall(self: *Self, call_data: anytype, mir_expr_id: MIR.ExprId, region: R
     const fn_mono = self.mir_store.typeOf(call_data.func);
     const fn_layout = try self.layoutFromMonotype(fn_mono);
     const fn_expr = try acc.ensureSymbol(fn_expr_raw, fn_layout, region);
+    const call_target = try self.callTargetForExpr(fn_expr);
 
     const mir_args = self.mir_store.getExprSpan(call_data.args);
     const lir_args = try self.lowerAnfSpan(&acc, mir_args, region);
 
     const call_expr = try self.lir_store.addExpr(.{ .call = .{
-        .fn_expr = fn_expr,
+        .callee = call_target,
         .fn_layout = fn_layout,
         .args = lir_args,
         .ret_layout = ret_layout,
@@ -3160,13 +3270,9 @@ fn lowerClosureCall(
                 lifted_def,
                 self.scratch_layout_idxs.items[save_layouts..],
             );
-            const fn_expr = try self.lir_store.addExpr(.{ .lookup = .{
-                .symbol = specialization.symbol,
-                .layout_idx = lifted_layout,
-            } }, region);
             // Zero-capture lambda: call with just user args, no extra captures param
             const call_expr = try self.lir_store.addExpr(.{ .call = .{
-                .fn_expr = fn_expr,
+                .callee = .{ .direct = specialization.symbol },
                 .fn_layout = lifted_layout,
                 .args = call_user_args,
                 .ret_layout = specialization.ret_layout,
@@ -3187,10 +3293,6 @@ fn lowerClosureCall(
             lifted_def,
             self.scratch_layout_idxs.items[save_layouts..],
         );
-        const fn_expr = try self.lir_store.addExpr(.{ .lookup = .{
-            .symbol = specialization.symbol,
-            .layout_idx = lifted_layout,
-        } }, region);
 
         // Build args: [user_args..., closure_val]
         // Re-read the span after lowering closure_val; lowerExpr may append to
@@ -3205,7 +3307,7 @@ fn lowerClosureCall(
         const all_args = try self.lir_store.addExprSpan(self.scratch_lir_expr_ids.items[save_exprs..]);
 
         const call_expr = try self.lir_store.addExpr(.{ .call = .{
-            .fn_expr = fn_expr,
+            .callee = .{ .direct = specialization.symbol },
             .fn_layout = lifted_layout,
             .args = all_args,
             .ret_layout = specialization.ret_layout,
@@ -3266,13 +3368,8 @@ fn lowerClosureCall(
             lifted_def,
             self.scratch_layout_idxs.items[save_layouts..],
         );
-        const fn_lookup = try self.lir_store.addExpr(.{ .lookup = .{
-            .symbol = specialization.symbol,
-            .layout_idx = lifted_layout,
-        } }, region);
-
         const branch_call = try self.lir_store.addExpr(.{ .call = .{
-            .fn_expr = fn_lookup,
+            .callee = .{ .direct = specialization.symbol },
             .fn_layout = lifted_layout,
             .args = branch_args,
             .ret_layout = specialization.ret_layout,
@@ -3398,11 +3495,13 @@ fn lowerBlock(self: *Self, block_data: anytype, _: MIR.ExprId, region: Region) A
                         if (self.lir_store.getSymbolDef(sym) == null) {
                             try self.lir_store.registerSymbolDef(sym, lir_expr);
                         }
+                        try self.registerCallableDefIfNeeded(sym, lir_expr);
                     },
                     .as_pattern => |as_pat| {
                         if (self.lir_store.getSymbolDef(as_pat.symbol) == null) {
                             try self.lir_store.registerSymbolDef(as_pat.symbol, lir_expr);
                         }
+                        try self.registerCallableDefIfNeeded(as_pat.symbol, lir_expr);
                     },
                     // Lambda defs bound to destructuring patterns, wildcards, or literals
                     // don't need symbol registration — there's no named symbol to look up.
