@@ -188,7 +188,7 @@ fn lirExprResultLayout(store: *const LirExprStore, expr_id: lir.LirExprId) layou
         .match_expr => |w| w.result_layout,
         .dbg => |d| d.result_layout,
         .expect => |e| e.result_layout,
-        .call => |c| c.ret_layout,
+        .proc_call => |c| c.ret_layout,
         .low_level => |ll| ll.ret_layout,
         .early_return => |er| er.ret_layout,
         .lookup => |l| l.layout_idx,
@@ -210,7 +210,6 @@ fn lirExprResultLayout(store: *const LirExprStore, expr_id: lir.LirExprId) layou
         .empty_list => |l| l.list_layout,
         .hosted_call => |hc| hc.ret_layout,
         .tag_payload_access => |tpa| tpa.payload_layout,
-        .lambda => |l| l.fn_layout,
         .for_loop, .while_loop, .incref, .decref, .free => .zst,
         .crash => |c| c.ret_layout,
         .runtime_error => |re| re.ret_layout,
@@ -742,8 +741,6 @@ pub const DevEvaluator = struct {
         const lir_expr_id = mir_to_lir.lower(mir_expr_id) catch {
             return error.RuntimeError;
         };
-        try lir.CallCanonicalize.canonicalizeDirectCalls(self.allocator, &lir_store, &.{lir_expr_id});
-
         // Run RC insertion pass on the LIR
         var rc_pass = lir.RcInsert.RcInsertPass.init(self.allocator, &lir_store, layout_store_ptr) catch return error.OutOfMemory;
         defer rc_pass.deinit();
@@ -752,7 +749,6 @@ pub const DevEvaluator = struct {
         // Run RC insertion pass on all function definitions (symbol_defs)
         // so that lambda bodies get proper incref/decref annotations.
         lir.RcInsert.insertRcOpsIntoSymbolDefsBestEffort(self.allocator, &lir_store, layout_store_ptr);
-        try lir.CallCanonicalize.canonicalizeDirectCalls(self.allocator, &lir_store, &.{final_expr_id});
 
         // Determine the result layout from the lowered LIR expression.
         const cir_expr = module_env.store.getExpr(expr_idx);
@@ -889,15 +885,12 @@ pub const DevEvaluator = struct {
         const lir_expr_id = mir_to_lir.lower(mir_expr_id) catch {
             return error.RuntimeError;
         };
-        try lir.CallCanonicalize.canonicalizeDirectCalls(self.allocator, &lir_store, &.{lir_expr_id});
-
         // Run RC insertion pass
         var rc_pass = lir.RcInsert.RcInsertPass.init(self.allocator, &lir_store, layout_store_ptr) catch return error.OutOfMemory;
         defer rc_pass.deinit();
         const final_expr_id = rc_pass.insertRcOps(lir_expr_id) catch lir_expr_id;
 
         lir.RcInsert.insertRcOpsIntoSymbolDefsBestEffort(self.allocator, &lir_store, layout_store_ptr);
-        try lir.CallCanonicalize.canonicalizeDirectCalls(self.allocator, &lir_store, &.{final_expr_id});
 
         // Create codegen
         var codegen = backend.HostLirCodeGen.init(

@@ -34,6 +34,7 @@ const Symbol = LIR.Symbol;
 const LirStmt = LIR.LirStmt;
 const LirStmtSpan = LIR.LirStmtSpan;
 const LirPatternId = LIR.LirPatternId;
+const LirPatternSpan = LIR.LirPatternSpan;
 const LirIfBranch = LIR.LirIfBranch;
 const LirMatchBranch = LIR.LirMatchBranch;
 const LirExprSpan = LIR.LirExprSpan;
@@ -208,6 +209,50 @@ pub const RcInsertPass = struct {
         return self.processExpr(normalized_expr);
     }
 
+    pub fn insertRcOpsForProcBody(
+        self: *RcInsertPass,
+        body_expr_id: LirExprId,
+        params: LirPatternSpan,
+        ret_layout: LayoutIdx,
+    ) Allocator.Error!LirExprId {
+        const loop_normalized_expr = try self.normalizeBorrowedLoopSources(body_expr_id);
+        if (builtin.mode == .Debug) {
+            try self.validateExprTreeIds(loop_normalized_expr);
+        }
+        const normalized_expr = try self.materializeRcCellLoadOperands(loop_normalized_expr);
+        if (builtin.mode == .Debug) {
+            try self.validateExprTreeIds(normalized_expr);
+        }
+
+        self.symbol_use_counts.clearRetainingCapacity();
+        self.symbol_consumed_counts.clearRetainingCapacity();
+        self.retained_owner_use_debits.clearRetainingCapacity();
+        self.symbol_layouts.clearRetainingCapacity();
+        self.live_rc_symbols.clearRetainingCapacity();
+        self.live_cells.clearRetainingCapacity();
+        self.block_consumed_uses.clearRetainingCapacity();
+        self.cumulative_consumed_uses.clearRetainingCapacity();
+        self.pending_branch_rc_adj.clearRetainingCapacity();
+        self.scratch_uses.clearRetainingCapacity();
+        self.scratch_consumed_uses.clearRetainingCapacity();
+        self.early_return_scope_base = 0;
+        self.early_return_cell_scope_base = 0;
+        if (self.ownership) |*ownership| ownership.deinit();
+        try self.uniquifyBindingPatterns(normalized_expr);
+        self.ownership = try OwnershipNormalize.analyzeWithParams(
+            self.allocator,
+            self.store,
+            params,
+            normalized_expr,
+        );
+
+        try self.countUses(normalized_expr);
+        try self.countConsumedUses(normalized_expr);
+
+        const region = self.store.getExprRegion(normalized_expr);
+        return self.processOwnedBodyWithParams(normalized_expr, params, ret_layout, region);
+    }
+
     fn validateExprId(self: *const RcInsertPass, expr_id: LirExprId, context: []const u8) void {
         if (expr_id.isNone()) return;
         const idx = @intFromEnum(expr_id);
@@ -261,10 +306,7 @@ pub const RcInsertPass = struct {
                 try self.validateExprTreeIds(wl.cond);
                 try self.validateExprTreeIds(wl.body);
             },
-            .call => |call| {
-                if (self.callCalleeExpr(call)) |callee_expr| {
-                    try self.validateExprTreeIds(callee_expr);
-                }
+            .proc_call => |call| {
                 for (self.store.getExprSpan(call.args)) |arg| try self.validateExprTreeIds(arg);
             },
             .low_level => |ll| for (self.store.getExprSpan(ll.args)) |arg| try self.validateExprTreeIds(arg),
@@ -514,23 +556,14 @@ pub const RcInsertPass = struct {
         return .{ .symbol = temp.symbol, .lookup = temp.lookup };
     }
 
-    fn callCalleeExpr(_: *const RcInsertPass, call: anytype) ?LirExprId {
-        return switch (call.callee) {
-            .expr => |callee_expr| callee_expr,
-            .direct => null,
-        };
-    }
-
-    fn rebuildCall(
+    fn rebuildProcCall(
         self: *RcInsertPass,
         call: anytype,
-        callee: LIR.CallTarget,
         args: LirExprSpan,
         region: Region,
     ) Allocator.Error!LirExprId {
-        return self.store.addExpr(.{ .call = .{
-            .callee = callee,
-            .fn_layout = call.fn_layout,
+        return self.store.addExpr(.{ .proc_call = .{
+            .proc = call.proc,
             .args = args,
             .ret_layout = call.ret_layout,
             .called_via = call.called_via,
@@ -558,7 +591,7 @@ pub const RcInsertPass = struct {
             .match_expr => |w| w.result_layout,
             .dbg => |d| d.result_layout,
             .expect => |e| e.result_layout,
-            .call => |c| c.ret_layout,
+            .proc_call => |c| c.ret_layout,
             .low_level => |ll| ll.ret_layout,
             .early_return => |er| er.ret_layout,
             .lookup => |l| l.layout_idx,
@@ -719,7 +752,7 @@ pub const RcInsertPass = struct {
         defer prelude.deinit(self.allocator);
 
         const rewritten = switch (self.store.getExpr(expr_id)) {
-            .call => |call| blk: {
+            .proc_call => |call| blk: {
                 const args = self.store.getExprSpan(call.args);
                 var new_args = std.ArrayList(LirExprId).empty;
                 defer new_args.deinit(self.allocator);
@@ -737,12 +770,7 @@ pub const RcInsertPass = struct {
                 }
 
                 if (!changed) break :blk expr_id;
-                break :blk try self.rebuildCall(
-                    call,
-                    call.callee,
-                    try self.store.addExprSpan(new_args.items),
-                    region,
-                );
+                break :blk try self.rebuildProcCall(call, try self.store.addExprSpan(new_args.items), region);
             },
             .low_level => |ll| blk: {
                 const args = self.store.getExprSpan(ll.args);
@@ -771,6 +799,7 @@ pub const RcInsertPass = struct {
                     .op = ll.op,
                     .args = try self.store.addExprSpan(new_args.items),
                     .ret_layout = ll.ret_layout,
+                    .callable_proc = ll.callable_proc,
                 } }, region);
             },
             .hosted_call => |_| expr_id,
@@ -1033,25 +1062,13 @@ pub const RcInsertPass = struct {
                 if (new_cond == wl.cond and new_body == wl.body and cond_prelude.items.len == 0) return expr_id;
                 return self.wrapPreludeAroundExpr(rebuilt, .zst, region, cond_prelude.items);
             },
-            .call => |call| {
+            .proc_call => |call| {
                 var prelude = std.ArrayList(LirStmt).empty;
                 defer prelude.deinit(self.allocator);
 
-                var new_callee = call.callee;
-                var callee_changed = false;
-                switch (call.callee) {
-                    .expr => |callee_expr| {
-                        const new_callee_raw = try self.materializeRcCellLoadOperands(callee_expr);
-                        const new_callee_expr = try self.materializeRcCellLoadOperand(new_callee_raw, region, &prelude);
-                        new_callee = .{ .expr = new_callee_expr };
-                        callee_changed = new_callee_expr != callee_expr;
-                    },
-                    .direct => {},
-                }
-
                 const args_res = try self.materializeRcCellLoadSpan(call.args, region, &prelude);
-                const rebuilt = try self.rebuildCall(call, new_callee, args_res.span, region);
-                if (!callee_changed and !args_res.changed and prelude.items.len == 0) return expr_id;
+                const rebuilt = try self.rebuildProcCall(call, args_res.span, region);
+                if (!args_res.changed and prelude.items.len == 0) return expr_id;
                 return self.wrapPreludeAroundExpr(rebuilt, call.ret_layout, region, prelude.items);
             },
             .list => |list_expr| {
@@ -1161,6 +1178,7 @@ pub const RcInsertPass = struct {
                     .op = ll.op,
                     .args = args_res.span,
                     .ret_layout = ll.ret_layout,
+                    .callable_proc = ll.callable_proc,
                 } }, region);
                 if (!args_res.changed and prelude.items.len == 0) return expr_id;
                 return self.wrapPreludeAroundExpr(rebuilt, ll.ret_layout, region, prelude.items);
@@ -1438,20 +1456,10 @@ pub const RcInsertPass = struct {
                     .body = new_body,
                 } }, region);
             },
-            .call => |call| {
-                var new_callee = call.callee;
-                var callee_changed = false;
-                switch (call.callee) {
-                    .expr => |callee_expr| {
-                        const new_callee_expr = try self.normalizeBorrowedLoopSources(callee_expr);
-                        new_callee = .{ .expr = new_callee_expr };
-                        callee_changed = new_callee_expr != callee_expr;
-                    },
-                    .direct => {},
-                }
+            .proc_call => |call| {
                 const args_res = try self.normalizeBorrowedLoopSourceSpan(call.args);
-                if (!callee_changed and !args_res.changed) return expr_id;
-                return self.rebuildCall(call, new_callee, args_res.span, region);
+                if (!args_res.changed) return expr_id;
+                return self.rebuildProcCall(call, args_res.span, region);
             },
             .list => |list_expr| {
                 const elems_res = try self.normalizeBorrowedLoopSourceSpan(list_expr.elems);
@@ -1550,6 +1558,7 @@ pub const RcInsertPass = struct {
                     .op = ll.op,
                     .args = try self.store.addExprSpan(new_args.items),
                     .ret_layout = ll.ret_layout,
+                    .callable_proc = ll.callable_proc,
                 } }, region);
                 return self.wrapPreludeAroundExpr(rebuilt, ll.ret_layout, region, prelude.items);
             },
@@ -1794,10 +1803,7 @@ pub const RcInsertPass = struct {
                 try self.uniquifyBindingPatterns(ds.value);
                 for (self.store.getExprSpan(ds.branches)) |branch| try self.uniquifyBindingPatterns(branch);
             },
-            .call => |call| {
-                if (self.callCalleeExpr(call)) |callee_expr| {
-                    try self.uniquifyBindingPatterns(callee_expr);
-                }
+            .proc_call => |call| {
                 for (self.store.getExprSpan(call.args)) |arg| try self.uniquifyBindingPatterns(arg);
             },
             .list => |list_expr| {
@@ -1885,10 +1891,7 @@ pub const RcInsertPass = struct {
                 }
                 try self.countUsesInto(block.final_expr, target);
             },
-            .call => |call| {
-                if (self.callCalleeExpr(call)) |callee_expr| {
-                    try self.countUsesInto(callee_expr, target);
-                }
+            .proc_call => |call| {
                 const args = self.store.getExprSpan(call.args);
                 for (args) |arg_id| {
                     try self.countUsesInto(arg_id, target);
@@ -2238,10 +2241,7 @@ pub const RcInsertPass = struct {
                     }
                 }
             },
-            .call => |call| {
-                if (self.callCalleeExpr(call)) |callee_expr| {
-                    try self.countConsumedUsesInto(callee_expr, target);
-                }
+            .proc_call => |call| {
                 const args = self.store.getExprSpan(call.args);
                 for (args) |arg_id| {
                     try self.countConsumedValueInto(arg_id, target);
@@ -2465,10 +2465,7 @@ pub const RcInsertPass = struct {
                 }
                 try self.countBorrowOwnerDemandValueInto(lam.body, &local);
             },
-            .call => |call| {
-                if (self.callCalleeExpr(call)) |callee_expr| {
-                    try self.countBorrowOwnerDemandUsesInto(callee_expr, target);
-                }
+            .proc_call => |call| {
                 const args = self.store.getExprSpan(call.args);
                 for (args) |arg_id| {
                     try self.countBorrowOwnerDemandValueInto(arg_id, target);
@@ -2865,23 +2862,10 @@ pub const RcInsertPass = struct {
             .discriminant_switch => |ds| self.processDiscriminantSwitch(ds, region),
             .early_return => |ret| self.processEarlyReturn(ret, region, expr_id),
             .cell_load => expr_id,
-            .call => |call| switch (call.callee) {
-                .expr => |callee_expr| {
-                    const new_callee_expr = try self.processExpr(callee_expr);
-                    var callee_added = try self.pushBorrowedExprUsesToBlockConsumed(callee_expr);
-                    defer {
-                        self.popExprUsesFromBlockConsumed(&callee_added);
-                        callee_added.deinit();
-                    }
-                    const args_res = try self.processExprSpanSequenced(call.args, .consume);
-                    if (new_callee_expr == callee_expr and !args_res.changed) return expr_id;
-                    return self.rebuildCall(call, .{ .expr = new_callee_expr }, args_res.span, region);
-                },
-                .direct => {
-                    const args_res = try self.processExprSpanSequenced(call.args, .consume);
-                    if (!args_res.changed) return expr_id;
-                    return self.rebuildCall(call, call.callee, args_res.span, region);
-                },
+            .proc_call => |call| {
+                const args_res = try self.processExprSpanSequenced(call.args, .consume);
+                if (!args_res.changed) return expr_id;
+                return self.rebuildProcCall(call, args_res.span, region);
             },
             .list => |list| {
                 const elems_res = try self.processExprSpanSequenced(list.elems, .consume);
@@ -2993,6 +2977,7 @@ pub const RcInsertPass = struct {
                     .op = ll.op,
                     .args = new_args_span,
                     .ret_layout = ll.ret_layout,
+                    .callable_proc = ll.callable_proc,
                 } }, region);
             },
             .dbg => |d| {
@@ -3970,12 +3955,13 @@ pub const RcInsertPass = struct {
         } }, region);
     }
 
-    /// Process a lambda expression.
-    /// Lambda bodies are independent scopes — the calling convention provides
-    /// 1 reference per parameter. We recurse into the body and emit RC ops
-    /// for lambda parameters based on body-local use counts.
-    fn processLambda(self: *RcInsertPass, lam: anytype, region: Region, expr_id: LirExprId) Allocator.Error!LirExprId {
-        // Lambda is a new function scope — save and reset early_return tracking.
+    fn processOwnedBodyWithParams(
+        self: *RcInsertPass,
+        body_expr_id: LirExprId,
+        params_span: LirPatternSpan,
+        ret_layout: LayoutIdx,
+        region: Region,
+    ) Allocator.Error!LirExprId {
         const saved_scope_base = self.early_return_scope_base;
         const saved_cell_scope_base = self.early_return_cell_scope_base;
         const saved_live_len = self.live_rc_symbols.items.len;
@@ -3991,24 +3977,24 @@ pub const RcInsertPass = struct {
 
         var local_consumed_uses = std.AutoHashMap(u64, u32).init(self.allocator);
         defer local_consumed_uses.deinit();
-        try self.countConsumedValueInto(lam.body, &local_consumed_uses);
+        try self.countConsumedValueInto(body_expr_id, &local_consumed_uses);
 
-        // Lambda parameters are live bindings for the whole body and must be
+        // Proc/lambda parameters are live bindings for the whole body and must be
         // included in early_return cleanup.
-        const params = try self.allocator.dupe(LirPatternId, self.store.getPatternSpan(lam.params));
+        const params = try self.allocator.dupe(LirPatternId, self.store.getPatternSpan(params_span));
         defer self.allocator.free(params);
 
         for (params) |pat_id| {
             try self.trackLiveRcSymbolsForPattern(pat_id, &local_consumed_uses);
         }
 
-        const new_body = try self.processExpr(lam.body);
+        const new_body = try self.processExpr(body_expr_id);
 
         var final_local_consumed_uses = std.AutoHashMap(u64, u32).init(self.allocator);
         defer final_local_consumed_uses.deinit();
         try self.countConsumedValueInto(new_body, &final_local_consumed_uses);
 
-        // Emit pre-body RC ops for lambda parameters.
+        // Emit pre-body RC ops for the parameters.
         var rc_stmts = std.ArrayList(LirStmt).empty;
         defer rc_stmts.deinit(self.allocator);
 
@@ -4022,7 +4008,7 @@ pub const RcInsertPass = struct {
             final_body = try self.store.addExpr(.{ .block = .{
                 .stmts = stmts_span,
                 .final_expr = new_body,
-                .result_layout = lam.ret_layout,
+                .result_layout = ret_layout,
             } }, region);
         }
 
@@ -4033,7 +4019,17 @@ pub const RcInsertPass = struct {
         for (params) |pat_id| {
             try self.emitTailDecrefsForPatternInto(pat_id, &final_local_consumed_uses, region, &tail_stmts);
         }
-        final_body = try self.wrapExprWithTailStmts(final_body, lam.ret_layout, tail_stmts.items, region);
+        final_body = try self.wrapExprWithTailStmts(final_body, ret_layout, tail_stmts.items, region);
+
+        return final_body;
+    }
+
+    /// Process a lambda expression.
+    /// Lambda bodies are independent scopes — the calling convention provides
+    /// 1 reference per parameter. We recurse into the body and emit RC ops
+    /// for lambda parameters based on body-local use counts.
+    fn processLambda(self: *RcInsertPass, lam: anytype, region: Region, expr_id: LirExprId) Allocator.Error!LirExprId {
+        const final_body = try self.processOwnedBodyWithParams(lam.body, lam.params, lam.ret_layout, region);
 
         if (final_body != lam.body) {
             return self.store.addExpr(.{ .lambda = .{
@@ -4398,10 +4394,7 @@ pub const RcInsertPass = struct {
                 if (try self.exprMutatesSymbol(expect_expr.cond, symbol)) return true;
                 return self.exprMutatesSymbol(expect_expr.body, symbol);
             },
-            .call => |call| {
-                if (self.callCalleeExpr(call)) |callee_expr| {
-                    if (try self.exprMutatesSymbol(callee_expr, symbol)) return true;
-                }
+            .proc_call => |call| {
                 for (self.store.getExprSpan(call.args)) |arg_id| {
                     if (try self.exprMutatesSymbol(arg_id, symbol)) return true;
                 }
@@ -4538,10 +4531,7 @@ pub const RcInsertPass = struct {
                 try self.collectExprBoundSymbols(e.body, set);
             },
             // Expressions with sub-expressions but no pattern bindings
-            .call => |call| {
-                if (self.callCalleeExpr(call)) |callee_expr| {
-                    try self.collectExprBoundSymbols(callee_expr, set);
-                }
+            .proc_call => |call| {
                 const args = self.store.getExprSpan(call.args);
                 for (args) |arg_id| try self.collectExprBoundSymbols(arg_id, set);
             },
@@ -5852,7 +5842,6 @@ test "RC: consuming stmt preserves list owner for later list_get_unsafe" {
 
     const i64_layout: LayoutIdx = .i64;
     const list_layout = try env.layout_store.insertLayout(layout_mod.Layout.list(i64_layout));
-    const fn_layout: LayoutIdx = .none;
     const sym_list = makeSymbol(1);
     const sym_arg = makeSymbol(2);
 
@@ -5867,24 +5856,11 @@ test "RC: consuming stmt preserves list owner for later list_get_unsafe" {
         .elems = elems,
     } }, Region.zero());
 
-    const pat_arg = try env.lir_store.addPattern(.{ .bind = .{
-        .symbol = sym_arg,
-        .layout_idx = list_layout,
-    } }, Region.zero());
-    const params = try env.lir_store.addPatternSpan(&.{pat_arg});
-    const always_false = try env.lir_store.addExpr(.{ .bool_literal = false }, Region.zero());
-    const callee = try env.lir_store.addExpr(.{ .lambda = .{
-        .fn_layout = fn_layout,
-        .params = params,
-        .body = always_false,
-        .ret_layout = .bool,
-    } }, Region.zero());
-
+    const callee_proc = try makeProc(&env.lir_store, sym_arg, .bool);
     const lookup_list_call = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_list, .layout_idx = list_layout } }, Region.zero());
     const call_args = try env.lir_store.addExprSpan(&.{lookup_list_call});
-    const call_expr = try env.lir_store.addExpr(.{ .call = .{
-        .callee = .{ .expr = callee },
-        .fn_layout = fn_layout,
+    const call_expr = try env.lir_store.addExpr(.{ .proc_call = .{
+        .proc = callee_proc,
         .args = call_args,
         .ret_layout = .bool,
         .called_via = .apply,
@@ -5994,15 +5970,7 @@ fn countRcOps(store: *const LirExprStore, expr_id: LirExprId) RcOpCounts {
             increfs += sub_body.increfs;
             decrefs += sub_body.decrefs;
         },
-        .call => |c| {
-            switch (c.callee) {
-                .expr => |callee_expr| {
-                    const sub_fn = countRcOps(store, callee_expr);
-                    increfs += sub_fn.increfs;
-                    decrefs += sub_fn.decrefs;
-                },
-                .direct => {},
-            }
+        .proc_call => |c| {
             const args = store.getExprSpan(c.args);
             for (args) |arg_id| {
                 const sub = countRcOps(store, arg_id);
@@ -6172,12 +6140,8 @@ fn countDecrefsForSymbol(store: *const LirExprStore, expr_id: LirExprId, symbol:
             }
             break :blk total;
         },
-        .call => |call| blk: {
+        .proc_call => |call| blk: {
             var total: u32 = 0;
-            switch (call.callee) {
-                .expr => |callee_expr| total += countDecrefsForSymbol(store, callee_expr, symbol),
-                .direct => {},
-            }
             for (store.getExprSpan(call.args)) |arg_id| {
                 total += countDecrefsForSymbol(store, arg_id, symbol);
             }
@@ -6276,12 +6240,8 @@ fn countIncrefsForSymbol(store: *const LirExprStore, expr_id: LirExprId, symbol:
             }
             break :blk total;
         },
-        .call => |call| blk: {
+        .proc_call => |call| blk: {
             var total: u32 = 0;
-            switch (call.callee) {
-                .expr => |callee_expr| total += countIncrefsForSymbol(store, callee_expr, symbol),
-                .direct => {},
-            }
             for (store.getExprSpan(call.args)) |arg_id| {
                 total += countIncrefsForSymbol(store, arg_id, symbol);
             }
@@ -6388,13 +6348,7 @@ fn findFirstIfThenElseExpr(store: *const LirExprStore, expr_id: LirExprId) ?LirE
             if (findFirstIfThenElseExpr(store, wl.cond)) |found| return found;
             return findFirstIfThenElseExpr(store, wl.body);
         },
-        .call => |call| {
-            switch (call.callee) {
-                .expr => |callee_expr| {
-                    if (findFirstIfThenElseExpr(store, callee_expr)) |found| return found;
-                },
-                .direct => {},
-            }
+        .proc_call => |call| {
             for (store.getExprSpan(call.args)) |arg_id| {
                 if (findFirstIfThenElseExpr(store, arg_id)) |found| return found;
             }
@@ -6494,13 +6448,7 @@ fn findFirstWhileExpr(store: *const LirExprStore, expr_id: LirExprId) ?LirExprId
             if (findFirstWhileExpr(store, fl.list_expr)) |found| return found;
             return findFirstWhileExpr(store, fl.body);
         },
-        .call => |call| {
-            switch (call.callee) {
-                .expr => |callee_expr| {
-                    if (findFirstWhileExpr(store, callee_expr)) |found| return found;
-                },
-                .direct => {},
-            }
+        .proc_call => |call| {
             for (store.getExprSpan(call.args)) |arg_id| {
                 if (findFirstWhileExpr(store, arg_id)) |found| return found;
             }
@@ -6569,6 +6517,18 @@ fn makeSymbol(idx: u29) LIR.Symbol {
         .idx = idx,
     };
     return LIR.Symbol.fromRaw(@as(u64, @as(u32, @bitCast(ident))));
+}
+
+fn makeProc(store: *LirExprStore, symbol: LIR.Symbol, ret_layout: LayoutIdx) !LIR.LirProcId {
+    return store.addProc(.{
+        .name = symbol,
+        .args = LIR.LirPatternSpan.empty(),
+        .arg_layouts = LIR.LayoutIdxSpan.empty(),
+        .body = .none,
+        .ret_layout = ret_layout,
+        .closure_data_layout = null,
+        .is_self_recursive = .not_self_recursive,
+    });
 }
 
 test "RC borrowed string expression releases original temporary binding" {
@@ -6925,7 +6885,6 @@ test "RC identity call result matched later tail-cleans matched binding" {
 
     const i64_layout: LayoutIdx = .i64;
     const list_layout = try env.layout_store.insertLayout(layout_mod.Layout.list(i64_layout));
-    const fn_layout: LayoutIdx = .none;
     const sym_x = makeSymbol(1);
     const sym_arg = makeSymbol(2);
     const sym_result = makeSymbol(3);
@@ -6939,30 +6898,14 @@ test "RC identity call result matched later tail-cleans matched binding" {
         .elems = elems,
     } }, Region.zero());
 
-    const pat_arg = try env.lir_store.addPattern(.{ .bind = .{
-        .symbol = sym_arg,
-        .layout_idx = list_layout,
-    } }, Region.zero());
-    const params = try env.lir_store.addPatternSpan(&.{pat_arg});
-    const lookup_arg = try env.lir_store.addExpr(.{ .lookup = .{
-        .symbol = sym_arg,
-        .layout_idx = list_layout,
-    } }, Region.zero());
-    const identity = try env.lir_store.addExpr(.{ .lambda = .{
-        .fn_layout = fn_layout,
-        .params = params,
-        .body = lookup_arg,
-        .ret_layout = list_layout,
-    } }, Region.zero());
-
+    const identity_proc = try makeProc(&env.lir_store, sym_arg, list_layout);
     const lookup_x_call = try env.lir_store.addExpr(.{ .lookup = .{
         .symbol = sym_x,
         .layout_idx = list_layout,
     } }, Region.zero());
     const call_args = try env.lir_store.addExprSpan(&.{lookup_x_call});
-    const call_expr = try env.lir_store.addExpr(.{ .call = .{
-        .callee = .{ .expr = identity },
-        .fn_layout = fn_layout,
+    const call_expr = try env.lir_store.addExpr(.{ .proc_call = .{
+        .proc = identity_proc,
         .args = call_args,
         .ret_layout = list_layout,
         .called_via = .apply,
@@ -7022,7 +6965,6 @@ test "RC repeated identity call tail-cleans the unused second result" {
 
     const i64_layout: LayoutIdx = .i64;
     const list_layout = try env.layout_store.insertLayout(layout_mod.Layout.list(i64_layout));
-    const fn_layout: LayoutIdx = .none;
     const sym_x = makeSymbol(1);
     const sym_arg = makeSymbol(2);
     const sym_a = makeSymbol(3);
@@ -7037,30 +6979,14 @@ test "RC repeated identity call tail-cleans the unused second result" {
         .elems = elems,
     } }, Region.zero());
 
-    const pat_arg = try env.lir_store.addPattern(.{ .bind = .{
-        .symbol = sym_arg,
-        .layout_idx = list_layout,
-    } }, Region.zero());
-    const params = try env.lir_store.addPatternSpan(&.{pat_arg});
-    const lookup_arg = try env.lir_store.addExpr(.{ .lookup = .{
-        .symbol = sym_arg,
-        .layout_idx = list_layout,
-    } }, Region.zero());
-    const identity = try env.lir_store.addExpr(.{ .lambda = .{
-        .fn_layout = fn_layout,
-        .params = params,
-        .body = lookup_arg,
-        .ret_layout = list_layout,
-    } }, Region.zero());
-
+    const identity_proc = try makeProc(&env.lir_store, sym_arg, list_layout);
     const lookup_x_call_a = try env.lir_store.addExpr(.{ .lookup = .{
         .symbol = sym_x,
         .layout_idx = list_layout,
     } }, Region.zero());
     const call_args_a = try env.lir_store.addExprSpan(&.{lookup_x_call_a});
-    const call_expr_a = try env.lir_store.addExpr(.{ .call = .{
-        .callee = .{ .expr = identity },
-        .fn_layout = fn_layout,
+    const call_expr_a = try env.lir_store.addExpr(.{ .proc_call = .{
+        .proc = identity_proc,
         .args = call_args_a,
         .ret_layout = list_layout,
         .called_via = .apply,
@@ -7071,9 +6997,8 @@ test "RC repeated identity call tail-cleans the unused second result" {
         .layout_idx = list_layout,
     } }, Region.zero());
     const call_args_b = try env.lir_store.addExprSpan(&.{lookup_x_call_b});
-    const call_expr_b = try env.lir_store.addExpr(.{ .call = .{
-        .callee = .{ .expr = identity },
-        .fn_layout = fn_layout,
+    const call_expr_b = try env.lir_store.addExpr(.{ .proc_call = .{
+        .proc = identity_proc,
         .args = call_args_b,
         .ret_layout = list_layout,
         .called_via = .apply,
@@ -7311,9 +7236,9 @@ test "RC builtin-fold shape tail-cleans borrowed list param" {
     const lookup_elem = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_elem, .layout_idx = i64_layout } }, Region.zero());
 
     const step_args = try env.lir_store.addExprSpan(&.{ lookup_state, lookup_elem });
-    const step_call = try env.lir_store.addExpr(.{ .call = .{
-        .callee = .{ .direct = sym_step },
-        .fn_layout = fn_layout,
+    const step_proc = try makeProc(&env.lir_store, sym_step, i64_layout);
+    const step_call = try env.lir_store.addExpr(.{ .proc_call = .{
+        .proc = step_proc,
         .args = step_args,
         .ret_layout = i64_layout,
         .called_via = .apply,
@@ -7613,9 +7538,9 @@ test "RC fold_rev-style while body does not pre-incref borrowed list param" {
     const lookup_state = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_state, .layout_idx = i64_layout } }, Region.zero());
     const lookup_item = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_item, .layout_idx = i64_layout } }, Region.zero());
     const step_args = try env.lir_store.addExprSpan(&.{ lookup_item, lookup_state });
-    const step_call = try env.lir_store.addExpr(.{ .call = .{
-        .callee = .{ .direct = sym_step },
-        .fn_layout = fn_layout,
+    const step_proc = try makeProc(&env.lir_store, sym_step, i64_layout);
+    const step_call = try env.lir_store.addExpr(.{ .proc_call = .{
+        .proc = step_proc,
         .args = step_args,
         .ret_layout = i64_layout,
         .called_via = .apply,
@@ -7890,9 +7815,9 @@ test "RC while loop over borrowed list only tail-cleans lambda param once" {
     const lookup_item = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_item, .layout_idx = i64_layout } }, Region.zero());
     const lookup_state = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_state, .layout_idx = i64_layout } }, Region.zero());
     const step_args = try env.lir_store.addExprSpan(&.{ lookup_item, lookup_state });
-    const step_call = try env.lir_store.addExpr(.{ .call = .{
-        .callee = .{ .direct = sym_step },
-        .fn_layout = fn_layout,
+    const step_proc = try makeProc(&env.lir_store, sym_step, i64_layout);
+    const step_call = try env.lir_store.addExpr(.{ .proc_call = .{
+        .proc = step_proc,
         .args = step_args,
         .ret_layout = i64_layout,
         .called_via = .apply,
@@ -8559,6 +8484,163 @@ test "RC lambda: unused refcounted param gets decref" {
     const rc = countRcOps(&env.lir_store, result);
     try std.testing.expectEqual(@as(u32, 0), rc.increfs);
     try std.testing.expectEqual(@as(u32, 1), rc.decrefs);
+}
+
+test "RC proc body: returning refcounted param does not tail-decref it" {
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const str_layout: LayoutIdx = .str;
+    const sym_s = makeSymbol(1);
+
+    const lookup_s = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_s,
+        .layout_idx = str_layout,
+    } }, Region.zero());
+    const pat_s = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_s,
+        .layout_idx = str_layout,
+    } }, Region.zero());
+    const params = try env.lir_store.addPatternSpan(&.{pat_s});
+
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOpsForProcBody(lookup_s, params, str_layout);
+
+    try std.testing.expectEqual(@as(u32, 0), countDecrefsForSymbol(&env.lir_store, result, sym_s));
+}
+
+test "RC proc body: returning list param does not tail-decref it" {
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_layout: LayoutIdx = .i64;
+    const list_layout = try env.layout_store.insertLayout(layout_mod.Layout.list(i64_layout));
+    const sym_list = makeSymbol(1);
+
+    const lookup_list = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_list,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+    const pat_list = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_list,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+    const params = try env.lir_store.addPatternSpan(&.{pat_list});
+
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOpsForProcBody(lookup_list, params, list_layout);
+
+    try std.testing.expectEqual(@as(u32, 0), countDecrefsForSymbol(&env.lir_store, result, sym_list));
+}
+
+test "RC proc_call caller: consumed refcounted arg is not tail-decref'd by caller" {
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const str_layout: LayoutIdx = .str;
+    const sym_s = makeSymbol(1);
+    const sym_id = makeSymbol(2);
+
+    const lookup_s = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_s,
+        .layout_idx = str_layout,
+    } }, Region.zero());
+    const proc_id = try makeProc(&env.lir_store, sym_id, str_layout);
+    const call_args = try env.lir_store.addExprSpan(&.{lookup_s});
+    const call_expr = try env.lir_store.addExpr(.{ .proc_call = .{
+        .proc = proc_id,
+        .args = call_args,
+        .ret_layout = str_layout,
+        .called_via = .apply,
+    } }, Region.zero());
+    const pat_s = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_s,
+        .layout_idx = str_layout,
+    } }, Region.zero());
+    const str_idx = try env.lir_store.insertString("this is definitely larger than a small string");
+    const str_lit = try env.lir_store.addExpr(.{ .str_literal = str_idx }, Region.zero());
+    const stmts = try env.lir_store.addStmts(&.{.{ .decl = .{
+        .pattern = pat_s,
+        .expr = str_lit,
+    } }});
+    const block_expr = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = call_expr,
+        .result_layout = str_layout,
+    } }, Region.zero());
+
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(block_expr);
+
+    try std.testing.expectEqual(@as(u32, 0), countDecrefsForSymbol(&env.lir_store, result, sym_s));
+}
+
+test "RC proc_call caller: consumed list arg is not tail-decref'd by caller" {
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_layout: LayoutIdx = .i64;
+    const list_layout = try env.layout_store.insertLayout(layout_mod.Layout.list(i64_layout));
+    const sym_list = makeSymbol(1);
+    const sym_id = makeSymbol(2);
+
+    const lookup_list = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_list,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+    const proc_id = try makeProc(&env.lir_store, sym_id, list_layout);
+    const call_args = try env.lir_store.addExprSpan(&.{lookup_list});
+    const call_expr = try env.lir_store.addExpr(.{ .proc_call = .{
+        .proc = proc_id,
+        .args = call_args,
+        .ret_layout = list_layout,
+        .called_via = .apply,
+    } }, Region.zero());
+    const pat_list = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_list,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+    const one = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 1, .layout_idx = i64_layout } }, Region.zero());
+    const elems = try env.lir_store.addExprSpan(&.{one});
+    const list_lit = try env.lir_store.addExpr(.{ .list = .{
+        .list_layout = list_layout,
+        .elem_layout = i64_layout,
+        .elems = elems,
+    } }, Region.zero());
+    const stmts = try env.lir_store.addStmts(&.{.{ .decl = .{
+        .pattern = pat_list,
+        .expr = list_lit,
+    } }});
+    const block_expr = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = call_expr,
+        .result_layout = list_layout,
+    } }, Region.zero());
+
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(block_expr);
+
+    try std.testing.expectEqual(@as(u32, 0), countDecrefsForSymbol(&env.lir_store, result, sym_list));
 }
 
 test "RC for_loop: elem used twice gets incref" {

@@ -297,6 +297,11 @@ pub const ProcRecursion = enum {
     tail_recursive,
 };
 
+pub const HostedProc = struct {
+    symbol_name: Ident.Idx,
+    index: u32,
+};
+
 /// Proc metadata for proc-backed callable identity.
 /// Callable bodies will move here instead of being discovered through value defs.
 pub const Proc = struct {
@@ -309,6 +314,7 @@ pub const Proc = struct {
     capture_bindings: CaptureBindingSpan,
     captures_param: PatternId,
     recursion: ProcRecursion,
+    hosted: ?HostedProc = null,
 };
 
 // --- Expression ---
@@ -418,14 +424,6 @@ pub const Expr = union(enum) {
     run_low_level: struct {
         op: CIR.Expr.LowLevel,
         args: ExprSpan,
-    },
-
-    /// Hosted function (platform-provided)
-    hosted: struct {
-        symbol_name: Ident.Idx,
-        index: u32,
-        params: PatternSpan,
-        body: ExprId,
     },
 
     // --- Error/Debug ---

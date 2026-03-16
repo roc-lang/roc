@@ -296,11 +296,6 @@ fn propagateExprAndBindingSetsForExpr(
                 changed = (try mergeExprLambdaSet(allocator, store, expr_id, ls_idx)) or changed;
             }
         },
-        .hosted => |hosted| {
-            if (store.getExprLambdaSet(hosted.body)) |ls_idx| {
-                changed = (try mergeExprLambdaSet(allocator, store, expr_id, ls_idx)) or changed;
-            }
-        },
         .dbg_expr => |dbg_expr| {
             if (store.getExprLambdaSet(dbg_expr.expr)) |ls_idx| {
                 changed = (try mergeExprLambdaSet(allocator, store, expr_id, ls_idx)) or changed;
@@ -806,7 +801,6 @@ fn resolveDirectProcMember(mir_store: *const MIR.Store, expr_id: MIR.ExprId) ?Me
             .closure_member = .none,
         },
         .block => |block| resolveDirectProcMember(mir_store, block.final_expr),
-        .hosted => |hosted| resolveDirectProcMember(mir_store, hosted.body),
         .dbg_expr => |dbg_expr| resolveDirectProcMember(mir_store, dbg_expr.expr),
         .expect => |expect| resolveDirectProcMember(mir_store, expect.body),
         .return_expr => |ret| resolveDirectProcMember(mir_store, ret.expr),

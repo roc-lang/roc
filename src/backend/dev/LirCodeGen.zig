@@ -883,6 +883,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             arg_layouts: LayoutIdxSpan,
         };
 
+        const unresolved_proc_code_start = std.math.maxInt(usize);
+
         /// A pending call that needs to be patched after all procedures are compiled.
         pub const PendingCall = struct {
             /// Offset where the call instruction is (needs patching)
@@ -1115,6 +1117,44 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.loop_break_patches.clearRetainingCapacity();
         }
 
+        fn cloneJoinPointJumpsMap(
+            self: *Self,
+            source: *const std.AutoHashMap(u32, std.ArrayList(JumpRecord)),
+        ) Allocator.Error!std.AutoHashMap(u32, std.ArrayList(JumpRecord)) {
+            var cloned = std.AutoHashMap(u32, std.ArrayList(JumpRecord)).init(self.allocator);
+            errdefer self.deinitJoinPointJumpsMap(&cloned);
+
+            var it = source.iterator();
+            while (it.next()) |entry| {
+                try cloned.put(entry.key_ptr.*, try entry.value_ptr.clone(self.allocator));
+            }
+
+            return cloned;
+        }
+
+        fn deinitJoinPointJumpsMap(
+            self: *Self,
+            map: *std.AutoHashMap(u32, std.ArrayList(JumpRecord)),
+        ) void {
+            var it = map.valueIterator();
+            while (it.next()) |list| {
+                list.deinit(self.allocator);
+            }
+            map.deinit();
+        }
+
+        fn clearFunctionControlFlowState(self: *Self) void {
+            self.join_points.clearRetainingCapacity();
+            var it = self.join_point_jumps.valueIterator();
+            while (it.next()) |list| {
+                list.clearRetainingCapacity();
+            }
+            self.join_point_jumps.clearRetainingCapacity();
+            self.join_point_param_layouts.clearRetainingCapacity();
+            self.join_point_param_patterns.clearRetainingCapacity();
+            self.loop_break_patches.clearRetainingCapacity();
+        }
+
         /// Generate code for a LIR expression
         ///
         /// The generated code follows the calling convention:
@@ -1255,6 +1295,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 reloc.adjustOffset(prologue_size);
             }
 
+            // Root-body direct calls and nested helper offsets shift with the prepended prologue
+            // exactly like proc/lambda bodies do.
+            try self.shiftNestedCompiledLambdaOffsets(body_start, body_end, prologue_size, std.math.maxInt(u64));
+            self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size, std.math.maxInt(u64));
+            self.shiftPendingCalls(body_start, body_end, prologue_size);
+            self.repatchInternalCalls(body_start, body_end, prologue_size, body_start);
+            self.repatchInternalAddrPatches(body_start, body_end, prologue_size, body_start);
+
             // Patch early return jumps (if any) to the epilogue
             const final_epilogue = body_epilogue_offset - body_start + prologue_size + prologue_start;
             for (self.early_return_patches.items) |patch| {
@@ -1326,7 +1374,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .lookup => |lookup| lookup.layout_idx,
                 .cell_load => |load| load.layout_idx,
                 .struct_access => |sa| sa.field_layout,
-                .call => |call| call.ret_layout,
+                .proc_call => |call| call.ret_layout,
                 .low_level => |ll| ll.ret_layout,
                 .hosted_call => |hc| hc.ret_layout,
                 // Compound expressions with result layouts
@@ -1418,7 +1466,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // Blocks
                 .block => |block| try self.generateBlock(block),
                 // Function calls and lambdas
-                .call => |call| try self.generateCall(call),
+                .proc_call => |call| try self.generateCall(call),
                 // Lambda as first-class value.
                 // In the new pipeline, function values are represented by their closure payloads,
                 // not by executable code pointers. A .lambda that survives to codegen is a
@@ -3336,20 +3384,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         };
                     };
 
-                    // Get the comparison function code offset.
-                    // We need the compile-time code offset for PC-relative addressing,
-                    // so resolve the comparator lambda directly from the LIR expression.
-                    // For elements > 8 bytes (multi-register types like Dec/i128), compile
-                    // the comparator with force_pass_by_ptr to match the trampoline's
-                    // pointer-based calling convention and avoid ABI mismatches.
-                    const needs_ptr_abi = elem_size_align.size > 8;
-                    const cmp_code_offset: usize = try self.resolveComparatorOffset(args[1], .{
-                        .force_pass_by_ptr = needs_ptr_abi,
-                        // Don't cache the ptr-mode compilation: the same lambda could
-                        // also be used in a direct call (value mode), and the cache is
-                        // keyed only by expression ID, not by calling convention mode.
-                        .use_cache = !needs_ptr_abi,
-                    });
+                    // The comparator proc must be explicit in LIR; codegen does not
+                    // recover callables from the function-value expression.
+                    if (ll.callable_proc.isNone()) {
+                        if (builtin.mode == .Debug) {
+                            std.debug.panic(
+                                "LIR/codegen invariant violated: list_sort_with is missing callable_proc metadata",
+                                .{},
+                            );
+                        }
+                        unreachable;
+                    }
+                    const cmp_code_offset: usize = try self.resolveComparatorOffset(ll.callable_proc);
 
                     // Compute the absolute address of the lambda at runtime using
                     // PC-relative addressing: emit LEA/ADR that resolves to the
@@ -10975,6 +11021,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
+        /// After a deferred-prologue body shifts forward, pending direct-proc calls
+        /// emitted inside that body must move with it so they can be patched later.
+        fn shiftPendingCalls(
+            self: *Self,
+            body_start: usize,
+            body_end: usize,
+            prologue_size: usize,
+        ) void {
+            for (self.pending_calls.items) |*pending| {
+                if (pending.call_site >= body_start and pending.call_site < body_end) {
+                    pending.call_site += prologue_size;
+                }
+            }
+        }
+
         /// When a lambda body is shifted forward by prepending a prologue, nested lambdas
         /// compiled inside that body also move. Keep the lambda caches in final coordinates.
         fn shiftNestedCompiledLambdaOffsets(
@@ -11563,6 +11624,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const saved_free_float = self.codegen.free_float;
             const saved_float_owners = self.codegen.float_owners;
             const saved_roc_ops_reg = self.roc_ops_reg;
+            const saved_ret_ptr_slot = self.ret_ptr_slot;
             const saved_binding_symbol = self.current_binding_symbol;
             const saved_lambda_expr_id = self.current_lambda_expr_id;
 
@@ -11599,6 +11661,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.codegen.free_float = saved_free_float;
                 self.codegen.float_owners = saved_float_owners;
                 self.roc_ops_reg = saved_roc_ops_reg;
+                self.ret_ptr_slot = saved_ret_ptr_slot;
                 self.current_binding_symbol = saved_binding_symbol;
                 self.current_lambda_expr_id = saved_lambda_expr_id;
                 self.codegen.patchJump(skip_jump, self.codegen.currentOffset());
@@ -11713,118 +11776,41 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return final_offset;
         }
 
-        fn getCanonicalCallableTarget(self: *Self, expr_id: LirExprId) lir.LIR.CallTarget {
-            return self.store.getExprCallableTarget(expr_id) orelse {
-                const expr = self.store.getExpr(expr_id);
-                if (std.debug.runtime_safety) std.debug.panic(
-                    "backend-visible callable expr {} is missing a canonical target (expr type '{s}')",
-                    .{ @intFromEnum(expr_id), @tagName(expr) },
-                );
-                unreachable;
-            };
-        }
-
-        fn directCallableLeafExprId(self: *Self, symbol: Symbol) LirExprId {
-            return self.store.getCallableDef(symbol) orelse {
-                if (std.debug.runtime_safety) std.debug.panic(
-                    "direct-call symbol {d} is missing a canonical callable leaf",
-                    .{symbol.raw()},
-                );
-                unreachable;
-            };
-        }
-
-        fn directCallableCodeOffsetWithOptions(
+        fn procCodeOffsetWithOptions(
             self: *Self,
-            symbol: Symbol,
-            opts: LambdaProcOptions,
-        ) Allocator.Error!usize {
-            const symbol_key: u64 = @bitCast(symbol);
-            if (opts.use_cache) {
-                if (self.proc_registry.get(symbol_key)) |proc| return proc.code_start;
+            proc_id: lir.LIR.LirProcId,
+            _: LambdaProcOptions,
+        ) Allocator.Error!CompiledProc {
+            const proc = self.store.getProc(proc_id);
+            const proc_key: u64 = @bitCast(proc.name);
+            if (self.proc_registry.get(proc_key)) |compiled| return compiled;
+
+            if (std.debug.runtime_safety) std.debug.panic(
+                "proc call target {d} ({d}) is missing from the compiled proc registry",
+                .{ @intFromEnum(proc_id), proc.name.raw() },
+            );
+            unreachable;
+        }
+
+        /// Resolve the pre-lowered comparator proc for list_sort_with to a compiled code offset.
+        fn resolveComparatorOffset(self: *Self, proc_id: lir.LIR.LirProcId) Allocator.Error!usize {
+            const compiled = try self.procCodeOffsetWithOptions(proc_id, .{});
+            if (compiled.code_start == unresolved_proc_code_start) {
+                if (std.debug.runtime_safety) {
+                    std.debug.panic(
+                        "list_sort_with comparator proc {d} was not compiled before codegen",
+                        .{@intFromEnum(proc_id)},
+                    );
+                }
+                unreachable;
             }
-
-            const def_expr_id = self.directCallableLeafExprId(symbol);
-            const def_expr = self.store.getExpr(def_expr_id);
-            return switch (def_expr) {
-                .lambda => |lambda| blk: {
-                    const saved_binding_symbol = self.current_binding_symbol;
-                    self.current_binding_symbol = symbol;
-                    defer self.current_binding_symbol = saved_binding_symbol;
-                    break :blk try self.compileLambdaAsProcWithOptions(def_expr_id, lambda, opts);
-                },
-                .runtime_error => {
-                    if (std.debug.runtime_safety) std.debug.panic(
-                        "direct-call symbol {d} resolved to runtime_error where a code offset was required",
-                        .{symbol.raw()},
-                    );
-                    unreachable;
-                },
-                else => {
-                    if (std.debug.runtime_safety) std.debug.panic(
-                        "direct-call symbol {d} resolved to non-leaf callable expr '{s}'",
-                        .{ symbol.raw(), @tagName(def_expr) },
-                    );
-                    unreachable;
-                },
-            };
+            return compiled.code_start;
         }
 
-        /// Resolve the comparator expression for list_sort_with to a compiled code offset.
-        fn resolveComparatorOffset(self: *Self, expr_id: LirExprId, opts: LambdaProcOptions) Allocator.Error!usize {
-            return switch (self.getCanonicalCallableTarget(expr_id)) {
-                .expr => |lambda_expr_id| blk: {
-                    const expr = self.store.getExpr(lambda_expr_id);
-                    switch (expr) {
-                        .lambda => |lambda| break :blk try self.compileLambdaAsProcWithOptions(lambda_expr_id, lambda, opts),
-                        else => {
-                            if (std.debug.runtime_safety) std.debug.panic(
-                                "canonical lambda target {} resolved to unexpected expr '{s}'",
-                                .{ @intFromEnum(lambda_expr_id), @tagName(expr) },
-                            );
-                            unreachable;
-                        },
-                    }
-                },
-                .direct => |symbol| try self.directCallableCodeOffsetWithOptions(symbol, opts),
-            };
-        }
-
-        /// Generate code for a function call.
-        /// In the new pipeline, MIR→LIR generates all closure dispatch as generic LIR
-        /// constructs (discriminant_switch, tag_payload_access, direct calls). The backend
-        /// just handles explicit direct-call symbols plus the residual runtime
-        /// function-value expression path. No closure-specific dispatch.
+        /// Generate code for a direct proc call.
         fn generateCall(self: *Self, call: anytype) Allocator.Error!ValueLocation {
-            return switch (call.callee) {
-                .direct => |symbol| try self.generateDirectSymbolCall(symbol, call.args, call.ret_layout),
-                .expr => |callee_expr_id| {
-                    const callee_expr = self.store.getExpr(callee_expr_id);
-                    switch (callee_expr) {
-                        .lambda => |lambda| {
-                            const code_offset = try self.compileLambdaAsProc(callee_expr_id, lambda);
-                            return try self.callCompiledOffset(code_offset, call.args, call.ret_layout);
-                        },
-                        .lookup => |lookup| {
-                            if (std.debug.runtime_safety) std.debug.panic(
-                                "generateCall: unexpected lookup callee after backend peeling deletion symbol={d}",
-                                .{
-                                    lookup.symbol.raw(),
-                                },
-                            );
-                            unreachable;
-                        },
-                        else => {
-                            if (std.debug.runtime_safety) std.debug.panic(
-                                "generateCall: unexpected callee expr type '{s}'. " ++
-                                    "Direct calls must use explicit callee symbols or direct lambda exprs.",
-                                .{@tagName(callee_expr)},
-                            );
-                            unreachable;
-                        },
-                    }
-                },
-            };
+            const proc = try self.procCodeOffsetWithOptions(call.proc, .{});
+            return try self.generateCallToCompiledProc(proc, call.args, call.ret_layout);
         }
 
         /// Copy a value location to a stack slot.
@@ -11911,8 +11897,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        /// Generate code for calling an explicit direct-callee symbol.
-        /// Direct calls resolve through callable_defs, not value defs.
         fn lowLevelWrapperParamSymbol(self: *Self, pat_id: lir.LirPatternId) ?Symbol {
             return switch (self.store.getPattern(pat_id)) {
                 .bind => |bind| bind.symbol,
@@ -11942,84 +11926,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             return true;
-        }
-
-        fn generateDirectSymbolCall(self: *Self, symbol: Symbol, args_span: anytype, ret_layout: layout.Idx) Allocator.Error!ValueLocation {
-            const symbol_key: u64 = @bitCast(symbol);
-
-            // Check if the function was compiled as a procedure
-            if (self.proc_registry.get(symbol_key)) |proc| {
-                if (builtin.mode == .Debug) {
-                    if (self.store.getCallableDef(symbol)) |def_expr_id| {
-                        const def_expr = self.store.getExpr(def_expr_id);
-                        const lambda_ret_layout = switch (def_expr) {
-                            .lambda => |lambda| lambda.ret_layout,
-                            else => ret_layout,
-                        };
-                        if (!try self.layoutsStructurallyCompatible(ret_layout, lambda_ret_layout)) {
-                            std.debug.panic(
-                                "LIR/codegen invariant violated: direct call ret_layout {d} disagrees with compiled lambda ret_layout {d} for symbol {d}",
-                                .{ @intFromEnum(ret_layout), @intFromEnum(lambda_ret_layout), symbol.raw() },
-                            );
-                        }
-                    }
-                }
-                return try self.generateCallToCompiledProc(proc, args_span, ret_layout);
-            }
-
-            if (self.store.getCallableDef(symbol)) |def_expr_id| {
-                const def_expr = self.store.getExpr(def_expr_id);
-                switch (def_expr) {
-                    .lambda => |lambda| {
-                        const body_expr = self.store.getExpr(lambda.body);
-                        if (body_expr == .low_level and self.isDirectLowLevelWrapper(lambda.params, body_expr.low_level)) {
-                            return self.generateLowLevel(.{
-                                .op = body_expr.low_level.op,
-                                .args = args_span,
-                                .ret_layout = ret_layout,
-                            });
-                        }
-                    },
-                    .runtime_error => {
-                        try self.emitRocCrash("hit a runtime error in call (dead code path)");
-                        try self.emitTrap();
-                        return .noreturn;
-                    },
-                    else => {},
-                }
-
-                return switch (def_expr) {
-                    .lambda => |lambda| {
-                        if (builtin.mode == .Debug and !try self.layoutsStructurallyCompatible(ret_layout, lambda.ret_layout)) {
-                            std.debug.panic(
-                                "LIR/codegen invariant violated: direct call ret_layout {d} disagrees with lambda ret_layout {d} for symbol {d}",
-                                .{ @intFromEnum(ret_layout), @intFromEnum(lambda.ret_layout), symbol.raw() },
-                            );
-                        }
-                        const saved_binding_symbol = self.current_binding_symbol;
-                        self.current_binding_symbol = symbol;
-                        defer self.current_binding_symbol = saved_binding_symbol;
-                        const code_offset = try self.compileLambdaAsProc(def_expr_id, lambda);
-                        return try self.callCompiledOffset(code_offset, args_span, ret_layout);
-                    },
-                    else => {
-                        if (std.debug.runtime_safety) std.debug.panic(
-                            "generateDirectSymbolCall: unexpected callable def expr type '{s}'. " ++
-                                "Direct-call symbols must resolve through callable_defs to lambda/runtime_error leaves.",
-                            .{@tagName(def_expr)},
-                        );
-                        unreachable;
-                    },
-                };
-            }
-
-            if (std.debug.runtime_safety) {
-                std.debug.panic(
-                    "generateDirectSymbolCall: unresolved direct callee symbol={}",
-                    .{symbol.raw()},
-                );
-            }
-            unreachable;
         }
 
         /// Generate a call to an already-compiled procedure.
@@ -12149,13 +12055,31 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .pass_by_ptr = pbp_plan.slice,
                 .emit_roc_ops = true,
             });
-            try self.emitCallToOffset(proc.code_start);
+            if (proc.code_start == unresolved_proc_code_start) {
+                try self.emitPendingCallToSymbol(proc.name);
+            } else {
+                try self.emitCallToOffset(proc.code_start);
+            }
 
             if (stack_spill_size > 0) {
                 try self.emitAddStackPtr(stack_spill_size);
             }
 
             return self.saveCallReturnValue(ret_layout, needs_ret_ptr, ret_buffer_offset);
+        }
+
+        fn emitPendingCallToSymbol(self: *Self, target_symbol: Symbol) !void {
+            const call_site = self.codegen.currentOffset();
+            try self.pending_calls.append(self.allocator, .{
+                .call_site = call_site,
+                .target_symbol = target_symbol,
+            });
+
+            if (comptime target.toCpuArch() == .aarch64) {
+                try self.codegen.emit.bl(0);
+            } else {
+                try self.codegen.emit.call(@bitCast(@as(i32, 0)));
+            }
         }
 
         /// Call a compiled procedure at a known code offset.
@@ -13094,6 +13018,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// This ensures all call targets are known before we need to patch calls.
         pub fn compileAllProcs(self: *Self, procs: []const LirProc) Allocator.Error!void {
             for (procs) |proc| {
+                const key: u64 = @bitCast(proc.name);
+                try self.proc_registry.put(key, .{
+                    .code_start = unresolved_proc_code_start,
+                    .code_end = 0,
+                    .name = proc.name,
+                    .arg_layouts = proc.arg_layouts,
+                });
+            }
+
+            for (procs) |proc| {
                 try self.compileProc(proc);
             }
         }
@@ -13107,15 +13041,54 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Save current state - procedure has its own scope that shouldn't pollute caller
             const saved_stack_offset = self.codegen.stack_offset;
             const saved_callee_saved_used = self.codegen.callee_saved_used;
+            const saved_callee_saved_available = self.codegen.callee_saved_available;
+            const saved_free_general = self.codegen.free_general;
+            const saved_general_owners = self.codegen.general_owners;
+            const saved_free_float = self.codegen.free_float;
+            const saved_float_owners = self.codegen.float_owners;
+            const saved_roc_ops_reg = self.roc_ops_reg;
+            const saved_ret_ptr_slot = self.ret_ptr_slot;
+            const saved_binding_symbol = self.current_binding_symbol;
+            const saved_lambda_expr_id = self.current_lambda_expr_id;
             var saved_symbol_locations = self.symbol_locations.clone() catch return error.OutOfMemory;
             defer saved_symbol_locations.deinit();
             var saved_mutable_var_slots = self.mutable_var_slots.clone() catch return error.OutOfMemory;
             defer saved_mutable_var_slots.deinit();
+            var saved_join_points = self.join_points.clone() catch return error.OutOfMemory;
+            defer saved_join_points.deinit();
+            var saved_join_point_jumps = try self.cloneJoinPointJumpsMap(&self.join_point_jumps);
+            defer self.deinitJoinPointJumpsMap(&saved_join_point_jumps);
+            var saved_join_point_param_layouts = self.join_point_param_layouts.clone() catch return error.OutOfMemory;
+            defer saved_join_point_param_layouts.deinit();
+            var saved_join_point_param_patterns = self.join_point_param_patterns.clone() catch return error.OutOfMemory;
+            defer saved_join_point_param_patterns.deinit();
+            var saved_loop_break_patches = try self.loop_break_patches.clone(self.allocator);
+            defer saved_loop_break_patches.deinit(self.allocator);
 
             // Clear state for procedure's scope
             self.symbol_locations.clearRetainingCapacity();
             self.mutable_var_slots.clearRetainingCapacity();
+            self.clearFunctionControlFlowState();
             self.codegen.callee_saved_used = 0;
+            self.codegen.callee_saved_available = CodeGen.CALLEE_SAVED_GENERAL_MASK;
+            self.codegen.free_general = CodeGen.INITIAL_FREE_GENERAL;
+            self.codegen.general_owners = [_]?u32{null} ** CodeGen.NUM_GENERAL_REGS;
+            self.codegen.free_float = CodeGen.INITIAL_FREE_FLOAT;
+            self.codegen.float_owners = [_]?u32{null} ** CodeGen.NUM_FLOAT_REGS;
+            self.roc_ops_reg = null;
+            self.current_binding_symbol = null;
+            self.current_lambda_expr_id = null;
+
+            // Reserve R12/X20 for roc_ops exactly like standalone lambda compilation.
+            if (comptime target.toCpuArch() == .x86_64) {
+                const r12_bit = @as(u16, 1) << @intFromEnum(x86_64.GeneralReg.R12);
+                self.codegen.callee_saved_used |= r12_bit;
+                self.codegen.callee_saved_available &= ~(@as(u32, 1) << @intFromEnum(x86_64.GeneralReg.R12));
+            } else {
+                const x20_bit = @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X20);
+                self.codegen.callee_saved_used |= x20_bit;
+                self.codegen.callee_saved_available &= ~(@as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X20));
+            }
 
             // PHASE 1: Generate body first (to determine callee_saved_used)
             // Initialize stack_offset to reserve space for callee-saved area
@@ -13132,15 +13105,24 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const body_start = self.codegen.currentOffset();
             const relocs_before = self.codegen.relocations.items.len;
 
-            // CRITICAL: Register the procedure BEFORE generating the body
-            // so that recursive calls within the body can find this procedure.
-            // We use body_start as a temporary code_start; will be updated after prologue prepend.
-            try self.proc_registry.put(key, .{
-                .code_start = body_start,
-                .code_end = 0, // Placeholder, updated below
-                .name = proc.name,
-                .arg_layouts = proc.arg_layouts,
-            });
+            // Keep this proc unresolved while generating its body. Recursive self-calls
+            // then use the same pending-call path as any other forward proc call, and
+            // get patched once the final prologue start is known.
+            if (self.proc_registry.getPtr(key)) |entry| {
+                entry.* = .{
+                    .code_start = unresolved_proc_code_start,
+                    .code_end = 0,
+                    .name = proc.name,
+                    .arg_layouts = proc.arg_layouts,
+                };
+            } else {
+                try self.proc_registry.put(key, .{
+                    .code_start = unresolved_proc_code_start,
+                    .code_end = 0,
+                    .name = proc.name,
+                    .arg_layouts = proc.arg_layouts,
+                });
+            }
 
             // Set up recursive context
             const old_recursive_symbol = self.current_recursive_symbol;
@@ -13159,8 +13141,49 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const saved_early_return_patches_len = self.early_return_patches.items.len;
             self.early_return_ret_layout = proc.ret_layout;
 
-            // Bind parameters to argument registers
-            try self.bindProcParams(proc.args, proc.arg_layouts);
+            errdefer {
+                _ = self.proc_registry.remove(key);
+                self.codegen.stack_offset = saved_stack_offset;
+                self.codegen.callee_saved_used = saved_callee_saved_used;
+                self.codegen.callee_saved_available = saved_callee_saved_available;
+                self.codegen.free_general = saved_free_general;
+                self.codegen.general_owners = saved_general_owners;
+                self.codegen.free_float = saved_free_float;
+                self.codegen.float_owners = saved_float_owners;
+                self.roc_ops_reg = saved_roc_ops_reg;
+                self.current_binding_symbol = saved_binding_symbol;
+                self.current_lambda_expr_id = saved_lambda_expr_id;
+                self.symbol_locations.deinit();
+                self.symbol_locations = saved_symbol_locations.clone() catch unreachable;
+                self.mutable_var_slots.deinit();
+                self.mutable_var_slots = saved_mutable_var_slots.clone() catch unreachable;
+                self.join_points.deinit();
+                self.join_points = saved_join_points.clone() catch unreachable;
+                self.deinitJoinPointJumpsMap(&self.join_point_jumps);
+                self.join_point_jumps = self.cloneJoinPointJumpsMap(&saved_join_point_jumps) catch unreachable;
+                self.join_point_param_layouts.deinit();
+                self.join_point_param_layouts = saved_join_point_param_layouts.clone() catch unreachable;
+                self.join_point_param_patterns.deinit();
+                self.join_point_param_patterns = saved_join_point_param_patterns.clone() catch unreachable;
+                self.loop_break_patches.deinit(self.allocator);
+                self.loop_break_patches = saved_loop_break_patches.clone(self.allocator) catch unreachable;
+                self.early_return_ret_layout = saved_early_return_ret_layout;
+                self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
+            }
+
+            const needs_ret_ptr = self.needsInternalReturnByPointer(proc.ret_layout);
+            if (needs_ret_ptr) {
+                self.ret_ptr_slot = self.codegen.allocStackSlot(8);
+                const first_reg = self.getArgumentRegister(0);
+                try self.codegen.emitStoreStack(.w64, self.ret_ptr_slot.?, first_reg);
+            } else {
+                self.ret_ptr_slot = null;
+            }
+
+            // Bind parameters to argument registers. Large returns use a hidden
+            // first argument register for the return buffer.
+            const initial_param_reg_idx: u8 = if (needs_ret_ptr) 1 else 0;
+            try self.bindLambdaParams(proc.args, initial_param_reg_idx, proc.force_pass_by_ptr);
 
             // Generate the body (control flow statements)
             // Note: .return_stmt emits jumps that are patched to the shared epilogue below
@@ -13213,6 +13236,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // Keep the lambda caches in final coordinates so later call sites resolve correctly.
                 try self.shiftNestedCompiledLambdaOffsets(body_start, body_end, prologue_size, std.math.maxInt(u64));
                 self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size, std.math.maxInt(u64));
+                self.shiftPendingCalls(body_start, body_end, prologue_size);
 
                 // Re-patch internal calls/addr whose targets are outside the shifted body
                 self.repatchInternalCalls(body_start, body_end, prologue_size, body_start);
@@ -13264,6 +13288,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // Keep the lambda caches in final coordinates so later call sites resolve correctly.
                 try self.shiftNestedCompiledLambdaOffsets(body_start, body_end, prologue_size, std.math.maxInt(u64));
                 self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size, std.math.maxInt(u64));
+                self.shiftPendingCalls(body_start, body_end, prologue_size);
 
                 // Re-patch internal calls/addr whose targets are outside the shifted body
                 self.repatchInternalCalls(body_start, body_end, prologue_size, body_start);
@@ -13290,10 +13315,29 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Restore state
             self.codegen.stack_offset = saved_stack_offset;
             self.codegen.callee_saved_used = saved_callee_saved_used;
+            self.codegen.callee_saved_available = saved_callee_saved_available;
+            self.codegen.free_general = saved_free_general;
+            self.codegen.general_owners = saved_general_owners;
+            self.codegen.free_float = saved_free_float;
+            self.codegen.float_owners = saved_float_owners;
+            self.roc_ops_reg = saved_roc_ops_reg;
+            self.ret_ptr_slot = saved_ret_ptr_slot;
+            self.current_binding_symbol = saved_binding_symbol;
+            self.current_lambda_expr_id = saved_lambda_expr_id;
             self.symbol_locations.deinit();
             self.symbol_locations = saved_symbol_locations.clone() catch return error.OutOfMemory;
             self.mutable_var_slots.deinit();
             self.mutable_var_slots = saved_mutable_var_slots.clone() catch return error.OutOfMemory;
+            self.join_points.deinit();
+            self.join_points = saved_join_points.clone() catch return error.OutOfMemory;
+            self.deinitJoinPointJumpsMap(&self.join_point_jumps);
+            self.join_point_jumps = try self.cloneJoinPointJumpsMap(&saved_join_point_jumps);
+            self.join_point_param_layouts.deinit();
+            self.join_point_param_layouts = saved_join_point_param_layouts.clone() catch return error.OutOfMemory;
+            self.join_point_param_patterns.deinit();
+            self.join_point_param_patterns = saved_join_point_param_patterns.clone() catch return error.OutOfMemory;
+            self.loop_break_patches.deinit(self.allocator);
+            self.loop_break_patches = try saved_loop_break_patches.clone(self.allocator);
         }
 
         /// Compile a lambda expression as a standalone procedure.
@@ -13342,10 +13386,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer saved_symbol_locations.deinit();
             var saved_mutable_var_slots = self.mutable_var_slots.clone() catch return error.OutOfMemory;
             defer saved_mutable_var_slots.deinit();
+            var saved_join_points = self.join_points.clone() catch return error.OutOfMemory;
+            defer saved_join_points.deinit();
+            var saved_join_point_jumps = try self.cloneJoinPointJumpsMap(&self.join_point_jumps);
+            defer self.deinitJoinPointJumpsMap(&saved_join_point_jumps);
+            var saved_join_point_param_layouts = self.join_point_param_layouts.clone() catch return error.OutOfMemory;
+            defer saved_join_point_param_layouts.deinit();
+            var saved_join_point_param_patterns = self.join_point_param_patterns.clone() catch return error.OutOfMemory;
+            defer saved_join_point_param_patterns.deinit();
+            var saved_loop_break_patches = try self.loop_break_patches.clone(self.allocator);
+            defer saved_loop_break_patches.deinit(self.allocator);
 
             // Clear state for the procedure's scope
             self.symbol_locations.clearRetainingCapacity();
             self.mutable_var_slots.clearRetainingCapacity();
+            self.clearFunctionControlFlowState();
             self.codegen.callee_saved_used = 0;
             // Reset register pools — the lambda is a separate function and should
             // not inherit register pressure from the parent's expression context.
@@ -13428,6 +13483,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.symbol_locations = saved_symbol_locations.clone() catch unreachable;
                 self.mutable_var_slots.deinit();
                 self.mutable_var_slots = saved_mutable_var_slots.clone() catch unreachable;
+                self.join_points.deinit();
+                self.join_points = saved_join_points.clone() catch unreachable;
+                self.deinitJoinPointJumpsMap(&self.join_point_jumps);
+                self.join_point_jumps = self.cloneJoinPointJumpsMap(&saved_join_point_jumps) catch unreachable;
+                self.join_point_param_layouts.deinit();
+                self.join_point_param_layouts = saved_join_point_param_layouts.clone() catch unreachable;
+                self.join_point_param_patterns.deinit();
+                self.join_point_param_patterns = saved_join_point_param_patterns.clone() catch unreachable;
+                self.loop_break_patches.deinit(self.allocator);
+                self.loop_break_patches = saved_loop_break_patches.clone(self.allocator) catch unreachable;
                 if (opts.use_cache) {
                     if (self.compiled_lambdas.fetchRemove(key)) |removed| {
                         _ = self.compiled_lambda_params.remove(removed.value);
@@ -13516,6 +13581,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 try self.shiftNestedCompiledLambdaOffsets(body_start, body_end, prologue_size, key);
                 self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size, std.math.maxInt(u64));
+                self.shiftPendingCalls(body_start, body_end, prologue_size);
                 // Re-patch internal calls/addr whose targets are outside the shifted body
                 self.repatchInternalCalls(body_start, body_end, prologue_size, body_start);
                 self.repatchInternalAddrPatches(body_start, body_end, prologue_size, body_start);
@@ -13558,6 +13624,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.symbol_locations = saved_symbol_locations.clone() catch return error.OutOfMemory;
                 self.mutable_var_slots.deinit();
                 self.mutable_var_slots = saved_mutable_var_slots.clone() catch return error.OutOfMemory;
+                self.join_points.deinit();
+                self.join_points = saved_join_points.clone() catch return error.OutOfMemory;
+                self.deinitJoinPointJumpsMap(&self.join_point_jumps);
+                self.join_point_jumps = try self.cloneJoinPointJumpsMap(&saved_join_point_jumps);
+                self.join_point_param_layouts.deinit();
+                self.join_point_param_layouts = saved_join_point_param_layouts.clone() catch return error.OutOfMemory;
+                self.join_point_param_patterns.deinit();
+                self.join_point_param_patterns = saved_join_point_param_patterns.clone() catch return error.OutOfMemory;
+                self.loop_break_patches.deinit(self.allocator);
+                self.loop_break_patches = try saved_loop_break_patches.clone(self.allocator);
 
                 // Patch the skip jump to point here (after the lambda code)
                 const after_lambda = self.codegen.currentOffset();
@@ -13591,6 +13667,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 try self.shiftNestedCompiledLambdaOffsets(body_start, body_end, prologue_size, key);
                 self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size, std.math.maxInt(u64));
+                self.shiftPendingCalls(body_start, body_end, prologue_size);
                 // Re-patch internal calls/addr whose targets are outside the shifted body
                 self.repatchInternalCalls(body_start, body_end, prologue_size, body_start);
                 self.repatchInternalAddrPatches(body_start, body_end, prologue_size, body_start);
@@ -13633,6 +13710,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.symbol_locations = saved_symbol_locations.clone() catch return error.OutOfMemory;
                 self.mutable_var_slots.deinit();
                 self.mutable_var_slots = saved_mutable_var_slots.clone() catch return error.OutOfMemory;
+                self.join_points.deinit();
+                self.join_points = saved_join_points.clone() catch return error.OutOfMemory;
+                self.deinitJoinPointJumpsMap(&self.join_point_jumps);
+                self.join_point_jumps = try self.cloneJoinPointJumpsMap(&saved_join_point_jumps);
+                self.join_point_param_layouts.deinit();
+                self.join_point_param_layouts = saved_join_point_param_layouts.clone() catch return error.OutOfMemory;
+                self.join_point_param_patterns.deinit();
+                self.join_point_param_patterns = saved_join_point_param_patterns.clone() catch return error.OutOfMemory;
+                self.loop_break_patches.deinit(self.allocator);
+                self.loop_break_patches = try saved_loop_break_patches.clone(self.allocator);
 
                 // Patch the skip jump to point here (after the lambda code)
                 const after_lambda = self.codegen.currentOffset();
@@ -14714,7 +14801,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// When registers are exhausted, spills remaining arguments to the stack.
         /// Bind procedure parameters to argument registers.
         /// Handles stack spilling when arguments exceed available registers.
-        fn bindProcParams(self: *Self, params: lir.LirPatternSpan, param_layouts: LayoutIdxSpan) Allocator.Error!void {
+        fn bindProcParams(self: *Self, params: lir.LirPatternSpan, param_layouts: LayoutIdxSpan, force_pass_by_ptr: bool) Allocator.Error!void {
             const pattern_ids = self.store.getPatternSpan(params);
             const layouts = self.store.getLayoutIdxSpan(param_layouts);
 
@@ -14776,6 +14863,49 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                         if (num_regs == 0) {
                             try self.symbol_locations.put(symbol_key, .{ .immediate_i64 = 0 });
+                            try self.trackMutableSlotFromSymbolLocation(bind, symbol_key);
+                            continue;
+                        }
+
+                        if (force_pass_by_ptr) {
+                            const abi_size: u32 = @as(u32, num_regs) * 8;
+                            const local_stack_offset = self.codegen.allocStackSlot(@intCast(abi_size));
+                            const data_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X10 else .RAX;
+
+                            const ptr_reg = if (reg_idx < max_arg_regs) blk: {
+                                const arg_reg = self.getArgumentRegister(reg_idx);
+                                reg_idx += 1;
+                                break :blk arg_reg;
+                            } else blk: {
+                                const ptr_slot = self.codegen.allocStackSlot(8);
+                                try self.copyFromCallerStack(stack_arg_offset, ptr_slot, 1);
+                                stack_arg_offset += 8;
+                                reg_idx = max_arg_regs;
+                                try self.emitLoad(.w64, scratch_reg, frame_ptr, ptr_slot);
+                                break :blk scratch_reg;
+                            };
+
+                            var ri: u8 = 0;
+                            while (ri < num_regs) : (ri += 1) {
+                                const off: i32 = @as(i32, ri) * 8;
+                                try self.emitLoad(.w64, data_reg, ptr_reg, off);
+                                try self.emitStore(.w64, frame_ptr, local_stack_offset + off, data_reg);
+                            }
+
+                            if (is_128bit) {
+                                try self.symbol_locations.put(symbol_key, .{ .stack_i128 = local_stack_offset });
+                            } else if (is_str) {
+                                try self.symbol_locations.put(symbol_key, .{ .stack_str = local_stack_offset });
+                            } else if (is_list) {
+                                try self.symbol_locations.put(symbol_key, .{ .list_stack = .{
+                                    .struct_offset = local_stack_offset,
+                                    .data_offset = 0,
+                                    .num_elements = 0,
+                                } });
+                            } else {
+                                try self.symbol_locations.put(symbol_key, self.stackLocationForLayout(param_layout_idx, local_stack_offset));
+                            }
+                            try self.trackMutableSlotFromSymbolLocation(bind, symbol_key);
                             continue;
                         }
 
@@ -14837,6 +14967,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 try self.symbol_locations.put(symbol_key, self.stackLocationForLayout(param_layout_idx, stack_offset));
                                 reg_idx += 1;
                             }
+                            try self.trackMutableSlotFromSymbolLocation(bind, symbol_key);
                         } else {
                             // Doesn't fit in registers - read from caller's stack frame
                             const abi_size: u32 = @as(u32, num_regs) * 8;
@@ -14860,6 +14991,74 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                             stack_arg_offset += @as(i32, num_regs) * 8;
                             reg_idx = max_arg_regs; // Mark all registers as consumed
+                            try self.trackMutableSlotFromSymbolLocation(bind, symbol_key);
+                        }
+                    },
+                    .wildcard => |wc| {
+                        const is_128bit = if (param_idx < layouts.len) blk: {
+                            const param_layout = layouts[param_idx];
+                            break :blk param_layout == .i128 or param_layout == .u128 or param_layout == .dec;
+                        } else false;
+
+                        const is_str = if (param_idx < layouts.len)
+                            layouts[param_idx] == .str
+                        else
+                            false;
+
+                        const param_layout_idx = if (param_idx < layouts.len) layouts[param_idx] else wc.layout_idx;
+                        const is_list = blk: {
+                            const ls = self.layout_store;
+                            if (@intFromEnum(param_layout_idx) >= ls.layouts.len()) {
+                                break :blk false;
+                            }
+                            const layout_val = ls.getLayout(param_layout_idx);
+                            break :blk layout_val.tag == .list or layout_val.tag == .list_of_zst;
+                        };
+
+                        const aggregate_size: ?u32 = if (param_idx < layouts.len) blk: {
+                            const ls = self.layout_store;
+                            const layout_val = ls.getLayout(param_layout_idx);
+                            if (layout_val.tag == .zst or ls.layoutSizeAlign(layout_val).size == 0) break :blk null;
+                            if (layout_val.tag == .struct_ or layout_val.tag == .tag_union or layout_val.tag == .closure) {
+                                const size = ls.layoutSizeAlign(layout_val).size;
+                                if (size > 8) break :blk size;
+                            }
+                            break :blk null;
+                        } else null;
+
+                        const num_regs: u8 = if (is_128bit)
+                            2
+                        else if (is_str or is_list)
+                            3
+                        else if (aggregate_size) |size|
+                            @as(u8, @intCast((size + 7) / 8))
+                        else
+                            self.calcParamRegCount(param_layout_idx);
+
+                        if (num_regs == 0) {
+                            continue;
+                        }
+
+                        if (force_pass_by_ptr) {
+                            if (reg_idx < max_arg_regs) {
+                                reg_idx += 1;
+                            } else {
+                                stack_arg_offset += 8;
+                                reg_idx = max_arg_regs;
+                            }
+                            continue;
+                        }
+
+                        if (reg_idx + num_regs <= max_arg_regs) {
+                            if (comptime target.toCpuArch() == .aarch64) {
+                                if (is_128bit and reg_idx % 2 != 0) {
+                                    reg_idx += 1;
+                                }
+                            }
+                            reg_idx += num_regs;
+                        } else {
+                            stack_arg_offset += @as(i32, num_regs) * 8;
+                            reg_idx = max_arg_regs;
                         }
                     },
                     else => {
@@ -14873,6 +15072,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     },
                 }
             }
+
+            const roc_ops_save_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64)
+                .X20
+            else
+                .R12;
+
+            if (reg_idx < max_arg_regs) {
+                const arg_reg = self.getArgumentRegister(reg_idx);
+                if (arg_reg != roc_ops_save_reg) {
+                    try self.codegen.emit.movRegReg(.w64, roc_ops_save_reg, arg_reg);
+                }
+            } else {
+                try self.emitLoad(.w64, roc_ops_save_reg, frame_ptr, stack_arg_offset);
+            }
+
+            self.roc_ops_reg = roc_ops_save_reg;
         }
 
         /// Generate code for a control flow statement
@@ -15882,6 +16097,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
 
                 self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size_val, std.math.maxInt(u64));
+                self.shiftPendingCalls(body_start, body_end, prologue_size_val);
                 // Re-patch internal calls/addr whose targets are outside the shifted body
                 self.repatchInternalCalls(body_start, body_end, prologue_size_val, body_start);
                 self.repatchInternalAddrPatches(body_start, body_end, prologue_size_val, body_start);
@@ -16174,57 +16390,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn generateEntrypointCallFromValue(
-            self: *Self,
-            fn_expr_id: LirExprId,
-            arg_layouts: []const layout.Idx,
-            ret_layout: layout.Idx,
-            args_ptr_reg: GeneralReg,
+            _: *Self,
+            _: LirExprId,
+            _: []const layout.Idx,
+            _: layout.Idx,
+            _: GeneralReg,
         ) Allocator.Error!?ValueLocation {
-            const arg_infos_start = self.scratch_arg_infos.top();
-            defer self.scratch_arg_infos.clearFrom(arg_infos_start);
-
-            const arg_infos = try self.materializeEntrypointArgInfos(arg_layouts, args_ptr_reg);
-
-            return switch (self.getCanonicalCallableTarget(fn_expr_id)) {
-                .expr => |lambda_expr_id| blk: {
-                    const expr = self.store.getExpr(lambda_expr_id);
-                    switch (expr) {
-                        .lambda => |lambda| {
-                            const code_offset = try self.compileLambdaAsProc(lambda_expr_id, lambda);
-                            break :blk try self.callCompiledOffsetWithArgInfos(code_offset, arg_infos, ret_layout);
-                        },
-                        else => {
-                            if (std.debug.runtime_safety) std.debug.panic(
-                                "entrypoint canonical lambda target {} resolved to unexpected expr '{s}'",
-                                .{ @intFromEnum(lambda_expr_id), @tagName(expr) },
-                            );
-                            unreachable;
-                        },
-                    }
-                },
-                .direct => |symbol| blk: {
-                    const def_expr_id = self.directCallableLeafExprId(symbol);
-                    const def_expr = self.store.getExpr(def_expr_id);
-                    switch (def_expr) {
-                        .runtime_error => {
-                            try self.emitRocCrash("hit a runtime error in entrypoint call (dead code path)");
-                            try self.emitTrap();
-                            break :blk .noreturn;
-                        },
-                        .lambda => {
-                            const code_offset = try self.directCallableCodeOffsetWithOptions(symbol, .{});
-                            break :blk try self.callCompiledOffsetWithArgInfos(code_offset, arg_infos, ret_layout);
-                        },
-                        else => {
-                            if (std.debug.runtime_safety) std.debug.panic(
-                                "entrypoint direct symbol {d} resolved to unexpected callable leaf '{s}'",
-                                .{ symbol.raw(), @tagName(def_expr) },
-                            );
-                            unreachable;
-                        },
-                    }
-                },
-            };
+            if (std.debug.runtime_safety) std.debug.panic(
+                "entrypoint function-value lowering has not been migrated to proc ids yet",
+                .{},
+            );
+            unreachable;
         }
 
         fn generateEntrypointBody(
@@ -16524,104 +16700,6 @@ test "entrypoint param slots round aggregates to ABI word width" {
     try std.testing.expectEqual(@as(u32, 16), codegen.entrypointParamSlotSize(aggregate_layout));
     try std.testing.expectEqual(@as(u32, 24), codegen.entrypointParamSlotSize(.str));
     try std.testing.expectEqual(@as(u32, 8), codegen.entrypointParamSlotSize(.bool));
-}
-
-test "entrypoint aliases with args use canonical callable targets" {
-    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
-        return error.SkipZigTest;
-    }
-
-    const allocator = std.testing.allocator;
-    var store = LirExprStore.init(allocator);
-    defer store.deinit();
-
-    const param_symbol = Symbol.fromRaw(21);
-    const target_symbol = Symbol.fromRaw(22);
-
-    const param = try store.addPattern(.{ .bind = .{
-        .symbol = param_symbol,
-        .layout_idx = .bool,
-    } }, base.Region.zero());
-    const params = try store.addPatternSpan(&.{param});
-    const lambda_body = try store.addExpr(.{ .lookup = .{
-        .symbol = param_symbol,
-        .layout_idx = .bool,
-    } }, base.Region.zero());
-    const lambda = try store.addExpr(.{ .lambda = .{
-        .fn_layout = .u64,
-        .params = params,
-        .body = lambda_body,
-        .ret_layout = .bool,
-    } }, base.Region.zero());
-    try store.registerSymbolDef(target_symbol, lambda);
-
-    const alias_lookup = try store.addExpr(.{ .lookup = .{
-        .symbol = target_symbol,
-        .layout_idx = .u64,
-    } }, base.Region.zero());
-    try lir.CallCanonicalize.canonicalizeDirectCalls(allocator, &store, &.{alias_lookup});
-
-    const alias_target = store.getExprCallableTarget(alias_lookup) orelse return error.TestUnexpectedResult;
-    try std.testing.expect(alias_target == .direct);
-    try std.testing.expect(alias_target.direct.eql(target_symbol));
-
-    var test_state = try TestLayoutState.init(allocator);
-    defer test_state.deinit();
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, null);
-    defer codegen.deinit();
-
-    if (comptime builtin.cpu.arch == .aarch64) {
-        codegen.codegen.stack_offset = 16 + @TypeOf(codegen.codegen).CALLEE_SAVED_AREA_SIZE;
-        codegen.roc_ops_reg = .X19;
-        try codegen.generateEntrypointBody(alias_lookup, &.{.bool}, .bool, .X20, .X21);
-    } else {
-        codegen.codegen.stack_offset = -@TypeOf(codegen.codegen).CALLEE_SAVED_AREA_SIZE;
-        codegen.roc_ops_reg = .R12;
-        try codegen.generateEntrypointBody(alias_lookup, &.{.bool}, .bool, .RBX, .R13);
-    }
-
-    try std.testing.expectEqual(@as(usize, 1), codegen.compiled_lambdas.count());
-}
-
-test "sort comparator aliases use canonical callable targets" {
-    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
-        return error.SkipZigTest;
-    }
-
-    const allocator = std.testing.allocator;
-    var store = LirExprStore.init(allocator);
-    defer store.deinit();
-
-    const wildcard = try store.addPattern(.{ .wildcard = .{ .layout_idx = .bool } }, base.Region.zero());
-    const params = try store.addPatternSpan(&.{ wildcard, wildcard });
-    const body = try store.addExpr(.{ .bool_literal = true }, base.Region.zero());
-    const lambda = try store.addExpr(.{ .lambda = .{
-        .fn_layout = .u64,
-        .params = params,
-        .body = body,
-        .ret_layout = .bool,
-    } }, base.Region.zero());
-
-    const cmp_symbol = Symbol.fromRaw(23);
-    try store.registerSymbolDef(cmp_symbol, lambda);
-
-    const alias_lookup = try store.addExpr(.{ .lookup = .{
-        .symbol = cmp_symbol,
-        .layout_idx = .u64,
-    } }, base.Region.zero());
-    try lir.CallCanonicalize.canonicalizeDirectCalls(allocator, &store, &.{alias_lookup});
-
-    const alias_target = store.getExprCallableTarget(alias_lookup) orelse return error.TestUnexpectedResult;
-    try std.testing.expect(alias_target == .direct);
-    try std.testing.expect(alias_target.direct.eql(cmp_symbol));
-
-    var test_state = try TestLayoutState.init(allocator);
-    defer test_state.deinit();
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, null);
-    defer codegen.deinit();
-
-    _ = try codegen.resolveComparatorOffset(alias_lookup, .{});
-    try std.testing.expectEqual(@as(usize, 1), codegen.compiled_lambdas.count());
 }
 
 test "tag payload bind invariant rejects mismatched pattern layout" {

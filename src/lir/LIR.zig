@@ -57,12 +57,15 @@ pub const LirPatternId = enum(u32) {
     }
 };
 
-/// Callee for a function call.
-/// Direct calls use a callable symbol registered in the LIR callable-def table.
-/// Runtime function-value calls continue to use an expression.
-pub const CallTarget = union(enum) {
-    expr: LirExprId,
-    direct: Symbol,
+/// Index into the LIR proc table.
+pub const LirProcId = enum(u32) {
+    _,
+
+    pub const none: LirProcId = @enumFromInt(std.math.maxInt(u32));
+
+    pub fn isNone(self: LirProcId) bool {
+        return self == none;
+    }
 };
 
 /// Span of expression IDs (for arg lists, record fields, list elements, etc.)
@@ -301,31 +304,16 @@ pub const LirExpr = union(enum) {
         layout_idx: layout.Idx,
     },
 
-    /// Function call
-    call: struct {
-        /// The call target: either an explicit direct callee symbol or a
-        /// runtime function-value expression.
-        callee: CallTarget,
-        /// Layout of the function/closure type
-        fn_layout: layout.Idx,
-        /// Arguments to the function
+    /// Explicit direct procedure call.
+    proc_call: struct {
+        /// The compiled procedure/proc-spec to call.
+        proc: LirProcId,
+        /// Arguments to the procedure.
         args: LirExprSpan,
-        /// Layout of the return type
+        /// Layout of the return type.
         ret_layout: layout.Idx,
-        /// How this call was made (for error messages)
+        /// How this call was made (for error messages).
         called_via: CalledVia,
-    },
-
-    /// Lambda (anonymous function without captures)
-    lambda: struct {
-        /// Layout of the function type
-        fn_layout: layout.Idx,
-        /// Parameter patterns
-        params: LirPatternSpan,
-        /// Function body
-        body: LirExprId,
-        /// Return type layout
-        ret_layout: layout.Idx,
     },
 
     /// Empty list `[]`
@@ -408,6 +396,9 @@ pub const LirExpr = union(enum) {
         op: LowLevel,
         args: LirExprSpan,
         ret_layout: layout.Idx,
+        /// Explicit proc used by low-level ops that need a backend-visible callable root,
+        /// such as List.sort_with's comparator trampoline.
+        callable_proc: LirProcId = LirProcId.none,
     },
 
     /// Debug expression (prints and returns value)
@@ -796,6 +787,9 @@ pub const LirProc = struct {
     ret_layout: layout.Idx,
     /// Layout of closure data (if this is a closure), null otherwise
     closure_data_layout: ?layout.Idx,
+    /// When true, bind parameters from pointers instead of direct value words.
+    /// Used for comparator trampolines that deliberately pass element pointers.
+    force_pass_by_ptr: bool = false,
     /// Whether this procedure is self-recursive
     is_self_recursive: SelfRecursive,
 };

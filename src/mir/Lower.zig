@@ -2755,12 +2755,26 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
         .e_hosted_lambda => |hosted| {
             const params = try self.lowerPatternSpan(module_env, hosted.args);
             const body = try self.lowerExpr(hosted.body);
-            return try self.store.addExpr(self.allocator, .{ .hosted = .{
-                .symbol_name = hosted.symbol_name,
-                .index = hosted.index,
+            const ret_monotype = switch (self.store.monotype_store.getMonotype(monotype)) {
+                .func => |func| func.ret,
+                else => unreachable,
+            };
+            const proc_id = try self.store.addProc(self.allocator, .{
+                .fn_monotype = monotype,
                 .params = params,
                 .body = body,
-            } }, monotype, region);
+                .ret_monotype = ret_monotype,
+                .debug_name = MIR.Symbol.none,
+                .source_region = region,
+                .capture_bindings = MIR.CaptureBindingSpan.empty(),
+                .captures_param = .none,
+                .recursion = .not_recursive,
+                .hosted = .{
+                    .symbol_name = hosted.symbol_name,
+                    .index = hosted.index,
+                },
+            });
+            return try self.store.addExpr(self.allocator, .{ .proc_ref = proc_id }, monotype, region);
         },
         .e_run_low_level => |run_ll| {
             if (run_ll.op == .str_inspekt) {
@@ -3413,6 +3427,7 @@ fn lowerLambda(self: *Self, module_env: *const ModuleEnv, lambda: CIR.Expr.Lambd
         .capture_bindings = MIR.CaptureBindingSpan.empty(),
         .captures_param = .none,
         .recursion = .not_recursive,
+        .hosted = null,
     });
     return try self.store.addExpr(self.allocator, .{ .proc_ref = proc_id }, monotype, region);
 }
@@ -3591,6 +3606,7 @@ fn lowerClosure(self: *Self, module_env: *const ModuleEnv, closure: CIR.Expr.Clo
         .capture_bindings = capture_binding_span,
         .captures_param = captures_param_pattern,
         .recursion = .not_recursive,
+        .hosted = null,
     });
 
     // --- Step 10: Register the lifted proc and its semantic closure member ---

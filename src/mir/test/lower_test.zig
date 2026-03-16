@@ -23,6 +23,23 @@ fn testSymbolFromIdent(ident: Ident.Idx) MIR.Symbol {
     return MIR.Symbol.fromRaw(@as(u64, @as(u32, @bitCast(ident))));
 }
 
+fn procIdFromExpr(mir_store: *const MIR.Store, expr_id: MIR.ExprId) ?MIR.ProcId {
+    return switch (mir_store.getExpr(expr_id)) {
+        .proc_ref => |proc_id| proc_id,
+        .closure_make => |closure| closure.proc,
+        .block => |block| procIdFromExpr(mir_store, block.final_expr),
+        .dbg_expr => |dbg_expr| procIdFromExpr(mir_store, dbg_expr.expr),
+        .expect => |expect| procIdFromExpr(mir_store, expect.body),
+        .return_expr => |ret| procIdFromExpr(mir_store, ret.expr),
+        else => null,
+    };
+}
+
+fn procIdFromValueDef(mir_store: *const MIR.Store, symbol: MIR.Symbol) ?MIR.ProcId {
+    const def_expr = mir_store.getValueDef(symbol) orelse return null;
+    return procIdFromExpr(mir_store, def_expr);
+}
+
 // --- MIR Store tests ---
 
 test "MIR Store: add and get expression" {
@@ -583,7 +600,7 @@ test "lambda set: closure-returning binding keeps resolvable lifted member" {
 
     const members = ls_store.getMembers(ls_store.getLambdaSet(returned_closure_ls).members);
     try testing.expectEqual(@as(usize, 1), members.len);
-    try testing.expect(env.mir_store.getValueDef(members[0].fn_symbol) != null);
+    try testing.expect(!members[0].proc.isNone());
     const returned_closure_member = env.mir_store.getClosureMember(members[0].closure_member);
     try testing.expectEqual(@as(usize, 1), env.mir_store.getCaptureBindings(returned_closure_member.capture_bindings).len);
 
@@ -598,7 +615,7 @@ test "lambda set: closure-returning binding keeps resolvable lifted member" {
 
     const callee_members = ls_store.getMembers(ls_store.getLambdaSet(callee_ls).members);
     try testing.expectEqual(@as(usize, 1), callee_members.len);
-    try testing.expect(env.mir_store.getValueDef(callee_members[0].fn_symbol) != null);
+    try testing.expect(!callee_members[0].proc.isNone());
 }
 
 test "lambda set: higher-order closure param propagation keeps member defs stable" {
@@ -634,7 +651,7 @@ test "lambda set: higher-order closure param propagation keeps member defs stabl
 
     const members = ls_store.getMembers(ls_store.getLambdaSet(callee_ls).members);
     try testing.expectEqual(@as(usize, 1), members.len);
-    try testing.expect(env.mir_store.getValueDef(members[0].fn_symbol) != null);
+    try testing.expect(!members[0].proc.isNone());
 }
 
 test "lambda set: exact closure factory program keeps symbol defs stable" {
@@ -662,7 +679,7 @@ test "lambda set: exact closure factory program keeps symbol defs stable" {
 
     try testing.expect(ls_store.lambda_sets.items.len > 0);
     try testing.expect(ls_store.members.items.len > 0);
-    try testing.expect(env.mir_store.getValueDef(ls_store.members.items[0].fn_symbol) != null);
+    try testing.expect(!ls_store.members.items[0].proc.isNone());
 }
 
 test "lambda set: factory-produced closure alias keeps captured symbol lambda set" {
@@ -756,7 +773,7 @@ test "lambda set: closure extracted from record field keeps member defs stable" 
     const f_ls = ls_store.getSymbolLambdaSet(resolved_f_sym) orelse return error.TestUnexpectedResult;
     const members = ls_store.getMembers(ls_store.getLambdaSet(f_ls).members);
     try testing.expectEqual(@as(usize, 1), members.len);
-    try testing.expect(env.mir_store.getValueDef(members[0].fn_symbol) != null);
+    try testing.expect(!members[0].proc.isNone());
     const closure_member = env.mir_store.getClosureMember(members[0].closure_member);
     try testing.expectEqual(@as(usize, 1), env.mir_store.getCaptureBindings(closure_member.capture_bindings).len);
 }
@@ -799,8 +816,8 @@ test "lambda set: plain lambda extracted from record field gets symbol identity"
     const members = ls_store.getMembers(ls_store.getLambdaSet(f_ls).members);
     try testing.expectEqual(@as(usize, 1), members.len);
     try testing.expect(members[0].closure_member.isNone());
-    const lifted_def = env.mir_store.getValueDef(members[0].fn_symbol) orelse return error.TestUnexpectedResult;
-    try testing.expect(LambdaSet.isLambdaExpr(env.mir_store, lifted_def));
+    try testing.expect(!members[0].proc.isNone());
+    try testing.expect(env.mir_store.getProc(members[0].proc).capture_bindings.isEmpty());
 }
 
 test "lambda set: plain lambda extracted from tuple field gets symbol identity" {
@@ -841,8 +858,8 @@ test "lambda set: plain lambda extracted from tuple field gets symbol identity" 
     const members = ls_store.getMembers(ls_store.getLambdaSet(f_ls).members);
     try testing.expectEqual(@as(usize, 1), members.len);
     try testing.expect(members[0].closure_member.isNone());
-    const lifted_def = env.mir_store.getValueDef(members[0].fn_symbol) orelse return error.TestUnexpectedResult;
-    try testing.expect(LambdaSet.isLambdaExpr(env.mir_store, lifted_def));
+    try testing.expect(!members[0].proc.isNone());
+    try testing.expect(env.mir_store.getProc(members[0].proc).capture_bindings.isEmpty());
 }
 
 test "lambda set: plain lambda extracted from tag payload gets symbol identity" {
@@ -884,8 +901,8 @@ test "lambda set: plain lambda extracted from tag payload gets symbol identity" 
     const members = ls_store.getMembers(ls_store.getLambdaSet(f_ls).members);
     try testing.expectEqual(@as(usize, 1), members.len);
     try testing.expect(members[0].closure_member.isNone());
-    const lifted_def = env.mir_store.getValueDef(members[0].fn_symbol) orelse return error.TestUnexpectedResult;
-    try testing.expect(LambdaSet.isLambdaExpr(env.mir_store, lifted_def));
+    try testing.expect(!members[0].proc.isNone());
+    try testing.expect(env.mir_store.getProc(members[0].proc).capture_bindings.isEmpty());
 }
 
 test "lambda set: plain lambda extracted from list element gets symbol identity" {
@@ -927,8 +944,8 @@ test "lambda set: plain lambda extracted from list element gets symbol identity"
     const members = ls_store.getMembers(ls_store.getLambdaSet(f_ls).members);
     try testing.expectEqual(@as(usize, 1), members.len);
     try testing.expect(members[0].closure_member.isNone());
-    const lifted_def = env.mir_store.getValueDef(members[0].fn_symbol) orelse return error.TestUnexpectedResult;
-    try testing.expect(LambdaSet.isLambdaExpr(env.mir_store, lifted_def));
+    try testing.expect(!members[0].proc.isNone());
+    try testing.expect(env.mir_store.getProc(members[0].proc).capture_bindings.isEmpty());
 }
 
 test "lambda set: higher-order param receives both closure members" {
@@ -952,19 +969,16 @@ test "lambda set: higher-order param receives both closure members" {
     var apply_sym: ?MIR.Symbol = null;
     for (stmts) |stmt| {
         if (stmt != .decl_const) continue;
-        const stmt_expr = env.mir_store.getExpr(stmt.decl_const.expr);
-        if (stmt_expr != .lambda) continue;
+        if (procIdFromExpr(env.mir_store, stmt.decl_const.expr) == null) continue;
         const pat = env.mir_store.getPattern(stmt.decl_const.pattern);
         if (pat != .bind) continue;
         apply_sym = pat.bind;
         break;
     }
     const resolved_apply_sym = apply_sym orelse return error.TestUnexpectedResult;
-    const apply_def = env.mir_store.getValueDef(resolved_apply_sym) orelse return error.TestUnexpectedResult;
-    const apply_expr = env.mir_store.getExpr(apply_def);
-    try testing.expect(apply_expr == .lambda);
-
-    const apply_params = env.mir_store.getPatternSpan(apply_expr.lambda.params);
+    const apply_proc_id = procIdFromValueDef(env.mir_store, resolved_apply_sym) orelse return error.TestUnexpectedResult;
+    const apply_proc = env.mir_store.getProc(apply_proc_id);
+    const apply_params = env.mir_store.getPatternSpan(apply_proc.params);
     try testing.expectEqual(@as(usize, 2), apply_params.len);
     const f_pat = env.mir_store.getPattern(apply_params[0]);
     try testing.expect(f_pat == .bind);
@@ -1015,19 +1029,16 @@ test "lambda set: higher-order closure captures monotype stays numeric tuple" {
     var apply_sym: ?MIR.Symbol = null;
     for (stmts) |stmt| {
         if (stmt != .decl_const) continue;
-        const stmt_expr = env.mir_store.getExpr(stmt.decl_const.expr);
-        if (stmt_expr != .lambda) continue;
+        if (procIdFromExpr(env.mir_store, stmt.decl_const.expr) == null) continue;
         const pat = env.mir_store.getPattern(stmt.decl_const.pattern);
         if (pat != .bind) continue;
         apply_sym = pat.bind;
         break;
     }
     const resolved_apply_sym = apply_sym orelse return error.TestUnexpectedResult;
-    const apply_def = env.mir_store.getValueDef(resolved_apply_sym) orelse return error.TestUnexpectedResult;
-    const apply_expr = env.mir_store.getExpr(apply_def);
-    try testing.expect(apply_expr == .lambda);
-
-    const apply_params = env.mir_store.getPatternSpan(apply_expr.lambda.params);
+    const apply_proc_id = procIdFromValueDef(env.mir_store, resolved_apply_sym) orelse return error.TestUnexpectedResult;
+    const apply_proc = env.mir_store.getProc(apply_proc_id);
+    const apply_params = env.mir_store.getPatternSpan(apply_proc.params);
     const f_pat = env.mir_store.getPattern(apply_params[0]);
     try testing.expect(f_pat == .bind);
     const f_sym = f_pat.bind;
@@ -1060,22 +1071,10 @@ test "lambda set: imported List.any receives predicate lambda set" {
     const any_sym = callee_expr.lookup;
     const any_def = env.mir_store.getValueDef(any_sym) orelse return error.TestUnexpectedResult;
 
-    var lambda_def = any_def;
-    var params: MIR.PatternSpan = undefined;
-    var lambda_body: MIR.ExprId = undefined;
-    while (true) {
-        switch (env.mir_store.getExpr(lambda_def)) {
-            .lambda => |lam| {
-                params = lam.params;
-                lambda_body = lam.body;
-                break;
-            },
-            .block => |block| {
-                lambda_def = block.final_expr;
-            },
-            else => return error.TestUnexpectedResult,
-        }
-    }
+    const any_proc_id = procIdFromExpr(env.mir_store, any_def) orelse return error.TestUnexpectedResult;
+    const any_proc = env.mir_store.getProc(any_proc_id);
+    const params = any_proc.params;
+    const lambda_body = any_proc.body;
 
     const param_ids = env.mir_store.getPatternSpan(params);
     try testing.expectEqual(@as(usize, 2), param_ids.len);
@@ -1146,8 +1145,8 @@ test "lambda set: imported List.any receives predicate lambda set" {
     const predicate_ls = ls_store.getSymbolLambdaSet(predicate_sym) orelse return error.TestUnexpectedResult;
     const members = ls_store.getMembers(ls_store.getLambdaSet(predicate_ls).members);
     try testing.expectEqual(@as(usize, 1), members.len);
-    try testing.expectEqual(arg_members[0].fn_symbol, members[0].fn_symbol);
-    try testing.expect(env.mir_store.getValueDef(members[0].fn_symbol) != null);
+    try testing.expectEqual(arg_members[0].proc, members[0].proc);
+    try testing.expect(!members[0].proc.isNone());
     try testing.expect(members[0].closure_member.isNone());
 }
 
@@ -1159,8 +1158,8 @@ test "lowerExpr: lambda" {
     defer env.deinit();
     const expr = try env.lowerFirstDef();
     const result = env.mir_store.getExpr(expr);
-    try testing.expect(result == .lambda);
-    try testing.expectEqual(@as(u16, 1), result.lambda.params.len);
+    try testing.expect(result == .proc_ref);
+    try testing.expectEqual(@as(u16, 1), env.mir_store.getProc(result.proc_ref).params.len);
 }
 
 test "lowerExpr: Bool.and short-circuit desugars to match" {
@@ -2588,7 +2587,7 @@ test "polymorphic lambda in block: sum called with U64 gets U64 monotype, not De
     const stmts = env.mir_store.getStmts(result.block.stmts);
     try testing.expect(stmts.len >= 1);
     const decl_expr = env.mir_store.getExpr(stmts[0].decl_const.expr);
-    try testing.expect(decl_expr == .lambda);
+    try testing.expect(decl_expr == .proc_ref);
     const lambda_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(stmts[0].decl_const.expr));
     try testing.expect(lambda_mono == .func);
     // Return type of the lambda must be U64
@@ -2636,7 +2635,8 @@ test "polymorphic lambda with literal in body: a + b + 0 called with U64" {
     const stmts = env.mir_store.getStmts(result.block.stmts);
     try testing.expect(stmts.len >= 1);
     const decl_expr = env.mir_store.getExpr(stmts[0].decl_const.expr);
-    try testing.expect(decl_expr == .lambda);
+    try testing.expect(decl_expr == .proc_ref);
+    const decl_proc = env.mir_store.getProc(decl_expr.proc_ref);
 
     // Lambda return must be U64
     const lambda_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(stmts[0].decl_const.expr));
@@ -2647,8 +2647,8 @@ test "polymorphic lambda with literal in body: a + b + 0 called with U64" {
     // Check that the lambda body's subexpressions are all U64, not Dec
     // The body is `a + b + 0` which desugars to `(a + b) + 0`
     // The body is either a call or run_low_level for the outer `+`
-    const body = env.mir_store.getExpr(decl_expr.lambda.body);
-    const body_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(decl_expr.lambda.body));
+    const body = env.mir_store.getExpr(decl_proc.body);
+    const body_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(decl_proc.body));
     try testing.expectEqual(Monotype.Prim.u64, body_mono.prim);
 
     // The outer `+` has args: (a + b) and 0

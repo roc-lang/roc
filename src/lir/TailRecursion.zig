@@ -144,22 +144,10 @@ pub const TailRecursionPass = struct {
     fn isTailCallToTarget(self: *TailRecursionPass, expr_id: LirExprId) ?LirExprSpan {
         const expr = self.store.getExpr(expr_id);
         switch (expr) {
-            .call => |call| {
-                switch (call.callee) {
-                    .direct => |symbol| {
-                        if (symbol.eql(self.target_symbol)) return call.args;
-                    },
-                    .expr => |callee_expr| {
-                        const fn_expr = self.store.getExpr(callee_expr);
-                        switch (fn_expr) {
-                            .lookup => |lookup| {
-                                if (lookup.symbol.eql(self.target_symbol)) {
-                                    return call.args;
-                                }
-                            },
-                            else => {},
-                        }
-                    },
+            .proc_call => |call| {
+                const proc = self.store.getProc(call.proc);
+                if (proc.name.eql(self.target_symbol)) {
+                    return call.args;
                 }
             },
             else => {},
@@ -465,6 +453,18 @@ fn symbolFromIdent(ident: @import("base").Ident.Idx) Symbol {
     return Symbol.fromRaw(@as(u64, @as(u32, @bitCast(ident))));
 }
 
+fn testProcForSymbol(store: *LirExprStore, symbol: Symbol) !ir.LirProcId {
+    return store.addProc(.{
+        .name = symbol,
+        .args = LirPatternSpan.empty(),
+        .arg_layouts = LayoutIdxSpan.empty(),
+        .body = .none,
+        .ret_layout = .none,
+        .closure_data_layout = null,
+        .is_self_recursive = .not_self_recursive,
+    });
+}
+
 test "TailRecursionPass initialization" {
     const allocator = std.testing.allocator;
     var store = LirExprStore.init(allocator);
@@ -507,10 +507,10 @@ test "TailRecursionPass: tail call is transformed to jump" {
     // Build: f(arg)
     const arg_lookup = try store.addExpr(.{ .lookup = .{ .symbol = arg_sym, .layout_idx = i64_layout } }, Region.zero());
     const call_args = try store.addExprSpan(&.{arg_lookup});
-    const call_expr = try store.addExpr(.{ .call = .{
-        .callee = .{ .direct = target_sym },
+    const target_proc = try testProcForSymbol(&store, target_sym);
+    const call_expr = try store.addExpr(.{ .proc_call = .{
+        .proc = target_proc,
         .args = call_args,
-        .fn_layout = i64_layout,
         .ret_layout = i64_layout,
         .called_via = .apply,
     } }, Region.zero());
@@ -568,10 +568,10 @@ test "TailRecursionPass: non-tail call is not transformed" {
     // Build: f(arg)
     const arg_lookup = try store.addExpr(.{ .lookup = .{ .symbol = arg_sym, .layout_idx = i64_layout } }, Region.zero());
     const call_args = try store.addExprSpan(&.{arg_lookup});
-    const call_expr = try store.addExpr(.{ .call = .{
-        .callee = .{ .direct = target_sym },
+    const target_proc = try testProcForSymbol(&store, target_sym);
+    const call_expr = try store.addExpr(.{ .proc_call = .{
+        .proc = target_proc,
         .args = call_args,
-        .fn_layout = i64_layout,
         .ret_layout = i64_layout,
         .called_via = .apply,
     } }, Region.zero());
@@ -629,10 +629,10 @@ test "makeTailRecursive: end-to-end transforms tail-recursive body" {
     // Build: f(param)
     const arg_lookup = try store.addExpr(.{ .lookup = .{ .symbol = param_sym, .layout_idx = i64_layout } }, Region.zero());
     const call_args = try store.addExprSpan(&.{arg_lookup});
-    const call_expr = try store.addExpr(.{ .call = .{
-        .callee = .{ .direct = target_sym },
+    const target_proc = try testProcForSymbol(&store, target_sym);
+    const call_expr = try store.addExpr(.{ .proc_call = .{
+        .proc = target_proc,
         .args = call_args,
-        .fn_layout = i64_layout,
         .ret_layout = i64_layout,
         .called_via = .apply,
     } }, Region.zero());
@@ -698,10 +698,10 @@ test "TailRecursionPass: tail call inside switch_stmt branch is transformed" {
     // Build branch 0 body: let result = f(arg) in ret result
     const arg_lookup = try store.addExpr(.{ .lookup = .{ .symbol = arg_sym, .layout_idx = i64_layout } }, Region.zero());
     const call_args = try store.addExprSpan(&.{arg_lookup});
-    const call_expr = try store.addExpr(.{ .call = .{
-        .callee = .{ .direct = target_sym },
+    const target_proc = try testProcForSymbol(&store, target_sym);
+    const call_expr = try store.addExpr(.{ .proc_call = .{
+        .proc = target_proc,
         .args = call_args,
-        .fn_layout = i64_layout,
         .ret_layout = i64_layout,
         .called_via = .apply,
     } }, Region.zero());
@@ -779,10 +779,10 @@ test "TailRecursionPass: direct ret f(...) is transformed to jump" {
     // Build: f(arg)
     const arg_lookup = try store.addExpr(.{ .lookup = .{ .symbol = arg_sym, .layout_idx = i64_layout } }, Region.zero());
     const call_args = try store.addExprSpan(&.{arg_lookup});
-    const call_expr = try store.addExpr(.{ .call = .{
-        .callee = .{ .direct = target_sym },
+    const target_proc = try testProcForSymbol(&store, target_sym);
+    const call_expr = try store.addExpr(.{ .proc_call = .{
+        .proc = target_proc,
         .args = call_args,
-        .fn_layout = i64_layout,
         .ret_layout = i64_layout,
         .called_via = .apply,
     } }, Region.zero());
@@ -831,10 +831,10 @@ test "TailRecursionPass: call to non-target function is not detected as tail cal
     // Build: g(arg) — calling other_fn_sym, NOT target_sym
     const arg_lookup = try store.addExpr(.{ .lookup = .{ .symbol = arg_sym, .layout_idx = i64_layout } }, Region.zero());
     const call_args = try store.addExprSpan(&.{arg_lookup});
-    const call_expr = try store.addExpr(.{ .call = .{
-        .callee = .{ .direct = other_fn_sym },
+    const other_proc = try testProcForSymbol(&store, other_fn_sym);
+    const call_expr = try store.addExpr(.{ .proc_call = .{
+        .proc = other_proc,
         .args = call_args,
-        .fn_layout = i64_layout,
         .ret_layout = i64_layout,
         .called_via = .apply,
     } }, Region.zero());

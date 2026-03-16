@@ -906,7 +906,7 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
             try self.body.append(self.allocator, Op.i32_const);
             try WasmModule.leb128WriteI32(self.allocator, &self.body, 0);
         },
-        .call => |c| {
+        .proc_call => |c| {
             try self.generateCall(c);
         },
         .zero_arg_tag => |z| {
@@ -2131,7 +2131,7 @@ fn exprLayoutIdx(self: *Self, expr_id: LirExprId) layout.Idx {
         .if_then_else => |ite| ite.result_layout,
         .match_expr => |w| w.result_layout,
         .nominal => |nom| self.exprLayoutIdx(nom.backing_expr),
-        .call => |c| c.ret_layout,
+        .proc_call => |c| c.ret_layout,
         .struct_ => |s| s.struct_layout,
         .struct_access => |sa| sa.field_layout,
         .zero_arg_tag => |z| z.union_layout,
@@ -2189,7 +2189,7 @@ fn exprValType(self: *Self, expr_id: LirExprId) ValType {
         .match_expr => |w| self.resolveValType(w.result_layout),
         .nominal => |nom| self.exprValType(nom.backing_expr),
         .empty_list => .i32, // pointer to 12-byte RocList
-        .call => |c| self.resolveValType(c.ret_layout),
+        .proc_call => |c| self.resolveValType(c.ret_layout),
         .lambda => .i32, // function reference (index)
         .struct_ => .i32, // pointer to stack memory
         .struct_access => |sa| self.resolveValType(sa.field_layout),
@@ -2251,7 +2251,7 @@ fn isCompositeExpr(self: *const Self, expr_id: LirExprId) bool {
         .match_expr => |w| self.isCompositeLayout(w.result_layout),
         .lookup => |l| self.isCompositeLayout(l.layout_idx),
         .cell_load => |l| self.isCompositeLayout(l.layout_idx),
-        .call => |c| self.isCompositeLayout(c.ret_layout),
+        .proc_call => |c| self.isCompositeLayout(c.ret_layout),
         .struct_access => |sa| self.isCompositeLayout(sa.field_layout),
         .low_level => |ll| self.isCompositeLayout(ll.ret_layout),
         .dbg => |d| self.isCompositeLayout(d.result_layout),
@@ -2274,7 +2274,7 @@ fn isCompositeExpr(self: *const Self, expr_id: LirExprId) bool {
 fn exprNeedsCompositeCallStabilization(self: *const Self, expr_id: LirExprId) bool {
     const expr = self.store.getExpr(expr_id);
     return switch (expr) {
-        .call => true,
+        .proc_call => true,
         .nominal => |nom| self.exprNeedsCompositeCallStabilization(nom.backing_expr),
         .block => |b| self.exprNeedsCompositeCallStabilization(b.final_expr),
         .incref => |inc| self.exprNeedsCompositeCallStabilization(inc.value),
@@ -5632,48 +5632,13 @@ fn bindCFLetPattern(self: *Self, pat: LirPattern, value_expr: LirExprId) Allocat
 /// just handles explicit direct-call symbols plus the residual runtime
 /// function-value expression path. No closure-specific dispatch.
 fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
-    const func_idx = switch (c.callee) {
-        .direct => |symbol| blk: {
-            const sym_key: u64 = @bitCast(symbol);
-            if (self.registered_procs.get(sym_key)) |registered| break :blk registered;
-
-            const def_expr_id = self.store.getCallableDef(symbol) orelse {
-                if (std.debug.runtime_safety) {
-                    std.debug.panic("generateCall: unresolved direct callee symbol", .{});
-                }
-                unreachable;
-            };
-            const def_expr = self.store.getExpr(def_expr_id);
-            break :blk switch (def_expr) {
-                .lambda => |lambda| try self.compileLambda(def_expr_id, lambda),
-                .runtime_error => {
-                    try self.generateExpr(def_expr_id);
-                    return;
-                },
-                else => {
-                    if (std.debug.runtime_safety) std.debug.panic(
-                        "generateCall: unexpected callable def expr type '{s}' for direct call. " ++
-                            "Direct-call symbols must resolve through callable_defs to lambda/runtime_error leaves.",
-                        .{@tagName(def_expr)},
-                    );
-                    unreachable;
-                },
-            };
-        },
-        .expr => |callee_expr_id| blk: {
-            const callee_expr = self.store.getExpr(callee_expr_id);
-            switch (callee_expr) {
-                .lambda => |lambda| break :blk try self.compileLambda(callee_expr_id, lambda),
-                else => {
-                    if (std.debug.runtime_safety) std.debug.panic(
-                        "generateCall: unexpected callee expr type '{s}'. " ++
-                            "Direct calls must use explicit callee symbols or direct lambda exprs.",
-                        .{@tagName(callee_expr)},
-                    );
-                    unreachable;
-                },
-            }
-        },
+    const proc = self.store.getProc(c.proc);
+    const proc_key: u64 = @bitCast(proc.name);
+    const func_idx = self.registered_procs.get(proc_key) orelse {
+        if (std.debug.runtime_safety) {
+            std.debug.panic("generateCall: unresolved proc call target {d}", .{@intFromEnum(c.proc)});
+        }
+        unreachable;
     };
 
     try self.emitLocalGet(self.roc_ops_local);
