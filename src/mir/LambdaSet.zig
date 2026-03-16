@@ -28,7 +28,7 @@ pub const Idx = enum(u32) {
 
 /// One possible callable member of a lambda set.
 pub const Member = struct {
-    fn_symbol: MIR.Symbol,
+    proc: MIR.ProcId,
     closure_member: MIR.ClosureMemberId,
 };
 
@@ -60,8 +60,8 @@ pub const Store = struct {
     symbol_lambda_sets: std.AutoHashMapUnmanaged(u64, Idx),
     symbol_field_lambda_sets: std.AutoHashMapUnmanaged(u128, Idx),
     expr_lambda_sets: std.AutoHashMapUnmanaged(u32, Idx),
-    member_return_lambda_sets: std.AutoHashMapUnmanaged(u64, Idx),
-    member_return_field_lambda_sets: std.AutoHashMapUnmanaged(u128, Idx),
+    member_return_lambda_sets: std.AutoHashMapUnmanaged(u32, Idx),
+    member_return_field_lambda_sets: std.AutoHashMapUnmanaged(u64, Idx),
 
     /// Create an empty lambda-set store.
     pub fn init() Store {
@@ -129,24 +129,19 @@ pub const Store = struct {
     }
 
     /// Get the inferred return lambda set for a callable member, if one exists.
-    pub fn getMemberReturnLambdaSet(self: *const Store, fn_symbol: MIR.Symbol) ?Idx {
-        return self.member_return_lambda_sets.get(fn_symbol.raw());
+    pub fn getMemberReturnLambdaSet(self: *const Store, proc: MIR.ProcId) ?Idx {
+        return self.member_return_lambda_sets.get(procKey(proc));
     }
 
     /// Get the inferred return lambda set for one function-typed field of a member.
-    pub fn getMemberReturnFieldLambdaSet(self: *const Store, fn_symbol: MIR.Symbol, field_idx: u32) ?Idx {
-        return self.member_return_field_lambda_sets.get(structFieldKey(fn_symbol, field_idx));
+    pub fn getMemberReturnFieldLambdaSet(self: *const Store, proc: MIR.ProcId, field_idx: u32) ?Idx {
+        return self.member_return_field_lambda_sets.get(procFieldKey(proc, field_idx));
     }
 };
 
-/// Whether an expression evaluates directly to a lambda, ignoring block wrappers.
+/// Whether an expression evaluates directly to a proc-backed callable, ignoring wrappers.
 pub fn isLambdaExpr(mir_store: *const MIR.Store, expr_id: MIR.ExprId) bool {
-    const expr = mir_store.getExpr(expr_id);
-    return switch (expr) {
-        .block => |block| isLambdaExpr(mir_store, block.final_expr),
-        .lambda => true,
-        else => false,
-    };
+    return resolveDirectProcMember(mir_store, expr_id) != null;
 }
 
 /// Infer authoritative lambda sets for all reachable MIR expressions and symbols.
@@ -158,16 +153,13 @@ pub fn infer(
     var store = Store.init();
     errdefer store.deinit(allocator);
 
-    var lambda_expr_symbols = std.AutoHashMapUnmanaged(u32, MIR.Symbol).empty;
-    defer lambda_expr_symbols.deinit(allocator);
-
     try seedClosureMembers(allocator, mir_store, &store);
-    try seedSymbolDefs(allocator, mir_store, &store, &lambda_expr_symbols);
+    try seedValueDefs(allocator, mir_store, &store);
 
     var changed = true;
     while (changed) {
         changed = false;
-        changed = (try propagateExprAndBindingSets(allocator, mir_store, &store, &lambda_expr_symbols)) or changed;
+        changed = (try propagateExprAndBindingSets(allocator, mir_store, &store)) or changed;
         changed = (try propagateMatchPatternBindings(allocator, mir_store, &store)) or changed;
         changed = (try propagateCallArgs(allocator, mir_store, &store)) or changed;
         changed = (try propagateCapturedFunctionLocals(allocator, mir_store, &store)) or changed;
@@ -187,31 +179,20 @@ fn seedClosureMembers(allocator: Allocator, mir_store: *const MIR.Store, store: 
     }
 }
 
-fn seedSymbolDefs(
+fn seedValueDefs(
     allocator: Allocator,
     mir_store: *const MIR.Store,
     store: *Store,
-    lambda_expr_symbols: *std.AutoHashMapUnmanaged(u32, MIR.Symbol),
 ) Allocator.Error!void {
     var it = mir_store.value_defs.iterator();
     while (it.next()) |entry| {
         const symbol = MIR.Symbol.fromRaw(entry.key_ptr.*);
         const expr_id = entry.value_ptr.*;
 
-        if (mir_store.getExprClosureMember(expr_id)) |closure_member| {
-            const member = memberFromClosureMember(mir_store, closure_member);
+        if (resolveDirectProcMember(mir_store, expr_id)) |member| {
             const singleton = try singletonLambdaSet(allocator, store, member);
             try store.symbol_lambda_sets.put(allocator, symbol.raw(), singleton);
             _ = try mergeExprLambdaSet(allocator, store, expr_id, singleton);
-            continue;
-        }
-
-        if (isLambdaExpr(mir_store, expr_id)) {
-            const member = plainLambdaMember(symbol);
-            const singleton = try singletonLambdaSet(allocator, store, member);
-            try store.symbol_lambda_sets.put(allocator, symbol.raw(), singleton);
-            try store.expr_lambda_sets.put(allocator, @intFromEnum(expr_id), singleton);
-            try lambda_expr_symbols.put(allocator, @intFromEnum(expr_id), symbol);
         }
     }
 }
@@ -220,7 +201,6 @@ fn propagateExprAndBindingSets(
     allocator: Allocator,
     mir_store: *const MIR.Store,
     store: *Store,
-    lambda_expr_symbols: *const std.AutoHashMapUnmanaged(u32, MIR.Symbol),
 ) Allocator.Error!bool {
     var changed = false;
     var expr_index: u32 = 0;
@@ -230,7 +210,6 @@ fn propagateExprAndBindingSets(
             allocator,
             mir_store,
             store,
-            lambda_expr_symbols,
             expr_id,
         )) or changed;
     }
@@ -241,13 +220,12 @@ fn propagateExprAndBindingSetsForExpr(
     allocator: Allocator,
     mir_store: *const MIR.Store,
     store: *Store,
-    lambda_expr_symbols: *const std.AutoHashMapUnmanaged(u32, MIR.Symbol),
     expr_id: MIR.ExprId,
 ) Allocator.Error!bool {
     var changed = false;
 
-    if (lambda_expr_symbols.get(@intFromEnum(expr_id))) |symbol| {
-        const singleton = try singletonLambdaSet(allocator, store, plainLambdaMember(symbol));
+    if (resolveDirectProcMember(mir_store, expr_id)) |member| {
+        const singleton = try singletonLambdaSet(allocator, store, member);
         changed = (try mergeExprLambdaSet(allocator, store, expr_id, singleton)) or changed;
     }
 
@@ -298,7 +276,7 @@ fn propagateExprAndBindingSetsForExpr(
                 var merged: std.ArrayListUnmanaged(Member) = .empty;
                 defer merged.deinit(allocator);
                 for (store.getMembers(store.getLambdaSet(callee_ls).members)) |member| {
-                    if (store.getMemberReturnLambdaSet(member.fn_symbol)) |ret_ls| {
+                    if (store.getMemberReturnLambdaSet(member.proc)) |ret_ls| {
                         try appendMembersDedup(allocator, &merged, store.getMembers(store.getLambdaSet(ret_ls).members));
                     }
                 }
@@ -503,21 +481,17 @@ fn propagateCapturedFunctionLocals(allocator: Allocator, mir_store: *const MIR.S
 fn propagateMemberReturnSets(allocator: Allocator, mir_store: *const MIR.Store, store: *Store) Allocator.Error!bool {
     var changed = false;
 
-    var it = mir_store.value_defs.iterator();
-    while (it.next()) |entry| {
-        const fn_symbol = MIR.Symbol.fromRaw(entry.key_ptr.*);
-        const def_expr_id = entry.value_ptr.*;
-        if (resolveToLambdaParams(mir_store, def_expr_id) == null) continue;
-        const body = resolveToLambdaBody(mir_store, def_expr_id) orelse continue;
-        if (store.getExprLambdaSet(body)) |body_ls| {
-            changed = (try mergeMemberReturnLambdaSet(allocator, store, fn_symbol, body_ls)) or changed;
+    for (mir_store.getProcs(), 0..) |proc, proc_idx| {
+        const proc_id: MIR.ProcId = @enumFromInt(proc_idx);
+        if (store.getExprLambdaSet(proc.body)) |body_ls| {
+            changed = (try mergeMemberReturnLambdaSet(allocator, store, proc_id, body_ls)) or changed;
         }
         changed = (try propagateReturnFieldLambdaSetsToMember(
             allocator,
             mir_store,
             store,
-            body,
-            fn_symbol,
+            proc.body,
+            proc_id,
         )) or changed;
     }
 
@@ -525,26 +499,8 @@ fn propagateMemberReturnSets(allocator: Allocator, mir_store: *const MIR.Store, 
 }
 
 fn paramsForMember(mir_store: *const MIR.Store, member: Member) ?MIR.PatternSpan {
-    const def_expr_id = mir_store.getValueDef(member.fn_symbol) orelse return null;
-    return resolveToLambdaParams(mir_store, def_expr_id);
-}
-
-fn resolveToLambdaParams(mir_store: *const MIR.Store, expr_id: MIR.ExprId) ?MIR.PatternSpan {
-    const expr = mir_store.getExpr(expr_id);
-    return switch (expr) {
-        .lambda => |lam| lam.params,
-        .block => |block| resolveToLambdaParams(mir_store, block.final_expr),
-        else => null,
-    };
-}
-
-fn resolveToLambdaBody(mir_store: *const MIR.Store, expr_id: MIR.ExprId) ?MIR.ExprId {
-    const expr = mir_store.getExpr(expr_id);
-    return switch (expr) {
-        .lambda => |lam| lam.body,
-        .block => |block| resolveToLambdaBody(mir_store, block.final_expr),
-        else => null,
-    };
+    if (member.proc.isNone()) return null;
+    return mir_store.getProc(member.proc).params;
 }
 
 fn resolveStructFieldLambdaSet(
@@ -652,9 +608,9 @@ fn patternBoundSymbol(mir_store: *const MIR.Store, pat_id: MIR.PatternId) ?MIR.S
     };
 }
 
-fn plainLambdaMember(symbol: MIR.Symbol) Member {
+fn plainProcMember(proc: MIR.ProcId) Member {
     return .{
-        .fn_symbol = symbol,
+        .proc = proc,
         .closure_member = .none,
     };
 }
@@ -662,7 +618,7 @@ fn plainLambdaMember(symbol: MIR.Symbol) Member {
 fn memberFromClosureMember(mir_store: *const MIR.Store, closure_member_id: MIR.ClosureMemberId) Member {
     const closure_member = mir_store.getClosureMember(closure_member_id);
     return .{
-        .fn_symbol = closure_member.fn_symbol,
+        .proc = closure_member.proc,
         .closure_member = closure_member_id,
     };
 }
@@ -685,7 +641,7 @@ fn appendMembersDedup(allocator: Allocator, dest: *std.ArrayListUnmanaged(Member
 
 fn containsMember(existing: []const Member, candidate: Member) bool {
     for (existing) |member| {
-        if (member.fn_symbol.eql(candidate.fn_symbol)) return true;
+        if (member.proc == candidate.proc) return true;
     }
     return false;
 }
@@ -739,7 +695,7 @@ fn propagateReturnFieldLambdaSetsToMember(
     mir_store: *const MIR.Store,
     store: *Store,
     expr_id: MIR.ExprId,
-    fn_symbol: MIR.Symbol,
+    proc: MIR.ProcId,
 ) Allocator.Error!bool {
     const field_count = structFieldArityForExpr(mir_store, expr_id) orelse return false;
 
@@ -747,7 +703,7 @@ fn propagateReturnFieldLambdaSetsToMember(
     var field_idx: u32 = 0;
     while (field_idx < field_count) : (field_idx += 1) {
         const field_ls = resolveStructFieldLambdaSet(mir_store, store, expr_id, field_idx) orelse continue;
-        changed = (try mergeMemberReturnFieldLambdaSet(allocator, store, fn_symbol, field_idx, field_ls)) or changed;
+        changed = (try mergeMemberReturnFieldLambdaSet(allocator, store, proc, field_idx, field_ls)) or changed;
     }
 
     return changed;
@@ -770,7 +726,7 @@ fn propagateCallReturnFieldLambdaSetsToSymbol(
     for (store.getMembers(store.getLambdaSet(callee_ls).members)) |member| {
         var field_idx: u32 = 0;
         while (field_idx < field_count) : (field_idx += 1) {
-            const field_ls = store.getMemberReturnFieldLambdaSet(member.fn_symbol, field_idx) orelse continue;
+            const field_ls = store.getMemberReturnFieldLambdaSet(member.proc, field_idx) orelse continue;
             changed = (try mergeIntoSymbolField(allocator, store, symbol, field_idx, field_ls)) or changed;
         }
     }
@@ -788,23 +744,24 @@ fn mergeExprLambdaSet(allocator: Allocator, store: *Store, expr_id: MIR.ExprId, 
     return mergeLambdaSetEntries(allocator, store, &store.expr_lambda_sets, expr_key, existing.?, new_ls_idx);
 }
 
-fn mergeMemberReturnLambdaSet(allocator: Allocator, store: *Store, fn_symbol: MIR.Symbol, new_ls_idx: Idx) Allocator.Error!bool {
-    const existing = store.member_return_lambda_sets.get(fn_symbol.raw());
+fn mergeMemberReturnLambdaSet(allocator: Allocator, store: *Store, proc: MIR.ProcId, new_ls_idx: Idx) Allocator.Error!bool {
+    const key = procKey(proc);
+    const existing = store.member_return_lambda_sets.get(key);
     if (existing == null) {
-        try store.member_return_lambda_sets.put(allocator, fn_symbol.raw(), new_ls_idx);
+        try store.member_return_lambda_sets.put(allocator, key, new_ls_idx);
         return true;
     }
-    return mergeLambdaSetEntries(allocator, store, &store.member_return_lambda_sets, fn_symbol.raw(), existing.?, new_ls_idx);
+    return mergeLambdaSetEntries(allocator, store, &store.member_return_lambda_sets, key, existing.?, new_ls_idx);
 }
 
 fn mergeMemberReturnFieldLambdaSet(
     allocator: Allocator,
     store: *Store,
-    fn_symbol: MIR.Symbol,
+    proc: MIR.ProcId,
     field_idx: u32,
     new_ls_idx: Idx,
 ) Allocator.Error!bool {
-    const key = structFieldKey(fn_symbol, field_idx);
+    const key = procFieldKey(proc, field_idx);
     const existing = store.member_return_field_lambda_sets.get(key);
     if (existing == null) {
         try store.member_return_field_lambda_sets.put(allocator, key, new_ls_idx);
@@ -835,4 +792,32 @@ fn mergeLambdaSetEntries(
     const merged_ls = try internLambdaSet(allocator, store, merged.items);
     try map.put(allocator, key, merged_ls);
     return true;
+}
+
+fn resolveDirectProcMember(mir_store: *const MIR.Store, expr_id: MIR.ExprId) ?Member {
+    if (mir_store.getExprClosureMember(expr_id)) |closure_member_id| {
+        return memberFromClosureMember(mir_store, closure_member_id);
+    }
+
+    return switch (mir_store.getExpr(expr_id)) {
+        .proc_ref => |proc| plainProcMember(proc),
+        .closure_make => |closure| .{
+            .proc = closure.proc,
+            .closure_member = .none,
+        },
+        .block => |block| resolveDirectProcMember(mir_store, block.final_expr),
+        .hosted => |hosted| resolveDirectProcMember(mir_store, hosted.body),
+        .dbg_expr => |dbg_expr| resolveDirectProcMember(mir_store, dbg_expr.expr),
+        .expect => |expect| resolveDirectProcMember(mir_store, expect.body),
+        .return_expr => |ret| resolveDirectProcMember(mir_store, ret.expr),
+        else => null,
+    };
+}
+
+fn procKey(proc: MIR.ProcId) u32 {
+    return @intFromEnum(proc);
+}
+
+fn procFieldKey(proc: MIR.ProcId, field_idx: u32) u64 {
+    return (@as(u64, procKey(proc)) << 32) | @as(u64, field_idx);
 }
