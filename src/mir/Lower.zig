@@ -3404,6 +3404,7 @@ fn lowerLambda(self: *Self, module_env: *const ModuleEnv, lambda: CIR.Expr.Lambd
         else => unreachable,
     };
     const proc_id = try self.store.addProc(self.allocator, .{
+        .fn_monotype = monotype,
         .params = params,
         .body = body,
         .ret_monotype = ret_monotype,
@@ -3581,6 +3582,7 @@ fn lowerClosure(self: *Self, module_env: *const ModuleEnv, closure: CIR.Expr.Clo
     const capture_binding_span = try self.store.addCaptureBindings(self.allocator, self.scratch_capture_bindings.sliceFromStart(binding_top));
 
     const proc_id = try self.store.addProc(self.allocator, .{
+        .fn_monotype = monotype,
         .params = all_params,
         .body = lifted_body,
         .ret_monotype = orig_func.ret,

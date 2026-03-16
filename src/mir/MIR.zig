@@ -300,6 +300,7 @@ pub const ProcRecursion = enum {
 /// Proc metadata for proc-backed callable identity.
 /// Callable bodies will move here instead of being discovered through value defs.
 pub const Proc = struct {
+    fn_monotype: Monotype.Idx,
     params: PatternSpan,
     body: ExprId,
     ret_monotype: Monotype.Idx,
