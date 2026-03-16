@@ -952,7 +952,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
     defer trace.end();
 
     switch (args.backend) {
-        .dev => return rocRunDevShim(ctx, args),
+        .dev, .llvm => return rocRunDevShim(ctx, args),
         .interpreter => {},
     }
 
@@ -3937,7 +3937,7 @@ fn rocBuild(ctx: *CliContext, args: cli_args.BuildArgs) !void {
 
     // Select build path based on backend
     switch (args.backend) {
-        .dev => {
+        .dev, .llvm => {
             // Use native code generation backend
             try rocBuildNative(ctx, args);
         },
@@ -5553,7 +5553,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
 
     // Run tests using the selected backend
     switch (args.backend) {
-        .dev => {
+        .dev, .llvm => {
             // Run tests using dev backend (native code generation)
             var dev_eval = eval.DevEvaluator.init(ctx.gpa, null) catch |err| {
                 try stderr.print("Failed to create dev evaluator: {}\n", .{err});
