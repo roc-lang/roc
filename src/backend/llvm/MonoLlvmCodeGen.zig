@@ -181,11 +181,6 @@ pub const MonoLlvmCodeGen = struct {
     /// Needed because symbol_values only stores LlvmBuilder.Value (loses dispatch info).
     closure_bindings: std.AutoHashMap(u64, ClosureMeta),
 
-    /// Debug breadcrumbs for pinpointing the last expression/op seen before
-    /// a `CompilationFailed` bubbles out of codegen.
-    last_expr_id: LirExprId = .none,
-    last_low_level_name: []const u8 = "none",
-
     const LoopVarAlloca = struct {
         alloca_ptr: LlvmBuilder.Value,
         elem_type: LlvmBuilder.Type,
@@ -295,8 +290,6 @@ pub const MonoLlvmCodeGen = struct {
         self.compiled_lambdas.clearRetainingCapacity();
         self.closure_bindings.clearRetainingCapacity();
         self.builtin_functions.clearRetainingCapacity();
-        self.last_expr_id = .none;
-        self.last_low_level_name = "none";
     }
 
     /// Declare a builtin function from builtins.bc as an external LLVM function.
@@ -408,19 +401,7 @@ pub const MonoLlvmCodeGen = struct {
         }
 
         // Generate LLVM IR for the expression
-        const value = self.generateExpr(expr_id) catch |err| {
-            if (builtin.mode == .Debug and err == error.CompilationFailed) {
-                std.log.err(
-                    "LLVM codegen failed near expr {d} ({s}), last low-level op={s}",
-                    .{
-                        @intFromEnum(self.last_expr_id),
-                        @tagName(self.store.getExpr(self.last_expr_id)),
-                        self.last_low_level_name,
-                    },
-                );
-            }
-            return err;
-        };
+        const value = try self.generateExpr(expr_id);
 
         // Store the result to the output pointer.
         // Some generators (e.g., string literals) write directly to out_ptr and
@@ -920,7 +901,6 @@ pub const MonoLlvmCodeGen = struct {
 
     /// Generate LLVM IR for an expression
     fn generateExpr(self: *MonoLlvmCodeGen, expr_id: LirExprId) Error!LlvmBuilder.Value {
-        self.last_expr_id = expr_id;
         const expr = self.store.getExpr(expr_id);
 
         return switch (expr) {
@@ -1825,13 +1805,6 @@ pub const MonoLlvmCodeGen = struct {
             const wip = self.wip orelse return error.CompilationFailed;
             const alignment = LlvmBuilder.Alignment.fromByteUnits(@intCast(@max(llvmTypeByteSize(lva.elem_type), 1)));
             return wip.load(.normal, lva.elem_type, lva.alloca_ptr, alignment, "") catch return error.CompilationFailed;
-        }
-
-        if (builtin.mode == .Debug) {
-            std.log.err(
-                "cell_load miss: layout={d} has_symbol_value={any}",
-                .{ @intFromEnum(layout_idx), self.symbol_values.contains(key) },
-            );
         }
 
         return self.generateLookup(cell, layout_idx);
@@ -3161,76 +3134,24 @@ pub const MonoLlvmCodeGen = struct {
         const wip = self.wip orelse return error.CompilationFailed;
         const builder = self.builder orelse return error.CompilationFailed;
         const args = self.store.getExprSpan(ll.args);
-        self.last_low_level_name = @tagName(ll.op);
-
         switch (ll.op) {
             // --- Numeric arithmetic ---
             .num_plus => {
                 std.debug.assert(args.len >= 2);
                 var lhs = try self.generateExpr(args[0]);
                 var rhs = try self.generateExpr(args[1]);
-                const lhs_layout = self.getExprResultLayout(args[0]);
-                const rhs_layout = self.getExprResultLayout(args[1]);
                 if (ll.ret_layout == .dec) {
-                    lhs = self.coerceValueToLayout(lhs, ll.ret_layout) catch |err| {
-                        if (builtin.mode == .Debug) {
-                            std.log.err(
-                                "num_plus lhs coerce failed: ret_layout={d} lhs_expr={s} lhs_layout={any} rhs_expr={s} rhs_layout={any}",
-                                .{ @intFromEnum(ll.ret_layout), @tagName(self.store.getExpr(args[0])), lhs_layout, @tagName(self.store.getExpr(args[1])), rhs_layout },
-                            );
-                        }
-                        return err;
-                    };
-                    rhs = self.coerceValueToLayout(rhs, ll.ret_layout) catch |err| {
-                        if (builtin.mode == .Debug) {
-                            std.log.err(
-                                "num_plus rhs coerce failed: ret_layout={d} lhs_expr={s} lhs_layout={any} rhs_expr={s} rhs_layout={any}",
-                                .{ @intFromEnum(ll.ret_layout), @tagName(self.store.getExpr(args[0])), lhs_layout, @tagName(self.store.getExpr(args[1])), rhs_layout },
-                            );
-                        }
-                        return err;
-                    };
+                    lhs = try self.coerceValueToLayout(lhs, ll.ret_layout);
+                    rhs = try self.coerceValueToLayout(rhs, ll.ret_layout);
                     return wip.bin(.add, lhs, rhs, "") catch return error.CompilationFailed;
                 }
                 const is_float = isFloatLayout(ll.ret_layout);
-                lhs = self.coerceValueToLayout(lhs, ll.ret_layout) catch |err| {
-                    if (builtin.mode == .Debug) {
-                        std.log.err(
-                            "num_plus lhs coerce failed: ret_layout={d} lhs_expr={s} lhs_layout={any} rhs_expr={s} rhs_layout={any}",
-                            .{ @intFromEnum(ll.ret_layout), @tagName(self.store.getExpr(args[0])), lhs_layout, @tagName(self.store.getExpr(args[1])), rhs_layout },
-                        );
-                    }
-                    return err;
-                };
-                rhs = self.coerceValueToLayout(rhs, ll.ret_layout) catch |err| {
-                    if (builtin.mode == .Debug) {
-                        std.log.err(
-                            "num_plus rhs coerce failed: ret_layout={d} lhs_expr={s} lhs_layout={any} rhs_expr={s} rhs_layout={any}",
-                            .{ @intFromEnum(ll.ret_layout), @tagName(self.store.getExpr(args[0])), lhs_layout, @tagName(self.store.getExpr(args[1])), rhs_layout },
-                        );
-                    }
-                    return err;
-                };
+                lhs = try self.coerceValueToLayout(lhs, ll.ret_layout);
+                rhs = try self.coerceValueToLayout(rhs, ll.ret_layout);
                 return if (is_float)
-                    (wip.bin(.fadd, lhs, rhs, "") catch |err| {
-                        if (builtin.mode == .Debug) {
-                            std.log.err(
-                                "num_plus fadd failed: ret_layout={d} lhs_expr={s} lhs_layout={any} rhs_expr={s} rhs_layout={any}",
-                                .{ @intFromEnum(ll.ret_layout), @tagName(self.store.getExpr(args[0])), lhs_layout, @tagName(self.store.getExpr(args[1])), rhs_layout },
-                            );
-                        }
-                        return err;
-                    })
+                    wip.bin(.fadd, lhs, rhs, "") catch return error.CompilationFailed
                 else
-                    (wip.bin(.add, lhs, rhs, "") catch |err| {
-                        if (builtin.mode == .Debug) {
-                            std.log.err(
-                                "num_plus add failed: ret_layout={d} lhs_expr={s} lhs_layout={any} rhs_expr={s} rhs_layout={any}",
-                                .{ @intFromEnum(ll.ret_layout), @tagName(self.store.getExpr(args[0])), lhs_layout, @tagName(self.store.getExpr(args[1])), rhs_layout },
-                            );
-                        }
-                        return err;
-                    });
+                    wip.bin(.add, lhs, rhs, "") catch return error.CompilationFailed;
             },
             .num_minus => {
                 std.debug.assert(args.len >= 2);
@@ -5972,44 +5893,12 @@ pub const MonoLlvmCodeGen = struct {
                     try self.bindPattern(b.pattern, val.value);
                 },
                 .cell_init => |cell| {
-                    const value = (self.generateExprAsValue(cell.expr) catch |err| {
-                        if (builtin.mode == .Debug) {
-                            std.log.err(
-                                "cell_init expr failed: layout={d} expr={s}",
-                                .{ @intFromEnum(cell.layout_idx), @tagName(self.store.getExpr(cell.expr)) },
-                            );
-                        }
-                        return err;
-                    }).value;
-                    self.initializeCell(cell.cell, cell.layout_idx, value) catch |err| {
-                        if (builtin.mode == .Debug) {
-                            std.log.err(
-                                "cell_init store failed: layout={d} expr={s}",
-                                .{ @intFromEnum(cell.layout_idx), @tagName(self.store.getExpr(cell.expr)) },
-                            );
-                        }
-                        return err;
-                    };
+                    const value = (try self.generateExprAsValue(cell.expr)).value;
+                    try self.initializeCell(cell.cell, cell.layout_idx, value);
                 },
                 .cell_store => |cell| {
-                    const value = (self.generateExprAsValue(cell.expr) catch |err| {
-                        if (builtin.mode == .Debug) {
-                            std.log.err(
-                                "cell_store expr failed: layout={d} expr={s}",
-                                .{ @intFromEnum(cell.layout_idx), @tagName(self.store.getExpr(cell.expr)) },
-                            );
-                        }
-                        return err;
-                    }).value;
-                    self.storeCell(cell.cell, cell.layout_idx, value) catch |err| {
-                        if (builtin.mode == .Debug) {
-                            std.log.err(
-                                "cell_store write failed: layout={d} expr={s}",
-                                .{ @intFromEnum(cell.layout_idx), @tagName(self.store.getExpr(cell.expr)) },
-                            );
-                        }
-                        return err;
-                    };
+                    const value = (try self.generateExprAsValue(cell.expr)).value;
+                    try self.storeCell(cell.cell, cell.layout_idx, value);
                 },
                 .cell_drop => |cell| try self.dropCell(cell.cell, cell.layout_idx),
             }
@@ -6054,24 +5943,8 @@ pub const MonoLlvmCodeGen = struct {
             try self.initializeCell(cell, layout_idx, value);
             return;
         };
-        const normalized = self.coerceValueToLayout(value, layout_idx) catch |err| {
-            if (builtin.mode == .Debug) {
-                std.log.err(
-                    "storeCell coerce failed: layout={d} cell_type_raw=0x{x}",
-                    .{ @intFromEnum(layout_idx), @intFromEnum(cell_alloca.elem_type) },
-                );
-            }
-            return err;
-        };
-        _ = wip.store(.normal, normalized, cell_alloca.alloca_ptr, self.alignmentForLayout(layout_idx)) catch |err| {
-            if (builtin.mode == .Debug) {
-                std.log.err(
-                    "storeCell store failed: layout={d} value_type_raw=0x{x} cell_type_raw=0x{x}",
-                    .{ @intFromEnum(layout_idx), @intFromEnum(normalized.typeOfWip(wip)), @intFromEnum(cell_alloca.elem_type) },
-                );
-            }
-            return err;
-        };
+        const normalized = try self.coerceValueToLayout(value, layout_idx);
+        _ = wip.store(.normal, normalized, cell_alloca.alloca_ptr, self.alignmentForLayout(layout_idx)) catch return error.CompilationFailed;
         self.symbol_values.put(key, normalized) catch return error.OutOfMemory;
     }
 
@@ -6290,6 +6163,27 @@ pub const MonoLlvmCodeGen = struct {
             self.symbol_values = outer_symbols_1;
         }
 
+        const outer_loop_var_allocas_1 = self.loop_var_allocas;
+        self.loop_var_allocas = std.AutoHashMap(u64, LoopVarAlloca).init(self.allocator);
+        defer {
+            self.loop_var_allocas.deinit();
+            self.loop_var_allocas = outer_loop_var_allocas_1;
+        }
+
+        const outer_loop_exit_blocks_1 = self.loop_exit_blocks;
+        self.loop_exit_blocks = .empty;
+        defer {
+            self.loop_exit_blocks.deinit(self.allocator);
+            self.loop_exit_blocks = outer_loop_exit_blocks_1;
+        }
+
+        const outer_cell_allocas_1 = self.cell_allocas;
+        self.cell_allocas = std.AutoHashMap(u64, LoopVarAlloca).init(self.allocator);
+        defer {
+            self.cell_allocas.deinit();
+            self.cell_allocas = outer_cell_allocas_1;
+        }
+
         // Save and clear closure_bindings (they belong to outer scope)
         const outer_closure_bindings_1 = self.closure_bindings;
         self.closure_bindings = std.AutoHashMap(u64, ClosureMeta).init(self.allocator);
@@ -6312,8 +6206,12 @@ pub const MonoLlvmCodeGen = struct {
 
         // Bind user params from function args 0..N-1
         for (params, 0..) |param_id, i| {
+            if (i >= param_types.items.len) {
+                std.debug.panic("compileLambdaAsFunc param index out of range: idx={d} total={d}", .{ i, param_types.items.len });
+            }
             const arg_val = lambda_wip_1.arg(@intCast(i));
             try self.bindPattern(param_id, arg_val);
+            try self.materializeMutablePatternCells(param_id);
         }
 
         // If closure_data parameter exists, extract captures and bind them
@@ -6324,6 +6222,9 @@ pub const MonoLlvmCodeGen = struct {
 
         // Set roc_ops_arg to the hidden last parameter
         const roc_ops_idx: u32 = @intCast(param_types.items.len - 1);
+        if (roc_ops_idx >= param_types.items.len) {
+            std.debug.panic("compileLambdaAsFunc roc_ops index out of range: idx={d} total={d}", .{ roc_ops_idx, param_types.items.len });
+        }
         self.roc_ops_arg = lambda_wip_1.arg(roc_ops_idx);
 
         // Generate the body and coerce it to the lambda's declared return layout.
@@ -6409,6 +6310,27 @@ pub const MonoLlvmCodeGen = struct {
             self.symbol_values = outer_symbols_2;
         }
 
+        const outer_loop_var_allocas_2 = self.loop_var_allocas;
+        self.loop_var_allocas = std.AutoHashMap(u64, LoopVarAlloca).init(self.allocator);
+        defer {
+            self.loop_var_allocas.deinit();
+            self.loop_var_allocas = outer_loop_var_allocas_2;
+        }
+
+        const outer_loop_exit_blocks_2 = self.loop_exit_blocks;
+        self.loop_exit_blocks = .empty;
+        defer {
+            self.loop_exit_blocks.deinit(self.allocator);
+            self.loop_exit_blocks = outer_loop_exit_blocks_2;
+        }
+
+        const outer_cell_allocas_2 = self.cell_allocas;
+        self.cell_allocas = std.AutoHashMap(u64, LoopVarAlloca).init(self.allocator);
+        defer {
+            self.cell_allocas.deinit();
+            self.cell_allocas = outer_cell_allocas_2;
+        }
+
         const outer_closure_bindings_2 = self.closure_bindings;
         self.closure_bindings = std.AutoHashMap(u64, ClosureMeta).init(self.allocator);
         defer {
@@ -6429,17 +6351,27 @@ pub const MonoLlvmCodeGen = struct {
 
         // Bind user params
         for (params, 0..) |param_id, i| {
+            if (i >= param_types.items.len) {
+                std.debug.panic("compileLambdaWithCaptures param index out of range: idx={d} total={d}", .{ i, param_types.items.len });
+            }
             const arg_val = lambda_wip.arg(@intCast(i));
             try self.bindPattern(param_id, arg_val);
+            try self.materializeMutablePatternCells(param_id);
         }
 
         // Extract captures from the closure data parameter
         const closure_arg_idx: u32 = @intCast(params.len);
+        if (closure_arg_idx >= param_types.items.len) {
+            std.debug.panic("compileLambdaWithCaptures closure index out of range: idx={d} total={d}", .{ closure_arg_idx, param_types.items.len });
+        }
         const closure_data_val = lambda_wip.arg(closure_arg_idx);
         try self.bindCapturesFromClosureData(closure_data_val, captures, representation);
 
         // Set roc_ops
         const roc_ops_idx: u32 = @intCast(param_types.items.len - 1);
+        if (roc_ops_idx >= param_types.items.len) {
+            std.debug.panic("compileLambdaWithCaptures roc_ops index out of range: idx={d} total={d}", .{ roc_ops_idx, param_types.items.len });
+        }
         self.roc_ops_arg = lambda_wip.arg(roc_ops_idx);
 
         // Generate the body and coerce it to the lambda's declared return layout.
@@ -6766,9 +6698,21 @@ pub const MonoLlvmCodeGen = struct {
 
         // Append closure data if present
         if (closure_data) |cd| {
-            const closure_param_idx = arg_values.items.len;
-            const coerced_closure = try self.coerceValueToType(cd, expected_params_copy[closure_param_idx], null);
-            arg_values.append(self.allocator, coerced_closure) catch return error.OutOfMemory;
+            if (expected_params_copy.len == args.len + 1) {
+                // Some runtime closure values are carried through call sites even though
+                // the compiled function ABI is direct-call (user args + roc_ops only).
+                // In that case there is no closure-data parameter slot to populate.
+            } else {
+                const closure_param_idx = arg_values.items.len;
+                if (closure_param_idx >= expected_params_copy.len) {
+                    std.debug.panic(
+                        "callCompiledFuncWithClosureData closure index out of range: idx={d} expected={d} user_args={d}",
+                        .{ closure_param_idx, expected_params_copy.len, args.len },
+                    );
+                }
+                const coerced_closure = try self.coerceValueToType(cd, expected_params_copy[closure_param_idx], null);
+                arg_values.append(self.allocator, coerced_closure) catch return error.OutOfMemory;
+            }
         }
 
         // Append hidden roc_ops parameter
@@ -7057,6 +7001,27 @@ pub const MonoLlvmCodeGen = struct {
             self.symbol_values = outer_symbols;
         }
 
+        const outer_loop_var_allocas = self.loop_var_allocas;
+        self.loop_var_allocas = std.AutoHashMap(u64, LoopVarAlloca).init(self.allocator);
+        defer {
+            self.loop_var_allocas.deinit();
+            self.loop_var_allocas = outer_loop_var_allocas;
+        }
+
+        const outer_loop_exit_blocks = self.loop_exit_blocks;
+        self.loop_exit_blocks = .empty;
+        defer {
+            self.loop_exit_blocks.deinit(self.allocator);
+            self.loop_exit_blocks = outer_loop_exit_blocks;
+        }
+
+        const outer_cell_allocas = self.cell_allocas;
+        self.cell_allocas = std.AutoHashMap(u64, LoopVarAlloca).init(self.allocator);
+        defer {
+            self.cell_allocas.deinit();
+            self.cell_allocas = outer_cell_allocas;
+        }
+
         const outer_closure_bindings = self.closure_bindings;
         self.closure_bindings = std.AutoHashMap(u64, ClosureMeta).init(self.allocator);
         defer {
@@ -7248,6 +7213,46 @@ pub const MonoLlvmCodeGen = struct {
                     const expected_len = builder.intValue(.i64, @as(u64, @intCast(prefix_patterns.len))) catch return error.OutOfMemory;
                     const rest_val = try self.buildRestSublist(data_ptr, list_len, expected_len, elem_size);
                     try self.bindPattern(list_pat.rest, rest_val);
+                }
+            },
+            else => {},
+        }
+    }
+
+    fn materializeMutablePatternCells(self: *MonoLlvmCodeGen, pattern_id: LirPatternId) Error!void {
+        const pattern = self.store.getPattern(pattern_id);
+        switch (pattern) {
+            .bind => |bind| {
+                if (!bind.reassignable) return;
+                const key: u64 = @bitCast(bind.symbol);
+                if (self.cell_allocas.contains(key)) return;
+                const current_value = self.symbol_values.get(key) orelse return error.CompilationFailed;
+                try self.initializeCell(bind.symbol, bind.layout_idx, current_value);
+            },
+            .as_pattern => |as_pat| {
+                if (as_pat.reassignable) {
+                    const key: u64 = @bitCast(as_pat.symbol);
+                    if (!self.cell_allocas.contains(key)) {
+                        const current_value = self.symbol_values.get(key) orelse return error.CompilationFailed;
+                        try self.initializeCell(as_pat.symbol, as_pat.layout_idx, current_value);
+                    }
+                }
+                try self.materializeMutablePatternCells(as_pat.inner);
+            },
+            .struct_ => |struct_pat| {
+                for (self.store.getPatternSpan(struct_pat.fields)) |field_pat| {
+                    try self.materializeMutablePatternCells(field_pat);
+                }
+            },
+            .list => |list_pat| {
+                for (self.store.getPatternSpan(list_pat.prefix)) |prefix_pat| {
+                    try self.materializeMutablePatternCells(prefix_pat);
+                }
+                if (!list_pat.rest.isNone()) {
+                    try self.materializeMutablePatternCells(list_pat.rest);
+                }
+                for (self.store.getPatternSpan(list_pat.suffix)) |suffix_pat| {
+                    try self.materializeMutablePatternCells(suffix_pat);
                 }
             },
             else => {},
