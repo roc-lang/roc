@@ -125,6 +125,7 @@ pub const ProcInst = struct {
     template: ProcTemplateId,
     subst: TypeSubstId,
     fn_monotype: Monotype.Idx,
+    fn_monotype_module_idx: u32,
 };
 
 pub const CallSiteResolution = struct {
@@ -576,15 +577,21 @@ pub const Pass = struct {
         callee_expr_idx: CIR.Expr.Idx,
     ) Allocator.Error!void {
         const template_id = try self.lookupDirectCalleeTemplate(result, module_idx, callee_expr_idx) orelse return;
+        const template = result.getProcTemplate(template_id);
+        if (self.templateNeedsInstantiation(template.*)) return;
         const fn_monotype = try self.resolveExprMonotype(result, module_idx, callee_expr_idx);
         if (fn_monotype.isNone()) return;
 
-        const proc_inst_id = try self.ensureProcInst(result, template_id, fn_monotype);
+        const proc_inst_id = try self.ensureProcInst(result, template_id, fn_monotype, module_idx);
         try result.call_site_proc_insts.put(
             self.allocator,
             Result.callSiteKey(module_idx, call_expr_idx),
             proc_inst_id,
         );
+    }
+
+    fn templateNeedsInstantiation(self: *Pass, template: ProcTemplate) bool {
+        return self.all_module_envs[template.module_idx].types.needsInstantiation(template.type_root);
     }
 
     fn lookupDirectCalleeTemplate(
@@ -610,9 +617,11 @@ pub const Pass = struct {
         result: *Result,
         template_id: ProcTemplateId,
         fn_monotype: Monotype.Idx,
+        fn_monotype_module_idx: u32,
     ) Allocator.Error!ProcInstId {
         for (result.proc_insts.items, 0..) |existing_proc_inst, idx| {
             if (existing_proc_inst.template != template_id) continue;
+            if (existing_proc_inst.fn_monotype_module_idx != fn_monotype_module_idx) continue;
             if (try self.monotypesStructurallyEqual(result, existing_proc_inst.fn_monotype, fn_monotype)) {
                 return @enumFromInt(idx);
             }
@@ -623,6 +632,7 @@ pub const Pass = struct {
             .template = template_id,
             .subst = .none,
             .fn_monotype = fn_monotype,
+            .fn_monotype_module_idx = fn_monotype_module_idx,
         });
         return proc_inst_id;
     }

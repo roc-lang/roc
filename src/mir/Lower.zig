@@ -111,6 +111,9 @@ nominal_cycle_breakers: std.AutoHashMap(types.Var, Monotype.Idx),
 /// Key is @bitCast(MIR.Symbol) → u64.
 lowered_symbols: std.AutoHashMap(u64, MIR.ExprId),
 
+/// Cache for already-lowered proc instances chosen by monomorphization.
+lowered_proc_insts: std.AutoHashMap(u32, MIR.ExprId),
+
 /// Metadata for opaque symbol IDs; populated at symbol construction time.
 symbol_metadata: std.AutoHashMap(u64, SymbolMetadata),
 
@@ -120,6 +123,9 @@ next_synthetic_ident: u29,
 
 /// Tracks symbols currently being lowered (recursion guard).
 in_progress_defs: std.AutoHashMap(u64, void),
+
+/// Tracks proc instances currently being lowered (recursion guard).
+in_progress_proc_insts: std.AutoHashMap(u32, MIR.ExprId),
 
 /// Monotype currently being lowered for each in-progress symbol.
 /// Used to detect in-progress calls that need a distinct specialization symbol.
@@ -185,9 +191,11 @@ pub fn init(
         .type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(allocator),
         .nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(allocator),
         .lowered_symbols = std.AutoHashMap(u64, MIR.ExprId).init(allocator),
+        .lowered_proc_insts = std.AutoHashMap(u32, MIR.ExprId).init(allocator),
         .symbol_metadata = std.AutoHashMap(u64, SymbolMetadata).init(allocator),
         .next_synthetic_ident = Ident.Idx.NONE.idx - 1,
         .in_progress_defs = std.AutoHashMap(u64, void).init(allocator),
+        .in_progress_proc_insts = std.AutoHashMap(u32, MIR.ExprId).init(allocator),
         .in_progress_symbol_monotypes = std.AutoHashMap(u64, Monotype.Idx).init(allocator),
         .resolved_dispatch_targets = resolved_dispatch_targets,
         .scratch_expr_ids = try base.Scratch(MIR.ExprId).init(allocator),
@@ -214,8 +222,10 @@ pub fn deinit(self: *Self) void {
     self.type_var_seen.deinit();
     self.nominal_cycle_breakers.deinit();
     self.lowered_symbols.deinit();
+    self.lowered_proc_insts.deinit();
     self.symbol_metadata.deinit();
     self.in_progress_defs.deinit();
+    self.in_progress_proc_insts.deinit();
     self.in_progress_symbol_monotypes.deinit();
     self.resolved_dispatch_targets.deinit();
     self.scratch_expr_ids.deinit();
@@ -621,6 +631,207 @@ fn normalizeCallerMonotypeForSymbolModule(
         self.current_module_idx,
         symbol_module_idx,
     );
+}
+
+fn importMonotypeFromStore(
+    self: *Self,
+    source_store: *const Monotype.Store,
+    monotype: Monotype.Idx,
+    from_module_idx: u32,
+    to_module_idx: u32,
+) Allocator.Error!Monotype.Idx {
+    if (monotype.isNone()) return monotype;
+
+    if (source_store == &self.store.monotype_store and from_module_idx == to_module_idx) {
+        return monotype;
+    }
+
+    var imported = std.AutoHashMap(Monotype.Idx, Monotype.Idx).init(self.allocator);
+    defer imported.deinit();
+
+    return self.importMonotypeFromStoreRec(
+        source_store,
+        monotype,
+        from_module_idx,
+        to_module_idx,
+        &imported,
+    );
+}
+
+fn importMonotypeFromStoreRec(
+    self: *Self,
+    source_store: *const Monotype.Store,
+    monotype: Monotype.Idx,
+    from_module_idx: u32,
+    to_module_idx: u32,
+    imported: *std.AutoHashMap(Monotype.Idx, Monotype.Idx),
+) Allocator.Error!Monotype.Idx {
+    if (monotype.isNone()) return monotype;
+    if (source_store == &self.store.monotype_store and from_module_idx == to_module_idx) {
+        return monotype;
+    }
+    if (imported.get(monotype)) |existing| return existing;
+
+    const mono = source_store.getMonotype(monotype);
+    switch (mono) {
+        .unit => return self.store.monotype_store.unit_idx,
+        .prim => |prim| return self.store.monotype_store.primIdx(prim),
+        .recursive_placeholder => {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("importMonotypeFromStore: unexpected recursive_placeholder", .{});
+            }
+            unreachable;
+        },
+        .list, .box, .tuple, .func, .record, .tag_union => {},
+    }
+
+    const placeholder = try self.store.monotype_store.addMonotype(self.allocator, .recursive_placeholder);
+    try imported.put(monotype, placeholder);
+
+    const mapped_ident = struct {
+        fn apply(
+            lower: *Self,
+            ident: Ident.Idx,
+            from_idx: u32,
+            to_idx: u32,
+        ) Allocator.Error!Ident.Idx {
+            if (from_idx == to_idx) return ident;
+            return lower.remapIdentBetweenModules(ident, from_idx, to_idx);
+        }
+    }.apply;
+
+    const mapped_mono: Monotype.Monotype = switch (mono) {
+        .list => |list_mono| .{ .list = .{
+            .elem = try self.importMonotypeFromStoreRec(
+                source_store,
+                list_mono.elem,
+                from_module_idx,
+                to_module_idx,
+                imported,
+            ),
+        } },
+        .box => |box_mono| .{ .box = .{
+            .inner = try self.importMonotypeFromStoreRec(
+                source_store,
+                box_mono.inner,
+                from_module_idx,
+                to_module_idx,
+                imported,
+            ),
+        } },
+        .tuple => |tuple_mono| blk: {
+            const idx_top = self.mono_scratches.idxs.top();
+            defer self.mono_scratches.idxs.clearFrom(idx_top);
+
+            for (source_store.getIdxSpan(tuple_mono.elems)) |elem_mono| {
+                try self.mono_scratches.idxs.append(try self.importMonotypeFromStoreRec(
+                    source_store,
+                    elem_mono,
+                    from_module_idx,
+                    to_module_idx,
+                    imported,
+                ));
+            }
+
+            break :blk .{ .tuple = .{
+                .elems = try self.store.monotype_store.addIdxSpan(
+                    self.allocator,
+                    self.mono_scratches.idxs.sliceFromStart(idx_top),
+                ),
+            } };
+        },
+        .func => |func_mono| blk: {
+            const idx_top = self.mono_scratches.idxs.top();
+            defer self.mono_scratches.idxs.clearFrom(idx_top);
+
+            for (source_store.getIdxSpan(func_mono.args)) |arg_mono| {
+                try self.mono_scratches.idxs.append(try self.importMonotypeFromStoreRec(
+                    source_store,
+                    arg_mono,
+                    from_module_idx,
+                    to_module_idx,
+                    imported,
+                ));
+            }
+
+            break :blk .{ .func = .{
+                .args = try self.store.monotype_store.addIdxSpan(
+                    self.allocator,
+                    self.mono_scratches.idxs.sliceFromStart(idx_top),
+                ),
+                .ret = try self.importMonotypeFromStoreRec(
+                    source_store,
+                    func_mono.ret,
+                    from_module_idx,
+                    to_module_idx,
+                    imported,
+                ),
+                .effectful = func_mono.effectful,
+            } };
+        },
+        .record => |record_mono| blk: {
+            const fields_top = self.mono_scratches.fields.top();
+            defer self.mono_scratches.fields.clearFrom(fields_top);
+
+            for (source_store.getFields(record_mono.fields)) |field| {
+                try self.mono_scratches.fields.append(.{
+                    .name = try mapped_ident(self, field.name, from_module_idx, to_module_idx),
+                    .type_idx = try self.importMonotypeFromStoreRec(
+                        source_store,
+                        field.type_idx,
+                        from_module_idx,
+                        to_module_idx,
+                        imported,
+                    ),
+                });
+            }
+
+            break :blk .{ .record = .{
+                .fields = try self.store.monotype_store.addFields(
+                    self.allocator,
+                    self.mono_scratches.fields.sliceFromStart(fields_top),
+                ),
+            } };
+        },
+        .tag_union => |tag_union_mono| blk: {
+            const tags_top = self.mono_scratches.tags.top();
+            defer self.mono_scratches.tags.clearFrom(tags_top);
+
+            for (source_store.getTags(tag_union_mono.tags)) |tag| {
+                const payload_top = self.mono_scratches.idxs.top();
+                defer self.mono_scratches.idxs.clearFrom(payload_top);
+
+                for (source_store.getIdxSpan(tag.payloads)) |payload_mono| {
+                    try self.mono_scratches.idxs.append(try self.importMonotypeFromStoreRec(
+                        source_store,
+                        payload_mono,
+                        from_module_idx,
+                        to_module_idx,
+                        imported,
+                    ));
+                }
+
+                try self.mono_scratches.tags.append(.{
+                    .name = try mapped_ident(self, tag.name, from_module_idx, to_module_idx),
+                    .payloads = try self.store.monotype_store.addIdxSpan(
+                        self.allocator,
+                        self.mono_scratches.idxs.sliceFromStart(payload_top),
+                    ),
+                });
+            }
+
+            break :blk .{ .tag_union = .{
+                .tags = try self.store.monotype_store.addTags(
+                    self.allocator,
+                    self.mono_scratches.tags.sliceFromStart(tags_top),
+                ),
+            } };
+        },
+        .unit, .prim, .recursive_placeholder => unreachable,
+    };
+
+    self.store.monotype_store.monotypes.items[@intFromEnum(placeholder)] = mapped_mono;
+    return placeholder;
 }
 
 fn monotypeIdxSpanIsValid(self: *const Self, span: Monotype.Span) bool {
@@ -2945,7 +3156,7 @@ fn lowerExprWithMonotypeOverride(
             try self.lowerClosureWithBoundMonotype(module_env, closure, monotype, region)
         else
             try self.lowerClosure(module_env, closure, monotype, region),
-        .e_call => |call| try self.lowerCall(module_env, call, monotype, region),
+        .e_call => |call| try self.lowerCall(module_env, expr_idx, call, monotype, region),
 
         // --- Block ---
         .e_block => |block| try self.lowerBlock(module_env, block, monotype, region),
@@ -2995,7 +3206,7 @@ fn lowerExprWithMonotypeOverride(
         .e_hosted_lambda => |hosted| if (monotype_override != null)
             try self.lowerHostedLambdaWithBoundMonotype(module_env, hosted, monotype, region)
         else
-            try self.lowerHostedLambdaSpecialized(module_env, hosted, monotype, region),
+            try self.lowerHostedLambdaSpecialized(module_env, hosted, monotype, region, null),
         .e_run_low_level => |run_ll| {
             if (run_ll.op == .str_inspekt) {
                 return try self.lowerStrInspekt(module_env, run_ll, region);
@@ -3614,7 +3825,7 @@ fn lowerMatch(self: *Self, module_env: *const ModuleEnv, match_expr: CIR.Expr.Ma
 
 /// Lower `e_lambda` to a proc-backed MIR function value (no captures).
 fn lowerLambda(self: *Self, module_env: *const ModuleEnv, lambda: CIR.Expr.Lambda, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
-    return self.lowerLambdaSpecialized(module_env, lambda, monotype, region);
+    return self.lowerLambdaSpecialized(module_env, lambda, monotype, region, null);
 }
 
 fn lowerLambdaWithBoundMonotype(
@@ -3624,7 +3835,7 @@ fn lowerLambdaWithBoundMonotype(
     monotype: Monotype.Idx,
     region: Region,
 ) Allocator.Error!MIR.ExprId {
-    return self.lowerLambdaSpecialized(module_env, lambda, monotype, region);
+    return self.lowerLambdaSpecialized(module_env, lambda, monotype, region, null);
 }
 
 fn lowerLambdaSpecialized(
@@ -3633,6 +3844,7 @@ fn lowerLambdaSpecialized(
     lambda: CIR.Expr.Lambda,
     monotype: Monotype.Idx,
     region: Region,
+    proc_inst_id: ?Monomorphize.ProcInstId,
 ) Allocator.Error!MIR.ExprId {
     const ret_monotype = switch (self.store.monotype_store.getMonotype(monotype)) {
         .func => |func| func.ret,
@@ -3651,6 +3863,10 @@ fn lowerLambdaSpecialized(
         .hosted = null,
     });
     const proc_expr = try self.store.addExpr(self.allocator, .{ .proc_ref = proc_id }, monotype, region);
+    if (proc_inst_id) |inst_id| {
+        try self.in_progress_proc_insts.put(@intFromEnum(inst_id), proc_expr);
+        errdefer _ = self.in_progress_proc_insts.remove(@intFromEnum(inst_id));
+    }
 
     const saved_pattern_scope = self.current_pattern_scope;
     self.current_pattern_scope = @intFromEnum(proc_id);
@@ -3672,6 +3888,11 @@ fn lowerLambdaSpecialized(
         .hosted = null,
     };
 
+    if (proc_inst_id) |inst_id| {
+        _ = self.in_progress_proc_insts.remove(@intFromEnum(inst_id));
+        try self.lowered_proc_insts.put(@intFromEnum(inst_id), proc_expr);
+    }
+
     return proc_expr;
 }
 
@@ -3679,7 +3900,7 @@ fn lowerLambdaSpecialized(
 /// At the use site, returns a tuple of the captured values and registers explicit
 /// MIR closure-member metadata for downstream analysis and lowering.
 fn lowerClosure(self: *Self, module_env: *const ModuleEnv, closure: CIR.Expr.Closure, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
-    return self.lowerClosureSpecialized(module_env, closure, monotype, region);
+    return self.lowerClosureSpecialized(module_env, closure, monotype, region, null);
 }
 
 fn lowerClosureWithBoundMonotype(
@@ -3689,7 +3910,7 @@ fn lowerClosureWithBoundMonotype(
     monotype: Monotype.Idx,
     region: Region,
 ) Allocator.Error!MIR.ExprId {
-    return self.lowerClosureSpecialized(module_env, closure, monotype, region);
+    return self.lowerClosureSpecialized(module_env, closure, monotype, region, null);
 }
 
 fn lowerClosureSpecialized(
@@ -3698,6 +3919,7 @@ fn lowerClosureSpecialized(
     closure: CIR.Expr.Closure,
     monotype: Monotype.Idx,
     region: Region,
+    proc_inst_id: ?Monomorphize.ProcInstId,
 ) Allocator.Error!MIR.ExprId {
     const inner_lambda_expr = module_env.store.getExpr(closure.lambda_idx);
     const lambda = inner_lambda_expr.e_lambda;
@@ -3713,7 +3935,7 @@ fn lowerClosureSpecialized(
 
     if (cir_capture_indices.len == 0) {
         // No captures — just lower as a plain lambda (no lifting needed).
-        return self.lowerLambdaSpecialized(module_env, lambda, monotype, region);
+        return self.lowerLambdaSpecialized(module_env, lambda, monotype, region, proc_inst_id);
     }
 
     // --- Step 1: Collect outer-scope capture symbols and their monotypes ---
@@ -3785,6 +4007,10 @@ fn lowerClosureSpecialized(
         .proc = proc_id,
         .captures = captures_tuple_expr,
     } }, monotype, region);
+    if (proc_inst_id) |inst_id| {
+        try self.in_progress_proc_insts.put(@intFromEnum(inst_id), closure_expr);
+        errdefer _ = self.in_progress_proc_insts.remove(@intFromEnum(inst_id));
+    }
 
     // --- Step 4: Enter a new scope for the lifted function body ---
     const saved_pattern_scope = self.current_pattern_scope;
@@ -3889,6 +4115,11 @@ fn lowerClosureSpecialized(
 
     try self.store.registerExprClosureMember(self.allocator, closure_expr, member_id);
 
+    if (proc_inst_id) |inst_id| {
+        _ = self.in_progress_proc_insts.remove(@intFromEnum(inst_id));
+        try self.lowered_proc_insts.put(@intFromEnum(inst_id), closure_expr);
+    }
+
     return closure_expr;
 }
 
@@ -3898,6 +4129,7 @@ fn lowerHostedLambdaSpecialized(
     hosted: anytype,
     monotype: Monotype.Idx,
     region: Region,
+    proc_inst_id: ?Monomorphize.ProcInstId,
 ) Allocator.Error!MIR.ExprId {
     const ret_monotype = switch (self.store.monotype_store.getMonotype(monotype)) {
         .func => |func| func.ret,
@@ -3919,6 +4151,10 @@ fn lowerHostedLambdaSpecialized(
         },
     });
     const proc_expr = try self.store.addExpr(self.allocator, .{ .proc_ref = proc_id }, monotype, region);
+    if (proc_inst_id) |inst_id| {
+        try self.in_progress_proc_insts.put(@intFromEnum(inst_id), proc_expr);
+        errdefer _ = self.in_progress_proc_insts.remove(@intFromEnum(inst_id));
+    }
 
     const saved_pattern_scope = self.current_pattern_scope;
     self.current_pattern_scope = @intFromEnum(proc_id);
@@ -3943,6 +4179,11 @@ fn lowerHostedLambdaSpecialized(
         },
     };
 
+    if (proc_inst_id) |inst_id| {
+        _ = self.in_progress_proc_insts.remove(@intFromEnum(inst_id));
+        try self.lowered_proc_insts.put(@intFromEnum(inst_id), proc_expr);
+    }
+
     return proc_expr;
 }
 
@@ -3953,7 +4194,7 @@ fn lowerHostedLambdaWithBoundMonotype(
     monotype: Monotype.Idx,
     region: Region,
 ) Allocator.Error!MIR.ExprId {
-    return self.lowerHostedLambdaSpecialized(module_env, hosted, monotype, region);
+    return self.lowerHostedLambdaSpecialized(module_env, hosted, monotype, region, null);
 }
 
 fn isCallableCirExpr(expr: CIR.Expr) bool {
@@ -4056,7 +4297,74 @@ fn monotypeCanRefine(
 /// Lower `e_call` to MIR call.
 /// If the call target is a lookup to a low-level builtin wrapper
 /// (e.g., List.concat, Str.concat), emit `run_low_level` instead of `call`.
-fn lowerCall(self: *Self, module_env: *const ModuleEnv, call: anytype, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
+fn lowerProcInst(self: *Self, proc_inst_id: Monomorphize.ProcInstId) Allocator.Error!MIR.ExprId {
+    const proc_inst_key = @intFromEnum(proc_inst_id);
+    if (self.lowered_proc_insts.get(proc_inst_key)) |cached| return cached;
+    if (self.in_progress_proc_insts.get(proc_inst_key)) |in_progress| return in_progress;
+
+    const proc_inst = self.monomorphization.getProcInst(proc_inst_id);
+    const template = self.monomorphization.getProcTemplate(proc_inst.template);
+    const module_idx = template.module_idx;
+    const module_env = self.all_module_envs[module_idx];
+    const proc_monotype = try self.importMonotypeFromStore(
+        &self.monomorphization.monotype_store,
+        proc_inst.fn_monotype,
+        proc_inst.fn_monotype_module_idx,
+        module_idx,
+    );
+
+    const switching_module = module_idx != self.current_module_idx;
+    const saved_module_idx = self.current_module_idx;
+    const saved_types_store = self.types_store;
+    const saved_ident_store = self.mono_scratches.ident_store;
+    const saved_module_env = self.mono_scratches.module_env;
+    if (switching_module) {
+        self.current_module_idx = module_idx;
+        self.types_store = &module_env.types;
+        self.mono_scratches.ident_store = module_env.getIdentStoreConst();
+        self.mono_scratches.module_env = module_env;
+    }
+    defer if (switching_module) {
+        self.current_module_idx = saved_module_idx;
+        self.types_store = saved_types_store;
+        self.mono_scratches.ident_store = saved_ident_store;
+        self.mono_scratches.module_env = saved_module_env;
+    };
+
+    return switch (module_env.store.getExpr(template.cir_expr)) {
+        .e_lambda => |lambda| try self.lowerLambdaSpecialized(
+            module_env,
+            lambda,
+            proc_monotype,
+            template.source_region,
+            proc_inst_id,
+        ),
+        .e_closure => |closure| try self.lowerClosureSpecialized(
+            module_env,
+            closure,
+            proc_monotype,
+            template.source_region,
+            proc_inst_id,
+        ),
+        .e_hosted_lambda => |hosted| try self.lowerHostedLambdaSpecialized(
+            module_env,
+            hosted,
+            proc_monotype,
+            template.source_region,
+            proc_inst_id,
+        ),
+        else => unreachable,
+    };
+}
+
+fn lowerCall(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    call_expr_idx: CIR.Expr.Idx,
+    call: anytype,
+    monotype: Monotype.Idx,
+    region: Region,
+) Allocator.Error!MIR.ExprId {
     if (self.getCallLowLevelOp(module_env, module_env.store.getExpr(call.func))) |ll_op| {
         if (ll_op == .list_append_unsafe) {
             const arg_exprs = module_env.store.sliceExpr(call.args);
@@ -4091,7 +4399,10 @@ fn lowerCall(self: *Self, module_env: *const ModuleEnv, call: anytype, monotype:
         } }, monotype, region);
     }
 
-    const lowered_func = try self.lowerExpr(call.func);
+    const lowered_func = if (self.monomorphization.getCallSiteProcInst(self.current_module_idx, call_expr_idx)) |proc_inst_id|
+        try self.lowerProcInst(proc_inst_id)
+    else
+        try self.lowerExpr(call.func);
 
     return self.lowerCallWithLoweredFunc(
         lowered_func,
