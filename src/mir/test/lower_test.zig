@@ -6,7 +6,6 @@ const testing = std.testing;
 const base = @import("base");
 const can = @import("can");
 const types = @import("types");
-
 const MIR = @import("../MIR.zig");
 const LambdaSet = @import("../LambdaSet.zig");
 const Monotype = @import("../Monotype.zig");

@@ -1123,15 +1123,27 @@ fn runtimeValueLayoutFromMirExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator
             return self.layoutFromMonotype(mono_idx);
         },
         .run_low_level => |ll| {
-            if (ll.op == .list_get_unsafe) {
-                if (self.specialized_monotype_layouts.get(@intFromEnum(mono_idx))) |layout_idx| {
-                    return layout_idx;
-                }
-                const args = self.mir_store.getExprSpan(ll.args);
-                if (builtin.mode == .Debug and args.len == 0) {
-                    std.debug.panic("MirToLir invariant violated: list_get_unsafe missing list argument", .{});
-                }
-                return self.runtimeListElemLayoutFromMirExpr(args[0]);
+            const args = self.mir_store.getExprSpan(ll.args);
+            switch (ll.op) {
+                .list_get_unsafe => {
+                    if (self.specialized_monotype_layouts.get(@intFromEnum(mono_idx))) |layout_idx| {
+                        return layout_idx;
+                    }
+                    if (builtin.mode == .Debug and args.len == 0) {
+                        std.debug.panic("MirToLir invariant violated: list_get_unsafe missing list argument", .{});
+                    }
+                    return self.runtimeListElemLayoutFromMirExpr(args[0]);
+                },
+                .list_append_unsafe, .list_prepend => {
+                    if (builtin.mode == .Debug and args.len == 0) {
+                        std.debug.panic(
+                            "MirToLir invariant violated: {s} missing list argument",
+                            .{@tagName(ll.op)},
+                        );
+                    }
+                    return self.runtimeValueLayoutFromMirExpr(args[0]);
+                },
+                else => {},
             }
         },
         .struct_ => |struct_| switch (mono) {
@@ -1251,6 +1263,18 @@ fn resolveToProcId(self: *Self, expr_id: MIR.ExprId) ?MIR.ProcId {
     };
 }
 
+fn resolvePlainProcRefId(self: *Self, expr_id: MIR.ExprId) ?MIR.ProcId {
+    const expr = self.mir_store.getExpr(expr_id);
+    return switch (expr) {
+        .proc_ref => |proc_id| proc_id,
+        .block => |block| self.resolvePlainProcRefId(block.final_expr),
+        .dbg_expr => |dbg_expr| self.resolvePlainProcRefId(dbg_expr.expr),
+        .expect => |expect| self.resolvePlainProcRefId(expect.body),
+        .return_expr => |ret| self.resolvePlainProcRefId(ret.expr),
+        else => null,
+    };
+}
+
 fn callableOriginForExpr(self: *Self, expr_id: MIR.ExprId) CallableOrigin {
     if (self.lambdaSetForExpr(expr_id)) |ls_idx| {
         return .{ .lambda_set = ls_idx };
@@ -1329,6 +1353,17 @@ fn ensureDirectProcSpec(
     const key_bytes = try self.specializationKeyBytes(callee_key, param_layouts, force_pass_by_ptr);
     const proc = self.mir_store.getProc(callee_proc);
     const provisional_ret_layout = try self.layoutFromMonotype(proc.ret_monotype);
+    if (param_layouts.len == 2) {
+        std.debug.print(
+            "ensureDirectProcSpec callee_proc={d} callee_key={d} ret_layout={d} ret_mono={d}\n",
+            .{
+                @intFromEnum(callee_proc),
+                callee_key,
+                @intFromEnum(provisional_ret_layout),
+                @intFromEnum(proc.ret_monotype),
+            },
+        );
+    }
     var specialization = self.direct_proc_specs.get(key_bytes);
 
     if (specialization == null) {
@@ -1444,6 +1479,24 @@ fn lowerDispatchProcBody(
 
         var branch_acc = self.startLetAccumulator();
         if (self.memberHasCaptures(member)) {
+            if (builtin.mode == .Debug) {
+                const proc = self.mir_store.getProc(member.proc);
+                std.debug.print(
+                    "lowerDispatchProcBody captures ls={d} branch={d}/{d} proc={d} closure_member={d} proc_capture_bindings={d} closure_capture_bindings={d}\n",
+                    .{
+                        @intFromEnum(callee_ls_idx),
+                        branch_index,
+                        members.items.len,
+                        @intFromEnum(member.proc),
+                        @intFromEnum(member.closure_member),
+                        self.mir_store.getCaptureBindings(proc.capture_bindings).len,
+                        if (!member.closure_member.isNone())
+                            self.mir_store.getCaptureBindings(self.mir_store.getClosureMember(member.closure_member).capture_bindings).len
+                        else
+                            @as(usize, 0),
+                    },
+                );
+            }
             const captures_layout = try self.closureVariantPayloadLayout(closure_layout, branch_index);
             const payload_expr = try self.lir_store.addExpr(.{ .tag_payload_access = .{
                 .value = closure_arg,
@@ -1737,6 +1790,22 @@ fn runtimeLayoutFromDirectProcSpecCall(
     callee_expr_id: MIR.ExprId,
     call_args: []const MIR.ExprId,
 ) Allocator.Error!?layout.Idx {
+    if (self.resolvePlainProcRefId(callee_expr_id)) |callee_proc| {
+        const save_layouts = self.scratch_layout_idxs.items.len;
+        defer self.scratch_layout_idxs.shrinkRetainingCapacity(save_layouts);
+        for (call_args) |arg_expr_id| {
+            const arg_layout = try self.runtimeValueLayoutFromMirExpr(arg_expr_id);
+            try self.scratch_layout_idxs.append(self.allocator, arg_layout);
+        }
+        const specialization = try self.ensureDirectProcSpec(
+            specializationIdentityForProc(callee_proc),
+            callee_proc,
+            self.scratch_layout_idxs.items[save_layouts..],
+            false,
+        );
+        return specialization.ret_layout;
+    }
+
     if (self.lambdaSetForExpr(callee_expr_id)) |callee_ls_idx| {
         var members = try self.snapshotLambdaSetMembers(callee_ls_idx);
         defer members.deinit(self.allocator);
@@ -2794,9 +2863,10 @@ fn lowerLookup(self: *Self, sym: Symbol, mono_idx: Monotype.Idx, _: MIR.ExprId, 
                 defer _ = self.propagating_defs.remove(key);
                 if (self.resolveToProcId(mir_def_id)) |proc_id| {
                     try self.prepareLiftedDefCaptureLayout(proc_id);
+                } else {
+                    const lir_def_id = try self.lowerExpr(mir_def_id);
+                    try self.lir_store.registerSymbolDef(sym, lir_def_id);
                 }
-                const lir_def_id = try self.lowerExpr(mir_def_id);
-                try self.lir_store.registerSymbolDef(sym, lir_def_id);
             }
         }
     }
@@ -3117,6 +3187,20 @@ fn lowerProcWithParamLayouts(
 
     const proc = self.mir_store.getProc(proc_id);
     const monotype = self.mir_store.monotype_store.getMonotype(proc.fn_monotype);
+    if (proc_id == @as(MIR.ProcId, @enumFromInt(3))) {
+        const body_mono = self.mir_store.typeOf(proc.body);
+        std.debug.print(
+            "lowerProcWithParamLayouts proc=3 fn_mono={d} ret_mono={d} body_mono={d} body_expr_tag={s} override_ret={any} override_body={any}\n",
+            .{
+                @intFromEnum(proc.fn_monotype),
+                @intFromEnum(proc.ret_monotype),
+                @intFromEnum(body_mono),
+                @tagName(self.mir_store.getExpr(proc.body)),
+                self.specialized_monotype_layouts.get(@intFromEnum(proc.ret_monotype)),
+                self.specialized_monotype_layouts.get(@intFromEnum(body_mono)),
+            },
+        );
+    }
     const mir_params = self.mir_store.getPatternSpan(proc.params);
     if (builtin.mode == .Debug and mir_params.len != param_layouts.len) {
         std.debug.panic(
@@ -3141,6 +3225,8 @@ fn lowerProcWithParamLayouts(
     defer param_infos.deinit(self.allocator);
     var param_rewrites = std.ArrayList(?TopLevelRestBindingRewrite).empty;
     defer param_rewrites.deinit(self.allocator);
+    var param_cell_init_stmts = std.ArrayList(LirStmt).empty;
+    defer param_cell_init_stmts.deinit(self.allocator);
     var saved_monotype_layouts = std.ArrayList(SavedMonotypeLayout).empty;
     defer saved_monotype_layouts.deinit(self.allocator);
     defer self.restoreMonotypeOverrides(saved_monotype_layouts.items);
@@ -3202,7 +3288,13 @@ fn lowerProcWithParamLayouts(
         try param_infos.append(self.allocator, lowered);
         const rewrite = try self.rewriteTopLevelRestBinding(lowered, param_layout, .owned, region);
         try param_rewrites.append(self.allocator, rewrite);
-        try self.scratch_lir_pattern_ids.append(self.allocator, if (rewrite) |rw| rw.source_pattern else lowered.pattern);
+        const entry_pattern = try self.rewriteProcEntryMutableBindings(
+            if (rewrite) |rw| rw.source_pattern else lowered.pattern,
+            .owned,
+            &param_cell_init_stmts,
+            region,
+        );
+        try self.scratch_lir_pattern_ids.append(self.allocator, entry_pattern);
     }
     const lir_params = try self.lir_store.addPatternSpan(self.scratch_lir_pattern_ids.items[save_param_patterns..]);
     if (builtin.mode == .Debug) {
@@ -3222,6 +3314,16 @@ fn lowerProcWithParamLayouts(
                 try self.layoutFromMonotype(f.ret)
             else
                 try self.runtimeValueLayoutFromMirExpr(proc.body);
+            if (proc_id == @as(MIR.ProcId, @enumFromInt(3))) {
+                std.debug.print(
+                    "lowerProcWithParamLayouts proc=3 inferred_ret_layout={d} f.ret={d} override_ret_now={any}\n",
+                    .{
+                        @intFromEnum(inferred),
+                        @intFromEnum(f.ret),
+                        self.specialized_monotype_layouts.get(@intFromEnum(f.ret)),
+                    },
+                );
+            }
             try self.registerSpecializedMonotypeLayout(f.ret, inferred, &saved_monotype_layouts);
             break :blk inferred;
         },
@@ -3236,14 +3338,113 @@ fn lowerProcWithParamLayouts(
     while (lambda_param_idx > 0) {
         lambda_param_idx -= 1;
         const info = param_infos.items[lambda_param_idx];
+        var mutable_prelude_stmts = std.ArrayList(LirStmt).empty;
+        defer mutable_prelude_stmts.deinit(self.allocator);
+        const rewrite = if (param_rewrites.items[lambda_param_idx]) |rw|
+            TopLevelRestBindingRewrite{
+                .source_pattern = rw.source_pattern,
+                .destructure_pattern = if (rw.destructure_pattern.isNone())
+                    LirPatternId.none
+                else
+                    try self.rewriteProcEntryMutableBindings(
+                        rw.destructure_pattern,
+                        .borrowed,
+                        &mutable_prelude_stmts,
+                        region,
+                    ),
+                .source_symbol = rw.source_symbol,
+                .source_layout = rw.source_layout,
+            }
+        else
+            null;
         lir_body = try self.wrapExprWithTopLevelRestBindingPrelude(
             lir_body,
             ret_layout,
-            param_rewrites.items[lambda_param_idx],
+            rewrite,
+            mutable_prelude_stmts.items,
             info.deferred_rest_start,
             info.deferred_rest_len,
             region,
         );
+    }
+
+    if (param_cell_init_stmts.items.len != 0) {
+        lir_body = try self.wrapExprWithPreludeStmts(lir_body, ret_layout, param_cell_init_stmts.items, region);
+    }
+
+    if (param_layouts.len == 2) {
+        const Debug = struct {
+            fn printExpr(store: *const LirExprStore, expr_id: LirExprId, indent: usize) void {
+                for (0..indent) |_| std.debug.print("  ", .{});
+                const expr = store.getExpr(expr_id);
+                switch (expr) {
+                    .block => |block| {
+                        std.debug.print("block result_layout={d}\n", .{@intFromEnum(block.result_layout)});
+                        for (store.getStmts(block.stmts)) |stmt| {
+                            for (0..indent + 1) |_| std.debug.print("  ", .{});
+                            switch (stmt) {
+                                .decl => |binding| {
+                                    std.debug.print("decl pat={d}\n", .{@intFromEnum(binding.pattern)});
+                                    printExpr(store, binding.expr, indent + 2);
+                                },
+                                .mutate => |binding| {
+                                    std.debug.print("mutate pat={d}\n", .{@intFromEnum(binding.pattern)});
+                                    printExpr(store, binding.expr, indent + 2);
+                                },
+                                .cell_init => |binding| {
+                                    std.debug.print("cell_init cell={d} layout={d}\n", .{ binding.cell.raw(), @intFromEnum(binding.layout_idx) });
+                                    printExpr(store, binding.expr, indent + 2);
+                                },
+                                .cell_store => |binding| {
+                                    std.debug.print("cell_store cell={d} layout={d}\n", .{ binding.cell.raw(), @intFromEnum(binding.layout_idx) });
+                                    printExpr(store, binding.expr, indent + 2);
+                                },
+                                .cell_drop => |binding| {
+                                    std.debug.print("cell_drop cell={d} layout={d}\n", .{ binding.cell.raw(), @intFromEnum(binding.layout_idx) });
+                                },
+                            }
+                        }
+                        for (0..indent + 1) |_| std.debug.print("  ", .{});
+                        std.debug.print("final\n", .{});
+                        printExpr(store, block.final_expr, indent + 2);
+                    },
+                    .lookup => |lookup| std.debug.print("lookup sym={d} layout={d}\n", .{ lookup.symbol.raw(), @intFromEnum(lookup.layout_idx) }),
+                    .cell_load => |load| std.debug.print("cell_load cell={d} layout={d}\n", .{ load.cell.raw(), @intFromEnum(load.layout_idx) }),
+                    .proc_call => |call| {
+                        std.debug.print("proc_call proc={d} ret={d} args={d}\n", .{ @intFromEnum(call.proc), @intFromEnum(call.ret_layout), store.getExprSpan(call.args).len });
+                        for (store.getExprSpan(call.args)) |arg| {
+                            printExpr(store, arg, indent + 1);
+                        }
+                    },
+                    .while_loop => |while_loop| {
+                        std.debug.print("while_loop\n", .{});
+                        for (0..indent + 1) |_| std.debug.print("  ", .{});
+                        std.debug.print("cond\n", .{});
+                        printExpr(store, while_loop.cond, indent + 2);
+                        for (0..indent + 1) |_| std.debug.print("  ", .{});
+                        std.debug.print("body\n", .{});
+                        printExpr(store, while_loop.body, indent + 2);
+                    },
+                    .empty_list => std.debug.print("empty_list\n", .{}),
+                    .low_level => |low_level| std.debug.print("low_level {s}\n", .{@tagName(low_level.op)}),
+                    .bool_literal => |val| std.debug.print("bool {any}\n", .{val}),
+                    .i64_literal => |lit| std.debug.print("i64 {d} layout={d}\n", .{ lit.value, @intFromEnum(lit.layout_idx) }),
+                    else => std.debug.print("{s}\n", .{@tagName(expr)}),
+                }
+            }
+        };
+
+        std.debug.print("=== candidate list proc name={d} ret={d} params={d} ===\n", .{
+            proc_name.raw(),
+            @intFromEnum(ret_layout),
+            param_layouts.len,
+        });
+        for (self.lir_store.getPatternSpan(lir_params), 0..) |pat_id, i| {
+            const pat = self.lir_store.getPattern(pat_id);
+            std.debug.print("arg[{d}] {s}\n", .{ i, @tagName(pat) });
+        }
+        Debug.printExpr(self.lir_store, lir_body, 1);
+        std.debug.print("=== end candidate list proc ===\n", .{});
     }
 
     var proc_rc_pass = try RcInsert.RcInsertPass.init(self.allocator, self.lir_store, self.layout_store);
@@ -3272,6 +3473,21 @@ fn lowerEntrypointApply(
     ret_layout: layout.Idx,
     region: Region,
 ) Allocator.Error!LirExprId {
+    if (self.resolvePlainProcRefId(func_mir_expr_id)) |callee_proc| {
+        const specialization = try self.ensureDirectProcSpec(
+            specializationIdentityForProc(callee_proc),
+            callee_proc,
+            arg_layouts,
+            false,
+        );
+        return self.lir_store.addExpr(.{ .proc_call = .{
+            .proc = specialization.proc,
+            .args = lir_args,
+            .ret_layout = specialization.ret_layout,
+            .called_via = .apply,
+        } }, region);
+    }
+
     if (self.lambdaSetForExpr(func_mir_expr_id)) |ls_idx| {
         var members = try self.snapshotLambdaSetMembers(ls_idx);
         defer members.deinit(self.allocator);
@@ -3429,6 +3645,33 @@ fn lowerCall(self: *Self, call_data: anytype, mir_expr_id: MIR.ExprId, region: R
                 unreachable;
             }
         }
+    }
+
+    if (self.resolvePlainProcRefId(call_data.func)) |callee_proc| {
+        var acc = self.startLetAccumulator();
+        const mir_args = self.mir_store.getExprSpan(call_data.args);
+        const lir_args = try self.lowerAnfSpan(&acc, mir_args, region);
+
+        const save_layouts = self.scratch_layout_idxs.items.len;
+        defer self.scratch_layout_idxs.shrinkRetainingCapacity(save_layouts);
+        for (mir_args) |mir_arg| {
+            const arg_layout = try self.runtimeValueLayoutFromMirExpr(mir_arg);
+            try self.scratch_layout_idxs.append(self.allocator, arg_layout);
+        }
+
+        const specialization = try self.ensureDirectProcSpec(
+            specializationIdentityForProc(callee_proc),
+            callee_proc,
+            self.scratch_layout_idxs.items[save_layouts..],
+            false,
+        );
+        const call_expr = try self.lir_store.addExpr(.{ .proc_call = .{
+            .proc = specialization.proc,
+            .args = lir_args,
+            .ret_layout = specialization.ret_layout,
+            .called_via = .apply,
+        } }, region);
+        return acc.finish(call_expr, specialization.ret_layout, region);
     }
 
     // Closure dispatch is driven by lambda sets for arbitrary callee expressions,
@@ -4771,6 +5014,7 @@ fn lowerForLoop(self: *Self, f: anytype, mono_idx: Monotype.Idx, region: Region)
         raw_body,
         .zst,
         elem_rewrite,
+        &.{},
         lowered_pat.deferred_rest_start,
         lowered_pat.deferred_rest_len,
         region,
@@ -5567,11 +5811,12 @@ fn wrapExprWithTopLevelRestBindingPrelude(
     body: LirExprId,
     body_layout: layout.Idx,
     rewrite: ?TopLevelRestBindingRewrite,
+    extra_prelude_stmts: []const LirStmt,
     deferred_rest_start: usize,
     deferred_rest_len: usize,
     region: Region,
 ) Allocator.Error!LirExprId {
-    if (rewrite == null and deferred_rest_len == 0) return body;
+    if (rewrite == null and deferred_rest_len == 0 and extra_prelude_stmts.len == 0) return body;
 
     const save_len = self.scratch_lir_stmts.items.len;
     defer self.scratch_lir_stmts.shrinkRetainingCapacity(save_len);
@@ -5590,6 +5835,7 @@ fn wrapExprWithTopLevelRestBindingPrelude(
         }
     }
 
+    try self.scratch_lir_stmts.appendSlice(self.allocator, extra_prelude_stmts);
     try self.appendDeferredListRestBindingDecls(deferred_rest_start, deferred_rest_len, region);
     const stmts = try self.lir_store.addStmts(self.scratch_lir_stmts.items[save_len..]);
     return self.lir_store.addExpr(.{ .block = .{
@@ -5619,6 +5865,158 @@ fn wrapExprWithDeferredListRestBindings(
         .final_expr = body,
         .result_layout = body_layout,
     } }, region);
+}
+
+fn wrapExprWithPreludeStmts(
+    self: *Self,
+    body: LirExprId,
+    body_layout: layout.Idx,
+    prelude_stmts: []const LirStmt,
+    region: Region,
+) Allocator.Error!LirExprId {
+    if (prelude_stmts.len == 0) return body;
+
+    const stmts = try self.lir_store.addStmts(prelude_stmts);
+    return self.lir_store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = body,
+        .result_layout = body_layout,
+    } }, region);
+}
+
+fn rewriteProcEntryMutableBindings(
+    self: *Self,
+    pat_id: LirPatternId,
+    ownership_mode: BindingOwnershipMode,
+    cell_init_stmts: *std.ArrayList(LirStmt),
+    region: Region,
+) Allocator.Error!LirPatternId {
+    if (pat_id.isNone()) return pat_id;
+
+    const pat = self.lir_store.getPattern(pat_id);
+
+    switch (pat) {
+        .bind => |bind| {
+            if (!bind.reassignable) return pat_id;
+
+            const source = try self.freshBindPattern(bind.layout_idx, false, region);
+            try self.symbol_layouts.put(source.symbol.raw(), bind.layout_idx);
+            try self.symbol_binding_modes.put(source.symbol.raw(), ownership_mode);
+
+            const source_lookup = try self.lir_store.addExpr(.{ .lookup = .{
+                .symbol = source.symbol,
+                .layout_idx = bind.layout_idx,
+            } }, region);
+            try cell_init_stmts.append(self.allocator, .{ .cell_init = .{
+                .cell = bind.symbol,
+                .layout_idx = bind.layout_idx,
+                .expr = source_lookup,
+            } });
+            return source.pattern;
+        },
+        .as_pattern => |as_pat| {
+            const inner = try self.rewriteProcEntryMutableBindings(as_pat.inner, ownership_mode, cell_init_stmts, region);
+            if (!as_pat.reassignable and inner == as_pat.inner) return pat_id;
+
+            if (as_pat.reassignable) {
+                const source_symbol = self.freshSymbol();
+                try self.symbol_layouts.put(source_symbol.raw(), as_pat.layout_idx);
+                try self.symbol_binding_modes.put(source_symbol.raw(), ownership_mode);
+
+                const source_pattern = try self.lir_store.addPattern(.{ .as_pattern = .{
+                    .symbol = source_symbol,
+                    .layout_idx = as_pat.layout_idx,
+                    .reassignable = false,
+                    .inner = inner,
+                } }, region);
+                const source_lookup = try self.lir_store.addExpr(.{ .lookup = .{
+                    .symbol = source_symbol,
+                    .layout_idx = as_pat.layout_idx,
+                } }, region);
+                try cell_init_stmts.append(self.allocator, .{ .cell_init = .{
+                    .cell = as_pat.symbol,
+                    .layout_idx = as_pat.layout_idx,
+                    .expr = source_lookup,
+                } });
+                return source_pattern;
+            }
+
+            return self.lir_store.addPattern(.{ .as_pattern = .{
+                .symbol = as_pat.symbol,
+                .layout_idx = as_pat.layout_idx,
+                .reassignable = false,
+                .inner = inner,
+            } }, region);
+        },
+        .tag => |tag_pat| {
+            const args = self.lir_store.getPatternSpan(tag_pat.args);
+            const save = self.scratch_lir_pattern_ids.items.len;
+            defer self.scratch_lir_pattern_ids.shrinkRetainingCapacity(save);
+            var changed = false;
+            for (args) |arg_pat| {
+                const rewritten = try self.rewriteProcEntryMutableBindings(arg_pat, ownership_mode, cell_init_stmts, region);
+                changed = changed or rewritten != arg_pat;
+                try self.scratch_lir_pattern_ids.append(self.allocator, rewritten);
+            }
+            if (!changed) return pat_id;
+            const new_args = try self.lir_store.addPatternSpan(self.scratch_lir_pattern_ids.items[save..]);
+            return self.lir_store.addPattern(.{ .tag = .{
+                .discriminant = tag_pat.discriminant,
+                .union_layout = tag_pat.union_layout,
+                .args = new_args,
+            } }, region);
+        },
+        .struct_ => |struct_pat| {
+            const fields = self.lir_store.getPatternSpan(struct_pat.fields);
+            const save = self.scratch_lir_pattern_ids.items.len;
+            defer self.scratch_lir_pattern_ids.shrinkRetainingCapacity(save);
+            var changed = false;
+            for (fields) |field_pat| {
+                const rewritten = try self.rewriteProcEntryMutableBindings(field_pat, ownership_mode, cell_init_stmts, region);
+                changed = changed or rewritten != field_pat;
+                try self.scratch_lir_pattern_ids.append(self.allocator, rewritten);
+            }
+            if (!changed) return pat_id;
+            const new_fields = try self.lir_store.addPatternSpan(self.scratch_lir_pattern_ids.items[save..]);
+            return self.lir_store.addPattern(.{ .struct_ = .{
+                .struct_layout = struct_pat.struct_layout,
+                .fields = new_fields,
+            } }, region);
+        },
+        .list => |list_pat| {
+            const prefix = self.lir_store.getPatternSpan(list_pat.prefix);
+            const save_prefix = self.scratch_lir_pattern_ids.items.len;
+            defer self.scratch_lir_pattern_ids.shrinkRetainingCapacity(save_prefix);
+            var changed = false;
+            for (prefix) |elem_pat| {
+                const rewritten = try self.rewriteProcEntryMutableBindings(elem_pat, ownership_mode, cell_init_stmts, region);
+                changed = changed or rewritten != elem_pat;
+                try self.scratch_lir_pattern_ids.append(self.allocator, rewritten);
+            }
+            const new_prefix = try self.lir_store.addPatternSpan(self.scratch_lir_pattern_ids.items[save_prefix..]);
+            const new_rest = try self.rewriteProcEntryMutableBindings(list_pat.rest, ownership_mode, cell_init_stmts, region);
+            changed = changed or new_rest != list_pat.rest;
+
+            const suffix = self.lir_store.getPatternSpan(list_pat.suffix);
+            const save_suffix = self.scratch_lir_pattern_ids.items.len;
+            defer self.scratch_lir_pattern_ids.shrinkRetainingCapacity(save_suffix);
+            for (suffix) |elem_pat| {
+                const rewritten = try self.rewriteProcEntryMutableBindings(elem_pat, ownership_mode, cell_init_stmts, region);
+                changed = changed or rewritten != elem_pat;
+                try self.scratch_lir_pattern_ids.append(self.allocator, rewritten);
+            }
+            const new_suffix = try self.lir_store.addPatternSpan(self.scratch_lir_pattern_ids.items[save_suffix..]);
+            if (!changed) return pat_id;
+            return self.lir_store.addPattern(.{ .list = .{
+                .list_layout = list_pat.list_layout,
+                .elem_layout = list_pat.elem_layout,
+                .prefix = new_prefix,
+                .rest = new_rest,
+                .suffix = new_suffix,
+            } }, region);
+        },
+        .wildcard, .int_literal, .float_literal, .str_literal => return pat_id,
+    }
 }
 
 /// Create a fresh synthetic symbol for generated code (ANF bindings).

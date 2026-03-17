@@ -812,6 +812,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Register where RocOps pointer is saved (for calling builtins that need it)
         roc_ops_reg: ?GeneralReg = null,
 
+        /// Proc currently being compiled, for debug-time invariant reporting.
+        current_proc_name: ?Symbol = null,
+
         /// Stack slot where the hidden return pointer is saved (for return-by-pointer
         /// convention used when the return type exceeds the register limit).
         /// Set during deferred-prologue proc compilation, used by moveToReturnRegisterWithLayout
@@ -1418,6 +1421,26 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Generate code for an expression (raw — may return bare register locations).
         fn generateExprRaw(self: *Self, expr_id: LirExprId) Allocator.Error!ValueLocation {
+            if (builtin.mode == .Debug) {
+                std.debug.print(
+                    "generateExprRaw proc={d} expr={d} expr_len={d}\n",
+                    .{
+                        if (self.current_proc_name) |sym| @as(u64, @bitCast(sym)) else 0,
+                        @intFromEnum(expr_id),
+                        self.store.exprs.items.len,
+                    },
+                );
+            }
+            if (builtin.mode == .Debug and @intFromEnum(expr_id) >= self.store.exprs.items.len) {
+                std.debug.panic(
+                    "LirCodeGen: invalid expr_id {d} while compiling proc {d} (store len {d})",
+                    .{
+                        @intFromEnum(expr_id),
+                        if (self.current_proc_name) |sym| @as(u64, @bitCast(sym)) else 0,
+                        self.store.exprs.items.len,
+                    },
+                );
+            }
             const expr = self.store.getExpr(expr_id);
 
             return switch (expr) {
@@ -4703,6 +4726,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.symbol_locations.put(symbol_key, loc);
                 }
                 return loc;
+            }
+
+            if (builtin.mode == .Debug) {
+                std.debug.print(
+                    "generateLookup missing symbol={d} layout={d} proc={d}\n",
+                    .{
+                        symbol.raw(),
+                        @intFromEnum(layout_idx),
+                        if (self.current_proc_name) |sym| @as(u64, @bitCast(sym)) else 0,
+                    },
+                );
             }
 
             unreachable;
@@ -12824,6 +12858,119 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// callee-saved registers are used, then prepends prologue and adjusts relocations.
         fn compileProcSpec(self: *Self, proc: LirProcSpec) Allocator.Error!void {
             const key: u64 = @bitCast(proc.name);
+            if (builtin.mode == .Debug and key == 18446744069414584320) {
+                const Debug = struct {
+                    fn printExpr(store: *const LirExprStore, expr_id: LirExprId, indent: usize) void {
+                        for (0..indent) |_| std.debug.print("  ", .{});
+                        const expr = store.getExpr(expr_id);
+                        switch (expr) {
+                            .lookup => |lookup| std.debug.print("lookup sym={d} layout={d}\n", .{ lookup.symbol.raw(), @intFromEnum(lookup.layout_idx) }),
+                            .struct_access => |sa| {
+                                std.debug.print("struct_access field={d} layout={d}\n", .{ sa.field_idx, @intFromEnum(sa.field_layout) });
+                                printExpr(store, sa.struct_expr, indent + 1);
+                            },
+                            .struct_ => |s| {
+                                std.debug.print("struct layout={d} fields={d}\n", .{ @intFromEnum(s.struct_layout), store.getExprSpan(s.fields).len });
+                                for (store.getExprSpan(s.fields)) |field| {
+                                    printExpr(store, field, indent + 1);
+                                }
+                            },
+                            .proc_call => |call| {
+                                std.debug.print("proc_call proc={d} ret={d} argc={d}\n", .{ @intFromEnum(call.proc), @intFromEnum(call.ret_layout), store.getExprSpan(call.args).len });
+                                for (store.getExprSpan(call.args)) |arg| {
+                                    printExpr(store, arg, indent + 1);
+                                }
+                            },
+                            .match_expr => |m| {
+                                std.debug.print("match result_layout={d} branches={d}\n", .{ @intFromEnum(m.result_layout), m.branches.len });
+                                for (0..indent + 1) |_| std.debug.print("  ", .{});
+                                std.debug.print("value\n", .{});
+                                printExpr(store, m.value, indent + 2);
+                                for (store.getMatchBranches(m.branches), 0..) |branch, i| {
+                                    for (0..indent + 1) |_| std.debug.print("  ", .{});
+                                    std.debug.print("branch[{d}] guard={d}\n", .{ i, @intFromEnum(branch.guard) });
+                                    printExpr(store, branch.body, indent + 2);
+                                }
+                            },
+                            .block => |block| {
+                                std.debug.print("block result_layout={d} stmts={d}\n", .{ @intFromEnum(block.result_layout), block.stmts.len });
+                                for (store.getStmts(block.stmts)) |stmt| {
+                                    for (0..indent + 1) |_| std.debug.print("  ", .{});
+                                    switch (stmt) {
+                                        .decl => |binding| {
+                                            std.debug.print("decl pat={d}\n", .{@intFromEnum(binding.pattern)});
+                                            printExpr(store, binding.expr, indent + 2);
+                                        },
+                                        .mutate => |binding| {
+                                            std.debug.print("mutate pat={d}\n", .{@intFromEnum(binding.pattern)});
+                                            printExpr(store, binding.expr, indent + 2);
+                                        },
+                                        .cell_init => |binding| {
+                                            std.debug.print("cell_init cell={d} layout={d}\n", .{ binding.cell.raw(), @intFromEnum(binding.layout_idx) });
+                                            printExpr(store, binding.expr, indent + 2);
+                                        },
+                                        .cell_store => |binding| {
+                                            std.debug.print("cell_store cell={d} layout={d}\n", .{ binding.cell.raw(), @intFromEnum(binding.layout_idx) });
+                                            printExpr(store, binding.expr, indent + 2);
+                                        },
+                                        .cell_drop => |binding| {
+                                            std.debug.print("cell_drop cell={d} layout={d}\n", .{ binding.cell.raw(), @intFromEnum(binding.layout_idx) });
+                                        },
+                                    }
+                                }
+                                for (0..indent + 1) |_| std.debug.print("  ", .{});
+                                std.debug.print("final\n", .{});
+                                printExpr(store, block.final_expr, indent + 2);
+                            },
+                            else => std.debug.print("{s}\n", .{@tagName(expr)}),
+                        }
+                    }
+                };
+
+                const body_stmt = self.store.getCFStmt(proc.body);
+                std.debug.print(
+                    "compileProcSpec debug proc={d} body_stmt={d} tag={s} selfrec={s}\n",
+                    .{
+                        key,
+                        @intFromEnum(proc.body),
+                        @tagName(body_stmt),
+                        @tagName(proc.is_self_recursive),
+                    },
+                );
+                switch (body_stmt) {
+                    .ret => |ret| Debug.printExpr(self.store, ret.value, 1),
+                    else => {},
+                }
+                const expr30: LirExprId = @enumFromInt(30);
+                const expr31: LirExprId = @enumFromInt(31);
+                if (@intFromEnum(expr31) < self.store.exprs.items.len) {
+                    const e30 = self.store.getExpr(expr30);
+                    const e31 = self.store.getExpr(expr31);
+                    std.debug.print("  expr30 tag={s}\n", .{@tagName(e30)});
+                    switch (e30) {
+                        .lookup => |lookup| {
+                            std.debug.print("    lookup sym={d} layout={d}\n", .{ @as(u64, @bitCast(lookup.symbol)), @intFromEnum(lookup.layout_idx) });
+                            if (self.store.getSymbolDef(lookup.symbol)) |def_expr| {
+                                std.debug.print("    lookup def expr={d} tag={s}\n", .{ @intFromEnum(def_expr), @tagName(self.store.getExpr(def_expr)) });
+                            } else {
+                                std.debug.print("    lookup has no symbol def\n", .{});
+                            }
+                        },
+                        .block => |block| std.debug.print("    block final={d} stmts={d}\n", .{ @intFromEnum(block.final_expr), block.stmts.len }),
+                        .match_expr => |m| std.debug.print("    match value={d} branches={d}\n", .{ @intFromEnum(m.value), m.branches.len }),
+                        .proc_call => |call| std.debug.print("    proc_call proc={d} argc={d}\n", .{ @intFromEnum(call.proc), self.store.getExprSpan(call.args).len }),
+                        else => {},
+                    }
+                    std.debug.print("  expr31 tag={s}\n", .{@tagName(e31)});
+                    switch (e31) {
+                        .struct_ => |s| std.debug.print("    struct layout={d} fields={d}\n", .{ @intFromEnum(s.struct_layout), self.store.getExprSpan(s.fields).len }),
+                        .block => |block| std.debug.print("    block final={d} stmts={d}\n", .{ @intFromEnum(block.final_expr), block.stmts.len }),
+                        .match_expr => |m| std.debug.print("    match value={d} branches={d}\n", .{ @intFromEnum(m.value), m.branches.len }),
+                        .proc_call => |call| std.debug.print("    proc_call proc={d} argc={d}\n", .{ @intFromEnum(call.proc), self.store.getExprSpan(call.args).len }),
+                        else => {},
+                    }
+                }
+            }
 
             // Save current state - procedure has its own scope that shouldn't pollute caller
             const saved_stack_offset = self.codegen.stack_offset;
@@ -12836,6 +12983,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const saved_roc_ops_reg = self.roc_ops_reg;
             const saved_ret_ptr_slot = self.ret_ptr_slot;
             const saved_binding_symbol = self.current_binding_symbol;
+            const saved_current_proc_name = self.current_proc_name;
             var saved_symbol_locations = self.symbol_locations.clone() catch return error.OutOfMemory;
             defer saved_symbol_locations.deinit();
             var saved_mutable_var_slots = self.mutable_var_slots.clone() catch return error.OutOfMemory;
@@ -12863,6 +13011,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.float_owners = [_]?u32{null} ** CodeGen.NUM_FLOAT_REGS;
             self.roc_ops_reg = null;
             self.current_binding_symbol = null;
+            self.current_proc_name = proc.name;
 
             // Reserve R12/X20 for roc_ops exactly like standalone lambda compilation.
             if (comptime target.toCpuArch() == .x86_64) {
@@ -12937,6 +13086,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.codegen.float_owners = saved_float_owners;
                 self.roc_ops_reg = saved_roc_ops_reg;
                 self.current_binding_symbol = saved_binding_symbol;
+                self.current_proc_name = saved_current_proc_name;
                 self.symbol_locations.deinit();
                 self.symbol_locations = saved_symbol_locations.clone() catch unreachable;
                 self.mutable_var_slots.deinit();
@@ -13105,6 +13255,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.roc_ops_reg = saved_roc_ops_reg;
             self.ret_ptr_slot = saved_ret_ptr_slot;
             self.current_binding_symbol = saved_binding_symbol;
+            self.current_proc_name = saved_current_proc_name;
             self.symbol_locations.deinit();
             self.symbol_locations = saved_symbol_locations.clone() catch return error.OutOfMemory;
             self.mutable_var_slots.deinit();
@@ -15564,6 +15715,376 @@ test "code generator initialization" {
 
     var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, null);
     defer codegen.deinit();
+}
+
+test "proc params and mutable list cells use distinct stack slots" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
+        return error.SkipZigTest;
+    }
+
+    const allocator = std.testing.allocator;
+    var store = LirExprStore.init(allocator);
+    defer store.deinit();
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+
+    const u32_layout: layout.Idx = .u32;
+    const list_layout = try test_state.layout_store.insertLayout(layout.Layout.list(u32_layout));
+
+    const sym_start = Symbol.fromRaw(1);
+    const sym_end = Symbol.fromRaw(2);
+    const sym_answer = Symbol.fromRaw(3);
+
+    const pat_start = try store.addPattern(.{ .bind = .{
+        .symbol = sym_start,
+        .layout_idx = u32_layout,
+        .reassignable = false,
+    } }, base.Region.zero());
+    const pat_end = try store.addPattern(.{ .bind = .{
+        .symbol = sym_end,
+        .layout_idx = u32_layout,
+        .reassignable = false,
+    } }, base.Region.zero());
+    const params = try store.addPatternSpan(&.{ pat_start, pat_end });
+
+    const answer_load = try store.addExpr(.{ .cell_load = .{
+        .cell = sym_answer,
+        .layout_idx = list_layout,
+    } }, base.Region.zero());
+    const one = try store.addExpr(.{ .i64_literal = .{
+        .value = 1,
+        .layout_idx = u32_layout,
+    } }, base.Region.zero());
+    const append_args = try store.addExprSpan(&.{ answer_load, one });
+    const append_expr = try store.addExpr(.{ .low_level = .{
+        .op = .list_append_unsafe,
+        .args = append_args,
+        .ret_layout = list_layout,
+    } }, base.Region.zero());
+
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, null);
+    defer codegen.deinit();
+
+    const HostCodeGen = @TypeOf(codegen.codegen);
+    if (comptime builtin.cpu.arch == .aarch64) {
+        codegen.codegen.stack_offset = 16 + HostCodeGen.CALLEE_SAVED_AREA_SIZE;
+    } else {
+        codegen.codegen.stack_offset = -HostCodeGen.CALLEE_SAVED_AREA_SIZE;
+    }
+
+    try codegen.bindLambdaParams(params, 0, false);
+
+    const end_loc = codegen.symbol_locations.get(sym_end.raw()) orelse unreachable;
+    const end_slot: i32 = switch (end_loc) {
+        .stack => |s| s.offset,
+        else => unreachable,
+    };
+
+    try codegen.initializeCell(sym_answer, list_layout, .{ .immediate_i64 = 0 });
+    const answer_info = codegen.mutable_var_slots.get(sym_answer.raw()) orelse unreachable;
+    try std.testing.expect(answer_info.slot != end_slot);
+
+    const append_loc = try codegen.generateExpr(append_expr);
+    const append_slot: i32 = switch (append_loc) {
+        .list_stack => |info| info.struct_offset,
+        else => unreachable,
+    };
+    try std.testing.expect(append_slot != end_slot);
+    try std.testing.expect(append_slot != answer_info.slot);
+}
+
+test "two-arg proc list loop returns full length" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
+        return error.SkipZigTest;
+    }
+
+    const RcInsertPass = lir.RcInsert.RcInsertPass;
+    const ExecutableMemory = @import("ExecutableMemory.zig").ExecutableMemory;
+    const RocAlloc = builtins.host_abi.RocAlloc;
+    const RocDealloc = builtins.host_abi.RocDealloc;
+    const RocRealloc = builtins.host_abi.RocRealloc;
+    const RocDbg = builtins.host_abi.RocDbg;
+    const RocExpectFailed = builtins.host_abi.RocExpectFailed;
+    const RocCrashed = builtins.host_abi.RocCrashed;
+
+    const SimpleTestEnv = struct {
+        const Self = @This();
+
+        allocator: Allocator,
+        roc_ops: builtins.host_abi.RocOps,
+
+        fn init(allocator: Allocator) Self {
+            return .{
+                .allocator = allocator,
+                .roc_ops = .{
+                    .env = undefined,
+                    .roc_alloc = rocAlloc,
+                    .roc_dealloc = rocDealloc,
+                    .roc_realloc = rocRealloc,
+                    .roc_dbg = rocDbg,
+                    .roc_expect_failed = rocExpectFailed,
+                    .roc_crashed = rocCrashed,
+                    .hosted_fns = .{ .count = 0, .fns = undefined },
+                },
+            };
+        }
+
+        fn getOps(self: *Self) *builtins.host_abi.RocOps {
+            self.roc_ops.env = @ptrCast(self);
+            return &self.roc_ops;
+        }
+
+        fn metaBytes(alignment: usize) usize {
+            return @max(alignment, @alignOf(usize));
+        }
+
+        fn rocAlloc(args: *RocAlloc, env: *anyopaque) callconv(.c) void {
+            const self: *Self = @ptrCast(@alignCast(env));
+            const align_enum = std.mem.Alignment.fromByteUnits(args.alignment);
+            const meta = metaBytes(args.alignment);
+            const total = args.length + meta;
+            const alloc_base = self.allocator.rawAlloc(total, align_enum, @returnAddress()) orelse
+                @panic("SimpleTestEnv alloc failed");
+            const size_ptr: *usize = @ptrFromInt(@intFromPtr(alloc_base) + meta - @sizeOf(usize));
+            size_ptr.* = total;
+            args.answer = @ptrFromInt(@intFromPtr(alloc_base) + meta);
+        }
+
+        fn rocDealloc(args: *RocDealloc, env: *anyopaque) callconv(.c) void {
+            const self: *Self = @ptrCast(@alignCast(env));
+            const meta = metaBytes(args.alignment);
+            const total_ptr: *const usize = @ptrFromInt(@intFromPtr(args.ptr) - @sizeOf(usize));
+            const total = total_ptr.*;
+            const alloc_base: [*]u8 = @ptrFromInt(@intFromPtr(args.ptr) - meta);
+            const align_enum = std.mem.Alignment.fromByteUnits(args.alignment);
+            self.allocator.rawFree(alloc_base[0..total], align_enum, @returnAddress());
+        }
+
+        fn rocRealloc(args: *RocRealloc, env: *anyopaque) callconv(.c) void {
+            const self: *Self = @ptrCast(@alignCast(env));
+            const old_ptr = args.answer;
+            const meta = metaBytes(args.alignment);
+            const old_total_ptr: *const usize = @ptrFromInt(@intFromPtr(old_ptr) - @sizeOf(usize));
+            const old_total = old_total_ptr.*;
+            const old_base: [*]u8 = @ptrFromInt(@intFromPtr(old_ptr) - meta);
+            const new_total = args.new_length + meta;
+            const align_enum = std.mem.Alignment.fromByteUnits(args.alignment);
+            const new_base = self.allocator.rawAlloc(new_total, align_enum, @returnAddress()) orelse
+                @panic("SimpleTestEnv realloc failed");
+            @memcpy(new_base[0..@min(old_total, new_total)], old_base[0..@min(old_total, new_total)]);
+            self.allocator.rawFree(old_base[0..old_total], align_enum, @returnAddress());
+            const new_total_ptr: *usize = @ptrFromInt(@intFromPtr(new_base) + meta - @sizeOf(usize));
+            new_total_ptr.* = new_total;
+            args.answer = @ptrFromInt(@intFromPtr(new_base) + meta);
+        }
+
+        fn rocDbg(_: *const RocDbg, _: *anyopaque) callconv(.c) void {
+            @panic("unexpected dbg in SimpleTestEnv");
+        }
+
+        fn rocExpectFailed(_: *const RocExpectFailed, _: *anyopaque) callconv(.c) void {
+            @panic("unexpected expect failure in SimpleTestEnv");
+        }
+
+        fn rocCrashed(args: *const RocCrashed, _: *anyopaque) callconv(.c) void {
+            std.debug.panic("roc crashed: {s}", .{args.utf8_bytes[0..args.len]});
+        }
+    };
+
+    const allocator = std.testing.allocator;
+    var store = LirExprStore.init(allocator);
+    defer store.deinit();
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+
+    const u32_layout: layout.Idx = .u32;
+    const i64_layout: layout.Idx = .i64;
+    const list_layout = try test_state.layout_store.insertLayout(layout.Layout.list(u32_layout));
+
+    const sym_start = Symbol.fromRaw(101);
+    const sym_end = Symbol.fromRaw(102);
+    const sym_current = Symbol.fromRaw(103);
+    const sym_answer = Symbol.fromRaw(104);
+    const proc_symbol = Symbol.fromRaw(105);
+
+    const pat_start = try store.addPattern(.{ .bind = .{
+        .symbol = sym_start,
+        .layout_idx = u32_layout,
+        .reassignable = false,
+    } }, base.Region.zero());
+    const pat_end = try store.addPattern(.{ .bind = .{
+        .symbol = sym_end,
+        .layout_idx = u32_layout,
+        .reassignable = false,
+    } }, base.Region.zero());
+    const proc_params = try store.addPatternSpan(&.{ pat_start, pat_end });
+
+    const wildcard_zst = try store.addPattern(.{ .wildcard = .{ .layout_idx = .zst } }, base.Region.zero());
+
+    const start_lookup = try store.addExpr(.{ .lookup = .{
+        .symbol = sym_start,
+        .layout_idx = u32_layout,
+    } }, base.Region.zero());
+    const end_lookup = try store.addExpr(.{ .lookup = .{
+        .symbol = sym_end,
+        .layout_idx = u32_layout,
+    } }, base.Region.zero());
+    const current_load_cond = try store.addExpr(.{ .cell_load = .{
+        .cell = sym_current,
+        .layout_idx = u32_layout,
+    } }, base.Region.zero());
+    const cond_args = try store.addExprSpan(&.{ current_load_cond, end_lookup });
+    const cond_expr = try store.addExpr(.{ .low_level = .{
+        .op = .num_is_lte,
+        .args = cond_args,
+        .ret_layout = .bool,
+    } }, base.Region.zero());
+
+    const answer_load_append = try store.addExpr(.{ .cell_load = .{
+        .cell = sym_answer,
+        .layout_idx = list_layout,
+    } }, base.Region.zero());
+    const current_load_append = try store.addExpr(.{ .cell_load = .{
+        .cell = sym_current,
+        .layout_idx = u32_layout,
+    } }, base.Region.zero());
+    const append_args = try store.addExprSpan(&.{ answer_load_append, current_load_append });
+    const append_expr = try store.addExpr(.{ .low_level = .{
+        .op = .list_append_unsafe,
+        .args = append_args,
+        .ret_layout = list_layout,
+    } }, base.Region.zero());
+
+    const current_load_inc = try store.addExpr(.{ .cell_load = .{
+        .cell = sym_current,
+        .layout_idx = u32_layout,
+    } }, base.Region.zero());
+    const one = try store.addExpr(.{ .i64_literal = .{
+        .value = 1,
+        .layout_idx = u32_layout,
+    } }, base.Region.zero());
+    const add_args = try store.addExprSpan(&.{ current_load_inc, one });
+    const next_current = try store.addExpr(.{ .low_level = .{
+        .op = .num_plus,
+        .args = add_args,
+        .ret_layout = u32_layout,
+    } }, base.Region.zero());
+
+    const unit = try store.addExpr(.{ .struct_ = .{
+        .struct_layout = .none,
+        .fields = try store.addExprSpan(&.{}),
+    } }, base.Region.zero());
+
+    const loop_body_stmts = try store.addStmts(&.{
+        .{ .cell_store = .{
+            .cell = sym_answer,
+            .layout_idx = list_layout,
+            .expr = append_expr,
+        } },
+        .{ .cell_store = .{
+            .cell = sym_current,
+            .layout_idx = u32_layout,
+            .expr = next_current,
+        } },
+    });
+    const loop_body = try store.addExpr(.{ .block = .{
+        .stmts = loop_body_stmts,
+        .final_expr = unit,
+        .result_layout = .zst,
+    } }, base.Region.zero());
+    const while_expr = try store.addExpr(.{ .while_loop = .{
+        .cond = cond_expr,
+        .body = loop_body,
+    } }, base.Region.zero());
+
+    const empty_list = try store.addExpr(.{ .empty_list = .{
+        .elem_layout = u32_layout,
+        .list_layout = list_layout,
+    } }, base.Region.zero());
+    const final_answer = try store.addExpr(.{ .cell_load = .{
+        .cell = sym_answer,
+        .layout_idx = list_layout,
+    } }, base.Region.zero());
+
+    const raw_body_stmts = try store.addStmts(&.{
+        .{ .cell_init = .{
+            .cell = sym_current,
+            .layout_idx = u32_layout,
+            .expr = start_lookup,
+        } },
+        .{ .cell_init = .{
+            .cell = sym_answer,
+            .layout_idx = list_layout,
+            .expr = empty_list,
+        } },
+        .{ .decl = .{
+            .pattern = wildcard_zst,
+            .expr = while_expr,
+        } },
+    });
+    const raw_body = try store.addExpr(.{ .block = .{
+        .stmts = raw_body_stmts,
+        .final_expr = final_answer,
+        .result_layout = list_layout,
+    } }, base.Region.zero());
+
+    var proc_rc = try RcInsertPass.init(allocator, &store, &test_state.layout_store);
+    defer proc_rc.deinit();
+    const proc_body = try proc_rc.insertRcOpsForProcBody(raw_body, proc_params, list_layout);
+    const proc_body_stmt = try store.addCFStmt(.{ .ret = .{ .value = proc_body } });
+    const arg_layouts = try store.addLayoutIdxSpan(&.{ u32_layout, u32_layout });
+    const proc_id = try store.addProcSpec(.{
+        .name = proc_symbol,
+        .args = proc_params,
+        .arg_layouts = arg_layouts,
+        .body = proc_body_stmt,
+        .ret_layout = list_layout,
+        .closure_data_layout = null,
+        .force_pass_by_ptr = false,
+        .is_self_recursive = .not_self_recursive,
+    });
+
+    const start_arg = try store.addExpr(.{ .i64_literal = .{
+        .value = 1,
+        .layout_idx = u32_layout,
+    } }, base.Region.zero());
+    const end_arg = try store.addExpr(.{ .i64_literal = .{
+        .value = 5,
+        .layout_idx = u32_layout,
+    } }, base.Region.zero());
+    const call_args = try store.addExprSpan(&.{ start_arg, end_arg });
+    const call_expr = try store.addExpr(.{ .proc_call = .{
+        .proc = proc_id,
+        .args = call_args,
+        .ret_layout = list_layout,
+        .called_via = .apply,
+    } }, base.Region.zero());
+    const len_args = try store.addExprSpan(&.{call_expr});
+    const raw_root = try store.addExpr(.{ .low_level = .{
+        .op = .list_len,
+        .args = len_args,
+        .ret_layout = i64_layout,
+    } }, base.Region.zero());
+
+    var root_rc = try RcInsertPass.init(allocator, &store, &test_state.layout_store);
+    defer root_rc.deinit();
+    const root_expr = try root_rc.insertRcOps(raw_root);
+
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, null);
+    defer codegen.deinit();
+    try codegen.compileAllProcSpecs(store.getProcSpecs());
+
+    const result = try codegen.generateCode(root_expr, i64_layout, 1);
+    defer allocator.free(result.code);
+
+    var executable = try ExecutableMemory.initWithEntryOffset(result.code, result.entry_offset);
+    defer executable.deinit();
+
+    var test_env = SimpleTestEnv.init(allocator);
+
+    var out: i64 = -1;
+    executable.callWithResultPtrAndRocOps(@ptrCast(&out), @ptrCast(test_env.getOps()));
+    try std.testing.expectEqual(@as(i64, 5), out);
 }
 
 test "generate i64 literal" {
