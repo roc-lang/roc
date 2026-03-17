@@ -20,6 +20,7 @@ const builtin_loading_mod = eval_mod.builtin_loading;
 const TestEnv = @import("TestEnv.zig");
 const Interpreter = eval_mod.Interpreter;
 const DevEvaluator = eval_mod.DevEvaluator;
+const LlvmEvaluator = eval_mod.LlvmEvaluator;
 const StackValue = eval_mod.StackValue;
 const BuiltinTypes = eval_mod.BuiltinTypes;
 const LoadedModule = builtin_loading_mod.LoadedModule;
@@ -361,7 +362,7 @@ fn forkAndExecute(
             }
             std.debug.print("\n", .{});
             posix.close(pipe_write);
-            posix.exit(1);
+            std.c._exit(1);
         };
 
         // Write the result string to the pipe
@@ -369,12 +370,12 @@ fn forkAndExecute(
         while (written < result_str.len) {
             written += posix.write(pipe_write, result_str[written..]) catch {
                 posix.close(pipe_write);
-                posix.exit(1);
+                std.c._exit(1);
             };
         }
 
         posix.close(pipe_write);
-        posix.exit(0);
+        std.c._exit(0);
     } else {
         // Parent process
         posix.close(pipe_write);
@@ -464,8 +465,130 @@ pub fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []
     }
 }
 
-fn llvmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) ![]const u8 {
-    return devEvaluatorStr(allocator, module_env, expr_idx, builtin_module_env);
+const LlvmEvalError = error{
+    LlvmEvaluatorInitFailed,
+    GenerateCodeFailed,
+    OutOfMemory,
+    ChildSegfaulted,
+    ChildExecFailed,
+    ForkFailed,
+    PipeCreationFailed,
+};
+
+fn llvmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) LlvmEvalError![]const u8 {
+    var llvm_eval = LlvmEvaluator.init(allocator) catch {
+        return error.LlvmEvaluatorInitFailed;
+    };
+    defer llvm_eval.deinit();
+
+    const all_module_envs = [_]*ModuleEnv{ @constCast(builtin_module_env), module_env };
+
+    var code_result = llvm_eval.generateCode(module_env, expr_idx, &all_module_envs, null) catch {
+        return error.GenerateCodeFailed;
+    };
+    defer code_result.deinit();
+
+    if (has_fork) {
+        return forkAndExecuteLlvm(allocator, &llvm_eval, &code_result);
+    }
+
+    return executeAndFormatLlvm(allocator, &llvm_eval, &code_result);
+}
+
+noinline fn executeAndFormatLlvm(
+    allocator: std.mem.Allocator,
+    llvm_eval: *LlvmEvaluator,
+    code_result: *const LlvmEvaluator.CodeResult,
+) LlvmEvalError![]const u8 {
+    std.debug.print("", .{});
+
+    var result_buf: [512]u8 align(16) = undefined;
+    code_result.callWithResultPtrAndRocOps(@ptrCast(&result_buf), @ptrCast(&llvm_eval.roc_ops));
+
+    const roc_str: *const builtins.str.RocStr = @ptrCast(@alignCast(&result_buf));
+    const result = allocator.dupe(u8, roc_str.asSlice()) catch return error.OutOfMemory;
+
+    if (!roc_str.isSmallStr()) {
+        @constCast(roc_str).decref(&llvm_eval.roc_ops);
+    }
+
+    return result;
+}
+
+fn forkAndExecuteLlvm(
+    allocator: std.mem.Allocator,
+    llvm_eval: *LlvmEvaluator,
+    code_result: *const LlvmEvaluator.CodeResult,
+) LlvmEvalError![]const u8 {
+    const pipe_fds = posix.pipe() catch {
+        return error.PipeCreationFailed;
+    };
+    const pipe_read = pipe_fds[0];
+    const pipe_write = pipe_fds[1];
+
+    const fork_result = posix.fork() catch {
+        posix.close(pipe_read);
+        posix.close(pipe_write);
+        return error.ForkFailed;
+    };
+
+    if (fork_result == 0) {
+        posix.close(pipe_read);
+
+        const child_alloc = std.heap.page_allocator;
+        const result_str = executeAndFormatLlvm(child_alloc, llvm_eval, code_result) catch {
+            posix.close(pipe_write);
+            std.c._exit(1);
+        };
+
+        var written: usize = 0;
+        while (written < result_str.len) {
+            written += posix.write(pipe_write, result_str[written..]) catch {
+                posix.close(pipe_write);
+                std.c._exit(1);
+            };
+        }
+
+        posix.close(pipe_write);
+        std.c._exit(0);
+    }
+
+    posix.close(pipe_write);
+
+    const wait_result = posix.waitpid(fork_result, 0);
+    const status = wait_result.status;
+    const termination_signal: u8 = @truncate(status & 0x7f);
+
+    if (termination_signal != 0) {
+        posix.close(pipe_read);
+        std.debug.print("\nChild process killed by signal {d} during llvm backend execution\n", .{termination_signal});
+        return error.ChildSegfaulted;
+    }
+
+    const exit_code: u8 = @truncate((status >> 8) & 0xff);
+    if (exit_code != 0) {
+        posix.close(pipe_read);
+        return error.ChildExecFailed;
+    }
+
+    var result_buf: std.ArrayList(u8) = .empty;
+    errdefer result_buf.deinit(allocator);
+
+    var read_buf: [4096]u8 = undefined;
+    while (true) {
+        const bytes_read = posix.read(pipe_read, &read_buf) catch {
+            posix.close(pipe_read);
+            return error.ChildExecFailed;
+        };
+        if (bytes_read == 0) break;
+        result_buf.appendSlice(allocator, read_buf[0..bytes_read]) catch {
+            posix.close(pipe_read);
+            return error.OutOfMemory;
+        };
+    }
+
+    posix.close(pipe_read);
+    return result_buf.toOwnedSlice(allocator) catch return error.OutOfMemory;
 }
 
 /// Compare interpreter output against the llvm backend output.
@@ -576,7 +699,7 @@ const WasmEvalError = error{
 };
 
 /// Evaluate an expression using the WasmEvaluator + bytebox and return the result as a string.
-fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) WasmEvalError![]const u8 {
+pub fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) WasmEvalError![]const u8 {
     // Reset host-side heap pointer for each test
     wasm_heap_ptr = 65536;
 

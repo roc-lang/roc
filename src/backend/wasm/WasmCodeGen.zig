@@ -125,6 +125,9 @@ str_with_ascii_lowercased_import: ?u32 = null,
 str_with_ascii_uppercased_import: ?u32 = null,
 str_caseless_ascii_equals_import: ?u32 = null,
 str_from_utf8_import: ?u32 = null,
+int_from_str_import: ?u32 = null,
+dec_from_str_import: ?u32 = null,
+float_from_str_import: ?u32 = null,
 /// Configurable wasm stack size in bytes (default 1MB).
 wasm_stack_bytes: u32 = 1024 * 1024,
 /// Configurable wasm memory pages (0 = auto-compute from stack size).
@@ -292,6 +295,15 @@ fn registerHostImports(self: *Self) !void {
     self.str_release_excess_capacity_import = try self.module.addImport("env", "roc_str_release_excess_capacity", str_unary_type);
     self.str_with_capacity_import = try self.module.addImport("env", "roc_str_with_capacity", str_unary_type);
     self.str_from_utf8_import = try self.module.addImport("env", "roc_str_from_utf8", str_unary_type);
+
+    const int_from_str_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i32, .i32 }, &.{});
+    self.int_from_str_import = try self.module.addImport("env", "roc_int_from_str", int_from_str_type);
+
+    const dec_from_str_type = try self.module.addFuncType(&.{ .i32, .i32, .i32 }, &.{});
+    self.dec_from_str_import = try self.module.addImport("env", "roc_dec_from_str", dec_from_str_type);
+
+    const float_from_str_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i32 }, &.{});
+    self.float_from_str_import = try self.module.addImport("env", "roc_float_from_str", float_from_str_type);
 
     // String ops: (arg1, arg2, result_ptr) -> void
     const str_binary_type = try self.module.addFuncType(&.{ .i32, .i32, .i32 }, &.{});
@@ -8289,6 +8301,93 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             WasmModule.leb128WriteU32(self.allocator, &self.body, import_idx) catch return error.OutOfMemory;
             try self.emitFpOffset(result_offset);
         },
+        .num_from_str => {
+            const ls = self.getLayoutStore();
+            const ret_layout_val = ls.getLayout(ll.ret_layout);
+            if (ret_layout_val.tag != .tag_union) unreachable;
+            const tu_data = ls.getTagUnionData(ret_layout_val.data.tag_union.idx);
+            const disc_offset: u32 = tu_data.discriminant_offset;
+            const result_offset = try self.allocStackMemory(tu_data.size, 4);
+
+            var ok_payload_idx: ?layout.Idx = null;
+            const variants = ls.getTagUnionVariants(tu_data);
+            for (0..variants.len) |i| {
+                const payload = variants.get(@intCast(i)).payload_layout;
+                const candidate_payload = blk: {
+                    const payload_layout = ls.getLayout(payload);
+                    if (payload_layout.tag != .struct_) break :blk payload;
+
+                    const struct_data = ls.getStructData(payload_layout.data.struct_.idx);
+                    const fields = ls.struct_fields.sliceRange(struct_data.getFields());
+                    if (fields.len != 1) break :blk payload;
+
+                    break :blk fields.get(0).layout;
+                };
+
+                if (candidate_payload == .dec or candidate_payload == .f32 or candidate_payload == .f64) {
+                    ok_payload_idx = candidate_payload;
+                    break;
+                }
+                const payload_layout = ls.getLayout(candidate_payload);
+                if (payload_layout.tag == .scalar) {
+                    ok_payload_idx = candidate_payload;
+                    break;
+                }
+            }
+            const ok_payload = ok_payload_idx orelse unreachable;
+
+            try self.generateExpr(args[0]);
+            const input = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalSet(input);
+
+            if (ok_payload == .dec) {
+                const import_idx = self.dec_from_str_import orelse unreachable;
+                try self.emitLocalGet(input);
+                try self.emitFpOffset(result_offset);
+                self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(disc_offset)) catch return error.OutOfMemory;
+                self.body.append(self.allocator, Op.call) catch return error.OutOfMemory;
+                WasmModule.leb128WriteU32(self.allocator, &self.body, import_idx) catch return error.OutOfMemory;
+            } else if (ok_payload == .f32 or ok_payload == .f64) {
+                const import_idx = self.float_from_str_import orelse unreachable;
+                const float_width: i32 = if (ok_payload == .f32) 4 else 8;
+                try self.emitLocalGet(input);
+                try self.emitFpOffset(result_offset);
+                self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                WasmModule.leb128WriteI32(self.allocator, &self.body, float_width) catch return error.OutOfMemory;
+                self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(disc_offset)) catch return error.OutOfMemory;
+                self.body.append(self.allocator, Op.call) catch return error.OutOfMemory;
+                WasmModule.leb128WriteU32(self.allocator, &self.body, import_idx) catch return error.OutOfMemory;
+            } else {
+                const import_idx = self.int_from_str_import orelse unreachable;
+                const int_width: i32 = switch (ok_payload) {
+                    .u8, .i8 => 1,
+                    .u16, .i16 => 2,
+                    .u32, .i32 => 4,
+                    .u64, .i64 => 8,
+                    .u128, .i128 => 16,
+                    else => unreachable,
+                };
+                const is_signed: i32 = switch (ok_payload) {
+                    .i8, .i16, .i32, .i64, .i128 => 1,
+                    .u8, .u16, .u32, .u64, .u128 => 0,
+                    else => unreachable,
+                };
+                try self.emitLocalGet(input);
+                try self.emitFpOffset(result_offset);
+                self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                WasmModule.leb128WriteI32(self.allocator, &self.body, int_width) catch return error.OutOfMemory;
+                self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                WasmModule.leb128WriteI32(self.allocator, &self.body, is_signed) catch return error.OutOfMemory;
+                self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(disc_offset)) catch return error.OutOfMemory;
+                self.body.append(self.allocator, Op.call) catch return error.OutOfMemory;
+                WasmModule.leb128WriteU32(self.allocator, &self.body, import_idx) catch return error.OutOfMemory;
+            }
+
+            try self.emitFpOffset(result_offset);
+        },
 
         .str_inspekt,
         .u8_to_str,
@@ -8305,7 +8404,6 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .f32_to_str,
         .f64_to_str,
         .num_to_str,
-        .num_from_str,
         .num_from_numeral,
         => unreachable, // Resolved before backend codegen
 
@@ -10096,8 +10194,66 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LirExprId, re
             try self.generateExpr(args[0]);
             try self.generateExpr(args[1]);
             switch (vt) {
-                .i32 => self.body.append(self.allocator, Op.i32_rem_s) catch return error.OutOfMemory,
-                .i64 => self.body.append(self.allocator, Op.i64_rem_s) catch return error.OutOfMemory,
+                .i32 => {
+                    const rhs = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                    const rem = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.local_tee) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, rhs) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i32_rem_s) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.local_tee) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, rem) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, rhs) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, rem) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i32_ne) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, rem) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i32_lt_s) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, rhs) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i32_lt_s) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i32_ne) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.select) catch return error.OutOfMemory;
+                },
+                .i64 => {
+                    const rhs = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
+                    const rem = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.local_tee) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, rhs) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i64_rem_s) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.local_tee) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, rem) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, rhs) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i64_add) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, rem) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI64(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i64_ne) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, rem) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI64(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i64_lt_s) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, rhs) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI64(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i64_lt_s) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i32_ne) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.select) catch return error.OutOfMemory;
+                },
                 .f32, .f64 => try self.emitFloatMod(vt),
             }
         },
