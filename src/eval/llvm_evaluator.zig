@@ -239,7 +239,7 @@ pub const LlvmEvaluator = struct {
 
         pub fn deinit(self: *CodeResult) void {
             self.library.close();
-            std.fs.cwd().deleteFile(std.mem.sliceTo(self.library_path, 0)) catch {};
+            std.fs.cwd().deleteFile(self.library_path) catch {};
             self.allocator.free(self.library_path);
             // Note: layout_store is owned by LlvmEvaluator, not cleaned up here
         }
@@ -351,11 +351,11 @@ pub const LlvmEvaluator = struct {
             .{ .function_sections = false, .opt_level = opt_level },
         ) catch return error.CompilationFailed;
         errdefer {
-            std.fs.cwd().deleteFile(std.mem.sliceTo(library_path, 0)) catch {};
+            std.fs.cwd().deleteFile(library_path) catch {};
             self.allocator.free(library_path);
         }
 
-        var library = std.DynLib.open(std.mem.sliceTo(library_path, 0)) catch return error.CompilationFailed;
+        var library = std.DynLib.open(library_path) catch return error.CompilationFailed;
         errdefer library.close();
 
         const entry_fn = library.lookup(LlvmEntryFn, "roc_eval") orelse

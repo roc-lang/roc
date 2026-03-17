@@ -7036,20 +7036,12 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     /// Dispatch an enum_dispatch closure: LLVM switch on tag, each case calls that member's lambda.
-    fn dispatchEnumClosure(self: *MonoLlvmCodeGen, ed: anytype, args_span: anytype, ret_layout: layout.Idx) Error!LlvmBuilder.Value {
-        _ = self;
-        _ = ed;
-        _ = args_span;
-        _ = ret_layout;
+    fn dispatchEnumClosure(_: *MonoLlvmCodeGen, _: anytype, _: anytype, _: layout.Idx) Error!LlvmBuilder.Value {
         return error.CompilationFailed;
     }
 
     /// Dispatch a union_repr closure: LLVM switch on tag, each case extracts captures and calls.
-    fn dispatchUnionClosure(self: *MonoLlvmCodeGen, ur: anytype, _: lir.LIR.LirCaptureSpan, args_span: anytype, ret_layout: layout.Idx) Error!LlvmBuilder.Value {
-        _ = self;
-        _ = ur;
-        _ = args_span;
-        _ = ret_layout;
+    fn dispatchUnionClosure(_: *MonoLlvmCodeGen, _: anytype, _: lir.LIR.LirCaptureSpan, _: anytype, _: layout.Idx) Error!LlvmBuilder.Value {
         return error.CompilationFailed;
     }
 
