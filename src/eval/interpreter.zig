@@ -2762,11 +2762,6 @@ pub const Interpreter = struct {
 
                 std.debug.assert((list_arg.layout.tag == .list and elt_arg.ptr != null) or list_arg.layout.tag == .list_of_zst);
 
-                // Get or create field names
-                const list_field = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text("list"));
-                const prev_field = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text("prev"));
-                const field_names = [2]base_pkg.Ident.Idx{ list_field, prev_field };
-
                 // Get element layout info
                 const list_info = self.runtime_layout_store.getListInfo(list_arg.layout);
 
@@ -2780,24 +2775,35 @@ pub const Interpreter = struct {
                     elt_arg.incref(&self.runtime_layout_store, roc_ops);
                 }
 
+                // create the returned struct
+                const list_field = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text("list"));
+                const prev_field = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text("prev"));
+                const field_names = [2]base_pkg.Ident.Idx{ list_field, prev_field };
+
                 const field_layouts = [2]Layout{ list_arg.layout, list_info.elem_layout };
                 const record_idx = try self.runtime_layout_store.putRecord(self.env, &field_layouts, &field_names);
                 const record_layout = self.runtime_layout_store.getLayout(record_idx);
 
-                // Push the record
                 const result_rt_var = return_rt_var orelse try self.runtime_types.fresh();
                 var dest = try self.pushRaw(record_layout, 0, result_rt_var);
                 var acc = try dest.asRecord(&self.runtime_layout_store);
+
+                const list_field_stack_val = try acc.getFieldByName(list_field, list_arg.rt_var) orelse unreachable;
+                const list_ptr: *builtins.list.RocList = @ptrCast(@alignCast(list_field_stack_val.ptr.?));
+
+                if (self.runtime_layout_store.isZeroSized(list_info.elem_layout)) {
+                    // Since zst elements are all the same, we don't modify the list.
+                    // Coppying the list_of_zst into the 'list' field is efficient.
+                    try list_arg.copyToPtr(&self.runtime_layout_store, list_ptr, roc_ops);
+                    // No need to set the 'prev' field, since the correct value is a null pointer.
+                    dest.is_initialized = true;
+                    return dest;
+                }
 
                 // Get pointer space for the replaced item
                 const elem_rt_var = elt_arg.rt_var;
                 const prev_field_stack_val = try acc.getFieldByName(prev_field, elem_rt_var) orelse unreachable;
                 const prev_field_ptr = prev_field_stack_val.ptr orelse unreachable;
-
-                const list_field_stack_val = try acc.getFieldByName(list_field, list_arg.rt_var) orelse unreachable;
-                const list_ptr: *builtins.list.RocList = @ptrCast(@alignCast(list_field_stack_val.ptr.?));
-
-                const roc_list = list_arg.asRocList().?;
 
                 // Handle numeric type mismatch for index argument.
                 // The index should be U64 (integer), but due to numeric literal defaulting
@@ -2813,39 +2819,26 @@ pub const Interpreter = struct {
                     }
                 } else @intCast(index_arg.asI128()); // Normal integer path
 
-                if (self.runtime_layout_store.isZeroSized(list_info.elem_layout)) {
-                    // Set list field - for ZST we just copy the original list
-                    // Copy the list value to the field
-                    try list_arg.copyToPtr(&self.runtime_layout_store, list_ptr, roc_ops);
+                const roc_list = list_arg.asRocList().?;
 
-                    // Set prev field
-                    try elt_arg.copyToPtr(&self.runtime_layout_store, prev_field_ptr, roc_ops);
+                // Perform replace, copying the replaced element to out_element_ptr
+                const result_list = builtins.list.listReplace(
+                    roc_list.*,
+                    list_info.elem_alignment,
+                    index,
+                    @ptrCast(elt_arg.ptr.?),
+                    list_info.elem_size,
+                    rc.isRefcounted(),
+                    rc.incContext(),
+                    rc.incCallback(),
+                    rc.decContext(),
+                    rc.decCallback(),
+                    @ptrCast(prev_field_ptr),
+                    @ptrCast(copy_fn),
+                    roc_ops,
+                );
 
-                    // list_arg ownership is transferred to the result (pushCopy increfs)
-                    // const result = try self.pushCopy(list_arg, roc_ops);
-                    // list_arg.decref(&self.runtime_layout_store, roc_ops);
-                    // return result;
-                } else {
-                    // Perform replace, copying the replaced element to out_element_ptr
-                    const result_list = builtins.list.listReplace(
-                        roc_list.*,
-                        list_info.elem_alignment,
-                        index,
-                        @ptrCast(elt_arg.ptr.?),
-                        list_info.elem_size,
-                        rc.isRefcounted(),
-                        rc.incContext(),
-                        rc.incCallback(),
-                        rc.decContext(),
-                        rc.decCallback(),
-                        @ptrCast(prev_field_ptr),
-                        @ptrCast(copy_fn),
-                        roc_ops,
-                    );
-
-                    list_ptr.* = result_list;
-                }
-
+                list_ptr.* = result_list;
                 dest.is_initialized = true;
                 return dest;
             },
