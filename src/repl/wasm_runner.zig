@@ -14,6 +14,7 @@ const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
 const WasmEvaluator = eval_mod.WasmEvaluator;
 
+/// Errors that can occur during WebAssembly evaluation.
 pub const WasmEvalError = error{
     WasmEvaluatorInitFailed,
     WasmGenerateCodeFailed,
@@ -22,6 +23,7 @@ pub const WasmEvalError = error{
     OutOfMemory,
 };
 
+/// Compiles and executes a Roc expression via the WebAssembly backend, returning the result as a string.
 pub fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) WasmEvalError![]const u8 {
     wasm_heap_ptr = 65536;
 

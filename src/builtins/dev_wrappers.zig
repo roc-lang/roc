@@ -229,6 +229,7 @@ fn writeDiscriminant(out: [*]u8, offset: u32, size: u32, value: u64) void {
     }
 }
 
+/// Converts a UTF-8 byte list to a RocStr, writing the full result union (string or error details) to an output buffer.
 pub fn roc_builtins_str_from_utf8_result(
     out: [*]u8,
     list_bytes: ?[*]u8,
@@ -256,6 +257,7 @@ pub fn roc_builtins_str_from_utf8_result(
     writeDiscriminant(out, outer_disc_offset, outer_disc_size, err_tag);
 }
 
+/// Converts a UTF-8 byte list to a RocStr, returning the result components via separate out-pointers.
 pub fn roc_builtins_str_from_utf8_parts(
     out_string: *RocStr,
     out_index: *u64,
