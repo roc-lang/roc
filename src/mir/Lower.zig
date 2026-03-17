@@ -1553,7 +1553,7 @@ fn resolveFuncTypeInStore(types_store: *const types.Store, type_var: types.Var) 
     };
 }
 
-fn lookupAssociatedMethodSymbol(
+fn lookupAssociatedMethodExternalDef(
     self: *Self,
     source_env: *const ModuleEnv,
     nominal: types.NominalType,
@@ -1561,7 +1561,7 @@ fn lookupAssociatedMethodSymbol(
 ) Allocator.Error!?struct {
     target_env: *const ModuleEnv,
     module_idx: u32,
-    symbol: MIR.Symbol,
+    def_node_idx: u16,
     type_var: types.Var,
 } {
     const target_module_idx = self.findModuleForOriginMaybe(source_env, nominal.origin_module) orelse return null;
@@ -1578,7 +1578,7 @@ fn lookupAssociatedMethodSymbol(
     return .{
         .target_env = target_env,
         .module_idx = target_module_idx,
-        .symbol = try self.internExternalDefSymbol(target_module_idx, node_idx),
+        .def_node_idx = node_idx,
         .type_var = ModuleEnv.varFrom(target_env.store.getDef(def_idx).expr),
     };
 }
@@ -2061,8 +2061,11 @@ fn lowerStrInspektNominal(
                 .fn_var = undefined,
             };
 
-            const method_symbol = try self.resolvedDispatchTargetToSymbol(type_env, unbox_target);
-            const func_expr = try self.specializeMethod(method_symbol, unbox_fn_mono);
+            const func_expr = try self.lowerMonomorphizedExternalProcInstForDispatchTarget(
+                type_env,
+                unbox_target,
+                unbox_fn_mono,
+            );
             const unbox_args = try self.store.addExprSpan(self.allocator, &.{value_expr});
             const unboxed = try self.store.addExpr(
                 self.allocator,
@@ -2078,7 +2081,7 @@ fn lowerStrInspektNominal(
         }
     }
 
-    if (try self.lookupAssociatedMethodSymbol(type_env, nominal, type_env.idents.to_inspect)) |method_info| {
+    if (try self.lookupAssociatedMethodExternalDef(type_env, nominal, type_env.idents.to_inspect)) |method_info| {
         const resolved_func = resolveFuncTypeInStore(&method_info.target_env.types, method_info.type_var) orelse
             return self.lowerStrInspektExpr(type_env, value_expr, type_env.types.getNominalBackingVar(nominal), region);
         if (resolved_func.effectful) {
@@ -2120,7 +2123,12 @@ fn lowerStrInspektNominal(
             ),
         };
 
-        const func_expr = try self.specializeMethod(method_info.symbol, method_func_mono);
+        const func_expr = try self.lowerMonomorphizedExternalProcInst(
+            method_info.module_idx,
+            method_info.def_node_idx,
+            method_func_mono,
+            method_info.module_idx,
+        );
         const call_args = try self.store.addExprSpan(self.allocator, &.{value_expr});
         const call_expr = try self.store.addExpr(
             self.allocator,
@@ -2557,8 +2565,11 @@ fn lowerStrInspektExprByMonotype(
                 .fn_var = undefined,
             };
 
-            const method_symbol = try self.resolvedDispatchTargetToSymbol(module_env, unbox_target);
-            const func_expr = try self.specializeMethod(method_symbol, unbox_fn_mono);
+            const func_expr = try self.lowerMonomorphizedExternalProcInstForDispatchTarget(
+                module_env,
+                unbox_target,
+                unbox_fn_mono,
+            );
             const unbox_args = try self.store.addExprSpan(self.allocator, &.{value_expr});
             const unboxed = try self.store.addExpr(
                 self.allocator,
@@ -4401,6 +4412,77 @@ fn lowerDispatchProcInstForExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.E
     return self.lowerProcInst(proc_inst_id);
 }
 
+fn lookupMonomorphizedProcInst(
+    self: *Self,
+    template_id: Monomorphize.ProcTemplateId,
+    fn_monotype: Monotype.Idx,
+    fn_monotype_module_idx: u32,
+) Allocator.Error!Monomorphize.ProcInstId {
+    for (self.monomorphization.proc_insts.items, 0..) |proc_inst, idx| {
+        if (proc_inst.template != template_id) continue;
+        if (proc_inst.fn_monotype_module_idx != fn_monotype_module_idx) continue;
+
+        const imported_proc_mono = try self.importMonotypeFromStore(
+            &self.monomorphization.monotype_store,
+            proc_inst.fn_monotype,
+            proc_inst.fn_monotype_module_idx,
+            fn_monotype_module_idx,
+        );
+        if (try self.monotypesStructurallyEqual(imported_proc_mono, fn_monotype)) {
+            return @enumFromInt(idx);
+        }
+    }
+
+    if (std.debug.runtime_safety) {
+        std.debug.panic(
+            "MIR Lower invariant: monomorphization missing proc inst for template={d} module={d} monotype={d}",
+            .{ @intFromEnum(template_id), fn_monotype_module_idx, @intFromEnum(fn_monotype) },
+        );
+    }
+    unreachable;
+}
+
+fn lowerMonomorphizedExternalProcInst(
+    self: *Self,
+    target_module_idx: u32,
+    def_node_idx: u16,
+    fn_monotype: Monotype.Idx,
+    fn_monotype_module_idx: u32,
+) Allocator.Error!MIR.ExprId {
+    const template_id = self.monomorphization.getExternalProcTemplate(target_module_idx, def_node_idx) orelse {
+        if (std.debug.runtime_safety) {
+            std.debug.panic(
+                "MIR Lower invariant: monomorphization missing external proc template for module={d} node={d}",
+                .{ target_module_idx, def_node_idx },
+            );
+        }
+        unreachable;
+    };
+    const proc_inst_id = try self.lookupMonomorphizedProcInst(template_id, fn_monotype, fn_monotype_module_idx);
+    return self.lowerProcInst(proc_inst_id);
+}
+
+fn lowerMonomorphizedExternalProcInstForDispatchTarget(
+    self: *Self,
+    source_env: *const ModuleEnv,
+    target: ResolvedDispatchTarget,
+    fn_monotype: Monotype.Idx,
+) Allocator.Error!MIR.ExprId {
+    const target_def = try self.resolveDispatchTargetToExternalDef(source_env, target);
+    const fn_monotype_module_idx = self.moduleIndexForEnv(source_env) orelse {
+        if (std.debug.runtime_safety) {
+            std.debug.panic("lowerMonomorphizedExternalProcInstForDispatchTarget: source env not found", .{});
+        }
+        unreachable;
+    };
+    return self.lowerMonomorphizedExternalProcInst(
+        target_def.module_idx,
+        target_def.def_node_idx,
+        fn_monotype,
+        fn_monotype_module_idx,
+    );
+}
+
 fn lowerCall(
     self: *Self,
     module_env: *const ModuleEnv,
@@ -6047,13 +6129,17 @@ fn monotypeFromTypeVarInStore(
     );
 }
 
-fn resolvedDispatchTargetToSymbol(self: *Self, source_env: *const ModuleEnv, target: ResolvedDispatchTarget) Allocator.Error!MIR.Symbol {
+fn resolveDispatchTargetToExternalDef(
+    self: *Self,
+    source_env: *const ModuleEnv,
+    target: ResolvedDispatchTarget,
+) Allocator.Error!struct { module_idx: u32, def_node_idx: u16 } {
     const target_module_idx = target.module_idx orelse self.findModuleForOrigin(source_env, target.origin);
     const target_env = self.all_module_envs[target_module_idx];
     const method_name = dispatchTargetMethodText(self, source_env, target) orelse {
         if (builtin.mode == .Debug) {
             std.debug.panic(
-                "resolvedDispatchTargetToSymbol: method ident {d} not readable from source module {d} or target module {d}",
+                "resolveDispatchTargetToExternalDef: method ident {d} not readable from source module {d} or target module {d}",
                 .{ target.method_ident.idx, self.current_module_idx, target_module_idx },
             );
         }
@@ -6063,7 +6149,7 @@ fn resolvedDispatchTargetToSymbol(self: *Self, source_env: *const ModuleEnv, tar
     const target_ident = target_env.common.findIdent(method_name) orelse {
         if (builtin.mode == .Debug) {
             std.debug.panic(
-                "resolvedDispatchTargetToSymbol: method '{s}' not found in target module {d}",
+                "resolveDispatchTargetToExternalDef: method '{s}' not found in target module {d}",
                 .{ method_name, target_module_idx },
             );
         }
@@ -6072,7 +6158,7 @@ fn resolvedDispatchTargetToSymbol(self: *Self, source_env: *const ModuleEnv, tar
     const target_node_idx = target_env.getExposedNodeIndexById(target_ident) orelse {
         if (builtin.mode == .Debug) {
             std.debug.panic(
-                "resolvedDispatchTargetToSymbol: exposed node not found for method '{s}' in module {d}",
+                "resolveDispatchTargetToExternalDef: exposed node not found for method '{s}' in module {d}",
                 .{ method_name, target_module_idx },
             );
         }
@@ -6081,13 +6167,21 @@ fn resolvedDispatchTargetToSymbol(self: *Self, source_env: *const ModuleEnv, tar
     if (!target_env.store.isDefNode(target_node_idx)) {
         if (builtin.mode == .Debug) {
             std.debug.panic(
-                "resolvedDispatchTargetToSymbol: exposed node for method '{s}' is not a def node (module={d}, node={d})",
+                "resolveDispatchTargetToExternalDef: exposed node for method '{s}' is not a def node (module={d}, node={d})",
                 .{ method_name, target_module_idx, target_node_idx },
             );
         }
         unreachable;
     }
-    return self.internExternalDefSymbol(target_module_idx, target_node_idx);
+    return .{
+        .module_idx = target_module_idx,
+        .def_node_idx = target_node_idx,
+    };
+}
+
+fn resolvedDispatchTargetToSymbol(self: *Self, source_env: *const ModuleEnv, target: ResolvedDispatchTarget) Allocator.Error!MIR.Symbol {
+    const target_def = try self.resolveDispatchTargetToExternalDef(source_env, target);
+    return self.internExternalDefSymbol(target_def.module_idx, target_def.def_node_idx);
 }
 
 fn dispatchTargetMethodText(
@@ -6167,54 +6261,6 @@ fn findDefExprByMetadata(self: *Self, symbol_meta: SymbolMetadata) ?CIR.Expr.Idx
             break :blk target_env.store.getDef(def_idx).expr;
         },
     };
-}
-
-/// Ensure a method definition is lowered (for cross-module dispatch),
-/// returning the proc-backed function value to call.
-fn specializeMethod(self: *Self, symbol: MIR.Symbol, caller_func_monotype: ?Monotype.Idx) Allocator.Error!MIR.ExprId {
-    const symbol_meta = self.getSymbolMetadata(symbol);
-    const symbol_module_idx = symbolMetadataModuleIdx(symbol_meta);
-    const symbol_display_name = symbolMetadataDisplayName(self, symbol_meta);
-
-    if (caller_func_monotype) |caller_monotype| {
-        if (!caller_monotype.isNone()) {
-            const normalized_caller_monotype = try self.normalizeCallerMonotypeForSymbolModule(
-                symbol_module_idx,
-                caller_monotype,
-            );
-            const symbol_key: u64 = @bitCast(symbol);
-
-            if (self.lowered_symbols.get(symbol_key)) |cached_expr| {
-                const cached_monotype = self.store.typeOf(cached_expr);
-                if (!try self.monotypesStructurallyEqual(cached_monotype, normalized_caller_monotype)) {
-                    const def_expr = self.findDefExprByMetadata(symbol_meta) orelse {
-                        if (std.debug.runtime_safety) {
-                            std.debug.panic(
-                                "specializeMethod: definition not found for cached '{s}' (module={d})",
-                                .{ symbol_display_name, symbol_module_idx },
-                            );
-                        }
-                        unreachable;
-                    };
-                    return try self.lowerExternalDefWithType(symbol, def_expr, caller_monotype);
-                }
-            }
-        }
-    }
-
-    const symbol_key: u64 = @bitCast(symbol);
-    if (self.lowered_symbols.get(symbol_key)) |cached| return cached;
-    const def_expr = self.findDefExprByMetadata(symbol_meta) orelse {
-        if (std.debug.runtime_safety) {
-            std.debug.panic(
-                "specializeMethod: definition not found for '{s}' (module={d})",
-                .{ symbol_display_name, symbol_module_idx },
-            );
-        }
-        unreachable;
-    };
-    const lowered = try self.lowerExternalDefWithType(symbol, def_expr, caller_func_monotype);
-    return lowered;
 }
 
 /// Lower an external definition by symbol, caching the result.

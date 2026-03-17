@@ -602,7 +602,17 @@ pub const Pass = struct {
                 try self.scanExpr(result, module_idx, for_expr.body);
             },
             .e_hosted_lambda => |hosted_expr| try self.scanExpr(result, module_idx, hosted_expr.body),
-            .e_run_low_level => |run_low_level| try self.scanExprSpan(result, module_idx, module_env.store.sliceExpr(run_low_level.args)),
+            .e_run_low_level => |run_low_level| {
+                const args = module_env.store.sliceExpr(run_low_level.args);
+                try self.scanExprSpan(result, module_idx, args);
+                if (run_low_level.op == .str_inspekt and args.len != 0) {
+                    try self.resolveStrInspektHelperProcInstsForTypeVar(
+                        result,
+                        module_idx,
+                        ModuleEnv.varFrom(args[0]),
+                    );
+                }
+            },
         }
     }
 
@@ -734,6 +744,303 @@ pub const Pass = struct {
         }
 
         return null;
+    }
+
+    fn builtinPrimForNominal(ident: Ident.Idx, common: ModuleEnv.CommonIdents) ?Monotype.Prim {
+        if (ident.eql(common.str)) return .str;
+        if (ident.eql(common.u8_type)) return .u8;
+        if (ident.eql(common.i8_type)) return .i8;
+        if (ident.eql(common.u16_type)) return .u16;
+        if (ident.eql(common.i16_type)) return .i16;
+        if (ident.eql(common.u32_type)) return .u32;
+        if (ident.eql(common.i32_type)) return .i32;
+        if (ident.eql(common.u64_type)) return .u64;
+        if (ident.eql(common.i64_type)) return .i64;
+        if (ident.eql(common.u128_type)) return .u128;
+        if (ident.eql(common.i128_type)) return .i128;
+        if (ident.eql(common.f32_type)) return .f32;
+        if (ident.eql(common.f64_type)) return .f64;
+        if (ident.eql(common.dec_type)) return .dec;
+        return null;
+    }
+
+    fn lookupAssociatedMethodTemplate(
+        self: *Pass,
+        result: *Result,
+        source_module_idx: u32,
+        nominal: types.NominalType,
+        method_ident: Ident.Idx,
+    ) Allocator.Error!?struct {
+        target_env: *const ModuleEnv,
+        module_idx: u32,
+        template_id: ProcTemplateId,
+        type_var: types.Var,
+    } {
+        const source_env = self.all_module_envs[source_module_idx];
+        const target_module_idx = self.findModuleForOrigin(source_env, nominal.origin_module);
+        const target_env = self.all_module_envs[target_module_idx];
+        const qualified_method_ident = target_env.lookupMethodIdentFromEnvConst(
+            source_env,
+            nominal.ident.ident_idx,
+            method_ident,
+        ) orelse return null;
+        const node_idx = target_env.getExposedNodeIndexById(qualified_method_ident) orelse return null;
+        if (!target_env.store.isDefNode(node_idx)) return null;
+
+        const def_idx: CIR.Def.Idx = @enumFromInt(node_idx);
+        const def = target_env.store.getDef(def_idx);
+        const target_expr = target_env.store.getExpr(def.expr);
+        const kind = callableKind(target_expr) orelse return null;
+        const template_id = try self.registerProcTemplate(
+            result,
+            packExternalDefSourceKey(target_module_idx, node_idx),
+            target_module_idx,
+            def.expr,
+            ModuleEnv.varFrom(def.pattern),
+            kind,
+            target_env.store.getExprRegion(def.expr),
+        );
+        return .{
+            .target_env = target_env,
+            .module_idx = target_module_idx,
+            .template_id = template_id,
+            .type_var = ModuleEnv.varFrom(def.expr),
+        };
+    }
+
+    fn ensureBuiltinBoxUnboxProcInst(
+        self: *Pass,
+        result: *Result,
+        source_module_idx: u32,
+        box_monotype: Monotype.Idx,
+        inner_monotype: Monotype.Idx,
+    ) Allocator.Error!void {
+        const source_env = self.all_module_envs[source_module_idx];
+        const common = ModuleEnv.CommonIdents.find(&source_env.common);
+        const builtin_module_idx = self.findModuleForOrigin(source_env, common.builtin_module);
+        const builtin_env = self.all_module_envs[builtin_module_idx];
+        const method_name = source_env.getIdent(common.builtin_box_unbox);
+        const target_ident = builtin_env.common.findIdent(method_name) orelse return;
+        const node_idx = builtin_env.getExposedNodeIndexById(target_ident) orelse return;
+        if (!builtin_env.store.isDefNode(node_idx)) return;
+
+        const def_idx: CIR.Def.Idx = @enumFromInt(node_idx);
+        const def = builtin_env.store.getDef(def_idx);
+        const target_expr = builtin_env.store.getExpr(def.expr);
+        const kind = callableKind(target_expr) orelse return;
+        const template_id = try self.registerProcTemplate(
+            result,
+            packExternalDefSourceKey(builtin_module_idx, node_idx),
+            builtin_module_idx,
+            def.expr,
+            ModuleEnv.varFrom(def.pattern),
+            kind,
+            builtin_env.store.getExprRegion(def.expr),
+        );
+
+        const args = try result.monotype_store.addIdxSpan(self.allocator, &.{box_monotype});
+        const fn_monotype = try result.monotype_store.addMonotype(self.allocator, .{ .func = .{
+            .args = args,
+            .ret = inner_monotype,
+            .effectful = false,
+        } });
+
+        _ = try self.ensureProcInst(result, template_id, fn_monotype, source_module_idx);
+    }
+
+    fn resolveTypeVarMonotypeWithBindings(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        store_types: *const types.Store,
+        var_: types.Var,
+        bindings: *std.AutoHashMap(types.Var, Monotype.Idx),
+    ) Allocator.Error!Monotype.Idx {
+        var nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+        defer nominal_cycle_breakers.deinit();
+
+        var scratches = try Monotype.Store.Scratches.init(self.allocator);
+        defer scratches.deinit();
+
+        const module_env = self.all_module_envs[module_idx];
+        scratches.ident_store = module_env.getIdentStoreConst();
+        scratches.module_env = module_env;
+        scratches.all_module_envs = self.all_module_envs;
+
+        return result.monotype_store.fromTypeVar(
+            self.allocator,
+            store_types,
+            var_,
+            module_env.idents,
+            bindings,
+            &nominal_cycle_breakers,
+            &scratches,
+        );
+    }
+
+    fn resolveFuncTypeInStore(types_store: *const types.Store, type_var: types.Var) ?struct { func: types.Func, effectful: bool } {
+        var resolved = types_store.resolveVar(type_var);
+        while (resolved.desc.content == .alias) {
+            resolved = types_store.resolveVar(types_store.getAliasBackingVar(resolved.desc.content.alias));
+        }
+
+        if (resolved.desc.content != .structure) return null;
+        return switch (resolved.desc.content.structure) {
+            .fn_pure => |func| .{ .func = func, .effectful = false },
+            .fn_effectful => |func| .{ .func = func, .effectful = true },
+            .fn_unbound => |func| .{ .func = func, .effectful = false },
+            else => null,
+        };
+    }
+
+    fn resolveStrInspektHelperProcInstsForTypeVar(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        type_var: types.Var,
+    ) Allocator.Error!void {
+        const module_env = self.all_module_envs[module_idx];
+
+        var resolved = module_env.types.resolveVar(type_var);
+        while (resolved.desc.content == .alias) {
+            resolved = module_env.types.resolveVar(module_env.types.getAliasBackingVar(resolved.desc.content.alias));
+        }
+
+        if (resolved.desc.content == .structure) {
+            switch (resolved.desc.content.structure) {
+                .nominal_type => |nominal| {
+                    const common = ModuleEnv.CommonIdents.find(&module_env.common);
+                    const ident = nominal.ident.ident_idx;
+
+                    if (nominal.origin_module.eql(common.builtin_module)) {
+                        if (builtinPrimForNominal(ident, common) != null) return;
+                        if (ident.eql(common.bool)) return;
+                        if (ident.eql(common.list)) {
+                            const type_args = module_env.types.sliceNominalArgs(nominal);
+                            if (type_args.len == 1) {
+                                try self.resolveStrInspektHelperProcInstsForTypeVar(result, module_idx, type_args[0]);
+                            }
+                            return;
+                        }
+                        if (ident.eql(common.box)) {
+                            const type_args = module_env.types.sliceNominalArgs(nominal);
+                            const outer_mono = try self.resolveTypeVarMonotype(result, module_idx, resolved.var_);
+                            const outer_box = result.monotype_store.getMonotype(outer_mono).box;
+                            try self.ensureBuiltinBoxUnboxProcInst(result, module_idx, outer_mono, outer_box.inner);
+                            if (type_args.len == 1) {
+                                try self.resolveStrInspektHelperProcInstsForTypeVar(result, module_idx, type_args[0]);
+                            }
+                            return;
+                        }
+                    }
+
+                    if (try self.lookupAssociatedMethodTemplate(result, module_idx, nominal, module_env.idents.to_inspect)) |method_info| {
+                        if (resolveFuncTypeInStore(&method_info.target_env.types, method_info.type_var)) |resolved_func| {
+                            if (!resolved_func.effectful) {
+                                const param_vars = method_info.target_env.types.sliceVars(resolved_func.func.args);
+                                if (param_vars.len == 1) {
+                                    var bindings = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+                                    defer bindings.deinit();
+                                    var ordered_entries = std.ArrayList(TypeSubstEntry).empty;
+                                    defer ordered_entries.deinit(self.allocator);
+
+                                    const arg_mono = try self.resolveTypeVarMonotype(result, module_idx, resolved.var_);
+                                    try self.bindTypeVarMonotypes(
+                                        result,
+                                        method_info.module_idx,
+                                        &method_info.target_env.types,
+                                        &bindings,
+                                        &ordered_entries,
+                                        param_vars[0],
+                                        arg_mono,
+                                        module_idx,
+                                    );
+
+                                    const method_func_mono = try self.resolveTypeVarMonotypeWithBindings(
+                                        result,
+                                        method_info.module_idx,
+                                        &method_info.target_env.types,
+                                        method_info.type_var,
+                                        &bindings,
+                                    );
+                                    if (!method_func_mono.isNone()) {
+                                        _ = try self.ensureProcInst(
+                                            result,
+                                            method_info.template_id,
+                                            method_func_mono,
+                                            method_info.module_idx,
+                                        );
+
+                                        const method_func = switch (result.monotype_store.getMonotype(method_func_mono)) {
+                                            .func => |func| func,
+                                            else => unreachable,
+                                        };
+                                        const ret_mono = result.monotype_store.getMonotype(method_func.ret);
+                                        if (!(ret_mono == .prim and ret_mono.prim == .str)) {
+                                            try self.resolveStrInspektHelperProcInstsForMonotype(
+                                                result,
+                                                method_info.module_idx,
+                                                method_func.ret,
+                                            );
+                                        }
+                                    }
+                                    return;
+                                }
+                            }
+                        }
+                    }
+
+                    try self.resolveStrInspektHelperProcInstsForMonotype(
+                        result,
+                        module_idx,
+                        try self.resolveTypeVarMonotype(result, module_idx, resolved.var_),
+                    );
+                    return;
+                },
+                else => {},
+            }
+        }
+
+        try self.resolveStrInspektHelperProcInstsForMonotype(
+            result,
+            module_idx,
+            try self.resolveTypeVarMonotype(result, module_idx, resolved.var_),
+        );
+    }
+
+    fn resolveStrInspektHelperProcInstsForMonotype(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        monotype: Monotype.Idx,
+    ) Allocator.Error!void {
+        switch (result.monotype_store.getMonotype(monotype)) {
+            .unit, .prim => {},
+            .list => |list_mono| try self.resolveStrInspektHelperProcInstsForMonotype(result, module_idx, list_mono.elem),
+            .box => |box_mono| {
+                try self.ensureBuiltinBoxUnboxProcInst(result, module_idx, monotype, box_mono.inner);
+                try self.resolveStrInspektHelperProcInstsForMonotype(result, module_idx, box_mono.inner);
+            },
+            .tuple => |tuple_mono| {
+                for (result.monotype_store.getIdxSpan(tuple_mono.elems)) |elem_mono| {
+                    try self.resolveStrInspektHelperProcInstsForMonotype(result, module_idx, elem_mono);
+                }
+            },
+            .func => {},
+            .record => |record_mono| {
+                for (result.monotype_store.getFields(record_mono.fields)) |field| {
+                    try self.resolveStrInspektHelperProcInstsForMonotype(result, module_idx, field.type_idx);
+                }
+            },
+            .tag_union => |tag_union_mono| {
+                for (result.monotype_store.getTags(tag_union_mono.tags)) |tag| {
+                    for (result.monotype_store.getIdxSpan(tag.payloads)) |payload_mono| {
+                        try self.resolveStrInspektHelperProcInstsForMonotype(result, module_idx, payload_mono);
+                    }
+                }
+            },
+            .recursive_placeholder => unreachable,
+        }
     }
 
     fn lookupDirectCalleeTemplate(
@@ -1026,24 +1333,6 @@ pub const Pass = struct {
             tail_mono,
             mono_module_idx,
         );
-    }
-
-    fn builtinPrimForNominal(ident: base.Ident.Idx, common: ModuleEnv.CommonIdents) ?Monotype.Prim {
-        if (ident.eql(common.str)) return .str;
-        if (ident.eql(common.u8_type)) return .u8;
-        if (ident.eql(common.i8_type)) return .i8;
-        if (ident.eql(common.u16_type)) return .u16;
-        if (ident.eql(common.i16_type)) return .i16;
-        if (ident.eql(common.u32_type)) return .u32;
-        if (ident.eql(common.i32_type)) return .i32;
-        if (ident.eql(common.u64_type)) return .u64;
-        if (ident.eql(common.i64_type)) return .i64;
-        if (ident.eql(common.u128_type)) return .u128;
-        if (ident.eql(common.i128_type)) return .i128;
-        if (ident.eql(common.f32_type)) return .f32;
-        if (ident.eql(common.f64_type)) return .f64;
-        if (ident.eql(common.dec_type)) return .dec;
-        return null;
     }
 
     fn bindTagPayloadsByName(
