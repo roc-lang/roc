@@ -4316,6 +4316,8 @@ fn lowerProcInst(self: *Self, proc_inst_id: Monomorphize.ProcInstId) Allocator.E
     const switching_module = module_idx != self.current_module_idx;
     const saved_module_idx = self.current_module_idx;
     const saved_types_store = self.types_store;
+    const saved_type_var_seen = self.type_var_seen;
+    const saved_nominal_cycle_breakers = self.nominal_cycle_breakers;
     const saved_ident_store = self.mono_scratches.ident_store;
     const saved_module_env = self.mono_scratches.module_env;
     if (switching_module) {
@@ -4324,12 +4326,41 @@ fn lowerProcInst(self: *Self, proc_inst_id: Monomorphize.ProcInstId) Allocator.E
         self.mono_scratches.ident_store = module_env.getIdentStoreConst();
         self.mono_scratches.module_env = module_env;
     }
-    defer if (switching_module) {
-        self.current_module_idx = saved_module_idx;
-        self.types_store = saved_types_store;
-        self.mono_scratches.ident_store = saved_ident_store;
-        self.mono_scratches.module_env = saved_module_env;
-    };
+
+    self.type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+    self.nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+
+    try self.seedTypeScopeBindingsInStore(
+        self.current_module_idx,
+        self.types_store,
+        &self.type_var_seen,
+    );
+
+    if (!proc_inst.subst.isNone()) {
+        const subst = self.monomorphization.getTypeSubst(proc_inst.subst);
+        for (self.monomorphization.getTypeSubstEntries(subst.entries)) |entry| {
+            const imported_mono = try self.importMonotypeFromStore(
+                &self.monomorphization.monotype_store,
+                entry.monotype,
+                proc_inst.fn_monotype_module_idx,
+                module_idx,
+            );
+            try self.type_var_seen.put(entry.type_var, imported_mono);
+        }
+    }
+
+    defer {
+        self.type_var_seen.deinit();
+        self.type_var_seen = saved_type_var_seen;
+        self.nominal_cycle_breakers.deinit();
+        self.nominal_cycle_breakers = saved_nominal_cycle_breakers;
+        if (switching_module) {
+            self.current_module_idx = saved_module_idx;
+            self.types_store = saved_types_store;
+            self.mono_scratches.ident_store = saved_ident_store;
+            self.mono_scratches.module_env = saved_module_env;
+        }
+    }
 
     return switch (module_env.store.getExpr(template.cir_expr)) {
         .e_lambda => |lambda| try self.lowerLambdaSpecialized(

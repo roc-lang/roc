@@ -188,6 +188,15 @@ pub const Result = struct {
         return &self.proc_insts.items[@intFromEnum(proc_inst_id)];
     }
 
+    pub fn getTypeSubst(self: *const Result, subst_id: TypeSubstId) *const TypeSubst {
+        return &self.substs.items[@intFromEnum(subst_id)];
+    }
+
+    pub fn getTypeSubstEntries(self: *const Result, span: TypeSubstSpan) []const TypeSubstEntry {
+        if (span.len == 0) return &.{};
+        return self.subst_entries.items[span.start..][0..span.len];
+    }
+
     pub fn getLocalProcTemplate(self: *const Result, module_idx: u32, pattern_idx: CIR.Pattern.Idx) ?ProcTemplateId {
         return self.proc_template_ids_by_source.get(packLocalPatternSourceKey(module_idx, pattern_idx));
     }
@@ -577,8 +586,6 @@ pub const Pass = struct {
         callee_expr_idx: CIR.Expr.Idx,
     ) Allocator.Error!void {
         const template_id = try self.lookupDirectCalleeTemplate(result, module_idx, callee_expr_idx) orelse return;
-        const template = result.getProcTemplate(template_id);
-        if (self.templateNeedsInstantiation(template.*)) return;
         const fn_monotype = try self.resolveExprMonotype(result, module_idx, callee_expr_idx);
         if (fn_monotype.isNone()) return;
 
@@ -588,10 +595,6 @@ pub const Pass = struct {
             Result.callSiteKey(module_idx, call_expr_idx),
             proc_inst_id,
         );
-    }
-
-    fn templateNeedsInstantiation(self: *Pass, template: ProcTemplate) bool {
-        return self.all_module_envs[template.module_idx].types.needsInstantiation(template.type_root);
     }
 
     fn lookupDirectCalleeTemplate(
@@ -619,10 +622,17 @@ pub const Pass = struct {
         fn_monotype: Monotype.Idx,
         fn_monotype_module_idx: u32,
     ) Allocator.Error!ProcInstId {
+        const template = result.getProcTemplate(template_id);
+        const subst_id = if (self.all_module_envs[template.module_idx].types.needsInstantiation(template.type_root))
+            try self.ensureTypeSubst(result, template.*, fn_monotype, fn_monotype_module_idx)
+        else
+            TypeSubstId.none;
+
         for (result.proc_insts.items, 0..) |existing_proc_inst, idx| {
             if (existing_proc_inst.template != template_id) continue;
             if (existing_proc_inst.fn_monotype_module_idx != fn_monotype_module_idx) continue;
             if (try self.monotypesStructurallyEqual(result, existing_proc_inst.fn_monotype, fn_monotype)) {
+                if (existing_proc_inst.subst != subst_id) continue;
                 return @enumFromInt(idx);
             }
         }
@@ -630,11 +640,729 @@ pub const Pass = struct {
         const proc_inst_id: ProcInstId = @enumFromInt(result.proc_insts.items.len);
         try result.proc_insts.append(self.allocator, .{
             .template = template_id,
-            .subst = .none,
+            .subst = subst_id,
             .fn_monotype = fn_monotype,
             .fn_monotype_module_idx = fn_monotype_module_idx,
         });
         return proc_inst_id;
+    }
+
+    fn ensureTypeSubst(
+        self: *Pass,
+        result: *Result,
+        template: ProcTemplate,
+        fn_monotype: Monotype.Idx,
+        fn_monotype_module_idx: u32,
+    ) Allocator.Error!TypeSubstId {
+        var bindings = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+        defer bindings.deinit();
+
+        var ordered_entries = std.ArrayList(TypeSubstEntry).empty;
+        defer ordered_entries.deinit(self.allocator);
+
+        try self.bindTypeVarMonotypes(
+            result,
+            template.module_idx,
+            &self.all_module_envs[template.module_idx].types,
+            &bindings,
+            &ordered_entries,
+            template.type_root,
+            fn_monotype,
+            fn_monotype_module_idx,
+        );
+
+        for (result.substs.items, 0..) |existing_subst, idx| {
+            if (try self.typeSubstEntriesEqual(
+                result,
+                result.getTypeSubstEntries(existing_subst.entries),
+                ordered_entries.items,
+            )) {
+                return @enumFromInt(idx);
+            }
+        }
+
+        const entries_span: TypeSubstSpan = if (ordered_entries.items.len == 0)
+            TypeSubstSpan.empty()
+        else blk: {
+            const start: u32 = @intCast(result.subst_entries.items.len);
+            try result.subst_entries.appendSlice(self.allocator, ordered_entries.items);
+            break :blk TypeSubstSpan{
+                .start = start,
+                .len = @as(u16, @intCast(ordered_entries.items.len)),
+            };
+        };
+
+        const subst_id: TypeSubstId = @enumFromInt(result.substs.items.len);
+        try result.substs.append(self.allocator, .{ .entries = entries_span });
+        return subst_id;
+    }
+
+    fn typeSubstEntriesEqual(
+        self: *Pass,
+        result: *const Result,
+        lhs: []const TypeSubstEntry,
+        rhs: []const TypeSubstEntry,
+    ) Allocator.Error!bool {
+        if (lhs.len != rhs.len) return false;
+
+        for (lhs, rhs) |lhs_entry, rhs_entry| {
+            if (lhs_entry.type_var != rhs_entry.type_var) return false;
+            if (!try self.monotypesStructurallyEqual(result, lhs_entry.monotype, rhs_entry.monotype)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    fn identsStructurallyEqualAcrossModules(
+        self: *Pass,
+        lhs_module_idx: u32,
+        lhs: base.Ident.Idx,
+        rhs_module_idx: u32,
+        rhs: base.Ident.Idx,
+    ) bool {
+        if (lhs_module_idx == rhs_module_idx and lhs == rhs) return true;
+
+        const lhs_text = self.all_module_envs[lhs_module_idx].getIdent(lhs);
+        const rhs_text = self.all_module_envs[rhs_module_idx].getIdent(rhs);
+        return std.mem.eql(u8, lhs_text, rhs_text);
+    }
+
+    fn recordFieldIndexByName(
+        self: *Pass,
+        template_module_idx: u32,
+        field_name: base.Ident.Idx,
+        mono_module_idx: u32,
+        mono_fields: []const Monotype.Field,
+    ) u32 {
+        for (mono_fields, 0..) |mono_field, field_idx| {
+            if (self.identsStructurallyEqualAcrossModules(
+                template_module_idx,
+                field_name,
+                mono_module_idx,
+                mono_field.name,
+            )) {
+                return @intCast(field_idx);
+            }
+        }
+
+        if (std.debug.runtime_safety) {
+            std.debug.panic(
+                "Monomorphize: record field '{s}' missing from monotype",
+                .{self.all_module_envs[template_module_idx].getIdent(field_name)},
+            );
+        }
+        unreachable;
+    }
+
+    fn tagIndexByName(
+        self: *Pass,
+        template_module_idx: u32,
+        tag_name: base.Ident.Idx,
+        mono_module_idx: u32,
+        mono_tags: []const Monotype.Tag,
+    ) u32 {
+        for (mono_tags, 0..) |mono_tag, tag_idx| {
+            if (self.identsStructurallyEqualAcrossModules(
+                template_module_idx,
+                tag_name,
+                mono_module_idx,
+                mono_tag.name,
+            )) {
+                return @intCast(tag_idx);
+            }
+        }
+
+        if (std.debug.runtime_safety) {
+            std.debug.panic(
+                "Monomorphize: tag '{s}' missing from monotype",
+                .{self.all_module_envs[template_module_idx].getIdent(tag_name)},
+            );
+        }
+        unreachable;
+    }
+
+    fn seenIndex(seen_indices: []const u32, idx: u32) bool {
+        for (seen_indices) |seen_idx| {
+            if (seen_idx == idx) return true;
+        }
+        return false;
+    }
+
+    fn appendSeenIndex(
+        allocator: Allocator,
+        seen_indices: *std.ArrayListUnmanaged(u32),
+        idx: u32,
+    ) Allocator.Error!void {
+        if (seenIndex(seen_indices.items, idx)) return;
+        try seen_indices.append(allocator, idx);
+    }
+
+    fn remainingRecordTailMonotype(
+        self: *Pass,
+        result: *Result,
+        mono_fields: []const Monotype.Field,
+        seen_indices: []const u32,
+    ) Allocator.Error!Monotype.Idx {
+        var remaining_fields: std.ArrayListUnmanaged(Monotype.Field) = .empty;
+        defer remaining_fields.deinit(self.allocator);
+
+        for (mono_fields, 0..) |field, field_idx| {
+            if (seenIndex(seen_indices, @intCast(field_idx))) continue;
+            try remaining_fields.append(self.allocator, field);
+        }
+
+        if (remaining_fields.items.len == 0) {
+            return result.monotype_store.unit_idx;
+        }
+
+        const field_span = try result.monotype_store.addFields(self.allocator, remaining_fields.items);
+        return try result.monotype_store.addMonotype(self.allocator, .{ .record = .{ .fields = field_span } });
+    }
+
+    fn remainingTagUnionTailMonotype(
+        self: *Pass,
+        result: *Result,
+        mono_tags: []const Monotype.Tag,
+        seen_indices: []const u32,
+    ) Allocator.Error!Monotype.Idx {
+        var remaining_tags: std.ArrayListUnmanaged(Monotype.Tag) = .empty;
+        defer remaining_tags.deinit(self.allocator);
+
+        for (mono_tags, 0..) |tag, tag_idx| {
+            if (seenIndex(seen_indices, @intCast(tag_idx))) continue;
+            try remaining_tags.append(self.allocator, tag);
+        }
+
+        const tag_span = try result.monotype_store.addTags(self.allocator, remaining_tags.items);
+        return try result.monotype_store.addMonotype(self.allocator, .{ .tag_union = .{ .tags = tag_span } });
+    }
+
+    fn bindRecordRowTail(
+        self: *Pass,
+        result: *Result,
+        template_module_idx: u32,
+        template_types: *const types.Store,
+        bindings: *std.AutoHashMap(types.Var, Monotype.Idx),
+        ordered_entries: *std.ArrayList(TypeSubstEntry),
+        ext_var: types.Var,
+        mono_fields: []const Monotype.Field,
+        seen_indices: []const u32,
+        mono_module_idx: u32,
+    ) Allocator.Error!void {
+        const tail_mono = try self.remainingRecordTailMonotype(result, mono_fields, seen_indices);
+        try self.bindTypeVarMonotypes(
+            result,
+            template_module_idx,
+            template_types,
+            bindings,
+            ordered_entries,
+            ext_var,
+            tail_mono,
+            mono_module_idx,
+        );
+    }
+
+    fn bindTagUnionRowTail(
+        self: *Pass,
+        result: *Result,
+        template_module_idx: u32,
+        template_types: *const types.Store,
+        bindings: *std.AutoHashMap(types.Var, Monotype.Idx),
+        ordered_entries: *std.ArrayList(TypeSubstEntry),
+        ext_var: types.Var,
+        mono_tags: []const Monotype.Tag,
+        seen_indices: []const u32,
+        mono_module_idx: u32,
+    ) Allocator.Error!void {
+        const tail_mono = try self.remainingTagUnionTailMonotype(result, mono_tags, seen_indices);
+        try self.bindTypeVarMonotypes(
+            result,
+            template_module_idx,
+            template_types,
+            bindings,
+            ordered_entries,
+            ext_var,
+            tail_mono,
+            mono_module_idx,
+        );
+    }
+
+    fn builtinPrimForNominal(ident: base.Ident.Idx, common: ModuleEnv.CommonIdents) ?Monotype.Prim {
+        if (ident.eql(common.str)) return .str;
+        if (ident.eql(common.u8_type)) return .u8;
+        if (ident.eql(common.i8_type)) return .i8;
+        if (ident.eql(common.u16_type)) return .u16;
+        if (ident.eql(common.i16_type)) return .i16;
+        if (ident.eql(common.u32_type)) return .u32;
+        if (ident.eql(common.i32_type)) return .i32;
+        if (ident.eql(common.u64_type)) return .u64;
+        if (ident.eql(common.i64_type)) return .i64;
+        if (ident.eql(common.u128_type)) return .u128;
+        if (ident.eql(common.i128_type)) return .i128;
+        if (ident.eql(common.f32_type)) return .f32;
+        if (ident.eql(common.f64_type)) return .f64;
+        if (ident.eql(common.dec_type)) return .dec;
+        return null;
+    }
+
+    fn bindTagPayloadsByName(
+        self: *Pass,
+        result: *Result,
+        template_module_idx: u32,
+        template_types: *const types.Store,
+        bindings: *std.AutoHashMap(types.Var, Monotype.Idx),
+        ordered_entries: *std.ArrayList(TypeSubstEntry),
+        tag_name: base.Ident.Idx,
+        payload_vars: []const types.Var,
+        mono_tags: []const Monotype.Tag,
+        mono_module_idx: u32,
+    ) Allocator.Error!void {
+        for (mono_tags) |mono_tag| {
+            if (!self.identsStructurallyEqualAcrossModules(
+                template_module_idx,
+                tag_name,
+                mono_module_idx,
+                mono_tag.name,
+            )) continue;
+
+            const mono_payloads = result.monotype_store.getIdxSpan(mono_tag.payloads);
+            if (payload_vars.len != mono_payloads.len) {
+                if (std.debug.runtime_safety) {
+                    std.debug.panic(
+                        "Monomorphize: payload arity mismatch for tag '{s}'",
+                        .{self.all_module_envs[template_module_idx].getIdent(tag_name)},
+                    );
+                }
+                unreachable;
+            }
+
+            for (payload_vars, 0..) |payload_var, i| {
+                try self.bindTypeVarMonotypes(
+                    result,
+                    template_module_idx,
+                    template_types,
+                    bindings,
+                    ordered_entries,
+                    payload_var,
+                    mono_payloads[i],
+                    mono_module_idx,
+                );
+            }
+            return;
+        }
+
+        if (std.debug.runtime_safety) {
+            std.debug.panic(
+                "Monomorphize: tag '{s}' missing from monotype",
+                .{self.all_module_envs[template_module_idx].getIdent(tag_name)},
+            );
+        }
+        unreachable;
+    }
+
+    fn bindTypeVarMonotypes(
+        self: *Pass,
+        result: *Result,
+        template_module_idx: u32,
+        template_types: *const types.Store,
+        bindings: *std.AutoHashMap(types.Var, Monotype.Idx),
+        ordered_entries: *std.ArrayList(TypeSubstEntry),
+        type_var: types.Var,
+        monotype: Monotype.Idx,
+        mono_module_idx: u32,
+    ) Allocator.Error!void {
+        if (monotype.isNone()) return;
+
+        const resolved = template_types.resolveVar(type_var);
+        if (bindings.get(resolved.var_)) |existing| {
+            if (!try self.monotypesStructurallyEqual(result, existing, monotype)) {
+                if (std.debug.runtime_safety) {
+                    std.debug.panic(
+                        "Monomorphize: conflicting monotype binding for type var root {d}",
+                        .{@intFromEnum(resolved.var_)},
+                    );
+                }
+                unreachable;
+            }
+            return;
+        }
+
+        switch (resolved.desc.content) {
+            .flex, .rigid => {
+                try bindings.put(resolved.var_, monotype);
+                try ordered_entries.append(self.allocator, .{
+                    .type_var = resolved.var_,
+                    .monotype = monotype,
+                });
+            },
+            .alias => |alias| try self.bindTypeVarMonotypes(
+                result,
+                template_module_idx,
+                template_types,
+                bindings,
+                ordered_entries,
+                template_types.getAliasBackingVar(alias),
+                monotype,
+                mono_module_idx,
+            ),
+            .structure => |flat_type| {
+                try bindings.put(resolved.var_, monotype);
+                try ordered_entries.append(self.allocator, .{
+                    .type_var = resolved.var_,
+                    .monotype = monotype,
+                });
+                try self.bindFlatTypeMonotypes(
+                    result,
+                    template_module_idx,
+                    template_types,
+                    bindings,
+                    ordered_entries,
+                    flat_type,
+                    monotype,
+                    mono_module_idx,
+                );
+            },
+            .err => {},
+        }
+    }
+
+    fn bindFlatTypeMonotypes(
+        self: *Pass,
+        result: *Result,
+        template_module_idx: u32,
+        template_types: *const types.Store,
+        bindings: *std.AutoHashMap(types.Var, Monotype.Idx),
+        ordered_entries: *std.ArrayList(TypeSubstEntry),
+        flat_type: types.FlatType,
+        monotype: Monotype.Idx,
+        mono_module_idx: u32,
+    ) Allocator.Error!void {
+        if (monotype.isNone()) return;
+
+        const mono = result.monotype_store.getMonotype(monotype);
+        const common_idents = ModuleEnv.CommonIdents.find(&self.all_module_envs[template_module_idx].common);
+
+        switch (flat_type) {
+            .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                const mfunc = switch (mono) {
+                    .func => |mfunc| mfunc,
+                    else => unreachable,
+                };
+
+                const type_args = template_types.sliceVars(func.args);
+                const mono_args = result.monotype_store.getIdxSpan(mfunc.args);
+                if (type_args.len != mono_args.len) unreachable;
+
+                for (type_args, 0..) |arg_var, i| {
+                    try self.bindTypeVarMonotypes(
+                        result,
+                        template_module_idx,
+                        template_types,
+                        bindings,
+                        ordered_entries,
+                        arg_var,
+                        mono_args[i],
+                        mono_module_idx,
+                    );
+                }
+                try self.bindTypeVarMonotypes(
+                    result,
+                    template_module_idx,
+                    template_types,
+                    bindings,
+                    ordered_entries,
+                    func.ret,
+                    mfunc.ret,
+                    mono_module_idx,
+                );
+            },
+            .nominal_type => |nominal| {
+                const ident = nominal.ident.ident_idx;
+                const origin = nominal.origin_module;
+
+                if (origin.eql(common_idents.builtin_module) and ident.eql(common_idents.list)) {
+                    const mlist = switch (mono) {
+                        .list => |mlist| mlist,
+                        else => unreachable,
+                    };
+                    const type_args = template_types.sliceNominalArgs(nominal);
+                    if (type_args.len != 1) unreachable;
+                    try self.bindTypeVarMonotypes(
+                        result,
+                        template_module_idx,
+                        template_types,
+                        bindings,
+                        ordered_entries,
+                        type_args[0],
+                        mlist.elem,
+                        mono_module_idx,
+                    );
+                    return;
+                }
+
+                if (origin.eql(common_idents.builtin_module) and ident.eql(common_idents.box)) {
+                    const mbox = switch (mono) {
+                        .box => |mbox| mbox,
+                        else => unreachable,
+                    };
+                    const type_args = template_types.sliceNominalArgs(nominal);
+                    if (type_args.len != 1) unreachable;
+                    try self.bindTypeVarMonotypes(
+                        result,
+                        template_module_idx,
+                        template_types,
+                        bindings,
+                        ordered_entries,
+                        type_args[0],
+                        mbox.inner,
+                        mono_module_idx,
+                    );
+                    return;
+                }
+
+                if (origin.eql(common_idents.builtin_module) and builtinPrimForNominal(ident, common_idents) != null) {
+                    switch (mono) {
+                        .prim => {},
+                        else => unreachable,
+                    }
+                    return;
+                }
+
+                try self.bindTypeVarMonotypes(
+                    result,
+                    template_module_idx,
+                    template_types,
+                    bindings,
+                    ordered_entries,
+                    template_types.getNominalBackingVar(nominal),
+                    monotype,
+                    mono_module_idx,
+                );
+            },
+            .record => |record| {
+                const mrec = switch (mono) {
+                    .record => |mrec| mrec,
+                    else => unreachable,
+                };
+                const mono_fields = result.monotype_store.getFields(mrec.fields);
+                var seen_field_indices: std.ArrayListUnmanaged(u32) = .empty;
+                defer seen_field_indices.deinit(self.allocator);
+
+                var current_row = record;
+                rows: while (true) {
+                    const fields_slice = template_types.getRecordFieldsSlice(current_row.fields);
+                    const field_names = fields_slice.items(.name);
+                    const field_vars = fields_slice.items(.var_);
+                    for (field_names, field_vars) |field_name, field_var| {
+                        const field_idx = self.recordFieldIndexByName(
+                            template_module_idx,
+                            field_name,
+                            mono_module_idx,
+                            mono_fields,
+                        );
+                        try appendSeenIndex(self.allocator, &seen_field_indices, field_idx);
+                        try self.bindTypeVarMonotypes(
+                            result,
+                            template_module_idx,
+                            template_types,
+                            bindings,
+                            ordered_entries,
+                            field_var,
+                            mono_fields[field_idx].type_idx,
+                            mono_module_idx,
+                        );
+                    }
+
+                    var ext_var = current_row.ext;
+                    while (true) {
+                        const ext_resolved = template_types.resolveVar(ext_var);
+                        switch (ext_resolved.desc.content) {
+                            .alias => |alias| {
+                                ext_var = template_types.getAliasBackingVar(alias);
+                                continue;
+                            },
+                            .structure => |ext_flat| switch (ext_flat) {
+                                .record => |next_row| {
+                                    current_row = next_row;
+                                    continue :rows;
+                                },
+                                .record_unbound => |fields_range| {
+                                    const ext_fields = template_types.getRecordFieldsSlice(fields_range);
+                                    const ext_names = ext_fields.items(.name);
+                                    const ext_vars = ext_fields.items(.var_);
+                                    for (ext_names, ext_vars) |field_name, field_var| {
+                                        const field_idx = self.recordFieldIndexByName(
+                                            template_module_idx,
+                                            field_name,
+                                            mono_module_idx,
+                                            mono_fields,
+                                        );
+                                        try appendSeenIndex(self.allocator, &seen_field_indices, field_idx);
+                                        try self.bindTypeVarMonotypes(
+                                            result,
+                                            template_module_idx,
+                                            template_types,
+                                            bindings,
+                                            ordered_entries,
+                                            field_var,
+                                            mono_fields[field_idx].type_idx,
+                                            mono_module_idx,
+                                        );
+                                    }
+                                    break :rows;
+                                },
+                                .empty_record => break :rows,
+                                else => unreachable,
+                            },
+                            .flex, .rigid => {
+                                try self.bindRecordRowTail(
+                                    result,
+                                    template_module_idx,
+                                    template_types,
+                                    bindings,
+                                    ordered_entries,
+                                    ext_var,
+                                    mono_fields,
+                                    seen_field_indices.items,
+                                    mono_module_idx,
+                                );
+                                break :rows;
+                            },
+                            .err => unreachable,
+                        }
+                    }
+                }
+            },
+            .record_unbound => |fields_range| {
+                const mrec = switch (mono) {
+                    .record => |mrec| mrec,
+                    else => unreachable,
+                };
+                const mono_fields = result.monotype_store.getFields(mrec.fields);
+                const fields_slice = template_types.getRecordFieldsSlice(fields_range);
+                const field_names = fields_slice.items(.name);
+                const field_vars = fields_slice.items(.var_);
+                for (field_names, field_vars) |field_name, field_var| {
+                    const field_idx = self.recordFieldIndexByName(
+                        template_module_idx,
+                        field_name,
+                        mono_module_idx,
+                        mono_fields,
+                    );
+                    try self.bindTypeVarMonotypes(
+                        result,
+                        template_module_idx,
+                        template_types,
+                        bindings,
+                        ordered_entries,
+                        field_var,
+                        mono_fields[field_idx].type_idx,
+                        mono_module_idx,
+                    );
+                }
+            },
+            .tuple => |tuple| {
+                const mtup = switch (mono) {
+                    .tuple => |mtup| mtup,
+                    else => unreachable,
+                };
+                const elem_vars = template_types.sliceVars(tuple.elems);
+                const elem_monos = result.monotype_store.getIdxSpan(mtup.elems);
+                if (elem_vars.len != elem_monos.len) unreachable;
+                for (elem_vars, 0..) |elem_var, i| {
+                    try self.bindTypeVarMonotypes(
+                        result,
+                        template_module_idx,
+                        template_types,
+                        bindings,
+                        ordered_entries,
+                        elem_var,
+                        elem_monos[i],
+                        mono_module_idx,
+                    );
+                }
+            },
+            .tag_union => |tag_union| {
+                const mtag = switch (mono) {
+                    .tag_union => |mtag| mtag,
+                    else => unreachable,
+                };
+                const mono_tags = result.monotype_store.getTags(mtag.tags);
+                var seen_tag_indices: std.ArrayListUnmanaged(u32) = .empty;
+                defer seen_tag_indices.deinit(self.allocator);
+
+                var current_row = tag_union;
+                rows: while (true) {
+                    const type_tags = template_types.getTagsSlice(current_row.tags);
+                    const tag_names = type_tags.items(.name);
+                    const tag_args = type_tags.items(.args);
+                    for (tag_names, tag_args) |tag_name, args_range| {
+                        const tag_idx = self.tagIndexByName(
+                            template_module_idx,
+                            tag_name,
+                            mono_module_idx,
+                            mono_tags,
+                        );
+                        try appendSeenIndex(self.allocator, &seen_tag_indices, tag_idx);
+                        try self.bindTagPayloadsByName(
+                            result,
+                            template_module_idx,
+                            template_types,
+                            bindings,
+                            ordered_entries,
+                            tag_name,
+                            template_types.sliceVars(args_range),
+                            mono_tags,
+                            mono_module_idx,
+                        );
+                    }
+
+                    var ext_var = current_row.ext;
+                    while (true) {
+                        const ext_resolved = template_types.resolveVar(ext_var);
+                        switch (ext_resolved.desc.content) {
+                            .alias => |alias| {
+                                ext_var = template_types.getAliasBackingVar(alias);
+                                continue;
+                            },
+                            .structure => |ext_flat| switch (ext_flat) {
+                                .tag_union => |next_row| {
+                                    current_row = next_row;
+                                    continue :rows;
+                                },
+                                .empty_tag_union => break :rows,
+                                else => unreachable,
+                            },
+                            .flex, .rigid => {
+                                try self.bindTagUnionRowTail(
+                                    result,
+                                    template_module_idx,
+                                    template_types,
+                                    bindings,
+                                    ordered_entries,
+                                    ext_var,
+                                    mono_tags,
+                                    seen_tag_indices.items,
+                                    mono_module_idx,
+                                );
+                                break :rows;
+                            },
+                            .err => unreachable,
+                        }
+                    }
+                }
+            },
+            .empty_record => switch (mono) {
+                .unit, .record => {},
+                else => unreachable,
+            },
+            .empty_tag_union => switch (mono) {
+                .tag_union => {},
+                else => unreachable,
+            },
+        }
     }
 
     fn resolveExprMonotype(
