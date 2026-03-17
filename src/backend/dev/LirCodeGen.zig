@@ -2990,6 +2990,78 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
                 },
+                .list_replace_unsafe => {
+                    // List.replace_unsafe: List(item), U64, item -> { list: List(item), prev: item }
+                    // Reuses wrapListReplace but constructs the return struct manually
+                    if (args.len != 3) unreachable;
+
+                    const ls = self.layout_store;
+                    const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+
+                    // Generate arguments
+                    const list_loc = try self.generateExpr(args[0]);
+                    const index_loc = try self.generateExpr(args[1]);
+                    const elem_loc = try self.generateExpr(args[2]);
+
+                    // Get return layout - should be a struct { list: List, prev: element }
+                    const ret_layout = ls.getLayout(ll.ret_layout);
+                    if (ret_layout.tag != .struct_) unreachable;
+                    const record_idx = ret_layout.data.struct_.idx;
+                    const record_data = ls.getStructData(record_idx);
+                    const result_size: u32 = record_data.size;
+
+                    // Get field offsets and layouts
+                    const field0_layout_idx = ls.getStructFieldLayout(record_idx, 0);
+                    const field0_layout = ls.getLayout(field0_layout_idx);
+                    const field0_offset: i32 = @intCast(ls.getStructFieldOffset(record_idx, 0));
+                    const field1_layout_idx = ls.getStructFieldLayout(record_idx, 1);
+                    const field1_layout = ls.getLayout(field1_layout_idx);
+                    const field1_offset: i32 = @intCast(ls.getStructFieldOffset(record_idx, 1));
+
+                    // Determine which field is list and which is element
+                    const field0_is_list = field0_layout.tag == .list or field0_layout.tag == .list_of_zst;
+                    const list_field_offset: i32 = if (field0_is_list) field0_offset else field1_offset;
+                    const elem_field_offset: i32 = if (field0_is_list) field1_offset else field0_offset;
+                    const elem_layout = if (field0_is_list) field1_layout else field0_layout;
+
+                    const elem_size_align = ls.layoutSizeAlign(elem_layout);
+
+                    // Ensure arguments are on stack
+                    const list_off = try self.ensureOnStack(list_loc, roc_list_size);
+                    const index_off = try self.ensureOnStack(index_loc, 8);
+                    const elem_off = try self.ensureOnStack(elem_loc, elem_size_align.size);
+
+                    // Allocate result struct
+                    const result_offset = self.codegen.allocStackSlot(result_size);
+
+                    // Call wrapListReplace
+                    const fn_addr: usize = @intFromPtr(&wrapListReplace);
+                    const base_reg = frame_ptr;
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+
+                    // out: pointer to list field in result struct
+                    try builder.addLeaArg(base_reg, result_offset + list_field_offset);
+                    // list_bytes, list_len, list_cap
+                    try builder.addMemArg(base_reg, list_off);
+                    try builder.addMemArg(base_reg, list_off + 8);
+                    try builder.addMemArg(base_reg, list_off + 16);
+                    // alignment
+                    try builder.addImmArg(@intCast(elem_size_align.alignment.toByteUnits()));
+                    // index
+                    try builder.addMemArg(base_reg, index_off);
+                    // element
+                    try builder.addLeaArg(base_reg, elem_off);
+                    // element_width
+                    try builder.addImmArg(@intCast(elem_size_align.size));
+                    // out_element: pointer to prev field in result struct
+                    try builder.addLeaArg(base_reg, result_offset + elem_field_offset);
+                    // roc_ops
+                    try builder.addRegArg(roc_ops_reg);
+
+                    try self.callBuiltin(&builder, fn_addr, .list_replace);
+
+                    return .{ .stack = .{ .offset = result_offset } };
+                },
                 .list_first => {
                     // list_first(list) -> element  (same as list_get at index 0)
                     if (args.len != 1) unreachable;
