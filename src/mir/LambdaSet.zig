@@ -57,8 +57,13 @@ pub const LambdaSet = struct {
 pub const Store = struct {
     lambda_sets: std.ArrayListUnmanaged(LambdaSet),
     members: std.ArrayListUnmanaged(Member),
+    symbol_source_exprs: std.AutoHashMapUnmanaged(u64, MIR.ExprId),
     symbol_lambda_sets: std.AutoHashMapUnmanaged(u64, Idx),
     symbol_field_lambda_sets: std.AutoHashMapUnmanaged(u128, Idx),
+    symbol_field_exprs: std.AutoHashMapUnmanaged(u128, MIR.ExprId),
+    symbol_tag_payload_exprs: std.AutoHashMapUnmanaged(u128, MIR.ExprId),
+    symbol_list_elem_exprs: std.AutoHashMapUnmanaged(u128, MIR.ExprId),
+    symbol_list_lengths: std.AutoHashMapUnmanaged(u64, u32),
     expr_lambda_sets: std.AutoHashMapUnmanaged(u32, Idx),
     member_return_lambda_sets: std.AutoHashMapUnmanaged(u32, Idx),
     member_return_field_lambda_sets: std.AutoHashMapUnmanaged(u64, Idx),
@@ -68,8 +73,13 @@ pub const Store = struct {
         return .{
             .lambda_sets = .empty,
             .members = .empty,
+            .symbol_source_exprs = .empty,
             .symbol_lambda_sets = .empty,
             .symbol_field_lambda_sets = .empty,
+            .symbol_field_exprs = .empty,
+            .symbol_tag_payload_exprs = .empty,
+            .symbol_list_elem_exprs = .empty,
+            .symbol_list_lengths = .empty,
             .expr_lambda_sets = .empty,
             .member_return_lambda_sets = .empty,
             .member_return_field_lambda_sets = .empty,
@@ -80,8 +90,13 @@ pub const Store = struct {
     pub fn deinit(self: *Store, allocator: Allocator) void {
         self.lambda_sets.deinit(allocator);
         self.members.deinit(allocator);
+        self.symbol_source_exprs.deinit(allocator);
         self.symbol_lambda_sets.deinit(allocator);
         self.symbol_field_lambda_sets.deinit(allocator);
+        self.symbol_field_exprs.deinit(allocator);
+        self.symbol_tag_payload_exprs.deinit(allocator);
+        self.symbol_list_elem_exprs.deinit(allocator);
+        self.symbol_list_lengths.deinit(allocator);
         self.expr_lambda_sets.deinit(allocator);
         self.member_return_lambda_sets.deinit(allocator);
         self.member_return_field_lambda_sets.deinit(allocator);
@@ -118,9 +133,29 @@ pub const Store = struct {
         return self.symbol_lambda_sets.get(symbol.raw());
     }
 
+    pub fn getSymbolSourceExpr(self: *const Store, symbol: MIR.Symbol) ?MIR.ExprId {
+        return self.symbol_source_exprs.get(symbol.raw());
+    }
+
     /// Get the lambda set inferred for one function-typed field of a symbol.
     pub fn getSymbolFieldLambdaSet(self: *const Store, symbol: MIR.Symbol, field_idx: u32) ?Idx {
         return self.symbol_field_lambda_sets.get(structFieldKey(symbol, field_idx));
+    }
+
+    pub fn getSymbolFieldExpr(self: *const Store, symbol: MIR.Symbol, field_idx: u32) ?MIR.ExprId {
+        return self.symbol_field_exprs.get(structFieldKey(symbol, field_idx));
+    }
+
+    pub fn getSymbolTagPayloadExpr(self: *const Store, symbol: MIR.Symbol, tag_name: Ident.Idx, payload_idx: u32) ?MIR.ExprId {
+        return self.symbol_tag_payload_exprs.get(tagPayloadKey(symbol, tag_name, payload_idx));
+    }
+
+    pub fn getSymbolListElemExpr(self: *const Store, symbol: MIR.Symbol, elem_idx: u32) ?MIR.ExprId {
+        return self.symbol_list_elem_exprs.get(listElemKey(symbol, elem_idx));
+    }
+
+    pub fn getSymbolListLength(self: *const Store, symbol: MIR.Symbol) ?u32 {
+        return self.symbol_list_lengths.get(symbol.raw());
     }
 
     /// Get the lambda set inferred for an expression, if one exists.
@@ -153,6 +188,7 @@ pub fn infer(
     var store = Store.init();
     errdefer store.deinit(allocator);
 
+    try seedSymbolSources(allocator, mir_store, &store);
     try seedClosureMembers(allocator, mir_store, &store);
     try seedValueDefs(allocator, mir_store, &store);
 
@@ -167,6 +203,127 @@ pub fn infer(
     }
 
     return store;
+}
+
+fn seedSymbolSources(allocator: Allocator, mir_store: *const MIR.Store, store: *Store) Allocator.Error!void {
+    var visiting = std.AutoHashMap(u64, void).init(allocator);
+    defer visiting.deinit();
+
+    var it = mir_store.value_defs.iterator();
+    while (it.next()) |entry| {
+        const symbol = MIR.Symbol.fromRaw(entry.key_ptr.*);
+        try seedSymbolSource(allocator, mir_store, store, symbol, entry.value_ptr.*, &visiting);
+    }
+}
+
+fn seedSymbolSource(
+    allocator: Allocator,
+    mir_store: *const MIR.Store,
+    store: *Store,
+    symbol: MIR.Symbol,
+    expr_id: MIR.ExprId,
+    visiting: *std.AutoHashMap(u64, void),
+) Allocator.Error!void {
+    const key = symbol.raw();
+    if (store.symbol_source_exprs.contains(key)) return;
+    if (visiting.contains(key)) return;
+
+    try visiting.put(key, {});
+    defer _ = visiting.remove(key);
+
+    try store.symbol_source_exprs.put(allocator, key, expr_id);
+    try seedCompositeSymbolSourcesFromExpr(allocator, mir_store, store, symbol, expr_id, visiting);
+}
+
+fn seedCompositeSymbolSourcesFromExpr(
+    allocator: Allocator,
+    mir_store: *const MIR.Store,
+    store: *Store,
+    symbol: MIR.Symbol,
+    expr_id: MIR.ExprId,
+    visiting: *std.AutoHashMap(u64, void),
+) Allocator.Error!void {
+    switch (mir_store.getExpr(expr_id)) {
+        .struct_ => |struct_| {
+            const fields = mir_store.getExprSpan(struct_.fields);
+            for (fields, 0..) |field_expr, field_idx| {
+                try store.symbol_field_exprs.put(
+                    allocator,
+                    structFieldKey(symbol, @intCast(field_idx)),
+                    field_expr,
+                );
+            }
+        },
+        .tag => |tag_expr| {
+            const payloads = mir_store.getExprSpan(tag_expr.args);
+            for (payloads, 0..) |payload_expr, payload_idx| {
+                try store.symbol_tag_payload_exprs.put(
+                    allocator,
+                    tagPayloadKey(symbol, tag_expr.name, @intCast(payload_idx)),
+                    payload_expr,
+                );
+            }
+        },
+        .list => |list_expr| {
+            const elems = mir_store.getExprSpan(list_expr.elems);
+            try store.symbol_list_lengths.put(allocator, symbol.raw(), @intCast(elems.len));
+            for (elems, 0..) |elem_expr, elem_idx| {
+                try store.symbol_list_elem_exprs.put(
+                    allocator,
+                    listElemKey(symbol, @intCast(elem_idx)),
+                    elem_expr,
+                );
+            }
+        },
+        .lookup => |source_symbol| {
+            _ = store.getSymbolSourceExpr(source_symbol) orelse blk: {
+                const source_def = mir_store.getValueDef(source_symbol) orelse return;
+                try seedSymbolSource(allocator, mir_store, store, source_symbol, source_def, visiting);
+                break :blk store.getSymbolSourceExpr(source_symbol) orelse return;
+            };
+
+            if (structFieldArityForExpr(mir_store, expr_id)) |field_count| {
+                var field_idx: u32 = 0;
+                while (field_idx < field_count) : (field_idx += 1) {
+                    const field_expr = store.getSymbolFieldExpr(source_symbol, field_idx) orelse continue;
+                    try store.symbol_field_exprs.put(allocator, structFieldKey(symbol, field_idx), field_expr);
+                }
+            }
+
+            const mono = mir_store.monotype_store.getMonotype(mir_store.typeOf(expr_id));
+            if (mono == .tag_union) {
+                for (mir_store.monotype_store.getTags(mono.tag_union.tags)) |tag| {
+                    const payloads = mir_store.monotype_store.getIdxSpan(tag.payloads);
+                    for (payloads, 0..) |_, payload_idx| {
+                        const payload_expr = store.getSymbolTagPayloadExpr(source_symbol, tag.name, @intCast(payload_idx)) orelse continue;
+                        try store.symbol_tag_payload_exprs.put(
+                            allocator,
+                            tagPayloadKey(symbol, tag.name, @intCast(payload_idx)),
+                            payload_expr,
+                        );
+                    }
+                }
+            }
+
+            if (store.getSymbolListLength(source_symbol)) |list_len| {
+                try store.symbol_list_lengths.put(allocator, symbol.raw(), list_len);
+                var elem_idx: u32 = 0;
+                while (elem_idx < list_len) : (elem_idx += 1) {
+                    const elem_expr = store.getSymbolListElemExpr(source_symbol, elem_idx) orelse continue;
+                    try store.symbol_list_elem_exprs.put(allocator, listElemKey(symbol, elem_idx), elem_expr);
+                }
+            }
+        },
+        .block => |block| try seedCompositeSymbolSourcesFromExpr(allocator, mir_store, store, symbol, block.final_expr, visiting),
+        .dbg_expr => |dbg_expr| try seedCompositeSymbolSourcesFromExpr(allocator, mir_store, store, symbol, dbg_expr.expr, visiting),
+        .expect => |expect| try seedCompositeSymbolSourcesFromExpr(allocator, mir_store, store, symbol, expect.body, visiting),
+        .return_expr => |ret| try seedCompositeSymbolSourcesFromExpr(allocator, mir_store, store, symbol, ret.expr, visiting),
+        .struct_access => |sa| {
+            const field_expr = resolveStructFieldExpr(mir_store, store, sa.struct_, sa.field_idx) orelse return;
+            try seedCompositeSymbolSourcesFromExpr(allocator, mir_store, store, symbol, field_expr, visiting);
+        },
+        else => {},
+    }
 }
 
 fn seedClosureMembers(allocator: Allocator, mir_store: *const MIR.Store, store: *Store) Allocator.Error!void {
@@ -413,7 +570,7 @@ fn propagatePatternBindingsFromExpr(
         .tag => |tag_pat| {
             const arg_patterns = mir_store.getPatternSpan(tag_pat.args);
             for (arg_patterns, 0..) |arg_pattern_id, arg_index| {
-                const payload_expr = resolveTagPayloadExpr(mir_store, source_expr, tag_pat.name, @intCast(arg_index)) orelse continue;
+                const payload_expr = resolveTagPayloadExpr(mir_store, store, source_expr, tag_pat.name, @intCast(arg_index)) orelse continue;
                 changed = (try propagatePatternBindingsFromExpr(
                     allocator,
                     mir_store,
@@ -426,7 +583,7 @@ fn propagatePatternBindingsFromExpr(
         .struct_destructure => |destructure| {
             const field_patterns = mir_store.getPatternSpan(destructure.fields);
             for (field_patterns, 0..) |field_pattern_id, field_index| {
-                const field_expr = resolveStructFieldExpr(mir_store, source_expr, @intCast(field_index)) orelse continue;
+                const field_expr = resolveStructFieldExpr(mir_store, store, source_expr, @intCast(field_index)) orelse continue;
                 changed = (try propagatePatternBindingsFromExpr(
                     allocator,
                     mir_store,
@@ -439,7 +596,7 @@ fn propagatePatternBindingsFromExpr(
         .list_destructure => |destructure| {
             const elem_patterns = mir_store.getPatternSpan(destructure.patterns);
             for (elem_patterns, 0..) |elem_pattern_id, elem_index| {
-                const elem_expr = resolveListElementExpr(mir_store, source_expr, @intCast(elem_index)) orelse continue;
+                const elem_expr = resolveListElementExpr(mir_store, store, source_expr, @intCast(elem_index)) orelse continue;
                 changed = (try propagatePatternBindingsFromExpr(
                     allocator,
                     mir_store,
@@ -508,12 +665,13 @@ fn resolveStructFieldLambdaSet(
     if (expr == .lookup) {
         if (store.getSymbolFieldLambdaSet(expr.lookup, field_idx)) |ls_idx| return ls_idx;
     }
-    const field_expr = resolveStructFieldExpr(mir_store, expr_id, field_idx) orelse return null;
+    const field_expr = resolveStructFieldExpr(mir_store, store, expr_id, field_idx) orelse return null;
     return store.getExprLambdaSet(field_expr);
 }
 
 fn resolveStructFieldExpr(
     mir_store: *const MIR.Store,
+    store: *const Store,
     expr_id: MIR.ExprId,
     field_idx: u32,
 ) ?MIR.ExprId {
@@ -524,17 +682,31 @@ fn resolveStructFieldExpr(
             if (field_idx >= fields.len) break :blk null;
             break :blk fields[field_idx];
         },
-        .lookup => |symbol| blk: {
-            const def_expr = mir_store.getValueDef(symbol) orelse break :blk null;
-            break :blk resolveStructFieldExpr(mir_store, def_expr, field_idx);
+        .lookup => |symbol| store.getSymbolFieldExpr(symbol, field_idx),
+        .block => |block| resolveStructFieldExpr(mir_store, store, block.final_expr, field_idx),
+        .dbg_expr => |dbg_expr| resolveStructFieldExpr(mir_store, store, dbg_expr.expr, field_idx),
+        .expect => |expect| resolveStructFieldExpr(mir_store, store, expect.body, field_idx),
+        .return_expr => |ret| resolveStructFieldExpr(mir_store, store, ret.expr, field_idx),
+        .struct_access => |sa| blk: {
+            const base_field = resolveStructFieldExpr(mir_store, store, sa.struct_, sa.field_idx) orelse break :blk null;
+            break :blk resolveStructFieldExpr(mir_store, store, base_field, field_idx);
         },
-        .block => |block| resolveStructFieldExpr(mir_store, block.final_expr, field_idx),
         else => null,
     };
 }
 
 fn structFieldKey(symbol: MIR.Symbol, field_idx: u32) u128 {
     return (@as(u128, symbol.raw()) << 32) | @as(u128, field_idx);
+}
+
+fn tagPayloadKey(symbol: MIR.Symbol, tag_name: Ident.Idx, payload_idx: u32) u128 {
+    return (@as(u128, symbol.raw()) << 64) |
+        (@as(u128, tag_name.idx) << 32) |
+        @as(u128, payload_idx);
+}
+
+fn listElemKey(symbol: MIR.Symbol, elem_idx: u32) u128 {
+    return (@as(u128, symbol.raw()) << 32) | @as(u128, elem_idx);
 }
 
 fn structFieldArityForExpr(mir_store: *const MIR.Store, expr_id: MIR.ExprId) ?u32 {
@@ -553,6 +725,7 @@ fn structFieldArityForMonotype(mir_store: *const MIR.Store, mono_idx: anytype) ?
 
 fn resolveTagPayloadExpr(
     mir_store: *const MIR.Store,
+    store: *const Store,
     expr_id: MIR.ExprId,
     tag_name: Ident.Idx,
     payload_idx: u32,
@@ -565,17 +738,18 @@ fn resolveTagPayloadExpr(
             if (payload_idx >= args.len) break :blk null;
             break :blk args[payload_idx];
         },
-        .lookup => |symbol| blk: {
-            const def_expr = mir_store.getValueDef(symbol) orelse break :blk null;
-            break :blk resolveTagPayloadExpr(mir_store, def_expr, tag_name, payload_idx);
-        },
-        .block => |block| resolveTagPayloadExpr(mir_store, block.final_expr, tag_name, payload_idx),
+        .lookup => |symbol| store.getSymbolTagPayloadExpr(symbol, tag_name, payload_idx),
+        .block => |block| resolveTagPayloadExpr(mir_store, store, block.final_expr, tag_name, payload_idx),
+        .dbg_expr => |dbg_expr| resolveTagPayloadExpr(mir_store, store, dbg_expr.expr, tag_name, payload_idx),
+        .expect => |expect| resolveTagPayloadExpr(mir_store, store, expect.body, tag_name, payload_idx),
+        .return_expr => |ret| resolveTagPayloadExpr(mir_store, store, ret.expr, tag_name, payload_idx),
         else => null,
     };
 }
 
 fn resolveListElementExpr(
     mir_store: *const MIR.Store,
+    store: *const Store,
     expr_id: MIR.ExprId,
     elem_idx: u32,
 ) ?MIR.ExprId {
@@ -586,11 +760,11 @@ fn resolveListElementExpr(
             if (elem_idx >= elems.len) break :blk null;
             break :blk elems[elem_idx];
         },
-        .lookup => |symbol| blk: {
-            const def_expr = mir_store.getValueDef(symbol) orelse break :blk null;
-            break :blk resolveListElementExpr(mir_store, def_expr, elem_idx);
-        },
-        .block => |block| resolveListElementExpr(mir_store, block.final_expr, elem_idx),
+        .lookup => |symbol| store.getSymbolListElemExpr(symbol, elem_idx),
+        .block => |block| resolveListElementExpr(mir_store, store, block.final_expr, elem_idx),
+        .dbg_expr => |dbg_expr| resolveListElementExpr(mir_store, store, dbg_expr.expr, elem_idx),
+        .expect => |expect| resolveListElementExpr(mir_store, store, expect.body, elem_idx),
+        .return_expr => |ret| resolveListElementExpr(mir_store, store, ret.expr, elem_idx),
         else => null,
     };
 }

@@ -1022,8 +1022,8 @@ fn runtimeLayoutForStructField(self: *Self, expr_id: MIR.ExprId, field_idx: u32)
                     break :blk field_info.field_layout;
                 }
             }
-            const def_expr = self.mir_store.getValueDef(symbol) orelse break :blk null;
-            break :blk try self.runtimeLayoutForStructField(def_expr, field_idx);
+            const field_expr = self.lambda_set_store.getSymbolFieldExpr(symbol, field_idx) orelse break :blk null;
+            break :blk try self.runtimeValueLayoutFromMirExpr(field_expr);
         },
         .block => |block| try self.runtimeLayoutForStructField(block.final_expr, field_idx),
         else => null,
@@ -1093,8 +1093,8 @@ fn runtimeValueLayoutFromMirExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator
         .call => |call_data| {
             const func_expr = self.mir_store.getExpr(call_data.func);
             if (func_expr == .lookup) {
-                if (self.mir_store.getValueDef(func_expr.lookup)) |def_expr_id| {
-                    if (self.mir_store.getExpr(def_expr_id) == .runtime_err_anno_only) {
+                if (self.lambda_set_store.getSymbolSourceExpr(func_expr.lookup)) |source_expr_id| {
+                    if (self.mir_store.getExpr(source_expr_id) == .runtime_err_anno_only) {
                         if (try self.annotationOnlyIntrinsicForFunc(self.mir_store.typeOf(call_data.func))) |intrinsic| {
                             return self.layoutFromMonotype(intrinsic.result_mono);
                         }
@@ -1154,8 +1154,8 @@ fn runtimeValueLayoutFromMirExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator
             if (self.symbol_layouts.get(sym.raw())) |layout_idx| {
                 return try self.runtimeLayoutForBindingSymbol(sym, mono_idx, layout_idx);
             }
-            if (self.mir_store.getValueDef(sym)) |def_expr_id| {
-                return self.runtimeValueLayoutFromMirExpr(def_expr_id);
+            if (self.lambda_set_store.getSymbolSourceExpr(sym)) |source_expr_id| {
+                return self.runtimeValueLayoutFromMirExpr(source_expr_id);
             }
             return self.layoutFromMonotype(mono_idx);
         },
@@ -1821,8 +1821,8 @@ fn runtimeListElemLayoutFromMirExpr(self: *Self, list_mir_expr_id: MIR.ExprId) A
             else => {},
         },
         .lookup => |symbol| {
-            if (self.mir_store.getValueDef(symbol)) |def_expr_id| {
-                return self.runtimeListElemLayoutFromMirExpr(def_expr_id);
+            if (self.lambda_set_store.getSymbolListElemExpr(symbol, 0)) |elem_expr_id| {
+                return self.runtimeValueLayoutFromMirExpr(elem_expr_id);
             }
         },
         .block => |block| return self.runtimeListElemLayoutFromMirExpr(block.final_expr),
@@ -2822,8 +2822,8 @@ fn lowerLookup(self: *Self, sym: Symbol, mono_idx: Monotype.Idx, _: MIR.ExprId, 
             }
             unreachable;
         }
-        if (self.mir_store.getValueDef(sym)) |mir_def_id| {
-            break :blk try self.runtimeValueLayoutFromMirExpr(mir_def_id);
+        if (self.lambda_set_store.getSymbolSourceExpr(sym)) |source_expr_id| {
+            break :blk try self.runtimeValueLayoutFromMirExpr(source_expr_id);
         }
         break :blk try self.layoutFromMonotype(mono_idx);
     };
@@ -3420,8 +3420,8 @@ fn lowerCall(self: *Self, call_data: anytype, mir_expr_id: MIR.ExprId, region: R
     }
     if (func_mir_expr == .lookup) {
         const sym = func_mir_expr.lookup;
-        if (self.mir_store.getValueDef(sym)) |def_expr_id| {
-            if (self.mir_store.getExpr(def_expr_id) == .runtime_err_anno_only) {
+        if (self.lambda_set_store.getSymbolSourceExpr(sym)) |source_expr_id| {
+            if (self.mir_store.getExpr(source_expr_id) == .runtime_err_anno_only) {
                 if (try self.lowerAnnotationOnlyIntrinsicCall(call_data, mono_idx, region)) |lowered| {
                     return lowered;
                 }
