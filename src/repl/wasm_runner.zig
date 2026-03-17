@@ -104,7 +104,9 @@ pub fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, ex
         env_imports.addHostFunction("roc_int_from_str", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostIntFromStr, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_dec_from_str", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostDecFromStr, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_float_from_str", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostFloatFromStr, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_list_append_unsafe", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostListAppendUnsafe, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_list_sort_with", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostListSortWith, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_list_reverse", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostListReverse, null) catch return error.WasmExecFailed;
 
         const imports = [_]bytebox.ModuleImportPackage{env_imports};
         module_instance.instantiate(.{ .stack_size = 1024 * 256, .imports = &imports }) catch return error.WasmExecFailed;
@@ -905,6 +907,69 @@ fn hostListSortWith(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]
     }
 
     std.mem.writeInt(u32, buffer[result_ptr..][0..4], @intCast(sorted_data), .little);
+    std.mem.writeInt(u32, buffer[result_ptr + 4 ..][0..4], @intCast(len), .little);
+    std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(len), .little);
+}
+
+fn hostListAppendUnsafe(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const buffer = module.store.getMemory(0).buffer();
+    const list_ptr: usize = @intCast(params[0].I32);
+    const elem_ptr: usize = @intCast(params[1].I32);
+    const elem_width: usize = @intCast(params[2].I32);
+    const alignment: u32 = @bitCast(params[3].I32);
+    const result_ptr: usize = @intCast(params[4].I32);
+
+    const data_ptr: usize = @intCast(std.mem.readInt(u32, buffer[list_ptr..][0..4], .little));
+    const len: usize = @intCast(std.mem.readInt(u32, buffer[list_ptr + 4 ..][0..4], .little));
+    const new_len = len + 1;
+
+    if (elem_width == 0) {
+        std.mem.writeInt(u32, buffer[result_ptr..][0..4], @intCast(data_ptr), .little);
+        std.mem.writeInt(u32, buffer[result_ptr + 4 ..][0..4], @intCast(new_len), .little);
+        std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(new_len), .little);
+        return;
+    }
+
+    const new_data = allocWasmData(buffer, alignment, new_len * elem_width);
+    if (len > 0) {
+        @memcpy(buffer[new_data..][0 .. len * elem_width], buffer[data_ptr..][0 .. len * elem_width]);
+    }
+    @memcpy(buffer[new_data + len * elem_width ..][0..elem_width], buffer[elem_ptr..][0..elem_width]);
+
+    std.mem.writeInt(u32, buffer[result_ptr..][0..4], @intCast(new_data), .little);
+    std.mem.writeInt(u32, buffer[result_ptr + 4 ..][0..4], @intCast(new_len), .little);
+    std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(new_len), .little);
+}
+
+fn hostListReverse(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const buffer = module.store.getMemory(0).buffer();
+    const list_ptr: usize = @intCast(params[0].I32);
+    const elem_width: usize = @intCast(params[1].I32);
+    const alignment: u32 = @bitCast(params[2].I32);
+    const result_ptr: usize = @intCast(params[3].I32);
+
+    const data_ptr: usize = @intCast(std.mem.readInt(u32, buffer[list_ptr..][0..4], .little));
+    const len: usize = @intCast(std.mem.readInt(u32, buffer[list_ptr + 4 ..][0..4], .little));
+    const cap: usize = @intCast(std.mem.readInt(u32, buffer[list_ptr + 8 ..][0..4], .little));
+
+    if (len < 2 or elem_width == 0) {
+        std.mem.writeInt(u32, buffer[result_ptr..][0..4], @intCast(data_ptr), .little);
+        std.mem.writeInt(u32, buffer[result_ptr + 4 ..][0..4], @intCast(len), .little);
+        std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(cap), .little);
+        return;
+    }
+
+    const reversed_data = allocWasmData(buffer, alignment, len * elem_width);
+    for (0..len) |i| {
+        const src_offset = (len - 1 - i) * elem_width;
+        const dst_offset = i * elem_width;
+        @memcpy(
+            buffer[reversed_data + dst_offset ..][0..elem_width],
+            buffer[data_ptr + src_offset ..][0..elem_width],
+        );
+    }
+
+    std.mem.writeInt(u32, buffer[result_ptr..][0..4], @intCast(reversed_data), .little);
     std.mem.writeInt(u32, buffer[result_ptr + 4 ..][0..4], @intCast(len), .little);
     std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(len), .little);
 }
