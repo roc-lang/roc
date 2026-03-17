@@ -1235,10 +1235,6 @@ fn resolveToProc(self: *Self, expr_id: MIR.ExprId) ?struct { proc: MIR.ProcId, p
         .dbg_expr => |dbg_expr| self.resolveToProc(dbg_expr.expr),
         .expect => |expect| self.resolveToProc(expect.body),
         .return_expr => |ret| self.resolveToProc(ret.expr),
-        .lookup => |sym| blk: {
-            const def_expr_id = self.mir_store.getValueDef(sym) orelse break :blk null;
-            break :blk self.resolveToProc(def_expr_id);
-        },
         else => null,
     };
 }
@@ -1252,10 +1248,6 @@ fn resolveToProcId(self: *Self, expr_id: MIR.ExprId) ?MIR.ProcId {
         .dbg_expr => |dbg_expr| self.resolveToProcId(dbg_expr.expr),
         .expect => |expect| self.resolveToProcId(expect.body),
         .return_expr => |ret| self.resolveToProcId(ret.expr),
-        .lookup => |sym| blk: {
-            const def_expr_id = self.mir_store.getValueDef(sym) orelse break :blk null;
-            break :blk self.resolveToProcId(def_expr_id);
-        },
         else => null,
     };
 }
@@ -3483,11 +3475,10 @@ fn lowerCall(self: *Self, call_data: anytype, mir_expr_id: MIR.ExprId, region: R
     // with lambda defs should have lambda sets and go through lowerClosureCall.
     if (func_mir_expr == .lookup and std.debug.runtime_safety) {
         const sym = func_mir_expr.lookup;
-        if (self.mir_store.getValueDef(sym)) |def_id| {
-            if (LambdaSet.isLambdaExpr(self.mir_store, def_id)) {
-                std.debug.panic("MirToLir: lookup callee with proc-backed callable def reached direct call fallback, symbol key={d}", .{sym.raw()});
-            }
-        }
+        std.debug.panic(
+            "MirToLir invariant violated: lookup callee reached direct call fallback without lambda-set/direct-proc resolution, symbol key={d}",
+            .{sym.raw()},
+        );
     }
 
     if (std.debug.runtime_safety) {
@@ -4833,17 +4824,20 @@ fn runtimeLayoutForBindingSymbol(
     }
 
     var layout_idx = existing_layout orelse fallback_layout;
-    const has_callable_def = if (self.mir_store.getValueDef(sym)) |def_id|
-        LambdaSet.isLambdaExpr(self.mir_store, def_id)
-    else
-        false;
 
-    if (mono == .func and !has_callable_def and existing_layout == null) {
+    if (mono == .func and existing_layout == null) {
         const generic_fn_layout = try self.monotype_layout_resolver.resolve(mono_idx, null);
         if (fallback_layout == generic_fn_layout) {
-            if (self.lambda_set_store.getSymbolLambdaSet(sym)) |ls_idx| {
-                layout_idx = try self.closureValueLayoutFromLambdaSet(ls_idx);
-            }
+            const ls_idx = self.lambda_set_store.getSymbolLambdaSet(sym) orelse {
+                if (std.debug.runtime_safety) {
+                    std.debug.panic(
+                        "MirToLir invariant violated: missing symbol lambda set for function binding {d}",
+                        .{sym.raw()},
+                    );
+                }
+                unreachable;
+            };
+            layout_idx = try self.closureValueLayoutFromLambdaSet(ls_idx);
         }
     }
 
