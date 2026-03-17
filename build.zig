@@ -2349,7 +2349,7 @@ pub fn build(b: *std.Build) void {
         run_int_dev_tests.addArg("zig-out/bin/roc");
         run_int_dev_tests.addArg("int");
         run_int_dev_tests.addArg("--mode=native");
-        run_int_dev_tests.addArg("--backend=dev");
+        run_int_dev_tests.addArg("--opt=dev");
         run_int_dev_tests.step.dependOn(&install.step);
         run_int_dev_tests.step.dependOn(&install_runner.step);
         run_int_dev_tests.step.dependOn(test_platforms_step);
@@ -2360,7 +2360,7 @@ pub fn build(b: *std.Build) void {
         run_str_dev_tests.addArg("zig-out/bin/roc");
         run_str_dev_tests.addArg("str");
         run_str_dev_tests.addArg("--mode=native");
-        run_str_dev_tests.addArg("--backend=dev");
+        run_str_dev_tests.addArg("--opt=dev");
         run_str_dev_tests.step.dependOn(&install.step);
         run_str_dev_tests.step.dependOn(&install_runner.step);
         run_str_dev_tests.step.dependOn(test_platforms_step);
@@ -2371,7 +2371,7 @@ pub fn build(b: *std.Build) void {
         run_fx_dev_tests.addArg("zig-out/bin/roc");
         run_fx_dev_tests.addArg("fx");
         run_fx_dev_tests.addArg("--mode=native");
-        run_fx_dev_tests.addArg("--backend=dev");
+        run_fx_dev_tests.addArg("--opt=dev");
         run_fx_dev_tests.step.dependOn(&install.step);
         run_fx_dev_tests.step.dependOn(&install_runner.step);
         run_fx_dev_tests.step.dependOn(test_platforms_step);
@@ -3359,7 +3359,7 @@ fn addMainExe(
     exe.step.dependOn(&copy_shim.step);
 
     // Copy builtins object for the host target for embedding into CLI
-    // This is used by `roc build --backend=dev` to link the app object with builtins
+    // This is used by `roc build --opt=dev` to link the app object with builtins
     const copy_builtins = b.addUpdateSourceFiles();
     const host_builtins_filename = if (target.result.os.tag == .windows) "roc_builtins.obj" else "roc_builtins.o";
     copy_builtins.addCopyFileToSource(builtins_obj.getEmittedBin(), b.pathJoin(&.{ "src/cli", host_builtins_filename }));
@@ -3488,7 +3488,7 @@ fn addMainExe(
         exe.step.dependOn(&copy_cross_shim.step);
 
         // Copy builtins object for this target for embedding into CLI
-        // Used by `roc build --backend=dev --target=X` to link the app object with builtins
+        // Used by `roc build --opt=dev --target=X` to link the app object with builtins
         const builtins_ext = if (cross_target.query.os_tag == .windows) "roc_builtins.obj" else "roc_builtins.o";
         const copy_cross_builtins = b.addUpdateSourceFiles();
         copy_cross_builtins.addCopyFileToSource(

@@ -3,7 +3,7 @@
 //!
 //! This library provides:
 //! - Numeric overflow functions (for compiler-rt)
-//! - Dev backend wrapper functions (for roc build --backend=dev)
+//! - Dev backend wrapper functions (for roc build --opt=dev)
 
 // Export key functions that might need compiler-rt symbols
 comptime {
@@ -18,7 +18,7 @@ comptime {
     @import("num.zig").exportSubWithOverflow(i128, "roc__num_sub_with_overflow_");
 }
 
-// Export dev backend wrapper functions - these are used by `roc build --backend=dev`
+// Export dev backend wrapper functions - these are used by `roc build --opt=dev`
 // to call builtin functions via symbol references instead of direct function pointers.
 pub const dev_wrappers = @import("dev_wrappers.zig");
 
