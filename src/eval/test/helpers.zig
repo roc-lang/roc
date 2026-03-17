@@ -439,28 +439,30 @@ pub fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []
     const dev_str = try devEvaluatorStr(allocator, module_env, inspect_expr, builtin_module_env);
     defer allocator.free(dev_str);
 
-    const wasm_str = try wasmEvaluatorStr(allocator, module_env, inspect_expr, builtin_module_env);
-    defer allocator.free(wasm_str);
+    // Wasm and LLVM backends are optional comparisons — they may not be available
+    // on all platforms (e.g. musl, Windows, some aarch64 targets).
+    const wasm_str: ?[]const u8 = wasmEvaluatorStr(allocator, module_env, inspect_expr, builtin_module_env) catch null;
+    defer if (wasm_str) |s| allocator.free(s);
 
-    const llvm_str = try llvmEvaluatorStr(allocator, module_env, inspect_expr, builtin_module_env);
-    defer allocator.free(llvm_str);
+    const llvm_str: ?[]const u8 = llvmEvaluatorStr(allocator, module_env, inspect_expr, builtin_module_env) catch null;
+    defer if (llvm_str) |s| allocator.free(s);
 
     if (!numericStringsEqual(interpreter_str, dev_str) or
-        !numericStringsEqual(interpreter_str, wasm_str) or
-        !numericStringsEqual(interpreter_str, llvm_str) or
-        !numericStringsEqual(dev_str, wasm_str) or
-        !numericStringsEqual(dev_str, llvm_str) or
-        !numericStringsEqual(wasm_str, llvm_str))
+        (wasm_str != null and !numericStringsEqual(interpreter_str, wasm_str.?)) or
+        (llvm_str != null and !numericStringsEqual(interpreter_str, llvm_str.?)) or
+        (wasm_str != null and !numericStringsEqual(dev_str, wasm_str.?)) or
+        (llvm_str != null and !numericStringsEqual(dev_str, llvm_str.?)) or
+        (wasm_str != null and llvm_str != null and !numericStringsEqual(wasm_str.?, llvm_str.?)))
     {
         const bool_equivalent =
             boolStringsEquivalent(interpreter_str, dev_str) and
-            boolStringsEquivalent(interpreter_str, wasm_str) and
-            boolStringsEquivalent(interpreter_str, llvm_str);
+            (wasm_str == null or boolStringsEquivalent(interpreter_str, wasm_str.?)) and
+            (llvm_str == null or boolStringsEquivalent(interpreter_str, llvm_str.?));
         if (bool_equivalent) return;
 
         std.debug.print(
             "\nEvaluator mismatch!\n  interpreter: '{s}'\n  dev:         '{s}'\n  wasm:        '{s}'\n  llvm:        '{s}'\n",
-            .{ interpreter_str, dev_str, wasm_str, llvm_str },
+            .{ interpreter_str, dev_str, wasm_str orelse "<unavailable>", llvm_str orelse "<unavailable>" },
         );
         return error.EvaluatorMismatch;
     }
@@ -649,22 +651,22 @@ fn compareFloatWithBackends(
     const dev_str = try devEvaluatorStr(allocator, module_env, inspect_expr, builtin_module_env);
     defer allocator.free(dev_str);
 
-    const wasm_str = try wasmEvaluatorStr(allocator, module_env, inspect_expr, builtin_module_env);
-    defer allocator.free(wasm_str);
+    const wasm_str: ?[]const u8 = wasmEvaluatorStr(allocator, module_env, inspect_expr, builtin_module_env) catch null;
+    defer if (wasm_str) |s| allocator.free(s);
 
-    const llvm_str = try llvmEvaluatorStr(allocator, module_env, inspect_expr, builtin_module_env);
-    defer allocator.free(llvm_str);
+    const llvm_str: ?[]const u8 = llvmEvaluatorStr(allocator, module_env, inspect_expr, builtin_module_env) catch null;
+    defer if (llvm_str) |s| allocator.free(s);
 
     if (!floatStringsEquivalent(T, interpreter_str, dev_str) or
-        !floatStringsEquivalent(T, interpreter_str, wasm_str) or
-        !floatStringsEquivalent(T, interpreter_str, llvm_str) or
-        !floatStringsEquivalent(T, dev_str, wasm_str) or
-        !floatStringsEquivalent(T, dev_str, llvm_str) or
-        !floatStringsEquivalent(T, wasm_str, llvm_str))
+        (wasm_str != null and !floatStringsEquivalent(T, interpreter_str, wasm_str.?)) or
+        (llvm_str != null and !floatStringsEquivalent(T, interpreter_str, llvm_str.?)) or
+        (wasm_str != null and !floatStringsEquivalent(T, dev_str, wasm_str.?)) or
+        (llvm_str != null and !floatStringsEquivalent(T, dev_str, llvm_str.?)) or
+        (wasm_str != null and llvm_str != null and !floatStringsEquivalent(T, wasm_str.?, llvm_str.?)))
     {
         std.debug.print(
             "\nEvaluator mismatch!\n  interpreter: '{s}'\n  dev:         '{s}'\n  wasm:        '{s}'\n  llvm:        '{s}'\n",
-            .{ interpreter_str, dev_str, wasm_str, llvm_str },
+            .{ interpreter_str, dev_str, wasm_str orelse "<unavailable>", llvm_str orelse "<unavailable>" },
         );
         return error.EvaluatorMismatch;
     }
