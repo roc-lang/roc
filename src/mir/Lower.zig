@@ -1321,64 +1321,6 @@ fn resolveFuncTypeInStore(types_store: *const types.Store, type_var: types.Var) 
     };
 }
 
-fn debugPrintMonotype(store: *const MIR.Store, mono_idx: Monotype.Idx) void {
-    if (mono_idx.isNone()) {
-        std.debug.print("none", .{});
-        return;
-    }
-
-    switch (store.monotype_store.getMonotype(mono_idx)) {
-        .unit => std.debug.print("unit", .{}),
-        .prim => |prim| std.debug.print("prim.{s}#{d}", .{ @tagName(prim), @intFromEnum(mono_idx) }),
-        .list => |list| {
-            std.debug.print("list(", .{});
-            debugPrintMonotype(store, list.elem);
-            std.debug.print(")", .{});
-        },
-        .box => |box| {
-            std.debug.print("box(", .{});
-            debugPrintMonotype(store, box.inner);
-            std.debug.print(")", .{});
-        },
-        .tuple => |tuple| {
-            std.debug.print("tuple(", .{});
-            for (store.monotype_store.getIdxSpan(tuple.elems), 0..) |elem, i| {
-                if (i > 0) std.debug.print(", ", .{});
-                debugPrintMonotype(store, elem);
-            }
-            std.debug.print(")", .{});
-        },
-        .func => |func| {
-            std.debug.print("func(", .{});
-            for (store.monotype_store.getIdxSpan(func.args), 0..) |arg, i| {
-                if (i > 0) std.debug.print(", ", .{});
-                debugPrintMonotype(store, arg);
-            }
-            std.debug.print(" -> ", .{});
-            debugPrintMonotype(store, func.ret);
-            std.debug.print(")#{d}", .{@intFromEnum(mono_idx)});
-        },
-        .record => |record| {
-            std.debug.print("record#{d}(", .{@intFromEnum(mono_idx)});
-            for (store.monotype_store.getFields(record.fields), 0..) |field, i| {
-                if (i > 0) std.debug.print(", ", .{});
-                std.debug.print("{d}:", .{field.name.idx});
-                debugPrintMonotype(store, field.type_idx);
-            }
-            std.debug.print(")", .{});
-        },
-        .tag_union => |tu| {
-            std.debug.print("tag_union#{d}(", .{@intFromEnum(mono_idx)});
-            for (store.monotype_store.getTags(tu.tags), 0..) |tag, i| {
-                if (i > 0) std.debug.print(", ", .{});
-                std.debug.print("{d}", .{tag.name.idx});
-            }
-            std.debug.print(")", .{});
-        },
-        .recursive_placeholder => std.debug.print("recursive_placeholder", .{}),
-    }
-}
-
 fn lookupAssociatedMethodExternalDef(
     self: *Self,
     source_env: *const ModuleEnv,
@@ -3724,18 +3666,6 @@ fn lowerLambdaSpecialized(
     self.current_pattern_scope = @intFromEnum(proc_id);
     defer self.current_pattern_scope = saved_pattern_scope;
 
-    const body_mono = try self.resolveMonotype(lambda.body);
-    if (std.debug.runtime_safety) {
-        std.debug.print(
-            "lowerLambdaSpecialized proc={d} body_expr={d} body_mono=",
-            .{ @intFromEnum(proc_id), @intFromEnum(lambda.body) },
-        );
-        debugPrintMonotype(self.store, body_mono);
-        std.debug.print(" fn_ret=", .{});
-        debugPrintMonotype(self.store, ret_monotype);
-        std.debug.print("\n", .{});
-    }
-
     const params = try self.lowerPatternSpan(module_env, lambda.args);
     const body = try self.lowerExpr(lambda.body);
 
@@ -4206,20 +4136,6 @@ fn lowerProcInst(self: *Self, proc_inst_id: Monomorphize.ProcInstId) Allocator.E
         proc_inst.fn_monotype_module_idx,
         module_idx,
     );
-    if (std.debug.runtime_safety) {
-        const template_expr = module_env.store.getExpr(template.cir_expr);
-        std.debug.print(
-            "lowerProcInst inst={d} template_expr={d} tag={s} module={d} mono=",
-            .{
-                @intFromEnum(proc_inst_id),
-                @intFromEnum(template.cir_expr),
-                @tagName(template_expr),
-                module_idx,
-            },
-        );
-        debugPrintMonotype(self.store, proc_monotype);
-        std.debug.print("\n", .{});
-    }
 
     const switching_module = module_idx != self.current_module_idx;
     const saved_module_idx = self.current_module_idx;
@@ -4300,18 +4216,6 @@ fn lowerProcInst(self: *Self, proc_inst_id: Monomorphize.ProcInstId) Allocator.E
         else => unreachable,
     };
 
-    if (std.debug.runtime_safety) {
-        const proc_id = switch (self.store.getExpr(lowered_proc_expr)) {
-            .proc_ref => |proc_id| proc_id,
-            .closure_make => |closure| closure.proc,
-            else => MIR.ProcId.none,
-        };
-        std.debug.print(
-            "lowerProcInstResult inst={d} proc={d}\n",
-            .{ @intFromEnum(proc_inst_id), @intFromEnum(proc_id) },
-        );
-    }
-
     return lowered_proc_expr;
 }
 
@@ -4338,21 +4242,6 @@ fn lowerDispatchProcInstForExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.E
         }
         unreachable;
     };
-    if (std.debug.runtime_safety and (expr_idx == @as(CIR.Expr.Idx, @enumFromInt(16)) or expr_idx == @as(CIR.Expr.Idx, @enumFromInt(20)) or expr_idx == @as(CIR.Expr.Idx, @enumFromInt(43)) or expr_idx == @as(CIR.Expr.Idx, @enumFromInt(50)) or expr_idx == @as(CIR.Expr.Idx, @enumFromInt(51)) or expr_idx == @as(CIR.Expr.Idx, @enumFromInt(66)))) {
-        const proc_inst = self.monomorphization.getProcInst(proc_inst_id);
-        const proc_mono = try self.importMonotypeFromStore(
-            &self.monomorphization.monotype_store,
-            proc_inst.fn_monotype,
-            proc_inst.fn_monotype_module_idx,
-            self.current_module_idx,
-        );
-        std.debug.print(
-            "lowerDispatchProcInstForExpr expr={d} ctx={d} proc_inst={d} mono=",
-            .{ @intFromEnum(expr_idx), @intFromEnum(self.current_proc_inst_context), @intFromEnum(proc_inst_id) },
-        );
-        debugPrintMonotype(self.store, proc_mono);
-        std.debug.print("\n", .{});
-    }
     return self.lowerProcInst(proc_inst_id);
 }
 
@@ -4597,12 +4486,22 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
         const stmt_region = module_env.store.getStatementRegion(stmt_idx);
         switch (cir_stmt) {
             .s_decl => |decl| {
+                if (cirExprIsCallable(module_env.store.getExpr(decl.expr)) and
+                    self.monomorphization.getExprProcInst(self.current_proc_inst_context, self.current_module_idx, decl.expr) == null)
+                {
+                    continue;
+                }
                 const pat = try self.lowerPattern(module_env, decl.pattern);
                 const expr = try self.lowerExpr(decl.expr);
                 try self.registerBoundSymbolDefIfNeeded(pat, expr);
                 try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = pat, .expr = expr } });
             },
             .s_var => |var_decl| {
+                if (cirExprIsCallable(module_env.store.getExpr(var_decl.expr)) and
+                    self.monomorphization.getExprProcInst(self.current_proc_inst_context, self.current_module_idx, var_decl.expr) == null)
+                {
+                    continue;
+                }
                 const pat = try self.lowerPattern(module_env, var_decl.pattern_idx);
                 const expr = try self.lowerExpr(var_decl.expr);
                 try self.registerBoundSymbolDefIfNeeded(pat, expr);
@@ -4699,6 +4598,13 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
         .stmts = stmt_span,
         .final_expr = final_expr,
     } }, monotype, region);
+}
+
+fn cirExprIsCallable(expr: CIR.Expr) bool {
+    return switch (expr) {
+        .e_lambda, .e_closure, .e_hosted_lambda => true,
+        else => false,
+    };
 }
 
 /// Lower `e_binop` to either a method call or a match (for short-circuit and/or).

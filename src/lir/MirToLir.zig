@@ -1353,17 +1353,6 @@ fn ensureDirectProcSpec(
     const key_bytes = try self.specializationKeyBytes(callee_key, param_layouts, force_pass_by_ptr);
     const proc = self.mir_store.getProc(callee_proc);
     const provisional_ret_layout = try self.layoutFromMonotype(proc.ret_monotype);
-    if (param_layouts.len == 2) {
-        std.debug.print(
-            "ensureDirectProcSpec callee_proc={d} callee_key={d} ret_layout={d} ret_mono={d}\n",
-            .{
-                @intFromEnum(callee_proc),
-                callee_key,
-                @intFromEnum(provisional_ret_layout),
-                @intFromEnum(proc.ret_monotype),
-            },
-        );
-    }
     var specialization = self.direct_proc_specs.get(key_bytes);
 
     if (specialization == null) {
@@ -1479,24 +1468,6 @@ fn lowerDispatchProcBody(
 
         var branch_acc = self.startLetAccumulator();
         if (self.memberHasCaptures(member)) {
-            if (builtin.mode == .Debug) {
-                const proc = self.mir_store.getProc(member.proc);
-                std.debug.print(
-                    "lowerDispatchProcBody captures ls={d} branch={d}/{d} proc={d} closure_member={d} proc_capture_bindings={d} closure_capture_bindings={d}\n",
-                    .{
-                        @intFromEnum(callee_ls_idx),
-                        branch_index,
-                        members.items.len,
-                        @intFromEnum(member.proc),
-                        @intFromEnum(member.closure_member),
-                        self.mir_store.getCaptureBindings(proc.capture_bindings).len,
-                        if (!member.closure_member.isNone())
-                            self.mir_store.getCaptureBindings(self.mir_store.getClosureMember(member.closure_member).capture_bindings).len
-                        else
-                            @as(usize, 0),
-                    },
-                );
-            }
             const captures_layout = try self.closureVariantPayloadLayout(closure_layout, branch_index);
             const payload_expr = try self.lir_store.addExpr(.{ .tag_payload_access = .{
                 .value = closure_arg,
@@ -3187,20 +3158,6 @@ fn lowerProcWithParamLayouts(
 
     const proc = self.mir_store.getProc(proc_id);
     const monotype = self.mir_store.monotype_store.getMonotype(proc.fn_monotype);
-    if (proc_id == @as(MIR.ProcId, @enumFromInt(3))) {
-        const body_mono = self.mir_store.typeOf(proc.body);
-        std.debug.print(
-            "lowerProcWithParamLayouts proc=3 fn_mono={d} ret_mono={d} body_mono={d} body_expr_tag={s} override_ret={any} override_body={any}\n",
-            .{
-                @intFromEnum(proc.fn_monotype),
-                @intFromEnum(proc.ret_monotype),
-                @intFromEnum(body_mono),
-                @tagName(self.mir_store.getExpr(proc.body)),
-                self.specialized_monotype_layouts.get(@intFromEnum(proc.ret_monotype)),
-                self.specialized_monotype_layouts.get(@intFromEnum(body_mono)),
-            },
-        );
-    }
     const mir_params = self.mir_store.getPatternSpan(proc.params);
     if (builtin.mode == .Debug and mir_params.len != param_layouts.len) {
         std.debug.panic(
@@ -3314,16 +3271,6 @@ fn lowerProcWithParamLayouts(
                 try self.layoutFromMonotype(f.ret)
             else
                 try self.runtimeValueLayoutFromMirExpr(proc.body);
-            if (proc_id == @as(MIR.ProcId, @enumFromInt(3))) {
-                std.debug.print(
-                    "lowerProcWithParamLayouts proc=3 inferred_ret_layout={d} f.ret={d} override_ret_now={any}\n",
-                    .{
-                        @intFromEnum(inferred),
-                        @intFromEnum(f.ret),
-                        self.specialized_monotype_layouts.get(@intFromEnum(f.ret)),
-                    },
-                );
-            }
             try self.registerSpecializedMonotypeLayout(f.ret, inferred, &saved_monotype_layouts);
             break :blk inferred;
         },
@@ -3370,81 +3317,6 @@ fn lowerProcWithParamLayouts(
 
     if (param_cell_init_stmts.items.len != 0) {
         lir_body = try self.wrapExprWithPreludeStmts(lir_body, ret_layout, param_cell_init_stmts.items, region);
-    }
-
-    if (param_layouts.len == 2) {
-        const Debug = struct {
-            fn printExpr(store: *const LirExprStore, expr_id: LirExprId, indent: usize) void {
-                for (0..indent) |_| std.debug.print("  ", .{});
-                const expr = store.getExpr(expr_id);
-                switch (expr) {
-                    .block => |block| {
-                        std.debug.print("block result_layout={d}\n", .{@intFromEnum(block.result_layout)});
-                        for (store.getStmts(block.stmts)) |stmt| {
-                            for (0..indent + 1) |_| std.debug.print("  ", .{});
-                            switch (stmt) {
-                                .decl => |binding| {
-                                    std.debug.print("decl pat={d}\n", .{@intFromEnum(binding.pattern)});
-                                    printExpr(store, binding.expr, indent + 2);
-                                },
-                                .mutate => |binding| {
-                                    std.debug.print("mutate pat={d}\n", .{@intFromEnum(binding.pattern)});
-                                    printExpr(store, binding.expr, indent + 2);
-                                },
-                                .cell_init => |binding| {
-                                    std.debug.print("cell_init cell={d} layout={d}\n", .{ binding.cell.raw(), @intFromEnum(binding.layout_idx) });
-                                    printExpr(store, binding.expr, indent + 2);
-                                },
-                                .cell_store => |binding| {
-                                    std.debug.print("cell_store cell={d} layout={d}\n", .{ binding.cell.raw(), @intFromEnum(binding.layout_idx) });
-                                    printExpr(store, binding.expr, indent + 2);
-                                },
-                                .cell_drop => |binding| {
-                                    std.debug.print("cell_drop cell={d} layout={d}\n", .{ binding.cell.raw(), @intFromEnum(binding.layout_idx) });
-                                },
-                            }
-                        }
-                        for (0..indent + 1) |_| std.debug.print("  ", .{});
-                        std.debug.print("final\n", .{});
-                        printExpr(store, block.final_expr, indent + 2);
-                    },
-                    .lookup => |lookup| std.debug.print("lookup sym={d} layout={d}\n", .{ lookup.symbol.raw(), @intFromEnum(lookup.layout_idx) }),
-                    .cell_load => |load| std.debug.print("cell_load cell={d} layout={d}\n", .{ load.cell.raw(), @intFromEnum(load.layout_idx) }),
-                    .proc_call => |call| {
-                        std.debug.print("proc_call proc={d} ret={d} args={d}\n", .{ @intFromEnum(call.proc), @intFromEnum(call.ret_layout), store.getExprSpan(call.args).len });
-                        for (store.getExprSpan(call.args)) |arg| {
-                            printExpr(store, arg, indent + 1);
-                        }
-                    },
-                    .while_loop => |while_loop| {
-                        std.debug.print("while_loop\n", .{});
-                        for (0..indent + 1) |_| std.debug.print("  ", .{});
-                        std.debug.print("cond\n", .{});
-                        printExpr(store, while_loop.cond, indent + 2);
-                        for (0..indent + 1) |_| std.debug.print("  ", .{});
-                        std.debug.print("body\n", .{});
-                        printExpr(store, while_loop.body, indent + 2);
-                    },
-                    .empty_list => std.debug.print("empty_list\n", .{}),
-                    .low_level => |low_level| std.debug.print("low_level {s}\n", .{@tagName(low_level.op)}),
-                    .bool_literal => |val| std.debug.print("bool {any}\n", .{val}),
-                    .i64_literal => |lit| std.debug.print("i64 {d} layout={d}\n", .{ lit.value, @intFromEnum(lit.layout_idx) }),
-                    else => std.debug.print("{s}\n", .{@tagName(expr)}),
-                }
-            }
-        };
-
-        std.debug.print("=== candidate list proc name={d} ret={d} params={d} ===\n", .{
-            proc_name.raw(),
-            @intFromEnum(ret_layout),
-            param_layouts.len,
-        });
-        for (self.lir_store.getPatternSpan(lir_params), 0..) |pat_id, i| {
-            const pat = self.lir_store.getPattern(pat_id);
-            std.debug.print("arg[{d}] {s}\n", .{ i, @tagName(pat) });
-        }
-        Debug.printExpr(self.lir_store, lir_body, 1);
-        std.debug.print("=== end candidate list proc ===\n", .{});
     }
 
     var proc_rc_pass = try RcInsert.RcInsertPass.init(self.allocator, self.lir_store, self.layout_store);

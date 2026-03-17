@@ -565,10 +565,6 @@ test "lowerExpr: block local closure call has resolvable symbol def and lambda s
     const final_expr = env.mir_store.getExpr(final_expr_id);
     try testing.expect(final_expr == .call);
 
-    const callee = env.mir_store.getExpr(final_expr.call.func);
-    try testing.expect(callee == .lookup);
-    const closure_sym = callee.lookup;
-
     const all_module_envs = [_]*ModuleEnv{
         @constCast(env.builtin_module.env),
         env.module_env,
@@ -576,9 +572,10 @@ test "lowerExpr: block local closure call has resolvable symbol def and lambda s
     var ls_store = try LambdaSet.infer(test_allocator, env.mir_store, all_module_envs[0..]);
     defer ls_store.deinit(test_allocator);
 
-    const closure_ls = ls_store.getSymbolLambdaSet(closure_sym) orelse return error.TestUnexpectedResult;
-    const members = ls_store.getMembers(ls_store.getLambdaSet(closure_ls).members);
+    const callee_ls = ls_store.getExprLambdaSet(final_expr.call.func) orelse return error.TestUnexpectedResult;
+    const members = ls_store.getMembers(ls_store.getLambdaSet(callee_ls).members);
     try testing.expectEqual(@as(usize, 1), members.len);
+    try testing.expect(!members[0].proc.isNone());
     const closure_member = env.mir_store.getClosureMember(members[0].closure_member);
     try testing.expectEqual(@as(usize, 1), env.mir_store.getCaptureBindings(closure_member.capture_bindings).len);
 }
