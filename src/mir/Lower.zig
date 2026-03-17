@@ -1822,22 +1822,10 @@ fn lowerStrInspektNominal(
                 ),
             };
 
-            const unbox_fn_mono = try self.buildFuncMonotype(&.{outer_mono}, box_data.inner, false);
-            const unbox_target: ResolvedDispatchTarget = .{
-                .origin = common.builtin_module,
-                .method_ident = common.builtin_box_unbox,
-                .fn_var = undefined,
-            };
-
-            const func_expr = try self.lowerMonomorphizedExternalProcInstForDispatchTarget(
-                type_env,
-                unbox_target,
-                unbox_fn_mono,
-            );
             const unbox_args = try self.store.addExprSpan(self.allocator, &.{value_expr});
             const unboxed = try self.store.addExpr(
                 self.allocator,
-                .{ .call = .{ .func = func_expr, .args = unbox_args } },
+                .{ .run_low_level = .{ .op = .box_unbox, .args = unbox_args } },
                 box_data.inner,
                 region,
             );
@@ -2324,24 +2312,10 @@ fn lowerStrInspektExprByMonotype(
         .list => |list_data| self.lowerStrInspektListByMonotype(module_env, value_expr, list_data, region),
         .unit => self.emitMirStrLiteral("{}", region),
         .box => |box_data| blk: {
-            const common = self.currentCommonIdents();
-            const unbox_fn_mono = try self.buildFuncMonotype(&.{mono_idx}, box_data.inner, false);
-            const unbox_target: ResolvedDispatchTarget = .{
-                .origin = common.builtin_module,
-                .method_ident = common.builtin_box_unbox,
-                // resolvedDispatchTargetToSymbol only uses origin/method_ident.
-                .fn_var = undefined,
-            };
-
-            const func_expr = try self.lowerMonomorphizedExternalProcInstForDispatchTarget(
-                module_env,
-                unbox_target,
-                unbox_fn_mono,
-            );
             const unbox_args = try self.store.addExprSpan(self.allocator, &.{value_expr});
             const unboxed = try self.store.addExpr(
                 self.allocator,
-                .{ .call = .{ .func = func_expr, .args = unbox_args } },
+                .{ .run_low_level = .{ .op = .box_unbox, .args = unbox_args } },
                 box_data.inner,
                 region,
             );
