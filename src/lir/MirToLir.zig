@@ -440,8 +440,7 @@ fn registerSpecializedMonotypeLayout(
         self.monotype_layout_resolver.clearOverrideCache();
         self.specialized_capture_layout_cache.clearRetainingCapacity();
         self.specialized_closure_value_layout_cache.clearRetainingCapacity();
-    }
-    else {
+    } else {
         try self.specialized_monotype_layouts.put(mono_key, layout_idx);
         self.monotype_layout_resolver.clearOverrideCache();
         self.specialized_capture_layout_cache.clearRetainingCapacity();

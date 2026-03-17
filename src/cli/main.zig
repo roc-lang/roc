@@ -4185,12 +4185,14 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     };
     defer mir_store.deinit(ctx.gpa);
 
-    var monomorphization = mir.Monomorphize.Result.init(
+    var monomorphization = mir.Monomorphize.runModule(
         ctx.gpa,
+        all_module_envs,
+        platform_types,
         platform_module_idx,
-        null,
+        app_module_idx,
     ) catch {
-        std.log.err("Failed to create monomorphization result", .{});
+        std.log.err("Failed to monomorphize platform module", .{});
         return error.OutOfMemory;
     };
     defer monomorphization.deinit(ctx.gpa);

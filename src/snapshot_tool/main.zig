@@ -4054,12 +4054,14 @@ fn processDevObjectSnapshot(
     };
     defer mir_store.deinit(allocator);
 
-    var monomorphization = mir_mod.Monomorphize.Result.init(
+    var monomorphization = mir_mod.Monomorphize.runModule(
         allocator,
+        all_module_envs,
+        platform_types,
         platform_module_idx,
-        null,
+        app_module_idx,
     ) catch {
-        std.log.err("Failed to create monomorphization result", .{});
+        std.log.err("Failed to monomorphize platform module", .{});
         return false;
     };
     defer monomorphization.deinit(allocator);

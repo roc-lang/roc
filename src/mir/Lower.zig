@@ -278,18 +278,6 @@ fn symbolMetadataModuleIdx(meta: SymbolMetadata) u32 {
     };
 }
 
-fn symbolMetadataDisplayIdent(meta: SymbolMetadata) Ident.Idx {
-    return switch (meta) {
-        .local_ident => |m| m.ident_idx,
-        .external_def => |m| m.display_ident_idx,
-    };
-}
-
-fn symbolMetadataDisplayName(self: *const Self, meta: SymbolMetadata) []const u8 {
-    const module_idx = symbolMetadataModuleIdx(meta);
-    return self.all_module_envs[module_idx].getIdent(symbolMetadataDisplayIdent(meta));
-}
-
 fn identTextIfOwnedBy(env: *const ModuleEnv, ident: Ident.Idx) ?[]const u8 {
     const ident_store = env.getIdentStoreConst();
     const bytes = ident_store.interner.bytes.items.items;
@@ -3438,19 +3426,6 @@ fn makeSyntheticIdent(self: *Self, original_ident: Ident.Idx) Ident.Idx {
     };
 }
 
-fn packCallableSourceKey(comptime namespace: u64, module_idx: u32, local_id: u32) u64 {
-    if (builtin.mode == .Debug) std.debug.assert(namespace <= 1);
-    return (namespace << 63) | (@as(u64, module_idx) << 31) | @as(u64, local_id);
-}
-
-fn packLocalCallableSourceKey(module_idx: u32, pattern_idx: CIR.Pattern.Idx) u64 {
-    return packCallableSourceKey(0, module_idx, @intFromEnum(pattern_idx));
-}
-
-fn packExternalCallableSourceKey(module_idx: u32, def_node_idx: u16) u64 {
-    return packCallableSourceKey(1, module_idx, def_node_idx);
-}
-
 /// Function values are already proc-backed, so no extra identity stabilization is needed.
 fn stabilizeEscapingFunctionExpr(_: *Self, expr: MIR.ExprId) Allocator.Error!MIR.ExprId {
     return expr;
@@ -3472,11 +3447,6 @@ fn stabilizeEscapingFunctionSpan(self: *Self, expr_span: MIR.ExprSpan) Allocator
 
     if (!changed) return expr_span;
     return try self.store.addExprSpan(self.allocator, self.scratch_expr_ids.sliceFromStart(scratch_top));
-}
-
-/// Compute the composite cache key for proc-backed callable instantiations.
-fn callableSpecKey(source_key: u64, monotype: Monotype.Idx) u128 {
-    return (@as(u128, source_key) << 32) | @as(u128, @intFromEnum(monotype));
 }
 
 fn monotypesStructurallyEqual(self: *Self, lhs: Monotype.Idx, rhs: Monotype.Idx) Allocator.Error!bool {
@@ -4216,13 +4186,6 @@ fn lowerHostedLambdaWithBoundMonotype(
     return self.lowerHostedLambdaSpecialized(module_env, hosted, monotype, region, null);
 }
 
-fn isCallableCirExpr(expr: CIR.Expr) bool {
-    return switch (expr) {
-        .e_lambda, .e_closure, .e_hosted_lambda => true,
-        else => false,
-    };
-}
-
 fn cirExprNeedsCallableOverrideIsolation(module_env: *const ModuleEnv, expr_idx: CIR.Expr.Idx) Allocator.Error!bool {
     return switch (module_env.store.getExpr(expr_idx)) {
         .e_lambda, .e_closure, .e_hosted_lambda => true,
@@ -4311,7 +4274,6 @@ fn monotypeCanRefine(
         },
     };
 }
-
 
 /// Lower `e_call` to MIR call.
 /// If the call target is a lookup to a low-level builtin wrapper
