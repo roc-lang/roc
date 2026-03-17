@@ -5940,8 +5940,31 @@ fn getLayoutStore(self: *const Self) *const LayoutStore {
 /// Get the byte size of a layout index using the layout store.
 fn layoutByteSize(self: *const Self, layout_idx: layout.Idx) u32 {
     const ls = self.getLayoutStore();
-    const l = ls.getLayout(layout_idx);
-    return ls.layoutSize(l);
+    return switch (WasmLayout.wasmReprWithStore(layout_idx, ls)) {
+        .primitive => |vt| switch (vt) {
+            .i32, .f32 => 4,
+            .i64, .f64 => 8,
+        },
+        .stack_memory => |size| size,
+    };
+}
+
+fn layoutByteAlign(self: *const Self, layout_idx: layout.Idx) u32 {
+    const ls = self.getLayoutStore();
+    return switch (WasmLayout.wasmReprWithStore(layout_idx, ls)) {
+        .primitive => |vt| switch (vt) {
+            .i32, .f32 => 4,
+            .i64, .f64 => 8,
+        },
+        .stack_memory => {
+            const l = ls.getLayout(layout_idx);
+            return switch (l.tag) {
+                .list, .list_of_zst, .box, .box_of_zst => 4,
+                .scalar => if (l.data.scalar.tag == .str) 4 else @intCast(ls.layoutSizeAlign(l).alignment.toByteUnits()),
+                else => @intCast(ls.layoutSizeAlign(l).alignment.toByteUnits()),
+            };
+        },
+    };
 }
 
 /// Emit a store instruction for the given value type at an address already on the stack.
@@ -11544,14 +11567,14 @@ fn emitFloatMod(self: *Self, vt: ValType) Allocator.Error!void {
 fn getListElemSize(self: *const Self, list_layout: layout.Idx) u32 {
     const ls = self.getLayoutStore();
     const info = ls.getListInfo(ls.getLayout(list_layout));
-    return info.elem_size;
+    return self.layoutByteSize(info.elem_layout_idx);
 }
 
 /// Get the element alignment for a list layout.
 fn getListElemAlign(self: *const Self, list_layout: layout.Idx) u32 {
     const ls = self.getLayoutStore();
     const info = ls.getListInfo(ls.getLayout(list_layout));
-    return info.elem_alignment;
+    return self.layoutByteAlign(info.elem_layout_idx);
 }
 
 fn listContainsRefcounted(self: *const Self, list_layout: layout.Idx) bool {
@@ -12077,8 +12100,15 @@ fn generateLLListConcat(self: *Self, args: anytype, ret_layout: layout.Idx) Allo
 
 /// Generate LowLevel list_reverse: create new list with elements in reverse order.
 fn generateLLListReverse(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
+    const ls = self.getLayoutStore();
     const elem_size = self.getListElemSize(ret_layout);
     const elem_align = self.getListElemAlign(ret_layout);
+    const elem_layout_idx = switch (ls.getLayout(ret_layout).tag) {
+        .list => ls.getLayout(ret_layout).data.list,
+        .list_of_zst => layout.Idx.zst,
+        else => unreachable,
+    };
+    const elements_refcounted = elem_layout_idx != .zst and ls.layoutContainsRefcounted(ls.getLayout(elem_layout_idx));
 
     try self.generateExpr(args[0]);
     const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -12163,6 +12193,15 @@ fn generateLLListReverse(self: *Self, args: anytype, ret_layout: layout.Idx) All
     try self.emitLocalSet(elem_bytes);
 
     try self.emitMemCopyLoop(new_data, dst_off2, src_ptr, elem_bytes);
+
+    if (elements_refcounted and elem_size > 0) {
+        const dst_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        try self.emitLocalGet(new_data);
+        try self.emitLocalGet(dst_off2);
+        self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+        try self.emitLocalSet(dst_ptr);
+        try self.emitRcAtPtr(.incref, dst_ptr, elem_layout_idx, 1);
+    }
 
     // rev_i++
     try self.emitLocalGet(rev_i);

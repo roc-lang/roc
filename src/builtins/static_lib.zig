@@ -49,6 +49,7 @@ comptime {
     @export(&dw.roc_builtins_str_from_utf8_lossy, .{ .name = "roc_builtins_str_from_utf8_lossy" });
     @export(&dw.roc_builtins_str_from_utf8, .{ .name = "roc_builtins_str_from_utf8" });
     @export(&dw.roc_builtins_str_from_utf8_result, .{ .name = "roc_builtins_str_from_utf8_result" });
+    @export(&dw.roc_builtins_str_from_utf8_parts, .{ .name = "roc_builtins_str_from_utf8_parts" });
     @export(&dw.roc_builtins_str_escape_and_quote, .{ .name = "roc_builtins_str_escape_and_quote" });
     @export(&dw.roc_builtins_list_with_capacity, .{ .name = "roc_builtins_list_with_capacity" });
     @export(&dw.roc_builtins_list_sort_with, .{ .name = "roc_builtins_list_sort_with" });

@@ -3137,8 +3137,13 @@ pub const MonoLlvmCodeGen = struct {
         const needs_temp = self.out_ptr == null;
         var temp_alloca: LlvmBuilder.Value = .none;
         if (needs_temp) {
-            const alloca_count = builder.intValue(.i32, 3) catch return error.OutOfMemory;
-            temp_alloca = wip.alloca(.normal, .i64, alloca_count, LlvmBuilder.Alignment.fromByteUnits(8), .default, "ll_tmp") catch return error.CompilationFailed;
+            const ls = self.layout_store orelse return error.CompilationFailed;
+            const ret_layout = ls.getLayout(ll.ret_layout);
+            const sa = ls.layoutSizeAlign(ret_layout);
+            const temp_words = @max((sa.size + 7) / 8, 1);
+            const alloca_count = builder.intValue(.i32, @as(u64, @intCast(temp_words))) catch return error.OutOfMemory;
+            const temp_alignment = LlvmBuilder.Alignment.fromByteUnits(@intCast(@max(sa.alignment.toByteUnits(), 1)));
+            temp_alloca = wip.alloca(.normal, .i64, alloca_count, temp_alignment, .default, "ll_tmp") catch return error.CompilationFailed;
             self.out_ptr = temp_alloca;
         }
 
@@ -3150,9 +3155,14 @@ pub const MonoLlvmCodeGen = struct {
         if (needs_temp) {
             self.out_ptr = saved_out_ptr;
             if (result == .none) {
-                const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
-                const struct_type = builder.structType(.normal, &.{ ptr_type, .i64, .i64 }) catch return error.CompilationFailed;
-                return wip.load(.normal, struct_type, temp_alloca, LlvmBuilder.Alignment.fromByteUnits(8), "ll_val") catch return error.CompilationFailed;
+                const ls = self.layout_store orelse return error.CompilationFailed;
+                const stored_layout = ls.getLayout(ll.ret_layout);
+                if (stored_layout.tag == .tag_union) {
+                    return temp_alloca;
+                }
+
+                const load_type = try self.layoutToLlvmTypeFull(ll.ret_layout);
+                return wip.load(.normal, load_type, temp_alloca, self.alignmentForLayout(ll.ret_layout), "ll_val") catch return error.CompilationFailed;
             }
         }
 
@@ -4078,35 +4088,60 @@ pub const MonoLlvmCodeGen = struct {
                 std.debug.assert(ret_layout_val.tag == .tag_union);
                 const tu_data = ls.getTagUnionData(ret_layout_val.data.tag_union.idx);
                 const variants = ls.getTagUnionVariants(tu_data);
-                const err_index: usize = 0;
-                const ok_index: usize = 1;
-                const err_layout_idx = variants.get(@intCast(err_index)).payload_layout;
+                var ok_index: ?usize = null;
+                var err_index: ?usize = null;
+
+                for (0..variants.len) |variant_idx| {
+                    const payload_layout = variants.get(@intCast(variant_idx)).payload_layout;
+                    const candidate = self.unwrapSingleFieldPayloadLayout(payload_layout) orelse payload_layout;
+
+                    if (candidate == .str) {
+                        ok_index = variant_idx;
+                    } else if (err_index == null) {
+                        err_index = variant_idx;
+                    }
+                }
+
+                const resolved_ok_index = ok_index orelse return error.CompilationFailed;
+                const resolved_err_index = err_index orelse return error.CompilationFailed;
+                const err_layout_idx = variants.get(@intCast(resolved_err_index)).payload_layout;
                 const unwrapped_err_layout_idx = self.unwrapSingleFieldPayloadLayout(err_layout_idx) orelse err_layout_idx;
                 const err_layout_val = ls.getLayout(unwrapped_err_layout_idx);
-                if (err_layout_val.tag != .tag_union) return error.CompilationFailed;
-                const inner_tu_data = ls.getTagUnionData(err_layout_val.data.tag_union.idx);
-                const inner_variants = ls.getTagUnionVariants(inner_tu_data);
-                if (inner_variants.len == 0) return error.CompilationFailed;
-                const record_layout_val = ls.getLayout(inner_variants.get(0).payload_layout);
-                if (record_layout_val.tag != .struct_) return error.CompilationFailed;
-                const record_idx = record_layout_val.data.struct_.idx;
-                const problem_offset = ls.getStructFieldOffsetByOriginalIndex(record_idx, 0);
-                const index_offset = ls.getStructFieldOffsetByOriginalIndex(record_idx, 1);
+                const record_idx = switch (err_layout_val.tag) {
+                    .struct_ => err_layout_val.data.struct_.idx,
+                    .tag_union => blk: {
+                        const inner_tu_data = ls.getTagUnionData(err_layout_val.data.tag_union.idx);
+                        const inner_variants = ls.getTagUnionVariants(inner_tu_data);
+                        if (inner_variants.len == 0) return error.CompilationFailed;
+                        const inner_payload_layout_idx = inner_variants.get(0).payload_layout;
+                        const unwrapped_inner_payload_idx = self.unwrapSingleFieldPayloadLayout(inner_payload_layout_idx) orelse inner_payload_layout_idx;
+                        const inner_payload_layout = ls.getLayout(unwrapped_inner_payload_idx);
+                        if (inner_payload_layout.tag != .struct_) return error.CompilationFailed;
+                        break :blk inner_payload_layout.data.struct_.idx;
+                    },
+                    else => return error.CompilationFailed,
+                };
+                const struct_data = ls.getStructData(record_idx);
+                const fields = ls.struct_fields.sliceRange(struct_data.getFields());
+                if (fields.len != 2) return error.CompilationFailed;
+                // Shared layout uses canonical alphabetical field indices.
+                // For { problem : Utf8ByteProblem, index : U64 }, that means
+                // original index 0 = index and original index 1 = problem.
+                const resolved_index_offset = ls.getStructFieldOffsetByOriginalIndex(record_idx, 0);
+                const resolved_problem_offset = ls.getStructFieldOffsetByOriginalIndex(record_idx, 1);
+
                 const zero_byte = builder.intValue(.i8, 0) catch return error.OutOfMemory;
                 const total_size_val = builder.intValue(.i32, tu_data.size) catch return error.OutOfMemory;
                 _ = wip.callMemSet(dest_ptr, alignment, zero_byte, total_size_val, .normal, false) catch return error.CompilationFailed;
-
-                const ok_tag_val = builder.intValue(.i64, ok_index) catch return error.OutOfMemory;
-                const err_tag_val = builder.intValue(.i64, err_index) catch return error.OutOfMemory;
+                const ok_tag_val = builder.intValue(.i64, @as(u64, @intCast(resolved_ok_index))) catch return error.OutOfMemory;
+                const err_tag_val = builder.intValue(.i64, @as(u64, @intCast(resolved_err_index))) catch return error.OutOfMemory;
                 const outer_disc_offset_val = builder.intValue(.i32, tu_data.discriminant_offset) catch return error.OutOfMemory;
                 const outer_disc_size_val = builder.intValue(.i32, tu_data.discriminant_size) catch return error.OutOfMemory;
-                const inner_disc_offset_val = builder.intValue(.i32, inner_tu_data.discriminant_offset) catch return error.OutOfMemory;
-                const inner_disc_size_val = builder.intValue(.i32, inner_tu_data.discriminant_size) catch return error.OutOfMemory;
-                const err_index_offset_val = builder.intValue(.i32, @as(u32, @intCast(index_offset))) catch return error.OutOfMemory;
-                const err_problem_offset_val = builder.intValue(.i32, @as(u32, @intCast(problem_offset))) catch return error.OutOfMemory;
+                const err_index_offset_val = builder.intValue(.i32, resolved_index_offset) catch return error.OutOfMemory;
+                const err_problem_offset_val = builder.intValue(.i32, resolved_problem_offset) catch return error.OutOfMemory;
 
-                _ = try self.callBuiltin("roc_builtins_str_from_utf8_result", .void, &.{
-                    ptr_type, ptr_type, .i64, .i64, .i64, .i64, .i32, .i32, .i32, .i32, .i32, .i32, ptr_type,
+                _ = self.callBuiltin("roc_builtins_str_from_utf8_result", .void, &.{
+                    ptr_type, ptr_type, .i64, .i64, .i64, .i64, .i32, .i32, .i32, .i32, ptr_type,
                 }, &.{
                     dest_ptr,
                     data_ptr,
@@ -4116,12 +4151,10 @@ pub const MonoLlvmCodeGen = struct {
                     err_tag_val,
                     outer_disc_offset_val,
                     outer_disc_size_val,
-                    inner_disc_offset_val,
-                    inner_disc_size_val,
                     err_index_offset_val,
                     err_problem_offset_val,
                     roc_ops,
-                });
+                }) catch return error.CompilationFailed;
                 return .none;
             },
             .num_from_str => {
@@ -4776,9 +4809,19 @@ pub const MonoLlvmCodeGen = struct {
             const payload_layout = variants.get(@intCast(i)).payload_layout;
             const candidate = self.unwrapSingleFieldPayloadLayout(payload_layout) orelse payload_layout;
             switch (candidate) {
-                .u8, .u16, .u32, .u64, .u128,
-                .i8, .i16, .i32, .i64, .i128,
-                .f32, .f64, .dec,
+                .u8,
+                .u16,
+                .u32,
+                .u64,
+                .u128,
+                .i8,
+                .i16,
+                .i32,
+                .i64,
+                .i128,
+                .f32,
+                .f64,
+                .dec,
                 => {
                     ok_payload_idx = candidate;
                     break;

@@ -238,8 +238,6 @@ pub fn roc_builtins_str_from_utf8_result(
     err_tag: u64,
     outer_disc_offset: u32,
     outer_disc_size: u32,
-    inner_disc_offset: u32,
-    inner_disc_size: u32,
     err_index_offset: u32,
     err_problem_offset: u32,
     roc_ops: *RocOps,
@@ -256,7 +254,6 @@ pub fn roc_builtins_str_from_utf8_result(
     utils.writeAs(u64, out + err_index_offset, result.byte_index, @src());
     utils.writeAs(u8, out + err_problem_offset, @intFromEnum(result.problem_code), @src());
     writeDiscriminant(out, outer_disc_offset, outer_disc_size, err_tag);
-    writeDiscriminant(out, inner_disc_offset, inner_disc_size, 0);
 }
 
 pub fn roc_builtins_str_from_utf8_parts(

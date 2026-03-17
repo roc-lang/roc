@@ -115,21 +115,33 @@ pub fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, ex
     const handle = module_instance.getFunctionHandle("main") catch return error.WasmExecFailed;
     var params = [1]bytebox.Val{.{ .I32 = 0 }};
     var returns: [1]bytebox.Val = undefined;
-    _ = module_instance.invoke(handle, &params, &returns, .{}) catch return error.WasmExecFailed;
+    _ = module_instance.invoke(handle, &params, &returns, .{}) catch |err| {
+        std.debug.print("wasm invoke failed: {}\n", .{err});
+        return error.WasmExecFailed;
+    };
 
     const str_ptr: u32 = @bitCast(returns[0].I32);
     const mem_slice = module_instance.memoryAll();
-    if (str_ptr + 12 > mem_slice.len) return error.WasmExecFailed;
+    if (str_ptr + 12 > mem_slice.len) {
+        std.debug.print("wasm result ptr out of bounds: ptr={d} mem={d}\n", .{ str_ptr, mem_slice.len });
+        return error.WasmExecFailed;
+    }
 
     const byte11 = mem_slice[str_ptr + 11];
     const str_data: []const u8 = if (byte11 & 0x80 != 0) sd: {
         const sso_len: u32 = byte11 & 0x7F;
-        if (sso_len > 11) return error.WasmExecFailed;
+        if (sso_len > 11) {
+            std.debug.print("wasm invalid SSO len: {d}\n", .{sso_len});
+            return error.WasmExecFailed;
+        }
         break :sd mem_slice[str_ptr..][0..sso_len];
     } else sd: {
         const data_ptr: u32 = @bitCast(mem_slice[str_ptr..][0..4].*);
         const data_len: u32 = @bitCast(mem_slice[str_ptr + 4 ..][0..4].*);
-        if (data_ptr + data_len > mem_slice.len) return error.WasmExecFailed;
+        if (data_ptr + data_len > mem_slice.len) {
+            std.debug.print("wasm heap str out of bounds: ptr={d} len={d} mem={d}\n", .{ data_ptr, data_len, mem_slice.len });
+            return error.WasmExecFailed;
+        }
         break :sd mem_slice[data_ptr..][0..data_len];
     };
 
