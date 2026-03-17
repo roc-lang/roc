@@ -3039,12 +3039,19 @@ pub const MonoLlvmCodeGen = struct {
                 }
                 self.out_ptr = null;
             } else if (is_tag_union_elem) {
-                // Tag union elements are pointer-based (alloca ptrs). Copy the full
-                // tag union data (payload + discriminant) from the alloca to the heap slot.
                 const elem_val = try self.generateExpr(elem_id);
                 const store_align = LlvmBuilder.Alignment.fromByteUnits(@intCast(@max(elem_align, 1)));
-                const size_val_copy = builder.intValue(.i32, @as(u32, @intCast(elem_size))) catch return error.OutOfMemory;
-                _ = wip.callMemCpy(elem_ptr, store_align, elem_val, store_align, size_val_copy, .normal, false) catch return error.CompilationFailed;
+                if (elem_val.typeOfWip(wip).isPointer(builder)) {
+                    // Payload-carrying tag unions are materialized as pointers to their
+                    // full in-memory representation. Copy the bytes into the list slot.
+                    const size_val_copy = builder.intValue(.i32, @as(u32, @intCast(elem_size))) catch return error.OutOfMemory;
+                    _ = wip.callMemCpy(elem_ptr, store_align, elem_val, store_align, size_val_copy, .normal, false) catch return error.CompilationFailed;
+                } else {
+                    // Zero-arg tag unions can lower to a scalar discriminant value even
+                    // when the layout itself is still classified as .tag_union.
+                    const store_val = try self.convertToFieldType(elem_val, list.elem_layout);
+                    _ = wip.store(.@"volatile", store_val, elem_ptr, store_align) catch return error.CompilationFailed;
+                }
             } else {
                 const elem_val = try self.generateExpr(elem_id);
                 // Convert value to match element layout
@@ -3218,6 +3225,38 @@ pub const MonoLlvmCodeGen = struct {
                     const neg_val = wip.bin(.sub, zero, operand, "") catch return error.CompilationFailed;
                     return wip.select(.normal, is_neg, neg_val, operand, "") catch return error.CompilationFailed;
                 }
+            },
+            .num_abs_diff => {
+                std.debug.assert(args.len >= 2);
+                const arg_layout = self.getExprResultLayout(args[0]) orelse ll.ret_layout;
+                var lhs = try self.generateExpr(args[0]);
+                var rhs = try self.generateExpr(args[1]);
+
+                if (isFloatLayout(arg_layout)) {
+                    lhs = try self.coerceValueToLayout(lhs, arg_layout);
+                    rhs = try self.coerceValueToLayout(rhs, arg_layout);
+                    const diff = wip.bin(.fsub, lhs, rhs, "") catch return error.CompilationFailed;
+                    const zero = if (arg_layout == .f32)
+                        (builder.floatConst(0.0) catch return error.OutOfMemory).toValue()
+                    else
+                        (builder.doubleConst(0.0) catch return error.OutOfMemory).toValue();
+                    const is_neg = wip.fcmp(.normal, .olt, diff, zero, "") catch return error.OutOfMemory;
+                    const neg_diff = wip.un(.fneg, diff, "") catch return error.CompilationFailed;
+                    return wip.select(.normal, is_neg, neg_diff, diff, "") catch return error.CompilationFailed;
+                }
+
+                lhs = try self.coerceValueToLayout(lhs, arg_layout);
+                rhs = try self.coerceValueToLayout(rhs, arg_layout);
+
+                const lhs_ge_rhs = wip.icmp(
+                    if (isSigned(arg_layout)) .sge else .uge,
+                    lhs,
+                    rhs,
+                    "",
+                ) catch return error.OutOfMemory;
+                const larger = wip.select(.normal, lhs_ge_rhs, lhs, rhs, "") catch return error.CompilationFailed;
+                const smaller = wip.select(.normal, lhs_ge_rhs, rhs, lhs, "") catch return error.CompilationFailed;
+                return wip.bin(.sub, larger, smaller, "") catch return error.CompilationFailed;
             },
 
             // --- Widening integer conversions (always safe) ---
@@ -5456,10 +5495,21 @@ pub const MonoLlvmCodeGen = struct {
                 break :blk .{ lo, hi };
             },
             else => blk: {
-                const low = if (value.typeOfWip(wip) == .i64)
+                const value_type = value.typeOfWip(wip);
+                const low = if (value_type == .i64)
                     value
-                else
-                    wip.cast(if (is_signed_precision) .sext else .zext, value, .i64, "") catch return error.CompilationFailed;
+                else if (!isIntType(value_type))
+                    return error.CompilationFailed
+                else blk2: {
+                    const value_bits = intTypeBits(value_type);
+                    if (value_bits < 64) {
+                        break :blk2 wip.cast(if (is_signed_precision) .sext else .zext, value, .i64, "") catch return error.CompilationFailed;
+                    }
+                    if (value_bits > 64) {
+                        break :blk2 wip.cast(.trunc, value, .i64, "") catch return error.CompilationFailed;
+                    }
+                    break :blk2 value;
+                };
                 break :blk .{ low, builder.intValue(.i64, 0) catch return error.OutOfMemory };
             },
         };
