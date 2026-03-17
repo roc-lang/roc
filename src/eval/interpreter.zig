@@ -2788,7 +2788,7 @@ pub const Interpreter = struct {
                 var dest = try self.pushRaw(record_layout, 0, result_rt_var);
                 var acc = try dest.asRecord(&self.runtime_layout_store);
 
-                const list_field_stack_val = try acc.getFieldByName(list_field, list_arg.rt_var) orelse unreachable;
+                const list_field_stack_val = try acc.getFieldByIndex(list_field.idx, list_arg.rt_var);
                 const list_ptr: *builtins.list.RocList = @ptrCast(@alignCast(list_field_stack_val.ptr.?));
 
                 if (self.runtime_layout_store.isZeroSized(list_info.elem_layout)) {
@@ -2802,7 +2802,7 @@ pub const Interpreter = struct {
 
                 // Get pointer space for the replaced item
                 const elem_rt_var = elt_arg.rt_var;
-                const prev_field_stack_val = try acc.getFieldByName(prev_field, elem_rt_var) orelse unreachable;
+                const prev_field_stack_val = try acc.getFieldByIndex(prev_field.idx, elem_rt_var);
                 const prev_field_ptr = prev_field_stack_val.ptr orelse unreachable;
 
                 // Handle numeric type mismatch for index argument.
