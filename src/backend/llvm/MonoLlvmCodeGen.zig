@@ -192,6 +192,44 @@ pub const MonoLlvmCodeGen = struct {
         captures: lir.LIR.LirCaptureSpan,
     };
 
+    const ScopeSnapshot = struct {
+        symbol_keys: std.AutoHashMap(u64, void),
+        closure_keys: std.AutoHashMap(u64, void),
+        cell_keys: std.AutoHashMap(u64, void),
+
+        fn init(self: *const MonoLlvmCodeGen) Error!ScopeSnapshot {
+            var snapshot = ScopeSnapshot{
+                .symbol_keys = std.AutoHashMap(u64, void).init(self.allocator),
+                .closure_keys = std.AutoHashMap(u64, void).init(self.allocator),
+                .cell_keys = std.AutoHashMap(u64, void).init(self.allocator),
+            };
+            errdefer snapshot.deinit();
+
+            var symbol_it = self.symbol_values.keyIterator();
+            while (symbol_it.next()) |key| {
+                try snapshot.symbol_keys.put(key.*, {});
+            }
+
+            var closure_it = self.closure_bindings.keyIterator();
+            while (closure_it.next()) |key| {
+                try snapshot.closure_keys.put(key.*, {});
+            }
+
+            var cell_it = self.cell_allocas.keyIterator();
+            while (cell_it.next()) |key| {
+                try snapshot.cell_keys.put(key.*, {});
+            }
+
+            return snapshot;
+        }
+
+        fn deinit(self: *ScopeSnapshot) void {
+            self.symbol_keys.deinit();
+            self.closure_keys.deinit();
+            self.cell_keys.deinit();
+        }
+    };
+
     /// Result of bitcode generation
     pub const BitcodeResult = struct {
         bitcode: []const u32,
@@ -2261,20 +2299,26 @@ pub const MonoLlvmCodeGen = struct {
 
                 // Then block — generate branch body
                 wip.cursor = .{ .block = then_block };
+                var branch_scope = try self.beginScope();
+                defer branch_scope.deinit();
                 const branch_val = try self.generateControlFlowValue(branch_expr_id, ds.result_layout);
                 _ = wip.br(merge_block) catch return error.OutOfMemory;
                 result_vals[branch_count] = branch_val;
                 result_blocks[branch_count] = wip.cursor.block;
+                try self.endScope(&branch_scope);
                 branch_count += 1;
 
                 // Else block — continue to next comparison
                 wip.cursor = .{ .block = else_block };
             } else {
                 // Last branch — no comparison needed (default case)
+                var branch_scope = try self.beginScope();
+                defer branch_scope.deinit();
                 const branch_val = try self.generateControlFlowValue(branch_expr_id, ds.result_layout);
                 _ = wip.br(merge_block) catch return error.OutOfMemory;
                 result_vals[branch_count] = branch_val;
                 result_blocks[branch_count] = wip.cursor.block;
+                try self.endScope(&branch_scope);
                 branch_count += 1;
             }
         }
@@ -2574,10 +2618,13 @@ pub const MonoLlvmCodeGen = struct {
             switch (pattern) {
                 .wildcard => {
                     // Always matches — generate body directly
+                    var branch_scope = try self.beginScope();
+                    defer branch_scope.deinit();
                     const body_val = try self.generateControlFlowValue(branch.body, w.result_layout);
                     _ = wip.br(merge_block) catch return error.OutOfMemory;
                     result_vals[branch_count] = body_val;
                     result_blocks[branch_count] = wip.cursor.block;
+                    try self.endScope(&branch_scope);
                     branch_count += 1;
                     break; // No more branches after wildcard
                 },
@@ -2585,11 +2632,14 @@ pub const MonoLlvmCodeGen = struct {
                 .bind => |bind| {
                     // Always matches, bind the scrutinee to the symbol
                     const symbol_key: u64 = @bitCast(bind.symbol);
+                    var branch_scope = try self.beginScope();
+                    defer branch_scope.deinit();
                     self.symbol_values.put(symbol_key, scrutinee) catch return error.OutOfMemory;
                     const body_val = try self.generateControlFlowValue(branch.body, w.result_layout);
                     _ = wip.br(merge_block) catch return error.OutOfMemory;
                     result_vals[branch_count] = body_val;
                     result_blocks[branch_count] = wip.cursor.block;
+                    try self.endScope(&branch_scope);
                     branch_count += 1;
                     break; // No more branches after bind
                 },
@@ -2607,10 +2657,13 @@ pub const MonoLlvmCodeGen = struct {
 
                     if (is_last) {
                         // Last branch — treat as default (skip comparison)
+                        var branch_scope = try self.beginScope();
+                        defer branch_scope.deinit();
                         const body_val = try self.generateControlFlowValue(branch.body, w.result_layout);
                         _ = wip.br(merge_block) catch return error.OutOfMemory;
                         result_vals[branch_count] = body_val;
                         result_blocks[branch_count] = wip.cursor.block;
+                        try self.endScope(&branch_scope);
                         branch_count += 1;
                     } else {
                         const then_block = wip.block(1, "int_match") catch return error.OutOfMemory;
@@ -2619,10 +2672,13 @@ pub const MonoLlvmCodeGen = struct {
 
                         // Then block — pattern matches
                         wip.cursor = .{ .block = then_block };
+                        var branch_scope = try self.beginScope();
+                        defer branch_scope.deinit();
                         const body_val = try self.generateControlFlowValue(branch.body, w.result_layout);
                         _ = wip.br(merge_block) catch return error.OutOfMemory;
                         result_vals[branch_count] = body_val;
                         result_blocks[branch_count] = wip.cursor.block;
+                        try self.endScope(&branch_scope);
                         branch_count += 1;
 
                         // Else block — continue to next branch
@@ -2667,11 +2723,14 @@ pub const MonoLlvmCodeGen = struct {
 
                     if (is_last) {
                         // Last branch — bind payload args if needed, generate body
+                        var branch_scope = try self.beginScope();
+                        defer branch_scope.deinit();
                         try self.bindTagPayloadArgs(tag_pat, tag_scrutinee);
                         const body_val = try self.generateControlFlowValue(branch.body, w.result_layout);
                         _ = wip.br(merge_block) catch return error.OutOfMemory;
                         result_vals[branch_count] = body_val;
                         result_blocks[branch_count] = wip.cursor.block;
+                        try self.endScope(&branch_scope);
                         branch_count += 1;
                     } else {
                         const then_block = wip.block(1, "tag_match") catch return error.OutOfMemory;
@@ -2679,11 +2738,14 @@ pub const MonoLlvmCodeGen = struct {
                         _ = wip.brCond(cmp, then_block, else_block, .none) catch return error.OutOfMemory;
 
                         wip.cursor = .{ .block = then_block };
+                        var branch_scope = try self.beginScope();
+                        defer branch_scope.deinit();
                         try self.bindTagPayloadArgs(tag_pat, tag_scrutinee);
                         const body_val = try self.generateControlFlowValue(branch.body, w.result_layout);
                         _ = wip.br(merge_block) catch return error.OutOfMemory;
                         result_vals[branch_count] = body_val;
                         result_blocks[branch_count] = wip.cursor.block;
+                        try self.endScope(&branch_scope);
                         branch_count += 1;
 
                         wip.cursor = .{ .block = else_block };
@@ -2704,11 +2766,14 @@ pub const MonoLlvmCodeGen = struct {
 
                     if (is_last) {
                         // Last branch — bind elements, generate body
+                        var branch_scope = try self.beginScope();
+                        defer branch_scope.deinit();
                         try self.bindPattern(branch.pattern, scrutinee);
                         const body_val = try self.generateControlFlowValue(branch.body, w.result_layout);
                         _ = wip.br(merge_block) catch return error.OutOfMemory;
                         result_vals[branch_count] = body_val;
                         result_blocks[branch_count] = wip.cursor.block;
+                        try self.endScope(&branch_scope);
                         branch_count += 1;
                     } else {
                         const then_block = wip.block(1, "list_match") catch return error.OutOfMemory;
@@ -2716,11 +2781,14 @@ pub const MonoLlvmCodeGen = struct {
                         _ = wip.brCond(cmp, then_block, else_block, .none) catch return error.OutOfMemory;
 
                         wip.cursor = .{ .block = then_block };
+                        var branch_scope = try self.beginScope();
+                        defer branch_scope.deinit();
                         try self.bindPattern(branch.pattern, scrutinee);
                         const body_val = try self.generateControlFlowValue(branch.body, w.result_layout);
                         _ = wip.br(merge_block) catch return error.OutOfMemory;
                         result_vals[branch_count] = body_val;
                         result_blocks[branch_count] = wip.cursor.block;
+                        try self.endScope(&branch_scope);
                         branch_count += 1;
 
                         wip.cursor = .{ .block = else_block };
@@ -2729,11 +2797,14 @@ pub const MonoLlvmCodeGen = struct {
 
                 .struct_ => {
                     // Struct pattern: always matches structurally, bind fields.
+                    var branch_scope = try self.beginScope();
+                    defer branch_scope.deinit();
                     try self.bindPattern(branch.pattern, scrutinee);
                     const body_val = try self.generateControlFlowValue(branch.body, w.result_layout);
                     _ = wip.br(merge_block) catch return error.OutOfMemory;
                     result_vals[branch_count] = body_val;
                     result_blocks[branch_count] = wip.cursor.block;
+                    try self.endScope(&branch_scope);
                     branch_count += 1;
                     break;
                 },
@@ -4997,6 +5068,51 @@ pub const MonoLlvmCodeGen = struct {
         return self.coerceValueToLayout((try self.generateExprAsValue(expr_id)).value, result_layout);
     }
 
+    fn beginScope(self: *MonoLlvmCodeGen) Error!ScopeSnapshot {
+        return ScopeSnapshot.init(self);
+    }
+
+    fn endScope(self: *MonoLlvmCodeGen, scope: *ScopeSnapshot) Error!void {
+        var symbol_keys_to_remove: std.ArrayList(u64) = .{};
+        defer symbol_keys_to_remove.deinit(self.allocator);
+
+        var symbol_it = self.symbol_values.keyIterator();
+        while (symbol_it.next()) |key| {
+            if (!scope.symbol_keys.contains(key.*)) {
+                try symbol_keys_to_remove.append(self.allocator, key.*);
+            }
+        }
+        for (symbol_keys_to_remove.items) |key| {
+            _ = self.symbol_values.remove(key);
+        }
+
+        var closure_keys_to_remove: std.ArrayList(u64) = .{};
+        defer closure_keys_to_remove.deinit(self.allocator);
+
+        var closure_it = self.closure_bindings.keyIterator();
+        while (closure_it.next()) |key| {
+            if (!scope.closure_keys.contains(key.*)) {
+                try closure_keys_to_remove.append(self.allocator, key.*);
+            }
+        }
+        for (closure_keys_to_remove.items) |key| {
+            _ = self.closure_bindings.remove(key);
+        }
+
+        var cell_keys_to_remove: std.ArrayList(u64) = .{};
+        defer cell_keys_to_remove.deinit(self.allocator);
+
+        var cell_it = self.cell_allocas.keyIterator();
+        while (cell_it.next()) |key| {
+            if (!scope.cell_keys.contains(key.*)) {
+                try cell_keys_to_remove.append(self.allocator, key.*);
+            }
+        }
+        for (cell_keys_to_remove.items) |key| {
+            _ = self.cell_allocas.remove(key);
+        }
+    }
+
     /// Generate a checked integer try-conversion returning a Result tag union.
     /// Calls a C wrapper that checks range and writes to a tag union buffer.
     fn generateIntTryConversion(self: *MonoLlvmCodeGen, ll: anytype) Error!LlvmBuilder.Value {
@@ -5948,15 +6064,21 @@ pub const MonoLlvmCodeGen = struct {
 
         // Then block
         wip.cursor = .{ .block = then_block };
+        var then_scope = try self.beginScope();
+        defer then_scope.deinit();
         const then_val = try self.generateControlFlowValue(first_branch.body, ite.result_layout);
         _ = wip.br(merge_block) catch return error.CompilationFailed;
         const then_exit_block = wip.cursor.block;
+        try self.endScope(&then_scope);
 
         // Else block
         wip.cursor = .{ .block = else_block };
+        var else_scope = try self.beginScope();
+        defer else_scope.deinit();
         const else_val = try self.generateControlFlowValue(ite.final_else, ite.result_layout);
         _ = wip.br(merge_block) catch return error.CompilationFailed;
         const else_exit_block = wip.cursor.block;
+        try self.endScope(&else_scope);
 
         // Merge block with phi
         wip.cursor = .{ .block = merge_block };
@@ -5977,6 +6099,9 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn generateBlock(self: *MonoLlvmCodeGen, block_data: anytype) Error!LlvmBuilder.Value {
+        var scope = try self.beginScope();
+        defer scope.deinit();
+
         // Save out_ptr — intermediate statements must not write to it.
         // Only the final expression should use out_ptr for direct-store types (strings).
         const saved_out_ptr = self.out_ptr;
@@ -6024,7 +6149,9 @@ pub const MonoLlvmCodeGen = struct {
         // Restore out_ptr for the final expression
         self.out_ptr = saved_out_ptr;
         // Generate and return the final expression
-        return self.generateExpr(block_data.final_expr);
+        const result = try self.generateExpr(block_data.final_expr);
+        try self.endScope(&scope);
+        return result;
     }
 
     fn alignmentForLayout(self: *MonoLlvmCodeGen, layout_idx: layout.Idx) LlvmBuilder.Alignment {
