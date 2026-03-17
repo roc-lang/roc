@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Test == and != operators with custom user-defined types that have is_eq methods
+description=Test == operator with custom user-defined types that have is_eq methods
 type=snippet
 ~~~
 # SOURCE
@@ -39,7 +39,7 @@ c3 = Color.Blue
 # Test equality - same values should be equal
 expect c1 == c2
 
-# Test inequality - different values should not be equal
+# Test inequality - different values should not be equal 
 expect c1 != c3
 ~~~
 # EXPECTED
@@ -208,7 +208,7 @@ c3 = Color.Blue
 # Test equality - same values should be equal
 expect c1 == c2
 
-# Test inequality - different values should not be equal
+# Test inequality - different values should not be equal 
 expect c1 != c3
 ~~~
 # CANONICALIZE
