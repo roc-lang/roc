@@ -294,17 +294,14 @@ fn identTextIfOwnedBy(env: *const ModuleEnv, ident: Ident.Idx) ?[]const u8 {
 }
 
 fn identTextForCompare(self: *const Self, ident: Ident.Idx) ?[]const u8 {
-    const owned = self.findOwnedIdentText(ident) orelse return null;
-    return owned.text;
-}
+    if (identTextIfOwnedBy(self.all_module_envs[self.current_module_idx], ident)) |text| {
+        return text;
+    }
 
-fn findOwnedIdentText(self: *const Self, ident: Ident.Idx) ?struct { module_idx: u32, text: []const u8 } {
     for (self.all_module_envs, 0..) |module_env, module_idx| {
+        if (module_idx == self.current_module_idx) continue;
         if (identTextIfOwnedBy(module_env, ident)) |text| {
-            return .{
-                .module_idx = @intCast(module_idx),
-                .text = text,
-            };
+            return text;
         }
     }
 
@@ -339,37 +336,40 @@ fn remapIdentBetweenModules(
 ) Allocator.Error!Ident.Idx {
     if (from_module_idx == to_module_idx) return ident;
 
+    const from_env = self.all_module_envs[from_module_idx];
     const to_env = self.all_module_envs[to_module_idx];
-    const owned = self.findOwnedIdentText(ident) orelse {
+    const ident_text = if (identTextIfOwnedBy(from_env, ident)) |text|
+        text
+    else if (identTextIfOwnedBy(to_env, ident)) |_|
+        return ident
+    else {
         if (std.debug.runtime_safety) {
             std.debug.panic(
-                "remapIdentBetweenModules: source ident {d} not owned by any loaded module",
-                .{ident.idx},
+                "remapIdentBetweenModules: ident {d} is owned by neither from_module={d} nor to_module={d}",
+                .{ ident.idx, from_module_idx, to_module_idx },
             );
         }
         unreachable;
     };
-    const actual_from_module_idx = owned.module_idx;
-    const actual_from_env = self.all_module_envs[actual_from_module_idx];
-    const ident_text = owned.text;
-
-    if (actual_from_module_idx == to_module_idx) return ident;
 
     if (to_env.common.findIdent(ident_text)) |mapped| return mapped;
 
     // If the source monotype uses the source module's self type name,
     // map that self-name directly to the target module's self-name.
-    if (std.mem.eql(u8, ident_text, actual_from_env.module_name)) {
+    if (std.mem.eql(u8, ident_text, from_env.module_name)) {
         if (to_env.common.findIdent(to_env.module_name)) |target_self| return target_self;
         if (to_env.common.getIdentStore().lookup(Ident.for_text(to_env.module_name))) |target_self| return target_self;
-        return ident;
     }
 
-    // Structural names (record fields, tag names) can be introduced by a third module
-    // and legitimately be absent in the target module's ident store. Keep using the
-    // original ident in that case and rely on structural text comparisons.
     if (to_env.common.getIdentStore().lookup(Ident.for_text(ident_text))) |mapped| return mapped;
-    return ident;
+
+    if (std.debug.runtime_safety) {
+        std.debug.panic(
+            "remapIdentBetweenModules: target module {d} does not contain ident '{s}' from source module {d}",
+            .{ to_module_idx, ident_text, from_module_idx },
+        );
+    }
+    unreachable;
 }
 
 fn remapMonotypeBetweenModules(
@@ -608,17 +608,12 @@ fn remapMonotypeBetweenModulesRec(
 }
 
 fn normalizeCallerMonotypeForSymbolModule(
-    self: *Self,
-    symbol_module_idx: u32,
+    _: *Self,
+    _: u32,
     caller_monotype: Monotype.Idx,
 ) Allocator.Error!Monotype.Idx {
     if (caller_monotype.isNone()) return caller_monotype;
-    if (self.current_module_idx == symbol_module_idx) return caller_monotype;
-    return self.remapMonotypeBetweenModules(
-        caller_monotype,
-        self.current_module_idx,
-        symbol_module_idx,
-    );
+    return caller_monotype;
 }
 
 fn importMonotypeFromStore(
@@ -3332,16 +3327,6 @@ fn currentCommonIdents(self: *const Self) ModuleEnv.CommonIdents {
     return self.all_module_envs[self.current_module_idx].idents;
 }
 
-/// Build a function monotype from argument types, return type, and effectfulness.
-fn buildFuncMonotype(self: *Self, arg_monotypes: []const Monotype.Idx, ret: Monotype.Idx, effectful: bool) Allocator.Error!Monotype.Idx {
-    const args_span = try self.store.monotype_store.addIdxSpan(self.allocator, arg_monotypes);
-    return try self.store.monotype_store.addMonotype(self.allocator, .{ .func = .{
-        .args = args_span,
-        .ret = ret,
-        .effectful = effectful,
-    } });
-}
-
 /// Lower a CIR Expr.Span to an MIR ExprSpan.
 fn lowerExprSpan(self: *Self, module_env: *const ModuleEnv, span: CIR.Expr.Span) Allocator.Error!MIR.ExprSpan {
     const cir_ids = module_env.store.sliceExpr(span);
@@ -4184,27 +4169,6 @@ fn lowerMonomorphizedExternalProcInst(
     };
     const proc_inst_id = try self.lookupMonomorphizedProcInst(template_id, fn_monotype, fn_monotype_module_idx);
     return self.lowerProcInst(proc_inst_id);
-}
-
-fn lowerMonomorphizedExternalProcInstForDispatchTarget(
-    self: *Self,
-    source_env: *const ModuleEnv,
-    target: ResolvedDispatchTarget,
-    fn_monotype: Monotype.Idx,
-) Allocator.Error!MIR.ExprId {
-    const target_def = try self.resolveDispatchTargetToExternalDef(source_env, target);
-    const fn_monotype_module_idx = self.moduleIndexForEnv(source_env) orelse {
-        if (std.debug.runtime_safety) {
-            std.debug.panic("lowerMonomorphizedExternalProcInstForDispatchTarget: source env not found", .{});
-        }
-        unreachable;
-    };
-    return self.lowerMonomorphizedExternalProcInst(
-        target_def.module_idx,
-        target_def.def_node_idx,
-        fn_monotype,
-        fn_monotype_module_idx,
-    );
 }
 
 fn lowerCall(
@@ -5402,35 +5366,6 @@ fn moduleIndexForEnv(self: *Self, env: *const ModuleEnv) ?u32 {
     return null;
 }
 
-/// Find the module index for a given origin module ident.
-/// Resolution is by qualified module name text, so it remains correct even
-/// when lowering specialized external definitions across module contexts.
-fn findModuleForOrigin(self: *Self, source_env: *const ModuleEnv, origin_module: Ident.Idx) u32 {
-    const source_module_idx = self.moduleIndexForEnv(source_env) orelse {
-        std.debug.panic(
-            "findModuleForOrigin: source module env not found in all_module_envs (current_module_idx={d})",
-            .{self.current_module_idx},
-        );
-    };
-
-    if (origin_module.eql(source_env.qualified_module_ident)) {
-        return source_module_idx;
-    }
-
-    const origin_name = source_env.getIdent(origin_module);
-    for (self.all_module_envs, 0..) |candidate_env, idx| {
-        const candidate_name = candidate_env.getIdent(candidate_env.qualified_module_ident);
-        if (std.mem.eql(u8, origin_name, candidate_name)) {
-            return @intCast(idx);
-        }
-    }
-
-    std.debug.panic(
-        "findModuleForOrigin: origin module not found (source_module_idx={d}, origin='{s}', origin_ident={d})",
-        .{ source_module_idx, origin_name, @as(u32, @bitCast(origin_module)) },
-    );
-}
-
 fn findModuleForOriginMaybe(self: *Self, source_env: *const ModuleEnv, origin_module: Ident.Idx) ?u32 {
     const source_module_idx = self.moduleIndexForEnv(source_env) orelse return null;
     if (origin_module.eql(source_env.qualified_module_ident)) return source_module_idx;
@@ -5512,71 +5447,6 @@ fn monotypeFromTypeVarInStore(
         &local_seen,
         &local_cycles,
     );
-}
-
-fn resolveDispatchTargetToExternalDef(
-    self: *Self,
-    source_env: *const ModuleEnv,
-    target: ResolvedDispatchTarget,
-) Allocator.Error!struct { module_idx: u32, def_node_idx: u16 } {
-    const target_module_idx = target.module_idx orelse self.findModuleForOrigin(source_env, target.origin);
-    const target_env = self.all_module_envs[target_module_idx];
-    const method_name = dispatchTargetMethodText(self, source_env, target) orelse {
-        if (builtin.mode == .Debug) {
-            std.debug.panic(
-                "resolveDispatchTargetToExternalDef: method ident {d} not readable from source module {d} or target module {d}",
-                .{ target.method_ident.idx, self.current_module_idx, target_module_idx },
-            );
-        }
-        unreachable;
-    };
-
-    const target_ident = target_env.common.findIdent(method_name) orelse {
-        if (builtin.mode == .Debug) {
-            std.debug.panic(
-                "resolveDispatchTargetToExternalDef: method '{s}' not found in target module {d}",
-                .{ method_name, target_module_idx },
-            );
-        }
-        unreachable;
-    };
-    const target_node_idx = target_env.getExposedNodeIndexById(target_ident) orelse {
-        if (builtin.mode == .Debug) {
-            std.debug.panic(
-                "resolveDispatchTargetToExternalDef: exposed node not found for method '{s}' in module {d}",
-                .{ method_name, target_module_idx },
-            );
-        }
-        unreachable;
-    };
-    if (!target_env.store.isDefNode(target_node_idx)) {
-        if (builtin.mode == .Debug) {
-            std.debug.panic(
-                "resolveDispatchTargetToExternalDef: exposed node for method '{s}' is not a def node (module={d}, node={d})",
-                .{ method_name, target_module_idx, target_node_idx },
-            );
-        }
-        unreachable;
-    }
-    return .{
-        .module_idx = target_module_idx,
-        .def_node_idx = target_node_idx,
-    };
-}
-
-fn dispatchTargetMethodText(
-    self: *const Self,
-    source_env: *const ModuleEnv,
-    target: ResolvedDispatchTarget,
-) ?[]const u8 {
-    if (identTextIfOwnedBy(source_env, target.method_ident)) |text| return text;
-
-    if (target.module_idx) |target_module_idx| {
-        const target_env = self.all_module_envs[target_module_idx];
-        if (identTextIfOwnedBy(target_env, target.method_ident)) |text| return text;
-    }
-
-    return null;
 }
 
 /// Lower an external definition by symbol, caching the result.
