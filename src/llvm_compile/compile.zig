@@ -356,7 +356,6 @@ fn linkSharedLibrary(
             try args.append(allocator, "-o");
             try args.append(allocator, std.mem.sliceTo(shared_lib_path, 0));
             try args.append(allocator, std.mem.sliceTo(object_path, 0));
-            try args.append(allocator, "-lc");
         },
         .windows => {
             try args.append(allocator, "lld-link");
