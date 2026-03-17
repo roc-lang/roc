@@ -168,6 +168,11 @@ const AssociatedMethodTemplate = struct {
     qualified_method_ident: Ident.Idx,
 };
 
+const ExprSource = struct {
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+};
+
 /// Output of the MIR monomorphization pass.
 pub const Result = struct {
     monotype_store: Monotype.Store,
@@ -294,6 +299,7 @@ pub const Pass = struct {
     app_module_idx: ?u32,
     visited_modules: std.AutoHashMapUnmanaged(u32, void),
     visited_exprs: std.AutoHashMapUnmanaged(u64, void),
+    source_exprs: std.AutoHashMapUnmanaged(u64, ExprSource),
     resolved_dispatch_targets: std.AutoHashMapUnmanaged(ContextExprKey, ResolvedDispatchTarget),
     scanned_proc_insts: std.AutoHashMapUnmanaged(u32, void),
     active_bindings: ?*std.AutoHashMap(types.Var, Monotype.Idx),
@@ -314,6 +320,7 @@ pub const Pass = struct {
             .app_module_idx = app_module_idx,
             .visited_modules = .empty,
             .visited_exprs = .empty,
+            .source_exprs = .empty,
             .resolved_dispatch_targets = .empty,
             .scanned_proc_insts = .empty,
             .active_bindings = null,
@@ -324,6 +331,7 @@ pub const Pass = struct {
     pub fn deinit(self: *Pass) void {
         self.visited_modules.deinit(self.allocator);
         self.visited_exprs.deinit(self.allocator);
+        self.source_exprs.deinit(self.allocator);
         self.resolved_dispatch_targets.deinit(self.allocator);
         self.scanned_proc_insts.deinit(self.allocator);
     }
@@ -391,6 +399,7 @@ pub const Pass = struct {
         for (defs) |def_idx| {
             const def = module_env.store.getDef(def_idx);
             const expr = module_env.store.getExpr(def.expr);
+            try self.recordSourceExpr(packLocalPatternSourceKey(module_idx, def.pattern), module_idx, def.expr);
 
             if (callableKind(expr)) |kind| {
                 const template_id = try self.registerCallableDefTemplate(
@@ -460,6 +469,37 @@ pub const Pass = struct {
         try result.proc_template_ids_by_source.put(self.allocator, source_key, template_id);
     }
 
+    fn recordSourceExpr(
+        self: *Pass,
+        source_key: u64,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) Allocator.Error!void {
+        if (self.source_exprs.get(source_key)) |existing| {
+            if (existing.module_idx != module_idx or existing.expr_idx != expr_idx) {
+                if (std.debug.runtime_safety) {
+                    std.debug.panic(
+                        "Monomorphize: conflicting source exprs for source key {d} (existing={d}:{d}, new={d}:{d})",
+                        .{
+                            source_key,
+                            existing.module_idx,
+                            @intFromEnum(existing.expr_idx),
+                            module_idx,
+                            @intFromEnum(expr_idx),
+                        },
+                    );
+                }
+                unreachable;
+            }
+            return;
+        }
+
+        try self.source_exprs.put(self.allocator, source_key, .{
+            .module_idx = module_idx,
+            .expr_idx = expr_idx,
+        });
+    }
+
     fn registerCallableDefTemplate(
         self: *Pass,
         result: *Result,
@@ -516,6 +556,7 @@ pub const Pass = struct {
         switch (stmt) {
             .s_decl => |decl| {
                 const expr = module_env.store.getExpr(decl.expr);
+                try self.recordSourceExpr(packLocalPatternSourceKey(module_idx, decl.pattern), module_idx, decl.expr);
                 if (callableKind(expr)) |kind| {
                     _ = try self.registerCallableDefTemplate(
                         result,
@@ -536,6 +577,7 @@ pub const Pass = struct {
             },
             .s_var => |var_decl| {
                 const expr = module_env.store.getExpr(var_decl.expr);
+                try self.recordSourceExpr(packLocalPatternSourceKey(module_idx, var_decl.pattern_idx), module_idx, var_decl.expr);
                 if (callableKind(expr)) |kind| {
                     _ = try self.registerCallableDefTemplate(
                         result,
@@ -675,8 +717,8 @@ pub const Pass = struct {
             .e_ellipsis,
             .e_anno_only,
             => {},
-            .e_lookup_local => |lookup| {
-                if (result.getLocalProcTemplate(module_idx, lookup.pattern_idx)) |template_id| {
+            .e_lookup_local => |_| {
+                if (try self.resolveExprCallableTemplate(result, module_idx, expr_idx)) |template_id| {
                     try self.resolveLookupExprProcInst(result, module_idx, expr_idx, template_id);
                 }
             },
@@ -687,6 +729,11 @@ pub const Pass = struct {
 
                 const def_idx: CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
                 const def = target_env.store.getDef(def_idx);
+                try self.recordSourceExpr(
+                    packExternalDefSourceKey(target_module_idx, lookup.target_node_idx),
+                    target_module_idx,
+                    def.expr,
+                );
                 const target_expr = target_env.store.getExpr(def.expr);
                 if (callableKind(target_expr)) |kind| {
                     _ = try self.registerCallableDefTemplate(
@@ -700,7 +747,7 @@ pub const Pass = struct {
                         packExternalDefSourceKey(target_module_idx, lookup.target_node_idx),
                     );
                 }
-                if (result.getExternalProcTemplate(target_module_idx, lookup.target_node_idx)) |template_id| {
+                if (try self.resolveExprCallableTemplate(result, module_idx, expr_idx)) |template_id| {
                     try self.resolveLookupExprProcInst(result, module_idx, expr_idx, template_id);
                 }
                 try self.scanModule(result, target_module_idx);
@@ -982,6 +1029,13 @@ pub const Pass = struct {
         for (arg_exprs, param_monos) |arg_expr_idx, param_mono| {
             const template_id = try self.lookupDirectCalleeTemplate(result, module_idx, arg_expr_idx) orelse continue;
             const proc_inst_id = try self.ensureProcInst(result, template_id, param_mono, fn_monotype_module_idx);
+            const template = result.getProcTemplate(template_id);
+
+            try result.expr_proc_insts.put(
+                self.allocator,
+                Result.contextExprKey(self.active_proc_inst_context, template.module_idx, template.cir_expr),
+                proc_inst_id,
+            );
 
             switch (module_env.store.getExpr(arg_expr_idx)) {
                 .e_lookup_local, .e_lookup_external => try result.lookup_expr_proc_insts.put(
@@ -994,7 +1048,7 @@ pub const Pass = struct {
                     Result.contextExprKey(self.active_proc_inst_context, module_idx, arg_expr_idx),
                     proc_inst_id,
                 ),
-                else => unreachable,
+                else => {},
             }
         }
     }
@@ -2767,22 +2821,155 @@ pub const Pass = struct {
         }
     }
 
+    fn resolveExprCallableTemplate(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) Allocator.Error!?ProcTemplateId {
+        var visiting: std.AutoHashMapUnmanaged(u64, void) = .empty;
+        defer visiting.deinit(self.allocator);
+        return self.resolveExprCallableTemplateWithVisited(result, module_idx, expr_idx, &visiting);
+    }
+
+    fn resolveExprCallableTemplateWithVisited(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        visiting: *std.AutoHashMapUnmanaged(u64, void),
+    ) Allocator.Error!?ProcTemplateId {
+        const visit_key = exprVisitKey(module_idx, expr_idx);
+        if (visiting.contains(visit_key)) return null;
+        try visiting.put(self.allocator, visit_key, {});
+        defer _ = visiting.remove(visit_key);
+
+        const module_env = self.all_module_envs[module_idx];
+        return switch (module_env.store.getExpr(expr_idx)) {
+            .e_lambda, .e_closure, .e_hosted_lambda => result.getExprProcTemplate(module_idx, expr_idx),
+            .e_lookup_local => |lookup| blk: {
+                if (result.getLocalProcTemplate(module_idx, lookup.pattern_idx)) |template_id| {
+                    break :blk template_id;
+                }
+                const source = self.source_exprs.get(packLocalPatternSourceKey(module_idx, lookup.pattern_idx)) orelse break :blk null;
+                break :blk try self.resolveExprCallableTemplateWithVisited(result, source.module_idx, source.expr_idx, visiting);
+            },
+            .e_lookup_external => |lookup| blk: {
+                const target_module_idx = self.resolveImportedModuleIdx(module_env, lookup.module_idx) orelse break :blk null;
+                if (result.getExternalProcTemplate(target_module_idx, lookup.target_node_idx)) |template_id| {
+                    break :blk template_id;
+                }
+                const source = self.source_exprs.get(packExternalDefSourceKey(target_module_idx, lookup.target_node_idx)) orelse break :blk null;
+                break :blk try self.resolveExprCallableTemplateWithVisited(result, source.module_idx, source.expr_idx, visiting);
+            },
+            .e_block => |block| try self.resolveExprCallableTemplateWithVisited(result, module_idx, block.final_expr, visiting),
+            .e_dbg => |dbg_expr| try self.resolveExprCallableTemplateWithVisited(result, module_idx, dbg_expr.expr, visiting),
+            .e_expect => |expect_expr| try self.resolveExprCallableTemplateWithVisited(result, module_idx, expect_expr.body, visiting),
+            .e_return => |return_expr| try self.resolveExprCallableTemplateWithVisited(result, module_idx, return_expr.expr, visiting),
+            .e_nominal => |nominal_expr| try self.resolveExprCallableTemplateWithVisited(result, module_idx, nominal_expr.backing_expr, visiting),
+            .e_nominal_external => |nominal_expr| try self.resolveExprCallableTemplateWithVisited(result, module_idx, nominal_expr.backing_expr, visiting),
+            .e_dot_access => |dot_expr| blk: {
+                if (dot_expr.args != null) break :blk null;
+                const field_expr = try self.resolveRecordFieldExpr(result, module_idx, dot_expr.receiver, dot_expr.field_name, visiting) orelse break :blk null;
+                break :blk try self.resolveExprCallableTemplateWithVisited(result, field_expr.module_idx, field_expr.expr_idx, visiting);
+            },
+            .e_tuple_access => |tuple_access| blk: {
+                const elem_expr = try self.resolveTupleElemExpr(result, module_idx, tuple_access.tuple, tuple_access.elem_index, visiting) orelse break :blk null;
+                break :blk try self.resolveExprCallableTemplateWithVisited(result, elem_expr.module_idx, elem_expr.expr_idx, visiting);
+            },
+            else => null,
+        };
+    }
+
+    fn resolveRecordFieldExpr(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        field_name: Ident.Idx,
+        visiting: *std.AutoHashMapUnmanaged(u64, void),
+    ) Allocator.Error!?ExprSource {
+        const visit_key = exprVisitKey(module_idx, expr_idx);
+        if (visiting.contains(visit_key)) return null;
+        try visiting.put(self.allocator, visit_key, {});
+        defer _ = visiting.remove(visit_key);
+
+        const module_env = self.all_module_envs[module_idx];
+        return switch (module_env.store.getExpr(expr_idx)) {
+            .e_record => |record| blk: {
+                for (module_env.store.sliceRecordFields(record.fields)) |field_idx| {
+                    const field = module_env.store.getRecordField(field_idx);
+                    if (self.identsStructurallyEqualAcrossModules(module_idx, field.name, module_idx, field_name)) {
+                        break :blk .{ .module_idx = module_idx, .expr_idx = field.value };
+                    }
+                }
+                break :blk null;
+            },
+            .e_lookup_local => |lookup| blk: {
+                const source = self.source_exprs.get(packLocalPatternSourceKey(module_idx, lookup.pattern_idx)) orelse break :blk null;
+                break :blk try self.resolveRecordFieldExpr(result, source.module_idx, source.expr_idx, field_name, visiting);
+            },
+            .e_lookup_external => |lookup| blk: {
+                const target_module_idx = self.resolveImportedModuleIdx(module_env, lookup.module_idx) orelse break :blk null;
+                const source = self.source_exprs.get(packExternalDefSourceKey(target_module_idx, lookup.target_node_idx)) orelse break :blk null;
+                break :blk try self.resolveRecordFieldExpr(result, source.module_idx, source.expr_idx, field_name, visiting);
+            },
+            .e_block => |block| try self.resolveRecordFieldExpr(result, module_idx, block.final_expr, field_name, visiting),
+            .e_dbg => |dbg_expr| try self.resolveRecordFieldExpr(result, module_idx, dbg_expr.expr, field_name, visiting),
+            .e_expect => |expect_expr| try self.resolveRecordFieldExpr(result, module_idx, expect_expr.body, field_name, visiting),
+            .e_return => |return_expr| try self.resolveRecordFieldExpr(result, module_idx, return_expr.expr, field_name, visiting),
+            .e_nominal => |nominal_expr| try self.resolveRecordFieldExpr(result, module_idx, nominal_expr.backing_expr, field_name, visiting),
+            .e_nominal_external => |nominal_expr| try self.resolveRecordFieldExpr(result, module_idx, nominal_expr.backing_expr, field_name, visiting),
+            else => null,
+        };
+    }
+
+    fn resolveTupleElemExpr(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        elem_index: u32,
+        visiting: *std.AutoHashMapUnmanaged(u64, void),
+    ) Allocator.Error!?ExprSource {
+        const visit_key = exprVisitKey(module_idx, expr_idx);
+        if (visiting.contains(visit_key)) return null;
+        try visiting.put(self.allocator, visit_key, {});
+        defer _ = visiting.remove(visit_key);
+
+        const module_env = self.all_module_envs[module_idx];
+        return switch (module_env.store.getExpr(expr_idx)) {
+            .e_tuple => |tuple_expr| blk: {
+                const elems = module_env.store.sliceExpr(tuple_expr.elems);
+                if (elem_index >= elems.len) break :blk null;
+                break :blk .{ .module_idx = module_idx, .expr_idx = elems[elem_index] };
+            },
+            .e_lookup_local => |lookup| blk: {
+                const source = self.source_exprs.get(packLocalPatternSourceKey(module_idx, lookup.pattern_idx)) orelse break :blk null;
+                break :blk try self.resolveTupleElemExpr(result, source.module_idx, source.expr_idx, elem_index, visiting);
+            },
+            .e_lookup_external => |lookup| blk: {
+                const target_module_idx = self.resolveImportedModuleIdx(module_env, lookup.module_idx) orelse break :blk null;
+                const source = self.source_exprs.get(packExternalDefSourceKey(target_module_idx, lookup.target_node_idx)) orelse break :blk null;
+                break :blk try self.resolveTupleElemExpr(result, source.module_idx, source.expr_idx, elem_index, visiting);
+            },
+            .e_block => |block| try self.resolveTupleElemExpr(result, module_idx, block.final_expr, elem_index, visiting),
+            .e_dbg => |dbg_expr| try self.resolveTupleElemExpr(result, module_idx, dbg_expr.expr, elem_index, visiting),
+            .e_expect => |expect_expr| try self.resolveTupleElemExpr(result, module_idx, expect_expr.body, elem_index, visiting),
+            .e_return => |return_expr| try self.resolveTupleElemExpr(result, module_idx, return_expr.expr, elem_index, visiting),
+            .e_nominal => |nominal_expr| try self.resolveTupleElemExpr(result, module_idx, nominal_expr.backing_expr, elem_index, visiting),
+            .e_nominal_external => |nominal_expr| try self.resolveTupleElemExpr(result, module_idx, nominal_expr.backing_expr, elem_index, visiting),
+            else => null,
+        };
+    }
+
     fn lookupDirectCalleeTemplate(
         self: *Pass,
         result: *Result,
         module_idx: u32,
         callee_expr_idx: CIR.Expr.Idx,
     ) Allocator.Error!?ProcTemplateId {
-        const module_env = self.all_module_envs[module_idx];
-        return switch (module_env.store.getExpr(callee_expr_idx)) {
-            .e_lookup_local => |lookup| result.getLocalProcTemplate(module_idx, lookup.pattern_idx),
-            .e_lookup_external => |lookup| blk: {
-                const target_module_idx = self.resolveImportedModuleIdx(module_env, lookup.module_idx) orelse break :blk null;
-                break :blk result.getExternalProcTemplate(target_module_idx, lookup.target_node_idx);
-            },
-            .e_lambda, .e_closure, .e_hosted_lambda => result.getExprProcTemplate(module_idx, callee_expr_idx),
-            else => null,
-        };
+        return self.resolveExprCallableTemplate(result, module_idx, callee_expr_idx);
     }
 
     fn ensureProcInst(
