@@ -590,17 +590,6 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
                 const pattern = self.store.getPattern(stmt.pattern);
                 switch (pattern) {
                     .bind => |bind| {
-                        // Check if the bound expression is a lambda — if so, compile
-                        // as a wasm function and record symbol→func_idx mapping.
-                        if (self.peelToLambda(stmt.expr)) |lambda_expr_id| {
-                            const lambda = self.store.getExpr(lambda_expr_id).lambda;
-                            const func_idx = try self.compileLambda(lambda_expr_id, lambda);
-                            // Record symbol→func_idx so lookups to this symbol find the function
-                            const sym_key: u64 = @bitCast(bind.symbol);
-                            self.registered_procs.put(sym_key, func_idx) catch return error.OutOfMemory;
-                            continue;
-                        }
-                        // Non-lambda — fall through to value binding
                         {
                             // Check for type representation mismatch: composite expr bound
                             // to scalar local (e.g., dec_literal bound to U64 local).
@@ -5008,18 +4997,6 @@ pub fn compileAllProcs(self: *Self, procs: []const LirProc) Allocator.Error!void
     }
 }
 
-/// Peel through nominal/block wrappers to find the underlying lambda.
-/// Returns null for non-callable expressions.
-fn peelToLambda(self: *const Self, expr_id: LirExprId) ?LirExprId {
-    const expr = self.store.getExpr(expr_id);
-    return switch (expr) {
-        .lambda => expr_id,
-        .nominal => |n| self.peelToLambda(n.backing_expr),
-        .block => |b| self.peelToLambda(b.final_expr),
-        else => null,
-    };
-}
-
 /// Compile a single LirProc as a wasm function.
 /// Does NOT compile the body — that's done by compileProcBody.
 fn registerProc(self: *Self, proc: LirProc) Allocator.Error!void {
@@ -5652,88 +5629,56 @@ fn bindCFLetPattern(self: *Self, pat: LirPattern, value_expr: LirExprId) Allocat
 /// Generate code for a function call.
 /// In the new pipeline, MIR→LIR generates all closure dispatch as generic LIR
 /// constructs (discriminant_switch, tag_payload_access, direct calls). The backend
-/// just handles: direct lambda calls and lookup calls. No closure-specific dispatch.
+/// just handles explicit direct-call symbols plus the residual runtime
+/// function-value expression path. No closure-specific dispatch.
 fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
-    const fn_expr = self.store.getExpr(c.fn_expr);
+    const func_idx = switch (c.callee) {
+        .direct => |symbol| blk: {
+            const sym_key: u64 = @bitCast(symbol);
+            if (self.registered_procs.get(sym_key)) |registered| break :blk registered;
 
-    switch (fn_expr) {
-        .lambda => |lambda| {
-            const func_idx = try self.compileLambda(c.fn_expr, lambda);
-            try self.emitLocalGet(self.roc_ops_local);
-            try self.generateCallArgs(c.args);
-            try self.emitCall(func_idx);
-        },
-        .lookup => |lookup| {
-            const sym_key: u64 = @bitCast(lookup.symbol);
-            // Check registered procs first (for inter-proc calls within compileAllProcs)
-            if (self.registered_procs.get(sym_key)) |func_idx| {
-                try self.emitLocalGet(self.roc_ops_local);
-                try self.generateCallArgs(c.args);
-                try self.emitCall(func_idx);
-            } else if (self.store.getSymbolDef(lookup.symbol)) |def_expr_id| {
-                const def_expr = self.store.getExpr(def_expr_id);
-                switch (def_expr) {
-                    .lambda => |lambda| {
-                        const func_idx = try self.compileLambda(def_expr_id, lambda);
-                        try self.emitLocalGet(self.roc_ops_local);
-                        try self.generateCallArgs(c.args);
-                        try self.emitCall(func_idx);
-                    },
-                    .nominal => |nom| {
-                        const inner = self.store.getExpr(nom.backing_expr);
-                        if (inner == .lambda) {
-                            const func_idx = try self.compileLambda(nom.backing_expr, inner.lambda);
-                            try self.emitLocalGet(self.roc_ops_local);
-                            try self.generateCallArgs(c.args);
-                            try self.emitCall(func_idx);
-                        } else {
-                            if (std.debug.runtime_safety) std.debug.panic(
-                                "generateCall: nominal wrapping unexpected expr '{s}'",
-                                .{@tagName(inner)},
-                            );
-                            unreachable;
-                        }
-                    },
-                    else => {
-                        if (std.debug.runtime_safety) std.debug.panic(
-                            "generateCall: unexpected def expr type '{s}' for lookup call. " ++
-                                "In the new pipeline, MIR→LIR resolves all closure dispatch to direct calls.",
-                            .{@tagName(def_expr)},
-                        );
-                        unreachable;
-                    },
-                }
-            } else {
+            const def_expr_id = self.store.getCallableDef(symbol) orelse {
                 if (std.debug.runtime_safety) {
-                    std.debug.panic("generateCall: unresolved lookup symbol", .{});
+                    std.debug.panic("generateCall: unresolved direct callee symbol", .{});
                 }
                 unreachable;
+            };
+            const def_expr = self.store.getExpr(def_expr_id);
+            break :blk switch (def_expr) {
+                .lambda => |lambda| try self.compileLambda(def_expr_id, lambda),
+                .runtime_error => {
+                    try self.generateExpr(def_expr_id);
+                    return;
+                },
+                else => {
+                    if (std.debug.runtime_safety) std.debug.panic(
+                        "generateCall: unexpected callable def expr type '{s}' for direct call. " ++
+                            "Direct-call symbols must resolve through callable_defs to lambda/runtime_error leaves.",
+                        .{@tagName(def_expr)},
+                    );
+                    unreachable;
+                },
+            };
+        },
+        .expr => |callee_expr_id| blk: {
+            const callee_expr = self.store.getExpr(callee_expr_id);
+            switch (callee_expr) {
+                .lambda => |lambda| break :blk try self.compileLambda(callee_expr_id, lambda),
+                else => {
+                    if (std.debug.runtime_safety) std.debug.panic(
+                        "generateCall: unexpected callee expr type '{s}'. " ++
+                            "Direct calls must use explicit callee symbols or direct lambda exprs.",
+                        .{@tagName(callee_expr)},
+                    );
+                    unreachable;
+                },
             }
         },
-        .nominal => |nom| {
-            const inner = self.store.getExpr(nom.backing_expr);
-            if (inner == .lambda) {
-                const func_idx = try self.compileLambda(nom.backing_expr, inner.lambda);
-                try self.emitLocalGet(self.roc_ops_local);
-                try self.generateCallArgs(c.args);
-                try self.emitCall(func_idx);
-            } else {
-                if (std.debug.runtime_safety) std.debug.panic(
-                    "generateCall: nominal wrapping unexpected expr '{s}'",
-                    .{@tagName(inner)},
-                );
-                unreachable;
-            }
-        },
-        else => {
-            if (std.debug.runtime_safety) std.debug.panic(
-                "generateCall: unexpected fn_expr type '{s}'. " ++
-                    "In the new pipeline, MIR→LIR resolves all closure dispatch to direct calls.",
-                .{@tagName(fn_expr)},
-            );
-            unreachable;
-        },
-    }
+    };
+
+    try self.emitLocalGet(self.roc_ops_local);
+    try self.generateCallArgs(c.args);
+    try self.emitCall(func_idx);
 }
 
 /// Emit a call instruction.

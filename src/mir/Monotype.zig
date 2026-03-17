@@ -491,28 +491,14 @@ pub const Store = struct {
                             .flex => {
                                 if (findNamedRowExtensionMonotype(scratches, ext_var, types_store)) |specialized| {
                                     try self.appendSpecializedRecordFields(specialized, scratch_top, scratches);
-                                    break :rows;
                                 }
-                                if (std.debug.runtime_safety) {
-                                    std.debug.panic(
-                                        "Monotype.fromTypeVar(record): unresolved flex row extension tail",
-                                        .{},
-                                    );
-                                }
-                                unreachable;
+                                break :rows; // Open record — treat as closed with collected fields
                             },
                             .rigid => {
                                 if (findNamedRowExtensionMonotype(scratches, ext_var, types_store)) |specialized| {
                                     try self.appendSpecializedRecordFields(specialized, scratch_top, scratches);
-                                    break :rows;
                                 }
-                                if (std.debug.runtime_safety) {
-                                    std.debug.panic(
-                                        "Monotype.fromTypeVar(record): unresolved rigid row extension tail",
-                                        .{},
-                                    );
-                                }
-                                unreachable;
+                                break :rows; // Rigid record — treat as closed with collected fields
                             },
                             .err => {
                                 if (std.debug.runtime_safety) {

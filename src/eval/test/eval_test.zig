@@ -2674,6 +2674,20 @@ test "issue 9043: self-reference in tuple pattern with var element should error"
     );
 }
 
+test "issue 9262: opaque function field returning tag union" {
+    try runExpectBool(
+        \\{
+        \\    W(a) := { f : {} -> [V(a)] }.{
+        \\        run = |w| (w.f)({})
+        \\
+        \\        mk = |val| { f: |{}| V(val) }
+        \\    }
+        \\
+        \\    W.run(W.mk("x")) == V("x")
+        \\}
+    , true, .no_trace);
+}
+
 test "recursive function with record - stack memory restoration (issue #8813)" {
     // Test that recursive closure calls don't leak stack memory.
     // If stack memory is not properly restored after closure returns,
