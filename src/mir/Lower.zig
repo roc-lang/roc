@@ -4388,6 +4388,19 @@ fn lowerProcInst(self: *Self, proc_inst_id: Monomorphize.ProcInstId) Allocator.E
     };
 }
 
+fn lowerDispatchProcInstForExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId {
+    const proc_inst_id = self.monomorphization.getDispatchExprProcInst(self.current_module_idx, expr_idx) orelse {
+        if (std.debug.runtime_safety) {
+            std.debug.panic(
+                "MIR Lower invariant: monomorphization missing dispatch proc inst for expr {d} in module {d}",
+                .{ @intFromEnum(expr_idx), self.current_module_idx },
+            );
+        }
+        unreachable;
+    };
+    return self.lowerProcInst(proc_inst_id);
+}
+
 fn lowerCall(
     self: *Self,
     module_env: *const ModuleEnv,
@@ -4748,27 +4761,7 @@ fn lowerBinop(self: *Self, expr_idx: CIR.Expr.Idx, binop: CIR.Expr.Binop, monoty
             }
 
             // Use checker-resolved target for static dispatch.
-            const method_ident: Ident.Idx = switch (binop.op) {
-                .add => module_env.idents.plus,
-                .sub => module_env.idents.minus,
-                .mul => module_env.idents.times,
-                .div => module_env.idents.div_by,
-                .div_trunc => module_env.idents.div_trunc_by,
-                .rem => module_env.idents.rem_by,
-                .lt => module_env.idents.is_lt,
-                .le => module_env.idents.is_lte,
-                .gt => module_env.idents.is_gt,
-                .ge => module_env.idents.is_gte,
-                .eq, .ne => module_env.idents.is_eq,
-                .@"and", .@"or" => unreachable,
-            };
-            const resolved_target = try self.resolveDispatchTargetForExpr(module_env, expr_idx, method_ident);
-            const method_symbol = try self.resolvedDispatchTargetToSymbol(module_env, resolved_target);
-
-            const func_monotype = try self.buildFuncMonotype(&.{ lhs_monotype, lhs_monotype }, monotype, false);
-
-            // Ensure the method body is lowered so codegen can find it.
-            const func_expr = try self.specializeMethod(method_symbol, func_monotype);
+            const func_expr = try self.lowerDispatchProcInstForExpr(expr_idx);
 
             const args = try self.store.addExprSpan(self.allocator, &.{ lhs, rhs });
             const result = try self.store.addExpr(self.allocator, .{ .call = .{
@@ -4788,17 +4781,9 @@ fn lowerBinop(self: *Self, expr_idx: CIR.Expr.Idx, binop: CIR.Expr.Binop, monoty
 
 /// Lower `e_unary_minus` to a call to `negate` (type-directed dispatch).
 fn lowerUnaryMinus(self: *Self, expr_idx: CIR.Expr.Idx, um: CIR.Expr.UnaryMinus, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
-    const module_env = self.all_module_envs[self.current_module_idx];
     const inner = try self.lowerExpr(um.expr);
 
-    const resolved_target = try self.resolveDispatchTargetForExpr(module_env, expr_idx, module_env.idents.negate);
-    const method_symbol = try self.resolvedDispatchTargetToSymbol(module_env, resolved_target);
-
-    const inner_monotype = try self.resolveMonotype(um.expr);
-    const func_monotype = try self.buildFuncMonotype(&.{inner_monotype}, monotype, false);
-
-    // Ensure the method body is lowered so codegen can find it.
-    const func_expr = try self.specializeMethod(method_symbol, func_monotype);
+    const func_expr = try self.lowerDispatchProcInstForExpr(expr_idx);
     const args = try self.store.addExprSpan(self.allocator, &.{inner});
     return try self.store.addExpr(self.allocator, .{ .call = .{
         .func = func_expr,
@@ -5407,7 +5392,6 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
             )
         else
             try self.resolveDispatchTargetForExpr(module_env, expr_idx, da.field_name);
-        const method_symbol = try self.resolvedDispatchTargetToSymbol(module_env, resolved_target);
 
         // Build args as either:
         // - [receiver] ++ explicit_args for instance methods
@@ -5430,7 +5414,6 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
             self.nominal_cycle_breakers = saved_nominal_cycle_breakers;
         }
 
-        var method_effectful = false;
         var fn_arg_vars: []const types.Var = &.{};
         var resolved_fn = self.types_store.resolveVar(resolved_target.fn_var);
         while (resolved_fn.desc.content == .alias) {
@@ -5438,18 +5421,9 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
         }
         if (resolved_fn.desc.content == .structure) {
             fn_arg_vars = switch (resolved_fn.desc.content.structure) {
-                .fn_pure => |f| blk: {
-                    method_effectful = false;
-                    break :blk self.types_store.sliceVars(f.args);
-                },
-                .fn_effectful => |f| blk: {
-                    method_effectful = true;
-                    break :blk self.types_store.sliceVars(f.args);
-                },
-                .fn_unbound => |f| blk: {
-                    method_effectful = false;
-                    break :blk self.types_store.sliceVars(f.args);
-                },
+                .fn_pure => |f| self.types_store.sliceVars(f.args),
+                .fn_effectful => |f| self.types_store.sliceVars(f.args),
+                .fn_unbound => |f| self.types_store.sliceVars(f.args),
                 .record, .record_unbound, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => {
                     if (builtin.mode == .Debug) std.debug.panic(
                         "CIR→MIR invariant violated: dispatch fn_var resolved to non-function structure '{s}'",
@@ -5514,22 +5488,9 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
         }
         const lowered_call_args = self.scratch_expr_ids.sliceFromStart(args_top);
 
-        const method_func_monotype = blk: {
-            const mono_top = self.mono_scratches.idxs.top();
-            defer self.mono_scratches.idxs.clearFrom(mono_top);
-            for (lowered_call_args) |arg_expr| {
-                try self.mono_scratches.idxs.append(self.store.typeOf(arg_expr));
-            }
-            break :blk try self.buildFuncMonotype(
-                self.mono_scratches.idxs.sliceFromStart(mono_top),
-                monotype,
-                method_effectful,
-            );
-        };
         const call_result_monotype = monotype;
 
-        // Ensure the method body is lowered so codegen can find it.
-        const func_expr = try self.specializeMethod(method_symbol, method_func_monotype);
+        const func_expr = try self.lowerDispatchProcInstForExpr(expr_idx);
 
         const args = try self.store.addExprSpan(self.allocator, lowered_call_args);
 
@@ -5675,18 +5636,8 @@ fn lowerRecord(self: *Self, module_env: *const ModuleEnv, record: anytype, monot
 
 /// Lower `e_type_var_dispatch` using checker-resolved dispatch target.
 fn lowerTypeVarDispatch(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.Idx, tvd: anytype, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
-    const cir_args = module_env.store.sliceExpr(tvd.args);
-    const mono_top = self.mono_scratches.idxs.top();
-    defer self.mono_scratches.idxs.clearFrom(mono_top);
-    for (cir_args) |arg_idx| {
-        try self.mono_scratches.idxs.append(try self.resolveMonotype(arg_idx));
-    }
-    const func_monotype = try self.buildFuncMonotype(self.mono_scratches.idxs.sliceFromStart(mono_top), monotype, false);
-    const resolved_target = try self.resolveDispatchTargetForExpr(module_env, expr_idx, tvd.method_name);
-    const method_symbol = try self.resolvedDispatchTargetToSymbol(module_env, resolved_target);
-
     const args = try self.lowerExprSpan(module_env, tvd.args);
-    const func_expr = try self.specializeMethod(method_symbol, func_monotype);
+    const func_expr = try self.lowerDispatchProcInstForExpr(expr_idx);
 
     return try self.store.addExpr(self.allocator, .{ .call = .{
         .func = func_expr,

@@ -12,6 +12,7 @@ const types = @import("types");
 const Monotype = @import("Monotype.zig");
 
 const Allocator = std.mem.Allocator;
+const Ident = base.Ident;
 const Region = base.Region;
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
@@ -134,6 +135,13 @@ pub const CallSiteResolution = struct {
     proc_inst: ProcInstId,
 };
 
+const ResolvedDispatchTarget = struct {
+    origin: Ident.Idx,
+    method_ident: Ident.Idx,
+    fn_var: types.Var,
+    module_idx: ?u32 = null,
+};
+
 pub const Result = struct {
     monotype_store: Monotype.Store,
     proc_templates: std.ArrayListUnmanaged(ProcTemplate),
@@ -141,6 +149,7 @@ pub const Result = struct {
     subst_entries: std.ArrayListUnmanaged(TypeSubstEntry),
     substs: std.ArrayListUnmanaged(TypeSubst),
     call_site_proc_insts: std.AutoHashMapUnmanaged(u64, ProcInstId),
+    dispatch_expr_proc_insts: std.AutoHashMapUnmanaged(u64, ProcInstId),
     proc_template_ids_by_source: std.AutoHashMapUnmanaged(u64, ProcTemplateId),
     deferred_local_callables: std.AutoHashMapUnmanaged(u64, DeferredLocalCallable),
     root_module_idx: u32,
@@ -154,6 +163,7 @@ pub const Result = struct {
             .subst_entries = .empty,
             .substs = .empty,
             .call_site_proc_insts = .empty,
+            .dispatch_expr_proc_insts = .empty,
             .proc_template_ids_by_source = .empty,
             .deferred_local_callables = .empty,
             .root_module_idx = root_module_idx,
@@ -168,6 +178,7 @@ pub const Result = struct {
         self.subst_entries.deinit(allocator);
         self.substs.deinit(allocator);
         self.call_site_proc_insts.deinit(allocator);
+        self.dispatch_expr_proc_insts.deinit(allocator);
         self.proc_template_ids_by_source.deinit(allocator);
         self.deferred_local_callables.deinit(allocator);
     }
@@ -178,6 +189,10 @@ pub const Result = struct {
 
     pub fn getCallSiteProcInst(self: *const Result, module_idx: u32, expr_idx: CIR.Expr.Idx) ?ProcInstId {
         return self.call_site_proc_insts.get(callSiteKey(module_idx, expr_idx));
+    }
+
+    pub fn getDispatchExprProcInst(self: *const Result, module_idx: u32, expr_idx: CIR.Expr.Idx) ?ProcInstId {
+        return self.dispatch_expr_proc_insts.get(callSiteKey(module_idx, expr_idx));
     }
 
     pub fn getProcTemplate(self: *const Result, proc_template_id: ProcTemplateId) *const ProcTemplate {
@@ -222,6 +237,7 @@ pub const Pass = struct {
     app_module_idx: ?u32,
     visited_modules: std.AutoHashMapUnmanaged(u32, void),
     visited_exprs: std.AutoHashMapUnmanaged(u64, void),
+    resolved_dispatch_targets: std.AutoHashMapUnmanaged(u64, ResolvedDispatchTarget),
 
     pub fn init(
         allocator: Allocator,
@@ -238,17 +254,20 @@ pub const Pass = struct {
             .app_module_idx = app_module_idx,
             .visited_modules = .empty,
             .visited_exprs = .empty,
+            .resolved_dispatch_targets = .empty,
         };
     }
 
     pub fn deinit(self: *Pass) void {
         self.visited_modules.deinit(self.allocator);
         self.visited_exprs.deinit(self.allocator);
+        self.resolved_dispatch_targets.deinit(self.allocator);
     }
 
     pub fn runExpr(self: *Pass, expr_idx: CIR.Expr.Idx) Allocator.Error!Result {
         var result = try Result.init(self.allocator, self.current_module_idx, expr_idx);
 
+        try self.seedResolvedDispatchTargets();
         try self.scanModule(&result, self.current_module_idx);
         try self.scanExpr(&result, self.current_module_idx, expr_idx);
 
@@ -257,6 +276,25 @@ pub const Pass = struct {
 
     fn exprVisitKey(module_idx: u32, expr_idx: CIR.Expr.Idx) u64 {
         return (@as(u64, module_idx) << 32) | @as(u64, @intFromEnum(expr_idx));
+    }
+
+    fn seedResolvedDispatchTargets(self: *Pass) Allocator.Error!void {
+        if (self.resolved_dispatch_targets.count() != 0) return;
+
+        for (self.all_module_envs, 0..) |env, mod_idx| {
+            const constraints = env.types.sliceAllStaticDispatchConstraints();
+            for (constraints) |constraint| {
+                if (constraint.source_expr_idx == types.StaticDispatchConstraint.no_source_expr) continue;
+                if (constraint.resolved_target.isNone()) continue;
+
+                const key = (@as(u64, @intCast(mod_idx)) << 32) | @as(u64, constraint.source_expr_idx);
+                try self.resolved_dispatch_targets.put(self.allocator, key, .{
+                    .origin = constraint.resolved_target.origin_module,
+                    .method_ident = constraint.resolved_target.method_ident,
+                    .fn_var = constraint.fn_var,
+                });
+            }
+        }
     }
 
     fn scanModule(self: *Pass, result: *Result, module_idx: u32) Allocator.Error!void {
@@ -537,20 +575,28 @@ pub const Pass = struct {
             .e_binop => |binop_expr| {
                 try self.scanExpr(result, module_idx, binop_expr.lhs);
                 try self.scanExpr(result, module_idx, binop_expr.rhs);
+                try self.resolveDispatchExprProcInst(result, module_idx, expr_idx);
             },
-            .e_unary_minus => |unary_expr| try self.scanExpr(result, module_idx, unary_expr.expr),
+            .e_unary_minus => |unary_expr| {
+                try self.scanExpr(result, module_idx, unary_expr.expr);
+                try self.resolveDispatchExprProcInst(result, module_idx, expr_idx);
+            },
             .e_unary_not => |unary_expr| try self.scanExpr(result, module_idx, unary_expr.expr),
             .e_dot_access => |dot_expr| {
                 try self.scanExpr(result, module_idx, dot_expr.receiver);
                 if (dot_expr.args) |args| {
                     try self.scanExprSpan(result, module_idx, module_env.store.sliceExpr(args));
+                    try self.resolveDispatchExprProcInst(result, module_idx, expr_idx);
                 }
             },
             .e_tuple_access => |tuple_access| try self.scanExpr(result, module_idx, tuple_access.tuple),
             .e_dbg => |dbg_expr| try self.scanExpr(result, module_idx, dbg_expr.expr),
             .e_expect => |expect_expr| try self.scanExpr(result, module_idx, expect_expr.body),
             .e_return => |return_expr| try self.scanExpr(result, module_idx, return_expr.expr),
-            .e_type_var_dispatch => |dispatch_expr| try self.scanExprSpan(result, module_idx, module_env.store.sliceExpr(dispatch_expr.args)),
+            .e_type_var_dispatch => |dispatch_expr| {
+                try self.scanExprSpan(result, module_idx, module_env.store.sliceExpr(dispatch_expr.args));
+                try self.resolveDispatchExprProcInst(result, module_idx, expr_idx);
+            },
             .e_for => |for_expr| {
                 try self.scanExpr(result, module_idx, for_expr.expr);
                 try self.scanExpr(result, module_idx, for_expr.body);
@@ -595,6 +641,99 @@ pub const Pass = struct {
             Result.callSiteKey(module_idx, call_expr_idx),
             proc_inst_id,
         );
+    }
+
+    fn resolveDispatchExprProcInst(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) Allocator.Error!void {
+        const resolved_target = self.resolved_dispatch_targets.get(exprVisitKey(module_idx, expr_idx)) orelse return;
+        const template_id = try self.lookupResolvedDispatchTemplate(result, module_idx, resolved_target) orelse return;
+        const fn_monotype = try self.resolveTypeVarMonotype(result, module_idx, resolved_target.fn_var);
+        if (fn_monotype.isNone()) return;
+
+        const proc_inst_id = try self.ensureProcInst(result, template_id, fn_monotype, module_idx);
+        try result.dispatch_expr_proc_insts.put(
+            self.allocator,
+            Result.callSiteKey(module_idx, expr_idx),
+            proc_inst_id,
+        );
+    }
+
+    fn lookupResolvedDispatchTemplate(
+        self: *Pass,
+        result: *Result,
+        source_module_idx: u32,
+        resolved_target: ResolvedDispatchTarget,
+    ) Allocator.Error!?ProcTemplateId {
+        const source_env = self.all_module_envs[source_module_idx];
+        const target_module_idx = resolved_target.module_idx orelse self.findModuleForOrigin(source_env, resolved_target.origin);
+        const target_env = self.all_module_envs[target_module_idx];
+        const method_name = self.dispatchTargetMethodText(source_env, resolved_target) orelse return null;
+        const target_ident = target_env.common.findIdent(method_name) orelse return null;
+        const target_node_idx = target_env.getExposedNodeIndexById(target_ident) orelse return null;
+        if (!target_env.store.isDefNode(target_node_idx)) return null;
+
+        return result.getExternalProcTemplate(target_module_idx, target_node_idx);
+    }
+
+    fn moduleIndexForEnv(self: *Pass, env: *const ModuleEnv) ?u32 {
+        for (self.all_module_envs, 0..) |candidate, idx| {
+            if (candidate == env) return @intCast(idx);
+        }
+        return null;
+    }
+
+    fn findModuleForOrigin(self: *Pass, source_env: *const ModuleEnv, origin_module: Ident.Idx) u32 {
+        const source_module_idx = self.moduleIndexForEnv(source_env) orelse unreachable;
+        const origin_name = source_env.getIdent(origin_module);
+
+        for (self.all_module_envs, 0..) |candidate, idx| {
+            const candidate_name = candidate.getIdent(candidate.qualified_module_ident);
+            if (std.mem.eql(u8, candidate_name, origin_name)) {
+                return @intCast(idx);
+            }
+        }
+
+        if (std.debug.runtime_safety) {
+            std.debug.panic(
+                "Monomorphize: could not resolve origin module '{s}' from source module {d}",
+                .{ origin_name, source_module_idx },
+            );
+        }
+        unreachable;
+    }
+
+    fn identTextIfOwnedBy(env: *const ModuleEnv, ident: Ident.Idx) ?[]const u8 {
+        const ident_store = env.getIdentStoreConst();
+        const bytes = ident_store.interner.bytes.items.items;
+        const start: usize = @intCast(ident.idx);
+        if (start >= bytes.len) return null;
+
+        const tail = bytes[start..];
+        const end_rel = std.mem.indexOfScalar(u8, tail, 0) orelse return null;
+        const text = tail[0..end_rel];
+
+        const roundtrip = ident_store.findByString(text) orelse return null;
+        if (!roundtrip.eql(ident)) return null;
+        return text;
+    }
+
+    fn dispatchTargetMethodText(
+        self: *Pass,
+        source_env: *const ModuleEnv,
+        target: ResolvedDispatchTarget,
+    ) ?[]const u8 {
+        if (identTextIfOwnedBy(source_env, target.method_ident)) |text| return text;
+
+        if (target.module_idx) |target_module_idx| {
+            const target_env = self.all_module_envs[target_module_idx];
+            if (identTextIfOwnedBy(target_env, target.method_ident)) |text| return text;
+        }
+
+        return null;
     }
 
     fn lookupDirectCalleeTemplate(
@@ -1371,6 +1510,15 @@ pub const Pass = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) Allocator.Error!Monotype.Idx {
+        return self.resolveTypeVarMonotype(result, module_idx, ModuleEnv.varFrom(expr_idx));
+    }
+
+    fn resolveTypeVarMonotype(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        var_: types.Var,
+    ) Allocator.Error!Monotype.Idx {
         const module_env = self.all_module_envs[module_idx];
 
         var specializations = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
@@ -1389,7 +1537,7 @@ pub const Pass = struct {
         return result.monotype_store.fromTypeVar(
             self.allocator,
             &module_env.types,
-            ModuleEnv.varFrom(expr_idx),
+            var_,
             module_env.idents,
             &specializations,
             &nominal_cycle_breakers,
