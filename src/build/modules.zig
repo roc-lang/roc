@@ -336,7 +336,7 @@ pub const ModuleType = enum {
             .values => &.{ .collections, .base, .builtins, .layout },
             .interpreter_values => &.{ .collections, .base, .builtins, .interpreter_layout },
             .eval => &.{ .tracy, .io, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .interpreter_layout, .values, .interpreter_values, .build_options, .reporting, .backend, .mir, .lir, .roc_target, .sljmp },
-            .compile => &.{ .tracy, .build_options, .io, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .eval, .unbundle, .roc_target },
+            .compile => &.{ .tracy, .build_options, .io, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .eval, .unbundle, .roc_target, .sljmp },
             .ipc => &.{},
             .repl => &.{ .base, .collections, .compile, .parse, .types, .can, .check, .builtins, .layout, .values, .eval, .backend, .roc_target },
             .fmt => &.{ .base, .parse, .collections, .can, .io, .tracy },
@@ -649,9 +649,9 @@ pub const RocModules = struct {
                     .optimize = optimize,
                     // IPC module needs libc for mmap, munmap, close on POSIX systems
                     // Bundle module needs libc for C zstd (unbundle uses stdlib zstd)
-                    // Eval/repl modules need libc for setjmp/longjmp crash protection
+                    // Eval/repl/compile modules need libc for setjmp/longjmp crash protection
                     // sljmp module needs libc for setjmp/longjmp functions
-                    .link_libc = (module_type == .ipc or module_type == .bundle or module_type == .eval or module_type == .repl or module_type == .sljmp),
+                    .link_libc = (module_type == .ipc or module_type == .bundle or module_type == .eval or module_type == .repl or module_type == .sljmp or module_type == .compile),
                 }),
                 .filters = filter_injection.filters,
             });

@@ -416,40 +416,22 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     // 7. Run glue spec via selected backend
     var result_buf: ResultListFileStr = undefined;
 
-    switch (args.backend) {
-        .dev, .llvm => {
-            runViaDev(
-                gpa,
-                entry.platform_env,
-                resolved.all_module_envs,
-                entry.app_module_env,
-                entry.entrypoint_expr,
-                &roc_ops,
-                @ptrCast(&types_list),
-                @ptrCast(&result_buf),
-            ) catch |err| {
-                stderr.print("Dev backend error running glue spec: {}\n", .{err}) catch {};
-                return error.CompilationFailed;
-            };
-        },
-        .interpreter => {
-            compile.runner.runViaInterpreter(
-                gpa,
-                entry.platform_env,
-                glue_build_env.builtin_modules,
-                resolved.all_module_envs,
-                entry.app_module_env,
-                entry.entrypoint_expr,
-                &roc_ops,
-                @ptrCast(&types_list),
-                @ptrCast(&result_buf),
-                RocTarget.detectNative(),
-            ) catch |err| {
-                stderr.print("Interpreter error running glue spec: {}\n", .{err}) catch {};
-                return error.CompilationFailed;
-            };
-        },
-    }
+    _ = compile.runner.run(
+        args.backend,
+        gpa,
+        entry.platform_env,
+        glue_build_env.builtin_modules,
+        resolved.all_module_envs,
+        entry.app_module_env,
+        entry.entrypoint_expr,
+        &roc_ops,
+        @ptrCast(&types_list),
+        @ptrCast(&result_buf),
+        RocTarget.detectNative(),
+    ) catch |err| {
+        stderr.print("Backend error running glue spec: {}\n", .{err}) catch {};
+        return error.CompilationFailed;
+    };
 
     // 8. Extract Try(List(File), Str) and write files
     const glue_result = extractGlueResult(&result_buf);
@@ -2339,93 +2321,4 @@ fn generateStubExprFromTypeAnno(gpa: std.mem.Allocator, env: *ModuleEnv, ast: *c
             buf.appendSlice(gpa, "{ ... }") catch {};
         },
     }
-}
-
-/// Run a compiled Roc entrypoint through the dev backend (native code generation).
-fn runViaDev(
-    gpa: Allocator,
-    platform_env: *ModuleEnv,
-    all_module_envs: []*ModuleEnv,
-    app_module_env: ?*ModuleEnv,
-    entrypoint_expr: can.CIR.Expr.Idx,
-    roc_ops: *builtins.host_abi.RocOps,
-    args_ptr: ?*anyopaque,
-    result_ptr: *anyopaque,
-) !void {
-    const eval_mod = @import("eval");
-    const types_mod = @import("types");
-    const DevEvaluator = eval_mod.DevEvaluator;
-    const ExecutableMemory = eval_mod.ExecutableMemory;
-
-    var dev_eval = DevEvaluator.init(gpa, null) catch {
-        return error.CompilationFailed;
-    };
-    defer dev_eval.deinit();
-
-    // Resolve entrypoint layouts from the CIR expression's type
-    const layout_store_ptr = dev_eval.ensureGlobalLayoutStore(all_module_envs) catch return error.CompilationFailed;
-    const module_idx: u32 = for (all_module_envs, 0..) |env, i| {
-        if (env == platform_env) break @intCast(i);
-    } else return error.CompilationFailed;
-
-    const expr_type_var = ModuleEnv.varFrom(entrypoint_expr);
-    const resolved_type = platform_env.types.resolveVar(expr_type_var);
-    const maybe_func = resolved_type.desc.content.unwrapFunc();
-
-    var arg_layouts_buf: [16]layout.Idx = undefined;
-    var arg_layouts_len: usize = 0;
-    var ret_layout: layout.Idx = undefined;
-
-    if (maybe_func) |func| {
-        const arg_vars = platform_env.types.sliceVars(func.args);
-        var type_scope = types_mod.TypeScope.init(gpa);
-        defer type_scope.deinit();
-        for (arg_vars, 0..) |arg_var, i| {
-            arg_layouts_buf[i] = layout_store_ptr.fromTypeVar(module_idx, arg_var, &type_scope, null) catch return error.CompilationFailed;
-        }
-        arg_layouts_len = arg_vars.len;
-        ret_layout = layout_store_ptr.fromTypeVar(module_idx, func.ret, &type_scope, null) catch return error.CompilationFailed;
-    } else {
-        var type_scope = types_mod.TypeScope.init(gpa);
-        defer type_scope.deinit();
-        ret_layout = layout_store_ptr.fromTypeVar(module_idx, expr_type_var, &type_scope, null) catch return error.CompilationFailed;
-    }
-
-    const arg_layouts: []const layout.Idx = arg_layouts_buf[0..arg_layouts_len];
-
-    var code_result = dev_eval.generateEntrypointCode(
-        platform_env,
-        entrypoint_expr,
-        all_module_envs,
-        app_module_env,
-        arg_layouts,
-        ret_layout,
-    ) catch {
-        return error.CompilationFailed;
-    };
-    defer code_result.deinit();
-
-    if (code_result.code.len == 0) {
-        return error.CompilationFailed;
-    }
-
-    var executable = ExecutableMemory.initWithEntryOffset(code_result.code, code_result.entry_offset) catch {
-        return error.CompilationFailed;
-    };
-    defer executable.deinit();
-
-    // Use the DevEvaluator's RocOps (which has setjmp/longjmp crash protection)
-    // instead of the caller's RocOps, so roc_crashed returns an error rather
-    // than calling std.process.exit(1).
-    // Splice in the caller's hosted functions so the generated code can call them.
-    dev_eval.roc_ops.hosted_fns = roc_ops.hosted_fns;
-
-    dev_eval.callRocABIWithCrashProtection(&executable, result_ptr, args_ptr) catch |err| switch (err) {
-        error.RocCrashed => {
-            return error.CompilationFailed;
-        },
-        error.Segfault => {
-            return error.CompilationFailed;
-        },
-    };
 }

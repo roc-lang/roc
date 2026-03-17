@@ -958,7 +958,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
     }
 
     switch (args.opt.toBackend()) {
-        .dev, .llvm => return rocRunDevShim(ctx, args),
+        .dev, .llvm, .wasm => return rocRunDevShim(ctx, args),
         .interpreter => {},
     }
 
@@ -1864,40 +1864,22 @@ fn rocRunDefaultApp(ctx: *CliContext, args: cli_args.RunArgs, original_source: [
     var cli_args_list = echo_platform.buildCliArgs(args.app_args, &roc_ops);
     var result_buf: [16]u8 align(16) = undefined;
 
-    switch (args.opt.toBackend()) {
-        .dev, .llvm => {
-            runViaDev(
-                ctx.gpa,
-                entry.platform_env,
-                resolved.all_module_envs,
-                entry.app_module_env,
-                entry.entrypoint_expr,
-                &roc_ops,
-                @ptrCast(&cli_args_list),
-                @ptrCast(&result_buf),
-            ) catch |err| {
-                std.debug.print("Dev backend execution error: {}\n", .{err});
-                std.process.exit(1);
-            };
-        },
-        .interpreter => {
-            compile.runner.runViaInterpreter(
-                ctx.gpa,
-                entry.platform_env,
-                build_env.builtin_modules,
-                resolved.all_module_envs,
-                entry.app_module_env,
-                entry.entrypoint_expr,
-                &roc_ops,
-                @ptrCast(&cli_args_list),
-                @ptrCast(&result_buf),
-                target,
-            ) catch |err| {
-                std.debug.print("Execution error: {}\n", .{err});
-                std.process.exit(1);
-            };
-        },
-    }
+    _ = compile.runner.run(
+        args.opt.toBackend(),
+        ctx.gpa,
+        entry.platform_env,
+        build_env.builtin_modules,
+        resolved.all_module_envs,
+        entry.app_module_env,
+        entry.entrypoint_expr,
+        &roc_ops,
+        @ptrCast(&cli_args_list),
+        @ptrCast(&result_buf),
+        target,
+    ) catch |err| {
+        std.debug.print("Execution error: {}\n", .{err});
+        std.process.exit(1);
+    };
 
     // Platform returns I8; bit-identical to u8 for std.process.exit
     const exit_code = result_buf[0];
@@ -3964,7 +3946,7 @@ fn rocBuild(ctx: *CliContext, args: cli_args.BuildArgs) !void {
 
     // Select build path based on optimization level
     switch (args.opt.toBackend()) {
-        .dev, .llvm => {
+        .dev, .llvm, .wasm => {
             // Use native code generation backend
             try rocBuildNative(ctx, args);
         },
@@ -5592,7 +5574,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
 
     // Run tests using the selected backend
     switch (args.opt.toBackend()) {
-        .dev, .llvm => {
+        .dev, .llvm, .wasm => {
             // Run tests using dev backend (native code generation)
             var dev_eval = eval.DevEvaluator.init(ctx.gpa, null) catch |err| {
                 try stderr.print("Failed to create dev evaluator: {}\n", .{err});
@@ -6033,92 +6015,6 @@ fn rocGlue(ctx: *CliContext, args: cli_args.GlueArgs) glue.GlueError!void {
         .platform_path = args.platform_path,
         .backend = args.opt.toBackend(),
     }, temp_dir);
-}
-
-/// Run a compiled Roc entrypoint through the dev backend (native code generation).
-/// Resolves entrypoint layouts, JIT-compiles CIR to native code via DevEvaluator,
-/// and executes via the RocCall ABI.
-fn runViaDev(
-    gpa: std.mem.Allocator,
-    platform_env: *ModuleEnv,
-    all_module_envs: []*ModuleEnv,
-    app_module_env: ?*ModuleEnv,
-    entrypoint_expr: can.CIR.Expr.Idx,
-    roc_ops: *echo_platform.host_abi.RocOps,
-    args_ptr: ?*anyopaque,
-    result_ptr: *anyopaque,
-) !void {
-    const types = @import("types");
-    const DevEvaluator = eval.DevEvaluator;
-    const ExecutableMemory = eval.ExecutableMemory;
-
-    var dev_eval = DevEvaluator.init(gpa, null) catch {
-        return error.DevEvaluatorFailed;
-    };
-    defer dev_eval.deinit();
-
-    // Resolve entrypoint layouts from the CIR expression's type
-    const layout_store_ptr = try dev_eval.ensureGlobalLayoutStore(all_module_envs);
-    const module_idx: u32 = for (all_module_envs, 0..) |env, i| {
-        if (env == platform_env) break @intCast(i);
-    } else return error.DevEvaluatorFailed;
-
-    const expr_type_var = ModuleEnv.varFrom(entrypoint_expr);
-    const resolved_type = platform_env.types.resolveVar(expr_type_var);
-    const maybe_func = resolved_type.desc.content.unwrapFunc();
-
-    var arg_layouts_buf: [16]layout.Idx = undefined;
-    var arg_layouts_len: usize = 0;
-    var ret_layout: layout.Idx = undefined;
-
-    if (maybe_func) |func| {
-        const arg_vars = platform_env.types.sliceVars(func.args);
-        var type_scope = types.TypeScope.init(gpa);
-        defer type_scope.deinit();
-        for (arg_vars, 0..) |arg_var, i| {
-            arg_layouts_buf[i] = layout_store_ptr.fromTypeVar(module_idx, arg_var, &type_scope, null) catch return error.DevEvaluatorFailed;
-        }
-        arg_layouts_len = arg_vars.len;
-        ret_layout = layout_store_ptr.fromTypeVar(module_idx, func.ret, &type_scope, null) catch return error.DevEvaluatorFailed;
-    } else {
-        var type_scope = types.TypeScope.init(gpa);
-        defer type_scope.deinit();
-        ret_layout = layout_store_ptr.fromTypeVar(module_idx, expr_type_var, &type_scope, null) catch return error.DevEvaluatorFailed;
-    }
-
-    const arg_layouts: []const layout.Idx = arg_layouts_buf[0..arg_layouts_len];
-
-    // Generate native code using the RocCall ABI entrypoint wrapper
-    var code_result = dev_eval.generateEntrypointCode(
-        platform_env,
-        entrypoint_expr,
-        all_module_envs,
-        app_module_env,
-        arg_layouts,
-        ret_layout,
-    ) catch {
-        return error.DevEvaluatorFailed;
-    };
-    defer code_result.deinit();
-
-    if (code_result.code.len == 0) {
-        return error.DevEvaluatorFailed;
-    }
-
-    // Make the generated code executable and run it
-    var executable = ExecutableMemory.initWithEntryOffset(code_result.code, code_result.entry_offset) catch {
-        return error.DevEvaluatorFailed;
-    };
-    defer executable.deinit();
-
-    // Use the DevEvaluator's RocOps (with setjmp/longjmp crash protection)
-    // so roc_crashed returns an error rather than calling std.process.exit(1).
-    dev_eval.roc_ops.hosted_fns = roc_ops.hosted_fns;
-
-    dev_eval.callRocABIWithCrashProtection(&executable, result_ptr, args_ptr) catch |err| switch (err) {
-        error.RocCrashed => return error.DevEvaluatorFailed,
-        error.Segfault => return error.DevEvaluatorFailed,
-    };
 }
 
 /// Reads, parses, formats, and overwrites all Roc files at the given paths.

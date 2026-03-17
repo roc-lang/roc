@@ -588,7 +588,7 @@ fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
     // Keep module order aligned with resolveImports/getResolvedModule indices.
     const all_module_envs = [_]*ModuleEnv{ @constCast(builtin_module_env), module_env };
 
-    var wasm_result = wasm_eval.generateWasm(module_env, expr_idx, &all_module_envs) catch {
+    var wasm_result = wasm_eval.generateWasm(module_env, expr_idx, &all_module_envs, null) catch {
         return error.WasmGenerateCodeFailed;
     };
     defer wasm_result.deinit();

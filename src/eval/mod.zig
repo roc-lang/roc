@@ -46,6 +46,9 @@ pub const TestRunner = @import("test_runner.zig").TestRunner;
 /// WebAssembly-based evaluator for wasm code generation
 const wasm_evaluator_mod = @import("wasm_evaluator.zig");
 pub const WasmEvaluator = wasm_evaluator_mod.WasmEvaluator;
+pub const WasmCodeResult = wasm_evaluator_mod.WasmCodeResult;
+/// Backend selection enum (re-exported for compile module use without adding a new dep)
+pub const EvalBackend = backend.EvalBackend;
 
 test "eval tests" {
     std.testing.refAllDecls(@This());

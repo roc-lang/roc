@@ -18,11 +18,13 @@ pub const EvalBackend = enum {
     dev,
     interpreter,
     llvm,
+    wasm,
 
     pub fn fromString(s: []const u8) ?EvalBackend {
         if (std.mem.eql(u8, s, "dev")) return .dev;
         if (std.mem.eql(u8, s, "interpreter")) return .interpreter;
         if (std.mem.eql(u8, s, "llvm")) return .llvm;
+        if (std.mem.eql(u8, s, "wasm")) return .wasm;
         return null;
     }
 };
