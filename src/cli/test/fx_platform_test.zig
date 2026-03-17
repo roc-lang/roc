@@ -917,6 +917,40 @@ test "run with --allow-errors attempts execution despite type errors" {
     // We just verify it didn't abort during type checking
 }
 
+test "run with --allow-errors handles type mismatch in function args" {
+    // Regression test for https://github.com/roc-lang/roc/issues/9263
+    // The dev backend crashed (SIGABRT) when --allow-errors was used on code
+    // where a type mismatch in a function argument caused the return type to
+    // become an error type variable nested inside a function type.
+    const allocator = testing.allocator;
+
+    const run_result = try util.runRocCommand(allocator, &.{
+        "--opt=dev",
+        "test/fx/allow_errors_type_mismatch.roc",
+        "--allow-errors",
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    // Should report the type mismatch
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "TYPE MISMATCH") != null);
+
+    // Must not crash with SIGABRT — the process should exit cleanly (or with
+    // a runtime error exit code), not be killed by a signal.
+    switch (run_result.term) {
+        .Exited => {},
+        .Signal => |sig| {
+            std.debug.print("CRASH: process killed by signal {}\n", .{sig});
+            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+            return error.TestUnexpectedResult;
+        },
+        else => |term| {
+            std.debug.print("Unexpected termination: {}\n", .{term});
+            return error.TestUnexpectedResult;
+        },
+    }
+}
+
 test "run allows warnings without blocking execution" {
     // Tests that warnings don't block execution (they never should)
     const allocator = testing.allocator;
