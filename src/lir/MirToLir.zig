@@ -1048,9 +1048,13 @@ fn runtimeValueLayoutFromMirExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator
                 if (self.lambda_set_store.getSymbolLambdaSet(sym)) |ls_idx| {
                     return self.closureValueLayoutFromLambdaSet(ls_idx);
                 }
-                if (self.mir_store.getValueDef(sym)) |def_expr_id| {
-                    return self.runtimeValueLayoutFromMirExpr(def_expr_id);
+                if (std.debug.runtime_safety) {
+                    std.debug.panic(
+                        "MirToLir invariant violated: missing symbol lambda set for function lookup {d}",
+                        .{sym.raw()},
+                    );
                 }
+                unreachable;
             },
             else => {},
         }
@@ -2818,12 +2822,16 @@ fn lowerLookup(self: *Self, sym: Symbol, mono_idx: Monotype.Idx, _: MIR.ExprId, 
             if (self.lambda_set_store.getSymbolLambdaSet(sym)) |ls_idx| {
                 break :blk try self.closureValueLayoutFromLambdaSet(ls_idx);
             }
+            if (std.debug.runtime_safety) {
+                std.debug.panic(
+                    "MirToLir invariant violated: missing symbol lambda set for function lookup {d}",
+                    .{sym.raw()},
+                );
+            }
+            unreachable;
         }
         if (self.mir_store.getValueDef(sym)) |mir_def_id| {
             break :blk try self.runtimeValueLayoutFromMirExpr(mir_def_id);
-        }
-        if (self.mir_store.monotype_store.getMonotype(mono_idx) == .func) {
-            break :blk try self.layoutFromMonotype(mono_idx);
         }
         break :blk try self.layoutFromMonotype(mono_idx);
     };
