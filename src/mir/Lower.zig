@@ -605,12 +605,16 @@ fn remapMonotypeBetweenModulesRec(
 }
 
 fn normalizeCallerMonotypeForSymbolModule(
-    _: *Self,
-    _: u32,
+    self: *Self,
+    symbol_module_idx: u32,
     caller_monotype: Monotype.Idx,
 ) Allocator.Error!Monotype.Idx {
     if (caller_monotype.isNone()) return caller_monotype;
-    return caller_monotype;
+    return self.remapMonotypeBetweenModules(
+        caller_monotype,
+        self.current_module_idx,
+        symbol_module_idx,
+    );
 }
 
 fn importMonotypeFromStore(

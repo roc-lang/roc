@@ -332,6 +332,7 @@ pub const Pass = struct {
         var result = try Result.init(self.allocator, self.current_module_idx, expr_idx);
 
         try self.seedResolvedDispatchTargets();
+        try self.scanSeedModules(&result);
         try self.scanModule(&result, self.current_module_idx);
         try self.scanExpr(&result, self.current_module_idx, expr_idx);
 
@@ -343,9 +344,18 @@ pub const Pass = struct {
         var result = try Result.init(self.allocator, self.current_module_idx, null);
 
         try self.seedResolvedDispatchTargets();
+        try self.scanSeedModules(&result);
         try self.scanModule(&result, self.current_module_idx);
 
         return result;
+    }
+
+    fn scanSeedModules(self: *Pass, result: *Result) Allocator.Error!void {
+        if (self.app_module_idx) |app_module_idx| {
+            if (app_module_idx != self.current_module_idx) {
+                try self.scanModule(result, app_module_idx);
+            }
+        }
     }
 
     fn exprVisitKey(module_idx: u32, expr_idx: CIR.Expr.Idx) u64 {
@@ -383,7 +393,7 @@ pub const Pass = struct {
             const expr = module_env.store.getExpr(def.expr);
 
             if (callableKind(expr)) |kind| {
-                _ = try self.registerCallableDefTemplate(
+                const template_id = try self.registerCallableDefTemplate(
                     result,
                     module_idx,
                     def.expr,
@@ -393,6 +403,7 @@ pub const Pass = struct {
                     module_env.store.getExprRegion(def.expr),
                     packLocalPatternSourceKey(module_idx, def.pattern),
                 );
+                try self.resolveReachableExprProcInst(result, module_idx, def.expr, template_id);
             } else {
                 try self.scanExpr(result, module_idx, def.expr);
             }
