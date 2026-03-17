@@ -111,6 +111,14 @@ fn emitMergedBitcodeToObjectFile(
     // Convert u32 slice to u8 slice for the bindings
     const bitcode_bytes: []const u8 = @as([*]const u8, @ptrCast(bitcode.ptr))[0 .. bitcode.len * 4];
 
+    if (std.process.getEnvVarOwned(std.heap.page_allocator, "ROC_LLVM_KEEP_BITCODE")) |keep_path| {
+        defer std.heap.page_allocator.free(keep_path);
+        std.fs.cwd().writeFile(.{
+            .sub_path = keep_path,
+            .data = bitcode_bytes,
+        }) catch {};
+    } else |_| {}
+
     // Initialize all targets
     bindings.initializeAllTargets();
 

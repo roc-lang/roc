@@ -1,7 +1,7 @@
 //! LIR to LLVM Code Generator
 //!
 //! This module generates LLVM IR from LIR (Low-level IR) expressions.
-//! It uses Zig's std.zig.llvm.Builder for IR generation.
+//! It uses Roc's in-tree LLVM builder for IR generation.
 //!
 //! Pipeline position:
 //! ```
@@ -18,7 +18,7 @@ const builtin = @import("builtin");
 const layout = @import("layout");
 const lir = @import("lir");
 
-const LlvmBuilder = std.zig.llvm.Builder;
+const LlvmBuilder = @import("Builder.zig");
 
 const LirExprStore = lir.LirExprStore;
 const LirExprId = lir.LirExprId;
@@ -510,6 +510,11 @@ pub const MonoLlvmCodeGen = struct {
             .name = "Roc Mono LLVM CodeGen",
             .version = .{ .major = 1, .minor = 0, .patch = 0 },
         };
+
+        if (std.process.getEnvVarOwned(self.allocator, "ROC_LLVM_KEEP_IR")) |keep_path| {
+            defer self.allocator.free(keep_path);
+            builder.printToFilePath(std.fs.cwd(), keep_path) catch return error.CompilationFailed;
+        } else |_| {}
 
         const bitcode = builder.toBitcode(self.allocator, producer) catch return error.CompilationFailed;
 
