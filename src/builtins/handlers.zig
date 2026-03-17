@@ -181,7 +181,9 @@ fn handleExceptionWindows(exception_info: *EXCEPTION_POINTERS) callconv(.winapi)
         // trigger a secondary ACCESS_VIOLATION, producing exit code 5 (0xC0000005
         // truncated to u8) instead of the intended 134.
         _ = TerminateProcess(GetCurrentProcess(), 134);
-        unreachable;
+        // Use @trap() instead of unreachable: unreachable is UB in ReleaseFast,
+        // while @trap() always generates a defined trap instruction.
+        @trap();
     } else if (is_arithmetic_error) {
         if (arithmetic_error_callback) |callback| {
             callback();

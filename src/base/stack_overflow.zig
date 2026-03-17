@@ -39,7 +39,7 @@ fn handleStackOverflow() noreturn {
         // Use TerminateProcess instead of ExitProcess: after a stack overflow the
         // stack is blown and ExitProcess's DLL cleanup can trigger a secondary crash.
         _ = kernel32.TerminateProcess(kernel32.GetCurrentProcess(), 134);
-        unreachable;
+        @trap();
     } else if (comptime builtin.os.tag != .freestanding) {
         // POSIX: use direct write syscall for signal-safety
         _ = posix.write(posix.STDERR_FILENO, STACK_OVERFLOW_MESSAGE) catch {};
