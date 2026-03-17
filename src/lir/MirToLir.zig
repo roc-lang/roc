@@ -939,9 +939,7 @@ fn lambdaSetForExpr(self: *Self, mir_expr_id: MIR.ExprId) ?LambdaSet.Idx {
 
     return switch (self.mir_store.getExpr(mir_expr_id)) {
         .lookup => |sym| blk: {
-            if (self.lambda_set_store.getSymbolLambdaSet(sym)) |ls_idx| break :blk ls_idx;
-            const def_expr = self.mir_store.getValueDef(sym) orelse break :blk null;
-            break :blk self.lambdaSetForExpr(def_expr);
+            break :blk self.lambda_set_store.getSymbolLambdaSet(sym);
         },
         .block => |block| self.lambdaSetForExpr(block.final_expr),
         .borrow_scope => |scope| self.lambdaSetForExpr(scope.body),
@@ -961,9 +959,7 @@ fn lambdaSetForStructField(self: *Self, expr_id: MIR.ExprId, field_idx: u32) ?La
             break :blk self.lambdaSetForExpr(fields[field_idx]);
         },
         .lookup => |symbol| blk: {
-            if (self.lambda_set_store.getSymbolFieldLambdaSet(symbol, field_idx)) |ls_idx| break :blk ls_idx;
-            const def_expr = self.mir_store.getValueDef(symbol) orelse break :blk null;
-            break :blk self.lambdaSetForStructField(def_expr, field_idx);
+            break :blk self.lambda_set_store.getSymbolFieldLambdaSet(symbol, field_idx);
         },
         .block => |block| self.lambdaSetForStructField(block.final_expr, field_idx),
         else => null,
