@@ -150,6 +150,7 @@ pub const Result = struct {
     substs: std.ArrayListUnmanaged(TypeSubst),
     call_site_proc_insts: std.AutoHashMapUnmanaged(u64, ProcInstId),
     dispatch_expr_proc_insts: std.AutoHashMapUnmanaged(u64, ProcInstId),
+    lookup_expr_proc_insts: std.AutoHashMapUnmanaged(u64, ProcInstId),
     proc_template_ids_by_source: std.AutoHashMapUnmanaged(u64, ProcTemplateId),
     deferred_local_callables: std.AutoHashMapUnmanaged(u64, DeferredLocalCallable),
     root_module_idx: u32,
@@ -164,6 +165,7 @@ pub const Result = struct {
             .substs = .empty,
             .call_site_proc_insts = .empty,
             .dispatch_expr_proc_insts = .empty,
+            .lookup_expr_proc_insts = .empty,
             .proc_template_ids_by_source = .empty,
             .deferred_local_callables = .empty,
             .root_module_idx = root_module_idx,
@@ -179,6 +181,7 @@ pub const Result = struct {
         self.substs.deinit(allocator);
         self.call_site_proc_insts.deinit(allocator);
         self.dispatch_expr_proc_insts.deinit(allocator);
+        self.lookup_expr_proc_insts.deinit(allocator);
         self.proc_template_ids_by_source.deinit(allocator);
         self.deferred_local_callables.deinit(allocator);
     }
@@ -193,6 +196,10 @@ pub const Result = struct {
 
     pub fn getDispatchExprProcInst(self: *const Result, module_idx: u32, expr_idx: CIR.Expr.Idx) ?ProcInstId {
         return self.dispatch_expr_proc_insts.get(callSiteKey(module_idx, expr_idx));
+    }
+
+    pub fn getLookupExprProcInst(self: *const Result, module_idx: u32, expr_idx: CIR.Expr.Idx) ?ProcInstId {
+        return self.lookup_expr_proc_insts.get(callSiteKey(module_idx, expr_idx));
     }
 
     pub fn getProcTemplate(self: *const Result, proc_template_id: ProcTemplateId) *const ProcTemplate {
@@ -488,7 +495,6 @@ pub const Pass = struct {
             .e_typed_frac,
             .e_str_segment,
             .e_bytes_literal,
-            .e_lookup_local,
             .e_lookup_pending,
             .e_lookup_required,
             .e_empty_list,
@@ -499,6 +505,11 @@ pub const Pass = struct {
             .e_ellipsis,
             .e_anno_only,
             => {},
+            .e_lookup_local => |lookup| {
+                if (result.getLocalProcTemplate(module_idx, lookup.pattern_idx)) |template_id| {
+                    try self.resolveLookupExprProcInst(result, module_idx, expr_idx, template_id);
+                }
+            },
             .e_lookup_external => |lookup| {
                 const target_module_idx = self.resolveImportedModuleIdx(module_env, lookup.module_idx) orelse return;
                 const target_env = self.all_module_envs[target_module_idx];
@@ -517,6 +528,9 @@ pub const Pass = struct {
                         kind,
                         target_env.store.getExprRegion(def.expr),
                     );
+                }
+                if (result.getExternalProcTemplate(target_module_idx, lookup.target_node_idx)) |template_id| {
+                    try self.resolveLookupExprProcInst(result, module_idx, expr_idx, template_id);
                 }
                 try self.scanModule(result, target_module_idx);
             },
@@ -666,6 +680,24 @@ pub const Pass = struct {
 
         const proc_inst_id = try self.ensureProcInst(result, template_id, fn_monotype, module_idx);
         try result.dispatch_expr_proc_insts.put(
+            self.allocator,
+            Result.callSiteKey(module_idx, expr_idx),
+            proc_inst_id,
+        );
+    }
+
+    fn resolveLookupExprProcInst(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        template_id: ProcTemplateId,
+    ) Allocator.Error!void {
+        const fn_monotype = try self.resolveExprMonotype(result, module_idx, expr_idx);
+        if (fn_monotype.isNone()) return;
+
+        const proc_inst_id = try self.ensureProcInst(result, template_id, fn_monotype, module_idx);
+        try result.lookup_expr_proc_insts.put(
             self.allocator,
             Result.callSiteKey(module_idx, expr_idx),
             proc_inst_id,

@@ -2979,6 +2979,10 @@ fn lowerExprWithMonotypeOverride(
 
         // --- Lookups ---
         .e_lookup_local => |lookup| {
+            if (self.monomorphization.getLookupExprProcInst(self.current_module_idx, expr_idx)) |proc_inst_id| {
+                return try self.lowerProcInst(proc_inst_id);
+            }
+
             const symbol = try self.patternToSymbol(lookup.pattern_idx);
             const symbol_key: u64 = @bitCast(symbol);
 
@@ -3051,6 +3055,10 @@ fn lowerExprWithMonotypeOverride(
             return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, monotype, region);
         },
         .e_lookup_external => |ext| {
+            if (self.monomorphization.getLookupExprProcInst(self.current_module_idx, expr_idx)) |proc_inst_id| {
+                return try self.lowerProcInst(proc_inst_id);
+            }
+
             // Import must be resolved before MIR lowering; reaching here
             // with an unresolved import means a compiler bug in an earlier phase.
             const target_module_idx: u32 = self.resolveImportedModuleIdx(module_env, ext.module_idx) orelse unreachable;
