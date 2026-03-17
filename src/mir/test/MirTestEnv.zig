@@ -232,7 +232,13 @@ pub fn initFull(module_name: []const u8, source: []const u8) !MirTestEnv {
 
     const monomorphization = try gpa.create(Monomorphize.Result);
     errdefer gpa.destroy(monomorphization);
-    monomorphization.* = try Monomorphize.Result.init(gpa, 1, null);
+    monomorphization.* = try Monomorphize.runModule(
+        gpa,
+        @as([]const *ModuleEnv, all_module_envs_slice),
+        &module_env.types,
+        1,
+        null,
+    );
     errdefer monomorphization.deinit(gpa);
 
     const lower = try gpa.create(Lower);
@@ -434,7 +440,13 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
 
     const monomorphization = try gpa.create(Monomorphize.Result);
     errdefer gpa.destroy(monomorphization);
-    monomorphization.* = try Monomorphize.Result.init(gpa, 2, null);
+    monomorphization.* = try Monomorphize.runModule(
+        gpa,
+        @as([]const *ModuleEnv, all_module_envs_slice),
+        &module_env.types,
+        2,
+        null,
+    );
     errdefer monomorphization.deinit(gpa);
 
     const lower = try gpa.create(Lower);

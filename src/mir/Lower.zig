@@ -902,226 +902,6 @@ fn monotypeIsWellFormedRec(
     };
 }
 
-fn alignMonotypeNamesToTemplate(
-    self: *Self,
-    template: Monotype.Idx,
-    actual: Monotype.Idx,
-) Allocator.Error!Monotype.Idx {
-    if (template.isNone() or actual.isNone()) return actual;
-
-    var aligned = std.AutoHashMap(u64, Monotype.Idx).init(self.allocator);
-    defer aligned.deinit();
-
-    return self.alignMonotypeNamesToTemplateRec(template, actual, &aligned);
-}
-
-fn alignMonotypeNamesToTemplateRec(
-    self: *Self,
-    template: Monotype.Idx,
-    actual: Monotype.Idx,
-    aligned: *std.AutoHashMap(u64, Monotype.Idx),
-) Allocator.Error!Monotype.Idx {
-    if (template == actual or template.isNone() or actual.isNone()) return actual;
-
-    const key: u64 = (@as(u64, @intFromEnum(template)) << 32) | @as(u64, @intFromEnum(actual));
-    if (aligned.get(key)) |cached| return cached;
-
-    const template_mono = self.store.monotype_store.getMonotype(template);
-    const actual_mono = self.store.monotype_store.getMonotype(actual);
-    if (std.meta.activeTag(template_mono) != std.meta.activeTag(actual_mono)) return actual;
-
-    const placeholder = try self.store.monotype_store.addMonotype(self.allocator, .recursive_placeholder);
-    try aligned.put(key, placeholder);
-
-    const result_mono: Monotype.Monotype = switch (template_mono) {
-        .unit => .unit,
-        .prim => |prim| .{ .prim = prim },
-        .list => |template_list| .{ .list = .{
-            .elem = try self.alignMonotypeNamesToTemplateRec(template_list.elem, actual_mono.list.elem, aligned),
-        } },
-        .box => |template_box| .{ .box = .{
-            .inner = try self.alignMonotypeNamesToTemplateRec(template_box.inner, actual_mono.box.inner, aligned),
-        } },
-        .tuple => |template_tuple| blk: {
-            if (!self.monotypeIdxSpanIsValid(template_tuple.elems) or !self.monotypeIdxSpanIsValid(actual_mono.tuple.elems)) {
-                break :blk actual_mono;
-            }
-            const template_elems = self.store.monotype_store.getIdxSpan(template_tuple.elems);
-            const actual_elems = self.store.monotype_store.getIdxSpan(actual_mono.tuple.elems);
-            if (template_elems.len != actual_elems.len) break :blk actual_mono;
-
-            const idx_top = self.mono_scratches.idxs.top();
-            defer self.mono_scratches.idxs.clearFrom(idx_top);
-            for (template_elems, actual_elems) |template_elem, actual_elem| {
-                try self.mono_scratches.idxs.append(
-                    try self.alignMonotypeNamesToTemplateRec(template_elem, actual_elem, aligned),
-                );
-            }
-            break :blk .{ .tuple = .{
-                .elems = try self.store.monotype_store.addIdxSpan(
-                    self.allocator,
-                    self.mono_scratches.idxs.sliceFromStart(idx_top),
-                ),
-            } };
-        },
-        .func => |template_func| blk: {
-            if (!self.monotypeIdxSpanIsValid(template_func.args) or !self.monotypeIdxSpanIsValid(actual_mono.func.args)) {
-                break :blk actual_mono;
-            }
-            const template_args = self.store.monotype_store.getIdxSpan(template_func.args);
-            const actual_func = actual_mono.func;
-            const actual_args = self.store.monotype_store.getIdxSpan(actual_func.args);
-            if (template_args.len != actual_args.len) break :blk actual_mono;
-
-            const idx_top = self.mono_scratches.idxs.top();
-            defer self.mono_scratches.idxs.clearFrom(idx_top);
-            for (template_args, actual_args) |template_arg, actual_arg| {
-                try self.mono_scratches.idxs.append(
-                    try self.alignMonotypeNamesToTemplateRec(template_arg, actual_arg, aligned),
-                );
-            }
-            const mapped_args = try self.store.monotype_store.addIdxSpan(
-                self.allocator,
-                self.mono_scratches.idxs.sliceFromStart(idx_top),
-            );
-            break :blk .{ .func = .{
-                .args = mapped_args,
-                .ret = try self.alignMonotypeNamesToTemplateRec(template_func.ret, actual_func.ret, aligned),
-                .effectful = actual_func.effectful,
-            } };
-        },
-        .record => |template_record| blk: {
-            if (!self.monotypeFieldSpanIsValid(template_record.fields) or !self.monotypeFieldSpanIsValid(actual_mono.record.fields)) {
-                break :blk actual_mono;
-            }
-            const template_fields = self.store.monotype_store.getFields(template_record.fields);
-            const actual_fields = self.store.monotype_store.getFields(actual_mono.record.fields);
-            if (template_fields.len != actual_fields.len) break :blk actual_mono;
-
-            const fields_top = self.mono_scratches.fields.top();
-            defer self.mono_scratches.fields.clearFrom(fields_top);
-
-            var used_actual = std.ArrayListUnmanaged(bool){};
-            defer used_actual.deinit(self.allocator);
-            try used_actual.resize(self.allocator, actual_fields.len);
-            @memset(used_actual.items, false);
-
-            for (template_fields, 0..) |template_field, template_i| {
-                var actual_i: usize = template_i;
-                for (actual_fields, 0..) |actual_field, candidate_i| {
-                    if (used_actual.items[candidate_i]) continue;
-                    if (self.identsStructurallyEqual(template_field.name, actual_field.name)) {
-                        actual_i = candidate_i;
-                        break;
-                    }
-                }
-                if (used_actual.items[actual_i]) {
-                    for (actual_fields, 0..) |_, candidate_i| {
-                        if (!used_actual.items[candidate_i]) {
-                            actual_i = candidate_i;
-                            break;
-                        }
-                    }
-                }
-                used_actual.items[actual_i] = true;
-                try self.mono_scratches.fields.append(.{
-                    .name = template_field.name,
-                    .type_idx = try self.alignMonotypeNamesToTemplateRec(
-                        template_field.type_idx,
-                        actual_fields[actual_i].type_idx,
-                        aligned,
-                    ),
-                });
-            }
-
-            break :blk .{ .record = .{
-                .fields = try self.store.monotype_store.addFields(
-                    self.allocator,
-                    self.mono_scratches.fields.sliceFromStart(fields_top),
-                ),
-            } };
-        },
-        .tag_union => |template_union| blk: {
-            if (!self.monotypeTagSpanIsValid(template_union.tags) or !self.monotypeTagSpanIsValid(actual_mono.tag_union.tags)) {
-                break :blk actual_mono;
-            }
-            const template_tags = self.store.monotype_store.getTags(template_union.tags);
-            const actual_tags = self.store.monotype_store.getTags(actual_mono.tag_union.tags);
-            if (template_tags.len != actual_tags.len) break :blk actual_mono;
-
-            const tags_top = self.mono_scratches.tags.top();
-            defer self.mono_scratches.tags.clearFrom(tags_top);
-
-            var used_actual = std.ArrayListUnmanaged(bool){};
-            defer used_actual.deinit(self.allocator);
-            try used_actual.resize(self.allocator, actual_tags.len);
-            @memset(used_actual.items, false);
-
-            for (template_tags, 0..) |template_tag, template_i| {
-                var actual_i: usize = template_i;
-                for (actual_tags, 0..) |actual_tag, candidate_i| {
-                    if (used_actual.items[candidate_i]) continue;
-                    if (self.identsTagNameEquivalent(template_tag.name, actual_tag.name)) {
-                        actual_i = candidate_i;
-                        break;
-                    }
-                }
-                if (used_actual.items[actual_i]) {
-                    for (actual_tags, 0..) |actual_tag, candidate_i| {
-                        if (used_actual.items[candidate_i]) continue;
-                        if (actual_tag.payloads.len == template_tag.payloads.len) {
-                            actual_i = candidate_i;
-                            break;
-                        }
-                    }
-                }
-                if (used_actual.items[actual_i]) {
-                    for (actual_tags, 0..) |_, candidate_i| {
-                        if (!used_actual.items[candidate_i]) {
-                            actual_i = candidate_i;
-                            break;
-                        }
-                    }
-                }
-                used_actual.items[actual_i] = true;
-
-                if (!self.monotypeIdxSpanIsValid(template_tag.payloads) or !self.monotypeIdxSpanIsValid(actual_tags[actual_i].payloads)) {
-                    break :blk actual_mono;
-                }
-                const template_payloads = self.store.monotype_store.getIdxSpan(template_tag.payloads);
-                const actual_payloads = self.store.monotype_store.getIdxSpan(actual_tags[actual_i].payloads);
-                if (template_payloads.len != actual_payloads.len) break :blk actual_mono;
-
-                const idx_top = self.mono_scratches.idxs.top();
-                defer self.mono_scratches.idxs.clearFrom(idx_top);
-                for (template_payloads, actual_payloads) |template_payload, actual_payload| {
-                    try self.mono_scratches.idxs.append(
-                        try self.alignMonotypeNamesToTemplateRec(template_payload, actual_payload, aligned),
-                    );
-                }
-                try self.mono_scratches.tags.append(.{
-                    .name = template_tag.name,
-                    .payloads = try self.store.monotype_store.addIdxSpan(
-                        self.allocator,
-                        self.mono_scratches.idxs.sliceFromStart(idx_top),
-                    ),
-                });
-            }
-
-            break :blk .{ .tag_union = .{
-                .tags = try self.store.monotype_store.addTags(
-                    self.allocator,
-                    self.mono_scratches.tags.sliceFromStart(tags_top),
-                ),
-            } };
-        },
-        .recursive_placeholder => unreachable,
-    };
-
-    self.store.monotype_store.monotypes.items[@intFromEnum(placeholder)] = result_mono;
-    return placeholder;
-}
-
 fn internSymbol(self: *Self, namespace_idx: u32, ident_idx: Ident.Idx) Allocator.Error!MIR.Symbol {
     const raw = packLocalSymbolId(namespace_idx, ident_idx);
     const gop = try self.symbol_metadata.getOrPut(raw);
@@ -5433,58 +5213,26 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
         }
 
         const receiver: MIR.ExprId = if (uses_runtime_receiver) try self.lowerExpr(da.receiver) else .none;
-        const receiver_monotype: Monotype.Idx = if (uses_runtime_receiver) self.store.typeOf(receiver) else .none;
-
-        const resolved_target = if (uses_runtime_receiver)
-            try self.resolveDispatchTargetForDotCall(
-                module_env,
-                expr_idx,
-                da.field_name,
-                receiver_monotype,
-            )
-        else
-            try self.resolveDispatchTargetForExpr(module_env, expr_idx, da.field_name);
 
         // Build args as either:
         // - [receiver] ++ explicit_args for instance methods
         // - explicit_args only for associated-item/static calls like
         //   `Simple.leaf("hello")`
         const explicit_args = module_env.store.sliceExpr(args_span);
-        // Method-call type bindings are per-call-site state. Keep them scoped.
-        const saved_type_var_seen = self.type_var_seen;
-        var call_type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
-        errdefer call_type_var_seen.deinit();
-        self.type_var_seen = call_type_var_seen;
-        const saved_nominal_cycle_breakers = self.nominal_cycle_breakers;
-        var call_nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
-        errdefer call_nominal_cycle_breakers.deinit();
-        self.nominal_cycle_breakers = call_nominal_cycle_breakers;
-        defer {
-            self.type_var_seen.deinit();
-            self.type_var_seen = saved_type_var_seen;
-            self.nominal_cycle_breakers.deinit();
-            self.nominal_cycle_breakers = saved_nominal_cycle_breakers;
-        }
-
-        var fn_arg_vars: []const types.Var = &.{};
-        var resolved_fn = self.types_store.resolveVar(resolved_target.fn_var);
-        while (resolved_fn.desc.content == .alias) {
-            resolved_fn = self.types_store.resolveVar(self.types_store.getAliasBackingVar(resolved_fn.desc.content.alias));
-        }
-        if (resolved_fn.desc.content == .structure) {
-            fn_arg_vars = switch (resolved_fn.desc.content.structure) {
-                .fn_pure => |f| self.types_store.sliceVars(f.args),
-                .fn_effectful => |f| self.types_store.sliceVars(f.args),
-                .fn_unbound => |f| self.types_store.sliceVars(f.args),
-                .record, .record_unbound, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => {
-                    if (builtin.mode == .Debug) std.debug.panic(
-                        "CIR→MIR invariant violated: dispatch fn_var resolved to non-function structure '{s}'",
-                        .{@tagName(resolved_fn.desc.content.structure)},
+        const func_expr = try self.lowerDispatchProcInstForExpr(expr_idx);
+        const func_mono = self.store.typeOf(func_expr);
+        const expected_arg_monotypes = switch (self.store.monotype_store.getMonotype(func_mono)) {
+            .func => |func| self.store.monotype_store.getIdxSpan(func.args),
+            else => {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "MIR Lower invariant: dispatch proc for dot access '{s}' did not lower to function monotype",
+                        .{module_env.getIdent(da.field_name)},
                     );
-                    unreachable;
-                },
-            };
-        }
+                }
+                unreachable;
+            },
+        };
 
         const receiver_param_offset: usize = if (uses_runtime_receiver) 1 else 0;
 
@@ -5495,39 +5243,16 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
         }
         for (explicit_args, 0..) |arg_idx, i| {
             const param_i = i + receiver_param_offset;
-            const expected_param_mono = blk: {
-                const dispatch_func_monotype = try self.monotypeFromTypeVarWithBindings(
-                    self.current_module_idx,
-                    self.types_store,
-                    resolved_target.fn_var,
-                    &self.type_var_seen,
-                    &self.nominal_cycle_breakers,
+            if (builtin.mode == .Debug and param_i >= expected_arg_monotypes.len) {
+                std.debug.panic(
+                    "MIR Lower invariant: dispatch proc arg arity mismatch for dot access '{s}' ({d} params, arg index {d})",
+                    .{ module_env.getIdent(da.field_name), expected_arg_monotypes.len, param_i },
                 );
-                if (dispatch_func_monotype.isNone()) break :blk Monotype.Idx.none;
-                const dispatch_mono = self.store.monotype_store.getMonotype(dispatch_func_monotype);
-                const dispatch_func = switch (dispatch_mono) {
-                    .func => |f| f,
-                    else => {
-                        typeBindingInvariant(
-                            "lowerDotAccess: dispatch fn_var monotype is not function (method='{s}', monotype='{s}')",
-                            .{ module_env.getIdent(da.field_name), @tagName(dispatch_mono) },
-                        );
-                    },
-                };
-                const dispatch_args = self.store.monotype_store.getIdxSpan(dispatch_func.args);
-                if (param_i >= dispatch_args.len) break :blk Monotype.Idx.none;
-                break :blk dispatch_args[param_i];
-            };
-            const arg_override = blk: {
-                if (!expected_param_mono.isNone() and self.monotypeIsWellFormed(expected_param_mono)) {
-                    break :blk expected_param_mono;
-                }
-                const resolved_arg_mono = try self.resolveMonotype(arg_idx);
-                if (!resolved_arg_mono.isNone() and self.monotypeIsWellFormed(resolved_arg_mono)) {
-                    break :blk resolved_arg_mono;
-                }
-                break :blk Monotype.Idx.none;
-            };
+            }
+            const arg_override = if (param_i < expected_arg_monotypes.len and self.monotypeIsWellFormed(expected_arg_monotypes[param_i]))
+                expected_arg_monotypes[param_i]
+            else
+                Monotype.Idx.none;
             const isolate_override = !arg_override.isNone() and try cirExprNeedsCallableOverrideIsolation(module_env, arg_idx);
             const lowered_arg = if (!arg_override.isNone() and isolate_override)
                 try self.lowerExprWithMonotypeOverrideIsolated(arg_idx, arg_override)
@@ -5541,8 +5266,6 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
         const lowered_call_args = self.scratch_expr_ids.sliceFromStart(args_top);
 
         const call_result_monotype = monotype;
-
-        const func_expr = try self.lowerDispatchProcInstForExpr(expr_idx);
 
         const args = try self.store.addExprSpan(self.allocator, lowered_call_args);
 
@@ -5746,25 +5469,9 @@ fn findModuleForOriginMaybe(self: *Self, source_env: *const ModuleEnv, origin_mo
     return null;
 }
 
-fn resolvedTargetIsUsable(
-    self: *Self,
-    source_env: *const ModuleEnv,
-    method_name: Ident.Idx,
-    resolved_target: types.StaticDispatchConstraint.ResolvedTarget,
-) bool {
-    const method_name_text = source_env.getIdent(method_name);
-    const target_method_text = identTextIfOwnedBy(source_env, resolved_target.method_ident) orelse return false;
-    if (!identMatchesMethodName(target_method_text, method_name_text)) return false;
-    return self.findModuleForOriginMaybe(source_env, resolved_target.origin_module) != null;
-}
-
 fn lookupResolvedDispatchTarget(self: *const Self, expr_idx: CIR.Expr.Idx) ?ResolvedDispatchTarget {
     const key = (@as(u64, self.current_module_idx) << 32) | @as(u64, @intFromEnum(expr_idx));
     return self.resolved_dispatch_targets.get(key);
-}
-
-fn staticDispatchKey(self: *const Self, expr_idx: CIR.Expr.Idx) u64 {
-    return (@as(u64, self.current_module_idx) << 32) | @as(u64, @intFromEnum(expr_idx));
 }
 
 fn lookupDispatchConstraintForExpr(
@@ -5802,272 +5509,6 @@ fn lookupDispatchConstraintForExpr(
         found = constraint;
     }
     return found;
-}
-
-fn resolveDispatchTargetForExpr(
-    self: *Self,
-    module_env: *const ModuleEnv,
-    expr_idx: CIR.Expr.Idx,
-    method_name: Ident.Idx,
-) Allocator.Error!ResolvedDispatchTarget {
-    if (self.lookupResolvedDispatchTarget(expr_idx)) |cached| return cached;
-
-    const constraint = self.lookupDispatchConstraintForExpr(expr_idx, method_name) orelse {
-        if (std.debug.runtime_safety) {
-            std.debug.panic(
-                "resolveDispatchTargetForExpr: no static dispatch constraint for expr={d} method='{s}'",
-                .{ @intFromEnum(expr_idx), module_env.getIdent(method_name) },
-            );
-        }
-        unreachable;
-    };
-
-    const desired_func_monotype = try self.monotypeFromTypeVarWithBindings(
-        self.current_module_idx,
-        self.types_store,
-        constraint.fn_var,
-        &self.type_var_seen,
-        &self.nominal_cycle_breakers,
-    );
-
-    const resolved = blk: {
-        if (!constraint.resolved_target.isNone() and
-            self.resolvedTargetIsUsable(module_env, method_name, constraint.resolved_target))
-        {
-            const target_module_idx = self.findModuleForOriginMaybe(module_env, constraint.resolved_target.origin_module).?;
-            const candidate = ResolvedDispatchTarget{
-                .origin = constraint.resolved_target.origin_module,
-                .method_ident = constraint.resolved_target.method_ident,
-                .fn_var = constraint.fn_var,
-                .module_idx = target_module_idx,
-            };
-            if (try self.resolvedDispatchTargetMatchesMonotype(module_env, candidate, desired_func_monotype)) {
-                break :blk candidate;
-            }
-        }
-        break :blk try self.resolveUnresolvedTypeVarDispatchTarget(module_env, method_name, constraint);
-    };
-
-    try self.resolved_dispatch_targets.put(self.staticDispatchKey(expr_idx), resolved);
-    return resolved;
-}
-
-fn monotypeDispatchCompatible(
-    self: *Self,
-    expected: Monotype.Idx,
-    actual: Monotype.Idx,
-) Allocator.Error!bool {
-    if (expected.isNone() or actual.isNone()) return true;
-    return try self.monotypesStructurallyEqual(expected, actual);
-}
-
-fn resolveDispatchTargetForDotCall(
-    self: *Self,
-    module_env: *const ModuleEnv,
-    expr_idx: CIR.Expr.Idx,
-    method_name: Ident.Idx,
-    receiver_monotype: Monotype.Idx,
-) Allocator.Error!ResolvedDispatchTarget {
-    var first_candidate: ?ResolvedDispatchTarget = null;
-    var unresolved_match: ?ResolvedDispatchTarget = null;
-    var resolved_match: ?ResolvedDispatchTarget = null;
-
-    for (self.types_store.sliceAllStaticDispatchConstraints()) |constraint| {
-        if (constraint.source_expr_idx != @intFromEnum(expr_idx)) continue;
-        if (!constraint.fn_name.eql(method_name)) continue;
-
-        const maybe_candidate: ?ResolvedDispatchTarget = blk: {
-            if (!constraint.resolved_target.isNone() and
-                self.resolvedTargetIsUsable(module_env, method_name, constraint.resolved_target))
-            {
-                const target_module_idx = self.findModuleForOriginMaybe(module_env, constraint.resolved_target.origin_module).?;
-                break :blk ResolvedDispatchTarget{
-                    .origin = constraint.resolved_target.origin_module,
-                    .method_ident = constraint.resolved_target.method_ident,
-                    .fn_var = constraint.fn_var,
-                    .module_idx = target_module_idx,
-                };
-            }
-            break :blk null;
-        };
-        const candidate = maybe_candidate orelse continue;
-
-        const fn_mono = try self.monotypeFromTypeVarWithBindings(
-            self.current_module_idx,
-            self.types_store,
-            constraint.fn_var,
-            &self.type_var_seen,
-            &self.nominal_cycle_breakers,
-        );
-        if (!try self.resolvedDispatchTargetMatchesMonotype(module_env, candidate, fn_mono)) continue;
-
-        if (first_candidate == null) first_candidate = candidate;
-
-        if (fn_mono.isNone()) {
-            if (!constraint.resolved_target.isNone()) {
-                if (resolved_match == null) resolved_match = candidate;
-            } else if (unresolved_match == null) {
-                unresolved_match = candidate;
-            }
-            continue;
-        }
-
-        const mono = self.store.monotype_store.getMonotype(fn_mono);
-        if (mono != .func) continue;
-        const fn_args = self.store.monotype_store.getIdxSpan(mono.func.args);
-        const compatible = if (fn_args.len == 0)
-            true
-        else
-            try self.monotypeDispatchCompatible(fn_args[0], receiver_monotype);
-        if (!compatible) continue;
-
-        if (!constraint.resolved_target.isNone()) {
-            if (resolved_match == null) resolved_match = candidate;
-        } else if (unresolved_match == null) {
-            unresolved_match = candidate;
-        }
-    }
-
-    if (resolved_match) |target| return target;
-    if (unresolved_match) |target| return target;
-    if (first_candidate) |target| return target;
-    return self.resolveDispatchTargetForExpr(module_env, expr_idx, method_name);
-}
-
-fn resolvedDispatchTargetMatchesMonotype(
-    self: *Self,
-    source_env: *const ModuleEnv,
-    target: ResolvedDispatchTarget,
-    desired_func_monotype: Monotype.Idx,
-) Allocator.Error!bool {
-    if (desired_func_monotype.isNone()) return true;
-
-    const symbol = try self.resolvedDispatchTargetToSymbol(source_env, target);
-    const symbol_meta = self.getSymbolMetadata(symbol);
-    const symbol_module_idx = symbolMetadataModuleIdx(symbol_meta);
-    const def_expr = self.findDefExprByMetadata(symbol_meta) orelse return true;
-    var candidate_mono = try self.monotypeFromTypeVarInStore(
-        symbol_module_idx,
-        &self.all_module_envs[symbol_module_idx].types,
-        ModuleEnv.varFrom(def_expr),
-    );
-    if (symbol_module_idx != self.current_module_idx) {
-        candidate_mono = try self.remapMonotypeBetweenModules(
-            candidate_mono,
-            symbol_module_idx,
-            self.current_module_idx,
-        );
-    }
-    const aligned_desired = try self.alignMonotypeNamesToTemplate(candidate_mono, desired_func_monotype);
-    return try self.monotypesStructurallyEqual(candidate_mono, aligned_desired);
-}
-
-fn identMatchesMethodName(full_name: []const u8, method_name: []const u8) bool {
-    if (std.mem.eql(u8, full_name, method_name)) return true;
-    if (full_name.len <= method_name.len + 1) return false;
-    const suffix_start = full_name.len - method_name.len;
-    return full_name[suffix_start - 1] == '.' and std.mem.eql(u8, full_name[suffix_start..], method_name);
-}
-
-fn resolveUnresolvedTypeVarDispatchTarget(
-    self: *Self,
-    module_env: *const ModuleEnv,
-    method_name: Ident.Idx,
-    constraint: types.StaticDispatchConstraint,
-) Allocator.Error!ResolvedDispatchTarget {
-    const desired_func_monotype = try self.monotypeFromTypeVarWithBindings(
-        self.current_module_idx,
-        self.types_store,
-        constraint.fn_var,
-        &self.type_var_seen,
-        &self.nominal_cycle_breakers,
-    );
-    if (desired_func_monotype.isNone()) {
-        if (std.debug.runtime_safety) {
-            std.debug.panic(
-                "resolveUnresolvedTypeVarDispatchTarget: unresolved fn_var monotype for method '{s}'",
-                .{module_env.getIdent(method_name)},
-            );
-        }
-        unreachable;
-    }
-
-    const method_name_text = module_env.getIdent(method_name);
-    var found_target: ?ResolvedDispatchTarget = null;
-
-    for (self.all_module_envs, 0..) |candidate_env, candidate_module_idx_usize| {
-        const candidate_module_idx: u32 = @intCast(candidate_module_idx_usize);
-        const defs = candidate_env.store.sliceDefs(candidate_env.all_defs);
-        for (defs) |def_idx| {
-            const def = candidate_env.store.getDef(def_idx);
-            const pattern = candidate_env.store.getPattern(def.pattern);
-            if (pattern != .assign) continue;
-
-            const method_ident = pattern.assign.ident;
-            const full_name = candidate_env.getIdent(method_ident);
-            if (!identMatchesMethodName(full_name, method_name_text)) continue;
-            if (candidate_env.getExposedNodeIndexById(method_ident) == null) continue;
-
-            const candidate_expr_var: types.Var = ModuleEnv.varFrom(def.expr);
-            var candidate_mono = try self.monotypeFromTypeVarInStore(
-                candidate_module_idx,
-                &candidate_env.types,
-                candidate_expr_var,
-            );
-            if (candidate_mono.isNone()) continue;
-            if (candidate_module_idx != self.current_module_idx) {
-                candidate_mono = try self.remapMonotypeBetweenModules(
-                    candidate_mono,
-                    candidate_module_idx,
-                    self.current_module_idx,
-                );
-            }
-            if (!try self.monotypesStructurallyEqual(candidate_mono, desired_func_monotype)) continue;
-
-            const candidate_origin_name = candidate_env.getIdent(candidate_env.qualified_module_ident);
-            const mapped_origin = module_env.common.findIdent(candidate_origin_name) orelse module_env.qualified_module_ident;
-            const candidate_method_name = candidate_env.getIdent(method_ident);
-
-            const candidate_target = ResolvedDispatchTarget{
-                .origin = mapped_origin,
-                .method_ident = method_ident,
-                .fn_var = constraint.fn_var,
-                .module_idx = candidate_module_idx,
-            };
-            if (found_target) |existing| {
-                const existing_method_text = dispatchTargetMethodText(self, module_env, existing) orelse {
-                    if (builtin.mode == .Debug) {
-                        std.debug.panic(
-                            "resolveUnresolvedTypeVarDispatchTarget: existing candidate method ident {d} unreadable",
-                            .{existing.method_ident.idx},
-                        );
-                    }
-                    unreachable;
-                };
-                if (std.debug.runtime_safety and
-                    ((existing.module_idx orelse std.math.maxInt(u32)) != (candidate_target.module_idx orelse std.math.maxInt(u32)) or
-                        !std.mem.eql(u8, existing_method_text, candidate_method_name)))
-                {
-                    std.debug.panic(
-                        "resolveUnresolvedTypeVarDispatchTarget: ambiguous dispatch for method '{s}'",
-                        .{method_name_text},
-                    );
-                }
-                continue;
-            }
-            found_target = candidate_target;
-        }
-    }
-
-    return found_target orelse {
-        if (std.debug.runtime_safety) {
-            std.debug.panic(
-                "resolveUnresolvedTypeVarDispatchTarget: no candidate for method '{s}'",
-                .{method_name_text},
-            );
-        }
-        unreachable;
-    };
 }
 
 fn monotypeFromTypeVarInStore(
@@ -6149,11 +5590,6 @@ fn resolveDispatchTargetToExternalDef(
     };
 }
 
-fn resolvedDispatchTargetToSymbol(self: *Self, source_env: *const ModuleEnv, target: ResolvedDispatchTarget) Allocator.Error!MIR.Symbol {
-    const target_def = try self.resolveDispatchTargetToExternalDef(source_env, target);
-    return self.internExternalDefSymbol(target_def.module_idx, target_def.def_node_idx);
-}
-
 fn dispatchTargetMethodText(
     self: *const Self,
     source_env: *const ModuleEnv,
@@ -6167,70 +5603,6 @@ fn dispatchTargetMethodText(
     }
 
     return null;
-}
-
-fn findDefExprBySymbol(self: *Self, module_idx: u32, ident_idx: Ident.Idx) ?CIR.Expr.Idx {
-    return if (self.findDefBySymbol(module_idx, ident_idx)) |def|
-        def.expr
-    else
-        null;
-}
-
-fn findDefBySymbol(self: *Self, module_idx: u32, ident_idx: Ident.Idx) ?CIR.Def {
-    const target_env = self.all_module_envs[module_idx];
-
-    if (target_env.getExposedNodeIndexById(ident_idx)) |node_idx| {
-        if (target_env.store.isDefNode(node_idx)) {
-            const def_idx: CIR.Def.Idx = @enumFromInt(node_idx);
-            return target_env.store.getDef(def_idx);
-        }
-    }
-
-    const defs = target_env.store.sliceDefs(target_env.all_defs);
-    for (defs) |def_idx| {
-        const def = target_env.store.getDef(def_idx);
-        const pat = target_env.store.getPattern(def.pattern);
-        switch (pat) {
-            .assign => |assign| {
-                if (assign.ident.eql(ident_idx)) return def;
-            },
-            .as,
-            .applied_tag,
-            .nominal,
-            .nominal_external,
-            .record_destructure,
-            .list,
-            .tuple,
-            .num_literal,
-            .small_dec_literal,
-            .dec_literal,
-            .frac_f32_literal,
-            .frac_f64_literal,
-            .str_literal,
-            .underscore,
-            .runtime_error,
-            => {
-                if (builtin.mode == .Debug) std.debug.panic(
-                    "CIR→MIR invariant violated: top-level def has non-assign pattern '{s}'",
-                    .{@tagName(pat)},
-                );
-                unreachable;
-            },
-        }
-    }
-    return null;
-}
-
-fn findDefExprByMetadata(self: *Self, symbol_meta: SymbolMetadata) ?CIR.Expr.Idx {
-    return switch (symbol_meta) {
-        .local_ident => |local| self.findDefExprBySymbol(local.module_idx, local.ident_idx),
-        .external_def => |ext| blk: {
-            const target_env = self.all_module_envs[ext.module_idx];
-            if (!target_env.store.isDefNode(ext.def_node_idx)) break :blk null;
-            const def_idx: CIR.Def.Idx = @enumFromInt(ext.def_node_idx);
-            break :blk target_env.store.getDef(def_idx).expr;
-        },
-    };
 }
 
 /// Lower an external definition by symbol, caching the result.

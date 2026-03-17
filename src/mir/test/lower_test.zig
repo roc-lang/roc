@@ -2518,7 +2518,6 @@ test "cross-module type resolution: U32.to dispatches with concrete U32 function
 
     // The call's function should be a lookup whose monotype is a func
     const proc_id = procIdFromCallableExpr(env.mir_store, top.call.func) orelse return error.TestUnexpectedResult;
-
     const func_monotype_idx = env.mir_store.typeOf(top.call.func);
     const func_mono = env.mir_store.monotype_store.getMonotype(func_monotype_idx);
     try testing.expect(func_mono == .func);

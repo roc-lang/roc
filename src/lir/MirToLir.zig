@@ -1655,12 +1655,6 @@ fn runtimeLayoutForProcBodyWithParamLayouts(
         try self.registerBindingPatternSymbols(param_pat_id, param_layout);
     }
     for (func_args, param_layouts[0..func_args.len]) |param_mono_idx, param_layout| {
-        if (self.mir_store.monotype_store.getMonotype(param_mono_idx) == .list and self.layout_store.getLayout(param_layout).tag == .scalar) {
-            std.debug.print(
-                "runtimeLayoutForProcBodyWithParamLayouts debug_name={d} mono_idx={d} layout_idx={d}\n",
-                .{ proc.debug_name.raw(), @intFromEnum(param_mono_idx), @intFromEnum(param_layout) },
-            );
-        }
         try self.registerSpecializedMonotypeLayout(param_mono_idx, param_layout, &saved_monotype_layouts);
     }
     if (!proc.captures_param.isNone()) {
@@ -1753,7 +1747,8 @@ fn runtimeLayoutFromDirectProcSpecCall(
         const save_layouts = self.scratch_layout_idxs.items.len;
         defer self.scratch_layout_idxs.shrinkRetainingCapacity(save_layouts);
         for (call_args) |arg_expr_id| {
-            try self.scratch_layout_idxs.append(self.allocator, try self.runtimeValueLayoutFromMirExpr(arg_expr_id));
+            const arg_layout = try self.runtimeValueLayoutFromMirExpr(arg_expr_id);
+            try self.scratch_layout_idxs.append(self.allocator, arg_layout);
         }
 
         var resolved_ret_layout: ?layout.Idx = null;
@@ -1788,7 +1783,8 @@ fn runtimeLayoutFromDirectProcSpecCall(
     const save_layouts = self.scratch_layout_idxs.items.len;
     defer self.scratch_layout_idxs.shrinkRetainingCapacity(save_layouts);
     for (call_args) |arg_expr_id| {
-        try self.scratch_layout_idxs.append(self.allocator, try self.runtimeValueLayoutFromMirExpr(arg_expr_id));
+        const arg_layout = try self.runtimeValueLayoutFromMirExpr(arg_expr_id);
+        try self.scratch_layout_idxs.append(self.allocator, arg_layout);
     }
     const specialization = try self.ensureDirectProcSpec(
         specializationIdentityForProc(callee_proc),
@@ -3451,7 +3447,8 @@ fn lowerCall(self: *Self, call_data: anytype, mir_expr_id: MIR.ExprId, region: R
         const save_layouts = self.scratch_layout_idxs.items.len;
         defer self.scratch_layout_idxs.shrinkRetainingCapacity(save_layouts);
         for (mir_args) |mir_arg| {
-            try self.scratch_layout_idxs.append(self.allocator, try self.runtimeValueLayoutFromMirExpr(mir_arg));
+            const arg_layout = try self.runtimeValueLayoutFromMirExpr(mir_arg);
+            try self.scratch_layout_idxs.append(self.allocator, arg_layout);
         }
 
         const specialization = try self.ensureDirectProcSpec(
