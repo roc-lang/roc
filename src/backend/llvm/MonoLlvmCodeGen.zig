@@ -181,6 +181,11 @@ pub const MonoLlvmCodeGen = struct {
     /// Needed because symbol_values only stores LlvmBuilder.Value (loses dispatch info).
     closure_bindings: std.AutoHashMap(u64, ClosureMeta),
 
+    /// Debug breadcrumbs for pinpointing the last expression/op seen before
+    /// a `CompilationFailed` bubbles out of codegen.
+    last_expr_id: LirExprId = .none,
+    last_low_level_name: []const u8 = "none",
+
     const LoopVarAlloca = struct {
         alloca_ptr: LlvmBuilder.Value,
         elem_type: LlvmBuilder.Type,
@@ -290,6 +295,8 @@ pub const MonoLlvmCodeGen = struct {
         self.compiled_lambdas.clearRetainingCapacity();
         self.closure_bindings.clearRetainingCapacity();
         self.builtin_functions.clearRetainingCapacity();
+        self.last_expr_id = .none;
+        self.last_low_level_name = "none";
     }
 
     /// Declare a builtin function from builtins.bc as an external LLVM function.
@@ -401,7 +408,19 @@ pub const MonoLlvmCodeGen = struct {
         }
 
         // Generate LLVM IR for the expression
-        const value = try self.generateExpr(expr_id);
+        const value = self.generateExpr(expr_id) catch |err| {
+            if (builtin.mode == .Debug and err == error.CompilationFailed) {
+                std.log.err(
+                    "LLVM codegen failed near expr {d} ({s}), last low-level op={s}",
+                    .{
+                        @intFromEnum(self.last_expr_id),
+                        @tagName(self.store.getExpr(self.last_expr_id)),
+                        self.last_low_level_name,
+                    },
+                );
+            }
+            return err;
+        };
 
         // Store the result to the output pointer.
         // Some generators (e.g., string literals) write directly to out_ptr and
@@ -901,6 +920,7 @@ pub const MonoLlvmCodeGen = struct {
 
     /// Generate LLVM IR for an expression
     fn generateExpr(self: *MonoLlvmCodeGen, expr_id: LirExprId) Error!LlvmBuilder.Value {
+        self.last_expr_id = expr_id;
         const expr = self.store.getExpr(expr_id);
 
         return switch (expr) {
@@ -1023,6 +1043,11 @@ pub const MonoLlvmCodeGen = struct {
 
     fn generateLookup(self: *MonoLlvmCodeGen, symbol: Symbol, _: layout.Idx) Error!LlvmBuilder.Value {
         const symbol_key: u64 = @bitCast(symbol);
+
+        if (self.cell_allocas.get(symbol_key)) |cell_alloca| {
+            const wip = self.wip orelse return error.CompilationFailed;
+            return wip.load(.normal, cell_alloca.elem_type, cell_alloca.alloca_ptr, LlvmBuilder.Alignment.fromByteUnits(@intCast(@max(llvmTypeByteSize(cell_alloca.elem_type), 1))), "") catch return error.CompilationFailed;
+        }
 
         // Check if we have a value for this symbol
         if (self.symbol_values.get(symbol_key)) |val| {
@@ -1802,6 +1827,13 @@ pub const MonoLlvmCodeGen = struct {
             return wip.load(.normal, lva.elem_type, lva.alloca_ptr, alignment, "") catch return error.CompilationFailed;
         }
 
+        if (builtin.mode == .Debug) {
+            std.log.err(
+                "cell_load miss: layout={d} has_symbol_value={any}",
+                .{ @intFromEnum(layout_idx), self.symbol_values.contains(key) },
+            );
+        }
+
         return self.generateLookup(cell, layout_idx);
     }
 
@@ -2318,6 +2350,14 @@ pub const MonoLlvmCodeGen = struct {
                 self.symbol_values.put(key, loaded) catch return error.OutOfMemory;
             }
         }
+        {
+            var cell_it = self.cell_allocas.iterator();
+            while (cell_it.next()) |entry| {
+                const cell_alignment = LlvmBuilder.Alignment.fromByteUnits(@intCast(@max(llvmTypeByteSize(entry.value_ptr.elem_type), 1)));
+                const loaded = wip.load(.normal, entry.value_ptr.elem_type, entry.value_ptr.alloca_ptr, cell_alignment, "") catch return error.CompilationFailed;
+                self.symbol_values.put(entry.key_ptr.*, loaded) catch return error.OutOfMemory;
+            }
+        }
         var cond_val = try self.generateExpr(wl.cond);
         if (cond_val.typeOfWip(wip) != .i1) {
             cond_val = wip.cast(.trunc, cond_val, .i1, "") catch return error.CompilationFailed;
@@ -2332,6 +2372,14 @@ pub const MonoLlvmCodeGen = struct {
                 self.symbol_values.put(key, loaded) catch return error.OutOfMemory;
             }
         }
+        {
+            var cell_it = self.cell_allocas.iterator();
+            while (cell_it.next()) |entry| {
+                const cell_alignment = LlvmBuilder.Alignment.fromByteUnits(@intCast(@max(llvmTypeByteSize(entry.value_ptr.elem_type), 1)));
+                const loaded = wip.load(.normal, entry.value_ptr.elem_type, entry.value_ptr.alloca_ptr, cell_alignment, "") catch return error.CompilationFailed;
+                self.symbol_values.put(entry.key_ptr.*, loaded) catch return error.OutOfMemory;
+            }
+        }
         _ = try self.generateExpr(wl.body);
         _ = wip.br(cond_block) catch return error.CompilationFailed;
 
@@ -2341,6 +2389,14 @@ pub const MonoLlvmCodeGen = struct {
             if (self.loop_var_allocas.get(key)) |lva| {
                 const final_val = wip.load(.normal, lva.elem_type, lva.alloca_ptr, alignment, "") catch return error.CompilationFailed;
                 self.symbol_values.put(key, final_val) catch return error.OutOfMemory;
+            }
+        }
+        {
+            var cell_it = self.cell_allocas.iterator();
+            while (cell_it.next()) |entry| {
+                const cell_alignment = LlvmBuilder.Alignment.fromByteUnits(@intCast(@max(llvmTypeByteSize(entry.value_ptr.elem_type), 1)));
+                const loaded = wip.load(.normal, entry.value_ptr.elem_type, entry.value_ptr.alloca_ptr, cell_alignment, "") catch return error.CompilationFailed;
+                self.symbol_values.put(entry.key_ptr.*, loaded) catch return error.OutOfMemory;
             }
         }
 
@@ -3105,30 +3161,89 @@ pub const MonoLlvmCodeGen = struct {
         const wip = self.wip orelse return error.CompilationFailed;
         const builder = self.builder orelse return error.CompilationFailed;
         const args = self.store.getExprSpan(ll.args);
+        self.last_low_level_name = @tagName(ll.op);
 
         switch (ll.op) {
             // --- Numeric arithmetic ---
             .num_plus => {
                 std.debug.assert(args.len >= 2);
-                const lhs = try self.generateExpr(args[0]);
-                const rhs = try self.generateExpr(args[1]);
+                var lhs = try self.generateExpr(args[0]);
+                var rhs = try self.generateExpr(args[1]);
+                const lhs_layout = self.getExprResultLayout(args[0]);
+                const rhs_layout = self.getExprResultLayout(args[1]);
                 if (ll.ret_layout == .dec) {
+                    lhs = self.coerceValueToLayout(lhs, ll.ret_layout) catch |err| {
+                        if (builtin.mode == .Debug) {
+                            std.log.err(
+                                "num_plus lhs coerce failed: ret_layout={d} lhs_expr={s} lhs_layout={any} rhs_expr={s} rhs_layout={any}",
+                                .{ @intFromEnum(ll.ret_layout), @tagName(self.store.getExpr(args[0])), lhs_layout, @tagName(self.store.getExpr(args[1])), rhs_layout },
+                            );
+                        }
+                        return err;
+                    };
+                    rhs = self.coerceValueToLayout(rhs, ll.ret_layout) catch |err| {
+                        if (builtin.mode == .Debug) {
+                            std.log.err(
+                                "num_plus rhs coerce failed: ret_layout={d} lhs_expr={s} lhs_layout={any} rhs_expr={s} rhs_layout={any}",
+                                .{ @intFromEnum(ll.ret_layout), @tagName(self.store.getExpr(args[0])), lhs_layout, @tagName(self.store.getExpr(args[1])), rhs_layout },
+                            );
+                        }
+                        return err;
+                    };
                     return wip.bin(.add, lhs, rhs, "") catch return error.CompilationFailed;
                 }
                 const is_float = isFloatLayout(ll.ret_layout);
+                lhs = self.coerceValueToLayout(lhs, ll.ret_layout) catch |err| {
+                    if (builtin.mode == .Debug) {
+                        std.log.err(
+                            "num_plus lhs coerce failed: ret_layout={d} lhs_expr={s} lhs_layout={any} rhs_expr={s} rhs_layout={any}",
+                            .{ @intFromEnum(ll.ret_layout), @tagName(self.store.getExpr(args[0])), lhs_layout, @tagName(self.store.getExpr(args[1])), rhs_layout },
+                        );
+                    }
+                    return err;
+                };
+                rhs = self.coerceValueToLayout(rhs, ll.ret_layout) catch |err| {
+                    if (builtin.mode == .Debug) {
+                        std.log.err(
+                            "num_plus rhs coerce failed: ret_layout={d} lhs_expr={s} lhs_layout={any} rhs_expr={s} rhs_layout={any}",
+                            .{ @intFromEnum(ll.ret_layout), @tagName(self.store.getExpr(args[0])), lhs_layout, @tagName(self.store.getExpr(args[1])), rhs_layout },
+                        );
+                    }
+                    return err;
+                };
                 return if (is_float)
-                    wip.bin(.fadd, lhs, rhs, "") catch return error.CompilationFailed
+                    (wip.bin(.fadd, lhs, rhs, "") catch |err| {
+                        if (builtin.mode == .Debug) {
+                            std.log.err(
+                                "num_plus fadd failed: ret_layout={d} lhs_expr={s} lhs_layout={any} rhs_expr={s} rhs_layout={any}",
+                                .{ @intFromEnum(ll.ret_layout), @tagName(self.store.getExpr(args[0])), lhs_layout, @tagName(self.store.getExpr(args[1])), rhs_layout },
+                            );
+                        }
+                        return err;
+                    })
                 else
-                    wip.bin(.add, lhs, rhs, "") catch return error.CompilationFailed;
+                    (wip.bin(.add, lhs, rhs, "") catch |err| {
+                        if (builtin.mode == .Debug) {
+                            std.log.err(
+                                "num_plus add failed: ret_layout={d} lhs_expr={s} lhs_layout={any} rhs_expr={s} rhs_layout={any}",
+                                .{ @intFromEnum(ll.ret_layout), @tagName(self.store.getExpr(args[0])), lhs_layout, @tagName(self.store.getExpr(args[1])), rhs_layout },
+                            );
+                        }
+                        return err;
+                    });
             },
             .num_minus => {
                 std.debug.assert(args.len >= 2);
-                const lhs = try self.generateExpr(args[0]);
-                const rhs = try self.generateExpr(args[1]);
+                var lhs = try self.generateExpr(args[0]);
+                var rhs = try self.generateExpr(args[1]);
                 if (ll.ret_layout == .dec) {
+                    lhs = try self.coerceValueToLayout(lhs, ll.ret_layout);
+                    rhs = try self.coerceValueToLayout(rhs, ll.ret_layout);
                     return wip.bin(.sub, lhs, rhs, "") catch return error.CompilationFailed;
                 }
                 const is_float = isFloatLayout(ll.ret_layout);
+                lhs = try self.coerceValueToLayout(lhs, ll.ret_layout);
+                rhs = try self.coerceValueToLayout(rhs, ll.ret_layout);
                 return if (is_float)
                     wip.bin(.fsub, lhs, rhs, "") catch return error.CompilationFailed
                 else
@@ -3136,12 +3251,16 @@ pub const MonoLlvmCodeGen = struct {
             },
             .num_times => {
                 std.debug.assert(args.len >= 2);
-                const lhs = try self.generateExpr(args[0]);
-                const rhs = try self.generateExpr(args[1]);
+                var lhs = try self.generateExpr(args[0]);
+                var rhs = try self.generateExpr(args[1]);
                 if (ll.ret_layout == .dec) {
+                    lhs = try self.coerceValueToLayout(lhs, ll.ret_layout);
+                    rhs = try self.coerceValueToLayout(rhs, ll.ret_layout);
                     return self.callDecMul(lhs, rhs) catch return error.CompilationFailed;
                 }
                 const is_float = isFloatLayout(ll.ret_layout);
+                lhs = try self.coerceValueToLayout(lhs, ll.ret_layout);
+                rhs = try self.coerceValueToLayout(rhs, ll.ret_layout);
                 return if (is_float)
                     wip.bin(.fmul, lhs, rhs, "") catch return error.CompilationFailed
                 else
@@ -4076,8 +4195,9 @@ pub const MonoLlvmCodeGen = struct {
                 const saved_out_ptr = self.out_ptr;
                 self.out_ptr = elem_alloca;
                 defer self.out_ptr = saved_out_ptr;
-                const elem_val = try self.generateExpr(args[1]);
+                var elem_val = try self.generateExpr(args[1]);
                 if (elem_val != .none) {
+                    elem_val = try self.coerceValueToLayout(elem_val, elem_info.elem_layout_idx);
                     _ = wip.store(.normal, elem_val, elem_alloca, elem_alignment) catch return error.CompilationFailed;
                 }
 
@@ -4126,8 +4246,9 @@ pub const MonoLlvmCodeGen = struct {
                 const saved_out_ptr = self.out_ptr;
                 self.out_ptr = elem_alloca;
                 defer self.out_ptr = saved_out_ptr;
-                const elem_val = try self.generateExpr(args[1]);
+                var elem_val = try self.generateExpr(args[1]);
                 if (elem_val != .none) {
+                    elem_val = try self.coerceValueToLayout(elem_val, elem_info.elem_layout_idx);
                     _ = wip.store(.normal, elem_val, elem_alloca, elem_alignment) catch return error.CompilationFailed;
                 }
 
@@ -4351,6 +4472,54 @@ pub const MonoLlvmCodeGen = struct {
                 const n_val = try self.generateExpr(args[1]);
                 self.out_ptr = saved;
                 return try self.callListSublist(args[0], zero, n_val, ll);
+            },
+
+            .list_sublist => {
+                // list_sublist(list, { start, len }) -> sublist(list, start, len)
+                std.debug.assert(args.len == 2);
+                const ls = self.layout_store orelse unreachable;
+                const range_layout_idx = self.getExprResultLayout(args[1]) orelse return error.CompilationFailed;
+                const range_layout = ls.getLayout(range_layout_idx);
+                if (range_layout.tag != .struct_) return error.CompilationFailed;
+
+                const record_idx = range_layout.data.struct_.idx;
+                const record_size = ls.getStructData(record_idx).size;
+                const len_offset = ls.getStructFieldOffsetByOriginalIndex(record_idx, 0);
+                const start_offset = ls.getStructFieldOffsetByOriginalIndex(record_idx, 1);
+
+                if (builtin.mode == .Debug) {
+                    const fields = ls.struct_fields.sliceRange(ls.getStructData(record_idx).getFields());
+                    if (fields.len != 2 or
+                        record_size != 16 or
+                        ls.getStructFieldLayoutByOriginalIndex(record_idx, 0) != .u64 or
+                        ls.getStructFieldLayoutByOriginalIndex(record_idx, 1) != .u64)
+                    {
+                        std.debug.panic(
+                            "LLVM list_sublist expected {{ len: U64, start: U64 }} record, got layout {d}",
+                            .{@intFromEnum(range_layout_idx)},
+                        );
+                    }
+                }
+
+                const range_ptr = try self.materializeAsPtr(args[1], @intCast(record_size));
+                const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+                const start_ptr = wip.gep(
+                    .inbounds,
+                    .i8,
+                    range_ptr,
+                    &.{builder.intValue(.i32, @as(u32, @intCast(start_offset))) catch return error.OutOfMemory},
+                    "",
+                ) catch return error.CompilationFailed;
+                const count_ptr = wip.gep(
+                    .inbounds,
+                    .i8,
+                    range_ptr,
+                    &.{builder.intValue(.i32, @as(u32, @intCast(len_offset))) catch return error.OutOfMemory},
+                    "",
+                ) catch return error.CompilationFailed;
+                const start_val = wip.load(.normal, .i64, start_ptr, alignment, "") catch return error.CompilationFailed;
+                const count_val = wip.load(.normal, .i64, count_ptr, alignment, "") catch return error.CompilationFailed;
+                return try self.callListSublist(args[0], start_val, count_val, ll);
             },
 
             .list_take_last => {
@@ -5803,12 +5972,44 @@ pub const MonoLlvmCodeGen = struct {
                     try self.bindPattern(b.pattern, val.value);
                 },
                 .cell_init => |cell| {
-                    const value = (try self.generateExprAsValue(cell.expr)).value;
-                    try self.initializeCell(cell.cell, cell.layout_idx, value);
+                    const value = (self.generateExprAsValue(cell.expr) catch |err| {
+                        if (builtin.mode == .Debug) {
+                            std.log.err(
+                                "cell_init expr failed: layout={d} expr={s}",
+                                .{ @intFromEnum(cell.layout_idx), @tagName(self.store.getExpr(cell.expr)) },
+                            );
+                        }
+                        return err;
+                    }).value;
+                    self.initializeCell(cell.cell, cell.layout_idx, value) catch |err| {
+                        if (builtin.mode == .Debug) {
+                            std.log.err(
+                                "cell_init store failed: layout={d} expr={s}",
+                                .{ @intFromEnum(cell.layout_idx), @tagName(self.store.getExpr(cell.expr)) },
+                            );
+                        }
+                        return err;
+                    };
                 },
                 .cell_store => |cell| {
-                    const value = (try self.generateExprAsValue(cell.expr)).value;
-                    try self.storeCell(cell.cell, cell.layout_idx, value);
+                    const value = (self.generateExprAsValue(cell.expr) catch |err| {
+                        if (builtin.mode == .Debug) {
+                            std.log.err(
+                                "cell_store expr failed: layout={d} expr={s}",
+                                .{ @intFromEnum(cell.layout_idx), @tagName(self.store.getExpr(cell.expr)) },
+                            );
+                        }
+                        return err;
+                    }).value;
+                    self.storeCell(cell.cell, cell.layout_idx, value) catch |err| {
+                        if (builtin.mode == .Debug) {
+                            std.log.err(
+                                "cell_store write failed: layout={d} expr={s}",
+                                .{ @intFromEnum(cell.layout_idx), @tagName(self.store.getExpr(cell.expr)) },
+                            );
+                        }
+                        return err;
+                    };
                 },
                 .cell_drop => |cell| try self.dropCell(cell.cell, cell.layout_idx),
             }
@@ -5840,14 +6041,38 @@ pub const MonoLlvmCodeGen = struct {
         const alloca_ptr = wip.alloca(.normal, cell_type, .none, alignment, .default, "cell") catch return error.CompilationFailed;
         _ = wip.store(.normal, normalized, alloca_ptr, alignment) catch return error.CompilationFailed;
         self.cell_allocas.put(key, .{ .alloca_ptr = alloca_ptr, .elem_type = cell_type }) catch return error.OutOfMemory;
+        self.symbol_values.put(key, normalized) catch return error.OutOfMemory;
     }
 
     fn storeCell(self: *MonoLlvmCodeGen, cell: Symbol, layout_idx: layout.Idx, value: LlvmBuilder.Value) Error!void {
         const wip = self.wip orelse return error.CompilationFailed;
         const key: u64 = @bitCast(cell);
-        const cell_alloca = self.cell_allocas.get(key) orelse return error.CompilationFailed;
-        const normalized = try self.coerceValueToLayout(value, layout_idx);
-        _ = wip.store(.normal, normalized, cell_alloca.alloca_ptr, self.alignmentForLayout(layout_idx)) catch return error.CompilationFailed;
+        const cell_alloca = self.cell_allocas.get(key) orelse {
+            // Mutable locals can legitimately reach their first write before this backend
+            // has materialized the backing alloca in the current function state. A lazy
+            // initialization is equivalent to an explicit cell_init for that first write.
+            try self.initializeCell(cell, layout_idx, value);
+            return;
+        };
+        const normalized = self.coerceValueToLayout(value, layout_idx) catch |err| {
+            if (builtin.mode == .Debug) {
+                std.log.err(
+                    "storeCell coerce failed: layout={d} cell_type_raw=0x{x}",
+                    .{ @intFromEnum(layout_idx), @intFromEnum(cell_alloca.elem_type) },
+                );
+            }
+            return err;
+        };
+        _ = wip.store(.normal, normalized, cell_alloca.alloca_ptr, self.alignmentForLayout(layout_idx)) catch |err| {
+            if (builtin.mode == .Debug) {
+                std.log.err(
+                    "storeCell store failed: layout={d} value_type_raw=0x{x} cell_type_raw=0x{x}",
+                    .{ @intFromEnum(layout_idx), @intFromEnum(normalized.typeOfWip(wip)), @intFromEnum(cell_alloca.elem_type) },
+                );
+            }
+            return err;
+        };
+        self.symbol_values.put(key, normalized) catch return error.OutOfMemory;
     }
 
     fn dropCell(self: *MonoLlvmCodeGen, cell: Symbol, _: layout.Idx) Error!void {
