@@ -158,6 +158,7 @@ const AssociatedMethodTemplate = struct {
     module_idx: u32,
     template_id: ProcTemplateId,
     type_var: types.Var,
+    qualified_method_ident: Ident.Idx,
 };
 
 /// Output of the MIR monomorphization pass.
@@ -1005,7 +1006,15 @@ pub const Pass = struct {
         const module_env = self.all_module_envs[module_idx];
         const receiver_nominal = resolveNominalTypeInStore(&module_env.types, receiver_type_var) orelse return false;
         const method_info = try self.lookupAssociatedMethodTemplate(result, module_idx, receiver_nominal, method_ident) orelse return false;
-        const constraint = self.lookupDispatchConstraintForExpr(module_idx, expr_idx, method_ident) orelse return false;
+        const receiver_monotype = try self.resolveTypeVarMonotype(result, module_idx, receiver_type_var);
+        const constraint = try self.lookupDispatchConstraintForAssociatedMethod(
+            result,
+            module_idx,
+            expr_idx,
+            method_ident,
+            method_info,
+            receiver_monotype,
+        ) orelse return false;
         const fn_monotype = try self.resolveTypeVarMonotype(result, module_idx, constraint.fn_var);
         if (fn_monotype.isNone()) return false;
 
@@ -1032,7 +1041,14 @@ pub const Pass = struct {
             receiver_monotype,
             method_ident,
         ) orelse return false;
-        const constraint = self.lookupDispatchConstraintForExpr(module_idx, expr_idx, method_ident) orelse return false;
+        const constraint = try self.lookupDispatchConstraintForAssociatedMethod(
+            result,
+            module_idx,
+            expr_idx,
+            method_ident,
+            method_info,
+            receiver_monotype,
+        ) orelse return false;
         const fn_monotype = try self.resolveTypeVarMonotype(result, module_idx, constraint.fn_var);
         if (fn_monotype.isNone()) return false;
 
@@ -1086,6 +1102,62 @@ pub const Pass = struct {
         }
 
         return found;
+    }
+
+    fn lookupDispatchConstraintForAssociatedMethod(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        method_name: Ident.Idx,
+        method_info: AssociatedMethodTemplate,
+        receiver_monotype: Monotype.Idx,
+    ) Allocator.Error!?types.StaticDispatchConstraint {
+        const module_env = self.all_module_envs[module_idx];
+        const target_method_text = method_info.target_env.getIdent(method_info.qualified_method_ident);
+
+        var resolved_match: ?types.StaticDispatchConstraint = null;
+        var unresolved_match: ?types.StaticDispatchConstraint = null;
+
+        for (module_env.types.sliceAllStaticDispatchConstraints()) |constraint| {
+            if (constraint.source_expr_idx != @intFromEnum(expr_idx)) continue;
+            if (!constraint.fn_name.eql(method_name)) continue;
+
+            if (!constraint.resolved_target.isNone()) {
+                const target_module_idx = self.findModuleForOriginMaybe(module_env, constraint.resolved_target.origin_module) orelse continue;
+                if (target_module_idx != method_info.module_idx) continue;
+                if (!std.mem.eql(u8, module_env.getIdent(constraint.resolved_target.method_ident), target_method_text)) continue;
+
+                if (resolved_match == null) resolved_match = constraint;
+                continue;
+            }
+
+            if (receiver_monotype.isNone()) {
+                if (unresolved_match == null) unresolved_match = constraint;
+                continue;
+            }
+
+            const fn_monotype = try self.resolveTypeVarMonotype(result, module_idx, constraint.fn_var);
+            if (fn_monotype.isNone()) continue;
+
+            const mono = result.monotype_store.getMonotype(fn_monotype);
+            if (mono != .func) continue;
+
+            const fn_args = result.monotype_store.getIdxSpan(mono.func.args);
+            if (fn_args.len == 0) continue;
+
+            if (!try self.monotypeDispatchCompatible(
+                result,
+                fn_args[0],
+                module_idx,
+                receiver_monotype,
+                module_idx,
+            )) continue;
+
+            if (unresolved_match == null) unresolved_match = constraint;
+        }
+
+        return resolved_match orelse unresolved_match;
     }
 
     fn resolvedTargetIsUsable(
@@ -1641,6 +1713,7 @@ pub const Pass = struct {
             .module_idx = target_module_idx,
             .template_id = template_id,
             .type_var = ModuleEnv.varFrom(def.expr),
+            .qualified_method_ident = qualified_method_ident,
         };
     }
 
