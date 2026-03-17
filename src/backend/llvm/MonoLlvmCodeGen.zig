@@ -1676,6 +1676,7 @@ pub const MonoLlvmCodeGen = struct {
 
     fn coerceValueToType(self: *MonoLlvmCodeGen, value: LlvmBuilder.Value, expected_type: LlvmBuilder.Type, value_layout: ?layout.Idx) Error!LlvmBuilder.Value {
         const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
         const actual_type = value.typeOfWip(wip);
 
         if (actual_type == expected_type) return value;
@@ -1714,11 +1715,32 @@ pub const MonoLlvmCodeGen = struct {
             return wip.cast(if (actual_type == .float) .fpext else .fptrunc, value, expected_type, "") catch return error.CompilationFailed;
         }
 
-        if (actual_type.isPointer(self.builder orelse return error.CompilationFailed) and expected_type.isPointer(self.builder orelse return error.CompilationFailed)) {
+        if (actual_type.isPointer(builder) and expected_type.isPointer(builder)) {
             return wip.cast(.bitcast, value, expected_type, "") catch return error.CompilationFailed;
         }
 
+        if (!actual_type.isPointer(builder) and expected_type.isPointer(builder)) {
+            if (value_layout) |layout_idx| {
+                return try self.materializeGeneratedValueToPtr(value, layout_idx);
+            }
+        }
+
         return value;
+    }
+
+    fn materializeGeneratedValueToPtr(self: *MonoLlvmCodeGen, value: LlvmBuilder.Value, layout_idx: layout.Idx) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const size = try self.materializedLayoutSize(layout_idx);
+        const byte_array_type = builder.arrayType(size, .i8) catch return error.OutOfMemory;
+        const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+        const alloca_ptr = wip.alloca(.normal, byte_array_type, .none, alignment, .default, "coerce_tmp") catch return error.CompilationFailed;
+
+        const zero_byte = builder.intValue(.i8, 0) catch return error.OutOfMemory;
+        const size_val = builder.intValue(.i32, size) catch return error.OutOfMemory;
+        _ = wip.callMemSet(alloca_ptr, alignment, zero_byte, size_val, .normal, false) catch return error.CompilationFailed;
+        _ = wip.store(.normal, value, alloca_ptr, alignment) catch return error.CompilationFailed;
+        return alloca_ptr;
     }
 
     fn llvmTypeByteSize(t: LlvmBuilder.Type) u64 {
@@ -4041,9 +4063,6 @@ pub const MonoLlvmCodeGen = struct {
                 const dest_ptr = self.out_ptr orelse return error.CompilationFailed;
                 const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
                 const roc_ops = self.roc_ops_arg orelse return error.CompilationFailed;
-                const raw_type = builder.arrayType(from_utf8_try_size, .i8) catch return error.OutOfMemory;
-                const raw_align = LlvmBuilder.Alignment.fromByteUnits(@alignOf(usize));
-                const raw_ptr = wip.alloca(.normal, raw_type, .none, raw_align, .default, "from_utf8_raw") catch return error.CompilationFailed;
                 const list_ptr = try self.materializeAsPtr(args[0], 24);
                 const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
                 const data_ptr = wip.load(.normal, ptr_type, list_ptr, alignment, "") catch return error.CompilationFailed;
@@ -4058,51 +4077,51 @@ pub const MonoLlvmCodeGen = struct {
                 const ret_layout_val = ls.getLayout(ll.ret_layout);
                 std.debug.assert(ret_layout_val.tag == .tag_union);
                 const tu_data = ls.getTagUnionData(ret_layout_val.data.tag_union.idx);
+                const variants = ls.getTagUnionVariants(tu_data);
+                const err_index: usize = 0;
+                const ok_index: usize = 1;
+                const err_layout_idx = variants.get(@intCast(err_index)).payload_layout;
+                const unwrapped_err_layout_idx = self.unwrapSingleFieldPayloadLayout(err_layout_idx) orelse err_layout_idx;
+                const err_layout_val = ls.getLayout(unwrapped_err_layout_idx);
+                if (err_layout_val.tag != .tag_union) return error.CompilationFailed;
+                const inner_tu_data = ls.getTagUnionData(err_layout_val.data.tag_union.idx);
+                const inner_variants = ls.getTagUnionVariants(inner_tu_data);
+                if (inner_variants.len == 0) return error.CompilationFailed;
+                const record_layout_val = ls.getLayout(inner_variants.get(0).payload_layout);
+                if (record_layout_val.tag != .struct_) return error.CompilationFailed;
+                const record_idx = record_layout_val.data.struct_.idx;
+                const problem_offset = ls.getStructFieldOffsetByOriginalIndex(record_idx, 0);
+                const index_offset = ls.getStructFieldOffsetByOriginalIndex(record_idx, 1);
                 const zero_byte = builder.intValue(.i8, 0) catch return error.OutOfMemory;
                 const total_size_val = builder.intValue(.i32, tu_data.size) catch return error.OutOfMemory;
                 _ = wip.callMemSet(dest_ptr, alignment, zero_byte, total_size_val, .normal, false) catch return error.CompilationFailed;
 
-                _ = try self.callBuiltin("roc_builtins_str_from_utf8", .void, &.{ ptr_type, ptr_type, .i64, .i64, ptr_type }, &.{ raw_ptr, data_ptr, list_len, list_cap, roc_ops });
+                const ok_tag_val = builder.intValue(.i64, ok_index) catch return error.OutOfMemory;
+                const err_tag_val = builder.intValue(.i64, err_index) catch return error.OutOfMemory;
+                const outer_disc_offset_val = builder.intValue(.i32, tu_data.discriminant_offset) catch return error.OutOfMemory;
+                const outer_disc_size_val = builder.intValue(.i32, tu_data.discriminant_size) catch return error.OutOfMemory;
+                const inner_disc_offset_val = builder.intValue(.i32, inner_tu_data.discriminant_offset) catch return error.OutOfMemory;
+                const inner_disc_size_val = builder.intValue(.i32, inner_tu_data.discriminant_size) catch return error.OutOfMemory;
+                const err_index_offset_val = builder.intValue(.i32, @as(u32, @intCast(index_offset))) catch return error.OutOfMemory;
+                const err_problem_offset_val = builder.intValue(.i32, @as(u32, @intCast(problem_offset))) catch return error.OutOfMemory;
 
-                const ok_ptr = wip.gep(.inbounds, .i8, raw_ptr, &.{builder.intValue(.i32, from_utf8_try_is_ok_offset) catch return error.OutOfMemory}, "") catch return error.CompilationFailed;
-                const is_ok = wip.load(.normal, .i8, ok_ptr, LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.CompilationFailed;
-                const ok_is_zero = wip.icmp(.eq, is_ok, builder.intValue(.i8, 0) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
-
-                const ok_block = wip.block(1, "str_from_utf8_ok") catch return error.OutOfMemory;
-                const err_block = wip.block(1, "str_from_utf8_err") catch return error.OutOfMemory;
-                const cont_block = wip.block(2, "str_from_utf8_done") catch return error.OutOfMemory;
-                _ = wip.brCond(ok_is_zero, err_block, ok_block, .none) catch return error.OutOfMemory;
-
-                wip.cursor = .{ .block = ok_block };
-                {
-                    const string_ptr = wip.gep(.inbounds, .i8, raw_ptr, &.{builder.intValue(.i32, from_utf8_try_string_offset) catch return error.OutOfMemory}, "") catch return error.CompilationFailed;
-                    const string_size_val = builder.intValue(.i32, roc_str_abi_size) catch return error.OutOfMemory;
-                    _ = wip.callMemCpy(dest_ptr, alignment, string_ptr, alignment, string_size_val, .normal, false) catch return error.CompilationFailed;
-
-                    const disc_type = discriminantIntType(tu_data.discriminant_size);
-                    const disc_ptr = wip.gep(.inbounds, .i8, dest_ptr, &.{builder.intValue(.i32, tu_data.discriminant_offset) catch return error.OutOfMemory}, "") catch return error.CompilationFailed;
-                    _ = wip.store(.normal, builder.intValue(disc_type, 1) catch return error.OutOfMemory, disc_ptr, LlvmBuilder.Alignment.fromByteUnits(@max(@as(u64, tu_data.discriminant_size), 1))) catch return error.CompilationFailed;
-                    _ = wip.br(cont_block) catch return error.OutOfMemory;
-                }
-
-                wip.cursor = .{ .block = err_block };
-                {
-                    const index_ptr = raw_ptr;
-                    const problem_ptr = wip.gep(.inbounds, .i8, raw_ptr, &.{builder.intValue(.i32, from_utf8_try_problem_code_offset) catch return error.OutOfMemory}, "") catch return error.CompilationFailed;
-                    const err_index = wip.load(.normal, .i64, index_ptr, alignment, "") catch return error.CompilationFailed;
-                    const err_problem = wip.load(.normal, .i8, problem_ptr, LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.CompilationFailed;
-
-                    _ = wip.store(.normal, err_index, dest_ptr, alignment) catch return error.CompilationFailed;
-                    const problem_dest_ptr = wip.gep(.inbounds, .i8, dest_ptr, &.{builder.intValue(.i32, 8) catch return error.OutOfMemory}, "") catch return error.CompilationFailed;
-                    _ = wip.store(.normal, err_problem, problem_dest_ptr, LlvmBuilder.Alignment.fromByteUnits(1)) catch return error.CompilationFailed;
-
-                    const disc_type = discriminantIntType(tu_data.discriminant_size);
-                    const disc_ptr = wip.gep(.inbounds, .i8, dest_ptr, &.{builder.intValue(.i32, tu_data.discriminant_offset) catch return error.OutOfMemory}, "") catch return error.CompilationFailed;
-                    _ = wip.store(.normal, builder.intValue(disc_type, 0) catch return error.OutOfMemory, disc_ptr, LlvmBuilder.Alignment.fromByteUnits(@max(@as(u64, tu_data.discriminant_size), 1))) catch return error.CompilationFailed;
-                    _ = wip.br(cont_block) catch return error.OutOfMemory;
-                }
-
-                wip.cursor = .{ .block = cont_block };
+                _ = try self.callBuiltin("roc_builtins_str_from_utf8_result", .void, &.{
+                    ptr_type, ptr_type, .i64, .i64, .i64, .i64, .i32, .i32, .i32, .i32, .i32, .i32, ptr_type,
+                }, &.{
+                    dest_ptr,
+                    data_ptr,
+                    list_len,
+                    list_cap,
+                    ok_tag_val,
+                    err_tag_val,
+                    outer_disc_offset_val,
+                    outer_disc_size_val,
+                    inner_disc_offset_val,
+                    inner_disc_size_val,
+                    err_index_offset_val,
+                    err_problem_offset_val,
+                    roc_ops,
+                });
                 return .none;
             },
             .num_from_str => {

@@ -1287,6 +1287,52 @@ fn emitLoadI32AtPtrOffset(self: *Self, ptr_local: u32, offset: i32, out_local: u
     try self.emitLocalSet(out_local);
 }
 
+fn emitPrepareListSliceMetadata(self: *Self, list_ptr_local: u32, elements_refcounted: bool, out_encoded_cap: u32) Allocator.Error!void {
+    const source_alloc_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    const source_is_slice = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitDecodeListAllocPtr(list_ptr_local, source_alloc_ptr, source_is_slice);
+
+    if (elements_refcounted) {
+        const rc_val = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+
+        self.body.append(self.allocator, Op.block) catch return error.OutOfMemory;
+        self.body.append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
+
+        try self.emitLocalGet(source_alloc_ptr);
+        self.body.append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
+        self.body.append(self.allocator, Op.br_if) catch return error.OutOfMemory;
+        WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+
+        try self.emitLocalGet(source_is_slice);
+        self.body.append(self.allocator, Op.br_if) catch return error.OutOfMemory;
+        WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+
+        try self.emitLoadI32AtPtrOffset(source_alloc_ptr, -4, rc_val);
+        try self.emitLocalGet(rc_val);
+        self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+        WasmModule.leb128WriteI32(self.allocator, &self.body, 1) catch return error.OutOfMemory;
+        self.body.append(self.allocator, Op.i32_ne) catch return error.OutOfMemory;
+        self.body.append(self.allocator, Op.br_if) catch return error.OutOfMemory;
+        WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+
+        try self.emitPtrWithOffset(source_alloc_ptr, -8);
+        try self.emitLocalGet(list_ptr_local);
+        try self.emitLoadOp(.i32, 4);
+        try self.emitStoreOp(.i32, 0);
+
+        self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
+    }
+
+    try self.emitLocalGet(source_alloc_ptr);
+    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+    WasmModule.leb128WriteI32(self.allocator, &self.body, 1) catch return error.OutOfMemory;
+    self.body.append(self.allocator, Op.i32_shr_u) catch return error.OutOfMemory;
+    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+    WasmModule.leb128WriteI32(self.allocator, &self.body, @as(i32, @bitCast(@as(u32, 0x80000000)))) catch return error.OutOfMemory;
+    self.body.append(self.allocator, Op.i32_or) catch return error.OutOfMemory;
+    try self.emitLocalSet(out_encoded_cap);
+}
+
 fn emitCallRocDealloc(self: *Self, ptr_local: u32, alignment: u32) Allocator.Error!void {
     const dealloc_slot = try self.allocStackMemory(8, 4);
 
@@ -7585,19 +7631,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitStoreOp(.i32, 4);
 
             // Encode seamless-slice cap from the source allocation pointer.
-            const source_alloc_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            const source_is_slice = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            try self.emitDecodeListAllocPtr(list_local, source_alloc_ptr, source_is_slice);
-
             const encoded_cap = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            try self.emitLocalGet(source_alloc_ptr);
-            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI32(self.allocator, &self.body, 1) catch return error.OutOfMemory;
-            self.body.append(self.allocator, Op.i32_shr_u) catch return error.OutOfMemory;
-            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI32(self.allocator, &self.body, @as(i32, @bitCast(@as(u32, 0x80000000)))) catch return error.OutOfMemory;
-            self.body.append(self.allocator, Op.i32_or) catch return error.OutOfMemory;
-            try self.emitLocalSet(encoded_cap);
+            try self.emitPrepareListSliceMetadata(list_local, self.listContainsRefcounted(ll.ret_layout), encoded_cap);
 
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, result_local) catch return error.OutOfMemory;
@@ -7795,19 +7830,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitStoreOp(.i32, 4);
 
             // Encode seamless-slice cap from the source allocation pointer.
-            const source_alloc_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            const source_is_slice = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            try self.emitDecodeListAllocPtr(list_local, source_alloc_ptr, source_is_slice);
-
             const encoded_cap = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            try self.emitLocalGet(source_alloc_ptr);
-            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI32(self.allocator, &self.body, 1) catch return error.OutOfMemory;
-            self.body.append(self.allocator, Op.i32_shr_u) catch return error.OutOfMemory;
-            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI32(self.allocator, &self.body, @as(i32, @bitCast(@as(u32, 0x80000000)))) catch return error.OutOfMemory;
-            self.body.append(self.allocator, Op.i32_or) catch return error.OutOfMemory;
-            try self.emitLocalSet(encoded_cap);
+            try self.emitPrepareListSliceMetadata(list_local, self.listContainsRefcounted(ll.ret_layout), encoded_cap);
 
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, result_local) catch return error.OutOfMemory;
@@ -8137,19 +8161,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitStoreOp(.i32, 4);
 
             // Encode seamless-slice cap from the source allocation pointer.
-            const source_alloc_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            const source_is_slice = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            try self.emitDecodeListAllocPtr(list_local, source_alloc_ptr, source_is_slice);
-
             const encoded_cap = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            try self.emitLocalGet(source_alloc_ptr);
-            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI32(self.allocator, &self.body, 1) catch return error.OutOfMemory;
-            self.body.append(self.allocator, Op.i32_shr_u) catch return error.OutOfMemory;
-            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI32(self.allocator, &self.body, @as(i32, @bitCast(@as(u32, 0x80000000)))) catch return error.OutOfMemory;
-            self.body.append(self.allocator, Op.i32_or) catch return error.OutOfMemory;
-            try self.emitLocalSet(encoded_cap);
+            try self.emitPrepareListSliceMetadata(list_local, self.listContainsRefcounted(ll.ret_layout), encoded_cap);
 
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, result_local) catch return error.OutOfMemory;
@@ -11541,6 +11554,11 @@ fn getListElemAlign(self: *const Self, list_layout: layout.Idx) u32 {
     return info.elem_alignment;
 }
 
+fn listContainsRefcounted(self: *const Self, list_layout: layout.Idx) bool {
+    const ls = self.getLayoutStore();
+    return ls.getListInfo(ls.getLayout(list_layout)).contains_refcounted;
+}
+
 const StrSearchMode = enum { contains, starts_with, ends_with };
 
 /// Generate LowLevel str_contains / str_starts_with / str_ends_with.
@@ -12691,19 +12709,8 @@ fn generateLLListSplitFirst(self: *Self, args: anytype, ret_layout: layout.Idx) 
     self.body.append(self.allocator, Op.i32_sub) catch return error.OutOfMemory;
     try self.emitLocalSet(rest_len);
 
-    const source_alloc_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const source_is_slice = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitDecodeListAllocPtr(list_ptr, source_alloc_ptr, source_is_slice);
-
     const encoded_cap = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalGet(source_alloc_ptr);
-    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-    WasmModule.leb128WriteI32(self.allocator, &self.body, 1) catch return error.OutOfMemory;
-    self.body.append(self.allocator, Op.i32_shr_u) catch return error.OutOfMemory;
-    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-    WasmModule.leb128WriteI32(self.allocator, &self.body, @as(i32, @bitCast(@as(u32, 0x80000000)))) catch return error.OutOfMemory;
-    self.body.append(self.allocator, Op.i32_or) catch return error.OutOfMemory;
-    try self.emitLocalSet(encoded_cap);
+    try self.emitPrepareListSliceMetadata(list_ptr, self.listContainsRefcounted(self.exprLayoutIdx(args[0])), encoded_cap);
 
     // Store rest list in result struct
     const rest_base = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;

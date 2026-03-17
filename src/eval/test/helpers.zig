@@ -2336,6 +2336,7 @@ fn hostListSortWith(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]
 }
 
 fn hostStrFromUtf8(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const Utf8ByteProblem = builtins.str.Utf8ByteProblem;
     const buffer = module.store.getMemory(0).buffer();
     const list_ptr: usize = @intCast(params[0].I32);
     const result_ptr: usize = @intCast(params[1].I32);
@@ -2349,6 +2350,23 @@ fn hostStrFromUtf8(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]c
         writeWasmStr(buffer, result_ptr, data.ptr, len);
         std.mem.writeInt(u32, buffer[result_ptr + disc_offset ..][0..4], 1, .little); // Ok tag
     } else {
+        var index: usize = 0;
+        while (index < data.len) {
+            const next_num_bytes = builtins.str.numberOfNextCodepointBytes(data, index) catch |err| {
+                const problem: Utf8ByteProblem = switch (err) {
+                    error.UnexpectedEof => .UnexpectedEndOfSequence,
+                    error.Utf8InvalidStartByte => .InvalidStartByte,
+                    error.Utf8ExpectedContinuation => .ExpectedContinuation,
+                    error.Utf8OverlongEncoding => .OverlongEncoding,
+                    error.Utf8EncodesSurrogateHalf => .EncodesSurrogateHalf,
+                    error.Utf8CodepointTooLarge => .CodepointTooLarge,
+                };
+                std.mem.writeInt(u64, buffer[result_ptr..][0..8], @intCast(index), .little);
+                buffer[result_ptr + 8] = @intFromEnum(problem);
+                break;
+            };
+            index += next_num_bytes;
+        }
         std.mem.writeInt(u32, buffer[result_ptr + disc_offset ..][0..4], 0, .little); // Err tag
     }
 }

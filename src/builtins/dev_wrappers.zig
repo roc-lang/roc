@@ -218,6 +218,64 @@ pub fn roc_builtins_str_from_utf8(out: [*]u8, list_bytes: ?[*]u8, list_len: usiz
     @as(*FromUtf8Try, @ptrCast(@alignCast(out))).* = result;
 }
 
+fn writeDiscriminant(out: [*]u8, offset: u32, size: u32, value: u64) void {
+    switch (size) {
+        0 => {},
+        1 => utils.writeAs(u8, out + offset, @truncate(value), @src()),
+        2 => utils.writeAs(u16, out + offset, @truncate(value), @src()),
+        4 => utils.writeAs(u32, out + offset, @truncate(value), @src()),
+        8 => utils.writeAs(u64, out + offset, value, @src()),
+        else => unreachable,
+    }
+}
+
+pub fn roc_builtins_str_from_utf8_result(
+    out: [*]u8,
+    list_bytes: ?[*]u8,
+    list_len: usize,
+    list_cap: usize,
+    ok_tag: u64,
+    err_tag: u64,
+    outer_disc_offset: u32,
+    outer_disc_size: u32,
+    inner_disc_offset: u32,
+    inner_disc_size: u32,
+    err_index_offset: u32,
+    err_problem_offset: u32,
+    roc_ops: *RocOps,
+) callconv(.c) void {
+    const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    const result = str.fromUtf8C(l, .Immutable, roc_ops);
+
+    if (result.is_ok) {
+        utils.writeAs(RocStr, out, result.string, @src());
+        writeDiscriminant(out, outer_disc_offset, outer_disc_size, ok_tag);
+        return;
+    }
+
+    utils.writeAs(u64, out + err_index_offset, result.byte_index, @src());
+    utils.writeAs(u8, out + err_problem_offset, @intFromEnum(result.problem_code), @src());
+    writeDiscriminant(out, outer_disc_offset, outer_disc_size, err_tag);
+    writeDiscriminant(out, inner_disc_offset, inner_disc_size, 0);
+}
+
+pub fn roc_builtins_str_from_utf8_parts(
+    out_string: *RocStr,
+    out_index: *u64,
+    out_problem: *u8,
+    list_bytes: ?[*]u8,
+    list_len: usize,
+    list_cap: usize,
+    roc_ops: *RocOps,
+) callconv(.c) u8 {
+    const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    const result = str.fromUtf8C(l, .Immutable, roc_ops);
+    out_string.* = result.string;
+    out_index.* = result.byte_index;
+    out_problem.* = @intFromEnum(result.problem_code);
+    return @intFromBool(result.is_ok);
+}
+
 /// Wrapper: escape special characters and wrap in double quotes for Str.inspect
 pub fn roc_builtins_str_escape_and_quote(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, str_cap: usize, roc_ops: *RocOps) callconv(.c) void {
     const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
