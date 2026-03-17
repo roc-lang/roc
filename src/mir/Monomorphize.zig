@@ -1118,6 +1118,8 @@ pub const Pass = struct {
 
         var resolved_match: ?types.StaticDispatchConstraint = null;
         var unresolved_match: ?types.StaticDispatchConstraint = null;
+        var first_unresolved: ?types.StaticDispatchConstraint = null;
+        var unresolved_count: u32 = 0;
 
         for (module_env.types.sliceAllStaticDispatchConstraints()) |constraint| {
             if (constraint.source_expr_idx != @intFromEnum(expr_idx)) continue;
@@ -1132,6 +1134,8 @@ pub const Pass = struct {
                 continue;
             }
 
+            if (first_unresolved == null) first_unresolved = constraint;
+            unresolved_count += 1;
             if (receiver_monotype.isNone()) {
                 if (unresolved_match == null) unresolved_match = constraint;
                 continue;
@@ -1157,7 +1161,7 @@ pub const Pass = struct {
             if (unresolved_match == null) unresolved_match = constraint;
         }
 
-        return resolved_match orelse unresolved_match;
+        return resolved_match orelse unresolved_match orelse if (unresolved_count == 1) first_unresolved else null;
     }
 
     fn resolvedTargetIsUsable(
