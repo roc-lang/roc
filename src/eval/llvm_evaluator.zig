@@ -25,7 +25,6 @@ const mir = @import("mir");
 const MIR = mir.MIR;
 const lir = @import("lir");
 const LirExprStore = lir.LirExprStore;
-const backend = @import("backend");
 const builtin_loading = @import("builtin_loading.zig");
 const compiled_builtins = @import("compiled_builtins");
 const builtins = @import("builtins");

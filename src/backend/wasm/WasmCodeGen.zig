@@ -1625,57 +1625,6 @@ fn emitListRc(
     }
 }
 
-fn emitListElementRcLoop(
-    self: *Self,
-    comptime kind: RcOpKind,
-    data_ptr_local: u32,
-    count_local: u32,
-    elem_layout_idx: layout.Idx,
-) Allocator.Error!void {
-    const elem_size = self.layoutByteSize(elem_layout_idx);
-    if (elem_size == 0) return;
-
-    const idx_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const elem_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-
-    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-    WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
-    try self.emitLocalSet(idx_local);
-
-    self.body.append(self.allocator, Op.block) catch return error.OutOfMemory;
-    self.body.append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
-    self.body.append(self.allocator, Op.loop_) catch return error.OutOfMemory;
-    self.body.append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
-
-    try self.emitLocalGet(idx_local);
-    try self.emitLocalGet(count_local);
-    self.body.append(self.allocator, Op.i32_ge_u) catch return error.OutOfMemory;
-    self.body.append(self.allocator, Op.br_if) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, &self.body, 1) catch return error.OutOfMemory;
-
-    try self.emitLocalGet(data_ptr_local);
-    try self.emitLocalGet(idx_local);
-    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(elem_size)) catch return error.OutOfMemory;
-    self.body.append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
-    self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-    try self.emitLocalSet(elem_ptr_local);
-
-    try self.emitRcAtPtr(kind, elem_ptr_local, elem_layout_idx, 1);
-
-    try self.emitLocalGet(idx_local);
-    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-    WasmModule.leb128WriteI32(self.allocator, &self.body, 1) catch return error.OutOfMemory;
-    self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-    try self.emitLocalSet(idx_local);
-
-    self.body.append(self.allocator, Op.br) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
-
-    self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
-    self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
-}
-
 fn emitStrRc(self: *Self, comptime kind: RcOpKind, str_ptr_local: u32, inc_count: u16) Allocator.Error!void {
     const alloc_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     const is_small_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -11604,26 +11553,6 @@ fn emitLocalGet(self: *Self, local: u32) Allocator.Error!void {
 fn emitLocalSet(self: *Self, local: u32) Allocator.Error!void {
     self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
     WasmModule.leb128WriteU32(self.allocator, &self.body, local) catch return error.OutOfMemory;
-}
-
-/// Helper: write a constant string to buffer[0..len]
-fn emitWriteStringConst(self: *Self, buf_local: u32, _: u32, str: []const u8) Allocator.Error!void {
-    for (str, 0..) |byte, i| {
-        try self.emitLocalGet(buf_local);
-        self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-        WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(byte)) catch return error.OutOfMemory;
-        self.body.append(self.allocator, Op.i32_store8) catch return error.OutOfMemory;
-        WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
-        WasmModule.leb128WriteU32(self.allocator, &self.body, @intCast(i)) catch return error.OutOfMemory;
-    }
-}
-
-/// Helper: emit 8 bytes for an f64 constant
-fn emitF64Bytes(self: *Self, value: f64) Allocator.Error!void {
-    const bytes: [8]u8 = @bitCast(value);
-    for (bytes) |b| {
-        self.body.append(self.allocator, b) catch return error.OutOfMemory;
-    }
 }
 
 /// Emit float modulo: a % b = a - trunc(a / b) * b
