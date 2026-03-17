@@ -1,3 +1,8 @@
+//! WebAssembly execution runner for the REPL and eval tests.
+//!
+//! Provides host-function bindings and memory management for running
+//! Roc expressions compiled to WebAssembly via the Bytebox runtime.
+
 const std = @import("std");
 const builtins = @import("builtins");
 const can = @import("can");

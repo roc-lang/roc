@@ -4019,8 +4019,9 @@ pub const MonoLlvmCodeGen = struct {
                     // result = gt - lt => 1 if gt, -1 (255 unsigned but signed -1) if lt, 0 if eq
                     return wip.bin(.sub, gt_val, lt_val, "") catch return error.CompilationFailed;
                 } else {
-                    const lt = wip.icmp(.slt, lhs, rhs, "") catch return error.OutOfMemory;
-                    const gt = wip.icmp(.sgt, lhs, rhs, "") catch return error.OutOfMemory;
+                    const signed = isSigned(arg_layout);
+                    const lt = wip.icmp(if (signed) .slt else .ult, lhs, rhs, "") catch return error.OutOfMemory;
+                    const gt = wip.icmp(if (signed) .sgt else .ugt, lhs, rhs, "") catch return error.OutOfMemory;
                     const lt_val = wip.conv(.unsigned, lt, .i8, "") catch return error.CompilationFailed;
                     const gt_val = wip.conv(.unsigned, gt, .i8, "") catch return error.CompilationFailed;
                     return wip.bin(.sub, gt_val, lt_val, "") catch return error.CompilationFailed;

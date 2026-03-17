@@ -1,3 +1,8 @@
+//! macOS compatibility shims for LLVM-compiled shared libraries.
+//!
+//! Provides stub implementations of Darwin-specific linker symbols that
+//! LLVM/LLD requires but are not needed for JIT evaluation.
+
 const std = @import("std");
 
 const dyld_build_version_t = extern struct {
