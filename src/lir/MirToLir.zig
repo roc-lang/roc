@@ -2140,6 +2140,17 @@ fn lowerInt(self: *Self, int_data: anytype, mono_idx: Monotype.Idx, region: Regi
         return self.lir_store.addExpr(.{ .dec_literal = val * one_point_zero }, region);
     }
 
+    // Float: integer literals with float type (e.g., `b : F32; b = 2`) must
+    // emit f32/f64 literals so consumers don't reinterpret raw int bits as float.
+    if (target_layout == .f32) {
+        const val = int_data.value.toI128();
+        return self.lir_store.addExpr(.{ .f32_literal = @floatFromInt(val) }, region);
+    }
+    if (target_layout == .f64) {
+        const val = int_data.value.toI128();
+        return self.lir_store.addExpr(.{ .f64_literal = @floatFromInt(val) }, region);
+    }
+
     const needs_128 = target_layout == .i128 or target_layout == .u128;
 
     switch (int_data.value.kind) {
