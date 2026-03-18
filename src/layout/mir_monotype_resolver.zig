@@ -152,11 +152,6 @@ pub const Resolver = struct {
             .tag_union => |tu| try self.buildTagUnionRef(self.monotype_store.getTags(tu.tags), overrides, graph, refs_by_mono),
         };
 
-        if (findEquivalentMonotypeRef(self.monotype_store, mono_idx, refs_by_mono, mono_key)) |equivalent| {
-            try refs_by_mono.put(mono_key, equivalent);
-            return equivalent;
-        }
-
         try refs_by_mono.put(mono_key, resolved_ref);
         return resolved_ref;
     }
@@ -254,26 +249,6 @@ pub const Resolver = struct {
         return self.buildStructFromElems(payloads, overrides, graph, refs_by_mono);
     }
 };
-
-fn findEquivalentMonotypeRef(
-    monotype_store: *const Monotype.Store,
-    mono_idx: Monotype.Idx,
-    refs_by_mono: *const std.AutoHashMap(u32, GraphRef),
-    mono_key: u32,
-) ?GraphRef {
-    const mono = monotype_store.getMonotype(mono_idx);
-
-    var iter = refs_by_mono.iterator();
-    while (iter.next()) |entry| {
-        if (entry.key_ptr.* == mono_key) continue;
-        const other_idx: Monotype.Idx = @enumFromInt(entry.key_ptr.*);
-        if (std.meta.eql(monotype_store.getMonotype(other_idx), mono)) {
-            return entry.value_ptr.*;
-        }
-    }
-
-    return null;
-}
 
 fn findEquivalentRootNode(
     allocator: Allocator,

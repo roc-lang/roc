@@ -204,7 +204,88 @@ pub const Store = struct {
     /// Cached ordinary tag-union monotype for nominal Bool.
     bool_tag_union_idx: Idx,
 
+    intern_map: InternMap,
+
     const prim_count = @typeInfo(Prim).@"enum".fields.len;
+
+    const ContentContext = struct {
+        store: *const Store,
+
+        pub fn hash(ctx: ContentContext, mono: Monotype) u32 {
+            var hasher = std.hash.Wyhash.init(0);
+            std.hash.autoHash(&hasher, std.meta.activeTag(mono));
+
+            switch (mono) {
+                .unit, .recursive_placeholder => {},
+                .prim => |p| std.hash.autoHash(&hasher, p),
+                .list => |l| std.hash.autoHash(&hasher, l.elem),
+                .box => |b| std.hash.autoHash(&hasher, b.inner),
+                .func => |f| {
+                    std.hash.autoHash(&hasher, f.effectful);
+                    std.hash.autoHash(&hasher, f.ret);
+                    for (ctx.store.getIdxSpan(f.args)) |arg| std.hash.autoHash(&hasher, arg);
+                },
+                .tuple => |t| {
+                    for (ctx.store.getIdxSpan(t.elems)) |elem| std.hash.autoHash(&hasher, elem);
+                },
+                .record => |r| {
+                    for (ctx.store.getFields(r.fields)) |field| {
+                        std.hash.autoHash(&hasher, field.name);
+                        std.hash.autoHash(&hasher, field.type_idx);
+                    }
+                },
+                .tag_union => |tu| {
+                    for (ctx.store.getTags(tu.tags)) |tag| {
+                        std.hash.autoHash(&hasher, tag.name);
+                        for (ctx.store.getIdxSpan(tag.payloads)) |p| std.hash.autoHash(&hasher, p);
+                    }
+                },
+            }
+
+            return @truncate(hasher.final());
+        }
+
+        pub fn eql(ctx: ContentContext, a: Monotype, b: Monotype) bool {
+            const a_tag = std.meta.activeTag(a);
+            const b_tag = std.meta.activeTag(b);
+            if (a_tag != b_tag) return false;
+
+            return switch (a) {
+                .unit, .recursive_placeholder => true,
+                .prim => |p| p == b.prim,
+                .list => |l| l.elem == b.list.elem,
+                .box => |bx| bx.inner == b.box.inner,
+                .func => |f| {
+                    const bf = b.func;
+                    if (f.effectful != bf.effectful) return false;
+                    if (f.ret != bf.ret) return false;
+                    return std.mem.eql(Idx, ctx.store.getIdxSpan(f.args), ctx.store.getIdxSpan(bf.args));
+                },
+                .tuple => |t| std.mem.eql(Idx, ctx.store.getIdxSpan(t.elems), ctx.store.getIdxSpan(b.tuple.elems)),
+                .record => |r| {
+                    const a_fields = ctx.store.getFields(r.fields);
+                    const b_fields = ctx.store.getFields(b.record.fields);
+                    if (a_fields.len != b_fields.len) return false;
+                    for (a_fields, b_fields) |af, bf| {
+                        if (af.name != bf.name or af.type_idx != bf.type_idx) return false;
+                    }
+                    return true;
+                },
+                .tag_union => |tu| {
+                    const a_tags = ctx.store.getTags(tu.tags);
+                    const b_tags = ctx.store.getTags(b.tag_union.tags);
+                    if (a_tags.len != b_tags.len) return false;
+                    for (a_tags, b_tags) |at, bt| {
+                        if (at.name != bt.name) return false;
+                        if (!std.mem.eql(Idx, ctx.store.getIdxSpan(at.payloads), ctx.store.getIdxSpan(bt.payloads))) return false;
+                    }
+                    return true;
+                },
+            };
+        }
+    };
+
+    const InternMap = std.HashMapUnmanaged(Monotype, Idx, ContentContext, std.hash_map.default_max_load_percentage);
 
     pub const Scratches = struct {
         fields: base.Scratch(Field),
@@ -257,32 +338,27 @@ pub const Store = struct {
 
     /// Pre-populate the store with the 16 fixed monotypes (unit + 15 primitives).
     pub fn init(allocator: Allocator) Allocator.Error!Store {
-        var monotypes: std.ArrayListUnmanaged(Monotype) = .empty;
-        try monotypes.ensureTotalCapacity(allocator, 1 + prim_count);
-
-        // Unit slot
-        const unit_idx: Idx = @enumFromInt(monotypes.items.len);
-        monotypes.appendAssumeCapacity(.unit);
-
-        // Primitive slots in enum order
-        var prim_idxs: [prim_count]Idx = undefined;
-        for (0..prim_count) |i| {
-            prim_idxs[i] = @enumFromInt(monotypes.items.len);
-            monotypes.appendAssumeCapacity(.{ .prim = @enumFromInt(i) });
-        }
-
-        return .{
-            .monotypes = monotypes,
+        var store = Store{
+            .monotypes = .empty,
             .extra_idx = .empty,
             .tags = .empty,
             .fields = .empty,
-            .unit_idx = unit_idx,
-            .prim_idxs = prim_idxs,
+            .intern_map = .{},
+            .unit_idx = undefined,
+            .prim_idxs = undefined,
             .bool_tag_union_idx = .none,
         };
+
+        store.unit_idx = try store.addMonotype(allocator, .unit);
+        for (0..prim_count) |i| {
+            store.prim_idxs[i] = try store.addMonotype(allocator, .{ .prim = @enumFromInt(i) });
+        }
+
+        return store;
     }
 
     pub fn deinit(self: *Store, allocator: Allocator) void {
+        self.intern_map.deinit(allocator);
         self.monotypes.deinit(allocator);
         self.extra_idx.deinit(allocator);
         self.tags.deinit(allocator);
@@ -290,9 +366,21 @@ pub const Store = struct {
     }
 
     pub fn addMonotype(self: *Store, allocator: Allocator, mono: Monotype) !Idx {
+        if (mono == .recursive_placeholder) {
+            const idx: u32 = @intCast(self.monotypes.items.len);
+            try self.monotypes.append(allocator, mono);
+            return @enumFromInt(idx);
+        }
+
+        const ctx = ContentContext{ .store = self };
+        const gop = try self.intern_map.getOrPutContext(allocator, mono, ctx);
+        if (gop.found_existing) return gop.value_ptr.*;
+
         const idx: u32 = @intCast(self.monotypes.items.len);
         try self.monotypes.append(allocator, mono);
-        return @enumFromInt(idx);
+        const result: Idx = @enumFromInt(idx);
+        gop.value_ptr.* = result;
+        return result;
     }
 
     pub fn getMonotype(self: *const Store, idx: Idx) Monotype {

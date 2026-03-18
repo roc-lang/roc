@@ -2955,12 +2955,12 @@ fn annotationOnlyIntrinsicForFunc(
     const ret_ty = self.mir_store.monotype_store.getMonotype(ret_mono);
 
     if (ret_ty == .box) {
-        if (try self.monotypesStructurallyEqual(arg_mono, ret_ty.box.inner)) {
+        if (arg_mono == ret_ty.box.inner) {
             return .{ .op = .box_box, .result_mono = ret_mono };
         }
     }
     if (arg_ty == .box) {
-        if (try self.monotypesStructurallyEqual(arg_ty.box.inner, ret_mono)) {
+        if (arg_ty.box.inner == ret_mono) {
             return .{ .op = .box_unbox, .result_mono = ret_mono };
         }
     }
@@ -2993,87 +2993,6 @@ fn lowerAnnotationOnlyIntrinsicCall(
         .ret_layout = ret_layout,
     } }, region);
     return try acc.finish(ll_expr, ret_layout, region);
-}
-
-fn monotypesStructurallyEqual(self: *Self, lhs: Monotype.Idx, rhs: Monotype.Idx) Allocator.Error!bool {
-    if (lhs == rhs) return true;
-    var seen = std.AutoHashMap(u64, void).init(self.allocator);
-    defer seen.deinit();
-    return try self.monotypesStructurallyEqualRec(lhs, rhs, &seen);
-}
-
-fn monotypesStructurallyEqualRec(
-    self: *Self,
-    lhs: Monotype.Idx,
-    rhs: Monotype.Idx,
-    seen: *std.AutoHashMap(u64, void),
-) Allocator.Error!bool {
-    if (lhs == rhs) return true;
-
-    const lhs_u32: u32 = @intFromEnum(lhs);
-    const rhs_u32: u32 = @intFromEnum(rhs);
-    const key: u64 = (@as(u64, lhs_u32) << 32) | @as(u64, rhs_u32);
-    if (seen.contains(key)) return true;
-    try seen.put(key, {});
-
-    const lhs_mono = self.mir_store.monotype_store.getMonotype(lhs);
-    const rhs_mono = self.mir_store.monotype_store.getMonotype(rhs);
-    if (std.meta.activeTag(lhs_mono) != std.meta.activeTag(rhs_mono)) return false;
-
-    return switch (lhs_mono) {
-        .recursive_placeholder => unreachable,
-        .unit => true,
-        .prim => |p| p == rhs_mono.prim,
-        .list => |l| try self.monotypesStructurallyEqualRec(l.elem, rhs_mono.list.elem, seen),
-        .box => |b| try self.monotypesStructurallyEqualRec(b.inner, rhs_mono.box.inner, seen),
-        .tuple => |t| blk: {
-            const lhs_elems = self.mir_store.monotype_store.getIdxSpan(t.elems);
-            const rhs_elems = self.mir_store.monotype_store.getIdxSpan(rhs_mono.tuple.elems);
-            if (lhs_elems.len != rhs_elems.len) break :blk false;
-            for (lhs_elems, rhs_elems) |lhs_elem, rhs_elem| {
-                if (!try self.monotypesStructurallyEqualRec(lhs_elem, rhs_elem, seen)) break :blk false;
-            }
-            break :blk true;
-        },
-        .func => |f| blk: {
-            const rf = rhs_mono.func;
-            if (f.effectful != rf.effectful) break :blk false;
-            const lhs_args = self.mir_store.monotype_store.getIdxSpan(f.args);
-            const rhs_args = self.mir_store.monotype_store.getIdxSpan(rf.args);
-            if (lhs_args.len != rhs_args.len) break :blk false;
-            for (lhs_args, rhs_args) |lhs_arg, rhs_arg| {
-                if (!try self.monotypesStructurallyEqualRec(lhs_arg, rhs_arg, seen)) break :blk false;
-            }
-            break :blk try self.monotypesStructurallyEqualRec(f.ret, rf.ret, seen);
-        },
-        .record => |r| blk: {
-            const lhs_fields = self.mir_store.monotype_store.getFields(r.fields);
-            const rhs_fields = self.mir_store.monotype_store.getFields(rhs_mono.record.fields);
-            if (lhs_fields.len != rhs_fields.len) break :blk false;
-            for (lhs_fields, rhs_fields) |lhs_field, rhs_field| {
-                if (!lhs_field.name.eql(rhs_field.name)) break :blk false;
-                if (!try self.monotypesStructurallyEqualRec(lhs_field.type_idx, rhs_field.type_idx, seen)) {
-                    break :blk false;
-                }
-            }
-            break :blk true;
-        },
-        .tag_union => |tu| blk: {
-            const lhs_tags = self.mir_store.monotype_store.getTags(tu.tags);
-            const rhs_tags = self.mir_store.monotype_store.getTags(rhs_mono.tag_union.tags);
-            if (lhs_tags.len != rhs_tags.len) break :blk false;
-            for (lhs_tags, rhs_tags) |lhs_tag, rhs_tag| {
-                if (!lhs_tag.name.eql(rhs_tag.name)) break :blk false;
-                const lhs_payloads = self.mir_store.monotype_store.getIdxSpan(lhs_tag.payloads);
-                const rhs_payloads = self.mir_store.monotype_store.getIdxSpan(rhs_tag.payloads);
-                if (lhs_payloads.len != rhs_payloads.len) break :blk false;
-                for (lhs_payloads, rhs_payloads) |lhs_payload, rhs_payload| {
-                    if (!try self.monotypesStructurallyEqualRec(lhs_payload, rhs_payload, seen)) break :blk false;
-                }
-            }
-            break :blk true;
-        },
-    };
 }
 
 /// Follow lookups/blocks/closure origins to recover the lambda parameter span.
