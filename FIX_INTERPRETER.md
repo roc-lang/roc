@@ -406,8 +406,8 @@ values via `Str.inspect` (same approach as dev/wasm evaluators).
 | Phase 6 | TODO | Rewire ComptimeEvaluator, TestRunner |
 | Phase 7 | TODO | Delete old CIR interpreter and `interpreter_layout` |
 
-Test results: **1223/1226 pass**, 3 skipped, **6 remaining LIR mismatches**
-(down from 24 — the ~17 rendering format differences are resolved).
+Test results: **1223/1226 pass**, 3 skipped, **1 remaining LIR mismatch**
+(down from 24 → 6 → 1).
 
 ## Proposed Implementation Plan
 
@@ -557,19 +557,17 @@ This is zero-overhead for small strings (≤23 bytes, inline in the struct).
 
 **Crash recovery via setjmp/longjmp** — Builtins that can crash (e.g., Dec division by zero) call `roc_ops.crash()`, which longjmps back. The interpreter sets up setjmp before each such call and returns `error.Crash` if triggered. Only the crash flag is reset per-operation; the static buffer is reset once per top-level `eval()` call (resetting it per-operation would invalidate earlier allocations).
 
-### Critical lesson: builtins that consume inputs cannot be called directly on interpreter-allocated data
+### Critical lesson: all heap data must be allocated through `roc_ops`
 
-**Problem discovered:** Builtins that "consume" their inputs (e.g., `strJoinWithC`) call `list.decref()` on the input, which tries to read a refcount header from memory before the data pointer. Interpreter-allocated lists don't have refcount headers (they use arena allocation), so this reads garbage and corrupts memory.
+**Problem discovered:** Builtins that "consume" their inputs (e.g., `listAppend`, `strJoinWithC`) call `list.decref()` or `isUnique()`, which reads the word *before* the data pointer as a refcount header. Data allocated from the interpreter's arena has no refcount headers, so this reads garbage and corrupts memory.
 
-**Solution:** For builtins that consume list/string inputs and call `decref` internally, implement the operation manually in the interpreter instead of calling the builtin. Currently this applies to:
+**Solution (adopted):** Allocate all heap data — list element storage and heap string data — through `roc_ops` with proper refcount headers via `allocateWithRefcount`. This gives the host control over memory and lets builtins be called directly without workarounds. The interpreter's arena is only used for Value wrappers (RocList/RocStr headers, scalars), not for data that `bytes` fields point to.
 
-- `str_join_with` — implemented as a manual loop reading RocStr elements from the list
-
-The safe-to-call builtins are those that:
-1. Only *borrow* their inputs (no decref), OR
-2. Only allocate the *result* through `roc_ops` (not the inputs)
-
-For reference, the ownership of each LowLevel's arguments is defined in `LowLevel.getArgOwnership()` in `src/base/LowLevel.zig`.
+- `allocRocData` helper in `lir_interpreter.zig` wraps `allocateWithRefcount` with setjmp crash recovery
+- `evalList` uses `allocRocData` for element storage
+- `makeRocStr` uses `allocRocData` for heap string data
+- `list_append_unsafe` calls `listAppend` (safe, capacity-reserving) directly — matching the dev codegen behavior
+- `str_join_with` is still implemented manually (the builtin consumes the input list which may contain arena-allocated RocStr *headers*, not just heap data)
 
 ### What was NOT needed
 
@@ -603,15 +601,17 @@ Down from **128 mismatches** before this phase. All **1223 tests pass**, 3 skipp
 - Guaranteed format compatibility with dev/wasm evaluators (same code path).
 - `lir_value_format.zig` is no longer used by the test harness (may be useful for debug/diagnostic purposes later).
 
-### Remaining mismatches after this phase (6 total, down from 24)
+### Remaining mismatches after this phase (1 total, down from 24 → 6 → 1)
 
 | Category | Count | Nature |
 |----------|-------|--------|
-| List operations (ZST append) | 1 | `list append zst` — empty vs populated list |
-| Numeric edge cases | 1 | F32 multiplication precision |
-| Other | ~4 | Various LIR interpreter eval failures (silently skipped) |
+| Tag union pattern matching | 1 | `issue 8783: List.fold with match on tag union elements` — fold returns `0` instead of `1`, likely upstream MirToLir specialization issue with tag union callback parameters |
 
-The ~17 rendering format differences (records as tuples, `error.Unsupported` for tag unions) are all resolved.
+The previous 5 mismatches were resolved by fixes in MirToLir and the interpreter:
+
+- **F32 multiplication** — `MirToLir.lowerInt` now emits `f32_literal`/`f64_literal` for integer literals with float layouts
+- **List.append empty/ZST** — `evalList` ZST length tracking, `evalForLoop` ZST iteration, and `list_append_unsafe` now calls the safe `listAppend` (matching dev codegen)
+- **Polymorphic List.contains** — resolved by allocating heap data through `roc_ops` with refcount headers
 
 Expected simplification:
 
@@ -847,15 +847,11 @@ Treat these separately:
 - semantic parity failures must block the refactor
 - purely legacy CIR-rendering expectations may be updated if the new layout-based rendering is correct and simpler
 
-### 6. (LEARNED) Interpreter-allocated data lacks refcount headers — builtins that consume inputs will crash
+### 6. (LEARNED → RESOLVED) Heap data must be allocated through `roc_ops` with refcount headers
 
-**Discovered during Phase 4 implementation.** The interpreter allocates lists and strings from an arena without refcount headers. Builtins that “consume” their inputs (ownership = `.consume` in `LowLevel.getArgOwnership()`) call `list.decref()` or `str.decref()`, which reads the word *before* the data pointer as a refcount. On interpreter-allocated data, this reads garbage and corrupts memory (manifests as `Invalid free` panic during arena deinit).
+**Discovered during Phase 4 implementation.** Originally, the interpreter allocated list element data and heap string data from an arena without refcount headers. Builtins that call `isUnique()` or `decref()` read the word *before* the data pointer as a refcount — on arena data this reads garbage, causing memory corruption (`Invalid free` panic during arena deinit).
 
-**Rule:** Before calling a builtin directly, check `LowLevel.getArgOwnership()`. If any argument is `.consume`, either:
-1. Implement the operation manually in the interpreter (preferred for simple ops like `str_join_with`)
-2. Allocate the input data with a proper refcount header before passing it to the builtin
-
-Currently `str_join_with` is implemented manually for this reason. Other consuming operations (`list_concat`, `list_prepend`, etc.) work because they happen to check `isUnique()` before attempting in-place mutation, and the `rcNone` no-op callbacks prevent actual refcount access.
+**Resolution:** All heap data (list elements, heap strings) is now allocated through `roc_ops` via `allocRocData`, which calls `allocateWithRefcount` to set up proper refcount headers. The interpreter's arena is only used for Value wrappers (headers and scalars), not data pointed to by `RocList.bytes` or `RocStr.bytes`. This lets builtins be called directly without ownership workarounds.
 
 ### 7. (LEARNED) The static allocation buffer must only be reset once per top-level eval, not per-operation
 

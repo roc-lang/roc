@@ -280,6 +280,16 @@ pub const LirInterpreter = struct {
         return Value.fromSlice(slice);
     }
 
+    /// Allocate heap data through roc_ops with a refcount header.
+    /// Use this for data that RocList.bytes or RocStr.bytes will point to,
+    /// so builtins can safely call isUnique()/decref() on it.
+    fn allocRocData(self: *LirInterpreter, data_bytes: usize, element_alignment: u32) Error![*]u8 {
+        self.roc_env.resetCrash();
+        const sj = setjmp(&self.roc_env.jmp_buf);
+        if (sj != 0) return error.Crash;
+        return builtins.utils.allocateWithRefcount(data_bytes, element_alignment, false, &self.roc_ops);
+    }
+
     // ──────────────────────────────────────────────────────────────
     // Expression evaluation
     // ──────────────────────────────────────────────────────────────
@@ -432,10 +442,11 @@ pub const LirInterpreter = struct {
                 // Set length in the last byte with high bit set
                 val.ptr[small_str_max] = @intCast(bytes.len | 0x80);
             } else {
-                // Heap string: allocate and store
-                const heap_mem = self.arena.allocator().alloc(u8, bytes.len) catch return error.OutOfMemory;
-                @memcpy(heap_mem, bytes);
-                val.write(usize, @intFromPtr(heap_mem.ptr)); // ptr
+                // Heap string: allocate through roc_ops so builtins
+                // can safely call isUnique()/decref() on the data.
+                const heap_data = try self.allocRocData(bytes.len, 1);
+                @memcpy(heap_data[0..bytes.len], bytes);
+                val.write(usize, @intFromPtr(heap_data)); // ptr
                 val.offset(8).write(usize, bytes.len); // len
                 val.offset(16).write(usize, bytes.len); // cap
             }
@@ -447,9 +458,9 @@ pub const LirInterpreter = struct {
                 @memcpy(dest[0..bytes.len], bytes);
                 val.ptr[small_str_max] = @intCast(bytes.len | 0x80);
             } else {
-                const heap_mem = self.arena.allocator().alloc(u8, bytes.len) catch return error.OutOfMemory;
-                @memcpy(heap_mem, bytes);
-                val.write(u32, @intCast(@intFromPtr(heap_mem.ptr)));
+                const heap_data = try self.allocRocData(bytes.len, 1);
+                @memcpy(heap_data[0..bytes.len], bytes);
+                val.write(u32, @intCast(@intFromPtr(heap_data)));
                 val.offset(4).write(u32, @intCast(bytes.len));
                 val.offset(8).write(u32, @intCast(bytes.len));
             }
@@ -769,11 +780,26 @@ pub const LirInterpreter = struct {
         // Allocate the RocList header
         const val = try self.alloc(l.list_layout);
 
-        if (count == 0 or elem_size == 0) return val;
+        if (count == 0) return val;
 
-        // Allocate element storage
+        // ZST lists need no element storage, but must record the length.
+        if (elem_size == 0) {
+            const target_usize = self.layout_store.targetUsize();
+            if (target_usize.size() == 8) {
+                val.offset(8).write(usize, count);
+            } else {
+                val.offset(4).write(u32, @intCast(count));
+            }
+            return val;
+        }
+
+        // Allocate element storage through roc_ops so builtins can safely
+        // call isUnique()/decref() on the data pointer.
         const total_elem_bytes = elem_size * count;
-        const elem_mem = self.arena.allocator().alloc(u8, total_elem_bytes) catch return error.OutOfMemory;
+        const sa = self.helper.sizeAlignOf(l.elem_layout);
+        const elem_alignment: u32 = @intCast(sa.alignment.toByteUnits());
+        const elem_data = try self.allocRocData(total_elem_bytes, elem_alignment);
+        const elem_mem = elem_data[0..total_elem_bytes];
         @memset(elem_mem, 0);
 
         // Evaluate each element
@@ -877,12 +903,15 @@ pub const LirInterpreter = struct {
             count = list_val.offset(4).read(u32);
         }
 
-        if (data_ptr == 0 or count == 0 or elem_size == 0) return .{ .value = Value.zst };
+        if (count == 0) return .{ .value = Value.zst };
 
-        const data: [*]u8 = @ptrFromInt(data_ptr);
+        const data: [*]u8 = if (data_ptr != 0) @ptrFromInt(data_ptr) else undefined;
         var i: usize = 0;
         while (i < count) : (i += 1) {
-            const elem_val = Value{ .ptr = data + i * elem_size };
+            const elem_val = if (elem_size > 0)
+                Value{ .ptr = data + i * elem_size }
+            else
+                Value.zst;
             try self.bindPattern(fl.elem_pattern, elem_val);
             const body_result = try self.eval(fl.body);
             switch (body_result) {
@@ -1281,12 +1310,24 @@ pub const LirInterpreter = struct {
                 break :blk val;
             },
             .list_append_unsafe => blk: {
+                // The Roc List.append function emits list_append_unsafe directly.
+                // Use the safe listAppend which reserves capacity first,
+                // matching the dev codegen (LirCodeGen) behavior.
                 const info = self.listElemInfo(arg_layout);
-                const result = builtins.list.listAppendUnsafe(
+                self.roc_env.resetCrash();
+                const sj = setjmp(&self.roc_env.jmp_buf);
+                if (sj != 0) return error.Crash;
+                const result = builtins.list.listAppend(
                     valueToRocList(args[0]),
+                    info.alignment,
                     @ptrCast(args[1].ptr),
                     info.width,
+                    false,
+                    null,
+                    &builtins.utils.rcNone,
+                    .InPlace,
                     &builtins.list.copy_fallback,
+                    &self.roc_ops,
                 );
                 break :blk self.rocListToValue(result, ll.ret_layout);
             },
