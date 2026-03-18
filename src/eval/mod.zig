@@ -45,6 +45,15 @@ pub const EvalError = Interpreter.Error;
 pub const TestRunner = @import("test_runner.zig").TestRunner;
 /// LLVM-based evaluator for optimized code generation
 pub const LlvmEvaluator = @import("llvm_evaluator.zig").LlvmEvaluator;
+/// Shared LIR lowering pipeline (CIR → MIR → LIR → RC)
+pub const lir_program = @import("lir_program.zig");
+pub const LirProgram = lir_program.LirProgram;
+/// Concrete runtime value for the LIR interpreter
+pub const lir_value = @import("lir_value.zig");
+pub const Value = lir_value.Value;
+/// LIR expression interpreter
+pub const lir_interpreter = @import("lir_interpreter.zig");
+pub const LirInterpreter = lir_interpreter.LirInterpreter;
 /// WebAssembly-based evaluator for wasm code generation
 const wasm_evaluator_mod = @import("wasm_evaluator.zig");
 pub const WasmEvaluator = wasm_evaluator_mod.WasmEvaluator;
@@ -62,6 +71,9 @@ test "eval tests" {
     std.testing.refAllDecls(@import("StackValue.zig"));
     std.testing.refAllDecls(@import("render_helpers.zig"));
     std.testing.refAllDecls(@import("llvm_evaluator.zig"));
+    std.testing.refAllDecls(@import("lir_program.zig"));
+    std.testing.refAllDecls(@import("lir_value.zig"));
+    std.testing.refAllDecls(@import("lir_interpreter.zig"));
     std.testing.refAllDecls(@import("wasm_evaluator.zig"));
     std.testing.refAllDecls(@import("stack.zig"));
     std.testing.refAllDecls(@import("test/TestEnv.zig"));
