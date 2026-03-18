@@ -564,6 +564,16 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
 
     const arg_layouts: []const layout.Idx = arg_layouts_buf[0..arg_layouts_len];
 
+    // Build TypeScope for platform requires types (maps flex vars to app types)
+    var platform_type_scope: ?types.TypeScope = if (app_env) |ae|
+        eval.cir_to_lir.buildPlatformTypeScope(allocator, env_ptr, ae) catch {
+            roc_ops.crash("INTERPRETER SHIM: Failed to build platform TypeScope");
+            return error.InterpreterSetupFailed;
+        }
+    else
+        null;
+    defer if (platform_type_scope) |*ts| ts.deinit();
+
     // Lower CIR to LIR
     const is_zero_arg_func = maybe_func != null and arg_layouts_len == 0;
     var lower_result = lir_program.lowerEntrypointExpr(
@@ -572,6 +582,7 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
         all_module_envs,
         app_env,
         is_zero_arg_func,
+        if (platform_type_scope) |*ts| ts else null,
     ) catch |err| {
         const err_msg = std.fmt.bufPrint(&buf, "INTERPRETER SHIM: LIR lowering failed: {s}", .{@errorName(err)}) catch "LIR lowering failed";
         roc_ops.crash(err_msg);

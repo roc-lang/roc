@@ -17,6 +17,8 @@ const MIR = mir.MIR;
 const lir = @import("lir");
 const LirExprStore = lir.LirExprStore;
 
+const types = @import("types");
+
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
@@ -81,6 +83,55 @@ pub fn findModuleEnvIdx(all_module_envs: []const *ModuleEnv, module_env: *Module
     for (all_module_envs, 0..) |env, i| {
         if (env == module_env) {
             return @intCast(i);
+        }
+    }
+    return null;
+}
+
+/// Build a TypeScope for platform `requires` type variables.
+/// Maps platform flex vars from `requires { model : Model }` to the app's concrete types.
+pub fn buildPlatformTypeScope(
+    allocator: Allocator,
+    platform_env: *const ModuleEnv,
+    app_env: *const ModuleEnv,
+) !types.TypeScope {
+    var type_scope = types.TypeScope.init(allocator);
+    errdefer type_scope.deinit();
+
+    try type_scope.scopes.append(types.VarMap.init(allocator));
+    const rigid_scope = &type_scope.scopes.items[0];
+    const all_aliases = platform_env.for_clause_aliases.items.items;
+
+    for (platform_env.requires_types.items.items) |required_type| {
+        const type_aliases_slice = all_aliases[@intFromEnum(required_type.type_aliases.start)..][0..required_type.type_aliases.count];
+        for (type_aliases_slice) |alias| {
+            const alias_stmt = platform_env.store.getStatement(alias.alias_stmt_idx);
+            std.debug.assert(alias_stmt == .s_alias_decl);
+            const alias_body_var = ModuleEnv.varFrom(alias_stmt.s_alias_decl.anno);
+            const alias_stmt_var = ModuleEnv.varFrom(alias.alias_stmt_idx);
+            const app_alias_name = app_env.common.findIdent(platform_env.getIdentText(alias.alias_name)) orelse continue;
+            const app_var = findTypeAliasBodyVar(app_env, app_alias_name) orelse continue;
+            try rigid_scope.put(alias_body_var, app_var);
+            try rigid_scope.put(alias_stmt_var, app_var);
+        }
+    }
+
+    return type_scope;
+}
+
+/// Find a type alias declaration by name in a module and return the var for its underlying type.
+fn findTypeAliasBodyVar(module: *const ModuleEnv, name: base.Ident.Idx) ?types.Var {
+    const stmts_slice = module.store.sliceStatements(module.all_statements);
+    for (stmts_slice) |stmt_idx| {
+        const stmt = module.store.getStatement(stmt_idx);
+        switch (stmt) {
+            .s_alias_decl => |alias_decl| {
+                const header = module.store.getTypeHeader(alias_decl.header);
+                if (header.relative_name.eql(name)) {
+                    return ModuleEnv.varFrom(alias_decl.anno);
+                }
+            },
+            else => {},
         }
     }
     return null;
@@ -231,6 +282,7 @@ pub const LirProgram = struct {
         all_module_envs: []const *ModuleEnv,
         app_module_env: ?*ModuleEnv,
         wrap_zero_arg_call: bool,
+        type_scope: ?*const types.TypeScope,
     ) Error!LowerResult {
         // Pre-lowering setup
         for (all_module_envs) |env| {
@@ -259,6 +311,13 @@ pub const LirProgram = struct {
             app_module_idx,
         ) catch return error.OutOfMemory;
         defer mir_lower.deinit();
+
+        // Apply platform TypeScope if provided (maps requires flex vars to app types)
+        if (type_scope) |ts| {
+            if (app_module_idx) |ami| {
+                mir_lower.setTypeScope(module_idx, ts, ami) catch return error.OutOfMemory;
+            }
+        }
 
         var mir_expr_id = mir_lower.lowerExpr(expr_idx) catch {
             return error.RuntimeError;

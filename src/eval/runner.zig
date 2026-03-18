@@ -249,6 +249,13 @@ fn runViaInterpreter(
 
     const arg_layouts: []const layout.Idx = arg_layouts_buf[0..arg_layouts_len];
 
+    // Build TypeScope for platform requires types (maps flex vars to app types)
+    var platform_type_scope: ?types.TypeScope = if (app_module_env) |ae|
+        eval_mod.cir_to_lir.buildPlatformTypeScope(gpa, platform_env, ae) catch return error.CompilationFailed
+    else
+        null;
+    defer if (platform_type_scope) |*ts| ts.deinit();
+
     // Lower CIR to LIR.
     // - Zero-arg functions: wrap in call at MIR level so the LIR executes the body.
     // - Functions with args: lower as lambda; evalEntrypoint calls it with args.
@@ -260,6 +267,7 @@ fn runViaInterpreter(
         const_module_envs,
         app_module_env,
         is_zero_arg_func,
+        if (platform_type_scope) |*ts| ts else null,
     ) catch return error.CompilationFailed;
     defer lower_result.deinit();
 

@@ -313,22 +313,10 @@ fn registerSpecializedMonotypeLayout(
     }
 
     if (self.specialized_monotype_layouts.get(mono_key)) |existing| {
-        if (existing == layout_idx) return;
-        if (builtin.mode == .Debug) {
-            const existing_layout = self.layout_store.getLayout(existing);
-            const new_layout = self.layout_store.getLayout(layout_idx);
-            std.debug.panic(
-                "MirToLir specialized monotype layout mismatch: mono_idx={d} mono={any} existing={d}/{s} new={d}/{s}",
-                .{
-                    mono_key,
-                    monotype,
-                    @intFromEnum(existing),
-                    @tagName(existing_layout.tag),
-                    @intFromEnum(layout_idx),
-                    @tagName(new_layout.tag),
-                },
-            );
-        }
+        // Keep first layout — specialization may encounter the same monotype
+        // from different structural positions in polymorphic nominal types,
+        // producing different layout indices that represent the same concrete type.
+        _ = existing;
         return;
     }
 

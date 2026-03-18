@@ -348,23 +348,51 @@ pub const LirInterpreter = struct {
             const lambda = final_expr.lambda;
 
             // Extract arguments from the packed arg tuple.
+            // The host packs args as a struct sorted by alignment (descending),
+            // then by original index (ascending) — matching the Roc ABI.
+            // Lambda params are in semantic (signature) order, so we compute
+            // each arg's byte offset in the sorted layout and extract accordingly.
             var args_buf: [16]Value = undefined;
             const arg_count = arg_layouts.len;
             if (arg_ptr) |aptr| {
                 const arg_bytes = @as([*]u8, @ptrCast(aptr));
+
+                // Build sorted index order (by alignment descending, index ascending)
+                var sorted_indices: [16]usize = undefined;
+                for (0..arg_count) |i| sorted_indices[i] = i;
+                for (0..arg_count) |i| {
+                    for (i + 1..arg_count) |j| {
+                        const i_al = self.helper.sizeAlignOf(arg_layouts[sorted_indices[i]]).alignment.toByteUnits();
+                        const j_al = self.helper.sizeAlignOf(arg_layouts[sorted_indices[j]]).alignment.toByteUnits();
+                        if (j_al > i_al or (j_al == i_al and sorted_indices[j] < sorted_indices[i])) {
+                            const tmp = sorted_indices[i];
+                            sorted_indices[i] = sorted_indices[j];
+                            sorted_indices[j] = tmp;
+                        }
+                    }
+                }
+
+                // Compute byte offset for each arg in sorted order, then extract
+                var arg_offsets: [16]usize = undefined;
                 var byte_offset: usize = 0;
-                for (arg_layouts, 0..) |arg_layout, i| {
-                    const sa = self.helper.sizeAlignOf(arg_layout);
+                for (sorted_indices[0..arg_count]) |orig_idx| {
+                    const sa = self.helper.sizeAlignOf(arg_layouts[orig_idx]);
                     const al = sa.alignment.toByteUnits();
                     byte_offset = std.mem.alignForward(usize, byte_offset, al);
+                    arg_offsets[orig_idx] = byte_offset;
+                    byte_offset += sa.size;
+                }
+
+                // Extract each arg at its computed offset
+                for (0..arg_count) |i| {
+                    const sa = self.helper.sizeAlignOf(arg_layouts[i]);
                     if (sa.size > 0) {
                         const copy = try self.allocBytes(sa.size);
-                        @memcpy(copy.ptr[0..sa.size], arg_bytes[byte_offset .. byte_offset + sa.size]);
+                        @memcpy(copy.ptr[0..sa.size], arg_bytes[arg_offsets[i] .. arg_offsets[i] + sa.size]);
                         args_buf[i] = copy;
                     } else {
                         args_buf[i] = Value.zst;
                     }
-                    byte_offset += sa.size;
                 }
             }
 
@@ -400,67 +428,165 @@ pub const LirInterpreter = struct {
     // ──────────────────────────────────────────────────────────────
 
     /// Evaluate a LIR expression, returning its value.
-    pub fn eval(self: *LirInterpreter, expr_id: LirExprId) Error!EvalResult {
+    pub fn eval(self: *LirInterpreter, initial_expr_id: LirExprId) Error!EvalResult {
         // Reset static buffer on first eval call only (avoid resetting during recursion)
         if (!self.eval_active) {
             self.roc_env.resetForEval();
             self.eval_active = true;
         }
-        const expr = self.store.getExpr(expr_id);
-        return switch (expr) {
-            .i64_literal => |lit| .{ .value = try self.evalI64Literal(lit.value, lit.layout_idx) },
-            .i128_literal => |lit| .{ .value = try self.evalI128Literal(lit.value, lit.layout_idx) },
-            .f64_literal => |v| .{ .value = try self.evalF64Literal(v) },
-            .f32_literal => |v| .{ .value = try self.evalF32Literal(v) },
-            .dec_literal => |v| .{ .value = try self.evalDecLiteral(v) },
-            .str_literal => |idx| .{ .value = try self.evalStrLiteral(idx) },
-            .bool_literal => |b| .{ .value = try self.evalBoolLiteral(b) },
-            .lookup => |l| .{ .value = try self.evalLookup(l.symbol, l.layout_idx) },
-            .cell_load => |l| .{ .value = try self.evalCellLoad(l.cell, l.layout_idx) },
-            .block => |b| try self.evalBlock(b),
-            .struct_ => |s| .{ .value = try self.evalStruct(s) },
-            .struct_access => |sa| .{ .value = try self.evalStructAccess(sa) },
-            .zero_arg_tag => |z| .{ .value = try self.evalZeroArgTag(z) },
-            .tag => |t| .{ .value = try self.evalTag(t) },
-            .if_then_else => |ite| try self.evalIfThenElse(ite),
-            .match_expr => |m| try self.evalMatch(m),
-            .discriminant_switch => |ds| try self.evalDiscriminantSwitch(ds),
-            .tag_payload_access => |tpa| .{ .value = try self.evalTagPayloadAccess(tpa) },
-            .call => |c| try self.evalCall(c),
-            .lambda => |l| .{ .value = try self.evalLambda(l, expr_id) },
-            .empty_list => |l| .{ .value = try self.evalEmptyList(l) },
-            .list => |l| .{ .value = try self.evalList(l) },
-            .nominal => |n| try self.eval(n.backing_expr),
-            .early_return => |er| try self.evalEarlyReturn(er),
-            .break_expr => .{ .break_expr = {} },
-            .for_loop => |fl| try self.evalForLoop(fl),
-            .while_loop => |wl| try self.evalWhileLoop(wl),
-            .crash => |c| try self.evalCrash(c),
-            .runtime_error => return error.RuntimeError,
-            // RC ops — for now, evaluate the value and discard (no-op RC).
-            .incref => |ir| blk: {
-                _ = try self.eval(ir.value);
-                break :blk .{ .value = Value.zst };
-            },
-            .decref => |dr| blk: {
-                _ = try self.eval(dr.value);
-                break :blk .{ .value = Value.zst };
-            },
-            .free => |f| blk: {
-                _ = try self.eval(f.value);
-                break :blk .{ .value = Value.zst };
-            },
-            // Cell operations
-            .dbg => |d| try self.evalDbg(d),
-            .expect => |e| try self.evalExpect(e),
-            .hosted_call => |hc| .{ .value = try self.evalHostedCall(hc) },
-            .low_level => |ll| .{ .value = try self.evalLowLevel(ll) },
-            .str_concat => |sc| .{ .value = try self.evalStrConcat(sc) },
-            .int_to_str => |its| .{ .value = try self.evalIntToStr(its) },
-            .float_to_str => |fts| .{ .value = try self.evalFloatToStr(fts) },
-            .dec_to_str => |dts| .{ .value = try self.evalDecToStr(dts) },
-            .str_escape_and_quote => |seq| .{ .value = try self.evalStrEscapeAndQuote(seq) },
-        };
+        var expr_id = initial_expr_id;
+        // Iterative loop — tail-call positions set expr_id and continue
+        // instead of recursing into eval(), avoiding stack overflow.
+        outer: while (true) {
+            const expr = self.store.getExpr(expr_id);
+            switch (expr) {
+                // Tail-call optimized: block (inlined evalBlock)
+                .block => |b| {
+                    const stmts = self.store.getStmts(b.stmts);
+                    for (stmts) |stmt| {
+                        switch (stmt) {
+                            .decl, .mutate => |binding| {
+                                const result = try self.eval(binding.expr);
+                                switch (result) {
+                                    .value => |val| try self.bindPattern(binding.pattern, val),
+                                    .early_return => return result,
+                                    .break_expr => return result,
+                                }
+                            },
+                            .cell_init => |cb| {
+                                const result = try self.eval(cb.expr);
+                                const val = switch (result) {
+                                    .value => |v| v,
+                                    .early_return => return result,
+                                    .break_expr => return result,
+                                };
+                                const size = self.helper.sizeOf(cb.layout_idx);
+                                self.cells.put(cb.cell.raw(), .{ .val = val, .size = size }) catch return error.OutOfMemory;
+                            },
+                            .cell_store => |cb| {
+                                const result = try self.eval(cb.expr);
+                                const val = switch (result) {
+                                    .value => |v| v,
+                                    .early_return => return result,
+                                    .break_expr => return result,
+                                };
+                                const size = self.helper.sizeOf(cb.layout_idx);
+                                if (self.cells.getPtr(cb.cell.raw())) |entry| {
+                                    entry.val = val;
+                                    entry.size = size;
+                                } else {
+                                    self.cells.put(cb.cell.raw(), .{ .val = val, .size = size }) catch return error.OutOfMemory;
+                                }
+                            },
+                            .cell_drop => {},
+                        }
+                    }
+                    expr_id = b.final_expr;
+                    continue :outer;
+                },
+                // Tail-call optimized: nominal unwrap
+                .nominal => |n| {
+                    expr_id = n.backing_expr;
+                    continue :outer;
+                },
+                // Tail-call optimized: if-then-else
+                .if_then_else => |ite| {
+                    const branches = self.store.getIfBranches(ite.branches);
+                    for (branches) |branch| {
+                        const cond_result = try self.eval(branch.cond);
+                        const cond_val = switch (cond_result) {
+                            .value => |v| v,
+                            else => return cond_result,
+                        };
+                        if (cond_val.read(u8) != 0) {
+                            expr_id = branch.body;
+                            continue :outer;
+                        }
+                    }
+                    expr_id = ite.final_else;
+                    continue :outer;
+                },
+                // Tail-call optimized: match
+                .match_expr => |m| {
+                    const match_val = try self.evalValue(m.value);
+                    const match_branches = self.store.getMatchBranches(m.branches);
+                    for (match_branches) |branch| {
+                        if (try self.matchPattern(branch.pattern, match_val)) {
+                            try self.bindPattern(branch.pattern, match_val);
+                            if (!branch.guard.isNone()) {
+                                const guard_val = try self.evalValue(branch.guard);
+                                if (guard_val.read(u8) == 0) continue;
+                            }
+                            expr_id = branch.body;
+                            continue :outer;
+                        }
+                    }
+                    return error.RuntimeError;
+                },
+                // Tail-call optimized: discriminant switch
+                .discriminant_switch => |ds| {
+                    const switch_val = try self.evalValue(ds.value);
+                    const disc = self.helper.readTagDiscriminant(switch_val, ds.union_layout);
+                    const disc_branches = self.store.getExprSpan(ds.branches);
+                    if (disc < disc_branches.len) {
+                        expr_id = disc_branches[disc];
+                        continue :outer;
+                    }
+                    return error.RuntimeError;
+                },
+                // Tail-call optimized: dbg (evaluate and return the inner expr)
+                .dbg => |d| {
+                    expr_id = d.expr;
+                    continue :outer;
+                },
+                // Non-tail cases return directly
+                .i64_literal => |lit| return .{ .value = try self.evalI64Literal(lit.value, lit.layout_idx) },
+                .i128_literal => |lit| return .{ .value = try self.evalI128Literal(lit.value, lit.layout_idx) },
+                .f64_literal => |v| return .{ .value = try self.evalF64Literal(v) },
+                .f32_literal => |v| return .{ .value = try self.evalF32Literal(v) },
+                .dec_literal => |v| return .{ .value = try self.evalDecLiteral(v) },
+                .str_literal => |idx| return .{ .value = try self.evalStrLiteral(idx) },
+                .bool_literal => |b| return .{ .value = try self.evalBoolLiteral(b) },
+                .lookup => |l| return .{ .value = try self.evalLookup(l.symbol, l.layout_idx) },
+                .cell_load => |l| return .{ .value = try self.evalCellLoad(l.cell, l.layout_idx) },
+                .struct_ => |s| return .{ .value = try self.evalStruct(s) },
+                .struct_access => |sa| return .{ .value = try self.evalStructAccess(sa) },
+                .zero_arg_tag => |z| return .{ .value = try self.evalZeroArgTag(z) },
+                .tag => |t| return .{ .value = try self.evalTag(t) },
+                .tag_payload_access => |tpa| return .{ .value = try self.evalTagPayloadAccess(tpa) },
+                .call => |c| return try self.evalCall(c),
+                .lambda => |l| return .{ .value = try self.evalLambda(l, expr_id) },
+                .empty_list => |l| return .{ .value = try self.evalEmptyList(l) },
+                .list => |l| return .{ .value = try self.evalList(l) },
+                .early_return => |er| return try self.evalEarlyReturn(er),
+                .break_expr => return .{ .break_expr = {} },
+                .for_loop => |fl| return try self.evalForLoop(fl),
+                .while_loop => |wl| return try self.evalWhileLoop(wl),
+                .crash => |c| return try self.evalCrash(c),
+                .runtime_error => return error.RuntimeError,
+                // RC ops — evaluate the value and discard (no-op RC).
+                .incref => |ir| {
+                    _ = try self.eval(ir.value);
+                    return .{ .value = Value.zst };
+                },
+                .decref => |dr| {
+                    _ = try self.eval(dr.value);
+                    return .{ .value = Value.zst };
+                },
+                .free => |f| {
+                    _ = try self.eval(f.value);
+                    return .{ .value = Value.zst };
+                },
+                .expect => |e| return try self.evalExpect(e),
+                .hosted_call => |hc| return .{ .value = try self.evalHostedCall(hc) },
+                .low_level => |ll| return .{ .value = try self.evalLowLevel(ll) },
+                .str_concat => |sc| return .{ .value = try self.evalStrConcat(sc) },
+                .int_to_str => |its| return .{ .value = try self.evalIntToStr(its) },
+                .float_to_str => |fts| return .{ .value = try self.evalFloatToStr(fts) },
+                .dec_to_str => |dts| return .{ .value = try self.evalDecToStr(dts) },
+                .str_escape_and_quote => |seq| return .{ .value = try self.evalStrEscapeAndQuote(seq) },
+            }
+        }
     }
 
     /// Evaluate an expression, expecting a normal value (not control flow).

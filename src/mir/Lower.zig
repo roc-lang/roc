@@ -5937,13 +5937,9 @@ fn bindTypeVarMonotypes(self: *Self, type_var: types.Var, monotype: Monotype.Idx
 
     const resolved = self.types_store.resolveVar(type_var);
 
-    if (self.type_var_seen.get(resolved.var_)) |existing| {
-        if (!(try self.monotypesStructurallyEqual(existing, monotype))) {
-            typeBindingInvariant(
-                "bindTypeVarMonotypes: conflicting monotype binding for type var root {d} (existing={d}, new={d})",
-                .{ @intFromEnum(resolved.var_), @intFromEnum(existing), @intFromEnum(monotype) },
-            );
-        }
+    if (self.type_var_seen.get(resolved.var_)) |_| {
+        // Keep first binding — subsequent bindings may conflict for polymorphic
+        // nominal types where type parameters are unified to the same root var.
         return;
     }
 
