@@ -1,1 +1,0 @@
-builtin_loading.test.loadCompiledModule rejects empty data

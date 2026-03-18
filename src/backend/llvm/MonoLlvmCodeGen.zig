@@ -4280,6 +4280,78 @@ pub const MonoLlvmCodeGen = struct {
                 return result_phi.toValue();
             },
 
+            .box_box => {
+                // Box.box(value) -> Box(value): heap-allocate and copy value
+                std.debug.assert(args.len >= 1);
+                const ls = self.layout_store orelse unreachable;
+                const ret_layout_data = ls.getLayout(ll.ret_layout);
+
+                if (ret_layout_data.tag == .box_of_zst) {
+                    _ = try self.generateExpr(args[0]);
+                    return builder.intValue(.i64, 0) catch return error.OutOfMemory;
+                }
+
+                const box_info = ls.getBoxInfo(ret_layout_data);
+                const elem_size: u32 = box_info.elem_size;
+                const elem_align: u32 = box_info.elem_alignment;
+
+                if (elem_size == 0) {
+                    _ = try self.generateExpr(args[0]);
+                    return builder.intValue(.i64, 0) catch return error.OutOfMemory;
+                }
+
+                // Allocate heap memory via allocateWithRefcountC
+                const roc_ops = self.roc_ops_arg orelse return error.CompilationFailed;
+                const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+                const size_val = builder.intValue(.i64, elem_size) catch return error.OutOfMemory;
+                const align_val = builder.intValue(.i32, elem_align) catch return error.OutOfMemory;
+                const refcounted_val = builder.intValue(.i1, @as(u64, if (box_info.contains_refcounted) 1 else 0)) catch return error.OutOfMemory;
+                const heap_ptr = try self.callBuiltin(
+                    "roc_builtins_allocate_with_refcount",
+                    ptr_type,
+                    &.{ .i64, .i32, .i1, ptr_type },
+                    &.{ size_val, align_val, refcounted_val, roc_ops },
+                );
+
+                // Generate the value and store to heap
+                const saved_out_ptr = self.out_ptr;
+                self.out_ptr = heap_ptr;
+                const value = try self.generateExpr(args[0]);
+                self.out_ptr = saved_out_ptr;
+
+                // If the value wasn't stored via out_ptr, store it now
+                const alignment = LlvmBuilder.Alignment.fromByteUnits(@max(elem_align, 1));
+                _ = wip.store(.normal, value, heap_ptr, alignment) catch return error.CompilationFailed;
+
+                return heap_ptr;
+            },
+            .box_unbox => {
+                // Box.unbox(box) -> value: dereference the box pointer
+                std.debug.assert(args.len >= 1);
+                const ls = self.layout_store orelse unreachable;
+                const box_arg_layout = self.getExprResultLayout(args[0]) orelse ll.ret_layout;
+                const box_layout_data = ls.getLayout(box_arg_layout);
+
+                if (box_layout_data.tag == .box_of_zst) {
+                    _ = try self.generateExpr(args[0]);
+                    return builder.intValue(.i64, 0) catch return error.OutOfMemory;
+                }
+
+                const box_info = ls.getBoxInfo(box_layout_data);
+                const elem_size: u32 = box_info.elem_size;
+
+                if (elem_size == 0) {
+                    _ = try self.generateExpr(args[0]);
+                    return builder.intValue(.i64, 0) catch return error.OutOfMemory;
+                }
+
+                // Generate the box pointer
+                const box_ptr = try self.generateExpr(args[0]);
+                const elem_type = try self.layoutToLlvmTypeFull(box_info.elem_layout_idx);
+                const alignment = LlvmBuilder.Alignment.fromByteUnits(@max(box_info.elem_alignment, 1));
+                return wip.load(.normal, elem_type, box_ptr, alignment, "") catch return error.CompilationFailed;
+            },
+
             else => std.debug.panic(
                 "LLVM backend missing LowLevel handler for {s}",
                 .{@tagName(ll.op)},
@@ -5588,7 +5660,32 @@ pub const MonoLlvmCodeGen = struct {
         self.out_ptr = null;
         defer self.out_ptr = saved_out_ptr;
 
-        return self.callExprWithArgs(call.fn_expr, call.args, call.ret_layout);
+        return switch (call.callee) {
+            .expr => |fn_expr_id| self.callExprWithArgs(fn_expr_id, call.args, call.ret_layout),
+            .direct => |symbol| self.callDirectSymbol(symbol, call.args, call.ret_layout),
+        };
+    }
+
+    fn callDirectSymbol(self: *MonoLlvmCodeGen, symbol: anytype, args_span: anytype, ret_layout: layout.Idx) Error!LlvmBuilder.Value {
+        const sym_key: u64 = @bitCast(symbol);
+
+        if (self.proc_registry.get(sym_key)) |func_index| {
+            return self.generateCallToCompiledProc(func_index, args_span, ret_layout);
+        }
+
+        const def_expr_id = self.store.getCallableDef(symbol) orelse unreachable;
+        const def_expr = self.store.getExpr(def_expr_id);
+        return switch (def_expr) {
+            .lambda => |lambda| {
+                const func_idx = try self.compileLambdaAsFunc(def_expr_id, lambda, ret_layout, null);
+                return self.callCompiledFuncWithClosureData(func_idx, try self.buildLambdaFunctionType(lambda, null), args_span, null, ret_layout);
+            },
+            .runtime_error => {
+                _ = try self.generateExpr(def_expr_id);
+                return error.CompilationFailed;
+            },
+            else => unreachable,
+        };
     }
 
     fn buildLambdaFunctionType(self: *MonoLlvmCodeGen, lambda: anytype, closure_layout: ?layout.Idx) Error!LlvmBuilder.Type {
@@ -5972,8 +6069,19 @@ pub const MonoLlvmCodeGen = struct {
     /// Handle chained calls: `(|a| |b| a*b)(5)(10)`.
     /// The inner call returns a closure value; we dispatch based on the inner result's representation.
     fn callChainedExpr(self: *MonoLlvmCodeGen, inner_call: anytype, args_span: anytype, ret_layout: layout.Idx) Error!LlvmBuilder.Value {
-        if (self.resolveToClosureMeta(inner_call.fn_expr)) |meta| {
-            return self.callClosureMetaWithArgs(meta, args_span, ret_layout);
+        switch (inner_call.callee) {
+            .expr => |fn_expr_id| {
+                if (self.resolveToClosureMeta(fn_expr_id)) |meta| {
+                    return self.callClosureMetaWithArgs(meta, args_span, ret_layout);
+                }
+            },
+            .direct => |symbol| {
+                // The inner call targets a known symbol. Resolve it to a lambda definition.
+                const def_expr_id = self.store.getCallableDef(symbol) orelse return error.CompilationFailed;
+                if (self.resolveToClosureMeta(def_expr_id)) |meta| {
+                    return self.callClosureMetaWithArgs(meta, args_span, ret_layout);
+                }
+            },
         }
 
         return error.CompilationFailed;

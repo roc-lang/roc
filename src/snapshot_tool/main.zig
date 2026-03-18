@@ -4528,24 +4528,13 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
     // so we can report the failure and continue with the next snapshot.
     // Install signal handlers for SIGSEGV/SIGBUS/SIGILL from generated code.
     installCrashSignalHandlers();
-    const ReplBackendKind = enum {
-        dev,
-        wasm,
-        llvm,
-    };
-
     inline for (.{
-        .{ .kind = ReplBackendKind.dev, .label = "dev" },
-        .{ .kind = ReplBackendKind.wasm, .label = "wasm" },
-        .{ .kind = ReplBackendKind.llvm, .label = "llvm" },
+        .{ .backend = repl.Backend.dev, .label = "dev" },
+        .{ .backend = repl.Backend.llvm, .label = "llvm" },
     }) |cfg| {
         var backend_snapshot_ops = SnapshotOps.init(output.gpa);
         defer backend_snapshot_ops.deinit();
-        const backend_repl_result = switch (cfg.kind) {
-            .dev => Repl.initWithBackend(output.gpa, backend_snapshot_ops.get_ops(), backend_snapshot_ops.crashContextPtr(), .dev),
-            .wasm => Repl.initWithWasmBackend(output.gpa, backend_snapshot_ops.get_ops(), backend_snapshot_ops.crashContextPtr()),
-            .llvm => Repl.initWithBackend(output.gpa, backend_snapshot_ops.get_ops(), backend_snapshot_ops.crashContextPtr(), .llvm),
-        };
+        const backend_repl_result = Repl.initWithBackend(output.gpa, backend_snapshot_ops.get_ops(), backend_snapshot_ops.crashContextPtr(), cfg.backend);
         if (backend_repl_result) |backend_repl_val| {
             var backend_repl = backend_repl_val;
 
