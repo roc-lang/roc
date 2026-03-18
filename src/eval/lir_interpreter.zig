@@ -194,11 +194,12 @@ pub const LirInterpreter = struct {
     fn evalI64Literal(self: *LirInterpreter, value: i64, layout_idx: layout_mod.Idx) Error!Value {
         const val = try self.alloc(layout_idx);
         const size = self.helper.sizeOf(layout_idx);
+        const bits: u64 = @bitCast(value);
         switch (size) {
-            1 => val.write(u8, @bitCast(@as(i8, @intCast(value)))),
-            2 => val.write(u16, @bitCast(@as(i16, @intCast(value)))),
-            4 => val.write(u32, @bitCast(@as(i32, @intCast(value)))),
-            8 => val.write(u64, @bitCast(value)),
+            1 => val.write(u8, @truncate(bits)),
+            2 => val.write(u16, @truncate(bits)),
+            4 => val.write(u32, @truncate(bits)),
+            8 => val.write(u64, bits),
             else => return error.RuntimeError,
         }
         return val;
@@ -743,7 +744,7 @@ pub const LirInterpreter = struct {
     fn evalCall(self: *LirInterpreter, c: anytype) Error!EvalResult {
         // Evaluate arguments
         const arg_exprs = self.store.getExprSpan(c.args);
-        var args = std.ArrayList(Value).init(self.allocator);
+        var args = std.array_list.AlignedManaged(Value, null).init(self.allocator);
         defer args.deinit();
         for (arg_exprs) |arg_expr_id| {
             const arg_result = try self.eval(arg_expr_id);
@@ -852,26 +853,15 @@ pub const LirInterpreter = struct {
 
         // Basic numeric operations
         return switch (ll.op) {
-            .num_add => self.numBinOp(args[0], args[1], ll.ret_layout, .add),
-            .num_sub => self.numBinOp(args[0], args[1], ll.ret_layout, .sub),
-            .num_mul => self.numBinOp(args[0], args[1], ll.ret_layout, .mul),
+            .num_plus => self.numBinOp(args[0], args[1], ll.ret_layout, .add),
+            .num_minus => self.numBinOp(args[0], args[1], ll.ret_layout, .sub),
+            .num_times => self.numBinOp(args[0], args[1], ll.ret_layout, .mul),
             .num_negate => self.numUnaryOp(args[0], ll.ret_layout, .negate),
-            .num_eq => self.numCmpOp(args[0], args[1], ll.ret_layout, .eq),
-            .num_neq => self.numCmpOp(args[0], args[1], ll.ret_layout, .neq),
-            .num_lt => self.numCmpOp(args[0], args[1], ll.ret_layout, .lt),
-            .num_lte => self.numCmpOp(args[0], args[1], ll.ret_layout, .lte),
-            .num_gt => self.numCmpOp(args[0], args[1], ll.ret_layout, .gt),
-            .num_gte => self.numCmpOp(args[0], args[1], ll.ret_layout, .gte),
-            .bool_and => blk: {
-                const val = try self.alloc(.bool);
-                val.write(u8, if (args[0].read(u8) != 0 and args[1].read(u8) != 0) 1 else 0);
-                break :blk val;
-            },
-            .bool_or => blk: {
-                const val = try self.alloc(.bool);
-                val.write(u8, if (args[0].read(u8) != 0 or args[1].read(u8) != 0) 1 else 0);
-                break :blk val;
-            },
+            .num_is_eq => self.numCmpOp(args[0], args[1], ll.ret_layout, .eq),
+            .num_is_lt => self.numCmpOp(args[0], args[1], ll.ret_layout, .lt),
+            .num_is_lte => self.numCmpOp(args[0], args[1], ll.ret_layout, .lte),
+            .num_is_gt => self.numCmpOp(args[0], args[1], ll.ret_layout, .gt),
+            .num_is_gte => self.numCmpOp(args[0], args[1], ll.ret_layout, .gte),
             .bool_not => blk: {
                 const val = try self.alloc(.bool);
                 val.write(u8, if (args[0].read(u8) == 0) 1 else 0);
@@ -885,14 +875,14 @@ pub const LirInterpreter = struct {
     }
 
     const NumOp = enum { add, sub, mul, negate };
-    const CmpOp = enum { eq, neq, lt, lte, gt, gte };
+    const CmpOp = enum { eq, lt, lte, gt, gte };
 
     fn numBinOp(self: *LirInterpreter, a: Value, b: Value, layout_idx: layout_mod.Idx, op: NumOp) Error!Value {
         const size = self.helper.sizeOf(layout_idx);
         const val = try self.alloc(layout_idx);
         switch (size) {
             8 => {
-                const l = self.store.getLayout(layout_idx);
+                const l = self.layout_store.getLayout(layout_idx);
                 if (l.tag == .scalar and l.data.scalar.tag == .frac) {
                     const av = a.read(f64);
                     const bv = b.read(f64);
@@ -914,7 +904,7 @@ pub const LirInterpreter = struct {
                 }
             },
             4 => {
-                const l = self.store.getLayout(layout_idx);
+                const l = self.layout_store.getLayout(layout_idx);
                 if (l.tag == .scalar and l.data.scalar.tag == .frac) {
                     const av = a.read(f32);
                     const bv = b.read(f32);
@@ -965,7 +955,6 @@ pub const LirInterpreter = struct {
         const bv = b.read(i64);
         const result: bool = switch (op) {
             .eq => av == bv,
-            .neq => av != bv,
             .lt => av < bv,
             .lte => av <= bv,
             .gt => av > bv,
@@ -985,7 +974,7 @@ pub const LirInterpreter = struct {
 
         // Concatenate all parts
         var total_len: usize = 0;
-        var part_strs = std.ArrayList([]const u8).init(self.allocator);
+        var part_strs = std.array_list.AlignedManaged([]const u8, null).init(self.allocator);
         defer part_strs.deinit();
 
         for (parts) |part_id| {

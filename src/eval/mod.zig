@@ -54,6 +54,8 @@ pub const Value = lir_value.Value;
 /// LIR expression interpreter
 pub const lir_interpreter = @import("lir_interpreter.zig");
 pub const LirInterpreter = lir_interpreter.LirInterpreter;
+/// Layout-based value formatter for the LIR interpreter
+pub const lir_value_format = @import("lir_value_format.zig");
 /// WebAssembly-based evaluator for wasm code generation
 const wasm_evaluator_mod = @import("wasm_evaluator.zig");
 pub const WasmEvaluator = wasm_evaluator_mod.WasmEvaluator;
@@ -74,6 +76,7 @@ test "eval tests" {
     std.testing.refAllDecls(@import("lir_program.zig"));
     std.testing.refAllDecls(@import("lir_value.zig"));
     std.testing.refAllDecls(@import("lir_interpreter.zig"));
+    std.testing.refAllDecls(@import("lir_value_format.zig"));
     std.testing.refAllDecls(@import("wasm_evaluator.zig"));
     std.testing.refAllDecls(@import("stack.zig"));
     std.testing.refAllDecls(@import("test/TestEnv.zig"));
