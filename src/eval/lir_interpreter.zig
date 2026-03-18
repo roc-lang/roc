@@ -631,10 +631,10 @@ pub const LirInterpreter = struct {
                     try self.bindPattern(args[0], val);
                 } else if (args.len > 1) {
                     // Multiple args = struct-like payload
+                    const payload_layout = self.tagPayloadLayout(t.union_layout, t.discriminant);
                     for (args, 0..) |arg_pat_id, i| {
-                        // Tag payload fields are struct-ordered
-                        _ = i;
-                        try self.bindPattern(arg_pat_id, val);
+                        const field_offset = self.helper.structFieldOffset(payload_layout, @intCast(i));
+                        try self.bindPattern(arg_pat_id, val.offset(field_offset));
                     }
                 }
             },
@@ -677,8 +677,14 @@ pub const LirInterpreter = struct {
                 if (disc != t.discriminant) break :blk false;
                 // Check payload patterns
                 const args = self.store.getPatternSpan(t.args);
-                for (args) |arg_pat_id| {
-                    if (!try self.matchPattern(arg_pat_id, val)) break :blk false;
+                if (args.len == 1) {
+                    if (!try self.matchPattern(args[0], val)) break :blk false;
+                } else if (args.len > 1) {
+                    const payload_layout = self.tagPayloadLayout(t.union_layout, t.discriminant);
+                    for (args, 0..) |arg_pat_id, i| {
+                        const field_offset = self.helper.structFieldOffset(payload_layout, @intCast(i));
+                        if (!try self.matchPattern(arg_pat_id, val.offset(field_offset))) break :blk false;
+                    }
                 }
                 break :blk true;
             },
