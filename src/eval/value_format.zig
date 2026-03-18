@@ -10,7 +10,7 @@
 const std = @import("std");
 const layout_mod = @import("layout");
 const builtins = @import("builtins");
-const lir_value = @import("lir_value.zig");
+const lir_value = @import("value.zig");
 
 const Layout = layout_mod.Layout;
 const Idx = layout_mod.Idx;

@@ -3,7 +3,7 @@ const std = @import("std");
 const testing = std.testing;
 const mem = std.mem;
 
-pub const Backend = @import("backend").EvalBackend;
+pub const Backend = @import("eval").EvalBackend;
 
 /// The core type representing a parsed command
 /// We could use anonymous structs for the argument types instead of defining one for each command to be more concise,

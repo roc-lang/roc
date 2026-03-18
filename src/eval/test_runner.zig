@@ -1,102 +1,25 @@
 //! Runs expect expressions
 //!
-//! This module is a wrapper around the interpreter used to simplify evaluating expect expressions.
+//! This module evaluates expect expressions using the LIR interpreter pipeline.
+//! CIR expressions are lowered through CIR → MIR → LIR → RC, then evaluated directly.
 
 const std = @import("std");
 const base = @import("base");
 const builtins = @import("builtins");
 const can = @import("can");
-const types = @import("types");
-const import_mapping_mod = types.import_mapping;
+const layout = @import("layout");
 const reporting = @import("reporting");
-const Interpreter = @import("interpreter.zig").Interpreter;
-const roc_target = @import("roc_target");
 const eval_mod = @import("mod.zig");
 
-const RocOps = builtins.host_abi.RocOps;
-const RocAlloc = builtins.host_abi.RocAlloc;
-const RocDealloc = builtins.host_abi.RocDealloc;
-const RocRealloc = builtins.host_abi.RocRealloc;
-const RocDbg = builtins.host_abi.RocDbg;
-const RocExpectFailed = builtins.host_abi.RocExpectFailed;
-const RocCrashed = builtins.host_abi.RocCrashed;
 const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
 const CIR = can.CIR;
 
-const EvalError = Interpreter.Error;
+const LirProgram = eval_mod.LirProgram;
+const LirInterpreter = eval_mod.LirInterpreter;
+const Value = eval_mod.Value;
 const CrashContext = eval_mod.CrashContext;
 const CrashState = eval_mod.CrashState;
-const BuiltinTypes = eval_mod.BuiltinTypes;
-
-fn testRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
-    const test_env: *TestRunner = @ptrCast(@alignCast(env));
-    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(alloc_args.alignment)));
-    const size_storage_bytes = @max(alloc_args.alignment, @alignOf(usize));
-    const total_size = alloc_args.length + size_storage_bytes;
-    const result = test_env.allocator.rawAlloc(total_size, align_enum, @returnAddress());
-    const base_ptr = result orelse {
-        @panic("Out of memory during testRocAlloc");
-    };
-    const size_ptr: *usize = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes - @sizeOf(usize));
-    size_ptr.* = total_size;
-    alloc_args.answer = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
-}
-
-fn testRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.c) void {
-    const test_env: *TestRunner = @ptrCast(@alignCast(env));
-    const size_storage_bytes = @max(dealloc_args.alignment, @alignOf(usize));
-    const size_ptr: *const usize = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - @sizeOf(usize));
-    const total_size = size_ptr.*;
-
-    const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - size_storage_bytes);
-    const log2_align = std.math.log2_int(u32, @intCast(dealloc_args.alignment));
-    const align_enum: std.mem.Alignment = @enumFromInt(log2_align);
-    const slice = @as([*]u8, @ptrCast(base_ptr))[0..total_size];
-    test_env.allocator.rawFree(slice, align_enum, @returnAddress());
-}
-
-fn testRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) void {
-    const test_env: *TestRunner = @ptrCast(@alignCast(env));
-    const size_storage_bytes = @max(realloc_args.alignment, @alignOf(usize));
-    const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(realloc_args.answer) - @sizeOf(usize));
-    const old_total_size = old_size_ptr.*;
-    const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(realloc_args.answer) - size_storage_bytes);
-    const new_total_size = realloc_args.new_length + size_storage_bytes;
-    const old_slice = @as([*]u8, @ptrCast(old_base_ptr))[0..old_total_size];
-    const new_slice = test_env.allocator.realloc(old_slice, new_total_size) catch {
-        @panic("Out of memory during testRocRealloc");
-    };
-    const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes - @sizeOf(usize));
-    new_size_ptr.* = new_total_size;
-    realloc_args.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
-}
-
-fn testRocDbg(_: *const RocDbg, _: *anyopaque) callconv(.c) void {
-    @panic("testRocDbg not implemented yet");
-}
-
-fn testRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
-    const test_env: *TestRunner = @ptrCast(@alignCast(env));
-    const source_bytes = expect_args.utf8_bytes[0..expect_args.len];
-    const trimmed = std.mem.trim(u8, source_bytes, " \t\n\r");
-    // Format and record the message
-    const formatted = std.fmt.allocPrint(test_env.allocator, "Expect failed: {s}", .{trimmed}) catch {
-        @panic("failed to allocate expect failure message for test runner");
-    };
-    test_env.crash.recordCrash(formatted) catch {
-        test_env.allocator.free(formatted);
-        @panic("failed to record expect failure for test runner");
-    };
-}
-
-fn testRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.c) void {
-    const test_env: *TestRunner = @ptrCast(@alignCast(env));
-    const msg_slice = crashed_args.utf8_bytes[0..crashed_args.len];
-    test_env.crash.recordCrash(msg_slice) catch {
-        @panic("failed to record crash message for test runner");
-    };
-}
 
 const Evaluation = enum {
     passed,
@@ -119,7 +42,7 @@ pub const FailureInfo = union(FailureType) {
     /// No additional info needed
     simple_failure,
     /// The specific interpreter error
-    eval_error: EvalError,
+    eval_error: anyerror,
     /// No additional info needed
     not_bool,
 };
@@ -142,50 +65,67 @@ const TestSummary = struct {
 pub const TestRunner = struct {
     allocator: Allocator,
     env: *ModuleEnv,
-    interpreter: Interpreter,
+    lir_program: LirProgram,
+    all_module_envs: []*ModuleEnv,
     crash: CrashContext,
-    roc_ops: ?RocOps,
     test_results: std.array_list.Managed(TestResult),
 
     pub fn init(
         allocator: std.mem.Allocator,
-        cir: *ModuleEnv,
-        builtin_types_param: BuiltinTypes,
+        module_env: *ModuleEnv,
         other_modules: []const *const can.ModuleEnv,
         builtin_module_env: ?*const can.ModuleEnv,
-        import_mapping: *const import_mapping_mod.ImportMapping,
     ) !TestRunner {
+        // Build all_module_envs: builtin + other + module_env (deduped)
+        var envs: std.ArrayList(*ModuleEnv) = .empty;
+        errdefer envs.deinit(allocator);
+
+        if (builtin_module_env) |be| {
+            try envs.append(allocator, @constCast(be));
+        }
+        for (other_modules) |m| {
+            const ptr: *ModuleEnv = @constCast(m);
+            // Don't add duplicates
+            var already_present = false;
+            for (envs.items) |e| {
+                if (e == ptr) {
+                    already_present = true;
+                    break;
+                }
+            }
+            if (!already_present) {
+                try envs.append(allocator, ptr);
+            }
+        }
+        // Add module_env if not already present
+        {
+            var found = false;
+            for (envs.items) |e| {
+                if (e == module_env) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                try envs.append(allocator, module_env);
+            }
+        }
+
         return TestRunner{
             .allocator = allocator,
-            .env = cir,
-            .interpreter = try Interpreter.init(allocator, cir, builtin_types_param, builtin_module_env, other_modules, import_mapping, null, null, roc_target.RocTarget.detectNative()),
+            .env = module_env,
+            .lir_program = LirProgram.init(allocator, base.target.TargetUsize.native),
+            .all_module_envs = try envs.toOwnedSlice(allocator),
             .crash = CrashContext.init(allocator),
-            .roc_ops = null,
             .test_results = std.array_list.Managed(TestResult).init(allocator),
         };
     }
 
     pub fn deinit(self: *TestRunner) void {
-        self.interpreter.deinit();
+        self.lir_program.deinit();
+        self.allocator.free(self.all_module_envs);
         self.crash.deinit();
         self.test_results.deinit();
-    }
-
-    fn get_ops(self: *TestRunner) *RocOps {
-        if (self.roc_ops == null) {
-            self.roc_ops = RocOps{
-                .env = @ptrCast(self),
-                .roc_alloc = testRocAlloc,
-                .roc_dealloc = testRocDealloc,
-                .roc_realloc = testRocRealloc,
-                .roc_dbg = testRocDbg,
-                .roc_expect_failed = testRocExpectFailed,
-                .roc_crashed = testRocCrashed,
-                .hosted_fns = .{ .count = 0, .fns = undefined }, // Not used in tests
-            };
-        }
-        self.crash.reset();
-        return &(self.roc_ops.?);
     }
 
     pub fn crashState(self: *TestRunner) CrashState {
@@ -193,24 +133,42 @@ pub const TestRunner = struct {
     }
 
     /// Evaluates a single expect expression, returning whether it passed, failed or did not evaluate to a boolean.
-    pub fn eval(self: *TestRunner, expr_idx: CIR.Expr.Idx) EvalError!Evaluation {
-        // Reset interpreter's env to the test module's env before each test.
-        // This ensures we're always reading from the correct module's NodeStore,
-        // even if a previous evaluation switched to a different module's env
-        // and didn't properly restore it.
-        self.interpreter.env = self.env;
+    pub fn eval(self: *TestRunner, expr_idx: CIR.Expr.Idx) !Evaluation {
+        // Lower CIR expression through the full pipeline: CIR → MIR → LIR → RC
+        var lower_result = self.lir_program.lowerExpr(
+            self.env,
+            expr_idx,
+            self.all_module_envs,
+            null,
+        ) catch |err| {
+            return err;
+        };
+        defer lower_result.deinit();
 
-        const ops = self.get_ops();
-        const result = try self.interpreter.eval(expr_idx, ops);
-        const layout_cache = &self.interpreter.runtime_layout_store;
-        defer result.decref(layout_cache, ops);
+        // Create LIR interpreter and evaluate
+        var interp = LirInterpreter.init(
+            self.allocator,
+            &lower_result.lir_store,
+            lower_result.layout_store,
+        );
+        defer interp.deinit();
 
-        if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int and result.layout.data.scalar.data.int == .u8) {
-            const is_true = result.asBool();
-            return if (is_true) Evaluation.passed else Evaluation.failed;
+        const eval_result = interp.eval(lower_result.final_expr_id) catch |err| {
+            return err;
+        };
+        const value = switch (eval_result) {
+            .value => |v| v,
+            .early_return => |v| v,
+            .break_expr => return error.RuntimeError,
+        };
+
+        // Check if result is a bool (layout.Idx.bool == 0)
+        if (lower_result.result_layout == .bool) {
+            const is_true = value.read(u8) != 0;
+            return if (is_true) .passed else .failed;
         }
 
-        return Evaluation.not_a_bool;
+        return .not_a_bool;
     }
 
     /// Evaluates all expect statements in the module, returning a summary of the results.
@@ -339,9 +297,9 @@ pub const TestRunner = struct {
 
                 // Add helpful explanation based on error type
                 const explanation = switch (err) {
-                    error.TypeMismatch => "The test expression has incompatible types and cannot be evaluated.",
-                    error.DivisionByZero => "The test expression attempts to divide by zero.",
-                    error.ZeroSizedType => "The test expression results in a zero-sized type.",
+                    error.Crash => "The test crashed during evaluation.",
+                    error.RuntimeError => "A runtime error occurred during evaluation.",
+                    error.OutOfMemory => "Out of memory during evaluation.",
                     else => "This usually indicates a bug in the test itself.",
                 };
                 try report.document.addText(explanation);

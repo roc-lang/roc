@@ -19,7 +19,7 @@ const can = @import("can");
 const layout = @import("layout");
 const backend = @import("backend");
 const builtin_loading = @import("builtin_loading.zig");
-const lir_program_mod = @import("lir_program.zig");
+const lir_program_mod = @import("cir_to_lir.zig");
 const LirProgram = lir_program_mod.LirProgram;
 
 const Allocator = std.mem.Allocator;

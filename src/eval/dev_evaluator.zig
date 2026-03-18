@@ -27,7 +27,7 @@ const LirExprStore = lir.LirExprStore;
 const builtin_loading = @import("builtin_loading.zig");
 const builtins = @import("builtins");
 const i128h = builtins.compiler_rt_128;
-const lir_program_mod = @import("lir_program.zig");
+const lir_program_mod = @import("cir_to_lir.zig");
 const LirProgram = lir_program_mod.LirProgram;
 
 // Cross-platform setjmp/longjmp for crash recovery.

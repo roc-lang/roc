@@ -13,7 +13,7 @@ const roc_target = @import("roc_target");
 const helpers = @import("helpers.zig");
 const builtin_loading = @import("../builtin_loading.zig");
 const TestEnv = @import("TestEnv.zig");
-const Interpreter = @import("../interpreter.zig").Interpreter;
+const Interpreter = @import("../cir_interpreter.zig").Interpreter;
 const BuiltinTypes = @import("../builtins.zig").BuiltinTypes;
 
 const Can = can.Can;

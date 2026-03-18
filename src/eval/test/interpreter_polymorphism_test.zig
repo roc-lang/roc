@@ -6,7 +6,7 @@ const std = @import("std");
 const helpers = @import("helpers.zig");
 // Use interpreter_allocator for interpreter tests (doesn't track leaks)
 const interpreter_allocator = helpers.interpreter_allocator;
-const Interpreter = @import("../interpreter.zig").Interpreter;
+const Interpreter = @import("../cir_interpreter.zig").Interpreter;
 const roc_target = @import("roc_target");
 const can = @import("can");
 const RocOps = @import("builtins").host_abi.RocOps;
