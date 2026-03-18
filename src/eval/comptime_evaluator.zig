@@ -272,7 +272,7 @@ pub const ComptimeEvaluator = struct {
         const expr = self.env.store.getExpr(expr_idx);
 
         const is_lambda = switch (expr) {
-            .e_lambda, .e_closure => true,
+            .e_lambda, .e_closure, .e_hosted_lambda => true,
             .e_runtime_error => return EvalResult{
                 .crash = .{
                     .message = "Runtime error in expression",
@@ -291,6 +291,15 @@ pub const ComptimeEvaluator = struct {
 
         // Skip lambdas - they don't need to be evaluated at the top level
         if (is_lambda) return EvalResult{ .success = {} };
+
+        // Skip defs whose types contain unresolved flex/rigid variables (e.g., platform
+        // module defs that reference the `model` type parameter from a `requires` clause).
+        // The MIR monotypification pipeline panics on these — they will be lowered later
+        // with concrete types when the app provides them.
+        const type_var = ModuleEnv.varFrom(expr_idx);
+        if (self.env.types.needsInstantiation(type_var)) {
+            return EvalResult{ .success = {} };
+        }
 
         // Reset halted flag at the start of each def - crashes only halt within a single def
         self.halted = false;

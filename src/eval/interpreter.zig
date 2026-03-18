@@ -211,6 +211,10 @@ pub const LirInterpreter = struct {
     /// Guard to reset the static buffer only once per top-level eval.
     eval_active: bool = false,
 
+    /// Current lambda params — used by evalHostedCall to collect implicit args
+    /// when the hosted_call has 0 explicit args (same pattern as dev backend).
+    current_lambda_params: ?lir.LirPatternSpan = null,
+
     pub const Error = error{
         OutOfMemory,
         RuntimeError,
@@ -449,7 +453,7 @@ pub const LirInterpreter = struct {
             // Cell operations
             .dbg => |d| try self.evalDbg(d),
             .expect => |e| try self.evalExpect(e),
-            .hosted_call => return error.RuntimeError, // Phase 3
+            .hosted_call => |hc| .{ .value = try self.evalHostedCall(hc) },
             .low_level => |ll| .{ .value = try self.evalLowLevel(ll) },
             .str_concat => |sc| .{ .value = try self.evalStrConcat(sc) },
             .int_to_str => |its| .{ .value = try self.evalIntToStr(its) },
@@ -1091,11 +1095,14 @@ pub const LirInterpreter = struct {
     fn callLambda(self: *LirInterpreter, lambda: anytype, args: []const Value) Error!EvalResult {
         const params = self.store.getPatternSpan(lambda.params);
 
-        // Save current bindings
+        // Save current bindings and lambda context
         const saved_bindings = self.bindings.clone() catch return error.OutOfMemory;
+        const saved_lambda_params = self.current_lambda_params;
+        self.current_lambda_params = lambda.params;
         defer {
             self.bindings.deinit();
             self.bindings = saved_bindings;
+            self.current_lambda_params = saved_lambda_params;
         }
 
         // Bind parameters
@@ -1144,6 +1151,87 @@ pub const LirInterpreter = struct {
             _ = try self.eval(e.body);
         }
         return .{ .value = Value.zst };
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // Hosted function calls
+    // ──────────────────────────────────────────────────────────────
+
+    fn evalHostedCall(self: *LirInterpreter, hc: anytype) Error!Value {
+        const args_exprs = self.store.getExprSpan(hc.args);
+
+        // Collect argument values and layouts.
+        // When explicit args are empty, fall back to the enclosing lambda's bound
+        // parameters (same pattern as the dev backend's collectImplicitHostedCallArgs).
+        const ArgInfo = struct { val: Value, layout: layout_mod.Idx };
+        var collected_args = std.ArrayList(ArgInfo).empty;
+        defer collected_args.deinit(self.allocator);
+
+        if (args_exprs.len > 0) {
+            // Explicit args: evaluate each one
+            for (args_exprs) |arg_id| {
+                const arg_val = try self.evalValue(arg_id);
+                const arg_layout = lir_program_mod.lirExprResultLayout(self.store, arg_id);
+                collected_args.append(self.allocator, .{ .val = arg_val, .layout = arg_layout }) catch return error.OutOfMemory;
+            }
+        } else if (self.current_lambda_params) |lambda_params| {
+            // Implicit args: read from enclosing lambda's bound parameters
+            for (self.store.getPatternSpan(lambda_params)) |pat_id| {
+                const pat = self.store.getPattern(pat_id);
+                switch (pat) {
+                    .bind => |bind| {
+                        if (self.bindings.get(bind.symbol.raw())) |binding| {
+                            collected_args.append(self.allocator, .{
+                                .val = binding.val,
+                                .layout = bind.layout_idx,
+                            }) catch return error.OutOfMemory;
+                        }
+                    },
+                    .wildcard => {},
+                    else => {},
+                }
+            }
+        }
+
+        // Marshal arguments into a contiguous buffer
+        var total_args_size: usize = 0;
+        for (collected_args.items) |arg| {
+            const sa = self.helper.sizeAlignOf(arg.layout);
+            total_args_size = std.mem.alignForward(usize, total_args_size, sa.alignment.toByteUnits());
+            total_args_size += sa.size;
+        }
+
+        const args_buf_size = @max(total_args_size, 8);
+        const args_buf = self.arena.allocator().alloc(u8, args_buf_size) catch return error.OutOfMemory;
+        @memset(args_buf, 0);
+
+        var offset: usize = 0;
+        for (collected_args.items) |arg| {
+            const sa = self.helper.sizeAlignOf(arg.layout);
+            offset = std.mem.alignForward(usize, offset, sa.alignment.toByteUnits());
+            if (sa.size > 0 and !arg.val.isZst()) {
+                @memcpy(args_buf[offset .. offset + sa.size], arg.val.readBytes(sa.size));
+            }
+            offset += sa.size;
+        }
+
+        // Allocate return buffer
+        const ret_size = self.helper.sizeOf(hc.ret_layout);
+        var ret_buf: [64]u8 align(16) = undefined;
+        @memset(ret_buf[0..@max(ret_size, 1)], 0);
+
+        // Call: hosted_fn(roc_ops, ret_ptr, args_ptr)
+        const hosted_fn = self.roc_ops.hosted_fns.fns[hc.index];
+        self.roc_env.resetCrash();
+        hosted_fn(@ptrCast(&self.roc_ops), @ptrCast(&ret_buf), @ptrCast(args_buf.ptr));
+
+        if (self.roc_env.crashed) return error.Crash;
+
+        // Copy result into interpreter value
+        if (ret_size == 0) return Value.zst;
+        const result = try self.alloc(hc.ret_layout);
+        @memcpy(result.ptr[0..ret_size], ret_buf[0..ret_size]);
+        return result;
     }
 
     // ──────────────────────────────────────────────────────────────
