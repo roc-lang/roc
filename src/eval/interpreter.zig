@@ -21,6 +21,7 @@ const lir_program_mod = @import("cir_to_lir.zig");
 const builtins = @import("builtins");
 const types = @import("types");
 const sljmp = @import("sljmp");
+const Io = @import("io").Io;
 
 const Allocator = std.mem.Allocator;
 const LirExprStore = lir.LirExprStore;
@@ -56,6 +57,7 @@ const longjmp = sljmp.longjmp;
 /// to avoid Zig allocator vtable issues from C-calling-convention callbacks.
 const InterpreterRocEnv = struct {
     allocator: Allocator,
+    io: Io,
     crashed: bool = false,
     crash_message: ?[]const u8 = null,
     jmp_buf: JmpBuf = undefined,
@@ -92,8 +94,8 @@ const InterpreterRocEnv = struct {
         }
     };
 
-    fn init(allocator: Allocator) InterpreterRocEnv {
-        return .{ .allocator = allocator };
+    fn init(allocator: Allocator, io: Io) InterpreterRocEnv {
+        return .{ .allocator = allocator, .io = io };
     }
 
     fn deinit(self: *InterpreterRocEnv) void {
@@ -155,9 +157,21 @@ const InterpreterRocEnv = struct {
         roc_realloc.answer = @ptrCast(new_ptr);
     }
 
-    fn rocDbgFn(_: *const RocDbg, _: *anyopaque) callconv(.c) void {}
+    fn rocDbgFn(roc_dbg: *const RocDbg, env: *anyopaque) callconv(.c) void {
+        const self: *InterpreterRocEnv = @ptrCast(@alignCast(env));
+        const msg = roc_dbg.utf8_bytes[0..roc_dbg.len];
+        var buf: [256]u8 = undefined;
+        const line = std.fmt.bufPrint(&buf, "[dbg] {s}\n", .{msg}) catch "[dbg] (message too long)\n";
+        self.io.writeStderr(line) catch {};
+    }
 
-    fn rocExpectFailedFn(_: *const RocExpectFailed, _: *anyopaque) callconv(.c) void {}
+    fn rocExpectFailedFn(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
+        const self: *InterpreterRocEnv = @ptrCast(@alignCast(env));
+        const source = expect_args.utf8_bytes[0..expect_args.len];
+        var buf: [512]u8 = undefined;
+        const line = std.fmt.bufPrint(&buf, "[expect failed] {s}\n", .{source}) catch "[expect failed]\n";
+        self.io.writeStderr(line) catch {};
+    }
 
     fn rocCrashedFn(roc_crashed: *const RocCrashed, env: *anyopaque) callconv(.c) void {
         const self: *InterpreterRocEnv = @ptrCast(@alignCast(env));
@@ -220,9 +234,10 @@ pub const LirInterpreter = struct {
         allocator: Allocator,
         store: *const LirExprStore,
         layout_store: *const layout_mod.Store,
+        io: ?Io,
     ) LirInterpreter {
         const roc_env = allocator.create(InterpreterRocEnv) catch @panic("OOM");
-        roc_env.* = InterpreterRocEnv.init(allocator);
+        roc_env.* = InterpreterRocEnv.init(allocator, io orelse Io.default());
 
         const empty_hosted_fns = struct {
             fn dummyHostedFn(_: *anyopaque, _: *anyopaque, _: *anyopaque) callconv(.c) void {}
@@ -261,6 +276,12 @@ pub const LirInterpreter = struct {
         self.top_level_cache.deinit();
         self.cells.deinit();
         self.bindings.deinit();
+    }
+
+    /// Get the crash message from the last evaluation (if any).
+    /// The message is owned by the interpreter and valid until the next eval or deinit.
+    pub fn getCrashMessage(self: *const LirInterpreter) ?[]const u8 {
+        return self.roc_env.crash_message;
     }
 
     /// Allocate memory for a value of the given layout.

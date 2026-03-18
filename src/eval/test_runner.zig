@@ -150,6 +150,7 @@ pub const TestRunner = struct {
             self.allocator,
             &lower_result.lir_store,
             lower_result.layout_store,
+            null,
         );
         defer interp.deinit();
 

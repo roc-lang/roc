@@ -101,6 +101,8 @@ test "eval tests" {
     std.testing.refAllDecls(@import("cir_to_lir.zig"));
     std.testing.refAllDecls(@import("value.zig"));
     std.testing.refAllDecls(@import("interpreter.zig"));
+    std.testing.refAllDecls(@import("fold_type.zig"));
+    std.testing.refAllDecls(@import("value_to_cir.zig"));
     std.testing.refAllDecls(@import("value_format.zig"));
     std.testing.refAllDecls(@import("wasm_evaluator.zig"));
     std.testing.refAllDecls(@import("stack.zig"));

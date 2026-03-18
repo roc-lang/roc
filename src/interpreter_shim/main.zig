@@ -109,7 +109,6 @@ extern fn roc_alloc(size: usize, alignment: u32) callconv(.c) ?*anyopaque;
 extern fn roc_realloc(ptr: *anyopaque, new_size: usize, old_size: usize, alignment: u32) callconv(.c) ?*anyopaque;
 extern fn roc_dealloc(ptr: *anyopaque, alignment: u32) callconv(.c) void;
 
-
 const SharedMemoryAllocator = if (is_wasm32) struct {} else ipc.SharedMemoryAllocator;
 
 /// Thread-safe initialization flag with unified interface.
@@ -581,7 +580,7 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
     defer lower_result.deinit();
 
     // Create LIR interpreter and evaluate
-    var interp = LirInterpreter.init(allocator, &lower_result.lir_store, lower_result.layout_store);
+    var interp = LirInterpreter.init(allocator, &lower_result.lir_store, lower_result.layout_store, null);
     defer interp.deinit();
 
     interp.evalEntrypoint(
@@ -881,4 +880,3 @@ fn setupModuleEnvFromSerialized(roc_ops: *RocOps, base_ptr: [*]align(1) u8, allo
         .app_env = env_ptrs[app_env_index],
     };
 }
-
