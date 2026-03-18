@@ -291,6 +291,86 @@ pub const LirInterpreter = struct {
     }
 
     // ──────────────────────────────────────────────────────────────
+    // Entrypoint evaluation (for roc run / interpreter shim)
+    // ──────────────────────────────────────────────────────────────
+
+    /// Evaluate an entrypoint expression, handling function calls with args.
+    ///
+    /// If the expression is a function (lambda), it is called with arguments
+    /// extracted from `arg_ptr` (a packed tuple of arg values). Otherwise the
+    /// expression is evaluated directly. The result is copied to `ret_ptr`.
+    ///
+    /// `caller_roc_ops` provides hosted functions from the platform; the
+    /// interpreter splices them into its own RocOps for builtin dispatch.
+    pub fn evalEntrypoint(
+        self: *LirInterpreter,
+        final_expr_id: LirExprId,
+        arg_layouts: []const layout_mod.Idx,
+        ret_layout: layout_mod.Idx,
+        caller_roc_ops: *RocOps,
+        arg_ptr: ?*anyopaque,
+        ret_ptr: *anyopaque,
+    ) Error!void {
+        // Splice in the caller's hosted functions so builtins can call them.
+        self.roc_ops.hosted_fns = caller_roc_ops.hosted_fns;
+
+        // Check if the expression is a function that needs to be called.
+        const final_expr = self.store.getExpr(final_expr_id);
+        const is_lambda = (final_expr == .lambda);
+
+        if (is_lambda) {
+            // Function entrypoint: call the lambda with args from arg_ptr.
+            const lambda = final_expr.lambda;
+
+            // Extract arguments from the packed arg tuple.
+            var args_buf: [16]Value = undefined;
+            const arg_count = arg_layouts.len;
+            if (arg_ptr) |aptr| {
+                const arg_bytes = @as([*]u8, @ptrCast(aptr));
+                var byte_offset: usize = 0;
+                for (arg_layouts, 0..) |arg_layout, i| {
+                    const sa = self.helper.sizeAlignOf(arg_layout);
+                    const al = sa.alignment.toByteUnits();
+                    byte_offset = std.mem.alignForward(usize, byte_offset, al);
+                    if (sa.size > 0) {
+                        const copy = try self.allocBytes(sa.size);
+                        @memcpy(copy.ptr[0..sa.size], arg_bytes[byte_offset .. byte_offset + sa.size]);
+                        args_buf[i] = copy;
+                    } else {
+                        args_buf[i] = Value.zst;
+                    }
+                    byte_offset += sa.size;
+                }
+            }
+
+            const call_result = try self.callLambda(lambda, args_buf[0..arg_count]);
+            const ret_val = switch (call_result) {
+                .value => |v| v,
+                .early_return => |v| v,
+                .break_expr => return error.RuntimeError,
+            };
+
+            const ret_size = self.helper.sizeOf(ret_layout);
+            if (ret_size > 0 and !ret_val.isZst()) {
+                @memcpy(@as([*]u8, @ptrCast(ret_ptr))[0..ret_size], ret_val.readBytes(ret_size));
+            }
+        } else {
+            // Non-function expression: evaluate directly.
+            const result = try self.eval(final_expr_id);
+            const val = switch (result) {
+                .value => |v| v,
+                .early_return => |v| v,
+                .break_expr => return error.RuntimeError,
+            };
+
+            const ret_size = self.helper.sizeOf(ret_layout);
+            if (ret_size > 0 and !val.isZst()) {
+                @memcpy(@as([*]u8, @ptrCast(ret_ptr))[0..ret_size], val.readBytes(ret_size));
+            }
+        }
+    }
+
+    // ──────────────────────────────────────────────────────────────
     // Expression evaluation
     // ──────────────────────────────────────────────────────────────
 

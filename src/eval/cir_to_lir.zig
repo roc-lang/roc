@@ -219,6 +219,66 @@ pub const LirProgram = struct {
         return self.lowerExprInner(module_env, expr_idx, all_module_envs, module_idx, app_module_idx, layout_store_ptr);
     }
 
+    /// Lower a CIR entrypoint expression to post-RC LIR.
+    ///
+    /// When `wrap_zero_arg_call` is true and the MIR expression has a function
+    /// type, wraps it in a zero-arg call so the result is the function's return
+    /// value, not a lambda. This is the same wrapping the dev evaluator does.
+    pub fn lowerEntrypointExpr(
+        self: *LirProgram,
+        module_env: *ModuleEnv,
+        expr_idx: CIR.Expr.Idx,
+        all_module_envs: []const *ModuleEnv,
+        app_module_env: ?*ModuleEnv,
+        wrap_zero_arg_call: bool,
+    ) Error!LowerResult {
+        // Pre-lowering setup
+        for (all_module_envs) |env| {
+            env.common.idents.interner.enableRuntimeInserts(env.gpa) catch return error.OutOfMemory;
+        }
+        module_env.imports.resolveImports(module_env, all_module_envs);
+
+        const module_idx = findModuleEnvIdx(all_module_envs, module_env) orelse return error.ModuleEnvNotFound;
+        const app_module_idx = if (app_module_env) |env|
+            findModuleEnvIdx(all_module_envs, env) orelse return error.ModuleEnvNotFound
+        else
+            null;
+
+        const layout_store_ptr = try self.prepareLayoutStores(all_module_envs);
+
+        // CIR → MIR
+        var mir_store = MIR.Store.init(self.allocator) catch return error.OutOfMemory;
+        defer mir_store.deinit(self.allocator);
+
+        var mir_lower = mir.Lower.init(
+            self.allocator,
+            &mir_store,
+            all_module_envs,
+            &module_env.types,
+            module_idx,
+            app_module_idx,
+        ) catch return error.OutOfMemory;
+        defer mir_lower.deinit();
+
+        var mir_expr_id = mir_lower.lowerExpr(expr_idx) catch {
+            return error.RuntimeError;
+        };
+
+        // Wrap zero-arg functions in a call (same logic as dev evaluator)
+        if (wrap_zero_arg_call) {
+            const func_mono_idx = mir_store.typeOf(mir_expr_id);
+            const func_mono = mir_store.monotype_store.getMonotype(func_mono_idx);
+            if (func_mono == .func) {
+                mir_expr_id = mir_store.addExpr(self.allocator, .{ .call = .{
+                    .func = mir_expr_id,
+                    .args = MIR.ExprSpan.empty(),
+                } }, func_mono.func.ret, base.Region.zero()) catch return error.OutOfMemory;
+            }
+        }
+
+        return self.lowerFromMir(module_env, expr_idx, all_module_envs, &mir_store, mir_expr_id, layout_store_ptr);
+    }
+
     /// Lower a CIR expression to post-RC LIR, given already-resolved module indices
     /// and a prepared layout store. Use this when you need to do additional MIR
     /// manipulation (e.g. wrapping zero-arg entrypoints) between CIR→MIR and MIR→LIR.
