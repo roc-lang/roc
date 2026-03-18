@@ -394,9 +394,12 @@ pub const Store = struct {
             .structure => |flat_type| {
                 return try self.fromFlatType(allocator, types_store, resolved.var_, flat_type, common_idents, specializations, nominal_cycle_breakers, scratches);
             },
-            // Error types are caught in lowerExpr before resolveMonotype;
-            // reaching here means a compiler bug in an earlier phase.
-            .err => unreachable,
+            // Error types can appear nested inside function types (as argument
+            // or return types) when --allow-errors is used. The guard in
+            // lowerExpr only catches top-level error types, so we need to handle
+            // them here too. Return unit as a safe placeholder so lowering can
+            // continue and the runtime-error path is hit at runtime.
+            .err => return self.unit_idx,
         };
     }
 
@@ -491,28 +494,14 @@ pub const Store = struct {
                             .flex => {
                                 if (findNamedRowExtensionMonotype(scratches, ext_var, types_store)) |specialized| {
                                     try self.appendSpecializedRecordFields(specialized, scratch_top, scratches);
-                                    break :rows;
                                 }
-                                if (std.debug.runtime_safety) {
-                                    std.debug.panic(
-                                        "Monotype.fromTypeVar(record): unresolved flex row extension tail",
-                                        .{},
-                                    );
-                                }
-                                unreachable;
+                                break :rows; // Open record — treat as closed with collected fields
                             },
                             .rigid => {
                                 if (findNamedRowExtensionMonotype(scratches, ext_var, types_store)) |specialized| {
                                     try self.appendSpecializedRecordFields(specialized, scratch_top, scratches);
-                                    break :rows;
                                 }
-                                if (std.debug.runtime_safety) {
-                                    std.debug.panic(
-                                        "Monotype.fromTypeVar(record): unresolved rigid row extension tail",
-                                        .{},
-                                    );
-                                }
-                                unreachable;
+                                break :rows; // Rigid record — treat as closed with collected fields
                             },
                             .err => {
                                 if (std.debug.runtime_safety) {

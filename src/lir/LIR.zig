@@ -57,6 +57,14 @@ pub const LirPatternId = enum(u32) {
     }
 };
 
+/// Callee for a function call.
+/// Direct calls use a callable symbol registered in the LIR callable-def table.
+/// Runtime function-value calls continue to use an expression.
+pub const CallTarget = union(enum) {
+    expr: LirExprId,
+    direct: Symbol,
+};
+
 /// Span of expression IDs (for arg lists, record fields, list elements, etc.)
 pub const LirExprSpan = extern struct {
     /// Starting index into extra_data where LirExprIds are stored
@@ -295,8 +303,9 @@ pub const LirExpr = union(enum) {
 
     /// Function call
     call: struct {
-        /// The function expression (could be a lookup, lambda, closure, etc.)
-        fn_expr: LirExprId,
+        /// The call target: either an explicit direct callee symbol or a
+        /// runtime function-value expression.
+        callee: CallTarget,
         /// Layout of the function/closure type
         fn_layout: layout.Idx,
         /// Arguments to the function

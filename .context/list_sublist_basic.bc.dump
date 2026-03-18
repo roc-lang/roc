@@ -1,0 +1,712 @@
+<IDENTIFICATION_BLOCK_ID NumWords=10 BlockCodeSize=3>
+  <STRING abbrevid=4 op0=82 op1=111 op2=99 op3=32 op4=77 op5=111 op6=110 op7=111 op8=32 op9=76 op10=76 op11=86 op12=77 op13=32 op14=67 op15=111 op16=100 op17=101 op18=71 op19=101 op20=110 op21=32 op22=49 op23=46 op24=48 op25=46 op26=48/> record string = 'Roc Mono LLVM CodeGen 1.0.0'
+  <EPOCH abbrevid=5 op0=0/>
+</IDENTIFICATION_BLOCK_ID>
+<MODULE_BLOCK NumWords=694 BlockCodeSize=4>
+  <VERSION abbrevid=4 op0=2/>
+  <TRIPLE abbrevid=5 op0=97 op1=97 op2=114 op3=99 op4=104 op5=54 op6=52 op7=45 op8=97 op9=112 op10=112 op11=108 op12=101 op13=45 op14=109 op15=97 op16=99 op17=111 op18=115 op19=120 op20=49 op21=51 op22=46 op23=48 op24=46 op25=48/> record string = 'aarch64-apple-macosx13.0.0'
+  <SOURCE_FILENAME abbrevid=5 op0=114 op1=111 op2=99 op3=95 op4=109 op5=111 op6=110 op7=111 op8=95 op9=101 op10=118 op11=97 op12=108/> record string = 'roc_mono_eval'
+  <TYPE_BLOCK_ID NumWords=38 BlockCodeSize=4>
+    <NUMENTRY abbrevid=4 op0=32/>
+    <VOID abbrevid=5/>
+    <HALF abbrevid=5/>
+    <BFLOAT abbrevid=5/>
+    <FLOAT abbrevid=5/>
+    <DOUBLE abbrevid=5/>
+    <FP128 abbrevid=5/>
+    <X86_FP80 abbrevid=5/>
+    <PPC_FP128 abbrevid=5/>
+    <UnknownCode24 abbrevid=5/>
+    <X86_MMX abbrevid=5/>
+    <LABEL abbrevid=5/>
+    <TOKEN abbrevid=5/>
+    <METADATA abbrevid=5/>
+    <INTEGER abbrevid=7 op0=1/>
+    <INTEGER abbrevid=7 op0=8/>
+    <INTEGER abbrevid=7 op0=16/>
+    <INTEGER abbrevid=7 op0=29/>
+    <INTEGER abbrevid=7 op0=32/>
+    <INTEGER abbrevid=7 op0=64/>
+    <INTEGER abbrevid=7 op0=80/>
+    <INTEGER abbrevid=7 op0=128/>
+    <UnknownCode25 abbrevid=13 op0=0/>
+    <UnknownCode25 abbrevid=13 op0=4/>
+    <FUNCTION abbrevid=15 op0=0 op1=0 op2=21 op3=21/>
+    <ARRAY abbrevid=11 op0=24 op1=14/>
+    <FUNCTION abbrevid=15 op0=0 op1=21 op2=18 op3=17 op4=13 op5=21/>
+    <STRUCT_ANON abbrevid=8 op0=0 op1=21 op2=18 op3=18/>
+    <STRUCT_ANON abbrevid=8 op0=0 op1=18 op2=18/>
+    <ARRAY abbrevid=11 op0=16 op1=14/>
+    <FUNCTION abbrevid=15 op0=0 op1=0 op2=21 op3=21 op4=18 op5=18 op6=17 op7=18 op8=18 op9=18 op10=13 op11=21/>
+    <FUNCTION abbrevid=15 op0=0 op1=0 op2=21 op3=18 op4=18 op5=21/>
+    <FUNCTION abbrevid=15 op0=0 op1=0 op2=21 op3=21 op4=18 op5=18 op6=21 op7=18 op8=18 op9=21/>
+  </TYPE_BLOCK_ID>
+  <PARAMATTR_GROUP_BLOCK_ID NumWords=1 BlockCodeSize=2>
+  </PARAMATTR_GROUP_BLOCK_ID>
+  <PARAMATTR_BLOCK NumWords=2 BlockCodeSize=3>
+    <ENTRY abbrevid=4/> record string = ''
+  </PARAMATTR_BLOCK>
+  <FUNCTION abbrevid=7 op0=0 op1=10 op2=23 op3=0 op4=0 op5=0 op6=1 op7=0 op8=0 op9=0 op10=0 op11=0 op12=0 op13=0 op14=0 op15=0 op16=0 op17=0 op18=0/>
+  <FUNCTION abbrevid=7 op0=10 op1=35 op2=25 op3=0 op4=1 op5=0 op6=1 op7=0 op8=0 op9=0 op10=0 op11=0 op12=0 op13=0 op14=0 op15=0 op16=0 op17=0 op18=0/>
+  <FUNCTION abbrevid=7 op0=45 op1=25 op2=29 op3=0 op4=1 op5=0 op6=1 op7=0 op8=0 op9=0 op10=0 op11=0 op12=0 op13=0 op14=0 op15=0 op16=0 op17=0 op18=0/>
+  <FUNCTION abbrevid=7 op0=70 op1=23 op2=30 op3=0 op4=1 op5=0 op6=1 op7=0 op8=0 op9=0 op10=0 op11=0 op12=0 op13=0 op14=0 op15=0 op16=0 op17=0 op18=0/>
+  <FUNCTION abbrevid=7 op0=93 op1=23 op2=31 op3=0 op4=1 op5=0 op6=1 op7=0 op8=0 op9=0 op10=0 op11=0 op12=0 op13=0 op14=0 op15=0 op16=0 op17=0 op18=0/>
+  <CONSTANTS_BLOCK NumWords=72 BlockCodeSize=5>
+    <SETTYPE abbrevid=4 op0=13/>
+    <INTEGER abbrevid=8 op0=0/>
+    <INTEGER abbrevid=8 op0=3/>
+    <SETTYPE abbrevid=4 op0=17/>
+    <INTEGER abbrevid=8 op0=0/>
+    <INTEGER abbrevid=8 op0=2/>
+    <SETTYPE abbrevid=4 op0=11/>
+    <NULL abbrevid=5/>
+    <SETTYPE abbrevid=4 op0=18/>
+    <INTEGER abbrevid=8 op0=0/>
+    <SETTYPE abbrevid=4 op0=17/>
+    <INTEGER abbrevid=8 op0=16/>
+    <INTEGER abbrevid=8 op0=32/>
+    <SETTYPE abbrevid=4 op0=18/>
+    <INTEGER abbrevid=8 op0=224/>
+    <SETTYPE abbrevid=4 op0=20/>
+    <INTEGER abbrevid=8 op0=0/>
+    <INTEGER abbrevid=8 op0=2000000000000000000/>
+    <SETTYPE abbrevid=4 op0=17/>
+    <INTEGER abbrevid=8 op0=64/>
+    <SETTYPE abbrevid=4 op0=20/>
+    <INTEGER abbrevid=8 op0=4000000000000000000/>
+    <SETTYPE abbrevid=4 op0=17/>
+    <INTEGER abbrevid=8 op0=96/>
+    <SETTYPE abbrevid=4 op0=20/>
+    <INTEGER abbrevid=8 op0=6000000000000000000/>
+    <SETTYPE abbrevid=4 op0=17/>
+    <INTEGER abbrevid=8 op0=128/>
+    <SETTYPE abbrevid=4 op0=20/>
+    <INTEGER abbrevid=8 op0=8000000000000000000/>
+    <SETTYPE abbrevid=4 op0=17/>
+    <INTEGER abbrevid=8 op0=160/>
+    <SETTYPE abbrevid=4 op0=20/>
+    <INTEGER abbrevid=8 op0=-8446744073709551616/>
+    <SETTYPE abbrevid=4 op0=17/>
+    <INTEGER abbrevid=8 op0=192/>
+    <SETTYPE abbrevid=4 op0=20/>
+    <INTEGER abbrevid=8 op0=-6446744073709551616/>
+    <SETTYPE abbrevid=4 op0=18/>
+    <INTEGER abbrevid=8 op0=14/>
+    <INTEGER abbrevid=8 op0=6/>
+    <INTEGER abbrevid=8 op0=4/>
+    <SETTYPE abbrevid=4 op0=27/>
+    <UnknownCode26 abbrevid=7/>
+    <SETTYPE abbrevid=4 op0=18/>
+    <INTEGER abbrevid=8 op0=32/>
+    <SETTYPE abbrevid=4 op0=14/>
+    <INTEGER abbrevid=8 op0=182/>
+    <INTEGER abbrevid=8 op0=255/>
+    <SETTYPE abbrevid=4 op0=17/>
+    <INTEGER abbrevid=8 op0=46/>
+    <SETTYPE abbrevid=4 op0=18/>
+    <INTEGER abbrevid=8 op0=2/>
+    <SETTYPE abbrevid=4 op0=14/>
+    <INTEGER abbrevid=8 op0=0/>
+    <INTEGER abbrevid=8 op0=2/>
+    <INTEGER abbrevid=8 op0=257/>
+    <INTEGER abbrevid=8 op0=88/>
+    <INTEGER abbrevid=8 op0=64/>
+    <INTEGER abbrevid=8 op0=253/>
+    <SETTYPE abbrevid=4 op0=17/>
+    <INTEGER abbrevid=8 op0=6/>
+    <SETTYPE abbrevid=4 op0=20/>
+    <INTEGER abbrevid=8 op0=128/>
+    <SETTYPE abbrevid=4 op0=14/>
+    <INTEGER abbrevid=8 op0=186/>
+  </CONSTANTS_BLOCK>
+  <METADATA_KIND_BLOCK NumWords=7 BlockCodeSize=3>
+    <KIND abbrevid=4 op0=2 op1=112 op2=114 op3=111 op4=102/> record string = 'prof'
+    <KIND abbrevid=4 op0=15 op1=117 op2=110 op3=112 op4=114 op5=101 op6=100 op7=105 op8=99 op9=116 op10=97 op11=98 op12=108 op13=101/> record string = 'unpredictable'
+  </METADATA_KIND_BLOCK>
+  <METADATA_BLOCK NumWords=69 BlockCodeSize=5>
+    <NODE abbrevid=17/> record string = ''
+  </METADATA_BLOCK>
+  <OPERAND_BUNDLE_TAGS_BLOCK NumWords=2 BlockCodeSize=3>
+    <OPERAND_BUNDLE_TAG abbrevid=4 op0=99 op1=111 op2=108 op3=100/> record string = 'cold'
+  </OPERAND_BUNDLE_TAGS_BLOCK>
+  <BLOCKINFO_BLOCK/>
+  <FUNCTION_BLOCK NumWords=371 BlockCodeSize=6>
+    <DECLAREBLOCKS abbrevid=4 op0=7/>
+    <INST_ALLOCA abbrevid=18 op0=24 op1=17 op2=8 op3=68/>
+    <INST_STORE abbrevid=30 op0=1 op1=37 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=1 op3=36/> record string = '$'
+    <INST_STORE abbrevid=30 op0=1 op1=38 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=2 op3=36/> record string = '$'
+    <INST_STORE abbrevid=30 op0=1 op1=39 op2=4 op3=0/>
+    <INST_ALLOCA abbrevid=18 op0=24 op1=17 op2=8 op3=68/>
+    <INST_STORE abbrevid=30 op0=1 op1=40 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=1 op3=39/> record string = '''
+    <INST_STORE abbrevid=30 op0=1 op1=41 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=2 op3=39/> record string = '''
+    <INST_STORE abbrevid=30 op0=1 op1=42 op2=4 op3=0/>
+    <INST_CALL abbrevid=5 op0=0 op1=32768 op2=25 op3=51 op4=39 op5=40 op6=47 op7=7/>
+    <INST_STORE abbrevid=30 op0=1 op1=39 op2=5 op3=1/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=1 op3=41/> record string = ')'
+    <INST_STORE abbrevid=30 op0=1 op1=39 op2=5 op3=1/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=2 op3=38/> record string = '&'
+    <INST_STORE abbrevid=30 op0=1 op1=38 op2=5 op3=1/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=3 op3=37/> record string = '%'
+    <INST_STORE abbrevid=30 op0=1 op1=37 op2=5 op3=1/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=4 op3=36/> record string = '$'
+    <INST_STORE abbrevid=30 op0=1 op1=36 op2=5 op3=1/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=5 op3=35/> record string = '#'
+    <INST_STORE abbrevid=30 op0=1 op1=35 op2=5 op3=1/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=6 op3=34/> record string = '"'
+    <INST_STORE abbrevid=30 op0=1 op1=34 op2=5 op3=1/>
+    <INST_STORE abbrevid=30 op0=10 op1=7 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=10 op3=48/> record string = '0'
+    <INST_STORE abbrevid=30 op0=1 op1=34 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=11 op3=48/> record string = '0'
+    <INST_STORE abbrevid=30 op0=1 op1=35 op2=4 op3=0/>
+    <INST_LOAD abbrevid=28 op0=12 op1=26 op2=4 op3=0/>
+    <INST_INSERTVAL abbrevid=21 op0=33 op1=35 op2=0/>
+    <INST_INSERTVAL abbrevid=21 op0=1 op1=35 op2=1/>
+    <INST_ALLOCA abbrevid=18 op0=28 op1=17 op2=8 op3=68/>
+    <INST_STORE abbrevid=30 op0=1 op1=55 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=1 op3=54/> record string = '6'
+    <INST_STORE abbrevid=30 op0=1 op1=56 op2=4 op3=0/>
+    <INST_STORE abbrevid=30 op0=2 op1=3 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=2 op3=55/> record string = '7'
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=3 op3=60/> record string = '<'
+    <INST_LOAD abbrevid=28 op0=2 op1=18 op2=4 op3=0/>
+    <INST_LOAD abbrevid=28 op0=2 op1=18 op2=4 op3=0/>
+    <INST_ALLOCA abbrevid=18 op0=24 op1=17 op2=8 op3=68/>
+    <INST_STORE abbrevid=30 op0=1 op1=61 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=1 op3=60/> record string = '<'
+    <INST_STORE abbrevid=30 op0=1 op1=62 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=2 op3=60/> record string = '<'
+    <INST_STORE abbrevid=30 op0=1 op1=63 op2=4 op3=0/>
+    <INST_STORE abbrevid=30 op0=3 op1=12 op2=4 op3=0/>
+    <INST_LOAD abbrevid=28 op0=3 op1=21 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=4 op3=63/> record string = '?'
+    <INST_LOAD abbrevid=28 op0=1 op1=18 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=6 op3=64/> record string = '@'
+    <INST_LOAD abbrevid=28 op0=1 op1=18 op2=4 op3=0/>
+    <INST_CALL abbrevid=5 op0=0 op1=32768 op2=29 op3=76 op4=32 op5=5 op6=3 op7=1 op8=66 op9=48 op10=10 op11=9 op12=73 op13=33/>
+    <INST_LOAD abbrevid=28 op0=32 op1=26 op2=4 op3=0/>
+    <INST_ALLOCA abbrevid=18 op0=24 op1=17 op2=8 op3=68/>
+    <INST_STORE abbrevid=30 op0=1 op1=70 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=1 op3=69/> record string = 'E'
+    <INST_STORE abbrevid=30 op0=1 op1=71 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=2 op3=69/> record string = 'E'
+    <INST_STORE abbrevid=30 op0=1 op1=72 op2=4 op3=0/>
+    <INST_ALLOCA abbrevid=18 op0=24 op1=17 op2=8 op3=68/>
+    <INST_STORE abbrevid=30 op0=1 op1=73 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=1 op3=72/> record string = 'H'
+    <INST_STORE abbrevid=30 op0=1 op1=74 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=2 op3=72/> record string = 'H'
+    <INST_STORE abbrevid=30 op0=1 op1=75 op2=4 op3=0/>
+    <INST_STORE abbrevid=30 op0=3 op1=54 op2=1 op3=1/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=3 op3=52/> record string = '4'
+    <INST_STORE abbrevid=30 op0=1 op1=54 op2=1 op3=1/>
+    <INST_LOAD abbrevid=28 op0=4 op1=26 op2=4 op3=0/>
+    <INST_ALLOCA abbrevid=18 op0=26 op1=17 op2=8 op3=68/>
+    <INST_STORE abbrevid=30 op0=1 op1=2 op2=4 op3=0/>
+    <INST_CAST abbrevid=17 op0=54 op1=13 op2=0/>
+    <INST_ALLOCA abbrevid=18 op0=13 op1=17 op2=8 op3=65/>
+    <INST_STORE abbrevid=30 op0=1 op1=2 op2=1 op3=0/>
+    <INST_ALLOCA abbrevid=18 op0=24 op1=17 op2=8 op3=68/>
+    <INST_STORE abbrevid=30 op0=1 op1=81 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=1 op3=80/> record string = 'P'
+    <INST_STORE abbrevid=30 op0=1 op1=82 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=2 op3=80/> record string = 'P'
+    <INST_STORE abbrevid=30 op0=1 op1=83 op2=4 op3=0/>
+    <INST_STORE abbrevid=30 op0=3 op1=15 op2=4 op3=0/>
+    <INST_LOAD abbrevid=28 op0=3 op1=21 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=4 op3=83/> record string = 'S'
+    <INST_LOAD abbrevid=28 op0=1 op1=18 op2=4 op3=0/>
+    <INST_ALLOCA abbrevid=18 op0=26 op1=17 op2=8 op3=68/>
+    <INST_STORE abbrevid=30 op0=1 op1=36 op2=4 op3=0/>
+    <INST_ALLOCA abbrevid=18 op0=26 op1=17 op2=8 op3=68/>
+    <INST_STORE abbrevid=30 op0=1 op1=12 op2=4 op3=0/>
+    <INST_ALLOCA abbrevid=18 op0=13 op1=17 op2=8 op3=68/>
+    <INST_STORE abbrevid=30 op0=1 op1=11 op2=4 op3=0/>
+    <INST_ALLOCA abbrevid=18 op0=26 op1=17 op2=8 op3=68/>
+    <INST_STORE abbrevid=30 op0=1 op1=22 op2=4 op3=0/>
+    <INST_ALLOCA abbrevid=18 op0=27 op1=17 op2=8 op3=68/>
+    <INST_STORE abbrevid=30 op0=1 op1=38 op2=4 op3=0/>
+    <INST_BR abbrevid=32 op0=1/>
+    <INST_PHI op0=18 op1=182 op2=0 op3=293 op4=4/>
+    <INST_CMP2 abbrevid=13 op0=1 op1=7 op2=36/>
+    <INST_BR abbrevid=33 op0=2 op1=3 op2=1/>
+    <INST_LOAD abbrevid=28 op0=7 op1=26 op2=4 op3=0/>
+    <INST_LOAD abbrevid=28 op0=7 op1=26 op2=4 op3=0/>
+    <INST_LOAD abbrevid=28 op0=7 op1=13 op2=4 op3=0/>
+    <INST_LOAD abbrevid=28 op0=7 op1=26 op2=4 op3=0/>
+    <INST_LOAD abbrevid=28 op0=7 op1=27 op2=4 op3=0/>
+    <INST_BINOP abbrevid=9 op0=7 op1=78 op2=2/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=16 op3=1/>
+    <INST_LOAD abbrevid=28 op0=1 op1=20 op2=0 op3=0/>
+    <INST_ALLOCA abbrevid=18 op0=24 op1=17 op2=8 op3=68/>
+    <INST_STORE abbrevid=30 op0=1 op1=102 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=1 op3=101/> record string = 'e'
+    <INST_STORE abbrevid=30 op0=1 op1=103 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=2 op3=101/> record string = 'e'
+    <INST_STORE abbrevid=30 op0=1 op1=104 op2=4 op3=0/>
+    <INST_ALLOCA abbrevid=18 op0=24 op1=17 op2=8 op3=68/>
+    <INST_STORE abbrevid=30 op0=1 op1=105 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=1 op3=104/> record string = 'h'
+    <INST_STORE abbrevid=30 op0=1 op1=106 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=2 op3=104/> record string = 'h'
+    <INST_STORE abbrevid=30 op0=1 op1=107 op2=4 op3=0/>
+    <INST_ALLOCA abbrevid=18 op0=24 op1=17 op2=8 op3=68/>
+    <INST_STORE abbrevid=30 op0=1 op1=108 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=1 op3=107/> record string = 'k'
+    <INST_STORE abbrevid=30 op0=1 op1=109 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=2 op3=107/> record string = 'k'
+    <INST_STORE abbrevid=30 op0=1 op1=110 op2=4 op3=0/>
+    <INST_LOAD abbrevid=28 op0=33 op1=26 op2=4 op3=0/>
+    <INST_STORE abbrevid=30 op0=4 op1=1 op2=4 op3=0/>
+    <INST_LOAD abbrevid=28 op0=4 op1=26 op2=4 op3=0/>
+    <INST_ALLOCA abbrevid=18 op0=24 op1=17 op2=8 op3=68/>
+    <INST_STORE abbrevid=30 op0=1 op1=113 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=1 op3=112/> record string = 'p'
+    <INST_STORE abbrevid=30 op0=1 op1=114 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=2 op3=112/> record string = 'p'
+    <INST_STORE abbrevid=30 op0=1 op1=115 op2=4 op3=0/>
+    <INST_STORE abbrevid=30 op0=3 op1=4 op2=4 op3=0/>
+    <INST_LOAD abbrevid=28 op0=3 op1=26 op2=4 op3=0/>
+    <INST_STORE abbrevid=30 op0=12 op1=1 op2=4 op3=0/>
+    <INST_LOAD abbrevid=28 op0=12 op1=26 op2=4 op3=0/>
+    <INST_ALLOCA abbrevid=18 op0=24 op1=17 op2=8 op3=68/>
+    <INST_STORE abbrevid=30 op0=1 op1=118 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=1 op3=117/> record string = 'u'
+    <INST_STORE abbrevid=30 op0=1 op1=119 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=2 op3=117/> record string = 'u'
+    <INST_STORE abbrevid=30 op0=1 op1=120 op2=4 op3=0/>
+    <INST_STORE abbrevid=30 op0=3 op1=4 op2=4 op3=0/>
+    <INST_LOAD abbrevid=28 op0=3 op1=26 op2=4 op3=0/>
+    <INST_ALLOCA abbrevid=18 op0=24 op1=17 op2=8 op3=68/>
+    <INST_STORE abbrevid=30 op0=1 op1=122 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=1 op3=121/> record string = 'y'
+    <INST_STORE abbrevid=30 op0=1 op1=123 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=2 op3=121/> record string = 'y'
+    <INST_STORE abbrevid=30 op0=1 op1=124 op2=4 op3=0/>
+    <INST_ALLOCA abbrevid=18 op0=24 op1=17 op2=8 op3=68/>
+    <INST_STORE abbrevid=30 op0=1 op1=125 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=1 op3=124/> record string = '|'
+    <INST_STORE abbrevid=30 op0=1 op1=126 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=2 op3=124/> record string = '|'
+    <INST_STORE abbrevid=30 op0=1 op1=127 op2=4 op3=0/>
+    <INST_LOAD abbrevid=28 op0=48 op1=13 op2=1 op3=0/>
+    <INST_ALLOCA abbrevid=18 op0=13 op1=17 op2=8 op3=68/>
+    <INST_STORE abbrevid=30 op0=1 op1=2 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=1 op3=132/>
+    <INST_LOAD abbrevid=28 op0=1 op1=14 op2=1 op3=0/>
+    <INST_CMP2 abbrevid=13 op0=1 op1=105 op2=32/>
+    <INST_BR abbrevid=33 op0=5 op1=6 op2=1/>
+    <INST_LOAD abbrevid=28 op0=46 op1=26 op2=4 op3=0/>
+    <INST_LOAD abbrevid=28 op0=46 op1=26 op2=4 op3=0/>
+    <INST_LOAD abbrevid=28 op0=46 op1=13 op2=4 op3=0/>
+    <INST_LOAD abbrevid=28 op0=46 op1=26 op2=4 op3=0/>
+    <INST_LOAD abbrevid=28 op0=46 op1=27 op2=4 op3=0/>
+    <INST_ALLOCA abbrevid=18 op0=24 op1=17 op2=8 op3=68/>
+    <INST_STORE abbrevid=30 op0=1 op1=138 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=1 op3=137/>
+    <INST_STORE abbrevid=30 op0=1 op1=139 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=2 op3=137/>
+    <INST_STORE abbrevid=30 op0=1 op1=140 op2=4 op3=0/>
+    <INST_ALLOCA abbrevid=18 op0=24 op1=17 op2=8 op3=68/>
+    <INST_STORE abbrevid=30 op0=1 op1=141 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=1 op3=140/>
+    <INST_STORE abbrevid=30 op0=1 op1=142 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=2 op3=140/>
+    <INST_STORE abbrevid=30 op0=1 op1=143 op2=4 op3=0/>
+    <INST_ALLOCA abbrevid=18 op0=24 op1=17 op2=8 op3=68/>
+    <INST_STORE abbrevid=30 op0=1 op1=144 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=1 op3=143/>
+    <INST_STORE abbrevid=30 op0=1 op1=145 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=2 op3=143/>
+    <INST_STORE abbrevid=30 op0=1 op1=146 op2=4 op3=0/>
+    <INST_LOAD abbrevid=28 op0=69 op1=26 op2=4 op3=0/>
+    <INST_STORE abbrevid=30 op0=4 op1=1 op2=4 op3=0/>
+    <INST_LOAD abbrevid=28 op0=4 op1=26 op2=4 op3=0/>
+    <INST_ALLOCA abbrevid=18 op0=24 op1=17 op2=8 op3=68/>
+    <INST_STORE abbrevid=30 op0=1 op1=149 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=1 op3=148/>
+    <INST_STORE abbrevid=30 op0=1 op1=150 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=2 op3=148/>
+    <INST_STORE abbrevid=30 op0=1 op1=151 op2=4 op3=0/>
+    <INST_STORE abbrevid=30 op0=3 op1=4 op2=4 op3=0/>
+    <INST_LOAD abbrevid=28 op0=3 op1=26 op2=4 op3=0/>
+    <INST_STORE abbrevid=30 op0=12 op1=1 op2=4 op3=0/>
+    <INST_LOAD abbrevid=28 op0=12 op1=26 op2=4 op3=0/>
+    <INST_ALLOCA abbrevid=18 op0=24 op1=17 op2=8 op3=68/>
+    <INST_STORE abbrevid=30 op0=1 op1=154 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=1 op3=153/>
+    <INST_STORE abbrevid=30 op0=1 op1=155 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=2 op3=153/>
+    <INST_STORE abbrevid=30 op0=1 op1=156 op2=4 op3=0/>
+    <INST_STORE abbrevid=30 op0=3 op1=4 op2=4 op3=0/>
+    <INST_LOAD abbrevid=28 op0=3 op1=26 op2=4 op3=0/>
+    <INST_ALLOCA abbrevid=18 op0=24 op1=17 op2=8 op3=68/>
+    <INST_STORE abbrevid=30 op0=1 op1=158 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=1 op3=157/>
+    <INST_STORE abbrevid=30 op0=1 op1=159 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=2 op3=157/>
+    <INST_STORE abbrevid=30 op0=1 op1=160 op2=4 op3=0/>
+    <INST_STORE abbrevid=30 op0=3 op1=4 op2=4 op3=0/>
+    <INST_ALLOCA abbrevid=18 op0=24 op1=17 op2=8 op3=68/>
+    <INST_STORE abbrevid=30 op0=1 op1=161 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=1 op3=160/>
+    <INST_STORE abbrevid=30 op0=1 op1=162 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=2 op3=160/>
+    <INST_STORE abbrevid=30 op0=1 op1=163 op2=4 op3=0/>
+    <INST_STORE abbrevid=30 op0=3 op1=130 op2=1 op3=1/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=3 op3=140/>
+    <INST_STORE abbrevid=30 op0=1 op1=142 op2=1 op3=1/>
+    <INST_LOAD abbrevid=28 op0=7 op1=21 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=8 op3=164/>
+    <INST_LOAD abbrevid=28 op0=1 op1=18 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=10 op3=165/>
+    <INST_LOAD abbrevid=28 op0=1 op1=18 op2=4 op3=0/>
+    <INST_LOAD abbrevid=28 op0=9 op1=21 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=10 op3=169/>
+    <INST_LOAD abbrevid=28 op0=1 op1=18 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=12 op3=170/>
+    <INST_LOAD abbrevid=28 op0=1 op1=18 op2=4 op3=0/>
+    <INST_CALL abbrevid=5 op0=0 op1=32768 op2=31 op3=180 op4=37 op5=10 op6=8 op7=6 op8=5 op9=3 op10=1 op11=139/>
+    <INST_LOAD abbrevid=28 op0=37 op1=26 op2=4 op3=0/>
+    <INST_LOAD abbrevid=28 op0=98 op1=26 op2=4 op3=0/>
+    <INST_STORE abbrevid=30 op0=107 op1=2 op2=4 op3=0/>
+    <INST_LOAD abbrevid=28 op0=107 op1=26 op2=4 op3=0/>
+    <INST_EXTRACTVAL abbrevid=20 op0=1 op1=0/>
+    <INST_STORE abbrevid=30 op0=144 op1=1 op2=4 op3=1/>
+    <INST_EXTRACTVAL abbrevid=20 op0=2 op1=1/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=145 op3=178/>
+    <INST_STORE abbrevid=30 op0=1 op1=2 op2=4 op3=1/>
+    <INST_EXTRACTVAL abbrevid=20 op0=4 op1=2/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=147 op3=179/>
+    <INST_STORE abbrevid=30 op0=1 op1=2 op2=4 op3=1/>
+    <INST_RET abbrevid=25/>
+    <INST_PHI op0=26 op1=121 op2=5 op3=133 op4=6/>
+    <INST_STORE abbrevid=30 op0=59 op1=1 op2=4 op3=0/>
+    <INST_LOAD abbrevid=28 op0=59 op1=26 op2=4 op3=0/>
+    <INST_ALLOCA abbrevid=18 op0=18 op1=17 op2=41 op3=68/>
+    <INST_CAST abbrevid=17 op0=85 op1=18 op2=0/>
+    <INST_BINOP abbrevid=9 op0=86 op1=154 op2=8/>
+    <INST_CAST abbrevid=17 op0=1 op1=18 op2=0/>
+    <INST_CALL abbrevid=5 op0=0 op1=32768 op2=30 op3=195 op4=4 op5=3 op6=1 op7=153/>
+    <INST_LOAD abbrevid=28 op0=4 op1=26 op2=4 op3=0/>
+    <INST_ALLOCA abbrevid=18 op0=24 op1=17 op2=8 op3=68/>
+    <INST_STORE abbrevid=30 op0=1 op1=190 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=1 op3=189/>
+    <INST_STORE abbrevid=30 op0=1 op1=191 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=2 op3=189/>
+    <INST_STORE abbrevid=30 op0=1 op1=192 op2=4 op3=0/>
+    <INST_ALLOCA abbrevid=18 op0=24 op1=17 op2=8 op3=68/>
+    <INST_STORE abbrevid=30 op0=1 op1=193 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=1 op3=192/>
+    <INST_STORE abbrevid=30 op0=1 op1=194 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=2 op3=192/>
+    <INST_STORE abbrevid=30 op0=1 op1=195 op2=4 op3=0/>
+    <INST_STORE abbrevid=30 op0=3 op1=12 op2=4 op3=0/>
+    <INST_ALLOCA abbrevid=18 op0=24 op1=17 op2=8 op3=68/>
+    <INST_STORE abbrevid=30 op0=1 op1=196 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=1 op3=195/>
+    <INST_STORE abbrevid=30 op0=1 op1=197 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=2 op3=195/>
+    <INST_STORE abbrevid=30 op0=1 op1=198 op2=4 op3=0/>
+    <INST_STORE abbrevid=30 op0=3 op1=10 op2=4 op3=0/>
+    <INST_LOAD abbrevid=28 op0=6 op1=21 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=7 op3=198/>
+    <INST_LOAD abbrevid=28 op0=1 op1=18 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=9 op3=199/>
+    <INST_LOAD abbrevid=28 op0=1 op1=18 op2=4 op3=0/>
+    <INST_LOAD abbrevid=28 op0=8 op1=21 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=9 op3=203/>
+    <INST_LOAD abbrevid=28 op0=1 op1=18 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=11 op3=204/>
+    <INST_LOAD abbrevid=28 op0=1 op1=18 op2=4 op3=0/>
+    <INST_CALL abbrevid=5 op0=0 op1=32768 op2=31 op3=214 op4=19 op5=10 op6=8 op7=6 op8=5 op9=3 op10=1 op11=173/>
+    <INST_LOAD abbrevid=28 op0=19 op1=26 op2=4 op3=0/>
+    <INST_STORE abbrevid=30 op0=88 op1=1 op2=4 op3=0/>
+    <INST_LOAD abbrevid=28 op0=88 op1=26 op2=4 op3=0/>
+    <INST_ALLOCA abbrevid=18 op0=24 op1=17 op2=8 op3=68/>
+    <INST_STORE abbrevid=30 op0=1 op1=211 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=1 op3=210/>
+    <INST_STORE abbrevid=30 op0=1 op1=212 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=2 op3=210/>
+    <INST_STORE abbrevid=30 op0=1 op1=213 op2=4 op3=0/>
+    <INST_ALLOCA abbrevid=18 op0=24 op1=17 op2=8 op3=68/>
+    <INST_STORE abbrevid=30 op0=1 op1=214 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=1 op3=213/>
+    <INST_STORE abbrevid=30 op0=1 op1=215 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=2 op3=213/>
+    <INST_STORE abbrevid=30 op0=1 op1=216 op2=4 op3=0/>
+    <INST_STORE abbrevid=30 op0=3 op1=96 op2=4 op3=0/>
+    <INST_ALLOCA abbrevid=18 op0=24 op1=17 op2=8 op3=68/>
+    <INST_STORE abbrevid=30 op0=1 op1=217 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=1 op3=216/>
+    <INST_STORE abbrevid=30 op0=1 op1=218 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=2 op3=216/>
+    <INST_STORE abbrevid=30 op0=1 op1=219 op2=4 op3=0/>
+    <INST_STORE abbrevid=30 op0=3 op1=10 op2=4 op3=0/>
+    <INST_LOAD abbrevid=28 op0=6 op1=21 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=7 op3=219/>
+    <INST_LOAD abbrevid=28 op0=1 op1=18 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=9 op3=220/>
+    <INST_LOAD abbrevid=28 op0=1 op1=18 op2=4 op3=0/>
+    <INST_LOAD abbrevid=28 op0=8 op1=21 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=9 op3=224/>
+    <INST_LOAD abbrevid=28 op0=1 op1=18 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=11 op3=225/>
+    <INST_LOAD abbrevid=28 op0=1 op1=18 op2=4 op3=0/>
+    <INST_CALL abbrevid=5 op0=0 op1=32768 op2=31 op3=235 op4=19 op5=10 op6=8 op7=6 op8=5 op9=3 op10=1 op11=194/>
+    <INST_LOAD abbrevid=28 op0=19 op1=26 op2=4 op3=0/>
+    <INST_STORE abbrevid=30 op0=129 op1=1 op2=4 op3=0/>
+    <INST_LOAD abbrevid=28 op0=129 op1=26 op2=4 op3=0/>
+    <INST_LOAD abbrevid=28 op0=154 op1=26 op2=4 op3=0/>
+    <INST_ALLOCA abbrevid=18 op0=24 op1=17 op2=8 op3=68/>
+    <INST_STORE abbrevid=30 op0=1 op1=233 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=1 op3=232/>
+    <INST_STORE abbrevid=30 op0=1 op1=234 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=2 op3=232/>
+    <INST_STORE abbrevid=30 op0=1 op1=235 op2=4 op3=0/>
+    <INST_STORE abbrevid=30 op0=3 op1=5 op2=4 op3=0/>
+    <INST_LOAD abbrevid=28 op0=3 op1=26 op2=4 op3=0/>
+    <INST_STORE abbrevid=30 op0=159 op1=1 op2=4 op3=0/>
+    <INST_CAST abbrevid=17 op0=236 op1=13 op2=0/>
+    <INST_STORE abbrevid=30 op0=158 op1=1 op2=1 op3=0/>
+    <INST_BINOP abbrevid=9 op0=146 op1=213 op2=0/>
+    <INST_BR abbrevid=32 op0=1/>
+    <INST_ALLOCA abbrevid=18 op0=24 op1=17 op2=8 op3=68/>
+    <INST_STORE abbrevid=30 op0=1 op1=239 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=1 op3=238/>
+    <INST_STORE abbrevid=30 op0=1 op1=240 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=2 op3=238/>
+    <INST_STORE abbrevid=30 op0=1 op1=241 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=3 op3=218/>
+    <INST_STORE abbrevid=30 op0=1 op1=215 op2=1 op3=1/>
+    <INST_LOAD abbrevid=28 op0=4 op1=26 op2=4 op3=0/>
+    <INST_BR abbrevid=32 op0=4/>
+    <INST_ALLOCA abbrevid=18 op0=24 op1=17 op2=8 op3=68/>
+    <INST_STORE abbrevid=30 op0=1 op1=244 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=1 op3=243/>
+    <INST_STORE abbrevid=30 op0=1 op1=245 op2=4 op3=0/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=2 op3=243/>
+    <INST_STORE abbrevid=30 op0=1 op1=246 op2=4 op3=0/>
+    <INST_STORE abbrevid=30 op0=3 op1=218 op2=1 op3=1/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=3 op3=248/>
+    <INST_STORE abbrevid=30 op0=1 op1=218 op2=1 op3=1/>
+    <INST_GEP abbrevid=19 op0=1 op1=14 op2=4 op3=224/>
+    <INST_STORE abbrevid=30 op0=1 op1=218 op2=1 op3=1/>
+    <INST_LOAD abbrevid=28 op0=5 op1=26 op2=4 op3=0/>
+    <INST_BR abbrevid=32 op0=4/>
+    <METADATA_ATTACHMENT_BLOCK NumWords=1 BlockCodeSize=3>
+    </METADATA_ATTACHMENT_BLOCK>
+  </FUNCTION_BLOCK>
+</MODULE_BLOCK>
+<STRTAB_BLOCK NumWords=32 BlockCodeSize=3>
+  <BLOB abbrevid=4/> blob data = unprintable, 116 bytes.
+</STRTAB_BLOCK>
+
+
+Summary of .context/list_sublist_basic.bc:
+         Total size: 23776b/2972.00B/743W
+        Stream type: LLVM IR
+  # Toplevel Blocks: 3
+
+Per-block Summary:
+  Block ID #0 (BLOCKINFO_BLOCK):
+      Num Instances: 1
+         Total Size: 2100b/262.50B/65W
+    Percent of file: 8.8324%
+      Num SubBlocks: 0
+        Num Abbrevs: 42
+        Num Records: 4
+    Percent Abbrevs: 0.0000%
+
+	Record Histogram:
+		  Count    # Bits     b/Rec   % Abv  Record Kind
+		      4        80      20.0          SETBID
+
+  Block ID #8 (MODULE_BLOCK):
+      Num Instances: 1
+         Total Size: 1768b/221.00B/55W
+    Percent of file: 7.4361%
+      Num SubBlocks: 9
+        Num Abbrevs: 5
+        Num Records: 8
+    Percent Abbrevs: 100.0000%
+
+	Record Histogram:
+		  Count    # Bits     b/Rec   % Abv  Record Kind
+		      5       630     126.0  100.00  FUNCTION
+		      1       122            100.00  SOURCE_FILENAME
+		      1       222            100.00  TRIPLE
+		      1         4            100.00  VERSION
+
+  Block ID #9 (PARAMATTR_BLOCK):
+      Num Instances: 1
+         Total Size: 116b/14.50B/3W
+    Percent of file: 0.4879%
+      Num SubBlocks: 0
+        Num Abbrevs: 1
+        Num Records: 1
+    Percent Abbrevs: 100.0000%
+
+	Record Histogram:
+		  Count    # Bits     b/Rec   % Abv  Record Kind
+		      1         9            100.00  ENTRY
+
+  Block ID #10 (PARAMATTR_GROUP_BLOCK_ID):
+      Num Instances: 1
+         Total Size: 84b/10.50B/2W
+    Percent of file: 0.3533%
+      Num SubBlocks: 0
+        Num Abbrevs: 0
+        Num Records: 0
+
+  Block ID #11 (CONSTANTS_BLOCK):
+      Num Instances: 1
+         Total Size: 2366b/295.75B/73W
+    Percent of file: 9.9512%
+      Num SubBlocks: 0
+        Num Abbrevs: 22
+        Num Records: 66
+    Percent Abbrevs: 100.0000%
+
+	Record Histogram:
+		  Count    # Bits     b/Rec   % Abv  Record Kind
+		     37      1161      31.4  100.00  INTEGER
+		     27       270      10.0  100.00  SETTYPE
+		      1         5            100.00  UnknownCode26
+		      1         5            100.00  NULL
+
+  Block ID #12 (FUNCTION_BLOCK):
+      Num Instances: 1
+         Total Size: 11848b/1481.00B/370W
+    Percent of file: 49.8318%
+      Num SubBlocks: 1
+        Num Abbrevs: 0
+        Num Records: 367
+    Percent Abbrevs: 99.4550%
+
+	Record Histogram:
+		  Count    # Bits     b/Rec   % Abv  Record Kind
+		    141      4221      29.9  100.00  INST_STORE
+		     93      3354      36.1  100.00  INST_GEP
+		     64      1632      25.5  100.00  INST_LOAD
+		     39      1293      33.2  100.00  INST_ALLOCA
+		      6       612     102.0  100.00  INST_CALL
+		      6        96      16.0  100.00  INST_BR
+		      4       102      25.5  100.00  INST_CAST
+		      3        72      24.0  100.00  INST_EXTRACTVAL
+		      3        96      32.0  100.00  INST_BINOP
+		      2        54      27.0  100.00  INST_CMP2
+		      2        78      39.0  100.00  INST_INSERTVAL
+		      2       120      60.0          INST_PHI
+		      1         6            100.00  INST_RET
+		      1        14            100.00  DECLAREBLOCKS
+
+  Block ID #13 (IDENTIFICATION_BLOCK_ID):
+      Num Instances: 1
+         Total Size: 374b/46.75B/11W
+    Percent of file: 1.5730%
+      Num SubBlocks: 0
+        Num Abbrevs: 2
+        Num Records: 2
+    Percent Abbrevs: 100.0000%
+
+	Record Histogram:
+		  Count    # Bits     b/Rec   % Abv  Record Kind
+		      1         9            100.00  EPOCH
+		      1       225            100.00  STRING
+
+  Block ID #15 (METADATA_BLOCK):
+      Num Instances: 1
+         Total Size: 2260b/282.50B/70W
+    Percent of file: 9.5054%
+      Num SubBlocks: 0
+        Num Abbrevs: 22
+        Num Records: 1
+    Percent Abbrevs: 100.0000%
+
+	Record Histogram:
+		  Count    # Bits     b/Rec   % Abv  Record Kind
+		      1        11            100.00  NODE
+
+  Block ID #16 (METADATA_ATTACHMENT_BLOCK):
+      Num Instances: 1
+         Total Size: 76b/9.50B/2W
+    Percent of file: 0.3197%
+      Num SubBlocks: 0
+        Num Abbrevs: 0
+        Num Records: 0
+
+  Block ID #17 (TYPE_BLOCK_ID):
+      Num Instances: 1
+         Total Size: 1252b/156.50B/39W
+    Percent of file: 5.2658%
+      Num SubBlocks: 0
+        Num Abbrevs: 12
+        Num Records: 33
+    Percent Abbrevs: 100.0000%
+
+	Record Histogram:
+		  Count    # Bits     b/Rec   % Abv  Record Kind
+		      8       256      32.0  100.00  INTEGER
+		      5       220      44.0  100.00  FUNCTION
+		      2        16       8.0  100.00  UnknownCode25
+		      2        47      23.5  100.00  STRUCT_ANON
+		      2        50      25.0  100.00  ARRAY
+		      1        12            100.00  UnknownCode24
+		      1        12            100.00  BFLOAT
+		      1        12            100.00  TOKEN
+		      1        12            100.00  X86_MMX
+		      1        12            100.00  METADATA
+		      1        12            100.00  PPC_FP128
+		      1        12            100.00  FP128
+		      1        12            100.00  X86_FP80
+		      1        12            100.00  HALF
+		      1         8            100.00  LABEL
+		      1         8            100.00  DOUBLE
+		      1         8            100.00  FLOAT
+		      1         8            100.00  VOID
+		      1        36            100.00  NUMENTRY
+
+  Block ID #21 (OPERAND_BUNDLE_TAGS_BLOCK):
+      Num Instances: 1
+         Total Size: 116b/14.50B/3W
+    Percent of file: 0.4879%
+      Num SubBlocks: 0
+        Num Abbrevs: 1
+        Num Records: 1
+    Percent Abbrevs: 100.0000%
+
+	Record Histogram:
+		  Count    # Bits     b/Rec   % Abv  Record Kind
+		      1        33            100.00  OPERAND_BUNDLE_TAG
+
+  Block ID #22 (METADATA_KIND_BLOCK):
+      Num Instances: 1
+         Total Size: 276b/34.50B/8W
+    Percent of file: 1.1608%
+      Num SubBlocks: 0
+        Num Abbrevs: 1
+        Num Records: 2
+    Percent Abbrevs: 100.0000%
+
+	Record Histogram:
+		  Count    # Bits     b/Rec   % Abv  Record Kind
+		      2       166      83.0  100.00  KIND
+
+  Block ID #23 (STRTAB_BLOCK):
+      Num Instances: 1
+         Total Size: 1078b/134.75B/33W
+    Percent of file: 4.5340%
+      Num SubBlocks: 0
+        Num Abbrevs: 1
+        Num Records: 1
+    Percent Abbrevs: 100.0000%
+
+	Record Histogram:
+		  Count    # Bits     b/Rec   % Abv  Record Kind
+		      1       971            100.00  BLOB
+

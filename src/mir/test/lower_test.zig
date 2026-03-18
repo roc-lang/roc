@@ -1327,6 +1327,71 @@ test "fromTypeVar: polymorphic opaque with function field propagates nominal arg
     try testing.expectEqual(Monotype.Prim.str, payload_type.prim);
 }
 
+test "lambda set: opaque function field call through param gets field lambda set" {
+    var env = try MirTestEnv.initModule("Test",
+        \\W(a) := { f : {} -> [V(a)] }.{
+        \\    run : W(a) -> [V(a)]
+        \\    run = |w| (w.f)({})
+        \\
+        \\    mk : a -> W(a)
+        \\    mk = |val| { f: |_| V(val) }
+        \\}
+        \\
+        \\result = W.run(W.mk("x"))
+    );
+    defer env.deinit();
+
+    _ = try env.lowerNamedDef("result");
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(env.builtin_module.env),
+        env.module_env,
+    };
+    var ls_store = try LambdaSet.infer(test_allocator, env.mir_store, all_module_envs[0..]);
+    defer ls_store.deinit(test_allocator);
+
+    var saw_field_call = false;
+    var saw_field_call_with_lambda_set = false;
+    var saw_param_field_lambda_set = false;
+
+    var expr_index: u32 = 0;
+    while (expr_index < env.mir_store.exprs.items.len) : (expr_index += 1) {
+        const expr_id: MIR.ExprId = @enumFromInt(expr_index);
+        const expr = env.mir_store.getExpr(expr_id);
+        if (expr != .call) continue;
+        const func_expr = env.mir_store.getExpr(expr.call.func);
+
+        var field_access_expr_id = expr.call.func;
+        var field_access_expr = func_expr;
+
+        if (field_access_expr == .lookup) {
+            const def_expr_id = env.mir_store.getSymbolDef(field_access_expr.lookup) orelse continue;
+            const def_expr = env.mir_store.getExpr(def_expr_id);
+            if (def_expr != .struct_access) continue;
+            field_access_expr_id = def_expr_id;
+            field_access_expr = def_expr;
+        } else if (field_access_expr != .struct_access) {
+            continue;
+        }
+
+        const access = field_access_expr.struct_access;
+        const struct_expr = env.mir_store.getExpr(access.struct_);
+        if (struct_expr != .lookup) continue;
+
+        saw_field_call = true;
+        if (ls_store.getExprLambdaSet(field_access_expr_id) != null) {
+            saw_field_call_with_lambda_set = true;
+        }
+        if (ls_store.getSymbolFieldLambdaSet(struct_expr.lookup, access.field_idx) != null) {
+            saw_param_field_lambda_set = true;
+        }
+    }
+
+    try testing.expect(saw_field_call);
+    try testing.expect(saw_field_call_with_lambda_set);
+    try testing.expect(saw_param_field_lambda_set);
+}
+
 // --- Gap #26: lowerExternalDef recursion guard ---
 
 test "lowerExternalDef: recursion guard returns lookup placeholder" {

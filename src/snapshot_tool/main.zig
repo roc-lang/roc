@@ -981,6 +981,12 @@ fn processSnapshotContent(
     var success = true;
     log("Generating snapshot for: {s}", .{output_path});
 
+    // Skip snapshots marked with skip=true in META
+    if (content.meta.skip) {
+        log("Skipping snapshot (skip=true): {s}", .{output_path});
+        return true;
+    }
+
     // Handle REPL snapshots separately
     if (content.meta.node_type == .repl) {
         return processReplSnapshot(allocator, content, output_path, config);
@@ -1737,15 +1743,18 @@ const Meta = struct {
     description: []const u8,
     node_type: NodeType,
     filename: ?[]const u8 = null,
+    skip: bool = false,
 
     const DESC_START: []const u8 = "description=";
     const TYPE_START: []const u8 = "type=";
+    const SKIP_START: []const u8 = "skip=";
 
     fn fromString(text: []const u8) Error!Meta {
         var lines = std.mem.splitScalar(u8, text, '\n');
         var desc: []const u8 = "";
         var node_type: NodeType = .file;
         var filename: ?[]const u8 = null;
+        var skip: bool = false;
         while (true) {
             var line = lines.next() orelse break;
             if (std.mem.startsWith(u8, line, DESC_START)) {
@@ -1759,6 +1768,8 @@ const Meta = struct {
                 } else {
                     node_type = try NodeType.fromString(ty);
                 }
+            } else if (std.mem.startsWith(u8, line, SKIP_START)) {
+                skip = std.mem.eql(u8, line[(SKIP_START.len)..], "true");
             }
         }
 
@@ -1766,6 +1777,7 @@ const Meta = struct {
             .description = desc,
             .node_type = node_type,
             .filename = filename,
+            .skip = skip,
         };
     }
 
@@ -1778,6 +1790,11 @@ const Meta = struct {
         if (self.filename) |fname| {
             try writer.writeAll(":");
             try writer.writeAll(fname);
+        }
+        if (self.skip) {
+            try writer.writeAll("\n");
+            try writer.writeAll(SKIP_START);
+            try writer.writeAll("true");
         }
     }
 
@@ -4209,6 +4226,13 @@ fn processDevObjectSnapshot(
         return false;
     }
 
+    const pre_rc_root_exprs = try allocator.alloc(lir_mod.LirExprId, entrypoints.items.len);
+    defer allocator.free(pre_rc_root_exprs);
+    for (entrypoints.items, 0..) |ep, i| {
+        pre_rc_root_exprs[i] = ep.body_expr;
+    }
+    try lir_mod.CallCanonicalize.canonicalizeDirectCalls(allocator, &lir_store, pre_rc_root_exprs);
+
     // 9. RC insertion
     var rc_pass = lir_mod.RcInsert.RcInsertPass.init(allocator, &lir_store, &layout_store) catch {
         std.log.err("Failed to create RC insertion pass", .{});
@@ -4221,6 +4245,12 @@ fn processDevObjectSnapshot(
     }
 
     lir_mod.RcInsert.insertRcOpsIntoSymbolDefsBestEffort(allocator, &lir_store, &layout_store);
+    const root_exprs = try allocator.alloc(lir_mod.LirExprId, entrypoints.items.len);
+    defer allocator.free(root_exprs);
+    for (entrypoints.items, 0..) |ep, i| {
+        root_exprs[i] = ep.body_expr;
+    }
+    try lir_mod.CallCanonicalize.canonicalizeDirectCalls(allocator, &lir_store, root_exprs);
 
     const procs = lir_store.getProcs();
 

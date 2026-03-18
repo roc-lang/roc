@@ -4,7 +4,7 @@
 //! so all arguments fit in registers and avoid platform-specific struct-passing ABI issues.
 //! They are used by both:
 //! - Native execution (dev evaluator) via direct function pointers
-//! - Object file generation (roc build --backend=dev) via symbol references
+//! - Object file generation (roc build --opt=dev) via symbol references
 
 const std = @import("std");
 const str = @import("str.zig");

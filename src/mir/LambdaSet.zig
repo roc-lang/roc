@@ -58,8 +58,10 @@ pub const Store = struct {
     lambda_sets: std.ArrayListUnmanaged(LambdaSet),
     members: std.ArrayListUnmanaged(Member),
     symbol_lambda_sets: std.AutoHashMapUnmanaged(u64, Idx),
+    symbol_field_lambda_sets: std.AutoHashMapUnmanaged(u128, Idx),
     expr_lambda_sets: std.AutoHashMapUnmanaged(u32, Idx),
     member_return_lambda_sets: std.AutoHashMapUnmanaged(u64, Idx),
+    member_return_field_lambda_sets: std.AutoHashMapUnmanaged(u128, Idx),
 
     /// Create an empty lambda-set store.
     pub fn init() Store {
@@ -67,8 +69,10 @@ pub const Store = struct {
             .lambda_sets = .empty,
             .members = .empty,
             .symbol_lambda_sets = .empty,
+            .symbol_field_lambda_sets = .empty,
             .expr_lambda_sets = .empty,
             .member_return_lambda_sets = .empty,
+            .member_return_field_lambda_sets = .empty,
         };
     }
 
@@ -77,8 +81,10 @@ pub const Store = struct {
         self.lambda_sets.deinit(allocator);
         self.members.deinit(allocator);
         self.symbol_lambda_sets.deinit(allocator);
+        self.symbol_field_lambda_sets.deinit(allocator);
         self.expr_lambda_sets.deinit(allocator);
         self.member_return_lambda_sets.deinit(allocator);
+        self.member_return_field_lambda_sets.deinit(allocator);
     }
 
     /// Append callable members and return their span.
@@ -112,6 +118,11 @@ pub const Store = struct {
         return self.symbol_lambda_sets.get(symbol.raw());
     }
 
+    /// Get the lambda set inferred for one function-typed field of a symbol.
+    pub fn getSymbolFieldLambdaSet(self: *const Store, symbol: MIR.Symbol, field_idx: u32) ?Idx {
+        return self.symbol_field_lambda_sets.get(structFieldKey(symbol, field_idx));
+    }
+
     /// Get the lambda set inferred for an expression, if one exists.
     pub fn getExprLambdaSet(self: *const Store, expr_id: MIR.ExprId) ?Idx {
         return self.expr_lambda_sets.get(@intFromEnum(expr_id));
@@ -120,6 +131,11 @@ pub const Store = struct {
     /// Get the inferred return lambda set for a callable member, if one exists.
     pub fn getMemberReturnLambdaSet(self: *const Store, fn_symbol: MIR.Symbol) ?Idx {
         return self.member_return_lambda_sets.get(fn_symbol.raw());
+    }
+
+    /// Get the inferred return lambda set for one function-typed field of a member.
+    pub fn getMemberReturnFieldLambdaSet(self: *const Store, fn_symbol: MIR.Symbol, field_idx: u32) ?Idx {
+        return self.member_return_field_lambda_sets.get(structFieldKey(fn_symbol, field_idx));
     }
 };
 
@@ -339,13 +355,28 @@ fn propagateCallArgs(allocator: Allocator, mir_store: *const MIR.Store, store: *
         const callee_ls = store.getExprLambdaSet(call.func) orelse continue;
         const args = mir_store.getExprSpan(call.args);
         for (args, 0..) |arg_expr, arg_index| {
-            const arg_ls = store.getExprLambdaSet(arg_expr) orelse continue;
             for (store.getMembers(store.getLambdaSet(callee_ls).members)) |member| {
                 const params = paramsForMember(mir_store, member) orelse continue;
                 const param_ids = mir_store.getPatternSpan(params);
                 if (arg_index >= param_ids.len) continue;
                 const param_symbol = patternBoundSymbol(mir_store, param_ids[arg_index]) orelse continue;
-                changed = (try mergeIntoSymbol(allocator, store, param_symbol, arg_ls)) or changed;
+                if (store.getExprLambdaSet(arg_expr)) |arg_ls| {
+                    changed = (try mergeIntoSymbol(allocator, store, param_symbol, arg_ls)) or changed;
+                }
+                changed = (try propagateStructFieldLambdaSetsToSymbol(
+                    allocator,
+                    mir_store,
+                    store,
+                    arg_expr,
+                    param_symbol,
+                )) or changed;
+                changed = (try propagateCallReturnFieldLambdaSetsToSymbol(
+                    allocator,
+                    mir_store,
+                    store,
+                    arg_expr,
+                    param_symbol,
+                )) or changed;
             }
         }
     }
@@ -478,8 +509,16 @@ fn propagateMemberReturnSets(allocator: Allocator, mir_store: *const MIR.Store, 
         const def_expr_id = entry.value_ptr.*;
         if (resolveToLambdaParams(mir_store, def_expr_id) == null) continue;
         const body = resolveToLambdaBody(mir_store, def_expr_id) orelse continue;
-        const body_ls = store.getExprLambdaSet(body) orelse continue;
-        changed = (try mergeMemberReturnLambdaSet(allocator, store, fn_symbol, body_ls)) or changed;
+        if (store.getExprLambdaSet(body)) |body_ls| {
+            changed = (try mergeMemberReturnLambdaSet(allocator, store, fn_symbol, body_ls)) or changed;
+        }
+        changed = (try propagateReturnFieldLambdaSetsToMember(
+            allocator,
+            mir_store,
+            store,
+            body,
+            fn_symbol,
+        )) or changed;
     }
 
     return changed;
@@ -514,6 +553,10 @@ fn resolveStructFieldLambdaSet(
     expr_id: MIR.ExprId,
     field_idx: u32,
 ) ?Idx {
+    const expr = mir_store.getExpr(expr_id);
+    if (expr == .lookup) {
+        if (store.getSymbolFieldLambdaSet(expr.lookup, field_idx)) |ls_idx| return ls_idx;
+    }
     const field_expr = resolveStructFieldExpr(mir_store, expr_id, field_idx) orelse return null;
     return store.getExprLambdaSet(field_expr);
 }
@@ -535,6 +578,24 @@ fn resolveStructFieldExpr(
             break :blk resolveStructFieldExpr(mir_store, def_expr, field_idx);
         },
         .block => |block| resolveStructFieldExpr(mir_store, block.final_expr, field_idx),
+        else => null,
+    };
+}
+
+fn structFieldKey(symbol: MIR.Symbol, field_idx: u32) u128 {
+    return (@as(u128, symbol.raw()) << 32) | @as(u128, field_idx);
+}
+
+fn structFieldArityForExpr(mir_store: *const MIR.Store, expr_id: MIR.ExprId) ?u32 {
+    return structFieldArityForMonotype(mir_store, mir_store.typeOf(expr_id));
+}
+
+fn structFieldArityForMonotype(mir_store: *const MIR.Store, mono_idx: anytype) ?u32 {
+    const mono = mir_store.monotype_store.getMonotype(mono_idx);
+    return switch (mono) {
+        .record => |record| @intCast(mir_store.monotype_store.getFields(record.fields).len),
+        .tuple => |tuple| @intCast(mir_store.monotype_store.getIdxSpan(tuple.elems).len),
+        .box => |box| structFieldArityForMonotype(mir_store, box.inner),
         else => null,
     };
 }
@@ -638,6 +699,85 @@ fn mergeIntoSymbol(allocator: Allocator, store: *Store, symbol: MIR.Symbol, new_
     return mergeLambdaSetEntries(allocator, store, &store.symbol_lambda_sets, symbol.raw(), existing.?, new_ls_idx);
 }
 
+fn mergeIntoSymbolField(
+    allocator: Allocator,
+    store: *Store,
+    symbol: MIR.Symbol,
+    field_idx: u32,
+    new_ls_idx: Idx,
+) Allocator.Error!bool {
+    const key = structFieldKey(symbol, field_idx);
+    const existing = store.symbol_field_lambda_sets.get(key);
+    if (existing == null) {
+        try store.symbol_field_lambda_sets.put(allocator, key, new_ls_idx);
+        return true;
+    }
+    return mergeLambdaSetEntries(allocator, store, &store.symbol_field_lambda_sets, key, existing.?, new_ls_idx);
+}
+
+fn propagateStructFieldLambdaSetsToSymbol(
+    allocator: Allocator,
+    mir_store: *const MIR.Store,
+    store: *Store,
+    expr_id: MIR.ExprId,
+    symbol: MIR.Symbol,
+) Allocator.Error!bool {
+    const field_count = structFieldArityForExpr(mir_store, expr_id) orelse return false;
+
+    var changed = false;
+    var field_idx: u32 = 0;
+    while (field_idx < field_count) : (field_idx += 1) {
+        const field_ls = resolveStructFieldLambdaSet(mir_store, store, expr_id, field_idx) orelse continue;
+        changed = (try mergeIntoSymbolField(allocator, store, symbol, field_idx, field_ls)) or changed;
+    }
+
+    return changed;
+}
+
+fn propagateReturnFieldLambdaSetsToMember(
+    allocator: Allocator,
+    mir_store: *const MIR.Store,
+    store: *Store,
+    expr_id: MIR.ExprId,
+    fn_symbol: MIR.Symbol,
+) Allocator.Error!bool {
+    const field_count = structFieldArityForExpr(mir_store, expr_id) orelse return false;
+
+    var changed = false;
+    var field_idx: u32 = 0;
+    while (field_idx < field_count) : (field_idx += 1) {
+        const field_ls = resolveStructFieldLambdaSet(mir_store, store, expr_id, field_idx) orelse continue;
+        changed = (try mergeMemberReturnFieldLambdaSet(allocator, store, fn_symbol, field_idx, field_ls)) or changed;
+    }
+
+    return changed;
+}
+
+fn propagateCallReturnFieldLambdaSetsToSymbol(
+    allocator: Allocator,
+    mir_store: *const MIR.Store,
+    store: *Store,
+    expr_id: MIR.ExprId,
+    symbol: MIR.Symbol,
+) Allocator.Error!bool {
+    const expr = mir_store.getExpr(expr_id);
+    if (expr != .call) return false;
+
+    const field_count = structFieldArityForExpr(mir_store, expr_id) orelse return false;
+    const callee_ls = store.getExprLambdaSet(expr.call.func) orelse return false;
+
+    var changed = false;
+    for (store.getMembers(store.getLambdaSet(callee_ls).members)) |member| {
+        var field_idx: u32 = 0;
+        while (field_idx < field_count) : (field_idx += 1) {
+            const field_ls = store.getMemberReturnFieldLambdaSet(member.fn_symbol, field_idx) orelse continue;
+            changed = (try mergeIntoSymbolField(allocator, store, symbol, field_idx, field_ls)) or changed;
+        }
+    }
+
+    return changed;
+}
+
 fn mergeExprLambdaSet(allocator: Allocator, store: *Store, expr_id: MIR.ExprId, new_ls_idx: Idx) Allocator.Error!bool {
     const expr_key = @intFromEnum(expr_id);
     const existing = store.expr_lambda_sets.get(expr_key);
@@ -655,6 +795,22 @@ fn mergeMemberReturnLambdaSet(allocator: Allocator, store: *Store, fn_symbol: MI
         return true;
     }
     return mergeLambdaSetEntries(allocator, store, &store.member_return_lambda_sets, fn_symbol.raw(), existing.?, new_ls_idx);
+}
+
+fn mergeMemberReturnFieldLambdaSet(
+    allocator: Allocator,
+    store: *Store,
+    fn_symbol: MIR.Symbol,
+    field_idx: u32,
+    new_ls_idx: Idx,
+) Allocator.Error!bool {
+    const key = structFieldKey(fn_symbol, field_idx);
+    const existing = store.member_return_field_lambda_sets.get(key);
+    if (existing == null) {
+        try store.member_return_field_lambda_sets.put(allocator, key, new_ls_idx);
+        return true;
+    }
+    return mergeLambdaSetEntries(allocator, store, &store.member_return_field_lambda_sets, key, existing.?, new_ls_idx);
 }
 
 fn mergeLambdaSetEntries(

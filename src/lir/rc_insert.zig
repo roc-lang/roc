@@ -262,7 +262,9 @@ pub const RcInsertPass = struct {
                 try self.validateExprTreeIds(wl.body);
             },
             .call => |call| {
-                try self.validateExprTreeIds(call.fn_expr);
+                if (self.callCalleeExpr(call)) |callee_expr| {
+                    try self.validateExprTreeIds(callee_expr);
+                }
                 for (self.store.getExprSpan(call.args)) |arg| try self.validateExprTreeIds(arg);
             },
             .low_level => |ll| for (self.store.getExprSpan(ll.args)) |arg| try self.validateExprTreeIds(arg),
@@ -512,6 +514,29 @@ pub const RcInsertPass = struct {
         return .{ .symbol = temp.symbol, .lookup = temp.lookup };
     }
 
+    fn callCalleeExpr(_: *const RcInsertPass, call: anytype) ?LirExprId {
+        return switch (call.callee) {
+            .expr => |callee_expr| callee_expr,
+            .direct => null,
+        };
+    }
+
+    fn rebuildCall(
+        self: *RcInsertPass,
+        call: anytype,
+        callee: LIR.CallTarget,
+        args: LirExprSpan,
+        region: Region,
+    ) Allocator.Error!LirExprId {
+        return self.store.addExpr(.{ .call = .{
+            .callee = callee,
+            .fn_layout = call.fn_layout,
+            .args = args,
+            .ret_layout = call.ret_layout,
+            .called_via = call.called_via,
+        } }, region);
+    }
+
     fn exprAliasesManagedRef(self: *const RcInsertPass, expr_id: LirExprId, layout_idx: LayoutIdx) bool {
         if (!self.layoutNeedsRc(layout_idx)) return false;
         if (expr_id.isNone()) return false;
@@ -712,13 +737,12 @@ pub const RcInsertPass = struct {
                 }
 
                 if (!changed) break :blk expr_id;
-                break :blk try self.store.addExpr(.{ .call = .{
-                    .fn_expr = call.fn_expr,
-                    .fn_layout = call.fn_layout,
-                    .args = try self.store.addExprSpan(new_args.items),
-                    .ret_layout = call.ret_layout,
-                    .called_via = call.called_via,
-                } }, region);
+                break :blk try self.rebuildCall(
+                    call,
+                    call.callee,
+                    try self.store.addExprSpan(new_args.items),
+                    region,
+                );
             },
             .low_level => |ll| blk: {
                 const args = self.store.getExprSpan(ll.args);
@@ -1010,19 +1034,24 @@ pub const RcInsertPass = struct {
                 return self.wrapPreludeAroundExpr(rebuilt, .zst, region, cond_prelude.items);
             },
             .call => |call| {
-                const new_fn_raw = try self.materializeRcCellLoadOperands(call.fn_expr);
                 var prelude = std.ArrayList(LirStmt).empty;
                 defer prelude.deinit(self.allocator);
-                const new_fn = try self.materializeRcCellLoadOperand(new_fn_raw, region, &prelude);
+
+                var new_callee = call.callee;
+                var callee_changed = false;
+                switch (call.callee) {
+                    .expr => |callee_expr| {
+                        const new_callee_raw = try self.materializeRcCellLoadOperands(callee_expr);
+                        const new_callee_expr = try self.materializeRcCellLoadOperand(new_callee_raw, region, &prelude);
+                        new_callee = .{ .expr = new_callee_expr };
+                        callee_changed = new_callee_expr != callee_expr;
+                    },
+                    .direct => {},
+                }
+
                 const args_res = try self.materializeRcCellLoadSpan(call.args, region, &prelude);
-                const rebuilt = try self.store.addExpr(.{ .call = .{
-                    .fn_expr = new_fn,
-                    .fn_layout = call.fn_layout,
-                    .args = args_res.span,
-                    .ret_layout = call.ret_layout,
-                    .called_via = call.called_via,
-                } }, region);
-                if (new_fn == call.fn_expr and !args_res.changed and prelude.items.len == 0) return expr_id;
+                const rebuilt = try self.rebuildCall(call, new_callee, args_res.span, region);
+                if (!callee_changed and !args_res.changed and prelude.items.len == 0) return expr_id;
                 return self.wrapPreludeAroundExpr(rebuilt, call.ret_layout, region, prelude.items);
             },
             .list => |list_expr| {
@@ -1410,16 +1439,19 @@ pub const RcInsertPass = struct {
                 } }, region);
             },
             .call => |call| {
-                const new_fn = try self.normalizeBorrowedLoopSources(call.fn_expr);
+                var new_callee = call.callee;
+                var callee_changed = false;
+                switch (call.callee) {
+                    .expr => |callee_expr| {
+                        const new_callee_expr = try self.normalizeBorrowedLoopSources(callee_expr);
+                        new_callee = .{ .expr = new_callee_expr };
+                        callee_changed = new_callee_expr != callee_expr;
+                    },
+                    .direct => {},
+                }
                 const args_res = try self.normalizeBorrowedLoopSourceSpan(call.args);
-                if (new_fn == call.fn_expr and !args_res.changed) return expr_id;
-                return self.store.addExpr(.{ .call = .{
-                    .fn_expr = new_fn,
-                    .fn_layout = call.fn_layout,
-                    .args = args_res.span,
-                    .ret_layout = call.ret_layout,
-                    .called_via = call.called_via,
-                } }, region);
+                if (!callee_changed and !args_res.changed) return expr_id;
+                return self.rebuildCall(call, new_callee, args_res.span, region);
             },
             .list => |list_expr| {
                 const elems_res = try self.normalizeBorrowedLoopSourceSpan(list_expr.elems);
@@ -1763,7 +1795,9 @@ pub const RcInsertPass = struct {
                 for (self.store.getExprSpan(ds.branches)) |branch| try self.uniquifyBindingPatterns(branch);
             },
             .call => |call| {
-                try self.uniquifyBindingPatterns(call.fn_expr);
+                if (self.callCalleeExpr(call)) |callee_expr| {
+                    try self.uniquifyBindingPatterns(callee_expr);
+                }
                 for (self.store.getExprSpan(call.args)) |arg| try self.uniquifyBindingPatterns(arg);
             },
             .list => |list_expr| {
@@ -1852,7 +1886,9 @@ pub const RcInsertPass = struct {
                 try self.countUsesInto(block.final_expr, target);
             },
             .call => |call| {
-                try self.countUsesInto(call.fn_expr, target);
+                if (self.callCalleeExpr(call)) |callee_expr| {
+                    try self.countUsesInto(callee_expr, target);
+                }
                 const args = self.store.getExprSpan(call.args);
                 for (args) |arg_id| {
                     try self.countUsesInto(arg_id, target);
@@ -2203,7 +2239,9 @@ pub const RcInsertPass = struct {
                 }
             },
             .call => |call| {
-                try self.countConsumedUsesInto(call.fn_expr, target);
+                if (self.callCalleeExpr(call)) |callee_expr| {
+                    try self.countConsumedUsesInto(callee_expr, target);
+                }
                 const args = self.store.getExprSpan(call.args);
                 for (args) |arg_id| {
                     try self.countConsumedValueInto(arg_id, target);
@@ -2428,7 +2466,9 @@ pub const RcInsertPass = struct {
                 try self.countBorrowOwnerDemandValueInto(lam.body, &local);
             },
             .call => |call| {
-                try self.countBorrowOwnerDemandUsesInto(call.fn_expr, target);
+                if (self.callCalleeExpr(call)) |callee_expr| {
+                    try self.countBorrowOwnerDemandUsesInto(callee_expr, target);
+                }
                 const args = self.store.getExprSpan(call.args);
                 for (args) |arg_id| {
                     try self.countBorrowOwnerDemandValueInto(arg_id, target);
@@ -2825,22 +2865,23 @@ pub const RcInsertPass = struct {
             .discriminant_switch => |ds| self.processDiscriminantSwitch(ds, region),
             .early_return => |ret| self.processEarlyReturn(ret, region, expr_id),
             .cell_load => expr_id,
-            .call => |call| {
-                const new_fn_expr = try self.processExpr(call.fn_expr);
-                var fn_added = try self.pushBorrowedExprUsesToBlockConsumed(call.fn_expr);
-                defer {
-                    self.popExprUsesFromBlockConsumed(&fn_added);
-                    fn_added.deinit();
-                }
-                const args_res = try self.processExprSpanSequenced(call.args, .consume);
-                if (new_fn_expr == call.fn_expr and !args_res.changed) return expr_id;
-                return self.store.addExpr(.{ .call = .{
-                    .fn_expr = new_fn_expr,
-                    .fn_layout = call.fn_layout,
-                    .args = args_res.span,
-                    .ret_layout = call.ret_layout,
-                    .called_via = call.called_via,
-                } }, region);
+            .call => |call| switch (call.callee) {
+                .expr => |callee_expr| {
+                    const new_callee_expr = try self.processExpr(callee_expr);
+                    var callee_added = try self.pushBorrowedExprUsesToBlockConsumed(callee_expr);
+                    defer {
+                        self.popExprUsesFromBlockConsumed(&callee_added);
+                        callee_added.deinit();
+                    }
+                    const args_res = try self.processExprSpanSequenced(call.args, .consume);
+                    if (new_callee_expr == callee_expr and !args_res.changed) return expr_id;
+                    return self.rebuildCall(call, .{ .expr = new_callee_expr }, args_res.span, region);
+                },
+                .direct => {
+                    const args_res = try self.processExprSpanSequenced(call.args, .consume);
+                    if (!args_res.changed) return expr_id;
+                    return self.rebuildCall(call, call.callee, args_res.span, region);
+                },
             },
             .list => |list| {
                 const elems_res = try self.processExprSpanSequenced(list.elems, .consume);
@@ -4358,7 +4399,9 @@ pub const RcInsertPass = struct {
                 return self.exprMutatesSymbol(expect_expr.body, symbol);
             },
             .call => |call| {
-                if (try self.exprMutatesSymbol(call.fn_expr, symbol)) return true;
+                if (self.callCalleeExpr(call)) |callee_expr| {
+                    if (try self.exprMutatesSymbol(callee_expr, symbol)) return true;
+                }
                 for (self.store.getExprSpan(call.args)) |arg_id| {
                     if (try self.exprMutatesSymbol(arg_id, symbol)) return true;
                 }
@@ -4496,7 +4539,9 @@ pub const RcInsertPass = struct {
             },
             // Expressions with sub-expressions but no pattern bindings
             .call => |call| {
-                try self.collectExprBoundSymbols(call.fn_expr, set);
+                if (self.callCalleeExpr(call)) |callee_expr| {
+                    try self.collectExprBoundSymbols(callee_expr, set);
+                }
                 const args = self.store.getExprSpan(call.args);
                 for (args) |arg_id| try self.collectExprBoundSymbols(arg_id, set);
             },
@@ -5446,7 +5491,9 @@ pub const RcInsertPass = struct {
 
 /// Lifted LIR procedures must go through the same RC insertion pass as the
 /// entry/root expression. Callers that only annotate entrypoints will miss the
-/// real function bodies for most compiled apps.
+/// real function bodies for most compiled apps. This must stay scoped to
+/// self-contained callable bodies; local alias defs can depend on ambient
+/// bindings and cannot be rewritten correctly out of context.
 pub fn insertRcOpsIntoSymbolDefsBestEffort(
     allocator: Allocator,
     store: *LirExprStore,
@@ -5454,6 +5501,14 @@ pub fn insertRcOpsIntoSymbolDefsBestEffort(
 ) void {
     var def_iter = store.symbol_defs.iterator();
     while (def_iter.next()) |entry| {
+        const should_process = switch (store.getExpr(entry.value_ptr.*)) {
+            .lambda => true,
+            .nominal => |nom| store.getExpr(nom.backing_expr) == .lambda,
+            .runtime_error => true,
+            else => false,
+        };
+        if (!should_process) continue;
+
         var fn_rc = RcInsertPass.init(allocator, store, layout_store) catch continue;
         defer fn_rc.deinit();
         entry.value_ptr.* = fn_rc.insertRcOps(entry.value_ptr.*) catch entry.value_ptr.*;
@@ -5828,7 +5883,7 @@ test "RC: consuming stmt preserves list owner for later list_get_unsafe" {
     const lookup_list_call = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_list, .layout_idx = list_layout } }, Region.zero());
     const call_args = try env.lir_store.addExprSpan(&.{lookup_list_call});
     const call_expr = try env.lir_store.addExpr(.{ .call = .{
-        .fn_expr = callee,
+        .callee = .{ .expr = callee },
         .fn_layout = fn_layout,
         .args = call_args,
         .ret_layout = .bool,
@@ -5940,9 +5995,14 @@ fn countRcOps(store: *const LirExprStore, expr_id: LirExprId) RcOpCounts {
             decrefs += sub_body.decrefs;
         },
         .call => |c| {
-            const sub_fn = countRcOps(store, c.fn_expr);
-            increfs += sub_fn.increfs;
-            decrefs += sub_fn.decrefs;
+            switch (c.callee) {
+                .expr => |callee_expr| {
+                    const sub_fn = countRcOps(store, callee_expr);
+                    increfs += sub_fn.increfs;
+                    decrefs += sub_fn.decrefs;
+                },
+                .direct => {},
+            }
             const args = store.getExprSpan(c.args);
             for (args) |arg_id| {
                 const sub = countRcOps(store, arg_id);
@@ -6113,7 +6173,11 @@ fn countDecrefsForSymbol(store: *const LirExprStore, expr_id: LirExprId, symbol:
             break :blk total;
         },
         .call => |call| blk: {
-            var total: u32 = countDecrefsForSymbol(store, call.fn_expr, symbol);
+            var total: u32 = 0;
+            switch (call.callee) {
+                .expr => |callee_expr| total += countDecrefsForSymbol(store, callee_expr, symbol),
+                .direct => {},
+            }
             for (store.getExprSpan(call.args)) |arg_id| {
                 total += countDecrefsForSymbol(store, arg_id, symbol);
             }
@@ -6213,7 +6277,11 @@ fn countIncrefsForSymbol(store: *const LirExprStore, expr_id: LirExprId, symbol:
             break :blk total;
         },
         .call => |call| blk: {
-            var total: u32 = countIncrefsForSymbol(store, call.fn_expr, symbol);
+            var total: u32 = 0;
+            switch (call.callee) {
+                .expr => |callee_expr| total += countIncrefsForSymbol(store, callee_expr, symbol),
+                .direct => {},
+            }
             for (store.getExprSpan(call.args)) |arg_id| {
                 total += countIncrefsForSymbol(store, arg_id, symbol);
             }
@@ -6321,7 +6389,12 @@ fn findFirstIfThenElseExpr(store: *const LirExprStore, expr_id: LirExprId) ?LirE
             return findFirstIfThenElseExpr(store, wl.body);
         },
         .call => |call| {
-            if (findFirstIfThenElseExpr(store, call.fn_expr)) |found| return found;
+            switch (call.callee) {
+                .expr => |callee_expr| {
+                    if (findFirstIfThenElseExpr(store, callee_expr)) |found| return found;
+                },
+                .direct => {},
+            }
             for (store.getExprSpan(call.args)) |arg_id| {
                 if (findFirstIfThenElseExpr(store, arg_id)) |found| return found;
             }
@@ -6422,7 +6495,12 @@ fn findFirstWhileExpr(store: *const LirExprStore, expr_id: LirExprId) ?LirExprId
             return findFirstWhileExpr(store, fl.body);
         },
         .call => |call| {
-            if (findFirstWhileExpr(store, call.fn_expr)) |found| return found;
+            switch (call.callee) {
+                .expr => |callee_expr| {
+                    if (findFirstWhileExpr(store, callee_expr)) |found| return found;
+                },
+                .direct => {},
+            }
             for (store.getExprSpan(call.args)) |arg_id| {
                 if (findFirstWhileExpr(store, arg_id)) |found| return found;
             }
@@ -6883,7 +6961,7 @@ test "RC identity call result matched later tail-cleans matched binding" {
     } }, Region.zero());
     const call_args = try env.lir_store.addExprSpan(&.{lookup_x_call});
     const call_expr = try env.lir_store.addExpr(.{ .call = .{
-        .fn_expr = identity,
+        .callee = .{ .expr = identity },
         .fn_layout = fn_layout,
         .args = call_args,
         .ret_layout = list_layout,
@@ -6981,7 +7059,7 @@ test "RC repeated identity call tail-cleans the unused second result" {
     } }, Region.zero());
     const call_args_a = try env.lir_store.addExprSpan(&.{lookup_x_call_a});
     const call_expr_a = try env.lir_store.addExpr(.{ .call = .{
-        .fn_expr = identity,
+        .callee = .{ .expr = identity },
         .fn_layout = fn_layout,
         .args = call_args_a,
         .ret_layout = list_layout,
@@ -6994,7 +7072,7 @@ test "RC repeated identity call tail-cleans the unused second result" {
     } }, Region.zero());
     const call_args_b = try env.lir_store.addExprSpan(&.{lookup_x_call_b});
     const call_expr_b = try env.lir_store.addExpr(.{ .call = .{
-        .fn_expr = identity,
+        .callee = .{ .expr = identity },
         .fn_layout = fn_layout,
         .args = call_args_b,
         .ret_layout = list_layout,
@@ -7229,13 +7307,12 @@ test "RC builtin-fold shape tail-cleans borrowed list param" {
 
     const lookup_list = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_list, .layout_idx = list_layout } }, Region.zero());
     const lookup_init = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_init, .layout_idx = i64_layout } }, Region.zero());
-    const lookup_step = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_step, .layout_idx = fn_layout } }, Region.zero());
     const lookup_state = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_state, .layout_idx = i64_layout } }, Region.zero());
     const lookup_elem = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_elem, .layout_idx = i64_layout } }, Region.zero());
 
     const step_args = try env.lir_store.addExprSpan(&.{ lookup_state, lookup_elem });
     const step_call = try env.lir_store.addExpr(.{ .call = .{
-        .fn_expr = lookup_step,
+        .callee = .{ .direct = sym_step },
         .fn_layout = fn_layout,
         .args = step_args,
         .ret_layout = i64_layout,
@@ -7535,10 +7612,9 @@ test "RC fold_rev-style while body does not pre-incref borrowed list param" {
 
     const lookup_state = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_state, .layout_idx = i64_layout } }, Region.zero());
     const lookup_item = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_item, .layout_idx = i64_layout } }, Region.zero());
-    const lookup_step = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_step, .layout_idx = fn_layout } }, Region.zero());
     const step_args = try env.lir_store.addExprSpan(&.{ lookup_item, lookup_state });
     const step_call = try env.lir_store.addExpr(.{ .call = .{
-        .fn_expr = lookup_step,
+        .callee = .{ .direct = sym_step },
         .fn_layout = fn_layout,
         .args = step_args,
         .ret_layout = i64_layout,
@@ -7811,12 +7887,11 @@ test "RC while loop over borrowed list only tail-cleans lambda param once" {
     } }, Region.zero());
 
     const pat_item = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_item, .layout_idx = i64_layout } }, Region.zero());
-    const lookup_step = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_step, .layout_idx = fn_layout } }, Region.zero());
     const lookup_item = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_item, .layout_idx = i64_layout } }, Region.zero());
     const lookup_state = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_state, .layout_idx = i64_layout } }, Region.zero());
     const step_args = try env.lir_store.addExprSpan(&.{ lookup_item, lookup_state });
     const step_call = try env.lir_store.addExpr(.{ .call = .{
-        .fn_expr = lookup_step,
+        .callee = .{ .direct = sym_step },
         .fn_layout = fn_layout,
         .args = step_args,
         .ret_layout = i64_layout,

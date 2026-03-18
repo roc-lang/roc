@@ -95,6 +95,11 @@ type_scope_caller_module_idx: ?u32,
 /// Used to resolve CIR local lookups to global symbols.
 pattern_symbols: std.AutoHashMap(u128, MIR.Symbol),
 
+/// Concrete monotype for each bound MIR symbol introduced from a lowered pattern.
+/// This is authoritative for local lookups that do not have a symbol_def yet
+/// (lambda params, destructures, closure locals, synthetic temporaries).
+symbol_monotypes: std.AutoHashMap(u64, Monotype.Idx),
+
 /// Specialization bindings: maps polymorphic type vars to concrete monotypes.
 /// Written by `bindTypeVarMonotypes`, read by `fromTypeVar`.
 type_var_seen: std.AutoHashMap(types.Var, Monotype.Idx),
@@ -187,6 +192,7 @@ pub fn init(
         .type_scope_module_idx = null,
         .type_scope_caller_module_idx = null,
         .pattern_symbols = std.AutoHashMap(u128, MIR.Symbol).init(allocator),
+        .symbol_monotypes = std.AutoHashMap(u64, Monotype.Idx).init(allocator),
         .type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(allocator),
         .nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(allocator),
         .lowered_symbols = std.AutoHashMap(u64, MIR.ExprId).init(allocator),
@@ -217,6 +223,7 @@ pub fn init(
 
 pub fn deinit(self: *Self) void {
     self.pattern_symbols.deinit();
+    self.symbol_monotypes.deinit();
     self.type_var_seen.deinit();
     self.nominal_cycle_breakers.deinit();
     self.lowered_symbols.deinit();
@@ -836,7 +843,46 @@ fn makeSyntheticBind(
     const sym_ident = self.makeSyntheticIdent(template);
     const symbol = try self.internSymbol(self.current_module_idx, sym_ident);
     const pattern = try self.store.addPattern(self.allocator, .{ .bind = symbol }, monotype);
+    try self.symbol_monotypes.put(symbol.raw(), monotype);
     return .{ .symbol = symbol, .pattern = pattern };
+}
+
+fn registerPatternSymbolMonotypes(self: *Self, pattern_id: MIR.PatternId) Allocator.Error!void {
+    const monotype = self.store.patternTypeOf(pattern_id);
+
+    switch (self.store.getPattern(pattern_id)) {
+        .bind => |symbol| try self.symbol_monotypes.put(symbol.raw(), monotype),
+        .as_pattern => |as_pat| {
+            try self.symbol_monotypes.put(as_pat.symbol.raw(), monotype);
+            try self.registerPatternSymbolMonotypes(as_pat.pattern);
+        },
+        .tag => |tag| {
+            for (self.store.getPatternSpan(tag.args)) |arg_pat| {
+                try self.registerPatternSymbolMonotypes(arg_pat);
+            }
+        },
+        .struct_destructure => |destructure| {
+            for (self.store.getPatternSpan(destructure.fields)) |field_pat| {
+                try self.registerPatternSymbolMonotypes(field_pat);
+            }
+        },
+        .list_destructure => |destructure| {
+            for (self.store.getPatternSpan(destructure.patterns)) |elem_pat| {
+                try self.registerPatternSymbolMonotypes(elem_pat);
+            }
+            if (!destructure.rest_pattern.isNone()) {
+                try self.registerPatternSymbolMonotypes(destructure.rest_pattern);
+            }
+        },
+        .wildcard,
+        .int_literal,
+        .str_literal,
+        .dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .runtime_error,
+        => {},
+    }
 }
 
 fn registerBoundSymbolDefIfNeeded(self: *Self, pattern: MIR.PatternId, expr: MIR.ExprId) Allocator.Error!void {
@@ -1291,6 +1337,8 @@ fn bindFlatTypeMonotypesInStore(
                 ),
             };
             const mono_fields = self.store.monotype_store.getFields(mrec.fields);
+            var seen_field_indices: std.ArrayListUnmanaged(u32) = .empty;
+            defer seen_field_indices.deinit(self.allocator);
 
             var current_row = record;
             rows: while (true) {
@@ -1299,6 +1347,7 @@ fn bindFlatTypeMonotypesInStore(
                 const field_vars = fields_slice.items(.var_);
                 for (field_names, field_vars) |field_name, field_var| {
                     const field_idx = self.recordFieldIndexByName(field_name, mono_fields);
+                    try appendSeenIndex(self.allocator, &seen_field_indices, field_idx);
                     try self.bindTypeVarMonotypesInStore(store_types, common_idents, bindings, field_var, mono_fields[field_idx].type_idx);
                 }
 
@@ -1321,6 +1370,7 @@ fn bindFlatTypeMonotypesInStore(
                                 const ext_vars = ext_fields.items(.var_);
                                 for (ext_names, ext_vars) |field_name, field_var| {
                                     const field_idx = self.recordFieldIndexByName(field_name, mono_fields);
+                                    try appendSeenIndex(self.allocator, &seen_field_indices, field_idx);
                                     try self.bindTypeVarMonotypesInStore(store_types, common_idents, bindings, field_var, mono_fields[field_idx].type_idx);
                                 }
                                 break :rows;
@@ -1331,7 +1381,10 @@ fn bindFlatTypeMonotypesInStore(
                                 .{@tagName(ext_flat)},
                             ),
                         },
-                        .flex, .rigid => break :rows,
+                        .flex, .rigid => {
+                            try self.bindRecordRowTailInStore(store_types, common_idents, bindings, ext_var, mono_fields, seen_field_indices.items);
+                            break :rows;
+                        },
                         .err => unreachable,
                     }
                 }
@@ -1383,6 +1436,8 @@ fn bindFlatTypeMonotypesInStore(
                 ),
             };
             const mono_tags = self.store.monotype_store.getTags(mtag.tags);
+            var seen_tag_indices: std.ArrayListUnmanaged(u32) = .empty;
+            defer seen_tag_indices.deinit(self.allocator);
 
             var current_row = tag_union;
             rows: while (true) {
@@ -1390,6 +1445,8 @@ fn bindFlatTypeMonotypesInStore(
                 const tag_names = type_tags.items(.name);
                 const tag_args = type_tags.items(.args);
                 for (tag_names, tag_args) |tag_name, args_range| {
+                    const tag_idx = self.tagIndexByName(tag_name, mono_tags);
+                    try appendSeenIndex(self.allocator, &seen_tag_indices, tag_idx);
                     const payload_vars = store_types.sliceVars(args_range);
                     try self.bindTagPayloadsByName(tag_name, payload_vars, mono_tags);
                 }
@@ -1413,7 +1470,10 @@ fn bindFlatTypeMonotypesInStore(
                                 .{@tagName(ext_flat)},
                             ),
                         },
-                        .flex, .rigid => break :rows,
+                        .flex, .rigid => {
+                            try self.bindTagUnionRowTailInStore(store_types, common_idents, bindings, ext_var, mono_tags, seen_tag_indices.items);
+                            break :rows;
+                        },
                         .err => unreachable,
                     }
                 }
@@ -2486,10 +2546,17 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                 }
             }
 
+            const lookup_var = ModuleEnv.varFrom(lookup.pattern_idx);
+            if (self.symbol_monotypes.get(symbol.raw())) |bound_monotype| {
+                const same_bound_mono = try self.monotypesStructurallyEqual(bound_monotype, monotype);
+                if (same_bound_mono) {
+                    return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, bound_monotype, region);
+                }
+            }
             const pattern_monotype = try self.monotypeFromTypeVarWithBindings(
                 self.current_module_idx,
                 self.types_store,
-                ModuleEnv.varFrom(lookup.pattern_idx),
+                lookup_var,
                 &self.type_var_seen,
                 &self.nominal_cycle_breakers,
             );
@@ -3175,41 +3242,41 @@ fn lowerPattern(self: *Self, module_env: *const ModuleEnv, pattern_idx: CIR.Patt
         &self.nominal_cycle_breakers,
     );
 
-    return switch (pattern) {
-        .assign => {
+    const lowered = switch (pattern) {
+        .assign => blk: {
             const symbol = try self.patternToSymbol(pattern_idx);
-            return try self.store.addPattern(self.allocator, .{ .bind = symbol }, monotype);
+            break :blk try self.store.addPattern(self.allocator, .{ .bind = symbol }, monotype);
         },
         .underscore => try self.store.addPattern(self.allocator, .wildcard, monotype),
-        .as => |a| {
+        .as => |a| blk: {
             const inner = try self.lowerPattern(module_env, a.pattern);
             const symbol = try self.patternToSymbol(pattern_idx);
-            return try self.store.addPattern(self.allocator, .{ .as_pattern = .{
+            break :blk try self.store.addPattern(self.allocator, .{ .as_pattern = .{
                 .pattern = inner,
                 .symbol = symbol,
             } }, monotype);
         },
-        .applied_tag => |tag| {
+        .applied_tag => |tag| blk: {
             const lowered_args = try self.lowerPatternSpan(module_env, tag.args);
             const args = try self.wrapMultiPayloadTagPatterns(tag.name, monotype, lowered_args);
-            return try self.store.addPattern(self.allocator, .{ .tag = .{
+            break :blk try self.store.addPattern(self.allocator, .{ .tag = .{
                 .name = tag.name,
                 .args = args,
             } }, monotype);
         },
-        .nominal => |nom| {
+        .nominal => |nom| blk: {
             // Strip nominal wrapper, but keep the nominal monotype
             // (same pattern as e_nominal expression lowering).
             const result = try self.lowerPattern(module_env, nom.backing_pattern);
             self.store.pattern_type_map.items[@intFromEnum(result)] = monotype;
-            return result;
+            break :blk result;
         },
-        .nominal_external => |nom_ext| {
+        .nominal_external => |nom_ext| blk: {
             // Strip nominal wrapper, but keep the nominal monotype
             // (same pattern as e_nominal_external expression lowering).
             const result = try self.lowerPattern(module_env, nom_ext.backing_pattern);
             self.store.pattern_type_map.items[@intFromEnum(result)] = monotype;
-            return result;
+            break :blk result;
         },
         .num_literal => |nl| try self.store.addPattern(self.allocator, .{ .int_literal = .{ .value = nl.value } }, monotype),
         .str_literal => |sl| blk: {
@@ -3217,14 +3284,14 @@ fn lowerPattern(self: *Self, module_env: *const ModuleEnv, pattern_idx: CIR.Patt
             break :blk try self.store.addPattern(self.allocator, .{ .str_literal = mir_str }, monotype);
         },
         .dec_literal => |dl| try self.store.addPattern(self.allocator, .{ .dec_literal = dl.value }, monotype),
-        .small_dec_literal => |sdl| {
+        .small_dec_literal => |sdl| blk: {
             const roc_dec = sdl.value.toRocDec();
-            return try self.store.addPattern(self.allocator, .{ .dec_literal = roc_dec }, monotype);
+            break :blk try self.store.addPattern(self.allocator, .{ .dec_literal = roc_dec }, monotype);
         },
         .frac_f32_literal => |fl| try self.store.addPattern(self.allocator, .{ .frac_f32_literal = fl.value }, monotype),
         .frac_f64_literal => |fl| try self.store.addPattern(self.allocator, .{ .frac_f64_literal = fl.value }, monotype),
         .runtime_error => try self.store.addPattern(self.allocator, .runtime_error, monotype),
-        .list => |list_pat| {
+        .list => |list_pat| blk: {
             const patterns = try self.lowerPatternSpan(module_env, list_pat.patterns);
             var rest_index: MIR.RestIndex = .none;
             var rest_pattern: MIR.PatternId = MIR.PatternId.none;
@@ -3234,13 +3301,13 @@ fn lowerPattern(self: *Self, module_env: *const ModuleEnv, pattern_idx: CIR.Patt
                     rest_pattern = try self.lowerPattern(module_env, rest_pat_idx);
                 }
             }
-            return try self.store.addPattern(self.allocator, .{ .list_destructure = .{
+            break :blk try self.store.addPattern(self.allocator, .{ .list_destructure = .{
                 .patterns = patterns,
                 .rest_index = rest_index,
                 .rest_pattern = rest_pattern,
             } }, monotype);
         },
-        .record_destructure => |record_pat| {
+        .record_destructure => |record_pat| blk: {
             const cir_destructs = module_env.store.sliceRecordDestructs(record_pat.destructs);
             const pats_top = self.scratch_pattern_ids.top();
             defer self.scratch_pattern_ids.clearFrom(pats_top);
@@ -3270,15 +3337,18 @@ fn lowerPattern(self: *Self, module_env: *const ModuleEnv, pattern_idx: CIR.Patt
             }
 
             const destructs_span = try self.store.addPatternSpan(self.allocator, self.scratch_pattern_ids.sliceFromStart(pats_top));
-            return try self.store.addPattern(self.allocator, .{ .struct_destructure = .{
+            break :blk try self.store.addPattern(self.allocator, .{ .struct_destructure = .{
                 .fields = destructs_span,
             } }, monotype);
         },
-        .tuple => |tuple_pat| {
+        .tuple => |tuple_pat| blk: {
             const elems = try self.lowerPatternSpan(module_env, tuple_pat.patterns);
-            return try self.store.addPattern(self.allocator, .{ .struct_destructure = .{ .fields = elems } }, monotype);
+            break :blk try self.store.addPattern(self.allocator, .{ .struct_destructure = .{ .fields = elems } }, monotype);
         },
     };
+
+    try self.registerPatternSymbolMonotypes(lowered);
+    return lowered;
 }
 
 // --- Desugaring helpers ---
@@ -5830,6 +5900,124 @@ fn recordFieldIndexByName(
     );
 }
 
+fn tagIndexByName(
+    self: *Self,
+    tag_name: Ident.Idx,
+    mono_tags: []const Monotype.Tag,
+) u32 {
+    for (mono_tags, 0..) |mono_tag, tag_idx| {
+        if (self.identsTagNameEquivalent(mono_tag.name, tag_name)) {
+            return @intCast(tag_idx);
+        }
+    }
+
+    const module_env = self.all_module_envs[self.current_module_idx];
+    typeBindingInvariant(
+        "tag '{s}' missing from monotype",
+        .{module_env.getIdent(tag_name)},
+    );
+}
+
+fn seenIndex(seen_indices: []const u32, idx: u32) bool {
+    for (seen_indices) |seen_idx| {
+        if (seen_idx == idx) return true;
+    }
+    return false;
+}
+
+fn appendSeenIndex(
+    allocator: Allocator,
+    seen_indices: *std.ArrayListUnmanaged(u32),
+    idx: u32,
+) Allocator.Error!void {
+    if (seenIndex(seen_indices.items, idx)) return;
+    try seen_indices.append(allocator, idx);
+}
+
+fn remainingRecordTailMonotype(
+    self: *Self,
+    mono_fields: []const Monotype.Field,
+    seen_indices: []const u32,
+) Allocator.Error!Monotype.Idx {
+    var remaining_fields: std.ArrayListUnmanaged(Monotype.Field) = .empty;
+    defer remaining_fields.deinit(self.allocator);
+
+    for (mono_fields, 0..) |field, field_idx| {
+        if (seenIndex(seen_indices, @intCast(field_idx))) continue;
+        try remaining_fields.append(self.allocator, field);
+    }
+
+    if (remaining_fields.items.len == 0) {
+        return self.store.monotype_store.unit_idx;
+    }
+
+    const field_span = try self.store.monotype_store.addFields(self.allocator, remaining_fields.items);
+    return try self.store.monotype_store.addMonotype(self.allocator, .{ .record = .{ .fields = field_span } });
+}
+
+fn remainingTagUnionTailMonotype(
+    self: *Self,
+    mono_tags: []const Monotype.Tag,
+    seen_indices: []const u32,
+) Allocator.Error!Monotype.Idx {
+    var remaining_tags: std.ArrayListUnmanaged(Monotype.Tag) = .empty;
+    defer remaining_tags.deinit(self.allocator);
+
+    for (mono_tags, 0..) |tag, tag_idx| {
+        if (seenIndex(seen_indices, @intCast(tag_idx))) continue;
+        try remaining_tags.append(self.allocator, tag);
+    }
+
+    const tag_span = try self.store.monotype_store.addTags(self.allocator, remaining_tags.items);
+    return try self.store.monotype_store.addMonotype(self.allocator, .{ .tag_union = .{ .tags = tag_span } });
+}
+
+fn bindRecordRowTailInStore(
+    self: *Self,
+    store_types: *const types.Store,
+    common_idents: ModuleEnv.CommonIdents,
+    bindings: *std.AutoHashMap(types.Var, Monotype.Idx),
+    ext_var: types.Var,
+    mono_fields: []const Monotype.Field,
+    seen_indices: []const u32,
+) Allocator.Error!void {
+    const tail_mono = try self.remainingRecordTailMonotype(mono_fields, seen_indices);
+    try self.bindTypeVarMonotypesInStore(store_types, common_idents, bindings, ext_var, tail_mono);
+}
+
+fn bindRecordRowTail(
+    self: *Self,
+    ext_var: types.Var,
+    mono_fields: []const Monotype.Field,
+    seen_indices: []const u32,
+) Allocator.Error!void {
+    const tail_mono = try self.remainingRecordTailMonotype(mono_fields, seen_indices);
+    try self.bindTypeVarMonotypes(ext_var, tail_mono);
+}
+
+fn bindTagUnionRowTailInStore(
+    self: *Self,
+    store_types: *const types.Store,
+    common_idents: ModuleEnv.CommonIdents,
+    bindings: *std.AutoHashMap(types.Var, Monotype.Idx),
+    ext_var: types.Var,
+    mono_tags: []const Monotype.Tag,
+    seen_indices: []const u32,
+) Allocator.Error!void {
+    const tail_mono = try self.remainingTagUnionTailMonotype(mono_tags, seen_indices);
+    try self.bindTypeVarMonotypesInStore(store_types, common_idents, bindings, ext_var, tail_mono);
+}
+
+fn bindTagUnionRowTail(
+    self: *Self,
+    ext_var: types.Var,
+    mono_tags: []const Monotype.Tag,
+    seen_indices: []const u32,
+) Allocator.Error!void {
+    const tail_mono = try self.remainingTagUnionTailMonotype(mono_tags, seen_indices);
+    try self.bindTypeVarMonotypes(ext_var, tail_mono);
+}
+
 fn tupleMonotypeForFields(self: *Self, field_monotypes: []const Monotype.Idx) Allocator.Error!Monotype.Idx {
     const elems = try self.store.monotype_store.addIdxSpan(self.allocator, field_monotypes);
     return try self.store.monotype_store.addMonotype(self.allocator, .{ .tuple = .{ .elems = elems } });
@@ -6070,8 +6258,9 @@ fn bindFlatTypeMonotypes(self: *Self, flat_type: types.FlatType, monotype: Monot
                 ),
             };
             const mono_field_span = mrec.fields;
-            const seen_top = self.scratch_ident_idxs.top();
-            defer self.scratch_ident_idxs.clearFrom(seen_top);
+            const mono_fields = self.store.monotype_store.getFields(mono_field_span);
+            var seen_field_indices: std.ArrayListUnmanaged(u32) = .empty;
+            defer seen_field_indices.deinit(self.allocator);
 
             var current_row = record;
             rows: while (true) {
@@ -6080,17 +6269,9 @@ fn bindFlatTypeMonotypes(self: *Self, flat_type: types.FlatType, monotype: Monot
                 const field_vars = fields_slice.items(.var_);
 
                 for (field_names, field_vars) |field_name, field_var| {
-                    var seen_name = false;
-                    for (self.scratch_ident_idxs.sliceFromStart(seen_top)) |existing_name| {
-                        if (existing_name.eql(field_name)) {
-                            seen_name = true;
-                            break;
-                        }
-                    }
-                    if (!seen_name) {
-                        try self.scratch_ident_idxs.append(field_name);
-                    }
-                    try self.bindRecordFieldByName(field_name, field_var, self.store.monotype_store.getFields(mono_field_span));
+                    const field_idx = self.recordFieldIndexByName(field_name, mono_fields);
+                    try appendSeenIndex(self.allocator, &seen_field_indices, field_idx);
+                    try self.bindTypeVarMonotypes(field_var, mono_fields[field_idx].type_idx);
                 }
 
                 var ext_var = current_row.ext;
@@ -6111,17 +6292,9 @@ fn bindFlatTypeMonotypes(self: *Self, flat_type: types.FlatType, monotype: Monot
                                 const ext_field_names = ext_fields.items(.name);
                                 const ext_field_vars = ext_fields.items(.var_);
                                 for (ext_field_names, ext_field_vars) |field_name, field_var| {
-                                    var seen_name = false;
-                                    for (self.scratch_ident_idxs.sliceFromStart(seen_top)) |existing_name| {
-                                        if (existing_name.eql(field_name)) {
-                                            seen_name = true;
-                                            break;
-                                        }
-                                    }
-                                    if (!seen_name) {
-                                        try self.scratch_ident_idxs.append(field_name);
-                                    }
-                                    try self.bindRecordFieldByName(field_name, field_var, self.store.monotype_store.getFields(mono_field_span));
+                                    const field_idx = self.recordFieldIndexByName(field_name, mono_fields);
+                                    try appendSeenIndex(self.allocator, &seen_field_indices, field_idx);
+                                    try self.bindTypeVarMonotypes(field_var, mono_fields[field_idx].type_idx);
                                 }
                                 break :rows;
                             },
@@ -6131,7 +6304,13 @@ fn bindFlatTypeMonotypes(self: *Self, flat_type: types.FlatType, monotype: Monot
                                 .{@tagName(ext_flat)},
                             ),
                         },
-                        .flex, .rigid => break :rows,
+                        .flex, .rigid => {
+                            try self.bindRecordRowTail(ext_var, mono_fields, seen_field_indices.items);
+                            for (mono_fields, 0..) |_, field_idx| {
+                                try appendSeenIndex(self.allocator, &seen_field_indices, @intCast(field_idx));
+                            }
+                            break :rows;
+                        },
                         .err => typeBindingInvariant(
                             "bindFlatTypeMonotypes(record): error extension",
                             .{},
@@ -6140,16 +6319,8 @@ fn bindFlatTypeMonotypes(self: *Self, flat_type: types.FlatType, monotype: Monot
                 }
             }
 
-            const final_mono_fields = self.store.monotype_store.getFields(mono_field_span);
-            for (final_mono_fields) |mono_field| {
-                var found = false;
-                for (self.scratch_ident_idxs.sliceFromStart(seen_top)) |seen_name| {
-                    if (seen_name.eql(mono_field.name)) {
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) {
+            for (mono_fields, 0..) |mono_field, field_idx| {
+                if (!seenIndex(seen_field_indices.items, @intCast(field_idx))) {
                     typeBindingInvariant(
                         "bindFlatTypeMonotypes(record): monotype field '{s}' missing from type row",
                         .{module_env.getIdent(mono_field.name)},
@@ -6210,9 +6381,9 @@ fn bindFlatTypeMonotypes(self: *Self, flat_type: types.FlatType, monotype: Monot
                     .{@tagName(mono)},
                 ),
             };
-
-            const seen_top = self.scratch_ident_idxs.top();
-            defer self.scratch_ident_idxs.clearFrom(seen_top);
+            const mono_tags = self.store.monotype_store.getTags(mono_tag_span);
+            var seen_tag_indices: std.ArrayListUnmanaged(u32) = .empty;
+            defer seen_tag_indices.deinit(self.allocator);
 
             var current_row = tag_union_row;
             rows: while (true) {
@@ -6221,18 +6392,10 @@ fn bindFlatTypeMonotypes(self: *Self, flat_type: types.FlatType, monotype: Monot
                 const type_tag_args = type_tags.items(.args);
 
                 for (type_tag_names, type_tag_args) |tag_name, tag_args| {
-                    var seen_tag = false;
-                    for (self.scratch_ident_idxs.sliceFromStart(seen_top)) |existing_name| {
-                        if (self.identsTagNameEquivalent(existing_name, tag_name)) {
-                            seen_tag = true;
-                            break;
-                        }
-                    }
-                    if (!seen_tag) {
-                        try self.scratch_ident_idxs.append(tag_name);
-                    }
+                    const tag_idx = self.tagIndexByName(tag_name, mono_tags);
+                    try appendSeenIndex(self.allocator, &seen_tag_indices, tag_idx);
                     const payload_vars = self.types_store.sliceVars(tag_args);
-                    try self.bindTagPayloadsByName(tag_name, payload_vars, self.store.monotype_store.getTags(mono_tag_span));
+                    try self.bindTagPayloadsByName(tag_name, payload_vars, mono_tags);
                 }
 
                 var ext_var = current_row.ext;
@@ -6254,7 +6417,13 @@ fn bindFlatTypeMonotypes(self: *Self, flat_type: types.FlatType, monotype: Monot
                                 .{@tagName(ext_flat)},
                             ),
                         },
-                        .flex, .rigid => break :rows,
+                        .flex, .rigid => {
+                            try self.bindTagUnionRowTail(ext_var, mono_tags, seen_tag_indices.items);
+                            for (mono_tags, 0..) |_, tag_idx| {
+                                try appendSeenIndex(self.allocator, &seen_tag_indices, @intCast(tag_idx));
+                            }
+                            break :rows;
+                        },
                         .err => typeBindingInvariant(
                             "bindFlatTypeMonotypes(tag_union): error extension",
                             .{},
@@ -6263,16 +6432,8 @@ fn bindFlatTypeMonotypes(self: *Self, flat_type: types.FlatType, monotype: Monot
                 }
             }
 
-            const final_mono_tags = self.store.monotype_store.getTags(mono_tag_span);
-            for (final_mono_tags) |mono_tag| {
-                var found = false;
-                for (self.scratch_ident_idxs.sliceFromStart(seen_top)) |seen_name| {
-                    if (self.identsTagNameEquivalent(seen_name, mono_tag.name)) {
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) {
+            for (mono_tags, 0..) |mono_tag, tag_idx| {
+                if (!seenIndex(seen_tag_indices.items, @intCast(tag_idx))) {
                     typeBindingInvariant(
                         "bindFlatTypeMonotypes(tag_union): monotype tag '{s}' missing from type row",
                         .{module_env.getIdent(mono_tag.name)},

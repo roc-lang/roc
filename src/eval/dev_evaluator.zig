@@ -613,6 +613,34 @@ pub const DevEvaluator = struct {
         executable.callWithResultPtrAndRocOps(result_ptr, @constCast(&self.roc_ops));
     }
 
+    /// Execute compiled code with crash protection using the RocCall ABI.
+    ///
+    /// Like callWithCrashProtection, but for entrypoint functions that take
+    /// arguments via the RocCall ABI: fn(roc_ops, ret_ptr, args_ptr).
+    /// Uses the DevEvaluator's own RocOps (with setjmp/longjmp crash handling)
+    /// so that roc_crashed returns an error instead of exiting the process.
+    ///
+    /// Callers should set `self.roc_ops.hosted_fns` before calling if the
+    /// entrypoint needs hosted functions.
+    pub fn callRocABIWithCrashProtection(self: *DevEvaluator, executable: *const backend.ExecutableMemory, result_ptr: *anyopaque, args_ptr: ?*anyopaque) error{ RocCrashed, Segfault }!void {
+        self.roc_env.crashed = false;
+
+        const veh_handle = WindowsSEH.install(&self.roc_env.jmp_buf);
+        defer WindowsSEH.remove(veh_handle);
+
+        const jmp_result = setjmp(&self.roc_env.jmp_buf);
+        if (jmp_result != 0) {
+            if (jmp_result == 2) {
+                const code = WindowsSEH.getExceptionCode();
+                std.debug.print("\nSegfault caught: {s} (code 0x{X:0>8})\n", .{ WindowsSEH.formatException(code), code });
+                return error.Segfault;
+            } else {
+                return error.RocCrashed;
+            }
+        }
+        executable.callRocABI(@ptrCast(@constCast(&self.roc_ops)), result_ptr, args_ptr);
+    }
+
     /// Clean up resources
     pub fn deinit(self: *DevEvaluator) void {
         if (self.global_type_layout_resolver) |resolver| {
@@ -742,6 +770,7 @@ pub const DevEvaluator = struct {
         const lir_expr_id = mir_to_lir.lower(mir_expr_id) catch {
             return error.RuntimeError;
         };
+        try lir.CallCanonicalize.canonicalizeDirectCalls(self.allocator, &lir_store, &.{lir_expr_id});
 
         // Run RC insertion pass on the LIR
         var rc_pass = lir.RcInsert.RcInsertPass.init(self.allocator, &lir_store, layout_store_ptr) catch return error.OutOfMemory;
@@ -751,6 +780,7 @@ pub const DevEvaluator = struct {
         // Run RC insertion pass on all function definitions (symbol_defs)
         // so that lambda bodies get proper incref/decref annotations.
         lir.RcInsert.insertRcOpsIntoSymbolDefsBestEffort(self.allocator, &lir_store, layout_store_ptr);
+        try lir.CallCanonicalize.canonicalizeDirectCalls(self.allocator, &lir_store, &.{final_expr_id});
 
         // Determine the result layout from the lowered LIR expression.
         const cir_expr = module_env.store.getExpr(expr_idx);
@@ -887,6 +917,7 @@ pub const DevEvaluator = struct {
         const lir_expr_id = mir_to_lir.lower(mir_expr_id) catch {
             return error.RuntimeError;
         };
+        try lir.CallCanonicalize.canonicalizeDirectCalls(self.allocator, &lir_store, &.{lir_expr_id});
 
         // Run RC insertion pass
         var rc_pass = lir.RcInsert.RcInsertPass.init(self.allocator, &lir_store, layout_store_ptr) catch return error.OutOfMemory;
@@ -894,6 +925,7 @@ pub const DevEvaluator = struct {
         const final_expr_id = rc_pass.insertRcOps(lir_expr_id) catch lir_expr_id;
 
         lir.RcInsert.insertRcOpsIntoSymbolDefsBestEffort(self.allocator, &lir_store, layout_store_ptr);
+        try lir.CallCanonicalize.canonicalizeDirectCalls(self.allocator, &lir_store, &.{final_expr_id});
 
         // Create codegen
         var codegen = backend.HostLirCodeGen.init(

@@ -40,6 +40,9 @@ pub const OwnershipNormalize = @import("OwnershipNormalize.zig");
 /// LIR-level reference counting insertion pass
 pub const RcInsert = @import("rc_insert.zig");
 
+/// Post-RC direct-call canonicalization
+pub const CallCanonicalize = @import("CallCanonicalize.zig");
+
 /// Re-export commonly used types from LIR
 pub const LirExpr = LIR.LirExpr;
 /// Re-export pattern type
@@ -87,4 +90,5 @@ test "lir tests" {
     std.testing.refAllDecls(OwnershipNormalize);
     std.testing.refAllDecls(TailRecursion);
     std.testing.refAllDecls(RcInsert);
+    std.testing.refAllDecls(CallCanonicalize);
 }

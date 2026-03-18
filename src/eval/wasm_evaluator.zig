@@ -244,6 +244,7 @@ pub const WasmEvaluator = struct {
         const lir_expr_id = mir_to_lir.lower(mir_expr_id) catch {
             return error.RuntimeError;
         };
+        try lir.CallCanonicalize.canonicalizeDirectCalls(self.allocator, &lir_store, &.{lir_expr_id});
 
         // Run RC insertion pass on the LIR
         var rc_pass = lir.RcInsert.RcInsertPass.init(self.allocator, &lir_store, layout_store_ptr) catch return error.OutOfMemory;
@@ -252,6 +253,7 @@ pub const WasmEvaluator = struct {
 
         // Run RC insertion pass on all function definitions (symbol_defs)
         lir.RcInsert.insertRcOpsIntoSymbolDefsBestEffort(self.allocator, &lir_store, layout_store_ptr);
+        try lir.CallCanonicalize.canonicalizeDirectCalls(self.allocator, &lir_store, &.{final_expr_id});
 
         // Determine result layout
         const cir_expr = module_env.store.getExpr(expr_idx);

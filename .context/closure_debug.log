@@ -1,0 +1,138 @@
+test-eval
++- run test eval failure
+RUN 1/4: mod.test.eval tests
+RUN 2/4: test.closure_test.test.closure: passing two different closures to same HOF
+lambda param layout=14 type=0x14
+lambda param layout=14 type=0x14
+closure call params: 0x14 0x14 0x15
+closure arg 0 expr=lookup
+closure arg 0 actual=0x14 expected=0x14
+closure arg 1 expr=lookup
+closure arg 1 actual=0x14 expected=0x14
+lambda param layout=14 type=0x14
+lambda param layout=16 type=0x19
+closure call params: 0x14 0x19 0x15
+closure arg 0 expr=lookup
+closure arg 0 actual=0x14 expected=0x14
+closure arg 1 expr=block
+closure arg 1 actual=0x19 expected=0x19
+lambda param layout=14 type=0x14
+lambda param layout=14 type=0x14
+closure call params: 0x14 0x14 0x15
+closure arg 0 expr=lookup
+closure arg 0 actual=0x14 expected=0x14
+closure arg 1 expr=lookup
+closure arg 1 actual=0x14 expected=0x14
+lambda param layout=14 type=0x14
+lambda param layout=16 type=0x19
+closure call params: 0x14 0x19 0x15
+closure arg 0 expr=lookup
+closure arg 0 actual=0x14 expected=0x14
+closure arg 1 expr=block
+closure arg 1 actual=0x19 expected=0x19
+lambda param layout=14 type=0x14
+lambda param layout=16 type=0x19
+closure call params: 0x14 0x19 0x15
+closure arg 0 expr=lookup
+closure arg 0 actual=0x14 expected=0x14
+closure arg 1 expr=block
+closure arg 1 actual=0x19 expected=0x19
+lambda param layout=14 type=0x14
+lambda param layout=16 type=0x19
+closure call params: 0x14 0x19 0x15
+closure arg 0 expr=lookup
+closure arg 0 actual=0x14 expected=0x14
+closure arg 1 expr=block
+closure arg 1 actual=0x19 expected=0x19
+lambda param layout=19 type=0x15
+lambda param layout=14 type=0x14
+closure call params: 0x15 0x14 0x15
+closure arg 0 expr=tag
+closure arg 0 actual=0x15 expected=0xaaaaaaaa
+thread 2550143 panic: index out of bounds: index 2863311530, len 30
+/Users/rtfeldman/Downloads/zig-aarch64-macos-0.15.2/lib/std/zig/llvm/Builder.zig:340:40: 0x1052c088f in tag (eval)
+        return builder.type_items.items[@intFromEnum(self)].tag;
+                                       ^
+/Users/rtfeldman/Downloads/zig-aarch64-macos-0.15.2/lib/std/zig/llvm/Builder.zig:381:37: 0x1054a05a3 in isPointer (eval)
+            else => switch (self.tag(builder)) {
+                                    ^
+/Users/rtfeldman/conductor/workspaces/roc/chicago/src/backend/llvm/MonoLlvmCodeGen.zig:1712:114: 0x105743b2f in coerceValueToType (eval)
+        if (actual_type.isPointer(self.builder orelse return error.CompilationFailed) and expected_type.isPointer(self.builder orelse return error.CompilationFailed)) {
+                                                                                                                 ^
+/Users/rtfeldman/conductor/workspaces/roc/chicago/src/backend/llvm/MonoLlvmCodeGen.zig:6572:51: 0x1056047af in callCompiledFuncWithClosureData__anon_146949 (eval)
+            const val = try self.coerceValueToType(arg.value, expected_params[i], arg.layout_idx);
+                                                  ^
+/Users/rtfeldman/conductor/workspaces/roc/chicago/src/backend/llvm/MonoLlvmCodeGen.zig:5932:64: 0x105603be3 in generateLookupCall__anon_146937 (eval)
+                    return self.callCompiledFuncWithClosureData(func_idx, try self.buildLambdaFunctionType(lambda, null), args_span, null, ret_layout);
+                                                               ^
+/Users/rtfeldman/conductor/workspaces/roc/chicago/src/backend/llvm/MonoLlvmCodeGen.zig:5898:56: 0x10547d4cb in callExprWithArgs__anon_117913 (eval)
+            .lookup => |lookup| self.generateLookupCall(lookup, args_span, ret_layout),
+                                                       ^
+/Users/rtfeldman/conductor/workspaces/roc/chicago/src/backend/llvm/MonoLlvmCodeGen.zig:5865:37: 0x1052aae4b in generateCall__anon_83835 (eval)
+        return self.callExprWithArgs(call.fn_expr, call.args, call.ret_layout);
+                                    ^
+/Users/rtfeldman/conductor/workspaces/roc/chicago/src/backend/llvm/MonoLlvmCodeGen.zig:926:46: 0x105023b0f in generateExpr (eval)
+            .call => |call| self.generateCall(call),
+                                             ^
+/Users/rtfeldman/conductor/workspaces/roc/chicago/src/backend/llvm/MonoLlvmCodeGen.zig:5820:33: 0x1052aa6ff in generateBlock__anon_83831 (eval)
+        return self.generateExpr(block_data.final_expr);
+                                ^
+/Users/rtfeldman/conductor/workspaces/roc/chicago/src/backend/llvm/MonoLlvmCodeGen.zig:923:49: 0x105023aeb in generateExpr (eval)
+            .block => |block| self.generateBlock(block),
+                                                ^
+/Users/rtfeldman/conductor/workspaces/roc/chicago/src/backend/llvm/MonoLlvmCodeGen.zig:4777:48: 0x10547c75f in generateExprAsValue (eval)
+        const raw_value = try self.generateExpr(expr_id);
+                                               ^
+/Users/rtfeldman/conductor/workspaces/roc/chicago/src/backend/llvm/MonoLlvmCodeGen.zig:5802:61: 0x1052aaa7b in generateBlock__anon_83831 (eval)
+                    const val = try self.generateExprAsValue(b.expr);
+                                                            ^
+/Users/rtfeldman/conductor/workspaces/roc/chicago/src/backend/llvm/MonoLlvmCodeGen.zig:923:49: 0x105023aeb in generateExpr (eval)
+            .block => |block| self.generateBlock(block),
+                                                ^
+/Users/rtfeldman/conductor/workspaces/roc/chicago/src/backend/llvm/MonoLlvmCodeGen.zig:4777:48: 0x10547c75f in generateExprAsValue (eval)
+        const raw_value = try self.generateExpr(expr_id);
+                                               ^
+/Users/rtfeldman/conductor/workspaces/roc/chicago/src/backend/llvm/MonoLlvmCodeGen.zig:5802:61: 0x1052aaa7b in generateBlock__anon_83831 (eval)
+                    const val = try self.generateExprAsValue(b.expr);
+                                                            ^
+/Users/rtfeldman/conductor/workspaces/roc/chicago/src/backend/llvm/MonoLlvmCodeGen.zig:923:49: 0x105023aeb in generateExpr (eval)
+            .block => |block| self.generateBlock(block),
+                                                ^
+/Users/rtfeldman/conductor/workspaces/roc/chicago/src/backend/llvm/MonoLlvmCodeGen.zig:404:44: 0x104ed11d3 in generateCode (eval)
+        const value = try self.generateExpr(expr_id);
+                                           ^
+/Users/rtfeldman/conductor/workspaces/roc/chicago/src/eval/llvm_evaluator.zig:338:46: 0x104de68a7 in generateCode (eval)
+        var gen_result = codegen.generateCode(final_expr_id, result_layout) catch |e| switch (e) {
+                                             ^
+/Users/rtfeldman/conductor/workspaces/roc/chicago/src/eval/test/helpers.zig:486:45: 0x104d1ab13 in llvmEvaluatorStr (eval)
+    var code_result = llvm_eval.generateCode(module_env, expr_idx, &all_module_envs, null) catch {
+                                            ^
+/Users/rtfeldman/conductor/workspaces/roc/chicago/src/eval/test/helpers.zig:654:42: 0x104d9c9c7 in compareFloatWithBackends__anon_18756 (eval)
+    const llvm_str = try llvmEvaluatorStr(allocator, module_env, inspect_expr, builtin_module_env);
+                                         ^
+/Users/rtfeldman/conductor/workspaces/roc/chicago/src/eval/test/helpers.zig:2308:33: 0x104d9d72b in runExpectI64 (eval)
+    try compareFloatWithBackends(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env, f32);
+                                ^
+/Users/rtfeldman/conductor/workspaces/roc/chicago/src/eval/test/closure_test.zig:150:21: 0x1059508e3 in test.closure: passing two different closures to same HOF (eval)
+    try runExpectI64(code, 40, .no_trace);
+                    ^
+/Users/rtfeldman/conductor/workspaces/roc/chicago/.context/verbose_test_runner.zig:107:29: 0x10594cbdf in mainServer (eval)
+                test_fn.func() catch |err| switch (err) {
+                            ^
+/Users/rtfeldman/conductor/workspaces/roc/chicago/.context/verbose_test_runner.zig:44:19: 0x10594a35b in main (eval)
+        mainServer() catch @panic("internal test runner failure");
+                  ^
+/Users/rtfeldman/Downloads/zig-aarch64-macos-0.15.2/lib/std/start.zig:618:22: 0x105949e77 in main (eval)
+            root.main();
+                     ^
+???:?:?: 0x1880bdd53 in ??? (???)
+???:?:?: 0x0 in ??? (???)
+error: while executing test 'test.closure_test.test.closure: passing two different closures to same HOF', the following command terminated with signal 6 (expected exited with code 0):
+./.zig-cache/o/9348e74cda25e5aeea962ed5f7b9035f/eval --cache-dir=./.zig-cache --seed=0xedbb0701 --listen=-
+
+Build Summary: 12/14 steps succeeded; 1 failed; 4/4 tests passed
+test-eval transitive failure
++- run test eval failure
+
+error: the following build command failed with exit code 1:
+.zig-cache/o/f758544f4e9ab8628a63d1032fc22283/build /Users/rtfeldman/Downloads/zig-aarch64-macos-0.15.2/zig /Users/rtfeldman/Downloads/zig-aarch64-macos-0.15.2/lib /Users/rtfeldman/conductor/workspaces/roc/chicago .zig-cache /Users/rtfeldman/.cache/zig --seed 0xedbb0701 -Z8ea7795df7976c4e test-eval -- --test-filter closure: passing two different closures to same HOF
