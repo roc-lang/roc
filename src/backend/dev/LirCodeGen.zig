@@ -7259,6 +7259,132 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return disc_reg;
         }
 
+        /// After the outer tag discriminant has matched, emit discriminant checks for any
+        /// nested .tag arg patterns. For example, for the branch `Err(Exit(code))`, after
+        /// confirming the outer discriminant is Err, this function checks that the payload's
+        /// discriminant is also Exit. If any inner check fails, a conditional jump is emitted
+        /// and its patch location is appended to `fail_patches` so the caller can direct all
+        /// failures to the same "start of next branch" target.
+        ///
+        /// Handles both the single-arg case (payload is itself a tag_union) and the multi-arg
+        /// case (payload is a struct whose fields may be tag unions). Recurses for deeper nesting.
+        fn emitInnerTagArgDiscriminantChecks(
+            self: *Self,
+            tag_pattern: anytype,
+            value_loc: ValueLocation,
+            value_layout_idx: layout.Idx,
+            value_layout_val: anytype,
+            fail_patches: *std.ArrayList(usize),
+        ) Allocator.Error!void {
+            const ls = self.layout_store;
+            const args = self.store.getPatternSpan(tag_pattern.args);
+            if (args.len == 0) return;
+
+            if (value_layout_val.tag != .tag_union) return;
+
+            const tu_data = ls.getTagUnionData(value_layout_val.data.tag_union.idx);
+            const variants = ls.getTagUnionVariants(tu_data);
+            if (tag_pattern.discriminant >= variants.len) return;
+
+            const payload_layout_idx = variants.get(tag_pattern.discriminant).payload_layout;
+            const payload_layout_val = ls.getLayout(payload_layout_idx);
+
+            // Materialize the outer value to the stack so we can address the payload.
+            const stable_value_loc = try self.materializeValueToStackForLayout(value_loc, value_layout_idx);
+            const base_offset: i32 = switch (stable_value_loc) {
+                .stack => |s| s.offset,
+                .stack_i128 => |off| off,
+                .stack_str => |off| off,
+                .list_stack => |ls_info| ls_info.struct_offset,
+                else => return,
+            };
+            const payload_loc = self.stackLocationForLayout(payload_layout_idx, base_offset);
+
+            if (payload_layout_val.tag == .tag_union) {
+                // Single-arg payload that is itself a tag union — check its discriminant.
+                if (args.len >= 1) {
+                    const arg_pat = self.store.getPattern(args[0]);
+                    if (arg_pat == .tag) {
+                        const inner_tag_pat = arg_pat.tag;
+                        const inner_tu = ls.getTagUnionData(payload_layout_val.data.tag_union.idx);
+                        const inner_disc_offset: i32 = @intCast(inner_tu.discriminant_offset);
+                        const inner_disc_size: u8 = inner_tu.discriminant_size;
+                        const inner_total_size: u32 = inner_tu.size;
+                        const inner_disc_use_w32 = (inner_disc_offset + 8 > @as(i32, @intCast(inner_total_size)));
+
+                        const inner_disc_reg = try self.loadAndMaskDiscriminant(
+                            payload_loc,
+                            inner_disc_use_w32,
+                            inner_disc_offset,
+                            inner_disc_size,
+                        );
+                        try self.emitCmpImm(inner_disc_reg, @intCast(inner_tag_pat.discriminant));
+                        self.codegen.freeGeneral(inner_disc_reg);
+                        const fail_patch = try self.emitJumpIfNotEqual();
+                        try fail_patches.append(self.allocator, fail_patch);
+
+                        // Recurse for deeper nesting (e.g., A(B(C(x)))).
+                        try self.emitInnerTagArgDiscriminantChecks(
+                            inner_tag_pat,
+                            payload_loc,
+                            payload_layout_idx,
+                            payload_layout_val,
+                            fail_patches,
+                        );
+                    }
+                }
+            } else if (payload_layout_val.tag == .struct_) {
+                // Multi-arg tag payload stored as a struct; check any fields that are .tag patterns.
+                for (args, 0..) |arg_pattern_id, arg_idx| {
+                    const arg_pat = self.store.getPattern(arg_pattern_id);
+                    if (arg_pat != .tag) continue;
+
+                    const inner_tag_pat = arg_pat.tag;
+                    const field_layout_idx = ls.getStructFieldLayoutByOriginalIndex(
+                        payload_layout_val.data.struct_.idx,
+                        @intCast(arg_idx),
+                    );
+                    const field_layout_val = ls.getLayout(field_layout_idx);
+                    if (field_layout_val.tag != .tag_union) continue;
+
+                    const field_offset = ls.getStructFieldOffsetByOriginalIndex(
+                        payload_layout_val.data.struct_.idx,
+                        @intCast(arg_idx),
+                    );
+                    const field_loc = self.stackLocationForLayout(
+                        field_layout_idx,
+                        base_offset + @as(i32, @intCast(field_offset)),
+                    );
+
+                    const inner_tu = ls.getTagUnionData(field_layout_val.data.tag_union.idx);
+                    const inner_disc_offset: i32 = @intCast(inner_tu.discriminant_offset);
+                    const inner_disc_size: u8 = inner_tu.discriminant_size;
+                    const inner_total_size: u32 = inner_tu.size;
+                    const inner_disc_use_w32 = (inner_disc_offset + 8 > @as(i32, @intCast(inner_total_size)));
+
+                    const inner_disc_reg = try self.loadAndMaskDiscriminant(
+                        field_loc,
+                        inner_disc_use_w32,
+                        inner_disc_offset,
+                        inner_disc_size,
+                    );
+                    try self.emitCmpImm(inner_disc_reg, @intCast(inner_tag_pat.discriminant));
+                    self.codegen.freeGeneral(inner_disc_reg);
+                    const fail_patch = try self.emitJumpIfNotEqual();
+                    try fail_patches.append(self.allocator, fail_patch);
+
+                    // Recurse for deeper nesting.
+                    try self.emitInnerTagArgDiscriminantChecks(
+                        inner_tag_pat,
+                        field_loc,
+                        field_layout_idx,
+                        field_layout_val,
+                        fail_patches,
+                    );
+                }
+            }
+        }
+
         /// Bind tag payload fields to symbols after a tag pattern match.
         /// Computes the payload location for each arg and delegates to bindPattern,
         /// which handles all pattern types (bind, wildcard, tag, struct, list, as_pattern, etc.).
@@ -7877,6 +8003,23 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             next_patch = try self.emitJumpIfNotEqual();
                         }
 
+                        // For patterns like Err(Exit(code)), check inner discriminants
+                        // before binding any payload variables. If any inner discriminant
+                        // does not match, we must fall through to the next branch.
+                        // Patches are collected alongside next_patch and all target the
+                        // same "start of next branch" offset.
+                        var inner_fail_patches = std.ArrayList(usize).empty;
+                        defer inner_fail_patches.deinit(self.allocator);
+                        if (!is_last_branch) {
+                            try self.emitInnerTagArgDiscriminantChecks(
+                                tag_pattern,
+                                value_loc,
+                                when_expr.value_layout,
+                                value_layout_val,
+                                &inner_fail_patches,
+                            );
+                        }
+
                         // Bind tag payload fields
                         try self.bindTagPayloadFields(tag_pattern, value_loc, when_expr.value_layout, value_layout_val);
 
@@ -7892,10 +8035,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             const end_patch = try self.codegen.emitJump();
                             try end_patches.append(self.allocator, end_patch);
 
-                            // Patch the next branch jump to here
+                            // Patch the outer and all inner "not-equal" jumps to the
+                            // start of the next branch (current position after the end jump).
+                            const next_branch_offset = self.codegen.currentOffset();
                             if (next_patch) |patch| {
-                                const current_offset = self.codegen.currentOffset();
-                                self.codegen.patchJump(patch, current_offset);
+                                self.codegen.patchJump(patch, next_branch_offset);
+                            }
+                            for (inner_fail_patches.items) |patch| {
+                                self.codegen.patchJump(patch, next_branch_offset);
                             }
                         }
                         if (guard_patch) |patch| {

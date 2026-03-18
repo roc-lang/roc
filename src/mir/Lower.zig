@@ -1336,7 +1336,13 @@ fn bindFlatTypeMonotypesInStore(
                     .{@tagName(mono)},
                 ),
             };
-            const mono_fields = self.store.monotype_store.getFields(mrec.fields);
+            // Copy mono_fields into a local owned buffer. Recursive bindTypeVarMonotypes
+            // calls below may reallocate the monotype store, invalidating any direct
+            // slice into it. Monotype.Field contains only indices (no pointers).
+            var owned_mono_fields: std.ArrayListUnmanaged(Monotype.Field) = .empty;
+            defer owned_mono_fields.deinit(self.allocator);
+            try owned_mono_fields.appendSlice(self.allocator, self.store.monotype_store.getFields(mrec.fields));
+            const mono_fields = owned_mono_fields.items;
             var seen_field_indices: std.ArrayListUnmanaged(u32) = .empty;
             defer seen_field_indices.deinit(self.allocator);
 
@@ -1435,7 +1441,13 @@ fn bindFlatTypeMonotypesInStore(
                     .{@tagName(mono)},
                 ),
             };
-            const mono_tags = self.store.monotype_store.getTags(mtag.tags);
+            // Copy mono_tags into a local owned buffer. Recursive bindTypeVarMonotypes
+            // calls below may reallocate the monotype store, invalidating any direct
+            // slice into it. Monotype.Tag contains only indices (no pointers).
+            var owned_mono_tags: std.ArrayListUnmanaged(Monotype.Tag) = .empty;
+            defer owned_mono_tags.deinit(self.allocator);
+            try owned_mono_tags.appendSlice(self.allocator, self.store.monotype_store.getTags(mtag.tags));
+            const mono_tags = owned_mono_tags.items;
             var seen_tag_indices: std.ArrayListUnmanaged(u32) = .empty;
             defer seen_tag_indices.deinit(self.allocator);
 
@@ -6258,7 +6270,13 @@ fn bindFlatTypeMonotypes(self: *Self, flat_type: types.FlatType, monotype: Monot
                 ),
             };
             const mono_field_span = mrec.fields;
-            const mono_fields = self.store.monotype_store.getFields(mono_field_span);
+            // Copy mono_fields into a local owned buffer. Recursive bindTypeVarMonotypes
+            // calls below may reallocate the monotype store, invalidating any direct
+            // slice into it. Monotype.Field contains only indices (no pointers).
+            var owned_mono_fields: std.ArrayListUnmanaged(Monotype.Field) = .empty;
+            defer owned_mono_fields.deinit(self.allocator);
+            try owned_mono_fields.appendSlice(self.allocator, self.store.monotype_store.getFields(mono_field_span));
+            const mono_fields = owned_mono_fields.items;
             var seen_field_indices: std.ArrayListUnmanaged(u32) = .empty;
             defer seen_field_indices.deinit(self.allocator);
 
@@ -6381,7 +6399,15 @@ fn bindFlatTypeMonotypes(self: *Self, flat_type: types.FlatType, monotype: Monot
                     .{@tagName(mono)},
                 ),
             };
-            const mono_tags = self.store.monotype_store.getTags(mono_tag_span);
+            // Copy mono_tags into a local owned buffer. Recursive bindTypeVarMonotypes
+            // calls below may reallocate the monotype store (e.g. via addTags/addMonotype
+            // in remainingTagUnionTailMonotype), which would invalidate any direct slice
+            // into the store. Monotype.Tag contains only indices (no pointers), so a
+            // value copy is safe and cheap.
+            var owned_mono_tags: std.ArrayListUnmanaged(Monotype.Tag) = .empty;
+            defer owned_mono_tags.deinit(self.allocator);
+            try owned_mono_tags.appendSlice(self.allocator, self.store.monotype_store.getTags(mono_tag_span));
+            const mono_tags = owned_mono_tags.items;
             var seen_tag_indices: std.ArrayListUnmanaged(u32) = .empty;
             defer seen_tag_indices.deinit(self.allocator);
 

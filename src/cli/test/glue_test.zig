@@ -247,7 +247,7 @@ test "glue command with ZigGlue succeeds (interpreter)" {
 }
 
 test "glue command with ZigGlue succeeds (dev backend)" {
-    // TODO: dev backend fails with bindFlatTypeMonotypes panic in Lower.zig
+    // TODO: dev backend hangs during roc glue execution
     return error.SkipZigTest;
 }
 
