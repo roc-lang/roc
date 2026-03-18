@@ -30,8 +30,6 @@ const bytebox = @import("bytebox");
 const WasmEvaluator = eval_mod.WasmEvaluator;
 const LirProgram = eval_mod.LirProgram;
 const LirInterpreter = eval_mod.LirInterpreter;
-const lir_value_format = eval_mod.lir_value_format;
-
 const posix = std.posix;
 
 const has_fork = builtin.os.tag != .windows;
@@ -505,13 +503,17 @@ fn compareFloatWithBackends(
 /// The LIR interpreter lowers CIR → MIR → LIR → RC, then interprets the LIR directly.
 /// Returns an error if any stage fails (lowering, evaluation, or formatting).
 fn lirInterpreterStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) ![]const u8 {
+    // Wrap in Str.inspect — same approach as devEvaluatorStr/wasmEvaluatorStr.
+    // This lets Roc's own inspect implementation handle field names, tag names, etc.
+    const inspect_expr = try wrapInStrInspect(module_env, expr_idx);
+
     var lir_prog = LirProgram.init(allocator, base.target.TargetUsize.native);
     defer lir_prog.deinit();
 
     // Keep module order aligned with resolveImports/getResolvedModule indices.
     const all_module_envs = [_]*ModuleEnv{ @constCast(builtin_module_env), module_env };
 
-    var lower_result = try lir_prog.lowerExpr(module_env, expr_idx, &all_module_envs, null);
+    var lower_result = try lir_prog.lowerExpr(module_env, inspect_expr, &all_module_envs, null);
     defer lower_result.deinit();
 
     var interp = LirInterpreter.init(allocator, &lower_result.lir_store, lower_result.layout_store);
@@ -524,7 +526,10 @@ fn lirInterpreterStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_
         .break_expr => return error.RuntimeError,
     };
 
-    return lir_value_format.formatValue(allocator, value, lower_result.result_layout, lower_result.layout_store);
+    // Result is a RocStr — read and dupe the string content
+    var roc_str: builtins.str.RocStr = undefined;
+    @memcpy(std.mem.asBytes(&roc_str), value.ptr[0..@sizeOf(builtins.str.RocStr)]);
+    return allocator.dupe(u8, roc_str.asSlice());
 }
 
 /// Compare the CIR interpreter's formatted output with the LIR interpreter.
