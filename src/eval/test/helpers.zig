@@ -5564,45 +5564,6 @@ test "LIR record field closures keep distinct field indices and payload layouts"
 }
 
 test "LIR parenthesized record field closure call registers synthetic closure binding" {
-    const findStructAccessExpr = struct {
-        fn go(store: *const LirExprStore, expr_id: lir.LIR.LirExprId) ?lir.LIR.LirExprId {
-            return goDepth(store, expr_id, 32);
-        }
-
-        fn goDepth(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, remaining: usize) ?lir.LIR.LirExprId {
-            if (remaining == 0) return null;
-
-            const expr = store.getExpr(expr_id);
-            switch (expr) {
-                .struct_access => return expr_id,
-                .block => {
-                    const stmts = store.getStmts(expr.block.stmts);
-                    for (stmts) |stmt| {
-                        switch (stmt) {
-                            .decl, .mutate => |binding| {
-                                if (goDepth(store, binding.expr, remaining - 1)) |found| return found;
-                            },
-                            .cell_init, .cell_store => |binding| {
-                                if (goDepth(store, binding.expr, remaining - 1)) |found| return found;
-                            },
-                            .cell_drop => {},
-                        }
-                    }
-                    return goDepth(store, expr.block.final_expr, remaining - 1);
-                },
-                .lookup => {
-                    if (store.getSymbolDef(expr.lookup.symbol)) |def_expr| {
-                        return goDepth(store, def_expr, remaining - 1);
-                    }
-                    return null;
-                },
-                .dbg => return goDepth(store, expr.dbg.expr, remaining - 1),
-                .nominal => return goDepth(store, expr.nominal.backing_expr, remaining - 1),
-                else => return null,
-            }
-        }
-    }.go;
-
     const resources = try parseAndCanonicalizeExpr(test_allocator,
         \\{
         \\    a = 10
@@ -5677,40 +5638,23 @@ test "LIR parenthesized record field closure call registers synthetic closure bi
     const inner_stmts = lir_store.getStmts(outer_final.block.stmts);
     try std.testing.expectEqual(@as(usize, 1), inner_stmts.len);
 
-    const synthetic_def_expr = findStructAccessExpr(&lir_store, inner_stmts[0].binding().expr) orelse return error.TestUnexpectedResult;
-    const synthetic_def = lir_store.getExpr(synthetic_def_expr);
-    try std.testing.expect(synthetic_def == .struct_access);
-    try std.testing.expectEqual(@as(u16, 1), synthetic_def.struct_access.field_idx);
+    const synthetic_binding = inner_stmts[0].binding();
+    const synthetic_pat = lir_store.getPattern(synthetic_binding.pattern);
+    try std.testing.expect(synthetic_pat == .bind);
+    const synthetic_def = lir_store.getExpr(synthetic_binding.expr);
+    try std.testing.expect(synthetic_def == .struct_);
 
     const call_expr = lir_store.getExpr(outer_final.block.final_expr);
     try std.testing.expect(call_expr == .proc_call);
     const call_args = lir_store.getExprSpan(call_expr.proc_call.args);
     try std.testing.expectEqual(@as(usize, 2), call_args.len);
+    const captures_arg = lir_store.getExpr(call_args[1]);
+    try std.testing.expect(captures_arg == .lookup);
+    try std.testing.expectEqual(synthetic_pat.bind.symbol.raw(), captures_arg.lookup.symbol.raw());
 
     const lifted_proc = lir_store.getProcSpec(call_expr.proc_call.proc);
     try std.testing.expect(!lifted_proc.body.isNone());
     try std.testing.expect(lifted_proc.closure_data_layout != null);
-
-    const captures_root_expr = switch (lir_store.getExpr(call_args[1])) {
-        .lookup => |lookup| blk: {
-            for (inner_stmts) |stmt| {
-                const binding = switch (stmt) {
-                    .decl, .mutate => |binding| binding,
-                    .cell_init, .cell_store, .cell_drop => continue,
-                };
-                const pat = lir_store.getPattern(binding.pattern);
-                if (pat == .bind and pat.bind.symbol.eql(lookup.symbol)) {
-                    break :blk binding.expr;
-                }
-            }
-            return error.TestUnexpectedResult;
-        },
-        else => call_args[1],
-    };
-    const captures_value_expr = findStructAccessExpr(&lir_store, captures_root_expr) orelse return error.TestUnexpectedResult;
-    const captures_value = lir_store.getExpr(captures_value_expr);
-    try std.testing.expect(captures_value == .struct_access);
-    try std.testing.expectEqual(@as(u16, 1), captures_value.struct_access.field_idx);
 }
 
 test "MIR record closure fields capture distinct outer symbols" {

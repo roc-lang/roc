@@ -46,6 +46,16 @@ fn packExprSourceKey(module_idx: u32, expr_idx: CIR.Expr.Idx) u64 {
     return packCallableSourceKey(.expr, module_idx, @intFromEnum(expr_idx));
 }
 
+fn hasNumeralConstraint(types_store: *const types.Store, constraints: types.StaticDispatchConstraint.SafeList.Range) bool {
+    for (types_store.sliceStaticDispatchConstraints(constraints)) |constraint| {
+        switch (constraint.origin) {
+            .from_numeral, .desugared_binop, .desugared_unaryop => return true,
+            .method_call, .where_clause => {},
+        }
+    }
+    return false;
+}
+
 /// Identifies a semantic callable template before monomorphic instantiation.
 pub const ProcTemplateId = enum(u32) {
     _,
@@ -399,7 +409,10 @@ pub const Pass = struct {
         for (defs) |def_idx| {
             const def = module_env.store.getDef(def_idx);
             const expr = module_env.store.getExpr(def.expr);
-            try self.recordSourceExpr(packLocalPatternSourceKey(module_idx, def.pattern), module_idx, def.expr);
+            try self.recordPatternSourceExpr(result, module_idx, def.pattern, .{
+                .module_idx = module_idx,
+                .expr_idx = def.expr,
+            });
 
             if (callableKind(expr)) |kind| {
                 const template_id = try self.registerCallableDefTemplate(
@@ -500,6 +513,90 @@ pub const Pass = struct {
         });
     }
 
+    fn recordPatternSourceExpr(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        pattern_idx: CIR.Pattern.Idx,
+        source: ExprSource,
+    ) Allocator.Error!void {
+        try self.recordSourceExpr(
+            packLocalPatternSourceKey(module_idx, pattern_idx),
+            source.module_idx,
+            source.expr_idx,
+        );
+
+        const module_env = self.all_module_envs[module_idx];
+        switch (module_env.store.getPattern(pattern_idx)) {
+            .assign,
+            .underscore,
+            .num_literal,
+            .small_dec_literal,
+            .dec_literal,
+            .frac_f32_literal,
+            .frac_f64_literal,
+            .str_literal,
+            .runtime_error,
+            => {},
+            .as => |as_pat| try self.recordPatternSourceExpr(result, module_idx, as_pat.pattern, source),
+            .nominal => |nominal_pat| try self.recordPatternSourceExpr(result, module_idx, nominal_pat.backing_pattern, source),
+            .nominal_external => |nominal_pat| try self.recordPatternSourceExpr(result, module_idx, nominal_pat.backing_pattern, source),
+            .tuple => |tuple_pat| {
+                for (module_env.store.slicePatterns(tuple_pat.patterns), 0..) |elem_pattern_idx, elem_index| {
+                    const elem_source = try self.resolveTupleElemSourceExpr(
+                        result,
+                        source.module_idx,
+                        source.expr_idx,
+                        @intCast(elem_index),
+                    ) orelse continue;
+                    try self.recordPatternSourceExpr(result, module_idx, elem_pattern_idx, elem_source);
+                }
+            },
+            .applied_tag => |tag_pat| {
+                for (module_env.store.slicePatterns(tag_pat.args), 0..) |arg_pattern_idx, arg_index| {
+                    const arg_source = try self.resolveTagPayloadSourceExpr(
+                        result,
+                        source.module_idx,
+                        source.expr_idx,
+                        module_idx,
+                        tag_pat.name,
+                        @intCast(arg_index),
+                    ) orelse continue;
+                    try self.recordPatternSourceExpr(result, module_idx, arg_pattern_idx, arg_source);
+                }
+            },
+            .record_destructure => |record_pat| {
+                for (module_env.store.sliceRecordDestructs(record_pat.destructs)) |destruct_idx| {
+                    const destruct = module_env.store.getRecordDestruct(destruct_idx);
+                    switch (destruct.kind) {
+                        .Required, .SubPattern => |sub_pattern_idx| {
+                            const field_source = try self.resolveRecordFieldSourceExpr(
+                                result,
+                                source.module_idx,
+                                source.expr_idx,
+                                module_idx,
+                                destruct.label,
+                            ) orelse continue;
+                            try self.recordPatternSourceExpr(result, module_idx, sub_pattern_idx, field_source);
+                        },
+                        .Rest => {},
+                    }
+                }
+            },
+            .list => |list_pat| {
+                for (module_env.store.slicePatterns(list_pat.patterns), 0..) |elem_pattern_idx, elem_index| {
+                    const elem_source = try self.resolveListElemSourceExpr(
+                        result,
+                        source.module_idx,
+                        source.expr_idx,
+                        @intCast(elem_index),
+                    ) orelse continue;
+                    try self.recordPatternSourceExpr(result, module_idx, elem_pattern_idx, elem_source);
+                }
+            },
+        }
+    }
+
     fn registerCallableDefTemplate(
         self: *Pass,
         result: *Result,
@@ -556,7 +653,10 @@ pub const Pass = struct {
         switch (stmt) {
             .s_decl => |decl| {
                 const expr = module_env.store.getExpr(decl.expr);
-                try self.recordSourceExpr(packLocalPatternSourceKey(module_idx, decl.pattern), module_idx, decl.expr);
+                try self.recordPatternSourceExpr(result, module_idx, decl.pattern, .{
+                    .module_idx = module_idx,
+                    .expr_idx = decl.expr,
+                });
                 if (callableKind(expr)) |kind| {
                     _ = try self.registerCallableDefTemplate(
                         result,
@@ -577,7 +677,10 @@ pub const Pass = struct {
             },
             .s_var => |var_decl| {
                 const expr = module_env.store.getExpr(var_decl.expr);
-                try self.recordSourceExpr(packLocalPatternSourceKey(module_idx, var_decl.pattern_idx), module_idx, var_decl.expr);
+                try self.recordPatternSourceExpr(result, module_idx, var_decl.pattern_idx, .{
+                    .module_idx = module_idx,
+                    .expr_idx = var_decl.expr,
+                });
                 if (callableKind(expr)) |kind| {
                     _ = try self.registerCallableDefTemplate(
                         result,
@@ -676,7 +779,7 @@ pub const Pass = struct {
         template_id: ProcTemplateId,
     ) Allocator.Error!void {
         const template = result.getProcTemplate(template_id);
-        const fn_monotype = try self.resolveTypeVarMonotypeIfExact(
+        const fn_monotype = try self.resolveTypeVarMonotypeIfMonomorphizable(
             result,
             template.module_idx,
             template.type_root,
@@ -761,6 +864,13 @@ pub const Pass = struct {
                 const branches = module_env.store.sliceMatchBranches(match_expr.branches);
                 for (branches) |branch_idx| {
                     const branch = module_env.store.getMatchBranch(branch_idx);
+                    for (module_env.store.sliceMatchBranchPatterns(branch.patterns)) |branch_pattern_idx| {
+                        const branch_pattern = module_env.store.getMatchBranchPattern(branch_pattern_idx);
+                        try self.recordPatternSourceExpr(result, module_idx, branch_pattern.pattern, .{
+                            .module_idx = module_idx,
+                            .expr_idx = match_expr.cond,
+                        });
+                    }
                     try self.scanExpr(result, module_idx, branch.value);
                     if (branch.guard) |guard_expr| {
                         try self.scanExpr(result, module_idx, guard_expr);
@@ -939,7 +1049,8 @@ pub const Pass = struct {
         const callee_expr_idx = call_expr.func;
         const module_env = self.all_module_envs[module_idx];
         const callee_expr = module_env.store.getExpr(callee_expr_idx);
-        const template_id = try self.lookupDirectCalleeTemplate(result, module_idx, callee_expr_idx) orelse {
+        const resolved_template_id = try self.lookupDirectCalleeTemplate(result, module_idx, callee_expr_idx);
+        const template_id = resolved_template_id orelse {
             switch (callee_expr) {
                 .e_lookup_local, .e_lookup_external => return,
                 .e_lambda, .e_closure, .e_hosted_lambda => {
@@ -2832,6 +2943,72 @@ pub const Pass = struct {
         return self.resolveExprCallableTemplateWithVisited(result, module_idx, expr_idx, &visiting);
     }
 
+    fn resolveRecordFieldSourceExpr(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        field_name_module_idx: u32,
+        field_name: Ident.Idx,
+    ) Allocator.Error!?ExprSource {
+        var visiting: std.AutoHashMapUnmanaged(u64, void) = .empty;
+        defer visiting.deinit(self.allocator);
+        return self.resolveRecordFieldExpr(
+            result,
+            module_idx,
+            expr_idx,
+            field_name_module_idx,
+            field_name,
+            &visiting,
+        );
+    }
+
+    fn resolveTupleElemSourceExpr(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        elem_index: u32,
+    ) Allocator.Error!?ExprSource {
+        var visiting: std.AutoHashMapUnmanaged(u64, void) = .empty;
+        defer visiting.deinit(self.allocator);
+        return self.resolveTupleElemExpr(result, module_idx, expr_idx, elem_index, &visiting);
+    }
+
+    fn resolveTagPayloadSourceExpr(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        tag_name_module_idx: u32,
+        tag_name: Ident.Idx,
+        payload_index: u32,
+    ) Allocator.Error!?ExprSource {
+        var visiting: std.AutoHashMapUnmanaged(u64, void) = .empty;
+        defer visiting.deinit(self.allocator);
+        return self.resolveTagPayloadExpr(
+            result,
+            module_idx,
+            expr_idx,
+            tag_name_module_idx,
+            tag_name,
+            payload_index,
+            &visiting,
+        );
+    }
+
+    fn resolveListElemSourceExpr(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        elem_index: u32,
+    ) Allocator.Error!?ExprSource {
+        var visiting: std.AutoHashMapUnmanaged(u64, void) = .empty;
+        defer visiting.deinit(self.allocator);
+        return self.resolveListElemExpr(result, module_idx, expr_idx, elem_index, &visiting);
+    }
+
     fn resolveExprCallableTemplateWithVisited(
         self: *Pass,
         result: *Result,
@@ -2870,7 +3047,14 @@ pub const Pass = struct {
             .e_nominal_external => |nominal_expr| try self.resolveExprCallableTemplateWithVisited(result, module_idx, nominal_expr.backing_expr, visiting),
             .e_dot_access => |dot_expr| blk: {
                 if (dot_expr.args != null) break :blk null;
-                const field_expr = try self.resolveRecordFieldExpr(result, module_idx, dot_expr.receiver, dot_expr.field_name, visiting) orelse break :blk null;
+                const field_expr = try self.resolveRecordFieldExpr(
+                    result,
+                    module_idx,
+                    dot_expr.receiver,
+                    module_idx,
+                    dot_expr.field_name,
+                    visiting,
+                ) orelse break :blk null;
                 break :blk try self.resolveExprCallableTemplateWithVisited(result, field_expr.module_idx, field_expr.expr_idx, visiting);
             },
             .e_tuple_access => |tuple_access| blk: {
@@ -2886,6 +3070,7 @@ pub const Pass = struct {
         result: *Result,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
+        field_name_module_idx: u32,
         field_name: Ident.Idx,
         visiting: *std.AutoHashMapUnmanaged(u64, void),
     ) Allocator.Error!?ExprSource {
@@ -2899,7 +3084,7 @@ pub const Pass = struct {
             .e_record => |record| blk: {
                 for (module_env.store.sliceRecordFields(record.fields)) |field_idx| {
                     const field = module_env.store.getRecordField(field_idx);
-                    if (self.identsStructurallyEqualAcrossModules(module_idx, field.name, module_idx, field_name)) {
+                    if (self.identsStructurallyEqualAcrossModules(module_idx, field.name, field_name_module_idx, field_name)) {
                         break :blk .{ .module_idx = module_idx, .expr_idx = field.value };
                     }
                 }
@@ -2907,19 +3092,19 @@ pub const Pass = struct {
             },
             .e_lookup_local => |lookup| blk: {
                 const source = self.source_exprs.get(packLocalPatternSourceKey(module_idx, lookup.pattern_idx)) orelse break :blk null;
-                break :blk try self.resolveRecordFieldExpr(result, source.module_idx, source.expr_idx, field_name, visiting);
+                break :blk try self.resolveRecordFieldExpr(result, source.module_idx, source.expr_idx, field_name_module_idx, field_name, visiting);
             },
             .e_lookup_external => |lookup| blk: {
                 const target_module_idx = self.resolveImportedModuleIdx(module_env, lookup.module_idx) orelse break :blk null;
                 const source = self.source_exprs.get(packExternalDefSourceKey(target_module_idx, lookup.target_node_idx)) orelse break :blk null;
-                break :blk try self.resolveRecordFieldExpr(result, source.module_idx, source.expr_idx, field_name, visiting);
+                break :blk try self.resolveRecordFieldExpr(result, source.module_idx, source.expr_idx, field_name_module_idx, field_name, visiting);
             },
-            .e_block => |block| try self.resolveRecordFieldExpr(result, module_idx, block.final_expr, field_name, visiting),
-            .e_dbg => |dbg_expr| try self.resolveRecordFieldExpr(result, module_idx, dbg_expr.expr, field_name, visiting),
-            .e_expect => |expect_expr| try self.resolveRecordFieldExpr(result, module_idx, expect_expr.body, field_name, visiting),
-            .e_return => |return_expr| try self.resolveRecordFieldExpr(result, module_idx, return_expr.expr, field_name, visiting),
-            .e_nominal => |nominal_expr| try self.resolveRecordFieldExpr(result, module_idx, nominal_expr.backing_expr, field_name, visiting),
-            .e_nominal_external => |nominal_expr| try self.resolveRecordFieldExpr(result, module_idx, nominal_expr.backing_expr, field_name, visiting),
+            .e_block => |block| try self.resolveRecordFieldExpr(result, module_idx, block.final_expr, field_name_module_idx, field_name, visiting),
+            .e_dbg => |dbg_expr| try self.resolveRecordFieldExpr(result, module_idx, dbg_expr.expr, field_name_module_idx, field_name, visiting),
+            .e_expect => |expect_expr| try self.resolveRecordFieldExpr(result, module_idx, expect_expr.body, field_name_module_idx, field_name, visiting),
+            .e_return => |return_expr| try self.resolveRecordFieldExpr(result, module_idx, return_expr.expr, field_name_module_idx, field_name, visiting),
+            .e_nominal => |nominal_expr| try self.resolveRecordFieldExpr(result, module_idx, nominal_expr.backing_expr, field_name_module_idx, field_name, visiting),
+            .e_nominal_external => |nominal_expr| try self.resolveRecordFieldExpr(result, module_idx, nominal_expr.backing_expr, field_name_module_idx, field_name, visiting),
             else => null,
         };
     }
@@ -2959,6 +3144,105 @@ pub const Pass = struct {
             .e_return => |return_expr| try self.resolveTupleElemExpr(result, module_idx, return_expr.expr, elem_index, visiting),
             .e_nominal => |nominal_expr| try self.resolveTupleElemExpr(result, module_idx, nominal_expr.backing_expr, elem_index, visiting),
             .e_nominal_external => |nominal_expr| try self.resolveTupleElemExpr(result, module_idx, nominal_expr.backing_expr, elem_index, visiting),
+            else => null,
+        };
+    }
+
+    fn resolveTagPayloadExpr(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        tag_name_module_idx: u32,
+        tag_name: Ident.Idx,
+        payload_index: u32,
+        visiting: *std.AutoHashMapUnmanaged(u64, void),
+    ) Allocator.Error!?ExprSource {
+        const visit_key = exprVisitKey(module_idx, expr_idx);
+        if (visiting.contains(visit_key)) return null;
+        try visiting.put(self.allocator, visit_key, {});
+        defer _ = visiting.remove(visit_key);
+
+        const module_env = self.all_module_envs[module_idx];
+        return switch (module_env.store.getExpr(expr_idx)) {
+            .e_tag => |tag_expr| blk: {
+                if (!self.identsStructurallyEqualAcrossModules(module_idx, tag_expr.name, tag_name_module_idx, tag_name)) {
+                    break :blk null;
+                }
+                const payloads = module_env.store.sliceExpr(tag_expr.args);
+                if (payload_index >= payloads.len) break :blk null;
+                break :blk .{ .module_idx = module_idx, .expr_idx = payloads[payload_index] };
+            },
+            .e_lookup_local => |lookup| blk: {
+                const source = self.source_exprs.get(packLocalPatternSourceKey(module_idx, lookup.pattern_idx)) orelse break :blk null;
+                break :blk try self.resolveTagPayloadExpr(
+                    result,
+                    source.module_idx,
+                    source.expr_idx,
+                    tag_name_module_idx,
+                    tag_name,
+                    payload_index,
+                    visiting,
+                );
+            },
+            .e_lookup_external => |lookup| blk: {
+                const target_module_idx = self.resolveImportedModuleIdx(module_env, lookup.module_idx) orelse break :blk null;
+                const source = self.source_exprs.get(packExternalDefSourceKey(target_module_idx, lookup.target_node_idx)) orelse break :blk null;
+                break :blk try self.resolveTagPayloadExpr(
+                    result,
+                    source.module_idx,
+                    source.expr_idx,
+                    tag_name_module_idx,
+                    tag_name,
+                    payload_index,
+                    visiting,
+                );
+            },
+            .e_block => |block| try self.resolveTagPayloadExpr(result, module_idx, block.final_expr, tag_name_module_idx, tag_name, payload_index, visiting),
+            .e_dbg => |dbg_expr| try self.resolveTagPayloadExpr(result, module_idx, dbg_expr.expr, tag_name_module_idx, tag_name, payload_index, visiting),
+            .e_expect => |expect_expr| try self.resolveTagPayloadExpr(result, module_idx, expect_expr.body, tag_name_module_idx, tag_name, payload_index, visiting),
+            .e_return => |return_expr| try self.resolveTagPayloadExpr(result, module_idx, return_expr.expr, tag_name_module_idx, tag_name, payload_index, visiting),
+            .e_nominal => |nominal_expr| try self.resolveTagPayloadExpr(result, module_idx, nominal_expr.backing_expr, tag_name_module_idx, tag_name, payload_index, visiting),
+            .e_nominal_external => |nominal_expr| try self.resolveTagPayloadExpr(result, module_idx, nominal_expr.backing_expr, tag_name_module_idx, tag_name, payload_index, visiting),
+            else => null,
+        };
+    }
+
+    fn resolveListElemExpr(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        elem_index: u32,
+        visiting: *std.AutoHashMapUnmanaged(u64, void),
+    ) Allocator.Error!?ExprSource {
+        const visit_key = exprVisitKey(module_idx, expr_idx);
+        if (visiting.contains(visit_key)) return null;
+        try visiting.put(self.allocator, visit_key, {});
+        defer _ = visiting.remove(visit_key);
+
+        const module_env = self.all_module_envs[module_idx];
+        return switch (module_env.store.getExpr(expr_idx)) {
+            .e_list => |list_expr| blk: {
+                const elems = module_env.store.sliceExpr(list_expr.elems);
+                if (elem_index >= elems.len) break :blk null;
+                break :blk .{ .module_idx = module_idx, .expr_idx = elems[elem_index] };
+            },
+            .e_lookup_local => |lookup| blk: {
+                const source = self.source_exprs.get(packLocalPatternSourceKey(module_idx, lookup.pattern_idx)) orelse break :blk null;
+                break :blk try self.resolveListElemExpr(result, source.module_idx, source.expr_idx, elem_index, visiting);
+            },
+            .e_lookup_external => |lookup| blk: {
+                const target_module_idx = self.resolveImportedModuleIdx(module_env, lookup.module_idx) orelse break :blk null;
+                const source = self.source_exprs.get(packExternalDefSourceKey(target_module_idx, lookup.target_node_idx)) orelse break :blk null;
+                break :blk try self.resolveListElemExpr(result, source.module_idx, source.expr_idx, elem_index, visiting);
+            },
+            .e_block => |block| try self.resolveListElemExpr(result, module_idx, block.final_expr, elem_index, visiting),
+            .e_dbg => |dbg_expr| try self.resolveListElemExpr(result, module_idx, dbg_expr.expr, elem_index, visiting),
+            .e_expect => |expect_expr| try self.resolveListElemExpr(result, module_idx, expect_expr.body, elem_index, visiting),
+            .e_return => |return_expr| try self.resolveListElemExpr(result, module_idx, return_expr.expr, elem_index, visiting),
+            .e_nominal => |nominal_expr| try self.resolveListElemExpr(result, module_idx, nominal_expr.backing_expr, elem_index, visiting),
+            .e_nominal_external => |nominal_expr| try self.resolveListElemExpr(result, module_idx, nominal_expr.backing_expr, elem_index, visiting),
             else => null,
         };
     }
@@ -3992,6 +4276,32 @@ pub const Pass = struct {
         );
     }
 
+    fn resolveTypeVarMonotypeIfMonomorphizable(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        var_: types.Var,
+    ) Allocator.Error!Monotype.Idx {
+        if (self.active_bindings != null) {
+            return self.resolveTypeVarMonotypeIfExact(result, module_idx, var_);
+        }
+
+        var seen: std.AutoHashMapUnmanaged(types.Var, void) = .empty;
+        defer seen.deinit(self.allocator);
+
+        if (!try self.typeVarMonomorphizableWithoutBindings(
+            result,
+            module_idx,
+            &self.all_module_envs[module_idx].types,
+            var_,
+            &seen,
+        )) {
+            return .none;
+        }
+
+        return self.resolveTypeVarMonotype(result, module_idx, var_);
+    }
+
     fn lookupBindingMonotype(
         store_types: *const types.Store,
         bindings: *const std.AutoHashMap(types.Var, Monotype.Idx),
@@ -4032,6 +4342,40 @@ pub const Pass = struct {
                 store_types,
                 flat_type,
                 bindings,
+                seen,
+            ),
+            .err => true,
+        };
+    }
+
+    fn typeVarMonomorphizableWithoutBindings(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        store_types: *const types.Store,
+        var_: types.Var,
+        seen: *std.AutoHashMapUnmanaged(types.Var, void),
+    ) Allocator.Error!bool {
+        const resolved = store_types.resolveVar(var_);
+        if (seen.contains(resolved.var_)) return true;
+        try seen.put(self.allocator, resolved.var_, {});
+        defer _ = seen.remove(resolved.var_);
+
+        return switch (resolved.desc.content) {
+            .flex => |flex| hasNumeralConstraint(store_types, flex.constraints),
+            .rigid => |rigid| hasNumeralConstraint(store_types, rigid.constraints),
+            .alias => |alias| self.typeVarMonomorphizableWithoutBindings(
+                result,
+                module_idx,
+                store_types,
+                store_types.getAliasBackingVar(alias),
+                seen,
+            ),
+            .structure => |flat_type| self.flatTypeMonomorphizableWithoutBindings(
+                result,
+                module_idx,
+                store_types,
+                flat_type,
                 seen,
             ),
             .err => true,
@@ -4148,6 +4492,128 @@ pub const Pass = struct {
                     }
                 }
                 break :blk try self.typeVarFullyBoundWithBindings(result, module_idx, store_types, tag_union.ext, bindings, seen);
+            },
+            .empty_record, .empty_tag_union => true,
+        };
+    }
+
+    fn flatTypeMonomorphizableWithoutBindings(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        store_types: *const types.Store,
+        flat_type: types.FlatType,
+        seen: *std.AutoHashMapUnmanaged(types.Var, void),
+    ) Allocator.Error!bool {
+        return switch (flat_type) {
+            .fn_pure, .fn_effectful, .fn_unbound => |func| blk: {
+                for (store_types.sliceVars(func.args)) |arg_var| {
+                    if (!try self.typeVarMonomorphizableWithoutBindings(result, module_idx, store_types, arg_var, seen)) {
+                        break :blk false;
+                    }
+                }
+                break :blk try self.typeVarMonomorphizableWithoutBindings(result, module_idx, store_types, func.ret, seen);
+            },
+            .nominal_type => |nominal| blk: {
+                for (store_types.sliceNominalArgs(nominal)) |arg_var| {
+                    if (!try self.typeVarMonomorphizableWithoutBindings(result, module_idx, store_types, arg_var, seen)) {
+                        break :blk false;
+                    }
+                }
+                break :blk true;
+            },
+            .record => |record| blk: {
+                var current_row = record;
+                while (true) {
+                    const fields_slice = store_types.getRecordFieldsSlice(current_row.fields);
+                    for (fields_slice.items(.var_)) |field_var| {
+                        if (!try self.typeVarMonomorphizableWithoutBindings(result, module_idx, store_types, field_var, seen)) {
+                            break :blk false;
+                        }
+                    }
+
+                    const ext_resolved = store_types.resolveVar(current_row.ext);
+                    switch (ext_resolved.desc.content) {
+                        .alias => |alias| {
+                            const backing = store_types.getAliasBackingVar(alias);
+                            const backing_resolved = store_types.resolveVar(backing);
+                            if (backing_resolved.desc.content == .structure) {
+                                switch (backing_resolved.desc.content.structure) {
+                                    .record => |next_row| {
+                                        current_row = next_row;
+                                        continue;
+                                    },
+                                    .record_unbound => |fields_range| {
+                                        const ext_fields = store_types.getRecordFieldsSlice(fields_range);
+                                        for (ext_fields.items(.var_)) |field_var| {
+                                            if (!try self.typeVarMonomorphizableWithoutBindings(result, module_idx, store_types, field_var, seen)) {
+                                                break :blk false;
+                                            }
+                                        }
+                                        break :blk true;
+                                    },
+                                    .empty_record => break :blk true,
+                                    else => break :blk try self.typeVarMonomorphizableWithoutBindings(result, module_idx, store_types, backing, seen),
+                                }
+                            }
+                            break :blk try self.typeVarMonomorphizableWithoutBindings(result, module_idx, store_types, backing, seen);
+                        },
+                        .structure => |ext_flat| switch (ext_flat) {
+                            .record => |next_row| {
+                                current_row = next_row;
+                                continue;
+                            },
+                            .record_unbound => |fields_range| {
+                                const ext_fields = store_types.getRecordFieldsSlice(fields_range);
+                                for (ext_fields.items(.var_)) |field_var| {
+                                    if (!try self.typeVarMonomorphizableWithoutBindings(result, module_idx, store_types, field_var, seen)) {
+                                        break :blk false;
+                                    }
+                                }
+                                break :blk true;
+                            },
+                            .empty_record => break :blk true,
+                            else => break :blk false,
+                        },
+                        .flex => |flex| break :blk hasNumeralConstraint(store_types, flex.constraints),
+                        .rigid => |rigid| break :blk hasNumeralConstraint(store_types, rigid.constraints),
+                        else => break :blk try self.typeVarMonomorphizableWithoutBindings(result, module_idx, store_types, current_row.ext, seen),
+                    }
+                }
+            },
+            .record_unbound => |fields_range| blk: {
+                const fields_slice = store_types.getRecordFieldsSlice(fields_range);
+                for (fields_slice.items(.var_)) |field_var| {
+                    if (!try self.typeVarMonomorphizableWithoutBindings(result, module_idx, store_types, field_var, seen)) {
+                        break :blk false;
+                    }
+                }
+                break :blk true;
+            },
+            .tuple => |tuple| blk: {
+                for (store_types.sliceVars(tuple.elems)) |elem_var| {
+                    if (!try self.typeVarMonomorphizableWithoutBindings(result, module_idx, store_types, elem_var, seen)) {
+                        break :blk false;
+                    }
+                }
+                break :blk true;
+            },
+            .tag_union => |tag_union| blk: {
+                const tags = store_types.getTagsSlice(tag_union.tags);
+                for (tags.items(.args)) |args_range| {
+                    for (store_types.sliceVars(args_range)) |payload_var| {
+                        if (!try self.typeVarMonomorphizableWithoutBindings(result, module_idx, store_types, payload_var, seen)) {
+                            break :blk false;
+                        }
+                    }
+                }
+
+                const ext_resolved = store_types.resolveVar(tag_union.ext);
+                switch (ext_resolved.desc.content) {
+                    .flex => |flex| break :blk hasNumeralConstraint(store_types, flex.constraints),
+                    .rigid => |rigid| break :blk hasNumeralConstraint(store_types, rigid.constraints),
+                    else => break :blk try self.typeVarMonomorphizableWithoutBindings(result, module_idx, store_types, tag_union.ext, seen),
+                }
             },
             .empty_record, .empty_tag_union => true,
         };
