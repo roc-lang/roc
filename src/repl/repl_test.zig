@@ -47,12 +47,11 @@ fn expectBackend(backend: enum { interpreter, dev, wasm, llvm }, expr: []const u
 }
 
 /// Run expression on interpreter, dev, wasm, and llvm backends, assert same expected output.
-/// Wasm and LLVM backends are optional — they may not be available on all platforms.
 fn expectAllNative(expr: []const u8, expected: []const u8) !void {
     try expectBackend(.interpreter, expr, expected);
     try expectBackend(.dev, expr, expected);
-    expectBackend(.wasm, expr, expected) catch {};
-    expectBackend(.llvm, expr, expected) catch {};
+    try expectBackend(.wasm, expr, expected);
+    try expectBackend(.llvm, expr, expected);
 }
 
 test "Repl - initialization and cleanup" {
