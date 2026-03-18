@@ -17,7 +17,9 @@ const layout_mod = @import("layout");
 const lir = @import("lir");
 const mir = @import("mir");
 const lir_value = @import("lir_value.zig");
+const lir_program_mod = @import("lir_program.zig");
 const builtins = @import("builtins");
+const types = @import("types");
 
 const Allocator = std.mem.Allocator;
 const LirExprStore = lir.LirExprStore;
@@ -30,6 +32,8 @@ const Symbol = lir.Symbol;
 const Layout = layout_mod.Layout;
 const Value = lir_value.Value;
 const LayoutHelper = lir_value.LayoutHelper;
+const RocDec = builtins.dec.RocDec;
+const i128h = builtins.compiler_rt_128;
 
 pub const LirInterpreter = struct {
     allocator: Allocator,
@@ -843,6 +847,11 @@ pub const LirInterpreter = struct {
     // Low-level operations (stub — will be expanded in Phase 4)
     // ──────────────────────────────────────────────────────────────
 
+    /// Resolve the result layout of a LIR expression.
+    fn exprLayout(self: *LirInterpreter, expr_id: LirExprId) layout_mod.Idx {
+        return lir_program_mod.lirExprResultLayout(self.store, expr_id);
+    }
+
     fn evalLowLevel(self: *LirInterpreter, ll: anytype) Error!Value {
         const arg_exprs = self.store.getExprSpan(ll.args);
         var args: [8]Value = undefined;
@@ -851,17 +860,31 @@ pub const LirInterpreter = struct {
             args[i] = try self.evalValue(arg_exprs[i]);
         }
 
-        // Basic numeric operations
+        // Determine argument layout for numeric ops (operand type, not return type)
+        const arg_layout: layout_mod.Idx = if (arg_exprs.len > 0)
+            self.exprLayout(arg_exprs[0])
+        else
+            ll.ret_layout;
+
         return switch (ll.op) {
-            .num_plus => self.numBinOp(args[0], args[1], ll.ret_layout, .add),
-            .num_minus => self.numBinOp(args[0], args[1], ll.ret_layout, .sub),
-            .num_times => self.numBinOp(args[0], args[1], ll.ret_layout, .mul),
-            .num_negate => self.numUnaryOp(args[0], ll.ret_layout, .negate),
-            .num_is_eq => self.numCmpOp(args[0], args[1], ll.ret_layout, .eq),
-            .num_is_lt => self.numCmpOp(args[0], args[1], ll.ret_layout, .lt),
-            .num_is_lte => self.numCmpOp(args[0], args[1], ll.ret_layout, .lte),
-            .num_is_gt => self.numCmpOp(args[0], args[1], ll.ret_layout, .gt),
-            .num_is_gte => self.numCmpOp(args[0], args[1], ll.ret_layout, .gte),
+            // Arithmetic
+            .num_plus => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .add),
+            .num_minus => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .sub),
+            .num_times => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .mul),
+            .num_div_by => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .div),
+            .num_div_trunc_by => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .div_trunc),
+            .num_rem_by => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .rem),
+            .num_mod_by => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .mod),
+            .num_negate => self.numUnaryOp(args[0], ll.ret_layout, arg_layout, .negate),
+            .num_abs => self.numUnaryOp(args[0], ll.ret_layout, arg_layout, .abs),
+            .num_abs_diff => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .abs_diff),
+            // Comparison
+            .num_is_eq => self.numCmpOp(args[0], args[1], arg_layout, .eq),
+            .num_is_lt => self.numCmpOp(args[0], args[1], arg_layout, .lt),
+            .num_is_lte => self.numCmpOp(args[0], args[1], arg_layout, .lte),
+            .num_is_gt => self.numCmpOp(args[0], args[1], arg_layout, .gt),
+            .num_is_gte => self.numCmpOp(args[0], args[1], arg_layout, .gte),
+            // Boolean
             .bool_not => blk: {
                 const val = try self.alloc(.bool);
                 val.write(u8, if (args[0].read(u8) == 0) 1 else 0);
@@ -874,94 +897,193 @@ pub const LirInterpreter = struct {
         };
     }
 
-    const NumOp = enum { add, sub, mul, negate };
+    const NumOp = enum { add, sub, mul, div, div_trunc, rem, mod, negate, abs, abs_diff };
     const CmpOp = enum { eq, lt, lte, gt, gte };
 
-    fn numBinOp(self: *LirInterpreter, a: Value, b: Value, layout_idx: layout_mod.Idx, op: NumOp) Error!Value {
-        const size = self.helper.sizeOf(layout_idx);
-        const val = try self.alloc(layout_idx);
+    /// Determine if a layout index represents a Dec type.
+    fn isDec(layout_idx: layout_mod.Idx) bool {
+        return layout_idx == .dec;
+    }
+
+    /// Determine if a layout index represents an unsigned integer.
+    fn isUnsigned(layout_idx: layout_mod.Idx) bool {
+        return switch (layout_idx) {
+            .u8, .u16, .u32, .u64, .u128 => true,
+            else => false,
+        };
+    }
+
+    fn numBinOp(self: *LirInterpreter, a: Value, b: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx, op: NumOp) Error!Value {
+        const val = try self.alloc(ret_layout);
+        const size = self.helper.sizeOf(arg_layout);
+
         switch (size) {
-            8 => {
-                const l = self.layout_store.getLayout(layout_idx);
-                if (l.tag == .scalar and l.data.scalar.tag == .frac) {
-                    const av = a.read(f64);
-                    const bv = b.read(f64);
-                    val.write(f64, switch (op) {
-                        .add => av + bv,
-                        .sub => av - bv,
-                        .mul => av * bv,
-                        .negate => -av,
-                    });
+            1 => {
+                if (isUnsigned(arg_layout)) {
+                    const av = a.read(u8);
+                    const bv = b.read(u8);
+                    val.write(u8, intBinOp(u8, av, bv, op));
                 } else {
-                    const av = a.read(i64);
-                    const bv = b.read(i64);
-                    val.write(i64, switch (op) {
-                        .add => av +% bv,
-                        .sub => av -% bv,
-                        .mul => av *% bv,
-                        .negate => -%av,
-                    });
+                    const av = a.read(i8);
+                    const bv = b.read(i8);
+                    val.write(i8, intBinOp(i8, av, bv, op));
+                }
+            },
+            2 => {
+                if (isUnsigned(arg_layout)) {
+                    const av = a.read(u16);
+                    const bv = b.read(u16);
+                    val.write(u16, intBinOp(u16, av, bv, op));
+                } else {
+                    const av = a.read(i16);
+                    const bv = b.read(i16);
+                    val.write(i16, intBinOp(i16, av, bv, op));
                 }
             },
             4 => {
-                const l = self.layout_store.getLayout(layout_idx);
+                const l = self.layout_store.getLayout(arg_layout);
                 if (l.tag == .scalar and l.data.scalar.tag == .frac) {
-                    const av = a.read(f32);
-                    const bv = b.read(f32);
-                    val.write(f32, switch (op) {
-                        .add => av + bv,
-                        .sub => av - bv,
-                        .mul => av * bv,
-                        .negate => -av,
-                    });
+                    val.write(f32, floatBinOp(f32, a.read(f32), b.read(f32), op));
+                } else if (isUnsigned(arg_layout)) {
+                    val.write(u32, intBinOp(u32, a.read(u32), b.read(u32), op));
                 } else {
-                    const av = a.read(i32);
-                    const bv = b.read(i32);
-                    val.write(i32, switch (op) {
-                        .add => av +% bv,
-                        .sub => av -% bv,
-                        .mul => av *% bv,
-                        .negate => -%av,
-                    });
+                    val.write(i32, intBinOp(i32, a.read(i32), b.read(i32), op));
+                }
+            },
+            8 => {
+                const l = self.layout_store.getLayout(arg_layout);
+                if (l.tag == .scalar and l.data.scalar.tag == .frac) {
+                    val.write(f64, floatBinOp(f64, a.read(f64), b.read(f64), op));
+                } else if (isUnsigned(arg_layout)) {
+                    val.write(u64, intBinOp(u64, a.read(u64), b.read(u64), op));
+                } else {
+                    val.write(i64, intBinOp(i64, a.read(i64), b.read(i64), op));
                 }
             },
             16 => {
-                const av = a.read(i128);
-                const bv = b.read(i128);
-                val.write(i128, switch (op) {
-                    .add => av +% bv,
-                    .sub => av -% bv,
-                    .mul => av *% bv,
-                    .negate => -%av,
-                });
+                if (isDec(arg_layout)) {
+                    val.write(i128, decBinOp(a.read(i128), b.read(i128), op));
+                } else if (isUnsigned(arg_layout)) {
+                    val.write(u128, intBinOp(u128, a.read(u128), b.read(u128), op));
+                } else {
+                    val.write(i128, intBinOp(i128, a.read(i128), b.read(i128), op));
+                }
             },
             else => {},
         }
         return val;
     }
 
-    fn numUnaryOp(self: *LirInterpreter, a: Value, layout_idx: layout_mod.Idx, op: NumOp) Error!Value {
-        return self.numBinOp(a, a, layout_idx, op);
+    fn numUnaryOp(self: *LirInterpreter, a: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx, op: NumOp) Error!Value {
+        // Reuse binOp with dummy second arg for unary ops (negate, abs)
+        return self.numBinOp(a, a, ret_layout, arg_layout, op);
     }
 
-    fn numCmpOp(self: *LirInterpreter, a: Value, b: Value, ret_layout: layout_mod.Idx, op: CmpOp) Error!Value {
-        _ = ret_layout;
+    fn numCmpOp(self: *LirInterpreter, a: Value, b: Value, arg_layout: layout_mod.Idx, op: CmpOp) Error!Value {
         const val = try self.alloc(.bool);
+        const size = self.helper.sizeOf(arg_layout);
 
-        // Determine the size of the values being compared from the first argument
-        // We need to check the layout of the arguments, not the return type (which is bool)
-        // For now, compare as i64 (most common case)
-        const av = a.read(i64);
-        const bv = b.read(i64);
-        const result: bool = switch (op) {
+        const result: bool = switch (size) {
+            1 => if (isUnsigned(arg_layout))
+                cmpOp(u8, a.read(u8), b.read(u8), op)
+            else
+                cmpOp(i8, a.read(i8), b.read(i8), op),
+            2 => if (isUnsigned(arg_layout))
+                cmpOp(u16, a.read(u16), b.read(u16), op)
+            else
+                cmpOp(i16, a.read(i16), b.read(i16), op),
+            4 => blk: {
+                const l = self.layout_store.getLayout(arg_layout);
+                break :blk if (l.tag == .scalar and l.data.scalar.tag == .frac)
+                    cmpOp(f32, a.read(f32), b.read(f32), op)
+                else if (isUnsigned(arg_layout))
+                    cmpOp(u32, a.read(u32), b.read(u32), op)
+                else
+                    cmpOp(i32, a.read(i32), b.read(i32), op);
+            },
+            8 => blk: {
+                const l = self.layout_store.getLayout(arg_layout);
+                break :blk if (l.tag == .scalar and l.data.scalar.tag == .frac)
+                    cmpOp(f64, a.read(f64), b.read(f64), op)
+                else if (isUnsigned(arg_layout))
+                    cmpOp(u64, a.read(u64), b.read(u64), op)
+                else
+                    cmpOp(i64, a.read(i64), b.read(i64), op);
+            },
+            // Dec comparison is just i128 comparison (scale factor is the same)
+            16 => if (isUnsigned(arg_layout))
+                cmpOp(u128, a.read(u128), b.read(u128), op)
+            else
+                cmpOp(i128, a.read(i128), b.read(i128), op),
+            else => false,
+        };
+        val.write(u8, if (result) 1 else 0);
+        return val;
+    }
+
+    /// Generic integer binary operation.
+    fn intBinOp(comptime T: type, av: T, bv: T, op: NumOp) T {
+        return switch (op) {
+            .add => av +% bv,
+            .sub => av -% bv,
+            .mul => av *% bv,
+            .negate => if (@typeInfo(T).int.signedness == .signed) -%av else -%av,
+            .abs => if (@typeInfo(T).int.signedness == .signed)
+                (if (av < 0) -%av else av)
+            else
+                av,
+            .abs_diff => if (@typeInfo(T).int.signedness == .signed)
+                (if (av > bv) av -% bv else bv -% av)
+            else
+                (if (av > bv) av - bv else bv - av),
+            .div, .div_trunc => if (bv != 0) @divTrunc(av, bv) else 0,
+            .rem => if (bv != 0) @rem(av, bv) else 0,
+            .mod => if (bv != 0) @mod(av, bv) else 0,
+        };
+    }
+
+    /// Generic float binary operation.
+    fn floatBinOp(comptime T: type, av: T, bv: T, op: NumOp) T {
+        return switch (op) {
+            .add => av + bv,
+            .sub => av - bv,
+            .mul => av * bv,
+            .negate => -av,
+            .abs => @abs(av),
+            .abs_diff => @abs(av - bv),
+            .div, .div_trunc => av / bv,
+            .rem, .mod => @rem(av, bv),
+        };
+    }
+
+    /// Dec (fixed-point i128 with 10^18 scale) binary operation.
+    fn decBinOp(av: i128, bv: i128, op: NumOp) i128 {
+        return switch (op) {
+            // Dec add/sub/negate are raw i128 ops (same scale factor)
+            .add => av +% bv,
+            .sub => av -% bv,
+            .negate => -%av,
+            .abs => if (av < 0) -%av else av,
+            .abs_diff => if (av > bv) av -% bv else bv -% av,
+            // Dec mul requires adjusting for the doubled scale factor
+            .mul => blk: {
+                const result = RocDec.mulWithOverflow(RocDec{ .num = av }, RocDec{ .num = bv });
+                break :blk result.value.num;
+            },
+            // Dec div/rem/mod — complex 256-bit math, skip for now
+            .div, .div_trunc, .rem, .mod => 0,
+        };
+    }
+
+    /// Generic comparison operation.
+    fn cmpOp(comptime T: type, av: T, bv: T, op: CmpOp) bool {
+        return switch (op) {
             .eq => av == bv,
             .lt => av < bv,
             .lte => av <= bv,
             .gt => av > bv,
             .gte => av >= bv,
         };
-        val.write(u8, if (result) 1 else 0);
-        return val;
     }
 
     // ──────────────────────────────────────────────────────────────
@@ -994,18 +1116,44 @@ pub const LirInterpreter = struct {
     }
 
     fn evalIntToStr(self: *LirInterpreter, its: anytype) Error!Value {
-        _ = its;
-        return self.makeRocStr("<int>");
+        const int_val = try self.evalValue(its.value);
+        const arena = self.arena.allocator();
+        const formatted: []const u8 = switch (its.int_precision) {
+            .u8 => std.fmt.allocPrint(arena, "{d}", .{int_val.read(u8)}) catch return error.OutOfMemory,
+            .i8 => std.fmt.allocPrint(arena, "{d}", .{int_val.read(i8)}) catch return error.OutOfMemory,
+            .u16 => std.fmt.allocPrint(arena, "{d}", .{int_val.read(u16)}) catch return error.OutOfMemory,
+            .i16 => std.fmt.allocPrint(arena, "{d}", .{int_val.read(i16)}) catch return error.OutOfMemory,
+            .u32 => std.fmt.allocPrint(arena, "{d}", .{int_val.read(u32)}) catch return error.OutOfMemory,
+            .i32 => std.fmt.allocPrint(arena, "{d}", .{int_val.read(i32)}) catch return error.OutOfMemory,
+            .u64 => std.fmt.allocPrint(arena, "{d}", .{int_val.read(u64)}) catch return error.OutOfMemory,
+            .i64 => std.fmt.allocPrint(arena, "{d}", .{int_val.read(i64)}) catch return error.OutOfMemory,
+            .u128 => std.fmt.allocPrint(arena, "{d}", .{int_val.read(u128)}) catch return error.OutOfMemory,
+            .i128 => std.fmt.allocPrint(arena, "{d}", .{int_val.read(i128)}) catch return error.OutOfMemory,
+        };
+        return self.makeRocStr(formatted);
     }
 
     fn evalFloatToStr(self: *LirInterpreter, fts: anytype) Error!Value {
-        _ = fts;
-        return self.makeRocStr("<float>");
+        const float_val = try self.evalValue(fts.value);
+        var buf: [400]u8 = undefined;
+        const slice: []const u8 = switch (fts.float_precision) {
+            .f32 => i128h.f64_to_str(&buf, @as(f64, float_val.read(f32))),
+            .f64 => i128h.f64_to_str(&buf, float_val.read(f64)),
+            .dec => blk: {
+                const dec = RocDec{ .num = float_val.read(i128) };
+                var dec_buf: [RocDec.max_str_length]u8 = undefined;
+                break :blk dec.format_to_buf(&dec_buf);
+            },
+        };
+        return self.makeRocStr(slice);
     }
 
     fn evalDecToStr(self: *LirInterpreter, dts: LirExprId) Error!Value {
-        _ = dts;
-        return self.makeRocStr("<dec>");
+        const dec_val = try self.evalValue(dts);
+        const dec = RocDec{ .num = dec_val.read(i128) };
+        var buf: [RocDec.max_str_length]u8 = undefined;
+        const slice = dec.format_to_buf(&buf);
+        return self.makeRocStr(slice);
     }
 
     fn evalStrEscapeAndQuote(self: *LirInterpreter, seq: LirExprId) Error!Value {
