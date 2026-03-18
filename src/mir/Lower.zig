@@ -1404,7 +1404,13 @@ fn bindFlatTypeMonotypesInStore(
                     .{@tagName(mono)},
                 ),
             };
-            const mono_fields = self.store.monotype_store.getFields(mrec.fields);
+            // Copy mono_fields into a local owned buffer. Recursive bindTypeVarMonotypes
+            // calls below may reallocate the monotype store, invalidating any direct
+            // slice into it. Monotype.Field contains only indices (no pointers).
+            var owned_mono_fields: std.ArrayListUnmanaged(Monotype.Field) = .empty;
+            defer owned_mono_fields.deinit(self.allocator);
+            try owned_mono_fields.appendSlice(self.allocator, self.store.monotype_store.getFields(mrec.fields));
+            const mono_fields = owned_mono_fields.items;
             const fields_slice = store_types.getRecordFieldsSlice(fields_range);
             const field_names = fields_slice.items(.name);
             const field_vars = fields_slice.items(.var_);
@@ -1422,7 +1428,13 @@ fn bindFlatTypeMonotypesInStore(
                 ),
             };
             const elem_vars = store_types.sliceVars(tuple.elems);
-            const elem_monos = self.store.monotype_store.getIdxSpan(mtup.elems);
+            // Copy elem_monos into a local owned buffer. Recursive bindTypeVarMonotypes
+            // calls below may reallocate the monotype store, invalidating any direct
+            // slice into it.
+            var owned_elem_monos: std.ArrayListUnmanaged(Monotype.Idx) = .empty;
+            defer owned_elem_monos.deinit(self.allocator);
+            try owned_elem_monos.appendSlice(self.allocator, self.store.monotype_store.getIdxSpan(mtup.elems));
+            const elem_monos = owned_elem_monos.items;
             if (elem_vars.len != elem_monos.len) {
                 typeBindingInvariant(
                     "bindFlatTypeMonotypesInStore(tuple): arity mismatch (type={d}, monotype={d})",

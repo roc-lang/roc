@@ -7303,9 +7303,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (payload_layout_val.tag == .tag_union) {
                 // Single-arg payload that is itself a tag union — check its discriminant.
                 if (args.len >= 1) {
-                    const arg_pat = self.store.getPattern(args[0]);
-                    if (arg_pat == .tag) {
-                        const inner_tag_pat = arg_pat.tag;
+                    // Unwrap as_pattern wrappers (e.g., Err(e as Exit(code))).
+                    var effective_pat = self.store.getPattern(args[0]);
+                    while (effective_pat == .as_pattern) {
+                        effective_pat = self.store.getPattern(effective_pat.as_pattern.inner);
+                    }
+                    if (effective_pat == .tag) {
+                        const inner_tag_pat = effective_pat.tag;
                         const inner_tu = ls.getTagUnionData(payload_layout_val.data.tag_union.idx);
                         const inner_disc_offset: i32 = @intCast(inner_tu.discriminant_offset);
                         const inner_disc_size: u8 = inner_tu.discriminant_size;
@@ -7336,10 +7340,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             } else if (payload_layout_val.tag == .struct_) {
                 // Multi-arg tag payload stored as a struct; check any fields that are .tag patterns.
                 for (args, 0..) |arg_pattern_id, arg_idx| {
-                    const arg_pat = self.store.getPattern(arg_pattern_id);
-                    if (arg_pat != .tag) continue;
+                    // Unwrap as_pattern wrappers (e.g., Foo(x, e as Bar(y))).
+                    var effective_pat = self.store.getPattern(arg_pattern_id);
+                    while (effective_pat == .as_pattern) {
+                        effective_pat = self.store.getPattern(effective_pat.as_pattern.inner);
+                    }
+                    if (effective_pat != .tag) continue;
 
-                    const inner_tag_pat = arg_pat.tag;
+                    const inner_tag_pat = effective_pat.tag;
                     const field_layout_idx = ls.getStructFieldLayoutByOriginalIndex(
                         payload_layout_val.data.struct_.idx,
                         @intCast(arg_idx),
@@ -15674,6 +15682,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             next_patch = try self.emitJumpIfNotEqual();
                         }
 
+                        // For patterns like Err(Exit(code)), check inner discriminants
+                        // before binding any payload variables. If any inner discriminant
+                        // does not match, we must fall through to the next branch.
+                        var inner_fail_patches = std.ArrayList(usize).empty;
+                        defer inner_fail_patches.deinit(self.allocator);
+                        if (!is_last_branch) {
+                            try self.emitInnerTagArgDiscriminantChecks(
+                                tag_pattern,
+                                value_loc,
+                                ms.value_layout,
+                                value_layout_val,
+                                &inner_fail_patches,
+                            );
+                        }
+
                         // Bind tag payload fields
                         try self.bindTagPayloadFields(tag_pattern, value_loc, ms.value_layout, value_layout_val);
 
@@ -15686,8 +15709,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             const end_patch = try self.codegen.emitJump();
                             try end_patches.append(self.allocator, end_patch);
 
+                            const next_branch_offset = self.codegen.currentOffset();
                             if (next_patch) |patch| {
-                                self.codegen.patchJump(patch, self.codegen.currentOffset());
+                                self.codegen.patchJump(patch, next_branch_offset);
+                            }
+                            for (inner_fail_patches.items) |patch| {
+                                self.codegen.patchJump(patch, next_branch_offset);
                             }
                         }
                         if (guard_patch) |patch| {

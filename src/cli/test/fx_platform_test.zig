@@ -408,6 +408,18 @@ test "fx platform wildcard match on open union (dev backend)" {
     try testing.expect(std.mem.indexOf(u8, run_result.stdout, "PASS: Wildcard match worked correctly") != null);
 }
 
+test "fx platform nested tag match in statement position (dev backend)" {
+    const allocator = testing.allocator;
+
+    const run_result = try util.runRoc(allocator, &.{"--opt=dev"}, "test/fx/nested_tag_match_stmt.roc");
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    try util.checkSuccess(run_result);
+
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "PASS: statement-position nested tag match works") != null);
+}
+
 test "fx platform dbg missing return value (interpreter)" {
     const allocator = testing.allocator;
 
