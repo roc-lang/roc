@@ -4594,10 +4594,7 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
                             "REPL backend mismatch at input {d} in {s}:\n  interpreter: '{s}'\n  {s}:         '{s}'{s}\n",
                             .{ i, snapshot_path, interp_output, cfg.label, backend_display, if (backend_output.len > max_output_len) "... (truncated)" else "" },
                         );
-                        // Backend mismatches are warnings only — the eval tests
-                        // (which use fork-based isolation) are the authoritative
-                        // parity check. Snapshot tool mismatches are informational
-                        // since backends may segfault or lack features on some platforms.
+                        success = false;
                     }
                 }
             }
@@ -4618,6 +4615,7 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
             }
         } else |err| {
             std.debug.print("{s} REPL init failed in {s}: {}\n", .{ cfg.label, snapshot_path, err });
+            success = false;
         }
     }
 
