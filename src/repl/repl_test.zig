@@ -21,34 +21,37 @@ fn expectInterpreter(expr: []const u8, expected: []const u8) !void {
     };
 }
 
-/// Run expression on both interpreter and dev backends, assert same expected output.
-fn expectBoth(expr: []const u8, expected: []const u8) !void {
-    // Interpreter backend
-    {
-        var test_env = TestEnv.init(alloc);
-        defer test_env.deinit();
-        var repl = try Repl.init(alloc, test_env.get_ops(), null);
-        defer repl.deinit();
-        const result = try repl.step(expr);
-        defer alloc.free(result);
-        testing.expectEqualStrings(expected, result) catch |err| {
-            std.debug.print("INTERPRETER FAILED for: {s}\n", .{expr});
-            return err;
+fn expectBackend(backend: enum { interpreter, dev, wasm, llvm }, expr: []const u8, expected: []const u8) !void {
+    var test_env = TestEnv.init(alloc);
+    defer test_env.deinit();
+    var repl = switch (backend) {
+        .interpreter => try Repl.init(alloc, test_env.get_ops(), null),
+        .dev => try Repl.initWithBackend(alloc, test_env.get_ops(), test_env.crashContextPtr(), .dev),
+        .wasm => try Repl.initWithWasmBackend(alloc, test_env.get_ops(), test_env.crashContextPtr()),
+        .llvm => try Repl.initWithBackend(alloc, test_env.get_ops(), test_env.crashContextPtr(), .llvm),
+    };
+    defer repl.deinit();
+
+    const result = try repl.step(expr);
+    defer alloc.free(result);
+    testing.expectEqualStrings(expected, result) catch |err| {
+        const backend_name = switch (backend) {
+            .interpreter => "INTERPRETER",
+            .dev => "DEV BACKEND",
+            .wasm => "WASM BACKEND",
+            .llvm => "LLVM BACKEND",
         };
-    }
-    // Dev backend
-    {
-        var test_env = TestEnv.init(alloc);
-        defer test_env.deinit();
-        var repl = try Repl.initWithBackend(alloc, test_env.get_ops(), test_env.crashContextPtr(), .dev);
-        defer repl.deinit();
-        const result = try repl.step(expr);
-        defer alloc.free(result);
-        testing.expectEqualStrings(expected, result) catch |err| {
-            std.debug.print("DEV BACKEND FAILED for: {s}\n", .{expr});
-            return err;
-        };
-    }
+        std.debug.print("{s} FAILED for: {s}\n", .{ backend_name, expr });
+        return err;
+    };
+}
+
+/// Run expression on interpreter, dev, wasm, and llvm backends, assert same expected output.
+fn expectAllNative(expr: []const u8, expected: []const u8) !void {
+    try expectBackend(.interpreter, expr, expected);
+    try expectBackend(.dev, expr, expected);
+    try expectBackend(.wasm, expr, expected);
+    try expectBackend(.llvm, expr, expected);
 }
 
 test "Repl - initialization and cleanup" {
@@ -79,125 +82,125 @@ test "Repl - special commands" {
 }
 
 test "Repl - simple expressions" {
-    try expectBoth("42", "42.0");
+    try expectAllNative("42", "42.0");
 }
 
 test "Repl - string expressions" {
-    try expectBoth("\"Hello, World!\"", "\"Hello, World!\"");
+    try expectAllNative("\"Hello, World!\"", "\"Hello, World!\"");
 }
 
 test "Repl - Bool.True" {
-    try expectBoth("Bool.True", "True");
+    try expectAllNative("Bool.True", "True");
 }
 
 test "Repl - Bool.False" {
-    try expectBoth("Bool.False", "False");
+    try expectAllNative("Bool.False", "False");
 }
 
 test "Repl - Bool.not(False)" {
-    try expectBoth("Bool.not(False)", "True");
+    try expectAllNative("Bool.not(False)", "True");
 }
 
 test "Repl - Bool.not(Bool.True)" {
-    try expectBoth("Bool.not(Bool.True)", "False");
+    try expectAllNative("Bool.not(Bool.True)", "False");
 }
 
 test "Repl - Bool.not(Bool.False)" {
-    try expectBoth("Bool.not(Bool.False)", "True");
+    try expectAllNative("Bool.not(Bool.False)", "True");
 }
 
 test "Repl - !Bool.True" {
-    try expectBoth("!Bool.True", "False");
+    try expectAllNative("!Bool.True", "False");
 }
 
 test "Repl - !Bool.False" {
-    try expectBoth("!Bool.False", "True");
+    try expectAllNative("!Bool.False", "True");
 }
 
 test "Repl - I8.mod_by negative positive" {
-    try expectBoth("I8.mod_by(-10, 3)", "2");
+    try expectAllNative("I8.mod_by(-10, 3)", "2");
 }
 
 test "Repl - I8.mod_by positive negative" {
-    try expectBoth("I8.mod_by(10, -3)", "-2");
+    try expectAllNative("I8.mod_by(10, -3)", "-2");
 }
 
 test "Repl - I8.mod_by negative negative" {
-    try expectBoth("I8.mod_by(-10, -3)", "-1");
+    try expectAllNative("I8.mod_by(-10, -3)", "-1");
 }
 
 test "Repl - Str.is_empty" {
-    try expectBoth("Str.is_empty(\"\")", "True");
-    try expectBoth("Str.is_empty(\"a\")", "False");
+    try expectAllNative("Str.is_empty(\"\")", "True");
+    try expectAllNative("Str.is_empty(\"a\")", "False");
 }
 
 test "Repl - lambda renders as <function>" {
-    try expectBoth("|x| x + 1", "<function>");
-    try expectBoth("|x, y| x + y", "<function>");
+    try expectAllNative("|x| x + 1", "<function>");
+    try expectAllNative("|x, y| x + y", "<function>");
 }
 
 test "Repl - Str.to_utf8" {
-    try expectBoth("Str.to_utf8(\"hello\")", "[104, 101, 108, 108, 111]");
-    try expectBoth("List.len(Str.to_utf8(\"\"))", "0");
-    try expectBoth("List.len(Str.to_utf8(\"hello\"))", "5");
-    try expectBoth("List.len(Str.to_utf8(\"é\"))", "2");
-    try expectBoth("List.len(Str.to_utf8(\"🎉\"))", "4");
-    try expectBoth("List.len(Str.to_utf8(\"Hello, World!\"))", "13");
-    try expectBoth("List.len(Str.to_utf8(\"日本語\"))", "9");
-    try expectBoth("List.len(Str.to_utf8(\"a é 🎉\"))", "9");
-    try expectBoth("List.is_empty(Str.to_utf8(\"\"))", "True");
-    try expectBoth("List.is_empty(Str.to_utf8(\"x\"))", "False");
+    try expectAllNative("Str.to_utf8(\"hello\")", "[104, 101, 108, 108, 111]");
+    try expectAllNative("List.len(Str.to_utf8(\"\"))", "0");
+    try expectAllNative("List.len(Str.to_utf8(\"hello\"))", "5");
+    try expectAllNative("List.len(Str.to_utf8(\"é\"))", "2");
+    try expectAllNative("List.len(Str.to_utf8(\"🎉\"))", "4");
+    try expectAllNative("List.len(Str.to_utf8(\"Hello, World!\"))", "13");
+    try expectAllNative("List.len(Str.to_utf8(\"日本語\"))", "9");
+    try expectAllNative("List.len(Str.to_utf8(\"a é 🎉\"))", "9");
+    try expectAllNative("List.is_empty(Str.to_utf8(\"\"))", "True");
+    try expectAllNative("List.is_empty(Str.to_utf8(\"x\"))", "False");
 }
 
 test "Repl - Str.from_utf8_lossy" {
-    try expectBoth("Str.from_utf8_lossy(Str.to_utf8(\"hello\"))", "\"hello\"");
-    try expectBoth("Str.from_utf8_lossy(Str.to_utf8(\"\"))", "\"\"");
-    try expectBoth("Str.from_utf8_lossy(Str.to_utf8(\"🎉 party!\"))", "\"🎉 party!\"");
-    try expectBoth("Str.from_utf8_lossy(Str.to_utf8(\"abc123\"))", "\"abc123\"");
+    try expectAllNative("Str.from_utf8_lossy(Str.to_utf8(\"hello\"))", "\"hello\"");
+    try expectAllNative("Str.from_utf8_lossy(Str.to_utf8(\"\"))", "\"\"");
+    try expectAllNative("Str.from_utf8_lossy(Str.to_utf8(\"🎉 party!\"))", "\"🎉 party!\"");
+    try expectAllNative("Str.from_utf8_lossy(Str.to_utf8(\"abc123\"))", "\"abc123\"");
 }
 
 test "Repl - Str.from_utf8 Ok" {
-    try expectBoth("Str.from_utf8([72, 105])", "Ok(\"Hi\")");
+    try expectAllNative("Str.from_utf8([72, 105])", "Ok(\"Hi\")");
 }
 
 test "Repl - U8.from_str result format" {
-    try expectBoth("U8.from_str(\"42\")", "Ok(42)");
+    try expectAllNative("U8.from_str(\"42\")", "Ok(42)");
 }
 
 test "Repl - F32.from_str result format" {
-    try expectBoth("F32.from_str(\"3.14\")", "Ok(3.140000104904175)");
+    try expectAllNative("F32.from_str(\"3.14\")", "Ok(3.140000104904175)");
 }
 
 test "Repl - list literals" {
-    try expectBoth("List.len([1, 2, 3])", "3");
-    try expectBoth("[1, 2, 3]", "[1.0, 2.0, 3.0]");
-    try expectBoth("[\"hello\", \"world\", \"test\"]", "[\"hello\", \"world\", \"test\"]");
-    try expectBoth("List.len([\"hello\", \"world\", \"test\"])", "3");
+    try expectAllNative("List.len([1, 2, 3])", "3");
+    try expectAllNative("[1, 2, 3]", "[1.0, 2.0, 3.0]");
+    try expectAllNative("[\"hello\", \"world\", \"test\"]", "[\"hello\", \"world\", \"test\"]");
+    try expectAllNative("List.len([\"hello\", \"world\", \"test\"])", "3");
 }
 
 test "Repl - list operations" {
-    try expectBoth("List.len(List.concat([1, 2], [3, 4]))", "4");
-    try expectBoth("List.len(List.concat([], [1, 2, 3]))", "3");
-    try expectBoth("List.len(List.concat([1, 2, 3], []))", "3");
-    try expectBoth("List.contains([1, 2, 3, 4, 5], 3)", "True");
-    try expectBoth("List.drop_if([1, 2, 3, 4, 5], |x| x > 2)", "[1.0, 2.0]");
-    try expectBoth("List.keep_if([1, 2, 3, 4, 5], |x| x > 2)", "[3.0, 4.0, 5.0]");
-    try expectBoth("List.keep_if([1, 2, 3], |_| Bool.False)", "[]");
-    try expectBoth("List.fold_rev([1.I64, 2.I64, 3.I64], 0.I64, |x, acc| acc * 10 + x)", "321");
-    try expectBoth("List.fold_rev([1], 0, |x, acc| acc * 10 + x)", "1.0");
-    try expectBoth("List.fold_rev([1, 2, 3], 0, |x, acc| acc * 10 + x)", "321.0");
-    try expectBoth("List.fold_rev([], 42, |x, acc| x + acc)", "42.0");
+    try expectAllNative("List.len(List.concat([1, 2], [3, 4]))", "4");
+    try expectAllNative("List.len(List.concat([], [1, 2, 3]))", "3");
+    try expectAllNative("List.len(List.concat([1, 2, 3], []))", "3");
+    try expectAllNative("List.contains([1, 2, 3, 4, 5], 3)", "True");
+    try expectAllNative("List.drop_if([1, 2, 3, 4, 5], |x| x > 2)", "[1.0, 2.0]");
+    try expectAllNative("List.keep_if([1, 2, 3, 4, 5], |x| x > 2)", "[3.0, 4.0, 5.0]");
+    try expectAllNative("List.keep_if([1, 2, 3], |_| Bool.False)", "[]");
+    try expectAllNative("List.fold_rev([1.I64, 2.I64, 3.I64], 0.I64, |x, acc| acc * 10 + x)", "321");
+    try expectAllNative("List.fold_rev([1], 0, |x, acc| acc * 10 + x)", "1.0");
+    try expectAllNative("List.fold_rev([1, 2, 3], 0, |x, acc| acc * 10 + x)", "321.0");
+    try expectAllNative("List.fold_rev([], 42, |x, acc| x + acc)", "42.0");
 }
 
 test "Repl - List.with_capacity" {
-    try expectBoth("List.with_capacity(10)", "[]");
+    try expectAllNative("List.with_capacity(10)", "[]");
     // TODO: List.first on empty list returns Ok({}) in dev backend instead of Err(ListWasEmpty)
     // try expectBoth("List.first(List.with_capacity(10))", "Err(ListWasEmpty)");
     try expectInterpreter("List.first(List.with_capacity(10))", "Err(ListWasEmpty)");
 }
 
 test "Repl - List.append" {
-    try expectBoth("List.append([1, 2], 3)", "[1.0, 2.0, 3.0]");
+    try expectAllNative("List.append([1, 2], 3)", "[1.0, 2.0, 3.0]");
 }
 
 test "Repl - range_to" {
@@ -207,25 +210,27 @@ test "Repl - range_to" {
 }
 
 test "Repl - list_sort_with" {
-    try expectBoth("List.len(List.sort_with([3, 1, 2], |a, b| if a < b LT else if a > b GT else EQ))", "3");
-    try expectBoth("List.len(List.sort_with([5, 2, 8, 1, 9], |a, b| if a < b LT else if a > b GT else EQ))", "5");
-    try expectBoth("List.len(List.sort_with([], |a, b| if a < b LT else if a > b GT else EQ))", "0");
-    try expectBoth("List.len(List.sort_with([42], |a, b| if a < b LT else if a > b GT else EQ))", "1");
+    try expectAllNative("List.len(List.sort_with([3, 1, 2], |a, b| if a < b LT else if a > b GT else EQ))", "3");
+    try expectAllNative("List.len(List.sort_with([5, 2, 8, 1, 9], |a, b| if a < b LT else if a > b GT else EQ))", "5");
+    try expectAllNative("List.len(List.sort_with([], |a, b| if a < b LT else if a > b GT else EQ))", "0");
+    try expectAllNative("List.len(List.sort_with([42], |a, b| if a < b LT else if a > b GT else EQ))", "1");
 }
 
 test "Repl - list fold with concat" {
-    try expectBoth("List.len(List.fold([1, 2, 3], [], |acc, x| List.concat(acc, [x])))", "3");
+    try expectAllNative("List.len(List.fold([1, 2, 3], [], |acc, x| List.concat(acc, [x])))", "3");
 }
 
 // Stateful tests (assignments, variable redefinition) - these use multi-step REPL
 // sessions so we test each backend separately but with the same expectations.
 
-fn expectStateful(backend: enum { interpreter, dev }, steps: []const [2][]const u8) !void {
+fn expectStateful(backend: enum { interpreter, dev, wasm, llvm }, steps: []const [2][]const u8) !void {
     var test_env = TestEnv.init(alloc);
     defer test_env.deinit();
     var repl = switch (backend) {
         .interpreter => try Repl.init(alloc, test_env.get_ops(), null),
         .dev => try Repl.initWithBackend(alloc, test_env.get_ops(), null, .dev),
+        .wasm => try Repl.initWithWasmBackend(alloc, test_env.get_ops(), null),
+        .llvm => try Repl.initWithBackend(alloc, test_env.get_ops(), null, .llvm),
     };
     defer repl.deinit();
 
@@ -233,7 +238,13 @@ fn expectStateful(backend: enum { interpreter, dev }, steps: []const [2][]const 
         const result = try repl.step(step[0]);
         defer alloc.free(result);
         testing.expectEqualStrings(step[1], result) catch |err| {
-            std.debug.print("{s} FAILED for: {s}\n", .{ if (backend == .interpreter) "INTERPRETER" else "DEV BACKEND", step[0] });
+            const backend_name = switch (backend) {
+                .interpreter => "INTERPRETER",
+                .dev => "DEV BACKEND",
+                .wasm => "WASM BACKEND",
+                .llvm => "LLVM BACKEND",
+            };
+            std.debug.print("{s} FAILED for: {s}\n", .{ backend_name, step[0] });
             return err;
         };
     }
@@ -246,6 +257,8 @@ test "Repl - silent assignments" {
     };
     try expectStateful(.interpreter, steps);
     try expectStateful(.dev, steps);
+    try expectStateful(.wasm, steps);
+    try expectStateful(.llvm, steps);
 }
 
 test "Repl - variable redefinition" {
@@ -258,6 +271,8 @@ test "Repl - variable redefinition" {
     };
     try expectStateful(.interpreter, steps);
     try expectStateful(.dev, steps);
+    try expectStateful(.wasm, steps);
+    try expectStateful(.llvm, steps);
 }
 
 test "Repl - for loop over list" {
@@ -267,6 +282,8 @@ test "Repl - for loop over list" {
     };
     try expectStateful(.interpreter, steps);
     try expectStateful(.dev, steps);
+    try expectStateful(.wasm, steps);
+    try expectStateful(.llvm, steps);
 }
 
 test "Repl - for loop snapshots" {
@@ -279,6 +296,8 @@ test "Repl - for loop snapshots" {
     };
     try expectStateful(.interpreter, steps);
     try expectStateful(.dev, steps);
+    try expectStateful(.wasm, steps);
+    try expectStateful(.llvm, steps);
 }
 
 // Non-evaluation tests that only need one backend
@@ -338,4 +357,6 @@ test "Repl - 4-arg lambda call (dev)" {
     };
     try expectStateful(.interpreter, steps);
     try expectStateful(.dev, steps);
+    try expectStateful(.wasm, steps);
+    try expectStateful(.llvm, steps);
 }

@@ -47,8 +47,12 @@ comptime {
     @export(&dw.roc_builtins_str_with_ascii_lowercased, .{ .name = "roc_builtins_str_with_ascii_lowercased" });
     @export(&dw.roc_builtins_str_with_ascii_uppercased, .{ .name = "roc_builtins_str_with_ascii_uppercased" });
     @export(&dw.roc_builtins_str_from_utf8_lossy, .{ .name = "roc_builtins_str_from_utf8_lossy" });
+    @export(&dw.roc_builtins_str_from_utf8, .{ .name = "roc_builtins_str_from_utf8" });
+    @export(&dw.roc_builtins_str_from_utf8_result, .{ .name = "roc_builtins_str_from_utf8_result" });
+    @export(&dw.roc_builtins_str_from_utf8_parts, .{ .name = "roc_builtins_str_from_utf8_parts" });
     @export(&dw.roc_builtins_str_escape_and_quote, .{ .name = "roc_builtins_str_escape_and_quote" });
     @export(&dw.roc_builtins_list_with_capacity, .{ .name = "roc_builtins_list_with_capacity" });
+    @export(&dw.roc_builtins_list_sort_with, .{ .name = "roc_builtins_list_sort_with" });
     @export(&dw.roc_builtins_list_append_unsafe, .{ .name = "roc_builtins_list_append_unsafe" });
     @export(&dw.roc_builtins_list_concat, .{ .name = "roc_builtins_list_concat" });
     @export(&dw.roc_builtins_list_prepend, .{ .name = "roc_builtins_list_prepend" });
@@ -104,4 +108,6 @@ comptime {
     @export(&dw.roc_builtins_float_to_str, .{ .name = "roc_builtins_float_to_str" });
     // Numeric-from-string wrapper
     @export(&dw.roc_builtins_int_from_str, .{ .name = "roc_builtins_int_from_str" });
+    @export(&dw.roc_builtins_dec_from_str, .{ .name = "roc_builtins_dec_from_str" });
+    @export(&dw.roc_builtins_float_from_str, .{ .name = "roc_builtins_float_from_str" });
 }

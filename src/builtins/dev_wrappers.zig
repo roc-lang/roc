@@ -16,6 +16,7 @@ const i128h = @import("compiler_rt_128.zig");
 
 const RocStr = str.RocStr;
 const RocList = list.RocList;
+const FromUtf8Try = str.FromUtf8Try;
 // Use a local opaque pointer type for RocOps to avoid importing host_abi.zig
 // which has a tracy dependency. The actual struct layout is handled by utils.zig.
 const RocOps = utils.RocOps;
@@ -63,6 +64,7 @@ const listAppendUnsafe = list.listAppendUnsafe;
 const listAppendSafeC = list.listAppendSafeC;
 const listDecref = list.listDecref;
 const RcDropFn = *const fn (?[*]u8, *RocOps) callconv(.c) void;
+const SortCmpFn = *const fn (?[*]u8, ?[*]u8, ?[*]u8) callconv(.c) u8;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // String Wrappers
@@ -209,6 +211,70 @@ pub fn roc_builtins_str_from_utf8_lossy(out: *RocStr, list_bytes: ?[*]u8, list_l
     out.* = fromUtf8Lossy(l, roc_ops);
 }
 
+/// Wrapper: fromUtf8C(RocList, UpdateMode, *RocOps) -> FromUtf8Try
+pub fn roc_builtins_str_from_utf8(out: [*]u8, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    const result: FromUtf8Try = str.fromUtf8C(l, .Immutable, roc_ops);
+    @as(*FromUtf8Try, @ptrCast(@alignCast(out))).* = result;
+}
+
+fn writeDiscriminant(out: [*]u8, offset: u32, size: u32, value: u64) void {
+    switch (size) {
+        0 => {},
+        1 => utils.writeAs(u8, out + offset, @truncate(value), @src()),
+        2 => utils.writeAs(u16, out + offset, @truncate(value), @src()),
+        4 => utils.writeAs(u32, out + offset, @truncate(value), @src()),
+        8 => utils.writeAs(u64, out + offset, value, @src()),
+        else => unreachable,
+    }
+}
+
+/// Converts a UTF-8 byte list to a RocStr, writing the full result union (string or error details) to an output buffer.
+pub fn roc_builtins_str_from_utf8_result(
+    out: [*]u8,
+    list_bytes: ?[*]u8,
+    list_len: usize,
+    list_cap: usize,
+    ok_tag: u64,
+    err_tag: u64,
+    outer_disc_offset: u32,
+    outer_disc_size: u32,
+    err_index_offset: u32,
+    err_problem_offset: u32,
+    roc_ops: *RocOps,
+) callconv(.c) void {
+    const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    const result = str.fromUtf8C(l, .Immutable, roc_ops);
+
+    if (result.is_ok) {
+        utils.writeAs(RocStr, out, result.string, @src());
+        writeDiscriminant(out, outer_disc_offset, outer_disc_size, ok_tag);
+        return;
+    }
+
+    utils.writeAs(u64, out + err_index_offset, result.byte_index, @src());
+    utils.writeAs(u8, out + err_problem_offset, @intFromEnum(result.problem_code), @src());
+    writeDiscriminant(out, outer_disc_offset, outer_disc_size, err_tag);
+}
+
+/// Converts a UTF-8 byte list to a RocStr, returning the result components via separate out-pointers.
+pub fn roc_builtins_str_from_utf8_parts(
+    out_string: *RocStr,
+    out_index: *u64,
+    out_problem: *u8,
+    list_bytes: ?[*]u8,
+    list_len: usize,
+    list_cap: usize,
+    roc_ops: *RocOps,
+) callconv(.c) u8 {
+    const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    const result = str.fromUtf8C(l, .Immutable, roc_ops);
+    out_string.* = result.string;
+    out_index.* = result.byte_index;
+    out_problem.* = @intFromEnum(result.problem_code);
+    return @intFromBool(result.is_ok);
+}
+
 /// Wrapper: escape special characters and wrap in double quotes for Str.inspect
 pub fn roc_builtins_str_escape_and_quote(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, str_cap: usize, roc_ops: *RocOps) callconv(.c) void {
     const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
@@ -310,6 +376,60 @@ fn callbackListElementDecref(context: ?*anyopaque, element: ?[*]u8) callconv(.c)
 /// Wrapper: listWithCapacity
 pub fn roc_builtins_list_with_capacity(out: *RocList, capacity: u64, alignment: u32, element_width: usize, elements_refcounted: bool, roc_ops: *RocOps) callconv(.c) void {
     out.* = listWithCapacity(capacity, alignment, element_width, elements_refcounted, null, @ptrCast(&rcNone), roc_ops);
+}
+
+/// Wrapper: listSortWith using a backend-provided comparator trampoline.
+pub fn roc_builtins_list_sort_with(
+    out: *RocList,
+    list_bytes: ?[*]u8,
+    list_len: usize,
+    list_cap: usize,
+    cmp_fn_ptr: ?*const anyopaque,
+    cmp_data: ?[*]u8,
+    alignment: u32,
+    element_width: usize,
+    roc_ops: *RocOps,
+) callconv(.c) void {
+    if (list_len < 2 or element_width == 0) {
+        out.* = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+        return;
+    }
+
+    const total_bytes = list_len * element_width;
+    const sorted_bytes = allocateWithRefcountC(total_bytes, alignment, false, roc_ops);
+    if (list_bytes) |src| {
+        @memcpy(sorted_bytes[0..total_bytes], src[0..total_bytes]);
+    }
+
+    const cmp_fn: SortCmpFn = @ptrFromInt(@intFromPtr(cmp_fn_ptr orelse unreachable));
+    const temp_ptr: [*]u8 = @ptrCast(roc_ops.alloc(@max(@as(usize, alignment), 1), element_width));
+    defer roc_ops.dealloc(temp_ptr, @max(@as(usize, alignment), 1));
+
+    var i: usize = 1;
+    while (i < list_len) : (i += 1) {
+        const elem_i = sorted_bytes + i * element_width;
+        @memcpy(temp_ptr[0..element_width], elem_i[0..element_width]);
+
+        var j: usize = i;
+        while (j > 0) {
+            const prev_elem = sorted_bytes + (j - 1) * element_width;
+            const cmp_result = cmp_fn(cmp_data, temp_ptr, prev_elem);
+            if (cmp_result != 2) break;
+
+            const dst_elem = sorted_bytes + j * element_width;
+            @memcpy(dst_elem[0..element_width], prev_elem[0..element_width]);
+            j -= 1;
+        }
+
+        const insert_pos = sorted_bytes + j * element_width;
+        @memcpy(insert_pos[0..element_width], temp_ptr[0..element_width]);
+    }
+
+    out.* = .{
+        .bytes = sorted_bytes,
+        .length = list_len,
+        .capacity_or_alloc_ptr = list_len,
+    };
 }
 
 /// Wrapper: listAppendUnsafe

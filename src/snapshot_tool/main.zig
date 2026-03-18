@@ -4534,9 +4534,9 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
     }) |cfg| {
         var backend_snapshot_ops = SnapshotOps.init(output.gpa);
         defer backend_snapshot_ops.deinit();
-        if (Repl.initWithBackend(output.gpa, backend_snapshot_ops.get_ops(), backend_snapshot_ops.crashContextPtr(), cfg.backend)) |backend_repl_val| {
+        const backend_repl_result = Repl.initWithBackend(output.gpa, backend_snapshot_ops.get_ops(), backend_snapshot_ops.crashContextPtr(), cfg.backend);
+        if (backend_repl_result) |backend_repl_val| {
             var backend_repl = backend_repl_val;
-            defer backend_repl.deinit();
 
             for (inputs.items, 0..) |input, i| {
                 // Set up panic protection via setjmp. If the backend panics,
@@ -4585,6 +4585,21 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
                         );
                         success = false;
                     }
+                }
+            }
+
+            // Deinit with panic protection — after a codegen panic, the REPL
+            // state may be corrupted and cleanup (e.g. GPA leak detection) can
+            // trigger secondary panics that would otherwise terminate the process.
+            {
+                var deinit_jmp_buf: sljmp.JmpBuf = undefined;
+                const deinit_jmp_result = sljmp.setjmp(&deinit_jmp_buf);
+                if (deinit_jmp_result != 0) {
+                    panic_msg = null;
+                } else {
+                    panic_jmp = &deinit_jmp_buf;
+                    backend_repl.deinit();
+                    panic_jmp = null;
                 }
             }
         } else |err| {
