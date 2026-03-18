@@ -1268,7 +1268,7 @@ test "check type - alias open tag union" {
         \\x : {} -> MyAlias([C])
         \\x = |{}| C
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "{  } -> MyAlias([C])");
+    try checkTypesModule(source, .{ .pass = .last_def }, "{} -> MyAlias([C])");
 }
 
 test "check type - alias open record" {
@@ -1280,7 +1280,7 @@ test "check type - alias open record" {
         \\x : {} -> MyAlias({b: U8})
         \\x = |{}| {a: "hello", b: 10} 
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "{  } -> MyAlias({ b: U8 })");
+    try checkTypesModule(source, .{ .pass = .last_def }, "{} -> MyAlias({ b: U8 })");
 }
 
 // nominal types //
@@ -1447,6 +1447,7 @@ test "check type - nominal - local record value - fail" {
         \\  Str.encode("hi", fmt)
         \\}
     ;
+    // TODO: Figure out why the arg `fmt` is not highlighted
     try checkTypesModule(
         source,
         .fail_with,
@@ -3699,7 +3700,7 @@ test "check type - structural tag - if True True else False is open tag union" {
     const source =
         \\x = if True True else False
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "[True, False, ..]");
+    try checkTypesModule(source, .{ .pass = .last_def }, "[False, True, ..]");
 }
 
 // helpers - module //
@@ -4029,7 +4030,7 @@ test "check type - record ext - arg inferred as open" {
         \\
         \\But `use_record` needs the first argument to be:
         \\
-        \\    { .., blah: Str }
+        \\    { blah: Str, .. }
         \\
         \\**Hint:** This record is missing the field: `blah`
         \\
@@ -5463,7 +5464,7 @@ test "check type - exhaustive match closes tag union inside record field" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "{ .., status: [Active, Inactive] } -> Str" },
+            .{ .def = "test", .expected = "{ status: [Active, Inactive], .. } -> Str" },
         },
     );
 }
@@ -5482,7 +5483,7 @@ test "check type - wildcard in record field keeps nested tag union open" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "{ .., status: [Active, ..] } -> Str" },
+            .{ .def = "test", .expected = "{ status: [Active, ..], .. } -> Str" },
         },
     );
 }
@@ -5522,7 +5523,7 @@ test "check type - exhaustive match closes tag union through tag then record" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Err(_a), Ok({ .., status: [Off, On] })] -> Str" },
+            .{ .def = "test", .expected = "[Err(_a), Ok({ status: [Off, On], .. })] -> Str" },
         },
     );
 }
@@ -5543,7 +5544,7 @@ test "check type - exhaustive match opens and closes tag unions through tag then
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Err(_a), Ok({ .., mode: ([Big], [Fast, ..]), status: [Off, On] })] -> Str" },
+            .{ .def = "test", .expected = "[Err(_a), Ok({ mode: ([Big], [Fast, ..]), status: [Off, On], .. })] -> Str" },
         },
     );
 }
@@ -5562,7 +5563,7 @@ test "check type - exhaustive match closes tag union through tuple then record" 
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "({ .., color: [Blue, Red] }, _field) -> Str" },
+            .{ .def = "test", .expected = "({ color: [Blue, Red], .. }, _field) -> Str" },
         },
     );
 }
@@ -5582,7 +5583,7 @@ test "check type - exhaustive match closes tag union through record then tuple" 
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "{ .., pair: ([Off, On], _field) } -> Str" },
+            .{ .def = "test", .expected = "{ pair: ([Off, On], _field), .. } -> Str" },
         },
     );
 }
@@ -5604,7 +5605,7 @@ test "check type - exhaustive match with different payload structures per tag" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Err([Critical, Warning]), Ok({ .., level: [High, Low] })] -> Str" },
+            .{ .def = "test", .expected = "[Err([Critical, Warning]), Ok({ level: [High, Low], .. })] -> Str" },
         },
     );
 }
@@ -5626,7 +5627,7 @@ test "check type - exhaustive match with different payload structures per tag, m
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Err([Critical, ..]), Ok({ .., level: [High, ..] })] -> Str" },
+            .{ .def = "test", .expected = "[Err([Critical, ..]), Ok({ level: [High, ..], .. })] -> Str" },
         },
     );
 }
@@ -5646,7 +5647,7 @@ test "check type - exhaustive match with different payload structures per tag, m
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Err([Critical, ..]), Ok({ .., level: [High, ..] })] -> Str" },
+            .{ .def = "test", .expected = "[Err([Critical, ..]), Ok({ level: [High, ..], .. })] -> Str" },
         },
     );
 }
@@ -5753,7 +5754,7 @@ test "check type - exhaustive match same record field at multiple nesting levels
         source,
         &.{
             // Inner "a" field's tag union [Red, Blue]: closed
-            .{ .def = "test", .expected = "{ .., a: { .., a: [Blue, Red] } } -> Str" },
+            .{ .def = "test", .expected = "{ a: { a: [Blue, Red], .. }, .. } -> Str" },
         },
     );
 }
@@ -5968,7 +5969,7 @@ test "check type - annotation keeps tag union open despite exhaustive match" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "make", .expected = "{  } -> [Red, ..]" },
+            .{ .def = "make", .expected = "{} -> [Red, ..]" },
             .{ .def = "test", .expected = "Str" },
         },
     );
@@ -6000,7 +6001,7 @@ test "check type - annotated open return type preserved after caller exhaustive 
     // Caller matches exhaustively then reuses the value — the annotation
     // prevents closing, so the second use at a broader type succeeds.
     const source =
-        \\Maker := {}.{
+        \\Maker := [Maker].{
         \\  get : Maker -> [Red, ..]
         \\  get = |_maker| Red
         \\}
@@ -6116,6 +6117,8 @@ test "check type - annotated open arg not closed even with exhaustive match" {
         \\But `accept_broad` needs the first argument to be:
         \\
         \\    [Blue, Red]
+        \\
+        \\**Hint:** This tag union open, but I expected it to be closed.
         \\
         \\
     );

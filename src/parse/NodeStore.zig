@@ -56,7 +56,7 @@ pub const AST_STATEMENT_NODE_COUNT = 13;
 /// Count of the pattern nodes in the AST
 pub const AST_PATTERN_NODE_COUNT = 15;
 /// Count of the type annotation nodes in the AST
-pub const AST_TYPE_ANNO_NODE_COUNT = 10;
+pub const AST_TYPE_ANNO_NODE_COUNT = 11;
 /// Count of the expression nodes in the AST
 pub const AST_EXPR_NODE_COUNT = 26;
 

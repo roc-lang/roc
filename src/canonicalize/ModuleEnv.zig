@@ -188,6 +188,8 @@ pub const CommonIdents = extern struct {
     // Synthetic identifiers for ? operator desugaring
     question_ok: Ident.Idx,
     question_err: Ident.Idx,
+    // Synthetic identifier for .. implicit rigids in open tag unions or records
+    open_ext: Ident.Idx,
 
     /// Insert all well-known identifiers into a CommonEnv.
     /// Use this when creating a fresh ModuleEnv from scratch.
@@ -277,6 +279,8 @@ pub const CommonIdents = extern struct {
             // Synthetic identifiers for ? operator desugaring
             .question_ok = try common.insertIdent(gpa, Ident.for_text("#ok")),
             .question_err = try common.insertIdent(gpa, Ident.for_text("#err")),
+            // Synthetic identifier for .. implicit rigids in open tag unions or records
+            .open_ext = try common.insertIdent(gpa, Ident.for_text("#others")),
         };
     }
 
@@ -369,6 +373,8 @@ pub const CommonIdents = extern struct {
             // Synthetic identifiers for ? operator desugaring
             .question_ok = common.findIdent("#ok") orelse unreachable,
             .question_err = common.findIdent("#err") orelse unreachable,
+            // Synthetic identifier for .. implicit rigids in open tag unions or records
+            .open_ext = common.findIdent("#others") orelse unreachable,
         };
     }
 };

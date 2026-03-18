@@ -637,9 +637,8 @@ pub const ReportBuilder = struct {
                         .tag_union => {
                             switch (em.situation) {
                                 .expected_rigid_was_closed => |rigid_idx| {
-                                    const name = self.can_ir.getIdent(rigid_idx);
-                                    if (name.len > 10 and std.mem.eql(u8, name[0..10], "#open_ext_")) {
-                                        // `#open_ext_{n}` is the internal name assigned to
+                                    if (rigid_idx == self.can_ir.idents.open_ext) {
+                                        // `open_ext` is the internal name assigned to
                                         // rigid vars defined via `..`, eg [A, B, ..]
                                         //
                                         // These can only come from annotation
@@ -661,9 +660,8 @@ pub const ReportBuilder = struct {
                                     }
                                 },
                                 .expected_closed_was_rigid => |rigid_idx| {
-                                    const name = self.can_ir.getIdent(rigid_idx);
-                                    if (name.len > 10 and std.mem.eql(u8, name[0..10], "#open_ext_")) {
-                                        // `#open_ext_{n}` is the internal name assigned to
+                                    if (rigid_idx == self.can_ir.idents.open_ext) {
+                                        // `open_ext` is the internal name assigned to
                                         // rigid vars defined via `..`, eg [A, B, ..]
                                         //
                                         // These can only come from annotation

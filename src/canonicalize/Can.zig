@@ -10268,12 +10268,8 @@ fn canonicalizeTypeAnnoRecord(
         .open => |open_tok| blk: {
             switch (type_anno_ctx.type) {
                 .local_anno => {
-                    var buf: [32]u8 = undefined;
-                    const name_text = std.fmt.bufPrint(&buf, "#open_ext_{d}", .{self.anon_open_ext_count}) catch unreachable;
-                    self.anon_open_ext_count += 1;
-                    const name_ident = try self.env.insertIdent(base.Ident.for_text(name_text));
                     break :blk try self.env.addTypeAnno(.{ .rigid_var = .{
-                        .name = name_ident,
+                        .name = self.env.idents.open_ext,
                     } }, region);
                 },
                 .type_decl_anno, .for_clause_anno => {
@@ -10313,15 +10309,8 @@ fn canonicalizeTypeAnnoTagUnion(
         .open => blk: {
             switch (type_anno_ctx.type) {
                 .local_anno => {
-                    // Anonymous `..` is shorthand for `..a` where `a` is a
-                    // unique rigid var. We use `#` prefix because it's not
-                    // a valid Roc identifier character, preventing collisions.
-                    var buf: [32]u8 = undefined;
-                    const name_text = std.fmt.bufPrint(&buf, "#open_ext_{d}", .{self.anon_open_ext_count}) catch unreachable;
-                    self.anon_open_ext_count += 1;
-                    const name_ident = try self.env.insertIdent(base.Ident.for_text(name_text));
                     break :blk try self.env.addTypeAnno(.{ .rigid_var = .{
-                        .name = name_ident,
+                        .name = self.env.idents.open_ext,
                     } }, region);
                 },
                 .type_decl_anno, .for_clause_anno => {
