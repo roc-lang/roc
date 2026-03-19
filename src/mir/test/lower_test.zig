@@ -2238,6 +2238,39 @@ test "cross-module: deeply nested polymorphic HOF lowers without error" {
     try testing.expect(result != .runtime_err_type);
 }
 
+test "cross-module: deeply nested polymorphic HOF nested lookup callee keeps both members" {
+    var env = try MirTestEnv.initExpr("(|twice, identity| { a: twice(identity, 42.I64), b: twice(|x| x + 1, 100.I64) })(|f, val| f(f(val)), |x| x)");
+    defer env.deinit();
+    _ = try env.lowerFirstDef();
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(env.builtin_module.env),
+        env.module_env,
+    };
+    var ls_store = try LambdaSet.infer(test_allocator, env.mir_store, all_module_envs[0..]);
+    defer ls_store.deinit(test_allocator);
+
+    var nested_lookup_count: usize = 0;
+    for (env.mir_store.exprs.items) |expr| {
+        if (expr != .call) continue;
+        const func_expr_id = expr.call.func;
+        const func_expr = env.mir_store.getExpr(func_expr_id);
+        if (func_expr != .lookup) continue;
+
+        const expr_ls = ls_store.getExprLambdaSet(func_expr_id) orelse continue;
+        const symbol_ls = ls_store.getSymbolLambdaSet(func_expr.lookup) orelse continue;
+        const expr_members = ls_store.getMembers(ls_store.getLambdaSet(expr_ls).members);
+        const symbol_members = ls_store.getMembers(ls_store.getLambdaSet(symbol_ls).members);
+        if (expr_members.len != 2 or symbol_members.len != 2) continue;
+
+        try testing.expectEqual(@as(usize, 2), expr_members.len);
+        try testing.expectEqual(@as(usize, 2), symbol_members.len);
+        nested_lookup_count += 1;
+    }
+
+    try testing.expectEqual(@as(usize, 2), nested_lookup_count);
+}
+
 // -- Fibonacci / recursive with cross-module numeric ops (snapshot: fibonacci.md) --
 
 test "cross-module: recursive fibonacci with numeric ops lowers without error" {

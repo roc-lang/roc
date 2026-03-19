@@ -1614,7 +1614,16 @@ pub const Pass = struct {
             .e_lookup_local => |lookup| {
                 if (result.getContextPatternProcInsts(self.active_proc_inst_context, module_idx, lookup.pattern_idx)) |proc_inst_ids| {
                     if (proc_inst_ids.len == 0) unreachable;
-                    if (proc_inst_ids.len > 1) return;
+                    if (proc_inst_ids.len > 1) {
+                        try self.recordCallSiteProcInstSet(
+                            result,
+                            self.active_proc_inst_context,
+                            module_idx,
+                            call_expr_idx,
+                            proc_inst_ids,
+                        );
+                        return;
+                    }
                 }
             },
             else => {},
@@ -3378,6 +3387,19 @@ pub const Pass = struct {
         const module_env = self.all_module_envs[module_idx];
         const existing_proc_inst_id = if (module_env.store.getExpr(expr_idx) == .e_lookup_local) blk: {
             const lookup = module_env.store.getExpr(expr_idx).e_lookup_local;
+            if (result.getContextPatternProcInsts(self.active_proc_inst_context, module_idx, lookup.pattern_idx)) |proc_inst_ids| {
+                if (proc_inst_ids.len == 0) unreachable;
+                if (proc_inst_ids.len > 1) {
+                    try self.recordLookupExprProcInstSet(
+                        result,
+                        self.active_proc_inst_context,
+                        module_idx,
+                        expr_idx,
+                        proc_inst_ids,
+                    );
+                    return;
+                }
+            }
             if (result.getContextPatternProcInst(self.active_proc_inst_context, module_idx, lookup.pattern_idx)) |candidate_proc_inst_id| {
                 if (result.getProcInst(candidate_proc_inst_id).template == template_id) {
                     break :blk candidate_proc_inst_id;
@@ -3568,6 +3590,30 @@ pub const Pass = struct {
         try result.call_site_proc_inst_sets.put(self.allocator, key, set_id);
     }
 
+    fn recordCallSiteProcInstSet(
+        self: *Pass,
+        result: *Result,
+        context_proc_inst: ProcInstId,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        proc_inst_ids: []const ProcInstId,
+    ) Allocator.Error!void {
+        if (proc_inst_ids.len == 0) unreachable;
+
+        const key = Result.contextExprKey(context_proc_inst, module_idx, expr_idx);
+        if (result.call_site_proc_insts.get(key)) |existing_proc_inst_id| {
+            if (!existing_proc_inst_id.isNone()) {
+                try result.call_site_proc_insts.put(self.allocator, key, ProcInstId.none);
+            }
+        } else {
+            try result.call_site_proc_insts.put(self.allocator, key, ProcInstId.none);
+        }
+
+        for (proc_inst_ids) |proc_inst_id| {
+            try self.mergeCallSiteProcInstSet(result, context_proc_inst, module_idx, expr_idx, proc_inst_id);
+        }
+    }
+
     fn recordCallSiteProcInst(
         self: *Pass,
         result: *Result,
@@ -3581,18 +3627,6 @@ pub const Pass = struct {
             if (existing_proc_inst_id == proc_inst_id) {
                 try self.mergeCallSiteProcInstSet(result, context_proc_inst, module_idx, expr_idx, proc_inst_id);
                 return;
-            }
-            if (builtin.mode == .Debug) {
-                std.debug.print(
-                    "DEBUG call-site ambiguity context={d} module={d} expr={d} existing={d} new={d}\n",
-                    .{
-                        @intFromEnum(context_proc_inst),
-                        module_idx,
-                        @intFromEnum(expr_idx),
-                        @intFromEnum(existing_proc_inst_id),
-                        @intFromEnum(proc_inst_id),
-                    },
-                );
             }
             if (!existing_proc_inst_id.isNone()) {
                 try result.call_site_proc_insts.put(self.allocator, key, ProcInstId.none);
@@ -3653,6 +3687,30 @@ pub const Pass = struct {
 
         try result.lookup_expr_proc_insts.put(self.allocator, key, proc_inst_id);
         try self.mergeLookupExprProcInstSet(result, context_proc_inst, module_idx, expr_idx, proc_inst_id);
+    }
+
+    fn recordLookupExprProcInstSet(
+        self: *Pass,
+        result: *Result,
+        context_proc_inst: ProcInstId,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        proc_inst_ids: []const ProcInstId,
+    ) Allocator.Error!void {
+        if (proc_inst_ids.len == 0) unreachable;
+
+        const key = Result.contextExprKey(context_proc_inst, module_idx, expr_idx);
+        if (result.lookup_expr_proc_insts.get(key)) |existing_proc_inst_id| {
+            if (!existing_proc_inst_id.isNone()) {
+                try result.lookup_expr_proc_insts.put(self.allocator, key, ProcInstId.none);
+            }
+        } else {
+            try result.lookup_expr_proc_insts.put(self.allocator, key, ProcInstId.none);
+        }
+
+        for (proc_inst_ids) |proc_inst_id| {
+            try self.mergeLookupExprProcInstSet(result, context_proc_inst, module_idx, expr_idx, proc_inst_id);
+        }
     }
 
     fn lookupResolvedDispatchTemplate(

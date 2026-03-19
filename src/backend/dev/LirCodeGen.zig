@@ -4720,6 +4720,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 return loc;
             }
 
+            if (std.debug.runtime_safety) {
+                std.debug.panic(
+                    "generateLookup: missing symbol location and symbol def for symbol={d} layout={d} current_proc={d}",
+                    .{
+                        symbol.raw(),
+                        @intFromEnum(layout_idx),
+                        if (self.current_proc_name) |sym| sym.raw() else std.math.maxInt(u64),
+                    },
+                );
+            }
             unreachable;
         }
 

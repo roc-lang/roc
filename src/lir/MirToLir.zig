@@ -3001,6 +3001,61 @@ fn lowerLookup(self: *Self, sym: Symbol, mono_idx: Monotype.Idx, mir_expr_id: MI
         break :blk try self.layoutFromMonotype(mono_idx);
     };
 
+    if (builtin.mode == .Debug and sym.raw() == 4294967272) {
+        const owner = self.debugSymbolOwner(sym);
+        const source_expr = if (self.lambda_set_store.getSymbolSourceExpr(sym)) |expr_id|
+            @intFromEnum(expr_id)
+        else
+            std.math.maxInt(u32);
+        const value_def = if (self.mir_store.getValueDef(sym)) |expr_id|
+            @intFromEnum(expr_id)
+        else
+            std.math.maxInt(u32);
+        std.debug.print(
+            "DEBUG lowerLookup missing-symbol candidate sym={d} expr={d} owner={s} owner_proc={d} owner_local={d} has_layout={any} source_expr={d} value_def={d} mono_tag={s}\n",
+            .{
+                sym.raw(),
+                @intFromEnum(mir_expr_id),
+                @tagName(owner.kind),
+                owner.proc_idx,
+                owner.local_idx,
+                self.symbol_layouts.get(sym.raw()) != null,
+                source_expr,
+                value_def,
+                @tagName(self.mir_store.monotype_store.getMonotype(mono_idx)),
+            },
+        );
+        if (owner.kind == .param) {
+            const proc = self.mir_store.getProc(@enumFromInt(owner.proc_idx));
+            const params = self.mir_store.getPatternSpan(proc.params);
+            std.debug.print("  owner proc params=", .{});
+            for (params, 0..) |param_id, i| {
+                if (i != 0) std.debug.print(" | ", .{});
+                const pattern = self.mir_store.getPattern(param_id);
+                switch (pattern) {
+                    .bind => |bound| std.debug.print(
+                        "{d}:{d}:{s}",
+                        .{
+                            i,
+                            bound.raw(),
+                            @tagName(self.mir_store.monotype_store.getMonotype(self.mir_store.patternTypeOf(param_id))),
+                        },
+                    ),
+                    .as_pattern => |as_pat| std.debug.print(
+                        "{d}:{d}:{s}",
+                        .{
+                            i,
+                            as_pat.symbol.raw(),
+                            @tagName(self.mir_store.monotype_store.getMonotype(self.mir_store.patternTypeOf(param_id))),
+                        },
+                    ),
+                    else => std.debug.print("{d}:{s}", .{ i, @tagName(pattern) }),
+                }
+            }
+            std.debug.print("\n", .{});
+        }
+    }
+
     if (self.mir_store.isSymbolReassignable(sym)) {
         return self.lir_store.addExpr(.{ .cell_load = .{
             .cell = sym,
@@ -3658,14 +3713,17 @@ fn lowerCall(self: *Self, call_data: anytype, mir_expr_id: MIR.ExprId, region: R
     if (self.resolvePlainProcRefId(call_data.func)) |callee_proc| {
         var acc = self.startLetAccumulator();
         const mir_args = self.mir_store.getExprSpan(call_data.args);
-        const lir_args = try self.lowerAnfSpan(&acc, mir_args, region);
+        var arg_origins = std.ArrayList(CallableOrigin).empty;
+        defer arg_origins.deinit(self.allocator);
+        for (mir_args) |mir_arg| {
+            try arg_origins.append(self.allocator, self.callableOriginForExpr(mir_arg));
+        }
+        const raw_lir_args = try self.lowerAnfSpan(&acc, mir_args, region);
+        const lir_args = try self.adaptClosureCallArgsToParams(callee_proc, arg_origins.items, raw_lir_args, region);
 
         const save_layouts = self.scratch_layout_idxs.items.len;
         defer self.scratch_layout_idxs.shrinkRetainingCapacity(save_layouts);
-        for (mir_args) |mir_arg| {
-            const arg_layout = try self.runtimeValueLayoutFromMirExpr(mir_arg);
-            try self.scratch_layout_idxs.append(self.allocator, arg_layout);
-        }
+        try self.appendArgLayoutsForSpan(lir_args);
 
         const specialization = try self.ensureDirectProcSpec(
             specializationIdentityForProc(callee_proc),
@@ -3693,14 +3751,17 @@ fn lowerCall(self: *Self, call_data: anytype, mir_expr_id: MIR.ExprId, region: R
     if (self.resolveToProcId(call_data.func)) |callee_proc| {
         var acc = self.startLetAccumulator();
         const mir_args = self.mir_store.getExprSpan(call_data.args);
-        const lir_args = try self.lowerAnfSpan(&acc, mir_args, region);
+        var arg_origins = std.ArrayList(CallableOrigin).empty;
+        defer arg_origins.deinit(self.allocator);
+        for (mir_args) |mir_arg| {
+            try arg_origins.append(self.allocator, self.callableOriginForExpr(mir_arg));
+        }
+        const raw_lir_args = try self.lowerAnfSpan(&acc, mir_args, region);
+        const lir_args = try self.adaptClosureCallArgsToParams(callee_proc, arg_origins.items, raw_lir_args, region);
 
         const save_layouts = self.scratch_layout_idxs.items.len;
         defer self.scratch_layout_idxs.shrinkRetainingCapacity(save_layouts);
-        for (mir_args) |mir_arg| {
-            const arg_layout = try self.runtimeValueLayoutFromMirExpr(mir_arg);
-            try self.scratch_layout_idxs.append(self.allocator, arg_layout);
-        }
+        try self.appendArgLayoutsForSpan(lir_args);
 
         const specialization = try self.ensureDirectProcSpec(
             specializationIdentityForProc(callee_proc),

@@ -2690,7 +2690,12 @@ fn lowerExprWithMonotypeOverride(
 
         // --- Lookups ---
         .e_lookup_local => |lookup| {
-            if (self.monomorphization.getLookupExprProcInst(self.current_proc_inst_context, self.current_module_idx, expr_idx)) |proc_inst_id| {
+            if (self.monomorphization.getContextPatternProcInsts(self.current_proc_inst_context, self.current_module_idx, lookup.pattern_idx)) |proc_inst_ids| {
+                if (proc_inst_ids.len == 0) unreachable;
+                if (proc_inst_ids.len == 1) {
+                    return try self.lowerProcInst(proc_inst_ids[0]);
+                }
+            } else if (self.monomorphization.getLookupExprProcInst(self.current_proc_inst_context, self.current_module_idx, expr_idx)) |proc_inst_id| {
                 return try self.lowerProcInst(proc_inst_id);
             }
 
@@ -3072,16 +3077,6 @@ fn seedCallableParamSymbols(
                     }
                 }.lessThan,
             );
-            if (builtin.mode == .Debug and self.current_module_idx == 1) {
-                std.debug.print(
-                    "DEBUG seedCallableParamSymbols context={d} pattern={d} proc_count={d}\n",
-                    .{
-                        @intFromEnum(self.current_proc_inst_context),
-                        @intFromEnum(original_pattern_idx),
-                        proc_ids.items.len,
-                    },
-                );
-            }
             try self.store.registerSymbolSeedProcSet(self.allocator, symbol, proc_ids.items);
         }
     }
@@ -4422,18 +4417,6 @@ fn lowerCall(
     region: Region,
 ) Allocator.Error!MIR.ExprId {
     const call_site_proc_inst = self.monomorphization.getCallSiteProcInst(self.current_proc_inst_context, self.current_module_idx, call_expr_idx);
-    if (builtin.mode == .Debug and self.current_module_idx == 1) {
-        std.debug.print(
-            "DEBUG lowerCall context={d} module={d} expr={d} direct={any} proc_inst={d}\n",
-            .{
-                @intFromEnum(self.current_proc_inst_context),
-                self.current_module_idx,
-                @intFromEnum(call_expr_idx),
-                call_site_proc_inst != null,
-                if (call_site_proc_inst) |proc_inst_id| @intFromEnum(proc_inst_id) else std.math.maxInt(u32),
-            },
-        );
-    }
     const call_result_monotype = if (call_site_proc_inst) |proc_inst_id|
         try self.procInstReturnMonotype(proc_inst_id)
     else
