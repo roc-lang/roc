@@ -2526,6 +2526,35 @@ test "cross-module: recursive fibonacci with numeric ops lowers without error" {
     try testing.expect(result != .runtime_err_type);
 }
 
+test "cross-module: repl-style recursive fibonacci block materializes one proc inst" {
+    var env = try MirTestEnv.initExpr(
+        \\{
+        \\    fib = |n| if n <= 1 n else fib(n - 1) + fib(n - 2)
+        \\    fib(5)
+        \\}
+    );
+    defer env.deinit();
+
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result == .block);
+
+    var user_template_count: usize = 0;
+    var user_proc_inst_count: usize = 0;
+    for (env.monomorphization.proc_templates.items) |template| {
+        if (template.module_idx != 1) continue;
+        user_template_count += 1;
+    }
+    for (env.monomorphization.proc_insts.items) |proc_inst| {
+        const template = env.monomorphization.getProcTemplate(proc_inst.template);
+        if (template.module_idx != 1) continue;
+        user_proc_inst_count += 1;
+    }
+
+    try testing.expectEqual(@as(usize, 2), user_template_count);
+    try testing.expectEqual(@as(usize, 1), user_proc_inst_count);
+}
+
 // -- String equality (snapshot: string_equality_basic.md) --
 
 test "cross-module: string equality lowers without error" {

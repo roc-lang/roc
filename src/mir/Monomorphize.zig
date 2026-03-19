@@ -624,21 +624,6 @@ pub const Pass = struct {
         return Result.contextExprKey(context_proc_inst, null, module_idx, expr_idx);
     }
 
-    fn getExprMonotypeInContext(
-        self: *const Pass,
-        result: *const Result,
-        context_proc_inst: ProcInstId,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) ?ResolvedMonotype {
-        return result.getExprMonotype(
-            context_proc_inst,
-            self.exprRootContext(context_proc_inst),
-            module_idx,
-            expr_idx,
-        );
-    }
-
     fn getExprProcInstInContext(
         self: *const Pass,
         result: *const Result,
@@ -662,51 +647,6 @@ pub const Pass = struct {
         expr_idx: CIR.Expr.Idx,
     ) ?ProcInstId {
         return result.getCallSiteProcInst(
-            context_proc_inst,
-            self.exprRootContext(context_proc_inst),
-            module_idx,
-            expr_idx,
-        );
-    }
-
-    fn getDispatchExprProcInstInContext(
-        self: *const Pass,
-        result: *const Result,
-        context_proc_inst: ProcInstId,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) ?ProcInstId {
-        return result.getDispatchExprProcInst(
-            context_proc_inst,
-            self.exprRootContext(context_proc_inst),
-            module_idx,
-            expr_idx,
-        );
-    }
-
-    fn getLookupExprProcInstInContext(
-        self: *const Pass,
-        result: *const Result,
-        context_proc_inst: ProcInstId,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) ?ProcInstId {
-        return result.getLookupExprProcInst(
-            context_proc_inst,
-            self.exprRootContext(context_proc_inst),
-            module_idx,
-            expr_idx,
-        );
-    }
-
-    fn getCallSiteProcInstsInContext(
-        self: *const Pass,
-        result: *const Result,
-        context_proc_inst: ProcInstId,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) ?[]const ProcInstId {
-        return result.getCallSiteProcInsts(
             context_proc_inst,
             self.exprRootContext(context_proc_inst),
             module_idx,
@@ -1735,7 +1675,7 @@ pub const Pass = struct {
         result: *Result,
         source_context_proc_inst: ProcInstId,
         module_idx: u32,
-        _: CIR.Expr.Idx,
+        closure_expr_idx: CIR.Expr.Idx,
         closure_expr: CIR.Expr.Closure,
     ) Allocator.Error!void {
         const module_env = self.all_module_envs[module_idx];
@@ -1743,8 +1683,24 @@ pub const Pass = struct {
         self.active_proc_inst_context = source_context_proc_inst;
         defer self.active_proc_inst_context = saved_proc_inst_context;
 
+        const current_template = if (!source_context_proc_inst.isNone())
+            result.getProcTemplate(result.getProcInst(source_context_proc_inst).template).*
+        else
+            null;
+
         for (module_env.store.sliceCaptures(closure_expr.captures)) |capture_idx| {
             const capture = module_env.store.getCapture(capture_idx);
+
+            if (current_template) |template| {
+                if (template.module_idx == module_idx and
+                    template.cir_expr == closure_expr_idx and
+                    template.binding_pattern != null and
+                    template.binding_pattern.? == capture.pattern_idx)
+                {
+                    continue;
+                }
+            }
+
             const source = self.source_exprs.get(packLocalPatternSourceKey(module_idx, capture.pattern_idx)) orelse continue;
 
             try self.scanReachableValueDefExpr(result, source.module_idx, source.expr_idx);
