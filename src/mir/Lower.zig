@@ -3312,7 +3312,7 @@ fn stabilizeEscapingFunctionSpan(self: *Self, expr_span: MIR.ExprSpan) Allocator
     return try self.store.addExprSpan(self.allocator, self.scratch_expr_ids.sliceFromStart(scratch_top));
 }
 
-fn callableBindingHasReachableValueUse(self: *const Self, pattern_idx: CIR.Pattern.Idx) bool {
+fn callableBindingHasDemandedValueUse(self: *const Self, pattern_idx: CIR.Pattern.Idx) bool {
     const proc_inst_ids = self.monomorphization.getContextPatternProcInsts(
         self.current_proc_inst_context,
         self.current_module_idx,
@@ -4635,6 +4635,19 @@ fn cirExprIsProcBacked(module_env: *const ModuleEnv, expr_idx: CIR.Expr.Idx) boo
     };
 }
 
+fn procBackedLeafExpr(module_env: *const ModuleEnv, expr_idx: CIR.Expr.Idx) ?CIR.Expr.Idx {
+    return switch (module_env.store.getExpr(expr_idx)) {
+        .e_lambda, .e_closure, .e_hosted_lambda => expr_idx,
+        .e_block => |block| procBackedLeafExpr(module_env, block.final_expr),
+        .e_dbg => |dbg_expr| procBackedLeafExpr(module_env, dbg_expr.expr),
+        .e_expect => |expect_expr| procBackedLeafExpr(module_env, expect_expr.body),
+        .e_return => |return_expr| procBackedLeafExpr(module_env, return_expr.expr),
+        .e_nominal => |nominal_expr| procBackedLeafExpr(module_env, nominal_expr.backing_expr),
+        .e_nominal_external => |nominal_expr| procBackedLeafExpr(module_env, nominal_expr.backing_expr),
+        else => null,
+    };
+}
+
 fn getCallLowLevelOp(self: *Self, caller_env: *const ModuleEnv, func_expr: CIR.Expr) ?CIR.Expr.LowLevel {
     return switch (func_expr) {
         .e_lookup_external => |lookup| self.getExternalLowLevelOp(caller_env, lookup),
@@ -4713,7 +4726,7 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
         switch (cir_stmt) {
             .s_decl => |decl| {
                 if (cirExprIsProcBacked(module_env, decl.expr) and
-                    !self.callableBindingHasReachableValueUse(decl.pattern))
+                    !self.callableBindingHasDemandedValueUse(decl.pattern))
                 {
                     continue;
                 }
@@ -4724,7 +4737,7 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
             },
             .s_var => |var_decl| {
                 if (cirExprIsProcBacked(module_env, var_decl.expr) and
-                    !self.callableBindingHasReachableValueUse(var_decl.pattern_idx))
+                    !self.callableBindingHasDemandedValueUse(var_decl.pattern_idx))
                 {
                     continue;
                 }
@@ -5927,22 +5940,32 @@ fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.E
 
     const current_env = self.all_module_envs[self.current_module_idx];
     const result = if (cirExprIsProcBacked(current_env, cir_expr_idx)) blk: {
-        const template_id = self.monomorphization.getExprProcTemplate(self.current_module_idx, cir_expr_idx) orelse {
+        const callable_expr_idx = procBackedLeafExpr(current_env, cir_expr_idx) orelse unreachable;
+        const template_id = self.monomorphization.getExprProcTemplate(self.current_module_idx, callable_expr_idx) orelse {
             if (builtin.mode == .Debug) {
+                const module_name = current_env.getIdent(current_env.qualified_module_ident);
                 std.debug.panic(
-                    "MIR Lower invariant: callable def symbol={d} expr={d} in module {d} has no proc template",
-                    .{ symbol.raw(), @intFromEnum(cir_expr_idx), self.current_module_idx },
+                    "MIR Lower invariant: callable def symbol={d} expr={d} leaf={d} tag={s} in module {d} ('{s}') has no proc template",
+                    .{
+                        symbol.raw(),
+                        @intFromEnum(cir_expr_idx),
+                        @intFromEnum(callable_expr_idx),
+                        @tagName(current_env.store.getExpr(callable_expr_idx)),
+                        self.current_module_idx,
+                        module_name,
+                    },
                 );
             }
             unreachable;
         };
-        const proc_inst_id = self.lookupMonomorphizedExprProcInst(cir_expr_idx) orelse {
+        const proc_inst_id = self.lookupMonomorphizedExprProcInst(callable_expr_idx) orelse {
             if (builtin.mode == .Debug) {
                 std.debug.panic(
-                    "MIR Lower invariant: callable def symbol={d} expr={d} in module {d} template={d} has no monomorphized proc inst in context {d} root_expr={d}",
+                    "MIR Lower invariant: callable def symbol={d} expr={d} leaf={d} in module {d} template={d} has no monomorphized proc inst in context {d} root_expr={d}",
                     .{
                         symbol.raw(),
                         @intFromEnum(cir_expr_idx),
+                        @intFromEnum(callable_expr_idx),
                         self.current_module_idx,
                         @intFromEnum(template_id),
                         @intFromEnum(self.current_proc_inst_context),
