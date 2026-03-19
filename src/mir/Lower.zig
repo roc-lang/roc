@@ -4417,6 +4417,32 @@ fn lowerProcInst(self: *Self, proc_inst_id: Monomorphize.ProcInstId) Allocator.E
         else => unreachable,
     };
 
+    if (builtin.mode == .Debug) {
+        switch (self.store.getExpr(lowered_proc_expr)) {
+            .proc_ref => |proc_id| std.debug.print(
+                "lowerProcInst proc_inst={d} template={d} fn_mono={d} {any} -> proc_id={d}\n",
+                .{
+                    @intFromEnum(proc_inst_id),
+                    @intFromEnum(proc_inst.template),
+                    @intFromEnum(proc_monotype),
+                    self.store.monotype_store.getMonotype(proc_monotype),
+                    @intFromEnum(proc_id),
+                },
+            ),
+            .closure_make => |closure| std.debug.print(
+                "lowerProcInst proc_inst={d} template={d} fn_mono={d} {any} -> closure_proc={d}\n",
+                .{
+                    @intFromEnum(proc_inst_id),
+                    @intFromEnum(proc_inst.template),
+                    @intFromEnum(proc_monotype),
+                    self.store.monotype_store.getMonotype(proc_monotype),
+                    @intFromEnum(closure.proc),
+                },
+            ),
+            else => {},
+        }
+    }
+
     return lowered_proc_expr;
 }
 
@@ -4550,6 +4576,22 @@ fn lowerCall(
                     try self.lowerExprWithMonotypeOverride(arg_exprs[1], elem_monotype)
                 else
                     try self.lowerExpr(arg_exprs[1]);
+                if (builtin.mode == .Debug and !self.current_proc_inst_context.isNone()) {
+                    std.debug.print(
+                        "Lower list_append_unsafe proc_inst={d} list_expr={d} list_mono={d} {any} elem_override={d} {any} elem_expr={d} elem_mono={d} {any}\n",
+                        .{
+                            @intFromEnum(self.current_proc_inst_context),
+                            @intFromEnum(arg_exprs[0]),
+                            @intFromEnum(list_mono_idx),
+                            self.store.monotype_store.getMonotype(list_mono_idx),
+                            @intFromEnum(elem_monotype),
+                            if (!elem_monotype.isNone()) self.store.monotype_store.getMonotype(elem_monotype) else .unit,
+                            @intFromEnum(arg_exprs[1]),
+                            @intFromEnum(self.store.typeOf(lowered_elem)),
+                            self.store.monotype_store.getMonotype(self.store.typeOf(lowered_elem)),
+                        },
+                    );
+                }
                 const args = try self.store.addExprSpan(self.allocator, &.{ lowered_list, lowered_elem });
                 return try self.store.addExpr(self.allocator, .{ .run_low_level = .{
                     .op = ll_op,

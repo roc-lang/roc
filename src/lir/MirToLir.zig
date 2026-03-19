@@ -116,6 +116,12 @@ const SavedMonotypeLayout = struct {
     previous: ?layout.Idx,
 };
 
+const SavedSymbolBinding = struct {
+    sym_key: u64,
+    previous_layout: ?layout.Idx,
+    previous_mode: ?BindingOwnershipMode,
+};
+
 allocator: Allocator,
 mir_store: *const MIR.Store,
 lir_store: *LirExprStore,
@@ -150,6 +156,10 @@ symbol_layouts: std.AutoHashMap(u64, layout.Idx),
 
 /// Tracks whether the current binding for a symbol is owned or borrowed.
 symbol_binding_modes: std.AutoHashMap(u64, BindingOwnershipMode),
+
+/// Lexical binding-scope restore stack for symbol layouts/binding modes.
+binding_scope_marks: std.ArrayList(usize),
+binding_scope_log: std.ArrayList(SavedSymbolBinding),
 
 /// Recursion guard for computing runtime lambda-set payload layouts.
 computing_lambda_set_layouts: std.AutoHashMap(u32, void),
@@ -214,6 +224,8 @@ pub fn init(
         .propagating_defs = std.AutoHashMap(u64, void).init(allocator),
         .symbol_layouts = std.AutoHashMap(u64, layout.Idx).init(allocator),
         .symbol_binding_modes = std.AutoHashMap(u64, BindingOwnershipMode).init(allocator),
+        .binding_scope_marks = .empty,
+        .binding_scope_log = .empty,
         .computing_lambda_set_layouts = std.AutoHashMap(u32, void).init(allocator),
         .direct_proc_specs = std.StringHashMap(DirectProcSpec).init(allocator),
         .lowering_direct_proc_specs = std.AutoHashMap(u64, void).init(allocator),
@@ -242,6 +254,8 @@ pub fn deinit(self: *Self) void {
     self.propagating_defs.deinit();
     self.symbol_layouts.deinit();
     self.symbol_binding_modes.deinit();
+    self.binding_scope_marks.deinit(self.allocator);
+    self.binding_scope_log.deinit(self.allocator);
     self.computing_lambda_set_layouts.deinit();
     {
         var it_vals = self.direct_proc_specs.valueIterator();
@@ -400,6 +414,55 @@ fn restoreMonotypeOverrides(self: *Self, saved: []const SavedMonotypeLayout) voi
     self.monotype_layout_resolver.clearOverrideCache();
     self.specialized_capture_layout_cache.clearRetainingCapacity();
     self.specialized_closure_value_layout_cache.clearRetainingCapacity();
+}
+
+fn beginBindingScope(self: *Self) Allocator.Error!void {
+    try self.binding_scope_marks.append(self.allocator, self.binding_scope_log.items.len);
+}
+
+fn endBindingScope(self: *Self) void {
+    const mark = self.binding_scope_marks.pop() orelse unreachable;
+    var i = self.binding_scope_log.items.len;
+    while (i > mark) {
+        i -= 1;
+        const saved = self.binding_scope_log.items[i];
+        if (saved.previous_layout) |layout_idx| {
+            self.symbol_layouts.put(saved.sym_key, layout_idx) catch unreachable;
+        } else {
+            _ = self.symbol_layouts.remove(saved.sym_key);
+        }
+        if (saved.previous_mode) |mode| {
+            self.symbol_binding_modes.put(saved.sym_key, mode) catch unreachable;
+        } else {
+            _ = self.symbol_binding_modes.remove(saved.sym_key);
+        }
+    }
+    self.binding_scope_log.shrinkRetainingCapacity(mark);
+}
+
+fn recordSymbolBindingBeforeMutation(self: *Self, sym_key: u64) Allocator.Error!void {
+    if (self.binding_scope_marks.items.len == 0) return;
+
+    const mark = self.binding_scope_marks.items[self.binding_scope_marks.items.len - 1];
+    for (self.binding_scope_log.items[mark..]) |saved| {
+        if (saved.sym_key == sym_key) return;
+    }
+
+    try self.binding_scope_log.append(self.allocator, .{
+        .sym_key = sym_key,
+        .previous_layout = self.symbol_layouts.get(sym_key),
+        .previous_mode = self.symbol_binding_modes.get(sym_key),
+    });
+}
+
+fn putSymbolLayout(self: *Self, sym_key: u64, layout_idx: layout.Idx) Allocator.Error!void {
+    try self.recordSymbolBindingBeforeMutation(sym_key);
+    try self.symbol_layouts.put(sym_key, layout_idx);
+}
+
+fn putSymbolBindingMode(self: *Self, sym_key: u64, mode: BindingOwnershipMode) Allocator.Error!void {
+    try self.recordSymbolBindingBeforeMutation(sym_key);
+    try self.symbol_binding_modes.put(sym_key, mode);
 }
 
 fn registerSpecializedMonotypeLayout(
@@ -1432,6 +1495,23 @@ fn ensureDirectProcSpec(
     param_layouts: []const layout.Idx,
     force_pass_by_ptr: bool,
 ) Allocator.Error!DirectProcSpec {
+    if (builtin.mode == .Debug) {
+        const proc = self.mir_store.getProc(callee_proc);
+        std.debug.print(
+            "ensureDirectProcSpec callee_proc={d} debug_name={d} fn_mono={d} {any} param_layouts=",
+            .{
+                @intFromEnum(callee_proc),
+                proc.debug_name.raw(),
+                @intFromEnum(proc.fn_monotype),
+                self.mir_store.monotype_store.getMonotype(proc.fn_monotype),
+            },
+        );
+        for (param_layouts, 0..) |param_layout, i| {
+            if (i != 0) std.debug.print(",", .{});
+            std.debug.print("{d}:{s}", .{ @intFromEnum(param_layout), @tagName(self.layout_store.getLayout(param_layout).tag) });
+        }
+        std.debug.print("\n", .{});
+    }
     const key_bytes = try self.specializationKeyBytes(callee_key, param_layouts, force_pass_by_ptr);
     const proc = self.mir_store.getProc(callee_proc);
     const provisional_ret_layout = try self.layoutFromMonotype(proc.ret_monotype);
@@ -1732,6 +1812,8 @@ fn runtimeLayoutForProcBodyWithParamLayouts(
     defer saved_layouts.deinit(self.allocator);
     var saved_monotype_layouts = std.ArrayList(SavedMonotypeLayout).empty;
     defer saved_monotype_layouts.deinit(self.allocator);
+    try self.beginBindingScope();
+    defer self.endBindingScope();
 
     var bound_symbols = std.ArrayList(u64).empty;
     defer bound_symbols.deinit(self.allocator);
@@ -1813,7 +1895,7 @@ fn runtimeLayoutForBlockFinal(self: *Self, block: anytype) Allocator.Error!layou
                     .sym_key = cell_symbol.raw(),
                     .previous = self.symbol_layouts.get(cell_symbol.raw()),
                 });
-                try self.symbol_layouts.put(cell_symbol.raw(), runtime_layout);
+                try self.putSymbolLayout(cell_symbol.raw(), runtime_layout);
             },
         }
     }
@@ -1919,31 +2001,6 @@ fn runtimeLayoutFromDirectProcSpecCall(
 fn runtimeListElemLayoutFromMirExpr(self: *Self, list_mir_expr_id: MIR.ExprId) Allocator.Error!layout.Idx {
     const list_mono_idx = self.mir_store.typeOf(list_mir_expr_id);
     const list_mono = self.mir_store.monotype_store.getMonotype(list_mono_idx);
-
-    switch (self.mir_store.getExpr(list_mir_expr_id)) {
-        .list => |list_data| {
-            const elems = self.mir_store.getExprSpan(list_data.elems);
-            if (elems.len > 0) return self.runtimeValueLayoutFromMirExpr(elems[0]);
-        },
-        .run_low_level => |ll| switch (ll.op) {
-            .list_append_unsafe => {
-                const args = self.mir_store.getExprSpan(ll.args);
-                if (args.len >= 2) return self.runtimeValueLayoutFromMirExpr(args[1]);
-            },
-            .list_concat => {
-                const args = self.mir_store.getExprSpan(ll.args);
-                if (args.len >= 1) return self.runtimeListElemLayoutFromMirExpr(args[0]);
-            },
-            else => {},
-        },
-        .lookup => |symbol| {
-            if (self.lambda_set_store.getSymbolListElemExpr(symbol, 0)) |elem_expr_id| {
-                return self.runtimeValueLayoutFromMirExpr(elem_expr_id);
-            }
-        },
-        .block => |block| return self.runtimeListElemLayoutFromMirExpr(block.final_expr),
-        else => {},
-    }
 
     const list_layout_idx = try self.runtimeValueLayoutFromMirExpr(list_mir_expr_id);
     const list_layout = self.layout_store.getLayout(list_layout_idx);
@@ -2080,7 +2137,7 @@ fn prepareLiftedDefCaptureLayout(self: *Self, proc_id: MIR.ProcId) Allocator.Err
     const last_pat = self.mir_store.getPattern(params[params.len - 1]);
     switch (last_pat) {
         .bind => |sym| {
-            try self.symbol_layouts.put(sym.raw(), captures_layout);
+            try self.putSymbolLayout(sym.raw(), captures_layout);
         },
         else => {},
     }
@@ -2454,8 +2511,8 @@ fn appendBindingStmt(
     region: Region,
 ) Allocator.Error!LirExprId {
     const bp = try self.freshBindPattern(expr_layout, false, region);
-    try self.symbol_layouts.put(bp.symbol.raw(), expr_layout);
-    try self.symbol_binding_modes.put(bp.symbol.raw(), bindingModeForSemantics(semantics));
+    try self.putSymbolLayout(bp.symbol.raw(), expr_layout);
+    try self.putSymbolBindingMode(bp.symbol.raw(), bindingModeForSemantics(semantics));
     try stmts.append(self.allocator, .{ .decl = .{
         .pattern = bp.pattern,
         .expr = expr_id,
@@ -2499,10 +2556,10 @@ fn updatePatternBindingMode(self: *Self, pat_id: LirPatternId, ownership_mode: B
 
     switch (self.lir_store.getPattern(pat_id)) {
         .bind => |bind| {
-            try self.symbol_binding_modes.put(bind.symbol.raw(), ownership_mode);
+            try self.putSymbolBindingMode(bind.symbol.raw(), ownership_mode);
         },
         .as_pattern => |as_pat| {
-            try self.symbol_binding_modes.put(as_pat.symbol.raw(), ownership_mode);
+            try self.putSymbolBindingMode(as_pat.symbol.raw(), ownership_mode);
             try self.updatePatternBindingMode(as_pat.inner, ownership_mode);
         },
         .tag => |tag_pat| {
@@ -3026,6 +3083,8 @@ fn lowerMatch(self: *Self, match_data: anytype, mir_expr_id: MIR.ExprId, region:
     defer self.scratch_lir_match_branches.shrinkRetainingCapacity(save_len);
     defer self.scratch_deferred_list_rest_bindings.shrinkRetainingCapacity(save_rest_bindings);
     for (mir_branches) |branch| {
+        try self.beginBindingScope();
+        defer self.endBindingScope();
         const branch_patterns = self.mir_store.getBranchPatterns(branch.patterns);
         if (branch_patterns.len == 0) continue;
         for (branch_patterns) |bp| {
@@ -3328,6 +3387,8 @@ fn lowerProcWithParamLayouts(
     defer saved_symbol_layouts.deinit(self.allocator);
     var saved_binding_modes = std.ArrayList(SavedBindingMode).empty;
     defer saved_binding_modes.deinit(self.allocator);
+    try self.beginBindingScope();
+    defer self.endBindingScope();
 
     const save_param_patterns = self.scratch_lir_pattern_ids.items.len;
     defer self.scratch_lir_pattern_ids.shrinkRetainingCapacity(save_param_patterns);
@@ -3669,6 +3730,46 @@ fn lowerCall(self: *Self, call_data: anytype, mir_expr_id: MIR.ExprId, region: R
         const save_layouts = self.scratch_layout_idxs.items.len;
         defer self.scratch_layout_idxs.shrinkRetainingCapacity(save_layouts);
         try self.appendArgLayoutsForSpan(lir_args);
+
+        if (builtin.mode == .Debug) {
+            const debug_lir_args = self.lir_store.getExprSpan(lir_args);
+            std.debug.print("lowerCall direct callee_proc={d}\n", .{@intFromEnum(callee_proc)});
+            for (mir_args, debug_lir_args, 0..) |mir_arg, lir_arg, arg_i| {
+                const mir_layout = try self.runtimeValueLayoutFromMirExpr(mir_arg);
+                const lir_layout = self.lirExprResultLayout(lir_arg);
+                std.debug.print(
+                    "  arg[{d}] mir={d} tag={s} mono={d} {any} mir_layout={d} {s} lir_layout={d} {s}\n",
+                    .{
+                        arg_i,
+                        @intFromEnum(mir_arg),
+                        @tagName(self.mir_store.getExpr(mir_arg)),
+                        @intFromEnum(self.mir_store.typeOf(mir_arg)),
+                        self.mir_store.monotype_store.getMonotype(self.mir_store.typeOf(mir_arg)),
+                        @intFromEnum(mir_layout),
+                        @tagName(self.layout_store.getLayout(mir_layout).tag),
+                        @intFromEnum(lir_layout),
+                        @tagName(self.layout_store.getLayout(lir_layout).tag),
+                    },
+                );
+                switch (self.mir_store.getExpr(mir_arg)) {
+                    .lookup => |lookup| {
+                        const owner = self.debugSymbolOwner(lookup);
+                        std.debug.print(
+                            "    lookup symbol={d} symbol_layout={?} binding_mode={?} owner={s} owner_proc={d} owner_local={d}\n",
+                            .{
+                                lookup.raw(),
+                                self.symbol_layouts.get(lookup.raw()),
+                                self.symbol_binding_modes.get(lookup.raw()),
+                                @tagName(owner.kind),
+                                owner.proc_idx,
+                                owner.local_idx,
+                            },
+                        );
+                    },
+                    else => {},
+                }
+            }
+        }
 
         const specialization = try self.ensureDirectProcSpec(
             specializationIdentityForProc(callee_proc),
@@ -4175,6 +4276,51 @@ fn lowerClosureCall(
         defer self.scratch_layout_idxs.shrinkRetainingCapacity(save_layouts);
         try self.appendArgLayoutsForSpan(call_user_args);
 
+        if (builtin.mode == .Debug) {
+            const debug_lir_args = self.lir_store.getExprSpan(call_user_args);
+            for (mir_args, debug_lir_args, 0..) |mir_arg, lir_arg, arg_i| {
+                const mir_layout = try self.runtimeValueLayoutFromMirExpr(mir_arg);
+                const lir_layout = self.lirExprResultLayout(lir_arg);
+                std.debug.print(
+                    "lowerClosureCall member_proc={d} arg[{d}] mir={d} tag={s} mono={d} {any} mir_layout={d} {s} lir_layout={d} {s} lir_expr={s}\n",
+                    .{
+                        @intFromEnum(member.proc),
+                        arg_i,
+                        @intFromEnum(mir_arg),
+                        @tagName(self.mir_store.getExpr(mir_arg)),
+                        @intFromEnum(self.mir_store.typeOf(mir_arg)),
+                        self.mir_store.monotype_store.getMonotype(self.mir_store.typeOf(mir_arg)),
+                        @intFromEnum(mir_layout),
+                        @tagName(self.layout_store.getLayout(mir_layout).tag),
+                        @intFromEnum(lir_layout),
+                        @tagName(self.layout_store.getLayout(lir_layout).tag),
+                        @tagName(self.lir_store.getExpr(lir_arg)),
+                    },
+                );
+                switch (self.mir_store.getExpr(mir_arg)) {
+                    .lookup => |lookup| {
+                        const owner = self.debugSymbolOwner(lookup);
+                        std.debug.print(
+                            "  lowerClosureCall mir lookup symbol={d} symbol_layout={?} binding_mode={?} owner={s} owner_proc={d} owner_local={d}\n",
+                            .{
+                                lookup.raw(),
+                                self.symbol_layouts.get(lookup.raw()),
+                                self.symbol_binding_modes.get(lookup.raw()),
+                                @tagName(owner.kind),
+                                owner.proc_idx,
+                                owner.local_idx,
+                            },
+                        );
+                    },
+                    .run_low_level => |ll| std.debug.print(
+                        "  lowerClosureCall mir lowlevel={s}\n",
+                        .{@tagName(ll.op)},
+                    ),
+                    else => {},
+                }
+            }
+        }
+
         if (!self.memberHasCaptures(member)) {
             const specialization = try self.ensureDirectProcSpec(
                 specializationIdentityForProc(member.proc),
@@ -4310,7 +4456,7 @@ fn lowerBlock(self: *Self, block_data: anytype, _: MIR.ExprId, region: Region) A
                     }
                     unreachable;
                 };
-                try self.symbol_layouts.put(cell_symbol.raw(), runtime_layout);
+                try self.putSymbolLayout(cell_symbol.raw(), runtime_layout);
                 try binding_infos.append(self.allocator, .{
                     .cell_symbol = cell_symbol,
                     .cell_layout = runtime_layout,
@@ -4324,7 +4470,7 @@ fn lowerBlock(self: *Self, block_data: anytype, _: MIR.ExprId, region: Region) A
                     unreachable;
                 };
                 const cell_layout = self.symbol_layouts.get(cell_symbol.raw()) orelse try self.runtimeValueLayoutFromMirExpr(binding.expr);
-                try self.symbol_layouts.put(cell_symbol.raw(), cell_layout);
+                try self.putSymbolLayout(cell_symbol.raw(), cell_layout);
                 try binding_infos.append(self.allocator, .{
                     .cell_symbol = cell_symbol,
                     .cell_layout = cell_layout,
@@ -4415,6 +4561,8 @@ fn bindingPatternSymbol(mir_store: *const MIR.Store, pattern_id: MIR.PatternId) 
 fn lowerBorrowScope(self: *Self, scope_data: anytype, _: MIR.ExprId, region: Region) Allocator.Error!LirExprId {
     const result_layout = try self.runtimeValueLayoutFromMirExpr(scope_data.body);
     const mir_bindings = self.mir_store.getBorrowBindings(scope_data.bindings);
+    try self.beginBindingScope();
+    defer self.endBindingScope();
 
     const save_len = self.scratch_lir_stmts.items.len;
     const save_rest_bindings = self.scratch_deferred_list_rest_bindings.items.len;
@@ -4901,6 +5049,7 @@ fn lowerLowLevel(self: *Self, ll: anytype, mir_expr_id: MIR.ExprId, region: Regi
         const lowered_arg = try self.lowerExpr(mir_arg);
         const arg_layout = try self.runtimeValueLayoutFromMirExpr(mir_arg);
         const ownership = arg_ownership[i];
+        const aliases_managed_ref = self.exprAliasesManagedRef(lowered_arg, arg_layout);
 
         const ensured_arg = switch (ownership) {
             .borrow => blk: {
@@ -4916,6 +5065,38 @@ fn lowerLowLevel(self: *Self, ll: anytype, mir_expr_id: MIR.ExprId, region: Regi
                 break :blk owned_arg;
             },
         };
+
+        if (builtin.mode == .Debug and ll.op == .list_append_unsafe) {
+            std.debug.print(
+                "lowerLowLevel list_append_unsafe arg[{d}] mir={d} mono={d} {any} layout={d} {s} ownership={s} aliases_managed_ref={} lowered={s} ensured={s}\n",
+                .{
+                    i,
+                    @intFromEnum(mir_arg),
+                    @intFromEnum(self.mir_store.typeOf(mir_arg)),
+                    self.mir_store.monotype_store.getMonotype(self.mir_store.typeOf(mir_arg)),
+                    @intFromEnum(arg_layout),
+                    @tagName(self.layout_store.getLayout(arg_layout).tag),
+                    @tagName(ownership),
+                    aliases_managed_ref,
+                    @tagName(self.lir_store.getExpr(lowered_arg)),
+                    @tagName(self.lir_store.getExpr(ensured_arg)),
+                },
+            );
+            switch (self.mir_store.getExpr(mir_arg)) {
+                .lookup => |lookup| std.debug.print(
+                    "  mir lookup symbol={d} symbol_layout={?} binding_mode={?}\n",
+                    .{ lookup.raw(), self.symbol_layouts.get(lookup.raw()), self.symbol_binding_modes.get(lookup.raw()) },
+                ),
+                else => {},
+            }
+            switch (self.lir_store.getExpr(ensured_arg)) {
+                .lookup => |lookup| std.debug.print(
+                    "  ensured lookup symbol={d} mode={?}\n",
+                    .{ lookup.symbol.raw(), self.symbol_binding_modes.get(lookup.symbol.raw()) },
+                ),
+                else => {},
+            }
+        }
 
         try self.scratch_lir_expr_ids.append(self.allocator, ensured_arg);
     }
@@ -5035,6 +5216,40 @@ fn lowerForLoop(self: *Self, f: anytype, mono_idx: Monotype.Idx, region: Region)
     };
 
     const elem_layout = try self.runtimeListElemLayoutFromMirExpr(f.list);
+    if (builtin.mode == .Debug) {
+        std.debug.print(
+            "lowerForLoop list_expr={d} tag={s} mono={d} {any} list_layout={d} {s} elem_layout={d} {s}\n",
+            .{
+                @intFromEnum(f.list),
+                @tagName(self.mir_store.getExpr(f.list)),
+                @intFromEnum(self.mir_store.typeOf(f.list)),
+                self.mir_store.monotype_store.getMonotype(self.mir_store.typeOf(f.list)),
+                @intFromEnum(list_layout),
+                @tagName(self.layout_store.getLayout(list_layout).tag),
+                @intFromEnum(elem_layout),
+                @tagName(self.layout_store.getLayout(elem_layout).tag),
+            },
+        );
+        switch (self.mir_store.getExpr(f.list)) {
+            .lookup => |lookup| {
+                const owner = self.debugSymbolOwner(lookup);
+                std.debug.print(
+                    "  lowerForLoop list lookup symbol={d} symbol_layout={?} binding_mode={?} owner={s} owner_proc={d} owner_local={d}\n",
+                    .{
+                        lookup.raw(),
+                        self.symbol_layouts.get(lookup.raw()),
+                        self.symbol_binding_modes.get(lookup.raw()),
+                        @tagName(owner.kind),
+                        owner.proc_idx,
+                        owner.local_idx,
+                    },
+                );
+            },
+            else => {},
+        }
+    }
+    try self.beginBindingScope();
+    defer self.endBindingScope();
     const save_rest_bindings = self.scratch_deferred_list_rest_bindings.items.len;
     defer self.scratch_deferred_list_rest_bindings.shrinkRetainingCapacity(save_rest_bindings);
     try self.registerBindingPatternSymbols(f.elem_pattern, elem_layout);
@@ -5165,7 +5380,7 @@ fn monotypeContainsFunctionValueInner(
 fn registerPatternSymbolLayout(self: *Self, sym: Symbol, mono_idx: Monotype.Idx, runtime_layout: layout.Idx) Allocator.Error!void {
     const sym_key: u64 = @bitCast(sym);
     const resolved_layout = try self.runtimeLayoutForBindingSymbol(sym, mono_idx, runtime_layout);
-    try self.symbol_layouts.put(sym_key, resolved_layout);
+    try self.putSymbolLayout(sym_key, resolved_layout);
 }
 
 fn runtimeTagPayloadArgLayout(
@@ -5262,6 +5477,20 @@ fn registerBindingPatternSymbols(
 ) Allocator.Error!void {
     const pat = self.mir_store.getPattern(mir_pat_id);
     const mono_idx = self.mir_store.patternTypeOf(mir_pat_id);
+    if (builtin.mode == .Debug) {
+        const mono = self.mir_store.monotype_store.getMonotype(mono_idx);
+        const runtime_tag = self.layout_store.getLayout(runtime_layout).tag;
+        switch (mono) {
+            .list => switch (runtime_tag) {
+                .list, .list_of_zst => {},
+                else => std.debug.panic(
+                    "MirToLir invariant violated: list-typed pattern {d} ({s}) received runtime layout {d} ({s})",
+                    .{ @intFromEnum(mir_pat_id), @tagName(pat), @intFromEnum(runtime_layout), @tagName(runtime_tag) },
+                ),
+            },
+            else => {},
+        }
+    }
 
     switch (pat) {
         .bind => |sym| try self.registerPatternSymbolLayout(sym, mono_idx, runtime_layout),
@@ -5389,8 +5618,8 @@ fn lowerWildcardBindingPattern(
     }
 
     const symbol = self.freshSymbol();
-    try self.symbol_layouts.put(symbol.raw(), runtime_layout);
-    try self.symbol_binding_modes.put(symbol.raw(), .owned);
+    try self.putSymbolLayout(symbol.raw(), runtime_layout);
+    try self.putSymbolBindingMode(symbol.raw(), .owned);
     return self.lir_store.addPattern(.{ .bind = .{
         .symbol = symbol,
         .layout_idx = runtime_layout,
@@ -5414,8 +5643,8 @@ fn lowerPatternInternal(
             const layout_idx = try self.runtimeLayoutForBindingSymbol(sym, mono_idx, runtime_layout);
             const reassignable = self.mir_store.isSymbolReassignable(sym);
             const sym_key: u64 = @bitCast(sym);
-            try self.symbol_layouts.put(sym_key, layout_idx);
-            try self.symbol_binding_modes.put(sym_key, ownership_mode);
+            try self.putSymbolLayout(sym_key, layout_idx);
+            try self.putSymbolBindingMode(sym_key, ownership_mode);
             break :blk self.lir_store.addPattern(.{ .bind = .{
                 .symbol = sym,
                 .layout_idx = layout_idx,
@@ -5639,7 +5868,7 @@ fn lowerPatternInternal(
             if (ld.rest_pattern.isNone() and !needs_owned_rest_discard) break :blk list_pattern;
 
             const synthetic_sym_key: u64 = @bitCast(deferred_rest_source_symbol);
-            try self.symbol_layouts.put(synthetic_sym_key, list_layout);
+            try self.putSymbolLayout(synthetic_sym_key, list_layout);
             break :blk try self.lir_store.addPattern(.{ .as_pattern = .{
                 .symbol = deferred_rest_source_symbol,
                 .layout_idx = list_layout,
@@ -5652,8 +5881,8 @@ fn lowerPatternInternal(
             const inner = try self.lowerPatternInternal(ap.pattern, runtime_layout, collect_rest_bindings, .borrowed, region);
             const reassignable = self.mir_store.isSymbolReassignable(ap.symbol);
             const sym_key: u64 = @bitCast(ap.symbol);
-            try self.symbol_layouts.put(sym_key, layout_idx);
-            try self.symbol_binding_modes.put(sym_key, ownership_mode);
+            try self.putSymbolLayout(sym_key, layout_idx);
+            try self.putSymbolBindingMode(sym_key, ownership_mode);
             break :blk self.lir_store.addPattern(.{ .as_pattern = .{
                 .symbol = ap.symbol,
                 .layout_idx = layout_idx,
@@ -5804,8 +6033,8 @@ fn rewriteTopLevelRestBinding(
     }
 
     const source = try self.freshBindPattern(runtime_layout, false, region);
-    try self.symbol_layouts.put(source.symbol.raw(), runtime_layout);
-    try self.symbol_binding_modes.put(source.symbol.raw(), ownership_mode);
+    try self.putSymbolLayout(source.symbol.raw(), runtime_layout);
+    try self.putSymbolBindingMode(source.symbol.raw(), ownership_mode);
     return .{
         .source_pattern = source.pattern,
         .destructure_pattern = lowered.pattern,
@@ -5827,8 +6056,8 @@ fn rewriteBorrowedBindingSource(
     }
 
     const source = try self.freshBindPattern(runtime_layout, false, region);
-    try self.symbol_layouts.put(source.symbol.raw(), runtime_layout);
-    try self.symbol_binding_modes.put(source.symbol.raw(), .borrowed);
+    try self.putSymbolLayout(source.symbol.raw(), runtime_layout);
+    try self.putSymbolBindingMode(source.symbol.raw(), .borrowed);
     return .{
         .source_pattern = source.pattern,
         .destructure_pattern = if (pat == .wildcard) LirPatternId.none else lowered.pattern,
@@ -5931,8 +6160,8 @@ fn rewriteProcEntryMutableBindings(
             if (!bind.reassignable) return pat_id;
 
             const source = try self.freshBindPattern(bind.layout_idx, false, region);
-            try self.symbol_layouts.put(source.symbol.raw(), bind.layout_idx);
-            try self.symbol_binding_modes.put(source.symbol.raw(), ownership_mode);
+            try self.putSymbolLayout(source.symbol.raw(), bind.layout_idx);
+            try self.putSymbolBindingMode(source.symbol.raw(), ownership_mode);
 
             const source_lookup = try self.lir_store.addExpr(.{ .lookup = .{
                 .symbol = source.symbol,
@@ -5951,8 +6180,8 @@ fn rewriteProcEntryMutableBindings(
 
             if (as_pat.reassignable) {
                 const source_symbol = self.freshSymbol();
-                try self.symbol_layouts.put(source_symbol.raw(), as_pat.layout_idx);
-                try self.symbol_binding_modes.put(source_symbol.raw(), ownership_mode);
+                try self.putSymbolLayout(source_symbol.raw(), as_pat.layout_idx);
+                try self.putSymbolBindingMode(source_symbol.raw(), ownership_mode);
 
                 const source_pattern = try self.lir_store.addPattern(.{ .as_pattern = .{
                     .symbol = source_symbol,
