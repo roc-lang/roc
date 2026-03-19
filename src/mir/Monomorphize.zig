@@ -1163,10 +1163,9 @@ pub const Pass = struct {
                     ModuleEnv.varFrom(decl.pattern),
                     decl.pattern,
                     packLocalPatternSourceKey(module_idx, decl.pattern),
-                )) |template_id| {
+                )) |_| {
                     try self.registerDeferredLocalCallable(result, module_idx, decl.pattern, decl.expr);
                     try self.scanExpr(result, module_idx, decl.expr);
-                    try self.materializeDemandedExprProcInst(result, module_idx, decl.expr, template_id);
                     if (self.getExprProcInstInContext(result, self.active_proc_inst_context, module_idx, decl.expr)) |proc_inst_id| {
                         try self.recordContextPatternProcInst(
                             result,
@@ -1193,10 +1192,9 @@ pub const Pass = struct {
                     ModuleEnv.varFrom(var_decl.pattern_idx),
                     var_decl.pattern_idx,
                     packLocalPatternSourceKey(module_idx, var_decl.pattern_idx),
-                )) |template_id| {
+                )) |_| {
                     try self.registerDeferredLocalCallable(result, module_idx, var_decl.pattern_idx, var_decl.expr);
                     try self.scanExpr(result, module_idx, var_decl.expr);
-                    try self.materializeDemandedExprProcInst(result, module_idx, var_decl.expr, template_id);
                     if (self.getExprProcInstInContext(result, self.active_proc_inst_context, module_idx, var_decl.expr)) |proc_inst_id| {
                         try self.recordContextPatternProcInst(
                             result,
@@ -1345,21 +1343,7 @@ pub const Pass = struct {
         expr_idx: CIR.Expr.Idx,
         template_id: ProcTemplateId,
     ) Allocator.Error!void {
-        const template = result.getProcTemplate(template_id);
-        const fn_monotype = blk: {
-            const expr_mono = try self.resolveExprMonotypeIfExactResolved(result, module_idx, expr_idx);
-            if (!expr_mono.isNone()) break :blk expr_mono;
-
-            if (self.all_module_envs[template.module_idx].types.needsInstantiation(template.type_root)) {
-                return;
-            }
-
-            break :blk try self.resolveTypeVarMonotypeIfMonomorphizableResolved(
-                result,
-                template.module_idx,
-                template.type_root,
-            );
-        };
+        const fn_monotype = try self.resolveExprMonotypeIfExactResolved(result, module_idx, expr_idx);
         if (fn_monotype.isNone()) return;
 
         const proc_inst_id = if (self.active_proc_inst_context.isNone())
@@ -1721,8 +1705,17 @@ pub const Pass = struct {
                 try self.scanValueExpr(result, module_idx, if_expr.final_else);
             },
             .e_call => |call_expr| {
-                try self.scanExpr(result, module_idx, call_expr.func);
                 try self.resolveDirectCallSite(result, module_idx, expr_idx, call_expr);
+                if (self.getCallSiteProcInstInContext(result, self.active_proc_inst_context, module_idx, expr_idx) == null and
+                    result.getCallSiteProcInsts(
+                        self.active_proc_inst_context,
+                        self.exprRootContext(self.active_proc_inst_context),
+                        module_idx,
+                        expr_idx,
+                    ) == null)
+                {
+                    try self.scanExpr(result, module_idx, call_expr.func);
+                }
                 try self.assignCallableArgProcInstsFromCallMonotype(result, module_idx, expr_idx, call_expr);
                 try self.scanExprSpan(result, module_idx, module_env.store.sliceExpr(call_expr.args));
                 if (self.active_bindings != null) {
@@ -4026,12 +4019,10 @@ pub const Pass = struct {
             break :blk null;
         } else null;
 
-        const proc_inst_id = if (existing_proc_inst_id) |proc_inst_id|
-            blk: {
-                try self.scanProcInst(result, proc_inst_id);
-                break :blk proc_inst_id;
-            }
-        else blk: {
+        const proc_inst_id = if (existing_proc_inst_id) |proc_inst_id| blk: {
+            try self.scanProcInst(result, proc_inst_id);
+            break :blk proc_inst_id;
+        } else blk: {
             if (desired_fn_monotype.isNone()) return;
             break :blk try self.ensureProcInst(result, template_id, desired_fn_monotype.idx, desired_fn_monotype.module_idx);
         };
