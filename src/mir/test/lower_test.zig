@@ -2251,6 +2251,62 @@ test "runExpr: block-carried arrow call materializes callable stmt proc inst" {
     try testing.expect(!proc_id.isNone());
 }
 
+test "runExpr: proc-backed closure captures do not synthesize unseeded function lookups" {
+    var env = try MirTestEnv.initExpr(
+        \\{
+        \\    append_one = |acc, x| List.append(acc, x)
+        \\    clone_via_fold = |xs| xs.fold(List.with_capacity(1), append_one)
+        \\    _first_len = clone_via_fold([1.I64, 2.I64]).len()
+        \\    clone_via_fold([[1.I64, 2.I64], [3.I64, 4.I64]]).len()
+        \\}
+    );
+    defer env.deinit();
+
+    const defs = env.module_env.store.sliceDefs(env.module_env.all_defs);
+    const main_def = env.module_env.store.getDef(defs[0]);
+    const all_module_envs = [_]*ModuleEnv{ @constCast(env.builtin_module.env), env.module_env };
+
+    var monomorphization = try Monomorphize.runExpr(
+        test_allocator,
+        @as([]const *ModuleEnv, all_module_envs[0..]),
+        &env.module_env.types,
+        1,
+        null,
+        main_def.expr,
+    );
+    defer monomorphization.deinit(test_allocator);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    var lower = try Lower.init(
+        test_allocator,
+        &mir_store,
+        &monomorphization,
+        @as([]const *ModuleEnv, all_module_envs[0..]),
+        &env.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    _ = try lower.lowerExpr(main_def.expr);
+
+    var ls_store = try LambdaSet.infer(test_allocator, &mir_store, @as([]const *ModuleEnv, all_module_envs[0..]));
+    defer ls_store.deinit(test_allocator);
+
+    var missing_count: usize = 0;
+    for (mir_store.exprs.items, 0..) |expr, expr_idx| {
+        if (expr != .lookup) continue;
+        const expr_id: MIR.ExprId = @enumFromInt(expr_idx);
+        if (mir_store.monotype_store.getMonotype(mir_store.typeOf(expr_id)) != .func) continue;
+        if (ls_store.getExprLambdaSet(expr_id) != null or ls_store.getSymbolLambdaSet(expr.lookup) != null) continue;
+        missing_count += 1;
+    }
+
+    try testing.expectEqual(@as(usize, 0), missing_count);
+}
+
 test "runExpr: repl-style multi-definition arrow call materializes callable stmt proc inst" {
     var env = try MirTestEnv.initExpr(
         \\{
