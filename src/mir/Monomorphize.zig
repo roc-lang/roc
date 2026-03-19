@@ -353,7 +353,9 @@ pub const Result = struct {
         module_idx: u32,
         pattern_idx: CIR.Pattern.Idx,
     ) ?ProcInstId {
-        return self.context_pattern_proc_insts.get(contextPatternKey(context_proc_inst, module_idx, pattern_idx));
+        const proc_inst_id = self.context_pattern_proc_insts.get(contextPatternKey(context_proc_inst, module_idx, pattern_idx)) orelse return null;
+        if (proc_inst_id.isNone()) return null;
+        return proc_inst_id;
     }
 
     pub fn getProcTemplate(self: *const Result, proc_template_id: ProcTemplateId) *const ProcTemplate {
@@ -971,10 +973,10 @@ pub const Pass = struct {
     ) Allocator.Error!void {
         const template = result.getProcTemplate(template_id);
         const fn_monotype = blk: {
-            const expr_mono = try self.resolveExprMonotypeIfMonomorphizableResolved(result, module_idx, expr_idx);
+            const expr_mono = try self.resolveExprMonotypeIfExactResolved(result, module_idx, expr_idx);
             if (!expr_mono.isNone()) break :blk expr_mono;
 
-            break :blk try self.resolveTypeVarMonotypeIfMonomorphizableResolved(
+            break :blk try self.resolveTypeVarMonotypeIfExactResolved(
                 result,
                 template.module_idx,
                 template.type_root,
@@ -1243,7 +1245,6 @@ pub const Pass = struct {
     ) Allocator.Error!void {
         const proc_inst = result.getProcInst(proc_inst_id).*;
         const template = result.getProcTemplate(proc_inst.template).*;
-        const module_env = self.all_module_envs[template.module_idx];
 
         if (!proc_inst.subst.isNone()) {
             const subst = result.getTypeSubst(proc_inst.subst);
@@ -1251,19 +1252,6 @@ pub const Pass = struct {
                 try bindings.put(entry.key, entry.monotype);
             }
         }
-
-        var ordered_entries = std.ArrayList(TypeSubstEntry).empty;
-        defer ordered_entries.deinit(self.allocator);
-        try self.bindTypeVarMonotypes(
-            result,
-            template.module_idx,
-            &module_env.types,
-            bindings,
-            &ordered_entries,
-            ModuleEnv.varFrom(template.cir_expr),
-            proc_inst.fn_monotype,
-            proc_inst.fn_monotype_module_idx,
-        );
 
         try self.seedProcBodyBindingsFromSignature(result, template.module_idx, template.cir_expr, proc_inst, bindings);
     }
@@ -1281,7 +1269,19 @@ pub const Pass = struct {
         var capture_bindings = std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype).init(self.allocator);
         defer capture_bindings.deinit();
 
-        const closure_proc_inst_id = result.getExprProcInst(self.active_proc_inst_context, module_idx, expr_idx);
+        const closure_proc_inst_id = blk: {
+            if (result.getExprProcInst(self.active_proc_inst_context, module_idx, expr_idx)) |proc_inst_id| {
+                break :blk proc_inst_id;
+            }
+            if (!self.active_proc_inst_context.isNone()) {
+                const active_proc_inst = result.getProcInst(self.active_proc_inst_context);
+                const active_template = result.getProcTemplate(active_proc_inst.template);
+                if (active_template.module_idx == module_idx and active_template.cir_expr == expr_idx) {
+                    break :blk self.active_proc_inst_context;
+                }
+            }
+            break :blk null;
+        };
         if (closure_proc_inst_id) |proc_inst_id| {
             try self.seedBindingsForProcInst(result, proc_inst_id, &capture_bindings);
             self.active_bindings = &capture_bindings;
@@ -2774,18 +2774,8 @@ pub const Pass = struct {
         const key = Result.contextPatternKey(context_proc_inst, module_idx, pattern_idx);
         const existing = result.context_pattern_proc_insts.get(key);
         if (existing) |existing_proc_inst_id| {
-            if (existing_proc_inst_id != proc_inst_id and std.debug.runtime_safety) {
-                std.debug.panic(
-                    "Monomorphize: conflicting proc insts for local callable pattern {d} in context {d} module {d}: {d} vs {d}",
-                    .{
-                        @intFromEnum(pattern_idx),
-                        @intFromEnum(context_proc_inst),
-                        module_idx,
-                        @intFromEnum(existing_proc_inst_id),
-                        @intFromEnum(proc_inst_id),
-                    },
-                );
-            }
+            if (existing_proc_inst_id == proc_inst_id or existing_proc_inst_id.isNone()) return;
+            try result.context_pattern_proc_insts.put(self.allocator, key, ProcInstId.none);
             return;
         }
         try result.context_pattern_proc_insts.put(self.allocator, key, proc_inst_id);
@@ -4443,6 +4433,7 @@ pub const Pass = struct {
             switch (module_env.store.getExpr(template.cir_expr)) {
                 .e_lambda => |lambda_expr| try self.scanValueExpr(result, template.module_idx, lambda_expr.body),
                 .e_closure => |closure_expr| {
+                    try self.scanClosureCaptureSources(result, template.module_idx, template.cir_expr, closure_expr);
                     const lambda_expr = module_env.store.getExpr(closure_expr.lambda_idx);
                     if (lambda_expr == .e_lambda) {
                         try self.scanValueExpr(result, template.module_idx, lambda_expr.e_lambda.body);
