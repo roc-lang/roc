@@ -1292,6 +1292,20 @@ pub const Pass = struct {
         }
     }
 
+    fn ensureCallableArgProcInstsScannedSlice(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        arg_exprs: []const CIR.Expr.Idx,
+    ) Allocator.Error!void {
+        for (arg_exprs) |arg_expr_idx| {
+            const proc_inst_id = result.getLookupExprProcInst(self.active_proc_inst_context, module_idx, arg_expr_idx) orelse
+                result.getExprProcInst(self.active_proc_inst_context, module_idx, arg_expr_idx) orelse
+                continue;
+            try self.scanProcInst(result, proc_inst_id);
+        }
+    }
+
     fn resolveDirectCallFnMonotype(
         self: *Pass,
         result: *Result,
@@ -1669,6 +1683,50 @@ pub const Pass = struct {
         try self.recordCurrentExprMonotype(result, module_idx, expr_idx, fn_mono.ret, proc_inst.fn_monotype_module_idx);
     }
 
+    fn assignCallableArgProcInstsFromDispatchProcInst(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        expr: CIR.Expr,
+        proc_inst_id: ProcInstId,
+    ) Allocator.Error!void {
+        const proc_inst = result.getProcInst(proc_inst_id);
+        const fn_mono = switch (result.monotype_store.getMonotype(proc_inst.fn_monotype)) {
+            .func => |func| func,
+            else => unreachable,
+        };
+
+        var actual_args = std.ArrayList(CIR.Expr.Idx).empty;
+        defer actual_args.deinit(self.allocator);
+        try self.appendDispatchActualArgs(module_idx, expr, &actual_args);
+
+        const param_monos = result.monotype_store.getIdxSpan(fn_mono.args);
+        if (actual_args.items.len != param_monos.len) {
+            if (std.debug.runtime_safety) {
+                std.debug.panic(
+                    "Monomorphize: dispatch proc-inst arg arity mismatch at expr {d} in module {d} (params={d}, args={d})",
+                    .{
+                        @intFromEnum(expr_idx),
+                        module_idx,
+                        param_monos.len,
+                        actual_args.items.len,
+                    },
+                );
+            }
+            unreachable;
+        }
+
+        try self.assignCallableArgProcInstsFromParams(
+            result,
+            module_idx,
+            actual_args.items,
+            param_monos,
+            proc_inst.fn_monotype_module_idx,
+        );
+        try self.ensureCallableArgProcInstsScannedSlice(result, module_idx, actual_args.items);
+    }
+
     fn recordCurrentExprMonotype(
         self: *Pass,
         result: *Result,
@@ -1862,6 +1920,8 @@ pub const Pass = struct {
             Result.contextExprKey(self.active_proc_inst_context, template.module_idx, template.cir_expr),
             proc_inst_id,
         );
+
+        try self.assignCallableArgProcInstsFromDispatchProcInst(result, module_idx, expr_idx, expr, proc_inst_id);
 
         if (!self.active_proc_inst_context.isNone()) {
             try self.bindCurrentDispatchFromProcInst(result, module_idx, expr_idx, expr, proc_inst_id);
