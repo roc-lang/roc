@@ -1469,6 +1469,7 @@ pub const Pass = struct {
             }
 
             for (param_vars, arg_exprs) |param_var, arg_expr_idx| {
+                if (isWeakNumericLiteralExpr(self.all_module_envs[module_idx].store.getExpr(arg_expr_idx))) continue;
                 const arg_mono = try self.resolveExprMonotypeIfExactResolved(result, module_idx, arg_expr_idx);
                 if (arg_mono.isNone()) continue;
                 var seen: std.AutoHashMapUnmanaged(types.Var, void) = .empty;
@@ -1524,7 +1525,7 @@ pub const Pass = struct {
 
         var seen: std.AutoHashMapUnmanaged(types.Var, void) = .empty;
         defer seen.deinit(self.allocator);
-        if (!try self.typeVarFullyBoundWithBindings(
+        if (!try self.typeVarMonomorphizableWithBindings(
             result,
             template.module_idx,
             template_types,
@@ -1681,6 +1682,7 @@ pub const Pass = struct {
             }
 
             for (param_vars, actual_args.items) |param_var, arg_expr_idx| {
+                if (isWeakNumericLiteralExpr(self.all_module_envs[module_idx].store.getExpr(arg_expr_idx))) continue;
                 const arg_mono = try self.resolveExprMonotypeIfExactResolved(result, module_idx, arg_expr_idx);
                 if (arg_mono.isNone()) continue;
                 try self.bindTypeVarMonotypes(
@@ -1712,7 +1714,7 @@ pub const Pass = struct {
 
         var seen: std.AutoHashMapUnmanaged(types.Var, void) = .empty;
         defer seen.deinit(self.allocator);
-        if (!try self.typeVarFullyBoundWithBindings(
+        if (!try self.typeVarMonomorphizableWithBindings(
             result,
             template.module_idx,
             template_types,
@@ -5234,7 +5236,29 @@ pub const Pass = struct {
         var_: types.Var,
     ) Allocator.Error!ResolvedMonotype {
         if (self.active_bindings != null) {
-            return self.resolveTypeVarMonotypeIfExactResolved(result, module_idx, var_);
+            const bindings = self.active_bindings.?;
+            var seen: std.AutoHashMapUnmanaged(types.Var, void) = .empty;
+            defer seen.deinit(self.allocator);
+
+            if (!try self.typeVarMonomorphizableWithBindings(
+                result,
+                module_idx,
+                &self.all_module_envs[module_idx].types,
+                var_,
+                bindings,
+                &seen,
+            )) {
+                return resolvedMonotype(.none, module_idx);
+            }
+
+            const mono = try self.resolveTypeVarMonotypeWithBindings(
+                result,
+                module_idx,
+                &self.all_module_envs[module_idx].types,
+                var_,
+                bindings,
+            );
+            return resolvedMonotype(mono, module_idx);
         }
 
         var seen: std.AutoHashMapUnmanaged(types.Var, void) = .empty;
@@ -5343,6 +5367,45 @@ pub const Pass = struct {
                 seen,
             ),
             .structure => |flat_type| self.flatTypeFullyBoundWithBindings(
+                result,
+                module_idx,
+                store_types,
+                flat_type,
+                bindings,
+                seen,
+            ),
+            .err => true,
+        };
+    }
+
+    fn typeVarMonomorphizableWithBindings(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        store_types: *const types.Store,
+        var_: types.Var,
+        bindings: *const std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
+        seen: *std.AutoHashMapUnmanaged(types.Var, void),
+    ) Allocator.Error!bool {
+        if (try lookupBindingMonotype(self, result, module_idx, store_types, bindings, var_)) |_| return true;
+
+        const resolved = store_types.resolveVar(var_);
+        if (seen.contains(resolved.var_)) return true;
+        try seen.put(self.allocator, resolved.var_, {});
+        defer _ = seen.remove(resolved.var_);
+
+        return switch (resolved.desc.content) {
+            .flex => |flex| hasNumeralConstraint(store_types, flex.constraints),
+            .rigid => |rigid| hasNumeralConstraint(store_types, rigid.constraints),
+            .alias => |alias| self.typeVarMonomorphizableWithBindings(
+                result,
+                module_idx,
+                store_types,
+                store_types.getAliasBackingVar(alias),
+                bindings,
+                seen,
+            ),
+            .structure => |flat_type| self.flatTypeMonomorphizableWithBindings(
                 result,
                 module_idx,
                 store_types,
@@ -5587,8 +5650,7 @@ pub const Pass = struct {
                             .empty_record => break :blk true,
                             else => break :blk false,
                         },
-                        .flex => |flex| break :blk hasNumeralConstraint(store_types, flex.constraints),
-                        .rigid => |rigid| break :blk hasNumeralConstraint(store_types, rigid.constraints),
+                        .flex, .rigid => break :blk true,
                         else => break :blk try self.typeVarMonomorphizableWithoutBindings(result, module_idx, store_types, current_row.ext, seen),
                     }
                 }
@@ -5622,9 +5684,129 @@ pub const Pass = struct {
 
                 const ext_resolved = store_types.resolveVar(tag_union.ext);
                 switch (ext_resolved.desc.content) {
-                    .flex => |flex| break :blk hasNumeralConstraint(store_types, flex.constraints),
-                    .rigid => |rigid| break :blk hasNumeralConstraint(store_types, rigid.constraints),
+                    .flex, .rigid => break :blk true,
                     else => break :blk try self.typeVarMonomorphizableWithoutBindings(result, module_idx, store_types, tag_union.ext, seen),
+                }
+            },
+            .empty_record, .empty_tag_union => true,
+        };
+    }
+
+    fn flatTypeMonomorphizableWithBindings(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        store_types: *const types.Store,
+        flat_type: types.FlatType,
+        bindings: *const std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
+        seen: *std.AutoHashMapUnmanaged(types.Var, void),
+    ) Allocator.Error!bool {
+        return switch (flat_type) {
+            .fn_pure, .fn_effectful, .fn_unbound => |func| blk: {
+                for (store_types.sliceVars(func.args)) |arg_var| {
+                    if (!try self.typeVarMonomorphizableWithBindings(result, module_idx, store_types, arg_var, bindings, seen)) {
+                        break :blk false;
+                    }
+                }
+                break :blk try self.typeVarMonomorphizableWithBindings(result, module_idx, store_types, func.ret, bindings, seen);
+            },
+            .nominal_type => |nominal| blk: {
+                for (store_types.sliceNominalArgs(nominal)) |arg_var| {
+                    if (!try self.typeVarMonomorphizableWithBindings(result, module_idx, store_types, arg_var, bindings, seen)) {
+                        break :blk false;
+                    }
+                }
+                break :blk true;
+            },
+            .record => |record| blk: {
+                var current_row = record;
+                while (true) {
+                    const fields_slice = store_types.getRecordFieldsSlice(current_row.fields);
+                    for (fields_slice.items(.var_)) |field_var| {
+                        if (!try self.typeVarMonomorphizableWithBindings(result, module_idx, store_types, field_var, bindings, seen)) {
+                            break :blk false;
+                        }
+                    }
+
+                    const ext_resolved = store_types.resolveVar(current_row.ext);
+                    switch (ext_resolved.desc.content) {
+                        .alias => |alias| {
+                            const backing = store_types.getAliasBackingVar(alias);
+                            const backing_resolved = store_types.resolveVar(backing);
+                            if (backing_resolved.desc.content == .structure) {
+                                switch (backing_resolved.desc.content.structure) {
+                                    .record => |next_row| {
+                                        current_row = next_row;
+                                        continue;
+                                    },
+                                    .record_unbound => |fields_range| {
+                                        const ext_fields = store_types.getRecordFieldsSlice(fields_range);
+                                        for (ext_fields.items(.var_)) |field_var| {
+                                            if (!try self.typeVarMonomorphizableWithBindings(result, module_idx, store_types, field_var, bindings, seen)) {
+                                                break :blk false;
+                                            }
+                                        }
+                                        break :blk true;
+                                    },
+                                    .empty_record => break :blk true,
+                                    else => break :blk try self.typeVarMonomorphizableWithBindings(result, module_idx, store_types, backing, bindings, seen),
+                                }
+                            }
+                            break :blk try self.typeVarMonomorphizableWithBindings(result, module_idx, store_types, backing, bindings, seen);
+                        },
+                        .structure => |ext_flat| switch (ext_flat) {
+                            .record => |next_row| {
+                                current_row = next_row;
+                                continue;
+                            },
+                            .record_unbound => |fields_range| {
+                                const ext_fields = store_types.getRecordFieldsSlice(fields_range);
+                                for (ext_fields.items(.var_)) |field_var| {
+                                    if (!try self.typeVarMonomorphizableWithBindings(result, module_idx, store_types, field_var, bindings, seen)) {
+                                        break :blk false;
+                                    }
+                                }
+                                break :blk true;
+                            },
+                            .empty_record => break :blk true,
+                            else => break :blk false,
+                        },
+                        .flex, .rigid => break :blk true,
+                        else => break :blk try self.typeVarMonomorphizableWithBindings(result, module_idx, store_types, current_row.ext, bindings, seen),
+                    }
+                }
+            },
+            .record_unbound => |fields_range| blk: {
+                const fields_slice = store_types.getRecordFieldsSlice(fields_range);
+                for (fields_slice.items(.var_)) |field_var| {
+                    if (!try self.typeVarMonomorphizableWithBindings(result, module_idx, store_types, field_var, bindings, seen)) {
+                        break :blk false;
+                    }
+                }
+                break :blk true;
+            },
+            .tuple => |tuple| blk: {
+                for (store_types.sliceVars(tuple.elems)) |elem_var| {
+                    if (!try self.typeVarMonomorphizableWithBindings(result, module_idx, store_types, elem_var, bindings, seen)) {
+                        break :blk false;
+                    }
+                }
+                break :blk true;
+            },
+            .tag_union => |tag_union| blk: {
+                const tags = store_types.getTagsSlice(tag_union.tags);
+                for (tags.items(.args)) |args_range| {
+                    for (store_types.sliceVars(args_range)) |payload_var| {
+                        if (!try self.typeVarMonomorphizableWithBindings(result, module_idx, store_types, payload_var, bindings, seen)) {
+                            break :blk false;
+                        }
+                    }
+                }
+
+                const ext_resolved = store_types.resolveVar(tag_union.ext);
+                switch (ext_resolved.desc.content) {
+                    .flex, .rigid => break :blk true,
+                    else => break :blk try self.typeVarMonomorphizableWithBindings(result, module_idx, store_types, tag_union.ext, bindings, seen),
                 }
             },
             .empty_record, .empty_tag_union => true,
@@ -5946,6 +6128,13 @@ fn callableKind(expr: CIR.Expr) ?ProcTemplateKind {
         .e_closure => .closure,
         .e_hosted_lambda => .hosted_lambda,
         else => null,
+    };
+}
+
+fn isWeakNumericLiteralExpr(expr: CIR.Expr) bool {
+    return switch (expr) {
+        .e_num => true,
+        else => false,
     };
 }
 
