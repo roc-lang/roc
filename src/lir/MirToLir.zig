@@ -1090,6 +1090,9 @@ fn runtimeValueLayoutFromMirExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator
 
     switch (expr) {
         .call => |call_data| {
+            if (!(try self.monotypeContainsFunctionValue(mono_idx))) {
+                return self.layoutFromMonotype(mono_idx);
+            }
             const func_expr = self.mir_store.getExpr(call_data.func);
             if (func_expr == .lookup) {
                 if (self.lambda_set_store.getSymbolSourceExpr(func_expr.lookup)) |source_expr_id| {
@@ -1403,7 +1406,6 @@ fn ensureDirectProcSpec(
         );
     }
     const specialization_ret_layout = inferred_ret_layout orelse unreachable;
-
     const refreshed_key_before_lower = try self.specializationKeyBytes(callee_key, param_layouts, force_pass_by_ptr);
     if (self.direct_proc_specs.getPtr(refreshed_key_before_lower)) |entry| {
         entry.ret_layout = specialization_ret_layout;
@@ -1630,7 +1632,7 @@ fn runtimeLayoutForProcBodyWithParamLayouts(
     param_layouts: []const layout.Idx,
 ) Allocator.Error!?layout.Idx {
     const proc = self.mir_store.getProc(callee_proc);
-    if (proc.hosted != null) {
+    if (proc.hosted != null or !(try self.monotypeContainsFunctionValue(proc.ret_monotype))) {
         return try self.layoutFromMonotype(proc.ret_monotype);
     }
     const params = self.mir_store.getPatternSpan(proc.params);
@@ -3365,7 +3367,6 @@ fn lowerProcWithParamLayouts(
     var proc_rc_pass = try RcInsert.RcInsertPass.init(self.allocator, self.lir_store, self.layout_store);
     defer proc_rc_pass.deinit();
     lir_body = try proc_rc_pass.insertRcOpsForProcBody(lir_body, lir_params, ret_layout);
-
     const arg_layouts = try self.lir_store.addLayoutIdxSpan(param_layouts);
     const body_stmt = try self.retStmtForExpr(lir_body);
     return .{
@@ -4975,7 +4976,7 @@ fn runtimeLayoutForBindingSymbol(
     const mono = self.mir_store.monotype_store.getMonotype(mono_idx);
 
     if (mono != .func and !(try self.monotypeContainsFunctionValue(mono_idx))) {
-        return self.layoutFromMonotype(mono_idx);
+        return existing_layout orelse fallback_layout;
     }
 
     var layout_idx = existing_layout orelse fallback_layout;

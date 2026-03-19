@@ -145,6 +145,20 @@ pub const PatternSpan = extern struct {
     }
 };
 
+/// Span of ProcId values stored in extra_data.
+pub const ProcSpan = extern struct {
+    start: u32,
+    len: u16,
+
+    pub fn empty() ProcSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+
+    pub fn isEmpty(self: ProcSpan) bool {
+        return self.len == 0;
+    }
+};
+
 /// Span of Stmt values stored in stmts array.
 pub const StmtSpan = extern struct {
     start: u32,
@@ -597,6 +611,9 @@ pub const Store = struct {
     /// Maps a MIR proc to its closure member.
     proc_closure_members: std.AutoHashMapUnmanaged(u32, ClosureMemberId),
 
+    /// Exact proc-backed callable members known for lowered MIR symbols.
+    symbol_seed_proc_sets: std.AutoHashMapUnmanaged(u64, ProcSpan),
+
     /// String literals copied from CIR during lowering.
     /// MIR owns its own string data so downstream passes (LIR, codegen)
     /// never need to reach back into CIR module envs.
@@ -621,6 +638,7 @@ pub const Store = struct {
             .closure_members = .empty,
             .expr_closure_members = .empty,
             .proc_closure_members = .empty,
+            .symbol_seed_proc_sets = .empty,
             .value_defs = .empty,
             .symbol_reassignable = .empty,
             .strings = .{},
@@ -645,6 +663,7 @@ pub const Store = struct {
         self.closure_members.deinit(allocator);
         self.expr_closure_members.deinit(allocator);
         self.proc_closure_members.deinit(allocator);
+        self.symbol_seed_proc_sets.deinit(allocator);
         self.value_defs.deinit(allocator);
         self.symbol_reassignable.deinit(allocator);
         self.strings.deinit(allocator);
@@ -733,6 +752,23 @@ pub const Store = struct {
 
     /// Retrieve PatternIds from a PatternSpan.
     pub fn getPatternSpan(self: *const Store, span: PatternSpan) []const PatternId {
+        if (span.len == 0) return &.{};
+        const raw = self.extra_data.items[span.start..][0..span.len];
+        return @ptrCast(raw);
+    }
+
+    /// Store ProcIds in extra_data and return a ProcSpan.
+    pub fn addProcSpan(self: *Store, allocator: Allocator, ids: []const ProcId) !ProcSpan {
+        if (ids.len == 0) return ProcSpan.empty();
+        const start: u32 = @intCast(self.extra_data.items.len);
+        for (ids) |id| {
+            try self.extra_data.append(allocator, @intFromEnum(id));
+        }
+        return .{ .start = start, .len = @intCast(ids.len) };
+    }
+
+    /// Retrieve ProcIds from a ProcSpan.
+    pub fn getProcSpan(self: *const Store, span: ProcSpan) []const ProcId {
         if (span.len == 0) return &.{};
         const raw = self.extra_data.items[span.start..][0..span.len];
         return @ptrCast(raw);
@@ -876,6 +912,38 @@ pub const Store = struct {
     /// Look up the closure member for a closure-valued expression, if any.
     pub fn getExprClosureMember(self: *const Store, expr_id: ExprId) ?ClosureMemberId {
         return self.expr_closure_members.get(@intFromEnum(expr_id));
+    }
+
+    pub fn registerSymbolSeedProcSet(self: *Store, allocator: Allocator, symbol: Symbol, proc_ids: []const ProcId) !void {
+        const key = symbol.raw();
+        const gop = try self.symbol_seed_proc_sets.getOrPut(allocator, key);
+        if (!gop.found_existing) {
+            const span = try self.addProcSpan(allocator, proc_ids);
+            gop.value_ptr.* = span;
+            return;
+        }
+
+        const existing = self.getProcSpan(gop.value_ptr.*);
+        if (existing.len == proc_ids.len) {
+            for (existing, proc_ids) |lhs, rhs| {
+                if (lhs != rhs) break;
+            } else {
+                return;
+            }
+        }
+
+        if (std.debug.runtime_safety) {
+            std.debug.panic(
+                "MIR conflicting seed proc set for symbol key {d}",
+                .{ key },
+            );
+        }
+        unreachable;
+    }
+
+    pub fn getSymbolSeedProcSet(self: *const Store, symbol: Symbol) ?[]const ProcId {
+        const span = self.symbol_seed_proc_sets.get(symbol.raw()) orelse return null;
+        return self.getProcSpan(span);
     }
 
     /// Register a value definition.

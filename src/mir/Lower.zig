@@ -302,6 +302,25 @@ fn getOwnedIdentText(env: *const ModuleEnv, ident: Ident.Idx) []const u8 {
     return env.getIdent(ident);
 }
 
+fn debugMonotypeShape(store: *const Monotype.Store, mono_idx: Monotype.Idx) []const u8 {
+    return switch (store.getMonotype(mono_idx)) {
+        .prim => |prim| @tagName(prim),
+        .func => "func",
+        .record => "record",
+        .tuple => "tuple",
+        .tag_union => "tag_union",
+        .list => "list",
+        .box => "box",
+        .unit => "unit",
+        .recursive_placeholder => "recursive_placeholder",
+    };
+}
+
+fn patternScopeForProcInst(proc_inst_id: Monomorphize.ProcInstId) u64 {
+    if (proc_inst_id.isNone()) return 0;
+    return (@as(u64, 1) << 63) | (@as(u64, @intFromEnum(proc_inst_id)) + 1);
+}
+
 fn identTextForCompare(self: *const Self, ident: Ident.Idx) ?[]const u8 {
     if (moduleOwnsIdent(self.all_module_envs[self.current_module_idx], ident)) {
         return getOwnedIdentText(self.all_module_envs[self.current_module_idx], ident);
@@ -2991,6 +3010,87 @@ fn patternBoundSymbol(self: *Self, pattern_id: MIR.PatternId) ?MIR.Symbol {
     };
 }
 
+fn resolveProcIdFromCallableExpr(self: *Self, expr_id: MIR.ExprId) ?MIR.ProcId {
+    return switch (self.store.getExpr(expr_id)) {
+        .proc_ref => |proc_id| proc_id,
+        .closure_make => |closure| closure.proc,
+        .block => |block| self.resolveProcIdFromCallableExpr(block.final_expr),
+        .dbg_expr => |dbg_expr| self.resolveProcIdFromCallableExpr(dbg_expr.expr),
+        .expect => |expect| self.resolveProcIdFromCallableExpr(expect.body),
+        .return_expr => |ret| self.resolveProcIdFromCallableExpr(ret.expr),
+        else => null,
+    };
+}
+
+fn seedCallableParamSymbols(
+    self: *Self,
+    original_patterns: []const CIR.Pattern.Idx,
+    lowered_params: MIR.PatternSpan,
+) Allocator.Error!void {
+    if (self.current_proc_inst_context.isNone()) return;
+
+    const lowered_param_ids = self.store.getPatternSpan(lowered_params);
+    if (builtin.mode == .Debug and lowered_param_ids.len != original_patterns.len) {
+        std.debug.panic(
+            "MIR Lower invariant: callable param seed arity mismatch (orig={d}, lowered={d})",
+            .{ original_patterns.len, lowered_param_ids.len },
+        );
+    }
+
+    for (original_patterns, lowered_param_ids) |original_pattern_idx, lowered_pattern_id| {
+        const proc_inst_ids = self.monomorphization.getContextPatternProcInsts(
+            self.current_proc_inst_context,
+            self.current_module_idx,
+            original_pattern_idx,
+        ) orelse continue;
+        const symbol = self.patternBoundSymbol(lowered_pattern_id) orelse continue;
+
+        var proc_ids = std.ArrayList(MIR.ProcId).empty;
+        defer proc_ids.deinit(self.allocator);
+        for (proc_inst_ids) |proc_inst_id| {
+            const proc_expr = try self.lowerProcInst(proc_inst_id);
+            const proc_id = self.resolveProcIdFromCallableExpr(proc_expr) orelse {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "MIR Lower invariant: callable param pattern {d} lowered proc inst {d} to non-callable expr {}",
+                        .{
+                            @intFromEnum(original_pattern_idx),
+                            @intFromEnum(proc_inst_id),
+                            @intFromEnum(proc_expr),
+                        },
+                    );
+                }
+                unreachable;
+            };
+
+            var seen = false;
+            for (proc_ids.items) |existing_proc_id| {
+                if (existing_proc_id == proc_id) {
+                    seen = true;
+                    break;
+                }
+            }
+            if (!seen) {
+                try proc_ids.append(self.allocator, proc_id);
+            }
+        }
+
+        if (proc_ids.items.len != 0) {
+            std.mem.sortUnstable(
+                MIR.ProcId,
+                proc_ids.items,
+                {},
+                struct {
+                    fn lessThan(_: void, lhs: MIR.ProcId, rhs: MIR.ProcId) bool {
+                        return @intFromEnum(lhs) < @intFromEnum(rhs);
+                    }
+                }.lessThan,
+            );
+            try self.store.registerSymbolSeedProcSet(self.allocator, symbol, proc_ids.items);
+        }
+    }
+}
+
 fn collectPatternBindings(
     self: *Self,
     module_env: *const ModuleEnv,
@@ -3082,16 +3182,6 @@ fn patternToSymbol(self: *Self, pattern_idx: CIR.Pattern.Idx) Allocator.Error!MI
 
     if (self.pattern_symbols.get(key)) |existing| {
         return existing;
-    }
-
-    // In a specialized scope, captures can reference symbols from an outer
-    // unscoped block. Reuse the existing unscoped mapping when available.
-    if (self.current_pattern_scope != 0) {
-        const unscoped_key: u128 = @as(u128, base_key);
-        if (self.pattern_symbols.get(unscoped_key)) |outer| {
-            try self.pattern_symbols.put(key, outer);
-            return outer;
-        }
     }
 
     const module_env = self.all_module_envs[self.current_module_idx];
@@ -3634,10 +3724,14 @@ fn lowerLambdaSpecialized(
     }
 
     const saved_pattern_scope = self.current_pattern_scope;
-    self.current_pattern_scope = @intFromEnum(proc_id);
+    self.current_pattern_scope = if (proc_inst_id) |inst_id|
+        patternScopeForProcInst(inst_id)
+    else
+        @intFromEnum(proc_id);
     defer self.current_pattern_scope = saved_pattern_scope;
 
     const params = try self.lowerPatternSpan(module_env, lambda.args);
+    try self.seedCallableParamSymbols(module_env.store.slicePatterns(lambda.args), params);
     const body = try self.lowerExpr(lambda.body);
 
     self.store.getProcPtr(proc_id).* = .{
@@ -3718,6 +3812,15 @@ fn lowerClosureSpecialized(
     const orig_monotype = self.store.monotype_store.getMonotype(monotype);
     const orig_func = orig_monotype.func;
     var captures_tuple_monotype = Monotype.Idx.none;
+    const closure_proc_inst_id = proc_inst_id orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic(
+                "MIR Lower invariant: captured closure expr {d} in module {d} is missing a proc inst",
+                .{ @intFromEnum(expr_idx), self.current_module_idx },
+            );
+        }
+        unreachable;
+    };
     const proc_id = try self.store.addProc(self.allocator, .{
         .fn_monotype = monotype,
         .params = MIR.PatternSpan.empty(),
@@ -3742,17 +3845,33 @@ fn lowerClosureSpecialized(
         for (cir_capture_indices) |cap_idx| {
             const cap = module_env.store.getCapture(cap_idx);
             const outer_symbol = try self.patternToSymbol(cap.pattern_idx);
-            const cap_type_var = ModuleEnv.varFrom(cap.pattern_idx);
-            const cap_monotype = try self.monotypeFromTypeVarWithBindings(
+            const resolved_cap_monotype = self.monomorphization.getClosureCaptureMonotype(
+                closure_proc_inst_id,
                 self.current_module_idx,
-                self.types_store,
-                cap_type_var,
-                &self.type_var_seen,
-                &self.nominal_cycle_breakers,
+                expr_idx,
+                cap.pattern_idx,
+            ) orelse {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "MIR Lower invariant: missing capture monotype for closure expr {d} pattern {d} proc_inst={d}",
+                        .{
+                            @intFromEnum(expr_idx),
+                            @intFromEnum(cap.pattern_idx),
+                            @intFromEnum(closure_proc_inst_id),
+                        },
+                    );
+                }
+                unreachable;
+            };
+            const cap_monotype = try self.importMonotypeFromStore(
+                &self.monomorphization.monotype_store,
+                resolved_cap_monotype.idx,
+                resolved_cap_monotype.module_idx,
+                self.current_module_idx,
             );
             try self.mono_scratches.idxs.append(cap_monotype);
             const capture_expr = if (self.monomorphization.getClosureCaptureProcInst(
-                self.current_proc_inst_context,
+                closure_proc_inst_id,
                 self.current_module_idx,
                 expr_idx,
                 cap.pattern_idx,
@@ -3787,7 +3906,10 @@ fn lowerClosureSpecialized(
 
     // --- Step 4: Enter a new scope for the lifted function body ---
     const saved_pattern_scope = self.current_pattern_scope;
-    self.current_pattern_scope = @intFromEnum(proc_id);
+    self.current_pattern_scope = if (proc_inst_id) |inst_id|
+        patternScopeForProcInst(inst_id)
+    else
+        @intFromEnum(proc_id);
     defer self.current_pattern_scope = saved_pattern_scope;
 
     var self_local_symbol: ?MIR.Symbol = null;
@@ -3826,6 +3948,7 @@ fn lowerClosureSpecialized(
 
     // --- Step 6: Lower the lambda params and body in the new scope ---
     const params = try self.lowerPatternSpan(module_env, lambda.args);
+    try self.seedCallableParamSymbols(module_env.store.slicePatterns(lambda.args), params);
     const body = try self.lowerExpr(lambda.body);
 
     // --- Step 7: Build destructuring preamble ---
@@ -3979,10 +4102,14 @@ fn lowerHostedLambdaSpecialized(
     }
 
     const saved_pattern_scope = self.current_pattern_scope;
-    self.current_pattern_scope = @intFromEnum(proc_id);
+    self.current_pattern_scope = if (proc_inst_id) |inst_id|
+        patternScopeForProcInst(inst_id)
+    else
+        @intFromEnum(proc_id);
     defer self.current_pattern_scope = saved_pattern_scope;
 
     const params = try self.lowerPatternSpan(module_env, hosted.args);
+    try self.seedCallableParamSymbols(module_env.store.slicePatterns(hosted.args), params);
     const body = try self.lowerExpr(hosted.body);
 
     self.store.getProcPtr(proc_id).* = .{
@@ -4126,6 +4253,7 @@ fn lowerProcInst(self: *Self, proc_inst_id: Monomorphize.ProcInstId) Allocator.E
     const saved_module_env = self.mono_scratches.module_env;
     const saved_mono_module_idx = self.mono_scratches.module_idx;
     const saved_proc_inst_context = self.current_proc_inst_context;
+    const saved_pattern_scope = self.current_pattern_scope;
     if (switching_module) {
         self.current_module_idx = module_idx;
         self.types_store = &module_env.types;
@@ -4137,6 +4265,7 @@ fn lowerProcInst(self: *Self, proc_inst_id: Monomorphize.ProcInstId) Allocator.E
     self.type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
     self.nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
     self.current_proc_inst_context = proc_inst_id;
+    self.current_pattern_scope = patternScopeForProcInst(proc_inst.defining_context_proc_inst);
 
     try self.seedTypeScopeBindingsInStore(
         self.current_module_idx,
@@ -4171,6 +4300,7 @@ fn lowerProcInst(self: *Self, proc_inst_id: Monomorphize.ProcInstId) Allocator.E
         self.nominal_cycle_breakers.deinit();
         self.nominal_cycle_breakers = saved_nominal_cycle_breakers;
         self.current_proc_inst_context = saved_proc_inst_context;
+        self.current_pattern_scope = saved_pattern_scope;
         if (switching_module) {
             self.current_module_idx = saved_module_idx;
             self.types_store = saved_types_store;
@@ -5683,7 +5813,11 @@ fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.E
     const saved_ident_store = self.mono_scratches.ident_store;
     const saved_module_env = self.mono_scratches.module_env;
     const saved_mono_module_idx = self.mono_scratches.module_idx;
-    self.current_pattern_scope = symbol_key;
+    // Lower external defs in canonical module scope. A def-lowering context is
+    // not a lexical scope, and reusing current_pattern_scope here causes local
+    // sibling bindings to be resolved to synthetic per-def symbols instead of
+    // their canonical block-local/module-local identities.
+    self.current_pattern_scope = 0;
     if (switching_module) {
         self.current_module_idx = symbol_module_idx;
         self.types_store = &self.all_module_envs[symbol_module_idx].types;

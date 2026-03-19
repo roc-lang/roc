@@ -4718,17 +4718,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 return loc;
             }
 
-            if (builtin.mode == .Debug) {
-                std.debug.print(
-                    "generateLookup missing symbol={d} layout={d} proc={d}\n",
-                    .{
-                        symbol.raw(),
-                        @intFromEnum(layout_idx),
-                        if (self.current_proc_name) |sym| @as(u64, @bitCast(sym)) else 0,
-                    },
-                );
-            }
-
             unreachable;
         }
 
@@ -12848,120 +12837,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// callee-saved registers are used, then prepends prologue and adjusts relocations.
         fn compileProcSpec(self: *Self, proc: LirProcSpec) Allocator.Error!void {
             const key: u64 = @bitCast(proc.name);
-            if (false and builtin.mode == .Debug and key == 18446744069414584320) {
-                const Debug = struct {
-                    fn printExpr(store: *const LirExprStore, expr_id: LirExprId, indent: usize) void {
-                        for (0..indent) |_| std.debug.print("  ", .{});
-                        const expr = store.getExpr(expr_id);
-                        switch (expr) {
-                            .lookup => |lookup| std.debug.print("lookup sym={d} layout={d}\n", .{ lookup.symbol.raw(), @intFromEnum(lookup.layout_idx) }),
-                            .struct_access => |sa| {
-                                std.debug.print("struct_access field={d} layout={d}\n", .{ sa.field_idx, @intFromEnum(sa.field_layout) });
-                                printExpr(store, sa.struct_expr, indent + 1);
-                            },
-                            .struct_ => |s| {
-                                std.debug.print("struct layout={d} fields={d}\n", .{ @intFromEnum(s.struct_layout), store.getExprSpan(s.fields).len });
-                                for (store.getExprSpan(s.fields)) |field| {
-                                    printExpr(store, field, indent + 1);
-                                }
-                            },
-                            .proc_call => |call| {
-                                std.debug.print("proc_call proc={d} ret={d} argc={d}\n", .{ @intFromEnum(call.proc), @intFromEnum(call.ret_layout), store.getExprSpan(call.args).len });
-                                for (store.getExprSpan(call.args)) |arg| {
-                                    printExpr(store, arg, indent + 1);
-                                }
-                            },
-                            .match_expr => |m| {
-                                std.debug.print("match result_layout={d} branches={d}\n", .{ @intFromEnum(m.result_layout), m.branches.len });
-                                for (0..indent + 1) |_| std.debug.print("  ", .{});
-                                std.debug.print("value\n", .{});
-                                printExpr(store, m.value, indent + 2);
-                                for (store.getMatchBranches(m.branches), 0..) |branch, i| {
-                                    for (0..indent + 1) |_| std.debug.print("  ", .{});
-                                    std.debug.print("branch[{d}] guard={d}\n", .{ i, @intFromEnum(branch.guard) });
-                                    printExpr(store, branch.body, indent + 2);
-                                }
-                            },
-                            .block => |block| {
-                                std.debug.print("block result_layout={d} stmts={d}\n", .{ @intFromEnum(block.result_layout), block.stmts.len });
-                                for (store.getStmts(block.stmts)) |stmt| {
-                                    for (0..indent + 1) |_| std.debug.print("  ", .{});
-                                    switch (stmt) {
-                                        .decl => |binding| {
-                                            std.debug.print("decl pat={d}\n", .{@intFromEnum(binding.pattern)});
-                                            printExpr(store, binding.expr, indent + 2);
-                                        },
-                                        .mutate => |binding| {
-                                            std.debug.print("mutate pat={d}\n", .{@intFromEnum(binding.pattern)});
-                                            printExpr(store, binding.expr, indent + 2);
-                                        },
-                                        .cell_init => |binding| {
-                                            std.debug.print("cell_init cell={d} layout={d}\n", .{ binding.cell.raw(), @intFromEnum(binding.layout_idx) });
-                                            printExpr(store, binding.expr, indent + 2);
-                                        },
-                                        .cell_store => |binding| {
-                                            std.debug.print("cell_store cell={d} layout={d}\n", .{ binding.cell.raw(), @intFromEnum(binding.layout_idx) });
-                                            printExpr(store, binding.expr, indent + 2);
-                                        },
-                                        .cell_drop => |binding| {
-                                            std.debug.print("cell_drop cell={d} layout={d}\n", .{ binding.cell.raw(), @intFromEnum(binding.layout_idx) });
-                                        },
-                                    }
-                                }
-                                for (0..indent + 1) |_| std.debug.print("  ", .{});
-                                std.debug.print("final\n", .{});
-                                printExpr(store, block.final_expr, indent + 2);
-                            },
-                            else => std.debug.print("{s}\n", .{@tagName(expr)}),
-                        }
-                    }
-                };
-
-                const body_stmt = self.store.getCFStmt(proc.body);
-                std.debug.print(
-                    "compileProcSpec debug proc={d} body_stmt={d} tag={s} selfrec={s}\n",
-                    .{
-                        key,
-                        @intFromEnum(proc.body),
-                        @tagName(body_stmt),
-                        @tagName(proc.is_self_recursive),
-                    },
-                );
-                switch (body_stmt) {
-                    .ret => |ret| Debug.printExpr(self.store, ret.value, 1),
-                    else => {},
-                }
-                const expr30: LirExprId = @enumFromInt(30);
-                const expr31: LirExprId = @enumFromInt(31);
-                if (@intFromEnum(expr31) < self.store.exprs.items.len) {
-                    const e30 = self.store.getExpr(expr30);
-                    const e31 = self.store.getExpr(expr31);
-                    std.debug.print("  expr30 tag={s}\n", .{@tagName(e30)});
-                    switch (e30) {
-                        .lookup => |lookup| {
-                            std.debug.print("    lookup sym={d} layout={d}\n", .{ @as(u64, @bitCast(lookup.symbol)), @intFromEnum(lookup.layout_idx) });
-                            if (self.store.getSymbolDef(lookup.symbol)) |def_expr| {
-                                std.debug.print("    lookup def expr={d} tag={s}\n", .{ @intFromEnum(def_expr), @tagName(self.store.getExpr(def_expr)) });
-                            } else {
-                                std.debug.print("    lookup has no symbol def\n", .{});
-                            }
-                        },
-                        .block => |block| std.debug.print("    block final={d} stmts={d}\n", .{ @intFromEnum(block.final_expr), block.stmts.len }),
-                        .match_expr => |m| std.debug.print("    match value={d} branches={d}\n", .{ @intFromEnum(m.value), m.branches.len }),
-                        .proc_call => |call| std.debug.print("    proc_call proc={d} argc={d}\n", .{ @intFromEnum(call.proc), self.store.getExprSpan(call.args).len }),
-                        else => {},
-                    }
-                    std.debug.print("  expr31 tag={s}\n", .{@tagName(e31)});
-                    switch (e31) {
-                        .struct_ => |s| std.debug.print("    struct layout={d} fields={d}\n", .{ @intFromEnum(s.struct_layout), self.store.getExprSpan(s.fields).len }),
-                        .block => |block| std.debug.print("    block final={d} stmts={d}\n", .{ @intFromEnum(block.final_expr), block.stmts.len }),
-                        .match_expr => |m| std.debug.print("    match value={d} branches={d}\n", .{ @intFromEnum(m.value), m.branches.len }),
-                        .proc_call => |call| std.debug.print("    proc_call proc={d} argc={d}\n", .{ @intFromEnum(call.proc), self.store.getExprSpan(call.args).len }),
-                        else => {},
-                    }
-                }
-            }
-
             // Save current state - procedure has its own scope that shouldn't pollute caller
             const saved_stack_offset = self.codegen.stack_offset;
             const saved_callee_saved_used = self.codegen.callee_saved_used;
@@ -13514,7 +13389,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 try self.codegen.emitLoadImm(low_reg, @bitCast(low));
                                 try self.codegen.emitLoadImm(high_reg, @bitCast(high));
                             },
-                            else => unreachable,
+                            else => if (builtin.mode == .Debug) {
+                                std.debug.panic(
+                                    "placeCallArguments i128 ABI mismatch: arg_loc={s} arg_layout={?} proc={d}",
+                                    .{
+                                        @tagName(arg_loc),
+                                        arg_layout,
+                                        if (self.current_proc_name) |sym| sym.raw() else std.math.maxInt(u64),
+                                    },
+                                );
+                            } else unreachable,
                         }
                         reg_idx += 2;
                         continue;

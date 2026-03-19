@@ -190,6 +190,7 @@ pub fn infer(
 
     try seedSymbolSources(allocator, mir_store, &store);
     try seedClosureMembers(allocator, mir_store, &store);
+    try seedExactSymbolProcSets(allocator, mir_store, &store);
     try seedValueDefs(allocator, mir_store, &store);
 
     var changed = true;
@@ -333,6 +334,32 @@ fn seedClosureMembers(allocator: Allocator, mir_store: *const MIR.Store, store: 
         const member = memberFromClosureMember(mir_store, entry.value_ptr.*);
         const singleton = try singletonLambdaSet(allocator, store, member);
         try store.expr_lambda_sets.put(allocator, @intFromEnum(expr_id), singleton);
+    }
+}
+
+fn seedExactSymbolProcSets(
+    allocator: Allocator,
+    mir_store: *const MIR.Store,
+    store: *Store,
+) Allocator.Error!void {
+    var it = mir_store.symbol_seed_proc_sets.iterator();
+    while (it.next()) |entry| {
+        const symbol = MIR.Symbol.fromRaw(entry.key_ptr.*);
+        const proc_ids = mir_store.getProcSpan(entry.value_ptr.*);
+
+        var members = std.ArrayListUnmanaged(Member){};
+        defer members.deinit(allocator);
+        for (proc_ids) |proc_id| {
+            const member = if (mir_store.getClosureMemberForProc(proc_id)) |closure_member_id|
+                memberFromClosureMember(mir_store, closure_member_id)
+            else
+                plainProcMember(proc_id);
+            try appendMembersDedup(allocator, &members, &.{member});
+        }
+
+        if (members.items.len == 0) continue;
+        const ls_idx = try internLambdaSet(allocator, store, members.items);
+        _ = try mergeIntoSymbol(allocator, store, symbol, ls_idx);
     }
 }
 
