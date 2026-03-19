@@ -760,9 +760,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// The symbol currently being bound (during let statement processing).
         current_binding_symbol: ?Symbol,
 
-        /// Registry of compiled procedures (symbol -> CompiledProc)
+        /// Registry of compiled procedures (proc-spec id -> CompiledProc)
         /// Used to find call targets during second pass
-        proc_registry: std.AutoHashMap(u64, CompiledProc),
+        proc_registry: std.AutoHashMap(u32, CompiledProc),
 
         /// Registry of compiled RC helpers keyed by canonical RC helper identity.
         compiled_rc_helpers: std.AutoHashMap(u64, usize),
@@ -861,6 +861,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Compiled procedure information for two-pass compilation.
         /// After a procedure is fully compiled (including RET), it's registered here.
         pub const CompiledProc = struct {
+            /// The compiled LIR proc-spec id
+            id: lir.LIR.LirProcSpecId,
             /// Offset into the code buffer where this procedure starts
             code_start: usize,
             /// Offset where this procedure ends
@@ -877,8 +879,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         pub const PendingCall = struct {
             /// Offset where the call instruction is (needs patching)
             call_site: usize,
-            /// The function being called
-            target_symbol: Symbol,
+            /// The proc being called
+            target_proc: lir.LIR.LirProcSpecId,
         };
 
         /// Tracks position of a BL/CALL to a compiled lambda proc.
@@ -1027,7 +1029,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .current_recursive_symbol = null,
                 .current_recursive_join_point = null,
                 .current_binding_symbol = null,
-                .proc_registry = std.AutoHashMap(u64, CompiledProc).init(allocator),
+                .proc_registry = std.AutoHashMap(u32, CompiledProc).init(allocator),
                 .compiled_rc_helpers = std.AutoHashMap(u64, usize).init(allocator),
                 .pending_calls = std.ArrayList(PendingCall).empty,
                 .join_point_jumps = std.AutoHashMap(u32, std.ArrayList(JumpRecord)).init(allocator),
@@ -11669,8 +11671,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             _: LambdaProcOptions,
         ) Allocator.Error!CompiledProc {
             const proc = self.store.getProcSpec(proc_id);
-            const proc_key: u64 = @bitCast(proc.name);
-            if (self.proc_registry.get(proc_key)) |compiled| return compiled;
+            if (self.proc_registry.get(@intFromEnum(proc_id))) |compiled| return compiled;
 
             if (std.debug.runtime_safety) std.debug.panic(
                 "proc call target {d} ({d}) is missing from the compiled proc registry",
@@ -11898,7 +11899,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .emit_roc_ops = true,
             });
             if (proc.code_start == unresolved_proc_code_start) {
-                try self.emitPendingCallToSymbol(proc.name);
+                try self.emitPendingCallToProc(proc.id);
             } else {
                 try self.emitCallToOffset(proc.code_start);
             }
@@ -11910,11 +11911,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return self.saveCallReturnValue(ret_layout, needs_ret_ptr, ret_buffer_offset);
         }
 
-        fn emitPendingCallToSymbol(self: *Self, target_symbol: Symbol) !void {
+        fn emitPendingCallToProc(self: *Self, target_proc: lir.LIR.LirProcSpecId) !void {
             const call_site = self.codegen.currentOffset();
             try self.pending_calls.append(self.allocator, .{
                 .call_site = call_site,
-                .target_symbol = target_symbol,
+                .target_proc = target_proc,
             });
 
             if (comptime target.toCpuArch() == .aarch64) {
@@ -12817,9 +12818,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Compile all procedures first, before generating any calls.
         /// This ensures all call targets are known before we need to patch calls.
         pub fn compileAllProcSpecs(self: *Self, proc_specs: []const LirProcSpec) Allocator.Error!void {
-            for (proc_specs) |proc| {
-                const key: u64 = @bitCast(proc.name);
-                try self.proc_registry.put(key, .{
+            for (proc_specs, 0..) |proc, i| {
+                const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(i);
+                try self.proc_registry.put(@intFromEnum(proc_id), .{
+                    .id = proc_id,
                     .code_start = unresolved_proc_code_start,
                     .code_end = 0,
                     .name = proc.name,
@@ -12827,16 +12829,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 });
             }
 
-            for (proc_specs) |proc| {
-                try self.compileProcSpec(proc);
+            for (proc_specs, 0..) |proc, i| {
+                try self.compileProcSpec(@enumFromInt(i), proc);
             }
         }
 
         /// Compile a single procedure as a complete unit.
         /// Uses deferred prologue pattern: generates body first to determine which
         /// callee-saved registers are used, then prepends prologue and adjusts relocations.
-        fn compileProcSpec(self: *Self, proc: LirProcSpec) Allocator.Error!void {
-            const key: u64 = @bitCast(proc.name);
+        fn compileProcSpec(self: *Self, proc_id: lir.LIR.LirProcSpecId, proc: LirProcSpec) Allocator.Error!void {
+            const key: u32 = @intFromEnum(proc_id);
             // Save current state - procedure has its own scope that shouldn't pollute caller
             const saved_stack_offset = self.codegen.stack_offset;
             const saved_callee_saved_used = self.codegen.callee_saved_used;
@@ -12909,6 +12911,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // get patched once the final prologue start is known.
             if (self.proc_registry.getPtr(key)) |entry| {
                 entry.* = .{
+                    .id = proc_id,
                     .code_start = unresolved_proc_code_start,
                     .code_end = 0,
                     .name = proc.name,
@@ -12916,6 +12919,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 };
             } else {
                 try self.proc_registry.put(key, .{
+                    .id = proc_id,
                     .code_start = unresolved_proc_code_start,
                     .code_end = 0,
                     .name = proc.name,
@@ -15072,8 +15076,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         pub fn patchPendingCalls(self: *Self) Allocator.Error!void {
             for (self.pending_calls.items) |pending| {
-                const key: u64 = @bitCast(pending.target_symbol);
-                const proc = self.proc_registry.get(key) orelse {
+                const proc = self.proc_registry.get(@intFromEnum(pending.target_proc)) orelse {
                     unreachable;
                 };
                 self.patchCallTarget(pending.call_site, proc.code_start);

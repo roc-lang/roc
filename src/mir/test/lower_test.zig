@@ -1812,6 +1812,271 @@ test "cross-module: List.keep_if lowers without error" {
     try testing.expect(result != .runtime_err_type);
 }
 
+test "cross-module: List.keep_if seeds lambda sets for reachable callable params" {
+    var env = try MirTestEnv.initExpr("List.keep_if([1.I64, 2.I64, 3.I64, 4.I64, 5.I64], |x| x > 2)");
+    defer env.deinit();
+    _ = try env.lowerFirstDef();
+
+    var ls_store = try LambdaSet.infer(test_allocator, env.mir_store, env.lower.all_module_envs);
+    defer ls_store.deinit(test_allocator);
+
+    for (env.mir_store.getProcs(), 0..) |proc, proc_idx| {
+        for (env.mir_store.getPatternSpan(proc.params)) |param_id| {
+            const param_mono = env.mir_store.patternTypeOf(param_id);
+            if (env.mir_store.monotype_store.getMonotype(param_mono) != .func) continue;
+            const symbol = switch (env.mir_store.getPattern(param_id)) {
+                .bind => |sym| sym,
+                .as_pattern => |as_pat| as_pat.symbol,
+                else => continue,
+            };
+            if (ls_store.getSymbolLambdaSet(symbol) == null) {
+                std.debug.print(
+                    "missing lambda set for proc {d} callable param symbol={d}\n",
+                    .{ proc_idx, symbol.raw() },
+                );
+            }
+            try testing.expect(ls_store.getSymbolLambdaSet(symbol) != null);
+        }
+    }
+}
+
+test "cross-module runExpr: List.keep_if function lookups retain lambda sets" {
+    var env = try MirTestEnv.initExpr("List.keep_if([1.I64, 2.I64, 3.I64, 4.I64, 5.I64], |x| x > 2)");
+    defer env.deinit();
+
+    const defs = env.module_env.store.sliceDefs(env.module_env.all_defs);
+    const main_def = env.module_env.store.getDef(defs[0]);
+    const all_module_envs = [_]*ModuleEnv{ @constCast(env.builtin_module.env), env.module_env };
+
+    var monomorphization = try Monomorphize.runExpr(
+        test_allocator,
+        @as([]const *ModuleEnv, all_module_envs[0..]),
+        &env.module_env.types,
+        1,
+        null,
+        main_def.expr,
+    );
+    defer monomorphization.deinit(test_allocator);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    var lower = try Lower.init(
+        test_allocator,
+        &mir_store,
+        &monomorphization,
+        @as([]const *ModuleEnv, all_module_envs[0..]),
+        &env.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    for (monomorphization.proc_insts.items, 0..) |proc_inst, proc_inst_idx| {
+        const template = monomorphization.getProcTemplate(proc_inst.template);
+        const template_env = all_module_envs[template.module_idx];
+        const template_region = template_env.store.getExprRegion(template.cir_expr);
+        const template_region_info = try base.RegionInfo.position(
+            template_env.getSourceAll(),
+            template_env.getLineStartsAll(),
+            template_region.start.offset,
+            template_region.end.offset,
+        );
+        std.debug.print(
+            "proc_inst[{d}] template={d} kind={s} template_module={d} cir_expr={d} defining_context={d} line={d}:{d} text={s}\n",
+            .{
+                proc_inst_idx,
+                @intFromEnum(proc_inst.template),
+                @tagName(template.kind),
+                template.module_idx,
+                @intFromEnum(template.cir_expr),
+                @intFromEnum(proc_inst.defining_context_proc_inst),
+                template_region_info.start_line_idx + 1,
+                template_region_info.start_col_idx + 1,
+                template_region_info.calculateLineText(template_env.getSourceAll(), template_env.getLineStartsAll()),
+            },
+        );
+    }
+    var expr_proc_it = monomorphization.expr_proc_insts.iterator();
+    while (expr_proc_it.next()) |entry| {
+        const proc_inst_id = entry.value_ptr.*;
+        if (proc_inst_id != @as(Monomorphize.ProcInstId, @enumFromInt(1)) and proc_inst_id != @as(Monomorphize.ProcInstId, @enumFromInt(4))) continue;
+        std.debug.print(
+            "expr_proc_inst context={d} module={d} expr={d} -> proc_inst={d}\n",
+            .{
+                entry.key_ptr.context_proc_inst_raw,
+                entry.key_ptr.module_idx,
+                entry.key_ptr.expr_raw,
+                @intFromEnum(proc_inst_id),
+            },
+        );
+    }
+    var lookup_proc_it = monomorphization.lookup_expr_proc_insts.iterator();
+    while (lookup_proc_it.next()) |entry| {
+        const proc_inst_id = entry.value_ptr.*;
+        if (proc_inst_id != @as(Monomorphize.ProcInstId, @enumFromInt(1)) and proc_inst_id != @as(Monomorphize.ProcInstId, @enumFromInt(4))) continue;
+        const debug_module_idx = entry.key_ptr.module_idx;
+        const debug_expr_idx: can.CIR.Expr.Idx = @enumFromInt(entry.key_ptr.expr_raw);
+        const debug_expr = all_module_envs[debug_module_idx].store.getExpr(debug_expr_idx);
+        const debug_region = all_module_envs[debug_module_idx].store.getExprRegion(debug_expr_idx);
+        const debug_region_info = try base.RegionInfo.position(
+            all_module_envs[debug_module_idx].getSourceAll(),
+            all_module_envs[debug_module_idx].getLineStartsAll(),
+            debug_region.start.offset,
+            debug_region.end.offset,
+        );
+        std.debug.print(
+            "lookup_proc_inst context={d} module={d} expr={d} tag={s} line={d}:{d} text={s}",
+            .{
+                entry.key_ptr.context_proc_inst_raw,
+                entry.key_ptr.module_idx,
+                entry.key_ptr.expr_raw,
+                @tagName(debug_expr),
+                debug_region_info.start_line_idx + 1,
+                debug_region_info.start_col_idx + 1,
+                debug_region_info.calculateLineText(all_module_envs[debug_module_idx].getSourceAll(), all_module_envs[debug_module_idx].getLineStartsAll()),
+            },
+        );
+        switch (debug_expr) {
+            .e_lookup_local => |lookup| {
+                var top_level_def_expr: ?u32 = null;
+                for (all_module_envs[debug_module_idx].store.sliceDefs(all_module_envs[debug_module_idx].all_defs)) |def_idx| {
+                    const def = all_module_envs[debug_module_idx].store.getDef(def_idx);
+                    if (def.pattern == lookup.pattern_idx) {
+                        top_level_def_expr = @intCast(@intFromEnum(def.expr));
+                        break;
+                    }
+                }
+                const pattern = all_module_envs[debug_module_idx].store.getPattern(lookup.pattern_idx);
+                std.debug.print(
+                    " pattern={d} pattern_tag={s}",
+                    .{ @intFromEnum(lookup.pattern_idx), @tagName(pattern) },
+                );
+                switch (pattern) {
+                    .assign => |assign| std.debug.print(
+                        " ident={s}",
+                        .{all_module_envs[debug_module_idx].getIdent(assign.ident)},
+                    ),
+                    .as => |as_pat| std.debug.print(
+                        " ident={s}",
+                        .{all_module_envs[debug_module_idx].getIdent(as_pat.ident)},
+                    ),
+                    else => {},
+                }
+                std.debug.print(
+                    " top_level_def_expr={?}",
+                    .{top_level_def_expr},
+                );
+            },
+            else => {},
+        }
+        std.debug.print(" -> proc_inst={d}\n", .{ @intFromEnum(proc_inst_id) });
+    }
+
+    _ = try lower.lowerExpr(main_def.expr);
+
+    var lowered_proc_it = lower.lowered_proc_insts.iterator();
+    while (lowered_proc_it.next()) |entry| {
+        const lowered_expr = entry.value_ptr.*;
+        std.debug.print(
+            "lowered_proc_inst[{d}] expr={d} proc_id={?}\n",
+            .{
+                entry.key_ptr.*,
+                @intFromEnum(lowered_expr),
+                procIdFromExpr(&mir_store, lowered_expr),
+            },
+        );
+    }
+
+    var ls_store = try LambdaSet.infer(test_allocator, &mir_store, @as([]const *ModuleEnv, all_module_envs[0..]));
+    defer ls_store.deinit(test_allocator);
+
+    const debug_expr_limit = @min(mir_store.exprs.items.len, 24);
+    for (0..debug_expr_limit) |expr_idx| {
+        const expr_id: MIR.ExprId = @enumFromInt(expr_idx);
+        const expr = mir_store.getExpr(expr_id);
+        switch (expr) {
+            .lookup => |sym| std.debug.print("expr[{d}] lookup symbol={d}\n", .{ expr_idx, sym.raw() }),
+            .call => |call| std.debug.print("expr[{d}] call func={d} argc={d}\n", .{ expr_idx, @intFromEnum(call.func), mir_store.getExprSpan(call.args).len }),
+            .proc_ref => |proc_id| std.debug.print("expr[{d}] proc_ref proc={d}\n", .{ expr_idx, @intFromEnum(proc_id) }),
+            .closure_make => |closure| std.debug.print("expr[{d}] closure_make proc={d} captures={d}\n", .{ expr_idx, @intFromEnum(closure.proc), @intFromEnum(closure.captures) }),
+            .block => |block| std.debug.print("expr[{d}] block final={d} stmts={d}\n", .{ expr_idx, @intFromEnum(block.final_expr), mir_store.getStmts(block.stmts).len }),
+            else => std.debug.print("expr[{d}] {s}\n", .{ expr_idx, @tagName(expr) }),
+        }
+    }
+
+    for (mir_store.getProcs(), 0..) |proc, proc_idx| {
+        const captures = mir_store.getCaptureBindings(proc.capture_bindings);
+        if (captures.len == 0) continue;
+        std.debug.print("proc[{d}] capture_count={d}\n", .{ proc_idx, captures.len });
+        for (captures, 0..) |capture, capture_idx| {
+            std.debug.print(
+                "  capture[{d}] local_symbol={d} source_expr={d}\n",
+                .{ capture_idx, capture.local_symbol.raw(), @intFromEnum(capture.source_expr) },
+            );
+        }
+    }
+
+    var missing_count: usize = 0;
+    for (mir_store.exprs.items, 0..) |expr, expr_idx| {
+        if (expr != .lookup) continue;
+        const expr_id: MIR.ExprId = @enumFromInt(expr_idx);
+        if (mir_store.monotype_store.getMonotype(mir_store.typeOf(expr_id)) != .func) continue;
+        if (ls_store.getExprLambdaSet(expr_id) != null or ls_store.getSymbolLambdaSet(expr.lookup) != null) continue;
+
+        var owner_pattern: ?u32 = null;
+        for (mir_store.patterns.items, 0..) |pattern, pattern_idx| {
+            const pattern_symbol = switch (pattern) {
+                .bind => |sym| sym,
+                .as_pattern => |as_pat| as_pat.symbol,
+                else => continue,
+            };
+            if (pattern_symbol == expr.lookup) {
+                owner_pattern = @intCast(pattern_idx);
+                break;
+            }
+        }
+
+        var owner_proc: ?u32 = null;
+        var owner_param: ?u32 = null;
+        proc_search: for (mir_store.getProcs(), 0..) |proc, proc_idx| {
+            for (mir_store.getPatternSpan(proc.params), 0..) |param_id, param_idx| {
+                const pattern_symbol = switch (mir_store.getPattern(param_id)) {
+                    .bind => |sym| sym,
+                    .as_pattern => |as_pat| as_pat.symbol,
+                    else => continue,
+                };
+                if (pattern_symbol == expr.lookup) {
+                    owner_proc = @intCast(proc_idx);
+                    owner_param = @intCast(param_idx);
+                    break :proc_search;
+                }
+            }
+        }
+
+        std.debug.print(
+            "runExpr missing lambda set for expr {d} symbol={d} owner_pattern={?} owner_proc={?} owner_param={?}",
+            .{ expr_idx, expr.lookup.raw(), owner_pattern, owner_proc, owner_param },
+        );
+        if (lower.symbol_metadata.get(expr.lookup.raw())) |metadata| {
+            switch (metadata) {
+                .local_ident => |local| std.debug.print(
+                    " local_ident(module={d}, ident={d})",
+                    .{ local.module_idx, local.ident_idx.idx },
+                ),
+                .external_def => |ext| std.debug.print(
+                    " external_def(module={d}, node={d}, ident={d})",
+                    .{ ext.module_idx, ext.def_node_idx, ext.display_ident_idx.idx },
+                ),
+            }
+        }
+        std.debug.print("\n", .{});
+        missing_count += 1;
+    }
+
+    try testing.expectEqual(@as(usize, 0), missing_count);
+}
+
 test "cross-module: List.keep_if with always-false predicate lowers without error" {
     var env = try MirTestEnv.initExpr("List.keep_if([1.I64, 2.I64, 3.I64], |_| Bool.False)");
     defer env.deinit();

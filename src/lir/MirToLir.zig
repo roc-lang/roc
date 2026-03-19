@@ -965,6 +965,65 @@ fn lambdaSetForStructField(self: *Self, expr_id: MIR.ExprId, field_idx: u32) ?La
     };
 }
 
+const SymbolOwnerDebug = struct {
+    kind: enum {
+        none,
+        param,
+        capture_local,
+        pattern,
+    } = .none,
+    proc_idx: u32 = std.math.maxInt(u32),
+    local_idx: u32 = std.math.maxInt(u32),
+};
+
+fn debugSymbolOwner(self: *Self, sym: MIR.Symbol) SymbolOwnerDebug {
+    for (self.mir_store.getProcs(), 0..) |proc, proc_idx| {
+        const params = self.mir_store.getPatternSpan(proc.params);
+        for (params, 0..) |param_id, param_idx| {
+            const param_symbol = switch (self.mir_store.getPattern(param_id)) {
+                .bind => |bound| bound,
+                .as_pattern => |as_pat| as_pat.symbol,
+                else => continue,
+            };
+            if (param_symbol == sym) {
+                return .{
+                    .kind = .param,
+                    .proc_idx = @intCast(proc_idx),
+                    .local_idx = @intCast(param_idx),
+                };
+            }
+        }
+
+        const capture_bindings = self.mir_store.getCaptureBindings(proc.capture_bindings);
+        for (capture_bindings, 0..) |binding, capture_idx| {
+            if (binding.local_symbol == sym) {
+                return .{
+                    .kind = .capture_local,
+                    .proc_idx = @intCast(proc_idx),
+                    .local_idx = @intCast(capture_idx),
+                };
+            }
+        }
+    }
+
+    for (self.mir_store.patterns.items, 0..) |pattern, pattern_idx| {
+        const pattern_symbol = switch (pattern) {
+            .bind => |bound| bound,
+            .as_pattern => |as_pat| as_pat.symbol,
+            else => continue,
+        };
+        if (pattern_symbol == sym) {
+            return .{
+                .kind = .pattern,
+                .proc_idx = std.math.maxInt(u32),
+                .local_idx = @intCast(pattern_idx),
+            };
+        }
+    }
+
+    return .{};
+}
+
 fn runtimeClosureDispatchLayoutForExpr(
     self: *Self,
     expr_id: MIR.ExprId,
@@ -1048,9 +1107,29 @@ fn runtimeValueLayoutFromMirExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator
                     return self.closureValueLayoutFromLambdaSet(ls_idx);
                 }
                 if (std.debug.runtime_safety) {
+                    const symbol_module_idx: u32 = @intCast((sym.raw() >> 32) & 0x7fff_ffff);
+                    const symbol_ident_bits: u32 = @truncate(sym.raw());
+                    const symbol_ident: Ident.Idx = @bitCast(symbol_ident_bits);
+                    const expr_ls = if (self.lambda_set_store.getExprLambdaSet(mir_expr_id)) |ls_idx|
+                        @intFromEnum(ls_idx)
+                    else
+                        std.math.maxInt(u32);
+                    const source_expr = if (self.lambda_set_store.getSymbolSourceExpr(sym)) |expr_id|
+                        @intFromEnum(expr_id)
+                    else
+                        std.math.maxInt(u32);
+                    const value_def = if (self.mir_store.getValueDef(sym)) |expr_id|
+                        @intFromEnum(expr_id)
+                    else
+                        std.math.maxInt(u32);
+                    const seed_proc_count: usize = if (self.mir_store.getSymbolSeedProcSet(sym)) |proc_ids|
+                        proc_ids.len
+                    else
+                        0;
+                    const owner = self.debugSymbolOwner(sym);
                     std.debug.panic(
-                        "MirToLir invariant violated: missing symbol lambda set for function lookup {d}",
-                        .{sym.raw()},
+                        "MirToLir invariant violated: missing symbol lambda set for function lookup {d} in expr {d} (module={d}, ident={d}, expr_ls={d}, source_expr={d}, value_def={d}, seed_proc_count={d}, owner={s}, owner_proc={d}, owner_local={d})",
+                        .{ sym.raw(), @intFromEnum(mir_expr_id), symbol_module_idx, symbol_ident.idx, expr_ls, source_expr, value_def, seed_proc_count, @tagName(owner.kind), owner.proc_idx, owner.local_idx },
                     );
                 }
                 unreachable;
@@ -1380,18 +1459,6 @@ fn ensureDirectProcSpec(
             .force_pass_by_ptr = force_pass_by_ptr,
             .status = .placeholder,
         });
-        if (builtin.mode == .Debug) {
-            std.debug.print(
-                "LIR new direct proc_spec={d} mir_proc={d} callee_key={d} ret={d} argc={d}\n",
-                .{
-                    @intFromEnum(placeholder),
-                    @intFromEnum(callee_proc),
-                    callee_key,
-                    @intFromEnum(provisional_ret_layout),
-                    param_layouts.len,
-                },
-            );
-        }
         specialization = self.direct_proc_specs.get(owned_key).?;
     }
 
@@ -2881,7 +2948,7 @@ fn lowerTag(self: *Self, tag_data: anytype, mono_idx: Monotype.Idx, mir_expr_id:
     return acc.finish(tag_expr, union_layout, region);
 }
 
-fn lowerLookup(self: *Self, sym: Symbol, mono_idx: Monotype.Idx, _: MIR.ExprId, region: Region) Allocator.Error!LirExprId {
+fn lowerLookup(self: *Self, sym: Symbol, mono_idx: Monotype.Idx, mir_expr_id: MIR.ExprId, region: Region) Allocator.Error!LirExprId {
     // Propagate MIR symbol definition to LIR store (if exists and not already done)
     if (self.lir_store.getSymbolDef(sym) == null) {
         if (self.mir_store.getValueDef(sym)) |mir_def_id| {
@@ -2908,9 +2975,22 @@ fn lowerLookup(self: *Self, sym: Symbol, mono_idx: Monotype.Idx, _: MIR.ExprId, 
                 break :blk try self.closureValueLayoutFromLambdaSet(ls_idx);
             }
             if (std.debug.runtime_safety) {
+                const source_expr = if (self.lambda_set_store.getSymbolSourceExpr(sym)) |expr_id|
+                    @intFromEnum(expr_id)
+                else
+                    std.math.maxInt(u32);
+                const value_def = if (self.mir_store.getValueDef(sym)) |expr_id|
+                    @intFromEnum(expr_id)
+                else
+                    std.math.maxInt(u32);
+                const seed_proc_count: usize = if (self.mir_store.getSymbolSeedProcSet(sym)) |proc_ids|
+                    proc_ids.len
+                else
+                    0;
+                const owner = self.debugSymbolOwner(sym);
                 std.debug.panic(
-                    "MirToLir invariant violated: missing symbol lambda set for function lookup {d}",
-                    .{sym.raw()},
+                    "MirToLir invariant violated: missing symbol lambda set for function lookup {d} in expr {d} (source_expr={d}, value_def={d}, seed_proc_count={d}, owner={s}, owner_proc={d}, owner_local={d})",
+                    .{ sym.raw(), @intFromEnum(mir_expr_id), source_expr, value_def, seed_proc_count, @tagName(owner.kind), owner.proc_idx, owner.local_idx },
                 );
             }
             unreachable;

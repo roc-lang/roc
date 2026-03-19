@@ -3856,12 +3856,13 @@ fn lowerClosureSpecialized(
                 self.current_module_idx,
             );
             try self.mono_scratches.idxs.append(cap_monotype);
-            const capture_expr = if (self.monomorphization.getClosureCaptureProcInst(
+            const capture_proc_inst = self.monomorphization.getClosureCaptureProcInst(
                 closure_proc_inst_id,
                 self.current_module_idx,
                 expr_idx,
                 cap.pattern_idx,
-            )) |capture_proc_inst_id|
+            );
+            const capture_expr = if (capture_proc_inst) |capture_proc_inst_id|
                 try self.lowerProcInst(capture_proc_inst_id)
             else
                 try self.store.addExpr(self.allocator, .{ .lookup = outer_symbol }, cap_monotype, region);
@@ -4321,18 +4322,6 @@ fn lowerProcInst(self: *Self, proc_inst_id: Monomorphize.ProcInstId) Allocator.E
         ),
         else => unreachable,
     };
-    if (builtin.mode == .Debug) {
-        const proc_id = self.resolveProcIdFromCallableExpr(lowered_proc_expr) orelse MIR.ProcId.none;
-        std.debug.print(
-            "LOWER proc_inst={d} template_expr={d} mir_proc={d} mono={d}\n",
-            .{
-                @intFromEnum(proc_inst_id),
-                @intFromEnum(template.cir_expr),
-                @intFromEnum(proc_id),
-                @intFromEnum(proc_monotype),
-            },
-        );
-    }
 
     return lowered_proc_expr;
 }

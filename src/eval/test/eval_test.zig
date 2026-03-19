@@ -4108,13 +4108,3 @@ test "focused: polymorphic additional specialization via List.append (non-eq)" {
         \\}
     , 2, .no_trace);
 }
-
-test "focused TEMP: nested-only List.append specialization" {
-    try runExpectI64(
-        \\{
-        \\    append_one = |acc, x| List.append(acc, x)
-        \\    clone_via_fold = |xs| xs.fold(List.with_capacity(1), append_one)
-        \\    clone_via_fold([[1.I64, 2.I64], [3.I64, 4.I64]]).len()
-        \\}
-    , 2, .no_trace);
-}
