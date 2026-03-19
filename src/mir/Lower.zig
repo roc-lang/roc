@@ -323,6 +323,21 @@ fn identFromStructuralName(self: *const Self, name_id: Monotype.StructuralNameId
     return Ident.Idx.NONE;
 }
 
+/// Canonicalize a cross-module TypeId by deeply resolving `.rec` indirections.
+///
+/// With content-based interning and a shared `TypeInterner`/`StructuralNamePool`,
+/// names and indices are already canonical across modules — no actual remapping of
+/// those occurs. However, recursive types created via `reserveRecursive` +
+/// `finalizeRecursive` may leave `.rec` placeholder TypeIds in their children
+/// (e.g. `List(rec(0))` instead of `List(tag_union(1))`). When a different module
+/// constructs the same type freshly via `intern*`, it produces the resolved form
+/// (e.g. `List(tag_union(1))`), causing TypeId mismatches on direct comparison.
+///
+/// This function walks the type tree, resolves all `.rec` children via the
+/// monotype store's `resolve()`, and re-interns to produce a canonical TypeId
+/// where all children are direct (non-`.rec`) references. This is only needed
+/// cross-module — within a single module, `.rec` placeholders are used
+/// consistently, so TypeId comparisons already work.
 fn remapMonotypeBetweenModules(
     self: *Self,
     monotype: Monotype.Idx,
@@ -342,6 +357,8 @@ fn remapMonotypeBetweenModules(
     );
 }
 
+/// Recursive worker for `remapMonotypeBetweenModules`. The `remapped` map
+/// tracks already-processed TypeIds to handle cycles in recursive types.
 fn remapMonotypeBetweenModulesRec(
     self: *Self,
     monotype: Monotype.Idx,
@@ -427,6 +444,10 @@ fn remapMonotypeBetweenModulesRec(
     return canonical;
 }
 
+/// Convenience wrapper: canonicalize a caller's monotype when it will be
+/// compared against or used as a key in the context of a symbol from a
+/// different module. Same-module calls skip canonicalization since `.rec`
+/// placeholders are already consistent within a module.
 fn normalizeCallerMonotypeForSymbolModule(
     self: *Self,
     symbol_module_idx: u32,
