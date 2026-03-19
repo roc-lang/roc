@@ -48,6 +48,187 @@ fn procIdFromCallableExpr(mir_store: *const MIR.Store, expr_id: MIR.ExprId) ?MIR
     };
 }
 
+const ForeignParamLookup = struct {
+    expr_id: MIR.ExprId,
+    symbol: MIR.Symbol,
+    owner_proc: MIR.ProcId,
+};
+
+fn dumpMirExpr(mir_store: *const MIR.Store, expr_id: MIR.ExprId, depth: usize) void {
+    const indent = depth * 2;
+    for (0..indent) |_| std.debug.print(" ", .{});
+
+    const expr = mir_store.getExpr(expr_id);
+    std.debug.print("expr {d}: {s}", .{ @intFromEnum(expr_id), @tagName(expr) });
+
+    switch (expr) {
+        .lookup => |symbol| {
+            std.debug.print(" symbol={d}\n", .{symbol.raw()});
+        },
+        .proc_ref => |proc_id| {
+            std.debug.print(" proc={d}\n", .{@intFromEnum(proc_id)});
+        },
+        .closure_make => |closure| {
+            std.debug.print(" proc={d}\n", .{@intFromEnum(closure.proc)});
+            dumpMirExpr(mir_store, closure.captures, depth + 1);
+        },
+        .call => |call| {
+            std.debug.print("\n", .{});
+            dumpMirExpr(mir_store, call.func, depth + 1);
+            for (mir_store.getExprSpan(call.args)) |arg| dumpMirExpr(mir_store, arg, depth + 1);
+        },
+        .block => |block| {
+            std.debug.print("\n", .{});
+            for (mir_store.getStmts(block.stmts), 0..) |stmt, stmt_i| {
+                for (0..indent + 2) |_| std.debug.print(" ", .{});
+                std.debug.print("stmt {d}: {s}\n", .{ stmt_i, @tagName(stmt) });
+                switch (stmt) {
+                    .decl_const, .decl_var, .mutate_var => |binding| dumpMirExpr(mir_store, binding.expr, depth + 2),
+                }
+            }
+            dumpMirExpr(mir_store, block.final_expr, depth + 1);
+        },
+        .struct_access => |access| {
+            std.debug.print(" field={d}\n", .{access.field_idx});
+            dumpMirExpr(mir_store, access.struct_, depth + 1);
+        },
+        .struct_ => |struct_| {
+            std.debug.print("\n", .{});
+            for (mir_store.getExprSpan(struct_.fields)) |field| dumpMirExpr(mir_store, field, depth + 1);
+        },
+        .for_loop => |for_loop| {
+            std.debug.print("\n", .{});
+            dumpMirExpr(mir_store, for_loop.list, depth + 1);
+            dumpMirExpr(mir_store, for_loop.body, depth + 1);
+        },
+        .while_loop => |while_loop| {
+            std.debug.print("\n", .{});
+            dumpMirExpr(mir_store, while_loop.cond, depth + 1);
+            dumpMirExpr(mir_store, while_loop.body, depth + 1);
+        },
+        .match_expr => |match_expr| {
+            std.debug.print("\n", .{});
+            dumpMirExpr(mir_store, match_expr.cond, depth + 1);
+            for (mir_store.getBranches(match_expr.branches), 0..) |branch, branch_i| {
+                for (0..indent + 2) |_| std.debug.print(" ", .{});
+                std.debug.print("branch {d}\n", .{branch_i});
+                if (!branch.guard.isNone()) dumpMirExpr(mir_store, branch.guard, depth + 2);
+                dumpMirExpr(mir_store, branch.body, depth + 2);
+            }
+        },
+        else => {
+            std.debug.print("\n", .{});
+        },
+    }
+}
+
+fn firstForeignParamLookup(
+    mir_store: *const MIR.Store,
+    expr_id: MIR.ExprId,
+    proc_id: MIR.ProcId,
+    all_param_symbols: *const std.AutoHashMap(MIR.Symbol, MIR.ProcId),
+) ?ForeignParamLookup {
+    const expr = mir_store.getExpr(expr_id);
+    switch (expr) {
+        .lookup => |symbol| {
+            if (all_param_symbols.get(symbol)) |owner_proc| {
+                if (owner_proc != proc_id) {
+                    return .{
+                        .expr_id = expr_id,
+                        .symbol = symbol,
+                        .owner_proc = owner_proc,
+                    };
+                }
+            }
+            return null;
+        },
+        .list => |list| {
+            for (mir_store.getExprSpan(list.elems)) |elem| {
+                if (firstForeignParamLookup(mir_store, elem, proc_id, all_param_symbols)) |found| return found;
+            }
+            return null;
+        },
+        .struct_ => |struct_| {
+            for (mir_store.getExprSpan(struct_.fields)) |field| {
+                if (firstForeignParamLookup(mir_store, field, proc_id, all_param_symbols)) |found| return found;
+            }
+            return null;
+        },
+        .tag => |tag| {
+            for (mir_store.getExprSpan(tag.args)) |arg| {
+                if (firstForeignParamLookup(mir_store, arg, proc_id, all_param_symbols)) |found| return found;
+            }
+            return null;
+        },
+        .match_expr => |match_expr| {
+            if (firstForeignParamLookup(mir_store, match_expr.cond, proc_id, all_param_symbols)) |found| return found;
+            for (mir_store.getBranches(match_expr.branches)) |branch| {
+                if (!branch.guard.isNone()) {
+                    if (firstForeignParamLookup(mir_store, branch.guard, proc_id, all_param_symbols)) |found| return found;
+                }
+                if (firstForeignParamLookup(mir_store, branch.body, proc_id, all_param_symbols)) |found| return found;
+            }
+            return null;
+        },
+        .proc_ref,
+        .runtime_err_can,
+        .runtime_err_type,
+        .runtime_err_ellipsis,
+        .runtime_err_anno_only,
+        .int,
+        .frac_f32,
+        .frac_f64,
+        .dec,
+        .str,
+        .crash,
+        .break_expr,
+        => return null,
+        .closure_make => |closure| return firstForeignParamLookup(mir_store, closure.captures, proc_id, all_param_symbols),
+        .call => |call| {
+            if (firstForeignParamLookup(mir_store, call.func, proc_id, all_param_symbols)) |found| return found;
+            for (mir_store.getExprSpan(call.args)) |arg| {
+                if (firstForeignParamLookup(mir_store, arg, proc_id, all_param_symbols)) |found| return found;
+            }
+            return null;
+        },
+        .block => |block| {
+            for (mir_store.getStmts(block.stmts)) |stmt| {
+                switch (stmt) {
+                    .decl_const, .decl_var, .mutate_var => |binding| {
+                        if (firstForeignParamLookup(mir_store, binding.expr, proc_id, all_param_symbols)) |found| return found;
+                    },
+                }
+            }
+            return firstForeignParamLookup(mir_store, block.final_expr, proc_id, all_param_symbols);
+        },
+        .borrow_scope => |borrow_scope| {
+            for (mir_store.getBorrowBindings(borrow_scope.bindings)) |binding| {
+                if (firstForeignParamLookup(mir_store, binding.expr, proc_id, all_param_symbols)) |found| return found;
+            }
+            return firstForeignParamLookup(mir_store, borrow_scope.body, proc_id, all_param_symbols);
+        },
+        .struct_access => |access| return firstForeignParamLookup(mir_store, access.struct_, proc_id, all_param_symbols),
+        .str_escape_and_quote => |inner| return firstForeignParamLookup(mir_store, inner, proc_id, all_param_symbols),
+        .run_low_level => |low_level| {
+            for (mir_store.getExprSpan(low_level.args)) |arg| {
+                if (firstForeignParamLookup(mir_store, arg, proc_id, all_param_symbols)) |found| return found;
+            }
+            return null;
+        },
+        .dbg_expr => |dbg_expr| return firstForeignParamLookup(mir_store, dbg_expr.expr, proc_id, all_param_symbols),
+        .expect => |expect| return firstForeignParamLookup(mir_store, expect.body, proc_id, all_param_symbols),
+        .for_loop => |for_loop| {
+            if (firstForeignParamLookup(mir_store, for_loop.list, proc_id, all_param_symbols)) |found| return found;
+            return firstForeignParamLookup(mir_store, for_loop.body, proc_id, all_param_symbols);
+        },
+        .while_loop => |while_loop| {
+            if (firstForeignParamLookup(mir_store, while_loop.cond, proc_id, all_param_symbols)) |found| return found;
+            return firstForeignParamLookup(mir_store, while_loop.body, proc_id, all_param_symbols);
+        },
+        .return_expr => |ret| return firstForeignParamLookup(mir_store, ret.expr, proc_id, all_param_symbols),
+    }
+}
+
 // --- MIR Store tests ---
 
 test "MIR Store: add and get expression" {
@@ -1810,6 +1991,65 @@ test "cross-module: List.keep_if lowers without error" {
     const expr = try env.lowerFirstDef();
     const result = env.mir_store.getExpr(expr);
     try testing.expect(result != .runtime_err_type);
+}
+
+test "cross-module: proc bodies do not directly lookup foreign proc params" {
+    var env = try MirTestEnv.initExpr("List.contains([1.I64, 2.I64, 3.I64, 4.I64, 5.I64], 3.I64)");
+    defer env.deinit();
+    _ = try env.lowerFirstDef();
+
+    var all_param_symbols = std.AutoHashMap(MIR.Symbol, MIR.ProcId).init(test_allocator);
+    defer all_param_symbols.deinit();
+
+    for (env.mir_store.getProcs(), 0..) |proc, proc_idx_usize| {
+        const proc_id: MIR.ProcId = @enumFromInt(proc_idx_usize);
+        for (env.mir_store.getPatternSpan(proc.params)) |param_id| {
+            const symbol = switch (env.mir_store.getPattern(param_id)) {
+                .bind => |sym| sym,
+                .as_pattern => |as_pat| as_pat.symbol,
+                else => continue,
+            };
+            try all_param_symbols.put(symbol, proc_id);
+        }
+    }
+
+    for (env.mir_store.getProcs(), 0..) |proc, proc_idx_usize| {
+        const proc_id: MIR.ProcId = @enumFromInt(proc_idx_usize);
+        if (proc.body.isNone()) continue;
+        if (firstForeignParamLookup(env.mir_store, proc.body, proc_id, &all_param_symbols)) |found| {
+            std.debug.print("proc {d} body={d} captures_param={d} capture_bindings={d}\n", .{
+                proc_idx_usize,
+                @intFromEnum(proc.body),
+                @intFromEnum(proc.captures_param),
+                proc.capture_bindings.len,
+            });
+            for (env.mir_store.getPatternSpan(proc.params), 0..) |param_id, param_i| {
+                const symbol = switch (env.mir_store.getPattern(param_id)) {
+                    .bind => |sym| sym,
+                    .as_pattern => |as_pat| as_pat.symbol,
+                    else => continue,
+                };
+                std.debug.print("  param {d} symbol={d}\n", .{ param_i, symbol.raw() });
+            }
+            for (env.mir_store.getCaptureBindings(proc.capture_bindings), 0..) |binding, binding_i| {
+                std.debug.print(
+                    "  capture_binding {d} local_symbol={d} source_expr={d}\n",
+                    .{ binding_i, binding.local_symbol.raw(), @intFromEnum(binding.source_expr) },
+                );
+            }
+            dumpMirExpr(env.mir_store, proc.body, 1);
+            std.debug.print(
+                "foreign param lookup in proc {d}: symbol={d} owner_proc={d} expr={d}\n",
+                .{
+                    proc_idx_usize,
+                    found.symbol.raw(),
+                    @intFromEnum(found.owner_proc),
+                    @intFromEnum(found.expr_id),
+                },
+            );
+            return error.TestUnexpectedResult;
+        }
+    }
 }
 
 test "cross-module: List.keep_if seeds lambda sets for reachable callable params" {

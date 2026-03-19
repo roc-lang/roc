@@ -3001,61 +3001,6 @@ fn lowerLookup(self: *Self, sym: Symbol, mono_idx: Monotype.Idx, mir_expr_id: MI
         break :blk try self.layoutFromMonotype(mono_idx);
     };
 
-    if (builtin.mode == .Debug and sym.raw() == 4294967272) {
-        const owner = self.debugSymbolOwner(sym);
-        const source_expr = if (self.lambda_set_store.getSymbolSourceExpr(sym)) |expr_id|
-            @intFromEnum(expr_id)
-        else
-            std.math.maxInt(u32);
-        const value_def = if (self.mir_store.getValueDef(sym)) |expr_id|
-            @intFromEnum(expr_id)
-        else
-            std.math.maxInt(u32);
-        std.debug.print(
-            "DEBUG lowerLookup missing-symbol candidate sym={d} expr={d} owner={s} owner_proc={d} owner_local={d} has_layout={any} source_expr={d} value_def={d} mono_tag={s}\n",
-            .{
-                sym.raw(),
-                @intFromEnum(mir_expr_id),
-                @tagName(owner.kind),
-                owner.proc_idx,
-                owner.local_idx,
-                self.symbol_layouts.get(sym.raw()) != null,
-                source_expr,
-                value_def,
-                @tagName(self.mir_store.monotype_store.getMonotype(mono_idx)),
-            },
-        );
-        if (owner.kind == .param) {
-            const proc = self.mir_store.getProc(@enumFromInt(owner.proc_idx));
-            const params = self.mir_store.getPatternSpan(proc.params);
-            std.debug.print("  owner proc params=", .{});
-            for (params, 0..) |param_id, i| {
-                if (i != 0) std.debug.print(" | ", .{});
-                const pattern = self.mir_store.getPattern(param_id);
-                switch (pattern) {
-                    .bind => |bound| std.debug.print(
-                        "{d}:{d}:{s}",
-                        .{
-                            i,
-                            bound.raw(),
-                            @tagName(self.mir_store.monotype_store.getMonotype(self.mir_store.patternTypeOf(param_id))),
-                        },
-                    ),
-                    .as_pattern => |as_pat| std.debug.print(
-                        "{d}:{d}:{s}",
-                        .{
-                            i,
-                            as_pat.symbol.raw(),
-                            @tagName(self.mir_store.monotype_store.getMonotype(self.mir_store.patternTypeOf(param_id))),
-                        },
-                    ),
-                    else => std.debug.print("{d}:{s}", .{ i, @tagName(pattern) }),
-                }
-            }
-            std.debug.print("\n", .{});
-        }
-    }
-
     if (self.mir_store.isSymbolReassignable(sym)) {
         return self.lir_store.addExpr(.{ .cell_load = .{
             .cell = sym,
@@ -3783,9 +3728,26 @@ fn lowerCall(self: *Self, call_data: anytype, mir_expr_id: MIR.ExprId, region: R
     // with lambda defs should have lambda sets and go through lowerClosureCall.
     if (func_mir_expr == .lookup and std.debug.runtime_safety) {
         const sym = func_mir_expr.lookup;
+        const expr_ls = if (self.lambda_set_store.getExprLambdaSet(call_data.func)) |ls_idx|
+            @intFromEnum(ls_idx)
+        else
+            std.math.maxInt(u32);
+        const symbol_ls = if (self.lambda_set_store.getSymbolLambdaSet(sym)) |ls_idx|
+            @intFromEnum(ls_idx)
+        else
+            std.math.maxInt(u32);
+        const source_expr = if (self.lambda_set_store.getSymbolSourceExpr(sym)) |expr_id|
+            @intFromEnum(expr_id)
+        else
+            std.math.maxInt(u32);
+        const seed_proc_count: usize = if (self.mir_store.getSymbolSeedProcSet(sym)) |proc_ids|
+            proc_ids.len
+        else
+            0;
+        const owner = self.debugSymbolOwner(sym);
         std.debug.panic(
-            "MirToLir invariant violated: lookup callee reached direct call fallback without lambda-set/direct-proc resolution, symbol key={d}",
-            .{sym.raw()},
+            "MirToLir invariant violated: lookup callee reached direct call fallback without lambda-set/direct-proc resolution, symbol key={d} expr_ls={d} symbol_ls={d} source_expr={d} seed_proc_count={d} owner={s} owner_proc={d} owner_local={d}",
+            .{ sym.raw(), expr_ls, symbol_ls, source_expr, seed_proc_count, @tagName(owner.kind), owner.proc_idx, owner.local_idx },
         );
     }
 

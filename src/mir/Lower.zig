@@ -2690,13 +2690,15 @@ fn lowerExprWithMonotypeOverride(
 
         // --- Lookups ---
         .e_lookup_local => |lookup| {
-            if (self.monomorphization.getContextPatternProcInsts(self.current_proc_inst_context, self.current_module_idx, lookup.pattern_idx)) |proc_inst_ids| {
-                if (proc_inst_ids.len == 0) unreachable;
-                if (proc_inst_ids.len == 1) {
-                    return try self.lowerProcInst(proc_inst_ids[0]);
+            if (isTopLevelPattern(module_env, lookup.pattern_idx)) {
+                if (self.monomorphization.getContextPatternProcInsts(self.current_proc_inst_context, self.current_module_idx, lookup.pattern_idx)) |proc_inst_ids| {
+                    if (proc_inst_ids.len == 0) unreachable;
+                    if (proc_inst_ids.len == 1) {
+                        return try self.lowerProcInst(proc_inst_ids[0]);
+                    }
+                } else if (self.monomorphization.getLookupExprProcInst(self.current_proc_inst_context, self.current_module_idx, expr_idx)) |proc_inst_id| {
+                    return try self.lowerProcInst(proc_inst_id);
                 }
-            } else if (self.monomorphization.getLookupExprProcInst(self.current_proc_inst_context, self.current_module_idx, expr_idx)) |proc_inst_id| {
-                return try self.lowerProcInst(proc_inst_id);
             }
 
             const symbol = try self.patternToSymbol(lookup.pattern_idx);
@@ -2711,6 +2713,7 @@ fn lowerExprWithMonotypeOverride(
                 for (defs) |def_idx| {
                     const def = module_env.store.getDef(def_idx);
                     if (def.pattern == lookup.pattern_idx) {
+                        if (cirExprIsProcBacked(module_env, def.expr)) break;
                         // Resolve the canonical (unscoped) symbol for this
                         // top-level def, not the potentially-scoped capture
                         // alias from lowerClosure. Inside a closure body,
@@ -4416,13 +4419,23 @@ fn lowerCall(
     monotype: Monotype.Idx,
     region: Region,
 ) Allocator.Error!MIR.ExprId {
-    const call_site_proc_inst = self.monomorphization.getCallSiteProcInst(self.current_proc_inst_context, self.current_module_idx, call_expr_idx);
+    const callee_expr = module_env.store.getExpr(call.func);
+    const value_flow_lookup_callee = switch (callee_expr) {
+        .e_lookup_local => |lookup| !isTopLevelPattern(module_env, lookup.pattern_idx),
+        .e_lookup_external => false,
+        .e_lookup_required => false,
+        else => false,
+    };
+    const call_site_proc_inst = if (value_flow_lookup_callee)
+        null
+    else
+        self.monomorphization.getCallSiteProcInst(self.current_proc_inst_context, self.current_module_idx, call_expr_idx);
     const call_result_monotype = if (call_site_proc_inst) |proc_inst_id|
         try self.procInstReturnMonotype(proc_inst_id)
     else
         monotype;
 
-    if (self.getCallLowLevelOp(module_env, module_env.store.getExpr(call.func))) |ll_op| {
+    if (self.getCallLowLevelOp(module_env, callee_expr)) |ll_op| {
         if (ll_op == .list_append_unsafe) {
             const arg_exprs = module_env.store.sliceExpr(call.args);
             if (arg_exprs.len == 2) {
@@ -4506,6 +4519,19 @@ fn lowerCallWithLoweredFunc(
         .func = lowered_func,
         .args = args,
     } }, call_result_monotype, region);
+}
+
+fn cirExprIsProcBacked(module_env: *const ModuleEnv, expr_idx: CIR.Expr.Idx) bool {
+    return switch (module_env.store.getExpr(expr_idx)) {
+        .e_lambda, .e_closure, .e_hosted_lambda => true,
+        .e_block => |block| cirExprIsProcBacked(module_env, block.final_expr),
+        .e_dbg => |dbg_expr| cirExprIsProcBacked(module_env, dbg_expr.expr),
+        .e_expect => |expect_expr| cirExprIsProcBacked(module_env, expect_expr.body),
+        .e_return => |return_expr| cirExprIsProcBacked(module_env, return_expr.expr),
+        .e_nominal => |nominal_expr| cirExprIsProcBacked(module_env, nominal_expr.backing_expr),
+        .e_nominal_external => |nominal_expr| cirExprIsProcBacked(module_env, nominal_expr.backing_expr),
+        else => false,
+    };
 }
 
 fn getCallLowLevelOp(self: *Self, caller_env: *const ModuleEnv, func_expr: CIR.Expr) ?CIR.Expr.LowLevel {
@@ -5846,8 +5872,7 @@ fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.E
     }
 
     const current_env = self.all_module_envs[self.current_module_idx];
-    const cir_expr = current_env.store.getExpr(cir_expr_idx);
-    const result = if (cirExprIsCallable(cir_expr)) blk: {
+    const result = if (cirExprIsProcBacked(current_env, cir_expr_idx)) blk: {
         const fn_monotype = try self.monotypeFromTypeVarWithBindings(
             self.current_module_idx,
             self.types_store,
