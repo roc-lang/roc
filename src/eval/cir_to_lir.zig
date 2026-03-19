@@ -403,12 +403,18 @@ pub const LirProgram = struct {
             return error.RuntimeError;
         };
 
+        // Canonicalize direct calls before RC insertion
+        lir.CallCanonicalize.canonicalizeDirectCalls(self.allocator, &lir_store, &.{lir_expr_id}) catch return error.OutOfMemory;
+
         // RC insertion
         var rc_pass = lir.RcInsert.RcInsertPass.init(self.allocator, &lir_store, layout_store_ptr) catch return error.OutOfMemory;
         defer rc_pass.deinit();
         const final_expr_id = rc_pass.insertRcOps(lir_expr_id) catch lir_expr_id;
 
         lir.RcInsert.insertRcOpsIntoSymbolDefsBestEffort(self.allocator, &lir_store, layout_store_ptr);
+
+        // Canonicalize direct calls after RC insertion (RC may introduce new calls)
+        lir.CallCanonicalize.canonicalizeDirectCalls(self.allocator, &lir_store, &.{final_expr_id}) catch return error.OutOfMemory;
 
         // Extract result metadata from the CIR expression
         const cir_expr = module_env.store.getExpr(expr_idx);
