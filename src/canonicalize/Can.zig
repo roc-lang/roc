@@ -10308,12 +10308,12 @@ fn canonicalizeTypeAnnoTagUnion(
         .closed => null,
         .open => blk: {
             switch (type_anno_ctx.type) {
-                .local_anno => {
+                .local_anno, .for_clause_anno => {
                     break :blk try self.env.addTypeAnno(.{ .rigid_var = .{
                         .name = self.env.idents.open_ext,
                     } }, region);
                 },
-                .type_decl_anno, .for_clause_anno => {
+                .type_decl_anno => {
                     return try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{
                         .open_ext_not_allowed_in_type_decl = .{
                             .region = self.parse_ir.tokenizedRegionToRegion(.{ .start = tag_union.ext.open, .end = tag_union.ext.open + 1 }),
