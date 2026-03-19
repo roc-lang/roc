@@ -4349,12 +4349,12 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
                 const arg_vars = platform_types.sliceVars(func.args);
                 if (arg_vars.len == 0) {
                     const func_mono_idx = mir_store.typeOf(mir_expr_id);
-                    const func_mono = mir_store.monotype_store.getMonotype(func_mono_idx);
-                    if (func_mono == .func) {
+                    const resolved_func = mir_store.monotype_store.resolve(func_mono_idx);
+                    if (resolved_func.kind == .func) {
                         mir_expr_id = try mir_store.addExpr(ctx.gpa, .{ .call = .{
                             .func = mir_expr_id,
                             .args = MIR.ExprSpan.empty(),
-                        } }, func_mono.func.ret, base.Region.zero());
+                        } }, mir_store.monotype_store.funcRet(resolved_func), base.Region.zero());
                     }
                 }
             }
