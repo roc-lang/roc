@@ -99,8 +99,6 @@ fn expectTypeAndMonotypeResolversAgree(
 
     var specializations = std.AutoHashMap(types.Var, mir.Monotype.Idx).init(allocator);
     defer specializations.deinit();
-    var nominal_cycle_breakers = std.AutoHashMap(types.Var, mir.Monotype.Idx).init(allocator);
-    defer nominal_cycle_breakers.deinit();
 
     const mono_idx = try mono_store.fromTypeVar(
         allocator,
@@ -108,7 +106,6 @@ fn expectTypeAndMonotypeResolversAgree(
         type_var,
         lt.module_env.idents,
         &specializations,
-        &nominal_cycle_breakers,
         &scratches,
     );
 

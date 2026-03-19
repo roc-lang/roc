@@ -644,14 +644,12 @@ pub const TypeInterner = struct {
         type_var: types.Var,
         common_idents: CommonIdents,
         specializations: *const std.AutoHashMap(types.Var, TypeId),
-        nominal_cycle_breakers: *std.AutoHashMap(types.Var, TypeId),
         scratches: *Scratches,
     ) Allocator.Error!TypeId {
         _ = allocator; // TypeInterner uses self.allocator
         const resolved = types_store.resolveVar(type_var);
 
         if (specializations.get(resolved.var_)) |cached| return cached;
-        if (nominal_cycle_breakers.get(resolved.var_)) |cached| return cached;
 
         return switch (resolved.desc.content) {
             .flex => |flex| {
@@ -670,10 +668,10 @@ pub const TypeInterner = struct {
             },
             .alias => |alias| {
                 const backing_var = types_store.getAliasBackingVar(alias);
-                return try self.fromTypeVar(self.allocator, types_store, backing_var, common_idents, specializations, nominal_cycle_breakers, scratches);
+                return try self.fromTypeVar(self.allocator, types_store, backing_var, common_idents, specializations, scratches);
             },
             .structure => |flat_type| {
-                return try self.fromFlatType(types_store, flat_type, common_idents, specializations, nominal_cycle_breakers, scratches);
+                return try self.fromFlatType(types_store, flat_type, common_idents, specializations, scratches);
             },
             .err => return self.unit_idx,
         };
@@ -685,12 +683,11 @@ pub const TypeInterner = struct {
         flat_type: types.FlatType,
         common_idents: CommonIdents,
         specializations: *const std.AutoHashMap(types.Var, TypeId),
-        nominal_cycle_breakers: *std.AutoHashMap(types.Var, TypeId),
         scratches: *Scratches,
     ) Allocator.Error!TypeId {
         return switch (flat_type) {
             .nominal_type => |nominal| {
-                return try self.fromNominalType(types_store, nominal, common_idents, specializations, nominal_cycle_breakers, scratches);
+                return try self.fromNominalType(types_store, nominal, common_idents, specializations, scratches);
             },
             .empty_record => self.unit_idx,
             .empty_tag_union => try self.internTagUnion(&.{}),
@@ -716,7 +713,7 @@ pub const TypeInterner = struct {
                         }
                         if (seen_name) continue;
 
-                        const field_type = try self.fromTypeVar(self.allocator, types_store, field_var, common_idents, specializations, nominal_cycle_breakers, scratches);
+                        const field_type = try self.fromTypeVar(self.allocator, types_store, field_var, common_idents, specializations, scratches);
                         const sname = try self.internNameFromIdent(scratches.ident_store.?, name);
                         try scratches.fields.append(.{ .name = sname, .ty = field_type });
                     }
@@ -750,7 +747,7 @@ pub const TypeInterner = struct {
                                         }
                                         if (seen_name) continue;
 
-                                        const field_type = try self.fromTypeVar(self.allocator, types_store, field_var, common_idents, specializations, nominal_cycle_breakers, scratches);
+                                        const field_type = try self.fromTypeVar(self.allocator, types_store, field_var, common_idents, specializations, scratches);
                                         const sname = try self.internNameFromIdent(scratches.ident_store.?, name);
                                         try scratches.fields.append(.{ .name = sname, .ty = field_type });
                                     }
@@ -802,7 +799,7 @@ pub const TypeInterner = struct {
                 defer scratches.fields.clearFrom(scratch_top);
 
                 for (names, vars) |name, field_var| {
-                    const field_type = try self.fromTypeVar(self.allocator, types_store, field_var, common_idents, specializations, nominal_cycle_breakers, scratches);
+                    const field_type = try self.fromTypeVar(self.allocator, types_store, field_var, common_idents, specializations, scratches);
                     const sname = try self.internNameFromIdent(scratches.ident_store.?, name);
                     try scratches.fields.append(.{ .name = sname, .ty = field_type });
                 }
@@ -817,7 +814,7 @@ pub const TypeInterner = struct {
                 defer scratches.idxs.clearFrom(scratch_top);
 
                 for (elem_vars) |elem_var| {
-                    const elem_type = try self.fromTypeVar(self.allocator, types_store, elem_var, common_idents, specializations, nominal_cycle_breakers, scratches);
+                    const elem_type = try self.fromTypeVar(self.allocator, types_store, elem_var, common_idents, specializations, scratches);
                     try scratches.idxs.append(elem_type);
                 }
 
@@ -839,7 +836,7 @@ pub const TypeInterner = struct {
                         defer scratches.idxs.clearFrom(idxs_top);
 
                         for (arg_vars) |arg_var| {
-                            const payload_type = try self.fromTypeVar(self.allocator, types_store, arg_var, common_idents, specializations, nominal_cycle_breakers, scratches);
+                            const payload_type = try self.fromTypeVar(self.allocator, types_store, arg_var, common_idents, specializations, scratches);
                             try scratches.idxs.append(payload_type);
                         }
 
@@ -898,9 +895,9 @@ pub const TypeInterner = struct {
                 std.mem.sort(TagKey, collected_tags, &self.name_pool, TagKey.sortByNameAsc);
                 return try self.internTagUnion(collected_tags);
             },
-            .fn_pure => |func| try self.fromFuncType(types_store, func, false, common_idents, specializations, nominal_cycle_breakers, scratches),
-            .fn_effectful => |func| try self.fromFuncType(types_store, func, true, common_idents, specializations, nominal_cycle_breakers, scratches),
-            .fn_unbound => |func| try self.fromFuncType(types_store, func, false, common_idents, specializations, nominal_cycle_breakers, scratches),
+            .fn_pure => |func| try self.fromFuncType(types_store, func, false, common_idents, specializations, scratches),
+            .fn_effectful => |func| try self.fromFuncType(types_store, func, true, common_idents, specializations, scratches),
+            .fn_unbound => |func| try self.fromFuncType(types_store, func, false, common_idents, specializations, scratches),
         };
     }
 
@@ -911,7 +908,6 @@ pub const TypeInterner = struct {
         effectful: bool,
         common_idents: CommonIdents,
         specializations: *const std.AutoHashMap(types.Var, TypeId),
-        nominal_cycle_breakers: *std.AutoHashMap(types.Var, TypeId),
         scratches: *Scratches,
     ) Allocator.Error!TypeId {
         const arg_vars = types_store.sliceVars(func.args);
@@ -919,11 +915,11 @@ pub const TypeInterner = struct {
         defer scratches.idxs.clearFrom(scratch_top);
 
         for (arg_vars) |arg_var| {
-            const arg_type = try self.fromTypeVar(self.allocator, types_store, arg_var, common_idents, specializations, nominal_cycle_breakers, scratches);
+            const arg_type = try self.fromTypeVar(self.allocator, types_store, arg_var, common_idents, specializations, scratches);
             try scratches.idxs.append(arg_type);
         }
 
-        const ret = try self.fromTypeVar(self.allocator, types_store, func.ret, common_idents, specializations, nominal_cycle_breakers, scratches);
+        const ret = try self.fromTypeVar(self.allocator, types_store, func.ret, common_idents, specializations, scratches);
         return try self.internFunc(scratches.idxs.sliceFromStart(scratch_top), ret, effectful);
     }
 
@@ -933,7 +929,6 @@ pub const TypeInterner = struct {
         nominal: types.NominalType,
         common_idents: CommonIdents,
         specializations: *const std.AutoHashMap(types.Var, TypeId),
-        nominal_cycle_breakers: *std.AutoHashMap(types.Var, TypeId),
         scratches: *Scratches,
     ) Allocator.Error!NominalInstanceKey {
         const ident_store = if (scratches.module_env) |env| env.getIdentStoreConst() else scratches.ident_store.?;
@@ -952,7 +947,6 @@ pub const TypeInterner = struct {
                 arg_var,
                 common_idents,
                 specializations,
-                nominal_cycle_breakers,
                 scratches,
             );
             try scratches.idxs.append(arg_mono);
@@ -972,7 +966,6 @@ pub const TypeInterner = struct {
         nominal: types.NominalType,
         common_idents: CommonIdents,
         specializations: *const std.AutoHashMap(types.Var, TypeId),
-        nominal_cycle_breakers: *std.AutoHashMap(types.Var, TypeId),
         scratches: *Scratches,
     ) Allocator.Error!TypeId {
         const ident = nominal.ident.ident_idx;
@@ -987,7 +980,7 @@ pub const TypeInterner = struct {
             if (ident.eql(common_idents.list)) {
                 const type_args = types_store.sliceNominalArgs(nominal);
                 if (type_args.len > 0) {
-                    const elem_type = try self.fromTypeVar(self.allocator, types_store, type_args[0], common_idents, specializations, nominal_cycle_breakers, scratches);
+                    const elem_type = try self.fromTypeVar(self.allocator, types_store, type_args[0], common_idents, specializations, scratches);
                     return try self.internList(elem_type);
                 }
                 return self.unit_idx;
@@ -996,7 +989,7 @@ pub const TypeInterner = struct {
             if (ident.eql(common_idents.box)) {
                 const type_args = types_store.sliceNominalArgs(nominal);
                 if (type_args.len > 0) {
-                    const inner_type = try self.fromTypeVar(self.allocator, types_store, type_args[0], common_idents, specializations, nominal_cycle_breakers, scratches);
+                    const inner_type = try self.fromTypeVar(self.allocator, types_store, type_args[0], common_idents, specializations, scratches);
                     return try self.internBox(inner_type);
                 }
                 return self.unit_idx;
@@ -1024,7 +1017,6 @@ pub const TypeInterner = struct {
             nominal,
             common_idents,
             specializations,
-            nominal_cycle_breakers,
             scratches,
         );
 
@@ -1054,7 +1046,6 @@ pub const TypeInterner = struct {
             nominal,
             common_idents,
             specializations,
-            nominal_cycle_breakers,
             scratches,
         );
         defer scratches.named_specializations.clearFrom(named_specializations_top);
@@ -1067,7 +1058,6 @@ pub const TypeInterner = struct {
             backing_var,
             common_idents,
             specializations,
-            nominal_cycle_breakers,
             scratches,
         );
         std.debug.assert(!backing_idx.isNone());
@@ -1169,7 +1159,6 @@ pub const TypeInterner = struct {
         nominal: types.NominalType,
         common_idents: CommonIdents,
         specializations: *const std.AutoHashMap(types.Var, TypeId),
-        nominal_cycle_breakers: *std.AutoHashMap(types.Var, TypeId),
         scratches: *Scratches,
     ) Allocator.Error!u32 {
         const top = scratches.named_specializations.top();
@@ -1200,7 +1189,6 @@ pub const TypeInterner = struct {
                 actual_arg,
                 common_idents,
                 specializations,
-                nominal_cycle_breakers,
                 scratches,
             );
             try scratches.named_specializations.append(.{
