@@ -2792,3 +2792,38 @@ test "Dec.abs lowers to num_abs with Dec monotype, not unit" {
         try testing.expectEqual(Monotype.Prim.dec, ret_id.builtinPrim().?);
     }
 }
+
+// --- Nominal instance cache tests ---
+
+test "nominal cache: non-recursive nominal returns direct type (not .rec)" {
+    var env = try MirTestEnv.initModule("Test",
+        \\Color := [Red, Green, Blue]
+        \\
+        \\x : Color
+        \\x = Color.Red
+    );
+    defer env.deinit();
+    const expr = try env.lowerNamedDef("x");
+    const raw_type = env.mir_store.typeOf(expr);
+    // Non-recursive nominal should NOT produce a .rec indirection.
+    try testing.expect(raw_type.kind == .tag_union);
+}
+
+test "nominal cache: identical nominal instantiations share TypeId" {
+    var env = try MirTestEnv.initModule("Test",
+        \\Pair(a) := { fst: a, snd: a }
+        \\
+        \\x : Pair(U64)
+        \\x = { fst: 1, snd: 2 }
+        \\
+        \\y : Pair(U64)
+        \\y = { fst: 3, snd: 4 }
+    );
+    defer env.deinit();
+    const expr_x = try env.lowerNamedDef("x");
+    const expr_y = try env.lowerNamedDef("y");
+    const type_x = env.mir_store.typeOf(expr_x);
+    const type_y = env.mir_store.typeOf(expr_y);
+    // Same nominal with same args should return the exact same TypeId.
+    try testing.expect(type_x.eql(type_y));
+}

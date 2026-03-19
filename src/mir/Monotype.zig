@@ -181,6 +181,20 @@ pub const StructuralNamePool = struct {
     }
 };
 
+/// Key identifying a nominal type instance by its origin, type name, and type arguments.
+pub const NominalInstanceKey = struct {
+    origin_name_id: StructuralNameId,
+    type_name_id: StructuralNameId,
+    args: IdxListId,
+};
+
+const NominalCacheEntry = union(enum) {
+    /// Lowering is in progress. rec_id is allocated lazily on recursive hit.
+    in_progress: TypeId, // TypeId.none until recursion detected
+    /// Fully lowered canonical type.
+    resolved: TypeId,
+};
+
 // ═══════════════════════════════════════════════════════════════
 // Internal helpers
 // ═══════════════════════════════════════════════════════════════
@@ -286,6 +300,9 @@ pub const TypeInterner = struct {
     // Structural name pool
     name_pool: StructuralNamePool,
 
+    // Nominal instance cache
+    nominal_cache: std.AutoHashMapUnmanaged(NominalInstanceKey, NominalCacheEntry),
+
     // Pre-interned builtins
     unit_idx: TypeId,
     prim_idxs: [prim_count]TypeId,
@@ -354,6 +371,7 @@ pub const TypeInterner = struct {
             .union_map = .{},
             .func_map = .{},
             .name_pool = StructuralNamePool.init(allocator),
+            .nominal_cache = .{},
             .unit_idx = undefined,
             .prim_idxs = undefined,
             .bool_tag_union_idx = TypeId.none,
@@ -390,6 +408,7 @@ pub const TypeInterner = struct {
         self.union_map.deinit(self.allocator);
         self.func_map.deinit(self.allocator);
         self.name_pool.deinit();
+        self.nominal_cache.deinit(self.allocator);
     }
 
     /// Look up the pre-interned TypeId for a primitive type.
@@ -654,7 +673,7 @@ pub const TypeInterner = struct {
                 return try self.fromTypeVar(self.allocator, types_store, backing_var, common_idents, specializations, nominal_cycle_breakers, scratches);
             },
             .structure => |flat_type| {
-                return try self.fromFlatType(types_store, resolved.var_, flat_type, common_idents, specializations, nominal_cycle_breakers, scratches);
+                return try self.fromFlatType(types_store, flat_type, common_idents, specializations, nominal_cycle_breakers, scratches);
             },
             .err => return self.unit_idx,
         };
@@ -663,7 +682,6 @@ pub const TypeInterner = struct {
     fn fromFlatType(
         self: *TypeInterner,
         types_store: *const types.Store,
-        var_: types.Var,
         flat_type: types.FlatType,
         common_idents: CommonIdents,
         specializations: *const std.AutoHashMap(types.Var, TypeId),
@@ -672,7 +690,7 @@ pub const TypeInterner = struct {
     ) Allocator.Error!TypeId {
         return switch (flat_type) {
             .nominal_type => |nominal| {
-                return try self.fromNominalType(types_store, var_, nominal, common_idents, specializations, nominal_cycle_breakers, scratches);
+                return try self.fromNominalType(types_store, nominal, common_idents, specializations, nominal_cycle_breakers, scratches);
             },
             .empty_record => self.unit_idx,
             .empty_tag_union => try self.internTagUnion(&.{}),
@@ -909,10 +927,48 @@ pub const TypeInterner = struct {
         return try self.internFunc(scratches.idxs.sliceFromStart(scratch_top), ret, effectful);
     }
 
+    fn buildNominalCacheKey(
+        self: *TypeInterner,
+        types_store: *const types.Store,
+        nominal: types.NominalType,
+        common_idents: CommonIdents,
+        specializations: *const std.AutoHashMap(types.Var, TypeId),
+        nominal_cycle_breakers: *std.AutoHashMap(types.Var, TypeId),
+        scratches: *Scratches,
+    ) Allocator.Error!NominalInstanceKey {
+        const ident_store = if (scratches.module_env) |env| env.getIdentStoreConst() else scratches.ident_store.?;
+        const origin_text = ident_store.getText(nominal.origin_module);
+        const type_text = ident_store.getText(nominal.ident.ident_idx);
+        const origin_name_id = try self.name_pool.intern(origin_text);
+        const type_name_id = try self.name_pool.intern(type_text);
+
+        const actual_args = types_store.sliceNominalArgs(nominal);
+        const idx_top = scratches.idxs.top();
+        defer scratches.idxs.clearFrom(idx_top);
+        for (actual_args) |arg_var| {
+            const arg_mono = try self.fromTypeVar(
+                self.allocator,
+                types_store,
+                arg_var,
+                common_idents,
+                specializations,
+                nominal_cycle_breakers,
+                scratches,
+            );
+            try scratches.idxs.append(arg_mono);
+        }
+        const args = try self.internIdxList(scratches.idxs.sliceFromStart(idx_top));
+
+        return .{
+            .origin_name_id = origin_name_id,
+            .type_name_id = type_name_id,
+            .args = args,
+        };
+    }
+
     fn fromNominalType(
         self: *TypeInterner,
         types_store: *const types.Store,
-        nominal_var: types.Var,
         nominal: types.NominalType,
         common_idents: CommonIdents,
         specializations: *const std.AutoHashMap(types.Var, TypeId),
@@ -961,16 +1017,38 @@ pub const TypeInterner = struct {
             if (ident.eql(common_idents.dec_type)) return self.primIdx(.dec);
         }
 
-        // Non-builtin nominal: strip wrapper, follow backing var.
-        // Use cycle breakers for recursive nominal types.
-        if (nominal_cycle_breakers.get(nominal_var)) |cached| return cached;
-        if (findEquivalentNominalCycleBreaker(types_store, nominal, nominal_cycle_breakers)) |cached| {
-            return cached;
+        // Non-builtin nominal: use nominal instance cache for dedup.
+        // 1. Build canonical cache key (lowers args as side effect).
+        const cache_key = try self.buildNominalCacheKey(
+            types_store,
+            nominal,
+            common_idents,
+            specializations,
+            nominal_cycle_breakers,
+            scratches,
+        );
+
+        // 2. Check nominal instance cache.
+        if (self.nominal_cache.get(cache_key)) |entry| {
+            switch (entry) {
+                .resolved => |type_id| return type_id,
+                .in_progress => |rec_id| {
+                    // Recursive hit: allocate .rec lazily if first time.
+                    if (rec_id.isNone()) {
+                        const new_rec = try self.reserveRecursive();
+                        // Must re-fetch after potential map growth from reserveRecursive.
+                        self.nominal_cache.getPtr(cache_key).?.* = .{ .in_progress = new_rec };
+                        return new_rec;
+                    }
+                    return rec_id;
+                },
+            }
         }
 
-        const rec_id = try self.reserveRecursive();
-        try nominal_cycle_breakers.put(nominal_var, rec_id);
+        // 3. Cache miss: mark in-progress before recursing.
+        try self.nominal_cache.put(self.allocator, cache_key, .{ .in_progress = TypeId.none });
 
+        // 4. Push nominal arg specializations (args already lowered by buildNominalCacheKey).
         const named_specializations_top = try self.pushNominalArgSpecializations(
             types_store,
             nominal,
@@ -981,15 +1059,34 @@ pub const TypeInterner = struct {
         );
         defer scratches.named_specializations.clearFrom(named_specializations_top);
 
+        // 5. Lower the backing var.
         const backing_var = types_store.getNominalBackingVar(nominal);
-        const backing_idx = try self.fromTypeVar(self.allocator, types_store, backing_var, common_idents, specializations, nominal_cycle_breakers, scratches);
+        const backing_idx = try self.fromTypeVar(
+            self.allocator,
+            types_store,
+            backing_var,
+            common_idents,
+            specializations,
+            nominal_cycle_breakers,
+            scratches,
+        );
+        std.debug.assert(!backing_idx.isNone());
 
-        self.finalizeRecursive(rec_id, backing_idx);
+        // 6. Finalize: check if recursion occurred.
+        //    Must re-fetch pointer because recursive lowering may have grown the map.
+        const entry_ptr = self.nominal_cache.getPtr(cache_key).?;
+        const in_progress_rec = entry_ptr.in_progress;
 
-        if (std.debug.runtime_safety) {
-            std.debug.assert(!backing_idx.isNone());
+        if (!in_progress_rec.isNone()) {
+            // Recursive: finalize the .rec slot, cache the .rec TypeId.
+            self.finalizeRecursive(in_progress_rec, backing_idx);
+            entry_ptr.* = .{ .resolved = in_progress_rec };
+            return in_progress_rec;
+        } else {
+            // Non-recursive: cache the backing type directly.
+            entry_ptr.* = .{ .resolved = backing_idx };
+            return backing_idx;
         }
-        return rec_id;
     }
 
     fn lookupNamedSpecialization(scratches: *const Scratches, name: Ident.Idx) ?TypeId {
@@ -1160,42 +1257,6 @@ pub const TypeInterner = struct {
         return null;
     }
 };
-
-fn findEquivalentNominalCycleBreaker(
-    types_store: *const types.Store,
-    nominal: types.NominalType,
-    nominal_cycle_breakers: *const std.AutoHashMap(types.Var, TypeId),
-) ?TypeId {
-    var iter = nominal_cycle_breakers.iterator();
-    while (iter.next()) |entry| {
-        const resolved = types_store.resolveVar(entry.key_ptr.*);
-        if (resolved.desc.content != .structure) continue;
-        const flat = resolved.desc.content.structure;
-        if (flat != .nominal_type) continue;
-        const other_nominal = flat.nominal_type;
-
-        if (!nominal.origin_module.eql(other_nominal.origin_module)) continue;
-        if (!nominal.ident.ident_idx.eql(other_nominal.ident.ident_idx)) continue;
-
-        const lhs_args = types_store.sliceNominalArgs(nominal);
-        const rhs_args = types_store.sliceNominalArgs(other_nominal);
-        if (lhs_args.len != rhs_args.len) continue;
-
-        var args_match = true;
-        for (lhs_args, rhs_args) |lhs_arg, rhs_arg| {
-            const lhs_resolved = types_store.resolveVar(lhs_arg);
-            const rhs_resolved = types_store.resolveVar(rhs_arg);
-            if (lhs_resolved.var_ != rhs_resolved.var_) {
-                args_match = false;
-                break;
-            }
-        }
-
-        if (args_match) return entry.value_ptr.*;
-    }
-
-    return null;
-}
 
 /// Backward-compat alias.
 pub const Store = TypeInterner;
