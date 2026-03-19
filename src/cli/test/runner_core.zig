@@ -77,7 +77,7 @@ pub fn crossCompile(
     const output_arg = try std.fmt.allocPrint(allocator, "--output={s}", .{output_name});
     defer allocator.free(output_arg);
 
-    const backend_arg = if (backend) |b| try std.fmt.allocPrint(allocator, "--backend={s}", .{b}) else null;
+    const backend_arg = if (backend) |b| try std.fmt.allocPrint(allocator, "--opt={s}", .{b}) else null;
     defer if (backend_arg) |b| allocator.free(b);
 
     var argv_buf: [6][]const u8 = undefined;
@@ -119,7 +119,7 @@ pub fn buildNative(
     const output_arg = try std.fmt.allocPrint(allocator, "--output={s}", .{output_name});
     defer allocator.free(output_arg);
 
-    const backend_arg = if (backend) |b| try std.fmt.allocPrint(allocator, "--backend={s}", .{b}) else null;
+    const backend_arg = if (backend) |b| try std.fmt.allocPrint(allocator, "--opt={s}", .{b}) else null;
     defer if (backend_arg) |b| allocator.free(b);
 
     var argv_buf: [5][]const u8 = undefined;
@@ -199,7 +199,7 @@ pub fn runNative(
 }
 
 /// Run a Roc app with --test mode and IO spec verification.
-/// When backend is set, builds the executable first with `roc build --backend=<name>`
+/// When backend is set, builds the executable first with `roc build --opt=<name>`
 /// then runs the resulting binary with `--test <spec>`.
 /// When backend is null, uses `roc run --test=<spec>` (interpreter).
 pub fn runWithIoSpec(

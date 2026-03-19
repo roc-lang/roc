@@ -39,7 +39,7 @@ pub const GlueArgs = struct {
     glue_spec: []const u8,
     output_dir: []const u8,
     platform_path: []const u8,
-    backend: EvalBackend = .interpreter,
+    backend: EvalBackend = .dev,
 };
 
 /// Error types for glue generation operations.

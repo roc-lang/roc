@@ -3,7 +3,7 @@
 //! This executable runs during `zig build` on the host machine to:
 //! 1. Parse and type-check the Builtin.roc module (which contains nested Bool, Try, Str, Dict, Set types)
 //! 2. Serialize the resulting ModuleEnv to a binary file
-//! 3. Output Builtin.bin to zig-out/builtins/ (which gets embedded in the roc binary)
+//! 3. Output Builtin.bin and builtin_indices.bin to paths provided by the build system
 
 const std = @import("std");
 const base = @import("base");
@@ -1265,8 +1265,12 @@ fn readFileAllocPath(gpa: Allocator, path: []const u8) ![]u8 {
 /// This runs during `zig build` on the host machine to generate .bin files
 /// that get embedded into the final roc executable.
 ///
-/// The build system passes the absolute path to Builtin.roc as the first argument for cache tracking;
-/// we honor that when present so the compiler works regardless of the current working directory.
+/// The build system passes:
+/// 1. the absolute path to Builtin.roc for cache tracking
+/// 2. the output path for Builtin.bin
+/// 3. the output path for builtin_indices.bin
+///
+/// We also keep project-relative defaults so manual runs still succeed.
 pub fn main() !void {
     var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
     defer {
@@ -1280,9 +1284,11 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(gpa);
     defer std.process.argsFree(gpa, args);
 
-    // Prefer the absolute path provided by the build system, but fall back to the
-    // project-relative path so manual runs (e.g. `zig build run`) still succeed.
+    // Prefer the explicit paths provided by the build system, but fall back to the
+    // project-relative defaults so manual runs still succeed.
     const builtin_src_path = if (args.len >= 2) args[1] else "src/build/roc/Builtin.roc";
+    const builtin_bin_path = if (args.len >= 3) args[2] else "zig-out/builtins/Builtin.bin";
+    const builtin_indices_path = if (args.len >= 4) args[3] else "zig-out/builtins/builtin_indices.bin";
 
     // Read the Builtin.roc source file at runtime
     // NOTE: We must free this source manually; CommonEnv.deinit() does not free the source.
@@ -1388,11 +1394,16 @@ pub fn main() !void {
     try builtin_env.common.setNodeIndexById(gpa, f64_ident, @intCast(@intFromEnum(f64_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, numeral_ident, @intCast(@intFromEnum(numeral_type_idx)));
 
-    // Create output directory
-    try std.fs.cwd().makePath("zig-out/builtins");
+    // Create output directories when needed.
+    if (std.fs.path.dirname(builtin_bin_path)) |dir| {
+        try std.fs.cwd().makePath(dir);
+    }
+    if (std.fs.path.dirname(builtin_indices_path)) |dir| {
+        try std.fs.cwd().makePath(dir);
+    }
 
     // Serialize the single Builtin module
-    try serializeModuleEnv(gpa, builtin_env, "zig-out/builtins/Builtin.bin");
+    try serializeModuleEnv(gpa, builtin_env, builtin_bin_path);
 
     // Create and serialize builtin indices
     const builtin_indices = BuiltinIndices{
@@ -1449,7 +1460,7 @@ pub fn main() !void {
     // This ensures BuiltinIndices stays in sync with the actual Builtin module content
     try validateBuiltinIndicesCompleteness(builtin_env, builtin_indices);
 
-    try serializeBuiltinIndices(builtin_indices, "zig-out/builtins/builtin_indices.bin");
+    try serializeBuiltinIndices(builtin_indices, builtin_indices_path);
 }
 
 /// Validates that BuiltinIndices contains all nominal type declarations in the Builtin module.

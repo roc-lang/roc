@@ -11,6 +11,7 @@ const check = @import("check");
 const Check = check.Check;
 const builtins = @import("builtins");
 const eval_mod = @import("eval");
+const wasm_runner = @import("wasm_runner.zig");
 const roc_target = @import("roc_target");
 const compile = @import("compile");
 const single_module = compile.single_module;
@@ -26,6 +27,12 @@ const LoadedModule = builtin_loading.LoadedModule;
 const DevEvaluator = eval_mod.DevEvaluator;
 
 pub const Backend = @import("eval").EvalBackend;
+const ExecutionBackend = enum {
+    interpreter,
+    dev,
+    llvm,
+    wasm,
+};
 const CommonEnv = base.CommonEnv;
 const RocStr = builtins.str.RocStr;
 
@@ -78,8 +85,8 @@ pub const Repl = struct {
     /// Shared crash context managed by the host (optional)
     crash_ctx: ?*CrashContext,
     /// Backend for code evaluation
-    backend: Backend,
-    /// DevEvaluator instance (only initialized when backend is .dev)
+    backend: ExecutionBackend,
+    /// DevEvaluator instance (initialized when backend is .dev or .llvm)
     dev_evaluator: ?DevEvaluator,
     /// ModuleEnv from last successful evaluation (for snapshot generation)
     last_module_env: ?*ModuleEnv,
@@ -95,10 +102,23 @@ pub const Repl = struct {
     builtin_module: LoadedModule,
 
     pub fn init(allocator: Allocator, roc_ops: *RocOps, crash_ctx: ?*CrashContext) !Repl {
-        return initWithBackend(allocator, roc_ops, crash_ctx, .interpreter);
+        return initInternal(allocator, roc_ops, crash_ctx, .interpreter);
     }
 
     pub fn initWithBackend(allocator: Allocator, roc_ops: *RocOps, crash_ctx: ?*CrashContext, backend: Backend) !Repl {
+        const execution_backend: ExecutionBackend = switch (backend) {
+            .interpreter => .interpreter,
+            .dev => .dev,
+            .llvm => .llvm,
+        };
+        return initInternal(allocator, roc_ops, crash_ctx, execution_backend);
+    }
+
+    pub fn initWithWasmBackend(allocator: Allocator, roc_ops: *RocOps, crash_ctx: ?*CrashContext) !Repl {
+        return initInternal(allocator, roc_ops, crash_ctx, .wasm);
+    }
+
+    fn initInternal(allocator: Allocator, roc_ops: *RocOps, crash_ctx: ?*CrashContext, backend: ExecutionBackend) !Repl {
         const compiled_builtins = @import("compiled_builtins");
 
         // Load builtin indices once at startup (generated at build time)
@@ -109,9 +129,9 @@ pub const Repl = struct {
         var builtin_module = try builtin_loading.loadCompiledModule(allocator, compiled_builtins.builtin_bin, "Builtin", builtin_source);
         errdefer builtin_module.deinit();
 
-        // Initialize DevEvaluator if using dev backend
+        // Initialize DevEvaluator if using a native-code backend
         var dev_evaluator: ?DevEvaluator = null;
-        if (backend == .dev) {
+        if (backend == .dev or backend == .llvm) {
             dev_evaluator = DevEvaluator.init(allocator, null) catch null;
         }
 
@@ -741,7 +761,7 @@ pub const Repl = struct {
             => {},
         }
 
-        if (self.backend == .dev) {
+        if (self.backend == .dev or self.backend == .llvm or self.backend == .wasm) {
             if (try self.getDeferredCompileCrash(module_env, final_expr_idx)) |crash_msg| {
                 return .{ .eval_error = crash_msg };
             }
@@ -753,53 +773,74 @@ pub const Repl = struct {
         };
 
         if (comptime builtin.os.tag != .freestanding) {
-            if (self.backend == .dev) {
-                if (self.dev_evaluator) |*dev_eval| {
-                    const all_module_envs: []const *ModuleEnv = &.{ self.builtin_module.env, module_env };
-                    var code_result = dev_eval.generateCode(module_env, inspect_expr, all_module_envs, null) catch |err| {
-                        return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Dev backend codegen error: {s}", .{@errorName(err)}) };
-                    };
-                    defer code_result.deinit();
-
-                    var executable = eval_mod.ExecutableMemory.initWithEntryOffset(code_result.code, code_result.entry_offset) catch |err| {
-                        return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Dev backend executable error: {s}", .{@errorName(err)}) };
-                    };
-                    defer executable.deinit();
-
-                    var result_buf: [512]u8 align(16) = @splat(0);
-                    dev_eval.callWithCrashProtection(&executable, @ptrCast(&result_buf)) catch |err| switch (err) {
-                        error.RocCrashed => {
-                            if (dev_eval.getCrashMessage()) |msg| {
-                                return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Dev backend crash: {s}", .{msg}) };
-                            }
-                            if (self.crash_ctx) |ctx| {
-                                if (ctx.crashMessage()) |msg| {
-                                    return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Dev backend crash: {s}", .{msg}) };
-                                }
-                            }
-                            return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Dev backend execution error: {s}", .{@errorName(err)}) };
-                        },
-                        error.Segfault => {
-                            return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Dev backend execution error: {s}", .{@errorName(err)}) };
-                        },
-                    };
-
-                    const roc_str: *const RocStr = @ptrCast(@alignCast(&result_buf));
-                    const slice = if (roc_str.isSmallStr())
-                        roc_str.asSlice()
-                    else if (roc_str.len() > 0 and roc_str.len() < 1024 * 1024)
-                        roc_str.asSlice()
-                    else
-                        return .{ .eval_error = try self.allocator.dupe(u8, "Dev backend returned invalid string") };
-                    const output = self.allocator.dupe(u8, slice) catch {
-                        return .{ .eval_error = try self.allocator.dupe(u8, "Out of memory") };
-                    };
-                    return .{ .expression = output };
-                }
+            switch (self.backend) {
+                .dev, .llvm => return self.evaluateWithDev(module_env, inspect_expr),
+                .wasm => return self.evaluateWithWasm(module_env, inspect_expr),
+                .interpreter => {},
             }
         }
 
         return self.evaluateWithInterpreter(module_env, inspect_expr, &imported_modules, &checker);
+    }
+
+    fn dupResultStr(self: *Repl, result_buf: *align(16) [512]u8, backend_name: []const u8) ![]const u8 {
+        const roc_str: *const RocStr = @ptrCast(@alignCast(result_buf));
+        const slice = if (roc_str.isSmallStr())
+            roc_str.asSlice()
+        else if (roc_str.len() > 0 and roc_str.len() < 1024 * 1024)
+            roc_str.asSlice()
+        else
+            return std.fmt.allocPrint(self.allocator, "{s} backend returned invalid string", .{backend_name});
+
+        return self.allocator.dupe(u8, slice);
+    }
+
+    fn evaluateWithDev(self: *Repl, module_env: *ModuleEnv, inspect_expr: can.CIR.Expr.Idx) !StepResult {
+        if (self.dev_evaluator == null) {
+            return .{ .eval_error = try self.allocator.dupe(u8, "Dev backend unavailable") };
+        }
+        const backend_name = if (self.backend == .llvm) "LLVM" else "Dev";
+        const all_module_envs: []const *ModuleEnv = &.{ self.builtin_module.env, module_env };
+        var code_result = self.dev_evaluator.?.generateCode(module_env, inspect_expr, all_module_envs, null) catch |err| {
+            return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "{s} backend codegen error: {s}", .{ backend_name, @errorName(err) }) };
+        };
+        defer code_result.deinit();
+
+        var executable = eval_mod.ExecutableMemory.initWithEntryOffset(code_result.code, code_result.entry_offset) catch |err| {
+            return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "{s} backend executable error: {s}", .{ backend_name, @errorName(err) }) };
+        };
+        defer executable.deinit();
+
+        var result_buf: [512]u8 align(16) = @splat(0);
+        self.dev_evaluator.?.callWithCrashProtection(&executable, @ptrCast(&result_buf)) catch |err| switch (err) {
+            error.RocCrashed => {
+                if (self.dev_evaluator.?.getCrashMessage()) |msg| {
+                    return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "{s} backend crash: {s}", .{ backend_name, msg }) };
+                }
+                if (self.crash_ctx) |ctx| {
+                    if (ctx.crashMessage()) |msg| {
+                        return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "{s} backend crash: {s}", .{ backend_name, msg }) };
+                    }
+                }
+                return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "{s} backend execution error: {s}", .{ backend_name, @errorName(err) }) };
+            },
+            error.Segfault => {
+                return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "{s} backend execution error: {s}", .{ backend_name, @errorName(err) }) };
+            },
+        };
+
+        const output = self.dupResultStr(&result_buf, backend_name) catch {
+            return .{ .eval_error = try self.allocator.dupe(u8, "Out of memory") };
+        };
+        return .{ .expression = output };
+    }
+
+    fn evaluateWithWasm(self: *Repl, module_env: *ModuleEnv, inspect_expr: can.CIR.Expr.Idx) !StepResult {
+        const output = wasm_runner.wasmEvaluatorStr(self.allocator, module_env, inspect_expr, self.builtin_module.env) catch |err| {
+            return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Wasm backend execution error: {s}", .{@errorName(err)}) };
+        };
+
+        return .{ .expression = output };
     }
 
     /// Evaluate a str_inspekt-wrapped expression using the interpreter.

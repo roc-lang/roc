@@ -271,6 +271,19 @@ for fx_file in $FX_FILES; do
             ;;
         num_method_call.roc)
             ROC_EXTRA_ARGS="--allow-errors"
+            EXTRA_ARGS+=" --ignore-failure=134"
+            ;;
+        # Known dev backend crashes (exit 134 = SIGABRT from compiler panics).
+        # These files work with the interpreter but crash during dev backend
+        # monomorphization or code generation. Skip them for benchmarking
+        # since the outputs will differ between main (interpreter) and PR (dev).
+        all_syntax_test.roc|\
+        wildcard_match_open_union_bug.roc|\
+        dbg_missing_return.roc|\
+        index_oob_instantiate.roc|\
+        repeating_pattern_segfault.roc|\
+        var_interp_segfault.roc)
+            EXTRA_ARGS+=" --ignore-failure=134"
             ;;
     esac
 

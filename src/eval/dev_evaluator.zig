@@ -702,12 +702,12 @@ pub const DevEvaluator = struct {
         // as calls, not as first-class function values.
         if (arg_layouts.len == 0) {
             const func_mono_idx = mir_store.typeOf(mir_expr_id);
-            const func_mono = mir_store.monotype_store.getMonotype(func_mono_idx);
-            if (func_mono == .func) {
+            const resolved_func = mir_store.monotype_store.resolve(func_mono_idx);
+            if (resolved_func.kind == .func) {
                 mir_expr_id = mir_store.addExpr(self.allocator, .{ .call = .{
                     .func = mir_expr_id,
                     .args = MIR.ExprSpan.empty(),
-                } }, func_mono.func.ret, base.Region.zero()) catch return error.OutOfMemory;
+                } }, mir_store.monotype_store.funcRet(resolved_func), base.Region.zero()) catch return error.OutOfMemory;
             }
         }
 

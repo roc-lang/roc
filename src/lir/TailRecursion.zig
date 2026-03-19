@@ -145,14 +145,21 @@ pub const TailRecursionPass = struct {
         const expr = self.store.getExpr(expr_id);
         switch (expr) {
             .call => |call| {
-                const fn_expr = self.store.getExpr(call.fn_expr);
-                switch (fn_expr) {
-                    .lookup => |lookup| {
-                        if (lookup.symbol.eql(self.target_symbol)) {
-                            return call.args;
+                switch (call.callee) {
+                    .direct => |symbol| {
+                        if (symbol.eql(self.target_symbol)) return call.args;
+                    },
+                    .expr => |callee_expr| {
+                        const fn_expr = self.store.getExpr(callee_expr);
+                        switch (fn_expr) {
+                            .lookup => |lookup| {
+                                if (lookup.symbol.eql(self.target_symbol)) {
+                                    return call.args;
+                                }
+                            },
+                            else => {},
                         }
                     },
-                    else => {},
                 }
             },
             else => {},
@@ -498,11 +505,10 @@ test "TailRecursionPass: tail call is transformed to jump" {
     const i64_layout = @import("layout").Idx.i64;
 
     // Build: f(arg)
-    const fn_lookup = try store.addExpr(.{ .lookup = .{ .symbol = target_sym, .layout_idx = i64_layout } }, Region.zero());
     const arg_lookup = try store.addExpr(.{ .lookup = .{ .symbol = arg_sym, .layout_idx = i64_layout } }, Region.zero());
     const call_args = try store.addExprSpan(&.{arg_lookup});
     const call_expr = try store.addExpr(.{ .call = .{
-        .fn_expr = fn_lookup,
+        .callee = .{ .direct = target_sym },
         .args = call_args,
         .fn_layout = i64_layout,
         .ret_layout = i64_layout,
@@ -560,11 +566,10 @@ test "TailRecursionPass: non-tail call is not transformed" {
     const i64_layout = @import("layout").Idx.i64;
 
     // Build: f(arg)
-    const fn_lookup = try store.addExpr(.{ .lookup = .{ .symbol = target_sym, .layout_idx = i64_layout } }, Region.zero());
     const arg_lookup = try store.addExpr(.{ .lookup = .{ .symbol = arg_sym, .layout_idx = i64_layout } }, Region.zero());
     const call_args = try store.addExprSpan(&.{arg_lookup});
     const call_expr = try store.addExpr(.{ .call = .{
-        .fn_expr = fn_lookup,
+        .callee = .{ .direct = target_sym },
         .args = call_args,
         .fn_layout = i64_layout,
         .ret_layout = i64_layout,
@@ -622,11 +627,10 @@ test "makeTailRecursive: end-to-end transforms tail-recursive body" {
     const param_layouts = try store.addLayoutIdxSpan(&.{i64_layout});
 
     // Build: f(param)
-    const fn_lookup = try store.addExpr(.{ .lookup = .{ .symbol = target_sym, .layout_idx = i64_layout } }, Region.zero());
     const arg_lookup = try store.addExpr(.{ .lookup = .{ .symbol = param_sym, .layout_idx = i64_layout } }, Region.zero());
     const call_args = try store.addExprSpan(&.{arg_lookup});
     const call_expr = try store.addExpr(.{ .call = .{
-        .fn_expr = fn_lookup,
+        .callee = .{ .direct = target_sym },
         .args = call_args,
         .fn_layout = i64_layout,
         .ret_layout = i64_layout,
@@ -692,11 +696,10 @@ test "TailRecursionPass: tail call inside switch_stmt branch is transformed" {
     const i64_layout = @import("layout").Idx.i64;
 
     // Build branch 0 body: let result = f(arg) in ret result
-    const fn_lookup = try store.addExpr(.{ .lookup = .{ .symbol = target_sym, .layout_idx = i64_layout } }, Region.zero());
     const arg_lookup = try store.addExpr(.{ .lookup = .{ .symbol = arg_sym, .layout_idx = i64_layout } }, Region.zero());
     const call_args = try store.addExprSpan(&.{arg_lookup});
     const call_expr = try store.addExpr(.{ .call = .{
-        .fn_expr = fn_lookup,
+        .callee = .{ .direct = target_sym },
         .args = call_args,
         .fn_layout = i64_layout,
         .ret_layout = i64_layout,
@@ -774,11 +777,10 @@ test "TailRecursionPass: direct ret f(...) is transformed to jump" {
     const i64_layout = @import("layout").Idx.i64;
 
     // Build: f(arg)
-    const fn_lookup = try store.addExpr(.{ .lookup = .{ .symbol = target_sym, .layout_idx = i64_layout } }, Region.zero());
     const arg_lookup = try store.addExpr(.{ .lookup = .{ .symbol = arg_sym, .layout_idx = i64_layout } }, Region.zero());
     const call_args = try store.addExprSpan(&.{arg_lookup});
     const call_expr = try store.addExpr(.{ .call = .{
-        .fn_expr = fn_lookup,
+        .callee = .{ .direct = target_sym },
         .args = call_args,
         .fn_layout = i64_layout,
         .ret_layout = i64_layout,
@@ -827,11 +829,10 @@ test "TailRecursionPass: call to non-target function is not detected as tail cal
     const i64_layout = @import("layout").Idx.i64;
 
     // Build: g(arg) — calling other_fn_sym, NOT target_sym
-    const fn_lookup = try store.addExpr(.{ .lookup = .{ .symbol = other_fn_sym, .layout_idx = i64_layout } }, Region.zero());
     const arg_lookup = try store.addExpr(.{ .lookup = .{ .symbol = arg_sym, .layout_idx = i64_layout } }, Region.zero());
     const call_args = try store.addExprSpan(&.{arg_lookup});
     const call_expr = try store.addExpr(.{ .call = .{
-        .fn_expr = fn_lookup,
+        .callee = .{ .direct = other_fn_sym },
         .args = call_args,
         .fn_layout = i64_layout,
         .ret_layout = i64_layout,

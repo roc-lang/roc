@@ -326,12 +326,13 @@ pub const LirProgram = struct {
         // Wrap zero-arg functions in a call (same logic as dev evaluator)
         if (wrap_zero_arg_call) {
             const func_mono_idx = mir_store.typeOf(mir_expr_id);
-            const func_mono = mir_store.monotype_store.getMonotype(func_mono_idx);
-            if (func_mono == .func) {
+            const resolved = mir_store.monotype_store.resolve(func_mono_idx);
+            if (resolved.kind == .func) {
+                const ret = mir_store.monotype_store.funcRet(resolved);
                 mir_expr_id = mir_store.addExpr(self.allocator, .{ .call = .{
                     .func = mir_expr_id,
                     .args = MIR.ExprSpan.empty(),
-                } }, func_mono.func.ret, base.Region.zero()) catch return error.OutOfMemory;
+                } }, ret, base.Region.zero()) catch return error.OutOfMemory;
             }
         }
 

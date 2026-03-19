@@ -192,7 +192,7 @@ const DevShimLibraries = struct {
 
 /// Embedded pre-compiled builtins object files for each target.
 /// These contain the wrapper functions needed by the dev backend for string/list operations.
-/// Used by `roc build --backend=dev` to link the app object with builtins.
+/// Used by `roc build --opt=dev` to link the app object with builtins.
 /// Now using static libraries instead of object files to include compiler_rt
 /// (needed for 128-bit integer operations used by Dec type).
 const BuiltinsObjects = struct {
@@ -957,8 +957,8 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
         return rocRunDefaultApp(ctx, args, source);
     }
 
-    switch (args.backend) {
-        .dev => return rocRunDevShim(ctx, args),
+    switch (args.opt.toBackend()) {
+        .dev, .llvm => return rocRunDevShim(ctx, args),
         .interpreter, .wasm => {},
     }
 
@@ -1805,10 +1805,17 @@ fn rocRunDefaultApp(ctx: *CliContext, args: cli_args.RunArgs, original_source: [
     const echo_module_path = std.fs.path.join(ctx.gpa, &.{ app_dir, ".roc_echo_platform", "Echo.roc" }) catch return error.OutOfMemory;
     defer ctx.gpa.free(echo_module_path);
 
+    // On Windows, platform_main_path contains backslashes which the Roc parser
+    // would interpret as escape sequences. Use forward slashes instead — the
+    // compiler's path resolution normalizes them back to native separators.
+    const platform_roc_path = ctx.gpa.dupe(u8, platform_main_path) catch return error.OutOfMemory;
+    defer ctx.gpa.free(platform_roc_path);
+    std.mem.replaceScalar(u8, platform_roc_path, '\\', '/');
+
     const header = std.fmt.allocPrint(
         ctx.gpa,
         "app [main!] {{ pf: platform \"{s}\" }}\n\nimport pf.Echo\n\necho! = |msg| Echo.line!(msg)\n\n",
-        .{platform_main_path},
+        .{platform_roc_path},
     ) catch return error.OutOfMemory;
     defer ctx.gpa.free(header);
 
@@ -1858,7 +1865,7 @@ fn rocRunDefaultApp(ctx: *CliContext, args: cli_args.RunArgs, original_source: [
     var result_buf: [16]u8 align(16) = undefined;
 
     eval.runner.runtimeRun(
-        args.backend,
+        args.opt.toBackend(),
         ctx.gpa,
         entry.platform_env,
         build_env.builtin_modules,
@@ -3937,9 +3944,9 @@ fn rocBuild(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         return error.UnsupportedTarget;
     }
 
-    // Select build path based on backend
-    switch (args.backend) {
-        .dev => {
+    // Select build path based on optimization level
+    switch (args.opt.toBackend()) {
+        .dev, .llvm => {
             // Use native code generation backend
             try rocBuildNative(ctx, args);
         },
@@ -4080,6 +4087,18 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     }
 
     std.log.debug("Target: {s}, Link type: {s}", .{ @tagName(target), @tagName(link_type) });
+
+    // glibc targets require a full libc for linking, which is only available on Linux hosts
+    if (target.isDynamic() and builtin.target.os.tag != .linux) {
+        const result = platform_validation.targets_validator.ValidationResult{
+            .unsupported_glibc_cross = .{
+                .target = target,
+                .host_os = @tagName(builtin.target.os.tag),
+            },
+        };
+        _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+        return error.UnsupportedCrossCompilation;
+    }
 
     // Check if dev backend supports this target architecture
     const target_arch = target.toCpuArch();
@@ -4312,12 +4331,12 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
                 const arg_vars = platform_types.sliceVars(func.args);
                 if (arg_vars.len == 0) {
                     const func_mono_idx = mir_store.typeOf(mir_expr_id);
-                    const func_mono = mir_store.monotype_store.getMonotype(func_mono_idx);
-                    if (func_mono == .func) {
+                    const resolved_func = mir_store.monotype_store.resolve(func_mono_idx);
+                    if (resolved_func.kind == .func) {
                         mir_expr_id = try mir_store.addExpr(ctx.gpa, .{ .call = .{
                             .func = mir_expr_id,
                             .args = MIR.ExprSpan.empty(),
-                        } }, func_mono.func.ret, base.Region.zero());
+                        } }, mir_store.monotype_store.funcRet(resolved_func), base.Region.zero());
                     }
                 }
             }
@@ -4377,6 +4396,13 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         });
     }
 
+    const pre_rc_root_exprs = try ctx.gpa.alloc(lir.LirExprId, entrypoints.items.len);
+    defer ctx.gpa.free(pre_rc_root_exprs);
+    for (entrypoints.items, 0..) |entrypoint, i| {
+        pre_rc_root_exprs[i] = entrypoint.body_expr;
+    }
+    try lir.CallCanonicalize.canonicalizeDirectCalls(ctx.gpa, &lir_store, pre_rc_root_exprs);
+
     if (entrypoints.items.len == 0) {
         std.log.err("No entrypoints could be lowered to LIR", .{});
         return error.NoEntrypointsLowered;
@@ -4394,6 +4420,13 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     }
 
     lir.RcInsert.insertRcOpsIntoSymbolDefsBestEffort(ctx.gpa, &lir_store, &layout_store);
+
+    const root_exprs = try ctx.gpa.alloc(lir.LirExprId, entrypoints.items.len);
+    defer ctx.gpa.free(root_exprs);
+    for (entrypoints.items, 0..) |entrypoint, i| {
+        root_exprs[i] = entrypoint.body_expr;
+    }
+    try lir.CallCanonicalize.canonicalizeDirectCalls(ctx.gpa, &lir_store, root_exprs);
 
     // Get procedures from the LIR store
     const procs = lir_store.getProcs();
@@ -5554,8 +5587,8 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
     }
 
     // Run tests using the selected backend
-    switch (args.backend) {
-        .dev => {
+    switch (args.opt.toBackend()) {
+        .dev, .llvm => {
             // Run tests using dev backend (native code generation)
             var dev_eval = eval.DevEvaluator.init(ctx.gpa, null) catch |err| {
                 try stderr.print("Failed to create dev evaluator: {}\n", .{err});
@@ -5976,7 +6009,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
 }
 
 fn rocRepl(ctx: *CliContext, repl_args: cli_args.ReplArgs) !void {
-    return cli_repl.run(ctx, repl_args.backend);
+    return cli_repl.run(ctx, repl_args.opt.toBackend());
 }
 
 const glue = @import("glue");
@@ -5990,7 +6023,7 @@ fn rocGlue(ctx: *CliContext, args: cli_args.GlueArgs) glue.GlueError!void {
         .glue_spec = args.glue_spec,
         .output_dir = args.output_dir,
         .platform_path = args.platform_path,
-        .backend = args.backend,
+        .backend = args.opt.toBackend(),
     }, temp_dir);
 }
 

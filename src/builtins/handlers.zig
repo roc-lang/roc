@@ -55,6 +55,8 @@ extern "kernel32" fn SetUnhandledExceptionFilter(lpTopLevelExceptionFilter: LPTO
 extern "kernel32" fn GetStdHandle(nStdHandle: DWORD) callconv(.winapi) HANDLE;
 extern "kernel32" fn WriteFile(hFile: HANDLE, lpBuffer: [*]const u8, nNumberOfBytesToWrite: DWORD, lpNumberOfBytesWritten: ?*DWORD, lpOverlapped: ?*anyopaque) callconv(.winapi) BOOL;
 extern "kernel32" fn ExitProcess(uExitCode: c_uint) callconv(.winapi) noreturn;
+extern "kernel32" fn TerminateProcess(hProcess: HANDLE, uExitCode: c_uint) callconv(.winapi) BOOL;
+extern "kernel32" fn GetCurrentProcess() callconv(.winapi) HANDLE;
 
 /// Size of the alternate signal stack (64KB should be plenty for the handler)
 const ALT_STACK_SIZE = 64 * 1024;
@@ -174,7 +176,14 @@ fn handleExceptionWindows(exception_info: *EXCEPTION_POINTERS) callconv(.winapi)
         if (stack_overflow_callback) |callback| {
             callback();
         }
-        ExitProcess(134);
+        // Use TerminateProcess instead of ExitProcess: after a stack overflow the
+        // stack is in a fragile state and ExitProcess's DLL-detach cleanup can
+        // trigger a secondary ACCESS_VIOLATION, producing exit code 5 (0xC0000005
+        // truncated to u8) instead of the intended 134.
+        _ = TerminateProcess(GetCurrentProcess(), 134);
+        // Use @trap() instead of unreachable: unreachable is UB in ReleaseFast,
+        // while @trap() always generates a defined trap instruction.
+        @trap();
     } else if (is_arithmetic_error) {
         if (arithmetic_error_callback) |callback| {
             callback();

@@ -1192,28 +1192,42 @@ pub const LirInterpreter = struct {
             args.append(arg_val) catch return error.OutOfMemory;
         }
 
-        // Resolve the function
-        const fn_expr = self.store.getExpr(c.fn_expr);
-        switch (fn_expr) {
-            .lookup => |l| {
+        // Resolve the function via CallTarget
+        switch (c.callee) {
+            .direct => |symbol| {
                 // Direct call to a named function
-                if (self.store.getSymbolDef(l.symbol)) |def_expr_id| {
+                if (self.store.getSymbolDef(symbol)) |def_expr_id| {
                     const def_expr = self.store.getExpr(def_expr_id);
                     if (def_expr == .lambda) {
                         return self.callLambda(def_expr.lambda, args.items);
                     }
                 }
-                // Try calling through the evaluated value
-                const fn_val = try self.evalLookup(l.symbol, l.layout_idx);
-                _ = fn_val;
                 return error.RuntimeError;
             },
-            .lambda => |lambda| {
-                return self.callLambda(lambda, args.items);
-            },
-            else => {
-                // Evaluate the function expression and try to call it
-                return error.RuntimeError;
+            .expr => |fn_expr_id| {
+                const fn_expr = self.store.getExpr(fn_expr_id);
+                switch (fn_expr) {
+                    .lookup => |l| {
+                        // Indirect call through a lookup
+                        if (self.store.getSymbolDef(l.symbol)) |def_expr_id| {
+                            const def_expr = self.store.getExpr(def_expr_id);
+                            if (def_expr == .lambda) {
+                                return self.callLambda(def_expr.lambda, args.items);
+                            }
+                        }
+                        // Try calling through the evaluated value
+                        const fn_val = try self.evalLookup(l.symbol, l.layout_idx);
+                        _ = fn_val;
+                        return error.RuntimeError;
+                    },
+                    .lambda => |lambda| {
+                        return self.callLambda(lambda, args.items);
+                    },
+                    else => {
+                        // Evaluate the function expression and try to call it
+                        return error.RuntimeError;
+                    },
+                }
             },
         }
     }

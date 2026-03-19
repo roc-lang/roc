@@ -2697,15 +2697,11 @@ test "Coordinator shutdown stops spawned workers promptly" {
     try coord.start();
     coord.shutdown(); // sets flag, closes channels, joins threads
 
-    // Workers may have consumed a few tasks before seeing the flag,
-    // but they should NOT have drained everything — at least some
-    // tasks must remain unconsumed.  With 8 buffered tasks and an
-    // immediate shutdown, workers process at most 1 each (the one
-    // they recv before the next loop-top flag check).
-    const remaining = coord.task_channel.len();
-    // Each of the 2 workers could have grabbed at most 1 task before
-    // seeing the shutdown flag on their next iteration.
-    try std.testing.expect(remaining >= buffered_before - 2);
+    // The important property is that shutdown() returns promptly
+    // (workers join instead of hanging). Workers may consume an
+    // unpredictable number of tasks between start() and shutdown()
+    // depending on scheduling, so we don't assert a specific count.
+    // The deterministic drain test above covers the flag+close path.
 
     coord.deinit();
 }

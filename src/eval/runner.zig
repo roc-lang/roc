@@ -54,7 +54,7 @@ pub fn run(
     target: roc_target.RocTarget,
 ) RunError!void {
     switch (eval_backend) {
-        .dev => try runViaDev(
+        .dev, .llvm => try runViaDev(
             gpa,
             platform_env,
             all_module_envs,

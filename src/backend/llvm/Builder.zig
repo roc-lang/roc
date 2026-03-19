@@ -2973,52 +2973,52 @@ pub const Intrinsic = enum {
         .memcpy = .{
             .ret_len = 0,
             .params = &.{
-                .{ .kind = .overloaded, .attrs = &.{ .@"noalias", .nocapture, .writeonly } },
-                .{ .kind = .overloaded, .attrs = &.{ .@"noalias", .nocapture, .readonly } },
                 .{ .kind = .overloaded },
-                .{ .kind = .{ .type = .i1 }, .attrs = &.{.immarg} },
+                .{ .kind = .overloaded },
+                .{ .kind = .overloaded },
+                .{ .kind = .{ .type = .i1 } },
             },
-            .attrs = &.{ .nocallback, .nofree, .nounwind, .willreturn, .{ .memory = .{ .argmem = .readwrite } } },
+            .attrs = &.{},
         },
         .@"memcpy.inline" = .{
             .ret_len = 0,
             .params = &.{
-                .{ .kind = .overloaded, .attrs = &.{ .@"noalias", .nocapture, .writeonly } },
-                .{ .kind = .overloaded, .attrs = &.{ .@"noalias", .nocapture, .readonly } },
                 .{ .kind = .overloaded },
-                .{ .kind = .{ .type = .i1 }, .attrs = &.{.immarg} },
+                .{ .kind = .overloaded },
+                .{ .kind = .overloaded },
+                .{ .kind = .{ .type = .i1 } },
             },
-            .attrs = &.{ .nocallback, .nofree, .nounwind, .willreturn, .{ .memory = .{ .argmem = .readwrite } } },
+            .attrs = &.{},
         },
         .memmove = .{
             .ret_len = 0,
             .params = &.{
-                .{ .kind = .overloaded, .attrs = &.{ .nocapture, .writeonly } },
-                .{ .kind = .overloaded, .attrs = &.{ .nocapture, .readonly } },
                 .{ .kind = .overloaded },
-                .{ .kind = .{ .type = .i1 }, .attrs = &.{.immarg} },
+                .{ .kind = .overloaded },
+                .{ .kind = .overloaded },
+                .{ .kind = .{ .type = .i1 } },
             },
-            .attrs = &.{ .nocallback, .nofree, .nounwind, .willreturn, .{ .memory = .{ .argmem = .readwrite } } },
+            .attrs = &.{},
         },
         .memset = .{
             .ret_len = 0,
             .params = &.{
-                .{ .kind = .overloaded, .attrs = &.{ .nocapture, .writeonly } },
+                .{ .kind = .overloaded },
                 .{ .kind = .{ .type = .i8 } },
                 .{ .kind = .overloaded },
-                .{ .kind = .{ .type = .i1 }, .attrs = &.{.immarg} },
+                .{ .kind = .{ .type = .i1 } },
             },
-            .attrs = &.{ .nocallback, .nofree, .nounwind, .willreturn, .{ .memory = .{ .argmem = .write } } },
+            .attrs = &.{},
         },
         .@"memset.inline" = .{
             .ret_len = 0,
             .params = &.{
-                .{ .kind = .overloaded, .attrs = &.{ .nocapture, .writeonly } },
+                .{ .kind = .overloaded },
                 .{ .kind = .{ .type = .i8 } },
                 .{ .kind = .overloaded },
-                .{ .kind = .{ .type = .i1 }, .attrs = &.{.immarg} },
+                .{ .kind = .{ .type = .i1 } },
             },
-            .attrs = &.{ .nocallback, .nofree, .nounwind, .willreturn, .{ .memory = .{ .argmem = .write } } },
+            .attrs = &.{},
         },
         .sqrt = .{
             .ret_len = 1,
@@ -6168,23 +6168,16 @@ pub const WipFunction = struct {
     pub fn callMemCpy(
         self: *WipFunction,
         dst: Value,
-        dst_align: Alignment,
+        _: Alignment,
         src: Value,
-        src_align: Alignment,
+        _: Alignment,
         len: Value,
         kind: MemoryAccessKind,
         @"inline": bool,
     ) Allocator.Error!Instruction.Index {
-        var dst_attrs = [_]Attribute.Index{try self.builder.attr(.{ .@"align" = dst_align })};
-        var src_attrs = [_]Attribute.Index{try self.builder.attr(.{ .@"align" = src_align })};
         const value = try self.callIntrinsic(
             .normal,
-            try self.builder.fnAttrs(&.{
-                .none,
-                .none,
-                try self.builder.attrs(&dst_attrs),
-                try self.builder.attrs(&src_attrs),
-            }),
+            .none,
             if (@"inline") .@"memcpy.inline" else .memcpy,
             &.{ dst.typeOfWip(self), src.typeOfWip(self), len.typeOfWip(self) },
             &.{ dst, src, len, switch (kind) {
@@ -6199,22 +6192,15 @@ pub const WipFunction = struct {
     pub fn callMemMove(
         self: *WipFunction,
         dst: Value,
-        dst_align: Alignment,
+        _: Alignment,
         src: Value,
-        src_align: Alignment,
+        _: Alignment,
         len: Value,
         kind: MemoryAccessKind,
     ) Allocator.Error!Instruction.Index {
-        var dst_attrs = [_]Attribute.Index{try self.builder.attr(.{ .@"align" = dst_align })};
-        var src_attrs = [_]Attribute.Index{try self.builder.attr(.{ .@"align" = src_align })};
         const value = try self.callIntrinsic(
             .normal,
-            try self.builder.fnAttrs(&.{
-                .none,
-                .none,
-                try self.builder.attrs(&dst_attrs),
-                try self.builder.attrs(&src_attrs),
-            }),
+            .none,
             .memmove,
             &.{ dst.typeOfWip(self), src.typeOfWip(self), len.typeOfWip(self) },
             &.{ dst, src, len, switch (kind) {
@@ -6229,16 +6215,15 @@ pub const WipFunction = struct {
     pub fn callMemSet(
         self: *WipFunction,
         dst: Value,
-        dst_align: Alignment,
+        _: Alignment,
         val: Value,
         len: Value,
         kind: MemoryAccessKind,
         @"inline": bool,
     ) Allocator.Error!Instruction.Index {
-        var dst_attrs = [_]Attribute.Index{try self.builder.attr(.{ .@"align" = dst_align })};
         const value = try self.callIntrinsic(
             .normal,
-            try self.builder.fnAttrs(&.{ .none, .none, try self.builder.attrs(&dst_attrs) }),
+            .none,
             if (@"inline") .@"memset.inline" else .memset,
             &.{ dst.typeOfWip(self), len.typeOfWip(self) },
             &.{ dst, val, len, switch (kind) {
@@ -6401,35 +6386,31 @@ pub const WipFunction = struct {
             builder: *Builder,
 
             fn map(wip_name: *@This(), name: String, sep: []const u8) Allocator.Error!String {
-                switch (name) {
-                    .none => return .none,
-                    .empty => {
-                        assert(wip_name.next_name != .none);
-                        defer wip_name.next_name = @enumFromInt(@intFromEnum(wip_name.next_name) + 1);
-                        return wip_name.next_name;
-                    },
-                    _ => {
-                        assert(!name.isAnon());
-                        const gop = try wip_name.next_unique_name.getOrPut(name);
-                        if (!gop.found_existing) {
-                            gop.value_ptr.* = .first_anon;
-                            return name;
-                        }
+                if (name == .none) return .none;
+                if (name == .empty or name.isAnon()) {
+                    assert(wip_name.next_name != .none);
+                    defer wip_name.next_name = @enumFromInt(@intFromEnum(wip_name.next_name) + 1);
+                    return wip_name.next_name;
+                }
 
-                        while (true) {
-                            gop.value_ptr.* = @enumFromInt(@intFromEnum(gop.value_ptr.*) + 1);
-                            const unique_name = try wip_name.builder.fmt("{f}{s}{f}", .{
-                                name.fmtRaw(wip_name.builder),
-                                sep,
-                                gop.value_ptr.fmtRaw(wip_name.builder),
-                            });
-                            const unique_gop = try wip_name.next_unique_name.getOrPut(unique_name);
-                            if (!unique_gop.found_existing) {
-                                unique_gop.value_ptr.* = .first_anon;
-                                return unique_name;
-                            }
-                        }
-                    },
+                const gop = try wip_name.next_unique_name.getOrPut(name);
+                if (!gop.found_existing) {
+                    gop.value_ptr.* = .first_anon;
+                    return name;
+                }
+
+                while (true) {
+                    gop.value_ptr.* = @enumFromInt(@intFromEnum(gop.value_ptr.*) + 1);
+                    const unique_name = try wip_name.builder.fmt("{f}{s}{f}", .{
+                        name.fmtRaw(wip_name.builder),
+                        sep,
+                        gop.value_ptr.fmtRaw(wip_name.builder),
+                    });
+                    const unique_gop = try wip_name.next_unique_name.getOrPut(unique_name);
+                    if (!unique_gop.found_existing) {
+                        unique_gop.value_ptr.* = .first_anon;
+                        return unique_name;
+                    }
                 }
             }
         } = .{
@@ -8671,25 +8652,15 @@ pub const Metadata = packed struct(u32) {
             w: *Writer,
         ) !void {
             const names = comptime std.meta.fieldNames(@TypeOf(nodes));
-
-            comptime var fmt_str: []const u8 = "{[distinct]s}{[node]s}(";
-            inline for (names) |name| fmt_str = fmt_str ++ "{[" ++ name ++ "]f}";
-            fmt_str = fmt_str ++ ")\n";
-
-            const field_names = @as([]const []const u8, &.{ "distinct", "node" }) ++ names;
-            comptime var field_types: [2 + names.len]type = undefined;
-            @memset(field_types[0..2], []const u8);
-            @memset(field_types[2..], std.fmt.Alt(FormatData, format));
-
-            var fmt_args: @Struct(.auto, null, field_names, &field_types, &@splat(.{})) = undefined;
-            fmt_args.distinct = @tagName(distinct);
-            fmt_args.node = @tagName(node);
-            inline for (names) |name| @field(fmt_args, name) = try formatter.fmt(
-                name ++ ": ",
-                @field(nodes, name),
-                null,
-            );
-            try w.print(fmt_str, fmt_args);
+            try w.print("{s}{s}(", .{ @tagName(distinct), @tagName(node) });
+            inline for (names) |name| {
+                try w.print("{f}", .{try formatter.fmt(
+                    name ++ ": ",
+                    @field(nodes, name),
+                    null,
+                )});
+            }
+            try w.writeAll(")\n");
         }
     };
 };
@@ -13544,7 +13515,7 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
                     record.clearRetainingCapacity();
                     try record.ensureUnusedCapacity(self.gpa, 2);
 
-                    record.appendAssumeCapacity(attr_gop.index);
+                    record.appendAssumeCapacity(attr_gop.index + 1);
                     record.appendAssumeCapacity(switch (i) {
                         0 => 0xffffffff,
                         else => i - 1,
@@ -13744,7 +13715,7 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
                         .attributes = attributes,
                         .index = @intCast(i),
                     }).?;
-                    record.appendAssumeCapacity(@intCast(group_index));
+                    record.appendAssumeCapacity(@intCast(group_index + 1));
                 }
 
                 try paramattr_block.writeAbbrev(ParamattrBlock.Entry{ .group_indices = record.items });

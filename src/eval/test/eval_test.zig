@@ -316,6 +316,26 @@ test "error test - crash statement" {
     , error.Crash, .no_trace);
 }
 
+test "inline expect statement fails" {
+    // Regression test for #9261: s_expect statements must be lowered as
+    // .expect MIR nodes so the dev backend generates the assertion check.
+    try runExpectError(
+        \\{
+        \\    expect 1 == 2
+        \\    {}
+        \\}
+    , error.Crash, .no_trace);
+}
+
+test "inline expect statement passes" {
+    try runExpectI64(
+        \\{
+        \\    expect 1 == 1
+        \\    42
+        \\}
+    , 42, .no_trace);
+}
+
 test "crash message storage and retrieval - host-managed context" {
     // Verify the crash callback stores the message in the host CrashContext
     const test_message = "Direct API test message";
@@ -2652,6 +2672,20 @@ test "issue 9043: self-reference in tuple pattern with var element should error"
         \\    $n
         \\}
     );
+}
+
+test "issue 9262: opaque function field returning tag union" {
+    try runExpectBool(
+        \\{
+        \\    W(a) := { f : {} -> [V(a)] }.{
+        \\        run = |w| (w.f)({})
+        \\
+        \\        mk = |val| { f: |{}| V(val) }
+        \\    }
+        \\
+        \\    W.run(W.mk("x")) == V("x")
+        \\}
+    , true, .no_trace);
 }
 
 test "recursive function with record - stack memory restoration (issue #8813)" {
