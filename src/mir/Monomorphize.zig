@@ -199,6 +199,11 @@ const ExprSource = struct {
     expr_idx: CIR.Expr.Idx,
 };
 
+const RequiredLookupTarget = struct {
+    module_idx: u32,
+    def_idx: CIR.Def.Idx,
+};
+
 /// Output of the MIR monomorphization pass.
 pub const Result = struct {
     monotype_store: Monotype.Store,
@@ -328,6 +333,7 @@ pub const Pass = struct {
     type_scope_caller_module_idx: ?u32,
     visited_modules: std.AutoHashMapUnmanaged(u32, void),
     visited_exprs: std.AutoHashMapUnmanaged(u64, void),
+    in_progress_value_defs: std.AutoHashMapUnmanaged(ContextExprKey, void),
     source_exprs: std.AutoHashMapUnmanaged(u64, ExprSource),
     resolved_dispatch_targets: std.AutoHashMapUnmanaged(ContextExprKey, ResolvedDispatchTarget),
     scanned_proc_insts: std.AutoHashMapUnmanaged(u32, void),
@@ -352,6 +358,7 @@ pub const Pass = struct {
             .type_scope_caller_module_idx = null,
             .visited_modules = .empty,
             .visited_exprs = .empty,
+            .in_progress_value_defs = .empty,
             .source_exprs = .empty,
             .resolved_dispatch_targets = .empty,
             .scanned_proc_insts = .empty,
@@ -374,6 +381,7 @@ pub const Pass = struct {
     pub fn deinit(self: *Pass) void {
         self.visited_modules.deinit(self.allocator);
         self.visited_exprs.deinit(self.allocator);
+        self.in_progress_value_defs.deinit(self.allocator);
         self.source_exprs.deinit(self.allocator);
         self.resolved_dispatch_targets.deinit(self.allocator);
         self.scanned_proc_insts.deinit(self.allocator);
@@ -788,6 +796,46 @@ pub const Pass = struct {
         return self.scanExprInternal(result, module_idx, expr_idx, true);
     }
 
+    fn scanReachableValueDefExpr(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) Allocator.Error!void {
+        const key = Result.contextExprKey(self.active_proc_inst_context, module_idx, expr_idx);
+        if (self.in_progress_value_defs.contains(key)) return;
+        try self.in_progress_value_defs.put(self.allocator, key, {});
+        defer _ = self.in_progress_value_defs.remove(key);
+
+        try self.scanValueExpr(result, module_idx, expr_idx);
+    }
+
+    fn resolveRequiredLookupTarget(
+        self: *Pass,
+        module_env: *const ModuleEnv,
+        lookup: @TypeOf(@as(CIR.Expr, undefined).e_lookup_required),
+    ) ?RequiredLookupTarget {
+        const app_idx = self.app_module_idx orelse return null;
+        const required_type = module_env.requires_types.get(lookup.requires_idx);
+        const required_name = module_env.getIdent(required_type.ident);
+
+        const app_env = self.all_module_envs[app_idx];
+        const app_ident = app_env.common.findIdent(required_name) orelse return null;
+        const app_exports = app_env.store.sliceDefs(app_env.exports);
+        for (app_exports) |def_idx| {
+            const def = app_env.store.getDef(def_idx);
+            const pat = app_env.store.getPattern(def.pattern);
+            if (pat == .assign and pat.assign.ident.eql(app_ident)) {
+                return .{
+                    .module_idx = app_idx,
+                    .def_idx = def_idx,
+                };
+            }
+        }
+
+        return null;
+    }
+
     fn scanExprInternal(
         self: *Pass,
         result: *Result,
@@ -885,7 +933,6 @@ pub const Pass = struct {
             .e_str_segment,
             .e_bytes_literal,
             .e_lookup_pending,
-            .e_lookup_required,
             .e_empty_list,
             .e_empty_record,
             .e_zero_argument_tag,
@@ -894,13 +941,16 @@ pub const Pass = struct {
             .e_ellipsis,
             .e_anno_only,
             => {},
-            .e_lookup_local => |_| {
+            .e_lookup_local => |lookup| {
                 if (try self.resolveExprCallableTemplate(result, module_idx, expr_idx)) |template_id| {
                     try self.resolveLookupExprProcInst(result, module_idx, expr_idx, template_id);
+                } else if (self.source_exprs.get(packLocalPatternSourceKey(module_idx, lookup.pattern_idx))) |source| {
+                    try self.scanReachableValueDefExpr(result, source.module_idx, source.expr_idx);
                 }
             },
             .e_lookup_external => |lookup| {
                 const target_module_idx = self.resolveImportedModuleIdx(module_env, lookup.module_idx) orelse return;
+                try self.scanModule(result, target_module_idx);
                 const target_env = self.all_module_envs[target_module_idx];
                 if (!target_env.store.isDefNode(lookup.target_node_idx)) return;
 
@@ -926,8 +976,39 @@ pub const Pass = struct {
                 }
                 if (try self.resolveExprCallableTemplate(result, module_idx, expr_idx)) |template_id| {
                     try self.resolveLookupExprProcInst(result, module_idx, expr_idx, template_id);
+                } else {
+                    try self.scanReachableValueDefExpr(result, target_module_idx, def.expr);
                 }
-                try self.scanModule(result, target_module_idx);
+            },
+            .e_lookup_required => |lookup| {
+                const target = self.resolveRequiredLookupTarget(module_env, lookup) orelse return;
+                try self.scanModule(result, target.module_idx);
+                const target_env = self.all_module_envs[target.module_idx];
+                const def = target_env.store.getDef(target.def_idx);
+                const target_node_idx: u16 = @intCast(@intFromEnum(target.def_idx));
+                try self.recordSourceExpr(
+                    packExternalDefSourceKey(target.module_idx, target_node_idx),
+                    target.module_idx,
+                    def.expr,
+                );
+                const target_expr = target_env.store.getExpr(def.expr);
+                if (callableKind(target_expr)) |kind| {
+                    _ = try self.registerCallableDefTemplate(
+                        result,
+                        target.module_idx,
+                        def.expr,
+                        ModuleEnv.varFrom(def.pattern),
+                        def.pattern,
+                        kind,
+                        target_env.store.getExprRegion(def.expr),
+                        packExternalDefSourceKey(target.module_idx, target_node_idx),
+                    );
+                }
+                if (try self.resolveExprCallableTemplate(result, module_idx, expr_idx)) |template_id| {
+                    try self.resolveLookupExprProcInst(result, module_idx, expr_idx, template_id);
+                } else {
+                    try self.scanReachableValueDefExpr(result, target.module_idx, def.expr);
+                }
             },
             .e_str => |str_expr| try self.scanValueExprSpan(result, module_idx, module_env.store.sliceExpr(str_expr.span)),
             .e_list => |list_expr| try self.scanValueExprSpan(result, module_idx, module_env.store.sliceExpr(list_expr.elems)),
@@ -3815,6 +3896,15 @@ pub const Pass = struct {
                 const source = self.source_exprs.get(packExternalDefSourceKey(target_module_idx, lookup.target_node_idx)) orelse break :blk null;
                 break :blk try self.resolveExprCallableTemplateWithVisited(result, source.module_idx, source.expr_idx, visiting);
             },
+            .e_lookup_required => |lookup| blk: {
+                const target = self.resolveRequiredLookupTarget(module_env, lookup) orelse break :blk null;
+                const target_node_idx: u16 = @intCast(@intFromEnum(target.def_idx));
+                if (result.getExternalProcTemplate(target.module_idx, target_node_idx)) |template_id| {
+                    break :blk template_id;
+                }
+                const source = self.source_exprs.get(packExternalDefSourceKey(target.module_idx, target_node_idx)) orelse break :blk null;
+                break :blk try self.resolveExprCallableTemplateWithVisited(result, source.module_idx, source.expr_idx, visiting);
+            },
             .e_block => |block| try self.resolveExprCallableTemplateWithVisited(result, module_idx, block.final_expr, visiting),
             .e_dbg => |dbg_expr| try self.resolveExprCallableTemplateWithVisited(result, module_idx, dbg_expr.expr, visiting),
             .e_expect => |expect_expr| try self.resolveExprCallableTemplateWithVisited(result, module_idx, expect_expr.body, visiting),
@@ -4365,33 +4455,6 @@ pub const Pass = struct {
             std.debug.panic(
                 "Monomorphize: record field '{s}' missing from monotype",
                 .{self.all_module_envs[template_module_idx].getIdent(field_name)},
-            );
-        }
-        unreachable;
-    }
-
-    fn tagIndexByName(
-        self: *Pass,
-        template_module_idx: u32,
-        tag_name: base.Ident.Idx,
-        mono_module_idx: u32,
-        mono_tags: []const Monotype.Tag,
-    ) u32 {
-        for (mono_tags, 0..) |mono_tag, tag_idx| {
-            if (self.identsStructurallyEqualAcrossModules(
-                template_module_idx,
-                tag_name,
-                mono_module_idx,
-                mono_tag.name,
-            )) {
-                return @intCast(tag_idx);
-            }
-        }
-
-        if (std.debug.runtime_safety) {
-            std.debug.panic(
-                "Monomorphize: tag '{s}' missing from monotype",
-                .{self.all_module_envs[template_module_idx].getIdent(tag_name)},
             );
         }
         unreachable;
