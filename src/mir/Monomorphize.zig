@@ -1191,12 +1191,11 @@ pub const Pass = struct {
             else => unreachable,
         };
         const arg_exprs = module_env.store.sliceExpr(call_expr.args);
-        const param_monos = result.monotype_store.getIdxSpan(proc_inst_fn_mono.args);
         try self.assignCallableArgProcInstsFromParams(
             result,
             module_idx,
             arg_exprs,
-            param_monos,
+            proc_inst_fn_mono.args,
             proc_inst.fn_monotype_module_idx,
         );
         try self.ensureCallableArgProcInstsScanned(result, module_idx, call_expr.args);
@@ -1212,13 +1211,14 @@ pub const Pass = struct {
         result: *Result,
         module_idx: u32,
         arg_exprs: []const CIR.Expr.Idx,
-        param_monos: []const Monotype.Idx,
+        param_monos: Monotype.Span,
         fn_monotype_module_idx: u32,
     ) Allocator.Error!void {
         const module_env = self.all_module_envs[module_idx];
         if (arg_exprs.len != param_monos.len) unreachable;
 
-        for (arg_exprs, param_monos) |arg_expr_idx, param_mono| {
+        for (arg_exprs, 0..) |arg_expr_idx, i| {
+            const param_mono = result.monotype_store.getIdxSpanItem(param_monos, i);
             const template_id = try self.lookupDirectCalleeTemplate(result, module_idx, arg_expr_idx) orelse continue;
             const proc_inst_id = try self.ensureProcInst(result, template_id, param_mono, fn_monotype_module_idx);
             const template = result.getProcTemplate(template_id);
@@ -1264,14 +1264,13 @@ pub const Pass = struct {
         };
 
         const arg_exprs = self.all_module_envs[module_idx].store.sliceExpr(call_expr.args);
-        const param_monos = result.monotype_store.getIdxSpan(fn_mono.args);
-        if (arg_exprs.len != param_monos.len) return;
+        if (arg_exprs.len != fn_mono.args.len) return;
 
         try self.assignCallableArgProcInstsFromParams(
             result,
             module_idx,
             arg_exprs,
-            param_monos,
+            fn_mono.args,
             callee_monotype.module_idx,
         );
         try self.ensureCallableArgProcInstsScanned(result, module_idx, call_expr.args);
@@ -1701,15 +1700,14 @@ pub const Pass = struct {
         defer actual_args.deinit(self.allocator);
         try self.appendDispatchActualArgs(module_idx, expr, &actual_args);
 
-        const param_monos = result.monotype_store.getIdxSpan(fn_mono.args);
-        if (actual_args.items.len != param_monos.len) {
+        if (actual_args.items.len != fn_mono.args.len) {
             if (std.debug.runtime_safety) {
                 std.debug.panic(
                     "Monomorphize: dispatch proc-inst arg arity mismatch at expr {d} in module {d} (params={d}, args={d})",
                     .{
                         @intFromEnum(expr_idx),
                         module_idx,
-                        param_monos.len,
+                        fn_mono.args.len,
                         actual_args.items.len,
                     },
                 );
@@ -1721,7 +1719,7 @@ pub const Pass = struct {
             result,
             module_idx,
             actual_args.items,
-            param_monos,
+            fn_mono.args,
             proc_inst.fn_monotype_module_idx,
         );
         try self.ensureCallableArgProcInstsScannedSlice(result, module_idx, actual_args.items);
@@ -4171,8 +4169,6 @@ pub const Pass = struct {
             .func => |func| func,
             else => return,
         };
-        const param_monos = result.monotype_store.getIdxSpan(fn_mono.args);
-
         const ProcBoundary = struct {
             arg_patterns: []const CIR.Pattern.Idx,
             body_expr: CIR.Expr.Idx,
@@ -4198,14 +4194,14 @@ pub const Pass = struct {
             else => return,
         };
 
-        if (boundary.arg_patterns.len != param_monos.len) {
+        if (boundary.arg_patterns.len != fn_mono.args.len) {
             if (std.debug.runtime_safety) {
                 std.debug.panic(
                     "Monomorphize: proc signature arity mismatch for expr {d} (patterns={d}, monos={d})",
                     .{
                         @intFromEnum(proc_expr_idx),
                         boundary.arg_patterns.len,
-                        param_monos.len,
+                        fn_mono.args.len,
                     },
                 );
             }
@@ -4226,7 +4222,8 @@ pub const Pass = struct {
             proc_inst.fn_monotype_module_idx,
         );
 
-        for (boundary.arg_patterns, param_monos) |pattern_idx, param_mono| {
+        for (boundary.arg_patterns, 0..) |pattern_idx, i| {
+            const param_mono = result.monotype_store.getIdxSpanItem(fn_mono.args, i);
             try self.bindTypeVarMonotypes(
                 result,
                 module_idx,
@@ -4400,6 +4397,66 @@ pub const Pass = struct {
         unreachable;
     }
 
+    fn recordFieldIndexByNameInSpan(
+        self: *Pass,
+        result: *const Result,
+        template_module_idx: u32,
+        field_name: base.Ident.Idx,
+        mono_module_idx: u32,
+        mono_fields: Monotype.FieldSpan,
+    ) u32 {
+        var field_i: usize = 0;
+        while (field_i < mono_fields.len) : (field_i += 1) {
+            const mono_field = result.monotype_store.getFieldItem(mono_fields, field_i);
+            if (self.identsStructurallyEqualAcrossModules(
+                template_module_idx,
+                field_name,
+                mono_module_idx,
+                mono_field.name,
+            )) {
+                return @intCast(field_i);
+            }
+        }
+
+        if (std.debug.runtime_safety) {
+            std.debug.panic(
+                "Monomorphize: record field '{s}' missing from monotype",
+                .{self.all_module_envs[template_module_idx].getIdent(field_name)},
+            );
+        }
+        unreachable;
+    }
+
+    fn tagIndexByNameInSpan(
+        self: *Pass,
+        result: *const Result,
+        template_module_idx: u32,
+        tag_name: base.Ident.Idx,
+        mono_module_idx: u32,
+        mono_tags: Monotype.TagSpan,
+    ) u32 {
+        var tag_i: usize = 0;
+        while (tag_i < mono_tags.len) : (tag_i += 1) {
+            const mono_tag = result.monotype_store.getTagItem(mono_tags, tag_i);
+            if (self.identsStructurallyEqualAcrossModules(
+                template_module_idx,
+                tag_name,
+                mono_module_idx,
+                mono_tag.name,
+            )) {
+                return @intCast(tag_i);
+            }
+        }
+
+        if (std.debug.runtime_safety) {
+            std.debug.panic(
+                "Monomorphize: tag '{s}' missing from monotype",
+                .{self.all_module_envs[template_module_idx].getIdent(tag_name)},
+            );
+        }
+        unreachable;
+    }
+
     fn seenIndex(seen_indices: []const u32, idx: u32) bool {
         for (seen_indices) |seen_idx| {
             if (seen_idx == idx) return true;
@@ -4515,10 +4572,12 @@ pub const Pass = struct {
         ordered_entries: *std.ArrayList(TypeSubstEntry),
         tag_name: base.Ident.Idx,
         payload_vars: []const types.Var,
-        mono_tags: []const Monotype.Tag,
+        mono_tags: Monotype.TagSpan,
         mono_module_idx: u32,
     ) Allocator.Error!void {
-        for (mono_tags) |mono_tag| {
+        var tag_i: usize = 0;
+        while (tag_i < mono_tags.len) : (tag_i += 1) {
+            const mono_tag = result.monotype_store.getTagItem(mono_tags, tag_i);
             if (!self.identsStructurallyEqualAcrossModules(
                 template_module_idx,
                 tag_name,
@@ -4526,8 +4585,7 @@ pub const Pass = struct {
                 mono_tag.name,
             )) continue;
 
-            const mono_payloads = result.monotype_store.getIdxSpan(mono_tag.payloads);
-            if (payload_vars.len != mono_payloads.len) {
+            if (payload_vars.len != mono_tag.payloads.len) {
                 if (std.debug.runtime_safety) {
                     std.debug.panic(
                         "Monomorphize: payload arity mismatch for tag '{s}'",
@@ -4538,6 +4596,7 @@ pub const Pass = struct {
             }
 
             for (payload_vars, 0..) |payload_var, i| {
+                const mono_payload = result.monotype_store.getIdxSpanItem(mono_tag.payloads, i);
                 try self.bindTypeVarMonotypes(
                     result,
                     template_module_idx,
@@ -4545,7 +4604,7 @@ pub const Pass = struct {
                     bindings,
                     ordered_entries,
                     payload_var,
-                    mono_payloads[i],
+                    mono_payload,
                     mono_module_idx,
                 );
             }
@@ -4663,10 +4722,10 @@ pub const Pass = struct {
                 };
 
                 const type_args = template_types.sliceVars(func.args);
-                const mono_args = result.monotype_store.getIdxSpan(mfunc.args);
-                if (type_args.len != mono_args.len) unreachable;
+                if (type_args.len != mfunc.args.len) unreachable;
 
                 for (type_args, 0..) |arg_var, i| {
+                    const mono_arg = result.monotype_store.getIdxSpanItem(mfunc.args, i);
                     try self.bindTypeVarMonotypes(
                         result,
                         template_module_idx,
@@ -4674,7 +4733,7 @@ pub const Pass = struct {
                         bindings,
                         ordered_entries,
                         arg_var,
-                        mono_args[i],
+                        mono_arg,
                         mono_module_idx,
                     );
                 }
@@ -4757,7 +4816,6 @@ pub const Pass = struct {
                     .record => |mrec| mrec,
                     else => unreachable,
                 };
-                const mono_fields = result.monotype_store.getFields(mrec.fields);
                 var seen_field_indices: std.ArrayListUnmanaged(u32) = .empty;
                 defer seen_field_indices.deinit(self.allocator);
 
@@ -4767,13 +4825,15 @@ pub const Pass = struct {
                     const field_names = fields_slice.items(.name);
                     const field_vars = fields_slice.items(.var_);
                     for (field_names, field_vars) |field_name, field_var| {
-                        const field_idx = self.recordFieldIndexByName(
+                        const field_idx = self.recordFieldIndexByNameInSpan(
+                            result,
                             template_module_idx,
                             field_name,
                             mono_module_idx,
-                            mono_fields,
+                            mrec.fields,
                         );
                         try appendSeenIndex(self.allocator, &seen_field_indices, field_idx);
+                        const mono_field = result.monotype_store.getFieldItem(mrec.fields, field_idx);
                         try self.bindTypeVarMonotypes(
                             result,
                             template_module_idx,
@@ -4781,7 +4841,7 @@ pub const Pass = struct {
                             bindings,
                             ordered_entries,
                             field_var,
-                            mono_fields[field_idx].type_idx,
+                            mono_field.type_idx,
                             mono_module_idx,
                         );
                     }
@@ -4804,13 +4864,15 @@ pub const Pass = struct {
                                     const ext_names = ext_fields.items(.name);
                                     const ext_vars = ext_fields.items(.var_);
                                     for (ext_names, ext_vars) |field_name, field_var| {
-                                        const field_idx = self.recordFieldIndexByName(
+                                        const field_idx = self.recordFieldIndexByNameInSpan(
+                                            result,
                                             template_module_idx,
                                             field_name,
                                             mono_module_idx,
-                                            mono_fields,
+                                            mrec.fields,
                                         );
                                         try appendSeenIndex(self.allocator, &seen_field_indices, field_idx);
+                                        const mono_field = result.monotype_store.getFieldItem(mrec.fields, field_idx);
                                         try self.bindTypeVarMonotypes(
                                             result,
                                             template_module_idx,
@@ -4818,7 +4880,7 @@ pub const Pass = struct {
                                             bindings,
                                             ordered_entries,
                                             field_var,
-                                            mono_fields[field_idx].type_idx,
+                                            mono_field.type_idx,
                                             mono_module_idx,
                                         );
                                     }
@@ -4835,7 +4897,7 @@ pub const Pass = struct {
                                     bindings,
                                     ordered_entries,
                                     ext_var,
-                                    mono_fields,
+                                    result.monotype_store.getFields(mrec.fields),
                                     seen_field_indices.items,
                                     mono_module_idx,
                                 );
@@ -4851,17 +4913,18 @@ pub const Pass = struct {
                     .record => |mrec| mrec,
                     else => unreachable,
                 };
-                const mono_fields = result.monotype_store.getFields(mrec.fields);
                 const fields_slice = template_types.getRecordFieldsSlice(fields_range);
                 const field_names = fields_slice.items(.name);
                 const field_vars = fields_slice.items(.var_);
                 for (field_names, field_vars) |field_name, field_var| {
-                    const field_idx = self.recordFieldIndexByName(
+                    const field_idx = self.recordFieldIndexByNameInSpan(
+                        result,
                         template_module_idx,
                         field_name,
                         mono_module_idx,
-                        mono_fields,
+                        mrec.fields,
                     );
+                    const mono_field = result.monotype_store.getFieldItem(mrec.fields, field_idx);
                     try self.bindTypeVarMonotypes(
                         result,
                         template_module_idx,
@@ -4869,7 +4932,7 @@ pub const Pass = struct {
                         bindings,
                         ordered_entries,
                         field_var,
-                        mono_fields[field_idx].type_idx,
+                        mono_field.type_idx,
                         mono_module_idx,
                     );
                 }
@@ -4880,9 +4943,9 @@ pub const Pass = struct {
                     else => unreachable,
                 };
                 const elem_vars = template_types.sliceVars(tuple.elems);
-                const elem_monos = result.monotype_store.getIdxSpan(mtup.elems);
-                if (elem_vars.len != elem_monos.len) unreachable;
+                if (elem_vars.len != mtup.elems.len) unreachable;
                 for (elem_vars, 0..) |elem_var, i| {
+                    const elem_mono = result.monotype_store.getIdxSpanItem(mtup.elems, i);
                     try self.bindTypeVarMonotypes(
                         result,
                         template_module_idx,
@@ -4890,7 +4953,7 @@ pub const Pass = struct {
                         bindings,
                         ordered_entries,
                         elem_var,
-                        elem_monos[i],
+                        elem_mono,
                         mono_module_idx,
                     );
                 }
@@ -4900,7 +4963,6 @@ pub const Pass = struct {
                     .tag_union => |mtag| mtag,
                     else => unreachable,
                 };
-                const mono_tags = result.monotype_store.getTags(mtag.tags);
                 var seen_tag_indices: std.ArrayListUnmanaged(u32) = .empty;
                 defer seen_tag_indices.deinit(self.allocator);
 
@@ -4910,11 +4972,12 @@ pub const Pass = struct {
                     const tag_names = type_tags.items(.name);
                     const tag_args = type_tags.items(.args);
                     for (tag_names, tag_args) |tag_name, args_range| {
-                        const tag_idx = self.tagIndexByName(
+                        const tag_idx = self.tagIndexByNameInSpan(
+                            result,
                             template_module_idx,
                             tag_name,
                             mono_module_idx,
-                            mono_tags,
+                            mtag.tags,
                         );
                         try appendSeenIndex(self.allocator, &seen_tag_indices, tag_idx);
                         try self.bindTagPayloadsByName(
@@ -4925,7 +4988,7 @@ pub const Pass = struct {
                             ordered_entries,
                             tag_name,
                             template_types.sliceVars(args_range),
-                            mono_tags,
+                            mtag.tags,
                             mono_module_idx,
                         );
                     }
@@ -4954,7 +5017,7 @@ pub const Pass = struct {
                                     bindings,
                                     ordered_entries,
                                     ext_var,
-                                    mono_tags,
+                                    result.monotype_store.getTags(mtag.tags),
                                     seen_tag_indices.items,
                                     mono_module_idx,
                                 );
