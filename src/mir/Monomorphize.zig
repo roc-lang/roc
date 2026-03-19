@@ -218,6 +218,11 @@ const ContextCaptureKey = struct {
     pattern_raw: u32,
 };
 
+const TemplateBodyCompletionKey = struct {
+    template_source_key: u64,
+    context_proc_inst_raw: u32,
+};
+
 const ContextPatternKey = struct {
     context_proc_inst_raw: u32,
     module_idx: u32,
@@ -557,6 +562,7 @@ pub const Pass = struct {
     source_exprs: std.AutoHashMapUnmanaged(u64, ExprSource),
     resolved_dispatch_targets: std.AutoHashMapUnmanaged(ContextExprKey, ResolvedDispatchTarget),
     scanned_proc_insts: std.AutoHashMapUnmanaged(u32, void),
+    in_progress_template_body_completions: std.AutoHashMapUnmanaged(TemplateBodyCompletionKey, void),
     active_bindings: ?*std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
     active_iteration_expr_monotypes: ?*std.AutoHashMapUnmanaged(ContextExprKey, ResolvedMonotype),
     active_proc_inst_context: ProcInstId,
@@ -584,6 +590,7 @@ pub const Pass = struct {
             .source_exprs = .empty,
             .resolved_dispatch_targets = .empty,
             .scanned_proc_insts = .empty,
+            .in_progress_template_body_completions = .empty,
             .active_bindings = null,
             .active_iteration_expr_monotypes = null,
             .active_proc_inst_context = .none,
@@ -676,6 +683,7 @@ pub const Pass = struct {
         self.source_exprs.deinit(self.allocator);
         self.resolved_dispatch_targets.deinit(self.allocator);
         self.scanned_proc_insts.deinit(self.allocator);
+        self.in_progress_template_body_completions.deinit(self.allocator);
     }
 
     pub fn runExpr(self: *Pass, expr_idx: CIR.Expr.Idx) Allocator.Error!Result {
@@ -2422,6 +2430,16 @@ pub const Pass = struct {
         bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
         proc_inst_context: ProcInstId,
     ) Allocator.Error!void {
+        const completion_key = TemplateBodyCompletionKey{
+            .template_source_key = template.source_key,
+            .context_proc_inst_raw = @intFromEnum(proc_inst_context),
+        };
+        if (self.in_progress_template_body_completions.contains(completion_key)) {
+            return;
+        }
+        try self.in_progress_template_body_completions.put(self.allocator, completion_key, {});
+        defer _ = self.in_progress_template_body_completions.remove(completion_key);
+
         const module_env = self.all_module_envs[template.module_idx];
         const expr = module_env.store.getExpr(template.cir_expr);
 
@@ -2533,6 +2551,8 @@ pub const Pass = struct {
             const context_pattern_proc_insts_before = result.context_pattern_proc_insts.count();
             const context_pattern_proc_inst_sets_before = result.context_pattern_proc_inst_sets.count();
 
+            try self.seedTemplateBodyBindingsFromCurrentBindings(result, template, bindings);
+
             switch (expr) {
                 .e_lambda => |lambda_expr| try self.scanValueExpr(result, template.module_idx, lambda_expr.body),
                 .e_closure => |closure_expr| {
@@ -2612,6 +2632,10 @@ pub const Pass = struct {
         const template = result.getProcTemplate(template_id).*;
         const template_env = self.all_module_envs[template.module_idx];
         const template_types = &template_env.types;
+        const desired_fn_monotype = resolvedMonotype(
+            try self.resolveDirectCallFnMonotype(result, module_idx, call_expr_idx, call_expr),
+            module_idx,
+        );
         const defining_context_proc_inst: ProcInstId = switch (template.kind) {
             .closure => self.active_proc_inst_context,
             .top_level_def, .lambda, .hosted_lambda => .none,
@@ -2622,6 +2646,8 @@ pub const Pass = struct {
 
         var ordered_entries = std.ArrayList(TypeSubstEntry).empty;
         defer ordered_entries.deinit(self.allocator);
+
+        try self.seedTemplateBindingsFromFnMonotype(result, template, desired_fn_monotype, &callee_bindings);
 
         if (resolveFuncTypeInStore(template_types, template.type_root)) |resolved_func| {
             const ret_mono = try self.resolveExprMonotypeIfExactResolved(result, module_idx, call_expr_idx);
@@ -2909,6 +2935,15 @@ pub const Pass = struct {
                 );
             }
         }
+
+        try self.seedTemplateBoundaryBindingsFromActuals(
+            result,
+            module_idx,
+            template,
+            actual_args.items,
+            try self.resolveExprMonotypeIfExactResolved(result, module_idx, expr_idx),
+            &callee_bindings,
+        );
 
         try self.completeTemplateBindingsFromBody(result, template, &callee_bindings, defining_context_proc_inst);
 
@@ -6230,6 +6265,244 @@ pub const Pass = struct {
             ModuleEnv.varFrom(boundary.body_expr),
             fn_mono.ret,
             proc_inst.fn_monotype_module_idx,
+        );
+    }
+
+    fn seedTemplateBodyBindingsFromCurrentBindings(
+        self: *Pass,
+        result: *Result,
+        template: ProcTemplate,
+        bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
+    ) Allocator.Error!void {
+        const module_env = self.all_module_envs[template.module_idx];
+        const boundary = self.procBoundaryInfo(template.module_idx, template.cir_expr) orelse return;
+        const resolved_func = resolveFuncTypeInStore(&module_env.types, template.type_root) orelse return;
+
+        var ordered_entries = std.ArrayList(TypeSubstEntry).empty;
+        defer ordered_entries.deinit(self.allocator);
+
+        if (try self.resolveTemplateTypeVarWithBindings(
+            result,
+            template.module_idx,
+            &module_env.types,
+            template.type_root,
+            bindings,
+        )) |fn_mono| {
+            try self.bindTypeVarMonotypes(
+                result,
+                template.module_idx,
+                &module_env.types,
+                bindings,
+                &ordered_entries,
+                ModuleEnv.varFrom(template.cir_expr),
+                fn_mono.idx,
+                fn_mono.module_idx,
+            );
+        }
+
+        const param_vars = module_env.types.sliceVars(resolved_func.func.args);
+        if (boundary.arg_patterns.len != param_vars.len) {
+            if (std.debug.runtime_safety) {
+                std.debug.panic(
+                    "Monomorphize: template boundary arity mismatch for expr {d} (patterns={d}, vars={d})",
+                    .{
+                        @intFromEnum(template.cir_expr),
+                        boundary.arg_patterns.len,
+                        param_vars.len,
+                    },
+                );
+            }
+            unreachable;
+        }
+
+        for (boundary.arg_patterns, param_vars) |pattern_idx, param_var| {
+            if (try self.resolveTemplateTypeVarWithBindings(
+                result,
+                template.module_idx,
+                &module_env.types,
+                param_var,
+                bindings,
+            )) |param_mono| {
+                try self.bindTypeVarMonotypes(
+                    result,
+                    template.module_idx,
+                    &module_env.types,
+                    bindings,
+                    &ordered_entries,
+                    ModuleEnv.varFrom(pattern_idx),
+                    param_mono.idx,
+                    param_mono.module_idx,
+                );
+            }
+        }
+
+        if (try self.resolveTemplateTypeVarWithBindings(
+            result,
+            template.module_idx,
+            &module_env.types,
+            resolved_func.func.ret,
+            bindings,
+        )) |ret_mono| {
+            try self.bindTypeVarMonotypes(
+                result,
+                template.module_idx,
+                &module_env.types,
+                bindings,
+                &ordered_entries,
+                ModuleEnv.varFrom(boundary.body_expr),
+                ret_mono.idx,
+                ret_mono.module_idx,
+            );
+        }
+    }
+
+    fn resolveTemplateTypeVarWithBindings(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        store_types: *const types.Store,
+        type_var: types.Var,
+        bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
+    ) Allocator.Error!?ResolvedMonotype {
+        var seen: std.AutoHashMapUnmanaged(types.Var, void) = .empty;
+        defer seen.deinit(self.allocator);
+
+        if (!try self.typeVarMonomorphizableWithBindings(
+            result,
+            module_idx,
+            store_types,
+            type_var,
+            bindings,
+            &seen,
+        )) {
+            return null;
+        }
+
+        const mono = try self.resolveTypeVarMonotypeWithBindings(
+            result,
+            module_idx,
+            store_types,
+            type_var,
+            bindings,
+        );
+        if (mono.isNone()) return null;
+        return resolvedMonotype(mono, module_idx);
+    }
+
+    fn seedTemplateBoundaryBindingsFromActuals(
+        self: *Pass,
+        result: *Result,
+        actual_module_idx: u32,
+        template: ProcTemplate,
+        actual_args: []const CIR.Expr.Idx,
+        ret_mono: ResolvedMonotype,
+        bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
+    ) Allocator.Error!void {
+        const module_env = self.all_module_envs[template.module_idx];
+        const boundary = self.procBoundaryInfo(template.module_idx, template.cir_expr) orelse return;
+
+        if (boundary.arg_patterns.len != actual_args.len) return;
+
+        var ordered_entries = std.ArrayList(TypeSubstEntry).empty;
+        defer ordered_entries.deinit(self.allocator);
+
+        for (boundary.arg_patterns, actual_args) |pattern_idx, arg_expr_idx| {
+            const arg_mono = try self.resolveExprMonotypeIfExactResolved(result, actual_module_idx, arg_expr_idx);
+            if (arg_mono.isNone()) continue;
+
+            try self.bindTypeVarMonotypes(
+                result,
+                template.module_idx,
+                &module_env.types,
+                bindings,
+                &ordered_entries,
+                ModuleEnv.varFrom(pattern_idx),
+                arg_mono.idx,
+                arg_mono.module_idx,
+            );
+        }
+
+        if (!ret_mono.isNone()) {
+            try self.bindTypeVarMonotypes(
+                result,
+                template.module_idx,
+                &module_env.types,
+                bindings,
+                &ordered_entries,
+                ModuleEnv.varFrom(boundary.body_expr),
+                ret_mono.idx,
+                ret_mono.module_idx,
+            );
+        }
+    }
+
+    fn seedTemplateBindingsFromFnMonotype(
+        self: *Pass,
+        result: *Result,
+        template: ProcTemplate,
+        fn_monotype: ResolvedMonotype,
+        bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
+    ) Allocator.Error!void {
+        if (fn_monotype.isNone()) return;
+
+        const module_env = self.all_module_envs[template.module_idx];
+        const boundary = self.procBoundaryInfo(template.module_idx, template.cir_expr) orelse return;
+        const fn_mono = switch (result.monotype_store.getMonotype(fn_monotype.idx)) {
+            .func => |func| func,
+            else => return,
+        };
+
+        if (boundary.arg_patterns.len != fn_mono.args.len) {
+            if (std.debug.runtime_safety) {
+                std.debug.panic(
+                    "Monomorphize: template fn-monotype arity mismatch for expr {d} (patterns={d}, monos={d})",
+                    .{
+                        @intFromEnum(template.cir_expr),
+                        boundary.arg_patterns.len,
+                        fn_mono.args.len,
+                    },
+                );
+            }
+            unreachable;
+        }
+
+        var ordered_entries = std.ArrayList(TypeSubstEntry).empty;
+        defer ordered_entries.deinit(self.allocator);
+
+        try self.bindTypeVarMonotypes(
+            result,
+            template.module_idx,
+            &module_env.types,
+            bindings,
+            &ordered_entries,
+            template.type_root,
+            fn_monotype.idx,
+            fn_monotype.module_idx,
+        );
+
+        for (boundary.arg_patterns, 0..) |pattern_idx, i| {
+            const param_mono = result.monotype_store.getIdxSpanItem(fn_mono.args, i);
+            try self.bindTypeVarMonotypes(
+                result,
+                template.module_idx,
+                &module_env.types,
+                bindings,
+                &ordered_entries,
+                ModuleEnv.varFrom(pattern_idx),
+                param_mono,
+                fn_monotype.module_idx,
+            );
+        }
+
+        try self.bindTypeVarMonotypes(
+            result,
+            template.module_idx,
+            &module_env.types,
+            bindings,
+            &ordered_entries,
+            ModuleEnv.varFrom(boundary.body_expr),
+            fn_mono.ret,
+            fn_monotype.module_idx,
         );
     }
 
