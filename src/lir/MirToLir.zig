@@ -2005,56 +2005,92 @@ fn prepareLiftedDefCaptureLayout(self: *Self, proc_id: MIR.ProcId) Allocator.Err
     }
 }
 
-fn identTextIfOwnedBy(env: anytype, ident: Ident.Idx) ?[]const u8 {
+fn moduleOwnsIdent(env: anytype, ident: Ident.Idx) bool {
     const ident_store = env.getIdentStoreConst();
     const bytes = ident_store.interner.bytes.items.items;
     const start: usize = @intCast(ident.idx);
-    if (start >= bytes.len) return null;
+    if (start >= bytes.len) return false;
 
     const tail = bytes[start..];
-    const end_rel = std.mem.indexOfScalar(u8, tail, 0) orelse return null;
+    const end_rel = std.mem.indexOfScalar(u8, tail, 0) orelse return false;
     const text = tail[0..end_rel];
 
-    const roundtrip = ident_store.findByString(text) orelse return null;
-    if (roundtrip.idx != ident.idx) return null;
-    return text;
+    const roundtrip = ident_store.findByString(text) orelse return false;
+    return roundtrip.idx == ident.idx;
 }
 
-fn identMatchesText(self: *const Self, ident: Ident.Idx, expected: []const u8) bool {
-    if (identTextIfOwnedBy(self.layout_store.currentEnv(), ident)) |text| {
-        if (std.mem.eql(u8, text, expected)) return true;
+fn getOwnedIdentText(env: anytype, ident: Ident.Idx) []const u8 {
+    if (builtin.mode == .Debug) std.debug.assert(moduleOwnsIdent(env, ident));
+    return env.getIdent(ident);
+}
+
+fn monotypeNameMatchesIdent(self: *const Self, name: Monotype.Name, ident: Ident.Idx) bool {
+    const target_text = name.text(self.layout_store.moduleEnvs());
+
+    if (moduleOwnsIdent(self.layout_store.currentEnv(), ident) and
+        std.mem.eql(u8, target_text, getOwnedIdentText(self.layout_store.currentEnv(), ident)))
+    {
+        return true;
     }
 
     for (self.layout_store.moduleEnvs()) |env| {
-        if (identTextIfOwnedBy(env, ident)) |text| {
-            if (std.mem.eql(u8, text, expected)) return true;
+        if (!moduleOwnsIdent(env, ident)) continue;
+        if (std.mem.eql(u8, target_text, getOwnedIdentText(env, ident))) return true;
+    }
+
+    return false;
+}
+
+fn identsMayHaveEqualText(self: *const Self, lhs: Ident.Idx, rhs: Ident.Idx) bool {
+    if (lhs.eql(rhs)) return true;
+
+    if (moduleOwnsIdent(self.layout_store.currentEnv(), lhs)) {
+        const lhs_text = getOwnedIdentText(self.layout_store.currentEnv(), lhs);
+        if (moduleOwnsIdent(self.layout_store.currentEnv(), rhs) and
+            std.mem.eql(u8, lhs_text, getOwnedIdentText(self.layout_store.currentEnv(), rhs)))
+        {
+            return true;
+        }
+
+        for (self.layout_store.moduleEnvs()) |env| {
+            if (!moduleOwnsIdent(env, rhs)) continue;
+            if (std.mem.eql(u8, lhs_text, getOwnedIdentText(env, rhs))) return true;
+        }
+    }
+
+    for (self.layout_store.moduleEnvs()) |lhs_env| {
+        if (!moduleOwnsIdent(lhs_env, lhs)) continue;
+        const lhs_text = getOwnedIdentText(lhs_env, lhs);
+
+        if (moduleOwnsIdent(self.layout_store.currentEnv(), rhs) and
+            std.mem.eql(u8, lhs_text, getOwnedIdentText(self.layout_store.currentEnv(), rhs)))
+        {
+            return true;
+        }
+
+        for (self.layout_store.moduleEnvs()) |rhs_env| {
+            if (!moduleOwnsIdent(rhs_env, rhs)) continue;
+            if (std.mem.eql(u8, lhs_text, getOwnedIdentText(rhs_env, rhs))) return true;
         }
     }
 
     return false;
 }
 
-fn labelTextForCompare(self: *const Self, label: anytype) ?[]const u8 {
-    return switch (@TypeOf(label)) {
-        Ident.Idx => blk: {
-            if (identTextIfOwnedBy(self.layout_store.currentEnv(), label)) |text| break :blk text;
-            for (self.layout_store.moduleEnvs()) |env| {
-                if (identTextIfOwnedBy(env, label)) |text| break :blk text;
-            }
-            break :blk null;
-        },
-        Monotype.Name => label.text(self.layout_store.moduleEnvs()),
-        else => @compileError("unsupported label type"),
-    };
-}
-
 fn identsTextEqual(self: *const Self, lhs: anytype, rhs: anytype) bool {
-    if (@TypeOf(lhs) == Ident.Idx and @TypeOf(rhs) == Ident.Idx and lhs.eql(rhs)) return true;
-    if (@TypeOf(lhs) == Monotype.Name and @TypeOf(rhs) == Monotype.Name and lhs.eql(rhs)) return true;
-
-    const lhs_text = self.labelTextForCompare(lhs) orelse return false;
-    const rhs_text = self.labelTextForCompare(rhs) orelse return false;
-    return std.mem.eql(u8, lhs_text, rhs_text);
+    return switch (@TypeOf(lhs)) {
+        Ident.Idx => switch (@TypeOf(rhs)) {
+            Ident.Idx => self.identsMayHaveEqualText(lhs, rhs),
+            Monotype.Name => self.monotypeNameMatchesIdent(rhs, lhs),
+            else => @compileError("unsupported rhs label type"),
+        },
+        Monotype.Name => switch (@TypeOf(rhs)) {
+            Ident.Idx => self.monotypeNameMatchesIdent(lhs, rhs),
+            Monotype.Name => lhs.textEqual(self.layout_store.moduleEnvs(), rhs),
+            else => @compileError("unsupported rhs label type"),
+        },
+        else => @compileError("unsupported lhs label type"),
+    };
 }
 
 /// Given a tag name and the monotype of the containing tag union,
@@ -5956,6 +5992,10 @@ fn testMirSymbol(mir_store: *MIR.Store, allocator: Allocator, ident: Ident.Idx) 
     return sym;
 }
 
+fn testMonotypeName(ident: Ident.Idx) Monotype.Name {
+    return .{ .module_idx = 0, .ident = ident };
+}
+
 fn testMirProc(
     mir_store: *MIR.Store,
     allocator: Allocator,
@@ -6094,7 +6134,7 @@ test "MIR zero-arg tag lowers to LIR zero_arg_tag" {
     // Create a single-tag union monotype: [MyTag]
     const tag_name = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
     const tag_span = try env.mir_store.monotype_store.addTags(allocator, &.{
-        .{ .name = tag_name, .payloads = Monotype.Span.empty() },
+        .{ .name = testMonotypeName(tag_name), .payloads = Monotype.Span.empty() },
     });
     const union_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .tag_union = .{ .tags = tag_span } });
 
@@ -6280,8 +6320,8 @@ test "MIR multi-tag union produces proper tag_union layout" {
     const foo_payloads = try env.mir_store.monotype_store.addIdxSpan(allocator, &.{i64_mono});
 
     const tag_span = try env.mir_store.monotype_store.addTags(allocator, &.{
-        .{ .name = tag_bar, .payloads = Monotype.Span.empty() },
-        .{ .name = tag_foo, .payloads = foo_payloads },
+        .{ .name = testMonotypeName(tag_bar), .payloads = Monotype.Span.empty() },
+        .{ .name = testMonotypeName(tag_foo), .payloads = foo_payloads },
     });
     const union_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .tag_union = .{ .tags = tag_span } });
     var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.lambda_set_store, env.module_env.idents.true_tag);
@@ -6324,8 +6364,8 @@ test "MIR multi-tag union tags get correct discriminants" {
     const foo_payloads = try env.mir_store.monotype_store.addIdxSpan(allocator, &.{i64_mono});
 
     const tag_span = try env.mir_store.monotype_store.addTags(allocator, &.{
-        .{ .name = tag_bar, .payloads = Monotype.Span.empty() },
-        .{ .name = tag_foo, .payloads = foo_payloads },
+        .{ .name = testMonotypeName(tag_bar), .payloads = Monotype.Span.empty() },
+        .{ .name = testMonotypeName(tag_foo), .payloads = foo_payloads },
     });
     const union_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .tag_union = .{ .tags = tag_span } });
 
@@ -6397,9 +6437,9 @@ test "MIR record access finds correct field index for non-first field" {
 
     // Create record monotype: { a: I64, b: I64, c: I64 }
     const record_fields = try env.mir_store.monotype_store.addFields(allocator, &.{
-        .{ .name = field_a, .type_idx = i64_mono },
-        .{ .name = field_b, .type_idx = i64_mono },
-        .{ .name = field_c, .type_idx = i64_mono },
+        .{ .name = testMonotypeName(field_a), .type_idx = i64_mono },
+        .{ .name = testMonotypeName(field_b), .type_idx = i64_mono },
+        .{ .name = testMonotypeName(field_c), .type_idx = i64_mono },
     });
     const record_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .record = .{ .fields = record_fields } });
 
@@ -6448,7 +6488,7 @@ test "MIR single-field record lowers as struct_ and preserves field access" {
     const field_only = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
 
     const record_fields = try env.mir_store.monotype_store.addFields(allocator, &.{
-        .{ .name = field_only, .type_idx = i64_mono },
+        .{ .name = testMonotypeName(field_only), .type_idx = i64_mono },
     });
     const record_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .record = .{ .fields = record_fields } });
 
@@ -6627,7 +6667,7 @@ test "MIR single-tag union with one payload emits tag layout" {
     const tag_ok = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
     const ok_payloads = try env.mir_store.monotype_store.addIdxSpan(allocator, &.{i64_mono});
     const tag_span = try env.mir_store.monotype_store.addTags(allocator, &.{
-        .{ .name = tag_ok, .payloads = ok_payloads },
+        .{ .name = testMonotypeName(tag_ok), .payloads = ok_payloads },
     });
     const union_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .tag_union = .{ .tags = tag_span } });
 
@@ -6674,7 +6714,7 @@ test "MIR single-tag union with zero args emits zero_arg_tag" {
     const tag_unit = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
     const empty_payloads = try env.mir_store.monotype_store.addIdxSpan(allocator, &.{});
     const tag_span = try env.mir_store.monotype_store.addTags(allocator, &.{
-        .{ .name = tag_unit, .payloads = empty_payloads },
+        .{ .name = testMonotypeName(tag_unit), .payloads = empty_payloads },
     });
     const union_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .tag_union = .{ .tags = tag_span } });
 
@@ -6714,7 +6754,7 @@ test "MIR single-tag union with multiple payloads emits tag layout" {
     const tag_pair = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
     const pair_payloads = try env.mir_store.monotype_store.addIdxSpan(allocator, &.{ i64_mono, bool_mono });
     const tag_span = try env.mir_store.monotype_store.addTags(allocator, &.{
-        .{ .name = tag_pair, .payloads = pair_payloads },
+        .{ .name = testMonotypeName(tag_pair), .payloads = pair_payloads },
     });
     const union_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .tag_union = .{ .tags = tag_span } });
 
@@ -6761,7 +6801,7 @@ test "MIR single-tag union pattern with one arg preserves tag pattern" {
     const tag_ok = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
     const ok_payloads = try env.mir_store.monotype_store.addIdxSpan(allocator, &.{i64_mono});
     const tag_span = try env.mir_store.monotype_store.addTags(allocator, &.{
-        .{ .name = tag_ok, .payloads = ok_payloads },
+        .{ .name = testMonotypeName(tag_ok), .payloads = ok_payloads },
     });
     const union_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .tag_union = .{ .tags = tag_span } });
 
@@ -7325,9 +7365,9 @@ test "record access uses layout field order not monotype alphabetical order" {
 
     // Monotype fields are alphabetical: { age: U8, name: I64, score: I64 }
     const record_fields = try env.mir_store.monotype_store.addFields(allocator, &.{
-        .{ .name = field_age, .type_idx = u8_mono },
-        .{ .name = field_name, .type_idx = i64_mono },
-        .{ .name = field_score, .type_idx = i64_mono },
+        .{ .name = testMonotypeName(field_age), .type_idx = u8_mono },
+        .{ .name = testMonotypeName(field_name), .type_idx = i64_mono },
+        .{ .name = testMonotypeName(field_score), .type_idx = i64_mono },
     });
     const record_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .record = .{ .fields = record_fields } });
 
@@ -7382,9 +7422,9 @@ test "record destructure wildcard gets actual field layout not zst" {
 
     // Record: { a: U8, b: I64, c: I64 }
     const record_fields = try env.mir_store.monotype_store.addFields(allocator, &.{
-        .{ .name = field_a, .type_idx = u8_mono },
-        .{ .name = field_b, .type_idx = i64_mono },
-        .{ .name = field_c, .type_idx = i64_mono },
+        .{ .name = testMonotypeName(field_a), .type_idx = u8_mono },
+        .{ .name = testMonotypeName(field_b), .type_idx = i64_mono },
+        .{ .name = testMonotypeName(field_c), .type_idx = i64_mono },
     });
     const record_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .record = .{ .fields = record_fields } });
 

@@ -95,6 +95,7 @@ const BoundTypeVarKey = struct {
     type_var: types.Var,
 };
 
+/// A monotype plus the module whose ident space that monotype currently uses.
 pub const ResolvedMonotype = struct {
     idx: Monotype.Idx,
     module_idx: u32,
@@ -1705,14 +1706,7 @@ pub const Pass = struct {
                 ModuleEnv.varFrom(binop_expr.lhs),
                 method_name,
             )) |proc_inst_id| {
-                try result.dispatch_expr_proc_insts.put(
-                    self.allocator,
-                    Result.contextExprKey(self.active_proc_inst_context, module_idx, expr_idx),
-                    proc_inst_id,
-                );
-                if (!self.active_proc_inst_context.isNone()) {
-                    try self.bindCurrentDispatchFromProcInst(result, module_idx, expr_idx, expr, proc_inst_id);
-                }
+                try self.recordDispatchExprProcInst(result, module_idx, expr_idx, expr, proc_inst_id);
                 return;
             }
             const lhs_monotype = try self.resolveExprMonotype(result, module_idx, binop_expr.lhs);
@@ -1724,14 +1718,7 @@ pub const Pass = struct {
                     lhs_monotype,
                     method_name,
                 )) |proc_inst_id| {
-                    try result.dispatch_expr_proc_insts.put(
-                        self.allocator,
-                        Result.contextExprKey(self.active_proc_inst_context, module_idx, expr_idx),
-                        proc_inst_id,
-                    );
-                    if (!self.active_proc_inst_context.isNone()) {
-                        try self.bindCurrentDispatchFromProcInst(result, module_idx, expr_idx, expr, proc_inst_id);
-                    }
+                    try self.recordDispatchExprProcInst(result, module_idx, expr_idx, expr, proc_inst_id);
                     return;
                 }
             }
@@ -1750,14 +1737,7 @@ pub const Pass = struct {
                     ModuleEnv.varFrom(dot_expr.receiver),
                     dot_expr.field_name,
                 )) |proc_inst_id| {
-                    try result.dispatch_expr_proc_insts.put(
-                        self.allocator,
-                        Result.contextExprKey(self.active_proc_inst_context, module_idx, expr_idx),
-                        proc_inst_id,
-                    );
-                    if (!self.active_proc_inst_context.isNone()) {
-                        try self.bindCurrentDispatchFromProcInst(result, module_idx, expr_idx, expr, proc_inst_id);
-                    }
+                    try self.recordDispatchExprProcInst(result, module_idx, expr_idx, expr, proc_inst_id);
                     return;
                 }
                 const receiver_monotype = try self.resolveExprMonotype(result, module_idx, dot_expr.receiver);
@@ -1769,14 +1749,7 @@ pub const Pass = struct {
                         receiver_monotype,
                         dot_expr.field_name,
                     )) |proc_inst_id| {
-                        try result.dispatch_expr_proc_insts.put(
-                            self.allocator,
-                            Result.contextExprKey(self.active_proc_inst_context, module_idx, expr_idx),
-                            proc_inst_id,
-                        );
-                        if (!self.active_proc_inst_context.isNone()) {
-                            try self.bindCurrentDispatchFromProcInst(result, module_idx, expr_idx, expr, proc_inst_id);
-                        }
+                        try self.recordDispatchExprProcInst(result, module_idx, expr_idx, expr, proc_inst_id);
                         return;
                     }
                 }
@@ -1814,14 +1787,7 @@ pub const Pass = struct {
                     ModuleEnv.varFrom(alias_stmt.type_var_anno),
                     dispatch_expr.method_name,
                 )) |proc_inst_id| {
-                    try result.dispatch_expr_proc_insts.put(
-                        self.allocator,
-                        Result.contextExprKey(self.active_proc_inst_context, module_idx, expr_idx),
-                        proc_inst_id,
-                    );
-                    if (!self.active_proc_inst_context.isNone()) {
-                        try self.bindCurrentDispatchFromProcInst(result, module_idx, expr_idx, expr, proc_inst_id);
-                    }
+                    try self.recordDispatchExprProcInst(result, module_idx, expr_idx, expr, proc_inst_id);
                     return;
                 }
                 const alias_monotype = try self.resolveTypeVarMonotype(result, module_idx, ModuleEnv.varFrom(alias_stmt.type_var_anno));
@@ -1833,14 +1799,7 @@ pub const Pass = struct {
                         alias_monotype,
                         dispatch_expr.method_name,
                     )) |proc_inst_id| {
-                        try result.dispatch_expr_proc_insts.put(
-                            self.allocator,
-                            Result.contextExprKey(self.active_proc_inst_context, module_idx, expr_idx),
-                            proc_inst_id,
-                        );
-                        if (!self.active_proc_inst_context.isNone()) {
-                            try self.bindCurrentDispatchFromProcInst(result, module_idx, expr_idx, expr, proc_inst_id);
-                        }
+                        try self.recordDispatchExprProcInst(result, module_idx, expr_idx, expr, proc_inst_id);
                         return;
                     }
                 }
@@ -1879,11 +1838,31 @@ pub const Pass = struct {
             }
             unreachable;
         };
+        try self.recordDispatchExprProcInst(result, module_idx, expr_idx, expr, proc_inst_id);
+    }
+
+    fn recordDispatchExprProcInst(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        expr: CIR.Expr,
+        proc_inst_id: ProcInstId,
+    ) Allocator.Error!void {
         try result.dispatch_expr_proc_insts.put(
             self.allocator,
             Result.contextExprKey(self.active_proc_inst_context, module_idx, expr_idx),
             proc_inst_id,
         );
+
+        const proc_inst = result.getProcInst(proc_inst_id);
+        const template = result.getProcTemplate(proc_inst.template);
+        try result.expr_proc_insts.put(
+            self.allocator,
+            Result.contextExprKey(self.active_proc_inst_context, template.module_idx, template.cir_expr),
+            proc_inst_id,
+        );
+
         if (!self.active_proc_inst_context.isNone()) {
             try self.bindCurrentDispatchFromProcInst(result, module_idx, expr_idx, expr, proc_inst_id);
         }
@@ -2814,8 +2793,6 @@ pub const Pass = struct {
         scratches.all_module_envs = self.all_module_envs;
         const named_specializations_top = try self.pushBindingNamedSpecializations(
             result,
-            module_idx,
-            store_types,
             bindings,
             &scratches,
         );
@@ -2835,14 +2812,10 @@ pub const Pass = struct {
     fn pushBindingNamedSpecializations(
         self: *Pass,
         result: *Result,
-        module_idx: u32,
-        store_types: *const types.Store,
         bindings: *const std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
         scratches: *Monotype.Store.Scratches,
     ) Allocator.Error!u32 {
-        _ = module_idx;
         const top = scratches.named_specializations.top();
-        _ = store_types;
 
         var named_bindings: std.StringHashMapUnmanaged(Monotype.Idx) = .empty;
         defer named_bindings.deinit(self.allocator);
@@ -2891,42 +2864,6 @@ pub const Pass = struct {
             .flex => |flex| if (flex.name) |name| self.all_module_envs[module_idx].getIdent(name) else null,
             else => null,
         };
-    }
-
-    fn remapIdentBetweenModules(
-        self: *const Pass,
-        ident: Ident.Idx,
-        from_module_idx: u32,
-        to_module_idx: u32,
-    ) Ident.Idx {
-        if (from_module_idx == to_module_idx) return ident;
-
-        const from_env = self.all_module_envs[from_module_idx];
-        const to_env = self.all_module_envs[to_module_idx];
-
-        const ident_text = if (moduleOwnsIdent(from_env, ident))
-            getOwnedIdentText(from_env, ident)
-        else if (moduleOwnsIdent(to_env, ident))
-            return ident
-        else {
-            if (std.debug.runtime_safety) {
-                std.debug.panic(
-                    "remapIdentBetweenModules: ident {d} is owned by neither from_module={d} nor to_module={d}",
-                    .{ ident.idx, from_module_idx, to_module_idx },
-                );
-            }
-            unreachable;
-        };
-
-        if (to_env.common.findIdent(ident_text)) |mapped| return mapped;
-
-        if (std.mem.eql(u8, ident_text, from_env.module_name)) {
-            if (to_env.common.findIdent(to_env.module_name)) |target_self| return target_self;
-            if (to_env.common.getIdentStore().lookup(Ident.for_text(to_env.module_name))) |target_self| return target_self;
-        }
-
-        if (to_env.common.getIdentStore().lookup(Ident.for_text(ident_text))) |mapped| return mapped;
-        return ident;
     }
 
     fn remapMonotypeBetweenModules(
@@ -3068,10 +3005,7 @@ pub const Pass = struct {
 
                 for (result.monotype_store.getFields(record_mono.fields)) |field| {
                     try scratches.fields.append(.{
-                        .name = .{
-                            .module_idx = field.name.module_idx,
-                            .ident = self.remapIdentBetweenModules(field.name.ident, from_module_idx, to_module_idx),
-                        },
+                        .name = field.name,
                         .type_idx = try self.remapMonotypeBetweenModulesRec(
                             result,
                             field.type_idx,
@@ -3113,10 +3047,7 @@ pub const Pass = struct {
                         scratches.idxs.sliceFromStart(payload_top),
                     );
                     try scratches.tags.append(.{
-                        .name = .{
-                            .module_idx = tag.name.module_idx,
-                            .ident = self.remapIdentBetweenModules(tag.name.ident, from_module_idx, to_module_idx),
-                        },
+                        .name = tag.name,
                         .payloads = mapped_payloads,
                     });
                 }
@@ -4564,7 +4495,11 @@ pub const Pass = struct {
         mono_module_idx: u32,
     ) Allocator.Error!void {
         if (monotype.isNone()) return;
-        const resolved_mono = resolvedMonotype(monotype, mono_module_idx);
+        const normalized_mono = if (mono_module_idx == template_module_idx)
+            monotype
+        else
+            try self.remapMonotypeBetweenModules(result, monotype, mono_module_idx, template_module_idx);
+        const resolved_mono = resolvedMonotype(normalized_mono, template_module_idx);
 
         const resolved_key = boundTypeVarKey(template_module_idx, template_types, type_var);
         if (bindings.get(resolved_key)) |existing| {
@@ -4574,7 +4509,10 @@ pub const Pass = struct {
                 if (std.debug.runtime_safety) {
                     std.debug.panic(
                         "Monomorphize: conflicting monotype binding for type var root {d} in module {d}",
-                        .{ @intFromEnum(resolved_key.type_var), resolved_key.module_idx },
+                        .{
+                            @intFromEnum(resolved_key.type_var),
+                            resolved_key.module_idx,
+                        },
                     );
                 }
                 unreachable;
@@ -4599,8 +4537,8 @@ pub const Pass = struct {
                 bindings,
                 ordered_entries,
                 template_types.getAliasBackingVar(alias),
-                monotype,
-                mono_module_idx,
+                normalized_mono,
+                template_module_idx,
             ),
             .structure => |flat_type| {
                 try bindings.put(resolved_key, resolved_mono);
@@ -4615,8 +4553,8 @@ pub const Pass = struct {
                     bindings,
                     ordered_entries,
                     flat_type,
-                    monotype,
-                    mono_module_idx,
+                    normalized_mono,
+                    template_module_idx,
                 );
             },
             .err => {},
@@ -4983,15 +4921,6 @@ pub const Pass = struct {
         return self.resolveTypeVarMonotypeResolved(result, module_idx, ModuleEnv.varFrom(expr_idx));
     }
 
-    fn resolveExprMonotypeIfExact(
-        self: *Pass,
-        result: *Result,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) Allocator.Error!Monotype.Idx {
-        return (try self.resolveExprMonotypeIfExactResolved(result, module_idx, expr_idx)).idx;
-    }
-
     fn resolveExprMonotypeIfExactResolved(
         self: *Pass,
         result: *Result,
@@ -5058,15 +4987,6 @@ pub const Pass = struct {
         return resolvedMonotype(mono, module_idx);
     }
 
-    fn resolveTypeVarMonotypeIfExact(
-        self: *Pass,
-        result: *Result,
-        module_idx: u32,
-        var_: types.Var,
-    ) Allocator.Error!Monotype.Idx {
-        return (try self.resolveTypeVarMonotypeIfExactResolved(result, module_idx, var_)).idx;
-    }
-
     fn resolveTypeVarMonotypeIfExactResolved(
         self: *Pass,
         result: *Result,
@@ -5101,15 +5021,6 @@ pub const Pass = struct {
             bindings,
         );
         return resolvedMonotype(mono, module_idx);
-    }
-
-    fn resolveTypeVarMonotypeIfMonomorphizable(
-        self: *Pass,
-        result: *Result,
-        module_idx: u32,
-        var_: types.Var,
-    ) Allocator.Error!Monotype.Idx {
-        return (try self.resolveTypeVarMonotypeIfMonomorphizableResolved(result, module_idx, var_)).idx;
     }
 
     fn resolveTypeVarMonotypeIfMonomorphizableResolved(
@@ -5890,6 +5801,7 @@ pub fn runExpr(
     return pass.runExpr(expr_idx);
 }
 
+/// Monomorphize one root expression using an explicit type scope for cross-module substitutions.
 pub fn runExprWithTypeScope(
     allocator: Allocator,
     all_module_envs: []const *ModuleEnv,
@@ -5913,6 +5825,7 @@ pub fn runExprWithTypeScope(
     return pass.runExpr(expr_idx);
 }
 
+/// Monomorphize an explicit set of root expressions in the current module.
 pub fn runRoots(
     allocator: Allocator,
     all_module_envs: []const *ModuleEnv,
@@ -5932,6 +5845,7 @@ pub fn runRoots(
     return pass.runRoots(exprs);
 }
 
+/// Monomorphize explicit root expressions using an explicit type scope for cross-module substitutions.
 pub fn runRootsWithTypeScope(
     allocator: Allocator,
     all_module_envs: []const *ModuleEnv,
@@ -5974,6 +5888,7 @@ pub fn runModule(
     return pass.runModule();
 }
 
+/// Monomorphize all reachable callables in the current module using an explicit type scope.
 pub fn runModuleWithTypeScope(
     allocator: Allocator,
     all_module_envs: []const *ModuleEnv,

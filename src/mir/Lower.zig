@@ -347,43 +347,6 @@ fn identsTagNameEquivalent(self: *const Self, lhs: anytype, rhs: anytype) bool {
     return std.mem.eql(u8, identLastSegment(lhs_text), identLastSegment(rhs_text));
 }
 
-fn remapIdentBetweenModules(
-    self: *Self,
-    ident: Ident.Idx,
-    from_module_idx: u32,
-    to_module_idx: u32,
-) Allocator.Error!Ident.Idx {
-    if (from_module_idx == to_module_idx) return ident;
-
-    const from_env = self.all_module_envs[from_module_idx];
-    const to_env = self.all_module_envs[to_module_idx];
-    const ident_text = if (moduleOwnsIdent(from_env, ident))
-        getOwnedIdentText(from_env, ident)
-    else if (moduleOwnsIdent(to_env, ident))
-        return ident
-    else {
-        if (std.debug.runtime_safety) {
-            std.debug.panic(
-                "remapIdentBetweenModules: ident {d} is owned by neither from_module={d} nor to_module={d}",
-                .{ ident.idx, from_module_idx, to_module_idx },
-            );
-        }
-        unreachable;
-    };
-
-    if (to_env.common.findIdent(ident_text)) |mapped| return mapped;
-
-    // If the source monotype uses the source module's self type name,
-    // map that self-name directly to the target module's self-name.
-    if (std.mem.eql(u8, ident_text, from_env.module_name)) {
-        if (to_env.common.findIdent(to_env.module_name)) |target_self| return target_self;
-        if (to_env.common.getIdentStore().lookup(Ident.for_text(to_env.module_name))) |target_self| return target_self;
-    }
-
-    if (to_env.common.getIdentStore().lookup(Ident.for_text(ident_text))) |mapped| return mapped;
-    return ident;
-}
-
 fn remapMonotypeBetweenModules(
     self: *Self,
     monotype: Monotype.Idx,
@@ -3566,12 +3529,19 @@ fn lowerExprProcInst(
 ) Allocator.Error!MIR.ExprId {
     const proc_inst_id = self.monomorphization.getExprProcInst(self.current_proc_inst_context, self.current_module_idx, expr_idx) orelse {
         if (builtin.mode == .Debug) {
+            const module_env = self.all_module_envs[self.current_module_idx];
+            const expr = module_env.store.getExpr(expr_idx);
+            const template_id = self.monomorphization.getExprProcTemplate(self.current_module_idx, expr_idx);
+            const root_proc_inst = self.monomorphization.getExprProcInst(.none, self.current_module_idx, expr_idx);
             std.debug.panic(
-                "MIR Lower invariant: callable expr {d} in module {d} has no proc inst in context {d}",
+                "MIR Lower invariant: callable expr {d} in module {d} ({s}) has no proc inst in context {d} template={d} root_context_proc_inst={d}",
                 .{
                     @intFromEnum(expr_idx),
                     self.current_module_idx,
+                    @tagName(expr),
                     @intFromEnum(self.current_proc_inst_context),
+                    if (template_id) |id| @intFromEnum(id) else std.math.maxInt(u32),
+                    if (root_proc_inst) |id| @intFromEnum(id) else std.math.maxInt(u32),
                 },
             );
         }
@@ -5739,7 +5709,42 @@ fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.E
         }
     }
 
-    const result = try self.lowerExpr(cir_expr_idx);
+    const current_env = self.all_module_envs[self.current_module_idx];
+    const cir_expr = current_env.store.getExpr(cir_expr_idx);
+    const result = if (cirExprIsCallable(cir_expr)) blk: {
+        const fn_monotype = try self.monotypeFromTypeVarWithBindings(
+            self.current_module_idx,
+            self.types_store,
+            target_type_var,
+            &self.type_var_seen,
+            &self.nominal_cycle_breakers,
+        );
+        if (fn_monotype.isNone()) {
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "MIR Lower invariant: callable def symbol={d} expr={d} in module {d} has no resolved function monotype",
+                    .{ symbol.raw(), @intFromEnum(cir_expr_idx), self.current_module_idx },
+                );
+            }
+            unreachable;
+        }
+
+        const template_id = self.monomorphization.getExprProcTemplate(self.current_module_idx, cir_expr_idx) orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "MIR Lower invariant: callable def symbol={d} expr={d} in module {d} has no proc template",
+                    .{ symbol.raw(), @intFromEnum(cir_expr_idx), self.current_module_idx },
+                );
+            }
+            unreachable;
+        };
+        const proc_inst_id = try self.lookupMonomorphizedProcInst(
+            template_id,
+            fn_monotype,
+            self.current_module_idx,
+        );
+        break :blk try self.lowerProcInst(proc_inst_id);
+    } else try self.lowerExpr(cir_expr_idx);
 
     // Cache the result and register the symbol definition
     try self.lowered_symbols.put(symbol_key, result);

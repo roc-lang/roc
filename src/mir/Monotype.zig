@@ -170,6 +170,7 @@ pub const Field = struct {
     }
 };
 
+/// A named tag or record field label paired with the module that owns its ident.
 pub const Name = struct {
     module_idx: u32,
     ident: Ident.Idx,

@@ -295,8 +295,8 @@ test "Monotype Store: record type" {
     const field2_type = store.primIdx(.str);
 
     const field_span = try store.addFields(test_allocator, &.{
-        .{ .name = Ident.Idx.NONE, .type_idx = field1_type },
-        .{ .name = Ident.Idx.NONE, .type_idx = field2_type },
+        .{ .name = .{ .module_idx = 0, .ident = Ident.Idx.NONE }, .type_idx = field1_type },
+        .{ .name = .{ .module_idx = 0, .ident = Ident.Idx.NONE }, .type_idx = field2_type },
     });
     const record = try store.addMonotype(test_allocator, .{ .record = .{ .fields = field_span } });
 
@@ -312,7 +312,7 @@ test "Monotype Store: tag union type" {
     const payload_span = try store.addIdxSpan(test_allocator, &.{payload_type});
 
     const tag_span = try store.addTags(test_allocator, &.{
-        .{ .name = Ident.Idx.NONE, .payloads = payload_span },
+        .{ .name = .{ .module_idx = 0, .ident = Ident.Idx.NONE }, .payloads = payload_span },
     });
     const tag_union = try store.addMonotype(test_allocator, .{ .tag_union = .{ .tags = tag_span } });
 
