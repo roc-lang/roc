@@ -1495,23 +1495,6 @@ fn ensureDirectProcSpec(
     param_layouts: []const layout.Idx,
     force_pass_by_ptr: bool,
 ) Allocator.Error!DirectProcSpec {
-    if (builtin.mode == .Debug) {
-        const proc = self.mir_store.getProc(callee_proc);
-        std.debug.print(
-            "ensureDirectProcSpec callee_proc={d} debug_name={d} fn_mono={d} {any} param_layouts=",
-            .{
-                @intFromEnum(callee_proc),
-                proc.debug_name.raw(),
-                @intFromEnum(proc.fn_monotype),
-                self.mir_store.monotype_store.getMonotype(proc.fn_monotype),
-            },
-        );
-        for (param_layouts, 0..) |param_layout, i| {
-            if (i != 0) std.debug.print(",", .{});
-            std.debug.print("{d}:{s}", .{ @intFromEnum(param_layout), @tagName(self.layout_store.getLayout(param_layout).tag) });
-        }
-        std.debug.print("\n", .{});
-    }
     const key_bytes = try self.specializationKeyBytes(callee_key, param_layouts, force_pass_by_ptr);
     const proc = self.mir_store.getProc(callee_proc);
     const provisional_ret_layout = try self.layoutFromMonotype(proc.ret_monotype);
@@ -3731,46 +3714,6 @@ fn lowerCall(self: *Self, call_data: anytype, mir_expr_id: MIR.ExprId, region: R
         defer self.scratch_layout_idxs.shrinkRetainingCapacity(save_layouts);
         try self.appendArgLayoutsForSpan(lir_args);
 
-        if (builtin.mode == .Debug) {
-            const debug_lir_args = self.lir_store.getExprSpan(lir_args);
-            std.debug.print("lowerCall direct callee_proc={d}\n", .{@intFromEnum(callee_proc)});
-            for (mir_args, debug_lir_args, 0..) |mir_arg, lir_arg, arg_i| {
-                const mir_layout = try self.runtimeValueLayoutFromMirExpr(mir_arg);
-                const lir_layout = self.lirExprResultLayout(lir_arg);
-                std.debug.print(
-                    "  arg[{d}] mir={d} tag={s} mono={d} {any} mir_layout={d} {s} lir_layout={d} {s}\n",
-                    .{
-                        arg_i,
-                        @intFromEnum(mir_arg),
-                        @tagName(self.mir_store.getExpr(mir_arg)),
-                        @intFromEnum(self.mir_store.typeOf(mir_arg)),
-                        self.mir_store.monotype_store.getMonotype(self.mir_store.typeOf(mir_arg)),
-                        @intFromEnum(mir_layout),
-                        @tagName(self.layout_store.getLayout(mir_layout).tag),
-                        @intFromEnum(lir_layout),
-                        @tagName(self.layout_store.getLayout(lir_layout).tag),
-                    },
-                );
-                switch (self.mir_store.getExpr(mir_arg)) {
-                    .lookup => |lookup| {
-                        const owner = self.debugSymbolOwner(lookup);
-                        std.debug.print(
-                            "    lookup symbol={d} symbol_layout={?} binding_mode={?} owner={s} owner_proc={d} owner_local={d}\n",
-                            .{
-                                lookup.raw(),
-                                self.symbol_layouts.get(lookup.raw()),
-                                self.symbol_binding_modes.get(lookup.raw()),
-                                @tagName(owner.kind),
-                                owner.proc_idx,
-                                owner.local_idx,
-                            },
-                        );
-                    },
-                    else => {},
-                }
-            }
-        }
-
         const specialization = try self.ensureDirectProcSpec(
             specializationIdentityForProc(callee_proc),
             callee_proc,
@@ -3845,10 +3788,31 @@ fn lowerCall(self: *Self, call_data: anytype, mir_expr_id: MIR.ExprId, region: R
             proc_ids.len
         else
             0;
+        const value_def_expr: u32 = if (self.mir_store.getValueDef(sym)) |expr_id|
+            @intFromEnum(expr_id)
+        else
+            std.math.maxInt(u32);
+        const value_def_tag = if (self.mir_store.getValueDef(sym)) |expr_id|
+            @tagName(self.mir_store.getExpr(expr_id))
+        else
+            "none";
         const owner = self.debugSymbolOwner(sym);
         std.debug.panic(
-            "MirToLir invariant violated: lookup callee reached direct call fallback without lambda-set/direct-proc resolution, symbol key={d} expr_ls={d} symbol_ls={d} source_expr={d} seed_proc_count={d} owner={s} owner_proc={d} owner_local={d}",
-            .{ sym.raw(), expr_ls, symbol_ls, source_expr, seed_proc_count, @tagName(owner.kind), owner.proc_idx, owner.local_idx },
+            "MirToLir invariant violated: lookup callee reached direct call fallback without lambda-set/direct-proc resolution, call_expr={d} func_expr={d} symbol key={d} expr_ls={d} symbol_ls={d} source_expr={d} seed_proc_count={d} value_def={d}:{s} owner={s} owner_proc={d} owner_local={d}",
+            .{
+                @intFromEnum(mir_expr_id),
+                @intFromEnum(call_data.func),
+                sym.raw(),
+                expr_ls,
+                symbol_ls,
+                source_expr,
+                seed_proc_count,
+                value_def_expr,
+                value_def_tag,
+                @tagName(owner.kind),
+                owner.proc_idx,
+                owner.local_idx,
+            },
         );
     }
 
@@ -4275,51 +4239,6 @@ fn lowerClosureCall(
         const save_layouts = self.scratch_layout_idxs.items.len;
         defer self.scratch_layout_idxs.shrinkRetainingCapacity(save_layouts);
         try self.appendArgLayoutsForSpan(call_user_args);
-
-        if (builtin.mode == .Debug) {
-            const debug_lir_args = self.lir_store.getExprSpan(call_user_args);
-            for (mir_args, debug_lir_args, 0..) |mir_arg, lir_arg, arg_i| {
-                const mir_layout = try self.runtimeValueLayoutFromMirExpr(mir_arg);
-                const lir_layout = self.lirExprResultLayout(lir_arg);
-                std.debug.print(
-                    "lowerClosureCall member_proc={d} arg[{d}] mir={d} tag={s} mono={d} {any} mir_layout={d} {s} lir_layout={d} {s} lir_expr={s}\n",
-                    .{
-                        @intFromEnum(member.proc),
-                        arg_i,
-                        @intFromEnum(mir_arg),
-                        @tagName(self.mir_store.getExpr(mir_arg)),
-                        @intFromEnum(self.mir_store.typeOf(mir_arg)),
-                        self.mir_store.monotype_store.getMonotype(self.mir_store.typeOf(mir_arg)),
-                        @intFromEnum(mir_layout),
-                        @tagName(self.layout_store.getLayout(mir_layout).tag),
-                        @intFromEnum(lir_layout),
-                        @tagName(self.layout_store.getLayout(lir_layout).tag),
-                        @tagName(self.lir_store.getExpr(lir_arg)),
-                    },
-                );
-                switch (self.mir_store.getExpr(mir_arg)) {
-                    .lookup => |lookup| {
-                        const owner = self.debugSymbolOwner(lookup);
-                        std.debug.print(
-                            "  lowerClosureCall mir lookup symbol={d} symbol_layout={?} binding_mode={?} owner={s} owner_proc={d} owner_local={d}\n",
-                            .{
-                                lookup.raw(),
-                                self.symbol_layouts.get(lookup.raw()),
-                                self.symbol_binding_modes.get(lookup.raw()),
-                                @tagName(owner.kind),
-                                owner.proc_idx,
-                                owner.local_idx,
-                            },
-                        );
-                    },
-                    .run_low_level => |ll| std.debug.print(
-                        "  lowerClosureCall mir lowlevel={s}\n",
-                        .{@tagName(ll.op)},
-                    ),
-                    else => {},
-                }
-            }
-        }
 
         if (!self.memberHasCaptures(member)) {
             const specialization = try self.ensureDirectProcSpec(
@@ -5049,7 +4968,6 @@ fn lowerLowLevel(self: *Self, ll: anytype, mir_expr_id: MIR.ExprId, region: Regi
         const lowered_arg = try self.lowerExpr(mir_arg);
         const arg_layout = try self.runtimeValueLayoutFromMirExpr(mir_arg);
         const ownership = arg_ownership[i];
-        const aliases_managed_ref = self.exprAliasesManagedRef(lowered_arg, arg_layout);
 
         const ensured_arg = switch (ownership) {
             .borrow => blk: {
@@ -5065,38 +4983,6 @@ fn lowerLowLevel(self: *Self, ll: anytype, mir_expr_id: MIR.ExprId, region: Regi
                 break :blk owned_arg;
             },
         };
-
-        if (builtin.mode == .Debug and ll.op == .list_append_unsafe) {
-            std.debug.print(
-                "lowerLowLevel list_append_unsafe arg[{d}] mir={d} mono={d} {any} layout={d} {s} ownership={s} aliases_managed_ref={} lowered={s} ensured={s}\n",
-                .{
-                    i,
-                    @intFromEnum(mir_arg),
-                    @intFromEnum(self.mir_store.typeOf(mir_arg)),
-                    self.mir_store.monotype_store.getMonotype(self.mir_store.typeOf(mir_arg)),
-                    @intFromEnum(arg_layout),
-                    @tagName(self.layout_store.getLayout(arg_layout).tag),
-                    @tagName(ownership),
-                    aliases_managed_ref,
-                    @tagName(self.lir_store.getExpr(lowered_arg)),
-                    @tagName(self.lir_store.getExpr(ensured_arg)),
-                },
-            );
-            switch (self.mir_store.getExpr(mir_arg)) {
-                .lookup => |lookup| std.debug.print(
-                    "  mir lookup symbol={d} symbol_layout={?} binding_mode={?}\n",
-                    .{ lookup.raw(), self.symbol_layouts.get(lookup.raw()), self.symbol_binding_modes.get(lookup.raw()) },
-                ),
-                else => {},
-            }
-            switch (self.lir_store.getExpr(ensured_arg)) {
-                .lookup => |lookup| std.debug.print(
-                    "  ensured lookup symbol={d} mode={?}\n",
-                    .{ lookup.symbol.raw(), self.symbol_binding_modes.get(lookup.symbol.raw()) },
-                ),
-                else => {},
-            }
-        }
 
         try self.scratch_lir_expr_ids.append(self.allocator, ensured_arg);
     }
@@ -5216,38 +5102,6 @@ fn lowerForLoop(self: *Self, f: anytype, mono_idx: Monotype.Idx, region: Region)
     };
 
     const elem_layout = try self.runtimeListElemLayoutFromMirExpr(f.list);
-    if (builtin.mode == .Debug) {
-        std.debug.print(
-            "lowerForLoop list_expr={d} tag={s} mono={d} {any} list_layout={d} {s} elem_layout={d} {s}\n",
-            .{
-                @intFromEnum(f.list),
-                @tagName(self.mir_store.getExpr(f.list)),
-                @intFromEnum(self.mir_store.typeOf(f.list)),
-                self.mir_store.monotype_store.getMonotype(self.mir_store.typeOf(f.list)),
-                @intFromEnum(list_layout),
-                @tagName(self.layout_store.getLayout(list_layout).tag),
-                @intFromEnum(elem_layout),
-                @tagName(self.layout_store.getLayout(elem_layout).tag),
-            },
-        );
-        switch (self.mir_store.getExpr(f.list)) {
-            .lookup => |lookup| {
-                const owner = self.debugSymbolOwner(lookup);
-                std.debug.print(
-                    "  lowerForLoop list lookup symbol={d} symbol_layout={?} binding_mode={?} owner={s} owner_proc={d} owner_local={d}\n",
-                    .{
-                        lookup.raw(),
-                        self.symbol_layouts.get(lookup.raw()),
-                        self.symbol_binding_modes.get(lookup.raw()),
-                        @tagName(owner.kind),
-                        owner.proc_idx,
-                        owner.local_idx,
-                    },
-                );
-            },
-            else => {},
-        }
-    }
     try self.beginBindingScope();
     defer self.endBindingScope();
     const save_rest_bindings = self.scratch_deferred_list_rest_bindings.items.len;
@@ -5477,21 +5331,6 @@ fn registerBindingPatternSymbols(
 ) Allocator.Error!void {
     const pat = self.mir_store.getPattern(mir_pat_id);
     const mono_idx = self.mir_store.patternTypeOf(mir_pat_id);
-    if (builtin.mode == .Debug) {
-        const mono = self.mir_store.monotype_store.getMonotype(mono_idx);
-        const runtime_tag = self.layout_store.getLayout(runtime_layout).tag;
-        switch (mono) {
-            .list => switch (runtime_tag) {
-                .list, .list_of_zst => {},
-                else => std.debug.panic(
-                    "MirToLir invariant violated: list-typed pattern {d} ({s}) received runtime layout {d} ({s})",
-                    .{ @intFromEnum(mir_pat_id), @tagName(pat), @intFromEnum(runtime_layout), @tagName(runtime_tag) },
-                ),
-            },
-            else => {},
-        }
-    }
-
     switch (pat) {
         .bind => |sym| try self.registerPatternSymbolLayout(sym, mono_idx, runtime_layout),
         .wildcard,

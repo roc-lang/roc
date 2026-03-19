@@ -2751,20 +2751,18 @@ fn lowerExprWithMonotypeOverride(
 
         // --- Lookups ---
         .e_lookup_local => |lookup| {
-            if (isTopLevelPattern(module_env, lookup.pattern_idx)) {
-                if (self.monomorphization.getContextPatternProcInsts(self.current_proc_inst_context, self.current_module_idx, lookup.pattern_idx)) |proc_inst_ids| {
-                    if (proc_inst_ids.len == 0) unreachable;
-                    if (proc_inst_ids.len == 1) {
-                        return try self.lowerProcInst(proc_inst_ids[0]);
-                    }
-                } else if (self.monomorphization.getLookupExprProcInst(
-                    self.current_proc_inst_context,
-                    self.monomorphizationRootExprContext(self.current_proc_inst_context),
-                    self.current_module_idx,
-                    expr_idx,
-                )) |proc_inst_id| {
-                    return try self.lowerProcInst(proc_inst_id);
+            if (self.monomorphization.getContextPatternProcInsts(self.current_proc_inst_context, self.current_module_idx, lookup.pattern_idx)) |proc_inst_ids| {
+                if (proc_inst_ids.len == 0) unreachable;
+                if (proc_inst_ids.len == 1) {
+                    return try self.lowerProcInst(proc_inst_ids[0]);
                 }
+            } else if (self.monomorphization.getLookupExprProcInst(
+                self.current_proc_inst_context,
+                self.monomorphizationRootExprContext(self.current_proc_inst_context),
+                self.current_module_idx,
+                expr_idx,
+            )) |proc_inst_id| {
+                return try self.lowerProcInst(proc_inst_id);
             }
 
             const symbol = try self.patternToSymbol(lookup.pattern_idx);
@@ -4417,32 +4415,6 @@ fn lowerProcInst(self: *Self, proc_inst_id: Monomorphize.ProcInstId) Allocator.E
         else => unreachable,
     };
 
-    if (builtin.mode == .Debug) {
-        switch (self.store.getExpr(lowered_proc_expr)) {
-            .proc_ref => |proc_id| std.debug.print(
-                "lowerProcInst proc_inst={d} template={d} fn_mono={d} {any} -> proc_id={d}\n",
-                .{
-                    @intFromEnum(proc_inst_id),
-                    @intFromEnum(proc_inst.template),
-                    @intFromEnum(proc_monotype),
-                    self.store.monotype_store.getMonotype(proc_monotype),
-                    @intFromEnum(proc_id),
-                },
-            ),
-            .closure_make => |closure| std.debug.print(
-                "lowerProcInst proc_inst={d} template={d} fn_mono={d} {any} -> closure_proc={d}\n",
-                .{
-                    @intFromEnum(proc_inst_id),
-                    @intFromEnum(proc_inst.template),
-                    @intFromEnum(proc_monotype),
-                    self.store.monotype_store.getMonotype(proc_monotype),
-                    @intFromEnum(closure.proc),
-                },
-            ),
-            else => {},
-        }
-    }
-
     return lowered_proc_expr;
 }
 
@@ -4542,21 +4514,12 @@ fn lowerCall(
     region: Region,
 ) Allocator.Error!MIR.ExprId {
     const callee_expr = module_env.store.getExpr(call.func);
-    const value_flow_lookup_callee = switch (callee_expr) {
-        .e_lookup_local => |lookup| !isTopLevelPattern(module_env, lookup.pattern_idx),
-        .e_lookup_external => false,
-        .e_lookup_required => false,
-        else => false,
-    };
-    const call_site_proc_inst = if (value_flow_lookup_callee)
-        null
-    else
-        self.monomorphization.getCallSiteProcInst(
-            self.current_proc_inst_context,
-            self.monomorphizationRootExprContext(self.current_proc_inst_context),
-            self.current_module_idx,
-            call_expr_idx,
-        );
+    const call_site_proc_inst = self.monomorphization.getCallSiteProcInst(
+        self.current_proc_inst_context,
+        self.monomorphizationRootExprContext(self.current_proc_inst_context),
+        self.current_module_idx,
+        call_expr_idx,
+    );
     const call_result_monotype = if (call_site_proc_inst) |proc_inst_id|
         try self.procInstReturnMonotype(proc_inst_id)
     else
@@ -4576,22 +4539,6 @@ fn lowerCall(
                     try self.lowerExprWithMonotypeOverride(arg_exprs[1], elem_monotype)
                 else
                     try self.lowerExpr(arg_exprs[1]);
-                if (builtin.mode == .Debug and !self.current_proc_inst_context.isNone()) {
-                    std.debug.print(
-                        "Lower list_append_unsafe proc_inst={d} list_expr={d} list_mono={d} {any} elem_override={d} {any} elem_expr={d} elem_mono={d} {any}\n",
-                        .{
-                            @intFromEnum(self.current_proc_inst_context),
-                            @intFromEnum(arg_exprs[0]),
-                            @intFromEnum(list_mono_idx),
-                            self.store.monotype_store.getMonotype(list_mono_idx),
-                            @intFromEnum(elem_monotype),
-                            if (!elem_monotype.isNone()) self.store.monotype_store.getMonotype(elem_monotype) else .unit,
-                            @intFromEnum(arg_exprs[1]),
-                            @intFromEnum(self.store.typeOf(lowered_elem)),
-                            self.store.monotype_store.getMonotype(self.store.typeOf(lowered_elem)),
-                        },
-                    );
-                }
                 const args = try self.store.addExprSpan(self.allocator, &.{ lowered_list, lowered_elem });
                 return try self.store.addExpr(self.allocator, .{ .run_low_level = .{
                     .op = ll_op,
@@ -4767,9 +4714,7 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
         const stmt_region = module_env.store.getStatementRegion(stmt_idx);
         switch (cir_stmt) {
             .s_decl => |decl| {
-                if (cirExprIsProcBacked(module_env, decl.expr) and
-                    !self.callableBindingHasDemandedValueUse(decl.pattern))
-                {
+                if (cirExprIsProcBacked(module_env, decl.expr)) {
                     continue;
                 }
                 const pat = try self.lowerPattern(module_env, decl.pattern);
