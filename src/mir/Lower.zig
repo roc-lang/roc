@@ -313,14 +313,21 @@ fn identLastSegment(text: []const u8) []const u8 {
 /// that require Ident.Idx names from monotype tag/field names.
 fn identFromStructuralName(self: *const Self, name_id: Monotype.StructuralNameId) Ident.Idx {
     const text = self.store.monotype_store.getNameText(name_id);
-    const module_env = self.all_module_envs[self.current_module_idx];
-    if (module_env.common.findIdent(text)) |ident| return ident;
-    const ident_store = module_env.getIdentStoreConst();
-    if (ident_store.findByString(text)) |ident| return ident;
-    if (ident_store.lookup(Ident.for_text(text))) |ident| return ident;
-    // Fallback: return a synthetic ident index; the text comparison path
-    // in the backend will handle it.
+    // Search current module first (most common case).
+    const current_env = self.all_module_envs[self.current_module_idx];
+    if (findIdentInEnv(current_env, text)) |ident| return ident;
+    // Fall back to all other modules for cross-module tags.
+    for (self.all_module_envs, 0..) |env, i| {
+        if (i == self.current_module_idx) continue;
+        if (findIdentInEnv(env, text)) |ident| return ident;
+    }
     return Ident.Idx.NONE;
+}
+
+fn findIdentInEnv(env: *const ModuleEnv, text: []const u8) ?Ident.Idx {
+    if (env.common.findIdent(text)) |ident| return ident;
+    if (env.getIdentStoreConst().lookup(Ident.for_text(text))) |ident| return ident;
+    return null;
 }
 
 /// Canonicalize a cross-module TypeId by deeply resolving `.rec` indirections.
