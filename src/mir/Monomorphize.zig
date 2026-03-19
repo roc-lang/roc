@@ -1215,7 +1215,7 @@ pub const Pass = struct {
     ) Allocator.Error!void {
         const template = result.getProcTemplate(template_id);
         const fn_monotype = blk: {
-            const expr_mono = try self.resolveExprMonotypeIfExactResolved(result, module_idx, expr_idx);
+            const expr_mono = try self.resolveExprMonotypeForProcInst(result, module_idx, expr_idx);
             if (!expr_mono.isNone()) break :blk expr_mono;
 
             break :blk try self.resolveTypeVarMonotypeIfExactResolved(
@@ -1252,6 +1252,18 @@ pub const Pass = struct {
             self.resultExprKey(context_proc_inst, module_idx, expr_idx),
             proc_inst_id,
         );
+    }
+
+    fn resolveExprMonotypeForProcInst(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) Allocator.Error!ResolvedMonotype {
+        return if (self.active_bindings != null)
+            try self.resolveExprMonotypeIfExactResolved(result, module_idx, expr_idx)
+        else
+            try self.resolveExprMonotypeResolved(result, module_idx, expr_idx);
     }
 
     fn lookupCurrentExprMonotype(
@@ -2378,7 +2390,7 @@ pub const Pass = struct {
         var ordered_entries = std.ArrayList(TypeSubstEntry).empty;
         defer ordered_entries.deinit(self.allocator);
 
-        const callee_fn_mono = try self.resolveExprMonotypeIfExactResolved(result, module_idx, call_expr.func);
+        const callee_fn_mono = try self.resolveExprMonotypeForProcInst(result, module_idx, call_expr.func);
         if (!callee_fn_mono.isNone()) {
             try self.bindTypeVarMonotypes(
                 result,
@@ -2410,8 +2422,7 @@ pub const Pass = struct {
             }
 
             for (param_vars, arg_exprs) |param_var, arg_expr_idx| {
-                if (isWeakNumericLiteralExpr(self.all_module_envs[module_idx].store.getExpr(arg_expr_idx))) continue;
-                const arg_mono = try self.resolveExprMonotypeIfExactResolved(result, module_idx, arg_expr_idx);
+                const arg_mono = try self.resolveExprMonotypeForProcInst(result, module_idx, arg_expr_idx);
                 if (arg_mono.isNone()) continue;
                 var seen: std.AutoHashMapUnmanaged(types.Var, void) = .empty;
                 defer seen.deinit(self.allocator);
@@ -2437,7 +2448,7 @@ pub const Pass = struct {
                 }
             }
 
-            const ret_mono = try self.resolveExprMonotypeIfExactResolved(result, module_idx, call_expr_idx);
+            const ret_mono = try self.resolveExprMonotypeForProcInst(result, module_idx, call_expr_idx);
             if (!ret_mono.isNone()) {
                 if (self.procBoundaryInfo(template.module_idx, template.cir_expr)) |boundary| {
                     try self.bindTypeVarMonotypes(
@@ -2642,8 +2653,7 @@ pub const Pass = struct {
             }
 
             for (param_vars, actual_args.items) |param_var, arg_expr_idx| {
-                if (isWeakNumericLiteralExpr(self.all_module_envs[module_idx].store.getExpr(arg_expr_idx))) continue;
-                const arg_mono = try self.resolveExprMonotypeIfExactResolved(result, module_idx, arg_expr_idx);
+                const arg_mono = try self.resolveExprMonotypeForProcInst(result, module_idx, arg_expr_idx);
                 if (arg_mono.isNone()) continue;
                 try self.bindTypeVarMonotypes(
                     result,
@@ -2657,7 +2667,7 @@ pub const Pass = struct {
                 );
             }
 
-            const ret_mono = try self.resolveExprMonotypeIfExactResolved(result, module_idx, expr_idx);
+            const ret_mono = try self.resolveExprMonotypeForProcInst(result, module_idx, expr_idx);
             if (!ret_mono.isNone()) {
                 if (self.procBoundaryInfo(template.module_idx, template.cir_expr)) |boundary| {
                     try self.bindTypeVarMonotypes(
@@ -3636,7 +3646,7 @@ pub const Pass = struct {
         const proc_inst_id = if (existing_proc_inst_id) |proc_inst_id|
             proc_inst_id
         else blk: {
-            const fn_monotype = try self.resolveExprMonotypeIfExactResolved(result, module_idx, expr_idx);
+            const fn_monotype = try self.resolveExprMonotypeForProcInst(result, module_idx, expr_idx);
             if (fn_monotype.isNone()) return;
             break :blk if (self.active_proc_inst_context.isNone())
                 try self.ensureProcInstUnscanned(result, template_id, fn_monotype.idx, fn_monotype.module_idx)
@@ -7588,13 +7598,6 @@ fn callableKind(expr: CIR.Expr) ?ProcTemplateKind {
         .e_closure => .closure,
         .e_hosted_lambda => .hosted_lambda,
         else => null,
-    };
-}
-
-fn isWeakNumericLiteralExpr(expr: CIR.Expr) bool {
-    return switch (expr) {
-        .e_num => true,
-        else => false,
     };
 }
 

@@ -310,6 +310,54 @@ fn monomorphizationRootExprContext(self: *const Self, context_proc_inst: Monomor
     return if (context_proc_inst.isNone()) self.current_root_expr_context else null;
 }
 
+fn lookupMonomorphizedExprMonotype(self: *const Self, expr_idx: CIR.Expr.Idx) ?Monomorphize.ResolvedMonotype {
+    const rooted = self.monomorphization.getExprMonotype(
+        self.current_proc_inst_context,
+        self.monomorphizationRootExprContext(self.current_proc_inst_context),
+        self.current_module_idx,
+        expr_idx,
+    );
+    if (rooted != null) return rooted;
+
+    if (self.current_proc_inst_context.isNone()) {
+        return self.monomorphization.getExprMonotype(.none, null, self.current_module_idx, expr_idx);
+    }
+
+    return null;
+}
+
+fn lookupMonomorphizedExprProcInst(self: *const Self, expr_idx: CIR.Expr.Idx) ?Monomorphize.ProcInstId {
+    const rooted = self.monomorphization.getExprProcInst(
+        self.current_proc_inst_context,
+        self.monomorphizationRootExprContext(self.current_proc_inst_context),
+        self.current_module_idx,
+        expr_idx,
+    );
+    if (rooted != null) return rooted;
+
+    if (self.current_proc_inst_context.isNone()) {
+        return self.monomorphization.getExprProcInst(.none, null, self.current_module_idx, expr_idx);
+    }
+
+    return null;
+}
+
+fn lookupMonomorphizedDispatchProcInst(self: *const Self, expr_idx: CIR.Expr.Idx) ?Monomorphize.ProcInstId {
+    const rooted = self.monomorphization.getDispatchExprProcInst(
+        self.current_proc_inst_context,
+        self.monomorphizationRootExprContext(self.current_proc_inst_context),
+        self.current_module_idx,
+        expr_idx,
+    );
+    if (rooted != null) return rooted;
+
+    if (self.current_proc_inst_context.isNone()) {
+        return self.monomorphization.getDispatchExprProcInst(.none, null, self.current_module_idx, expr_idx);
+    }
+
+    return null;
+}
+
 fn patternScopeForProcInst(proc_inst_id: Monomorphize.ProcInstId) u64 {
     if (proc_inst_id.isNone()) return 0;
     return (@as(u64, 1) << 63) | (@as(u64, @intFromEnum(proc_inst_id)) + 1);
@@ -3379,20 +3427,13 @@ fn monotypesStructurallyEqualRec(
 
 /// Get the monotype for a CIR expression (via its type var).
 fn resolveMonotype(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!Monotype.Idx {
-    if (!self.current_proc_inst_context.isNone()) {
-        if (self.monomorphization.getExprMonotype(
-            self.current_proc_inst_context,
-            self.monomorphizationRootExprContext(self.current_proc_inst_context),
+    if (self.lookupMonomorphizedExprMonotype(expr_idx)) |mono| {
+        return self.importMonotypeFromStore(
+            &self.monomorphization.monotype_store,
+            mono.idx,
+            mono.module_idx,
             self.current_module_idx,
-            expr_idx,
-        )) |mono| {
-            return self.importMonotypeFromStore(
-                &self.monomorphization.monotype_store,
-                mono.idx,
-                mono.module_idx,
-                self.current_module_idx,
-            );
-        }
+        );
     }
 
     const type_var = ModuleEnv.varFrom(expr_idx);
@@ -3639,37 +3680,29 @@ fn lowerExprProcInst(
     expr_idx: CIR.Expr.Idx,
     _: Monotype.Idx,
 ) Allocator.Error!MIR.ExprId {
-    const rooted_proc_inst_id = self.monomorphization.getExprProcInst(
-        self.current_proc_inst_context,
-        self.monomorphizationRootExprContext(self.current_proc_inst_context),
-        self.current_module_idx,
-        expr_idx,
-    );
-    const proc_inst_id = rooted_proc_inst_id orelse lookup_proc_inst: {
-        if (self.current_proc_inst_context.isNone()) {
-            if (self.monomorphization.getExprProcInst(.none, null, self.current_module_idx, expr_idx)) |canonical_proc_inst_id| {
-                break :lookup_proc_inst canonical_proc_inst_id;
-            }
-        }
+    const proc_inst_id = self.lookupMonomorphizedExprProcInst(expr_idx) orelse {
         if (builtin.mode == .Debug) {
             const module_env = self.all_module_envs[self.current_module_idx];
             const expr = module_env.store.getExpr(expr_idx);
             const template_id = self.monomorphization.getExprProcTemplate(self.current_module_idx, expr_idx);
-            const root_proc_inst = self.monomorphization.getExprProcInst(
-                .none,
-                self.monomorphizationRootExprContext(.none),
+            const rooted_proc_inst = self.monomorphization.getExprProcInst(
+                self.current_proc_inst_context,
+                self.monomorphizationRootExprContext(self.current_proc_inst_context),
                 self.current_module_idx,
                 expr_idx,
             );
+            const canonical_proc_inst = self.monomorphization.getExprProcInst(.none, null, self.current_module_idx, expr_idx);
             std.debug.panic(
-                "MIR Lower invariant: callable expr {d} in module {d} ({s}) has no proc inst in context {d} template={d} root_context_proc_inst={d}",
+                "MIR Lower invariant: callable expr {d} in module {d} ({s}) has no proc inst in context {d} root_expr_context={d} template={d} rooted_proc_inst={d} canonical_proc_inst={d}",
                 .{
                     @intFromEnum(expr_idx),
                     self.current_module_idx,
                     @tagName(expr),
                     @intFromEnum(self.current_proc_inst_context),
+                    if (self.current_root_expr_context) |root_expr_idx| @intFromEnum(root_expr_idx) else std.math.maxInt(u32),
                     if (template_id) |id| @intFromEnum(id) else std.math.maxInt(u32),
-                    if (root_proc_inst) |id| @intFromEnum(id) else std.math.maxInt(u32),
+                    if (rooted_proc_inst) |id| @intFromEnum(id) else std.math.maxInt(u32),
+                    if (canonical_proc_inst) |id| @intFromEnum(id) else std.math.maxInt(u32),
                 },
             );
         }
@@ -4379,12 +4412,7 @@ fn lowerProcInst(self: *Self, proc_inst_id: Monomorphize.ProcInstId) Allocator.E
 }
 
 fn lowerDispatchProcInstForExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId {
-    const proc_inst_id = self.monomorphization.getDispatchExprProcInst(
-        self.current_proc_inst_context,
-        self.monomorphizationRootExprContext(self.current_proc_inst_context),
-        self.current_module_idx,
-        expr_idx,
-    ) orelse {
+    const proc_inst_id = self.lookupMonomorphizedDispatchProcInst(expr_idx) orelse {
         if (std.debug.runtime_safety) {
             std.debug.panic(
                 "MIR Lower invariant: monomorphization missing dispatch proc inst for expr {d} in module {d}",
@@ -5960,18 +5988,7 @@ fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.E
             }
             unreachable;
         };
-        const rooted_proc_inst_id = self.monomorphization.getExprProcInst(
-            self.current_proc_inst_context,
-            self.monomorphizationRootExprContext(self.current_proc_inst_context),
-            self.current_module_idx,
-            cir_expr_idx,
-        );
-        const proc_inst_id = rooted_proc_inst_id orelse lookup_proc_inst: {
-            if (self.current_proc_inst_context.isNone()) {
-                if (self.monomorphization.getExprProcInst(.none, null, self.current_module_idx, cir_expr_idx)) |canonical_proc_inst_id| {
-                    break :lookup_proc_inst canonical_proc_inst_id;
-                }
-            }
+        const proc_inst_id = self.lookupMonomorphizedExprProcInst(cir_expr_idx) orelse {
             if (builtin.mode == .Debug) {
                 std.debug.panic(
                     "MIR Lower invariant: callable def symbol={d} expr={d} in module {d} template={d} has no monomorphized proc inst in context {d} root_expr={d}",
