@@ -5702,7 +5702,6 @@ test "MIR record closure fields capture distinct outer symbols" {
     const mir_expr = try lower.lowerExpr(resources.expr_idx);
     const root = mir_store.getExpr(mir_expr);
     try std.testing.expect(root == .block);
-
     const stmts = mir_store.getStmts(root.block.stmts);
     try std.testing.expect(stmts.len >= 3);
 
@@ -5801,7 +5800,6 @@ test "LIR lifted closure with function-valued captures keeps both capture slots"
     const mir_expr = try lower.lowerExpr(resources.expr_idx);
     const root = mir_store.getExpr(mir_expr);
     try std.testing.expect(root == .block);
-
     const stmts = mir_store.getStmts(root.block.stmts);
     const final_expr = mir_store.getExpr(root.block.final_expr);
     try std.testing.expect(final_expr == .call);
@@ -5835,7 +5833,6 @@ test "LIR lifted closure with function-valued captures keeps both capture slots"
     try std.testing.expectEqual(@as(usize, 1), sym_members.len);
     try std.testing.expectEqual(sym_members[0].proc, members[0].proc);
     try std.testing.expectEqual(@as(usize, 2), mir_store.getCaptureBindings(closure_member.capture_bindings).len);
-
     var layout_store = try layout.Store.init(
         all_module_envs[0..],
         resources.builtin_module.env.idents.builtin_str,

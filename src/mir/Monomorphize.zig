@@ -1634,6 +1634,17 @@ pub const Pass = struct {
                 if (try self.resolveExprCallableTemplate(result, module_idx, expr_idx)) |template_id| {
                     try self.resolveLookupExprProcInst(result, module_idx, expr_idx, template_id);
                 } else if (self.source_exprs.get(packLocalPatternSourceKey(module_idx, lookup.pattern_idx))) |source| {
+                    if (result.getContextPatternProcInsts(self.active_proc_inst_context, module_idx, lookup.pattern_idx)) |proc_inst_ids| {
+                        var visiting: std.AutoHashMapUnmanaged(u64, void) = .empty;
+                        defer visiting.deinit(self.allocator);
+                        try self.propagateDemandedProcInstsToValueExpr(
+                            result,
+                            source.module_idx,
+                            source.expr_idx,
+                            proc_inst_ids,
+                            &visiting,
+                        );
+                    }
                     try self.scanDemandedValueDefExpr(result, source.module_idx, source.expr_idx);
                 }
             },
@@ -1705,6 +1716,7 @@ pub const Pass = struct {
                             .expr_idx = match_expr.cond,
                         });
                     }
+                    try self.propagateDemandedValueResultMonotypeToChild(result, module_idx, expr_idx, branch.value);
                     try self.scanValueExpr(result, module_idx, branch.value);
                     if (branch.guard) |guard_expr| {
                         try self.scanExpr(result, module_idx, guard_expr);
@@ -1716,8 +1728,10 @@ pub const Pass = struct {
                 for (branches) |branch_idx| {
                     const branch = module_env.store.getIfBranch(branch_idx);
                     try self.scanExpr(result, module_idx, branch.cond);
+                    try self.propagateDemandedValueResultMonotypeToChild(result, module_idx, expr_idx, branch.body);
                     try self.scanValueExpr(result, module_idx, branch.body);
                 }
+                try self.propagateDemandedValueResultMonotypeToChild(result, module_idx, expr_idx, if_expr.final_else);
                 try self.scanValueExpr(result, module_idx, if_expr.final_else);
             },
             .e_call => |call_expr| {
@@ -1758,6 +1772,7 @@ pub const Pass = struct {
                 for (stmts) |stmt_idx| {
                     try self.scanStmt(result, module_idx, stmt_idx);
                 }
+                try self.propagateDemandedValueResultMonotypeToChild(result, module_idx, expr_idx, block_expr.final_expr);
                 try self.scanValueExpr(result, module_idx, block_expr.final_expr);
             },
             .e_tag => |tag_expr| try self.scanValueExprSpan(result, module_idx, module_env.store.sliceExpr(tag_expr.args)),
@@ -1801,8 +1816,14 @@ pub const Pass = struct {
                 }
             },
             .e_tuple_access => |tuple_access| try self.scanExpr(result, module_idx, tuple_access.tuple),
-            .e_dbg => |dbg_expr| try self.scanValueExpr(result, module_idx, dbg_expr.expr),
-            .e_expect => |expect_expr| try self.scanValueExpr(result, module_idx, expect_expr.body),
+            .e_dbg => |dbg_expr| {
+                try self.propagateDemandedValueResultMonotypeToChild(result, module_idx, expr_idx, dbg_expr.expr);
+                try self.scanValueExpr(result, module_idx, dbg_expr.expr);
+            },
+            .e_expect => |expect_expr| {
+                try self.propagateDemandedValueResultMonotypeToChild(result, module_idx, expr_idx, expect_expr.body);
+                try self.scanValueExpr(result, module_idx, expect_expr.body);
+            },
             .e_return => |return_expr| try self.scanValueExpr(result, module_idx, return_expr.expr),
             .e_type_var_dispatch => |dispatch_expr| {
                 try self.resolveDispatchExprProcInst(result, module_idx, expr_idx, expr);
@@ -2028,6 +2049,24 @@ pub const Pass = struct {
                 )) {
                     .one => |proc_inst_id| break :blk proc_inst_id,
                     .ambiguous => {
+                        for (proc_inst_ids) |proc_inst_id| {
+                            try self.recordContextPatternProcInst(
+                                result,
+                                self.active_proc_inst_context,
+                                module_idx,
+                                lookup.pattern_idx,
+                                proc_inst_id,
+                            );
+                        }
+                        var visiting: std.AutoHashMapUnmanaged(u64, void) = .empty;
+                        defer visiting.deinit(self.allocator);
+                        try self.propagateDemandedProcInstsToValueExpr(
+                            result,
+                            module_idx,
+                            callee_expr_idx,
+                            proc_inst_ids,
+                            &visiting,
+                        );
                         try self.recordCallSiteProcInstSet(
                             result,
                             self.active_proc_inst_context,
@@ -2039,6 +2078,24 @@ pub const Pass = struct {
                     },
                     .none => {
                         if (proc_inst_ids.len > 1) {
+                            for (proc_inst_ids) |proc_inst_id| {
+                                try self.recordContextPatternProcInst(
+                                    result,
+                                    self.active_proc_inst_context,
+                                    module_idx,
+                                    lookup.pattern_idx,
+                                    proc_inst_id,
+                                );
+                            }
+                            var visiting: std.AutoHashMapUnmanaged(u64, void) = .empty;
+                            defer visiting.deinit(self.allocator);
+                            try self.propagateDemandedProcInstsToValueExpr(
+                                result,
+                                module_idx,
+                                callee_expr_idx,
+                                proc_inst_ids,
+                                &visiting,
+                            );
                             try self.recordCallSiteProcInstSet(
                                 result,
                                 self.active_proc_inst_context,
@@ -3166,6 +3223,24 @@ pub const Pass = struct {
                 record_mono.module_idx,
             );
         }
+    }
+
+    fn propagateDemandedValueResultMonotypeToChild(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        parent_expr_idx: CIR.Expr.Idx,
+        child_expr_idx: CIR.Expr.Idx,
+    ) Allocator.Error!void {
+        const parent_mono = try self.resolveExprMonotypeIfMonomorphizableResolved(result, module_idx, parent_expr_idx);
+        if (parent_mono.isNone()) return;
+        try self.recordCurrentExprMonotype(
+            result,
+            module_idx,
+            child_expr_idx,
+            parent_mono.idx,
+            parent_mono.module_idx,
+        );
     }
 
     fn resolveDispatchExprProcInst(
@@ -5822,6 +5897,241 @@ pub const Pass = struct {
             },
             else => null,
         };
+    }
+
+    fn selectDemandedProcInstForTemplate(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        template_id: ProcTemplateId,
+        proc_inst_ids: []const ProcInstId,
+    ) Allocator.Error!?ProcInstId {
+        var first_match: ?ProcInstId = null;
+        var match_count: usize = 0;
+        for (proc_inst_ids) |proc_inst_id| {
+            if (result.getProcInst(proc_inst_id).template != template_id) continue;
+            match_count += 1;
+            if (first_match == null) first_match = proc_inst_id;
+        }
+
+        if (match_count == 0) return null;
+        if (match_count == 1) return first_match;
+
+        const desired_fn_monotype = try self.resolveExprMonotypeIfMonomorphizableResolved(result, module_idx, expr_idx);
+        switch (try self.selectExistingProcInstForFnMonotype(
+            result,
+            proc_inst_ids,
+            desired_fn_monotype,
+            template_id,
+        )) {
+            .one => |proc_inst_id| return proc_inst_id,
+            .none => {
+                if (std.debug.runtime_safety) {
+                    std.debug.panic(
+                        "Monomorphize: demanded proc-inst set has multiple matches for expr {d} in module {d} template={d} without an exact callable monotype",
+                        .{ @intFromEnum(expr_idx), module_idx, @intFromEnum(template_id) },
+                    );
+                }
+                unreachable;
+            },
+            .ambiguous => {
+                if (std.debug.runtime_safety) {
+                    std.debug.panic(
+                        "Monomorphize: demanded proc-inst set is ambiguous for expr {d} in module {d} template={d}",
+                        .{ @intFromEnum(expr_idx), module_idx, @intFromEnum(template_id) },
+                    );
+                }
+                unreachable;
+            },
+        }
+    }
+
+    fn propagateDemandedProcInstsToValueExpr(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        proc_inst_ids: []const ProcInstId,
+        visiting: *std.AutoHashMapUnmanaged(u64, void),
+    ) Allocator.Error!void {
+        const visit_key = exprVisitKey(module_idx, expr_idx);
+        if (visiting.contains(visit_key)) return;
+        try visiting.put(self.allocator, visit_key, {});
+        defer _ = visiting.remove(visit_key);
+
+        const module_env = self.all_module_envs[module_idx];
+        const expr = module_env.store.getExpr(expr_idx);
+        switch (expr) {
+            .e_lambda, .e_closure, .e_hosted_lambda => {
+                const template_id = (try self.resolveExprCallableTemplate(result, module_idx, expr_idx)) orelse return;
+                const proc_inst_id = (try self.selectDemandedProcInstForTemplate(
+                    result,
+                    module_idx,
+                    expr_idx,
+                    template_id,
+                    proc_inst_ids,
+                )) orelse return;
+                try self.recordExprProcInst(
+                    result,
+                    self.active_proc_inst_context,
+                    module_idx,
+                    expr_idx,
+                    proc_inst_id,
+                );
+            },
+            .e_lookup_local => |lookup| {
+                if (result.getLocalProcTemplate(module_idx, lookup.pattern_idx)) |template_id| {
+                    if (try self.selectDemandedProcInstForTemplate(
+                        result,
+                        module_idx,
+                        expr_idx,
+                        template_id,
+                        proc_inst_ids,
+                    )) |proc_inst_id| {
+                        try self.recordLookupExprProcInst(
+                            result,
+                            self.active_proc_inst_context,
+                            module_idx,
+                            expr_idx,
+                            proc_inst_id,
+                        );
+                        try self.recordContextPatternProcInst(
+                            result,
+                            self.active_proc_inst_context,
+                            module_idx,
+                            lookup.pattern_idx,
+                            proc_inst_id,
+                        );
+                        return;
+                    }
+                }
+
+                const source = self.source_exprs.get(packLocalPatternSourceKey(module_idx, lookup.pattern_idx)) orelse return;
+                try self.propagateDemandedProcInstsToValueExpr(
+                    result,
+                    source.module_idx,
+                    source.expr_idx,
+                    proc_inst_ids,
+                    visiting,
+                );
+            },
+            .e_lookup_external => |lookup| {
+                const target_module_idx = self.resolveImportedModuleIdx(module_env, lookup.module_idx) orelse return;
+                if (result.getExternalProcTemplate(target_module_idx, lookup.target_node_idx)) |template_id| {
+                    if (try self.selectDemandedProcInstForTemplate(
+                        result,
+                        module_idx,
+                        expr_idx,
+                        template_id,
+                        proc_inst_ids,
+                    )) |proc_inst_id| {
+                        try self.recordLookupExprProcInst(
+                            result,
+                            self.active_proc_inst_context,
+                            module_idx,
+                            expr_idx,
+                            proc_inst_id,
+                        );
+                        return;
+                    }
+                }
+
+                const source = try self.resolveExternalDefSourceExpr(result, target_module_idx, lookup.target_node_idx) orelse return;
+                try self.propagateDemandedProcInstsToValueExpr(
+                    result,
+                    source.module_idx,
+                    source.expr_idx,
+                    proc_inst_ids,
+                    visiting,
+                );
+            },
+            .e_lookup_required => |lookup| {
+                const target = self.resolveRequiredLookupTarget(module_env, lookup) orelse return;
+                const target_node_idx: u16 = @intCast(@intFromEnum(target.def_idx));
+                if (result.getExternalProcTemplate(target.module_idx, target_node_idx)) |template_id| {
+                    if (try self.selectDemandedProcInstForTemplate(
+                        result,
+                        module_idx,
+                        expr_idx,
+                        template_id,
+                        proc_inst_ids,
+                    )) |proc_inst_id| {
+                        try self.recordLookupExprProcInst(
+                            result,
+                            self.active_proc_inst_context,
+                            module_idx,
+                            expr_idx,
+                            proc_inst_id,
+                        );
+                        return;
+                    }
+                }
+
+                const source = try self.resolveExternalDefSourceExpr(result, target.module_idx, target_node_idx) orelse return;
+                try self.propagateDemandedProcInstsToValueExpr(
+                    result,
+                    source.module_idx,
+                    source.expr_idx,
+                    proc_inst_ids,
+                    visiting,
+                );
+            },
+            .e_if => |if_expr| {
+                for (module_env.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
+                    const branch = module_env.store.getIfBranch(branch_idx);
+                    try self.propagateDemandedProcInstsToValueExpr(result, module_idx, branch.body, proc_inst_ids, visiting);
+                }
+                try self.propagateDemandedProcInstsToValueExpr(result, module_idx, if_expr.final_else, proc_inst_ids, visiting);
+            },
+            .e_match => |match_expr| {
+                for (module_env.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
+                    const branch = module_env.store.getMatchBranch(branch_idx);
+                    try self.propagateDemandedProcInstsToValueExpr(result, module_idx, branch.value, proc_inst_ids, visiting);
+                }
+            },
+            .e_block => |block_expr| try self.propagateDemandedProcInstsToValueExpr(result, module_idx, block_expr.final_expr, proc_inst_ids, visiting),
+            .e_dbg => |dbg_expr| try self.propagateDemandedProcInstsToValueExpr(result, module_idx, dbg_expr.expr, proc_inst_ids, visiting),
+            .e_expect => |expect_expr| try self.propagateDemandedProcInstsToValueExpr(result, module_idx, expect_expr.body, proc_inst_ids, visiting),
+            .e_return => |return_expr| try self.propagateDemandedProcInstsToValueExpr(result, module_idx, return_expr.expr, proc_inst_ids, visiting),
+            .e_nominal => |nominal_expr| try self.propagateDemandedProcInstsToValueExpr(result, module_idx, nominal_expr.backing_expr, proc_inst_ids, visiting),
+            .e_nominal_external => |nominal_expr| try self.propagateDemandedProcInstsToValueExpr(result, module_idx, nominal_expr.backing_expr, proc_inst_ids, visiting),
+            .e_dot_access => |dot_expr| {
+                if (dot_expr.args != null) return;
+                const field_expr = try self.resolveRecordFieldExpr(
+                    result,
+                    module_idx,
+                    dot_expr.receiver,
+                    module_idx,
+                    dot_expr.field_name,
+                    visiting,
+                ) orelse return;
+                try self.propagateDemandedProcInstsToValueExpr(
+                    result,
+                    field_expr.module_idx,
+                    field_expr.expr_idx,
+                    proc_inst_ids,
+                    visiting,
+                );
+            },
+            .e_tuple_access => |tuple_access| {
+                const elem_expr = try self.resolveTupleElemExpr(
+                    result,
+                    module_idx,
+                    tuple_access.tuple,
+                    tuple_access.elem_index,
+                    visiting,
+                ) orelse return;
+                try self.propagateDemandedProcInstsToValueExpr(
+                    result,
+                    elem_expr.module_idx,
+                    elem_expr.expr_idx,
+                    proc_inst_ids,
+                    visiting,
+                );
+            },
+            else => {},
+        }
     }
 
     fn resolveRecordFieldExpr(

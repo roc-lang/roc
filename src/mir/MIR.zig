@@ -291,8 +291,11 @@ pub const Capture = struct {
 pub const CaptureBinding = struct {
     /// Local symbol introduced in the lifted function body for this capture slot.
     local_symbol: Symbol,
-    /// The source expression captured at the closure creation site.
+    /// The semantic source expression captured at the closure creation site.
+    /// This is used for lambda-set propagation and capture-layout analysis.
     source_expr: ExprId,
+    /// The runtime expression evaluated to populate the capture payload slot.
+    value_expr: ExprId,
     /// Monotype of the captured value.
     monotype: Monotype.Idx,
 };

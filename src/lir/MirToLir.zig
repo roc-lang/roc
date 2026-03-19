@@ -2682,6 +2682,38 @@ fn adaptExprToRuntimeLayout(
     );
 }
 
+fn lowerExprToKnownRuntimeLayout(
+    self: *Self,
+    mir_expr_id: MIR.ExprId,
+    target_layout: layout.Idx,
+    region: Region,
+) Allocator.Error!LirExprId {
+    const mir_expr = self.mir_store.getExpr(mir_expr_id);
+    if (mir_expr == .lookup) {
+        const sym = mir_expr.lookup;
+        if (self.mir_store.isSymbolReassignable(sym)) {
+            return self.lir_store.addExpr(.{ .cell_load = .{
+                .cell = sym,
+                .layout_idx = target_layout,
+            } }, region);
+        }
+        return self.lir_store.addExpr(.{ .lookup = .{
+            .symbol = sym,
+            .layout_idx = target_layout,
+        } }, region);
+    }
+
+    const lowered = try self.lowerExpr(mir_expr_id);
+    const source_layout = self.lirExprResultLayout(lowered);
+    return self.adaptValueLayout(
+        lowered,
+        self.mir_store.typeOf(mir_expr_id),
+        source_layout,
+        target_layout,
+        region,
+    );
+}
+
 fn lowerInt(self: *Self, int_data: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
     // Use the monotype to determine the concrete integer layout.
     // For 128-bit types, always emit i128_literal even if the value fits in i64,
@@ -3187,7 +3219,8 @@ fn lowerClosureMake(
     mir_expr_id: MIR.ExprId,
     region: Region,
 ) Allocator.Error!LirExprId {
-    if (self.mir_store.getExprClosureMember(mir_expr_id) == null) {
+    const closure_member_id = self.mir_store.getExprClosureMember(mir_expr_id);
+    if (closure_member_id == null) {
         return self.lowerExpr(closure.captures);
     }
     const captures_expr = self.mir_store.getExpr(closure.captures);
@@ -3204,50 +3237,46 @@ fn lowerClosureMake(
     const save_stmt_len = self.scratch_lir_stmts.items.len;
     defer self.scratch_lir_stmts.shrinkRetainingCapacity(save_stmt_len);
 
-    const appendCapture = struct {
-        fn append(
-            self_: *Self,
-            mir_elem: MIR.ExprId,
-            region_: Region,
-        ) Allocator.Error!void {
-            const lir_expr = try self_.lowerExpr(mir_elem);
-            const elem_layout = try self_.runtimeValueLayoutFromMirExpr(mir_elem);
-            const source_expr = if (self_.isBorrowAtomicExpr(lir_expr))
-                lir_expr
-            else blk: {
-                break :blk try self_.appendBindingStmt(
-                    &self_.scratch_lir_stmts,
-                    lir_expr,
-                    elem_layout,
-                    self_.borrowBindingSemanticsForExpr(lir_expr, elem_layout),
-                    region_,
-                );
-            };
-
-            if (!self_.layout_store.layoutContainsRefcounted(self_.layout_store.getLayout(elem_layout))) {
-                try self_.scratch_lir_expr_ids.append(self_.allocator, source_expr);
-                return;
-            }
-
-            const retained_lookup = try self_.materializeRetainedBinding(
-                &self_.scratch_lir_stmts,
-                source_expr,
-                elem_layout,
-                region_,
-            );
-            try self_.scratch_lir_expr_ids.append(self_.allocator, retained_lookup);
-        }
-    }.append;
-
     const tuple_layout_val = self.layout_store.getLayout(tuple_layout);
     if (tuple_layout_val.tag != .struct_) unreachable;
 
     const struct_data = self.layout_store.getStructData(tuple_layout_val.data.struct_.idx);
     const layout_fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
+    const closure_member = self.mir_store.getClosureMember(closure_member_id.?);
+    const capture_bindings = self.mir_store.getCaptureBindings(closure_member.capture_bindings);
 
     for (0..layout_fields.len) |li| {
         const original_index = layout_fields.get(li).index;
-        try appendCapture(self, mir_elems[original_index], region);
+        const capture_expr = if (original_index < capture_bindings.len)
+            capture_bindings[original_index].value_expr
+        else
+            mir_elems[original_index];
+        const target_layout = layout_fields.get(li).layout;
+        const lir_expr = try self.lowerExprToKnownRuntimeLayout(capture_expr, target_layout, region);
+        const source_expr = if (self.isBorrowAtomicExpr(lir_expr))
+            lir_expr
+        else blk: {
+            break :blk try self.appendBindingStmt(
+                &self.scratch_lir_stmts,
+                lir_expr,
+                target_layout,
+                self.borrowBindingSemanticsForExpr(lir_expr, target_layout),
+                region,
+            );
+        };
+
+        if (!self.layout_store.layoutContainsRefcounted(self.layout_store.getLayout(target_layout))) {
+            try self.scratch_lir_expr_ids.append(self.allocator, source_expr);
+            continue;
+        }
+
+        const retained_lookup = try self.materializeRetainedBinding(
+            &self.scratch_lir_stmts,
+            source_expr,
+            target_layout,
+            region,
+        );
+        try self.scratch_lir_expr_ids.append(self.allocator, retained_lookup);
     }
 
     const final_expr = blk: {
