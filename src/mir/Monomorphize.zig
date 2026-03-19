@@ -1475,12 +1475,39 @@ pub const Pass = struct {
                 module_idx,
                 capture.pattern_idx,
             );
+            const source_capture_proc_inst = if (source) |capture_source|
+                self.getExprProcInstInContext(
+                    result,
+                    closure_proc_inst_id,
+                    capture_source.module_idx,
+                    capture_source.expr_idx,
+                )
+            else
+                null;
             const enclosing_capture_proc_inst = result.getContextPatternProcInst(
                 enclosing_context_proc_inst,
                 module_idx,
                 capture.pattern_idx,
             );
-            var capture_mono = if (local_capture_proc_inst) |capture_proc_inst_id| blk: {
+            if (builtin.mode == .Debug and
+                self.active_root_expr_context != null and
+                @intFromEnum(self.active_root_expr_context.?) == 40 and
+                @intFromEnum(closure_expr_idx) == 19)
+            {
+                std.debug.print(
+                    "capture facts closure_expr={d} proc_inst={d} pattern={d} local_proc={d} source_proc={d} enclosing_proc={d} source_expr={d}\n",
+                    .{
+                        @intFromEnum(closure_expr_idx),
+                        @intFromEnum(closure_proc_inst_id),
+                        @intFromEnum(capture.pattern_idx),
+                        if (local_capture_proc_inst) |proc_inst_id| @intFromEnum(proc_inst_id) else std.math.maxInt(u32),
+                        if (source_capture_proc_inst) |proc_inst_id| @intFromEnum(proc_inst_id) else std.math.maxInt(u32),
+                        if (enclosing_capture_proc_inst) |proc_inst_id| @intFromEnum(proc_inst_id) else std.math.maxInt(u32),
+                        if (source) |capture_source| @intFromEnum(capture_source.expr_idx) else std.math.maxInt(u32),
+                    },
+                );
+            }
+            var capture_mono = if (local_capture_proc_inst orelse source_capture_proc_inst) |capture_proc_inst_id| blk: {
                 const proc_inst = result.getProcInst(capture_proc_inst_id);
                 break :blk resolvedMonotype(proc_inst.fn_monotype, proc_inst.fn_monotype_module_idx);
             } else try self.resolveTypeVarMonotypeIfMonomorphizableResolved(
@@ -1533,8 +1560,26 @@ pub const Pass = struct {
                     capture_mono,
                 );
             }
+            if (builtin.mode == .Debug and
+                self.active_root_expr_context != null and
+                @intFromEnum(self.active_root_expr_context.?) == 40 and
+                @intFromEnum(closure_expr_idx) == 19)
+            {
+                if (capture_mono.isNone()) {
+                    std.debug.print("  capture mono: none\n", .{});
+                } else {
+                    std.debug.print(
+                        "  capture mono: {d}@{d} {any}\n",
+                        .{
+                            @intFromEnum(capture_mono.idx),
+                            capture_mono.module_idx,
+                            result.monotype_store.getMonotype(capture_mono.idx),
+                        },
+                    );
+                }
+            }
 
-            if (local_capture_proc_inst) |capture_proc_inst_id| {
+            if (local_capture_proc_inst orelse source_capture_proc_inst) |capture_proc_inst_id| {
                 try result.closure_capture_proc_insts.put(
                     self.allocator,
                     key,
@@ -2175,7 +2220,25 @@ pub const Pass = struct {
 
         for (arg_exprs, 0..) |arg_expr_idx, i| {
             const param_mono = result.monotype_store.getIdxSpanItem(param_monos, i);
-            const template_id = try self.lookupDirectCalleeTemplate(result, module_idx, arg_expr_idx) orelse continue;
+            const maybe_template_id = try self.lookupDirectCalleeTemplate(result, module_idx, arg_expr_idx);
+            if (builtin.mode == .Debug and
+                self.active_root_expr_context != null and
+                @intFromEnum(self.active_root_expr_context.?) == 40)
+            {
+                std.debug.print(
+                    "callable arg expr={d} tag={s} template={d} param_mono={d}@{d} {any} ctx={d}\n",
+                    .{
+                        @intFromEnum(arg_expr_idx),
+                        @tagName(module_env.store.getExpr(arg_expr_idx)),
+                        if (maybe_template_id) |template_id| @intFromEnum(template_id) else std.math.maxInt(u32),
+                        @intFromEnum(param_mono),
+                        fn_monotype_module_idx,
+                        result.monotype_store.getMonotype(param_mono),
+                        @intFromEnum(self.active_proc_inst_context),
+                    },
+                );
+            }
+            const template_id = maybe_template_id orelse continue;
             const template = result.getProcTemplate(template_id);
             if (self.active_bindings != null and self.active_proc_inst_context.isNone() and template.kind == .closure) {
                 // During template-binding completion, a closure's proc identity is not
@@ -2194,7 +2257,23 @@ pub const Pass = struct {
             );
 
             switch (module_env.store.getExpr(arg_expr_idx)) {
-                .e_lookup_local, .e_lookup_external => try self.recordLookupExprProcInst(
+                .e_lookup_local => |lookup| {
+                    try self.recordLookupExprProcInst(
+                        result,
+                        self.active_proc_inst_context,
+                        module_idx,
+                        arg_expr_idx,
+                        proc_inst_id,
+                    );
+                    try self.recordContextPatternProcInst(
+                        result,
+                        self.active_proc_inst_context,
+                        module_idx,
+                        lookup.pattern_idx,
+                        proc_inst_id,
+                    );
+                },
+                .e_lookup_external => try self.recordLookupExprProcInst(
                     result,
                     self.active_proc_inst_context,
                     module_idx,
@@ -3306,14 +3385,61 @@ pub const Pass = struct {
             }
             unreachable;
         };
+        const debug_method_name = self.dispatchTargetMethodText(module_env, resolved_target) orelse "<unreadable>";
+        if (builtin.mode == .Debug and
+            self.active_root_expr_context != null and
+            @intFromEnum(self.active_root_expr_context.?) == 40)
+        {
+            std.debug.print(
+                "dispatch expr={d} method={s} fn_var={d} exact=",
+                .{ @intFromEnum(expr_idx), debug_method_name, @intFromEnum(resolved_target.fn_var) },
+            );
+            const debug_exact_fn = try self.resolveTypeVarMonotypeIfExactResolved(result, module_idx, resolved_target.fn_var);
+            if (debug_exact_fn.isNone()) {
+                std.debug.print("none", .{});
+            } else {
+                std.debug.print("{d}@{d} {any}", .{
+                    @intFromEnum(debug_exact_fn.idx),
+                    debug_exact_fn.module_idx,
+                    result.monotype_store.getMonotype(debug_exact_fn.idx),
+                });
+            }
+            var debug_actual_args = std.ArrayList(CIR.Expr.Idx).empty;
+            defer debug_actual_args.deinit(self.allocator);
+            try self.appendDispatchActualArgs(module_idx, expr, &debug_actual_args);
+            for (debug_actual_args.items, 0..) |arg_expr_idx, arg_i| {
+                const arg_mono = try self.resolveExprMonotypeIfExactResolved(result, module_idx, arg_expr_idx);
+                if (arg_mono.isNone()) {
+                    std.debug.print(" arg[{d}]=expr{d}:none", .{ arg_i, @intFromEnum(arg_expr_idx) });
+                } else {
+                    std.debug.print(" arg[{d}]=expr{d}:{d}@{d} {any}", .{
+                        arg_i,
+                        @intFromEnum(arg_expr_idx),
+                        @intFromEnum(arg_mono.idx),
+                        arg_mono.module_idx,
+                        result.monotype_store.getMonotype(arg_mono.idx),
+                    });
+                }
+            }
+            std.debug.print("\n", .{});
+        }
         const proc_inst_id = blk: {
-            const fn_monotype = try self.resolveTypeVarMonotypeIfExactResolved(result, module_idx, resolved_target.fn_var);
-            if (!fn_monotype.isNone()) {
-                break :blk try self.ensureProcInstUnscanned(result, template_id, fn_monotype.idx, fn_monotype.module_idx);
+            if (self.active_bindings == null) {
+                const fn_monotype = try self.resolveTypeVarMonotypeIfExactResolved(result, module_idx, resolved_target.fn_var);
+                if (!fn_monotype.isNone()) {
+                    break :blk try self.ensureProcInstUnscanned(result, template_id, fn_monotype.idx, fn_monotype.module_idx);
+                }
             }
 
             if (try self.inferDispatchProcInst(result, module_idx, expr_idx, expr, template_id)) |inferred| {
                 break :blk inferred;
+            }
+
+            if (self.active_bindings != null) return;
+
+            const fn_monotype = try self.resolveTypeVarMonotypeIfExactResolved(result, module_idx, resolved_target.fn_var);
+            if (!fn_monotype.isNone()) {
+                break :blk try self.ensureProcInstUnscanned(result, template_id, fn_monotype.idx, fn_monotype.module_idx);
             }
 
             return;
@@ -3337,6 +3463,22 @@ pub const Pass = struct {
 
         const proc_inst = result.getProcInst(proc_inst_id);
         const template = result.getProcTemplate(proc_inst.template);
+        if (builtin.mode == .Debug and
+            self.active_root_expr_context != null and
+            @intFromEnum(self.active_root_expr_context.?) == 40)
+        {
+            std.debug.print(
+                "record dispatch expr={d} proc_inst={d} template_expr={d} fn={d}@{d} {any}\n",
+                .{
+                    @intFromEnum(expr_idx),
+                    @intFromEnum(proc_inst_id),
+                    @intFromEnum(template.cir_expr),
+                    @intFromEnum(proc_inst.fn_monotype),
+                    proc_inst.fn_monotype_module_idx,
+                    result.monotype_store.getMonotype(proc_inst.fn_monotype),
+                },
+            );
+        }
         try self.recordExprProcInst(
             result,
             self.active_proc_inst_context,
@@ -6037,6 +6179,25 @@ pub const Pass = struct {
             const mono_equal = try self.monotypesStructurallyEqual(result, existing_proc_inst.fn_monotype, fn_monotype);
             if (mono_equal) {
                 if (existing_proc_inst.subst != subst_id) continue;
+                if (builtin.mode == .Debug and
+                    self.active_root_expr_context != null and
+                    @intFromEnum(self.active_root_expr_context.?) == 40)
+                {
+                    std.debug.print(
+                        "reuse proc_inst={d} template={d} existing_fn={d}@{d} {any} requested_fn={d}@{d} {any} subst={d}\n",
+                        .{
+                            idx,
+                            @intFromEnum(template_id),
+                            @intFromEnum(existing_proc_inst.fn_monotype),
+                            existing_proc_inst.fn_monotype_module_idx,
+                            result.monotype_store.getMonotype(existing_proc_inst.fn_monotype),
+                            @intFromEnum(fn_monotype),
+                            fn_monotype_module_idx,
+                            result.monotype_store.getMonotype(fn_monotype),
+                            @intFromEnum(subst_id),
+                        },
+                    );
+                }
                 const existing_id: ProcInstId = @enumFromInt(idx);
                 if (scan_body) {
                     try self.scanProcInst(result, existing_id);
@@ -6053,6 +6214,22 @@ pub const Pass = struct {
             .fn_monotype_module_idx = fn_monotype_module_idx,
             .defining_context_proc_inst = defining_context_proc_inst,
         });
+        if (builtin.mode == .Debug and
+            self.active_root_expr_context != null and
+            @intFromEnum(self.active_root_expr_context.?) == 40)
+        {
+            std.debug.print(
+                "new proc_inst={d} template={d} fn={d}@{d} {any} subst={d}\n",
+                .{
+                    @intFromEnum(proc_inst_id),
+                    @intFromEnum(template_id),
+                    @intFromEnum(fn_monotype),
+                    fn_monotype_module_idx,
+                    result.monotype_store.getMonotype(fn_monotype),
+                    @intFromEnum(subst_id),
+                },
+            );
+        }
         if (scan_body) {
             try self.scanProcInst(result, proc_inst_id);
         }
@@ -6529,6 +6706,34 @@ pub const Pass = struct {
             fn_monotype,
             fn_monotype_module_idx,
         );
+
+        if (builtin.mode == .Debug and
+            self.active_root_expr_context != null and
+            @intFromEnum(self.active_root_expr_context.?) == 40 and
+            @intFromEnum(template.cir_expr) == 1654)
+        {
+            std.debug.print(
+                "ensureTypeSubst template_expr={d} fn={d}@{d} entries={d}\n",
+                .{
+                    @intFromEnum(template.cir_expr),
+                    @intFromEnum(fn_monotype),
+                    fn_monotype_module_idx,
+                    ordered_entries.items.len,
+                },
+            );
+            for (ordered_entries.items) |entry| {
+                std.debug.print(
+                    "  entry var={d}@{d} mono={d}@{d} {any}\n",
+                    .{
+                        @intFromEnum(entry.key.type_var),
+                        entry.key.module_idx,
+                        @intFromEnum(entry.monotype.idx),
+                        entry.monotype.module_idx,
+                        result.monotype_store.getMonotype(entry.monotype.idx),
+                    },
+                );
+            }
+        }
 
         for (result.substs.items, 0..) |existing_subst, idx| {
             if (try self.typeSubstEntriesEqual(
@@ -7336,8 +7541,13 @@ pub const Pass = struct {
         const expr = module_env.store.getExpr(expr_idx);
 
         // Invocation nodes get their exact monotype from explicit proc-inst
-        // resolution, not from the raw type-variable root on the CIR node.
+        // resolution in root/global contexts. During active binding completion,
+        // the invocation's own CIR type root is part of the current demanded
+        // specialization and can be read directly from the active bindings.
         if (exprMonotypeOwnedByInvocation(expr)) {
+            if (self.active_bindings != null) {
+                return self.resolveTypeVarMonotypeIfExactResolved(result, module_idx, ModuleEnv.varFrom(expr_idx));
+            }
             return resolvedMonotype(.none, module_idx);
         }
 
