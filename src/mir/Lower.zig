@@ -302,20 +302,6 @@ fn getOwnedIdentText(env: *const ModuleEnv, ident: Ident.Idx) []const u8 {
     return env.getIdent(ident);
 }
 
-fn debugMonotypeShape(store: *const Monotype.Store, mono_idx: Monotype.Idx) []const u8 {
-    return switch (store.getMonotype(mono_idx)) {
-        .prim => |prim| @tagName(prim),
-        .func => "func",
-        .record => "record",
-        .tuple => "tuple",
-        .tag_union => "tag_union",
-        .list => "list",
-        .box => "box",
-        .unit => "unit",
-        .recursive_placeholder => "recursive_placeholder",
-    };
-}
-
 fn patternScopeForProcInst(proc_inst_id: Monomorphize.ProcInstId) u64 {
     if (proc_inst_id.isNone()) return 0;
     return (@as(u64, 1) << 63) | (@as(u64, @intFromEnum(proc_inst_id)) + 1);
@@ -4335,6 +4321,18 @@ fn lowerProcInst(self: *Self, proc_inst_id: Monomorphize.ProcInstId) Allocator.E
         ),
         else => unreachable,
     };
+    if (builtin.mode == .Debug) {
+        const proc_id = self.resolveProcIdFromCallableExpr(lowered_proc_expr) orelse MIR.ProcId.none;
+        std.debug.print(
+            "LOWER proc_inst={d} template_expr={d} mir_proc={d} mono={d}\n",
+            .{
+                @intFromEnum(proc_inst_id),
+                @intFromEnum(template.cir_expr),
+                @intFromEnum(proc_id),
+                @intFromEnum(proc_monotype),
+            },
+        );
+    }
 
     return lowered_proc_expr;
 }

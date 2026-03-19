@@ -1380,6 +1380,18 @@ fn ensureDirectProcSpec(
             .force_pass_by_ptr = force_pass_by_ptr,
             .status = .placeholder,
         });
+        if (builtin.mode == .Debug) {
+            std.debug.print(
+                "LIR new direct proc_spec={d} mir_proc={d} callee_key={d} ret={d} argc={d}\n",
+                .{
+                    @intFromEnum(placeholder),
+                    @intFromEnum(callee_proc),
+                    callee_key,
+                    @intFromEnum(provisional_ret_layout),
+                    param_layouts.len,
+                },
+            );
+        }
         specialization = self.direct_proc_specs.get(owned_key).?;
     }
 

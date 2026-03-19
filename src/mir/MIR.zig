@@ -935,7 +935,7 @@ pub const Store = struct {
         if (std.debug.runtime_safety) {
             std.debug.panic(
                 "MIR conflicting seed proc set for symbol key {d}",
-                .{ key },
+                .{key},
             );
         }
         unreachable;

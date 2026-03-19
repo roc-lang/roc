@@ -167,6 +167,7 @@ pub const ProcInst = struct {
     defining_context_proc_inst: ProcInstId,
 };
 
+/// Interned identifier for a set of reachable proc instantiations.
 pub const ProcInstSetId = enum(u32) {
     _,
 
@@ -177,6 +178,7 @@ pub const ProcInstSetId = enum(u32) {
     }
 };
 
+/// Contiguous span of proc-inst-set members in the monomorphization store.
 pub const ProcInstSetSpan = extern struct {
     start: u32,
     len: u16,
@@ -190,23 +192,10 @@ pub const ProcInstSetSpan = extern struct {
     }
 };
 
+/// A deduplicated set of proc instantiations associated with one callable value.
 pub const ProcInstSet = struct {
     members: ProcInstSetSpan,
 };
-
-fn debugMonotypeShape(store: *const Monotype.Store, mono_idx: Monotype.Idx) []const u8 {
-    return switch (store.getMonotype(mono_idx)) {
-        .prim => |prim| @tagName(prim),
-        .func => "func",
-        .record => "record",
-        .tuple => "tuple",
-        .tag_union => "tag_union",
-        .list => "list",
-        .box => "box",
-        .unit => "unit",
-        .recursive_placeholder => "recursive_placeholder",
-    };
-}
 
 /// Associates a source call site with the proc instantiation chosen for it.
 pub const CallSiteResolution = struct {
@@ -1125,11 +1114,32 @@ pub const Pass = struct {
         for (module_env.store.sliceCaptures(closure_expr.captures)) |capture_idx| {
             const capture = module_env.store.getCapture(capture_idx);
             const key = Result.contextCaptureKey(closure_proc_inst_id, module_idx, closure_expr_idx, capture.pattern_idx);
-            const capture_mono = try self.resolveTypeVarMonotypeIfMonomorphizableResolved(
+            const context_capture_proc_inst = result.getContextPatternProcInst(
+                enclosing_context_proc_inst,
+                module_idx,
+                capture.pattern_idx,
+            );
+            var capture_mono = try self.resolveTypeVarMonotypeIfMonomorphizableResolved(
                 result,
                 module_idx,
                 ModuleEnv.varFrom(capture.pattern_idx),
             );
+            if (capture_mono.isNone()) {
+                if (context_capture_proc_inst) |capture_proc_inst_id| {
+                    const proc_inst = result.getProcInst(capture_proc_inst_id);
+                    capture_mono = resolvedMonotype(proc_inst.fn_monotype, proc_inst.fn_monotype_module_idx);
+                } else if (self.source_exprs.get(packLocalPatternSourceKey(module_idx, capture.pattern_idx))) |source| {
+                    const saved_proc_inst_context = self.active_proc_inst_context;
+                    self.active_proc_inst_context = enclosing_context_proc_inst;
+                    defer self.active_proc_inst_context = saved_proc_inst_context;
+
+                    capture_mono = try self.resolveExprMonotypeIfExactResolved(
+                        result,
+                        source.module_idx,
+                        source.expr_idx,
+                    );
+                }
+            }
 
             if (!capture_mono.isNone()) {
                 try result.closure_capture_monotypes.put(
@@ -1139,7 +1149,7 @@ pub const Pass = struct {
                 );
             }
 
-            if (result.getContextPatternProcInst(enclosing_context_proc_inst, module_idx, capture.pattern_idx)) |capture_proc_inst_id| {
+            if (context_capture_proc_inst) |capture_proc_inst_id| {
                 try result.closure_capture_proc_insts.put(
                     self.allocator,
                     key,
@@ -1324,7 +1334,7 @@ pub const Pass = struct {
             .e_nominal => |nominal_expr| try self.scanValueExpr(result, module_idx, nominal_expr.backing_expr),
             .e_nominal_external => |nominal_expr| try self.scanValueExpr(result, module_idx, nominal_expr.backing_expr),
             .e_closure => |closure_expr| {
-                try self.scanClosureCaptureSources(result, module_idx, expr_idx, closure_expr);
+                try self.scanClosureCaptureSources(result, self.active_proc_inst_context, module_idx, expr_idx, closure_expr);
                 try self.scanExpr(result, module_idx, closure_expr.lambda_idx);
             },
             .e_lambda => |lambda_expr| {
@@ -1428,11 +1438,15 @@ pub const Pass = struct {
     fn scanClosureCaptureSources(
         self: *Pass,
         result: *Result,
+        source_context_proc_inst: ProcInstId,
         module_idx: u32,
         _: CIR.Expr.Idx,
         closure_expr: CIR.Expr.Closure,
     ) Allocator.Error!void {
         const module_env = self.all_module_envs[module_idx];
+        const saved_proc_inst_context = self.active_proc_inst_context;
+        self.active_proc_inst_context = source_context_proc_inst;
+        defer self.active_proc_inst_context = saved_proc_inst_context;
 
         for (module_env.store.sliceCaptures(closure_expr.captures)) |capture_idx| {
             const capture = module_env.store.getCapture(capture_idx);
@@ -1521,23 +1535,11 @@ pub const Pass = struct {
                 else => return,
             }
         };
-        const proc_inst_id = if (!self.active_proc_inst_context.isNone())
-            try self.inferDirectCallProcInst(result, module_idx, call_expr_idx, call_expr, template_id) orelse return
+        const proc_inst_id = if (try self.inferDirectCallProcInst(result, module_idx, call_expr_idx, call_expr, template_id)) |proc_inst_id|
+            proc_inst_id
         else blk: {
             const fn_monotype = try self.resolveDirectCallFnMonotype(result, module_idx, call_expr_idx, call_expr);
-            if (fn_monotype.isNone()) {
-                if (std.debug.runtime_safety) {
-                    std.debug.panic(
-                        "Monomorphize: reachable direct call expr {d} in module {d} has callee expr {d} with no concrete fn monotype",
-                        .{
-                            @intFromEnum(call_expr_idx),
-                            module_idx,
-                            @intFromEnum(callee_expr_idx),
-                        },
-                    );
-                }
-                unreachable;
-            }
+            if (fn_monotype.isNone()) return;
 
             break :blk try self.ensureProcInst(result, template_id, fn_monotype, module_idx);
         };
@@ -2979,19 +2981,33 @@ pub const Pass = struct {
         expr_idx: CIR.Expr.Idx,
         template_id: ProcTemplateId,
     ) Allocator.Error!void {
-        const fn_monotype = try self.resolveExprMonotypeIfExactResolved(result, module_idx, expr_idx);
-        if (fn_monotype.isNone()) return;
+        const module_env = self.all_module_envs[module_idx];
+        const existing_proc_inst_id = if (module_env.store.getExpr(expr_idx) == .e_lookup_local) blk: {
+            const lookup = module_env.store.getExpr(expr_idx).e_lookup_local;
+            if (result.getContextPatternProcInst(self.active_proc_inst_context, module_idx, lookup.pattern_idx)) |candidate_proc_inst_id| {
+                if (result.getProcInst(candidate_proc_inst_id).template == template_id) {
+                    break :blk candidate_proc_inst_id;
+                }
+            }
+            break :blk null;
+        } else null;
 
-        const proc_inst_id = if (self.active_proc_inst_context.isNone())
-            try self.ensureProcInst(result, template_id, fn_monotype.idx, fn_monotype.module_idx)
-        else
-            try self.ensureProcInst(result, template_id, fn_monotype.idx, fn_monotype.module_idx);
+        const proc_inst_id = if (existing_proc_inst_id) |proc_inst_id|
+            proc_inst_id
+        else blk: {
+            const fn_monotype = try self.resolveExprMonotypeIfExactResolved(result, module_idx, expr_idx);
+            if (fn_monotype.isNone()) return;
+
+            break :blk if (self.active_proc_inst_context.isNone())
+                try self.ensureProcInst(result, template_id, fn_monotype.idx, fn_monotype.module_idx)
+            else
+                try self.ensureProcInst(result, template_id, fn_monotype.idx, fn_monotype.module_idx);
+        };
         try result.lookup_expr_proc_insts.put(
             self.allocator,
             Result.contextExprKey(self.active_proc_inst_context, module_idx, expr_idx),
             proc_inst_id,
         );
-        const module_env = self.all_module_envs[module_idx];
         if (module_env.store.getExpr(expr_idx) == .e_lookup_local) {
             try self.recordContextPatternProcInst(
                 result,
@@ -4715,6 +4731,19 @@ pub const Pass = struct {
             .fn_monotype_module_idx = fn_monotype_module_idx,
             .defining_context_proc_inst = defining_context_proc_inst,
         });
+        if (builtin.mode == .Debug) {
+            std.debug.print(
+                "MONO new proc_inst={d} template_expr={d} kind={s} mono={d}@{d} defining_ctx={d}\n",
+                .{
+                    @intFromEnum(proc_inst_id),
+                    @intFromEnum(template.cir_expr),
+                    @tagName(template.kind),
+                    @intFromEnum(fn_monotype),
+                    fn_monotype_module_idx,
+                    @intFromEnum(defining_context_proc_inst),
+                },
+            );
+        }
         if (scan_body) {
             try self.scanProcInst(result, proc_inst_id);
         }
@@ -4745,6 +4774,15 @@ pub const Pass = struct {
         const saved_proc_inst_context = self.active_proc_inst_context;
         self.active_proc_inst_context = proc_inst_id;
         defer self.active_proc_inst_context = saved_proc_inst_context;
+        if (template.binding_pattern) |binding_pattern| {
+            try self.recordContextPatternProcInst(
+                result,
+                proc_inst_id,
+                template.module_idx,
+                binding_pattern,
+                proc_inst_id,
+            );
+        }
 
         var iterations: u32 = 0;
         while (true) {
@@ -4766,7 +4804,13 @@ pub const Pass = struct {
             switch (module_env.store.getExpr(template.cir_expr)) {
                 .e_lambda => |lambda_expr| try self.scanValueExpr(result, template.module_idx, lambda_expr.body),
                 .e_closure => |closure_expr| {
-                    try self.scanClosureCaptureSources(result, template.module_idx, template.cir_expr, closure_expr);
+                    try self.scanClosureCaptureSources(
+                        result,
+                        proc_inst.defining_context_proc_inst,
+                        template.module_idx,
+                        template.cir_expr,
+                        closure_expr,
+                    );
                     const lambda_expr = module_env.store.getExpr(closure_expr.lambda_idx);
                     if (lambda_expr == .e_lambda) {
                         try self.scanValueExpr(result, template.module_idx, lambda_expr.e_lambda.body);
