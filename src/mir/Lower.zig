@@ -127,6 +127,11 @@ in_progress_defs: std.AutoHashMap(u64, void),
 /// Tracks proc instances currently being lowered (recursion guard).
 in_progress_proc_insts: std.AutoHashMap(u32, MIR.ExprId),
 
+/// Local proc-backed bindings intentionally skipped as runtime statements.
+/// Lookups of these patterns must reify from proc-inst ownership instead of
+/// expecting a local runtime binding.
+skipped_proc_backed_binding_patterns: std.AutoHashMap(u64, void),
+
 /// Proc-inst context for context-sensitive monomorphized lookup/call resolution.
 current_proc_inst_context: Monomorphize.ProcInstId,
 
@@ -202,6 +207,7 @@ pub fn init(
         .next_synthetic_ident = Ident.Idx.NONE.idx - 1,
         .in_progress_defs = std.AutoHashMap(u64, void).init(allocator),
         .in_progress_proc_insts = std.AutoHashMap(u32, MIR.ExprId).init(allocator),
+        .skipped_proc_backed_binding_patterns = std.AutoHashMap(u64, void).init(allocator),
         .current_proc_inst_context = .none,
         .current_root_expr_context = null,
         .in_progress_symbol_monotypes = std.AutoHashMap(u64, Monotype.Idx).init(allocator),
@@ -235,6 +241,7 @@ pub fn deinit(self: *Self) void {
     self.symbol_metadata.deinit();
     self.in_progress_defs.deinit();
     self.in_progress_proc_insts.deinit();
+    self.skipped_proc_backed_binding_patterns.deinit();
     self.in_progress_symbol_monotypes.deinit();
     self.resolved_dispatch_targets.deinit();
     self.scratch_expr_ids.deinit();
@@ -2751,18 +2758,20 @@ fn lowerExprWithMonotypeOverride(
 
         // --- Lookups ---
         .e_lookup_local => |lookup| {
-            if (self.monomorphization.getContextPatternProcInsts(self.current_proc_inst_context, self.current_module_idx, lookup.pattern_idx)) |proc_inst_ids| {
-                if (proc_inst_ids.len == 0) unreachable;
-                if (proc_inst_ids.len == 1) {
-                    return try self.lowerProcInst(proc_inst_ids[0]);
+            if (self.isSkippedProcBackedBindingPattern(self.current_module_idx, lookup.pattern_idx)) {
+                if (self.monomorphization.getContextPatternProcInsts(self.current_proc_inst_context, self.current_module_idx, lookup.pattern_idx)) |proc_inst_ids| {
+                    if (proc_inst_ids.len == 0) unreachable;
+                    if (proc_inst_ids.len == 1) {
+                        return try self.lowerProcInst(proc_inst_ids[0]);
+                    }
+                } else if (self.monomorphization.getLookupExprProcInst(
+                    self.current_proc_inst_context,
+                    self.monomorphizationRootExprContext(self.current_proc_inst_context),
+                    self.current_module_idx,
+                    expr_idx,
+                )) |proc_inst_id| {
+                    return try self.lowerProcInst(proc_inst_id);
                 }
-            } else if (self.monomorphization.getLookupExprProcInst(
-                self.current_proc_inst_context,
-                self.monomorphizationRootExprContext(self.current_proc_inst_context),
-                self.current_module_idx,
-                expr_idx,
-            )) |proc_inst_id| {
-                return try self.lowerProcInst(proc_inst_id);
             }
 
             const symbol = try self.patternToSymbol(lookup.pattern_idx);
@@ -3317,6 +3326,109 @@ fn callableBindingHasDemandedValueUse(self: *const Self, pattern_idx: CIR.Patter
         pattern_idx,
     ) orelse return false;
     return proc_inst_ids.len != 0;
+}
+
+fn bindingPatternKey(module_idx: u32, pattern_idx: CIR.Pattern.Idx) u64 {
+    return (@as(u64, module_idx) << 32) | @intFromEnum(pattern_idx);
+}
+
+fn markSkippedProcBackedBindingPatterns(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    pattern_idx: CIR.Pattern.Idx,
+) Allocator.Error!void {
+    var bindings = std.ArrayList(PatternBinding).empty;
+    defer bindings.deinit(self.allocator);
+    try self.collectPatternBindings(module_env, pattern_idx, &bindings);
+    for (bindings.items) |binding| {
+        try self.skipped_proc_backed_binding_patterns.put(
+            bindingPatternKey(self.current_module_idx, binding.pattern_idx),
+            {},
+        );
+    }
+}
+
+fn seedSkippedProcBackedBindingSymbols(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    pattern_idx: CIR.Pattern.Idx,
+    expr_idx: CIR.Expr.Idx,
+) Allocator.Error!void {
+    var bindings = std.ArrayList(PatternBinding).empty;
+    defer bindings.deinit(self.allocator);
+    try self.collectPatternBindings(module_env, pattern_idx, &bindings);
+
+    const root_expr_context = self.monomorphizationRootExprContext(self.current_proc_inst_context);
+    const leaf_expr_idx = procBackedLeafExpr(module_env, expr_idx);
+
+    for (bindings.items) |binding| {
+        const symbol = try self.patternToSymbol(binding.pattern_idx);
+        var proc_ids = std.ArrayList(MIR.ProcId).empty;
+        defer proc_ids.deinit(self.allocator);
+
+        if (self.monomorphization.getContextPatternProcInsts(
+            self.current_proc_inst_context,
+            self.current_module_idx,
+            binding.pattern_idx,
+        )) |proc_inst_ids| {
+            for (proc_inst_ids) |proc_inst_id| {
+                const proc_expr = try self.lowerProcInst(proc_inst_id);
+                const proc_id = self.resolveProcIdFromCallableExpr(proc_expr) orelse continue;
+                var seen = false;
+                for (proc_ids.items) |existing_proc_id| {
+                    if (existing_proc_id == proc_id) {
+                        seen = true;
+                        break;
+                    }
+                }
+                if (!seen) try proc_ids.append(self.allocator, proc_id);
+            }
+        } else if (leaf_expr_idx) |leaf| {
+            if (self.monomorphization.getExprProcInst(
+                self.current_proc_inst_context,
+                root_expr_context,
+                self.current_module_idx,
+                leaf,
+            )) |proc_inst_id| {
+                const proc_expr = try self.lowerProcInst(proc_inst_id);
+                const proc_id = self.resolveProcIdFromCallableExpr(proc_expr) orelse continue;
+                try proc_ids.append(self.allocator, proc_id);
+            }
+        }
+
+        if (proc_ids.items.len == 0) continue;
+        std.mem.sortUnstable(
+            MIR.ProcId,
+            proc_ids.items,
+            {},
+            struct {
+                fn lessThan(_: void, lhs: MIR.ProcId, rhs: MIR.ProcId) bool {
+                    return @intFromEnum(lhs) < @intFromEnum(rhs);
+                }
+            }.lessThan,
+        );
+        try self.store.registerSymbolSeedProcSet(self.allocator, symbol, proc_ids.items);
+    }
+}
+
+fn isSkippedProcBackedBindingPattern(
+    self: *const Self,
+    module_idx: u32,
+    pattern_idx: CIR.Pattern.Idx,
+) bool {
+    return self.skipped_proc_backed_binding_patterns.contains(bindingPatternKey(module_idx, pattern_idx));
+}
+
+fn calleeNeedsProcInstMaterialization(
+    self: *const Self,
+    module_env: *const ModuleEnv,
+    func_expr_idx: CIR.Expr.Idx,
+) bool {
+    return switch (module_env.store.getExpr(func_expr_idx)) {
+        .e_lookup_local => |lookup| self.isSkippedProcBackedBindingPattern(self.current_module_idx, lookup.pattern_idx),
+        .e_lookup_external, .e_lookup_required => false,
+        else => true,
+    };
 }
 
 fn monotypesStructurallyEqual(self: *Self, lhs: Monotype.Idx, rhs: Monotype.Idx) Allocator.Error!bool {
@@ -4560,7 +4672,10 @@ fn lowerCall(
     }
 
     const lowered_func = if (call_site_proc_inst) |proc_inst_id|
-        try self.lowerProcInst(proc_inst_id)
+        if (self.calleeNeedsProcInstMaterialization(module_env, call.func))
+            try self.lowerProcInst(proc_inst_id)
+        else
+            try self.lowerExpr(call.func)
     else
         try self.lowerExpr(call.func);
 
@@ -4715,6 +4830,8 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
         switch (cir_stmt) {
             .s_decl => |decl| {
                 if (cirExprIsProcBacked(module_env, decl.expr)) {
+                    try self.markSkippedProcBackedBindingPatterns(module_env, decl.pattern);
+                    try self.seedSkippedProcBackedBindingSymbols(module_env, decl.pattern, decl.expr);
                     continue;
                 }
                 const pat = try self.lowerPattern(module_env, decl.pattern);
@@ -4726,6 +4843,8 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
                 if (cirExprIsProcBacked(module_env, var_decl.expr) and
                     !self.callableBindingHasDemandedValueUse(var_decl.pattern_idx))
                 {
+                    try self.markSkippedProcBackedBindingPatterns(module_env, var_decl.pattern_idx);
+                    try self.seedSkippedProcBackedBindingSymbols(module_env, var_decl.pattern_idx, var_decl.expr);
                     continue;
                 }
                 const pat = try self.lowerPattern(module_env, var_decl.pattern_idx);
