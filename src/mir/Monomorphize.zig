@@ -3008,7 +3008,9 @@ pub const Pass = struct {
                 const idx_top = scratches.idxs.top();
                 defer scratches.idxs.clearFrom(idx_top);
 
-                for (result.monotype_store.getIdxSpan(tuple_mono.elems)) |elem_mono| {
+                var elem_i: usize = 0;
+                while (elem_i < tuple_mono.elems.len) : (elem_i += 1) {
+                    const elem_mono = result.monotype_store.getIdxSpanItem(tuple_mono.elems, elem_i);
                     try scratches.idxs.append(try self.remapMonotypeBetweenModulesRec(
                         result,
                         elem_mono,
@@ -3029,7 +3031,9 @@ pub const Pass = struct {
                 const idx_top = scratches.idxs.top();
                 defer scratches.idxs.clearFrom(idx_top);
 
-                for (result.monotype_store.getIdxSpan(func_mono.args)) |arg_mono| {
+                var arg_i: usize = 0;
+                while (arg_i < func_mono.args.len) : (arg_i += 1) {
+                    const arg_mono = result.monotype_store.getIdxSpanItem(func_mono.args, arg_i);
                     try scratches.idxs.append(try self.remapMonotypeBetweenModulesRec(
                         result,
                         arg_mono,
@@ -3063,7 +3067,9 @@ pub const Pass = struct {
                 const fields_top = scratches.fields.top();
                 defer scratches.fields.clearFrom(fields_top);
 
-                for (result.monotype_store.getFields(record_mono.fields)) |field| {
+                var field_i: usize = 0;
+                while (field_i < record_mono.fields.len) : (field_i += 1) {
+                    const field = result.monotype_store.getFieldItem(record_mono.fields, field_i);
                     try scratches.fields.append(.{
                         .name = field.name,
                         .type_idx = try self.remapMonotypeBetweenModulesRec(
@@ -3087,11 +3093,15 @@ pub const Pass = struct {
                 const tags_top = scratches.tags.top();
                 defer scratches.tags.clearFrom(tags_top);
 
-                for (result.monotype_store.getTags(tag_union_mono.tags)) |tag| {
+                var tag_i: usize = 0;
+                while (tag_i < tag_union_mono.tags.len) : (tag_i += 1) {
+                    const tag = result.monotype_store.getTagItem(tag_union_mono.tags, tag_i);
                     const payload_top = scratches.idxs.top();
                     defer scratches.idxs.clearFrom(payload_top);
 
-                    for (result.monotype_store.getIdxSpan(tag.payloads)) |payload_mono| {
+                    var payload_i: usize = 0;
+                    while (payload_i < tag.payloads.len) : (payload_i += 1) {
+                        const payload_mono = result.monotype_store.getIdxSpanItem(tag.payloads, payload_i);
                         try scratches.idxs.append(try self.remapMonotypeBetweenModulesRec(
                             result,
                             payload_mono,
@@ -3671,19 +3681,27 @@ pub const Pass = struct {
                 try self.resolveStrInspektHelperProcInstsForMonotype(result, module_idx, box_mono.inner);
             },
             .tuple => |tuple_mono| {
-                for (result.monotype_store.getIdxSpan(tuple_mono.elems)) |elem_mono| {
+                var elem_i: usize = 0;
+                while (elem_i < tuple_mono.elems.len) : (elem_i += 1) {
+                    const elem_mono = result.monotype_store.getIdxSpanItem(tuple_mono.elems, elem_i);
                     try self.resolveStrInspektHelperProcInstsForMonotype(result, module_idx, elem_mono);
                 }
             },
             .func => {},
             .record => |record_mono| {
-                for (result.monotype_store.getFields(record_mono.fields)) |field| {
+                var field_i: usize = 0;
+                while (field_i < record_mono.fields.len) : (field_i += 1) {
+                    const field = result.monotype_store.getFieldItem(record_mono.fields, field_i);
                     try self.resolveStrInspektHelperProcInstsForMonotype(result, module_idx, field.type_idx);
                 }
             },
             .tag_union => |tag_union_mono| {
-                for (result.monotype_store.getTags(tag_union_mono.tags)) |tag| {
-                    for (result.monotype_store.getIdxSpan(tag.payloads)) |payload_mono| {
+                var tag_i: usize = 0;
+                while (tag_i < tag_union_mono.tags.len) : (tag_i += 1) {
+                    const tag = result.monotype_store.getTagItem(tag_union_mono.tags, tag_i);
+                    var payload_i: usize = 0;
+                    while (payload_i < tag.payloads.len) : (payload_i += 1) {
+                        const payload_mono = result.monotype_store.getIdxSpanItem(tag.payloads, payload_i);
                         try self.resolveStrInspektHelperProcInstsForMonotype(result, module_idx, payload_mono);
                     }
                 }

@@ -365,6 +365,12 @@ pub const Store = struct {
         return @ptrCast(raw);
     }
 
+    /// Read one Monotype.Idx from a Span without borrowing a slice that may be invalidated by later appends.
+    pub fn getIdxSpanItem(self: *const Store, span: Span, index: usize) Idx {
+        std.debug.assert(index < span.len);
+        return @enumFromInt(self.extra_idx.items[span.start + index]);
+    }
+
     /// Add tags to the tags array and return a TagSpan.
     pub fn addTags(self: *Store, allocator: Allocator, tag_slice: []const Tag) !TagSpan {
         if (tag_slice.len == 0) return TagSpan.empty();
@@ -379,6 +385,12 @@ pub const Store = struct {
         return self.tags.items[span.start..][0..span.len];
     }
 
+    /// Read one Tag from a TagSpan without borrowing a slice that may be invalidated by later appends.
+    pub fn getTagItem(self: *const Store, span: TagSpan, index: usize) Tag {
+        std.debug.assert(index < span.len);
+        return self.tags.items[span.start + index];
+    }
+
     /// Add fields to the fields array and return a FieldSpan.
     pub fn addFields(self: *Store, allocator: Allocator, field_slice: []const Field) !FieldSpan {
         if (field_slice.len == 0) return FieldSpan.empty();
@@ -391,6 +403,12 @@ pub const Store = struct {
     pub fn getFields(self: *const Store, span: FieldSpan) []const Field {
         if (span.len == 0) return &.{};
         return self.fields.items[span.start..][0..span.len];
+    }
+
+    /// Read one Field from a FieldSpan without borrowing a slice that may be invalidated by later appends.
+    pub fn getFieldItem(self: *const Store, span: FieldSpan, index: usize) Field {
+        std.debug.assert(index < span.len);
+        return self.fields.items[span.start + index];
     }
 
     /// Convert a CIR type variable to a Monotype, recursively resolving all
