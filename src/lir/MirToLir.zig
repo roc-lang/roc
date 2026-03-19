@@ -627,10 +627,10 @@ fn runtimeTagLayoutFromExpr(
     const save_idxs = self.scratch_layout_idxs.items.len;
     defer self.scratch_layout_idxs.shrinkRetainingCapacity(save_idxs);
 
-    const tag_name_text = self.identText(tag_data.name);
     var found_active = false;
     for (tags) |tag| {
-        if (tag_name_text != null and std.mem.eql(u8, self.mir_store.monotype_store.getNameText(tag.name), tag_name_text.?)) {
+        const mono_tag_text = self.mir_store.monotype_store.getNameText(tag.name);
+        if (self.identMatchesText(tag_data.name, mono_tag_text)) {
             found_active = true;
             if (mir_args.len == 0) {
                 try self.scratch_layout_idxs.append(self.allocator, zst_idx);
@@ -1726,14 +1726,6 @@ fn identTextIfOwnedBy(env: anytype, ident: Ident.Idx) ?[]const u8 {
 }
 
 /// Resolve an Ident.Idx to its text string, searching all module envs.
-fn identText(self: *const Self, ident: Ident.Idx) ?[]const u8 {
-    if (identTextIfOwnedBy(self.layout_store.currentEnv(), ident)) |text| return text;
-    for (self.layout_store.moduleEnvs()) |env| {
-        if (identTextIfOwnedBy(env, ident)) |text| return text;
-    }
-    return null;
-}
-
 fn identMatchesText(self: *const Self, ident: Ident.Idx, expected: []const u8) bool {
     if (identTextIfOwnedBy(self.layout_store.currentEnv(), ident)) |text| {
         if (std.mem.eql(u8, text, expected)) return true;
@@ -2558,11 +2550,12 @@ fn lowerLookup(self: *Self, sym: Symbol, mono_idx: Monotype.Idx, _: MIR.ExprId, 
         }
     }
 
+    const resolved = self.mir_store.monotype_store.resolve(mono_idx);
     const layout_idx = blk: {
         if (self.symbol_layouts.get(sym.raw())) |binding_layout| {
             break :blk try self.runtimeLayoutForBindingSymbol(sym, mono_idx, binding_layout);
         }
-        if (self.mir_store.monotype_store.resolve(mono_idx).kind == .func) {
+        if (resolved.kind == .func) {
             if (self.lambda_set_store.getSymbolLambdaSet(sym)) |ls_idx| {
                 break :blk try self.closureValueLayoutFromLambdaSet(ls_idx);
             }
@@ -2570,7 +2563,7 @@ fn lowerLookup(self: *Self, sym: Symbol, mono_idx: Monotype.Idx, _: MIR.ExprId, 
         if (self.mir_store.getSymbolDef(sym)) |mir_def_id| {
             break :blk try self.runtimeValueLayoutFromMirExpr(mir_def_id);
         }
-        if (self.mir_store.monotype_store.resolve(mono_idx).kind == .func) {
+        if (resolved.kind == .func) {
             break :blk try self.layoutFromMonotype(mono_idx);
         }
         break :blk try self.layoutFromMonotype(mono_idx);
@@ -4460,9 +4453,10 @@ fn registerBindingPatternSymbols(
         .struct_destructure => |sd| {
             const mir_patterns = self.mir_store.getPatternSpan(sd.fields);
             if (mir_patterns.len == 0) return;
-            switch (self.mir_store.monotype_store.resolve(mono_idx).kind) {
+            const resolved = self.mir_store.monotype_store.resolve(mono_idx);
+            switch (resolved.kind) {
                 .record => {
-                    const all_fields = self.mir_store.monotype_store.recordFields(self.mir_store.monotype_store.resolve(mono_idx));
+                    const all_fields = self.mir_store.monotype_store.recordFields(resolved);
                     const record_layout_val = self.layout_store.getLayout(runtime_layout);
                     if (builtin.mode == .Debug and all_fields.len != 0 and record_layout_val.tag != .struct_) {
                         std.debug.panic(
@@ -4644,9 +4638,10 @@ fn lowerPatternInternal(
                 break :blk self.lowerWildcardBindingPattern(struct_layout, ownership_mode, region);
             }
 
-            switch (self.mir_store.monotype_store.resolve(mono_idx).kind) {
+            const resolved = self.mir_store.monotype_store.resolve(mono_idx);
+            switch (resolved.kind) {
                 .record => {
-                    const all_fields = self.mir_store.monotype_store.recordFields(self.mir_store.monotype_store.resolve(mono_idx));
+                    const all_fields = self.mir_store.monotype_store.recordFields(resolved);
 
                     if (all_fields.len == 0) {
                         break :blk self.lowerWildcardBindingPattern(struct_layout, ownership_mode, region);

@@ -91,7 +91,7 @@ fn expectTypeAndMonotypeResolversAgree(
     const type_layout_idx = try type_layout_resolver.resolve(0, type_var, &lt.type_scope, null);
 
     var mono_store = try mir.Monotype.Store.init(allocator);
-    defer mono_store.deinit(allocator);
+    defer mono_store.deinit();
 
     var scratches = try mir.Monotype.Store.Scratches.init(allocator);
     defer scratches.deinit();

@@ -4603,10 +4603,11 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
                 &self.type_var_seen,
             );
             if (!refined.isNone()) {
-                if (self.store.monotype_store.resolve(refined).kind != .func) {
+                const resolved_refined = self.store.monotype_store.resolve(refined);
+                if (resolved_refined.kind != .func) {
                     typeBindingInvariant(
                         "lowerDotAccess: refined dispatch fn_var monotype is not function (method='{s}', kind={d})",
-                        .{ module_env.getIdent(da.field_name), @intFromEnum(self.store.monotype_store.resolve(refined).kind) },
+                        .{ module_env.getIdent(da.field_name), @intFromEnum(resolved_refined.kind) },
                     );
                 }
                 break :blk refined;

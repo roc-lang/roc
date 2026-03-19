@@ -218,7 +218,7 @@ test "MIR Store: multiple expressions round trip" {
 
 test "Monotype Store: primitive types" {
     var store = try Monotype.Store.init(test_allocator);
-    defer store.deinit(test_allocator);
+    defer store.deinit();
 
     try testing.expectEqual(Monotype.Prim.str, store.primIdx(.str).builtinPrim().?);
     try testing.expectEqual(Monotype.Prim.i64, store.primIdx(.i64).builtinPrim().?);
@@ -226,14 +226,14 @@ test "Monotype Store: primitive types" {
 
 test "Monotype Store: unit type" {
     var store = try Monotype.Store.init(test_allocator);
-    defer store.deinit(test_allocator);
+    defer store.deinit();
 
     try testing.expect(store.unit_idx.isUnit());
 }
 
 test "Monotype Store: list type" {
     var store = try Monotype.Store.init(test_allocator);
-    defer store.deinit(test_allocator);
+    defer store.deinit();
 
     const elem = store.primIdx(.str);
     const list = try store.internList(elem);
@@ -244,7 +244,7 @@ test "Monotype Store: list type" {
 
 test "Monotype Store: func type" {
     var store = try Monotype.Store.init(test_allocator);
-    defer store.deinit(test_allocator);
+    defer store.deinit();
 
     const arg1 = store.primIdx(.i64);
     const arg2 = store.primIdx(.str);
@@ -259,7 +259,7 @@ test "Monotype Store: func type" {
 
 test "Monotype Store: record type" {
     var store = try Monotype.Store.init(test_allocator);
-    defer store.deinit(test_allocator);
+    defer store.deinit();
 
     const field1_type = store.primIdx(.i64);
     const field2_type = store.primIdx(.str);
@@ -276,7 +276,7 @@ test "Monotype Store: record type" {
 
 test "Monotype Store: tag union type" {
     var store = try Monotype.Store.init(test_allocator);
-    defer store.deinit(test_allocator);
+    defer store.deinit();
 
     const payload_type = store.primIdx(.str);
     const tag_name = try store.name_pool.intern("MyTag");
@@ -290,7 +290,7 @@ test "Monotype Store: tag union type" {
 
 test "Monotype Store: box type" {
     var store = try Monotype.Store.init(test_allocator);
-    defer store.deinit(test_allocator);
+    defer store.deinit();
 
     const inner = store.primIdx(.i64);
     const boxed = try store.internBox(inner);
@@ -301,7 +301,7 @@ test "Monotype Store: box type" {
 
 test "Monotype Store: tuple type" {
     var store = try Monotype.Store.init(test_allocator);
-    defer store.deinit(test_allocator);
+    defer store.deinit();
 
     const elem1 = store.primIdx(.i64);
     const elem2 = store.primIdx(.str);
@@ -313,7 +313,7 @@ test "Monotype Store: tuple type" {
 
 test "Monotype Store: all primitive types" {
     var store = try Monotype.Store.init(test_allocator);
-    defer store.deinit(test_allocator);
+    defer store.deinit();
 
     const prims = [_]Monotype.Prim{
         .str,

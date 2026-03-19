@@ -386,8 +386,7 @@ pub const TypeInterner = struct {
         return self;
     }
 
-    pub fn deinit(self: *TypeInterner, allocator: Allocator) void {
-        _ = allocator; // TypeInterner uses self.allocator
+    pub fn deinit(self: *TypeInterner) void {
         self.list_payloads.deinit(self.allocator);
         self.box_payloads.deinit(self.allocator);
         self.tuple_payloads.deinit(self.allocator);
@@ -1246,5 +1245,6 @@ pub const TypeInterner = struct {
     }
 };
 
-/// Backward-compat alias.
+/// Backward-compat alias used in 17+ call sites (MIR.zig, Lower.zig, MirToLir.zig, etc.).
+/// May be removed in a future rename pass.
 pub const Store = TypeInterner;
