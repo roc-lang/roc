@@ -2129,6 +2129,195 @@ test "cross-module runExpr: List.keep_if function lookups retain lambda sets" {
     try testing.expectEqual(@as(usize, 0), missing_count);
 }
 
+test "runExpr: top-level local function lookup materializes callable def proc inst" {
+    var env = try MirTestEnv.initFull("Test",
+        \\fn0 = |a| a + 1
+        \\main = fn0(10)
+    );
+    defer env.deinit();
+
+    const def = try env.getDefExprByName("main");
+    const all_module_envs = [_]*ModuleEnv{ @constCast(env.builtin_module.env), env.module_env };
+
+    var monomorphization = try Monomorphize.runExpr(
+        test_allocator,
+        @as([]const *ModuleEnv, all_module_envs[0..]),
+        &env.module_env.types,
+        1,
+        null,
+        def.expr_idx,
+    );
+    defer monomorphization.deinit(test_allocator);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    var lower = try Lower.init(
+        test_allocator,
+        &mir_store,
+        &monomorphization,
+        @as([]const *ModuleEnv, all_module_envs[0..]),
+        &env.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    const expr = try lower.lowerExpr(def.expr_idx);
+    const result = mir_store.getExpr(expr);
+    try testing.expect(result == .call);
+
+    const proc_id = procIdFromCallableExpr(&mir_store, result.call.func) orelse return error.TestUnexpectedResult;
+    try testing.expect(!proc_id.isNone());
+}
+
+test "runExpr: block-carried local function lookup materializes callable stmt proc inst" {
+    var env = try MirTestEnv.initExpr(
+        \\{
+        \\    fn0 = |a| a + 1
+        \\    fn0(10)
+        \\}
+    );
+    defer env.deinit();
+
+    const defs = env.module_env.store.sliceDefs(env.module_env.all_defs);
+    const main_def = env.module_env.store.getDef(defs[0]);
+    const all_module_envs = [_]*ModuleEnv{ @constCast(env.builtin_module.env), env.module_env };
+
+    var monomorphization = try Monomorphize.runExpr(
+        test_allocator,
+        @as([]const *ModuleEnv, all_module_envs[0..]),
+        &env.module_env.types,
+        1,
+        null,
+        main_def.expr,
+    );
+    defer monomorphization.deinit(test_allocator);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    var lower = try Lower.init(
+        test_allocator,
+        &mir_store,
+        &monomorphization,
+        @as([]const *ModuleEnv, all_module_envs[0..]),
+        &env.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    const expr = try lower.lowerExpr(main_def.expr);
+    const result = mir_store.getExpr(expr);
+    try testing.expect(result == .block);
+
+    const final_expr = mir_store.getExpr(result.block.final_expr);
+    try testing.expect(final_expr == .call);
+
+    const proc_id = procIdFromCallableExpr(&mir_store, final_expr.call.func) orelse return error.TestUnexpectedResult;
+    try testing.expect(!proc_id.isNone());
+}
+
+test "runExpr: block-carried arrow call materializes callable stmt proc inst" {
+    var env = try MirTestEnv.initExpr(
+        \\{
+        \\    fn0 = |a| a + 1
+        \\    10->fn0
+        \\}
+    );
+    defer env.deinit();
+
+    const defs = env.module_env.store.sliceDefs(env.module_env.all_defs);
+    const main_def = env.module_env.store.getDef(defs[0]);
+    const all_module_envs = [_]*ModuleEnv{ @constCast(env.builtin_module.env), env.module_env };
+
+    var monomorphization = try Monomorphize.runExpr(
+        test_allocator,
+        @as([]const *ModuleEnv, all_module_envs[0..]),
+        &env.module_env.types,
+        1,
+        null,
+        main_def.expr,
+    );
+    defer monomorphization.deinit(test_allocator);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    var lower = try Lower.init(
+        test_allocator,
+        &mir_store,
+        &monomorphization,
+        @as([]const *ModuleEnv, all_module_envs[0..]),
+        &env.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    const expr = try lower.lowerExpr(main_def.expr);
+    const result = mir_store.getExpr(expr);
+    try testing.expect(result == .block);
+
+    const final_expr = mir_store.getExpr(result.block.final_expr);
+    try testing.expect(final_expr == .call);
+
+    const proc_id = procIdFromCallableExpr(&mir_store, final_expr.call.func) orelse return error.TestUnexpectedResult;
+    try testing.expect(!proc_id.isNone());
+}
+
+test "runExpr: repl-style multi-definition arrow call materializes callable stmt proc inst" {
+    var env = try MirTestEnv.initExpr(
+        \\{
+        \\    fn0 = |a| a + 1
+        \\    fn1 = |a, b| a + b
+        \\    fn2 = |a, b, c| a + b + c
+        \\    fn3 = |a, b, c, d| a + b + c + d
+        \\    10->fn0
+        \\}
+    );
+    defer env.deinit();
+
+    const defs = env.module_env.store.sliceDefs(env.module_env.all_defs);
+    const main_def = env.module_env.store.getDef(defs[0]);
+    const all_module_envs = [_]*ModuleEnv{ @constCast(env.builtin_module.env), env.module_env };
+
+    var monomorphization = try Monomorphize.runExpr(
+        test_allocator,
+        @as([]const *ModuleEnv, all_module_envs[0..]),
+        &env.module_env.types,
+        1,
+        null,
+        main_def.expr,
+    );
+    defer monomorphization.deinit(test_allocator);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    var lower = try Lower.init(
+        test_allocator,
+        &mir_store,
+        &monomorphization,
+        @as([]const *ModuleEnv, all_module_envs[0..]),
+        &env.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    const expr = try lower.lowerExpr(main_def.expr);
+    const result = mir_store.getExpr(expr);
+    try testing.expect(result == .block);
+
+    const final_expr = mir_store.getExpr(result.block.final_expr);
+    try testing.expect(final_expr == .call);
+
+    const proc_id = procIdFromCallableExpr(&mir_store, final_expr.call.func) orelse return error.TestUnexpectedResult;
+    try testing.expect(!proc_id.isNone());
+}
+
 test "cross-module: List.keep_if with always-false predicate lowers without error" {
     var env = try MirTestEnv.initExpr("List.keep_if([1.I64, 2.I64, 3.I64], |_| Bool.False)");
     defer env.deinit();

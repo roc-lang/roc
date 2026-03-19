@@ -3312,6 +3312,15 @@ fn stabilizeEscapingFunctionSpan(self: *Self, expr_span: MIR.ExprSpan) Allocator
     return try self.store.addExprSpan(self.allocator, self.scratch_expr_ids.sliceFromStart(scratch_top));
 }
 
+fn callableBindingHasReachableValueUse(self: *const Self, pattern_idx: CIR.Pattern.Idx) bool {
+    const proc_inst_ids = self.monomorphization.getContextPatternProcInsts(
+        self.current_proc_inst_context,
+        self.current_module_idx,
+        pattern_idx,
+    ) orelse return false;
+    return proc_inst_ids.len != 0;
+}
+
 fn monotypesStructurallyEqual(self: *Self, lhs: Monotype.Idx, rhs: Monotype.Idx) Allocator.Error!bool {
     if (lhs == rhs) return true;
 
@@ -4414,9 +4423,10 @@ fn lowerProcInst(self: *Self, proc_inst_id: Monomorphize.ProcInstId) Allocator.E
 fn lowerDispatchProcInstForExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId {
     const proc_inst_id = self.lookupMonomorphizedDispatchProcInst(expr_idx) orelse {
         if (std.debug.runtime_safety) {
+            const expr = self.all_module_envs[self.current_module_idx].store.getExpr(expr_idx);
             std.debug.panic(
-                "MIR Lower invariant: monomorphization missing dispatch proc inst for expr {d} in module {d}",
-                .{ @intFromEnum(expr_idx), self.current_module_idx },
+                "MIR Lower invariant: monomorphization missing dispatch proc inst for expr {d} in module {d} kind={s}",
+                .{ @intFromEnum(expr_idx), self.current_module_idx, @tagName(expr) },
             );
         }
         unreachable;
@@ -4702,13 +4712,8 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
         const stmt_region = module_env.store.getStatementRegion(stmt_idx);
         switch (cir_stmt) {
             .s_decl => |decl| {
-                if (cirExprIsCallable(module_env.store.getExpr(decl.expr)) and
-                    self.monomorphization.getExprProcInst(
-                        self.current_proc_inst_context,
-                        self.monomorphizationRootExprContext(self.current_proc_inst_context),
-                        self.current_module_idx,
-                        decl.expr,
-                    ) == null)
+                if (cirExprIsProcBacked(module_env, decl.expr) and
+                    !self.callableBindingHasReachableValueUse(decl.pattern))
                 {
                     continue;
                 }
@@ -4718,13 +4723,8 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
                 try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = pat, .expr = expr } });
             },
             .s_var => |var_decl| {
-                if (cirExprIsCallable(module_env.store.getExpr(var_decl.expr)) and
-                    self.monomorphization.getExprProcInst(
-                        self.current_proc_inst_context,
-                        self.monomorphizationRootExprContext(self.current_proc_inst_context),
-                        self.current_module_idx,
-                        var_decl.expr,
-                    ) == null)
+                if (cirExprIsProcBacked(module_env, var_decl.expr) and
+                    !self.callableBindingHasReachableValueUse(var_decl.pattern_idx))
                 {
                     continue;
                 }
@@ -4826,13 +4826,6 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
     } }, monotype, region);
 }
 
-fn cirExprIsCallable(expr: CIR.Expr) bool {
-    return switch (expr) {
-        .e_lambda, .e_closure, .e_hosted_lambda => true,
-        else => false,
-    };
-}
-
 /// Lower `e_binop` to either a method call or a match (for short-circuit and/or).
 fn lowerBinop(self: *Self, expr_idx: CIR.Expr.Idx, binop: CIR.Expr.Binop, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
     const module_env = self.all_module_envs[self.current_module_idx];
@@ -4889,10 +4882,7 @@ fn lowerBinop(self: *Self, expr_idx: CIR.Expr.Idx, binop: CIR.Expr.Binop, monoty
                     },
                     // Tag unions may be nominal (with dispatch target) or anonymous structural.
                     .tag_union => {
-                        const cached_dispatch = self.lookupResolvedDispatchTarget(expr_idx);
-                        const eq_constraint = self.lookupDispatchConstraintForExpr(expr_idx, module_env.idents.is_eq);
-                        const constraint_resolved = if (eq_constraint) |constraint| !constraint.resolved_target.isNone() else false;
-                        const has_nominal_dispatch = cached_dispatch != null or constraint_resolved;
+                        const has_nominal_dispatch = self.lookupMonomorphizedDispatchProcInst(expr_idx) != null;
                         if (!has_nominal_dispatch) {
                             const result = try self.lowerStructuralEquality(lhs, rhs, lhs_monotype, monotype, region);
                             if (binop.op == .ne) return try self.negBool(module_env, result, monotype, region);
@@ -5541,7 +5531,7 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
                 // Records, tuples, lists, and unit are always structural.
                 .record, .tuple, .list, .unit => {},
                 // Tag unions may be nominal or anonymous structural.
-                .tag_union => if (self.lookupResolvedDispatchTarget(expr_idx) != null) break :structural_eq,
+                .tag_union => if (self.lookupMonomorphizedDispatchProcInst(expr_idx) != null) break :structural_eq,
                 else => break :structural_eq,
             }
             if (!std.mem.eql(u8, module_env.getIdent(da.field_name), "is_eq")) break :structural_eq;
@@ -5778,48 +5768,6 @@ fn findModuleForOriginMaybe(self: *Self, source_env: *const ModuleEnv, origin_mo
         if (std.mem.eql(u8, origin_name, candidate_name)) return @intCast(idx);
     }
     return null;
-}
-
-fn lookupResolvedDispatchTarget(self: *const Self, expr_idx: CIR.Expr.Idx) ?ResolvedDispatchTarget {
-    const key = (@as(u64, self.current_module_idx) << 32) | @as(u64, @intFromEnum(expr_idx));
-    return self.resolved_dispatch_targets.get(key);
-}
-
-fn lookupDispatchConstraintForExpr(
-    self: *const Self,
-    expr_idx: CIR.Expr.Idx,
-    method_name: Ident.Idx,
-) ?types.StaticDispatchConstraint {
-    var found: ?types.StaticDispatchConstraint = null;
-    for (self.types_store.sliceAllStaticDispatchConstraints()) |constraint| {
-        if (constraint.source_expr_idx != @intFromEnum(expr_idx)) continue;
-        if (!constraint.fn_name.eql(method_name)) continue;
-        if (found) |existing| {
-            const existing_resolved = !existing.resolved_target.isNone();
-            const candidate_resolved = !constraint.resolved_target.isNone();
-
-            // Constraint solving can emit multiple constraints for the same
-            // expression+method pair (different fn_vars), especially for
-            // desugared binops and merged constraint sets. Prefer a resolved
-            // target when available; otherwise keep the first unresolved one.
-            if (existing_resolved and candidate_resolved) {
-                if (std.debug.runtime_safety and
-                    (!existing.resolved_target.origin_module.eql(constraint.resolved_target.origin_module) or
-                        !existing.resolved_target.method_ident.eql(constraint.resolved_target.method_ident)))
-                {
-                    std.debug.panic(
-                        "lookupDispatchConstraintForExpr: conflicting resolved targets for expr={d} method={d}",
-                        .{ @intFromEnum(expr_idx), method_name.idx },
-                    );
-                }
-            } else if (!existing_resolved and candidate_resolved) {
-                found = constraint;
-            }
-            continue;
-        }
-        found = constraint;
-    }
-    return found;
 }
 
 fn monotypeFromTypeVarInStore(
