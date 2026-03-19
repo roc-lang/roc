@@ -3667,6 +3667,7 @@ fn lowerLambdaSpecialized(
 fn lowerClosureSpecialized(
     self: *Self,
     module_env: *const ModuleEnv,
+    expr_idx: CIR.Expr.Idx,
     closure: CIR.Expr.Closure,
     monotype: Monotype.Idx,
     region: Region,
@@ -3750,8 +3751,16 @@ fn lowerClosureSpecialized(
                 &self.nominal_cycle_breakers,
             );
             try self.mono_scratches.idxs.append(cap_monotype);
-            const lookup_expr = try self.store.addExpr(self.allocator, .{ .lookup = outer_symbol }, cap_monotype, region);
-            try self.scratch_expr_ids.append(lookup_expr);
+            const capture_expr = if (self.monomorphization.getClosureCaptureProcInst(
+                self.current_proc_inst_context,
+                self.current_module_idx,
+                expr_idx,
+                cap.pattern_idx,
+            )) |capture_proc_inst_id|
+                try self.lowerProcInst(capture_proc_inst_id)
+            else
+                try self.store.addExpr(self.allocator, .{ .lookup = outer_symbol }, cap_monotype, region);
+            try self.scratch_expr_ids.append(capture_expr);
         }
 
         const capture_monotypes = self.mono_scratches.idxs.sliceFromStart(idxs_top);
@@ -4181,6 +4190,7 @@ fn lowerProcInst(self: *Self, proc_inst_id: Monomorphize.ProcInstId) Allocator.E
         ),
         .e_closure => |closure| try self.lowerClosureSpecialized(
             module_env,
+            template.cir_expr,
             closure,
             proc_monotype,
             template.source_region,

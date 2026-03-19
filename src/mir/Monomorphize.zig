@@ -179,6 +179,19 @@ const ContextExprKey = struct {
     expr_raw: u32,
 };
 
+const ContextCaptureKey = struct {
+    closure_proc_inst_raw: u32,
+    module_idx: u32,
+    closure_expr_raw: u32,
+    pattern_raw: u32,
+};
+
+const ContextPatternKey = struct {
+    context_proc_inst_raw: u32,
+    module_idx: u32,
+    pattern_raw: u32,
+};
+
 const ResolvedDispatchTarget = struct {
     origin: Ident.Idx,
     method_ident: Ident.Idx,
@@ -216,6 +229,8 @@ pub const Result = struct {
     call_site_proc_insts: std.AutoHashMapUnmanaged(ContextExprKey, ProcInstId),
     dispatch_expr_proc_insts: std.AutoHashMapUnmanaged(ContextExprKey, ProcInstId),
     lookup_expr_proc_insts: std.AutoHashMapUnmanaged(ContextExprKey, ProcInstId),
+    closure_capture_proc_insts: std.AutoHashMapUnmanaged(ContextCaptureKey, ProcInstId),
+    context_pattern_proc_insts: std.AutoHashMapUnmanaged(ContextPatternKey, ProcInstId),
     proc_template_ids_by_source: std.AutoHashMapUnmanaged(u64, ProcTemplateId),
     deferred_local_callables: std.AutoHashMapUnmanaged(u64, DeferredLocalCallable),
     root_module_idx: u32,
@@ -233,6 +248,8 @@ pub const Result = struct {
             .call_site_proc_insts = .empty,
             .dispatch_expr_proc_insts = .empty,
             .lookup_expr_proc_insts = .empty,
+            .closure_capture_proc_insts = .empty,
+            .context_pattern_proc_insts = .empty,
             .proc_template_ids_by_source = .empty,
             .deferred_local_callables = .empty,
             .root_module_idx = root_module_idx,
@@ -251,6 +268,8 @@ pub const Result = struct {
         self.call_site_proc_insts.deinit(allocator);
         self.dispatch_expr_proc_insts.deinit(allocator);
         self.lookup_expr_proc_insts.deinit(allocator);
+        self.closure_capture_proc_insts.deinit(allocator);
+        self.context_pattern_proc_insts.deinit(allocator);
         self.proc_template_ids_by_source.deinit(allocator);
         self.deferred_local_callables.deinit(allocator);
     }
@@ -264,6 +283,32 @@ pub const Result = struct {
             .context_proc_inst_raw = @intFromEnum(context_proc_inst),
             .module_idx = module_idx,
             .expr_raw = @intFromEnum(expr_idx),
+        };
+    }
+
+    pub fn contextCaptureKey(
+        closure_proc_inst: ProcInstId,
+        module_idx: u32,
+        closure_expr_idx: CIR.Expr.Idx,
+        pattern_idx: CIR.Pattern.Idx,
+    ) ContextCaptureKey {
+        return .{
+            .closure_proc_inst_raw = @intFromEnum(closure_proc_inst),
+            .module_idx = module_idx,
+            .closure_expr_raw = @intFromEnum(closure_expr_idx),
+            .pattern_raw = @intFromEnum(pattern_idx),
+        };
+    }
+
+    pub fn contextPatternKey(
+        context_proc_inst: ProcInstId,
+        module_idx: u32,
+        pattern_idx: CIR.Pattern.Idx,
+    ) ContextPatternKey {
+        return .{
+            .context_proc_inst_raw = @intFromEnum(context_proc_inst),
+            .module_idx = module_idx,
+            .pattern_raw = @intFromEnum(pattern_idx),
         };
     }
 
@@ -285,6 +330,30 @@ pub const Result = struct {
 
     pub fn getLookupExprProcInst(self: *const Result, context_proc_inst: ProcInstId, module_idx: u32, expr_idx: CIR.Expr.Idx) ?ProcInstId {
         return self.lookup_expr_proc_insts.get(contextExprKey(context_proc_inst, module_idx, expr_idx));
+    }
+
+    pub fn getClosureCaptureProcInst(
+        self: *const Result,
+        closure_proc_inst: ProcInstId,
+        module_idx: u32,
+        closure_expr_idx: CIR.Expr.Idx,
+        pattern_idx: CIR.Pattern.Idx,
+    ) ?ProcInstId {
+        return self.closure_capture_proc_insts.get(contextCaptureKey(
+            closure_proc_inst,
+            module_idx,
+            closure_expr_idx,
+            pattern_idx,
+        ));
+    }
+
+    pub fn getContextPatternProcInst(
+        self: *const Result,
+        context_proc_inst: ProcInstId,
+        module_idx: u32,
+        pattern_idx: CIR.Pattern.Idx,
+    ) ?ProcInstId {
+        return self.context_pattern_proc_insts.get(contextPatternKey(context_proc_inst, module_idx, pattern_idx));
     }
 
     pub fn getProcTemplate(self: *const Result, proc_template_id: ProcTemplateId) *const ProcTemplate {
@@ -789,11 +858,15 @@ pub const Pass = struct {
     }
 
     fn scanExpr(self: *Pass, result: *Result, module_idx: u32, expr_idx: CIR.Expr.Idx) Allocator.Error!void {
-        return self.scanExprInternal(result, module_idx, expr_idx, false);
+        return self.scanExprInternal(result, module_idx, expr_idx, false, false);
     }
 
     fn scanValueExpr(self: *Pass, result: *Result, module_idx: u32, expr_idx: CIR.Expr.Idx) Allocator.Error!void {
-        return self.scanExprInternal(result, module_idx, expr_idx, true);
+        return self.scanExprInternal(result, module_idx, expr_idx, true, false);
+    }
+
+    fn scanValueExprForced(self: *Pass, result: *Result, module_idx: u32, expr_idx: CIR.Expr.Idx) Allocator.Error!void {
+        return self.scanExprInternal(result, module_idx, expr_idx, true, true);
     }
 
     fn scanReachableValueDefExpr(
@@ -807,7 +880,7 @@ pub const Pass = struct {
         try self.in_progress_value_defs.put(self.allocator, key, {});
         defer _ = self.in_progress_value_defs.remove(key);
 
-        try self.scanValueExpr(result, module_idx, expr_idx);
+        try self.scanValueExprForced(result, module_idx, expr_idx);
     }
 
     fn resolveRequiredLookupTarget(
@@ -842,6 +915,7 @@ pub const Pass = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
         materialize_if_callable: bool,
+        force_rescan_children: bool,
     ) Allocator.Error!void {
         const module_env = self.all_module_envs[module_idx];
         const expr = module_env.store.getExpr(expr_idx);
@@ -876,7 +950,7 @@ pub const Pass = struct {
             }
         }
 
-        if (self.active_bindings != null) {
+        if (self.active_bindings != null or force_rescan_children) {
             try self.scanExprChildren(result, module_idx, expr_idx, expr);
             return;
         }
@@ -944,6 +1018,9 @@ pub const Pass = struct {
             .e_lookup_local => |lookup| {
                 if (try self.resolveExprCallableTemplate(result, module_idx, expr_idx)) |template_id| {
                     try self.resolveLookupExprProcInst(result, module_idx, expr_idx, template_id);
+                    if (self.source_exprs.get(packLocalPatternSourceKey(module_idx, lookup.pattern_idx))) |source| {
+                        try self.scanReachableValueDefExpr(result, source.module_idx, source.expr_idx);
+                    }
                 } else if (self.source_exprs.get(packLocalPatternSourceKey(module_idx, lookup.pattern_idx))) |source| {
                     try self.scanReachableValueDefExpr(result, source.module_idx, source.expr_idx);
                 }
@@ -976,6 +1053,7 @@ pub const Pass = struct {
                 }
                 if (try self.resolveExprCallableTemplate(result, module_idx, expr_idx)) |template_id| {
                     try self.resolveLookupExprProcInst(result, module_idx, expr_idx, template_id);
+                    try self.scanReachableValueDefExpr(result, target_module_idx, def.expr);
                 } else {
                     try self.scanReachableValueDefExpr(result, target_module_idx, def.expr);
                 }
@@ -1006,6 +1084,7 @@ pub const Pass = struct {
                 }
                 if (try self.resolveExprCallableTemplate(result, module_idx, expr_idx)) |template_id| {
                     try self.resolveLookupExprProcInst(result, module_idx, expr_idx, template_id);
+                    try self.scanReachableValueDefExpr(result, target.module_idx, def.expr);
                 } else {
                     try self.scanReachableValueDefExpr(result, target.module_idx, def.expr);
                 }
@@ -1073,7 +1152,10 @@ pub const Pass = struct {
             .e_tag => |tag_expr| try self.scanValueExprSpan(result, module_idx, module_env.store.sliceExpr(tag_expr.args)),
             .e_nominal => |nominal_expr| try self.scanValueExpr(result, module_idx, nominal_expr.backing_expr),
             .e_nominal_external => |nominal_expr| try self.scanValueExpr(result, module_idx, nominal_expr.backing_expr),
-            .e_closure => |closure_expr| try self.scanExpr(result, module_idx, closure_expr.lambda_idx),
+            .e_closure => |closure_expr| {
+                try self.scanClosureCaptureSources(result, module_idx, expr_idx, closure_expr);
+                try self.scanExpr(result, module_idx, closure_expr.lambda_idx);
+            },
             .e_lambda => |lambda_expr| {
                 if (self.active_bindings != null) {
                     try self.scanValueExpr(result, module_idx, lambda_expr.body);
@@ -1150,6 +1232,100 @@ pub const Pass = struct {
     fn scanValueExprSpan(self: *Pass, result: *Result, module_idx: u32, exprs: []const CIR.Expr.Idx) Allocator.Error!void {
         for (exprs) |child_expr| {
             try self.scanValueExpr(result, module_idx, child_expr);
+        }
+    }
+
+    fn seedBindingsForProcInst(
+        self: *Pass,
+        result: *Result,
+        proc_inst_id: ProcInstId,
+        bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
+    ) Allocator.Error!void {
+        const proc_inst = result.getProcInst(proc_inst_id).*;
+        const template = result.getProcTemplate(proc_inst.template).*;
+        const module_env = self.all_module_envs[template.module_idx];
+
+        if (!proc_inst.subst.isNone()) {
+            const subst = result.getTypeSubst(proc_inst.subst);
+            for (result.getTypeSubstEntries(subst.entries)) |entry| {
+                try bindings.put(entry.key, entry.monotype);
+            }
+        }
+
+        var ordered_entries = std.ArrayList(TypeSubstEntry).empty;
+        defer ordered_entries.deinit(self.allocator);
+        try self.bindTypeVarMonotypes(
+            result,
+            template.module_idx,
+            &module_env.types,
+            bindings,
+            &ordered_entries,
+            ModuleEnv.varFrom(template.cir_expr),
+            proc_inst.fn_monotype,
+            proc_inst.fn_monotype_module_idx,
+        );
+
+        try self.seedProcBodyBindingsFromSignature(result, template.module_idx, template.cir_expr, proc_inst, bindings);
+    }
+
+    fn scanClosureCaptureSources(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        closure_expr: CIR.Expr.Closure,
+    ) Allocator.Error!void {
+        const module_env = self.all_module_envs[module_idx];
+        const saved_bindings = self.active_bindings;
+
+        var capture_bindings = std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype).init(self.allocator);
+        defer capture_bindings.deinit();
+
+        const closure_proc_inst_id = result.getExprProcInst(self.active_proc_inst_context, module_idx, expr_idx);
+        if (closure_proc_inst_id) |proc_inst_id| {
+            try self.seedBindingsForProcInst(result, proc_inst_id, &capture_bindings);
+            self.active_bindings = &capture_bindings;
+        }
+        defer self.active_bindings = saved_bindings;
+
+        for (module_env.store.sliceCaptures(closure_expr.captures)) |capture_idx| {
+            const capture = module_env.store.getCapture(capture_idx);
+            const source = self.source_exprs.get(packLocalPatternSourceKey(module_idx, capture.pattern_idx)) orelse continue;
+
+            if (closure_proc_inst_id) |proc_inst_id| {
+                if (result.getContextPatternProcInst(proc_inst_id, module_idx, capture.pattern_idx)) |capture_proc_inst_id| {
+                    try result.closure_capture_proc_insts.put(
+                        self.allocator,
+                        Result.contextCaptureKey(proc_inst_id, module_idx, expr_idx, capture.pattern_idx),
+                        capture_proc_inst_id,
+                    );
+                    continue;
+                }
+                if (result.getLocalProcTemplate(module_idx, capture.pattern_idx)) |template_id| {
+                    const capture_mono = try self.resolveTypeVarMonotypeIfMonomorphizableResolved(
+                        result,
+                        module_idx,
+                        ModuleEnv.varFrom(capture.pattern_idx),
+                    );
+                    if (!capture_mono.isNone()) {
+                        const capture_proc_inst_id = try self.ensureProcInst(
+                            result,
+                            template_id,
+                            capture_mono.idx,
+                            capture_mono.module_idx,
+                        );
+                        try result.closure_capture_proc_insts.put(
+                            self.allocator,
+                            Result.contextCaptureKey(proc_inst_id, module_idx, expr_idx, capture.pattern_idx),
+                            capture_proc_inst_id,
+                        );
+                        try self.scanProcInst(result, capture_proc_inst_id);
+                        continue;
+                    }
+                }
+            }
+
+            try self.scanReachableValueDefExpr(result, source.module_idx, source.expr_idx);
         }
     }
 
@@ -1257,6 +1433,16 @@ pub const Pass = struct {
             Result.contextExprKey(self.active_proc_inst_context, module_idx, call_expr_idx),
             proc_inst_id,
         );
+        switch (callee_expr) {
+            .e_lookup_local => |lookup| try self.recordContextPatternProcInst(
+                result,
+                self.active_proc_inst_context,
+                module_idx,
+                lookup.pattern_idx,
+                proc_inst_id,
+            ),
+            else => {},
+        }
         const callee_template = result.getProcTemplate(template_id);
         try result.expr_proc_insts.put(
             self.allocator,
@@ -2560,11 +2746,49 @@ pub const Pass = struct {
             Result.contextExprKey(self.active_proc_inst_context, module_idx, expr_idx),
             proc_inst_id,
         );
+        const module_env = self.all_module_envs[module_idx];
+        if (module_env.store.getExpr(expr_idx) == .e_lookup_local) {
+            try self.recordContextPatternProcInst(
+                result,
+                self.active_proc_inst_context,
+                module_idx,
+                module_env.store.getExpr(expr_idx).e_lookup_local.pattern_idx,
+                proc_inst_id,
+            );
+        }
         try result.expr_proc_insts.put(
             self.allocator,
             Result.contextExprKey(self.active_proc_inst_context, template.module_idx, template.cir_expr),
             proc_inst_id,
         );
+    }
+
+    fn recordContextPatternProcInst(
+        self: *Pass,
+        result: *Result,
+        context_proc_inst: ProcInstId,
+        module_idx: u32,
+        pattern_idx: CIR.Pattern.Idx,
+        proc_inst_id: ProcInstId,
+    ) Allocator.Error!void {
+        const key = Result.contextPatternKey(context_proc_inst, module_idx, pattern_idx);
+        const existing = result.context_pattern_proc_insts.get(key);
+        if (existing) |existing_proc_inst_id| {
+            if (existing_proc_inst_id != proc_inst_id and std.debug.runtime_safety) {
+                std.debug.panic(
+                    "Monomorphize: conflicting proc insts for local callable pattern {d} in context {d} module {d}: {d} vs {d}",
+                    .{
+                        @intFromEnum(pattern_idx),
+                        @intFromEnum(context_proc_inst),
+                        module_idx,
+                        @intFromEnum(existing_proc_inst_id),
+                        @intFromEnum(proc_inst_id),
+                    },
+                );
+            }
+            return;
+        }
+        try result.context_pattern_proc_insts.put(self.allocator, key, proc_inst_id);
     }
 
     fn lookupResolvedDispatchTemplate(
@@ -4190,14 +4414,7 @@ pub const Pass = struct {
         var bindings = std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype).init(self.allocator);
         defer bindings.deinit();
 
-        if (!proc_inst.subst.isNone()) {
-            const subst = result.getTypeSubst(proc_inst.subst);
-            for (result.getTypeSubstEntries(subst.entries)) |entry| {
-                try bindings.put(entry.key, entry.monotype);
-            }
-        }
-
-        try self.seedProcBodyBindingsFromSignature(result, template.module_idx, template.cir_expr, proc_inst, &bindings);
+        try self.seedBindingsForProcInst(result, proc_inst_id, &bindings);
 
         const saved_bindings = self.active_bindings;
         self.active_bindings = &bindings;
