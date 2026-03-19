@@ -2034,20 +2034,27 @@ fn identMatchesText(self: *const Self, ident: Ident.Idx, expected: []const u8) b
     return false;
 }
 
-fn identsTextEqual(self: *const Self, lhs: Ident.Idx, rhs: Ident.Idx) bool {
-    if (lhs.eql(rhs)) return true;
+fn labelTextForCompare(self: *const Self, label: anytype) ?[]const u8 {
+    return switch (@TypeOf(label)) {
+        Ident.Idx => blk: {
+            if (identTextIfOwnedBy(self.layout_store.currentEnv(), label)) |text| break :blk text;
+            for (self.layout_store.moduleEnvs()) |env| {
+                if (identTextIfOwnedBy(env, label)) |text| break :blk text;
+            }
+            break :blk null;
+        },
+        Monotype.Name => label.text(self.layout_store.moduleEnvs()),
+        else => @compileError("unsupported label type"),
+    };
+}
 
-    if (identTextIfOwnedBy(self.layout_store.currentEnv(), lhs)) |lhs_text| {
-        if (self.identMatchesText(rhs, lhs_text)) return true;
-    }
+fn identsTextEqual(self: *const Self, lhs: anytype, rhs: anytype) bool {
+    if (@TypeOf(lhs) == Ident.Idx and @TypeOf(rhs) == Ident.Idx and lhs.eql(rhs)) return true;
+    if (@TypeOf(lhs) == Monotype.Name and @TypeOf(rhs) == Monotype.Name and lhs.eql(rhs)) return true;
 
-    for (self.layout_store.moduleEnvs()) |env| {
-        if (identTextIfOwnedBy(env, lhs)) |lhs_text| {
-            if (self.identMatchesText(rhs, lhs_text)) return true;
-        }
-    }
-
-    return false;
+    const lhs_text = self.labelTextForCompare(lhs) orelse return false;
+    const rhs_text = self.labelTextForCompare(rhs) orelse return false;
+    return std.mem.eql(u8, lhs_text, rhs_text);
 }
 
 /// Given a tag name and the monotype of the containing tag union,
@@ -3725,7 +3732,7 @@ fn monotypesStructurallyEqualRec(
             const rhs_fields = self.mir_store.monotype_store.getFields(rhs_mono.record.fields);
             if (lhs_fields.len != rhs_fields.len) break :blk false;
             for (lhs_fields, rhs_fields) |lhs_field, rhs_field| {
-                if (!lhs_field.name.eql(rhs_field.name)) break :blk false;
+                if (!self.identsTextEqual(lhs_field.name, rhs_field.name)) break :blk false;
                 if (!try self.monotypesStructurallyEqualRec(lhs_field.type_idx, rhs_field.type_idx, seen)) {
                     break :blk false;
                 }
@@ -3737,7 +3744,7 @@ fn monotypesStructurallyEqualRec(
             const rhs_tags = self.mir_store.monotype_store.getTags(rhs_mono.tag_union.tags);
             if (lhs_tags.len != rhs_tags.len) break :blk false;
             for (lhs_tags, rhs_tags) |lhs_tag, rhs_tag| {
-                if (!lhs_tag.name.eql(rhs_tag.name)) break :blk false;
+                if (!self.identsTextEqual(lhs_tag.name, rhs_tag.name)) break :blk false;
                 const lhs_payloads = self.mir_store.monotype_store.getIdxSpan(lhs_tag.payloads);
                 const rhs_payloads = self.mir_store.monotype_store.getIdxSpan(rhs_tag.payloads);
                 if (lhs_payloads.len != rhs_payloads.len) break :blk false;
@@ -6004,6 +6011,12 @@ test "ANF: list of calls Let-binds each call to a symbol" {
     const proc_id = try testMirProc(&env.mir_store, allocator, sym_f, func_mono, proc_params, proc_body, i64_mono);
     const proc_ref = try env.mir_store.addExpr(allocator, .{ .proc_ref = proc_id }, func_mono, Region.zero());
     try env.mir_store.registerValueDef(allocator, sym_f, proc_ref);
+    const members = try env.lambda_set_store.addMembers(allocator, &.{.{
+        .proc = proc_id,
+        .closure_member = .none,
+    }});
+    const ls_idx = try env.lambda_set_store.addLambdaSet(allocator, .{ .members = members });
+    try env.lambda_set_store.symbol_lambda_sets.put(allocator, sym_f.raw(), ls_idx);
 
     // func_lookup: lookup of `f`
     const func_lookup = try env.mir_store.addExpr(allocator, .{ .lookup = sym_f }, func_mono, Region.zero());
@@ -6477,7 +6490,7 @@ test "MIR tuple access preserves element index" {
     defer testDeinit(&env);
 
     const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
-    const bool_mono = try env.mir_store.monotype_store.addBoolTagUnion(allocator, env.module_env.idents);
+    const bool_mono = try env.mir_store.monotype_store.addBoolTagUnion(allocator, 0, env.module_env.idents);
 
     // Create tuple monotype: (I64, Bool, I64)
     const tuple_elems = try env.mir_store.monotype_store.addIdxSpan(allocator, &.{ i64_mono, bool_mono, i64_mono });
@@ -6695,7 +6708,7 @@ test "MIR single-tag union with multiple payloads emits tag layout" {
     defer testDeinit(&env);
 
     const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
-    const bool_mono = try env.mir_store.monotype_store.addBoolTagUnion(allocator, env.module_env.idents);
+    const bool_mono = try env.mir_store.monotype_store.addBoolTagUnion(allocator, 0, env.module_env.idents);
 
     // Create a single-tag union with multiple payloads: [Pair I64 Bool]
     const tag_pair = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
@@ -6967,7 +6980,7 @@ test "MIR while_loop lowers to LIR while_loop" {
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const bool_mono = try env.mir_store.monotype_store.addBoolTagUnion(allocator, env.module_env.idents);
+    const bool_mono = try env.mir_store.monotype_store.addBoolTagUnion(allocator, 0, env.module_env.idents);
     const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
     const unit_mono = env.mir_store.monotype_store.unit_idx;
 
@@ -7029,7 +7042,7 @@ test "MIR expect lowers to LIR expect" {
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const bool_mono = try env.mir_store.monotype_store.addBoolTagUnion(allocator, env.module_env.idents);
+    const bool_mono = try env.mir_store.monotype_store.addBoolTagUnion(allocator, 0, env.module_env.idents);
     const unit_mono = env.mir_store.monotype_store.unit_idx;
 
     // Build MIR: expect (true)
@@ -7448,7 +7461,7 @@ test "LIR Bool match: True pattern gets discriminant 1, False body gets discrimi
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const bool_mono = try env.mir_store.monotype_store.addBoolTagUnion(allocator, env.module_env.idents);
+    const bool_mono = try env.mir_store.monotype_store.addBoolTagUnion(allocator, 0, env.module_env.idents);
     const true_tag = env.module_env.idents.true_tag;
     const false_tag = env.module_env.idents.false_tag;
 
@@ -7538,7 +7551,7 @@ test "LIR Bool match: False scrutinee gets discriminant 0" {
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const bool_mono = try env.mir_store.monotype_store.addBoolTagUnion(allocator, env.module_env.idents);
+    const bool_mono = try env.mir_store.monotype_store.addBoolTagUnion(allocator, 0, env.module_env.idents);
     const true_tag = env.module_env.idents.true_tag;
     const false_tag = env.module_env.idents.false_tag;
 

@@ -125,17 +125,17 @@ pub const Prim = enum {
 
 /// A tag in a tag union.
 pub const Tag = struct {
-    name: Ident.Idx,
+    name: Name,
     /// Span of Monotype.Idx for payload types
     payloads: Span,
 
-    pub fn sortByNameAsc(ident_store: *const Ident.Store, a: Tag, b: Tag) bool {
-        return orderByName(ident_store, a, b) == .lt;
+    pub fn sortByNameAsc(all_module_envs: []const *const ModuleEnv, a: Tag, b: Tag) bool {
+        return orderByName(all_module_envs, a, b) == .lt;
     }
 
-    fn orderByName(ident_store: *const Ident.Store, a: Tag, b: Tag) std.math.Order {
-        const a_text = ident_store.getText(a.name);
-        const b_text = ident_store.getText(b.name);
+    fn orderByName(all_module_envs: []const *const ModuleEnv, a: Tag, b: Tag) std.math.Order {
+        const a_text = a.name.text(all_module_envs);
+        const b_text = b.name.text(all_module_envs);
         return std.mem.order(u8, a_text, b_text);
     }
 };
@@ -156,17 +156,45 @@ pub const TagSpan = extern struct {
 
 /// A field in a record.
 pub const Field = struct {
-    name: Ident.Idx,
+    name: Name,
     type_idx: Idx,
 
-    pub fn sortByNameAsc(ident_store: *const Ident.Store, a: Field, b: Field) bool {
-        return orderByName(ident_store, a, b) == .lt;
+    pub fn sortByNameAsc(all_module_envs: []const *const ModuleEnv, a: Field, b: Field) bool {
+        return orderByName(all_module_envs, a, b) == .lt;
     }
 
-    fn orderByName(ident_store: *const Ident.Store, a: Field, b: Field) std.math.Order {
-        const a_text = ident_store.getText(a.name);
-        const b_text = ident_store.getText(b.name);
+    fn orderByName(all_module_envs: []const *const ModuleEnv, a: Field, b: Field) std.math.Order {
+        const a_text = a.name.text(all_module_envs);
+        const b_text = b.name.text(all_module_envs);
         return std.mem.order(u8, a_text, b_text);
+    }
+};
+
+pub const Name = struct {
+    module_idx: u32,
+    ident: Ident.Idx,
+
+    pub fn eql(self: Name, other: Name) bool {
+        return self.module_idx == other.module_idx and self.ident.eql(other.ident);
+    }
+
+    pub fn text(self: Name, all_module_envs: []const *const ModuleEnv) []const u8 {
+        return all_module_envs[self.module_idx].getIdent(self.ident);
+    }
+
+    pub fn textEqual(self: Name, all_module_envs: []const *const ModuleEnv, other: Name) bool {
+        if (self.eql(other)) return true;
+        return std.mem.eql(u8, self.text(all_module_envs), other.text(all_module_envs));
+    }
+
+    pub fn textEqualsIdent(
+        self: Name,
+        all_module_envs: []const *const ModuleEnv,
+        ident_module_idx: u32,
+        ident: Ident.Idx,
+    ) bool {
+        if (self.module_idx == ident_module_idx and self.ident.eql(ident)) return true;
+        return std.mem.eql(u8, self.text(all_module_envs), all_module_envs[ident_module_idx].getIdent(ident));
     }
 };
 
@@ -188,6 +216,24 @@ const NamedSpecialization = struct {
     name_text: []const u8,
     type_idx: Idx,
 };
+
+fn scopedName(scratches: *const Store.Scratches, ident: Ident.Idx) Name {
+    const module_idx = scratches.module_idx orelse unreachable;
+    return .{
+        .module_idx = module_idx,
+        .ident = ident,
+    };
+}
+
+fn namesEqual(all_module_envs: []const *const ModuleEnv, lhs: Name, rhs: Name) bool {
+    return lhs.textEqual(all_module_envs, rhs);
+}
+
+fn nameEqualsIdent(scratches: *const Store.Scratches, lhs: Name, ident: Ident.Idx) bool {
+    const all_module_envs = scratches.all_module_envs orelse unreachable;
+    const module_idx = scratches.module_idx orelse unreachable;
+    return lhs.textEqualsIdent(all_module_envs, module_idx, ident);
+}
 
 /// Flat storage for monomorphic types.
 pub const Store = struct {
@@ -216,8 +262,10 @@ pub const Store = struct {
         ident_store: ?*const Ident.Store = null,
         /// Module env owning the current `types_store` / `ident_store`.
         module_env: ?*const ModuleEnv = null,
+        /// Module index owning the current `types_store` / `module_env`.
+        module_idx: ?u32 = null,
         /// Shared module env slice used to resolve nominal definitions by origin module.
-        all_module_envs: ?[]const *ModuleEnv = null,
+        all_module_envs: ?[]const *const ModuleEnv = null,
 
         pub fn init(allocator: Allocator) Allocator.Error!Scratches {
             return .{
@@ -241,14 +289,14 @@ pub const Store = struct {
         return self.prim_idxs[@intFromEnum(prim)];
     }
 
-    pub fn addBoolTagUnion(self: *Store, allocator: Allocator, common_idents: CommonIdents) !Idx {
+    pub fn addBoolTagUnion(self: *Store, allocator: Allocator, module_idx: u32, common_idents: CommonIdents) !Idx {
         if (!self.bool_tag_union_idx.isNone()) return self.bool_tag_union_idx;
 
         const false_payloads = Span.empty();
         const true_payloads = Span.empty();
         const tags = try self.addTags(allocator, &.{
-            .{ .name = common_idents.false_tag, .payloads = false_payloads },
-            .{ .name = common_idents.true_tag, .payloads = true_payloads },
+            .{ .name = .{ .module_idx = module_idx, .ident = common_idents.false_tag }, .payloads = false_payloads },
+            .{ .name = .{ .module_idx = module_idx, .ident = common_idents.true_tag }, .payloads = true_payloads },
         });
         const idx = try self.addMonotype(allocator, .{ .tag_union = .{ .tags = tags } });
         self.bool_tag_union_idx = idx;
@@ -433,7 +481,7 @@ pub const Store = struct {
                     for (names, vars) |name, field_var| {
                         var seen_name = false;
                         for (scratches.fields.sliceFromStart(scratch_top)) |existing| {
-                            if (existing.name.eql(name)) {
+                            if (nameEqualsIdent(scratches, existing.name, name)) {
                                 seen_name = true;
                                 break;
                             }
@@ -441,7 +489,7 @@ pub const Store = struct {
                         if (seen_name) continue;
 
                         const field_type = try self.fromTypeVar(allocator, types_store, field_var, common_idents, specializations, nominal_cycle_breakers, scratches);
-                        try scratches.fields.append(.{ .name = name, .type_idx = field_type });
+                        try scratches.fields.append(.{ .name = scopedName(scratches, name), .type_idx = field_type });
                     }
 
                     var ext_var = current_row.ext;
@@ -465,7 +513,7 @@ pub const Store = struct {
                                     for (ext_names, ext_vars) |name, field_var| {
                                         var seen_name = false;
                                         for (scratches.fields.sliceFromStart(scratch_top)) |existing| {
-                                            if (existing.name.eql(name)) {
+                                            if (nameEqualsIdent(scratches, existing.name, name)) {
                                                 seen_name = true;
                                                 break;
                                             }
@@ -473,7 +521,7 @@ pub const Store = struct {
                                         if (seen_name) continue;
 
                                         const field_type = try self.fromTypeVar(allocator, types_store, field_var, common_idents, specializations, nominal_cycle_breakers, scratches);
-                                        try scratches.fields.append(.{ .name = name, .type_idx = field_type });
+                                        try scratches.fields.append(.{ .name = scopedName(scratches, name), .type_idx = field_type });
                                     }
                                     break :rows;
                                 },
@@ -515,8 +563,8 @@ pub const Store = struct {
 
                 const collected_fields = scratches.fields.sliceFromStart(scratch_top);
                 // Each row segment is sorted, but concatenation may not be.
-                if (scratches.ident_store) |ident_store| {
-                    std.mem.sort(Field, collected_fields, ident_store, Field.sortByNameAsc);
+                if (scratches.all_module_envs) |all_module_envs| {
+                    std.mem.sort(Field, collected_fields, all_module_envs, Field.sortByNameAsc);
                 }
                 const field_span = try self.addFields(allocator, collected_fields);
                 return try self.addMonotype(allocator, .{ .record = .{ .fields = field_span } });
@@ -532,7 +580,7 @@ pub const Store = struct {
 
                 for (names, vars) |name, field_var| {
                     const field_type = try self.fromTypeVar(allocator, types_store, field_var, common_idents, specializations, nominal_cycle_breakers, scratches);
-                    try scratches.fields.append(.{ .name = name, .type_idx = field_type });
+                    try scratches.fields.append(.{ .name = scopedName(scratches, name), .type_idx = field_type });
                 }
 
                 const field_span = try self.addFields(allocator, scratches.fields.sliceFromStart(scratch_top));
@@ -575,7 +623,7 @@ pub const Store = struct {
                         }
 
                         const payloads_span = try self.addIdxSpan(allocator, scratches.idxs.sliceFromStart(idxs_top));
-                        try scratches.tags.append(.{ .name = name, .payloads = payloads_span });
+                        try scratches.tags.append(.{ .name = scopedName(scratches, name), .payloads = payloads_span });
                     }
 
                     // Follow extension variable to find more tags
@@ -631,8 +679,8 @@ pub const Store = struct {
                 const collected_tags = scratches.tags.sliceFromStart(tags_top);
                 // Sort tags alphabetically to match discriminant assignment order.
                 // Each ext-chain row is pre-sorted, but the concatenation may not be.
-                if (scratches.ident_store) |ident_store| {
-                    std.mem.sort(Tag, collected_tags, ident_store, Tag.sortByNameAsc);
+                if (scratches.all_module_envs) |all_module_envs| {
+                    std.mem.sort(Tag, collected_tags, all_module_envs, Tag.sortByNameAsc);
                 }
                 const tag_span = try self.addTags(allocator, collected_tags);
                 return try self.addMonotype(allocator, .{ .tag_union = .{ .tags = tag_span } });
@@ -690,7 +738,10 @@ pub const Store = struct {
         if (origin.eql(common_idents.builtin_module)) {
             // Bool/Str: unqualified idents from source declarations
             if (ident.eql(common_idents.str)) return self.primIdx(.str);
-            if (ident.eql(common_idents.bool)) return try self.addBoolTagUnion(allocator, common_idents);
+            if (ident.eql(common_idents.bool)) {
+                const module_idx = scratches.module_idx orelse unreachable;
+                return try self.addBoolTagUnion(allocator, module_idx, common_idents);
+            }
         }
 
         if (origin.eql(common_idents.builtin_module)) {
@@ -804,12 +855,13 @@ pub const Store = struct {
         scratches: *Scratches,
     ) Allocator.Error!void {
         const mono = self.getMonotype(specialized);
+        const all_module_envs = scratches.all_module_envs orelse unreachable;
         switch (mono) {
             .record => |record| {
                 for (self.getFields(record.fields)) |field| {
                     var seen_name = false;
                     for (scratches.fields.sliceFromStart(scratch_top)) |existing| {
-                        if (existing.name.eql(field.name)) {
+                        if (namesEqual(all_module_envs, existing.name, field.name)) {
                             seen_name = true;
                             break;
                         }
@@ -920,7 +972,7 @@ pub const Store = struct {
 
     fn findNominalDefinitionEnv(
         source_env: *const ModuleEnv,
-        all_module_envs: []const *ModuleEnv,
+        all_module_envs: []const *const ModuleEnv,
         origin_module: Ident.Idx,
     ) ?*const ModuleEnv {
         const origin_name = source_env.getIdent(origin_module);

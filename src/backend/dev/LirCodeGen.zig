@@ -1421,16 +1421,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Generate code for an expression (raw — may return bare register locations).
         fn generateExprRaw(self: *Self, expr_id: LirExprId) Allocator.Error!ValueLocation {
-            if (builtin.mode == .Debug) {
-                std.debug.print(
-                    "generateExprRaw proc={d} expr={d} expr_len={d}\n",
-                    .{
-                        if (self.current_proc_name) |sym| @as(u64, @bitCast(sym)) else 0,
-                        @intFromEnum(expr_id),
-                        self.store.exprs.items.len,
-                    },
-                );
-            }
             if (builtin.mode == .Debug and @intFromEnum(expr_id) >= self.store.exprs.items.len) {
                 std.debug.panic(
                     "LirCodeGen: invalid expr_id {d} while compiling proc {d} (store len {d})",
@@ -12858,7 +12848,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// callee-saved registers are used, then prepends prologue and adjusts relocations.
         fn compileProcSpec(self: *Self, proc: LirProcSpec) Allocator.Error!void {
             const key: u64 = @bitCast(proc.name);
-            if (builtin.mode == .Debug and key == 18446744069414584320) {
+            if (false and builtin.mode == .Debug and key == 18446744069414584320) {
                 const Debug = struct {
                     fn printExpr(store: *const LirExprStore, expr_id: LirExprId, indent: usize) void {
                         for (0..indent) |_| std.debug.print("  ", .{});
@@ -15971,7 +15961,7 @@ test "two-arg proc list loop returns full length" {
     } }, base.Region.zero());
 
     const unit = try store.addExpr(.{ .struct_ = .{
-        .struct_layout = .none,
+        .struct_layout = .zst,
         .fields = try store.addExprSpan(&.{}),
     } }, base.Region.zero());
 

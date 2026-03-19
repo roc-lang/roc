@@ -5,6 +5,7 @@
 //! result of this pass; it must not infer callable instantiations itself.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const can = @import("can");
 const types = @import("types");
@@ -89,10 +90,24 @@ pub const ProcInstId = enum(u32) {
     }
 };
 
+const BoundTypeVarKey = struct {
+    module_idx: u32,
+    type_var: types.Var,
+};
+
+pub const ResolvedMonotype = struct {
+    idx: Monotype.Idx,
+    module_idx: u32,
+
+    pub fn isNone(self: ResolvedMonotype) bool {
+        return self.idx.isNone();
+    }
+};
+
 /// One concrete type-variable assignment inside a proc instantiation substitution.
 pub const TypeSubstEntry = struct {
-    type_var: types.Var,
-    monotype: Monotype.Idx,
+    key: BoundTypeVarKey,
+    monotype: ResolvedMonotype,
 };
 
 /// A packed slice of substitution entries stored in the monomorphization result.
@@ -190,7 +205,7 @@ pub const Result = struct {
     proc_insts: std.ArrayListUnmanaged(ProcInst),
     subst_entries: std.ArrayListUnmanaged(TypeSubstEntry),
     substs: std.ArrayListUnmanaged(TypeSubst),
-    context_expr_monotypes: std.AutoHashMapUnmanaged(ContextExprKey, Monotype.Idx),
+    context_expr_monotypes: std.AutoHashMapUnmanaged(ContextExprKey, ResolvedMonotype),
     expr_proc_insts: std.AutoHashMapUnmanaged(ContextExprKey, ProcInstId),
     call_site_proc_insts: std.AutoHashMapUnmanaged(ContextExprKey, ProcInstId),
     dispatch_expr_proc_insts: std.AutoHashMapUnmanaged(ContextExprKey, ProcInstId),
@@ -250,7 +265,7 @@ pub const Result = struct {
         return self.call_site_proc_insts.get(contextExprKey(context_proc_inst, module_idx, expr_idx));
     }
 
-    pub fn getExprMonotype(self: *const Result, context_proc_inst: ProcInstId, module_idx: u32, expr_idx: CIR.Expr.Idx) ?Monotype.Idx {
+    pub fn getExprMonotype(self: *const Result, context_proc_inst: ProcInstId, module_idx: u32, expr_idx: CIR.Expr.Idx) ?ResolvedMonotype {
         return self.context_expr_monotypes.get(contextExprKey(context_proc_inst, module_idx, expr_idx));
     }
 
@@ -307,12 +322,15 @@ pub const Pass = struct {
     types_store: *const types.Store,
     current_module_idx: u32,
     app_module_idx: ?u32,
+    type_scope: ?*const types.TypeScope,
+    type_scope_module_idx: ?u32,
+    type_scope_caller_module_idx: ?u32,
     visited_modules: std.AutoHashMapUnmanaged(u32, void),
     visited_exprs: std.AutoHashMapUnmanaged(u64, void),
     source_exprs: std.AutoHashMapUnmanaged(u64, ExprSource),
     resolved_dispatch_targets: std.AutoHashMapUnmanaged(ContextExprKey, ResolvedDispatchTarget),
     scanned_proc_insts: std.AutoHashMapUnmanaged(u32, void),
-    active_bindings: ?*std.AutoHashMap(types.Var, Monotype.Idx),
+    active_bindings: ?*std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
     active_proc_inst_context: ProcInstId,
 
     pub fn init(
@@ -328,6 +346,9 @@ pub const Pass = struct {
             .types_store = types_store,
             .current_module_idx = current_module_idx,
             .app_module_idx = app_module_idx,
+            .type_scope = null,
+            .type_scope_module_idx = null,
+            .type_scope_caller_module_idx = null,
             .visited_modules = .empty,
             .visited_exprs = .empty,
             .source_exprs = .empty,
@@ -336,6 +357,17 @@ pub const Pass = struct {
             .active_bindings = null,
             .active_proc_inst_context = .none,
         };
+    }
+
+    pub fn setTypeScope(
+        self: *Pass,
+        module_idx: u32,
+        type_scope: *const types.TypeScope,
+        caller_module_idx: u32,
+    ) void {
+        self.type_scope = type_scope;
+        self.type_scope_module_idx = module_idx;
+        self.type_scope_caller_module_idx = caller_module_idx;
     }
 
     pub fn deinit(self: *Pass) void {
@@ -352,7 +384,20 @@ pub const Pass = struct {
         try self.seedResolvedDispatchTargets();
         try self.scanSeedModules(&result);
         try self.scanModule(&result, self.current_module_idx);
-        try self.scanExpr(&result, self.current_module_idx, expr_idx);
+        try self.scanValueExpr(&result, self.current_module_idx, expr_idx);
+
+        return result;
+    }
+
+    pub fn runRoots(self: *Pass, exprs: []const CIR.Expr.Idx) Allocator.Error!Result {
+        var result = try Result.init(self.allocator, self.current_module_idx, null);
+
+        try self.seedResolvedDispatchTargets();
+        try self.scanSeedModules(&result);
+        try self.scanModule(&result, self.current_module_idx);
+        for (exprs) |expr_idx| {
+            try self.scanValueExpr(&result, self.current_module_idx, expr_idx);
+        }
 
         return result;
     }
@@ -364,6 +409,12 @@ pub const Pass = struct {
         try self.seedResolvedDispatchTargets();
         try self.scanSeedModules(&result);
         try self.scanModule(&result, self.current_module_idx);
+
+        const module_env = self.all_module_envs[self.current_module_idx];
+        for (module_env.store.sliceDefs(module_env.all_defs)) |def_idx| {
+            const def = module_env.store.getDef(def_idx);
+            try self.scanValueExpr(&result, self.current_module_idx, def.expr);
+        }
 
         return result;
     }
@@ -400,9 +451,13 @@ pub const Pass = struct {
     }
 
     fn scanModule(self: *Pass, result: *Result, module_idx: u32) Allocator.Error!void {
+        try self.primeModuleDefs(result, module_idx);
+
         if (self.visited_modules.contains(module_idx)) return;
         try self.visited_modules.put(self.allocator, module_idx, {});
+    }
 
+    fn primeModuleDefs(self: *Pass, result: *Result, module_idx: u32) Allocator.Error!void {
         const module_env = self.all_module_envs[module_idx];
         const defs = module_env.store.sliceDefs(module_env.all_defs);
 
@@ -415,7 +470,7 @@ pub const Pass = struct {
             });
 
             if (callableKind(expr)) |kind| {
-                const template_id = try self.registerCallableDefTemplate(
+                _ = try self.registerCallableDefTemplate(
                     result,
                     module_idx,
                     def.expr,
@@ -425,9 +480,6 @@ pub const Pass = struct {
                     module_env.store.getExprRegion(def.expr),
                     packLocalPatternSourceKey(module_idx, def.pattern),
                 );
-                try self.resolveReachableExprProcInst(result, module_idx, def.expr, template_id);
-            } else {
-                try self.scanExpr(result, module_idx, def.expr);
             }
         }
     }
@@ -703,9 +755,9 @@ pub const Pass = struct {
                 try self.scanExpr(result, module_idx, reassign.expr);
                 try self.bindCurrentPatternFromExprIfExact(result, module_idx, reassign.pattern_idx, reassign.expr);
             },
-            .s_dbg => |dbg_stmt| try self.scanExpr(result, module_idx, dbg_stmt.expr),
-            .s_expr => |expr_stmt| try self.scanExpr(result, module_idx, expr_stmt.expr),
-            .s_expect => |expect_stmt| try self.scanExpr(result, module_idx, expect_stmt.body),
+            .s_dbg => |dbg_stmt| try self.scanValueExpr(result, module_idx, dbg_stmt.expr),
+            .s_expr => |expr_stmt| try self.scanValueExpr(result, module_idx, expr_stmt.expr),
+            .s_expect => |expect_stmt| try self.scanValueExpr(result, module_idx, expect_stmt.body),
             .s_for => |for_stmt| {
                 try self.scanExpr(result, module_idx, for_stmt.expr);
                 try self.scanExpr(result, module_idx, for_stmt.body);
@@ -714,7 +766,7 @@ pub const Pass = struct {
                 try self.scanExpr(result, module_idx, while_stmt.cond);
                 try self.scanExpr(result, module_idx, while_stmt.body);
             },
-            .s_return => |return_stmt| try self.scanExpr(result, module_idx, return_stmt.expr),
+            .s_return => |return_stmt| try self.scanValueExpr(result, module_idx, return_stmt.expr),
             .s_import,
             .s_alias_decl,
             .s_nominal_decl,
@@ -728,11 +780,25 @@ pub const Pass = struct {
     }
 
     fn scanExpr(self: *Pass, result: *Result, module_idx: u32, expr_idx: CIR.Expr.Idx) Allocator.Error!void {
+        return self.scanExprInternal(result, module_idx, expr_idx, false);
+    }
+
+    fn scanValueExpr(self: *Pass, result: *Result, module_idx: u32, expr_idx: CIR.Expr.Idx) Allocator.Error!void {
+        return self.scanExprInternal(result, module_idx, expr_idx, true);
+    }
+
+    fn scanExprInternal(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        materialize_if_callable: bool,
+    ) Allocator.Error!void {
         const module_env = self.all_module_envs[module_idx];
         const expr = module_env.store.getExpr(expr_idx);
 
         if (!self.active_proc_inst_context.isNone()) {
-            const monotype = try self.resolveExprMonotype(result, module_idx, expr_idx);
+            const monotype = try self.resolveExprMonotypeResolved(result, module_idx, expr_idx);
             if (!monotype.isNone()) {
                 const key = Result.contextExprKey(self.active_proc_inst_context, module_idx, expr_idx);
                 if (result.context_expr_monotypes.get(key) == null) {
@@ -756,7 +822,9 @@ pub const Pass = struct {
                 kind,
                 module_env.store.getExprRegion(expr_idx),
             );
-            try self.resolveReachableExprProcInst(result, module_idx, expr_idx, template_id);
+            if (materialize_if_callable) {
+                try self.resolveReachableExprProcInst(result, module_idx, expr_idx, template_id);
+            }
         }
 
         if (self.active_bindings != null) {
@@ -779,17 +847,22 @@ pub const Pass = struct {
         template_id: ProcTemplateId,
     ) Allocator.Error!void {
         const template = result.getProcTemplate(template_id);
-        const fn_monotype = try self.resolveTypeVarMonotypeIfMonomorphizable(
-            result,
-            template.module_idx,
-            template.type_root,
-        );
+        const fn_monotype = blk: {
+            const expr_mono = try self.resolveExprMonotypeIfMonomorphizableResolved(result, module_idx, expr_idx);
+            if (!expr_mono.isNone()) break :blk expr_mono;
+
+            break :blk try self.resolveTypeVarMonotypeIfMonomorphizableResolved(
+                result,
+                template.module_idx,
+                template.type_root,
+            );
+        };
         if (fn_monotype.isNone()) return;
 
         const proc_inst_id = if (self.active_proc_inst_context.isNone())
-            try self.ensureProcInst(result, template_id, fn_monotype, template.module_idx)
+            try self.ensureProcInst(result, template_id, fn_monotype.idx, fn_monotype.module_idx)
         else
-            try self.ensureProcInst(result, template_id, fn_monotype, template.module_idx);
+            try self.ensureProcInst(result, template_id, fn_monotype.idx, fn_monotype.module_idx);
         try result.expr_proc_insts.put(
             self.allocator,
             Result.contextExprKey(self.active_proc_inst_context, module_idx, expr_idx),
@@ -855,9 +928,9 @@ pub const Pass = struct {
                 }
                 try self.scanModule(result, target_module_idx);
             },
-            .e_str => |str_expr| try self.scanExprSpan(result, module_idx, module_env.store.sliceExpr(str_expr.span)),
-            .e_list => |list_expr| try self.scanExprSpan(result, module_idx, module_env.store.sliceExpr(list_expr.elems)),
-            .e_tuple => |tuple_expr| try self.scanExprSpan(result, module_idx, module_env.store.sliceExpr(tuple_expr.elems)),
+            .e_str => |str_expr| try self.scanValueExprSpan(result, module_idx, module_env.store.sliceExpr(str_expr.span)),
+            .e_list => |list_expr| try self.scanValueExprSpan(result, module_idx, module_env.store.sliceExpr(list_expr.elems)),
+            .e_tuple => |tuple_expr| try self.scanValueExprSpan(result, module_idx, module_env.store.sliceExpr(tuple_expr.elems)),
             .e_match => |match_expr| {
                 try self.scanExpr(result, module_idx, match_expr.cond);
 
@@ -871,7 +944,7 @@ pub const Pass = struct {
                             .expr_idx = match_expr.cond,
                         });
                     }
-                    try self.scanExpr(result, module_idx, branch.value);
+                    try self.scanValueExpr(result, module_idx, branch.value);
                     if (branch.guard) |guard_expr| {
                         try self.scanExpr(result, module_idx, guard_expr);
                     }
@@ -882,14 +955,15 @@ pub const Pass = struct {
                 for (branches) |branch_idx| {
                     const branch = module_env.store.getIfBranch(branch_idx);
                     try self.scanExpr(result, module_idx, branch.cond);
-                    try self.scanExpr(result, module_idx, branch.body);
+                    try self.scanValueExpr(result, module_idx, branch.body);
                 }
-                try self.scanExpr(result, module_idx, if_expr.final_else);
+                try self.scanValueExpr(result, module_idx, if_expr.final_else);
             },
             .e_call => |call_expr| {
                 try self.scanExpr(result, module_idx, call_expr.func);
                 try self.scanExprSpan(result, module_idx, module_env.store.sliceExpr(call_expr.args));
                 try self.resolveDirectCallSite(result, module_idx, expr_idx, call_expr);
+                try self.assignCallableArgProcInstsFromCallMonotype(result, module_idx, expr_idx, call_expr);
                 if (self.active_bindings != null) {
                     try self.scanExpr(result, module_idx, call_expr.func);
                     try self.scanExprSpan(result, module_idx, module_env.store.sliceExpr(call_expr.args));
@@ -903,7 +977,7 @@ pub const Pass = struct {
                 const fields = module_env.store.sliceRecordFields(record_expr.fields);
                 for (fields) |field_idx| {
                     const field = module_env.store.getRecordField(field_idx);
-                    try self.scanExpr(result, module_idx, field.value);
+                    try self.scanValueExpr(result, module_idx, field.value);
                 }
             },
             .e_block => |block_expr| {
@@ -912,15 +986,15 @@ pub const Pass = struct {
                 for (stmts) |stmt_idx| {
                     try self.scanStmt(result, module_idx, stmt_idx);
                 }
-                try self.scanExpr(result, module_idx, block_expr.final_expr);
+                try self.scanValueExpr(result, module_idx, block_expr.final_expr);
             },
-            .e_tag => |tag_expr| try self.scanExprSpan(result, module_idx, module_env.store.sliceExpr(tag_expr.args)),
-            .e_nominal => |nominal_expr| try self.scanExpr(result, module_idx, nominal_expr.backing_expr),
-            .e_nominal_external => |nominal_expr| try self.scanExpr(result, module_idx, nominal_expr.backing_expr),
+            .e_tag => |tag_expr| try self.scanValueExprSpan(result, module_idx, module_env.store.sliceExpr(tag_expr.args)),
+            .e_nominal => |nominal_expr| try self.scanValueExpr(result, module_idx, nominal_expr.backing_expr),
+            .e_nominal_external => |nominal_expr| try self.scanValueExpr(result, module_idx, nominal_expr.backing_expr),
             .e_closure => |closure_expr| try self.scanExpr(result, module_idx, closure_expr.lambda_idx),
             .e_lambda => |lambda_expr| {
                 if (self.active_bindings != null) {
-                    try self.scanExpr(result, module_idx, lambda_expr.body);
+                    try self.scanValueExpr(result, module_idx, lambda_expr.body);
                 }
             },
             .e_binop => |binop_expr| {
@@ -952,9 +1026,9 @@ pub const Pass = struct {
                 }
             },
             .e_tuple_access => |tuple_access| try self.scanExpr(result, module_idx, tuple_access.tuple),
-            .e_dbg => |dbg_expr| try self.scanExpr(result, module_idx, dbg_expr.expr),
-            .e_expect => |expect_expr| try self.scanExpr(result, module_idx, expect_expr.body),
-            .e_return => |return_expr| try self.scanExpr(result, module_idx, return_expr.expr),
+            .e_dbg => |dbg_expr| try self.scanValueExpr(result, module_idx, dbg_expr.expr),
+            .e_expect => |expect_expr| try self.scanValueExpr(result, module_idx, expect_expr.body),
+            .e_return => |return_expr| try self.scanValueExpr(result, module_idx, return_expr.expr),
             .e_type_var_dispatch => |dispatch_expr| {
                 try self.scanExprSpan(result, module_idx, module_env.store.sliceExpr(dispatch_expr.args));
                 try self.resolveDispatchExprProcInst(result, module_idx, expr_idx, expr);
@@ -968,7 +1042,7 @@ pub const Pass = struct {
             },
             .e_hosted_lambda => |hosted_expr| {
                 if (self.active_bindings != null) {
-                    try self.scanExpr(result, module_idx, hosted_expr.body);
+                    try self.scanValueExpr(result, module_idx, hosted_expr.body);
                 }
             },
             .e_run_low_level => |run_low_level| {
@@ -988,6 +1062,12 @@ pub const Pass = struct {
     fn scanExprSpan(self: *Pass, result: *Result, module_idx: u32, exprs: []const CIR.Expr.Idx) Allocator.Error!void {
         for (exprs) |child_expr| {
             try self.scanExpr(result, module_idx, child_expr);
+        }
+    }
+
+    fn scanValueExprSpan(self: *Pass, result: *Result, module_idx: u32, exprs: []const CIR.Expr.Idx) Allocator.Error!void {
+        for (exprs) |child_expr| {
+            try self.scanValueExpr(result, module_idx, child_expr);
         }
     }
 
@@ -1122,7 +1202,7 @@ pub const Pass = struct {
         try result.context_expr_monotypes.put(
             self.allocator,
             Result.contextExprKey(self.active_proc_inst_context, module_idx, call_expr_idx),
-            proc_inst_fn_mono.ret,
+            resolvedMonotype(proc_inst_fn_mono.ret, proc_inst.fn_monotype_module_idx),
         );
     }
 
@@ -1162,6 +1242,38 @@ pub const Pass = struct {
                 else => {},
             }
         }
+    }
+
+    fn assignCallableArgProcInstsFromCallMonotype(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        call_expr_idx: CIR.Expr.Idx,
+        call_expr: anytype,
+    ) Allocator.Error!void {
+        if (self.active_proc_inst_context.isNone()) return;
+        if (result.getCallSiteProcInst(self.active_proc_inst_context, module_idx, call_expr_idx) != null) return;
+
+        const callee_monotype = try self.resolveExprMonotypeResolved(result, module_idx, call_expr.func);
+        if (callee_monotype.isNone()) return;
+
+        const fn_mono = switch (result.monotype_store.getMonotype(callee_monotype.idx)) {
+            .func => |func| func,
+            else => return,
+        };
+
+        const arg_exprs = self.all_module_envs[module_idx].store.sliceExpr(call_expr.args);
+        const param_monos = result.monotype_store.getIdxSpan(fn_mono.args);
+        if (arg_exprs.len != param_monos.len) return;
+
+        try self.assignCallableArgProcInstsFromParams(
+            result,
+            module_idx,
+            arg_exprs,
+            param_monos,
+            callee_monotype.module_idx,
+        );
+        try self.ensureCallableArgProcInstsScanned(result, module_idx, call_expr.args);
     }
 
     fn ensureCallableArgProcInstsScanned(
@@ -1224,13 +1336,13 @@ pub const Pass = struct {
         const template_env = self.all_module_envs[template.module_idx];
         const template_types = &template_env.types;
 
-        var callee_bindings = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+        var callee_bindings = std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype).init(self.allocator);
         defer callee_bindings.deinit();
 
         var ordered_entries = std.ArrayList(TypeSubstEntry).empty;
         defer ordered_entries.deinit(self.allocator);
 
-        const callee_fn_mono = try self.resolveExprMonotypeIfExact(result, module_idx, call_expr.func);
+        const callee_fn_mono = try self.resolveExprMonotypeIfExactResolved(result, module_idx, call_expr.func);
         if (!callee_fn_mono.isNone()) {
             try self.bindTypeVarMonotypes(
                 result,
@@ -1239,8 +1351,8 @@ pub const Pass = struct {
                 &callee_bindings,
                 &ordered_entries,
                 template.type_root,
-                callee_fn_mono,
-                module_idx,
+                callee_fn_mono.idx,
+                callee_fn_mono.module_idx,
             );
         }
 
@@ -1262,32 +1374,56 @@ pub const Pass = struct {
             }
 
             for (param_vars, arg_exprs) |param_var, arg_expr_idx| {
-                const arg_mono = try self.resolveExprMonotypeIfExact(result, module_idx, arg_expr_idx);
+                const arg_mono = try self.resolveExprMonotypeIfExactResolved(result, module_idx, arg_expr_idx);
                 if (arg_mono.isNone()) continue;
-                try self.bindTypeVarMonotypes(
+                var seen: std.AutoHashMapUnmanaged(types.Var, void) = .empty;
+                defer seen.deinit(self.allocator);
+
+                if (!try self.typeVarFullyBoundWithBindings(
                     result,
                     template.module_idx,
                     template_types,
-                    &callee_bindings,
-                    &ordered_entries,
                     param_var,
-                    arg_mono,
-                    module_idx,
-                );
+                    &callee_bindings,
+                    &seen,
+                )) {
+                    try self.bindTypeVarMonotypes(
+                        result,
+                        template.module_idx,
+                        template_types,
+                        &callee_bindings,
+                        &ordered_entries,
+                        param_var,
+                        arg_mono.idx,
+                        arg_mono.module_idx,
+                    );
+                }
             }
 
-            const ret_mono = try self.resolveExprMonotypeIfExact(result, module_idx, call_expr_idx);
+            const ret_mono = try self.resolveExprMonotypeIfExactResolved(result, module_idx, call_expr_idx);
             if (!ret_mono.isNone()) {
-                try self.bindTypeVarMonotypes(
+                var seen: std.AutoHashMapUnmanaged(types.Var, void) = .empty;
+                defer seen.deinit(self.allocator);
+
+                if (!try self.typeVarFullyBoundWithBindings(
                     result,
                     template.module_idx,
                     template_types,
-                    &callee_bindings,
-                    &ordered_entries,
                     resolved_func.func.ret,
-                    ret_mono,
-                    module_idx,
-                );
+                    &callee_bindings,
+                    &seen,
+                )) {
+                    try self.bindTypeVarMonotypes(
+                        result,
+                        template.module_idx,
+                        template_types,
+                        &callee_bindings,
+                        &ordered_entries,
+                        resolved_func.func.ret,
+                        ret_mono.idx,
+                        ret_mono.module_idx,
+                    );
+                }
             }
         }
 
@@ -1316,31 +1452,6 @@ pub const Pass = struct {
         return try self.ensureProcInst(result, template_id, fn_monotype, template.module_idx);
     }
 
-    fn bindCurrentProcTypeVar(
-        self: *Pass,
-        result: *Result,
-        module_idx: u32,
-        var_: types.Var,
-        monotype: Monotype.Idx,
-        mono_module_idx: u32,
-    ) Allocator.Error!void {
-        const bindings = self.active_bindings orelse return;
-
-        var ordered_entries = std.ArrayList(TypeSubstEntry).empty;
-        defer ordered_entries.deinit(self.allocator);
-
-        try self.bindTypeVarMonotypes(
-            result,
-            module_idx,
-            &self.all_module_envs[module_idx].types,
-            bindings,
-            &ordered_entries,
-            var_,
-            monotype,
-            mono_module_idx,
-        );
-    }
-
     fn bindCurrentPatternFromExprIfExact(
         self: *Pass,
         result: *Result,
@@ -1348,19 +1459,21 @@ pub const Pass = struct {
         pattern_idx: CIR.Pattern.Idx,
         expr_idx: CIR.Expr.Idx,
     ) Allocator.Error!void {
+        if (self.all_module_envs[module_idx].types.needsInstantiation(ModuleEnv.varFrom(pattern_idx))) return;
+
         const bindings = self.active_bindings orelse return;
         const module_env = self.all_module_envs[module_idx];
         const expr_mono = switch (module_env.store.getExpr(expr_idx)) {
             .e_lookup_local => |lookup| blk: {
-                const source_mono = try self.resolveTypeVarMonotypeIfExact(
+                const source_mono = try self.resolveTypeVarMonotypeIfExactResolved(
                     result,
                     module_idx,
                     ModuleEnv.varFrom(lookup.pattern_idx),
                 );
                 if (!source_mono.isNone()) break :blk source_mono;
-                break :blk try self.resolveExprMonotypeIfExact(result, module_idx, expr_idx);
+                break :blk try self.resolveExprMonotypeIfExactResolved(result, module_idx, expr_idx);
             },
-            else => try self.resolveExprMonotypeIfExact(result, module_idx, expr_idx),
+            else => try self.resolveExprMonotypeIfExactResolved(result, module_idx, expr_idx),
         };
         if (expr_mono.isNone()) return;
 
@@ -1374,8 +1487,8 @@ pub const Pass = struct {
             bindings,
             &ordered_entries,
             ModuleEnv.varFrom(pattern_idx),
-            expr_mono,
-            module_idx,
+            expr_mono.idx,
+            expr_mono.module_idx,
         );
     }
 
@@ -1397,34 +1510,13 @@ pub const Pass = struct {
         const param_monos = result.monotype_store.getIdxSpan(fn_mono.args);
         if (arg_exprs.len != param_monos.len) unreachable;
 
-        try self.bindCurrentProcTypeVar(
-            result,
-            module_idx,
-            ModuleEnv.varFrom(call_expr.func),
-            proc_inst.fn_monotype,
-            proc_inst.fn_monotype_module_idx,
-        );
-        try self.recordCurrentExprMonotype(result, module_idx, call_expr.func, proc_inst.fn_monotype);
+        try self.recordCurrentExprMonotype(result, module_idx, call_expr.func, proc_inst.fn_monotype, proc_inst.fn_monotype_module_idx);
 
         for (arg_exprs, param_monos) |arg_expr_idx, param_mono| {
-            try self.bindCurrentProcTypeVar(
-                result,
-                module_idx,
-                ModuleEnv.varFrom(arg_expr_idx),
-                param_mono,
-                proc_inst.fn_monotype_module_idx,
-            );
-            try self.recordCurrentExprMonotype(result, module_idx, arg_expr_idx, param_mono);
+            try self.recordCurrentExprMonotype(result, module_idx, arg_expr_idx, param_mono, proc_inst.fn_monotype_module_idx);
         }
 
-        try self.bindCurrentProcTypeVar(
-            result,
-            module_idx,
-            ModuleEnv.varFrom(call_expr_idx),
-            fn_mono.ret,
-            proc_inst.fn_monotype_module_idx,
-        );
-        try self.recordCurrentExprMonotype(result, module_idx, call_expr_idx, fn_mono.ret);
+        try self.recordCurrentExprMonotype(result, module_idx, call_expr_idx, fn_mono.ret, proc_inst.fn_monotype_module_idx);
     }
 
     fn appendDispatchActualArgs(
@@ -1467,7 +1559,7 @@ pub const Pass = struct {
         const template_env = self.all_module_envs[template.module_idx];
         const template_types = &template_env.types;
 
-        var callee_bindings = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+        var callee_bindings = std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype).init(self.allocator);
         defer callee_bindings.deinit();
 
         var ordered_entries = std.ArrayList(TypeSubstEntry).empty;
@@ -1494,7 +1586,7 @@ pub const Pass = struct {
             }
 
             for (param_vars, actual_args.items) |param_var, arg_expr_idx| {
-                const arg_mono = try self.resolveExprMonotypeIfExact(result, module_idx, arg_expr_idx);
+                const arg_mono = try self.resolveExprMonotypeIfExactResolved(result, module_idx, arg_expr_idx);
                 if (arg_mono.isNone()) continue;
                 try self.bindTypeVarMonotypes(
                     result,
@@ -1503,12 +1595,12 @@ pub const Pass = struct {
                     &callee_bindings,
                     &ordered_entries,
                     param_var,
-                    arg_mono,
-                    module_idx,
+                    arg_mono.idx,
+                    arg_mono.module_idx,
                 );
             }
 
-            const ret_mono = try self.resolveExprMonotypeIfExact(result, module_idx, expr_idx);
+            const ret_mono = try self.resolveExprMonotypeIfExactResolved(result, module_idx, expr_idx);
             if (!ret_mono.isNone()) {
                 try self.bindTypeVarMonotypes(
                     result,
@@ -1517,8 +1609,8 @@ pub const Pass = struct {
                     &callee_bindings,
                     &ordered_entries,
                     resolved_func.func.ret,
-                    ret_mono,
-                    module_idx,
+                    ret_mono.idx,
+                    ret_mono.module_idx,
                 );
             }
         }
@@ -1570,24 +1662,10 @@ pub const Pass = struct {
         if (actual_args.items.len != param_monos.len) unreachable;
 
         for (actual_args.items, param_monos) |arg_expr_idx, param_mono| {
-            try self.bindCurrentProcTypeVar(
-                result,
-                module_idx,
-                ModuleEnv.varFrom(arg_expr_idx),
-                param_mono,
-                proc_inst.fn_monotype_module_idx,
-            );
-            try self.recordCurrentExprMonotype(result, module_idx, arg_expr_idx, param_mono);
+            try self.recordCurrentExprMonotype(result, module_idx, arg_expr_idx, param_mono, proc_inst.fn_monotype_module_idx);
         }
 
-        try self.bindCurrentProcTypeVar(
-            result,
-            module_idx,
-            ModuleEnv.varFrom(expr_idx),
-            fn_mono.ret,
-            proc_inst.fn_monotype_module_idx,
-        );
-        try self.recordCurrentExprMonotype(result, module_idx, expr_idx, fn_mono.ret);
+        try self.recordCurrentExprMonotype(result, module_idx, expr_idx, fn_mono.ret, proc_inst.fn_monotype_module_idx);
     }
 
     fn recordCurrentExprMonotype(
@@ -1596,12 +1674,13 @@ pub const Pass = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
         monotype: Monotype.Idx,
+        monotype_module_idx: u32,
     ) Allocator.Error!void {
         if (self.active_proc_inst_context.isNone() or monotype.isNone()) return;
         try result.context_expr_monotypes.put(
             self.allocator,
             Result.contextExprKey(self.active_proc_inst_context, module_idx, expr_idx),
-            monotype,
+            resolvedMonotype(monotype, monotype_module_idx),
         );
     }
 
@@ -1865,12 +1944,12 @@ pub const Pass = struct {
         binop_expr: CIR.Expr.Binop,
         method_name: Ident.Idx,
     ) Allocator.Error!ResolvedDispatchTarget {
-        const lhs_monotype = try self.resolveExprMonotype(result, module_idx, binop_expr.lhs);
+        const lhs_monotype = try self.resolveExprMonotypeResolved(result, module_idx, binop_expr.lhs);
         if (lhs_monotype.isNone()) {
             return self.resolveDispatchTargetForExpr(result, module_idx, expr_idx, method_name);
         }
 
-        var merged_bindings = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+        var merged_bindings = std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype).init(self.allocator);
         defer merged_bindings.deinit();
         if (self.active_bindings) |bindings| {
             var it = bindings.iterator();
@@ -1878,7 +1957,10 @@ pub const Pass = struct {
                 try merged_bindings.put(entry.key_ptr.*, entry.value_ptr.*);
             }
         }
-        try merged_bindings.put(ModuleEnv.varFrom(binop_expr.rhs), lhs_monotype);
+        try merged_bindings.put(
+            boundTypeVarKey(module_idx, &self.all_module_envs[module_idx].types, ModuleEnv.varFrom(binop_expr.rhs)),
+            lhs_monotype,
+        );
 
         const saved_bindings = self.active_bindings;
         self.active_bindings = &merged_bindings;
@@ -2051,7 +2133,8 @@ pub const Pass = struct {
         resolved_target: types.StaticDispatchConstraint.ResolvedTarget,
     ) bool {
         const method_name_text = source_env.getIdent(method_name);
-        const target_method_text = identTextIfOwnedBy(source_env, resolved_target.method_ident) orelse return false;
+        if (!moduleOwnsIdent(source_env, resolved_target.method_ident)) return false;
+        const target_method_text = getOwnedIdentText(source_env, resolved_target.method_ident);
         if (!identMatchesMethodName(target_method_text, method_name_text)) return false;
         return self.findModuleForOriginMaybe(source_env, resolved_target.origin_module) != null;
     }
@@ -2240,9 +2323,25 @@ pub const Pass = struct {
         const desired_func_monotype = try self.resolveTypeVarMonotype(result, module_idx, constraint.fn_var);
         if (desired_func_monotype.isNone()) {
             if (std.debug.runtime_safety) {
+                const context_proc_inst = self.active_proc_inst_context;
+                const context_template_expr_raw: u32 = if (!context_proc_inst.isNone())
+                    @intFromEnum(result.getProcTemplate(result.getProcInst(context_proc_inst).template).cir_expr)
+                else
+                    std.math.maxInt(u32);
+                const context_template_module = if (!context_proc_inst.isNone())
+                    result.getProcTemplate(result.getProcInst(context_proc_inst).template).module_idx
+                else
+                    std.math.maxInt(u32);
                 std.debug.panic(
-                    "Monomorphize: unresolved fn_var monotype for method '{s}'",
-                    .{module_env.getIdent(method_name)},
+                    "Monomorphize: unresolved fn_var monotype for method '{s}' in module={d} source_expr={d} context_proc_inst={d} context_template_module={d} context_template_expr={d}",
+                    .{
+                        module_env.getIdent(method_name),
+                        module_idx,
+                        constraint.source_expr_idx,
+                        @intFromEnum(context_proc_inst),
+                        context_template_module,
+                        context_template_expr_raw,
+                    },
                 );
             }
             unreachable;
@@ -2328,14 +2427,14 @@ pub const Pass = struct {
         expr_idx: CIR.Expr.Idx,
         template_id: ProcTemplateId,
     ) Allocator.Error!void {
-        const fn_monotype = try self.resolveExprMonotypeIfExact(result, module_idx, expr_idx);
+        const fn_monotype = try self.resolveExprMonotypeIfExactResolved(result, module_idx, expr_idx);
         const template = result.getProcTemplate(template_id);
         if (fn_monotype.isNone()) return;
 
         const proc_inst_id = if (self.active_proc_inst_context.isNone())
-            try self.ensureProcInst(result, template_id, fn_monotype, module_idx)
+            try self.ensureProcInst(result, template_id, fn_monotype.idx, fn_monotype.module_idx)
         else
-            try self.ensureProcInst(result, template_id, fn_monotype, module_idx);
+            try self.ensureProcInst(result, template_id, fn_monotype.idx, fn_monotype.module_idx);
         try result.lookup_expr_proc_insts.put(
             self.allocator,
             Result.contextExprKey(self.active_proc_inst_context, module_idx, expr_idx),
@@ -2413,7 +2512,8 @@ pub const Pass = struct {
         const source_module_idx = self.moduleIndexForEnv(source_env) orelse return null;
         if (origin_module.eql(source_env.qualified_module_ident)) return source_module_idx;
 
-        const origin_name = identTextIfOwnedBy(source_env, origin_module) orelse return null;
+        if (!moduleOwnsIdent(source_env, origin_module)) return null;
+        const origin_name = getOwnedIdentText(source_env, origin_module);
         for (self.all_module_envs, 0..) |candidate_env, idx| {
             const candidate_name = candidate_env.getIdent(candidate_env.qualified_module_ident);
             if (std.mem.eql(u8, origin_name, candidate_name)) return @intCast(idx);
@@ -2421,19 +2521,23 @@ pub const Pass = struct {
         return null;
     }
 
-    fn identTextIfOwnedBy(env: *const ModuleEnv, ident: Ident.Idx) ?[]const u8 {
+    fn moduleOwnsIdent(env: *const ModuleEnv, ident: Ident.Idx) bool {
         const ident_store = env.getIdentStoreConst();
         const bytes = ident_store.interner.bytes.items.items;
         const start: usize = @intCast(ident.idx);
-        if (start >= bytes.len) return null;
+        if (start >= bytes.len) return false;
 
         const tail = bytes[start..];
-        const end_rel = std.mem.indexOfScalar(u8, tail, 0) orelse return null;
+        const end_rel = std.mem.indexOfScalar(u8, tail, 0) orelse return false;
         const text = tail[0..end_rel];
 
-        const roundtrip = ident_store.findByString(text) orelse return null;
-        if (!roundtrip.eql(ident)) return null;
-        return text;
+        const roundtrip = ident_store.findByString(text) orelse return false;
+        return roundtrip.eql(ident);
+    }
+
+    fn getOwnedIdentText(env: *const ModuleEnv, ident: Ident.Idx) []const u8 {
+        if (builtin.mode == .Debug) std.debug.assert(moduleOwnsIdent(env, ident));
+        return env.getIdent(ident);
     }
 
     fn dispatchTargetMethodText(
@@ -2441,11 +2545,11 @@ pub const Pass = struct {
         source_env: *const ModuleEnv,
         target: ResolvedDispatchTarget,
     ) ?[]const u8 {
-        if (identTextIfOwnedBy(source_env, target.method_ident)) |text| return text;
+        if (moduleOwnsIdent(source_env, target.method_ident)) return getOwnedIdentText(source_env, target.method_ident);
 
         if (target.module_idx) |target_module_idx| {
             const target_env = self.all_module_envs[target_module_idx];
-            if (identTextIfOwnedBy(target_env, target.method_ident)) |text| return text;
+            if (moduleOwnsIdent(target_env, target.method_ident)) return getOwnedIdentText(target_env, target.method_ident);
         }
 
         return null;
@@ -2667,8 +2771,36 @@ pub const Pass = struct {
         module_idx: u32,
         store_types: *const types.Store,
         var_: types.Var,
-        bindings: *std.AutoHashMap(types.Var, Monotype.Idx),
+        bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
     ) Allocator.Error!Monotype.Idx {
+        var exact_specializations = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+        defer exact_specializations.deinit();
+
+        var bindings_it = bindings.iterator();
+        while (bindings_it.next()) |entry| {
+            if (entry.key_ptr.module_idx != module_idx) continue;
+
+            if (exact_specializations.get(entry.key_ptr.type_var)) |existing| {
+                if (entry.value_ptr.module_idx != module_idx or
+                    !try self.monotypesStructurallyEqual(result, existing, entry.value_ptr.idx))
+                {
+                    if (std.debug.runtime_safety) {
+                        std.debug.panic(
+                            "Monomorphize: conflicting exact binding for type var root {d} in module {d}",
+                            .{ @intFromEnum(entry.key_ptr.type_var), module_idx },
+                        );
+                    }
+                    unreachable;
+                }
+                continue;
+            }
+
+            try exact_specializations.put(entry.key_ptr.type_var, entry.value_ptr.idx);
+        }
+
+        try self.seedTypeScopeBindingsInStore(result, module_idx, store_types, &exact_specializations);
+        try self.bindNamedTypeScopeMatchInStore(result, module_idx, store_types, store_types.resolveVar(var_), &exact_specializations);
+
         var nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
         defer nominal_cycle_breakers.deinit();
 
@@ -2678,6 +2810,7 @@ pub const Pass = struct {
         const module_env = self.all_module_envs[module_idx];
         scratches.ident_store = module_env.getIdentStoreConst();
         scratches.module_env = module_env;
+        scratches.module_idx = module_idx;
         scratches.all_module_envs = self.all_module_envs;
         const named_specializations_top = try self.pushBindingNamedSpecializations(
             result,
@@ -2693,7 +2826,7 @@ pub const Pass = struct {
             store_types,
             var_,
             module_env.idents,
-            bindings,
+            &exact_specializations,
             &nominal_cycle_breakers,
             &scratches,
         );
@@ -2704,26 +2837,31 @@ pub const Pass = struct {
         result: *Result,
         module_idx: u32,
         store_types: *const types.Store,
-        bindings: *const std.AutoHashMap(types.Var, Monotype.Idx),
+        bindings: *const std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
         scratches: *Monotype.Store.Scratches,
     ) Allocator.Error!u32 {
+        _ = module_idx;
         const top = scratches.named_specializations.top();
-        const module_env = self.all_module_envs[module_idx];
+        _ = store_types;
 
-        var named_bindings: std.AutoHashMapUnmanaged(Ident.Idx, Monotype.Idx) = .empty;
+        var named_bindings: std.StringHashMapUnmanaged(Monotype.Idx) = .empty;
         defer named_bindings.deinit(self.allocator);
 
         var it = bindings.iterator();
         while (it.next()) |entry| {
-            const name = resolvedBindingName(store_types, entry.key_ptr.*) orelse continue;
-            const monotype = entry.value_ptr.*;
+            const name_text = resolvedBindingName(
+                self,
+                entry.key_ptr.module_idx,
+                entry.key_ptr.type_var,
+            ) orelse continue;
+            const monotype = entry.value_ptr.idx;
 
-            if (named_bindings.get(name)) |existing| {
+            if (named_bindings.get(name_text)) |existing| {
                 if (!try self.monotypesStructurallyEqual(result, existing, monotype)) {
                     if (std.debug.runtime_safety) {
                         std.debug.panic(
                             "Monomorphize: conflicting named proc binding for type var '{s}'",
-                            .{module_env.getIdent(name)},
+                            .{name_text},
                         );
                     }
                     unreachable;
@@ -2731,13 +2869,13 @@ pub const Pass = struct {
                 continue;
             }
 
-            try named_bindings.put(self.allocator, name, monotype);
+            try named_bindings.put(self.allocator, name_text, monotype);
         }
 
         var named_it = named_bindings.iterator();
         while (named_it.next()) |entry| {
             try scratches.named_specializations.append(.{
-                .name_text = module_env.getIdent(entry.key_ptr.*),
+                .name_text = entry.key_ptr.*,
                 .type_idx = entry.value_ptr.*,
             });
         }
@@ -2745,13 +2883,255 @@ pub const Pass = struct {
         return top;
     }
 
-    fn resolvedBindingName(store_types: *const types.Store, var_: types.Var) ?Ident.Idx {
+    fn resolvedBindingName(self: *const Pass, module_idx: u32, var_: types.Var) ?[]const u8 {
+        const store_types = &self.all_module_envs[module_idx].types;
         const resolved = store_types.resolveVar(var_);
         return switch (resolved.desc.content) {
-            .rigid => |rigid| rigid.name,
-            .flex => |flex| flex.name,
+            .rigid => |rigid| self.all_module_envs[module_idx].getIdent(rigid.name),
+            .flex => |flex| if (flex.name) |name| self.all_module_envs[module_idx].getIdent(name) else null,
             else => null,
         };
+    }
+
+    fn remapIdentBetweenModules(
+        self: *const Pass,
+        ident: Ident.Idx,
+        from_module_idx: u32,
+        to_module_idx: u32,
+    ) Ident.Idx {
+        if (from_module_idx == to_module_idx) return ident;
+
+        const from_env = self.all_module_envs[from_module_idx];
+        const to_env = self.all_module_envs[to_module_idx];
+
+        const ident_text = if (moduleOwnsIdent(from_env, ident))
+            getOwnedIdentText(from_env, ident)
+        else if (moduleOwnsIdent(to_env, ident))
+            return ident
+        else {
+            if (std.debug.runtime_safety) {
+                std.debug.panic(
+                    "remapIdentBetweenModules: ident {d} is owned by neither from_module={d} nor to_module={d}",
+                    .{ ident.idx, from_module_idx, to_module_idx },
+                );
+            }
+            unreachable;
+        };
+
+        if (to_env.common.findIdent(ident_text)) |mapped| return mapped;
+
+        if (std.mem.eql(u8, ident_text, from_env.module_name)) {
+            if (to_env.common.findIdent(to_env.module_name)) |target_self| return target_self;
+            if (to_env.common.getIdentStore().lookup(Ident.for_text(to_env.module_name))) |target_self| return target_self;
+        }
+
+        if (to_env.common.getIdentStore().lookup(Ident.for_text(ident_text))) |mapped| return mapped;
+        return ident;
+    }
+
+    fn remapMonotypeBetweenModules(
+        self: *Pass,
+        result: *Result,
+        monotype: Monotype.Idx,
+        from_module_idx: u32,
+        to_module_idx: u32,
+    ) Allocator.Error!Monotype.Idx {
+        if (monotype.isNone() or from_module_idx == to_module_idx) return monotype;
+
+        var remapped = std.AutoHashMap(Monotype.Idx, Monotype.Idx).init(self.allocator);
+        defer remapped.deinit();
+
+        var scratches = try Monotype.Store.Scratches.init(self.allocator);
+        defer scratches.deinit();
+        scratches.ident_store = self.all_module_envs[to_module_idx].getIdentStoreConst();
+        scratches.module_env = self.all_module_envs[to_module_idx];
+        scratches.module_idx = to_module_idx;
+        scratches.all_module_envs = self.all_module_envs;
+
+        return self.remapMonotypeBetweenModulesRec(
+            result,
+            monotype,
+            from_module_idx,
+            to_module_idx,
+            &remapped,
+            &scratches,
+        );
+    }
+
+    fn remapMonotypeBetweenModulesRec(
+        self: *Pass,
+        result: *Result,
+        monotype: Monotype.Idx,
+        from_module_idx: u32,
+        to_module_idx: u32,
+        remapped: *std.AutoHashMap(Monotype.Idx, Monotype.Idx),
+        scratches: *Monotype.Store.Scratches,
+    ) Allocator.Error!Monotype.Idx {
+        if (monotype.isNone() or from_module_idx == to_module_idx) return monotype;
+        if (remapped.get(monotype)) |existing| return existing;
+
+        const mono = result.monotype_store.getMonotype(monotype);
+        switch (mono) {
+            .unit => return result.monotype_store.unit_idx,
+            .prim => |prim| return result.monotype_store.primIdx(prim),
+            .recursive_placeholder => {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("remapMonotypeBetweenModules: unexpected recursive_placeholder", .{});
+                }
+                unreachable;
+            },
+            .list, .box, .tuple, .func, .record, .tag_union => {},
+        }
+
+        const placeholder = try result.monotype_store.addMonotype(self.allocator, .recursive_placeholder);
+        try remapped.put(monotype, placeholder);
+
+        const mapped_mono: Monotype.Monotype = switch (mono) {
+            .list => |list_mono| .{ .list = .{
+                .elem = try self.remapMonotypeBetweenModulesRec(
+                    result,
+                    list_mono.elem,
+                    from_module_idx,
+                    to_module_idx,
+                    remapped,
+                    scratches,
+                ),
+            } },
+            .box => |box_mono| .{ .box = .{
+                .inner = try self.remapMonotypeBetweenModulesRec(
+                    result,
+                    box_mono.inner,
+                    from_module_idx,
+                    to_module_idx,
+                    remapped,
+                    scratches,
+                ),
+            } },
+            .tuple => |tuple_mono| blk: {
+                const idx_top = scratches.idxs.top();
+                defer scratches.idxs.clearFrom(idx_top);
+
+                for (result.monotype_store.getIdxSpan(tuple_mono.elems)) |elem_mono| {
+                    try scratches.idxs.append(try self.remapMonotypeBetweenModulesRec(
+                        result,
+                        elem_mono,
+                        from_module_idx,
+                        to_module_idx,
+                        remapped,
+                        scratches,
+                    ));
+                }
+
+                const mapped_elems = try result.monotype_store.addIdxSpan(
+                    self.allocator,
+                    scratches.idxs.sliceFromStart(idx_top),
+                );
+                break :blk .{ .tuple = .{ .elems = mapped_elems } };
+            },
+            .func => |func_mono| blk: {
+                const idx_top = scratches.idxs.top();
+                defer scratches.idxs.clearFrom(idx_top);
+
+                for (result.monotype_store.getIdxSpan(func_mono.args)) |arg_mono| {
+                    try scratches.idxs.append(try self.remapMonotypeBetweenModulesRec(
+                        result,
+                        arg_mono,
+                        from_module_idx,
+                        to_module_idx,
+                        remapped,
+                        scratches,
+                    ));
+                }
+                const mapped_args = try result.monotype_store.addIdxSpan(
+                    self.allocator,
+                    scratches.idxs.sliceFromStart(idx_top),
+                );
+
+                const mapped_ret = try self.remapMonotypeBetweenModulesRec(
+                    result,
+                    func_mono.ret,
+                    from_module_idx,
+                    to_module_idx,
+                    remapped,
+                    scratches,
+                );
+
+                break :blk .{ .func = .{
+                    .args = mapped_args,
+                    .ret = mapped_ret,
+                    .effectful = func_mono.effectful,
+                } };
+            },
+            .record => |record_mono| blk: {
+                const fields_top = scratches.fields.top();
+                defer scratches.fields.clearFrom(fields_top);
+
+                for (result.monotype_store.getFields(record_mono.fields)) |field| {
+                    try scratches.fields.append(.{
+                        .name = .{
+                            .module_idx = field.name.module_idx,
+                            .ident = self.remapIdentBetweenModules(field.name.ident, from_module_idx, to_module_idx),
+                        },
+                        .type_idx = try self.remapMonotypeBetweenModulesRec(
+                            result,
+                            field.type_idx,
+                            from_module_idx,
+                            to_module_idx,
+                            remapped,
+                            scratches,
+                        ),
+                    });
+                }
+
+                const mapped_fields = try result.monotype_store.addFields(
+                    self.allocator,
+                    scratches.fields.sliceFromStart(fields_top),
+                );
+                break :blk .{ .record = .{ .fields = mapped_fields } };
+            },
+            .tag_union => |tag_union_mono| blk: {
+                const tags_top = scratches.tags.top();
+                defer scratches.tags.clearFrom(tags_top);
+
+                for (result.monotype_store.getTags(tag_union_mono.tags)) |tag| {
+                    const payload_top = scratches.idxs.top();
+                    defer scratches.idxs.clearFrom(payload_top);
+
+                    for (result.monotype_store.getIdxSpan(tag.payloads)) |payload_mono| {
+                        try scratches.idxs.append(try self.remapMonotypeBetweenModulesRec(
+                            result,
+                            payload_mono,
+                            from_module_idx,
+                            to_module_idx,
+                            remapped,
+                            scratches,
+                        ));
+                    }
+
+                    const mapped_payloads = try result.monotype_store.addIdxSpan(
+                        self.allocator,
+                        scratches.idxs.sliceFromStart(payload_top),
+                    );
+                    try scratches.tags.append(.{
+                        .name = .{
+                            .module_idx = tag.name.module_idx,
+                            .ident = self.remapIdentBetweenModules(tag.name.ident, from_module_idx, to_module_idx),
+                        },
+                        .payloads = mapped_payloads,
+                    });
+                }
+
+                const mapped_tags = try result.monotype_store.addTags(
+                    self.allocator,
+                    scratches.tags.sliceFromStart(tags_top),
+                );
+                break :blk .{ .tag_union = .{ .tags = mapped_tags } };
+            },
+            .unit, .prim, .recursive_placeholder => unreachable,
+        };
+
+        result.monotype_store.monotypes.items[@intFromEnum(placeholder)] = mapped_mono;
+        return placeholder;
     }
 
     fn resolveFuncTypeInStore(types_store: *const types.Store, type_var: types.Var) ?struct { func: types.Func, effectful: bool } {
@@ -2780,6 +3160,393 @@ pub const Pass = struct {
             .nominal_type => |nominal| nominal,
             else => null,
         };
+    }
+
+    fn bindTypeVarMonotypesInStore(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        store_types: *const types.Store,
+        common_idents: ModuleEnv.CommonIdents,
+        bindings: *std.AutoHashMap(types.Var, Monotype.Idx),
+        type_var: types.Var,
+        monotype: Monotype.Idx,
+    ) Allocator.Error!void {
+        if (monotype.isNone()) return;
+
+        const resolved = store_types.resolveVar(type_var);
+        if (bindings.get(resolved.var_)) |existing| {
+            if (!(try self.monotypesStructurallyEqual(result, existing, monotype))) {
+                if (std.debug.runtime_safety) {
+                    std.debug.panic(
+                        "Monomorphize: conflicting monotype binding for type var root {d}",
+                        .{@intFromEnum(resolved.var_)},
+                    );
+                }
+                unreachable;
+            }
+            return;
+        }
+
+        switch (resolved.desc.content) {
+            .flex, .rigid => try bindings.put(resolved.var_, monotype),
+            .alias => |alias| try self.bindTypeVarMonotypesInStore(
+                result,
+                module_idx,
+                store_types,
+                common_idents,
+                bindings,
+                store_types.getAliasBackingVar(alias),
+                monotype,
+            ),
+            .structure => |flat_type| {
+                try bindings.put(resolved.var_, monotype);
+                try self.bindFlatTypeMonotypesInStore(
+                    result,
+                    module_idx,
+                    store_types,
+                    common_idents,
+                    bindings,
+                    flat_type,
+                    monotype,
+                );
+            },
+            .err => {},
+        }
+    }
+
+    fn seedTypeScopeBindingsInStore(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        store_types: *const types.Store,
+        bindings: *std.AutoHashMap(types.Var, Monotype.Idx),
+    ) Allocator.Error!void {
+        const type_scope = self.type_scope orelse return;
+        const type_scope_module_idx = self.type_scope_module_idx orelse return;
+        const caller_module_idx = self.type_scope_caller_module_idx orelse return;
+
+        if (module_idx != type_scope_module_idx) return;
+
+        const common_idents = ModuleEnv.CommonIdents.find(&self.all_module_envs[module_idx].common);
+        const caller_types = &self.all_module_envs[caller_module_idx].types;
+
+        for (type_scope.scopes.items) |*scope| {
+            var it = scope.iterator();
+            while (it.next()) |entry| {
+                const platform_var = entry.key_ptr.*;
+                const caller_var = entry.value_ptr.*;
+                const caller_mono = try self.monotypeFromTypeVarInStore(result, caller_module_idx, caller_types, caller_var);
+                if (caller_mono.isNone()) continue;
+                const normalized_mono = if (caller_module_idx == module_idx)
+                    caller_mono
+                else
+                    try self.remapMonotypeBetweenModules(result, caller_mono, caller_module_idx, module_idx);
+                try self.bindTypeVarMonotypesInStore(
+                    result,
+                    module_idx,
+                    store_types,
+                    common_idents,
+                    bindings,
+                    platform_var,
+                    normalized_mono,
+                );
+            }
+        }
+    }
+
+    fn bindNamedTypeScopeMatchInStore(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        store_types: *const types.Store,
+        resolved: types.store.ResolvedVarDesc,
+        bindings: *std.AutoHashMap(types.Var, Monotype.Idx),
+    ) Allocator.Error!void {
+        const type_scope = self.type_scope orelse return;
+        const type_scope_module_idx = self.type_scope_module_idx orelse return;
+        const caller_module_idx = self.type_scope_caller_module_idx orelse return;
+
+        if (module_idx != type_scope_module_idx) return;
+        if (bindings.contains(resolved.var_)) return;
+
+        const current_name = switch (resolved.desc.content) {
+            .rigid => |rigid| rigid.name,
+            .flex => |flex| flex.name orelse return,
+            else => return,
+        };
+
+        const common_idents = ModuleEnv.CommonIdents.find(&self.all_module_envs[module_idx].common);
+        const caller_types = &self.all_module_envs[caller_module_idx].types;
+
+        for (type_scope.scopes.items) |*scope| {
+            var it = scope.iterator();
+            while (it.next()) |entry| {
+                const platform_resolved = store_types.resolveVar(entry.key_ptr.*);
+                const platform_name = switch (platform_resolved.desc.content) {
+                    .rigid => |rigid| rigid.name,
+                    .flex => |flex| flex.name orelse continue,
+                    else => continue,
+                };
+                if (!platform_name.eql(current_name)) continue;
+
+                const caller_mono = try self.monotypeFromTypeVarInStore(result, caller_module_idx, caller_types, entry.value_ptr.*);
+                if (caller_mono.isNone()) continue;
+                const normalized_mono = if (caller_module_idx == module_idx)
+                    caller_mono
+                else
+                    try self.remapMonotypeBetweenModules(result, caller_mono, caller_module_idx, module_idx);
+
+                try self.bindTypeVarMonotypesInStore(
+                    result,
+                    module_idx,
+                    store_types,
+                    common_idents,
+                    bindings,
+                    resolved.var_,
+                    normalized_mono,
+                );
+                return;
+            }
+        }
+    }
+
+    fn monotypeFromTypeVarInStore(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        store_types: *const types.Store,
+        var_: types.Var,
+    ) Allocator.Error!Monotype.Idx {
+        var specializations = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+        defer specializations.deinit();
+
+        try self.seedTypeScopeBindingsInStore(result, module_idx, store_types, &specializations);
+        try self.bindNamedTypeScopeMatchInStore(result, module_idx, store_types, store_types.resolveVar(var_), &specializations);
+
+        var nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+        defer nominal_cycle_breakers.deinit();
+
+        var scratches = try Monotype.Store.Scratches.init(self.allocator);
+        defer scratches.deinit();
+
+        const module_env = self.all_module_envs[module_idx];
+        scratches.ident_store = module_env.getIdentStoreConst();
+        scratches.module_env = module_env;
+        scratches.module_idx = module_idx;
+        scratches.all_module_envs = self.all_module_envs;
+
+        return result.monotype_store.fromTypeVar(
+            self.allocator,
+            store_types,
+            var_,
+            module_env.idents,
+            &specializations,
+            &nominal_cycle_breakers,
+            &scratches,
+        );
+    }
+
+    fn bindFlatTypeMonotypesInStore(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        store_types: *const types.Store,
+        common_idents: ModuleEnv.CommonIdents,
+        bindings: *std.AutoHashMap(types.Var, Monotype.Idx),
+        flat_type: types.FlatType,
+        monotype: Monotype.Idx,
+    ) Allocator.Error!void {
+        if (monotype.isNone()) return;
+
+        const mono = result.monotype_store.getMonotype(monotype);
+
+        switch (flat_type) {
+            .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                const mfunc = switch (mono) {
+                    .func => |mfunc| mfunc,
+                    else => unreachable,
+                };
+
+                const type_args = store_types.sliceVars(func.args);
+                const mono_args = result.monotype_store.getIdxSpan(mfunc.args);
+                if (type_args.len != mono_args.len) unreachable;
+                for (type_args, 0..) |arg_var, i| {
+                    try self.bindTypeVarMonotypesInStore(result, module_idx, store_types, common_idents, bindings, arg_var, mono_args[i]);
+                }
+                try self.bindTypeVarMonotypesInStore(result, module_idx, store_types, common_idents, bindings, func.ret, mfunc.ret);
+            },
+            .nominal_type => |nominal| {
+                const ident = nominal.ident.ident_idx;
+                const origin = nominal.origin_module;
+
+                if (origin.eql(common_idents.builtin_module) and ident.eql(common_idents.list)) {
+                    const mlist = switch (mono) {
+                        .list => |mlist| mlist,
+                        else => unreachable,
+                    };
+                    const type_args = store_types.sliceNominalArgs(nominal);
+                    if (type_args.len != 1) unreachable;
+                    try self.bindTypeVarMonotypesInStore(result, module_idx, store_types, common_idents, bindings, type_args[0], mlist.elem);
+                    return;
+                }
+
+                if (origin.eql(common_idents.builtin_module) and ident.eql(common_idents.box)) {
+                    const mbox = switch (mono) {
+                        .box => |mbox| mbox,
+                        else => unreachable,
+                    };
+                    const type_args = store_types.sliceNominalArgs(nominal);
+                    if (type_args.len != 1) unreachable;
+                    try self.bindTypeVarMonotypesInStore(result, module_idx, store_types, common_idents, bindings, type_args[0], mbox.inner);
+                    return;
+                }
+
+                if (origin.eql(common_idents.builtin_module) and builtinPrimForNominal(ident, common_idents) != null) {
+                    switch (mono) {
+                        .prim => {},
+                        else => unreachable,
+                    }
+                    return;
+                }
+
+                try self.bindTypeVarMonotypesInStore(
+                    result,
+                    module_idx,
+                    store_types,
+                    common_idents,
+                    bindings,
+                    store_types.getNominalBackingVar(nominal),
+                    monotype,
+                );
+            },
+            .record => |record| {
+                const mrec = switch (mono) {
+                    .record => |mrec| mrec,
+                    else => unreachable,
+                };
+                const mono_fields = result.monotype_store.getFields(mrec.fields);
+                var seen_field_indices: std.ArrayListUnmanaged(u32) = .empty;
+                defer seen_field_indices.deinit(self.allocator);
+
+                var current_row = record;
+                rows: while (true) {
+                    const fields_slice = store_types.getRecordFieldsSlice(current_row.fields);
+                    const field_names = fields_slice.items(.name);
+                    const field_vars = fields_slice.items(.var_);
+                    for (field_names, field_vars) |field_name, field_var| {
+                        const field_idx = self.recordFieldIndexByName(module_idx, field_name, module_idx, mono_fields);
+                        try appendSeenIndex(self.allocator, &seen_field_indices, field_idx);
+                        try self.bindTypeVarMonotypesInStore(
+                            result,
+                            module_idx,
+                            store_types,
+                            common_idents,
+                            bindings,
+                            field_var,
+                            mono_fields[field_idx].type_idx,
+                        );
+                    }
+
+                    var ext_var = current_row.ext;
+                    while (true) {
+                        const ext_resolved = store_types.resolveVar(ext_var);
+                        switch (ext_resolved.desc.content) {
+                            .alias => |alias| {
+                                ext_var = store_types.getAliasBackingVar(alias);
+                                continue;
+                            },
+                            .structure => |ext_flat| switch (ext_flat) {
+                                .record => |next_row| {
+                                    current_row = next_row;
+                                    continue :rows;
+                                },
+                                .record_unbound => |fields_range| {
+                                    const ext_fields = store_types.getRecordFieldsSlice(fields_range);
+                                    const ext_names = ext_fields.items(.name);
+                                    const ext_vars = ext_fields.items(.var_);
+                                    for (ext_names, ext_vars) |field_name, field_var| {
+                                        const field_idx = self.recordFieldIndexByName(module_idx, field_name, module_idx, mono_fields);
+                                        if (seenIndex(seen_field_indices.items, field_idx)) continue;
+                                        try self.bindTypeVarMonotypesInStore(
+                                            result,
+                                            module_idx,
+                                            store_types,
+                                            common_idents,
+                                            bindings,
+                                            field_var,
+                                            mono_fields[field_idx].type_idx,
+                                        );
+                                    }
+                                    return;
+                                },
+                                .empty_record => return,
+                                else => unreachable,
+                            },
+                            .flex, .rigid, .err => return,
+                        }
+                    }
+                }
+            },
+            .record_unbound => |fields_range| {
+                const mrec = switch (mono) {
+                    .record => |mrec| mrec,
+                    else => unreachable,
+                };
+                const mono_fields = result.monotype_store.getFields(mrec.fields);
+                const fields = store_types.getRecordFieldsSlice(fields_range);
+                for (fields.items(.name), fields.items(.var_)) |field_name, field_var| {
+                    const field_idx = self.recordFieldIndexByName(module_idx, field_name, module_idx, mono_fields);
+                    try self.bindTypeVarMonotypesInStore(
+                        result,
+                        module_idx,
+                        store_types,
+                        common_idents,
+                        bindings,
+                        field_var,
+                        mono_fields[field_idx].type_idx,
+                    );
+                }
+            },
+            .tuple => |tuple| {
+                const mtup = switch (mono) {
+                    .tuple => |mtup| mtup,
+                    else => unreachable,
+                };
+                const mono_elems = result.monotype_store.getIdxSpan(mtup.elems);
+                const elem_vars = store_types.sliceVars(tuple.elems);
+                if (mono_elems.len != elem_vars.len) unreachable;
+                for (elem_vars, mono_elems) |elem_var, elem_mono| {
+                    try self.bindTypeVarMonotypesInStore(result, module_idx, store_types, common_idents, bindings, elem_var, elem_mono);
+                }
+            },
+            .tag_union => |tag_union| {
+                const mtag = switch (mono) {
+                    .tag_union => |mtag| mtag,
+                    else => unreachable,
+                };
+                const mono_tags = result.monotype_store.getTags(mtag.tags);
+                const tags = store_types.getTagsSlice(tag_union.tags);
+                const tag_args = tags.items(.args);
+                if (tag_args.len != mono_tags.len) unreachable;
+                for (tag_args, mono_tags) |args_range, mono_tag| {
+                    const payload_vars = store_types.sliceVars(args_range);
+                    const mono_payloads = result.monotype_store.getIdxSpan(mono_tag.payloads);
+                    if (payload_vars.len != mono_payloads.len) unreachable;
+                    for (payload_vars, mono_payloads) |payload_var, payload_mono| {
+                        try self.bindTypeVarMonotypesInStore(result, module_idx, store_types, common_idents, bindings, payload_var, payload_mono);
+                    }
+                }
+            },
+            .empty_record => switch (mono) {
+                .record => {},
+                else => unreachable,
+            },
+            .empty_tag_union => switch (mono) {
+                .tag_union => {},
+                else => unreachable,
+            },
+        }
     }
 
     fn resolveStrInspektHelperProcInstsForTypeVar(
@@ -2828,7 +3595,7 @@ pub const Pass = struct {
                             if (!resolved_func.effectful) {
                                 const param_vars = method_info.target_env.types.sliceVars(resolved_func.func.args);
                                 if (param_vars.len == 1) {
-                                    var bindings = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+                                    var bindings = std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype).init(self.allocator);
                                     defer bindings.deinit();
                                     var ordered_entries = std.ArrayList(TypeSubstEntry).empty;
                                     defer ordered_entries.deinit(self.allocator);
@@ -2903,6 +3670,8 @@ pub const Pass = struct {
         module_idx: u32,
         monotype: Monotype.Idx,
     ) Allocator.Error!void {
+        if (monotype.isNone()) return;
+
         switch (result.monotype_store.getMonotype(monotype)) {
             .unit, .prim => {},
             .list => |list_mono| try self.resolveStrInspektHelperProcInstsForMonotype(result, module_idx, list_mono.elem),
@@ -3313,19 +4082,19 @@ pub const Pass = struct {
         // reachable callables and append to both arrays, which would invalidate pointers.
         const proc_inst = result.getProcInst(proc_inst_id).*;
         const template = result.getProcTemplate(proc_inst.template).*;
-        try self.scanModule(result, template.module_idx);
+        try self.primeModuleDefs(result, template.module_idx);
         try self.scanned_proc_insts.put(self.allocator, proc_inst_key, {});
         defer _ = self.scanned_proc_insts.remove(proc_inst_key);
 
         const module_env = self.all_module_envs[template.module_idx];
 
-        var bindings = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+        var bindings = std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype).init(self.allocator);
         defer bindings.deinit();
 
         if (!proc_inst.subst.isNone()) {
             const subst = result.getTypeSubst(proc_inst.subst);
             for (result.getTypeSubstEntries(subst.entries)) |entry| {
-                try bindings.put(entry.type_var, entry.monotype);
+                try bindings.put(entry.key, entry.monotype);
             }
         }
 
@@ -3356,14 +4125,14 @@ pub const Pass = struct {
             const context_monos_before = result.context_expr_monotypes.count();
 
             switch (module_env.store.getExpr(template.cir_expr)) {
-                .e_lambda => |lambda_expr| try self.scanExpr(result, template.module_idx, lambda_expr.body),
+                .e_lambda => |lambda_expr| try self.scanValueExpr(result, template.module_idx, lambda_expr.body),
                 .e_closure => |closure_expr| {
                     const lambda_expr = module_env.store.getExpr(closure_expr.lambda_idx);
                     if (lambda_expr == .e_lambda) {
-                        try self.scanExpr(result, template.module_idx, lambda_expr.e_lambda.body);
+                        try self.scanValueExpr(result, template.module_idx, lambda_expr.e_lambda.body);
                     }
                 },
-                .e_hosted_lambda => |hosted_expr| try self.scanExpr(result, template.module_idx, hosted_expr.body),
+                .e_hosted_lambda => |hosted_expr| try self.scanValueExpr(result, template.module_idx, hosted_expr.body),
                 else => unreachable,
             }
 
@@ -3385,7 +4154,7 @@ pub const Pass = struct {
         module_idx: u32,
         proc_expr_idx: CIR.Expr.Idx,
         proc_inst: ProcInst,
-        bindings: *std.AutoHashMap(types.Var, Monotype.Idx),
+        bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
     ) Allocator.Error!void {
         const module_env = self.all_module_envs[module_idx];
         const proc_expr = module_env.store.getExpr(proc_expr_idx);
@@ -3479,7 +4248,7 @@ pub const Pass = struct {
         fn_monotype: Monotype.Idx,
         fn_monotype_module_idx: u32,
     ) Allocator.Error!TypeSubstId {
-        var bindings = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+        var bindings = std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype).init(self.allocator);
         defer bindings.deinit();
 
         var ordered_entries = std.ArrayList(TypeSubstEntry).empty;
@@ -3531,8 +4300,9 @@ pub const Pass = struct {
         if (lhs.len != rhs.len) return false;
 
         for (lhs, rhs) |lhs_entry, rhs_entry| {
-            if (lhs_entry.type_var != rhs_entry.type_var) return false;
-            if (!try self.monotypesStructurallyEqual(result, lhs_entry.monotype, rhs_entry.monotype)) {
+            if (!std.meta.eql(lhs_entry.key, rhs_entry.key)) return false;
+            if (lhs_entry.monotype.module_idx != rhs_entry.monotype.module_idx) return false;
+            if (!try self.monotypesStructurallyEqual(result, lhs_entry.monotype.idx, rhs_entry.monotype.idx)) {
                 return false;
             }
         }
@@ -3540,17 +4310,30 @@ pub const Pass = struct {
         return true;
     }
 
+    fn labelTextAcrossModules(self: *Pass, module_idx: u32, label: anytype) []const u8 {
+        return switch (@TypeOf(label)) {
+            base.Ident.Idx => self.all_module_envs[module_idx].getIdent(label),
+            Monotype.Name => label.text(self.all_module_envs),
+            else => @compileError("unsupported label type"),
+        };
+    }
+
     fn identsStructurallyEqualAcrossModules(
         self: *Pass,
         lhs_module_idx: u32,
-        lhs: base.Ident.Idx,
+        lhs: anytype,
         rhs_module_idx: u32,
-        rhs: base.Ident.Idx,
+        rhs: anytype,
     ) bool {
-        if (lhs_module_idx == rhs_module_idx and lhs == rhs) return true;
+        if (@TypeOf(lhs) == base.Ident.Idx and @TypeOf(rhs) == base.Ident.Idx and lhs_module_idx == rhs_module_idx and lhs == rhs) {
+            return true;
+        }
+        if (@TypeOf(lhs) == Monotype.Name and @TypeOf(rhs) == Monotype.Name and lhs.eql(rhs)) {
+            return true;
+        }
 
-        const lhs_text = self.all_module_envs[lhs_module_idx].getIdent(lhs);
-        const rhs_text = self.all_module_envs[rhs_module_idx].getIdent(rhs);
+        const lhs_text = self.labelTextAcrossModules(lhs_module_idx, lhs);
+        const rhs_text = self.labelTextAcrossModules(rhs_module_idx, rhs);
         return std.mem.eql(u8, lhs_text, rhs_text);
     }
 
@@ -3669,7 +4452,7 @@ pub const Pass = struct {
         result: *Result,
         template_module_idx: u32,
         template_types: *const types.Store,
-        bindings: *std.AutoHashMap(types.Var, Monotype.Idx),
+        bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
         ordered_entries: *std.ArrayList(TypeSubstEntry),
         ext_var: types.Var,
         mono_fields: []const Monotype.Field,
@@ -3694,7 +4477,7 @@ pub const Pass = struct {
         result: *Result,
         template_module_idx: u32,
         template_types: *const types.Store,
-        bindings: *std.AutoHashMap(types.Var, Monotype.Idx),
+        bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
         ordered_entries: *std.ArrayList(TypeSubstEntry),
         ext_var: types.Var,
         mono_tags: []const Monotype.Tag,
@@ -3719,7 +4502,7 @@ pub const Pass = struct {
         result: *Result,
         template_module_idx: u32,
         template_types: *const types.Store,
-        bindings: *std.AutoHashMap(types.Var, Monotype.Idx),
+        bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
         ordered_entries: *std.ArrayList(TypeSubstEntry),
         tag_name: base.Ident.Idx,
         payload_vars: []const types.Var,
@@ -3774,21 +4557,24 @@ pub const Pass = struct {
         result: *Result,
         template_module_idx: u32,
         template_types: *const types.Store,
-        bindings: *std.AutoHashMap(types.Var, Monotype.Idx),
+        bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
         ordered_entries: *std.ArrayList(TypeSubstEntry),
         type_var: types.Var,
         monotype: Monotype.Idx,
         mono_module_idx: u32,
     ) Allocator.Error!void {
         if (monotype.isNone()) return;
+        const resolved_mono = resolvedMonotype(monotype, mono_module_idx);
 
-        const resolved = template_types.resolveVar(type_var);
-        if (bindings.get(resolved.var_)) |existing| {
-            if (!try self.monotypesStructurallyEqual(result, existing, monotype)) {
+        const resolved_key = boundTypeVarKey(template_module_idx, template_types, type_var);
+        if (bindings.get(resolved_key)) |existing| {
+            if (existing.module_idx != resolved_mono.module_idx or
+                !try self.monotypesStructurallyEqual(result, existing.idx, resolved_mono.idx))
+            {
                 if (std.debug.runtime_safety) {
                     std.debug.panic(
-                        "Monomorphize: conflicting monotype binding for type var root {d}",
-                        .{@intFromEnum(resolved.var_)},
+                        "Monomorphize: conflicting monotype binding for type var root {d} in module {d}",
+                        .{ @intFromEnum(resolved_key.type_var), resolved_key.module_idx },
                     );
                 }
                 unreachable;
@@ -3796,12 +4582,14 @@ pub const Pass = struct {
             return;
         }
 
+        const resolved = template_types.resolveVar(type_var);
+
         switch (resolved.desc.content) {
             .flex, .rigid => {
-                try bindings.put(resolved.var_, monotype);
+                try bindings.put(resolved_key, resolved_mono);
                 try ordered_entries.append(self.allocator, .{
-                    .type_var = resolved.var_,
-                    .monotype = monotype,
+                    .key = resolved_key,
+                    .monotype = resolved_mono,
                 });
             },
             .alias => |alias| try self.bindTypeVarMonotypes(
@@ -3815,10 +4603,10 @@ pub const Pass = struct {
                 mono_module_idx,
             ),
             .structure => |flat_type| {
-                try bindings.put(resolved.var_, monotype);
+                try bindings.put(resolved_key, resolved_mono);
                 try ordered_entries.append(self.allocator, .{
-                    .type_var = resolved.var_,
-                    .monotype = monotype,
+                    .key = resolved_key,
+                    .monotype = resolved_mono,
                 });
                 try self.bindFlatTypeMonotypes(
                     result,
@@ -3840,7 +4628,7 @@ pub const Pass = struct {
         result: *Result,
         template_module_idx: u32,
         template_types: *const types.Store,
-        bindings: *std.AutoHashMap(types.Var, Monotype.Idx),
+        bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
         ordered_entries: *std.ArrayList(TypeSubstEntry),
         flat_type: types.FlatType,
         monotype: Monotype.Idx,
@@ -4178,7 +4966,21 @@ pub const Pass = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) Allocator.Error!Monotype.Idx {
-        return self.resolveTypeVarMonotype(result, module_idx, ModuleEnv.varFrom(expr_idx));
+        return (try self.resolveExprMonotypeResolved(result, module_idx, expr_idx)).idx;
+    }
+
+    fn resolveExprMonotypeResolved(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) Allocator.Error!ResolvedMonotype {
+        if (!self.active_proc_inst_context.isNone()) {
+            if (result.getExprMonotype(self.active_proc_inst_context, module_idx, expr_idx)) |resolved| {
+                return resolved;
+            }
+        }
+        return self.resolveTypeVarMonotypeResolved(result, module_idx, ModuleEnv.varFrom(expr_idx));
     }
 
     fn resolveExprMonotypeIfExact(
@@ -4187,11 +4989,26 @@ pub const Pass = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) Allocator.Error!Monotype.Idx {
+        return (try self.resolveExprMonotypeIfExactResolved(result, module_idx, expr_idx)).idx;
+    }
+
+    fn resolveExprMonotypeIfExactResolved(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) Allocator.Error!ResolvedMonotype {
+        if (!self.active_proc_inst_context.isNone()) {
+            if (result.getExprMonotype(self.active_proc_inst_context, module_idx, expr_idx)) |resolved| {
+                return resolved;
+            }
+        }
+
         if (self.active_bindings != null) {
             const module_env = self.all_module_envs[module_idx];
             switch (module_env.store.getExpr(expr_idx)) {
                 .e_lookup_local => |lookup| {
-                    const pattern_mono = try self.resolveTypeVarMonotypeIfExact(
+                    const pattern_mono = try self.resolveTypeVarMonotypeIfExactResolved(
                         result,
                         module_idx,
                         ModuleEnv.varFrom(lookup.pattern_idx),
@@ -4202,7 +5019,21 @@ pub const Pass = struct {
             }
         }
 
-        return self.resolveTypeVarMonotypeIfExact(result, module_idx, ModuleEnv.varFrom(expr_idx));
+        return self.resolveTypeVarMonotypeIfExactResolved(result, module_idx, ModuleEnv.varFrom(expr_idx));
+    }
+
+    fn resolveExprMonotypeIfMonomorphizableResolved(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) Allocator.Error!ResolvedMonotype {
+        if (!self.active_proc_inst_context.isNone()) {
+            if (result.getExprMonotype(self.active_proc_inst_context, module_idx, expr_idx)) |resolved| {
+                return resolved;
+            }
+        }
+        return self.resolveTypeVarMonotypeIfMonomorphizableResolved(result, module_idx, ModuleEnv.varFrom(expr_idx));
     }
 
     fn resolveTypeVarMonotype(
@@ -4211,34 +5042,20 @@ pub const Pass = struct {
         module_idx: u32,
         var_: types.Var,
     ) Allocator.Error!Monotype.Idx {
+        return (try self.resolveTypeVarMonotypeResolved(result, module_idx, var_)).idx;
+    }
+
+    fn resolveTypeVarMonotypeResolved(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        var_: types.Var,
+    ) Allocator.Error!ResolvedMonotype {
         if (self.active_bindings != null) {
-            return self.resolveTypeVarMonotypeIfExact(result, module_idx, var_);
+            return self.resolveTypeVarMonotypeIfExactResolved(result, module_idx, var_);
         }
-
-        const module_env = self.all_module_envs[module_idx];
-
-        var specializations = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
-        defer specializations.deinit();
-
-        var nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
-        defer nominal_cycle_breakers.deinit();
-
-        var scratches = try Monotype.Store.Scratches.init(self.allocator);
-        defer scratches.deinit();
-
-        scratches.ident_store = module_env.getIdentStoreConst();
-        scratches.module_env = module_env;
-        scratches.all_module_envs = self.all_module_envs;
-
-        return result.monotype_store.fromTypeVar(
-            self.allocator,
-            &module_env.types,
-            var_,
-            module_env.idents,
-            &specializations,
-            &nominal_cycle_breakers,
-            &scratches,
-        );
+        const mono = try self.monotypeFromTypeVarInStore(result, module_idx, &self.all_module_envs[module_idx].types, var_);
+        return resolvedMonotype(mono, module_idx);
     }
 
     fn resolveTypeVarMonotypeIfExact(
@@ -4247,10 +5064,19 @@ pub const Pass = struct {
         module_idx: u32,
         var_: types.Var,
     ) Allocator.Error!Monotype.Idx {
+        return (try self.resolveTypeVarMonotypeIfExactResolved(result, module_idx, var_)).idx;
+    }
+
+    fn resolveTypeVarMonotypeIfExactResolved(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        var_: types.Var,
+    ) Allocator.Error!ResolvedMonotype {
         const bindings = self.active_bindings orelse {
             const store_types = &self.all_module_envs[module_idx].types;
-            if (store_types.needsInstantiation(var_)) return .none;
-            return self.resolveTypeVarMonotype(result, module_idx, var_);
+            if (store_types.needsInstantiation(var_)) return resolvedMonotype(.none, module_idx);
+            return self.resolveTypeVarMonotypeResolved(result, module_idx, var_);
         };
 
         var seen: std.AutoHashMapUnmanaged(types.Var, void) = .empty;
@@ -4264,16 +5090,17 @@ pub const Pass = struct {
             bindings,
             &seen,
         )) {
-            return .none;
+            return resolvedMonotype(.none, module_idx);
         }
 
-        return self.resolveTypeVarMonotypeWithBindings(
+        const mono = try self.resolveTypeVarMonotypeWithBindings(
             result,
             module_idx,
             &self.all_module_envs[module_idx].types,
             var_,
             bindings,
         );
+        return resolvedMonotype(mono, module_idx);
     }
 
     fn resolveTypeVarMonotypeIfMonomorphizable(
@@ -4282,8 +5109,17 @@ pub const Pass = struct {
         module_idx: u32,
         var_: types.Var,
     ) Allocator.Error!Monotype.Idx {
+        return (try self.resolveTypeVarMonotypeIfMonomorphizableResolved(result, module_idx, var_)).idx;
+    }
+
+    fn resolveTypeVarMonotypeIfMonomorphizableResolved(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        var_: types.Var,
+    ) Allocator.Error!ResolvedMonotype {
         if (self.active_bindings != null) {
-            return self.resolveTypeVarMonotypeIfExact(result, module_idx, var_);
+            return self.resolveTypeVarMonotypeIfExactResolved(result, module_idx, var_);
         }
 
         var seen: std.AutoHashMapUnmanaged(types.Var, void) = .empty;
@@ -4296,19 +5132,74 @@ pub const Pass = struct {
             var_,
             &seen,
         )) {
-            return .none;
+            return resolvedMonotype(.none, module_idx);
         }
 
-        return self.resolveTypeVarMonotype(result, module_idx, var_);
+        return self.resolveTypeVarMonotypeResolved(result, module_idx, var_);
+    }
+
+    fn boundTypeVarKey(
+        module_idx: u32,
+        store_types: *const types.Store,
+        var_: types.Var,
+    ) BoundTypeVarKey {
+        return .{
+            .module_idx = module_idx,
+            .type_var = store_types.resolveVar(var_).var_,
+        };
+    }
+
+    fn resolvedMonotype(idx: Monotype.Idx, module_idx: u32) ResolvedMonotype {
+        return .{ .idx = idx, .module_idx = module_idx };
     }
 
     fn lookupBindingMonotype(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
         store_types: *const types.Store,
-        bindings: *const std.AutoHashMap(types.Var, Monotype.Idx),
+        bindings: *const std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
         var_: types.Var,
-    ) Allocator.Error!?Monotype.Idx {
+    ) Allocator.Error!?ResolvedMonotype {
+        if (bindings.get(boundTypeVarKey(module_idx, store_types, var_))) |binding| return binding;
+
+        const type_scope = self.type_scope orelse return null;
+        const type_scope_module_idx = self.type_scope_module_idx orelse return null;
+        const caller_module_idx = self.type_scope_caller_module_idx orelse return null;
+
+        if (module_idx != type_scope_module_idx) return null;
+
         const resolved = store_types.resolveVar(var_);
-        return bindings.get(resolved.var_);
+        const current_name = switch (resolved.desc.content) {
+            .rigid => |rigid| rigid.name,
+            .flex => |flex| flex.name orelse null,
+            else => null,
+        } orelse return null;
+
+        const caller_types = &self.all_module_envs[caller_module_idx].types;
+
+        for (type_scope.scopes.items) |*scope| {
+            var it = scope.iterator();
+            while (it.next()) |entry| {
+                const platform_resolved = store_types.resolveVar(entry.key_ptr.*);
+                const platform_name = switch (platform_resolved.desc.content) {
+                    .rigid => |rigid| rigid.name,
+                    .flex => |flex| flex.name orelse continue,
+                    else => continue,
+                };
+                if (!platform_name.eql(current_name)) continue;
+
+                const caller_mono = try self.monotypeFromTypeVarInStore(result, caller_module_idx, caller_types, entry.value_ptr.*);
+                if (caller_mono.isNone()) continue;
+                const normalized_mono = if (caller_module_idx == module_idx)
+                    caller_mono
+                else
+                    try self.remapMonotypeBetweenModules(result, caller_mono, caller_module_idx, module_idx);
+                return resolvedMonotype(normalized_mono, module_idx);
+            }
+        }
+
+        return null;
     }
 
     fn typeVarFullyBoundWithBindings(
@@ -4317,10 +5208,10 @@ pub const Pass = struct {
         module_idx: u32,
         store_types: *const types.Store,
         var_: types.Var,
-        bindings: *const std.AutoHashMap(types.Var, Monotype.Idx),
+        bindings: *const std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
         seen: *std.AutoHashMapUnmanaged(types.Var, void),
     ) Allocator.Error!bool {
-        if (try lookupBindingMonotype(store_types, bindings, var_)) |_| return true;
+        if (try lookupBindingMonotype(self, result, module_idx, store_types, bindings, var_)) |_| return true;
 
         const resolved = store_types.resolveVar(var_);
         if (seen.contains(resolved.var_)) return true;
@@ -4356,6 +5247,12 @@ pub const Pass = struct {
         var_: types.Var,
         seen: *std.AutoHashMapUnmanaged(types.Var, void),
     ) Allocator.Error!bool {
+        {
+            var empty_bindings = std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype).init(self.allocator);
+            defer empty_bindings.deinit();
+            if (try lookupBindingMonotype(self, result, module_idx, store_types, &empty_bindings, var_)) |_| return true;
+        }
+
         const resolved = store_types.resolveVar(var_);
         if (seen.contains(resolved.var_)) return true;
         try seen.put(self.allocator, resolved.var_, {});
@@ -4388,7 +5285,7 @@ pub const Pass = struct {
         module_idx: u32,
         store_types: *const types.Store,
         flat_type: types.FlatType,
-        bindings: *const std.AutoHashMap(types.Var, Monotype.Idx),
+        bindings: *const std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
         seen: *std.AutoHashMapUnmanaged(types.Var, void),
     ) Allocator.Error!bool {
         return switch (flat_type) {
@@ -4709,7 +5606,7 @@ pub const Pass = struct {
                 const rhs_fields = result.monotype_store.getFields(rhs_mono.record.fields);
                 if (lhs_fields.len != rhs_fields.len) break :blk false;
                 for (lhs_fields, rhs_fields) |lhs_field, rhs_field| {
-                    if (lhs_field.name != rhs_field.name) break :blk false;
+                    if (!lhs_field.name.textEqual(self.all_module_envs, rhs_field.name)) break :blk false;
                     if (!try self.monotypesStructurallyEqualRec(result, lhs_field.type_idx, rhs_field.type_idx, seen)) {
                         break :blk false;
                     }
@@ -4723,7 +5620,7 @@ pub const Pass = struct {
                 for (lhs_tags, rhs_tags) |lhs_tag, rhs_tag| {
                     const lhs_payloads = result.monotype_store.getIdxSpan(lhs_tag.payloads);
                     const rhs_payloads = result.monotype_store.getIdxSpan(rhs_tag.payloads);
-                    if (lhs_tag.name != rhs_tag.name) break :blk false;
+                    if (!lhs_tag.name.textEqual(self.all_module_envs, rhs_tag.name)) break :blk false;
                     if (lhs_payloads.len != rhs_payloads.len) break :blk false;
                     for (lhs_payloads, rhs_payloads) |lhs_payload, rhs_payload| {
                         if (!try self.monotypesStructurallyEqualRec(result, lhs_payload, rhs_payload, seen)) {
@@ -4993,6 +5890,71 @@ pub fn runExpr(
     return pass.runExpr(expr_idx);
 }
 
+pub fn runExprWithTypeScope(
+    allocator: Allocator,
+    all_module_envs: []const *ModuleEnv,
+    types_store: *const types.Store,
+    current_module_idx: u32,
+    app_module_idx: ?u32,
+    expr_idx: CIR.Expr.Idx,
+    type_scope_module_idx: u32,
+    type_scope: *const types.TypeScope,
+    type_scope_caller_module_idx: u32,
+) Allocator.Error!Result {
+    var pass = Pass.init(
+        allocator,
+        all_module_envs,
+        types_store,
+        current_module_idx,
+        app_module_idx,
+    );
+    pass.setTypeScope(type_scope_module_idx, type_scope, type_scope_caller_module_idx);
+    defer pass.deinit();
+    return pass.runExpr(expr_idx);
+}
+
+pub fn runRoots(
+    allocator: Allocator,
+    all_module_envs: []const *ModuleEnv,
+    types_store: *const types.Store,
+    current_module_idx: u32,
+    app_module_idx: ?u32,
+    exprs: []const CIR.Expr.Idx,
+) Allocator.Error!Result {
+    var pass = Pass.init(
+        allocator,
+        all_module_envs,
+        types_store,
+        current_module_idx,
+        app_module_idx,
+    );
+    defer pass.deinit();
+    return pass.runRoots(exprs);
+}
+
+pub fn runRootsWithTypeScope(
+    allocator: Allocator,
+    all_module_envs: []const *ModuleEnv,
+    types_store: *const types.Store,
+    current_module_idx: u32,
+    app_module_idx: ?u32,
+    exprs: []const CIR.Expr.Idx,
+    type_scope_module_idx: u32,
+    type_scope: *const types.TypeScope,
+    type_scope_caller_module_idx: u32,
+) Allocator.Error!Result {
+    var pass = Pass.init(
+        allocator,
+        all_module_envs,
+        types_store,
+        current_module_idx,
+        app_module_idx,
+    );
+    pass.setTypeScope(type_scope_module_idx, type_scope, type_scope_caller_module_idx);
+    defer pass.deinit();
+    return pass.runRoots(exprs);
+}
+
 /// Monomorphize all reachable callables in the current module.
 pub fn runModule(
     allocator: Allocator,
@@ -5008,6 +5970,28 @@ pub fn runModule(
         current_module_idx,
         app_module_idx,
     );
+    defer pass.deinit();
+    return pass.runModule();
+}
+
+pub fn runModuleWithTypeScope(
+    allocator: Allocator,
+    all_module_envs: []const *ModuleEnv,
+    types_store: *const types.Store,
+    current_module_idx: u32,
+    app_module_idx: ?u32,
+    type_scope_module_idx: u32,
+    type_scope: *const types.TypeScope,
+    type_scope_caller_module_idx: u32,
+) Allocator.Error!Result {
+    var pass = Pass.init(
+        allocator,
+        all_module_envs,
+        types_store,
+        current_module_idx,
+        app_module_idx,
+    );
+    pass.setTypeScope(type_scope_module_idx, type_scope, type_scope_caller_module_idx);
     defer pass.deinit();
     return pass.runModule();
 }

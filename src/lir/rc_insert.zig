@@ -630,16 +630,29 @@ pub const RcInsertPass = struct {
         return self.layoutNeedsRc(self.exprResultLayout(expr_id));
     }
 
-    fn shouldMaterializeBorrowedUse(self: *const RcInsertPass, expr_id: LirExprId) bool {
+    fn hasReusableBorrowOwner(self: *const RcInsertPass, expr_id: LirExprId) bool {
         if (expr_id.isNone()) return false;
 
         const layout_idx = self.exprResultLayout(expr_id);
         if (!self.layoutNeedsRc(layout_idx)) return false;
 
         return switch (self.store.getExpr(expr_id)) {
-            .lookup => |lookup| !lookup.symbol.isNone() and self.store.getSymbolDef(lookup.symbol) != null,
+            .lookup => |lookup| !lookup.symbol.isNone() and self.store.getSymbolDef(lookup.symbol) == null,
+            .nominal => |nominal| self.hasReusableBorrowOwner(nominal.backing_expr),
+            .struct_access => |access| self.hasReusableBorrowOwner(access.struct_expr),
+            .tag_payload_access => |access| self.hasReusableBorrowOwner(access.value),
+            .dbg => |dbg_expr| self.hasReusableBorrowOwner(dbg_expr.expr),
             else => false,
         };
+    }
+
+    fn shouldMaterializeBorrowedUse(self: *const RcInsertPass, expr_id: LirExprId) bool {
+        if (expr_id.isNone()) return false;
+
+        const layout_idx = self.exprResultLayout(expr_id);
+        if (!self.layoutNeedsRc(layout_idx)) return false;
+
+        return !self.hasReusableBorrowOwner(expr_id);
     }
 
     fn materializeBorrowedUse(
@@ -6477,6 +6490,55 @@ test "RC borrow-only low-level materializes refcounted top-level lookup" {
     try std.testing.expectEqual(@as(usize, 1), final_args.len);
     try std.testing.expect(final_args[0] != lookup_data);
     try std.testing.expect(env.lir_store.getExpr(final_args[0]) == .lookup);
+}
+
+test "RC borrow-only low-level materializes refcounted proc_call result" {
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_layout: LayoutIdx = .i64;
+    const list_layout = try env.layout_store.insertLayout(layout_mod.Layout.list(i64_layout));
+    const sym_proc = makeSymbol(200);
+
+    const proc_id = try makeProc(&env.lir_store, sym_proc, list_layout);
+    const call_expr = try env.lir_store.addExpr(.{ .proc_call = .{
+        .proc = proc_id,
+        .args = LIR.LirExprSpan.empty(),
+        .ret_layout = list_layout,
+        .called_via = .apply,
+    } }, Region.zero());
+    const len_expr = try env.lir_store.addExpr(.{ .low_level = .{
+        .op = .list_len,
+        .args = try env.lir_store.addExprSpan(&.{call_expr}),
+        .ret_layout = i64_layout,
+    } }, Region.zero());
+
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(len_expr);
+    const root = env.lir_store.getExpr(result);
+    try std.testing.expect(root == .block);
+
+    const stmts = env.lir_store.getStmts(root.block.stmts);
+    try std.testing.expectEqual(@as(usize, 1), stmts.len);
+    try std.testing.expect(stmts[0] == .decl);
+    try std.testing.expectEqual(call_expr, stmts[0].decl.expr);
+
+    const low_level_id = findFirstLowLevelExpr(&env.lir_store, root.block.final_expr) orelse return error.TestUnexpectedResult;
+    const final_expr = env.lir_store.getExpr(low_level_id);
+    try std.testing.expect(final_expr == .low_level);
+    const final_args = env.lir_store.getExprSpan(final_expr.low_level.args);
+    try std.testing.expectEqual(@as(usize, 1), final_args.len);
+    try std.testing.expect(final_args[0] != call_expr);
+    try std.testing.expect(env.lir_store.getExpr(final_args[0]) == .lookup);
+
+    const rc = countRcOps(&env.lir_store, result);
+    try std.testing.expectEqual(@as(u32, 0), rc.increfs);
+    try std.testing.expectEqual(@as(u32, 1), rc.decrefs);
 }
 
 test "RC synthetic symbols stay unique across passes on one store" {

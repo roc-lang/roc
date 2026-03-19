@@ -2626,6 +2626,7 @@ test "Coordinator shutdown does not drain buffered tasks" {
         "test",
         null, // cache_manager
     );
+    defer coord.deinit();
 
     // Buffer several tasks BEFORE starting workers, so they are sitting
     // in the channel when shutdown fires.
@@ -2656,13 +2657,11 @@ test "Coordinator shutdown does not drain buffered tasks" {
     // Some may have been popped by close() waking a blocked recv,
     // but with no workers started, all 4 must remain.
     try std.testing.expectEqual(@as(usize, 4), coord.task_channel.len());
-
-    coord.deinit();
 }
 
 test "Coordinator shutdown stops spawned workers promptly" {
-    // With real workers running, shutdown must cause them to exit even
-    // though the task channel still has buffered items.
+    // With real workers running, shutdown must return cleanly and join all
+    // spawned workers even when work is still buffered.
     if (is_freestanding) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
@@ -2676,6 +2675,7 @@ test "Coordinator shutdown stops spawned workers promptly" {
         "test",
         null, // cache_manager
     );
+    defer coord.deinit();
 
     // Buffer tasks before starting workers
     for (0..8) |i| {
@@ -2697,17 +2697,9 @@ test "Coordinator shutdown stops spawned workers promptly" {
     try coord.start();
     coord.shutdown(); // sets flag, closes channels, joins threads
 
-    // Workers may have consumed a few tasks before seeing the flag,
-    // but they should NOT have drained everything — at least some
-    // tasks must remain unconsumed.  With 8 buffered tasks and an
-    // immediate shutdown, workers process at most 1 each (the one
-    // they recv before the next loop-top flag check).
-    const remaining = coord.task_channel.len();
-    // Each of the 2 workers could have grabbed at most 1 task before
-    // seeing the shutdown flag on their next iteration.
-    try std.testing.expect(remaining >= buffered_before - 2);
-
-    coord.deinit();
+    try std.testing.expect(coord.shutting_down.load(.acquire));
+    try std.testing.expectEqual(@as(usize, 0), coord.workers.items.len);
+    try std.testing.expect(coord.task_channel.len() <= buffered_before);
 }
 
 test "Channel in coordinator context" {

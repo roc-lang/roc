@@ -295,10 +295,10 @@ fn seedCompositeSymbolSourcesFromExpr(
                 for (mir_store.monotype_store.getTags(mono.tag_union.tags)) |tag| {
                     const payloads = mir_store.monotype_store.getIdxSpan(tag.payloads);
                     for (payloads, 0..) |_, payload_idx| {
-                        const payload_expr = store.getSymbolTagPayloadExpr(source_symbol, tag.name, @intCast(payload_idx)) orelse continue;
+                        const payload_expr = store.getSymbolTagPayloadExpr(source_symbol, tag.name.ident, @intCast(payload_idx)) orelse continue;
                         try store.symbol_tag_payload_exprs.put(
                             allocator,
-                            tagPayloadKey(symbol, tag.name, @intCast(payload_idx)),
+                            tagPayloadKey(symbol, tag.name.ident, @intCast(payload_idx)),
                             payload_expr,
                         );
                     }
