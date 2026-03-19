@@ -4703,12 +4703,20 @@ fn adaptLayoutByStructure(
             }
         },
         .block => |block| {
-            return self.adaptLayoutByStructure(
+            const adapted_final = try self.adaptLayoutByStructure(
                 block.final_expr,
                 self.lirExprResultLayout(block.final_expr),
                 target_layout,
                 region,
             );
+            if (adapted_final == block.final_expr and block.result_layout == target_layout) {
+                return value_expr;
+            }
+            return self.lir_store.addExpr(.{ .block = .{
+                .stmts = block.stmts,
+                .final_expr = adapted_final,
+                .result_layout = target_layout,
+            } }, region);
         },
         .nominal => |nominal| {
             return self.adaptLayoutByStructure(
@@ -4774,7 +4782,6 @@ fn unwrapClosurePayloadExpr(self: *Self, value_expr: LirExprId) UnwrappedClosure
             }
             break :blk .{ .expr = value_expr, .layout = self.lirExprResultLayout(value_expr) };
         },
-        .block => |block| self.unwrapClosurePayloadExpr(block.final_expr),
         .nominal => |nominal| self.unwrapClosurePayloadExpr(nominal.backing_expr),
         else => .{ .expr = value_expr, .layout = self.lirExprResultLayout(value_expr) },
     };

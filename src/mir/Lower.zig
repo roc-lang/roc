@@ -372,26 +372,6 @@ fn patternScopeForProcInst(proc_inst_id: Monomorphize.ProcInstId) u64 {
     return (@as(u64, 1) << 63) | (@as(u64, @intFromEnum(proc_inst_id)) + 1);
 }
 
-fn resolvePatternSymbolInScope(
-    self: *Self,
-    pattern_scope: u64,
-    pattern_idx: CIR.Pattern.Idx,
-) Allocator.Error!MIR.Symbol {
-    const saved_pattern_scope = self.current_pattern_scope;
-    self.current_pattern_scope = pattern_scope;
-    defer self.current_pattern_scope = saved_pattern_scope;
-    return self.patternToSymbol(pattern_idx);
-}
-
-fn definingPatternScopeForProcInst(
-    self: *const Self,
-    proc_inst_id: Monomorphize.ProcInstId,
-) u64 {
-    if (proc_inst_id.isNone()) return 0;
-    const proc_inst = self.monomorphization.getProcInst(proc_inst_id);
-    return patternScopeForProcInst(proc_inst.defining_context_proc_inst);
-}
-
 fn identTextForCompare(self: *const Self, ident: Ident.Idx) ?[]const u8 {
     if (moduleOwnsIdent(self.all_module_envs[self.current_module_idx], ident)) {
         return getOwnedIdentText(self.all_module_envs[self.current_module_idx], ident);
@@ -3930,7 +3910,6 @@ fn buildSpecializedClosureValue(
     capture_value_exprs_snapshot: ?*std.ArrayList(MIR.ExprId),
 ) Allocator.Error!BuiltClosureValue {
     const cir_capture_indices_all = module_env.store.sliceCaptures(closure.captures);
-    const capture_source_scope = self.definingPatternScopeForProcInst(closure_proc_inst_id);
     const self_binding_pattern = blk: {
         const proc_inst = self.monomorphization.getProcInst(closure_proc_inst_id);
         const template = self.monomorphization.getProcTemplate(proc_inst.template);
@@ -3961,7 +3940,7 @@ fn buildSpecializedClosureValue(
 
     for (cir_capture_indices) |cap_idx| {
         const cap = module_env.store.getCapture(cap_idx);
-        const outer_symbol = try self.resolvePatternSymbolInScope(capture_source_scope, cap.pattern_idx);
+        const outer_symbol = try self.patternToSymbol(cap.pattern_idx);
         const resolved_cap_monotype = self.monomorphization.getClosureCaptureMonotype(
             closure_proc_inst_id,
             self.current_module_idx,
@@ -4504,7 +4483,6 @@ fn lowerProcInst(self: *Self, proc_inst_id: Monomorphize.ProcInstId) Allocator.E
     self.type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
     self.nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
     self.current_proc_inst_context = proc_inst_id;
-    self.current_pattern_scope = patternScopeForProcInst(proc_inst_id);
 
     try self.seedTypeScopeBindingsInStore(
         self.current_module_idx,

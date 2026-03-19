@@ -5880,6 +5880,277 @@ test "LIR lifted closure with function-valued captures keeps both capture slots"
     try std.testing.expect(capture_fields.get(1).layout != .zst);
 }
 
+test "LIR captured closure forwarding has no dangling lookups" {
+    const resources = try parseAndCanonicalizeExpr(test_allocator,
+        \\{
+        \\    y = 5
+        \\    inner = |x| x + y
+        \\    outer = |x| inner(x)
+        \\    outer(10)
+        \\}
+    );
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(resources.builtin_module.env),
+        resources.module_env,
+    };
+
+    var monomorphization = try mir.Monomorphize.runExpr(
+        test_allocator,
+        all_module_envs[0..],
+        &resources.module_env.types,
+        1,
+        null,
+        resources.expr_idx,
+    );
+    defer monomorphization.deinit(test_allocator);
+
+    var lower = try mir.Lower.init(
+        test_allocator,
+        &mir_store,
+        &monomorphization,
+        all_module_envs[0..],
+        &resources.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    const mir_expr = try lower.lowerExpr(resources.expr_idx);
+
+    var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
+    defer lambda_set_store.deinit(test_allocator);
+
+    var layout_store = try layout.Store.init(
+        all_module_envs[0..],
+        resources.builtin_module.env.idents.builtin_str,
+        test_allocator,
+        base.target.TargetUsize.native,
+    );
+    defer layout_store.deinit();
+
+    var lir_store = LirExprStore.init(test_allocator);
+    defer lir_store.deinit();
+
+    var translator = lir.MirToLir.init(
+        test_allocator,
+        &mir_store,
+        &lir_store,
+        &layout_store,
+        &lambda_set_store,
+        resources.module_env.idents.true_tag,
+    );
+    defer translator.deinit();
+
+    const lir_expr = try translator.lower(mir_expr);
+
+    const FindDanglingLookup = struct {
+        const Found = struct {
+            expr_id: lir.LIR.LirExprId,
+            symbol: lir.LIR.Symbol,
+        };
+
+        fn appendPatternSymbols(
+            store: *const LirExprStore,
+            pattern_id: lir.LIR.LirPatternId,
+            out: *std.ArrayListUnmanaged(lir.LIR.Symbol),
+            allocator: std.mem.Allocator,
+        ) !void {
+            if (pattern_id.isNone()) return;
+            switch (store.getPattern(pattern_id)) {
+                .bind => |bind| try out.append(allocator, bind.symbol),
+                .as_pattern => |as_pat| {
+                    try out.append(allocator, as_pat.symbol);
+                    try appendPatternSymbols(store, as_pat.inner, out, allocator);
+                },
+                .tag => |tag_pat| for (store.getPatternSpan(tag_pat.args)) |arg_pat| {
+                    try appendPatternSymbols(store, arg_pat, out, allocator);
+                },
+                .struct_ => |struct_pat| for (store.getPatternSpan(struct_pat.fields)) |field_pat| {
+                    try appendPatternSymbols(store, field_pat, out, allocator);
+                },
+                .list => |list_pat| {
+                    for (store.getPatternSpan(list_pat.prefix)) |elem_pat| {
+                        try appendPatternSymbols(store, elem_pat, out, allocator);
+                    }
+                    try appendPatternSymbols(store, list_pat.rest, out, allocator);
+                    for (store.getPatternSpan(list_pat.suffix)) |elem_pat| {
+                        try appendPatternSymbols(store, elem_pat, out, allocator);
+                    }
+                },
+                .wildcard,
+                .int_literal,
+                .float_literal,
+                .str_literal,
+                => {},
+            }
+        }
+
+        fn hasBoundSymbol(bound: []const lir.LIR.Symbol, symbol: lir.LIR.Symbol) bool {
+            for (bound) |bound_symbol| {
+                if (bound_symbol == symbol) return true;
+            }
+            return false;
+        }
+
+        fn go(
+            store: *const LirExprStore,
+            expr_id: lir.LIR.LirExprId,
+            bound: *std.ArrayListUnmanaged(lir.LIR.Symbol),
+            visiting_defs: *std.AutoHashMapUnmanaged(u32, void),
+            allocator: std.mem.Allocator,
+        ) !?Found {
+            const expr = store.getExpr(expr_id);
+            switch (expr) {
+                .lookup => |lookup| {
+                    if (hasBoundSymbol(bound.items, lookup.symbol)) return null;
+                    if (store.getSymbolDef(lookup.symbol)) |def_expr| {
+                        const def_key = @intFromEnum(def_expr);
+                        if (visiting_defs.contains(def_key)) return null;
+                        try visiting_defs.put(allocator, def_key, {});
+                        defer _ = visiting_defs.remove(def_key);
+                        return go(store, def_expr, bound, visiting_defs, allocator);
+                    }
+                    return .{ .expr_id = expr_id, .symbol = lookup.symbol };
+                },
+                .block => |block| {
+                    const saved_len = bound.items.len;
+                    defer bound.shrinkRetainingCapacity(saved_len);
+
+                    for (store.getStmts(block.stmts)) |stmt| {
+                        switch (stmt) {
+                            .decl, .mutate => |binding| {
+                                if (try go(store, binding.expr, bound, visiting_defs, allocator)) |found| return found;
+                                try appendPatternSymbols(store, binding.pattern, bound, allocator);
+                            },
+                            .cell_init, .cell_store => |binding| {
+                                if (try go(store, binding.expr, bound, visiting_defs, allocator)) |found| return found;
+                            },
+                            .cell_drop => {},
+                        }
+                    }
+
+                    return go(store, block.final_expr, bound, visiting_defs, allocator);
+                },
+                .dbg => |dbg_expr| return go(store, dbg_expr.expr, bound, visiting_defs, allocator),
+                .expect => |expect_expr| {
+                    if (try go(store, expect_expr.cond, bound, visiting_defs, allocator)) |found| return found;
+                    return go(store, expect_expr.body, bound, visiting_defs, allocator);
+                },
+                .if_then_else => |ite| {
+                    for (store.getIfBranches(ite.branches)) |branch| {
+                        if (try go(store, branch.cond, bound, visiting_defs, allocator)) |found| return found;
+                        if (try go(store, branch.body, bound, visiting_defs, allocator)) |found| return found;
+                    }
+                    return go(store, ite.final_else, bound, visiting_defs, allocator);
+                },
+                .match_expr => |match_expr| {
+                    if (try go(store, match_expr.value, bound, visiting_defs, allocator)) |found| return found;
+                    for (store.getMatchBranches(match_expr.branches)) |branch| {
+                        const saved_len = bound.items.len;
+                        defer bound.shrinkRetainingCapacity(saved_len);
+                        try appendPatternSymbols(store, branch.pattern, bound, allocator);
+                        if (!branch.guard.isNone()) {
+                            if (try go(store, branch.guard, bound, visiting_defs, allocator)) |found| return found;
+                        }
+                        if (try go(store, branch.body, bound, visiting_defs, allocator)) |found| return found;
+                    }
+                    return null;
+                },
+                .proc_call => |call| {
+                    for (store.getExprSpan(call.args)) |arg| {
+                        if (try go(store, arg, bound, visiting_defs, allocator)) |found| return found;
+                    }
+                    return null;
+                },
+                .low_level => |ll| {
+                    for (store.getExprSpan(ll.args)) |arg| {
+                        if (try go(store, arg, bound, visiting_defs, allocator)) |found| return found;
+                    }
+                    return null;
+                },
+                .list => |list_expr| {
+                    for (store.getExprSpan(list_expr.elems)) |elem| {
+                        if (try go(store, elem, bound, visiting_defs, allocator)) |found| return found;
+                    }
+                    return null;
+                },
+                .struct_ => |struct_expr| {
+                    for (store.getExprSpan(struct_expr.fields)) |field| {
+                        if (try go(store, field, bound, visiting_defs, allocator)) |found| return found;
+                    }
+                    return null;
+                },
+                .tag => |tag_expr| {
+                    for (store.getExprSpan(tag_expr.args)) |arg| {
+                        if (try go(store, arg, bound, visiting_defs, allocator)) |found| return found;
+                    }
+                    return null;
+                },
+                .struct_access => |sa| return go(store, sa.struct_expr, bound, visiting_defs, allocator),
+                .tag_payload_access => |tpa| return go(store, tpa.value, bound, visiting_defs, allocator),
+                .nominal => |nominal| return go(store, nominal.backing_expr, bound, visiting_defs, allocator),
+                .hosted_call => |call| {
+                    for (store.getExprSpan(call.args)) |arg| {
+                        if (try go(store, arg, bound, visiting_defs, allocator)) |found| return found;
+                    }
+                    return null;
+                },
+                .while_loop => |loop| {
+                    if (try go(store, loop.cond, bound, visiting_defs, allocator)) |found| return found;
+                    return go(store, loop.body, bound, visiting_defs, allocator);
+                },
+                .for_loop => |loop| {
+                    if (try go(store, loop.list_expr, bound, visiting_defs, allocator)) |found| return found;
+                    return go(store, loop.body, bound, visiting_defs, allocator);
+                },
+                .incref => |expr_inner| return go(store, expr_inner.value, bound, visiting_defs, allocator),
+                .decref => |expr_inner| return go(store, expr_inner.value, bound, visiting_defs, allocator),
+                .free => |expr_inner| return go(store, expr_inner.value, bound, visiting_defs, allocator),
+                .early_return => |ret| return go(store, ret.expr, bound, visiting_defs, allocator),
+                .discriminant_switch => |ds| {
+                    if (try go(store, ds.value, bound, visiting_defs, allocator)) |found| return found;
+                    for (store.getExprSpan(ds.branches)) |branch_expr| {
+                        if (try go(store, branch_expr, bound, visiting_defs, allocator)) |found| return found;
+                    }
+                    return null;
+                },
+                .cell_load,
+                .empty_list,
+                .zero_arg_tag,
+                .i64_literal,
+                .i128_literal,
+                .f64_literal,
+                .f32_literal,
+                .dec_literal,
+                .str_literal,
+                .bool_literal,
+                .str_concat,
+                .int_to_str,
+                .float_to_str,
+                .dec_to_str,
+                .str_escape_and_quote,
+                .crash,
+                .runtime_error,
+                .break_expr,
+                => return null,
+            }
+        }
+    };
+
+    var bound: std.ArrayListUnmanaged(lir.LIR.Symbol) = .empty;
+    defer bound.deinit(test_allocator);
+    var visiting_defs: std.AutoHashMapUnmanaged(u32, void) = .empty;
+    defer visiting_defs.deinit(test_allocator);
+
+    const found = try FindDanglingLookup.go(&lir_store, lir_expr, &bound, &visiting_defs, test_allocator);
+    try std.testing.expect(found == null);
+}
+
 test "debug: nested List.any captured Str proc body rc shape" {
     const resources = try parseAndCanonicalizeExpr(test_allocator,
         \\{
