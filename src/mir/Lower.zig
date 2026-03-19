@@ -3966,6 +3966,7 @@ fn buildSpecializedClosureValue(
             self.current_module_idx,
         );
         try self.mono_scratches.idxs.append(cap_monotype);
+        const runtime_lookup_expr = try self.store.addExpr(self.allocator, .{ .lookup = outer_symbol }, cap_monotype, region);
 
         const proc_backed_capture_expr = if (self.monomorphization.getClosureCaptureProcInst(
             closure_proc_inst_id,
@@ -3976,10 +3977,11 @@ fn buildSpecializedClosureValue(
             try self.lowerProcInst(capture_proc_inst_id)
         else
             MIR.ExprId.none;
-        const runtime_capture_expr = if (!proc_backed_capture_expr.isNone())
+        const runtime_capture_expr = if (!proc_backed_capture_expr.isNone() and
+            self.isSkippedProcBackedBindingPattern(self.current_module_idx, cap.pattern_idx))
             proc_backed_capture_expr
         else
-            try self.store.addExpr(self.allocator, .{ .lookup = outer_symbol }, cap_monotype, region);
+            runtime_lookup_expr;
         try self.scratch_expr_ids.append(runtime_capture_expr);
 
         const semantic_capture_expr = if (!proc_backed_capture_expr.isNone())

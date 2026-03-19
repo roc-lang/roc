@@ -5880,13 +5880,16 @@ test "LIR lifted closure with function-valued captures keeps both capture slots"
     try std.testing.expect(capture_fields.get(1).layout != .zst);
 }
 
-test "LIR captured closure forwarding has no dangling lookups" {
+test "LIR proc-backed closures have no dangling lookups" {
     const resources = try parseAndCanonicalizeExpr(test_allocator,
         \\{
-        \\    y = 5
-        \\    inner = |x| x + y
-        \\    outer = |x| inner(x)
-        \\    outer(10)
+        \\    compose = |f, g| |x| f(g(x))
+        \\    a = 3
+        \\    b = 7
+        \\    add_a = |x| x + a
+        \\    add_b = |x| x + b
+        \\    add_both = compose(add_a, add_b)
+        \\    add_both(10)
         \\}
     );
     defer cleanupParseAndCanonical(test_allocator, resources);
@@ -6140,6 +6143,66 @@ test "LIR captured closure forwarding has no dangling lookups" {
                 => return null,
             }
         }
+
+        fn goCF(
+            store: *const LirExprStore,
+            stmt_id: lir.LIR.CFStmtId,
+            bound: *std.ArrayListUnmanaged(lir.LIR.Symbol),
+            visiting_defs: *std.AutoHashMapUnmanaged(u32, void),
+            allocator: std.mem.Allocator,
+        ) !?Found {
+            if (stmt_id.isNone()) return null;
+
+            switch (store.getCFStmt(stmt_id)) {
+                .let_stmt => |stmt| {
+                    if (try go(store, stmt.value, bound, visiting_defs, allocator)) |found| return found;
+                    const saved_len = bound.items.len;
+                    defer bound.shrinkRetainingCapacity(saved_len);
+                    try appendPatternSymbols(store, stmt.pattern, bound, allocator);
+                    return goCF(store, stmt.next, bound, visiting_defs, allocator);
+                },
+                .join => |stmt| {
+                    if (try goCF(store, stmt.remainder, bound, visiting_defs, allocator)) |found| return found;
+                    const saved_len = bound.items.len;
+                    defer bound.shrinkRetainingCapacity(saved_len);
+                    for (store.getPatternSpan(stmt.params)) |param| {
+                        try appendPatternSymbols(store, param, bound, allocator);
+                    }
+                    return goCF(store, stmt.body, bound, visiting_defs, allocator);
+                },
+                .jump => |stmt| {
+                    for (store.getExprSpan(stmt.args)) |arg| {
+                        if (try go(store, arg, bound, visiting_defs, allocator)) |found| return found;
+                    }
+                    return null;
+                },
+                .ret => |stmt| return go(store, stmt.value, bound, visiting_defs, allocator),
+                .expr_stmt => |stmt| {
+                    if (try go(store, stmt.value, bound, visiting_defs, allocator)) |found| return found;
+                    return goCF(store, stmt.next, bound, visiting_defs, allocator);
+                },
+                .switch_stmt => |stmt| {
+                    if (try go(store, stmt.cond, bound, visiting_defs, allocator)) |found| return found;
+                    for (store.getCFSwitchBranches(stmt.branches)) |branch| {
+                        if (try goCF(store, branch.body, bound, visiting_defs, allocator)) |found| return found;
+                    }
+                    return goCF(store, stmt.default_branch, bound, visiting_defs, allocator);
+                },
+                .match_stmt => |stmt| {
+                    if (try go(store, stmt.value, bound, visiting_defs, allocator)) |found| return found;
+                    for (store.getCFMatchBranches(stmt.branches)) |branch| {
+                        const saved_len = bound.items.len;
+                        defer bound.shrinkRetainingCapacity(saved_len);
+                        try appendPatternSymbols(store, branch.pattern, bound, allocator);
+                        if (!branch.guard.isNone()) {
+                            if (try go(store, branch.guard, bound, visiting_defs, allocator)) |found| return found;
+                        }
+                        if (try goCF(store, branch.body, bound, visiting_defs, allocator)) |found| return found;
+                    }
+                    return null;
+                },
+            }
+        }
     };
 
     var bound: std.ArrayListUnmanaged(lir.LIR.Symbol) = .empty;
@@ -6147,8 +6210,60 @@ test "LIR captured closure forwarding has no dangling lookups" {
     var visiting_defs: std.AutoHashMapUnmanaged(u32, void) = .empty;
     defer visiting_defs.deinit(test_allocator);
 
-    const found = try FindDanglingLookup.go(&lir_store, lir_expr, &bound, &visiting_defs, test_allocator);
-    try std.testing.expect(found == null);
+    const root_found = try FindDanglingLookup.go(&lir_store, lir_expr, &bound, &visiting_defs, test_allocator);
+    try std.testing.expect(root_found == null);
+
+    for (lir_store.getProcSpecs()) |proc_spec| {
+        bound.clearRetainingCapacity();
+        visiting_defs.clearRetainingCapacity();
+        for (lir_store.getPatternSpan(proc_spec.args)) |arg_pat| {
+            try FindDanglingLookup.appendPatternSymbols(&lir_store, arg_pat, &bound, test_allocator);
+        }
+        const proc_found = try FindDanglingLookup.goCF(&lir_store, proc_spec.body, &bound, &visiting_defs, test_allocator);
+        if (proc_found) |found| {
+            std.debug.print(
+                "dangling proc-body lookup proc={d} expr={d} symbol={d}\n",
+                .{ proc_spec.name.raw(), @intFromEnum(found.expr_id), found.symbol.raw() },
+            );
+            std.debug.print("  proc body tag={s}\n", .{@tagName(lir_store.getCFStmt(proc_spec.body))});
+            for (lir_store.getPatternSpan(proc_spec.args), 0..) |arg_pat, arg_idx| {
+                switch (lir_store.getPattern(arg_pat)) {
+                    .bind => |bind| std.debug.print(
+                        "  proc arg {d}: symbol={d} layout={d}\n",
+                        .{ arg_idx, bind.symbol.raw(), @intFromEnum(bind.layout_idx) },
+                    ),
+                    else => std.debug.print("  proc arg {d}: {s}\n", .{ arg_idx, @tagName(lir_store.getPattern(arg_pat)) }),
+                }
+            }
+            const expr_limit = @min(lir_store.exprs.items.len, 8);
+            for (0..expr_limit) |expr_index| {
+                const expr_id_debug: lir.LIR.LirExprId = @enumFromInt(expr_index);
+                const expr_debug = lir_store.getExpr(expr_id_debug);
+                switch (expr_debug) {
+                    .lookup => |lookup| std.debug.print(
+                        "  lir expr {d}: lookup symbol={d} layout={d}\n",
+                        .{ expr_index, lookup.symbol.raw(), @intFromEnum(lookup.layout_idx) },
+                    ),
+                    .struct_ => |struct_expr| std.debug.print(
+                        "  lir expr {d}: struct_ fields_start={d} len={d} layout={d}\n",
+                        .{ expr_index, struct_expr.fields.start, struct_expr.fields.len, @intFromEnum(struct_expr.struct_layout) },
+                    ),
+                    .block => |block_expr| std.debug.print(
+                        "  lir expr {d}: block stmts_start={d} len={d} final={d} result_layout={d}\n",
+                        .{
+                            expr_index,
+                            block_expr.stmts.start,
+                            block_expr.stmts.len,
+                            @intFromEnum(block_expr.final_expr),
+                            @intFromEnum(block_expr.result_layout),
+                        },
+                    ),
+                    else => std.debug.print("  lir expr {d}: {s}\n", .{ expr_index, @tagName(expr_debug) }),
+                }
+            }
+        }
+        try std.testing.expect(proc_found == null);
+    }
 }
 
 test "debug: nested List.any captured Str proc body rc shape" {

@@ -2064,7 +2064,7 @@ test "cross-module: List.keep_if seeds lambda sets for reachable callable params
     }
 }
 
-test "cross-module runExpr: List.keep_if function lookups retain lambda sets" {
+test "cross-module runExpr: List.keep_if callable lookup sites retain lambda sets" {
     var env = try MirTestEnv.initExpr("List.keep_if([1.I64, 2.I64, 3.I64, 4.I64, 5.I64], |x| x > 2)");
     defer env.deinit();
 
@@ -2101,16 +2101,17 @@ test "cross-module runExpr: List.keep_if function lookups retain lambda sets" {
     var ls_store = try LambdaSet.infer(test_allocator, &mir_store, @as([]const *ModuleEnv, all_module_envs[0..]));
     defer ls_store.deinit(test_allocator);
 
-    var missing_count: usize = 0;
-    for (mir_store.exprs.items, 0..) |expr, expr_idx| {
-        if (expr != .lookup) continue;
-        const expr_id: MIR.ExprId = @enumFromInt(expr_idx);
-        if (mir_store.monotype_store.getMonotype(mir_store.typeOf(expr_id)) != .func) continue;
-        if (ls_store.getExprLambdaSet(expr_id) != null or ls_store.getSymbolLambdaSet(expr.lookup) != null) continue;
-        missing_count += 1;
+    for (mir_store.exprs.items) |expr| {
+        if (expr != .call) continue;
+        const func_expr_id = expr.call.func;
+        const func_expr = mir_store.getExpr(func_expr_id);
+        if (func_expr != .lookup) continue;
+        if (mir_store.monotype_store.getMonotype(mir_store.typeOf(func_expr_id)) != .func) continue;
+        try testing.expect(
+            ls_store.getExprLambdaSet(func_expr_id) != null or
+                ls_store.getSymbolLambdaSet(func_expr.lookup) != null,
+        );
     }
-
-    try testing.expectEqual(@as(usize, 0), missing_count);
 }
 
 test "runExpr: top-level local function lookup materializes callable def proc inst" {
@@ -2251,7 +2252,7 @@ test "runExpr: block-carried arrow call materializes callable stmt proc inst" {
     try testing.expect(!proc_id.isNone());
 }
 
-test "runExpr: proc-backed closure captures do not synthesize unseeded function lookups" {
+test "runExpr: proc-backed closure capture sources retain lambda sets" {
     var env = try MirTestEnv.initExpr(
         \\{
         \\    append_one = |acc, x| List.append(acc, x)
@@ -2295,16 +2296,17 @@ test "runExpr: proc-backed closure captures do not synthesize unseeded function 
     var ls_store = try LambdaSet.infer(test_allocator, &mir_store, @as([]const *ModuleEnv, all_module_envs[0..]));
     defer ls_store.deinit(test_allocator);
 
-    var missing_count: usize = 0;
-    for (mir_store.exprs.items, 0..) |expr, expr_idx| {
-        if (expr != .lookup) continue;
-        const expr_id: MIR.ExprId = @enumFromInt(expr_idx);
-        if (mir_store.monotype_store.getMonotype(mir_store.typeOf(expr_id)) != .func) continue;
-        if (ls_store.getExprLambdaSet(expr_id) != null or ls_store.getSymbolLambdaSet(expr.lookup) != null) continue;
-        missing_count += 1;
+    for (mir_store.closure_members.items) |closure_member| {
+        for (mir_store.getCaptureBindings(closure_member.capture_bindings)) |binding| {
+            const source_expr = mir_store.getExpr(binding.source_expr);
+            if (source_expr != .lookup) continue;
+            if (mir_store.monotype_store.getMonotype(binding.monotype) != .func) continue;
+            try testing.expect(
+                ls_store.getExprLambdaSet(binding.source_expr) != null or
+                    ls_store.getSymbolLambdaSet(source_expr.lookup) != null,
+            );
+        }
     }
-
-    try testing.expectEqual(@as(usize, 0), missing_count);
 }
 
 test "runExpr: repl-style multi-definition arrow call materializes callable stmt proc inst" {

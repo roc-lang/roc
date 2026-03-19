@@ -2688,21 +2688,6 @@ fn lowerExprToKnownRuntimeLayout(
     target_layout: layout.Idx,
     region: Region,
 ) Allocator.Error!LirExprId {
-    const mir_expr = self.mir_store.getExpr(mir_expr_id);
-    if (mir_expr == .lookup) {
-        const sym = mir_expr.lookup;
-        if (self.mir_store.isSymbolReassignable(sym)) {
-            return self.lir_store.addExpr(.{ .cell_load = .{
-                .cell = sym,
-                .layout_idx = target_layout,
-            } }, region);
-        }
-        return self.lir_store.addExpr(.{ .lookup = .{
-            .symbol = sym,
-            .layout_idx = target_layout,
-        } }, region);
-    }
-
     const lowered = try self.lowerExpr(mir_expr_id);
     const source_layout = self.lirExprResultLayout(lowered);
     return self.adaptValueLayout(
