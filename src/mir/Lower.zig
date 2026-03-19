@@ -310,67 +310,24 @@ fn identTextIfOwnedBy(env: *const ModuleEnv, ident: Ident.Idx) ?[]const u8 {
     return text;
 }
 
-fn identTextForCompare(self: *const Self, ident: Ident.Idx) ?[]const u8 {
-    if (identTextIfOwnedBy(self.all_module_envs[self.current_module_idx], ident)) |text| return text;
-    return null;
-}
-
-fn identsStructurallyEqual(self: *const Self, lhs: Ident.Idx, rhs: Ident.Idx) bool {
-    if (lhs.eql(rhs)) return true;
-    const lhs_text = self.identTextForCompare(lhs) orelse return false;
-    const rhs_text = self.identTextForCompare(rhs) orelse return false;
-    return std.mem.eql(u8, lhs_text, rhs_text);
-}
-
 fn identLastSegment(text: []const u8) []const u8 {
     const dot = std.mem.lastIndexOfScalar(u8, text, '.') orelse return text;
     return text[dot + 1 ..];
 }
 
-fn identsTagNameEquivalent(self: *const Self, lhs: Ident.Idx, rhs: Ident.Idx) bool {
-    if (self.identsStructurallyEqual(lhs, rhs)) return true;
-
-    const lhs_text = self.identTextForCompare(lhs) orelse return false;
-    const rhs_text = self.identTextForCompare(rhs) orelse return false;
-    return std.mem.eql(u8, identLastSegment(lhs_text), identLastSegment(rhs_text));
-}
-
-fn remapIdentBetweenModules(
-    self: *Self,
-    ident: Ident.Idx,
-    from_module_idx: u32,
-    to_module_idx: u32,
-) Allocator.Error!Ident.Idx {
-    if (from_module_idx == to_module_idx) return ident;
-
-    const from_env = self.all_module_envs[from_module_idx];
-    const to_env = self.all_module_envs[to_module_idx];
-
-    if (identTextIfOwnedBy(from_env, ident)) |ident_text| {
-        if (to_env.common.findIdent(ident_text)) |mapped| return mapped;
-
-        // If the source monotype uses the source module's self type name,
-        // map that self-name directly to the target module's self-name.
-        if (std.mem.eql(u8, ident_text, from_env.module_name)) {
-            if (to_env.common.findIdent(to_env.module_name)) |target_self| return target_self;
-            if (to_env.common.getIdentStore().lookup(Ident.for_text(to_env.module_name))) |target_self| return target_self;
-            return ident;
-        }
-
-        // Structural names (record fields, tag names) can be introduced by the
-        // caller module and legitimately be absent in the target module's ident store.
-        // Keep using the source ident in that case and rely on structural text comparisons.
-        if (to_env.common.getIdentStore().lookup(Ident.for_text(ident_text))) |mapped| return mapped;
-        return ident;
-    }
-
-    if (std.debug.runtime_safety) {
-        std.debug.panic(
-            "remapIdentBetweenModules: source ident {d} not owned by source module {d}",
-            .{ ident.idx, from_module_idx },
-        );
-    }
-    unreachable;
+/// Convert a StructuralNameId (from the monotype store) to an Ident.Idx
+/// in the current module's ident store. Used when constructing MIR patterns
+/// that require Ident.Idx names from monotype tag/field names.
+fn identFromStructuralName(self: *const Self, name_id: Monotype.StructuralNameId) Ident.Idx {
+    const text = self.store.monotype_store.getNameText(name_id);
+    const module_env = self.all_module_envs[self.current_module_idx];
+    if (module_env.common.findIdent(text)) |ident| return ident;
+    const ident_store = module_env.getIdentStoreConst();
+    if (ident_store.findByString(text)) |ident| return ident;
+    if (ident_store.lookup(Ident.for_text(text))) |ident| return ident;
+    // Fallback: return a synthetic ident index; the text comparison path
+    // in the backend will handle it.
+    return Ident.Idx.NONE;
 }
 
 fn remapMonotypeBetweenModules(
@@ -381,7 +338,7 @@ fn remapMonotypeBetweenModules(
 ) Allocator.Error!Monotype.Idx {
     if (monotype.isNone() or from_module_idx == to_module_idx) return monotype;
 
-    var remapped = std.AutoHashMap(Monotype.Idx, Monotype.Idx).init(self.allocator);
+    var remapped = std.AutoHashMap(u32, Monotype.Idx).init(self.allocator);
     defer remapped.deinit();
 
     return self.remapMonotypeBetweenModulesRec(
@@ -397,218 +354,83 @@ fn remapMonotypeBetweenModulesRec(
     monotype: Monotype.Idx,
     from_module_idx: u32,
     to_module_idx: u32,
-    remapped: *std.AutoHashMap(Monotype.Idx, Monotype.Idx),
+    remapped: *std.AutoHashMap(u32, Monotype.Idx),
 ) Allocator.Error!Monotype.Idx {
     if (monotype.isNone() or from_module_idx == to_module_idx) return monotype;
-    if (remapped.get(monotype)) |existing| return existing;
+    const mono_key: u32 = @bitCast(monotype);
+    if (remapped.get(mono_key)) |existing| return existing;
 
-    const mono = self.store.monotype_store.getMonotype(monotype);
-    switch (mono) {
-        .unit => return self.store.monotype_store.unit_idx,
-        .prim => |prim| return self.store.monotype_store.primIdx(prim),
-        .recursive_placeholder => {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("remapMonotypeBetweenModules: unexpected recursive_placeholder", .{});
-            }
-            unreachable;
-        },
-        .list, .box, .tuple, .func, .record, .tag_union => {},
+    const resolved = self.store.monotype_store.resolve(monotype);
+    switch (resolved.kind) {
+        .builtin => return resolved, // unit and prims are canonical
+        .rec => unreachable,
+        else => {},
     }
 
-    const placeholder = try self.store.monotype_store.addMonotype(self.allocator, .recursive_placeholder);
-    try remapped.put(monotype, placeholder);
+    const rec_id = try self.store.monotype_store.reserveRecursive();
+    try remapped.put(mono_key, rec_id);
 
-    const mapped_mono: Monotype.Monotype = switch (mono) {
-        .list => |list_mono| .{ .list = .{
-            .elem = try self.remapMonotypeBetweenModulesRec(
-                list_mono.elem,
-                from_module_idx,
-                to_module_idx,
-                remapped,
-            ),
-        } },
-        .box => |box_mono| .{ .box = .{
-            .inner = try self.remapMonotypeBetweenModulesRec(
-                box_mono.inner,
-                from_module_idx,
-                to_module_idx,
-                remapped,
-            ),
-        } },
-        .tuple => |tuple_mono| blk: {
+    const canonical: Monotype.Idx = switch (resolved.kind) {
+        .list => try self.store.monotype_store.internList(
+            try self.remapMonotypeBetweenModulesRec(self.store.monotype_store.listElem(resolved), from_module_idx, to_module_idx, remapped),
+        ),
+        .box => try self.store.monotype_store.internBox(
+            try self.remapMonotypeBetweenModulesRec(self.store.monotype_store.boxInner(resolved), from_module_idx, to_module_idx, remapped),
+        ),
+        .tuple => blk: {
             const idx_top = self.mono_scratches.idxs.top();
             defer self.mono_scratches.idxs.clearFrom(idx_top);
-
-            const elem_span = tuple_mono.elems;
-            var elem_i: u32 = 0;
-            while (elem_i < @as(u32, elem_span.len)) : (elem_i += 1) {
-                const elem_pos_u64 = @as(u64, elem_span.start) + elem_i;
-                if (builtin.mode == .Debug and elem_pos_u64 >= self.store.monotype_store.extra_idx.items.len) {
-                    std.debug.panic(
-                        "remapMonotypeBetweenModulesRec: tuple elem span out of bounds (start={d}, len={d}, i={d}, extra_len={d})",
-                        .{ elem_span.start, elem_span.len, elem_i, self.store.monotype_store.extra_idx.items.len },
-                    );
-                }
-                const elem_pos: usize = @intCast(elem_pos_u64);
-                const elem_mono: Monotype.Idx = @enumFromInt(self.store.monotype_store.extra_idx.items[elem_pos]);
-                try self.mono_scratches.idxs.append(try self.remapMonotypeBetweenModulesRec(
-                    elem_mono,
-                    from_module_idx,
-                    to_module_idx,
-                    remapped,
-                ));
+            for (self.store.monotype_store.tupleElems(resolved)) |elem| {
+                try self.mono_scratches.idxs.append(try self.remapMonotypeBetweenModulesRec(elem, from_module_idx, to_module_idx, remapped));
             }
-
-            const mapped_elems = try self.store.monotype_store.addIdxSpan(
-                self.allocator,
-                self.mono_scratches.idxs.sliceFromStart(idx_top),
-            );
-            break :blk .{ .tuple = .{ .elems = mapped_elems } };
+            break :blk try self.store.monotype_store.internTuple(self.mono_scratches.idxs.sliceFromStart(idx_top));
         },
-        .func => |func_mono| blk: {
+        .func => blk: {
             const idx_top = self.mono_scratches.idxs.top();
             defer self.mono_scratches.idxs.clearFrom(idx_top);
-
-            const arg_span = func_mono.args;
-            var arg_i: u32 = 0;
-            while (arg_i < @as(u32, arg_span.len)) : (arg_i += 1) {
-                const arg_pos_u64 = @as(u64, arg_span.start) + arg_i;
-                if (builtin.mode == .Debug and arg_pos_u64 >= self.store.monotype_store.extra_idx.items.len) {
-                    std.debug.panic(
-                        "remapMonotypeBetweenModulesRec: func arg span out of bounds (start={d}, len={d}, i={d}, extra_len={d})",
-                        .{ arg_span.start, arg_span.len, arg_i, self.store.monotype_store.extra_idx.items.len },
-                    );
-                }
-                const arg_pos: usize = @intCast(arg_pos_u64);
-                const arg_mono: Monotype.Idx = @enumFromInt(self.store.monotype_store.extra_idx.items[arg_pos]);
-                try self.mono_scratches.idxs.append(try self.remapMonotypeBetweenModulesRec(
-                    arg_mono,
-                    from_module_idx,
-                    to_module_idx,
-                    remapped,
-                ));
+            for (self.store.monotype_store.funcArgs(resolved)) |arg| {
+                try self.mono_scratches.idxs.append(try self.remapMonotypeBetweenModulesRec(arg, from_module_idx, to_module_idx, remapped));
             }
-            const mapped_args = try self.store.monotype_store.addIdxSpan(
-                self.allocator,
+            const mapped_ret = try self.remapMonotypeBetweenModulesRec(self.store.monotype_store.funcRet(resolved), from_module_idx, to_module_idx, remapped);
+            break :blk try self.store.monotype_store.internFunc(
                 self.mono_scratches.idxs.sliceFromStart(idx_top),
+                mapped_ret,
+                self.store.monotype_store.funcEffectful(resolved),
             );
-
-            const mapped_ret = try self.remapMonotypeBetweenModulesRec(
-                func_mono.ret,
-                from_module_idx,
-                to_module_idx,
-                remapped,
-            );
-
-            break :blk .{ .func = .{
-                .args = mapped_args,
-                .ret = mapped_ret,
-                .effectful = func_mono.effectful,
-            } };
         },
-        .record => |record_mono| blk: {
+        .record => blk: {
             const fields_top = self.mono_scratches.fields.top();
             defer self.mono_scratches.fields.clearFrom(fields_top);
-
-            const field_span = record_mono.fields;
-            var field_i: u32 = 0;
-            while (field_i < @as(u32, field_span.len)) : (field_i += 1) {
-                const field_pos_u64 = @as(u64, field_span.start) + field_i;
-                if (builtin.mode == .Debug and field_pos_u64 >= self.store.monotype_store.fields.items.len) {
-                    std.debug.panic(
-                        "remapMonotypeBetweenModulesRec: record field span out of bounds (start={d}, len={d}, i={d}, fields_len={d})",
-                        .{ field_span.start, field_span.len, field_i, self.store.monotype_store.fields.items.len },
-                    );
-                }
-                const field_pos: usize = @intCast(field_pos_u64);
-                const field = self.store.monotype_store.fields.items[field_pos];
+            for (self.store.monotype_store.recordFields(resolved)) |field| {
                 try self.mono_scratches.fields.append(.{
-                    .name = try self.remapIdentBetweenModules(field.name, from_module_idx, to_module_idx),
-                    .type_idx = try self.remapMonotypeBetweenModulesRec(
-                        field.type_idx,
-                        from_module_idx,
-                        to_module_idx,
-                        remapped,
-                    ),
+                    .name = field.name, // StructuralNameId is already canonical
+                    .ty = try self.remapMonotypeBetweenModulesRec(field.ty, from_module_idx, to_module_idx, remapped),
                 });
             }
-
-            const mapped_fields = try self.store.monotype_store.addFields(
-                self.allocator,
-                self.mono_scratches.fields.sliceFromStart(fields_top),
-            );
-            break :blk .{ .record = .{ .fields = mapped_fields } };
+            break :blk try self.store.monotype_store.internRecord(self.mono_scratches.fields.sliceFromStart(fields_top));
         },
-        .tag_union => |tag_union_mono| blk: {
+        .tag_union => blk: {
             const tags_top = self.mono_scratches.tags.top();
             defer self.mono_scratches.tags.clearFrom(tags_top);
-
-            const tag_span = tag_union_mono.tags;
-            var tag_i: u32 = 0;
-            while (tag_i < @as(u32, tag_span.len)) : (tag_i += 1) {
-                const tag_pos_u64 = @as(u64, tag_span.start) + tag_i;
-                if (builtin.mode == .Debug and tag_pos_u64 >= self.store.monotype_store.tags.items.len) {
-                    std.debug.panic(
-                        "remapMonotypeBetweenModulesRec: tag span out of bounds (start={d}, len={d}, i={d}, tags_len={d})",
-                        .{ tag_span.start, tag_span.len, tag_i, self.store.monotype_store.tags.items.len },
-                    );
-                }
-                const tag_pos: usize = @intCast(tag_pos_u64);
-                const tag = self.store.monotype_store.tags.items[tag_pos];
-
+            for (self.store.monotype_store.tagUnionTags(resolved)) |tag| {
                 const payload_top = self.mono_scratches.idxs.top();
                 defer self.mono_scratches.idxs.clearFrom(payload_top);
-
-                const payload_span = tag.payloads;
-                var payload_i: u32 = 0;
-                while (payload_i < @as(u32, payload_span.len)) : (payload_i += 1) {
-                    const payload_pos_u64 = @as(u64, payload_span.start) + payload_i;
-                    if (builtin.mode == .Debug and payload_pos_u64 >= self.store.monotype_store.extra_idx.items.len) {
-                        std.debug.panic(
-                            "remapMonotypeBetweenModulesRec: tag payload span out of bounds (start={d}, len={d}, i={d}, extra_len={d}, tag={d})",
-                            .{
-                                payload_span.start,
-                                payload_span.len,
-                                payload_i,
-                                self.store.monotype_store.extra_idx.items.len,
-                                tag.name.idx,
-                            },
-                        );
-                    }
-                    const payload_pos: usize = @intCast(payload_pos_u64);
-                    const payload_mono: Monotype.Idx = @enumFromInt(self.store.monotype_store.extra_idx.items[payload_pos]);
-                    try self.mono_scratches.idxs.append(try self.remapMonotypeBetweenModulesRec(
-                        payload_mono,
-                        from_module_idx,
-                        to_module_idx,
-                        remapped,
-                    ));
+                for (self.store.monotype_store.getIdxListItems(tag.payloads)) |payload| {
+                    try self.mono_scratches.idxs.append(try self.remapMonotypeBetweenModulesRec(payload, from_module_idx, to_module_idx, remapped));
                 }
-
-                const mapped_payloads = try self.store.monotype_store.addIdxSpan(
-                    self.allocator,
-                    self.mono_scratches.idxs.sliceFromStart(payload_top),
-                );
+                const mapped_payloads = try self.store.monotype_store.internIdxList(self.mono_scratches.idxs.sliceFromStart(payload_top));
                 try self.mono_scratches.tags.append(.{
-                    .name = try self.remapIdentBetweenModules(tag.name, from_module_idx, to_module_idx),
+                    .name = tag.name, // StructuralNameId is already canonical
                     .payloads = mapped_payloads,
                 });
             }
-
-            const mapped_tags = try self.store.monotype_store.addTags(
-                self.allocator,
-                self.mono_scratches.tags.sliceFromStart(tags_top),
-            );
-            break :blk .{ .tag_union = .{ .tags = mapped_tags } };
+            break :blk try self.store.monotype_store.internTagUnion(self.mono_scratches.tags.sliceFromStart(tags_top));
         },
-        .unit, .prim, .recursive_placeholder => unreachable,
+        .builtin, .rec => unreachable,
     };
 
-    // Intern the mapped monotype so structurally identical remapped types share indices.
-    const canonical = try self.store.monotype_store.addMonotype(self.allocator, mapped_mono);
-    // Also overwrite the placeholder slot for any recursive back-references that used it.
-    self.store.monotype_store.monotypes.items[@intFromEnum(placeholder)] = mapped_mono;
-    try remapped.put(monotype, canonical);
+    self.store.monotype_store.finalizeRecursive(rec_id, canonical);
+    try remapped.put(mono_key, canonical);
     return canonical;
 }
 
@@ -819,7 +641,7 @@ fn emitMirUnitExpr(self: *Self, region: Region) Allocator.Error!MIR.ExprId {
 }
 
 fn emitMirBoolLiteral(self: *Self, module_env: *const ModuleEnv, value: bool, region: Region) Allocator.Error!MIR.ExprId {
-    const bool_mono = try self.store.monotype_store.addBoolTagUnion(self.allocator, self.currentCommonIdents());
+    const bool_mono = try self.store.monotype_store.addBoolTagUnion();
     return try self.store.addExpr(
         self.allocator,
         .{ .tag = .{
@@ -1239,19 +1061,18 @@ fn bindFlatTypeMonotypesInStore(
 ) Allocator.Error!void {
     if (monotype.isNone()) return;
 
-    const mono = self.store.monotype_store.getMonotype(monotype);
+    const resolved = self.store.monotype_store.resolve(monotype);
     switch (flat_type) {
         .fn_pure, .fn_effectful, .fn_unbound => |func| {
-            const mfunc = switch (mono) {
-                .func => |mfunc| mfunc,
-                else => typeBindingInvariant(
-                    "bindFlatTypeMonotypesInStore(fn): expected function monotype, found '{s}'",
-                    .{@tagName(mono)},
-                ),
-            };
+            if (resolved.kind != .func) {
+                typeBindingInvariant(
+                    "bindFlatTypeMonotypesInStore(fn): expected function monotype, found kind={d}",
+                    .{@intFromEnum(resolved.kind)},
+                );
+            }
 
             const type_args = store_types.sliceVars(func.args);
-            const mono_args = self.store.monotype_store.getIdxSpan(mfunc.args);
+            const mono_args = self.store.monotype_store.funcArgs(resolved);
             if (type_args.len != mono_args.len) {
                 typeBindingInvariant(
                     "bindFlatTypeMonotypesInStore(fn): arity mismatch (type={d}, monotype={d})",
@@ -1261,20 +1082,19 @@ fn bindFlatTypeMonotypesInStore(
             for (type_args, 0..) |arg_var, i| {
                 try self.bindTypeVarMonotypesInStore(store_types, common_idents, bindings, arg_var, mono_args[i]);
             }
-            try self.bindTypeVarMonotypesInStore(store_types, common_idents, bindings, func.ret, mfunc.ret);
+            try self.bindTypeVarMonotypesInStore(store_types, common_idents, bindings, func.ret, self.store.monotype_store.funcRet(resolved));
         },
         .nominal_type => |nominal| {
             const ident = nominal.ident.ident_idx;
             const origin = nominal.origin_module;
 
             if (origin.eql(common_idents.builtin_module) and ident.eql(common_idents.list)) {
-                const mlist = switch (mono) {
-                    .list => |mlist| mlist,
-                    else => typeBindingInvariant(
-                        "bindFlatTypeMonotypesInStore(nominal List): expected list monotype, found '{s}'",
-                        .{@tagName(mono)},
-                    ),
-                };
+                if (resolved.kind != .list) {
+                    typeBindingInvariant(
+                        "bindFlatTypeMonotypesInStore(nominal List): expected list monotype, found kind={d}",
+                        .{@intFromEnum(resolved.kind)},
+                    );
+                }
                 const type_args = store_types.sliceNominalArgs(nominal);
                 if (type_args.len != 1) {
                     typeBindingInvariant(
@@ -1282,18 +1102,17 @@ fn bindFlatTypeMonotypesInStore(
                         .{type_args.len},
                     );
                 }
-                try self.bindTypeVarMonotypesInStore(store_types, common_idents, bindings, type_args[0], mlist.elem);
+                try self.bindTypeVarMonotypesInStore(store_types, common_idents, bindings, type_args[0], self.store.monotype_store.listElem(resolved));
                 return;
             }
 
             if (origin.eql(common_idents.builtin_module) and ident.eql(common_idents.box)) {
-                const mbox = switch (mono) {
-                    .box => |mbox| mbox,
-                    else => typeBindingInvariant(
-                        "bindFlatTypeMonotypesInStore(nominal Box): expected box monotype, found '{s}'",
-                        .{@tagName(mono)},
-                    ),
-                };
+                if (resolved.kind != .box) {
+                    typeBindingInvariant(
+                        "bindFlatTypeMonotypesInStore(nominal Box): expected box monotype, found kind={d}",
+                        .{@intFromEnum(resolved.kind)},
+                    );
+                }
                 const type_args = store_types.sliceNominalArgs(nominal);
                 if (type_args.len != 1) {
                     typeBindingInvariant(
@@ -1301,17 +1120,16 @@ fn bindFlatTypeMonotypesInStore(
                         .{type_args.len},
                     );
                 }
-                try self.bindTypeVarMonotypesInStore(store_types, common_idents, bindings, type_args[0], mbox.inner);
+                try self.bindTypeVarMonotypesInStore(store_types, common_idents, bindings, type_args[0], self.store.monotype_store.boxInner(resolved));
                 return;
             }
 
             if (origin.eql(common_idents.builtin_module) and builtinPrimForNominal(ident, common_idents) != null) {
-                switch (mono) {
-                    .prim => {},
-                    else => typeBindingInvariant(
-                        "bindFlatTypeMonotypesInStore(nominal prim): expected prim monotype, found '{s}'",
-                        .{@tagName(mono)},
-                    ),
+                if (resolved.kind != .builtin or resolved.builtinPrim() == null) {
+                    typeBindingInvariant(
+                        "bindFlatTypeMonotypesInStore(nominal prim): expected prim monotype, found kind={d}",
+                        .{@intFromEnum(resolved.kind)},
+                    );
                 }
                 return;
             }
@@ -1325,14 +1143,13 @@ fn bindFlatTypeMonotypesInStore(
             );
         },
         .record => |record| {
-            const mrec = switch (mono) {
-                .record => |mrec| mrec,
-                else => typeBindingInvariant(
-                    "bindFlatTypeMonotypesInStore(record): expected record monotype, found '{s}'",
-                    .{@tagName(mono)},
-                ),
-            };
-            const mono_fields = self.store.monotype_store.getFields(mrec.fields);
+            if (resolved.kind != .record) {
+                typeBindingInvariant(
+                    "bindFlatTypeMonotypesInStore(record): expected record monotype, found kind={d}",
+                    .{@intFromEnum(resolved.kind)},
+                );
+            }
+            const mono_fields = self.store.monotype_store.recordFields(resolved);
             var seen_field_indices: std.ArrayListUnmanaged(u32) = .empty;
             defer seen_field_indices.deinit(self.allocator);
 
@@ -1344,7 +1161,7 @@ fn bindFlatTypeMonotypesInStore(
                 for (field_names, field_vars) |field_name, field_var| {
                     const field_idx = self.recordFieldIndexByName(field_name, mono_fields);
                     try appendSeenIndex(self.allocator, &seen_field_indices, field_idx);
-                    try self.bindTypeVarMonotypesInStore(store_types, common_idents, bindings, field_var, mono_fields[field_idx].type_idx);
+                    try self.bindTypeVarMonotypesInStore(store_types, common_idents, bindings, field_var, mono_fields[field_idx].ty);
                 }
 
                 var ext_var = current_row.ext;
@@ -1367,7 +1184,7 @@ fn bindFlatTypeMonotypesInStore(
                                 for (ext_names, ext_vars) |field_name, field_var| {
                                     const field_idx = self.recordFieldIndexByName(field_name, mono_fields);
                                     try appendSeenIndex(self.allocator, &seen_field_indices, field_idx);
-                                    try self.bindTypeVarMonotypesInStore(store_types, common_idents, bindings, field_var, mono_fields[field_idx].type_idx);
+                                    try self.bindTypeVarMonotypesInStore(store_types, common_idents, bindings, field_var, mono_fields[field_idx].ty);
                                 }
                                 break :rows;
                             },
@@ -1387,32 +1204,30 @@ fn bindFlatTypeMonotypesInStore(
             }
         },
         .record_unbound => |fields_range| {
-            const mrec = switch (mono) {
-                .record => |mrec| mrec,
-                else => typeBindingInvariant(
-                    "bindFlatTypeMonotypesInStore(record_unbound): expected record monotype, found '{s}'",
-                    .{@tagName(mono)},
-                ),
-            };
-            const mono_fields = self.store.monotype_store.getFields(mrec.fields);
+            if (resolved.kind != .record) {
+                typeBindingInvariant(
+                    "bindFlatTypeMonotypesInStore(record_unbound): expected record monotype, found kind={d}",
+                    .{@intFromEnum(resolved.kind)},
+                );
+            }
+            const mono_fields = self.store.monotype_store.recordFields(resolved);
             const fields_slice = store_types.getRecordFieldsSlice(fields_range);
             const field_names = fields_slice.items(.name);
             const field_vars = fields_slice.items(.var_);
             for (field_names, field_vars) |field_name, field_var| {
                 const field_idx = self.recordFieldIndexByName(field_name, mono_fields);
-                try self.bindTypeVarMonotypesInStore(store_types, common_idents, bindings, field_var, mono_fields[field_idx].type_idx);
+                try self.bindTypeVarMonotypesInStore(store_types, common_idents, bindings, field_var, mono_fields[field_idx].ty);
             }
         },
         .tuple => |tuple| {
-            const mtup = switch (mono) {
-                .tuple => |mtup| mtup,
-                else => typeBindingInvariant(
-                    "bindFlatTypeMonotypesInStore(tuple): expected tuple monotype, found '{s}'",
-                    .{@tagName(mono)},
-                ),
-            };
+            if (resolved.kind != .tuple) {
+                typeBindingInvariant(
+                    "bindFlatTypeMonotypesInStore(tuple): expected tuple monotype, found kind={d}",
+                    .{@intFromEnum(resolved.kind)},
+                );
+            }
             const elem_vars = store_types.sliceVars(tuple.elems);
-            const elem_monos = self.store.monotype_store.getIdxSpan(mtup.elems);
+            const elem_monos = self.store.monotype_store.tupleElems(resolved);
             if (elem_vars.len != elem_monos.len) {
                 typeBindingInvariant(
                     "bindFlatTypeMonotypesInStore(tuple): arity mismatch (type={d}, monotype={d})",
@@ -1424,14 +1239,13 @@ fn bindFlatTypeMonotypesInStore(
             }
         },
         .tag_union => |tag_union| {
-            const mtag = switch (mono) {
-                .tag_union => |mtag| mtag,
-                else => typeBindingInvariant(
-                    "bindFlatTypeMonotypesInStore(tag_union): expected tag union monotype, found '{s}'",
-                    .{@tagName(mono)},
-                ),
-            };
-            const mono_tags = self.store.monotype_store.getTags(mtag.tags);
+            if (resolved.kind != .tag_union) {
+                typeBindingInvariant(
+                    "bindFlatTypeMonotypesInStore(tag_union): expected tag union monotype, found kind={d}",
+                    .{@intFromEnum(resolved.kind)},
+                );
+            }
+            const mono_tags = self.store.monotype_store.tagUnionTags(resolved);
             var seen_tag_indices: std.ArrayListUnmanaged(u32) = .empty;
             defer seen_tag_indices.deinit(self.allocator);
 
@@ -1475,19 +1289,21 @@ fn bindFlatTypeMonotypesInStore(
                 }
             }
         },
-        .empty_record => switch (mono) {
-            .unit => {},
-            else => typeBindingInvariant(
-                "bindFlatTypeMonotypesInStore(empty_record): expected unit monotype, found '{s}'",
-                .{@tagName(mono)},
-            ),
+        .empty_record => {
+            if (!resolved.isUnit() and resolved.kind != .record) {
+                typeBindingInvariant(
+                    "bindFlatTypeMonotypesInStore(empty_record): expected unit monotype, found kind={d}",
+                    .{@intFromEnum(resolved.kind)},
+                );
+            }
         },
-        .empty_tag_union => switch (mono) {
-            .tag_union => {},
-            else => typeBindingInvariant(
-                "bindFlatTypeMonotypesInStore(empty_tag_union): expected tag union monotype, found '{s}'",
-                .{@tagName(mono)},
-            ),
+        .empty_tag_union => {
+            if (resolved.kind != .tag_union) {
+                typeBindingInvariant(
+                    "bindFlatTypeMonotypesInStore(empty_tag_union): expected tag union monotype, found kind={d}",
+                    .{@intFromEnum(resolved.kind)},
+                );
+            }
         },
     }
 }
@@ -1529,16 +1345,15 @@ fn lowerStrInspektNominal(
             }
 
             const outer_mono = try self.monotypeFromTypeVarInEnv(type_env, type_var);
-            const box_mono = self.store.monotype_store.getMonotype(outer_mono);
-            const box_data = switch (box_mono) {
-                .box => |box| box,
-                else => typeBindingInvariant(
-                    "lowerStrInspektNominal(Box): expected box monotype, found '{s}'",
-                    .{@tagName(box_mono)},
-                ),
-            };
+            const box_resolved = self.store.monotype_store.resolve(outer_mono);
+            if (box_resolved.kind != .box) {
+                typeBindingInvariant(
+                    "lowerStrInspektNominal(Box): expected box monotype, found kind={d}",
+                    .{@intFromEnum(box_resolved.kind)},
+                );
+            }
 
-            const unbox_fn_mono = try self.buildFuncMonotype(&.{outer_mono}, box_data.inner, false);
+            const unbox_fn_mono = try self.buildFuncMonotype(&.{outer_mono}, self.store.monotype_store.boxInner(box_resolved), false);
             const unbox_target: ResolvedDispatchTarget = .{
                 .origin = common.builtin_module,
                 .method_ident = common.builtin_box_unbox,
@@ -1557,7 +1372,7 @@ fn lowerStrInspektNominal(
             const unboxed = try self.store.addExpr(
                 self.allocator,
                 .{ .call = .{ .func = func_expr, .args = unbox_args } },
-                box_data.inner,
+                self.store.monotype_store.boxInner(box_resolved),
                 region,
             );
 
@@ -1602,13 +1417,14 @@ fn lowerStrInspektNominal(
             return self.lowerStrInspektExpr(type_env, value_expr, type_env.types.getNominalBackingVar(nominal), region);
         }
 
-        const method_func = switch (self.store.monotype_store.getMonotype(method_func_mono)) {
-            .func => |func| func,
-            else => typeBindingInvariant(
-                "lowerStrInspektNominal: expected function monotype for to_inspect, found '{s}'",
-                .{@tagName(self.store.monotype_store.getMonotype(method_func_mono))},
-            ),
-        };
+        const method_func_resolved = self.store.monotype_store.resolve(method_func_mono);
+        if (method_func_resolved.kind != .func) {
+            typeBindingInvariant(
+                "lowerStrInspektNominal: expected function monotype for to_inspect, found kind={d}",
+                .{@intFromEnum(method_func_resolved.kind)},
+            );
+        }
+        const method_ret = self.store.monotype_store.funcRet(method_func_resolved);
 
         const lowered_method_symbol = try self.specializeMethod(method_info.symbol, method_func_mono);
         const func_expr = try self.store.addExpr(
@@ -1621,13 +1437,13 @@ fn lowerStrInspektNominal(
         const call_expr = try self.store.addExpr(
             self.allocator,
             .{ .call = .{ .func = func_expr, .args = call_args } },
-            method_func.ret,
+            method_ret,
             region,
         );
 
-        const ret_mono = self.store.monotype_store.getMonotype(method_func.ret);
-        if (ret_mono == .prim and ret_mono.prim == .str) {
-            return call_expr;
+        const ret_resolved = self.store.monotype_store.resolve(method_ret);
+        if (ret_resolved.builtinPrim()) |p| {
+            if (p == .str) return call_expr;
         }
 
         return self.lowerStrInspektExpr(method_info.target_env, call_expr, resolved_func.func.ret, region);
@@ -1938,7 +1754,7 @@ fn lowerStrInspektList(
     region: Region,
 ) Allocator.Error!MIR.ExprId {
     const str_mono = self.store.monotype_store.primIdx(.str);
-    const bool_mono = try self.store.monotype_store.addBoolTagUnion(self.allocator, self.currentCommonIdents());
+    const bool_mono = try self.store.monotype_store.addBoolTagUnion();
     const unit_mono = self.store.monotype_store.unit_idx;
     const elem_mono = try self.monotypeFromTypeVarInEnv(type_env, elem_var);
     const current_env = self.all_module_envs[self.current_module_idx];
@@ -2016,19 +1832,20 @@ fn lowerStrInspektExprByMonotype(
     mono_idx: Monotype.Idx,
     region: Region,
 ) Allocator.Error!MIR.ExprId {
-    const mono = self.store.monotype_store.getMonotype(mono_idx);
-    return switch (mono) {
-        .prim => |prim| switch (prim) {
-            .str => blk: {
-                break :blk try self.store.addExpr(
-                    self.allocator,
-                    .{ .str_escape_and_quote = value_expr },
-                    self.store.monotype_store.primIdx(.str),
-                    region,
-                );
-            },
-            else => |p| blk: {
-                const ll = toStrLowLevelForPrim(p) orelse unreachable;
+    const resolved = self.store.monotype_store.resolve(mono_idx);
+    return switch (resolved.kind) {
+        .builtin => blk: {
+            if (resolved.isUnit()) break :blk self.emitMirStrLiteral("{}", region);
+            if (resolved.builtinPrim()) |prim| {
+                if (prim == .str) {
+                    break :blk try self.store.addExpr(
+                        self.allocator,
+                        .{ .str_escape_and_quote = value_expr },
+                        self.store.monotype_store.primIdx(.str),
+                        region,
+                    );
+                }
+                const ll = toStrLowLevelForPrim(prim) orelse unreachable;
                 const args = try self.store.addExprSpan(self.allocator, &.{value_expr});
                 break :blk try self.store.addExpr(
                     self.allocator,
@@ -2036,20 +1853,20 @@ fn lowerStrInspektExprByMonotype(
                     self.store.monotype_store.primIdx(.str),
                     region,
                 );
-            },
+            }
+            unreachable;
         },
-        .record => |record| self.lowerStrInspektRecordByMonotype(module_env, value_expr, record, region),
-        .tuple => |tup| self.lowerStrInspektTupleByMonotype(module_env, value_expr, tup, region),
-        .tag_union => |tu| self.lowerStrInspektTagUnionByMonotype(module_env, value_expr, tu, mono_idx, region),
-        .list => |list_data| self.lowerStrInspektListByMonotype(module_env, value_expr, list_data, region),
-        .unit => self.emitMirStrLiteral("{}", region),
-        .box => |box_data| blk: {
+        .record => self.lowerStrInspektRecordByMonotype(module_env, value_expr, resolved, region),
+        .tuple => self.lowerStrInspektTupleByMonotype(module_env, value_expr, resolved, region),
+        .tag_union => self.lowerStrInspektTagUnionByMonotype(module_env, value_expr, resolved, mono_idx, region),
+        .list => self.lowerStrInspektListByMonotype(module_env, value_expr, resolved, region),
+        .box => blk: {
             const common = self.currentCommonIdents();
-            const unbox_fn_mono = try self.buildFuncMonotype(&.{mono_idx}, box_data.inner, false);
+            const box_inner = self.store.monotype_store.boxInner(resolved);
+            const unbox_fn_mono = try self.buildFuncMonotype(&.{mono_idx}, box_inner, false);
             const unbox_target: ResolvedDispatchTarget = .{
                 .origin = common.builtin_module,
                 .method_ident = common.builtin_box_unbox,
-                // resolvedDispatchTargetToSymbol only uses origin/method_ident.
                 .fn_var = undefined,
             };
 
@@ -2065,19 +1882,19 @@ fn lowerStrInspektExprByMonotype(
             const unboxed = try self.store.addExpr(
                 self.allocator,
                 .{ .call = .{ .func = func_expr, .args = unbox_args } },
-                box_data.inner,
+                box_inner,
                 region,
             );
 
-            const inner_str = try self.lowerStrInspektExprByMonotype(module_env, unboxed, box_data.inner, region);
+            const inner_str = try self.lowerStrInspektExprByMonotype(module_env, unboxed, box_inner, region);
             const open = try self.emitMirStrLiteral("Box(", region);
             const close = try self.emitMirStrLiteral(")", region);
             break :blk self.foldMirStrConcat(&.{ open, inner_str, close }, region);
         },
         .func => self.emitMirStrLiteral("<function>", region),
-        .recursive_placeholder => {
+        .rec => {
             if (std.debug.runtime_safety) {
-                std.debug.panic("recursive_placeholder survived monotype construction", .{});
+                std.debug.panic("recursive type survived monotype construction", .{});
             }
             unreachable;
         },
@@ -2086,32 +1903,31 @@ fn lowerStrInspektExprByMonotype(
 
 fn lowerStrInspektRecordByMonotype(
     self: *Self,
-    module_env: *const ModuleEnv,
+    _: *const ModuleEnv,
     value_expr: MIR.ExprId,
     record: anytype,
     region: Region,
 ) Allocator.Error!MIR.ExprId {
-    const field_span = record.fields;
-    const fields = self.store.monotype_store.getFields(field_span);
+    const fields = self.store.monotype_store.recordFields(record);
     if (fields.len == 0) return self.emitMirStrLiteral("{}", region);
 
     const save_exprs = self.scratch_expr_ids.top();
     defer self.scratch_expr_ids.clearFrom(save_exprs);
 
     try self.scratch_expr_ids.append(try self.emitMirStrLiteral("{ ", region));
-    for (0..field_span.len) |i| {
-        const current_fields = self.store.monotype_store.getFields(field_span);
+    for (0..fields.len) |i| {
+        const current_fields = self.store.monotype_store.recordFields(record);
         const field = current_fields[i];
         if (i > 0) {
             try self.scratch_expr_ids.append(try self.emitMirStrLiteral(", ", region));
         }
-        const field_name = module_env.getIdent(field.name);
+        const field_name = self.store.monotype_store.getNameText(field.name);
         const label = try std.fmt.allocPrint(self.allocator, "{s}: ", .{field_name});
         defer self.allocator.free(label);
         try self.scratch_expr_ids.append(try self.emitMirStrLiteral(label, region));
 
-        const field_expr = try self.emitMirStructAccess(value_expr, @intCast(i), field.type_idx, region);
-        try self.scratch_expr_ids.append(try self.lowerStrInspektExprByMonotype(module_env, field_expr, field.type_idx, region));
+        const field_expr = try self.emitMirStructAccess(value_expr, @intCast(i), field.ty, region);
+        try self.scratch_expr_ids.append(try self.lowerStrInspektExprByMonotype(self.all_module_envs[self.current_module_idx], field_expr, field.ty, region));
     }
     try self.scratch_expr_ids.append(try self.emitMirStrLiteral(" }", region));
     return self.foldMirStrConcat(self.scratch_expr_ids.sliceFromStart(save_exprs), region);
@@ -2124,16 +1940,15 @@ fn lowerStrInspektTupleByMonotype(
     tup: anytype,
     region: Region,
 ) Allocator.Error!MIR.ExprId {
-    const elem_span = tup.elems;
-    const elems = self.store.monotype_store.getIdxSpan(elem_span);
+    const elems = self.store.monotype_store.tupleElems(tup);
     if (elems.len == 0) return self.emitMirStrLiteral("()", region);
 
     const save_exprs = self.scratch_expr_ids.top();
     defer self.scratch_expr_ids.clearFrom(save_exprs);
 
     try self.scratch_expr_ids.append(try self.emitMirStrLiteral("(", region));
-    for (0..elem_span.len) |i| {
-        const current_elems = self.store.monotype_store.getIdxSpan(elem_span);
+    for (0..elems.len) |i| {
+        const current_elems = self.store.monotype_store.tupleElems(tup);
         const elem_mono = current_elems[i];
         if (i > 0) {
             try self.scratch_expr_ids.append(try self.emitMirStrLiteral(", ", region));
@@ -2154,35 +1969,34 @@ fn lowerStrInspektTagUnionByMonotype(
     mono_idx: Monotype.Idx,
     region: Region,
 ) Allocator.Error!MIR.ExprId {
-    const tag_span = tu.tags;
-    const tags = self.store.monotype_store.getTags(tag_span);
+    const tags = self.store.monotype_store.tagUnionTags(tu);
     if (tags.len == 0) return self.emitMirStrLiteral("<empty_tag_union>", region);
 
     const save_branches = self.scratch_branches.top();
     defer self.scratch_branches.clearFrom(save_branches);
 
-    for (0..tag_span.len) |tag_i| {
-        const current_tags = self.store.monotype_store.getTags(tag_span);
+    for (0..tags.len) |tag_i| {
+        const current_tags = self.store.monotype_store.tagUnionTags(tu);
         const tag = current_tags[tag_i];
-        const payload_span = tag.payloads;
-        const payloads = self.store.monotype_store.getIdxSpan(payload_span);
+        const payloads = self.store.monotype_store.getIdxListItems(tag.payloads);
 
         const save_payload_patterns = self.scratch_pattern_ids.top();
         defer self.scratch_pattern_ids.clearFrom(save_payload_patterns);
         const save_payload_symbols = self.scratch_captures.top();
         defer self.scratch_captures.clearFrom(save_payload_symbols);
 
-        for (self.store.monotype_store.getIdxSpan(payload_span)) |payload_mono| {
+        for (payloads) |payload_mono| {
             const bind = try self.makeSyntheticBind(payload_mono, false);
             try self.scratch_pattern_ids.append(bind.pattern);
             try self.scratch_captures.append(.{ .symbol = bind.symbol });
         }
 
         const payload_pattern_span = try self.store.addPatternSpan(self.allocator, self.scratch_pattern_ids.sliceFromStart(save_payload_patterns));
-        const tag_args = try self.wrapMultiPayloadTagPatterns(tag.name, mono_idx, payload_pattern_span);
+        const tag_ident = self.identFromStructuralName(tag.name);
+        const tag_args = try self.wrapMultiPayloadTagPatterns(tag_ident, mono_idx, payload_pattern_span);
         const tag_pattern = try self.store.addPattern(
             self.allocator,
-            .{ .tag = .{ .name = tag.name, .args = tag_args } },
+            .{ .tag = .{ .name = tag_ident, .args = tag_args } },
             mono_idx,
         );
         const branch_patterns = try self.store.addBranchPatterns(self.allocator, &.{MIR.BranchPattern{
@@ -2190,19 +2004,20 @@ fn lowerStrInspektTagUnionByMonotype(
             .degenerate = false,
         }});
 
+        const tag_name_text = self.store.monotype_store.getNameText(tag.name);
         const body = if (payloads.len == 0) blk: {
-            break :blk try self.emitMirStrLiteral(module_env.getIdent(tag.name), region);
+            break :blk try self.emitMirStrLiteral(tag_name_text, region);
         } else blk: {
             const save_parts = self.scratch_expr_ids.top();
             defer self.scratch_expr_ids.clearFrom(save_parts);
 
-            const tag_open = try std.fmt.allocPrint(self.allocator, "{s}(", .{module_env.getIdent(tag.name)});
+            const tag_open = try std.fmt.allocPrint(self.allocator, "{s}(", .{tag_name_text});
             defer self.allocator.free(tag_open);
             try self.scratch_expr_ids.append(try self.emitMirStrLiteral(tag_open, region));
 
             const payload_symbols = self.scratch_captures.sliceFromStart(save_payload_symbols);
-            for (0..payload_span.len) |i| {
-                const payload_mono = self.store.monotype_store.getIdxSpan(payload_span)[i];
+            for (0..payloads.len) |i| {
+                const payload_mono = self.store.monotype_store.getIdxListItems(tag.payloads)[i];
                 const payload_capture = payload_symbols[i];
                 if (i > 0) {
                     try self.scratch_expr_ids.append(try self.emitMirStrLiteral(", ", region));
@@ -2241,12 +2056,12 @@ fn lowerStrInspektListByMonotype(
     region: Region,
 ) Allocator.Error!MIR.ExprId {
     const str_mono = self.store.monotype_store.primIdx(.str);
-    const bool_mono = try self.store.monotype_store.addBoolTagUnion(self.allocator, self.currentCommonIdents());
+    const bool_mono = try self.store.monotype_store.addBoolTagUnion();
     const unit_mono = self.store.monotype_store.unit_idx;
 
     const acc_bind = try self.makeSyntheticBind(str_mono, true);
     const first_bind = try self.makeSyntheticBind(bool_mono, true);
-    const elem_bind = try self.makeSyntheticBind(list_data.elem, false);
+    const elem_bind = try self.makeSyntheticBind(self.store.monotype_store.listElem(list_data), false);
 
     const open_bracket = try self.emitMirStrLiteral("[", region);
     const close_bracket = try self.emitMirStrLiteral("]", region);
@@ -2261,8 +2076,8 @@ fn lowerStrInspektListByMonotype(
     //   acc = acc ++ prefix ++ inspect(elem)
     const first_lookup = try self.emitMirLookup(first_bind.symbol, bool_mono, region);
     const prefix = try self.createBoolMatch(module_env, first_lookup, empty, comma, str_mono, region);
-    const elem_lookup = try self.emitMirLookup(elem_bind.symbol, list_data.elem, region);
-    const elem_inspected = try self.lowerStrInspektExprByMonotype(module_env, elem_lookup, list_data.elem, region);
+    const elem_lookup = try self.emitMirLookup(elem_bind.symbol, self.store.monotype_store.listElem(list_data), region);
+    const elem_inspected = try self.lowerStrInspektExprByMonotype(module_env, elem_lookup, self.store.monotype_store.listElem(list_data), region);
     const prefixed_elem = try self.emitMirStrConcat(prefix, elem_inspected, region);
     const acc_lookup = try self.emitMirLookup(acc_bind.symbol, str_mono, region);
     const new_acc = try self.emitMirStrConcat(acc_lookup, prefixed_elem, region);
@@ -2352,9 +2167,9 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
         .e_typed_int => |ti| try self.store.addExpr(self.allocator, .{ .int = .{ .value = ti.value } }, monotype, region),
         .e_typed_frac => |tf| {
             const roc_dec = builtins.dec.RocDec{ .num = tf.value.toI128() };
-            const mono = self.store.monotype_store.getMonotype(monotype);
-            return switch (mono) {
-                .prim => |p| switch (p) {
+            const resolved_mono = self.store.monotype_store.resolve(monotype);
+            if (resolved_mono.builtinPrim()) |p| {
+                return switch (p) {
                     .f64 => try self.store.addExpr(self.allocator, .{ .frac_f64 = roc_dec.toF64() }, monotype, region),
                     .f32 => try self.store.addExpr(self.allocator, .{ .frac_f32 = @floatCast(roc_dec.toF64()) }, monotype, region),
                     .dec => try self.store.addExpr(self.allocator, .{ .dec = roc_dec }, monotype, region),
@@ -2368,18 +2183,17 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                         }
                         unreachable;
                     },
-                },
-                else => {
-                    if (std.debug.runtime_safety) {
-                        const type_name = module_env.getIdent(tf.type_name);
-                        std.debug.panic(
-                            "lowerExpr(e_typed_frac): non-prim monotype for type '{s}' (checker/lowering invariant broken)",
-                            .{type_name},
-                        );
-                    }
-                    unreachable;
-                },
-            };
+                };
+            } else {
+                if (std.debug.runtime_safety) {
+                    const type_name = module_env.getIdent(tf.type_name);
+                    std.debug.panic(
+                        "lowerExpr(e_typed_frac): non-prim monotype for type '{s}' (checker/lowering invariant broken)",
+                        .{type_name},
+                    );
+                }
+                unreachable;
+            }
         },
 
         // --- Strings ---
@@ -2989,7 +2803,7 @@ fn hoistAnonymousFunctionExpr(self: *Self, expr: MIR.ExprId) Allocator.Error!MIR
 /// stable symbol identity before lambda-set inference runs. Named lookups and
 /// lifted closures already have that identity; anonymous lambda expressions do not.
 fn stabilizeEscapingFunctionExpr(self: *Self, expr: MIR.ExprId) Allocator.Error!MIR.ExprId {
-    if (self.store.monotype_store.getMonotype(self.store.typeOf(expr)) != .func) return expr;
+    if (self.store.monotype_store.resolve(self.store.typeOf(expr)).kind != .func) return expr;
     if (self.store.getExprClosureMember(expr) != null) return expr;
 
     return switch (self.store.getExpr(expr)) {
@@ -3030,7 +2844,7 @@ fn isLambdaExpr(mir_store: *const MIR.Store, expr_id: MIR.ExprId) bool {
 
 /// Compute the composite cache key for polymorphic specializations.
 fn polySpecKey(symbol_key: u64, monotype: Monotype.Idx) u128 {
-    return (@as(u128, symbol_key) << 32) | @as(u128, @intFromEnum(monotype));
+    return (@as(u128, symbol_key) << 32) | @as(u128, @as(u32, @bitCast(monotype)));
 }
 
 fn lookupPolySpecialization(self: *Self, symbol_key: u64, caller_monotype: Monotype.Idx) ?MIR.Symbol {
@@ -3055,12 +2869,7 @@ fn currentCommonIdents(self: *const Self) ModuleEnv.CommonIdents {
 
 /// Build a function monotype from argument types, return type, and effectfulness.
 fn buildFuncMonotype(self: *Self, arg_monotypes: []const Monotype.Idx, ret: Monotype.Idx, effectful: bool) Allocator.Error!Monotype.Idx {
-    const args_span = try self.store.monotype_store.addIdxSpan(self.allocator, arg_monotypes);
-    return try self.store.monotype_store.addMonotype(self.allocator, .{ .func = .{
-        .args = args_span,
-        .ret = ret,
-        .effectful = effectful,
-    } });
+    return try self.store.monotype_store.internFunc(arg_monotypes, ret, effectful);
 }
 
 /// Lower a CIR Expr.Span to an MIR ExprSpan.
@@ -3176,19 +2985,20 @@ fn lowerPattern(self: *Self, module_env: *const ModuleEnv, pattern_idx: CIR.Patt
             const cir_destructs = module_env.store.sliceRecordDestructs(record_pat.destructs);
             const pats_top = self.scratch_pattern_ids.top();
             defer self.scratch_pattern_ids.clearFrom(pats_top);
-            const mono_field_span = switch (self.store.monotype_store.getMonotype(monotype)) {
-                .record => |record_mono| record_mono.fields,
-                .unit => Monotype.FieldSpan.empty(),
-                else => typeBindingInvariant(
-                    "lowerPattern(record_destructure): expected record monotype, found '{s}'",
-                    .{@tagName(self.store.monotype_store.getMonotype(monotype))},
-                ),
-            };
-            const mono_fields_for_defaults = self.store.monotype_store.getFields(mono_field_span);
+            const mono_resolved = self.store.monotype_store.resolve(monotype);
+            const mono_fields_for_defaults: []const Monotype.FieldKey = if (mono_resolved.kind == .record)
+                self.store.monotype_store.recordFields(mono_resolved)
+            else if (mono_resolved.isUnit())
+                &.{}
+            else
+                typeBindingInvariant(
+                    "lowerPattern(record_destructure): expected record monotype, found kind={d}",
+                    .{@intFromEnum(mono_resolved.kind)},
+                );
 
             for (mono_fields_for_defaults) |mono_field| {
                 try self.scratch_pattern_ids.append(
-                    try self.store.addPattern(self.allocator, .wildcard, mono_field.type_idx),
+                    try self.store.addPattern(self.allocator, .wildcard, mono_field.ty),
                 );
             }
 
@@ -3196,7 +3006,7 @@ fn lowerPattern(self: *Self, module_env: *const ModuleEnv, pattern_idx: CIR.Patt
                 const destruct = module_env.store.getRecordDestruct(destruct_idx);
                 const pat_idx = destruct.kind.toPatternIdx();
                 const mir_pat = try self.lowerPattern(module_env, pat_idx);
-                const mono_fields = self.store.monotype_store.getFields(mono_field_span);
+                const mono_fields = self.store.monotype_store.recordFields(mono_resolved);
                 const field_idx = self.recordFieldIndexByName(destruct.label, mono_fields);
                 self.scratch_pattern_ids.items.items[@intCast(pats_top + field_idx)] = mir_pat;
             }
@@ -3362,10 +3172,7 @@ fn lowerClosure(self: *Self, module_env: *const ModuleEnv, closure: CIR.Expr.Clo
     try capture_lookup_exprs_snapshot.appendSlice(self.allocator, capture_lookup_exprs);
 
     // --- Step 2: Create captures tuple monotype ---
-    const captures_tuple_elems = try self.store.monotype_store.addIdxSpan(self.allocator, capture_monotypes_snapshot.items);
-    const captures_tuple_monotype = try self.store.monotype_store.addMonotype(self.allocator, .{ .tuple = .{
-        .elems = captures_tuple_elems,
-    } });
+    const captures_tuple_monotype = try self.store.monotype_store.internTuple(capture_monotypes_snapshot.items);
 
     // --- Step 3: Create the lifted function symbol ---
     // Use closure's tag_name as the basis if available, else synthesize
@@ -3447,9 +3254,8 @@ fn lowerClosure(self: *Self, module_env: *const ModuleEnv, closure: CIR.Expr.Clo
     const all_params = try self.store.addPatternSpan(self.allocator, self.scratch_pattern_ids.sliceFromStart(pat_top));
 
     // Build the lifted function's monotype: func(orig_args..., captures_tuple) -> ret
-    const orig_monotype = self.store.monotype_store.getMonotype(monotype);
-    const orig_func = orig_monotype.func;
-    const orig_arg_monos = self.store.monotype_store.getIdxSpan(orig_func.args);
+    const resolved_mono = self.store.monotype_store.resolve(monotype);
+    const orig_arg_monos = self.store.monotype_store.funcArgs(resolved_mono);
     const arg_top = self.mono_scratches.idxs.top();
     defer self.mono_scratches.idxs.clearFrom(arg_top);
     for (orig_arg_monos) |am| {
@@ -3458,8 +3264,8 @@ fn lowerClosure(self: *Self, module_env: *const ModuleEnv, closure: CIR.Expr.Clo
     try self.mono_scratches.idxs.append(captures_tuple_monotype);
     const lifted_func_monotype = try self.buildFuncMonotype(
         self.mono_scratches.idxs.sliceFromStart(arg_top),
-        orig_func.ret,
-        orig_func.effectful,
+        self.store.monotype_store.funcRet(resolved_mono),
+        self.store.monotype_store.funcEffectful(resolved_mono),
     );
 
     // Create the lifted lambda expression
@@ -3624,11 +3430,12 @@ fn lowerCallWithLoweredFunc(
 ) Allocator.Error!MIR.ExprId {
     const lowered_func = try self.stabilizeEscapingFunctionExpr(lowered_func_input);
     const func_mono = self.store.typeOf(lowered_func);
-    const call_result_monotype = switch (self.store.monotype_store.getMonotype(func_mono)) {
-        .func => |f| f.ret,
-        else => monotype,
-    };
-    if (self.store.monotype_store.getMonotype(func_mono) == .func and self.store.getExpr(lowered_func) != .lookup) {
+    const func_mono_resolved = self.store.monotype_store.resolve(func_mono);
+    const call_result_monotype = if (func_mono_resolved.kind == .func)
+        self.store.monotype_store.funcRet(func_mono_resolved)
+    else
+        monotype;
+    if (func_mono_resolved.kind == .func and self.store.getExpr(lowered_func) != .lookup) {
         const func_bind = try self.makeSyntheticBind(func_mono, false);
         try self.registerBoundSymbolDefIfNeeded(func_bind.pattern, lowered_func);
         const func_lookup = try self.emitMirLookup(func_bind.symbol, func_mono, region);
@@ -3960,7 +3767,7 @@ fn lowerBinop(self: *Self, expr_idx: CIR.Expr.Idx, binop: CIR.Expr.Binop, monoty
         .@"and" => {
             const cond = try self.lowerExpr(binop.lhs);
             const body_true = try self.lowerExpr(binop.rhs);
-            const bool_monotype = try self.store.monotype_store.addBoolTagUnion(self.allocator, self.currentCommonIdents());
+            const bool_monotype = try self.store.monotype_store.addBoolTagUnion();
             const false_expr = try self.store.addExpr(self.allocator, .{ .tag = .{
                 .name = module_env.idents.false_tag,
                 .args = MIR.ExprSpan.empty(),
@@ -3972,7 +3779,7 @@ fn lowerBinop(self: *Self, expr_idx: CIR.Expr.Idx, binop: CIR.Expr.Binop, monoty
         .@"or" => {
             const cond = try self.lowerExpr(binop.lhs);
             const body_else = try self.lowerExpr(binop.rhs);
-            const bool_monotype = try self.store.monotype_store.addBoolTagUnion(self.allocator, self.currentCommonIdents());
+            const bool_monotype = try self.store.monotype_store.addBoolTagUnion();
             const true_expr = try self.store.addExpr(self.allocator, .{ .tag = .{
                 .name = module_env.idents.true_tag,
                 .args = MIR.ExprSpan.empty(),
@@ -3993,8 +3800,8 @@ fn lowerBinop(self: *Self, expr_idx: CIR.Expr.Idx, binop: CIR.Expr.Binop, monoty
             // Equality on structural types is decomposed field-by-field in MIR
             // rather than dispatched to a nominal method.
             if (binop.op == .eq or binop.op == .ne) {
-                const lhs_mono = self.store.monotype_store.getMonotype(lhs_monotype);
-                switch (lhs_mono) {
+                const lhs_resolved = self.store.monotype_store.resolve(lhs_monotype);
+                switch (lhs_resolved.kind) {
                     // Records, tuples, and lists are always structural.
                     .record, .tuple, .list => {
                         const result = try self.lowerStructuralEquality(lhs, rhs, lhs_monotype, monotype, region);
@@ -4014,21 +3821,22 @@ fn lowerBinop(self: *Self, expr_idx: CIR.Expr.Idx, binop: CIR.Expr.Binop, monoty
                         }
                         // Nominal tag union — fall through to method call dispatch below.
                     },
-                    // Unit is always equal.
-                    .unit => return try self.emitMirBoolLiteral(module_env, binop.op == .eq, region),
-                    // Primitives: emit low-level eq op directly.
-                    .prim => |p| {
-                        const op: CIR.Expr.LowLevel = switch (p) {
-                            .str => .str_is_eq,
-                            else => .num_is_eq,
-                        };
-                        const args = try self.store.addExprSpan(self.allocator, &.{ lhs, rhs });
-                        const result = try self.store.addExpr(self.allocator, .{ .run_low_level = .{
-                            .op = op,
-                            .args = args,
-                        } }, monotype, region);
-                        if (binop.op == .ne) return try self.negBool(module_env, result, monotype, region);
-                        return result;
+                    // Builtins: unit is always equal, prims use low-level eq.
+                    .builtin => {
+                        if (lhs_resolved.isUnit()) return try self.emitMirBoolLiteral(module_env, binop.op == .eq, region);
+                        if (lhs_resolved.builtinPrim()) |p| {
+                            const op: CIR.Expr.LowLevel = switch (p) {
+                                .str => .str_is_eq,
+                                else => .num_is_eq,
+                            };
+                            const args = try self.store.addExprSpan(self.allocator, &.{ lhs, rhs });
+                            const result = try self.store.addExpr(self.allocator, .{ .run_low_level = .{
+                                .op = op,
+                                .args = args,
+                            } }, monotype, region);
+                            if (binop.op == .ne) return try self.negBool(module_env, result, monotype, region);
+                            return result;
+                        }
                     },
                     else => {},
                 }
@@ -4115,7 +3923,7 @@ fn createBoolMatch(
     monotype: Monotype.Idx,
     region: Region,
 ) Allocator.Error!MIR.ExprId {
-    const bool_monotype = try self.store.monotype_store.addBoolTagUnion(self.allocator, self.currentCommonIdents());
+    const bool_monotype = try self.store.monotype_store.addBoolTagUnion();
 
     const true_pattern = try self.store.addPattern(self.allocator, .{ .tag = .{
         .name = module_env.idents.true_tag,
@@ -4139,7 +3947,7 @@ fn createBoolMatch(
 
 /// Negate a Bool: `match expr { True => False, _ => True }`
 fn negBool(self: *Self, module_env: *const ModuleEnv, expr: MIR.ExprId, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
-    const bool_monotype = try self.store.monotype_store.addBoolTagUnion(self.allocator, self.currentCommonIdents());
+    const bool_monotype = try self.store.monotype_store.addBoolTagUnion();
     const false_expr = try self.store.addExpr(self.allocator, .{ .tag = .{
         .name = module_env.idents.false_tag,
         .args = MIR.ExprSpan.empty(),
@@ -4168,9 +3976,14 @@ fn lowerStructuralEquality(
     region: Region,
 ) Allocator.Error!MIR.ExprId {
     const module_env = self.all_module_envs[self.current_module_idx];
-    const mono = self.store.monotype_store.getMonotype(operand_monotype);
-    return switch (mono) {
-        .unit => try self.emitMirBoolLiteral(module_env, true, region),
+    const resolved = self.store.monotype_store.resolve(operand_monotype);
+    return switch (resolved.kind) {
+        .builtin => if (resolved.isUnit()) try self.emitMirBoolLiteral(module_env, true, region) else {
+            if (std.debug.runtime_safety) {
+                std.debug.panic("lowerStructuralEquality: unexpected builtin monotype", .{});
+            }
+            unreachable;
+        },
         .record, .tuple, .tag_union, .list => blk: {
             // Structural equality may inspect the same operand many times; bind
             // each side once so downstream helpers only work with stable lookups.
@@ -4179,11 +3992,11 @@ fn lowerStructuralEquality(
             const lhs_lookup = try self.emitMirLookup(lhs_bind.symbol, operand_monotype, region);
             const rhs_lookup = try self.emitMirLookup(rhs_bind.symbol, operand_monotype, region);
 
-            const inner = switch (mono) {
-                .record => |rec| try self.lowerRecordEquality(module_env, lhs_lookup, rhs_lookup, rec, ret_monotype, region),
-                .tuple => |tup| try self.lowerTupleEquality(module_env, lhs_lookup, rhs_lookup, tup, ret_monotype, region),
-                .tag_union => |tu| try self.lowerTagUnionEquality(module_env, lhs_lookup, rhs_lookup, tu, operand_monotype, ret_monotype, region),
-                .list => |lst| try self.lowerListEquality(module_env, lhs_lookup, rhs_lookup, lst, ret_monotype, region),
+            const inner = switch (resolved.kind) {
+                .record => try self.lowerRecordEquality(module_env, lhs_lookup, rhs_lookup, resolved, ret_monotype, region),
+                .tuple => try self.lowerTupleEquality(module_env, lhs_lookup, rhs_lookup, resolved, ret_monotype, region),
+                .tag_union => try self.lowerTagUnionEquality(module_env, lhs_lookup, rhs_lookup, resolved, operand_monotype, ret_monotype, region),
+                .list => try self.lowerListEquality(module_env, lhs_lookup, rhs_lookup, resolved, ret_monotype, region),
                 else => unreachable,
             };
 
@@ -4199,7 +4012,7 @@ fn lowerStructuralEquality(
         },
         else => {
             if (std.debug.runtime_safety) {
-                std.debug.panic("lowerStructuralEquality: unexpected monotype {s}", .{@tagName(mono)});
+                std.debug.panic("lowerStructuralEquality: unexpected monotype kind={d}", .{@intFromEnum(resolved.kind)});
             }
             unreachable;
         },
@@ -4218,28 +4031,34 @@ fn lowerFieldEquality(
     ret_monotype: Monotype.Idx,
     region: Region,
 ) Allocator.Error!MIR.ExprId {
-    const mono = self.store.monotype_store.getMonotype(field_monotype);
-    switch (mono) {
-        .prim => |p| {
-            const op: CIR.Expr.LowLevel = switch (p) {
-                .str => .str_is_eq,
-                else => .num_is_eq,
-            };
-            const args = try self.store.addExprSpan(self.allocator, &.{ lhs, rhs });
-            return try self.store.addExpr(self.allocator, .{ .run_low_level = .{
-                .op = op,
-                .args = args,
-            } }, ret_monotype, region);
+    const resolved = self.store.monotype_store.resolve(field_monotype);
+    switch (resolved.kind) {
+        .builtin => {
+            if (resolved.isUnit()) {
+                return try self.emitMirBoolLiteral(module_env, true, region);
+            }
+            if (resolved.builtinPrim()) |p| {
+                const op: CIR.Expr.LowLevel = switch (p) {
+                    .str => .str_is_eq,
+                    else => .num_is_eq,
+                };
+                const args = try self.store.addExprSpan(self.allocator, &.{ lhs, rhs });
+                return try self.store.addExpr(self.allocator, .{ .run_low_level = .{
+                    .op = op,
+                    .args = args,
+                } }, ret_monotype, region);
+            }
+            if (std.debug.runtime_safety) {
+                std.debug.panic("lowerFieldEquality: unexpected builtin monotype", .{});
+            }
+            unreachable;
         },
         .record, .tuple, .tag_union, .list => {
             return try self.lowerStructuralEquality(lhs, rhs, field_monotype, ret_monotype, region);
         },
-        .unit => {
-            return try self.emitMirBoolLiteral(module_env, true, region);
-        },
         else => {
             if (std.debug.runtime_safety) {
-                std.debug.panic("lowerFieldEquality: unexpected field monotype {s}", .{@tagName(mono)});
+                std.debug.panic("lowerFieldEquality: unexpected field monotype kind={d}", .{@intFromEnum(resolved.kind)});
             }
             unreachable;
         },
@@ -4261,25 +4080,24 @@ fn lowerRecordEquality(
     self.debugAssertLookupExpr(lhs, "lowerRecordEquality(lhs)");
     self.debugAssertLookupExpr(rhs, "lowerRecordEquality(rhs)");
 
-    const field_span = rec.fields;
-    const fields = self.store.monotype_store.getFields(field_span);
+    const fields = self.store.monotype_store.recordFields(rec);
 
     // Empty record: always equal
     if (fields.len == 0) return try self.emitMirBoolLiteral(module_env, true, region);
 
     // Build field comparisons from last to first (innermost result first).
     var result: MIR.ExprId = undefined;
-    var i: usize = field_span.len;
+    var i: usize = fields.len;
     while (i > 0) {
         i -= 1;
-        const field = self.store.monotype_store.getFields(field_span)[i];
+        const field = self.store.monotype_store.recordFields(rec)[i];
 
-        const lhs_field = try self.emitMirStructAccess(lhs, @intCast(i), field.type_idx, region);
-        const rhs_field = try self.emitMirStructAccess(rhs, @intCast(i), field.type_idx, region);
+        const lhs_field = try self.emitMirStructAccess(lhs, @intCast(i), field.ty, region);
+        const rhs_field = try self.emitMirStructAccess(rhs, @intCast(i), field.ty, region);
 
-        const field_eq = try self.lowerFieldEquality(module_env, lhs_field, rhs_field, field.type_idx, ret_monotype, region);
+        const field_eq = try self.lowerFieldEquality(module_env, lhs_field, rhs_field, field.ty, ret_monotype, region);
 
-        if (i == field_span.len - 1) {
+        if (i == fields.len - 1) {
             result = field_eq;
         } else {
             // Short-circuit AND: match field_eq { True => <rest>, _ => False }
@@ -4304,25 +4122,24 @@ fn lowerTupleEquality(
     self.debugAssertLookupExpr(lhs, "lowerTupleEquality(lhs)");
     self.debugAssertLookupExpr(rhs, "lowerTupleEquality(rhs)");
 
-    const elem_span = tup.elems;
-    const elems = self.store.monotype_store.getIdxSpan(elem_span);
+    const elems = self.store.monotype_store.tupleElems(tup);
 
     // Empty tuple: always equal
     if (elems.len == 0) return try self.emitMirBoolLiteral(module_env, true, region);
 
     // Build element comparisons from last to first.
     var result: MIR.ExprId = undefined;
-    var i: usize = elem_span.len;
+    var i: usize = elems.len;
     while (i > 0) {
         i -= 1;
-        const elem_mono = self.store.monotype_store.getIdxSpan(elem_span)[i];
+        const elem_mono = self.store.monotype_store.tupleElems(tup)[i];
 
         const lhs_elem = try self.emitMirStructAccess(lhs, @intCast(i), elem_mono, region);
         const rhs_elem = try self.emitMirStructAccess(rhs, @intCast(i), elem_mono, region);
 
         const elem_eq = try self.lowerFieldEquality(module_env, lhs_elem, rhs_elem, elem_mono, ret_monotype, region);
 
-        if (i == elem_span.len - 1) {
+        if (i == elems.len - 1) {
             result = elem_eq;
         } else {
             const false_expr = try self.emitMirBoolLiteral(module_env, false, region);
@@ -4349,8 +4166,7 @@ fn lowerTagUnionEquality(
     self.debugAssertLookupExpr(lhs, "lowerTagUnionEquality(lhs)");
     self.debugAssertLookupExpr(rhs, "lowerTagUnionEquality(rhs)");
 
-    const tag_span = tu.tags;
-    const tags = self.store.monotype_store.getTags(tag_span);
+    const tags = self.store.monotype_store.tagUnionTags(tu);
 
     // Empty tag union: vacuously true
     if (tags.len == 0) return try self.emitMirBoolLiteral(module_env, true, region);
@@ -4358,17 +4174,17 @@ fn lowerTagUnionEquality(
     const save_branches = self.scratch_branches.top();
     defer self.scratch_branches.clearFrom(save_branches);
 
-    for (0..tag_span.len) |tag_i| {
-        const current_tags = self.store.monotype_store.getTags(tag_span);
+    for (0..tags.len) |tag_i| {
+        const current_tags = self.store.monotype_store.tagUnionTags(tu);
         const tag = current_tags[tag_i];
-        const payload_span = tag.payloads;
+        const payloads = self.store.monotype_store.getIdxListItems(tag.payloads);
 
         // --- LHS pattern: Tag(lhs_p0, lhs_p1, ...) ---
         const save_pats = self.scratch_pattern_ids.top();
         const save_caps = self.scratch_captures.top();
         defer self.scratch_captures.clearFrom(save_caps);
 
-        for (self.store.monotype_store.getIdxSpan(payload_span)) |payload_mono| {
+        for (payloads) |payload_mono| {
             const bind = try self.makeSyntheticBind(payload_mono, false);
             try self.scratch_pattern_ids.append(bind.pattern);
             try self.scratch_captures.append(.{ .symbol = bind.symbol });
@@ -4378,10 +4194,11 @@ fn lowerTagUnionEquality(
             self.scratch_pattern_ids.sliceFromStart(save_pats),
         );
         self.scratch_pattern_ids.clearFrom(save_pats);
-        const lhs_tag_args = try self.wrapMultiPayloadTagPatterns(tag.name, tu_monotype, lhs_payload_patterns);
+        const tag_ident = self.identFromStructuralName(tag.name);
+        const lhs_tag_args = try self.wrapMultiPayloadTagPatterns(tag_ident, tu_monotype, lhs_payload_patterns);
 
         const lhs_tag_pattern = try self.store.addPattern(self.allocator, .{ .tag = .{
-            .name = tag.name,
+            .name = tag_ident,
             .args = lhs_tag_args,
         } }, tu_monotype);
         const lhs_bp = try self.store.addBranchPatterns(self.allocator, &.{.{
@@ -4390,7 +4207,7 @@ fn lowerTagUnionEquality(
         }});
 
         // --- RHS pattern: Tag(rhs_p0, rhs_p1, ...) ---
-        for (self.store.monotype_store.getIdxSpan(payload_span)) |payload_mono| {
+        for (payloads) |payload_mono| {
             const bind = try self.makeSyntheticBind(payload_mono, false);
             try self.scratch_pattern_ids.append(bind.pattern);
             try self.scratch_captures.append(.{ .symbol = bind.symbol });
@@ -4400,10 +4217,10 @@ fn lowerTagUnionEquality(
             self.scratch_pattern_ids.sliceFromStart(save_pats),
         );
         self.scratch_pattern_ids.clearFrom(save_pats);
-        const rhs_tag_args = try self.wrapMultiPayloadTagPatterns(tag.name, tu_monotype, rhs_payload_patterns);
+        const rhs_tag_args = try self.wrapMultiPayloadTagPatterns(tag_ident, tu_monotype, rhs_payload_patterns);
 
         const rhs_tag_pattern = try self.store.addPattern(self.allocator, .{ .tag = .{
-            .name = tag.name,
+            .name = tag_ident,
             .args = rhs_tag_args,
         } }, tu_monotype);
         const rhs_bp = try self.store.addBranchPatterns(self.allocator, &.{.{
@@ -4413,23 +4230,23 @@ fn lowerTagUnionEquality(
 
         // --- Build payload comparison ---
         const all_caps = self.scratch_captures.sliceFromStart(save_caps);
-        const payload_eq = if (payload_span.len == 0)
+        const payload_eq = if (payloads.len == 0)
             try self.emitMirBoolLiteral(module_env, true, region)
         else blk: {
-            const lhs_caps = all_caps[0..payload_span.len];
-            const rhs_caps = all_caps[payload_span.len..][0..payload_span.len];
+            const lhs_caps = all_caps[0..payloads.len];
+            const rhs_caps = all_caps[payloads.len..][0..payloads.len];
 
             // Chain payload comparisons with short-circuit AND (last to first)
             var payload_result: MIR.ExprId = undefined;
-            var j: usize = payload_span.len;
+            var j: usize = payloads.len;
             while (j > 0) {
                 j -= 1;
-                const payload_mono = self.store.monotype_store.getIdxSpan(payload_span)[j];
+                const payload_mono = self.store.monotype_store.getIdxListItems(tag.payloads)[j];
                 const lhs_lookup = try self.emitMirLookup(lhs_caps[j].symbol, payload_mono, region);
                 const rhs_lookup = try self.emitMirLookup(rhs_caps[j].symbol, payload_mono, region);
                 const field_eq = try self.lowerFieldEquality(module_env, lhs_lookup, rhs_lookup, payload_mono, ret_monotype, region);
 
-                if (j == payload_span.len - 1) {
+                if (j == payloads.len - 1) {
                     payload_result = field_eq;
                 } else {
                     const false_expr = try self.emitMirBoolLiteral(module_env, false, region);
@@ -4503,7 +4320,7 @@ fn lowerListEquality(
     self.debugAssertLookupExpr(rhs, "lowerListEquality(rhs)");
 
     const u64_mono = self.store.monotype_store.primIdx(.u64);
-    const bool_mono = try self.store.monotype_store.addBoolTagUnion(self.allocator, self.currentCommonIdents());
+    const bool_mono = try self.store.monotype_store.addBoolTagUnion();
     const unit_mono = self.store.monotype_store.unit_idx;
 
     // len = list_len(lhs)
@@ -4559,17 +4376,17 @@ fn lowerListEquality(
     const lhs_elem = try self.store.addExpr(self.allocator, .{ .run_low_level = .{
         .op = .list_get_unsafe,
         .args = lhs_get_args,
-    } }, lst.elem, region);
+    } }, self.store.monotype_store.listElem(lst), region);
 
     const i_lookup_rhs = try self.emitMirLookup(i_bind.symbol, u64_mono, region);
     const rhs_get_args = try self.store.addExprSpan(self.allocator, &.{ rhs, i_lookup_rhs });
     const rhs_elem = try self.store.addExpr(self.allocator, .{ .run_low_level = .{
         .op = .list_get_unsafe,
         .args = rhs_get_args,
-    } }, lst.elem, region);
+    } }, self.store.monotype_store.listElem(lst), region);
 
     // Compare elements
-    const elem_eq = try self.lowerFieldEquality(module_env, lhs_elem, rhs_elem, lst.elem, ret_monotype, region);
+    const elem_eq = try self.lowerFieldEquality(module_env, lhs_elem, rhs_elem, self.store.monotype_store.listElem(lst), ret_monotype, region);
 
     // i = num_plus(i, 1)
     const i_lookup_inc = try self.emitMirLookup(i_bind.symbol, u64_mono, region);
@@ -4648,10 +4465,11 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
             const receiver = try self.lowerExpr(da.receiver);
             const rcv_mono_idx = try self.resolveMonotype(da.receiver);
             if (rcv_mono_idx.isNone()) break :structural_eq;
-            const rcv_mono = self.store.monotype_store.getMonotype(rcv_mono_idx);
-            switch (rcv_mono) {
-                // Records, tuples, lists, and unit are always structural.
-                .record, .tuple, .list, .unit => {},
+            const rcv_resolved = self.store.monotype_store.resolve(rcv_mono_idx);
+            switch (rcv_resolved.kind) {
+                // Records, tuples, lists are always structural. Unit (builtin) too.
+                .record, .tuple, .list => {},
+                .builtin => if (!rcv_resolved.isUnit()) break :structural_eq,
                 // Tag unions may be nominal or anonymous structural.
                 .tag_union => if (self.lookupResolvedDispatchTarget(expr_idx) != null) break :structural_eq,
                 else => break :structural_eq,
@@ -4758,17 +4576,14 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
             &self.nominal_cycle_breakers,
         );
         if (!dispatch_func_monotype.isNone()) {
-            const dispatch_mono = self.store.monotype_store.getMonotype(dispatch_func_monotype);
-            const dispatch_func = switch (dispatch_mono) {
-                .func => |f| f,
-                else => {
-                    typeBindingInvariant(
-                        "lowerDotAccess: dispatch fn_var monotype is not function (method='{s}', monotype='{s}')",
-                        .{ module_env.getIdent(da.field_name), @tagName(dispatch_mono) },
-                    );
-                },
-            };
-            const dispatch_args = self.store.monotype_store.getIdxSpan(dispatch_func.args);
+            const dispatch_resolved = self.store.monotype_store.resolve(dispatch_func_monotype);
+            if (dispatch_resolved.kind != .func) {
+                typeBindingInvariant(
+                    "lowerDotAccess: dispatch fn_var monotype is not function (method='{s}', kind={d})",
+                    .{ module_env.getIdent(da.field_name), @intFromEnum(dispatch_resolved.kind) },
+                );
+            }
+            const dispatch_args = self.store.monotype_store.funcArgs(dispatch_resolved);
             if (dispatch_args.len > 0) {
                 expected_param_monos = dispatch_args;
             }
@@ -4806,11 +4621,10 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
                 &self.nominal_cycle_breakers,
             );
             if (!refined.isNone()) {
-                const refined_mono = self.store.monotype_store.getMonotype(refined);
-                if (refined_mono != .func) {
+                if (self.store.monotype_store.resolve(refined).kind != .func) {
                     typeBindingInvariant(
-                        "lowerDotAccess: refined dispatch fn_var monotype is not function (method='{s}', monotype='{s}')",
-                        .{ module_env.getIdent(da.field_name), @tagName(refined_mono) },
+                        "lowerDotAccess: refined dispatch fn_var monotype is not function (method='{s}', kind={d})",
+                        .{ module_env.getIdent(da.field_name), @intFromEnum(self.store.monotype_store.resolve(refined).kind) },
                     );
                 }
                 break :blk refined;
@@ -4827,10 +4641,11 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
                 method_effectful,
             );
         };
-        const call_result_monotype = switch (self.store.monotype_store.getMonotype(method_func_monotype)) {
-            .func => |f| f.ret,
-            else => monotype,
-        };
+        const mfm_resolved = self.store.monotype_store.resolve(method_func_monotype);
+        const call_result_monotype = if (mfm_resolved.kind == .func)
+            self.store.monotype_store.funcRet(mfm_resolved)
+        else
+            monotype;
 
         // Ensure the method body is lowered so codegen can find it.
         const lowered_method_symbol = try self.specializeMethod(method_symbol, method_func_monotype);
@@ -4846,16 +4661,16 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
         // Field access
         const receiver = try self.lowerExpr(da.receiver);
         const receiver_monotype = self.store.typeOf(receiver);
-        const receiver_record = switch (self.store.monotype_store.getMonotype(receiver_monotype)) {
-            .record => |record| record,
-            else => typeBindingInvariant(
-                "lowerDotAccess: field access receiver is not a record monotype (field='{s}', monotype='{s}')",
-                .{ module_env.getIdent(da.field_name), @tagName(self.store.monotype_store.getMonotype(receiver_monotype)) },
-            ),
-        };
+        const receiver_resolved = self.store.monotype_store.resolve(receiver_monotype);
+        if (receiver_resolved.kind != .record) {
+            typeBindingInvariant(
+                "lowerDotAccess: field access receiver is not a record monotype (field='{s}', kind={d})",
+                .{ module_env.getIdent(da.field_name), @intFromEnum(receiver_resolved.kind) },
+            );
+        }
         const field_idx = self.recordFieldIndexByName(
             da.field_name,
-            self.store.monotype_store.getFields(receiver_record.fields),
+            self.store.monotype_store.recordFields(receiver_resolved),
         );
         return try self.emitMirStructAccess(receiver, field_idx, monotype, region);
     }
@@ -4864,14 +4679,10 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
 /// Lower a CIR record expression.
 fn lowerRecord(self: *Self, module_env: *const ModuleEnv, record: anytype, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
     const cir_field_indices = module_env.store.sliceRecordFields(record.fields);
-    const mono_record = switch (self.store.monotype_store.getMonotype(monotype)) {
-        .record => |mono_record| mono_record,
-        else => typeBindingInvariant(
-            "lowerRecord: expected record monotype, found '{s}'",
-            .{@tagName(self.store.monotype_store.getMonotype(monotype))},
-        ),
-    };
-    const mono_field_span = mono_record.fields;
+    const record_resolved = self.store.monotype_store.resolve(monotype);
+    if (record_resolved.kind != .record) {
+        typeBindingInvariant("lowerRecord: expected record monotype", .{});
+    }
 
     const ProvidedField = struct {
         name: Ident.Idx,
@@ -4899,11 +4710,12 @@ fn lowerRecord(self: *Self, module_env: *const ModuleEnv, record: anytype, monot
     const exprs_top = self.scratch_expr_ids.top();
     defer self.scratch_expr_ids.clearFrom(exprs_top);
 
-    const canonical_field_exprs = try self.allocator.alloc(?MIR.ExprId, mono_field_span.len);
+    const record_mono_fields = self.store.monotype_store.recordFields(record_resolved);
+    const canonical_field_exprs = try self.allocator.alloc(?MIR.ExprId, record_mono_fields.len);
     defer self.allocator.free(canonical_field_exprs);
     @memset(canonical_field_exprs, null);
 
-    const mono_fields = self.store.monotype_store.getFields(mono_field_span);
+    const mono_fields = record_mono_fields;
     for (provided_fields.items) |provided| {
         const field_idx = self.recordFieldIndexByName(provided.name, mono_fields);
         canonical_field_exprs[@intCast(field_idx)] = provided.expr;
@@ -4929,12 +4741,12 @@ fn lowerRecord(self: *Self, module_env: *const ModuleEnv, record: anytype, monot
         // Record update: include all fields in the resulting record.
         // Updated fields use explicit expressions; missing fields become accesses on the
         // base record expression from `..record`.
-        const updated_mono_fields = self.store.monotype_store.getFields(mono_field_span);
+        const updated_mono_fields = self.store.monotype_store.recordFields(record_resolved);
         for (updated_mono_fields, 0..) |mono_field, field_idx| {
             const field_expr = canonical_field_exprs[field_idx] orelse try self.emitMirStructAccess(
                 extension_binding.?.lookup,
                 @intCast(field_idx),
-                mono_field.type_idx,
+                mono_field.ty,
                 region,
             );
 
@@ -5199,9 +5011,9 @@ fn resolveDispatchTargetForDotCall(
             continue;
         }
 
-        const mono = self.store.monotype_store.getMonotype(fn_mono);
-        if (mono != .func) continue;
-        const fn_args = self.store.monotype_store.getIdxSpan(mono.func.args);
+        const fn_resolved = self.store.monotype_store.resolve(fn_mono);
+        if (fn_resolved.kind != .func) continue;
+        const fn_args = self.store.monotype_store.funcArgs(fn_resolved);
         const compatible = if (fn_args.len == 0)
             true
         else
@@ -5737,45 +5549,49 @@ fn bindRecordFieldByName(
     self: *Self,
     field_name: Ident.Idx,
     field_var: types.Var,
-    mono_fields: []const Monotype.Field,
+    mono_fields: []const Monotype.FieldKey,
 ) Allocator.Error!void {
     const field_idx = self.recordFieldIndexByName(field_name, mono_fields);
-    try self.bindTypeVarMonotypes(field_var, mono_fields[@intCast(field_idx)].type_idx);
+    try self.bindTypeVarMonotypes(field_var, mono_fields[@intCast(field_idx)].ty);
 }
 
 fn recordFieldIndexByName(
     self: *Self,
     field_name: Ident.Idx,
-    mono_fields: []const Monotype.Field,
+    mono_fields: []const Monotype.FieldKey,
 ) u32 {
+    const field_name_text = self.all_module_envs[self.current_module_idx].getIdent(field_name);
     for (mono_fields, 0..) |mono_field, field_idx| {
-        if (self.identsStructurallyEqual(mono_field.name, field_name)) {
+        if (std.mem.eql(u8, self.store.monotype_store.getNameText(mono_field.name), field_name_text)) {
             return @intCast(field_idx);
         }
     }
 
-    const module_env = self.all_module_envs[self.current_module_idx];
     typeBindingInvariant(
         "record field '{s}' missing from monotype",
-        .{module_env.getIdent(field_name)},
+        .{field_name_text},
     );
 }
 
 fn tagIndexByName(
     self: *Self,
     tag_name: Ident.Idx,
-    mono_tags: []const Monotype.Tag,
+    mono_tags: []const Monotype.TagKey,
 ) u32 {
+    const tag_name_text = self.all_module_envs[self.current_module_idx].getIdent(tag_name);
+    const tag_last_segment = identLastSegment(tag_name_text);
     for (mono_tags, 0..) |mono_tag, tag_idx| {
-        if (self.identsTagNameEquivalent(mono_tag.name, tag_name)) {
+        const mono_tag_text = self.store.monotype_store.getNameText(mono_tag.name);
+        if (std.mem.eql(u8, mono_tag_text, tag_name_text) or
+            std.mem.eql(u8, identLastSegment(mono_tag_text), tag_last_segment))
+        {
             return @intCast(tag_idx);
         }
     }
 
-    const module_env = self.all_module_envs[self.current_module_idx];
     typeBindingInvariant(
         "tag '{s}' missing from monotype",
-        .{module_env.getIdent(tag_name)},
+        .{tag_name_text},
     );
 }
 
@@ -5797,10 +5613,10 @@ fn appendSeenIndex(
 
 fn remainingRecordTailMonotype(
     self: *Self,
-    mono_fields: []const Monotype.Field,
+    mono_fields: []const Monotype.FieldKey,
     seen_indices: []const u32,
 ) Allocator.Error!Monotype.Idx {
-    var remaining_fields: std.ArrayListUnmanaged(Monotype.Field) = .empty;
+    var remaining_fields: std.ArrayListUnmanaged(Monotype.FieldKey) = .empty;
     defer remaining_fields.deinit(self.allocator);
 
     for (mono_fields, 0..) |field, field_idx| {
@@ -5812,16 +5628,15 @@ fn remainingRecordTailMonotype(
         return self.store.monotype_store.unit_idx;
     }
 
-    const field_span = try self.store.monotype_store.addFields(self.allocator, remaining_fields.items);
-    return try self.store.monotype_store.addMonotype(self.allocator, .{ .record = .{ .fields = field_span } });
+    return try self.store.monotype_store.internRecord(remaining_fields.items);
 }
 
 fn remainingTagUnionTailMonotype(
     self: *Self,
-    mono_tags: []const Monotype.Tag,
+    mono_tags: []const Monotype.TagKey,
     seen_indices: []const u32,
 ) Allocator.Error!Monotype.Idx {
-    var remaining_tags: std.ArrayListUnmanaged(Monotype.Tag) = .empty;
+    var remaining_tags: std.ArrayListUnmanaged(Monotype.TagKey) = .empty;
     defer remaining_tags.deinit(self.allocator);
 
     for (mono_tags, 0..) |tag, tag_idx| {
@@ -5829,8 +5644,7 @@ fn remainingTagUnionTailMonotype(
         try remaining_tags.append(self.allocator, tag);
     }
 
-    const tag_span = try self.store.monotype_store.addTags(self.allocator, remaining_tags.items);
-    return try self.store.monotype_store.addMonotype(self.allocator, .{ .tag_union = .{ .tags = tag_span } });
+    return try self.store.monotype_store.internTagUnion(remaining_tags.items);
 }
 
 fn bindRecordRowTailInStore(
@@ -5839,7 +5653,7 @@ fn bindRecordRowTailInStore(
     common_idents: ModuleEnv.CommonIdents,
     bindings: *std.AutoHashMap(types.Var, Monotype.Idx),
     ext_var: types.Var,
-    mono_fields: []const Monotype.Field,
+    mono_fields: []const Monotype.FieldKey,
     seen_indices: []const u32,
 ) Allocator.Error!void {
     const tail_mono = try self.remainingRecordTailMonotype(mono_fields, seen_indices);
@@ -5849,7 +5663,7 @@ fn bindRecordRowTailInStore(
 fn bindRecordRowTail(
     self: *Self,
     ext_var: types.Var,
-    mono_fields: []const Monotype.Field,
+    mono_fields: []const Monotype.FieldKey,
     seen_indices: []const u32,
 ) Allocator.Error!void {
     const tail_mono = try self.remainingRecordTailMonotype(mono_fields, seen_indices);
@@ -5862,7 +5676,7 @@ fn bindTagUnionRowTailInStore(
     common_idents: ModuleEnv.CommonIdents,
     bindings: *std.AutoHashMap(types.Var, Monotype.Idx),
     ext_var: types.Var,
-    mono_tags: []const Monotype.Tag,
+    mono_tags: []const Monotype.TagKey,
     seen_indices: []const u32,
 ) Allocator.Error!void {
     const tail_mono = try self.remainingTagUnionTailMonotype(mono_tags, seen_indices);
@@ -5872,7 +5686,7 @@ fn bindTagUnionRowTailInStore(
 fn bindTagUnionRowTail(
     self: *Self,
     ext_var: types.Var,
-    mono_tags: []const Monotype.Tag,
+    mono_tags: []const Monotype.TagKey,
     seen_indices: []const u32,
 ) Allocator.Error!void {
     const tail_mono = try self.remainingTagUnionTailMonotype(mono_tags, seen_indices);
@@ -5880,8 +5694,7 @@ fn bindTagUnionRowTail(
 }
 
 fn tupleMonotypeForFields(self: *Self, field_monotypes: []const Monotype.Idx) Allocator.Error!Monotype.Idx {
-    const elems = try self.store.monotype_store.addIdxSpan(self.allocator, field_monotypes);
-    return try self.store.monotype_store.addMonotype(self.allocator, .{ .tuple = .{ .elems = elems } });
+    return try self.store.monotype_store.internTuple(field_monotypes);
 }
 
 fn tagPayloadMonotypesByName(
@@ -5889,25 +5702,29 @@ fn tagPayloadMonotypesByName(
     union_monotype: Monotype.Idx,
     tag_name: Ident.Idx,
 ) []const Monotype.Idx {
-    const mono = self.store.monotype_store.getMonotype(union_monotype);
-    const tags = switch (mono) {
-        .tag_union => |tu| self.store.monotype_store.getTags(tu.tags),
-        else => typeBindingInvariant(
-            "tag payload lookup expected tag_union monotype, found '{s}'",
-            .{@tagName(mono)},
-        ),
-    };
+    const resolved = self.store.monotype_store.resolve(union_monotype);
+    if (resolved.kind != .tag_union) {
+        typeBindingInvariant(
+            "tag payload lookup expected tag_union monotype, found kind={d}",
+            .{@intFromEnum(resolved.kind)},
+        );
+    }
+    const tags = self.store.monotype_store.tagUnionTags(resolved);
 
+    const tag_name_text = self.all_module_envs[self.current_module_idx].getIdent(tag_name);
+    const tag_last_segment = identLastSegment(tag_name_text);
     for (tags) |tag| {
-        if (self.identsTagNameEquivalent(tag.name, tag_name)) {
-            return self.store.monotype_store.getIdxSpan(tag.payloads);
+        const mono_tag_text = self.store.monotype_store.getNameText(tag.name);
+        if (std.mem.eql(u8, mono_tag_text, tag_name_text) or
+            std.mem.eql(u8, identLastSegment(mono_tag_text), tag_last_segment))
+        {
+            return self.store.monotype_store.getIdxListItems(tag.payloads);
         }
     }
 
-    const module_env = self.all_module_envs[self.current_module_idx];
     typeBindingInvariant(
         "tag '{s}' missing from monotype",
-        .{module_env.getIdent(tag_name)},
+        .{tag_name_text},
     );
 }
 
@@ -5964,30 +5781,31 @@ fn bindTagPayloadsByName(
     self: *Self,
     tag_name: Ident.Idx,
     payload_vars: []const types.Var,
-    mono_tags: []const Monotype.Tag,
+    mono_tags: []const Monotype.TagKey,
 ) Allocator.Error!void {
+    const tag_name_text = self.all_module_envs[self.current_module_idx].getIdent(tag_name);
+    const tag_last_segment = identLastSegment(tag_name_text);
     for (mono_tags) |mono_tag| {
-        if (!self.identsTagNameEquivalent(mono_tag.name, tag_name)) continue;
+        const mono_tag_text = self.store.monotype_store.getNameText(mono_tag.name);
+        if (!std.mem.eql(u8, mono_tag_text, tag_name_text) and
+            !std.mem.eql(u8, identLastSegment(mono_tag_text), tag_last_segment)) continue;
 
-        const mono_payload_span = mono_tag.payloads;
-        if (payload_vars.len != mono_payload_span.len) {
-            const module_env = self.all_module_envs[self.current_module_idx];
+        const mono_payloads = self.store.monotype_store.getIdxListItems(mono_tag.payloads);
+        if (payload_vars.len != mono_payloads.len) {
             typeBindingInvariant(
                 "bindFlatTypeMonotypes(tag_union): payload arity mismatch for tag '{s}'",
-                .{module_env.getIdent(tag_name)},
+                .{tag_name_text},
             );
         }
         for (payload_vars, 0..) |payload_var, i| {
-            const mono_payload = self.store.monotype_store.getIdxSpan(mono_payload_span)[i];
-            try self.bindTypeVarMonotypes(payload_var, mono_payload);
+            try self.bindTypeVarMonotypes(payload_var, mono_payloads[i]);
         }
         return;
     }
 
-    const module_env = self.all_module_envs[self.current_module_idx];
     typeBindingInvariant(
         "bindFlatTypeMonotypes(tag_union): tag '{s}' missing from monotype",
-        .{module_env.getIdent(tag_name)},
+        .{tag_name_text},
     );
 }
 
@@ -6019,31 +5837,28 @@ fn bindTypeVarMonotypes(self: *Self, type_var: types.Var, monotype: Monotype.Idx
 fn bindFlatTypeMonotypes(self: *Self, flat_type: types.FlatType, monotype: Monotype.Idx) Allocator.Error!void {
     if (monotype.isNone()) return;
 
-    const mono = self.store.monotype_store.getMonotype(monotype);
-    const module_env = self.all_module_envs[self.current_module_idx];
+    const resolved = self.store.monotype_store.resolve(monotype);
 
     switch (flat_type) {
         .fn_pure, .fn_effectful, .fn_unbound => |func| {
-            const mfunc = switch (mono) {
-                .func => |mfunc| mfunc,
-                else => typeBindingInvariant(
-                    "bindFlatTypeMonotypes(fn): expected function monotype, found '{s}'",
-                    .{@tagName(mono)},
-                ),
-            };
+            if (resolved.kind != .func) {
+                typeBindingInvariant(
+                    "bindFlatTypeMonotypes(fn): expected function monotype, found kind={d}",
+                    .{@intFromEnum(resolved.kind)},
+                );
+            }
             const type_args = self.types_store.sliceVars(func.args);
-            const mono_arg_span = mfunc.args;
-            if (type_args.len != mono_arg_span.len) {
+            const mono_args = self.store.monotype_store.funcArgs(resolved);
+            if (type_args.len != mono_args.len) {
                 typeBindingInvariant(
                     "bindFlatTypeMonotypes(fn): arity mismatch (type={d}, monotype={d})",
-                    .{ type_args.len, mono_arg_span.len },
+                    .{ type_args.len, mono_args.len },
                 );
             }
             for (type_args, 0..) |ta, i| {
-                const ma = self.store.monotype_store.getIdxSpan(mono_arg_span)[i];
-                try self.bindTypeVarMonotypes(ta, ma);
+                try self.bindTypeVarMonotypes(ta, mono_args[i]);
             }
-            try self.bindTypeVarMonotypes(func.ret, mfunc.ret);
+            try self.bindTypeVarMonotypes(func.ret, self.store.monotype_store.funcRet(resolved));
         },
         .nominal_type => |nominal| {
             const common = self.currentCommonIdents();
@@ -6051,13 +5866,12 @@ fn bindFlatTypeMonotypes(self: *Self, flat_type: types.FlatType, monotype: Monot
             const origin = nominal.origin_module;
 
             if (origin.eql(common.builtin_module) and ident.eql(common.list)) {
-                const mlist = switch (mono) {
-                    .list => |mlist| mlist,
-                    else => typeBindingInvariant(
-                        "bindFlatTypeMonotypes(nominal List): expected list monotype, found '{s}'",
-                        .{@tagName(mono)},
-                    ),
-                };
+                if (resolved.kind != .list) {
+                    typeBindingInvariant(
+                        "bindFlatTypeMonotypes(nominal List): expected list monotype, found kind={d}",
+                        .{@intFromEnum(resolved.kind)},
+                    );
+                }
                 const type_args = self.types_store.sliceNominalArgs(nominal);
                 if (type_args.len != 1) {
                     typeBindingInvariant(
@@ -6065,17 +5879,16 @@ fn bindFlatTypeMonotypes(self: *Self, flat_type: types.FlatType, monotype: Monot
                         .{type_args.len},
                     );
                 }
-                try self.bindTypeVarMonotypes(type_args[0], mlist.elem);
+                try self.bindTypeVarMonotypes(type_args[0], self.store.monotype_store.listElem(resolved));
                 return;
             }
             if (origin.eql(common.builtin_module) and ident.eql(common.box)) {
-                const mbox = switch (mono) {
-                    .box => |mbox| mbox,
-                    else => typeBindingInvariant(
-                        "bindFlatTypeMonotypes(nominal Box): expected box monotype, found '{s}'",
-                        .{@tagName(mono)},
-                    ),
-                };
+                if (resolved.kind != .box) {
+                    typeBindingInvariant(
+                        "bindFlatTypeMonotypes(nominal Box): expected box monotype, found kind={d}",
+                        .{@intFromEnum(resolved.kind)},
+                    );
+                }
                 const type_args = self.types_store.sliceNominalArgs(nominal);
                 if (type_args.len != 1) {
                     typeBindingInvariant(
@@ -6083,17 +5896,16 @@ fn bindFlatTypeMonotypes(self: *Self, flat_type: types.FlatType, monotype: Monot
                         .{type_args.len},
                     );
                 }
-                try self.bindTypeVarMonotypes(type_args[0], mbox.inner);
+                try self.bindTypeVarMonotypes(type_args[0], self.store.monotype_store.boxInner(resolved));
                 return;
             }
 
             if (origin.eql(common.builtin_module) and builtinPrimForNominal(ident, common) != null) {
-                switch (mono) {
-                    .prim => {},
-                    else => typeBindingInvariant(
-                        "bindFlatTypeMonotypes(nominal prim): expected prim monotype, found '{s}'",
-                        .{@tagName(mono)},
-                    ),
+                if (resolved.kind != .builtin or resolved.builtinPrim() == null) {
+                    typeBindingInvariant(
+                        "bindFlatTypeMonotypes(nominal prim): expected prim monotype, found kind={d}",
+                        .{@intFromEnum(resolved.kind)},
+                    );
                 }
                 return;
             }
@@ -6103,15 +5915,13 @@ fn bindFlatTypeMonotypes(self: *Self, flat_type: types.FlatType, monotype: Monot
             try self.bindTypeVarMonotypes(backing_var, monotype);
         },
         .record => |record| {
-            const mrec = switch (mono) {
-                .record => |mrec| mrec,
-                else => typeBindingInvariant(
-                    "bindFlatTypeMonotypes(record): expected record monotype, found '{s}'",
-                    .{@tagName(mono)},
-                ),
-            };
-            const mono_field_span = mrec.fields;
-            const mono_fields = self.store.monotype_store.getFields(mono_field_span);
+            if (resolved.kind != .record) {
+                typeBindingInvariant(
+                    "bindFlatTypeMonotypes(record): expected record monotype, found kind={d}",
+                    .{@intFromEnum(resolved.kind)},
+                );
+            }
+            const mono_fields = self.store.monotype_store.recordFields(resolved);
             var seen_field_indices: std.ArrayListUnmanaged(u32) = .empty;
             defer seen_field_indices.deinit(self.allocator);
 
@@ -6124,7 +5934,7 @@ fn bindFlatTypeMonotypes(self: *Self, flat_type: types.FlatType, monotype: Monot
                 for (field_names, field_vars) |field_name, field_var| {
                     const field_idx = self.recordFieldIndexByName(field_name, mono_fields);
                     try appendSeenIndex(self.allocator, &seen_field_indices, field_idx);
-                    try self.bindTypeVarMonotypes(field_var, mono_fields[field_idx].type_idx);
+                    try self.bindTypeVarMonotypes(field_var, mono_fields[field_idx].ty);
                 }
 
                 var ext_var = current_row.ext;
@@ -6147,7 +5957,7 @@ fn bindFlatTypeMonotypes(self: *Self, flat_type: types.FlatType, monotype: Monot
                                 for (ext_field_names, ext_field_vars) |field_name, field_var| {
                                     const field_idx = self.recordFieldIndexByName(field_name, mono_fields);
                                     try appendSeenIndex(self.allocator, &seen_field_indices, field_idx);
-                                    try self.bindTypeVarMonotypes(field_var, mono_fields[field_idx].type_idx);
+                                    try self.bindTypeVarMonotypes(field_var, mono_fields[field_idx].ty);
                                 }
                                 break :rows;
                             },
@@ -6176,65 +5986,61 @@ fn bindFlatTypeMonotypes(self: *Self, flat_type: types.FlatType, monotype: Monot
                 if (!seenIndex(seen_field_indices.items, @intCast(field_idx))) {
                     typeBindingInvariant(
                         "bindFlatTypeMonotypes(record): monotype field '{s}' missing from type row",
-                        .{module_env.getIdent(mono_field.name)},
+                        .{self.store.monotype_store.getNameText(mono_field.name)},
                     );
                 }
             }
         },
         .record_unbound => |fields_range| {
-            const mrec = switch (mono) {
-                .record => |mrec| mrec,
-                else => typeBindingInvariant(
-                    "bindFlatTypeMonotypes(record_unbound): expected record monotype, found '{s}'",
-                    .{@tagName(mono)},
-                ),
-            };
+            if (resolved.kind != .record) {
+                typeBindingInvariant(
+                    "bindFlatTypeMonotypes(record_unbound): expected record monotype, found kind={d}",
+                    .{@intFromEnum(resolved.kind)},
+                );
+            }
             const fields_slice = self.types_store.getRecordFieldsSlice(fields_range);
             const field_names = fields_slice.items(.name);
             const field_vars = fields_slice.items(.var_);
-            const mono_field_span = mrec.fields;
+            const mono_fields = self.store.monotype_store.recordFields(resolved);
 
-            if (field_names.len != mono_field_span.len) {
+            if (field_names.len != mono_fields.len) {
                 typeBindingInvariant(
                     "bindFlatTypeMonotypes(record_unbound): field count mismatch (type={d}, monotype={d})",
-                    .{ field_names.len, mono_field_span.len },
+                    .{ field_names.len, mono_fields.len },
                 );
             }
 
             for (field_names, field_vars) |field_name, field_var| {
-                try self.bindRecordFieldByName(field_name, field_var, self.store.monotype_store.getFields(mono_field_span));
+                try self.bindRecordFieldByName(field_name, field_var, mono_fields);
             }
         },
         .tuple => |tuple| {
-            const mtuple = switch (mono) {
-                .tuple => |mtuple| mtuple,
-                else => typeBindingInvariant(
-                    "bindFlatTypeMonotypes(tuple): expected tuple monotype, found '{s}'",
-                    .{@tagName(mono)},
-                ),
-            };
+            if (resolved.kind != .tuple) {
+                typeBindingInvariant(
+                    "bindFlatTypeMonotypes(tuple): expected tuple monotype, found kind={d}",
+                    .{@intFromEnum(resolved.kind)},
+                );
+            }
             const elem_vars = self.types_store.sliceVars(tuple.elems);
-            const mono_elem_span = mtuple.elems;
-            if (elem_vars.len != mono_elem_span.len) {
+            const mono_elems = self.store.monotype_store.tupleElems(resolved);
+            if (elem_vars.len != mono_elems.len) {
                 typeBindingInvariant(
                     "bindFlatTypeMonotypes(tuple): arity mismatch (type={d}, monotype={d})",
-                    .{ elem_vars.len, mono_elem_span.len },
+                    .{ elem_vars.len, mono_elems.len },
                 );
             }
             for (elem_vars, 0..) |ev, i| {
-                const me = self.store.monotype_store.getIdxSpan(mono_elem_span)[i];
-                try self.bindTypeVarMonotypes(ev, me);
+                try self.bindTypeVarMonotypes(ev, mono_elems[i]);
             }
         },
         .tag_union => |tag_union_row| {
-            const mono_tag_span = switch (mono) {
-                .tag_union => |mtu| mtu.tags,
-                else => typeBindingInvariant(
-                    "bindFlatTypeMonotypes(tag_union): expected tag_union monotype, found '{s}'",
-                    .{@tagName(mono)},
-                ),
-            };
-            const mono_tags = self.store.monotype_store.getTags(mono_tag_span);
+            if (resolved.kind != .tag_union) {
+                typeBindingInvariant(
+                    "bindFlatTypeMonotypes(tag_union): expected tag_union monotype, found kind={d}",
+                    .{@intFromEnum(resolved.kind)},
+                );
+            }
+            const mono_tags = self.store.monotype_store.tagUnionTags(resolved);
             var seen_tag_indices: std.ArrayListUnmanaged(u32) = .empty;
             defer seen_tag_indices.deinit(self.allocator);
 
@@ -6289,37 +6095,36 @@ fn bindFlatTypeMonotypes(self: *Self, flat_type: types.FlatType, monotype: Monot
                 if (!seenIndex(seen_tag_indices.items, @intCast(tag_idx))) {
                     typeBindingInvariant(
                         "bindFlatTypeMonotypes(tag_union): monotype tag '{s}' missing from type row",
-                        .{module_env.getIdent(mono_tag.name)},
+                        .{self.store.monotype_store.getNameText(mono_tag.name)},
                     );
                 }
             }
         },
         .empty_record => {
-            switch (mono) {
-                .unit => {},
-                .record => |mrec| {
-                    const fields = self.store.monotype_store.getFields(mrec.fields);
-                    if (fields.len != 0) {
-                        typeBindingInvariant(
-                            "bindFlatTypeMonotypes(empty_record): expected zero record fields, found {d}",
-                            .{fields.len},
-                        );
-                    }
-                },
-                else => typeBindingInvariant(
-                    "bindFlatTypeMonotypes(empty_record): expected unit/empty-record monotype, found '{s}'",
-                    .{@tagName(mono)},
-                ),
+            if (!resolved.isUnit() and resolved.kind != .record) {
+                typeBindingInvariant(
+                    "bindFlatTypeMonotypes(empty_record): expected unit/empty-record monotype, found kind={d}",
+                    .{@intFromEnum(resolved.kind)},
+                );
+            }
+            if (resolved.kind == .record) {
+                const fields = self.store.monotype_store.recordFields(resolved);
+                if (fields.len != 0) {
+                    typeBindingInvariant(
+                        "bindFlatTypeMonotypes(empty_record): expected zero record fields, found {d}",
+                        .{fields.len},
+                    );
+                }
             }
         },
         .empty_tag_union => {
-            const mono_tags = switch (mono) {
-                .tag_union => |mtu| self.store.monotype_store.getTags(mtu.tags),
-                else => typeBindingInvariant(
-                    "bindFlatTypeMonotypes(empty_tag_union): expected empty tag union monotype, found '{s}'",
-                    .{@tagName(mono)},
-                ),
-            };
+            if (resolved.kind != .tag_union) {
+                typeBindingInvariant(
+                    "bindFlatTypeMonotypes(empty_tag_union): expected empty tag union monotype, found kind={d}",
+                    .{@intFromEnum(resolved.kind)},
+                );
+            }
+            const mono_tags = self.store.monotype_store.tagUnionTags(resolved);
             if (mono_tags.len != 0) {
                 typeBindingInvariant(
                     "bindFlatTypeMonotypes(empty_tag_union): expected zero tags, found {d}",

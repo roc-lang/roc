@@ -220,15 +220,15 @@ test "Monotype Store: primitive types" {
     var store = try Monotype.Store.init(test_allocator);
     defer store.deinit(test_allocator);
 
-    try testing.expectEqual(Monotype.Prim.str, store.getMonotype(store.primIdx(.str)).prim);
-    try testing.expectEqual(Monotype.Prim.i64, store.getMonotype(store.primIdx(.i64)).prim);
+    try testing.expectEqual(Monotype.Prim.str, store.primIdx(.str).builtinPrim().?);
+    try testing.expectEqual(Monotype.Prim.i64, store.primIdx(.i64).builtinPrim().?);
 }
 
 test "Monotype Store: unit type" {
     var store = try Monotype.Store.init(test_allocator);
     defer store.deinit(test_allocator);
 
-    try testing.expect(store.getMonotype(store.unit_idx) == .unit);
+    try testing.expect(store.unit_idx.isUnit());
 }
 
 test "Monotype Store: list type" {
@@ -236,10 +236,10 @@ test "Monotype Store: list type" {
     defer store.deinit(test_allocator);
 
     const elem = store.primIdx(.str);
-    const list = try store.addMonotype(test_allocator, .{ .list = .{ .elem = elem } });
+    const list = try store.internList(elem);
 
-    const retrieved = store.getMonotype(list);
-    try testing.expectEqual(elem, retrieved.list.elem);
+    try testing.expect(list.kind == .list);
+    try testing.expect(store.listElem(list).eql(elem));
 }
 
 test "Monotype Store: func type" {
@@ -250,16 +250,11 @@ test "Monotype Store: func type" {
     const arg2 = store.primIdx(.str);
     const ret = store.primIdx(.i64);
 
-    const args_span = try store.addIdxSpan(test_allocator, &.{ arg1, arg2 });
-    const func = try store.addMonotype(test_allocator, .{ .func = .{
-        .args = args_span,
-        .ret = ret,
-        .effectful = false,
-    } });
+    const func = try store.internFunc(&.{ arg1, arg2 }, ret, false);
 
-    const retrieved = store.getMonotype(func);
-    try testing.expectEqual(ret, retrieved.func.ret);
-    try testing.expectEqual(false, retrieved.func.effectful);
+    try testing.expect(func.kind == .func);
+    try testing.expect(store.funcRet(func).eql(ret));
+    try testing.expect(!store.funcEffectful(func));
 }
 
 test "Monotype Store: record type" {
@@ -269,14 +264,14 @@ test "Monotype Store: record type" {
     const field1_type = store.primIdx(.i64);
     const field2_type = store.primIdx(.str);
 
-    const field_span = try store.addFields(test_allocator, &.{
-        .{ .name = Ident.Idx.NONE, .type_idx = field1_type },
-        .{ .name = Ident.Idx.NONE, .type_idx = field2_type },
+    const name1 = try store.name_pool.intern("field1");
+    const name2 = try store.name_pool.intern("field2");
+    const record = try store.internRecord(&.{
+        .{ .name = name1, .ty = field1_type },
+        .{ .name = name2, .ty = field2_type },
     });
-    const record = try store.addMonotype(test_allocator, .{ .record = .{ .fields = field_span } });
 
-    const retrieved = store.getMonotype(record);
-    try testing.expect(retrieved == .record);
+    try testing.expect(record.kind == .record);
 }
 
 test "Monotype Store: tag union type" {
@@ -284,15 +279,13 @@ test "Monotype Store: tag union type" {
     defer store.deinit(test_allocator);
 
     const payload_type = store.primIdx(.str);
-    const payload_span = try store.addIdxSpan(test_allocator, &.{payload_type});
-
-    const tag_span = try store.addTags(test_allocator, &.{
-        .{ .name = Ident.Idx.NONE, .payloads = payload_span },
+    const tag_name = try store.name_pool.intern("MyTag");
+    const payload_list = try store.internIdxList(&.{payload_type});
+    const tag_union = try store.internTagUnion(&.{
+        .{ .name = tag_name, .payloads = payload_list },
     });
-    const tag_union = try store.addMonotype(test_allocator, .{ .tag_union = .{ .tags = tag_span } });
 
-    const retrieved = store.getMonotype(tag_union);
-    try testing.expect(retrieved == .tag_union);
+    try testing.expect(tag_union.kind == .tag_union);
 }
 
 test "Monotype Store: box type" {
@@ -300,10 +293,10 @@ test "Monotype Store: box type" {
     defer store.deinit(test_allocator);
 
     const inner = store.primIdx(.i64);
-    const boxed = try store.addMonotype(test_allocator, .{ .box = .{ .inner = inner } });
+    const boxed = try store.internBox(inner);
 
-    const retrieved = store.getMonotype(boxed);
-    try testing.expectEqual(inner, retrieved.box.inner);
+    try testing.expect(boxed.kind == .box);
+    try testing.expect(store.boxInner(boxed).eql(inner));
 }
 
 test "Monotype Store: tuple type" {
@@ -313,11 +306,9 @@ test "Monotype Store: tuple type" {
     const elem1 = store.primIdx(.i64);
     const elem2 = store.primIdx(.str);
 
-    const elems_span = try store.addIdxSpan(test_allocator, &.{ elem1, elem2 });
-    const tuple = try store.addMonotype(test_allocator, .{ .tuple = .{ .elems = elems_span } });
+    const tuple = try store.internTuple(&.{ elem1, elem2 });
 
-    const retrieved = store.getMonotype(tuple);
-    try testing.expect(retrieved == .tuple);
+    try testing.expect(tuple.kind == .tuple);
 }
 
 test "Monotype Store: all primitive types" {
@@ -343,7 +334,7 @@ test "Monotype Store: all primitive types" {
 
     for (prims) |p| {
         const idx = store.primIdx(p);
-        try testing.expectEqual(p, store.getMonotype(idx).prim);
+        try testing.expectEqual(p, idx.builtinPrim().?);
     }
 }
 
@@ -1039,9 +1030,8 @@ test "lambda set: higher-order closure captures monotype stays numeric tuple" {
     const closure_member = env.mir_store.getClosureMember(members[0].closure_member);
     const capture_bindings = env.mir_store.getCaptureBindings(closure_member.capture_bindings);
     try testing.expectEqual(@as(usize, 1), capture_bindings.len);
-    const elem_mono = env.mir_store.monotype_store.getMonotype(capture_bindings[0].monotype);
-    try testing.expect(elem_mono == .prim);
-    try testing.expectEqual(Monotype.Prim.dec, elem_mono.prim);
+    const elem_mono = env.mir_store.monotype_store.resolve(capture_bindings[0].monotype);
+    try testing.expectEqual(Monotype.Prim.dec, elem_mono.builtinPrim().?);
 }
 
 test "lambda set: imported List.any receives predicate lambda set" {
@@ -1080,21 +1070,18 @@ test "lambda set: imported List.any receives predicate lambda set" {
     const param_ids = env.mir_store.getPatternSpan(params);
     try testing.expectEqual(@as(usize, 2), param_ids.len);
 
-    const list_param_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.patternTypeOf(param_ids[0]));
-    try testing.expect(list_param_mono == .list);
-    const list_elem_mono = env.mir_store.monotype_store.getMonotype(list_param_mono.list.elem);
-    try testing.expect(list_elem_mono == .prim);
-    try testing.expectEqual(Monotype.Prim.i64, list_elem_mono.prim);
+    const list_param_id = env.mir_store.monotype_store.resolve(env.mir_store.patternTypeOf(param_ids[0]));
+    try testing.expect(list_param_id.kind == .list);
+    const list_elem_id = env.mir_store.monotype_store.listElem(list_param_id);
+    try testing.expectEqual(Monotype.Prim.i64, list_elem_id.builtinPrim().?);
 
-    const predicate_param_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.patternTypeOf(param_ids[1]));
-    try testing.expect(predicate_param_mono == .func);
-    const predicate_arg_monos = env.mir_store.monotype_store.getIdxSpan(predicate_param_mono.func.args);
+    const predicate_param_id = env.mir_store.monotype_store.resolve(env.mir_store.patternTypeOf(param_ids[1]));
+    try testing.expect(predicate_param_id.kind == .func);
+    const predicate_arg_monos = env.mir_store.monotype_store.funcArgs(predicate_param_id);
     try testing.expectEqual(@as(usize, 1), predicate_arg_monos.len);
-    const predicate_arg_mono = env.mir_store.monotype_store.getMonotype(predicate_arg_monos[0]);
-    try testing.expect(predicate_arg_mono == .prim);
-    try testing.expectEqual(Monotype.Prim.i64, predicate_arg_mono.prim);
-    const predicate_ret_mono = env.mir_store.monotype_store.getMonotype(predicate_param_mono.func.ret);
-    try testing.expect(predicate_ret_mono == .tag_union);
+    try testing.expectEqual(Monotype.Prim.i64, predicate_arg_monos[0].builtinPrim().?);
+    const predicate_ret_id = env.mir_store.monotype_store.funcRet(predicate_param_id);
+    try testing.expect(predicate_ret_id.kind == .tag_union);
 
     const predicate_pat = env.mir_store.getPattern(param_ids[1]);
     try testing.expect(predicate_pat == .bind);
@@ -1128,9 +1115,8 @@ test "lambda set: imported List.any receives predicate lambda set" {
         }
     }
 
-    const loop_item_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.patternTypeOf(loop_item_pat.?));
-    try testing.expect(loop_item_mono == .prim);
-    try testing.expectEqual(Monotype.Prim.i64, loop_item_mono.prim);
+    const loop_item_id = env.mir_store.monotype_store.resolve(env.mir_store.patternTypeOf(loop_item_pat.?));
+    try testing.expectEqual(Monotype.Prim.i64, loop_item_id.builtinPrim().?);
 
     const all_module_envs = [_]*ModuleEnv{
         @constCast(env.builtin_module.env),
@@ -1185,9 +1171,8 @@ test "fromTypeVar: int with suffix resolves to prim i64" {
     var env = try MirTestEnv.initExpr("42.I64");
     defer env.deinit();
     const expr = try env.lowerFirstDef();
-    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(monotype == .prim);
-    try testing.expectEqual(Monotype.Prim.i64, monotype.prim);
+    const mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(expr));
+    try testing.expectEqual(Monotype.Prim.i64, mono_id.builtinPrim().?);
 }
 
 test "fromTypeVar: string resolves to valid monotype" {
@@ -1215,17 +1200,17 @@ test "fromTypeVar: list resolves to list monotype" {
     // This catches the cross-module ident mismatch bug where
     // fromNominalType fails to recognize List because the Builtin
     // module's Ident.Idx for "List" differs from the current module's.
-    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(monotype == .list);
+    const mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(expr));
+    try testing.expect(mono_id.kind == .list);
 }
 
 test "fromTypeVar: record resolves to record with fields" {
     var env = try MirTestEnv.initExpr("{ x: 1, y: 2 }");
     defer env.deinit();
     const expr = try env.lowerFirstDef();
-    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(monotype == .record);
-    try testing.expectEqual(@as(u16, 2), monotype.record.fields.len);
+    const mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(expr));
+    try testing.expect(mono_id.kind == .record);
+    try testing.expectEqual(@as(usize, 2), env.mir_store.monotype_store.recordFields(mono_id).len);
 }
 
 test "fromTypeVar: lambda resolves to func type" {
@@ -1235,17 +1220,17 @@ test "fromTypeVar: lambda resolves to func type" {
     );
     defer env.deinit();
     const expr = try env.lowerFirstDef();
-    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(monotype == .func);
-    try testing.expectEqual(@as(u16, 1), monotype.func.args.len);
+    const mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(expr));
+    try testing.expect(mono_id.kind == .func);
+    try testing.expectEqual(@as(usize, 1), env.mir_store.monotype_store.funcArgs(mono_id).len);
 }
 
 test "fromTypeVar: tag resolves to tag_union" {
     var env = try MirTestEnv.initExpr("Ok(42)");
     defer env.deinit();
     const expr = try env.lowerFirstDef();
-    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(monotype == .tag_union);
+    const mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(expr));
+    try testing.expect(mono_id.kind == .tag_union);
 }
 
 test "fromTypeVar: tuple resolves to tuple type" {
@@ -1254,9 +1239,9 @@ test "fromTypeVar: tuple resolves to tuple type" {
     );
     defer env.deinit();
     const expr = try env.lowerFirstDef();
-    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(monotype == .tuple);
-    try testing.expectEqual(@as(u16, 2), monotype.tuple.elems.len);
+    const mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(expr));
+    try testing.expect(mono_id.kind == .tuple);
+    try testing.expectEqual(@as(usize, 2), env.mir_store.monotype_store.tupleElems(mono_id).len);
 }
 
 // --- Gap #25: Recursive types in fromTypeVar ---
@@ -1272,8 +1257,8 @@ test "fromTypeVar: recursive linked list type completes without hanging" {
     const expr = try env.lowerNamedDef("x");
     const result = env.mir_store.getExpr(expr);
     try testing.expect(result == .tag);
-    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(monotype == .tag_union);
+    const mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(expr));
+    try testing.expect(mono_id.kind == .tag_union);
 }
 
 test "fromTypeVar: recursive binary tree type completes without hanging" {
@@ -1287,8 +1272,8 @@ test "fromTypeVar: recursive binary tree type completes without hanging" {
     const expr = try env.lowerNamedDef("x");
     const result = env.mir_store.getExpr(expr);
     try testing.expect(result == .tag);
-    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(monotype == .tag_union);
+    const mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(expr));
+    try testing.expect(mono_id.kind == .tag_union);
 }
 
 test "fromTypeVar: polymorphic opaque with function field propagates nominal args into backing type" {
@@ -1304,27 +1289,25 @@ test "fromTypeVar: polymorphic opaque with function field propagates nominal arg
     defer env.deinit();
 
     const expr = try env.lowerNamedDef("w");
-    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
+    const mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(expr));
 
-    try testing.expect(monotype == .record);
+    try testing.expect(mono_id.kind == .record);
 
-    const fields = env.mir_store.monotype_store.getFields(monotype.record.fields);
+    const fields = env.mir_store.monotype_store.recordFields(mono_id);
     try testing.expectEqual(@as(usize, 1), fields.len);
 
-    const field_type = env.mir_store.monotype_store.getMonotype(fields[0].type_idx);
-    try testing.expect(field_type == .func);
+    const field_type = env.mir_store.monotype_store.resolve(fields[0].ty);
+    try testing.expect(field_type.kind == .func);
 
-    const ret_type = env.mir_store.monotype_store.getMonotype(field_type.func.ret);
-    try testing.expect(ret_type == .tag_union);
+    const ret_type = env.mir_store.monotype_store.resolve(env.mir_store.monotype_store.funcRet(field_type));
+    try testing.expect(ret_type.kind == .tag_union);
 
-    const tags = env.mir_store.monotype_store.getTags(ret_type.tag_union.tags);
+    const tags = env.mir_store.monotype_store.tagUnionTags(ret_type);
     try testing.expectEqual(@as(usize, 1), tags.len);
-    try testing.expectEqual(@as(usize, 1), tags[0].payloads.len);
 
-    const payloads = env.mir_store.monotype_store.getIdxSpan(tags[0].payloads);
-    const payload_type = env.mir_store.monotype_store.getMonotype(payloads[0]);
-    try testing.expect(payload_type == .prim);
-    try testing.expectEqual(Monotype.Prim.str, payload_type.prim);
+    const payloads = env.mir_store.monotype_store.getIdxListItems(tags[0].payloads);
+    try testing.expectEqual(@as(usize, 1), payloads.len);
+    try testing.expectEqual(Monotype.Prim.str, payloads[0].builtinPrim().?);
 }
 
 test "lambda set: opaque function field call through param gets field lambda set" {
@@ -1776,10 +1759,10 @@ test "lowerExternalDef: mutually recursive defs get monotypes patched (not left 
     try testing.expect(odd_type != env.mir_store.monotype_store.unit_idx);
 
     // Both should resolve to func types (U64 -> Bool)
-    const even_mono = env.mir_store.monotype_store.getMonotype(even_type);
-    const odd_mono = env.mir_store.monotype_store.getMonotype(odd_type);
-    try testing.expect(even_mono == .func);
-    try testing.expect(odd_mono == .func);
+    const even_resolved = env.mir_store.monotype_store.resolve(even_type);
+    const odd_resolved = env.mir_store.monotype_store.resolve(odd_type);
+    try testing.expect(even_resolved.kind == .func);
+    try testing.expect(odd_resolved.kind == .func);
 }
 
 // --- Cross-module builtin call lowering ---
@@ -2222,8 +2205,8 @@ test "Bool diagnostic MIR: Bool.True lowers to tag with tag_union" {
     const tag_name = env.module_env.getIdent(result.tag.name);
     try testing.expectEqualStrings("True", tag_name);
     // Monotype should be tag_union
-    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(monotype == .tag_union);
+    const mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(expr));
+    try testing.expect(mono_id.kind == .tag_union);
 }
 
 test "Bool diagnostic MIR: Bool.False lowers to tag with tag_union" {
@@ -2235,8 +2218,8 @@ test "Bool diagnostic MIR: Bool.False lowers to tag with tag_union" {
     try testing.expectEqual(@as(u16, 0), result.tag.args.len);
     const tag_name = env.module_env.getIdent(result.tag.name);
     try testing.expectEqualStrings("False", tag_name);
-    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(monotype == .tag_union);
+    const mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(expr));
+    try testing.expect(mono_id.kind == .tag_union);
 }
 
 test "Bool diagnostic MIR: Bool.not(True) lowers with tag_union type" {
@@ -2246,8 +2229,8 @@ test "Bool diagnostic MIR: Bool.not(True) lowers with tag_union type" {
     const result = env.mir_store.getExpr(expr);
     // Bool.not may lower as a cross-module call or inlined match
     try testing.expect(result != .runtime_err_type);
-    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(monotype == .tag_union);
+    const mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(expr));
+    try testing.expect(mono_id.kind == .tag_union);
 }
 
 test "Bool diagnostic MIR: Bool.not(False) lowers with tag_union type" {
@@ -2256,8 +2239,8 @@ test "Bool diagnostic MIR: Bool.not(False) lowers with tag_union type" {
     const expr = try env.lowerFirstDef();
     const result = env.mir_store.getExpr(expr);
     try testing.expect(result != .runtime_err_type);
-    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(monotype == .tag_union);
+    const mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(expr));
+    try testing.expect(mono_id.kind == .tag_union);
 }
 
 test "Bool diagnostic MIR: !Bool.True lowers to match_expr with tag_union" {
@@ -2269,8 +2252,8 @@ test "Bool diagnostic MIR: !Bool.True lowers to match_expr with tag_union" {
     const expr = try env.lowerFirstDef();
     // !Bool.True desugars via negBool to a match expression
     try testing.expect(env.mir_store.getExpr(expr) == .match_expr);
-    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(monotype == .tag_union);
+    const mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(expr));
+    try testing.expect(mono_id.kind == .tag_union);
 }
 
 test "Bool diagnostic MIR: !Bool.False lowers to match_expr with tag_union" {
@@ -2281,8 +2264,8 @@ test "Bool diagnostic MIR: !Bool.False lowers to match_expr with tag_union" {
     defer env.deinit();
     const expr = try env.lowerFirstDef();
     try testing.expect(env.mir_store.getExpr(expr) == .match_expr);
-    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(monotype == .tag_union);
+    const mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(expr));
+    try testing.expect(mono_id.kind == .tag_union);
 }
 
 test "Bool diagnostic MIR: Bool.True and Bool.False lowers to match_expr with tag_union" {
@@ -2292,8 +2275,8 @@ test "Bool diagnostic MIR: Bool.True and Bool.False lowers to match_expr with ta
     const result = env.mir_store.getExpr(expr);
     // `and` short-circuit desugars to a match expression
     try testing.expect(result == .match_expr);
-    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(monotype == .tag_union);
+    const mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(expr));
+    try testing.expect(mono_id.kind == .tag_union);
 }
 
 test "Bool diagnostic MIR: !Bool.True or !Bool.True lowers with tag_union" {
@@ -2306,8 +2289,8 @@ test "Bool diagnostic MIR: !Bool.True or !Bool.True lowers with tag_union" {
     const result = env.mir_store.getExpr(expr);
     // `or` short-circuit desugars to a match expression
     try testing.expect(result == .match_expr);
-    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(monotype == .tag_union);
+    const mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(expr));
+    try testing.expect(mono_id.kind == .tag_union);
 }
 
 test "Bool diagnostic MIR: lambda negation applied to Bool.True lowers with tag_union" {
@@ -2317,8 +2300,8 @@ test "Bool diagnostic MIR: lambda negation applied to Bool.True lowers with tag_
     const result = env.mir_store.getExpr(expr);
     // A lambda call should produce a .call expression
     try testing.expect(result != .runtime_err_type);
-    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(monotype == .tag_union);
+    const mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(expr));
+    try testing.expect(mono_id.kind == .tag_union);
 }
 
 // --- Bool.not structural tests ---
@@ -2342,8 +2325,8 @@ test "Bool.not MIR: !Bool.True match has True pattern -> False body, wildcard ->
     try testing.expectEqualStrings("True", cond_tag_name);
 
     // Check condition monotype is tag_union
-    const cond_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(result.match_expr.cond));
-    try testing.expect(cond_mono == .tag_union);
+    const cond_mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(result.match_expr.cond));
+    try testing.expect(cond_mono_id.kind == .tag_union);
 
     // Check there are 2 branches
     const branches = env.mir_store.getBranches(result.match_expr.branches);
@@ -2357,8 +2340,8 @@ test "Bool.not MIR: !Bool.True match has True pattern -> False body, wildcard ->
     const pat0_name = env.module_env.getIdent(pat0.tag.name);
     try testing.expectEqualStrings("True", pat0_name);
     // Pattern monotype should be tag_union
-    const pat0_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.patternTypeOf(bp0[0].pattern));
-    try testing.expect(pat0_mono == .tag_union);
+    const pat0_mono_id = env.mir_store.monotype_store.resolve(env.mir_store.patternTypeOf(bp0[0].pattern));
+    try testing.expect(pat0_mono_id.kind == .tag_union);
     // Body should be False tag
     const body0 = env.mir_store.getExpr(branches[0].body);
     try testing.expect(body0 == .tag);
@@ -2392,8 +2375,8 @@ test "Bool.not MIR: !Bool.False match has True pattern -> False body, wildcard -
     try testing.expect(cond == .tag);
     const cond_tag_name = env.module_env.getIdent(cond.tag.name);
     try testing.expectEqualStrings("False", cond_tag_name);
-    const cond_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(result.match_expr.cond));
-    try testing.expect(cond_mono == .tag_union);
+    const cond_mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(result.match_expr.cond));
+    try testing.expect(cond_mono_id.kind == .tag_union);
 
     // Branch structure should be identical: True => False, _ => True
     const branches = env.mir_store.getBranches(result.match_expr.branches);
@@ -2423,16 +2406,16 @@ test "Bool.not MIR: Bool.not(True) is a call with tag_union return type" {
     // Bool.not(True) should be a call expression (cross-module method call)
     try testing.expect(result == .call);
     // Return type should be tag_union
-    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(monotype == .tag_union);
+    const mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(expr));
+    try testing.expect(mono_id.kind == .tag_union);
     // The argument should be a tag (True) with tag_union type
     const args = env.mir_store.getExprSpan(result.call.args);
     try testing.expectEqual(@as(usize, 1), args.len);
     const arg = env.mir_store.getExpr(args[0]);
     try testing.expect(arg == .tag);
     try testing.expectEqualStrings("True", env.module_env.getIdent(arg.tag.name));
-    const arg_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(args[0]));
-    try testing.expect(arg_mono == .tag_union);
+    const arg_mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(args[0]));
+    try testing.expect(arg_mono_id.kind == .tag_union);
 }
 
 test "Bool.not MIR: Bool.not(False) is a call with tag_union return type" {
@@ -2441,15 +2424,15 @@ test "Bool.not MIR: Bool.not(False) is a call with tag_union return type" {
     const expr = try env.lowerFirstDef();
     const result = env.mir_store.getExpr(expr);
     try testing.expect(result == .call);
-    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(monotype == .tag_union);
+    const mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(expr));
+    try testing.expect(mono_id.kind == .tag_union);
     const args = env.mir_store.getExprSpan(result.call.args);
     try testing.expectEqual(@as(usize, 1), args.len);
     const arg = env.mir_store.getExpr(args[0]);
     try testing.expect(arg == .tag);
     try testing.expectEqualStrings("False", env.module_env.getIdent(arg.tag.name));
-    const arg_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(args[0]));
-    try testing.expect(arg_mono == .tag_union);
+    const arg_mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(args[0]));
+    try testing.expect(arg_mono_id.kind == .tag_union);
 }
 
 // --- Nominal Bool vs structural tag union MIR tests ---
@@ -2464,8 +2447,8 @@ test "Nominal Bool MIR: annotated True lowers with tag_union" {
     );
     defer env.deinit();
     const expr = try env.lowerFirstDef();
-    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(monotype == .tag_union);
+    const mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(expr));
+    try testing.expect(mono_id.kind == .tag_union);
 }
 
 test "Nominal Bool MIR: annotated False lowers with tag_union" {
@@ -2475,32 +2458,32 @@ test "Nominal Bool MIR: annotated False lowers with tag_union" {
     );
     defer env.deinit();
     const expr = try env.lowerFirstDef();
-    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(monotype == .tag_union);
+    const mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(expr));
+    try testing.expect(mono_id.kind == .tag_union);
 }
 
 test "Structural tag MIR: bare True lowers as tag_union" {
     var env = try MirTestEnv.initExpr("True");
     defer env.deinit();
     const expr = try env.lowerFirstDef();
-    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(monotype == .tag_union);
+    const mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(expr));
+    try testing.expect(mono_id.kind == .tag_union);
 }
 
 test "Structural tag MIR: bare False lowers as tag_union" {
     var env = try MirTestEnv.initExpr("False");
     defer env.deinit();
     const expr = try env.lowerFirstDef();
-    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(monotype == .tag_union);
+    const mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(expr));
+    try testing.expect(mono_id.kind == .tag_union);
 }
 
 test "Structural tag MIR: if True True else False lowers as tag_union" {
     var env = try MirTestEnv.initExpr("if True True else False");
     defer env.deinit();
     const expr = try env.lowerFirstDef();
-    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(monotype == .tag_union);
+    const mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(expr));
+    try testing.expect(mono_id.kind == .tag_union);
 }
 
 // --- Cross-module type resolution: method dispatch resolves concrete types ---
@@ -2522,29 +2505,27 @@ test "cross-module type resolution: U32.to dispatches with concrete U32 function
     const func_expr = env.mir_store.getExpr(top.call.func);
     try testing.expect(func_expr == .lookup);
 
-    const func_monotype_idx = env.mir_store.typeOf(top.call.func);
-    const func_mono = env.mir_store.monotype_store.getMonotype(func_monotype_idx);
-    try testing.expect(func_mono == .func);
+    const func_mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(top.call.func));
+    try testing.expect(func_mono_id.kind == .func);
 
     // The function's return type must be List(U32), not List(unit)
-    const ret_mono = env.mir_store.monotype_store.getMonotype(func_mono.func.ret);
-    try testing.expect(ret_mono == .list);
+    const ret_mono_id = env.mir_store.monotype_store.resolve(env.mir_store.monotype_store.funcRet(func_mono_id));
+    try testing.expect(ret_mono_id.kind == .list);
 
-    const elem_mono = env.mir_store.monotype_store.getMonotype(ret_mono.list.elem);
-    try testing.expectEqual(Monotype.Monotype{ .prim = .u32 }, elem_mono);
+    const elem_mono_id = env.mir_store.monotype_store.listElem(ret_mono_id);
+    try testing.expectEqual(Monotype.Prim.u32, elem_mono_id.builtinPrim().?);
 
     // Verify the function DEFINITION body was also lowered with concrete types.
     const method_symbol = func_expr.lookup;
     const sym_key: u64 = @bitCast(method_symbol);
     const def_expr_id = env.mir_store.symbol_defs.get(sym_key) orelse
         return error.TestUnexpectedResult;
-    const def_mono_idx = env.mir_store.typeOf(def_expr_id);
-    const def_mono = env.mir_store.monotype_store.getMonotype(def_mono_idx);
-    try testing.expect(def_mono == .func);
-    const def_ret_mono = env.mir_store.monotype_store.getMonotype(def_mono.func.ret);
-    try testing.expect(def_ret_mono == .list);
-    const def_elem = env.mir_store.monotype_store.getMonotype(def_ret_mono.list.elem);
-    try testing.expectEqual(Monotype.Monotype{ .prim = .u32 }, def_elem);
+    const def_mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(def_expr_id));
+    try testing.expect(def_mono_id.kind == .func);
+    const def_ret_id = env.mir_store.monotype_store.resolve(env.mir_store.monotype_store.funcRet(def_mono_id));
+    try testing.expect(def_ret_id.kind == .list);
+    const def_elem_id = env.mir_store.monotype_store.listElem(def_ret_id);
+    try testing.expectEqual(Monotype.Prim.u32, def_elem_id.builtinPrim().?);
 }
 
 // --- Polymorphic numeric specialization tests ---
@@ -2573,15 +2554,14 @@ test "polymorphic lambda in block: sum called with U64 gets U64 monotype, not De
     try testing.expect(final_expr == .call);
 
     // The call's return type must be U64, not Dec
-    const call_monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(result.block.final_expr));
-    try testing.expectEqual(Monotype.Prim.u64, call_monotype.prim);
+    const call_mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(result.block.final_expr));
+    try testing.expectEqual(Monotype.Prim.u64, call_mono_id.builtinPrim().?);
 
     // The call's arguments must be U64
     const args = env.mir_store.getExprSpan(final_expr.call.args);
     for (args) |arg| {
-        const arg_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(arg));
-        try testing.expect(arg_mono == .prim);
-        try testing.expectEqual(Monotype.Prim.u64, arg_mono.prim);
+        const arg_mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(arg));
+        try testing.expectEqual(Monotype.Prim.u64, arg_mono_id.builtinPrim().?);
     }
 
     // The lambda itself (first stmt's expr) should have params typed as U64
@@ -2589,12 +2569,11 @@ test "polymorphic lambda in block: sum called with U64 gets U64 monotype, not De
     try testing.expect(stmts.len >= 1);
     const decl_expr = env.mir_store.getExpr(stmts[0].decl_const.expr);
     try testing.expect(decl_expr == .lambda);
-    const lambda_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(stmts[0].decl_const.expr));
-    try testing.expect(lambda_mono == .func);
+    const lambda_mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(stmts[0].decl_const.expr));
+    try testing.expect(lambda_mono_id.kind == .func);
     // Return type of the lambda must be U64
-    const ret_mono = env.mir_store.monotype_store.getMonotype(lambda_mono.func.ret);
-    try testing.expect(ret_mono == .prim);
-    try testing.expectEqual(Monotype.Prim.u64, ret_mono.prim);
+    const ret_mono_id = env.mir_store.monotype_store.funcRet(lambda_mono_id);
+    try testing.expectEqual(Monotype.Prim.u64, ret_mono_id.builtinPrim().?);
 }
 
 test "polymorphic lambda in block: fn called via arrow syntax gets correct type" {
@@ -2611,9 +2590,8 @@ test "polymorphic lambda in block: fn called via arrow syntax gets correct type"
     try testing.expect(result == .block);
 
     // The final expression's return type must be U64
-    const call_monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(result.block.final_expr));
-    try testing.expect(call_monotype == .prim);
-    try testing.expectEqual(Monotype.Prim.u64, call_monotype.prim);
+    const call_mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(result.block.final_expr));
+    try testing.expectEqual(Monotype.Prim.u64, call_mono_id.builtinPrim().?);
 }
 
 test "polymorphic lambda with literal in body: a + b + 0 called with U64" {
@@ -2629,8 +2607,8 @@ test "polymorphic lambda with literal in body: a + b + 0 called with U64" {
     try testing.expect(result == .block);
 
     // The call's return type must be U64
-    const call_monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(result.block.final_expr));
-    try testing.expectEqual(Monotype.Prim.u64, call_monotype.prim);
+    const call_mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(result.block.final_expr));
+    try testing.expectEqual(Monotype.Prim.u64, call_mono_id.builtinPrim().?);
 
     // Check the lambda body
     const stmts = env.mir_store.getStmts(result.block.stmts);
@@ -2639,17 +2617,17 @@ test "polymorphic lambda with literal in body: a + b + 0 called with U64" {
     try testing.expect(decl_expr == .lambda);
 
     // Lambda return must be U64
-    const lambda_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(stmts[0].decl_const.expr));
-    try testing.expect(lambda_mono == .func);
-    const ret_mono = env.mir_store.monotype_store.getMonotype(lambda_mono.func.ret);
-    try testing.expectEqual(Monotype.Prim.u64, ret_mono.prim);
+    const lambda_mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(stmts[0].decl_const.expr));
+    try testing.expect(lambda_mono_id.kind == .func);
+    const ret_mono_id = env.mir_store.monotype_store.funcRet(lambda_mono_id);
+    try testing.expectEqual(Monotype.Prim.u64, ret_mono_id.builtinPrim().?);
 
     // Check that the lambda body's subexpressions are all U64, not Dec
     // The body is `a + b + 0` which desugars to `(a + b) + 0`
     // The body is either a call or run_low_level for the outer `+`
     const body = env.mir_store.getExpr(decl_expr.lambda.body);
-    const body_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(decl_expr.lambda.body));
-    try testing.expectEqual(Monotype.Prim.u64, body_mono.prim);
+    const body_mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(decl_expr.lambda.body));
+    try testing.expectEqual(Monotype.Prim.u64, body_mono_id.builtinPrim().?);
 
     // The outer `+` has args: (a + b) and 0
     // Check that the 0 literal has U64 monotype
@@ -2658,8 +2636,8 @@ test "polymorphic lambda with literal in body: a + b + 0 called with U64" {
         if (ll_args.len == 2) {
             const zero_expr = env.mir_store.getExpr(ll_args[1]);
             try testing.expect(zero_expr == .int);
-            const zero_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(ll_args[1]));
-            try testing.expectEqual(Monotype.Prim.u64, zero_mono.prim);
+            const zero_mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(ll_args[1]));
+            try testing.expectEqual(Monotype.Prim.u64, zero_mono_id.builtinPrim().?);
         }
     } else if (body == .call) {
         const call_args = env.mir_store.getExprSpan(body.call.args);
@@ -2687,8 +2665,8 @@ test "structural equality: record == produces match_expr (field-by-field)" {
     try testing.expectEqual(@as(usize, 2), bindings.len);
     try testing.expect(env.mir_store.getExpr(result.borrow_scope.body) == .match_expr);
     // Return type should be Bool
-    const mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(mono == .tag_union);
+    const mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(expr));
+    try testing.expect(mono_id.kind == .tag_union);
 }
 
 test "structural equality: record != produces negated match_expr" {
@@ -2701,8 +2679,8 @@ test "structural equality: record != produces negated match_expr" {
     const result = env.mir_store.getExpr(expr);
     // != wraps the == result in negBool (match True => False, _ => True)
     try testing.expect(result == .match_expr);
-    const mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(mono == .tag_union);
+    const mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(expr));
+    try testing.expect(mono_id.kind == .tag_union);
 }
 
 test "structural equality: empty record == is True" {
@@ -2730,8 +2708,8 @@ test "structural equality: tuple == produces match_expr" {
     const bindings = env.mir_store.getBorrowBindings(result.borrow_scope.bindings);
     try testing.expectEqual(@as(usize, 2), bindings.len);
     try testing.expect(env.mir_store.getExpr(result.borrow_scope.body) == .match_expr);
-    const mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(mono == .tag_union);
+    const mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(expr));
+    try testing.expect(mono_id.kind == .tag_union);
 }
 
 test "structural equality: tag union == produces nested match_expr" {
@@ -2748,8 +2726,8 @@ test "structural equality: tag union == produces nested match_expr" {
     const bindings = env.mir_store.getBorrowBindings(result.borrow_scope.bindings);
     try testing.expectEqual(@as(usize, 2), bindings.len);
     try testing.expect(env.mir_store.getExpr(result.borrow_scope.body) == .match_expr);
-    const mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(mono == .tag_union);
+    const mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(expr));
+    try testing.expect(mono_id.kind == .tag_union);
 }
 
 test "structural equality: single-field record produces run_low_level (no match)" {
@@ -2791,8 +2769,8 @@ test "structural equality: list == produces block with length check" {
     try testing.expect(result == .borrow_scope);
     const bindings = env.mir_store.getBorrowBindings(result.borrow_scope.bindings);
     try testing.expectEqual(@as(usize, 2), bindings.len);
-    const mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(mono == .tag_union);
+    const mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(expr));
+    try testing.expect(mono_id.kind == .tag_union);
 }
 
 test "Dec.abs lowers to num_abs with Dec monotype, not unit" {
@@ -2803,15 +2781,14 @@ test "Dec.abs lowers to num_abs with Dec monotype, not unit" {
 
     // The result monotype must be Dec, not unit
     const mono_idx = env.mir_store.typeOf(expr);
-    const mono = env.mir_store.monotype_store.getMonotype(mono_idx);
-    try testing.expectEqual(Monotype.Monotype{ .prim = .dec }, mono);
+    const mono_id = env.mir_store.monotype_store.resolve(mono_idx);
+    try testing.expectEqual(Monotype.Prim.dec, mono_id.builtinPrim().?);
 
     // If it's a call, check the function's monotype too
     if (top == .call) {
-        const func_mono_idx = env.mir_store.typeOf(top.call.func);
-        const func_mono = env.mir_store.monotype_store.getMonotype(func_mono_idx);
-        try testing.expect(func_mono == .func);
-        const ret = env.mir_store.monotype_store.getMonotype(func_mono.func.ret);
-        try testing.expectEqual(Monotype.Monotype{ .prim = .dec }, ret);
+        const func_mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(top.call.func));
+        try testing.expect(func_mono_id.kind == .func);
+        const ret_id = env.mir_store.monotype_store.funcRet(func_mono_id);
+        try testing.expectEqual(Monotype.Prim.dec, ret_id.builtinPrim().?);
     }
 }

@@ -591,11 +591,11 @@ fn structFieldArityForExpr(mir_store: *const MIR.Store, expr_id: MIR.ExprId) ?u3
 }
 
 fn structFieldArityForMonotype(mir_store: *const MIR.Store, mono_idx: anytype) ?u32 {
-    const mono = mir_store.monotype_store.getMonotype(mono_idx);
-    return switch (mono) {
-        .record => |record| @intCast(mir_store.monotype_store.getFields(record.fields).len),
-        .tuple => |tuple| @intCast(mir_store.monotype_store.getIdxSpan(tuple.elems).len),
-        .box => |box| structFieldArityForMonotype(mir_store, box.inner),
+    const resolved = mir_store.monotype_store.resolve(mono_idx);
+    return switch (resolved.kind) {
+        .record => @intCast(mir_store.monotype_store.recordFields(resolved).len),
+        .tuple => @intCast(mir_store.monotype_store.tupleElems(resolved).len),
+        .box => structFieldArityForMonotype(mir_store, mir_store.monotype_store.boxInner(resolved)),
         else => null,
     };
 }

@@ -294,24 +294,17 @@ fn registerSpecializedMonotypeLayout(
 ) Allocator.Error!void {
     if (mono_idx.isNone()) return;
 
-    const monotype = self.mir_store.monotype_store.getMonotype(mono_idx);
+    const resolved = self.mir_store.monotype_store.resolve(mono_idx);
 
     // .func monotypes always resolve to their canonical closure layout.
     // They must not be overridden with a data layout from a containing
     // composite type, because lowerLambda/lowerHosted rely on
     // layoutFromMonotype returning a callable (closure) layout for the
     // lambda's fn_layout field.
-    if (monotype == .func) return;
+    if (resolved.kind == .func) return;
 
-    const mono_key = @intFromEnum(mono_idx);
+    const mono_key = @as(u32, @bitCast(mono_idx));
     try self.saveMonotypeOverrideIfNeeded(saved, mono_key);
-
-    if (monotype == .func) {
-        // Function monotypes keep their callable layout. Specialization may refine the
-        // runtime value layout of a function value (e.g. empty captures -> zst), but that
-        // must not poison later `layoutFromMonotype(.func)` queries used for call/lambda nodes.
-        return;
-    }
 
     if (self.specialized_monotype_layouts.get(mono_key)) |existing| {
         if (existing == layout_idx) return;
@@ -319,10 +312,10 @@ fn registerSpecializedMonotypeLayout(
             const existing_layout = self.layout_store.getLayout(existing);
             const new_layout = self.layout_store.getLayout(layout_idx);
             std.debug.panic(
-                "MirToLir specialized monotype layout mismatch: mono_idx={d} mono={any} existing={d}/{s} new={d}/{s}",
+                "MirToLir specialized monotype layout mismatch: mono_idx={d} kind={s} existing={d}/{s} new={d}/{s}",
                 .{
                     mono_key,
-                    monotype,
+                    @tagName(resolved.kind),
                     @intFromEnum(existing),
                     @tagName(existing_layout.tag),
                     @intFromEnum(layout_idx),
@@ -339,30 +332,34 @@ fn registerSpecializedMonotypeLayout(
     self.specialized_closure_value_layout_cache.clearRetainingCapacity();
     const layout_val = self.layout_store.getLayout(layout_idx);
 
-    switch (monotype) {
-        .recursive_placeholder, .unit, .prim => {},
+    switch (resolved.kind) {
+        .rec => unreachable, // already resolved
+        .builtin => {},
         .func => {},
-        .box => |b| {
+        .box => {
             if (layout_val.tag == .box) {
-                try self.registerSpecializedMonotypeLayout(b.inner, layout_val.data.box, saved);
+                try self.registerSpecializedMonotypeLayout(self.mir_store.monotype_store.boxInner(resolved), layout_val.data.box, saved);
             }
         },
-        .list => |l| switch (layout_val.tag) {
-            .list => try self.registerSpecializedMonotypeLayout(l.elem, layout_val.data.list, saved),
-            .list_of_zst => try self.registerSpecializedMonotypeLayout(
-                l.elem,
-                try self.zeroSizedSpecializationLayoutFromMonotype(l.elem),
-                saved,
-            ),
+        .list => switch (layout_val.tag) {
+            .list => try self.registerSpecializedMonotypeLayout(self.mir_store.monotype_store.listElem(resolved), layout_val.data.list, saved),
+            .list_of_zst => {
+                const elem = self.mir_store.monotype_store.listElem(resolved);
+                try self.registerSpecializedMonotypeLayout(
+                    elem,
+                    try self.zeroSizedSpecializationLayoutFromMonotype(elem),
+                    saved,
+                );
+            },
             else => {},
         },
-        .tuple => |t| {
-            const elems = self.mir_store.monotype_store.getIdxSpan(t.elems);
+        .tuple => {
+            const elems = self.mir_store.monotype_store.tupleElems(resolved);
             if (elems.len == 0) return;
             if (builtin.mode == .Debug and layout_val.tag != .struct_) {
                 std.debug.panic(
-                    "MirToLir invariant violated: non-empty tuple monotype must specialize to struct_ layout, got mono_idx={d} mono={any} layout_idx={d} tag={s}",
-                    .{ mono_key, monotype, @intFromEnum(layout_idx), @tagName(layout_val.tag) },
+                    "MirToLir invariant violated: non-empty tuple monotype must specialize to struct_ layout, got mono_idx={d} kind={s} layout_idx={d} tag={s}",
+                    .{ mono_key, @tagName(resolved.kind), @intFromEnum(layout_idx), @tagName(layout_val.tag) },
                 );
             }
             if (layout_val.tag != .struct_) return;
@@ -378,13 +375,13 @@ fn registerSpecializedMonotypeLayout(
                 }
             }
         },
-        .record => |r| {
-            const fields = self.mir_store.monotype_store.getFields(r.fields);
+        .record => {
+            const fields = self.mir_store.monotype_store.recordFields(resolved);
             if (fields.len == 0) return;
             if (builtin.mode == .Debug and layout_val.tag != .struct_) {
                 std.debug.panic(
-                    "MirToLir invariant violated: non-empty record monotype must specialize to struct_ layout, got mono_idx={d} mono={any} layout_idx={d} tag={s}",
-                    .{ mono_key, monotype, @intFromEnum(layout_idx), @tagName(layout_val.tag) },
+                    "MirToLir invariant violated: non-empty record monotype must specialize to struct_ layout, got mono_idx={d} kind={s} layout_idx={d} tag={s}",
+                    .{ mono_key, @tagName(resolved.kind), @intFromEnum(layout_idx), @tagName(layout_val.tag) },
                 );
             }
             if (layout_val.tag != .struct_) return;
@@ -395,18 +392,18 @@ fn registerSpecializedMonotypeLayout(
                 for (0..layout_fields.len) |li| {
                     const layout_field = layout_fields.get(li);
                     if (layout_field.index != semantic_index) continue;
-                    try self.registerSpecializedMonotypeLayout(field.type_idx, layout_field.layout, saved);
+                    try self.registerSpecializedMonotypeLayout(field.ty, layout_field.layout, saved);
                     break;
                 }
             }
         },
-        .tag_union => |tu| {
-            const tags = self.mir_store.monotype_store.getTags(tu.tags);
+        .tag_union => {
+            const tags = self.mir_store.monotype_store.tagUnionTags(resolved);
             if (tags.len == 0) return;
             if (builtin.mode == .Debug and layout_val.tag != .tag_union) {
                 std.debug.panic(
-                    "MirToLir invariant violated: non-empty tag union monotype must specialize to tag_union layout, got mono_idx={d} mono={any} layout_idx={d} tag={s}",
-                    .{ mono_key, monotype, @intFromEnum(layout_idx), @tagName(layout_val.tag) },
+                    "MirToLir invariant violated: non-empty tag union monotype must specialize to tag_union layout, got mono_idx={d} kind={s} layout_idx={d} tag={s}",
+                    .{ mono_key, @tagName(resolved.kind), @intFromEnum(layout_idx), @tagName(layout_val.tag) },
                 );
             }
             if (layout_val.tag != .tag_union) return;
@@ -416,7 +413,7 @@ fn registerSpecializedMonotypeLayout(
             for (tags, 0..) |tag, i| {
                 if (i >= union_layouts.len) break;
                 const payload_layout_idx = union_layouts.get(i).payload_layout;
-                const payloads = self.mir_store.monotype_store.getIdxSpan(tag.payloads);
+                const payloads = self.mir_store.monotype_store.getIdxListItems(tag.payloads);
                 if (payloads.len == 0) continue;
                 const payload_layout_val = self.layout_store.getLayout(payload_layout_idx);
                 if (payload_layout_val.tag != .struct_) continue;
@@ -572,15 +569,14 @@ fn runtimeListLayoutFromExprs(
 }
 
 fn tagPayloadMonotypes(self: *Self, union_mono_idx: Monotype.Idx, tag_name: Ident.Idx) []const Monotype.Idx {
-    const union_mono = self.mir_store.monotype_store.getMonotype(union_mono_idx);
-    const tags = switch (union_mono) {
-        .tag_union => |tu| self.mir_store.monotype_store.getTags(tu.tags),
-        else => unreachable,
-    };
+    const resolved = self.mir_store.monotype_store.resolve(union_mono_idx);
+    std.debug.assert(resolved.kind == .tag_union);
+    const tags = self.mir_store.monotype_store.tagUnionTags(resolved);
 
     for (tags) |tag| {
-        if (self.identsTextEqual(tag.name, tag_name)) {
-            return self.mir_store.monotype_store.getIdxSpan(tag.payloads);
+        const mono_tag_text = self.mir_store.monotype_store.getNameText(tag.name);
+        if (self.identMatchesText(tag_name, mono_tag_text)) {
+            return self.mir_store.monotype_store.getIdxListItems(tag.payloads);
         }
     }
 
@@ -616,14 +612,13 @@ fn runtimeTagLayoutFromExpr(
     tag_data: anytype,
     union_mono_idx: Monotype.Idx,
 ) Allocator.Error!layout.Idx {
-    if (self.specialized_monotype_layouts.get(@intFromEnum(union_mono_idx))) |layout_idx| {
+    if (self.specialized_monotype_layouts.get(@as(u32, @bitCast(union_mono_idx)))) |layout_idx| {
         return layout_idx;
     }
 
-    const tags = switch (self.mir_store.monotype_store.getMonotype(union_mono_idx)) {
-        .tag_union => |tu| self.mir_store.monotype_store.getTags(tu.tags),
-        else => unreachable,
-    };
+    const resolved = self.mir_store.monotype_store.resolve(union_mono_idx);
+    std.debug.assert(resolved.kind == .tag_union);
+    const tags = self.mir_store.monotype_store.tagUnionTags(resolved);
     const mir_args = self.tagPayloadExprs(union_mono_idx, tag_data.name, tag_data.args);
 
     if (tags.len == 0) return .zst;
@@ -632,9 +627,10 @@ fn runtimeTagLayoutFromExpr(
     const save_idxs = self.scratch_layout_idxs.items.len;
     defer self.scratch_layout_idxs.shrinkRetainingCapacity(save_idxs);
 
+    const tag_name_text = self.identText(tag_data.name);
     var found_active = false;
     for (tags) |tag| {
-        if (self.identsTextEqual(tag.name, tag_data.name)) {
+        if (tag_name_text != null and std.mem.eql(u8, self.mir_store.monotype_store.getNameText(tag.name), tag_name_text.?)) {
             found_active = true;
             if (mir_args.len == 0) {
                 try self.scratch_layout_idxs.append(self.allocator, zst_idx);
@@ -644,7 +640,7 @@ fn runtimeTagLayoutFromExpr(
             continue;
         }
 
-        const payloads = self.mir_store.monotype_store.getIdxSpan(tag.payloads);
+        const payloads = self.mir_store.monotype_store.getIdxListItems(tag.payloads);
         if (payloads.len == 0) {
             try self.scratch_layout_idxs.append(self.allocator, zst_idx);
         } else {
@@ -655,7 +651,7 @@ fn runtimeTagLayoutFromExpr(
     if (builtin.mode == .Debug and !found_active) {
         std.debug.panic(
             "MirToLir invariant violated: active tag ident idx {d} missing from tag union mono_idx={d}",
-            .{ tag_data.name.idx, @intFromEnum(union_mono_idx) },
+            .{ tag_data.name.idx, @as(u32, @bitCast(union_mono_idx)) },
         );
     }
 
@@ -685,8 +681,8 @@ fn runtimeLayoutFromPattern(self: *Self, mir_pat_id: MIR.PatternId) Allocator.Er
 
     return switch (pat) {
         .bind => |sym| blk: {
-            const mono = self.mir_store.monotype_store.getMonotype(mono_idx);
-            if (mono == .func) {
+            const resolved = self.mir_store.monotype_store.resolve(mono_idx);
+            if (resolved.kind == .func) {
                 if (self.lambda_set_store.getSymbolLambdaSet(sym)) |ls_idx| {
                     break :blk try self.closureValueLayoutFromLambdaSet(ls_idx);
                 }
@@ -702,7 +698,7 @@ fn runtimeLayoutFromPattern(self: *Self, mir_pat_id: MIR.PatternId) Allocator.Er
         .runtime_error,
         => self.layoutFromMonotype(mono_idx),
         .as_pattern => |ap| self.runtimeLayoutFromPattern(ap.pattern),
-        .struct_destructure => |sd| switch (self.mir_store.monotype_store.getMonotype(mono_idx)) {
+        .struct_destructure => |sd| switch (self.mir_store.monotype_store.resolve(mono_idx).kind) {
             .record => self.runtimeRecordLayoutFromPattern(mono_idx, self.mir_store.getPatternSpan(sd.fields)),
             .tuple => self.runtimeTupleLayoutFromPatternSpan(self.mir_store.getPatternSpan(sd.fields)),
             else => self.layoutFromMonotype(mono_idx),
@@ -732,13 +728,10 @@ fn runtimeRecordLayoutFromPattern(
     mono_idx: Monotype.Idx,
     mir_patterns: []const MIR.PatternId,
 ) Allocator.Error!layout.Idx {
-    const mono = self.mir_store.monotype_store.getMonotype(mono_idx);
-    const record = switch (mono) {
-        .record => |r| r,
-        else => return self.layoutFromMonotype(mono_idx),
-    };
+    const resolved = self.mir_store.monotype_store.resolve(mono_idx);
+    if (resolved.kind != .record) return self.layoutFromMonotype(mono_idx);
 
-    const all_fields = self.mir_store.monotype_store.getFields(record.fields);
+    const all_fields = self.mir_store.monotype_store.recordFields(resolved);
     if (all_fields.len == 0) return try self.layout_store.getEmptyRecordLayout();
 
     const save_layouts = self.scratch_layouts.items.len;
@@ -747,7 +740,7 @@ fn runtimeRecordLayoutFromPattern(
         const field_layout_idx = if (field_idx < mir_patterns.len)
             try self.runtimeLayoutFromPattern(mir_patterns[field_idx])
         else
-            try self.layoutFromMonotype(field.type_idx);
+            try self.layoutFromMonotype(field.ty);
         try self.scratch_layouts.append(self.allocator, self.layout_store.getLayout(field_layout_idx));
     }
 
@@ -953,8 +946,8 @@ fn runtimeLayoutForStructField(self: *Self, expr_id: MIR.ExprId, field_idx: u32)
         .lookup => |symbol| blk: {
             if (self.symbol_layouts.get(symbol.raw())) |struct_layout| {
                 const struct_layout_val = self.layout_store.getLayout(struct_layout);
-                const struct_mono = self.mir_store.monotype_store.getMonotype(self.mir_store.typeOf(expr_id));
-                switch (struct_mono) {
+                const struct_resolved = self.mir_store.monotype_store.resolve(self.mir_store.typeOf(expr_id));
+                switch (struct_resolved.kind) {
                     .record, .tuple => {},
                     else => {},
                 }
@@ -977,9 +970,9 @@ fn runtimeLayoutForStructField(self: *Self, expr_id: MIR.ExprId, field_idx: u32)
 /// captures payloads (or a tag union over payloads), not by callable code pointers.
 fn runtimeValueLayoutFromMirExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!layout.Idx {
     const mono_idx = self.mir_store.typeOf(mir_expr_id);
-    const mono = self.mir_store.monotype_store.getMonotype(mono_idx);
+    const resolved = self.mir_store.monotype_store.resolve(mono_idx);
     const expr = self.mir_store.getExpr(mir_expr_id);
-    if (mono == .func) {
+    if (resolved.kind == .func) {
         switch (expr) {
             .block => |block| return self.runtimeLayoutForBlockFinal(block),
             .lookup => |sym| {
@@ -1047,12 +1040,12 @@ fn runtimeValueLayoutFromMirExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator
                 return self.layoutFromMonotype(mono_idx);
             }
             return self.runtimeListLayoutFromExprs(
-                mono.list.elem,
+                self.mir_store.monotype_store.listElem(resolved),
                 self.mir_store.getExprSpan(list_data.elems),
             );
         },
         .tag => |tag_data| {
-            if (mono == .tag_union) {
+            if (resolved.kind == .tag_union) {
                 if (!(try self.monotypeContainsFunctionValue(mono_idx))) {
                     return self.layoutFromMonotype(mono_idx);
                 }
@@ -1062,7 +1055,7 @@ fn runtimeValueLayoutFromMirExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator
         },
         .run_low_level => |ll| {
             if (ll.op == .list_get_unsafe) {
-                if (self.specialized_monotype_layouts.get(@intFromEnum(mono_idx))) |layout_idx| {
+                if (self.specialized_monotype_layouts.get(@as(u32, @bitCast(mono_idx)))) |layout_idx| {
                     return layout_idx;
                 }
                 const args = self.mir_store.getExprSpan(ll.args);
@@ -1072,7 +1065,7 @@ fn runtimeValueLayoutFromMirExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator
                 return self.runtimeListElemLayoutFromMirExpr(args[0]);
             }
         },
-        .struct_ => |struct_| switch (mono) {
+        .struct_ => |struct_| switch (resolved.kind) {
             .tuple => {
                 if (!(try self.monotypeContainsFunctionValue(mono_idx))) {
                     return self.layoutFromMonotype(mono_idx);
@@ -1087,6 +1080,7 @@ fn runtimeValueLayoutFromMirExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator
             },
             else => {},
         },
+
         .lookup => |sym| {
             if (self.symbol_layouts.get(sym.raw())) |layout_idx| {
                 return try self.runtimeLayoutForBindingSymbol(sym, mono_idx, layout_idx);
@@ -1372,11 +1366,9 @@ fn runtimeLayoutForLambdaBodyWithParamLayouts(
     const params = self.mir_store.getPatternSpan(resolved.params);
     if (params.len != param_layouts.len) return null;
     const fn_mono_idx = self.mir_store.typeOf(callee_expr_id);
-    const fn_mono = self.mir_store.monotype_store.getMonotype(fn_mono_idx);
-    const func_args = switch (fn_mono) {
-        .func => |f| self.mir_store.monotype_store.getIdxSpan(f.args),
-        else => return null,
-    };
+    const fn_resolved = self.mir_store.monotype_store.resolve(fn_mono_idx);
+    if (fn_resolved.kind != .func) return null;
+    const func_args = self.mir_store.monotype_store.funcArgs(fn_resolved);
     if (func_args.len != param_layouts.len) return null;
 
     var saved_layouts = std.ArrayList(struct {
@@ -1558,7 +1550,7 @@ fn runtimeLayoutFromSpecializedDirectCall(
 
 fn runtimeListElemLayoutFromMirExpr(self: *Self, list_mir_expr_id: MIR.ExprId) Allocator.Error!layout.Idx {
     const list_mono_idx = self.mir_store.typeOf(list_mir_expr_id);
-    const list_mono = self.mir_store.monotype_store.getMonotype(list_mono_idx);
+    const list_resolved = self.mir_store.monotype_store.resolve(list_mono_idx);
 
     switch (self.mir_store.getExpr(list_mir_expr_id)) {
         .list => |list_data| {
@@ -1590,17 +1582,16 @@ fn runtimeListElemLayoutFromMirExpr(self: *Self, list_mir_expr_id: MIR.ExprId) A
 
     return switch (list_layout.tag) {
         .list => list_layout.data.list,
-        .list_of_zst => switch (list_mono) {
-            .list => |l| try self.zeroSizedSpecializationLayoutFromMonotype(l.elem),
-            else => {
-                if (builtin.mode == .Debug) {
-                    std.debug.panic(
-                        "MirToLir invariant violated: expected list monotype for list_get_unsafe source, got {s}",
-                        .{@tagName(list_mono)},
-                    );
-                }
-                unreachable;
-            },
+        .list_of_zst => if (list_resolved.kind == .list)
+            try self.zeroSizedSpecializationLayoutFromMonotype(self.mir_store.monotype_store.listElem(list_resolved))
+        else {
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "MirToLir invariant violated: expected list monotype for list_get_unsafe source, got {s}",
+                    .{@tagName(list_resolved.kind)},
+                );
+            }
+            unreachable;
         },
         else => {
             if (builtin.mode == .Debug) {
@@ -1734,6 +1725,15 @@ fn identTextIfOwnedBy(env: anytype, ident: Ident.Idx) ?[]const u8 {
     return text;
 }
 
+/// Resolve an Ident.Idx to its text string, searching all module envs.
+fn identText(self: *const Self, ident: Ident.Idx) ?[]const u8 {
+    if (identTextIfOwnedBy(self.layout_store.currentEnv(), ident)) |text| return text;
+    for (self.layout_store.moduleEnvs()) |env| {
+        if (identTextIfOwnedBy(env, ident)) |text| return text;
+    }
+    return null;
+}
+
 fn identMatchesText(self: *const Self, ident: Ident.Idx, expected: []const u8) bool {
     if (identTextIfOwnedBy(self.layout_store.currentEnv(), ident)) |text| {
         if (std.mem.eql(u8, text, expected)) return true;
@@ -1748,52 +1748,34 @@ fn identMatchesText(self: *const Self, ident: Ident.Idx, expected: []const u8) b
     return false;
 }
 
-fn identsTextEqual(self: *const Self, lhs: Ident.Idx, rhs: Ident.Idx) bool {
-    if (lhs.eql(rhs)) return true;
-
-    if (identTextIfOwnedBy(self.layout_store.currentEnv(), lhs)) |lhs_text| {
-        if (self.identMatchesText(rhs, lhs_text)) return true;
-    }
-
-    for (self.layout_store.moduleEnvs()) |env| {
-        if (identTextIfOwnedBy(env, lhs)) |lhs_text| {
-            if (self.identMatchesText(rhs, lhs_text)) return true;
-        }
-    }
-
-    return false;
-}
-
 /// Given a tag name and the monotype of the containing tag union,
 /// return the discriminant (sorted index of the tag name).
 fn tagDiscriminant(self: *const Self, tag_name: Ident.Idx, union_mono_idx: Monotype.Idx) u16 {
-    const monotype = self.mir_store.monotype_store.getMonotype(union_mono_idx);
-    switch (monotype) {
-        .tag_union => |tu| {
-            const tags = self.mir_store.monotype_store.getTags(tu.tags);
+    const resolved = self.mir_store.monotype_store.resolve(union_mono_idx);
+    if (resolved.kind == .tag_union) {
+        const tags = self.mir_store.monotype_store.tagUnionTags(resolved);
 
-            for (tags, 0..) |tag, i| {
-                if (self.identsTextEqual(tag.name, tag_name)) {
-                    return @intCast(i);
-                }
+        for (tags, 0..) |tag, i| {
+            const mono_tag_text = self.mir_store.monotype_store.getNameText(tag.name);
+            if (self.identMatchesText(tag_name, mono_tag_text)) {
+                return @intCast(i);
             }
-            if (builtin.mode == .Debug) {
-                std.debug.panic(
-                    "MirToLir invariant violated: tag ident idx {d} not found in tag union mono_idx={d}",
-                    .{ tag_name.idx, @intFromEnum(union_mono_idx) },
-                );
-            }
-            unreachable;
-        },
-        .prim, .unit, .record, .tuple, .list, .box, .func, .recursive_placeholder => {
-            if (builtin.mode == .Debug) {
-                std.debug.panic(
-                    "tagDiscriminant expected tag_union; got {s} for tag ident idx {d} mono_idx={d}",
-                    .{ @tagName(std.meta.activeTag(monotype)), tag_name.idx, @intFromEnum(union_mono_idx) },
-                );
-            }
-            unreachable;
-        },
+        }
+        if (builtin.mode == .Debug) {
+            std.debug.panic(
+                "MirToLir invariant violated: tag ident idx {d} not found in tag union mono_idx={d}",
+                .{ tag_name.idx, @as(u32, @bitCast(union_mono_idx)) },
+            );
+        }
+        unreachable;
+    } else {
+        if (builtin.mode == .Debug) {
+            std.debug.panic(
+                "tagDiscriminant expected tag_union; got {s} for tag ident idx {d} mono_idx={d}",
+                .{ @tagName(resolved.kind), tag_name.idx, @as(u32, @bitCast(union_mono_idx)) },
+            );
+        }
+        unreachable;
     }
 }
 
@@ -2158,19 +2140,32 @@ fn lowerExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirExprId {
             break :blk self.lir_store.addExpr(.{ .str_literal = lir_str_idx }, region);
         },
         .list => |l| self.lowerList(l, mir_expr_id, region),
-        .struct_ => |s| switch (self.mir_store.monotype_store.getMonotype(mono_idx)) {
-            .record => self.lowerRecord(s.fields, mono_idx, mir_expr_id, region),
-            .tuple => self.lowerTuple(s.fields, mono_idx, mir_expr_id, region),
-            .unit => self.lowerRecord(s.fields, mono_idx, mir_expr_id, region),
-            else => {
-                if (builtin.mode == .Debug) {
-                    std.debug.panic(
-                        "MirToLir invariant violated: MIR struct_ has unexpected monotype {s} at expr {d}",
-                        .{ @tagName(self.mir_store.monotype_store.getMonotype(mono_idx)), @intFromEnum(mir_expr_id) },
-                    );
-                }
-                unreachable;
-            },
+        .struct_ => |s| blk: {
+            const struct_resolved = self.mir_store.monotype_store.resolve(mono_idx);
+            break :blk switch (struct_resolved.kind) {
+                .record => self.lowerRecord(s.fields, mono_idx, mir_expr_id, region),
+                .tuple => self.lowerTuple(s.fields, mono_idx, mir_expr_id, region),
+                .builtin => if (struct_resolved.isUnit())
+                    self.lowerRecord(s.fields, mono_idx, mir_expr_id, region)
+                else {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic(
+                            "MirToLir invariant violated: MIR struct_ has unexpected monotype kind {s} at expr {d}",
+                            .{ @tagName(struct_resolved.kind), @intFromEnum(mir_expr_id) },
+                        );
+                    }
+                    unreachable;
+                },
+                else => {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic(
+                            "MirToLir invariant violated: MIR struct_ has unexpected monotype kind {s} at expr {d}",
+                            .{ @tagName(struct_resolved.kind), @intFromEnum(mir_expr_id) },
+                        );
+                    }
+                    unreachable;
+                },
+            };
         },
         .tag => |t| self.lowerTag(t, mono_idx, mir_expr_id, region),
         .lookup => |sym| self.lowerLookup(sym, mono_idx, mir_expr_id, region),
@@ -2179,7 +2174,7 @@ fn lowerExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirExprId {
         .call => |c| self.lowerCall(c, mir_expr_id, region),
         .block => |b| self.lowerBlock(b, mir_expr_id, region),
         .borrow_scope => |b| self.lowerBorrowScope(b, mir_expr_id, region),
-        .struct_access => |sa| switch (self.mir_store.monotype_store.getMonotype(self.mir_store.typeOf(sa.struct_))) {
+        .struct_access => |sa| switch (self.mir_store.monotype_store.resolve(self.mir_store.typeOf(sa.struct_)).kind) {
             .record => self.lowerRecordAccess(sa.struct_, sa.field_idx, mir_expr_id, region),
             .tuple => self.lowerTupleAccess(sa.struct_, sa.field_idx, mir_expr_id, region),
             else => unreachable,
@@ -2187,9 +2182,11 @@ fn lowerExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirExprId {
         .str_escape_and_quote => |s| blk: {
             if (builtin.mode == .Debug) {
                 const arg_mono = self.mir_store.typeOf(s);
-                const arg_type = self.mir_store.monotype_store.getMonotype(arg_mono);
-                const ret_type = self.mir_store.monotype_store.getMonotype(mono_idx);
-                if (!(arg_type == .prim and arg_type.prim == .str and ret_type == .prim and ret_type.prim == .str)) {
+                const arg_resolved = self.mir_store.monotype_store.resolve(arg_mono);
+                const ret_resolved = self.mir_store.monotype_store.resolve(mono_idx);
+                const arg_is_str = if (arg_resolved.builtinPrim()) |p| p == .str else false;
+                const ret_is_str = if (ret_resolved.builtinPrim()) |p| p == .str else false;
+                if (!(arg_is_str and ret_is_str)) {
                     std.debug.panic("MIR invariant violated: str_escape_and_quote must be Str -> Str", .{});
                 }
             }
@@ -2565,7 +2562,7 @@ fn lowerLookup(self: *Self, sym: Symbol, mono_idx: Monotype.Idx, _: MIR.ExprId, 
         if (self.symbol_layouts.get(sym.raw())) |binding_layout| {
             break :blk try self.runtimeLayoutForBindingSymbol(sym, mono_idx, binding_layout);
         }
-        if (self.mir_store.monotype_store.getMonotype(mono_idx) == .func) {
+        if (self.mir_store.monotype_store.resolve(mono_idx).kind == .func) {
             if (self.lambda_set_store.getSymbolLambdaSet(sym)) |ls_idx| {
                 break :blk try self.closureValueLayoutFromLambdaSet(ls_idx);
             }
@@ -2573,7 +2570,7 @@ fn lowerLookup(self: *Self, sym: Symbol, mono_idx: Monotype.Idx, _: MIR.ExprId, 
         if (self.mir_store.getSymbolDef(sym)) |mir_def_id| {
             break :blk try self.runtimeValueLayoutFromMirExpr(mir_def_id);
         }
-        if (self.mir_store.monotype_store.getMonotype(mono_idx) == .func) {
+        if (self.mir_store.monotype_store.resolve(mono_idx).kind == .func) {
             break :blk try self.layoutFromMonotype(mono_idx);
         }
         break :blk try self.layoutFromMonotype(mono_idx);
@@ -2680,11 +2677,9 @@ fn lowerMatch(self: *Self, match_data: anytype, mir_expr_id: MIR.ExprId, region:
 }
 
 fn lowerLambda(self: *Self, lam: anytype, mono_idx: Monotype.Idx, _: MIR.ExprId, region: Region) Allocator.Error!LirExprId {
-    const monotype = self.mir_store.monotype_store.getMonotype(mono_idx);
-    const func_args = switch (monotype) {
-        .func => |f| self.mir_store.monotype_store.getIdxSpan(f.args),
-        .prim, .unit, .record, .tuple, .tag_union, .list, .box, .recursive_placeholder => unreachable,
-    };
+    const lambda_resolved = self.mir_store.monotype_store.resolve(mono_idx);
+    std.debug.assert(lambda_resolved.kind == .func);
+    const func_args = self.mir_store.monotype_store.funcArgs(lambda_resolved);
     const save_layouts = self.scratch_layout_idxs.items.len;
     defer self.scratch_layout_idxs.shrinkRetainingCapacity(save_layouts);
     for (func_args) |arg_mono_idx| {
@@ -2710,7 +2705,8 @@ fn lowerLambdaWithParamLayouts(
     };
 
     const fn_layout = try self.layoutFromMonotype(mono_idx);
-    const monotype = self.mir_store.monotype_store.getMonotype(mono_idx);
+    const lwp_resolved = self.mir_store.monotype_store.resolve(mono_idx);
+    std.debug.assert(lwp_resolved.kind == .func);
     const mir_params = self.mir_store.getPatternSpan(lam.params);
     if (builtin.mode == .Debug and mir_params.len != param_layouts.len) {
         std.debug.panic(
@@ -2718,10 +2714,7 @@ fn lowerLambdaWithParamLayouts(
             .{ mir_params.len, param_layouts.len },
         );
     }
-    const func_args = switch (monotype) {
-        .func => |f| self.mir_store.monotype_store.getIdxSpan(f.args),
-        .prim, .unit, .record, .tuple, .tag_union, .list, .box, .recursive_placeholder => unreachable,
-    };
+    const func_args = self.mir_store.monotype_store.funcArgs(lwp_resolved);
     if (builtin.mode == .Debug and func_args.len != param_layouts.len) {
         std.debug.panic(
             "MirToLir invariant violated: function monotype arg/layout mismatch ({d} args, {d} layouts)",
@@ -2802,13 +2795,10 @@ fn lowerLambdaWithParamLayouts(
             }
         }
     }
-    const ret_layout = switch (monotype) {
-        .func => |f| blk: {
-            const inferred = try self.runtimeValueLayoutFromMirExpr(lam.body);
-            try self.registerSpecializedMonotypeLayout(f.ret, inferred, &saved_monotype_layouts);
-            break :blk inferred;
-        },
-        .prim, .unit, .record, .tuple, .tag_union, .list, .box, .recursive_placeholder => unreachable, // Lambda expressions always have .func monotype
+    const ret_layout = blk: {
+        const inferred = try self.runtimeValueLayoutFromMirExpr(lam.body);
+        try self.registerSpecializedMonotypeLayout(self.mir_store.monotype_store.funcRet(lwp_resolved), inferred, &saved_monotype_layouts);
+        break :blk inferred;
     };
 
     var lir_body = try self.lowerExpr(lam.body);
@@ -2943,24 +2933,24 @@ fn annotationOnlyIntrinsicForFunc(
     self: *Self,
     func_mono_idx: Monotype.Idx,
 ) Allocator.Error!?AnnotationOnlyIntrinsic {
-    const func_mono = self.mir_store.monotype_store.getMonotype(func_mono_idx);
-    if (func_mono != .func) return null;
+    const func_resolved = self.mir_store.monotype_store.resolve(func_mono_idx);
+    if (func_resolved.kind != .func) return null;
 
-    const fn_args = self.mir_store.monotype_store.getIdxSpan(func_mono.func.args);
+    const fn_args = self.mir_store.monotype_store.funcArgs(func_resolved);
     if (fn_args.len != 1) return null;
     const arg_mono = fn_args[0];
-    const ret_mono = func_mono.func.ret;
+    const ret_mono = self.mir_store.monotype_store.funcRet(func_resolved);
 
-    const arg_ty = self.mir_store.monotype_store.getMonotype(arg_mono);
-    const ret_ty = self.mir_store.monotype_store.getMonotype(ret_mono);
+    const arg_resolved = self.mir_store.monotype_store.resolve(arg_mono);
+    const ret_resolved = self.mir_store.monotype_store.resolve(ret_mono);
 
-    if (ret_ty == .box) {
-        if (arg_mono == ret_ty.box.inner) {
+    if (ret_resolved.kind == .box) {
+        if (arg_mono.eql(self.mir_store.monotype_store.boxInner(ret_resolved))) {
             return .{ .op = .box_box, .result_mono = ret_mono };
         }
     }
-    if (arg_ty == .box) {
-        if (arg_ty.box.inner == ret_mono) {
+    if (arg_resolved.kind == .box) {
+        if (self.mir_store.monotype_store.boxInner(arg_resolved).eql(ret_mono)) {
             return .{ .op = .box_unbox, .result_mono = ret_mono };
         }
     }
@@ -3039,7 +3029,7 @@ fn adaptFunctionArgToParamLambdaSet(
 ) Allocator.Error!LirExprId {
     const param_symbol = self.functionParamSymbol(param_pat_id) orelse return arg_lir_expr;
     const param_mono = self.mir_store.patternTypeOf(param_pat_id);
-    if (self.mir_store.monotype_store.getMonotype(param_mono) != .func) return arg_lir_expr;
+    if (self.mir_store.monotype_store.resolve(param_mono).kind != .func) return arg_lir_expr;
 
     const param_ls_idx = self.lambda_set_store.getSymbolLambdaSet(param_symbol) orelse return arg_lir_expr;
     var param_members = try self.snapshotLambdaSetMembers(param_ls_idx);
@@ -3664,12 +3654,12 @@ fn adaptValueLayout(
 ) Allocator.Error!LirExprId {
     if (source_layout == target_layout) return value_expr;
 
-    const monotype = self.mir_store.monotype_store.getMonotype(mono_idx);
-    return switch (monotype) {
-        .record => |record| self.adaptRecordValueLayout(value_expr, record, source_layout, target_layout, region),
-        .tuple => |tuple| self.adaptTupleValueLayout(value_expr, tuple, source_layout, target_layout, region),
+    const adapt_resolved = self.mir_store.monotype_store.resolve(mono_idx);
+    return switch (adapt_resolved.kind) {
+        .record => self.adaptRecordValueLayout(value_expr, adapt_resolved, source_layout, target_layout, region),
+        .tuple => self.adaptTupleValueLayout(value_expr, adapt_resolved, source_layout, target_layout, region),
         .func => self.adaptLayoutByStructure(value_expr, source_layout, target_layout, region),
-        .prim, .unit, .tag_union, .list, .box, .recursive_placeholder => value_expr,
+        .builtin, .tag_union, .list, .box, .rec => value_expr,
     };
 }
 
@@ -3857,12 +3847,12 @@ fn adaptConcreteClosureMemberPayload(
 fn adaptRecordValueLayout(
     self: *Self,
     value_expr: LirExprId,
-    record: anytype,
+    record_id: Monotype.TypeId,
     source_layout: layout.Idx,
     target_layout: layout.Idx,
     region: Region,
 ) Allocator.Error!LirExprId {
-    const fields = self.mir_store.monotype_store.getFields(record.fields);
+    const fields = self.mir_store.monotype_store.recordFields(record_id);
     if (fields.len == 0) return value_expr;
     const source_layout_val = self.layout_store.getLayout(source_layout);
     const target_layout_val = self.layout_store.getLayout(target_layout);
@@ -3894,7 +3884,7 @@ fn adaptRecordValueLayout(
         } }, region);
         const adapted_field = try self.adaptValueLayout(
             field_expr,
-            fields[semantic_index].type_idx,
+            fields[semantic_index].ty,
             source_field.field_layout,
             target_field.layout,
             region,
@@ -3914,12 +3904,12 @@ fn adaptRecordValueLayout(
 fn adaptTupleValueLayout(
     self: *Self,
     value_expr: LirExprId,
-    tuple: anytype,
+    tuple_id: Monotype.TypeId,
     source_layout: layout.Idx,
     target_layout: layout.Idx,
     region: Region,
 ) Allocator.Error!LirExprId {
-    const elems = self.mir_store.monotype_store.getIdxSpan(tuple.elems);
+    const elems = self.mir_store.monotype_store.tupleElems(tuple_id);
     if (elems.len == 0) return value_expr;
     const source_layout_val = self.layout_store.getLayout(source_layout);
     const target_layout_val = self.layout_store.getLayout(target_layout);
@@ -4085,16 +4075,11 @@ fn lowerHosted(self: *Self, h: anytype, mono_idx: Monotype.Idx, region: Region) 
     // as a hosted_call expression using h.index (the host function's dispatch
     // index). The string name is only needed for linking, handled separately.
     const fn_layout = try self.layoutFromMonotype(mono_idx);
-    const monotype = self.mir_store.monotype_store.getMonotype(mono_idx);
-    const ret_layout = switch (monotype) {
-        .func => |f| try self.layoutFromMonotype(f.ret),
-        .prim, .unit, .record, .tuple, .tag_union, .list, .box, .recursive_placeholder => unreachable, // Hosted expressions always have .func monotype
-    };
+    const hosted_resolved = self.mir_store.monotype_store.resolve(mono_idx);
+    std.debug.assert(hosted_resolved.kind == .func); // Hosted expressions always have .func monotype
+    const ret_layout = try self.layoutFromMonotype(self.mir_store.monotype_store.funcRet(hosted_resolved));
 
-    const func_args = switch (monotype) {
-        .func => |f| self.mir_store.monotype_store.getIdxSpan(f.args),
-        .prim, .unit, .record, .tuple, .tag_union, .list, .box, .recursive_placeholder => unreachable,
-    };
+    const func_args = self.mir_store.monotype_store.funcArgs(hosted_resolved);
     const mir_params = self.mir_store.getPatternSpan(h.params);
     const save_rest_bindings = self.scratch_deferred_list_rest_bindings.items.len;
     defer self.scratch_deferred_list_rest_bindings.shrinkRetainingCapacity(save_rest_bindings);
@@ -4272,9 +4257,9 @@ fn runtimeLayoutForBindingSymbol(
     fallback_layout: layout.Idx,
 ) Allocator.Error!layout.Idx {
     const existing_layout = self.symbol_layouts.get(sym.raw());
-    const mono = self.mir_store.monotype_store.getMonotype(mono_idx);
+    const binding_resolved = self.mir_store.monotype_store.resolve(mono_idx);
 
-    if (mono != .func and !(try self.monotypeContainsFunctionValue(mono_idx))) {
+    if (binding_resolved.kind != .func and !(try self.monotypeContainsFunctionValue(mono_idx))) {
         return self.layoutFromMonotype(mono_idx);
     }
 
@@ -4284,7 +4269,7 @@ fn runtimeLayoutForBindingSymbol(
     else
         false;
 
-    if (mono == .func and !has_callable_def and existing_layout == null) {
+    if (binding_resolved.kind == .func and !has_callable_def and existing_layout == null) {
         const generic_fn_layout = try self.monotype_layout_resolver.resolve(mono_idx, null);
         if (fallback_layout == generic_fn_layout) {
             if (self.lambda_set_store.getSymbolLambdaSet(sym)) |ls_idx| {
@@ -4307,39 +4292,40 @@ fn monotypeContainsFunctionValueInner(
     mono_idx: Monotype.Idx,
     visited: *std.AutoHashMap(u32, void),
 ) Allocator.Error!bool {
-    const mono_key = @intFromEnum(mono_idx);
+    const mono_key = @as(u32, @bitCast(mono_idx));
     if (visited.contains(mono_key)) return false;
     try visited.put(mono_key, {});
 
-    return switch (self.mir_store.monotype_store.getMonotype(mono_idx)) {
+    const contains_resolved = self.mir_store.monotype_store.resolve(mono_idx);
+    return switch (contains_resolved.kind) {
         .func => true,
-        .record => |record| blk: {
-            const fields = self.mir_store.monotype_store.getFields(record.fields);
+        .record => blk: {
+            const fields = self.mir_store.monotype_store.recordFields(contains_resolved);
             for (fields) |field| {
-                if (try self.monotypeContainsFunctionValueInner(field.type_idx, visited)) break :blk true;
+                if (try self.monotypeContainsFunctionValueInner(field.ty, visited)) break :blk true;
             }
             break :blk false;
         },
-        .tuple => |tuple| blk: {
-            const elems = self.mir_store.monotype_store.getIdxSpan(tuple.elems);
+        .tuple => blk: {
+            const elems = self.mir_store.monotype_store.tupleElems(contains_resolved);
             for (elems) |elem_mono| {
                 if (try self.monotypeContainsFunctionValueInner(elem_mono, visited)) break :blk true;
             }
             break :blk false;
         },
-        .tag_union => |tu| blk: {
-            const tags = self.mir_store.monotype_store.getTags(tu.tags);
+        .tag_union => blk: {
+            const tags = self.mir_store.monotype_store.tagUnionTags(contains_resolved);
             for (tags) |tag| {
-                const payloads = self.mir_store.monotype_store.getIdxSpan(tag.payloads);
+                const payloads = self.mir_store.monotype_store.getIdxListItems(tag.payloads);
                 for (payloads) |payload_mono| {
                     if (try self.monotypeContainsFunctionValueInner(payload_mono, visited)) break :blk true;
                 }
             }
             break :blk false;
         },
-        .list => |list| self.monotypeContainsFunctionValueInner(list.elem, visited),
-        .box => |box| self.monotypeContainsFunctionValueInner(box.inner, visited),
-        .prim, .unit, .recursive_placeholder => false,
+        .list => self.monotypeContainsFunctionValueInner(self.mir_store.monotype_store.listElem(contains_resolved), visited),
+        .box => self.monotypeContainsFunctionValueInner(self.mir_store.monotype_store.boxInner(contains_resolved), visited),
+        .builtin, .rec => false,
     };
 }
 
@@ -4474,9 +4460,9 @@ fn registerBindingPatternSymbols(
         .struct_destructure => |sd| {
             const mir_patterns = self.mir_store.getPatternSpan(sd.fields);
             if (mir_patterns.len == 0) return;
-            switch (self.mir_store.monotype_store.getMonotype(mono_idx)) {
-                .record => |record_mono| {
-                    const all_fields = self.mir_store.monotype_store.getFields(record_mono.fields);
+            switch (self.mir_store.monotype_store.resolve(mono_idx).kind) {
+                .record => {
+                    const all_fields = self.mir_store.monotype_store.recordFields(self.mir_store.monotype_store.resolve(mono_idx));
                     const record_layout_val = self.layout_store.getLayout(runtime_layout);
                     if (builtin.mode == .Debug and all_fields.len != 0 and record_layout_val.tag != .struct_) {
                         std.debug.panic(
@@ -4516,10 +4502,9 @@ fn registerBindingPatternSymbols(
         },
         .list_destructure => |ld| {
             const list_layout = try self.layoutFromMonotype(mono_idx);
-            const elem_mono = switch (self.mir_store.monotype_store.getMonotype(mono_idx)) {
-                .list => |list_mono| list_mono.elem,
-                else => unreachable,
-            };
+            const ld_resolved = self.mir_store.monotype_store.resolve(mono_idx);
+            std.debug.assert(ld_resolved.kind == .list);
+            const elem_mono = self.mir_store.monotype_store.listElem(ld_resolved);
             const elem_layout = try self.layoutFromMonotype(elem_mono);
             const all_patterns = self.mir_store.getPatternSpan(ld.patterns);
 
@@ -4659,9 +4644,9 @@ fn lowerPatternInternal(
                 break :blk self.lowerWildcardBindingPattern(struct_layout, ownership_mode, region);
             }
 
-            switch (self.mir_store.monotype_store.getMonotype(mono_idx)) {
-                .record => |record_mono| {
-                    const all_fields = self.mir_store.monotype_store.getFields(record_mono.fields);
+            switch (self.mir_store.monotype_store.resolve(mono_idx).kind) {
+                .record => {
+                    const all_fields = self.mir_store.monotype_store.recordFields(self.mir_store.monotype_store.resolve(mono_idx));
 
                     if (all_fields.len == 0) {
                         break :blk self.lowerWildcardBindingPattern(struct_layout, ownership_mode, region);
@@ -4744,11 +4729,9 @@ fn lowerPatternInternal(
         },
         .list_destructure => |ld| blk: {
             const list_layout = try self.layoutFromMonotype(mono_idx);
-            const list_monotype = self.mir_store.monotype_store.getMonotype(mono_idx);
-            const elem_layout = switch (list_monotype) {
-                .list => |l| try self.layoutFromMonotype(l.elem),
-                .prim, .unit, .record, .tuple, .tag_union, .box, .func, .recursive_placeholder => unreachable,
-            };
+            const lp_resolved = self.mir_store.monotype_store.resolve(mono_idx);
+            std.debug.assert(lp_resolved.kind == .list);
+            const elem_layout = try self.layoutFromMonotype(self.mir_store.monotype_store.listElem(lp_resolved));
             const all_patterns = self.mir_store.getPatternSpan(ld.patterns);
             const has_rest = !ld.rest_index.isNone();
             const needs_owned_rest_discard =
@@ -5146,16 +5129,11 @@ test "ANF: list of calls Let-binds each call to a symbol" {
     // With ANF, each call should be Let-bound to a fresh symbol,
     // and the list elements should be lookups to those symbols.
 
-    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
-    const list_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .list = .{ .elem = i64_mono } });
+    const i64_mono = env.mir_store.monotype_store.primIdx(.i64);
+    const list_mono = try env.mir_store.monotype_store.internList(i64_mono);
 
     // func_args_mono: (I64) -> I64
-    const func_arg_span = try env.mir_store.monotype_store.addIdxSpan(allocator, &.{i64_mono});
-    const func_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .func = .{
-        .args = func_arg_span,
-        .ret = i64_mono,
-        .effectful = false,
-    } });
+    const func_mono = try env.mir_store.monotype_store.internFunc(&.{i64_mono}, i64_mono, false);
 
     const ident_f = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
     const sym_f = try testMirSymbol(&env.mir_store, allocator, ident_f);
@@ -5211,7 +5189,7 @@ test "MIR int literal lowers to LIR i64_literal" {
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+    const i64_mono = env.mir_store.monotype_store.primIdx(.i64);
 
     const int_expr = try env.mir_store.addExpr(allocator, .{ .int = .{
         .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 },
@@ -5234,11 +5212,11 @@ test "MIR zero-arg tag lowers to LIR zero_arg_tag" {
     defer testDeinit(&env);
 
     // Create a single-tag union monotype: [MyTag]
-    const tag_name = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
-    const tag_span = try env.mir_store.monotype_store.addTags(allocator, &.{
-        .{ .name = tag_name, .payloads = Monotype.Span.empty() },
+    const tag_name = try env.module_env.common.idents.insert(allocator, Ident.for_text("MyTag"));
+    const my_tag_name = try env.mir_store.monotype_store.name_pool.intern("MyTag");
+    const union_mono = try env.mir_store.monotype_store.internTagUnion(&.{
+        .{ .name = my_tag_name, .payloads = .empty },
     });
-    const union_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .tag_union = .{ .tags = tag_span } });
 
     const tag_expr = try env.mir_store.addExpr(allocator, .{ .tag = .{
         .name = tag_name,
@@ -5260,8 +5238,8 @@ test "MIR empty list lowers to LIR empty_list" {
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
-    const list_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .list = .{ .elem = i64_mono } });
+    const i64_mono = env.mir_store.monotype_store.primIdx(.i64);
+    const list_mono = try env.mir_store.monotype_store.internList(i64_mono);
 
     const list_expr = try env.mir_store.addExpr(allocator, .{ .list = .{
         .elems = MIR.ExprSpan.empty(),
@@ -5281,7 +5259,7 @@ test "MIR lookup lowers to LIR lookup" {
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+    const i64_mono = env.mir_store.monotype_store.primIdx(.i64);
 
     const ident_x = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
     const sym_x = try testMirSymbol(&env.mir_store, allocator, ident_x);
@@ -5303,7 +5281,7 @@ test "MIR block lowers to LIR block" {
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+    const i64_mono = env.mir_store.monotype_store.primIdx(.i64);
 
     // Create a simple block: { x = 42; x }
     const ident_x = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
@@ -5344,7 +5322,7 @@ test "MIR match with pattern alternatives lowers to multiple LIR match-branches"
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+    const i64_mono = env.mir_store.monotype_store.primIdx(.i64);
 
     // Condition: integer literal 1
     const cond = try env.mir_store.addExpr(allocator, .{ .int = .{
@@ -5412,20 +5390,18 @@ test "MIR multi-tag union produces proper tag_union layout" {
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+    const i64_mono = env.mir_store.monotype_store.primIdx(.i64);
 
     // Create a 2-tag union: [Foo I64, Bar]
     // Tags are sorted alphabetically: Bar < Foo, so Bar=0, Foo=1
-    const tag_bar = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
-    const tag_foo = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 2 };
+    const bar_name = try env.mir_store.monotype_store.name_pool.intern("Bar");
+    const foo_name = try env.mir_store.monotype_store.name_pool.intern("Foo");
+    const foo_payloads = try env.mir_store.monotype_store.internIdxList(&.{i64_mono});
 
-    const foo_payloads = try env.mir_store.monotype_store.addIdxSpan(allocator, &.{i64_mono});
-
-    const tag_span = try env.mir_store.monotype_store.addTags(allocator, &.{
-        .{ .name = tag_bar, .payloads = Monotype.Span.empty() },
-        .{ .name = tag_foo, .payloads = foo_payloads },
+    const union_mono = try env.mir_store.monotype_store.internTagUnion(&.{
+        .{ .name = bar_name, .payloads = .empty },
+        .{ .name = foo_name, .payloads = foo_payloads },
     });
-    const union_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .tag_union = .{ .tags = tag_span } });
     var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.lambda_set_store, env.module_env.idents.true_tag);
     defer translator.deinit();
 
@@ -5456,20 +5432,21 @@ test "MIR multi-tag union tags get correct discriminants" {
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+    const i64_mono = env.mir_store.monotype_store.primIdx(.i64);
 
     // Create a 2-tag union: [Bar, Foo I64]
-    // Sorted alphabetically by ident idx: Bar (idx=1) < Foo (idx=2)
-    const tag_bar = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
-    const tag_foo = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 2 };
+    // Sorted alphabetically: Bar < Foo
+    const tag_bar = try env.module_env.common.idents.insert(allocator, Ident.for_text("Bar"));
+    const tag_foo = try env.module_env.common.idents.insert(allocator, Ident.for_text("Foo"));
 
-    const foo_payloads = try env.mir_store.monotype_store.addIdxSpan(allocator, &.{i64_mono});
+    const bar_name2 = try env.mir_store.monotype_store.name_pool.intern("Bar");
+    const foo_name2 = try env.mir_store.monotype_store.name_pool.intern("Foo");
+    const foo_payloads2 = try env.mir_store.monotype_store.internIdxList(&.{i64_mono});
 
-    const tag_span = try env.mir_store.monotype_store.addTags(allocator, &.{
-        .{ .name = tag_bar, .payloads = Monotype.Span.empty() },
-        .{ .name = tag_foo, .payloads = foo_payloads },
+    const union_mono = try env.mir_store.monotype_store.internTagUnion(&.{
+        .{ .name = bar_name2, .payloads = .empty },
+        .{ .name = foo_name2, .payloads = foo_payloads2 },
     });
-    const union_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .tag_union = .{ .tags = tag_span } });
 
     // Lower a Bar tag (zero-arg, discriminant should be 0)
     const bar_expr = try env.mir_store.addExpr(allocator, .{ .tag = .{
@@ -5509,13 +5486,8 @@ test "MIR function monotype lowers to closure layout" {
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
-    const arg_span = try env.mir_store.monotype_store.addIdxSpan(allocator, &.{i64_mono});
-    const fn_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .func = .{
-        .args = arg_span,
-        .ret = i64_mono,
-        .effectful = false,
-    } });
+    const i64_mono = env.mir_store.monotype_store.primIdx(.i64);
+    const fn_mono = try env.mir_store.monotype_store.internFunc(&.{i64_mono}, i64_mono, false);
     var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.lambda_set_store, env.module_env.idents.true_tag);
     defer translator.deinit();
 
@@ -5530,20 +5502,17 @@ test "MIR record access finds correct field index for non-first field" {
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
-
-    // Create field name idents: a (idx=1), b (idx=2), c (idx=3)
-    const field_a = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
-    const field_b = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 2 };
-    const field_c = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 3 };
+    const i64_mono = env.mir_store.monotype_store.primIdx(.i64);
 
     // Create record monotype: { a: I64, b: I64, c: I64 }
-    const record_fields = try env.mir_store.monotype_store.addFields(allocator, &.{
-        .{ .name = field_a, .type_idx = i64_mono },
-        .{ .name = field_b, .type_idx = i64_mono },
-        .{ .name = field_c, .type_idx = i64_mono },
+    const name_a = try env.mir_store.monotype_store.name_pool.intern("a");
+    const name_b = try env.mir_store.monotype_store.name_pool.intern("b");
+    const name_c = try env.mir_store.monotype_store.name_pool.intern("c");
+    const record_mono = try env.mir_store.monotype_store.internRecord(&.{
+        .{ .name = name_a, .ty = i64_mono },
+        .{ .name = name_b, .ty = i64_mono },
+        .{ .name = name_c, .ty = i64_mono },
     });
-    const record_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .record = .{ .fields = record_fields } });
 
     // Create a record literal: { a: 1, b: 2, c: 3 }
     const int_1 = try env.mir_store.addExpr(allocator, .{ .int = .{
@@ -5586,13 +5555,11 @@ test "MIR single-field record lowers as struct_ and preserves field access" {
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
-    const field_only = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
-
-    const record_fields = try env.mir_store.monotype_store.addFields(allocator, &.{
-        .{ .name = field_only, .type_idx = i64_mono },
+    const i64_mono = env.mir_store.monotype_store.primIdx(.i64);
+    const name_only = try env.mir_store.monotype_store.name_pool.intern("only");
+    const record_mono = try env.mir_store.monotype_store.internRecord(&.{
+        .{ .name = name_only, .ty = i64_mono },
     });
-    const record_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .record = .{ .fields = record_fields } });
 
     const int_1 = try env.mir_store.addExpr(allocator, .{ .int = .{
         .value = .{ .bytes = @bitCast(@as(i128, 1)), .kind = .i128 },
@@ -5631,12 +5598,11 @@ test "MIR tuple access preserves element index" {
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
-    const bool_mono = try env.mir_store.monotype_store.addBoolTagUnion(allocator, env.module_env.idents);
+    const i64_mono = env.mir_store.monotype_store.primIdx(.i64);
+    const bool_mono = try env.mir_store.monotype_store.addBoolTagUnion();
 
     // Create tuple monotype: (I64, Bool, I64)
-    const tuple_elems = try env.mir_store.monotype_store.addIdxSpan(allocator, &.{ i64_mono, bool_mono, i64_mono });
-    const tuple_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .tuple = .{ .elems = tuple_elems } });
+    const tuple_mono = try env.mir_store.monotype_store.internTuple(&.{ i64_mono, bool_mono, i64_mono });
 
     // Create a tuple literal: (1, true, 2)
     const int_1 = try env.mir_store.addExpr(allocator, .{ .int = .{
@@ -5679,9 +5645,8 @@ test "MIR single-element tuple lowers as struct_ and preserves field access" {
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
-    const tuple_elems = try env.mir_store.monotype_store.addIdxSpan(allocator, &.{i64_mono});
-    const tuple_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .tuple = .{ .elems = tuple_elems } });
+    const i64_mono = env.mir_store.monotype_store.primIdx(.i64);
+    const tuple_mono = try env.mir_store.monotype_store.internTuple(&.{i64_mono});
 
     const int_1 = try env.mir_store.addExpr(allocator, .{ .int = .{
         .value = .{ .bytes = @bitCast(@as(i128, 1)), .kind = .i128 },
@@ -5720,7 +5685,7 @@ test "MIR lookup propagates symbol def to LIR store" {
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+    const i64_mono = env.mir_store.monotype_store.primIdx(.i64);
 
     // Register a symbol def in MIR: x = 42
     const ident_x = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
@@ -5763,15 +5728,15 @@ test "MIR single-tag union with one payload emits tag layout" {
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+    const i64_mono = env.mir_store.monotype_store.primIdx(.i64);
 
     // Create a single-tag union monotype: [Ok I64]
-    const tag_ok = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
-    const ok_payloads = try env.mir_store.monotype_store.addIdxSpan(allocator, &.{i64_mono});
-    const tag_span = try env.mir_store.monotype_store.addTags(allocator, &.{
-        .{ .name = tag_ok, .payloads = ok_payloads },
+    const tag_ok = try env.module_env.common.idents.insert(allocator, Ident.for_text("Ok"));
+    const ok_name = try env.mir_store.monotype_store.name_pool.intern("Ok");
+    const ok_payloads = try env.mir_store.monotype_store.internIdxList(&.{i64_mono});
+    const union_mono = try env.mir_store.monotype_store.internTagUnion(&.{
+        .{ .name = ok_name, .payloads = ok_payloads },
     });
-    const union_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .tag_union = .{ .tags = tag_span } });
 
     // Create expression: Ok 42
     const int_42 = try env.mir_store.addExpr(allocator, .{ .int = .{
@@ -5813,12 +5778,11 @@ test "MIR single-tag union with zero args emits zero_arg_tag" {
     defer testDeinit(&env);
 
     // Create a single zero-arg tag union: [Unit]
-    const tag_unit = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
-    const empty_payloads = try env.mir_store.monotype_store.addIdxSpan(allocator, &.{});
-    const tag_span = try env.mir_store.monotype_store.addTags(allocator, &.{
-        .{ .name = tag_unit, .payloads = empty_payloads },
+    const tag_unit = try env.module_env.common.idents.insert(allocator, Ident.for_text("Unit"));
+    const unit_tag_name = try env.mir_store.monotype_store.name_pool.intern("Unit");
+    const union_mono = try env.mir_store.monotype_store.internTagUnion(&.{
+        .{ .name = unit_tag_name, .payloads = .empty },
     });
-    const union_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .tag_union = .{ .tags = tag_span } });
 
     // Create expression: Unit
     const empty_args = try env.mir_store.addExprSpan(allocator, &.{});
@@ -5849,16 +5813,16 @@ test "MIR single-tag union with multiple payloads emits tag layout" {
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
-    const bool_mono = try env.mir_store.monotype_store.addBoolTagUnion(allocator, env.module_env.idents);
+    const i64_mono = env.mir_store.monotype_store.primIdx(.i64);
+    const bool_mono = try env.mir_store.monotype_store.addBoolTagUnion();
 
     // Create a single-tag union with multiple payloads: [Pair I64 Bool]
-    const tag_pair = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
-    const pair_payloads = try env.mir_store.monotype_store.addIdxSpan(allocator, &.{ i64_mono, bool_mono });
-    const tag_span = try env.mir_store.monotype_store.addTags(allocator, &.{
-        .{ .name = tag_pair, .payloads = pair_payloads },
+    const tag_pair = try env.module_env.common.idents.insert(allocator, Ident.for_text("Pair"));
+    const pair_tag_name = try env.mir_store.monotype_store.name_pool.intern("Pair");
+    const pair_payloads = try env.mir_store.monotype_store.internIdxList(&.{ i64_mono, bool_mono });
+    const union_mono = try env.mir_store.monotype_store.internTagUnion(&.{
+        .{ .name = pair_tag_name, .payloads = pair_payloads },
     });
-    const union_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .tag_union = .{ .tags = tag_span } });
 
     // Create expression: Pair 42 true
     const int_42 = try env.mir_store.addExpr(allocator, .{ .int = .{
@@ -5897,18 +5861,18 @@ test "MIR single-tag union pattern with one arg preserves tag pattern" {
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+    const i64_mono = env.mir_store.monotype_store.primIdx(.i64);
 
     // Create a single-tag union monotype: [Ok I64]
-    const tag_ok = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
-    const ok_payloads = try env.mir_store.monotype_store.addIdxSpan(allocator, &.{i64_mono});
-    const tag_span = try env.mir_store.monotype_store.addTags(allocator, &.{
-        .{ .name = tag_ok, .payloads = ok_payloads },
+    const tag_ok = try env.module_env.common.idents.insert(allocator, Ident.for_text("Ok"));
+    const ok_name2 = try env.mir_store.monotype_store.name_pool.intern("Ok");
+    const ok_payloads2 = try env.mir_store.monotype_store.internIdxList(&.{i64_mono});
+    const union_mono = try env.mir_store.monotype_store.internTagUnion(&.{
+        .{ .name = ok_name2, .payloads = ok_payloads2 },
     });
-    const union_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .tag_union = .{ .tags = tag_span } });
 
     // Create pattern: Ok x (bind the payload)
-    const ident_x = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 2 };
+    const ident_x = try env.module_env.common.idents.insert(allocator, Ident.for_text("x"));
     const sym_x = try testMirSymbol(&env.mir_store, allocator, ident_x);
     const bind_pat = try env.mir_store.addPattern(allocator, .{ .bind = sym_x }, i64_mono);
     const pat_args = try env.mir_store.addPatternSpan(allocator, &.{bind_pat});
@@ -5934,15 +5898,10 @@ test "MIR hosted lambda lowers to LIR lambda wrapping hosted_call" {
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+    const i64_mono = env.mir_store.monotype_store.primIdx(.i64);
 
     // Create function type: (I64, I64) -> I64
-    const func_arg_span = try env.mir_store.monotype_store.addIdxSpan(allocator, &.{ i64_mono, i64_mono });
-    const func_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .func = .{
-        .args = func_arg_span,
-        .ret = i64_mono,
-        .effectful = false,
-    } });
+    const func_mono = try env.mir_store.monotype_store.internFunc(&.{ i64_mono, i64_mono }, i64_mono, false);
 
     // Create parameter patterns (two binds)
     const ident_a = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
@@ -5999,14 +5958,9 @@ test "lambdaSetForExpr unwraps dbg_expr wrapper" {
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+    const i64_mono = env.mir_store.monotype_store.primIdx(.i64);
 
-    const func_arg_span = try env.mir_store.monotype_store.addIdxSpan(allocator, &.{i64_mono});
-    const func_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .func = .{
-        .args = func_arg_span,
-        .ret = i64_mono,
-        .effectful = false,
-    } });
+    const func_mono = try env.mir_store.monotype_store.internFunc(&.{i64_mono}, i64_mono, false);
 
     const ident_arg = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
     const sym_arg = try testMirSymbol(&env.mir_store, allocator, ident_arg);
@@ -6045,14 +5999,9 @@ test "MIR function lookup uses symbol lambda set before wrapper def layout" {
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+    const i64_mono = env.mir_store.monotype_store.primIdx(.i64);
 
-    const func_arg_span = try env.mir_store.monotype_store.addIdxSpan(allocator, &.{i64_mono});
-    const func_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .func = .{
-        .args = func_arg_span,
-        .ret = i64_mono,
-        .effectful = false,
-    } });
+    const func_mono = try env.mir_store.monotype_store.internFunc(&.{i64_mono}, i64_mono, false);
 
     const ident_arg = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
     const sym_arg = try testMirSymbol(&env.mir_store, allocator, ident_arg);
@@ -6098,7 +6047,7 @@ test "MIR block with decl_var and mutate_var lowers to LIR decl and mutate" {
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+    const i64_mono = env.mir_store.monotype_store.primIdx(.i64);
 
     // Build MIR: { var s = 1; s = 2; s }
     const ident_s = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = true }, .idx = 1 };
@@ -6153,8 +6102,8 @@ test "MIR for_loop lowers to LIR for_loop" {
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
-    const list_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .list = .{ .elem = i64_mono } });
+    const i64_mono = env.mir_store.monotype_store.primIdx(.i64);
+    const list_mono = try env.mir_store.monotype_store.internList(i64_mono);
     const unit_mono = env.mir_store.monotype_store.unit_idx;
 
     // Build MIR: for elem in list { body }
@@ -6193,8 +6142,8 @@ test "MIR while_loop lowers to LIR while_loop" {
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const bool_mono = try env.mir_store.monotype_store.addBoolTagUnion(allocator, env.module_env.idents);
-    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+    const bool_mono = try env.mir_store.monotype_store.addBoolTagUnion();
+    const i64_mono = env.mir_store.monotype_store.primIdx(.i64);
     const unit_mono = env.mir_store.monotype_store.unit_idx;
 
     // Build MIR: while cond { body }
@@ -6229,7 +6178,7 @@ test "MIR dbg_expr lowers to LIR dbg" {
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+    const i64_mono = env.mir_store.monotype_store.primIdx(.i64);
 
     // Build MIR: dbg(42)
     const inner_expr = try env.mir_store.addExpr(allocator, .{ .int = .{
@@ -6255,7 +6204,7 @@ test "MIR expect lowers to LIR expect" {
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const bool_mono = try env.mir_store.monotype_store.addBoolTagUnion(allocator, env.module_env.idents);
+    const bool_mono = try env.mir_store.monotype_store.addBoolTagUnion();
     const unit_mono = env.mir_store.monotype_store.unit_idx;
 
     // Build MIR: expect (true)
@@ -6304,7 +6253,7 @@ test "MIR return_expr lowers to LIR early_return" {
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+    const i64_mono = env.mir_store.monotype_store.primIdx(.i64);
 
     // Build MIR: return 42
     const inner_expr = try env.mir_store.addExpr(allocator, .{ .int = .{
@@ -6352,7 +6301,7 @@ test "MIR num_plus low-level lowers to low-level" {
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+    const i64_mono = env.mir_store.monotype_store.primIdx(.i64);
 
     // Build MIR: run_low_level(.num_plus, [10, 20])
     const arg0 = try env.mir_store.addExpr(allocator, .{ .int = .{
@@ -6385,8 +6334,8 @@ test "borrowed low-level temp arg lowers through explicit block binding" {
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
-    const list_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .list = .{ .elem = i64_mono } });
+    const i64_mono = env.mir_store.monotype_store.primIdx(.i64);
+    const list_mono = try env.mir_store.monotype_store.internList(i64_mono);
 
     const elem0 = try env.mir_store.addExpr(allocator, .{ .int = .{
         .value = .{ .bytes = @bitCast(@as(i128, 3)), .kind = .i128 },
@@ -6430,8 +6379,8 @@ test "borrowed low-level large string literal lowers through explicit block bind
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const str_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.str)];
-    const u64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.u64)];
+    const str_mono = env.mir_store.monotype_store.primIdx(.str);
+    const u64_mono = env.mir_store.monotype_store.primIdx(.u64);
 
     const large_text =
         "This string is deliberately longer than RocStr small-string storage";
@@ -6467,8 +6416,8 @@ test "borrow-only low-level lookup arg stays as plain low_level" {
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
-    const list_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .list = .{ .elem = i64_mono } });
+    const i64_mono = env.mir_store.monotype_store.primIdx(.i64);
+    const list_mono = try env.mir_store.monotype_store.internList(i64_mono);
 
     const ident_list = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 2 };
     const sym_list = try testMirSymbol(&env.mir_store, allocator, ident_list);
@@ -6504,7 +6453,7 @@ test "MIR large unsigned int (U64 max) lowers to LIR i128_literal" {
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const u64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.u64)];
+    const u64_mono = env.mir_store.monotype_store.primIdx(.u64);
 
     // U64 max value = 18446744073709551615, which exceeds maxInt(i64)
     // so it should lower to i128_literal, not i64_literal
@@ -6528,21 +6477,18 @@ test "record access uses layout field order not monotype alphabetical order" {
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const u8_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.u8)];
-    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
-
-    // Field names: age (idx=1), name (idx=2), score (idx=3)
-    const field_age = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
-    const field_name = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 2 };
-    const field_score = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 3 };
+    const u8_mono = env.mir_store.monotype_store.primIdx(.u8);
+    const i64_mono = env.mir_store.monotype_store.primIdx(.i64);
 
     // Monotype fields are alphabetical: { age: U8, name: I64, score: I64 }
-    const record_fields = try env.mir_store.monotype_store.addFields(allocator, &.{
-        .{ .name = field_age, .type_idx = u8_mono },
-        .{ .name = field_name, .type_idx = i64_mono },
-        .{ .name = field_score, .type_idx = i64_mono },
+    const name_age = try env.mir_store.monotype_store.name_pool.intern("age");
+    const name_name = try env.mir_store.monotype_store.name_pool.intern("name");
+    const name_score = try env.mir_store.monotype_store.name_pool.intern("score");
+    const record_mono = try env.mir_store.monotype_store.internRecord(&.{
+        .{ .name = name_age, .ty = u8_mono },
+        .{ .name = name_name, .ty = i64_mono },
+        .{ .name = name_score, .ty = i64_mono },
     });
-    const record_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .record = .{ .fields = record_fields } });
 
     // Create a record literal
     const int_1 = try env.mir_store.addExpr(allocator, .{ .int = .{
@@ -6586,20 +6532,20 @@ test "record destructure wildcard gets actual field layout not zst" {
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const u8_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.u8)];
-    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+    const u8_mono = env.mir_store.monotype_store.primIdx(.u8);
+    const i64_mono = env.mir_store.monotype_store.primIdx(.i64);
 
     const field_a = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
-    const field_b = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 2 };
-    const field_c = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 3 };
 
     // Record: { a: U8, b: I64, c: I64 }
-    const record_fields = try env.mir_store.monotype_store.addFields(allocator, &.{
-        .{ .name = field_a, .type_idx = u8_mono },
-        .{ .name = field_b, .type_idx = i64_mono },
-        .{ .name = field_c, .type_idx = i64_mono },
+    const name_a2 = try env.mir_store.monotype_store.name_pool.intern("a");
+    const name_b2 = try env.mir_store.monotype_store.name_pool.intern("b");
+    const name_c2 = try env.mir_store.monotype_store.name_pool.intern("c");
+    const record_mono = try env.mir_store.monotype_store.internRecord(&.{
+        .{ .name = name_a2, .ty = u8_mono },
+        .{ .name = name_b2, .ty = i64_mono },
+        .{ .name = name_c2, .ty = i64_mono },
     });
-    const record_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .record = .{ .fields = record_fields } });
 
     // Create a full-arity canonical destructure pattern that only binds field "a" (U8).
     // In canonical MIR order this is [a, b, c], but in layout order it becomes [b, c, a].
@@ -6645,7 +6591,7 @@ test "MIR small i128 value emits i128_literal not i64_literal" {
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const i128_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i128)];
+    const i128_mono = env.mir_store.monotype_store.primIdx(.i128);
 
     // Value 42 fits in i64, but monotype is i128.
     // Must emit i128_literal so LIR carries the correct 128-bit literal layout.
@@ -6674,7 +6620,7 @@ test "LIR Bool match: True pattern gets discriminant 1, False body gets discrimi
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const bool_mono = try env.mir_store.monotype_store.addBoolTagUnion(allocator, env.module_env.idents);
+    const bool_mono = try env.mir_store.monotype_store.addBoolTagUnion();
     const true_tag = env.module_env.idents.true_tag;
     const false_tag = env.module_env.idents.false_tag;
 
@@ -6764,7 +6710,7 @@ test "LIR Bool match: False scrutinee gets discriminant 0" {
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const bool_mono = try env.mir_store.monotype_store.addBoolTagUnion(allocator, env.module_env.idents);
+    const bool_mono = try env.mir_store.monotype_store.addBoolTagUnion();
     const true_tag = env.module_env.idents.true_tag;
     const false_tag = env.module_env.idents.false_tag;
 
@@ -6838,7 +6784,7 @@ test "MIR small u128 value emits i128_literal not i64_literal" {
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const u128_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.u128)];
+    const u128_mono = env.mir_store.monotype_store.primIdx(.u128);
 
     // Value 7 fits in i64, but monotype is u128.
     // Must emit i128_literal so LIR carries the correct 128-bit literal layout.
