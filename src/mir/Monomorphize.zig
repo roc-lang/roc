@@ -141,6 +141,7 @@ pub const ProcTemplate = struct {
     type_root: types.Var,
     binding_pattern: ?CIR.Pattern.Idx = null,
     kind: ProcTemplateKind = .top_level_def,
+    lexical_owner_template: ProcTemplateId = .none,
     source_region: Region = Region.zero(),
 };
 
@@ -869,6 +870,11 @@ pub const Pass = struct {
     ) Allocator.Error!ProcTemplateId {
         if (result.proc_template_ids_by_source.get(source_key)) |existing| return existing;
 
+        const lexical_owner_template: ProcTemplateId = if (kind == .closure and !self.active_proc_inst_context.isNone())
+            result.getProcInst(self.active_proc_inst_context).template
+        else
+            .none;
+
         const proc_template_id: ProcTemplateId = @enumFromInt(result.proc_templates.items.len);
         try result.proc_templates.append(self.allocator, .{
             .source_key = source_key,
@@ -877,6 +883,7 @@ pub const Pass = struct {
             .type_root = type_root,
             .binding_pattern = binding_pattern,
             .kind = kind,
+            .lexical_owner_template = lexical_owner_template,
             .source_region = source_region,
         });
         try result.proc_template_ids_by_source.put(self.allocator, source_key, proc_template_id);
@@ -2740,10 +2747,7 @@ pub const Pass = struct {
             try self.resolveDirectCallFnMonotype(result, module_idx, call_expr_idx, call_expr),
             module_idx,
         );
-        const defining_context_proc_inst: ProcInstId = switch (template.kind) {
-            .closure => self.active_proc_inst_context,
-            .top_level_def, .lambda, .hosted_lambda => .none,
-        };
+        const defining_context_proc_inst = self.resolveTemplateDefiningContextProcInst(result, template);
 
         var callee_bindings = std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype).init(self.allocator);
         defer callee_bindings.deinit();
@@ -2967,10 +2971,7 @@ pub const Pass = struct {
         const template = result.getProcTemplate(template_id).*;
         const template_env = self.all_module_envs[template.module_idx];
         const template_types = &template_env.types;
-        const defining_context_proc_inst: ProcInstId = switch (template.kind) {
-            .closure => self.active_proc_inst_context,
-            .top_level_def, .lambda, .hosted_lambda => .none,
-        };
+        const defining_context_proc_inst = self.resolveTemplateDefiningContextProcInst(result, template);
 
         var callee_bindings = std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype).init(self.allocator);
         defer callee_bindings.deinit();
@@ -6386,10 +6387,7 @@ pub const Pass = struct {
         scan_body: bool,
     ) Allocator.Error!ProcInstId {
         const template = result.getProcTemplate(template_id);
-        const defining_context_proc_inst: ProcInstId = switch (template.kind) {
-            .closure => self.active_proc_inst_context,
-            .top_level_def, .lambda, .hosted_lambda => .none,
-        };
+        const defining_context_proc_inst = self.resolveTemplateDefiningContextProcInst(result, template.*);
         const subst_id = if (self.all_module_envs[template.module_idx].types.needsInstantiation(template.type_root))
             try self.ensureTypeSubst(result, template.*, fn_monotype, fn_monotype_module_idx)
         else
@@ -6422,6 +6420,52 @@ pub const Pass = struct {
             try self.scanProcInst(result, proc_inst_id);
         }
         return proc_inst_id;
+    }
+
+    fn resolveTemplateDefiningContextProcInst(
+        self: *Pass,
+        result: *const Result,
+        template: ProcTemplate,
+    ) ProcInstId {
+        switch (template.kind) {
+            .top_level_def, .lambda, .hosted_lambda => return .none,
+            .closure => {
+                if (template.lexical_owner_template.isNone()) return .none;
+                if (self.active_proc_inst_context.isNone()) {
+                    if (std.debug.runtime_safety) {
+                        std.debug.panic(
+                            "Monomorphize: closure template expr={d} requires lexical owner template={d} but no active proc inst is available",
+                            .{
+                                @intFromEnum(template.cir_expr),
+                                @intFromEnum(template.lexical_owner_template),
+                            },
+                        );
+                    }
+                    unreachable;
+                }
+
+                var current = self.active_proc_inst_context;
+                while (!current.isNone()) {
+                    const current_proc_inst = result.getProcInst(current);
+                    if (current_proc_inst.template == template.lexical_owner_template) {
+                        return current;
+                    }
+                    current = current_proc_inst.defining_context_proc_inst;
+                }
+
+                if (std.debug.runtime_safety) {
+                    std.debug.panic(
+                        "Monomorphize: closure template expr={d} could not resolve lexical owner template={d} from active proc inst={d}",
+                        .{
+                            @intFromEnum(template.cir_expr),
+                            @intFromEnum(template.lexical_owner_template),
+                            @intFromEnum(self.active_proc_inst_context),
+                        },
+                    );
+                }
+                unreachable;
+            },
+        }
     }
 
     fn scanProcInst(self: *Pass, result: *Result, proc_inst_id: ProcInstId) Allocator.Error!void {

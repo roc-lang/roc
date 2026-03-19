@@ -1941,6 +1941,29 @@ test "lowerExternalDef: mutually recursive defs get monotypes patched (not left 
     try testing.expect(odd_mono == .func);
 }
 
+test "lowerExpr: mutually recursive local closures lower to a finite recursive proc set" {
+    var env = try MirTestEnv.initExpr(
+        \\{
+        \\    is_even = |n| if (n == 0) True else is_odd(n - 1)
+        \\    is_odd = |n| if (n == 0) False else is_even(n - 1)
+        \\    if (is_even(4)) 1 else 0
+        \\}
+    );
+    defer env.deinit();
+
+    const expr = try env.lowerFirstDef();
+    try testing.expect(env.mir_store.getExpr(expr) != .runtime_err_type);
+
+    var recursive_proc_count: usize = 0;
+    for (env.mir_store.getProcs()) |proc| {
+        if (proc.recursion != .recursive) continue;
+        try testing.expectEqual(@as(usize, 0), env.mir_store.getCaptureBindings(proc.capture_bindings).len);
+        recursive_proc_count += 1;
+    }
+
+    try testing.expectEqual(@as(usize, 2), recursive_proc_count);
+}
+
 // --- Cross-module builtin call lowering ---
 //
 // These tests verify that calls to Builtin module functions (List.map, List.get,

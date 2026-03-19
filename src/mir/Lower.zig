@@ -129,6 +129,10 @@ in_progress_defs: std.AutoHashMap(u64, void),
 /// Tracks proc instances currently being lowered (recursion guard).
 in_progress_proc_insts: std.AutoHashMap(u32, MIR.ExprId),
 
+/// Reserved proc skeletons for recursive proc-inst groups whose bodies are not
+/// fully lowered yet but already need stable proc ids.
+reserved_proc_insts: std.AutoHashMap(u32, MIR.ProcId),
+
 /// Local proc-backed bindings intentionally skipped as runtime statements.
 /// Lookups of these patterns must reify from proc-inst ownership instead of
 /// expecting a local runtime binding.
@@ -209,6 +213,7 @@ pub fn init(
         .next_synthetic_ident = Ident.Idx.NONE.idx - 1,
         .in_progress_defs = std.AutoHashMap(u64, void).init(allocator),
         .in_progress_proc_insts = std.AutoHashMap(u32, MIR.ExprId).init(allocator),
+        .reserved_proc_insts = std.AutoHashMap(u32, MIR.ProcId).init(allocator),
         .skipped_proc_backed_binding_patterns = std.AutoHashMap(u64, void).init(allocator),
         .current_proc_inst_context = .none,
         .current_root_expr_context = null,
@@ -243,6 +248,7 @@ pub fn deinit(self: *Self) void {
     self.symbol_metadata.deinit();
     self.in_progress_defs.deinit();
     self.in_progress_proc_insts.deinit();
+    self.reserved_proc_insts.deinit();
     self.skipped_proc_backed_binding_patterns.deinit();
     self.in_progress_symbol_monotypes.deinit();
     self.resolved_dispatch_targets.deinit();
@@ -3896,37 +3902,321 @@ const BuiltClosureValue = struct {
     captures_tuple_monotype: Monotype.Idx,
 };
 
-fn buildSpecializedClosureValue(
+const CaptureRequest = struct {
+    module_idx: u32,
+    closure_expr_idx: CIR.Expr.Idx,
+    closure_proc_inst_id: Monomorphize.ProcInstId,
+    pattern_idx: CIR.Pattern.Idx,
+    name: Ident.Idx,
+};
+
+const RecursiveGroupMember = struct {
+    proc_inst_id: Monomorphize.ProcInstId,
+    binding_pattern: CIR.Pattern.Idx,
+    binding_name: Ident.Idx,
+};
+
+const ClosureLowerPlan = struct {
+    capture_requests: std.ArrayList(CaptureRequest),
+    recursive_members: std.ArrayList(RecursiveGroupMember),
+    current_recursive_member_index: ?usize,
+
+    fn init() ClosureLowerPlan {
+        return .{
+            .capture_requests = .empty,
+            .recursive_members = .empty,
+            .current_recursive_member_index = null,
+        };
+    }
+
+    fn deinit(self: *ClosureLowerPlan, allocator: Allocator) void {
+        self.capture_requests.deinit(allocator);
+        self.recursive_members.deinit(allocator);
+    }
+};
+
+fn reserveProcInstSkeleton(self: *Self, proc_inst_id: Monomorphize.ProcInstId) Allocator.Error!MIR.ProcId {
+    const proc_inst_key = @intFromEnum(proc_inst_id);
+    if (self.lowered_proc_insts.get(proc_inst_key)) |proc_id| return proc_id;
+    if (self.reserved_proc_insts.get(proc_inst_key)) |proc_id| return proc_id;
+
+    const proc_inst = self.monomorphization.getProcInst(proc_inst_id);
+    const template = self.monomorphization.getProcTemplate(proc_inst.template);
+    const proc_monotype = try self.importMonotypeFromStore(
+        &self.monomorphization.monotype_store,
+        proc_inst.fn_monotype,
+        proc_inst.fn_monotype_module_idx,
+        template.module_idx,
+    );
+    const proc_func = switch (self.store.monotype_store.getMonotype(proc_monotype)) {
+        .func => |func| func,
+        else => unreachable,
+    };
+
+    const proc_id = try self.store.addProc(self.allocator, .{
+        .fn_monotype = proc_monotype,
+        .params = MIR.PatternSpan.empty(),
+        .body = MIR.ExprId.none,
+        .ret_monotype = proc_func.ret,
+        .debug_name = MIR.Symbol.none,
+        .source_region = template.source_region,
+        .capture_bindings = MIR.CaptureBindingSpan.empty(),
+        .captures_param = .none,
+        .recursion = .not_recursive,
+        .hosted = null,
+    });
+    try self.reserved_proc_insts.put(proc_inst_key, proc_id);
+    return proc_id;
+}
+
+fn procTemplateBindingName(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    binding_pattern: CIR.Pattern.Idx,
+) Allocator.Error!Ident.Idx {
+    var bindings = std.ArrayList(PatternBinding).empty;
+    defer bindings.deinit(self.allocator);
+    try self.collectPatternBindings(module_env, binding_pattern, &bindings);
+    if (builtin.mode == .Debug) std.debug.assert(bindings.items.len != 0);
+    return bindings.items[0].ident;
+}
+
+fn appendDirectCapturedProcInsts(
+    self: *Self,
+    proc_inst_id: Monomorphize.ProcInstId,
+    out: *std.ArrayList(Monomorphize.ProcInstId),
+) Allocator.Error!void {
+    const proc_inst = self.monomorphization.getProcInst(proc_inst_id);
+    const template = self.monomorphization.getProcTemplate(proc_inst.template);
+    const module_env = self.all_module_envs[template.module_idx];
+    const template_expr = module_env.store.getExpr(template.cir_expr);
+    if (template_expr != .e_closure) return;
+
+    for (module_env.store.sliceCaptures(template_expr.e_closure.captures)) |capture_idx| {
+        const capture = module_env.store.getCapture(capture_idx);
+        const captured_proc_inst = self.monomorphization.getClosureCaptureProcInst(
+            proc_inst_id,
+            template.module_idx,
+            template.cir_expr,
+            capture.pattern_idx,
+        ) orelse continue;
+        try out.append(self.allocator, captured_proc_inst);
+    }
+}
+
+fn procInstCanReachProcInst(
+    self: *Self,
+    start_proc_inst_id: Monomorphize.ProcInstId,
+    target_proc_inst_id: Monomorphize.ProcInstId,
+) Allocator.Error!bool {
+    var stack = std.ArrayList(Monomorphize.ProcInstId).empty;
+    defer stack.deinit(self.allocator);
+    var seen = std.AutoHashMap(u32, void).init(self.allocator);
+    defer seen.deinit();
+
+    try self.appendDirectCapturedProcInsts(start_proc_inst_id, &stack);
+    while (stack.pop()) |candidate| {
+        if (candidate == target_proc_inst_id) return true;
+        const candidate_key = @intFromEnum(candidate);
+        if (seen.contains(candidate_key)) continue;
+        try seen.put(candidate_key, {});
+        try self.appendDirectCapturedProcInsts(candidate, &stack);
+    }
+
+    return false;
+}
+
+fn appendRecursiveClosureGroupMembers(
+    self: *Self,
+    closure_proc_inst_id: Monomorphize.ProcInstId,
+    plan: *ClosureLowerPlan,
+) Allocator.Error!void {
+    const root_proc_inst = self.monomorphization.getProcInst(closure_proc_inst_id);
+    const root_template = self.monomorphization.getProcTemplate(root_proc_inst.template);
+    const root_binding_pattern = root_template.binding_pattern orelse return;
+
+    var reachable = std.ArrayList(Monomorphize.ProcInstId).empty;
+    defer reachable.deinit(self.allocator);
+    var seen = std.AutoHashMap(u32, void).init(self.allocator);
+    defer seen.deinit();
+
+    try reachable.append(self.allocator, closure_proc_inst_id);
+    try seen.put(@intFromEnum(closure_proc_inst_id), {});
+    var cursor: usize = 0;
+    while (cursor < reachable.items.len) : (cursor += 1) {
+        var direct = std.ArrayList(Monomorphize.ProcInstId).empty;
+        defer direct.deinit(self.allocator);
+        try self.appendDirectCapturedProcInsts(reachable.items[cursor], &direct);
+        for (direct.items) |candidate| {
+            const candidate_key = @intFromEnum(candidate);
+            if (seen.contains(candidate_key)) continue;
+            try seen.put(candidate_key, {});
+            try reachable.append(self.allocator, candidate);
+        }
+    }
+
+    const has_self_cycle = try self.procInstCanReachProcInst(closure_proc_inst_id, closure_proc_inst_id);
+    for (reachable.items) |candidate| {
+        if (candidate != closure_proc_inst_id and !(try self.procInstCanReachProcInst(candidate, closure_proc_inst_id))) {
+            continue;
+        }
+
+        if (candidate == closure_proc_inst_id and !has_self_cycle) continue;
+
+        const proc_inst = self.monomorphization.getProcInst(candidate);
+        const template = self.monomorphization.getProcTemplate(proc_inst.template);
+        const binding_pattern = template.binding_pattern orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "MIR Lower invariant: recursive closure group member proc_inst={d} template={d} has no binding pattern",
+                    .{ @intFromEnum(candidate), @intFromEnum(proc_inst.template) },
+                );
+            }
+            unreachable;
+        };
+        const module_env = self.all_module_envs[template.module_idx];
+        try plan.recursive_members.append(self.allocator, .{
+            .proc_inst_id = candidate,
+            .binding_pattern = binding_pattern,
+            .binding_name = try self.procTemplateBindingName(module_env, binding_pattern),
+        });
+    }
+
+    if (plan.recursive_members.items.len == 0) return;
+
+    std.sort.block(
+        RecursiveGroupMember,
+        plan.recursive_members.items,
+        self,
+        struct {
+            fn lessThan(lower: *Self, lhs: RecursiveGroupMember, rhs: RecursiveGroupMember) bool {
+                const lhs_template = lower.monomorphization.getProcTemplate(lower.monomorphization.getProcInst(lhs.proc_inst_id).template);
+                const rhs_template = lower.monomorphization.getProcTemplate(lower.monomorphization.getProcInst(rhs.proc_inst_id).template);
+                if (lhs_template.source_key != rhs_template.source_key) {
+                    return lhs_template.source_key < rhs_template.source_key;
+                }
+                return @intFromEnum(lhs.proc_inst_id) < @intFromEnum(rhs.proc_inst_id);
+            }
+        }.lessThan,
+    );
+
+    for (plan.recursive_members.items, 0..) |member, idx| {
+        if (member.proc_inst_id == closure_proc_inst_id) {
+            plan.current_recursive_member_index = idx;
+            break;
+        }
+    }
+
+    if (builtin.mode == .Debug) {
+        std.debug.assert(plan.current_recursive_member_index != null);
+        std.debug.assert(root_binding_pattern == plan.recursive_members.items[plan.current_recursive_member_index.?].binding_pattern);
+    }
+}
+
+fn appendClosureCaptureRequestsForCurrentClosure(
     self: *Self,
     module_env: *const ModuleEnv,
     expr_idx: CIR.Expr.Idx,
     closure: CIR.Expr.Closure,
+    closure_proc_inst_id: Monomorphize.ProcInstId,
+    excluded_binding_patterns: *const std.AutoHashMap(u64, void),
+    out: *std.ArrayList(CaptureRequest),
+) Allocator.Error!void {
+    for (module_env.store.sliceCaptures(closure.captures)) |capture_idx| {
+        const capture = module_env.store.getCapture(capture_idx);
+        if (excluded_binding_patterns.contains(bindingPatternKey(self.current_module_idx, capture.pattern_idx))) continue;
+        try out.append(self.allocator, .{
+            .module_idx = self.current_module_idx,
+            .closure_expr_idx = expr_idx,
+            .closure_proc_inst_id = closure_proc_inst_id,
+            .pattern_idx = capture.pattern_idx,
+            .name = capture.name,
+        });
+    }
+}
+
+fn appendSharedCaptureRequestsForRecursiveGroup(
+    self: *Self,
+    excluded_binding_patterns: *const std.AutoHashMap(u64, void),
+    recursive_members: []const RecursiveGroupMember,
+    out: *std.ArrayList(CaptureRequest),
+) Allocator.Error!void {
+    var seen_patterns = std.AutoHashMap(u64, void).init(self.allocator);
+    defer seen_patterns.deinit();
+
+    for (recursive_members) |member| {
+        const proc_inst = self.monomorphization.getProcInst(member.proc_inst_id);
+        const template = self.monomorphization.getProcTemplate(proc_inst.template);
+        const module_env = self.all_module_envs[template.module_idx];
+        const template_expr = module_env.store.getExpr(template.cir_expr);
+        if (template_expr != .e_closure) continue;
+
+        for (module_env.store.sliceCaptures(template_expr.e_closure.captures)) |capture_idx| {
+            const capture = module_env.store.getCapture(capture_idx);
+            const pattern_key = bindingPatternKey(template.module_idx, capture.pattern_idx);
+            if (excluded_binding_patterns.contains(pattern_key)) continue;
+            if (seen_patterns.contains(pattern_key)) continue;
+            try seen_patterns.put(pattern_key, {});
+            try out.append(self.allocator, .{
+                .module_idx = template.module_idx,
+                .closure_expr_idx = template.cir_expr,
+                .closure_proc_inst_id = member.proc_inst_id,
+                .pattern_idx = capture.pattern_idx,
+                .name = capture.name,
+            });
+        }
+    }
+}
+
+fn planClosureLowering(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    expr_idx: CIR.Expr.Idx,
+    closure: CIR.Expr.Closure,
+    closure_proc_inst_id: Monomorphize.ProcInstId,
+) Allocator.Error!ClosureLowerPlan {
+    var plan = ClosureLowerPlan.init();
+    errdefer plan.deinit(self.allocator);
+
+    try self.appendRecursiveClosureGroupMembers(closure_proc_inst_id, &plan);
+
+    var excluded_binding_patterns = std.AutoHashMap(u64, void).init(self.allocator);
+    defer excluded_binding_patterns.deinit();
+    for (plan.recursive_members.items) |member| {
+        try excluded_binding_patterns.put(bindingPatternKey(self.current_module_idx, member.binding_pattern), {});
+    }
+
+    if (plan.recursive_members.items.len != 0) {
+        try self.appendSharedCaptureRequestsForRecursiveGroup(
+            &excluded_binding_patterns,
+            plan.recursive_members.items,
+            &plan.capture_requests,
+        );
+    } else {
+        try self.appendClosureCaptureRequestsForCurrentClosure(
+            module_env,
+            expr_idx,
+            closure,
+            closure_proc_inst_id,
+            &excluded_binding_patterns,
+            &plan.capture_requests,
+        );
+    }
+
+    return plan;
+}
+
+fn buildClosureValueFromCaptureRequests(
+    self: *Self,
     monotype: Monotype.Idx,
     region: Region,
-    closure_proc_inst_id: Monomorphize.ProcInstId,
     proc_id: MIR.ProcId,
+    capture_requests: []const CaptureRequest,
     capture_monotypes_snapshot: ?*std.ArrayList(Monotype.Idx),
     capture_source_exprs_snapshot: ?*std.ArrayList(MIR.ExprId),
     capture_value_exprs_snapshot: ?*std.ArrayList(MIR.ExprId),
 ) Allocator.Error!BuiltClosureValue {
-    const cir_capture_indices_all = module_env.store.sliceCaptures(closure.captures);
-    const self_binding_pattern = blk: {
-        const proc_inst = self.monomorphization.getProcInst(closure_proc_inst_id);
-        const template = self.monomorphization.getProcTemplate(proc_inst.template);
-        break :blk template.binding_pattern;
-    };
-    const CaptureIdx = @TypeOf(cir_capture_indices_all[0]);
-    var cir_capture_indices_filtered = std.ArrayList(CaptureIdx).empty;
-    defer cir_capture_indices_filtered.deinit(self.allocator);
-    for (cir_capture_indices_all) |cap_idx| {
-        const cap = module_env.store.getCapture(cap_idx);
-        if (self_binding_pattern) |pattern_idx| {
-            if (cap.pattern_idx == pattern_idx) continue;
-        }
-        try cir_capture_indices_filtered.append(self.allocator, cap_idx);
-    }
-    const cir_capture_indices = cir_capture_indices_filtered.items;
-    if (cir_capture_indices.len == 0) {
+    if (capture_requests.len == 0) {
         return .{
             .proc_expr = try self.store.addExpr(self.allocator, .{ .proc_ref = proc_id }, monotype, region),
             .captures_tuple_monotype = Monotype.Idx.none,
@@ -3938,22 +4228,21 @@ fn buildSpecializedClosureValue(
     const value_expr_top = self.scratch_expr_ids.top();
     defer self.scratch_expr_ids.clearFrom(value_expr_top);
 
-    for (cir_capture_indices) |cap_idx| {
-        const cap = module_env.store.getCapture(cap_idx);
-        const outer_symbol = try self.patternToSymbol(cap.pattern_idx);
+    for (capture_requests) |request| {
+        const outer_symbol = try self.patternToSymbol(request.pattern_idx);
         const resolved_cap_monotype = self.monomorphization.getClosureCaptureMonotype(
-            closure_proc_inst_id,
-            self.current_module_idx,
-            expr_idx,
-            cap.pattern_idx,
+            request.closure_proc_inst_id,
+            request.module_idx,
+            request.closure_expr_idx,
+            request.pattern_idx,
         ) orelse {
             if (builtin.mode == .Debug) {
                 std.debug.panic(
                     "MIR Lower invariant: missing capture monotype for closure expr {d} pattern {d} proc_inst={d}",
                     .{
-                        @intFromEnum(expr_idx),
-                        @intFromEnum(cap.pattern_idx),
-                        @intFromEnum(closure_proc_inst_id),
+                        @intFromEnum(request.closure_expr_idx),
+                        @intFromEnum(request.pattern_idx),
+                        @intFromEnum(request.closure_proc_inst_id),
                     },
                 );
             }
@@ -3969,16 +4258,16 @@ fn buildSpecializedClosureValue(
         const runtime_lookup_expr = try self.store.addExpr(self.allocator, .{ .lookup = outer_symbol }, cap_monotype, region);
 
         const proc_backed_capture_expr = if (self.monomorphization.getClosureCaptureProcInst(
-            closure_proc_inst_id,
-            self.current_module_idx,
-            expr_idx,
-            cap.pattern_idx,
+            request.closure_proc_inst_id,
+            request.module_idx,
+            request.closure_expr_idx,
+            request.pattern_idx,
         )) |capture_proc_inst_id|
             try self.lowerProcInst(capture_proc_inst_id)
         else
             MIR.ExprId.none;
         const runtime_capture_expr = if (!proc_backed_capture_expr.isNone() and
-            self.isSkippedProcBackedBindingPattern(self.current_module_idx, cap.pattern_idx))
+            self.isSkippedProcBackedBindingPattern(self.current_module_idx, request.pattern_idx))
             proc_backed_capture_expr
         else
             runtime_lookup_expr;
@@ -4018,6 +4307,33 @@ fn buildSpecializedClosureValue(
     };
 }
 
+fn buildSpecializedClosureValue(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    expr_idx: CIR.Expr.Idx,
+    closure: CIR.Expr.Closure,
+    monotype: Monotype.Idx,
+    region: Region,
+    closure_proc_inst_id: Monomorphize.ProcInstId,
+    proc_id: MIR.ProcId,
+    capture_monotypes_snapshot: ?*std.ArrayList(Monotype.Idx),
+    capture_source_exprs_snapshot: ?*std.ArrayList(MIR.ExprId),
+    capture_value_exprs_snapshot: ?*std.ArrayList(MIR.ExprId),
+) Allocator.Error!BuiltClosureValue {
+    var plan = try self.planClosureLowering(module_env, expr_idx, closure, closure_proc_inst_id);
+    defer plan.deinit(self.allocator);
+
+    return self.buildClosureValueFromCaptureRequests(
+        monotype,
+        region,
+        proc_id,
+        plan.capture_requests.items,
+        capture_monotypes_snapshot,
+        capture_source_exprs_snapshot,
+        capture_value_exprs_snapshot,
+    );
+}
+
 /// Lower `e_closure` by lifting it to a top-level function with an explicit captures tuple parameter.
 /// At the use site, returns a tuple of the captured values and registers explicit
 /// MIR closure-member metadata for downstream analysis and lowering.
@@ -4032,36 +4348,20 @@ fn lowerClosureSpecialized(
 ) Allocator.Error!MIR.ExprId {
     const inner_lambda_expr = module_env.store.getExpr(closure.lambda_idx);
     const lambda = inner_lambda_expr.e_lambda;
-    const cir_capture_indices_all = module_env.store.sliceCaptures(closure.captures);
-    const CaptureIdx = @TypeOf(cir_capture_indices_all[0]);
-    const self_binding_pattern = blk: {
-        if (proc_inst_id) |inst_id| {
-            const proc_inst = self.monomorphization.getProcInst(inst_id);
-            const template = self.monomorphization.getProcTemplate(proc_inst.template);
-            break :blk template.binding_pattern;
+    const closure_proc_inst_id = proc_inst_id orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic(
+                "MIR Lower invariant: captured closure expr {d} in module {d} is missing a proc inst",
+                .{ @intFromEnum(expr_idx), self.current_module_idx },
+            );
         }
-        break :blk null;
+        unreachable;
     };
-    var cir_capture_indices_filtered = std.ArrayList(CaptureIdx).empty;
-    defer cir_capture_indices_filtered.deinit(self.allocator);
-    var self_capture_name: ?Ident.Idx = null;
-    var has_self_capture = false;
+    var lower_plan = try self.planClosureLowering(module_env, expr_idx, closure, closure_proc_inst_id);
+    defer lower_plan.deinit(self.allocator);
 
-    for (cir_capture_indices_all) |cap_idx| {
-        const cap = module_env.store.getCapture(cap_idx);
-        if (self_binding_pattern) |pattern_idx| {
-            if (cap.pattern_idx == pattern_idx) {
-                has_self_capture = true;
-                if (self_capture_name == null) self_capture_name = cap.name;
-                continue;
-            }
-        }
-        try cir_capture_indices_filtered.append(self.allocator, cap_idx);
-    }
-    const cir_capture_indices = cir_capture_indices_filtered.items;
-
-    if (cir_capture_indices.len == 0 and !has_self_capture) {
-        // No captures — just lower as a plain lambda (no lifting needed).
+    if (lower_plan.capture_requests.items.len == 0 and lower_plan.recursive_members.items.len == 0) {
+        // No captures or recursive peers — just lower as a plain lambda.
         return self.lowerLambdaSpecialized(module_env, lambda, monotype, region, proc_inst_id);
     }
 
@@ -4073,40 +4373,23 @@ fn lowerClosureSpecialized(
     defer capture_value_exprs_snapshot.deinit(self.allocator);
     var capture_local_symbols = std.ArrayList(MIR.Symbol).empty;
     defer capture_local_symbols.deinit(self.allocator);
+    var recursive_local_symbols = std.ArrayList(MIR.Symbol).empty;
+    defer recursive_local_symbols.deinit(self.allocator);
+    var recursive_proc_ids = std.ArrayList(MIR.ProcId).empty;
+    defer recursive_proc_ids.deinit(self.allocator);
+    var recursive_monotypes = std.ArrayList(Monotype.Idx).empty;
+    defer recursive_monotypes.deinit(self.allocator);
 
     const orig_monotype = self.store.monotype_store.getMonotype(monotype);
     const orig_func = orig_monotype.func;
     var captures_tuple_monotype = Monotype.Idx.none;
-    const closure_proc_inst_id = proc_inst_id orelse {
-        if (builtin.mode == .Debug) {
-            std.debug.panic(
-                "MIR Lower invariant: captured closure expr {d} in module {d} is missing a proc inst",
-                .{ @intFromEnum(expr_idx), self.current_module_idx },
-            );
-        }
-        unreachable;
-    };
-    const proc_id = try self.store.addProc(self.allocator, .{
-        .fn_monotype = monotype,
-        .params = MIR.PatternSpan.empty(),
-        .body = MIR.ExprId.none,
-        .ret_monotype = orig_func.ret,
-        .debug_name = MIR.Symbol.none,
-        .source_region = region,
-        .capture_bindings = MIR.CaptureBindingSpan.empty(),
-        .captures_param = .none,
-        .recursion = if (has_self_capture) .recursive else .not_recursive,
-        .hosted = null,
-    });
+    const proc_id = try self.reserveProcInstSkeleton(closure_proc_inst_id);
     var captures_param_pattern = MIR.PatternId.none;
-    const built_value = try self.buildSpecializedClosureValue(
-        module_env,
-        expr_idx,
-        closure,
+    const built_value = try self.buildClosureValueFromCaptureRequests(
         monotype,
         region,
-        closure_proc_inst_id,
         proc_id,
+        lower_plan.capture_requests.items,
         &capture_monotypes_snapshot,
         &capture_source_exprs_snapshot,
         &capture_value_exprs_snapshot,
@@ -4114,7 +4397,7 @@ fn lowerClosureSpecialized(
     captures_tuple_monotype = built_value.captures_tuple_monotype;
     const proc_expr = built_value.proc_expr;
 
-    if (cir_capture_indices.len != 0) {
+    if (lower_plan.capture_requests.items.len != 0) {
         const captures_param_ident = self.makeSyntheticIdent(closure.tag_name);
         const captures_param_symbol = try self.internSymbol(self.current_module_idx, captures_param_ident);
         captures_param_pattern = try self.store.addPattern(self.allocator, .{ .bind = captures_param_symbol }, captures_tuple_monotype);
@@ -4128,36 +4411,42 @@ fn lowerClosureSpecialized(
         @intFromEnum(proc_id);
     defer self.current_pattern_scope = saved_pattern_scope;
 
-    var self_local_symbol: ?MIR.Symbol = null;
-    if (has_self_capture) {
-        const self_pattern_idx = self_binding_pattern orelse unreachable;
-        const base_key: u64 = (@as(u64, self.current_module_idx) << 32) | @intFromEnum(self_pattern_idx);
-        const scoped_key: u128 = (@as(u128, self.current_pattern_scope) << 64) | @as(u128, base_key);
-        const local_ident = self.makeSyntheticIdent(self_capture_name orelse closure.tag_name);
-        const local_symbol = try self.internSymbol(self.current_module_idx, local_ident);
-        try self.pattern_symbols.put(scoped_key, local_symbol);
-        try self.symbol_monotypes.put(local_symbol.raw(), monotype);
-        self_local_symbol = local_symbol;
-    }
-
     // Explicitly create fresh local symbols for each captured variable in the new scope.
     // patternToSymbol would resolve these to the outer scope's symbols (correct for
     // normal scoping), but here we need distinct symbols that get their values from
     // destructuring the captures tuple parameter.
-    for (cir_capture_indices) |cap_idx| {
-        const cap = module_env.store.getCapture(cap_idx);
-        const base_key: u64 = (@as(u64, self.current_module_idx) << 32) | @intFromEnum(cap.pattern_idx);
+    for (lower_plan.capture_requests.items) |request| {
+        const base_key: u64 = (@as(u64, self.current_module_idx) << 32) | @intFromEnum(request.pattern_idx);
         const scoped_key: u128 = (@as(u128, self.current_pattern_scope) << 64) | @as(u128, base_key);
-        const local_ident = self.makeSyntheticIdent(cap.name);
+        const local_ident = self.makeSyntheticIdent(request.name);
         const local_symbol = try self.internSymbol(self.current_module_idx, local_ident);
         try self.pattern_symbols.put(scoped_key, local_symbol);
         try self.symbol_monotypes.put(local_symbol.raw(), capture_monotypes_snapshot.items[capture_local_symbols.items.len]);
         try capture_local_symbols.append(self.allocator, local_symbol);
     }
 
+    for (lower_plan.recursive_members.items) |member| {
+        const member_proc_inst = self.monomorphization.getProcInst(member.proc_inst_id);
+        const member_monotype = try self.importMonotypeFromStore(
+            &self.monomorphization.monotype_store,
+            member_proc_inst.fn_monotype,
+            member_proc_inst.fn_monotype_module_idx,
+            self.current_module_idx,
+        );
+        const base_key: u64 = (@as(u64, self.current_module_idx) << 32) | @intFromEnum(member.binding_pattern);
+        const scoped_key: u128 = (@as(u128, self.current_pattern_scope) << 64) | @as(u128, base_key);
+        const local_ident = self.makeSyntheticIdent(member.binding_name);
+        const local_symbol = try self.internSymbol(self.current_module_idx, local_ident);
+        try self.pattern_symbols.put(scoped_key, local_symbol);
+        try self.symbol_monotypes.put(local_symbol.raw(), member_monotype);
+        try recursive_local_symbols.append(self.allocator, local_symbol);
+        try recursive_proc_ids.append(self.allocator, try self.reserveProcInstSkeleton(member.proc_inst_id));
+        try recursive_monotypes.append(self.allocator, member_monotype);
+    }
+
     if (proc_inst_id) |inst_id| {
-        const in_progress_expr = if (self_local_symbol) |self_symbol|
-            try self.store.addExpr(self.allocator, .{ .lookup = self_symbol }, monotype, region)
+        const in_progress_expr = if (lower_plan.current_recursive_member_index) |member_idx|
+            try self.store.addExpr(self.allocator, .{ .lookup = recursive_local_symbols.items[member_idx] }, monotype, region)
         else
             proc_expr;
         try self.in_progress_proc_insts.put(@intFromEnum(inst_id), in_progress_expr);
@@ -4174,7 +4463,7 @@ fn lowerClosureSpecialized(
     const stmts_top = self.scratch_stmts.top();
     defer self.scratch_stmts.clearFrom(stmts_top);
 
-    for (cir_capture_indices, 0..) |_, i| {
+    for (lower_plan.capture_requests.items, 0..) |_, i| {
         const cap_monotype = capture_monotypes_snapshot.items[i];
         const local_symbol = capture_local_symbols.items[i];
 
@@ -4195,9 +4484,9 @@ fn lowerClosureSpecialized(
         try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = bind_pat, .expr = tuple_access_expr } });
     }
 
-    if (self_local_symbol) |local_symbol| {
-        const self_expr = if (cir_capture_indices.len == 0) blk: {
-            break :blk try self.store.addExpr(self.allocator, .{ .proc_ref = proc_id }, monotype, region);
+    for (recursive_local_symbols.items, recursive_proc_ids.items, recursive_monotypes.items) |local_symbol, member_proc_id, member_monotype| {
+        const recursive_expr = if (lower_plan.capture_requests.items.len == 0) blk: {
+            break :blk try self.store.addExpr(self.allocator, .{ .proc_ref = member_proc_id }, member_monotype, region);
         } else blk: {
             const self_expr_top = self.scratch_expr_ids.top();
             defer self.scratch_expr_ids.clearFrom(self_expr_top);
@@ -4207,17 +4496,17 @@ fn lowerClosureSpecialized(
                 try self.scratch_expr_ids.append(capture_lookup);
             }
 
-            const self_capture_span = try self.store.addExprSpan(self.allocator, self.scratch_expr_ids.sliceFromStart(self_expr_top));
-            const self_captures_tuple = try self.emitMirStructExprFromSpan(self_capture_span, captures_tuple_monotype, region);
+            const recursive_capture_span = try self.store.addExprSpan(self.allocator, self.scratch_expr_ids.sliceFromStart(self_expr_top));
+            const recursive_captures_tuple = try self.emitMirStructExprFromSpan(recursive_capture_span, captures_tuple_monotype, region);
             break :blk try self.store.addExpr(self.allocator, .{ .closure_make = .{
-                .proc = proc_id,
-                .captures = self_captures_tuple,
-            } }, monotype, region);
+                .proc = member_proc_id,
+                .captures = recursive_captures_tuple,
+            } }, member_monotype, region);
         };
 
-        const self_bind_pat = try self.store.addPattern(self.allocator, .{ .bind = local_symbol }, monotype);
-        try self.registerBoundSymbolDefIfNeeded(self_bind_pat, self_expr);
-        try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = self_bind_pat, .expr = self_expr } });
+        const recursive_bind_pat = try self.store.addPattern(self.allocator, .{ .bind = local_symbol }, member_monotype);
+        try self.registerBoundSymbolDefIfNeeded(recursive_bind_pat, recursive_expr);
+        try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = recursive_bind_pat, .expr = recursive_expr } });
     }
 
     // --- Step 7: Wrap body in block with destructuring stmts ---
@@ -4242,10 +4531,10 @@ fn lowerClosureSpecialized(
     }
     const all_params = try self.store.addPatternSpan(self.allocator, self.scratch_pattern_ids.sliceFromStart(pat_top));
 
-    const capture_binding_span = if (cir_capture_indices.len == 0) MIR.CaptureBindingSpan.empty() else blk: {
+    const capture_binding_span = if (lower_plan.capture_requests.items.len == 0) MIR.CaptureBindingSpan.empty() else blk: {
         const binding_top = self.scratch_capture_bindings.top();
         defer self.scratch_capture_bindings.clearFrom(binding_top);
-        for (cir_capture_indices, 0..) |_, i| {
+        for (lower_plan.capture_requests.items, 0..) |_, i| {
             try self.scratch_capture_bindings.append(.{
                 .local_symbol = capture_local_symbols.items[i],
                 .source_expr = capture_source_exprs_snapshot.items[i],
@@ -4265,11 +4554,11 @@ fn lowerClosureSpecialized(
         .source_region = region,
         .capture_bindings = capture_binding_span,
         .captures_param = captures_param_pattern,
-        .recursion = if (has_self_capture) .recursive else .not_recursive,
+        .recursion = if (lower_plan.recursive_members.items.len != 0) .recursive else .not_recursive,
         .hosted = null,
     };
 
-    if (cir_capture_indices.len != 0) {
+    if (lower_plan.capture_requests.items.len != 0) {
         // --- Step 9: Register the lifted proc and its semantic closure member ---
         const member_id = try self.store.addClosureMember(self.allocator, .{
             .proc = proc_id,
@@ -4279,8 +4568,14 @@ fn lowerClosureSpecialized(
         try self.store.registerExprClosureMember(self.allocator, proc_expr, member_id);
     }
 
+    for (lower_plan.recursive_members.items) |member| {
+        if (member.proc_inst_id == closure_proc_inst_id) continue;
+        _ = try self.lowerProcInst(member.proc_inst_id);
+    }
+
     if (proc_inst_id) |inst_id| {
         _ = self.in_progress_proc_insts.remove(@intFromEnum(inst_id));
+        _ = self.reserved_proc_insts.remove(@intFromEnum(inst_id));
         try self.lowered_proc_insts.put(@intFromEnum(inst_id), proc_id);
     }
 
