@@ -297,6 +297,11 @@ pub const TypeInterner = struct {
     union_map: std.AutoHashMapUnmanaged(TagListId, TypeId),
     func_map: std.AutoHashMapUnmanaged(u96, TypeId), // packed func key
 
+    // Fingerprint → chain-head maps for list interning
+    idx_list_fp_map: std.AutoHashMapUnmanaged(u64, IdxListId),
+    field_list_fp_map: std.AutoHashMapUnmanaged(u64, FieldListId),
+    tag_list_fp_map: std.AutoHashMapUnmanaged(u64, TagListId),
+
     // Structural name pool
     name_pool: StructuralNamePool,
 
@@ -312,9 +317,9 @@ pub const TypeInterner = struct {
 
     // --- Internal list metadata ---
 
-    const IdxListMeta = struct { start: u32, len: u32, fingerprint: u64 };
-    const FieldListMeta = struct { start: u32, len: u32, fingerprint: u64 };
-    const TagListMeta = struct { start: u32, len: u32, fingerprint: u64 };
+    const IdxListMeta = struct { start: u32, len: u32, fingerprint: u64, next: IdxListId };
+    const FieldListMeta = struct { start: u32, len: u32, fingerprint: u64, next: FieldListId };
+    const TagListMeta = struct { start: u32, len: u32, fingerprint: u64, next: TagListId };
 
     // --- Scratches (reusable temporary buffers) ---
 
@@ -370,6 +375,9 @@ pub const TypeInterner = struct {
             .record_map = .{},
             .union_map = .{},
             .func_map = .{},
+            .idx_list_fp_map = .{},
+            .field_list_fp_map = .{},
+            .tag_list_fp_map = .{},
             .name_pool = StructuralNamePool.init(allocator),
             .nominal_cache = .{},
             .unit_idx = undefined,
@@ -406,6 +414,9 @@ pub const TypeInterner = struct {
         self.record_map.deinit(self.allocator);
         self.union_map.deinit(self.allocator);
         self.func_map.deinit(self.allocator);
+        self.idx_list_fp_map.deinit(self.allocator);
+        self.field_list_fp_map.deinit(self.allocator);
+        self.tag_list_fp_map.deinit(self.allocator);
         self.name_pool.deinit();
         self.nominal_cache.deinit(self.allocator);
     }
@@ -502,43 +513,94 @@ pub const TypeInterner = struct {
     pub fn internIdxList(self: *TypeInterner, items: []const TypeId) !IdxListId {
         if (items.len == 0) return .empty;
         const fp = hashTypeIds(items);
-        for (self.idx_list_metas.items, 0..) |meta, i| {
-            if (meta.fingerprint != fp or meta.len != items.len) continue;
-            if (eqlTypeIds(self.idx_list_items.items[meta.start..][0..meta.len], items))
-                return @enumFromInt(@as(u32, @intCast(i)) + 1);
+
+        const gop = try self.idx_list_fp_map.getOrPut(self.allocator, fp);
+
+        if (gop.found_existing) {
+            var cur = gop.value_ptr.*;
+            while (cur != .empty) {
+                const meta = self.idx_list_metas.items[@intFromEnum(cur) - 1];
+                if (meta.len == items.len and
+                    eqlTypeIds(self.idx_list_items.items[meta.start..][0..meta.len], items))
+                    return cur;
+                cur = meta.next;
+            }
         }
+
+        const old_head: IdxListId = if (gop.found_existing) gop.value_ptr.* else .empty;
         const start: u32 = @intCast(self.idx_list_items.items.len);
         try self.idx_list_items.appendSlice(self.allocator, items);
-        try self.idx_list_metas.append(self.allocator, .{ .start = start, .len = @intCast(items.len), .fingerprint = fp });
-        return @enumFromInt(@as(u32, @intCast(self.idx_list_metas.items.len)));
+        try self.idx_list_metas.append(self.allocator, .{
+            .start = start,
+            .len = @intCast(items.len),
+            .fingerprint = fp,
+            .next = old_head,
+        });
+        const new_id: IdxListId = @enumFromInt(@as(u32, @intCast(self.idx_list_metas.items.len)));
+        gop.value_ptr.* = new_id;
+        return new_id;
     }
 
     pub fn internFieldList(self: *TypeInterner, items: []const FieldKey) !FieldListId {
         if (items.len == 0) return .empty;
         const fp = hashFieldKeys(items);
-        for (self.field_list_metas.items, 0..) |meta, i| {
-            if (meta.fingerprint != fp or meta.len != items.len) continue;
-            if (eqlFieldKeys(self.field_list_items.items[meta.start..][0..meta.len], items))
-                return @enumFromInt(@as(u32, @intCast(i)) + 1);
+
+        const gop = try self.field_list_fp_map.getOrPut(self.allocator, fp);
+
+        if (gop.found_existing) {
+            var cur = gop.value_ptr.*;
+            while (cur != .empty) {
+                const meta = self.field_list_metas.items[@intFromEnum(cur) - 1];
+                if (meta.len == items.len and
+                    eqlFieldKeys(self.field_list_items.items[meta.start..][0..meta.len], items))
+                    return cur;
+                cur = meta.next;
+            }
         }
+
+        const old_head: FieldListId = if (gop.found_existing) gop.value_ptr.* else .empty;
         const start: u32 = @intCast(self.field_list_items.items.len);
         try self.field_list_items.appendSlice(self.allocator, items);
-        try self.field_list_metas.append(self.allocator, .{ .start = start, .len = @intCast(items.len), .fingerprint = fp });
-        return @enumFromInt(@as(u32, @intCast(self.field_list_metas.items.len)));
+        try self.field_list_metas.append(self.allocator, .{
+            .start = start,
+            .len = @intCast(items.len),
+            .fingerprint = fp,
+            .next = old_head,
+        });
+        const new_id: FieldListId = @enumFromInt(@as(u32, @intCast(self.field_list_metas.items.len)));
+        gop.value_ptr.* = new_id;
+        return new_id;
     }
 
     pub fn internTagList(self: *TypeInterner, items: []const TagKey) !TagListId {
         if (items.len == 0) return .empty;
         const fp = hashTagKeys(items);
-        for (self.tag_list_metas.items, 0..) |meta, i| {
-            if (meta.fingerprint != fp or meta.len != items.len) continue;
-            if (eqlTagKeys(self.tag_list_items.items[meta.start..][0..meta.len], items))
-                return @enumFromInt(@as(u32, @intCast(i)) + 1);
+
+        const gop = try self.tag_list_fp_map.getOrPut(self.allocator, fp);
+
+        if (gop.found_existing) {
+            var cur = gop.value_ptr.*;
+            while (cur != .empty) {
+                const meta = self.tag_list_metas.items[@intFromEnum(cur) - 1];
+                if (meta.len == items.len and
+                    eqlTagKeys(self.tag_list_items.items[meta.start..][0..meta.len], items))
+                    return cur;
+                cur = meta.next;
+            }
         }
+
+        const old_head: TagListId = if (gop.found_existing) gop.value_ptr.* else .empty;
         const start: u32 = @intCast(self.tag_list_items.items.len);
         try self.tag_list_items.appendSlice(self.allocator, items);
-        try self.tag_list_metas.append(self.allocator, .{ .start = start, .len = @intCast(items.len), .fingerprint = fp });
-        return @enumFromInt(@as(u32, @intCast(self.tag_list_metas.items.len)));
+        try self.tag_list_metas.append(self.allocator, .{
+            .start = start,
+            .len = @intCast(items.len),
+            .fingerprint = fp,
+            .next = old_head,
+        });
+        const new_id: TagListId = @enumFromInt(@as(u32, @intCast(self.tag_list_metas.items.len)));
+        gop.value_ptr.* = new_id;
+        return new_id;
     }
 
     pub fn getIdxListItems(self: *const TypeInterner, id: IdxListId) []const TypeId {
