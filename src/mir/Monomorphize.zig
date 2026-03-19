@@ -1215,10 +1215,10 @@ pub const Pass = struct {
     ) Allocator.Error!void {
         const template = result.getProcTemplate(template_id);
         const fn_monotype = blk: {
-            const expr_mono = try self.resolveExprMonotypeForProcInst(result, module_idx, expr_idx);
+            const expr_mono = try self.resolveExprMonotypeIfMonomorphizableResolved(result, module_idx, expr_idx);
             if (!expr_mono.isNone()) break :blk expr_mono;
 
-            break :blk try self.resolveTypeVarMonotypeIfExactResolved(
+            break :blk try self.resolveTypeVarMonotypeIfMonomorphizableResolved(
                 result,
                 template.module_idx,
                 template.type_root,
@@ -1254,16 +1254,32 @@ pub const Pass = struct {
         );
     }
 
-    fn resolveExprMonotypeForProcInst(
+    fn resolveExprMonotypeIfMonomorphizableResolved(
         self: *Pass,
         result: *Result,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) Allocator.Error!ResolvedMonotype {
-        return if (self.active_bindings != null)
-            try self.resolveExprMonotypeIfExactResolved(result, module_idx, expr_idx)
-        else
-            try self.resolveExprMonotypeResolved(result, module_idx, expr_idx);
+        if (self.lookupCurrentExprMonotype(result, module_idx, expr_idx)) |resolved| {
+            return resolved;
+        }
+
+        if (self.active_bindings != null) {
+            const module_env = self.all_module_envs[module_idx];
+            switch (module_env.store.getExpr(expr_idx)) {
+                .e_lookup_local => |lookup| {
+                    const pattern_mono = try self.resolveTypeVarMonotypeIfMonomorphizableResolved(
+                        result,
+                        module_idx,
+                        ModuleEnv.varFrom(lookup.pattern_idx),
+                    );
+                    if (!pattern_mono.isNone()) return pattern_mono;
+                },
+                else => {},
+            }
+        }
+
+        return self.resolveTypeVarMonotypeIfMonomorphizableResolved(result, module_idx, ModuleEnv.varFrom(expr_idx));
     }
 
     fn lookupCurrentExprMonotype(
@@ -2390,7 +2406,7 @@ pub const Pass = struct {
         var ordered_entries = std.ArrayList(TypeSubstEntry).empty;
         defer ordered_entries.deinit(self.allocator);
 
-        const callee_fn_mono = try self.resolveExprMonotypeForProcInst(result, module_idx, call_expr.func);
+        const callee_fn_mono = try self.resolveExprMonotypeIfExactResolved(result, module_idx, call_expr.func);
         if (!callee_fn_mono.isNone()) {
             try self.bindTypeVarMonotypes(
                 result,
@@ -2422,7 +2438,7 @@ pub const Pass = struct {
             }
 
             for (param_vars, arg_exprs) |param_var, arg_expr_idx| {
-                const arg_mono = try self.resolveExprMonotypeForProcInst(result, module_idx, arg_expr_idx);
+                const arg_mono = try self.resolveExprMonotypeIfExactResolved(result, module_idx, arg_expr_idx);
                 if (arg_mono.isNone()) continue;
                 var seen: std.AutoHashMapUnmanaged(types.Var, void) = .empty;
                 defer seen.deinit(self.allocator);
@@ -2448,7 +2464,7 @@ pub const Pass = struct {
                 }
             }
 
-            const ret_mono = try self.resolveExprMonotypeForProcInst(result, module_idx, call_expr_idx);
+            const ret_mono = try self.resolveExprMonotypeIfExactResolved(result, module_idx, call_expr_idx);
             if (!ret_mono.isNone()) {
                 if (self.procBoundaryInfo(template.module_idx, template.cir_expr)) |boundary| {
                     try self.bindTypeVarMonotypes(
@@ -2653,7 +2669,7 @@ pub const Pass = struct {
             }
 
             for (param_vars, actual_args.items) |param_var, arg_expr_idx| {
-                const arg_mono = try self.resolveExprMonotypeForProcInst(result, module_idx, arg_expr_idx);
+                const arg_mono = try self.resolveExprMonotypeIfExactResolved(result, module_idx, arg_expr_idx);
                 if (arg_mono.isNone()) continue;
                 try self.bindTypeVarMonotypes(
                     result,
@@ -2667,7 +2683,7 @@ pub const Pass = struct {
                 );
             }
 
-            const ret_mono = try self.resolveExprMonotypeForProcInst(result, module_idx, expr_idx);
+            const ret_mono = try self.resolveExprMonotypeIfExactResolved(result, module_idx, expr_idx);
             if (!ret_mono.isNone()) {
                 if (self.procBoundaryInfo(template.module_idx, template.cir_expr)) |boundary| {
                     try self.bindTypeVarMonotypes(
@@ -3646,7 +3662,7 @@ pub const Pass = struct {
         const proc_inst_id = if (existing_proc_inst_id) |proc_inst_id|
             proc_inst_id
         else blk: {
-            const fn_monotype = try self.resolveExprMonotypeForProcInst(result, module_idx, expr_idx);
+            const fn_monotype = try self.resolveExprMonotypeIfMonomorphizableResolved(result, module_idx, expr_idx);
             if (fn_monotype.isNone()) return;
             break :blk if (self.active_proc_inst_context.isNone())
                 try self.ensureProcInstUnscanned(result, template_id, fn_monotype.idx, fn_monotype.module_idx)
@@ -6671,7 +6687,12 @@ pub const Pass = struct {
     ) Allocator.Error!ResolvedMonotype {
         const bindings = self.active_bindings orelse {
             const store_types = &self.all_module_envs[module_idx].types;
-            if (store_types.needsInstantiation(var_)) return resolvedMonotype(.none, module_idx);
+            var seen: std.AutoHashMapUnmanaged(types.Var, void) = .empty;
+            defer seen.deinit(self.allocator);
+
+            if (!try self.typeVarFullyBoundWithoutBindings(result, module_idx, store_types, var_, &seen)) {
+                return resolvedMonotype(.none, module_idx);
+            }
             return self.resolveTypeVarMonotypeResolved(result, module_idx, var_);
         };
 
@@ -6697,6 +6718,26 @@ pub const Pass = struct {
             bindings,
         );
         return resolvedMonotype(mono, module_idx);
+    }
+
+    fn typeVarFullyBoundWithoutBindings(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        store_types: *const types.Store,
+        var_: types.Var,
+        seen: *std.AutoHashMapUnmanaged(types.Var, void),
+    ) Allocator.Error!bool {
+        var empty_bindings = std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype).init(self.allocator);
+        defer empty_bindings.deinit();
+        return self.typeVarFullyBoundWithBindings(
+            result,
+            module_idx,
+            store_types,
+            var_,
+            &empty_bindings,
+            seen,
+        );
     }
 
     fn resolveTypeVarMonotypeIfMonomorphizableResolved(
