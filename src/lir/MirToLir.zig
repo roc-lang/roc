@@ -6357,9 +6357,8 @@ test "MIR multi-tag union tags get correct discriminants" {
     const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
 
     // Create a 2-tag union: [Bar, Foo I64]
-    // Sorted alphabetically by ident idx: Bar (idx=1) < Foo (idx=2)
-    const tag_bar = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
-    const tag_foo = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 2 };
+    const tag_bar = try env.module_env.insertIdent(Ident.for_text("Bar"));
+    const tag_foo = try env.module_env.insertIdent(Ident.for_text("Foo"));
 
     const foo_payloads = try env.mir_store.monotype_store.addIdxSpan(allocator, &.{i64_mono});
 

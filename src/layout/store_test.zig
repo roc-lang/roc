@@ -96,6 +96,9 @@ fn expectTypeAndMonotypeResolversAgree(
     var scratches = try mir.Monotype.Store.Scratches.init(allocator);
     defer scratches.deinit();
     scratches.ident_store = lt.module_env.getIdentStoreConst();
+    scratches.module_env = &lt.module_env;
+    scratches.module_idx = 0;
+    scratches.all_module_envs = &lt.module_env_ptr;
 
     var specializations = std.AutoHashMap(types.Var, mir.Monotype.Idx).init(allocator);
     defer specializations.deinit();
