@@ -111,8 +111,10 @@ nominal_cycle_breakers: std.AutoHashMap(types.Var, Monotype.Idx),
 /// Key is @bitCast(MIR.Symbol) → u64.
 lowered_symbols: std.AutoHashMap(u64, MIR.ExprId),
 
-/// Cache for already-lowered proc instances chosen by monomorphization.
-lowered_proc_insts: std.AutoHashMap(u32, MIR.ExprId),
+/// Cache for proc bodies already lowered for proc instances chosen by monomorphization.
+/// The callable value expression itself is rebuilt per use-site scope because
+/// closure captures are context-sensitive.
+lowered_proc_insts: std.AutoHashMap(u32, MIR.ProcId),
 
 /// Metadata for opaque symbol IDs; populated at symbol construction time.
 symbol_metadata: std.AutoHashMap(u64, SymbolMetadata),
@@ -202,7 +204,7 @@ pub fn init(
         .type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(allocator),
         .nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(allocator),
         .lowered_symbols = std.AutoHashMap(u64, MIR.ExprId).init(allocator),
-        .lowered_proc_insts = std.AutoHashMap(u32, MIR.ExprId).init(allocator),
+        .lowered_proc_insts = std.AutoHashMap(u32, MIR.ProcId).init(allocator),
         .symbol_metadata = std.AutoHashMap(u64, SymbolMetadata).init(allocator),
         .next_synthetic_ident = Ident.Idx.NONE.idx - 1,
         .in_progress_defs = std.AutoHashMap(u64, void).init(allocator),
@@ -2758,7 +2760,9 @@ fn lowerExprWithMonotypeOverride(
 
         // --- Lookups ---
         .e_lookup_local => |lookup| {
-            if (self.isSkippedProcBackedBindingPattern(self.current_module_idx, lookup.pattern_idx)) {
+            if (self.currentScopedPatternSymbol(self.current_module_idx, lookup.pattern_idx) == null and
+                self.isSkippedProcBackedBindingPattern(self.current_module_idx, lookup.pattern_idx))
+            {
                 if (self.monomorphization.getContextPatternProcInsts(self.current_proc_inst_context, self.current_module_idx, lookup.pattern_idx)) |proc_inst_ids| {
                     if (proc_inst_ids.len == 0) unreachable;
                     if (proc_inst_ids.len == 1) {
@@ -2786,7 +2790,6 @@ fn lowerExprWithMonotypeOverride(
                 for (defs) |def_idx| {
                     const def = module_env.store.getDef(def_idx);
                     if (def.pattern == lookup.pattern_idx) {
-                        if (cirExprIsProcBacked(module_env, def.expr)) break;
                         // Resolve the canonical (unscoped) symbol for this
                         // top-level def, not the potentially-scoped capture
                         // alias from lowerClosure. Inside a closure body,
@@ -3332,6 +3335,16 @@ fn bindingPatternKey(module_idx: u32, pattern_idx: CIR.Pattern.Idx) u64 {
     return (@as(u64, module_idx) << 32) | @intFromEnum(pattern_idx);
 }
 
+fn scopedPatternSymbolKey(module_idx: u32, pattern_scope: u64, pattern_idx: CIR.Pattern.Idx) u128 {
+    const base_key: u64 = bindingPatternKey(module_idx, pattern_idx);
+    return (@as(u128, pattern_scope) << 64) | @as(u128, base_key);
+}
+
+fn currentScopedPatternSymbol(self: *const Self, module_idx: u32, pattern_idx: CIR.Pattern.Idx) ?MIR.Symbol {
+    if (self.current_pattern_scope == 0) return null;
+    return self.pattern_symbols.get(scopedPatternSymbolKey(module_idx, self.current_pattern_scope, pattern_idx));
+}
+
 fn markSkippedProcBackedBindingPatterns(
     self: *Self,
     module_env: *const ModuleEnv,
@@ -3345,69 +3358,6 @@ fn markSkippedProcBackedBindingPatterns(
             bindingPatternKey(self.current_module_idx, binding.pattern_idx),
             {},
         );
-    }
-}
-
-fn seedSkippedProcBackedBindingSymbols(
-    self: *Self,
-    module_env: *const ModuleEnv,
-    pattern_idx: CIR.Pattern.Idx,
-    expr_idx: CIR.Expr.Idx,
-) Allocator.Error!void {
-    var bindings = std.ArrayList(PatternBinding).empty;
-    defer bindings.deinit(self.allocator);
-    try self.collectPatternBindings(module_env, pattern_idx, &bindings);
-
-    const root_expr_context = self.monomorphizationRootExprContext(self.current_proc_inst_context);
-    const leaf_expr_idx = procBackedLeafExpr(module_env, expr_idx);
-
-    for (bindings.items) |binding| {
-        const symbol = try self.patternToSymbol(binding.pattern_idx);
-        var proc_ids = std.ArrayList(MIR.ProcId).empty;
-        defer proc_ids.deinit(self.allocator);
-
-        if (self.monomorphization.getContextPatternProcInsts(
-            self.current_proc_inst_context,
-            self.current_module_idx,
-            binding.pattern_idx,
-        )) |proc_inst_ids| {
-            for (proc_inst_ids) |proc_inst_id| {
-                const proc_expr = try self.lowerProcInst(proc_inst_id);
-                const proc_id = self.resolveProcIdFromCallableExpr(proc_expr) orelse continue;
-                var seen = false;
-                for (proc_ids.items) |existing_proc_id| {
-                    if (existing_proc_id == proc_id) {
-                        seen = true;
-                        break;
-                    }
-                }
-                if (!seen) try proc_ids.append(self.allocator, proc_id);
-            }
-        } else if (leaf_expr_idx) |leaf| {
-            if (self.monomorphization.getExprProcInst(
-                self.current_proc_inst_context,
-                root_expr_context,
-                self.current_module_idx,
-                leaf,
-            )) |proc_inst_id| {
-                const proc_expr = try self.lowerProcInst(proc_inst_id);
-                const proc_id = self.resolveProcIdFromCallableExpr(proc_expr) orelse continue;
-                try proc_ids.append(self.allocator, proc_id);
-            }
-        }
-
-        if (proc_ids.items.len == 0) continue;
-        std.mem.sortUnstable(
-            MIR.ProcId,
-            proc_ids.items,
-            {},
-            struct {
-                fn lessThan(_: void, lhs: MIR.ProcId, rhs: MIR.ProcId) bool {
-                    return @intFromEnum(lhs) < @intFromEnum(rhs);
-                }
-            }.lessThan,
-        );
-        try self.store.registerSymbolSeedProcSet(self.allocator, symbol, proc_ids.items);
     }
 }
 
@@ -3425,7 +3375,8 @@ fn calleeNeedsProcInstMaterialization(
     func_expr_idx: CIR.Expr.Idx,
 ) bool {
     return switch (module_env.store.getExpr(func_expr_idx)) {
-        .e_lookup_local => |lookup| self.isSkippedProcBackedBindingPattern(self.current_module_idx, lookup.pattern_idx),
+        .e_lookup_local => |lookup| self.currentScopedPatternSymbol(self.current_module_idx, lookup.pattern_idx) == null and
+            self.isSkippedProcBackedBindingPattern(self.current_module_idx, lookup.pattern_idx),
         .e_lookup_external, .e_lookup_required => false,
         else => true,
     };
@@ -3939,10 +3890,106 @@ fn lowerLambdaSpecialized(
 
     if (proc_inst_id) |inst_id| {
         _ = self.in_progress_proc_insts.remove(@intFromEnum(inst_id));
-        try self.lowered_proc_insts.put(@intFromEnum(inst_id), proc_expr);
+        try self.lowered_proc_insts.put(@intFromEnum(inst_id), proc_id);
     }
 
     return proc_expr;
+}
+
+const BuiltClosureValue = struct {
+    proc_expr: MIR.ExprId,
+    captures_tuple_monotype: Monotype.Idx,
+};
+
+fn buildSpecializedClosureValue(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    expr_idx: CIR.Expr.Idx,
+    closure: CIR.Expr.Closure,
+    monotype: Monotype.Idx,
+    region: Region,
+    closure_proc_inst_id: Monomorphize.ProcInstId,
+    proc_id: MIR.ProcId,
+    capture_monotypes_snapshot: ?*std.ArrayList(Monotype.Idx),
+    capture_lookup_exprs_snapshot: ?*std.ArrayList(MIR.ExprId),
+) Allocator.Error!BuiltClosureValue {
+    const cir_capture_indices = module_env.store.sliceCaptures(closure.captures);
+    if (cir_capture_indices.len == 0) {
+        return .{
+            .proc_expr = try self.store.addExpr(self.allocator, .{ .proc_ref = proc_id }, monotype, region),
+            .captures_tuple_monotype = Monotype.Idx.none,
+        };
+    }
+
+    const idxs_top = self.mono_scratches.idxs.top();
+    defer self.mono_scratches.idxs.clearFrom(idxs_top);
+    const expr_top = self.scratch_expr_ids.top();
+    defer self.scratch_expr_ids.clearFrom(expr_top);
+
+    for (cir_capture_indices) |cap_idx| {
+        const cap = module_env.store.getCapture(cap_idx);
+        const outer_symbol = try self.patternToSymbol(cap.pattern_idx);
+        const resolved_cap_monotype = self.monomorphization.getClosureCaptureMonotype(
+            closure_proc_inst_id,
+            self.current_module_idx,
+            expr_idx,
+            cap.pattern_idx,
+        ) orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "MIR Lower invariant: missing capture monotype for closure expr {d} pattern {d} proc_inst={d}",
+                    .{
+                        @intFromEnum(expr_idx),
+                        @intFromEnum(cap.pattern_idx),
+                        @intFromEnum(closure_proc_inst_id),
+                    },
+                );
+            }
+            unreachable;
+        };
+        const cap_monotype = try self.importMonotypeFromStore(
+            &self.monomorphization.monotype_store,
+            resolved_cap_monotype.idx,
+            resolved_cap_monotype.module_idx,
+            self.current_module_idx,
+        );
+        try self.mono_scratches.idxs.append(cap_monotype);
+        const capture_proc_inst = self.monomorphization.getClosureCaptureProcInst(
+            closure_proc_inst_id,
+            self.current_module_idx,
+            expr_idx,
+            cap.pattern_idx,
+        );
+        const capture_expr = if (capture_proc_inst) |capture_proc_inst_id|
+            try self.lowerProcInst(capture_proc_inst_id)
+        else
+            try self.store.addExpr(self.allocator, .{ .lookup = outer_symbol }, cap_monotype, region);
+        try self.scratch_expr_ids.append(capture_expr);
+    }
+
+    const capture_monotypes = self.mono_scratches.idxs.sliceFromStart(idxs_top);
+    const capture_lookup_exprs = self.scratch_expr_ids.sliceFromStart(expr_top);
+    if (capture_monotypes_snapshot) |snapshot| {
+        try snapshot.appendSlice(self.allocator, capture_monotypes);
+    }
+    if (capture_lookup_exprs_snapshot) |snapshot| {
+        try snapshot.appendSlice(self.allocator, capture_lookup_exprs);
+    }
+
+    const captures_tuple_elems = try self.store.monotype_store.addIdxSpan(self.allocator, capture_monotypes);
+    const captures_tuple_monotype = try self.store.monotype_store.addMonotype(self.allocator, .{ .tuple = .{
+        .elems = captures_tuple_elems,
+    } });
+
+    const captures_tuple_span = try self.store.addExprSpan(self.allocator, capture_lookup_exprs);
+    const captures_tuple_expr = try self.emitMirStructExprFromSpan(captures_tuple_span, captures_tuple_monotype, region);
+    return .{
+        .proc_expr = try self.store.addExpr(self.allocator, .{ .closure_make = .{
+            .proc = proc_id,
+            .captures = captures_tuple_expr,
+        } }, monotype, region),
+        .captures_tuple_monotype = captures_tuple_monotype,
+    };
 }
 
 /// Lower `e_closure` by lifting it to a top-level function with an explicit captures tuple parameter.
@@ -4024,76 +4071,25 @@ fn lowerClosureSpecialized(
         .hosted = null,
     });
     var captures_param_pattern = MIR.PatternId.none;
-    const proc_expr = if (cir_capture_indices.len == 0) blk: {
-        break :blk try self.store.addExpr(self.allocator, .{ .proc_ref = proc_id }, monotype, region);
-    } else blk: {
-        const idxs_top = self.mono_scratches.idxs.top();
-        defer self.mono_scratches.idxs.clearFrom(idxs_top);
-        const expr_top = self.scratch_expr_ids.top();
-        defer self.scratch_expr_ids.clearFrom(expr_top);
+    const built_value = try self.buildSpecializedClosureValue(
+        module_env,
+        expr_idx,
+        closure,
+        monotype,
+        region,
+        closure_proc_inst_id,
+        proc_id,
+        &capture_monotypes_snapshot,
+        &capture_lookup_exprs_snapshot,
+    );
+    captures_tuple_monotype = built_value.captures_tuple_monotype;
+    const proc_expr = built_value.proc_expr;
 
-        for (cir_capture_indices) |cap_idx| {
-            const cap = module_env.store.getCapture(cap_idx);
-            const outer_symbol = try self.patternToSymbol(cap.pattern_idx);
-            const resolved_cap_monotype = self.monomorphization.getClosureCaptureMonotype(
-                closure_proc_inst_id,
-                self.current_module_idx,
-                expr_idx,
-                cap.pattern_idx,
-            ) orelse {
-                if (builtin.mode == .Debug) {
-                    std.debug.panic(
-                        "MIR Lower invariant: missing capture monotype for closure expr {d} pattern {d} proc_inst={d}",
-                        .{
-                            @intFromEnum(expr_idx),
-                            @intFromEnum(cap.pattern_idx),
-                            @intFromEnum(closure_proc_inst_id),
-                        },
-                    );
-                }
-                unreachable;
-            };
-            const cap_monotype = try self.importMonotypeFromStore(
-                &self.monomorphization.monotype_store,
-                resolved_cap_monotype.idx,
-                resolved_cap_monotype.module_idx,
-                self.current_module_idx,
-            );
-            try self.mono_scratches.idxs.append(cap_monotype);
-            const capture_proc_inst = self.monomorphization.getClosureCaptureProcInst(
-                closure_proc_inst_id,
-                self.current_module_idx,
-                expr_idx,
-                cap.pattern_idx,
-            );
-            const capture_expr = if (capture_proc_inst) |capture_proc_inst_id|
-                try self.lowerProcInst(capture_proc_inst_id)
-            else
-                try self.store.addExpr(self.allocator, .{ .lookup = outer_symbol }, cap_monotype, region);
-            try self.scratch_expr_ids.append(capture_expr);
-        }
-
-        const capture_monotypes = self.mono_scratches.idxs.sliceFromStart(idxs_top);
-        const capture_lookup_exprs = self.scratch_expr_ids.sliceFromStart(expr_top);
-        try capture_monotypes_snapshot.appendSlice(self.allocator, capture_monotypes);
-        try capture_lookup_exprs_snapshot.appendSlice(self.allocator, capture_lookup_exprs);
-
-        const captures_tuple_elems = try self.store.monotype_store.addIdxSpan(self.allocator, capture_monotypes_snapshot.items);
-        captures_tuple_monotype = try self.store.monotype_store.addMonotype(self.allocator, .{ .tuple = .{
-            .elems = captures_tuple_elems,
-        } });
-
+    if (cir_capture_indices.len != 0) {
         const captures_param_ident = self.makeSyntheticIdent(closure.tag_name);
         const captures_param_symbol = try self.internSymbol(self.current_module_idx, captures_param_ident);
         captures_param_pattern = try self.store.addPattern(self.allocator, .{ .bind = captures_param_symbol }, captures_tuple_monotype);
-
-        const captures_tuple_span = try self.store.addExprSpan(self.allocator, capture_lookup_exprs_snapshot.items);
-        const captures_tuple_expr = try self.emitMirStructExprFromSpan(captures_tuple_span, captures_tuple_monotype, region);
-        break :blk try self.store.addExpr(self.allocator, .{ .closure_make = .{
-            .proc = proc_id,
-            .captures = captures_tuple_expr,
-        } }, monotype, region);
-    };
+    }
 
     // --- Step 4: Enter a new scope for the lifted function body ---
     const saved_pattern_scope = self.current_pattern_scope;
@@ -4253,7 +4249,7 @@ fn lowerClosureSpecialized(
 
     if (proc_inst_id) |inst_id| {
         _ = self.in_progress_proc_insts.remove(@intFromEnum(inst_id));
-        try self.lowered_proc_insts.put(@intFromEnum(inst_id), proc_expr);
+        try self.lowered_proc_insts.put(@intFromEnum(inst_id), proc_id);
     }
 
     return proc_expr;
@@ -4321,7 +4317,7 @@ fn lowerHostedLambdaSpecialized(
 
     if (proc_inst_id) |inst_id| {
         _ = self.in_progress_proc_insts.remove(@intFromEnum(inst_id));
-        try self.lowered_proc_insts.put(@intFromEnum(inst_id), proc_expr);
+        try self.lowered_proc_insts.put(@intFromEnum(inst_id), proc_id);
     }
 
     return proc_expr;
@@ -4421,7 +4417,6 @@ fn monotypeCanRefine(
 /// (e.g., List.concat, Str.concat), emit `run_low_level` instead of `call`.
 fn lowerProcInst(self: *Self, proc_inst_id: Monomorphize.ProcInstId) Allocator.Error!MIR.ExprId {
     const proc_inst_key = @intFromEnum(proc_inst_id);
-    if (self.lowered_proc_insts.get(proc_inst_key)) |cached| return cached;
     if (self.in_progress_proc_insts.get(proc_inst_key)) |in_progress| return in_progress;
 
     const proc_inst = self.monomorphization.getProcInst(proc_inst_id);
@@ -4444,7 +4439,6 @@ fn lowerProcInst(self: *Self, proc_inst_id: Monomorphize.ProcInstId) Allocator.E
     const saved_module_env = self.mono_scratches.module_env;
     const saved_mono_module_idx = self.mono_scratches.module_idx;
     const saved_proc_inst_context = self.current_proc_inst_context;
-    const saved_pattern_scope = self.current_pattern_scope;
     if (switching_module) {
         self.current_module_idx = module_idx;
         self.types_store = &module_env.types;
@@ -4456,7 +4450,6 @@ fn lowerProcInst(self: *Self, proc_inst_id: Monomorphize.ProcInstId) Allocator.E
     self.type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
     self.nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
     self.current_proc_inst_context = proc_inst_id;
-    self.current_pattern_scope = patternScopeForProcInst(proc_inst.defining_context_proc_inst);
 
     try self.seedTypeScopeBindingsInStore(
         self.current_module_idx,
@@ -4485,13 +4478,35 @@ fn lowerProcInst(self: *Self, proc_inst_id: Monomorphize.ProcInstId) Allocator.E
 
     try self.bindProcTemplateBoundaryMonotypes(module_env, template.cir_expr, proc_monotype);
 
+    if (self.lowered_proc_insts.get(proc_inst_key)) |cached_proc_id| {
+        return switch (module_env.store.getExpr(template.cir_expr)) {
+            .e_lambda, .e_hosted_lambda => try self.store.addExpr(
+                self.allocator,
+                .{ .proc_ref = cached_proc_id },
+                proc_monotype,
+                template.source_region,
+            ),
+            .e_closure => |closure| (try self.buildSpecializedClosureValue(
+                module_env,
+                template.cir_expr,
+                closure,
+                proc_monotype,
+                template.source_region,
+                proc_inst_id,
+                cached_proc_id,
+                null,
+                null,
+            )).proc_expr,
+            else => unreachable,
+        };
+    }
+
     defer {
         self.type_var_seen.deinit();
         self.type_var_seen = saved_type_var_seen;
         self.nominal_cycle_breakers.deinit();
         self.nominal_cycle_breakers = saved_nominal_cycle_breakers;
         self.current_proc_inst_context = saved_proc_inst_context;
-        self.current_pattern_scope = saved_pattern_scope;
         if (switching_module) {
             self.current_module_idx = saved_module_idx;
             self.types_store = saved_types_store;
@@ -4831,7 +4846,6 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
             .s_decl => |decl| {
                 if (cirExprIsProcBacked(module_env, decl.expr)) {
                     try self.markSkippedProcBackedBindingPatterns(module_env, decl.pattern);
-                    try self.seedSkippedProcBackedBindingSymbols(module_env, decl.pattern, decl.expr);
                     continue;
                 }
                 const pat = try self.lowerPattern(module_env, decl.pattern);
@@ -4844,7 +4858,6 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
                     !self.callableBindingHasDemandedValueUse(var_decl.pattern_idx))
                 {
                     try self.markSkippedProcBackedBindingPatterns(module_env, var_decl.pattern_idx);
-                    try self.seedSkippedProcBackedBindingSymbols(module_env, var_decl.pattern_idx, var_decl.expr);
                     continue;
                 }
                 const pat = try self.lowerPattern(module_env, var_decl.pattern_idx);

@@ -48,6 +48,20 @@ fn procIdFromCallableExpr(mir_store: *const MIR.Store, expr_id: MIR.ExprId) ?MIR
     };
 }
 
+fn firstCalledProcInStmts(mir_store: *const MIR.Store, stmts: []const MIR.Stmt) ?MIR.ProcId {
+    for (stmts) |stmt| {
+        const binding = switch (stmt) {
+            .decl_const, .decl_var, .mutate_var => |b| b,
+        };
+        if (mir_store.getExpr(binding.expr) != .call) continue;
+        if (procIdFromCallableExpr(mir_store, mir_store.getExpr(binding.expr).call.func)) |proc_id| {
+            return proc_id;
+        }
+    }
+
+    return null;
+}
+
 const ForeignParamLookup = struct {
     expr_id: MIR.ExprId,
     symbol: MIR.Symbol,
@@ -775,24 +789,12 @@ test "lambda set: closure-returning binding keeps resolvable lifted member" {
     const block = env.mir_store.getExpr(expr);
     try testing.expect(block == .block);
 
-    const stmts = env.mir_store.getStmts(block.block.stmts);
-    try testing.expect(stmts.len >= 2);
-    try testing.expect(stmts[1] == .decl_const);
-
     const all_module_envs = [_]*ModuleEnv{
         @constCast(env.builtin_module.env),
         env.module_env,
     };
     var ls_store = try LambdaSet.infer(test_allocator, env.mir_store, all_module_envs[0..]);
     defer ls_store.deinit(test_allocator);
-
-    const returned_closure_ls = ls_store.getExprLambdaSet(stmts[1].decl_const.expr) orelse return error.TestUnexpectedResult;
-
-    const members = ls_store.getMembers(ls_store.getLambdaSet(returned_closure_ls).members);
-    try testing.expectEqual(@as(usize, 1), members.len);
-    try testing.expect(!members[0].proc.isNone());
-    const returned_closure_member = env.mir_store.getClosureMember(members[0].closure_member);
-    try testing.expectEqual(@as(usize, 1), env.mir_store.getCaptureBindings(returned_closure_member.capture_bindings).len);
 
     var final_expr_id = block.block.final_expr;
     while (env.mir_store.getExpr(final_expr_id) == .block) {
@@ -806,6 +808,8 @@ test "lambda set: closure-returning binding keeps resolvable lifted member" {
     const callee_members = ls_store.getMembers(ls_store.getLambdaSet(callee_ls).members);
     try testing.expectEqual(@as(usize, 1), callee_members.len);
     try testing.expect(!callee_members[0].proc.isNone());
+    const returned_closure_member = env.mir_store.getClosureMember(callee_members[0].closure_member);
+    try testing.expectEqual(@as(usize, 1), env.mir_store.getCaptureBindings(returned_closure_member.capture_bindings).len);
 }
 
 test "lambda set: higher-order closure param propagation keeps member defs stable" {
@@ -1156,17 +1160,7 @@ test "lambda set: higher-order param receives both closure members" {
     try testing.expect(block == .block);
 
     const stmts = env.mir_store.getStmts(block.block.stmts);
-    var apply_sym: ?MIR.Symbol = null;
-    for (stmts) |stmt| {
-        if (stmt != .decl_const) continue;
-        if (procIdFromExpr(env.mir_store, stmt.decl_const.expr) == null) continue;
-        const pat = env.mir_store.getPattern(stmt.decl_const.pattern);
-        if (pat != .bind) continue;
-        apply_sym = pat.bind;
-        break;
-    }
-    const resolved_apply_sym = apply_sym orelse return error.TestUnexpectedResult;
-    const apply_proc_id = procIdFromValueDef(env.mir_store, resolved_apply_sym) orelse return error.TestUnexpectedResult;
+    const apply_proc_id = firstCalledProcInStmts(env.mir_store, stmts) orelse return error.TestUnexpectedResult;
     const apply_proc = env.mir_store.getProc(apply_proc_id);
     const apply_params = env.mir_store.getPatternSpan(apply_proc.params);
     try testing.expectEqual(@as(usize, 2), apply_params.len);
@@ -1216,17 +1210,7 @@ test "lambda set: higher-order closure captures monotype stays numeric tuple" {
     try testing.expect(block == .block);
 
     const stmts = env.mir_store.getStmts(block.block.stmts);
-    var apply_sym: ?MIR.Symbol = null;
-    for (stmts) |stmt| {
-        if (stmt != .decl_const) continue;
-        if (procIdFromExpr(env.mir_store, stmt.decl_const.expr) == null) continue;
-        const pat = env.mir_store.getPattern(stmt.decl_const.pattern);
-        if (pat != .bind) continue;
-        apply_sym = pat.bind;
-        break;
-    }
-    const resolved_apply_sym = apply_sym orelse return error.TestUnexpectedResult;
-    const apply_proc_id = procIdFromValueDef(env.mir_store, resolved_apply_sym) orelse return error.TestUnexpectedResult;
+    const apply_proc_id = firstCalledProcInStmts(env.mir_store, stmts) orelse return error.TestUnexpectedResult;
     const apply_proc = env.mir_store.getProc(apply_proc_id);
     const apply_params = env.mir_store.getPatternSpan(apply_proc.params);
     const f_pat = env.mir_store.getPattern(apply_params[0]);
@@ -3140,17 +3124,22 @@ test "polymorphic lambda in block: sum called with U64 gets U64 monotype, not De
         try testing.expectEqual(Monotype.Prim.u64, arg_mono.prim);
     }
 
-    // The lambda itself (first stmt's expr) should have params typed as U64
-    const stmts = env.mir_store.getStmts(result.block.stmts);
-    try testing.expect(stmts.len >= 1);
-    const decl_expr = env.mir_store.getExpr(stmts[0].decl_const.expr);
-    try testing.expect(decl_expr == .proc_ref);
-    const lambda_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(stmts[0].decl_const.expr));
+    // The called proc itself should have U64 params and return type.
+    const sum_proc_id = procIdFromCallableExpr(env.mir_store, final_expr.call.func) orelse return error.TestUnexpectedResult;
+    const lambda_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(final_expr.call.func));
     try testing.expect(lambda_mono == .func);
-    // Return type of the lambda must be U64
     const ret_mono = env.mir_store.monotype_store.getMonotype(lambda_mono.func.ret);
     try testing.expect(ret_mono == .prim);
     try testing.expectEqual(Monotype.Prim.u64, ret_mono.prim);
+
+    const sum_proc = env.mir_store.getProc(sum_proc_id);
+    for (env.mir_store.getPatternSpan(sum_proc.params)) |param_id| {
+        const param = env.mir_store.getPattern(param_id);
+        try testing.expect(param == .bind);
+        const param_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.patternTypeOf(param_id));
+        try testing.expect(param_mono == .prim);
+        try testing.expectEqual(Monotype.Prim.u64, param_mono.prim);
+    }
 }
 
 test "polymorphic lambda in block: fn called via arrow syntax gets correct type" {
@@ -3188,15 +3177,13 @@ test "polymorphic lambda with literal in body: a + b + 0 called with U64" {
     const call_monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(result.block.final_expr));
     try testing.expectEqual(Monotype.Prim.u64, call_monotype.prim);
 
-    // Check the lambda body
-    const stmts = env.mir_store.getStmts(result.block.stmts);
-    try testing.expect(stmts.len >= 1);
-    const decl_expr = env.mir_store.getExpr(stmts[0].decl_const.expr);
-    try testing.expect(decl_expr == .proc_ref);
-    const decl_proc = env.mir_store.getProc(decl_expr.proc_ref);
+    const final_expr = env.mir_store.getExpr(result.block.final_expr);
+    try testing.expect(final_expr == .call);
+    const sum_proc_id = procIdFromCallableExpr(env.mir_store, final_expr.call.func) orelse return error.TestUnexpectedResult;
+    const decl_proc = env.mir_store.getProc(sum_proc_id);
 
     // Lambda return must be U64
-    const lambda_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(stmts[0].decl_const.expr));
+    const lambda_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(final_expr.call.func));
     try testing.expect(lambda_mono == .func);
     const ret_mono = env.mir_store.monotype_store.getMonotype(lambda_mono.func.ret);
     try testing.expectEqual(Monotype.Prim.u64, ret_mono.prim);
