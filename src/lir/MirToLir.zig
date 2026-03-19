@@ -1618,7 +1618,7 @@ fn lowerDispatchProcBody(
                 .union_layout = closure_layout,
                 .payload_layout = captures_layout,
             } }, region);
-            const payload_arg = try branch_acc.bindRetained(payload_expr, captures_layout, region);
+            const payload_arg = try branch_acc.ensureSymbol(payload_expr, captures_layout, region);
             try self.scratch_lir_expr_ids.append(self.allocator, payload_arg);
             try self.scratch_layout_idxs.append(self.allocator, self.lirExprResultLayout(payload_arg));
         }

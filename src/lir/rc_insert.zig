@@ -2994,6 +2994,9 @@ pub const RcInsertPass = struct {
                 if (self.layoutNeedsRc(tpa.payload_layout)) {
                     try self.emitIncrefInto(payload.symbol, tpa.payload_layout, 1, region, &stmts);
                 }
+                if (self.layoutNeedsRc(tpa.union_layout)) {
+                    try self.emitDecrefInto(parent.symbol, tpa.union_layout, region, &stmts);
+                }
 
                 return self.store.addExpr(.{ .block = .{
                     .stmts = try self.store.addStmts(stmts.items),
@@ -8626,6 +8629,43 @@ test "RC discriminant_switch: body-bound symbols don't get per-branch RC ops" {
     const rc = countRcOps(&env.lir_store, result);
     try std.testing.expectEqual(@as(u32, 0), rc.increfs);
     try std.testing.expectEqual(@as(u32, 1), rc.decrefs);
+}
+
+test "RC tag_payload_access: retained parent temp is released after extraction" {
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const str_layout: LayoutIdx = .str;
+    const tag_union_layout = try env.layout_store.putTagUnion(&.{ str_layout, str_layout });
+    const sym_val = makeSymbol(1);
+
+    const lookup_val = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_val,
+        .layout_idx = tag_union_layout,
+    } }, Region.zero());
+    const payload_expr = try env.lir_store.addExpr(.{ .tag_payload_access = .{
+        .value = lookup_val,
+        .union_layout = tag_union_layout,
+        .payload_layout = str_layout,
+    } }, Region.zero());
+
+    const pat_val = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_val,
+        .layout_idx = tag_union_layout,
+    } }, Region.zero());
+    const params = try env.lir_store.addPatternSpan(&.{pat_val});
+
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOpsForProcBody(payload_expr, params, str_layout);
+    const rc = countRcOps(&env.lir_store, result);
+
+    try std.testing.expectEqual(@as(u32, 2), rc.increfs);
+    try std.testing.expectEqual(@as(u32, 2), rc.decrefs);
 }
 
 test "RC early_return emits correct number of decrefs for multi-use symbol" {

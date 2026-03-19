@@ -3913,7 +3913,23 @@ fn buildSpecializedClosureValue(
     capture_monotypes_snapshot: ?*std.ArrayList(Monotype.Idx),
     capture_lookup_exprs_snapshot: ?*std.ArrayList(MIR.ExprId),
 ) Allocator.Error!BuiltClosureValue {
-    const cir_capture_indices = module_env.store.sliceCaptures(closure.captures);
+    const cir_capture_indices_all = module_env.store.sliceCaptures(closure.captures);
+    const self_binding_pattern = blk: {
+        const proc_inst = self.monomorphization.getProcInst(closure_proc_inst_id);
+        const template = self.monomorphization.getProcTemplate(proc_inst.template);
+        break :blk template.binding_pattern;
+    };
+    const CaptureIdx = @TypeOf(cir_capture_indices_all[0]);
+    var cir_capture_indices_filtered = std.ArrayList(CaptureIdx).empty;
+    defer cir_capture_indices_filtered.deinit(self.allocator);
+    for (cir_capture_indices_all) |cap_idx| {
+        const cap = module_env.store.getCapture(cap_idx);
+        if (self_binding_pattern) |pattern_idx| {
+            if (cap.pattern_idx == pattern_idx) continue;
+        }
+        try cir_capture_indices_filtered.append(self.allocator, cap_idx);
+    }
+    const cir_capture_indices = cir_capture_indices_filtered.items;
     if (cir_capture_indices.len == 0) {
         return .{
             .proc_expr = try self.store.addExpr(self.allocator, .{ .proc_ref = proc_id }, monotype, region),
@@ -4417,7 +4433,9 @@ fn monotypeCanRefine(
 /// (e.g., List.concat, Str.concat), emit `run_low_level` instead of `call`.
 fn lowerProcInst(self: *Self, proc_inst_id: Monomorphize.ProcInstId) Allocator.Error!MIR.ExprId {
     const proc_inst_key = @intFromEnum(proc_inst_id);
-    if (self.in_progress_proc_insts.get(proc_inst_key)) |in_progress| return in_progress;
+    if (self.in_progress_proc_insts.get(proc_inst_key)) |in_progress| {
+        return in_progress;
+    }
 
     const proc_inst = self.monomorphization.getProcInst(proc_inst_id);
     const template = self.monomorphization.getProcTemplate(proc_inst.template);
@@ -4456,6 +4474,21 @@ fn lowerProcInst(self: *Self, proc_inst_id: Monomorphize.ProcInstId) Allocator.E
         self.types_store,
         &self.type_var_seen,
     );
+
+    defer {
+        self.type_var_seen.deinit();
+        self.type_var_seen = saved_type_var_seen;
+        self.nominal_cycle_breakers.deinit();
+        self.nominal_cycle_breakers = saved_nominal_cycle_breakers;
+        self.current_proc_inst_context = saved_proc_inst_context;
+        if (switching_module) {
+            self.current_module_idx = saved_module_idx;
+            self.types_store = saved_types_store;
+            self.mono_scratches.ident_store = saved_ident_store;
+            self.mono_scratches.module_env = saved_module_env;
+            self.mono_scratches.module_idx = saved_mono_module_idx;
+        }
+    }
 
     if (!proc_inst.subst.isNone()) {
         const subst = self.monomorphization.getTypeSubst(proc_inst.subst);
@@ -4499,21 +4532,6 @@ fn lowerProcInst(self: *Self, proc_inst_id: Monomorphize.ProcInstId) Allocator.E
             )).proc_expr,
             else => unreachable,
         };
-    }
-
-    defer {
-        self.type_var_seen.deinit();
-        self.type_var_seen = saved_type_var_seen;
-        self.nominal_cycle_breakers.deinit();
-        self.nominal_cycle_breakers = saved_nominal_cycle_breakers;
-        self.current_proc_inst_context = saved_proc_inst_context;
-        if (switching_module) {
-            self.current_module_idx = saved_module_idx;
-            self.types_store = saved_types_store;
-            self.mono_scratches.ident_store = saved_ident_store;
-            self.mono_scratches.module_env = saved_module_env;
-            self.mono_scratches.module_idx = saved_mono_module_idx;
-        }
     }
 
     const lowered_proc_expr = switch (module_env.store.getExpr(template.cir_expr)) {

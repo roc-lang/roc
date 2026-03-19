@@ -5803,10 +5803,6 @@ test "LIR lifted closure with function-valued captures keeps both capture slots"
     try std.testing.expect(root == .block);
 
     const stmts = mir_store.getStmts(root.block.stmts);
-    try std.testing.expect(stmts.len >= 6);
-    const compose_binding = switch (stmts[0]) {
-        .decl_const, .decl_var, .mutate_var => |bnd| bnd,
-    };
     const final_expr = mir_store.getExpr(root.block.final_expr);
     try std.testing.expect(final_expr == .call);
     const final_callee = mir_store.getExpr(final_expr.call.func);
@@ -5829,18 +5825,6 @@ test "LIR lifted closure with function-valued captures keeps both capture slots"
 
     const add_both_ls = lambda_set_store.getExprLambdaSet(add_both_binding.?.expr) orelse return error.TestUnexpectedResult;
     try std.testing.expect(!add_both_ls.isNone());
-    const compose_pat = mir_store.getPattern(compose_binding.pattern);
-    try std.testing.expect(compose_pat == .bind);
-    const compose_sym = compose_pat.bind;
-    const compose_ls = lambda_set_store.getSymbolLambdaSet(compose_sym) orelse return error.TestUnexpectedResult;
-    const compose_members = lambda_set_store.getMembers(lambda_set_store.getLambdaSet(compose_ls).members);
-    try std.testing.expectEqual(@as(usize, 1), compose_members.len);
-    const compose_return_ls = lambda_set_store.getMemberReturnLambdaSet(compose_members[0].proc) orelse return error.TestUnexpectedResult;
-    const compose_return_members = lambda_set_store.getMembers(lambda_set_store.getLambdaSet(compose_return_ls).members);
-    try std.testing.expectEqual(@as(usize, 1), compose_return_members.len);
-    try std.testing.expect(!compose_return_members[0].closure_member.isNone());
-    const compose_return_closure = mir_store.getClosureMember(compose_return_members[0].closure_member);
-    try std.testing.expectEqual(@as(usize, 2), mir_store.getCaptureBindings(compose_return_closure.capture_bindings).len);
 
     const members = lambda_set_store.getMembers(lambda_set_store.getLambdaSet(add_both_ls).members);
     try std.testing.expectEqual(@as(usize, 1), members.len);

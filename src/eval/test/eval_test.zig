@@ -3919,6 +3919,20 @@ test "direct List.contains captured Str control" {
     );
 }
 
+test "forwarding tag union with Str payload through proc call does not leak" {
+    try runExpectBool(
+        \\{
+        \\    consume = |value| value == Ok({ x: "x" })
+        \\    forward = |value| consume(value)
+        \\    value = Ok({ x: "x" })
+        \\    forward(value)
+        \\}
+    ,
+        true,
+        .no_trace,
+    );
+}
+
 // Focused reproductions of the 10 known dev-backend failures.
 // Same expressions as the originals to ensure the bugs reproduce.
 

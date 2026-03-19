@@ -2707,7 +2707,6 @@ test "cross-module: repl-style recursive fibonacci block materializes one proc i
         \\}
     );
     defer env.deinit();
-
     const expr = try env.lowerFirstDef();
     const result = env.mir_store.getExpr(expr);
     try testing.expect(result == .block);
