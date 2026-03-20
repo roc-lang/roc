@@ -10,6 +10,7 @@ const base = @import("base");
 const can = @import("can");
 const check = @import("check");
 const compiled_builtins = @import("compiled_builtins");
+const test_helpers = @import("helpers.zig");
 
 const ComptimeEvaluator = @import("../comptime_evaluator.zig").ComptimeEvaluator;
 const BuiltinTypes = @import("../builtins.zig").BuiltinTypes;
@@ -166,21 +167,9 @@ fn evalModuleAndGetInt(src: []const u8, decl_index: usize) !i128 {
     return error.NotFolded;
 }
 
-/// Helper to evaluate multi-declaration modules and get the Dec value of a specific declaration
-fn evalModuleAndGetDec(src: []const u8, decl_index: usize) !i128 {
-    // Dec values are folded as e_num with .dec kind, so we use the same path
-    return evalModuleAndGetInt(src, decl_index);
-}
-
-/// Helper to evaluate multi-declaration modules and get the string representation of a specific declaration.
-/// Since the LIR pipeline doesn't support rendering values back to strings,
-/// this reads the folded CIR expression and formats it.
-fn evalModuleAndGetString(src: []const u8, decl_index: usize, _: std.mem.Allocator) ![]u8 {
+fn evalModuleAndGetString(src: []const u8, decl_index: usize, allocator: std.mem.Allocator) ![]const u8 {
     var result = try parseCheckAndEvalModule(src);
     defer cleanupEvalModule(&result);
-
-    // Evaluate all declarations via the public API
-    _ = try result.evaluator.evalAll();
 
     // Get the target declaration's folded expression
     const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
@@ -189,26 +178,7 @@ fn evalModuleAndGetString(src: []const u8, decl_index: usize, _: std.mem.Allocat
     }
 
     const def = result.module_env.store.getDef(defs[decl_index]);
-    const expr = result.module_env.store.getExpr(def.expr);
-
-    // Format the folded expression as a string
-    var buf: [256]u8 = undefined;
-    switch (expr) {
-        .e_num => |num| {
-            const val: i128 = @bitCast(num.value.bytes);
-            const formatted = std.fmt.bufPrint(&buf, "{d}", .{val}) catch return error.NotFolded;
-            const out = try std.testing.allocator.alloc(u8, formatted.len);
-            @memcpy(out, formatted);
-            return out;
-        },
-        .e_zero_argument_tag => |tag| {
-            const name = result.module_env.getIdent(tag.name);
-            const out = try std.testing.allocator.alloc(u8, name.len);
-            @memcpy(out, name);
-            return out;
-        },
-        else => return error.NotFolded,
-    }
+    return test_helpers.lirInterpreterStr(allocator, result.module_env, def.expr, result.builtin_module.env);
 }
 
 test "low_level - Str.is_empty returns True for empty string" {
@@ -2901,9 +2871,9 @@ test "issue 8750: dbg in polymorphic function with List.fold" {
     ;
 
     // List.fold returns Dec because numeric literals default to Dec.
-    // Dec value 6 is stored as 6 * 10^18 in fixed-point representation.
-    const sum_value = try evalModuleAndGetDec(src, 2);
-    try testing.expectEqual(@as(i128, 6_000_000_000_000_000_000), sum_value);
+    // The CIR stores the unscaled integer value; value_to_cir divides by 10^18.
+    const sum_value = try evalModuleAndGetInt(src, 2);
+    try testing.expectEqual(@as(i128, 6), sum_value);
 }
 
 // Test without dbg to isolate whether the bug is specific to dbg or more general
@@ -2915,8 +2885,8 @@ test "issue 8750: identity function (no dbg) with List.fold" {
     ;
 
     // List.fold returns Dec because numeric literals default to Dec.
-    const sum_value = try evalModuleAndGetDec(src, 2);
-    try testing.expectEqual(@as(i128, 6_000_000_000_000_000_000), sum_value);
+    const sum_value = try evalModuleAndGetInt(src, 2);
+    try testing.expectEqual(@as(i128, 6), sum_value);
 }
 
 // Test direct List.fold without any wrapping function
@@ -2927,8 +2897,8 @@ test "issue 8750: direct List.fold without wrapper" {
     ;
 
     // List.fold returns Dec because numeric literals default to Dec.
-    const sum_value = try evalModuleAndGetDec(src, 1);
-    try testing.expectEqual(@as(i128, 6_000_000_000_000_000_000), sum_value);
+    const sum_value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 6), sum_value);
 }
 
 // Test dbg with simpler function (no List.fold)
@@ -2955,8 +2925,8 @@ test "issue 8750: block without dbg before List.fold" {
     ;
 
     // List.fold returns Dec because numeric literals default to Dec.
-    const sum_value = try evalModuleAndGetDec(src, 2);
-    try testing.expectEqual(@as(i128, 6_000_000_000_000_000_000), sum_value);
+    const sum_value = try evalModuleAndGetInt(src, 2);
+    try testing.expectEqual(@as(i128, 6), sum_value);
 }
 
 // Test with dbg of a constant (not the polymorphic parameter)
@@ -2971,8 +2941,8 @@ test "issue 8750: dbg of constant before returning v with List.fold" {
     ;
 
     // List.fold returns Dec because numeric literals default to Dec.
-    const sum_value = try evalModuleAndGetDec(src, 2);
-    try testing.expectEqual(@as(i128, 6_000_000_000_000_000_000), sum_value);
+    const sum_value = try evalModuleAndGetInt(src, 2);
+    try testing.expectEqual(@as(i128, 6), sum_value);
 }
 
 // Test that List.fold computes the correct value

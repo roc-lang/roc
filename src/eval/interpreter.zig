@@ -222,6 +222,12 @@ pub const LirInterpreter = struct {
     const max_call_depth: usize = 512;
     const stack_overflow_message =
         "This Roc program overflowed its stack memory. This usually means there is very deep or infinite recursion somewhere in the code.";
+    const infinite_while_loop_message =
+        "This while loop's condition evaluated to True at compile time, " ++
+        "and the loop body has no break or return statement, " ++
+        "which would cause an infinite loop. " ++
+        "Use a mutable variable for the condition, or add a break/return.";
+    const division_by_zero_message = "Division by zero";
 
     allocator: Allocator,
     store: *const LirExprStore,
@@ -258,6 +264,9 @@ pub const LirInterpreter = struct {
     /// Bound recursive function-call depth so the interpreter reports a Roc crash
     /// instead of overflowing the native stack.
     call_depth: usize = 0,
+
+    /// Comptime evaluation enables this to reject statically-infinite while loops.
+    detect_infinite_while_loops: bool = false,
 
     /// Current lambda params — used by evalHostedCall to collect implicit args
     /// when the hosted_call has 0 explicit args (same pattern as dev backend).
@@ -721,6 +730,205 @@ pub const LirInterpreter = struct {
         return self.triggerCrash(msg);
     }
 
+    fn callCalleeExprId(call: anytype) ?LirExprId {
+        return switch (call.callee) {
+            .expr => |expr_id| expr_id,
+            .direct => null,
+        };
+    }
+
+    fn exprInvolvesMutableCell(self: *const LirInterpreter, expr_id: LirExprId) bool {
+        const expr = self.store.getExpr(expr_id);
+        return switch (expr) {
+            .cell_load => true,
+            .block => |block| blk: {
+                for (self.store.getStmts(block.stmts)) |stmt| {
+                    switch (stmt) {
+                        .decl, .mutate => |binding| if (self.exprInvolvesMutableCell(binding.expr)) break :blk true,
+                        .cell_init, .cell_store => |binding| if (self.exprInvolvesMutableCell(binding.expr)) break :blk true,
+                        .cell_drop => {},
+                    }
+                }
+                break :blk self.exprInvolvesMutableCell(block.final_expr);
+            },
+            .if_then_else => |ite| blk: {
+                for (self.store.getIfBranches(ite.branches)) |branch| {
+                    if (self.exprInvolvesMutableCell(branch.cond) or self.exprInvolvesMutableCell(branch.body)) break :blk true;
+                }
+                break :blk self.exprInvolvesMutableCell(ite.final_else);
+            },
+            .match_expr => |match_expr| blk: {
+                if (self.exprInvolvesMutableCell(match_expr.value)) break :blk true;
+                for (self.store.getMatchBranches(match_expr.branches)) |branch| {
+                    if ((!branch.guard.isNone() and self.exprInvolvesMutableCell(branch.guard)) or self.exprInvolvesMutableCell(branch.body)) break :blk true;
+                }
+                break :blk false;
+            },
+            .lambda => false,
+            .for_loop => |loop| self.exprInvolvesMutableCell(loop.list_expr) or self.exprInvolvesMutableCell(loop.body),
+            .while_loop => |loop| self.exprInvolvesMutableCell(loop.cond) or self.exprInvolvesMutableCell(loop.body),
+            .call => |call| blk: {
+                if (callCalleeExprId(call)) |callee_expr| {
+                    if (self.exprInvolvesMutableCell(callee_expr)) break :blk true;
+                }
+                for (self.store.getExprSpan(call.args)) |arg| {
+                    if (self.exprInvolvesMutableCell(arg)) break :blk true;
+                }
+                break :blk false;
+            },
+            .low_level => |ll| blk: {
+                for (self.store.getExprSpan(ll.args)) |arg| {
+                    if (self.exprInvolvesMutableCell(arg)) break :blk true;
+                }
+                break :blk false;
+            },
+            .list => |list_expr| blk: {
+                for (self.store.getExprSpan(list_expr.elems)) |elem| {
+                    if (self.exprInvolvesMutableCell(elem)) break :blk true;
+                }
+                break :blk false;
+            },
+            .struct_ => |s| blk: {
+                for (self.store.getExprSpan(s.fields)) |field| {
+                    if (self.exprInvolvesMutableCell(field)) break :blk true;
+                }
+                break :blk false;
+            },
+            .tag => |t| blk: {
+                for (self.store.getExprSpan(t.args)) |arg| {
+                    if (self.exprInvolvesMutableCell(arg)) break :blk true;
+                }
+                break :blk false;
+            },
+            .expect => |e| self.exprInvolvesMutableCell(e.cond) or self.exprInvolvesMutableCell(e.body),
+            .dbg => |d| self.exprInvolvesMutableCell(d.expr),
+            .nominal => |n| self.exprInvolvesMutableCell(n.backing_expr),
+            .str_concat => |parts| blk: {
+                for (self.store.getExprSpan(parts)) |part| {
+                    if (self.exprInvolvesMutableCell(part)) break :blk true;
+                }
+                break :blk false;
+            },
+            .int_to_str => |its| self.exprInvolvesMutableCell(its.value),
+            .float_to_str => |fts| self.exprInvolvesMutableCell(fts.value),
+            .dec_to_str => |arg| self.exprInvolvesMutableCell(arg),
+            .str_escape_and_quote => |arg| self.exprInvolvesMutableCell(arg),
+            .discriminant_switch => |ds| blk: {
+                if (self.exprInvolvesMutableCell(ds.value)) break :blk true;
+                for (self.store.getExprSpan(ds.branches)) |branch| {
+                    if (self.exprInvolvesMutableCell(branch)) break :blk true;
+                }
+                break :blk false;
+            },
+            .tag_payload_access => |tpa| self.exprInvolvesMutableCell(tpa.value),
+            .hosted_call => |hc| blk: {
+                for (self.store.getExprSpan(hc.args)) |arg| {
+                    if (self.exprInvolvesMutableCell(arg)) break :blk true;
+                }
+                break :blk false;
+            },
+            .incref => |rc| self.exprInvolvesMutableCell(rc.value),
+            .decref => |rc| self.exprInvolvesMutableCell(rc.value),
+            .free => |rc| self.exprInvolvesMutableCell(rc.value),
+            else => false,
+        };
+    }
+
+    fn exprHasLoopExit(self: *const LirInterpreter, expr_id: LirExprId) bool {
+        const expr = self.store.getExpr(expr_id);
+        return switch (expr) {
+            .early_return, .break_expr => true,
+            .lambda, .for_loop, .while_loop => false,
+            .block => |block| blk: {
+                for (self.store.getStmts(block.stmts)) |stmt| {
+                    switch (stmt) {
+                        .decl, .mutate => |binding| if (self.exprHasLoopExit(binding.expr)) break :blk true,
+                        .cell_init, .cell_store => |binding| if (self.exprHasLoopExit(binding.expr)) break :blk true,
+                        .cell_drop => {},
+                    }
+                }
+                break :blk self.exprHasLoopExit(block.final_expr);
+            },
+            .if_then_else => |ite| blk: {
+                for (self.store.getIfBranches(ite.branches)) |branch| {
+                    if (self.exprHasLoopExit(branch.cond) or self.exprHasLoopExit(branch.body)) break :blk true;
+                }
+                break :blk self.exprHasLoopExit(ite.final_else);
+            },
+            .match_expr => |match_expr| blk: {
+                if (self.exprHasLoopExit(match_expr.value)) break :blk true;
+                for (self.store.getMatchBranches(match_expr.branches)) |branch| {
+                    if ((!branch.guard.isNone() and self.exprHasLoopExit(branch.guard)) or self.exprHasLoopExit(branch.body)) break :blk true;
+                }
+                break :blk false;
+            },
+            .call => |call| blk: {
+                if (callCalleeExprId(call)) |callee_expr| {
+                    if (self.exprHasLoopExit(callee_expr)) break :blk true;
+                }
+                for (self.store.getExprSpan(call.args)) |arg| {
+                    if (self.exprHasLoopExit(arg)) break :blk true;
+                }
+                break :blk false;
+            },
+            .low_level => |ll| blk: {
+                for (self.store.getExprSpan(ll.args)) |arg| {
+                    if (self.exprHasLoopExit(arg)) break :blk true;
+                }
+                break :blk false;
+            },
+            .list => |list_expr| blk: {
+                for (self.store.getExprSpan(list_expr.elems)) |elem| {
+                    if (self.exprHasLoopExit(elem)) break :blk true;
+                }
+                break :blk false;
+            },
+            .struct_ => |s| blk: {
+                for (self.store.getExprSpan(s.fields)) |field| {
+                    if (self.exprHasLoopExit(field)) break :blk true;
+                }
+                break :blk false;
+            },
+            .tag => |t| blk: {
+                for (self.store.getExprSpan(t.args)) |arg| {
+                    if (self.exprHasLoopExit(arg)) break :blk true;
+                }
+                break :blk false;
+            },
+            .expect => |e| self.exprHasLoopExit(e.cond) or self.exprHasLoopExit(e.body),
+            .dbg => |d| self.exprHasLoopExit(d.expr),
+            .nominal => |n| self.exprHasLoopExit(n.backing_expr),
+            .str_concat => |parts| blk: {
+                for (self.store.getExprSpan(parts)) |part| {
+                    if (self.exprHasLoopExit(part)) break :blk true;
+                }
+                break :blk false;
+            },
+            .int_to_str => |its| self.exprHasLoopExit(its.value),
+            .float_to_str => |fts| self.exprHasLoopExit(fts.value),
+            .dec_to_str => |arg| self.exprHasLoopExit(arg),
+            .str_escape_and_quote => |arg| self.exprHasLoopExit(arg),
+            .discriminant_switch => |ds| blk: {
+                if (self.exprHasLoopExit(ds.value)) break :blk true;
+                for (self.store.getExprSpan(ds.branches)) |branch| {
+                    if (self.exprHasLoopExit(branch)) break :blk true;
+                }
+                break :blk false;
+            },
+            .tag_payload_access => |tpa| self.exprHasLoopExit(tpa.value),
+            .hosted_call => |hc| blk: {
+                for (self.store.getExprSpan(hc.args)) |arg| {
+                    if (self.exprHasLoopExit(arg)) break :blk true;
+                }
+                break :blk false;
+            },
+            .incref => |rc| self.exprHasLoopExit(rc.value),
+            .decref => |rc| self.exprHasLoopExit(rc.value),
+            .free => |rc| self.exprHasLoopExit(rc.value),
+            else => false,
+        };
+    }
+
     // Literals
 
     fn evalI64Literal(self: *LirInterpreter, value: i64, layout_idx: layout_mod.Idx) Error!Value {
@@ -917,7 +1125,13 @@ pub const LirInterpreter = struct {
             .tag => |t| {
                 const args = self.store.getPatternSpan(t.args);
                 for (args, 0..) |arg_pat_id, i| {
-                    const arg_val = self.tagPayloadArgValue(val, t.union_layout, t.discriminant, @intCast(i));
+                    const arg_val = self.tagPayloadArgValueForPattern(
+                        val,
+                        t.union_layout,
+                        t.discriminant,
+                        @intCast(i),
+                        arg_pat_id,
+                    );
                     try self.bindPattern(arg_pat_id, arg_val);
                 }
             },
@@ -981,7 +1195,7 @@ pub const LirInterpreter = struct {
             .str_literal => |idx| blk: {
                 const expected = self.store.getString(idx);
                 const actual = self.readRocStr(val);
-                break :blk std.mem.eql(u8, actual, expected);
+                break :blk rocStrEqualSlices(actual, expected);
             },
             .tag => |t| blk: {
                 const tag_base = self.resolveTagUnionBaseValue(val, t.union_layout);
@@ -990,7 +1204,13 @@ pub const LirInterpreter = struct {
                 // Check payload patterns
                 const args = self.store.getPatternSpan(t.args);
                 for (args, 0..) |arg_pat_id, i| {
-                    const arg_val = self.tagPayloadArgValue(val, t.union_layout, t.discriminant, @intCast(i));
+                    const arg_val = self.tagPayloadArgValueForPattern(
+                        val,
+                        t.union_layout,
+                        t.discriminant,
+                        @intCast(i),
+                        arg_pat_id,
+                    );
                     if (!try self.matchPattern(arg_pat_id, arg_val)) break :blk false;
                 }
                 break :blk true;
@@ -1192,9 +1412,10 @@ pub const LirInterpreter = struct {
 
     fn evalTagPayloadAccess(self: *LirInterpreter, tpa: anytype) Error!Value {
         const val = try self.evalValue(tpa.value);
-        const tag_base = self.resolveTagUnionBaseValue(val, self.exprLayout(tpa.value));
-        // Payload is always at offset 0 in the underlying tag union.
-        return tag_base.value;
+        const tag_base = self.resolveTagUnionBaseValue(val, tpa.union_layout);
+        const disc = self.helper.readTagDiscriminant(tag_base.value, tag_base.layout);
+        const actual_payload_layout = self.tagPayloadLayout(tpa.union_layout, disc);
+        return self.normalizeValueToLayout(tag_base.value, actual_payload_layout, tpa.payload_layout);
     }
 
     fn evalEarlyReturn(self: *LirInterpreter, er: anytype) Error!EvalResult {
@@ -1240,9 +1461,17 @@ pub const LirInterpreter = struct {
     }
 
     fn evalWhileLoop(self: *LirInterpreter, wl: anytype) Error!EvalResult {
+        const check_infinite_loop = self.detect_infinite_while_loops and
+            !self.exprInvolvesMutableCell(wl.cond) and
+            !self.exprHasLoopExit(wl.body);
+
         while (true) {
             const cond_val = try self.evalValue(wl.cond);
-            if (cond_val.read(u8) == 0) break;
+            const cond_is_true = cond_val.read(u8) != 0;
+            if (check_infinite_loop and cond_is_true) {
+                return self.triggerCrash(infinite_while_loop_message);
+            }
+            if (!cond_is_true) break;
             const body_result = try self.eval(wl.body);
             switch (body_result) {
                 .value => {},
@@ -1310,9 +1539,6 @@ pub const LirInterpreter = struct {
                                 return self.callLambda(def_expr.lambda, args.items);
                             }
                         }
-                        // Try calling through the evaluated value
-                        const fn_val = try self.evalLookup(l.symbol, l.layout_idx);
-                        _ = fn_val;
                         const msg = std.fmt.allocPrint(
                             self.arena.allocator(),
                             "Could not resolve indirect call target for symbol {d}",
@@ -1369,10 +1595,9 @@ pub const LirInterpreter = struct {
         };
     }
 
-    fn evalLambda(self: *LirInterpreter, lambda: anytype, expr_id: LirExprId) Error!Value {
+    fn evalLambda(self: *LirInterpreter, _: anytype, expr_id: LirExprId) Error!Value {
         // Lambda as a value — store a reference to the expression.
         // The actual call will resolve via the expression ID.
-        _ = lambda;
         // Return a value that encodes the expr_id for later dispatch
         const val = try self.allocBytes(8);
         val.write(u32, @intFromEnum(expr_id));
@@ -1381,17 +1606,17 @@ pub const LirInterpreter = struct {
 
     // Crash / dbg / expect
 
-    fn evalCrash(self: *LirInterpreter, c: anytype) Error!EvalResult {
-        _ = self;
-        _ = c;
+    fn evalCrash(_: *LirInterpreter, _: anytype) Error!EvalResult {
         return error.Crash;
     }
 
     fn evalExpect(self: *LirInterpreter, e: anytype) Error!EvalResult {
         const cond_val = try self.evalValue(e.cond);
         if (cond_val.read(u8) == 0) {
-            const msg = try self.renderExpectExpr(e.cond);
-            return self.triggerCrash(msg);
+            if (self.roc_env.expect_message == null) {
+                const msg = try self.renderExpectExpr(e.cond);
+                self.roc_env.expect_message = self.allocator.dupe(u8, msg) catch return error.OutOfMemory;
+            }
         }
         return .{ .value = Value.zst };
     }
@@ -1954,6 +2179,17 @@ pub const LirInterpreter = struct {
             },
             .list_concat => blk: {
                 const info = self.listElemInfo(arg_layout);
+                if (info.width == 0) {
+                    const list_a = valueToRocList(args[0]);
+                    const list_b = valueToRocList(args[1]);
+                    const total_len = list_a.len() + list_b.len();
+                    const result = RocList{
+                        .bytes = null,
+                        .length = total_len,
+                        .capacity_or_alloc_ptr = total_len,
+                    };
+                    break :blk self.rocListToValue(result, ll.ret_layout);
+                }
                 self.roc_env.resetCrash();
                 const sj = setjmp(&self.roc_env.jmp_buf);
                 if (sj != 0) return error.Crash;
@@ -2138,7 +2374,9 @@ pub const LirInterpreter = struct {
             .list_take_last => self.evalListTakeLast(args[0], args[1], arg_layout, ll.ret_layout),
             .list_contains => self.evalListContains(args[0], args[1], arg_layout, ll.ret_layout),
             .list_reverse => self.evalListReverse(args[0], arg_layout, ll.ret_layout),
-            .list_sort_with => try self.alloc(ll.ret_layout), // requires callback — return unchanged
+            .list_sort_with => blk: {
+                break :blk try self.evalListSortWith(args[0], arg_layout, ll.ret_layout, arg_exprs[1]);
+            },
             .list_split_first => self.evalListSplitFirst(args[0], arg_layout, ll.ret_layout),
             .list_split_last => self.evalListSplitLast(args[0], arg_layout, ll.ret_layout),
 
@@ -2560,36 +2798,36 @@ pub const LirInterpreter = struct {
             switch (size) {
                 1 => {
                     if (isUnsigned(arg_layout)) {
-                        if (b.read(u8) == 0) return self.runtimeError("DivisionByZero");
-                    } else if (b.read(i8) == 0) return self.runtimeError("DivisionByZero");
+                        if (b.read(u8) == 0) return self.runtimeError(division_by_zero_message);
+                    } else if (b.read(i8) == 0) return self.runtimeError(division_by_zero_message);
                 },
                 2 => {
                     if (isUnsigned(arg_layout)) {
-                        if (b.read(u16) == 0) return self.runtimeError("DivisionByZero");
-                    } else if (b.read(i16) == 0) return self.runtimeError("DivisionByZero");
+                        if (b.read(u16) == 0) return self.runtimeError(division_by_zero_message);
+                    } else if (b.read(i16) == 0) return self.runtimeError(division_by_zero_message);
                 },
                 4 => {
                     const l = self.layout_store.getLayout(arg_layout);
                     if (!(l.tag == .scalar and l.data.scalar.tag == .frac)) {
                         if (isUnsigned(arg_layout)) {
-                            if (b.read(u32) == 0) return self.runtimeError("DivisionByZero");
-                        } else if (b.read(i32) == 0) return self.runtimeError("DivisionByZero");
+                            if (b.read(u32) == 0) return self.runtimeError(division_by_zero_message);
+                        } else if (b.read(i32) == 0) return self.runtimeError(division_by_zero_message);
                     }
                 },
                 8 => {
                     const l = self.layout_store.getLayout(arg_layout);
                     if (!(l.tag == .scalar and l.data.scalar.tag == .frac)) {
                         if (isUnsigned(arg_layout)) {
-                            if (b.read(u64) == 0) return self.runtimeError("DivisionByZero");
-                        } else if (b.read(i64) == 0) return self.runtimeError("DivisionByZero");
+                            if (b.read(u64) == 0) return self.runtimeError(division_by_zero_message);
+                        } else if (b.read(i64) == 0) return self.runtimeError(division_by_zero_message);
                     }
                 },
                 16 => {
                     if (isDec(arg_layout)) {
-                        if (b.read(i128) == 0) return self.runtimeError("DivisionByZero");
+                        if (b.read(i128) == 0) return self.runtimeError(division_by_zero_message);
                     } else if (isUnsigned(arg_layout)) {
-                        if (b.read(u128) == 0) return self.runtimeError("DivisionByZero");
-                    } else if (b.read(i128) == 0) return self.runtimeError("DivisionByZero");
+                        if (b.read(u128) == 0) return self.runtimeError(division_by_zero_message);
+                    } else if (b.read(i128) == 0) return self.runtimeError(division_by_zero_message);
                 },
                 else => {},
             }
@@ -2871,9 +3109,8 @@ pub const LirInterpreter = struct {
         const val = try self.alloc(ret_layout);
         const sv = arg.read(Src);
         // Truncate to same-width as Dst, then bitcast if signedness differs
-        const SrcBits = @typeInfo(Src).int.bits;
         const DstBits = @typeInfo(Dst).int.bits;
-        _ = SrcBits;
+        std.debug.assert(@typeInfo(Src).int.bits >= DstBits);
         const SameSigned = std.meta.Int(@typeInfo(Src).int.signedness, DstBits);
         const truncated: SameSigned = @truncate(sv);
         val.write(Dst, @bitCast(truncated));
@@ -2980,12 +3217,10 @@ pub const LirInterpreter = struct {
         return val;
     }
 
-    fn numToStr(self: *LirInterpreter, comptime T: type, arg: Value, ret_layout: layout_mod.Idx) Error!Value {
+    fn numToStr(self: *LirInterpreter, comptime T: type, arg: Value, _: layout_mod.Idx) Error!Value {
         const arena = self.arena.allocator();
         const formatted = std.fmt.allocPrint(arena, "{d}", .{arg.read(T)}) catch return error.OutOfMemory;
-        const str_val = try self.makeRocStr(formatted);
-        _ = ret_layout;
-        return str_val;
+        return try self.makeRocStr(formatted);
     }
 
     fn numToStrByLayout(self: *LirInterpreter, arg: Value, arg_layout: layout_mod.Idx, ret_layout: layout_mod.Idx) Error!Value {
@@ -3121,7 +3356,7 @@ pub const LirInterpreter = struct {
         if (rl.bytes != null and info.width > 0) {
             for (0..rl.len()) |i| {
                 const elem_ptr = rl.bytes.? + i * info.width;
-                if (std.mem.eql(u8, elem_ptr[0..info.width], elem_arg.ptr[0..info.width])) {
+                if (rawBytesEqual(elem_ptr[0..info.width], elem_arg.ptr[0..info.width])) {
                     found = true;
                     break;
                 }
@@ -3154,6 +3389,82 @@ pub const LirInterpreter = struct {
             }
         }
         return self.rocListToValue(new_list, ret_layout);
+    }
+
+    fn evalListSortWith(self: *LirInterpreter, list_val: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx, comparator_expr_id: LirExprId) Error!Value {
+        const rl = valueToRocList(list_val);
+        const info = self.listElemInfo(list_layout);
+        const list_len = rl.len();
+
+        if (list_len < 2 or rl.bytes == null or info.width == 0)
+            return self.rocListToValue(rl, ret_layout);
+
+        // Resolve the comparator to a lambda
+        const lambda_id = self.resolveLambdaExprId(comparator_expr_id) orelse
+            return error.RuntimeError;
+        const lambda = self.store.getExpr(lambda_id).lambda;
+
+        // Clone the list data for in-place sorting
+        self.roc_env.resetCrash();
+        const sj = setjmp(&self.roc_env.jmp_buf);
+        if (sj != 0) return error.Crash;
+        const new_list = builtins.list.shallowClone(rl, rl.len(), info.width, info.alignment, false, &self.roc_ops);
+        const sorted_bytes = new_list.bytes orelse return self.rocListToValue(new_list, ret_layout);
+
+        // Insertion sort using the comparator lambda
+        const tmp = self.arena.allocator().alloc(u8, info.width) catch return error.OutOfMemory;
+
+        var i: usize = 1;
+        while (i < list_len) : (i += 1) {
+            // Save element[i] to temp
+            @memcpy(tmp, sorted_bytes[i * info.width ..][0..info.width]);
+            const temp_val = Value{ .ptr = tmp.ptr };
+
+            // Shift elements right until we find the insertion point
+            var j: usize = i;
+            while (j > 0) {
+                const elem_prev = Value{ .ptr = sorted_bytes + (j - 1) * info.width };
+
+                // Call comparator(temp, elem[j-1])
+                const call_args = [2]Value{ temp_val, elem_prev };
+                const result = try self.callLambda(lambda, &call_args);
+                const cmp_val = switch (result) {
+                    .value => |v| v,
+                    else => return error.RuntimeError,
+                };
+
+                // Tag discriminants (alphabetical): EQ=0, GT=1, LT=2
+                const disc = cmp_val.read(u8);
+                if (disc != 2) break; // not LT, stop shifting
+
+                // Shift element[j-1] to element[j]
+                @memcpy(sorted_bytes[j * info.width ..][0..info.width], sorted_bytes[(j - 1) * info.width ..][0..info.width]);
+                j -= 1;
+            }
+            // Insert temp at position j
+            @memcpy(sorted_bytes[j * info.width ..][0..info.width], tmp);
+        }
+
+        return self.rocListToValue(new_list, ret_layout);
+    }
+
+    /// Resolve a LIR expression ID to a lambda expression ID.
+    /// Handles direct lambdas and lookups to lambdas.
+    fn resolveLambdaExprId(self: *LirInterpreter, expr_id: LirExprId) ?LirExprId {
+        const expr = self.store.getExpr(expr_id);
+        switch (expr) {
+            .lambda => return expr_id,
+            .lookup => |l| {
+                if (self.store.getSymbolDef(l.symbol)) |def_id| {
+                    if (self.store.getExpr(def_id) == .lambda) return def_id;
+                }
+                if (self.store.getCallableDef(l.symbol)) |callable_id| {
+                    if (self.store.getExpr(callable_id) == .lambda) return callable_id;
+                }
+                return null;
+            },
+            else => return null,
+        }
     }
 
     fn evalListSplitFirst(self: *LirInterpreter, list_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx) Error!Value {
@@ -3353,7 +3664,7 @@ pub const LirInterpreter = struct {
 
     // String operations
 
-    fn evalStrJoinWith(self: *LirInterpreter, list_arg: Value, sep_arg: Value, ret_layout: layout_mod.Idx) Error!Value {
+    fn evalStrJoinWith(self: *LirInterpreter, list_arg: Value, sep_arg: Value, _: layout_mod.Idx) Error!Value {
         const rl = valueToRocList(list_arg);
         const sep = self.readRocStr(sep_arg);
         const count = rl.len();
@@ -3383,8 +3694,26 @@ pub const LirInterpreter = struct {
                 offset += sep.len;
             }
         }
-        _ = ret_layout;
         return self.makeRocStr(buf);
+    }
+
+    fn rawBytesEqual(a: []const u8, b: []const u8) bool {
+        if (a.len != b.len) return false;
+        for (a, b) |lhs, rhs| {
+            if (lhs != rhs) return false;
+        }
+        return true;
+    }
+
+    fn rocStrEqualSlices(a: []const u8, b: []const u8) bool {
+        return dev_wrappers.roc_builtins_str_equal(
+            if (a.len == 0) null else @constCast(a.ptr),
+            a.len,
+            a.len,
+            if (b.len == 0) null else @constCast(b.ptr),
+            b.len,
+            b.len,
+        );
     }
 
     fn evalStrConcat(self: *LirInterpreter, sc: lir.LirExprSpan) Error!EvalResult {
@@ -3511,7 +3840,7 @@ pub const LirInterpreter = struct {
         return .zst;
     }
 
-    fn readBoxedDataPointer(self: *LirInterpreter, boxed: Value) ?[*]u8 {
+    fn readBoxedDataPointer(self: *const LirInterpreter, boxed: Value) ?[*]u8 {
         const target_usize = self.layout_store.targetUsize();
         const raw_ptr: usize = if (target_usize.size() == 8)
             boxed.read(usize)
@@ -3576,7 +3905,7 @@ pub const LirInterpreter = struct {
         union_layout: layout_mod.Idx,
         discriminant: u16,
         arg_index: u32,
-    ) Value {
+    ) struct { value: Value, layout: layout_mod.Idx } {
         const tag_base = self.resolveTagUnionBaseValue(union_val, union_layout);
         const payload_layout = self.tagPayloadLayout(union_layout, discriminant);
         const payload_layout_val = self.layout_store.getLayout(payload_layout);
@@ -3585,9 +3914,70 @@ pub const LirInterpreter = struct {
                 payload_layout_val.data.struct_.idx,
                 arg_index,
             );
-            return tag_base.value.offset(field_offset);
+            const field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(
+                payload_layout_val.data.struct_.idx,
+                arg_index,
+            );
+            return .{
+                .value = tag_base.value.offset(field_offset),
+                .layout = field_layout,
+            };
         }
-        return tag_base.value;
+        return .{
+            .value = tag_base.value,
+            .layout = payload_layout,
+        };
+    }
+
+    fn tagPayloadArgValueForPattern(
+        self: *LirInterpreter,
+        union_val: Value,
+        union_layout: layout_mod.Idx,
+        discriminant: u16,
+        arg_index: u32,
+        pattern_id: LirPatternId,
+    ) Value {
+        const payload = self.tagPayloadArgValue(union_val, union_layout, discriminant, arg_index);
+        const expected_layout = self.patternLayout(pattern_id) orelse return payload.value;
+        return self.normalizeValueToLayout(payload.value, payload.layout, expected_layout);
+    }
+
+    fn patternLayout(self: *const LirInterpreter, pattern_id: LirPatternId) ?layout_mod.Idx {
+        const pat = self.store.getPattern(pattern_id);
+        return switch (pat) {
+            .bind => |b| b.layout_idx,
+            .wildcard => |w| w.layout_idx,
+            .int_literal => |lit| lit.layout_idx,
+            .float_literal => |lit| lit.layout_idx,
+            .str_literal => .str,
+            .tag => |t| t.union_layout,
+            .struct_ => |s| s.struct_layout,
+            .list => |l| l.list_layout,
+            .as_pattern => |ap| ap.layout_idx,
+        };
+    }
+
+    fn normalizeValueToLayout(
+        self: *const LirInterpreter,
+        value: Value,
+        actual_layout: layout_mod.Idx,
+        expected_layout: layout_mod.Idx,
+    ) Value {
+        if (actual_layout == expected_layout) return value;
+
+        const actual_layout_val = self.layout_store.getLayout(actual_layout);
+        switch (actual_layout_val.tag) {
+            .box => {
+                if (actual_layout_val.data.box == expected_layout) {
+                    const data_ptr = self.readBoxedDataPointer(value) orelse return Value.zst;
+                    return .{ .ptr = data_ptr };
+                }
+            },
+            .box_of_zst => if (expected_layout == .zst) return Value.zst,
+            else => {},
+        }
+
+        return value;
     }
 
     fn getLayout(self: *LirInterpreter, idx: layout_mod.Idx) Layout {
