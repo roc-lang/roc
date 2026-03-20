@@ -625,9 +625,7 @@ fn retStmtForExpr(self: *Self, expr_id: LirExprId) Allocator.Error!CFStmtId {
     return self.lir_store.addCFStmt(.{ .ret = .{ .value = expr_id } });
 }
 
-fn verifyFunctionLayouts(self: *Self, _: LirExprId) void {
-    _ = self;
-}
+fn verifyFunctionLayouts(_: *Self, _: LirExprId) void {}
 
 fn runtimeTupleLayoutFromExprs(self: *Self, mir_expr_ids: []const MIR.ExprId) Allocator.Error!layout.Idx {
     if (mir_expr_ids.len == 0) return .zst;
