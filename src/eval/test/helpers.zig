@@ -5656,7 +5656,7 @@ test "LIR parenthesized record field closure call registers synthetic closure bi
     const synthetic_pat = lir_store.getPattern(synthetic_binding.pattern);
     try std.testing.expect(synthetic_pat == .bind);
     const synthetic_def = lir_store.getExpr(synthetic_binding.expr);
-    try std.testing.expect(synthetic_def == .struct_);
+    try std.testing.expect(synthetic_def == .struct_access);
 
     const call_expr = lir_store.getExpr(outer_final.block.final_expr);
     try std.testing.expect(call_expr == .proc_call);
