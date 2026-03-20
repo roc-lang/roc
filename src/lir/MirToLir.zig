@@ -247,6 +247,25 @@ fn copyStringToLir(self: *Self, mir_str_idx: StringLiteral.Idx) Allocator.Error!
     return self.lir_store.strings.insert(self.allocator, str_bytes);
 }
 
+const annotation_only_value_crash_message =
+    "This value has no implementation. It is only a type annotation for now.";
+
+const annotation_only_function_crash_message =
+    "Cannot call function: this function has only a type annotation with no implementation";
+
+fn lowerCrashWithMessage(
+    self: *Self,
+    message: []const u8,
+    ret_layout: layout.Idx,
+    region: Region,
+) Allocator.Error!LirExprId {
+    const msg_idx = try self.lir_store.strings.insert(self.allocator, message);
+    return self.lir_store.addExpr(.{ .crash = .{
+        .msg = msg_idx,
+        .ret_layout = ret_layout,
+    } }, region);
+}
+
 /// Convert a Monotype.Idx to a layout.Idx, using a cache.
 fn layoutFromMonotype(self: *Self, mono_idx: Monotype.Idx) Allocator.Error!layout.Idx {
     return self.monotype_layout_resolver.resolve(
@@ -292,7 +311,7 @@ fn registerSpecializedMonotypeLayout(
     layout_idx: layout.Idx,
     saved: *std.ArrayList(SavedMonotypeLayout),
 ) Allocator.Error!void {
-    if (mono_idx.isNone()) return;
+    if (mono_idx.isNone() or layout_idx == layout.Idx.none) return;
 
     const resolved = self.mir_store.monotype_store.resolve(mono_idx);
 
@@ -570,7 +589,7 @@ fn runtimeListLayoutFromExprs(
 
 fn tagPayloadMonotypes(self: *Self, union_mono_idx: Monotype.Idx, tag_name: Ident.Idx) []const Monotype.Idx {
     const resolved = self.mir_store.monotype_store.resolve(union_mono_idx);
-    std.debug.assert(resolved.kind == .tag_union);
+    if (resolved.kind != .tag_union) return &.{};
     const tags = self.mir_store.monotype_store.tagUnionTags(resolved);
 
     for (tags) |tag| {
@@ -581,6 +600,24 @@ fn tagPayloadMonotypes(self: *Self, union_mono_idx: Monotype.Idx, tag_name: Iden
     }
 
     return &.{};
+}
+
+/// Invalid programs can still reach tag lowering while the compiler is
+/// attempting to produce diagnostics. In that case, return null and let the
+/// caller fall back instead of asserting on a non-tag-union monotype.
+fn maybeTagDiscriminant(self: *const Self, tag_name: Ident.Idx, union_mono_idx: Monotype.Idx) ?u16 {
+    const resolved = self.mir_store.monotype_store.resolve(union_mono_idx);
+    if (resolved.kind != .tag_union) return null;
+
+    const tags = self.mir_store.monotype_store.tagUnionTags(resolved);
+    for (tags, 0..) |tag, i| {
+        const mono_tag_text = self.mir_store.monotype_store.getNameText(tag.name);
+        if (self.identMatchesText(tag_name, mono_tag_text)) {
+            return @intCast(i);
+        }
+    }
+
+    return null;
 }
 
 fn tagPayloadExprs(self: *Self, union_mono_idx: Monotype.Idx, tag_name: Ident.Idx, args: MIR.ExprSpan) []const MIR.ExprId {
@@ -1008,6 +1045,7 @@ fn runtimeValueLayoutFromMirExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator
                 if (try self.runtimeLayoutForStructField(sa.struct_, sa.field_idx)) |layout_idx| return layout_idx;
             },
             .lambda, .hosted => return .zst,
+            .runtime_err_can, .runtime_err_type, .runtime_err_ellipsis => return .zst,
             else => {},
         }
         if (std.debug.runtime_safety) {
@@ -1177,6 +1215,19 @@ fn resolveToLambdaExprId(self: *Self, expr_id: MIR.ExprId) ?MIR.ExprId {
     };
 }
 
+fn resolveToCallableExprId(self: *Self, expr_id: MIR.ExprId) ?MIR.ExprId {
+    const expr = self.mir_store.getExpr(expr_id);
+    return switch (expr) {
+        .lambda, .hosted => expr_id,
+        .block => |block| self.resolveToCallableExprId(block.final_expr),
+        .lookup => |sym| blk: {
+            const def_expr_id = self.mir_store.getSymbolDef(sym) orelse break :blk null;
+            break :blk self.resolveToCallableExprId(def_expr_id);
+        },
+        else => null,
+    };
+}
+
 fn resolveCallableStructFieldExpr(self: *Self, expr_id: LirExprId, field_idx: u16, depth: u16) ?LirExprId {
     if (depth > 256) std.debug.panic(
         "resolveCallableStructFieldExpr: debug-only heuristic detected likely infinite recursion (depth > 256) at expr {}",
@@ -1286,17 +1337,32 @@ fn ensureSpecializedDirectCallee(
 
     const resolved_symbol = specialization.?.symbol;
     if (self.lir_store.getSymbolDef(resolved_symbol) != null) return specialization.?;
-    if (self.specializing_direct_callees.contains(resolved_symbol.raw())) return specialization.?;
 
-    const lambda_expr_id = self.resolveToLambdaExprId(lifted_def) orelse {
+    const callable_expr_id = self.resolveToCallableExprId(lifted_def) orelse {
         if (std.debug.runtime_safety) {
             std.debug.panic(
-                "MirToLir invariant violated: direct-call specialization target is not a lambda expr for key {d}",
+                "MirToLir invariant violated: direct-call specialization target is not a callable expr for key {d}",
                 .{callee_key},
             );
         }
         unreachable;
     };
+
+    if (self.specializing_direct_callees.contains(resolved_symbol.raw())) {
+        if (specialization.?.ret_layout == layout.Idx.none) {
+            const fn_mono_idx = self.mir_store.typeOf(callable_expr_id);
+            const fn_resolved = self.mir_store.monotype_store.resolve(fn_mono_idx);
+            if (fn_resolved.kind == .func) {
+                const fallback_ret_layout = try self.layoutFromMonotype(self.mir_store.monotype_store.funcRet(fn_resolved));
+                const refreshed_key = try self.specializationKeyBytes(callee_key, param_layouts);
+                if (self.specialized_direct_callees.getPtr(refreshed_key)) |entry| {
+                    entry.ret_layout = fallback_ret_layout;
+                    return entry.*;
+                }
+            }
+        }
+        return specialization.?;
+    }
 
     try self.specializing_direct_callees.put(resolved_symbol.raw(), {});
     defer _ = self.specializing_direct_callees.remove(resolved_symbol.raw());
@@ -1305,10 +1371,20 @@ fn ensureSpecializedDirectCallee(
         try self.prepareLiftedDefCaptureLayout(original_fn_symbol, lifted_def);
     }
 
-    const inferred_ret_layout = try self.runtimeLayoutForLambdaBodyWithParamLayouts(
-        lifted_def,
-        specialization.?.param_layouts,
-    );
+    const callable_expr = self.mir_store.getExpr(callable_expr_id);
+    const inferred_ret_layout = switch (callable_expr) {
+        .lambda => try self.runtimeLayoutForLambdaBodyWithParamLayouts(
+            lifted_def,
+            specialization.?.param_layouts,
+        ),
+        .hosted => blk: {
+            const fn_mono_idx = self.mir_store.typeOf(callable_expr_id);
+            const fn_resolved = self.mir_store.monotype_store.resolve(fn_mono_idx);
+            if (fn_resolved.kind != .func) break :blk null;
+            break :blk try self.layoutFromMonotype(self.mir_store.monotype_store.funcRet(fn_resolved));
+        },
+        else => null,
+    };
     if (builtin.mode == .Debug and inferred_ret_layout == null) {
         std.debug.panic(
             "MirToLir invariant violated: could not infer specialized return layout for direct callee key {d}",
@@ -1322,19 +1398,20 @@ fn ensureSpecializedDirectCallee(
         entry.ret_layout = specialization_ret_layout;
     } else unreachable;
 
-    const lambda_expr = self.mir_store.getExpr(lambda_expr_id);
-    if (builtin.mode == .Debug and lambda_expr != .lambda) {
-        std.debug.panic(
-            "MirToLir invariant violated: resolved specialized direct-call expr {} is not lambda",
-            .{@intFromEnum(lambda_expr_id)},
-        );
-    }
-    const lir_def = try self.lowerLambdaWithParamLayouts(
-        lambda_expr.lambda,
-        self.mir_store.typeOf(lambda_expr_id),
-        specialization.?.param_layouts,
-        Region.zero(),
-    );
+    const lir_def = switch (callable_expr) {
+        .lambda => try self.lowerLambdaWithParamLayouts(
+            callable_expr.lambda,
+            self.mir_store.typeOf(callable_expr_id),
+            specialization.?.param_layouts,
+            Region.zero(),
+        ),
+        .hosted => try self.lowerHosted(
+            callable_expr.hosted,
+            self.mir_store.typeOf(callable_expr_id),
+            Region.zero(),
+        ),
+        else => unreachable,
+    };
     try self.lir_store.registerSymbolDef(resolved_symbol, lir_def);
     try self.lir_store.registerCallableDef(resolved_symbol, lir_def);
 
@@ -1353,6 +1430,38 @@ fn ensureSpecializedDirectCallee(
     if (self.specialized_direct_callees.getPtr(refreshed_key_bytes)) |entry| {
         entry.ret_layout = lowered_ret_layout;
         return entry.*;
+    }
+    unreachable;
+}
+
+fn specializationRetLayoutOrFallback(
+    self: *Self,
+    lifted_def: MIR.ExprId,
+    specialization: DirectCallSpecialization,
+) Allocator.Error!layout.Idx {
+    if (specialization.ret_layout != layout.Idx.none) return specialization.ret_layout;
+
+    const callable_expr_id = self.resolveToCallableExprId(lifted_def) orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic(
+                "MirToLir invariant violated: missing callable expr while resolving specialized return layout",
+                .{},
+            );
+        }
+        unreachable;
+    };
+
+    const fn_mono_idx = self.mir_store.typeOf(callable_expr_id);
+    const fn_resolved = self.mir_store.monotype_store.resolve(fn_mono_idx);
+    if (fn_resolved.kind == .func) {
+        return self.layoutFromMonotype(self.mir_store.monotype_store.funcRet(fn_resolved));
+    }
+
+    if (builtin.mode == .Debug) {
+        std.debug.panic(
+            "MirToLir invariant violated: non-function callable expr while resolving specialized return layout",
+            .{},
+        );
     }
     unreachable;
 }
@@ -1526,7 +1635,7 @@ fn runtimeLayoutFromSpecializedDirectCall(
             self.scratch_layout_idxs.shrinkRetainingCapacity(member_save);
 
             if (resolved_ret_layout == null) {
-                resolved_ret_layout = specialization.ret_layout;
+                resolved_ret_layout = try self.specializationRetLayoutOrFallback(lifted_def, specialization);
             }
         }
 
@@ -1545,7 +1654,7 @@ fn runtimeLayoutFromSpecializedDirectCall(
         lambda_expr_id,
         self.scratch_layout_idxs.items[save_layouts..],
     );
-    return specialization.ret_layout;
+    return try self.specializationRetLayoutOrFallback(lambda_expr_id, specialization);
 }
 
 fn runtimeListElemLayoutFromMirExpr(self: *Self, list_mir_expr_id: MIR.ExprId) Allocator.Error!layout.Idx {
@@ -1740,35 +1849,8 @@ fn identMatchesText(self: *const Self, ident: Ident.Idx, expected: []const u8) b
     return false;
 }
 
-/// Given a tag name and the monotype of the containing tag union,
-/// return the discriminant (sorted index of the tag name).
 fn tagDiscriminant(self: *const Self, tag_name: Ident.Idx, union_mono_idx: Monotype.Idx) u16 {
-    const resolved = self.mir_store.monotype_store.resolve(union_mono_idx);
-    if (resolved.kind == .tag_union) {
-        const tags = self.mir_store.monotype_store.tagUnionTags(resolved);
-
-        for (tags, 0..) |tag, i| {
-            const mono_tag_text = self.mir_store.monotype_store.getNameText(tag.name);
-            if (self.identMatchesText(tag_name, mono_tag_text)) {
-                return @intCast(i);
-            }
-        }
-        if (builtin.mode == .Debug) {
-            std.debug.panic(
-                "MirToLir invariant violated: tag ident idx {d} not found in tag union mono_idx={d}",
-                .{ tag_name.idx, @as(u32, @bitCast(union_mono_idx)) },
-            );
-        }
-        unreachable;
-    } else {
-        if (builtin.mode == .Debug) {
-            std.debug.panic(
-                "tagDiscriminant expected tag_union; got {s} for tag ident idx {d} mono_idx={d}",
-                .{ @tagName(resolved.kind), tag_name.idx, @as(u32, @bitCast(union_mono_idx)) },
-            );
-        }
-        unreachable;
-    }
+    return self.maybeTagDiscriminant(tag_name, union_mono_idx) orelse 0;
 }
 
 /// ANF Let-binding accumulator. Accumulates Let-bindings for compound
@@ -2587,6 +2669,14 @@ fn lowerLookup(self: *Self, sym: Symbol, mono_idx: Monotype.Idx, _: MIR.ExprId, 
         } }, region);
     }
 
+    if (resolved.kind != .func) {
+        if (self.mir_store.getSymbolDef(sym)) |mir_def_id| {
+            if (self.mir_store.getExpr(mir_def_id) == .runtime_err_anno_only) {
+                return self.lowerCrashWithMessage(annotation_only_value_crash_message, layout_idx, region);
+            }
+        }
+    }
+
     return self.lir_store.addExpr(.{ .lookup = .{ .symbol = sym, .layout_idx = layout_idx } }, region);
 }
 
@@ -2676,6 +2766,7 @@ fn lowerMatch(self: *Self, match_data: anytype, mir_expr_id: MIR.ExprId, region:
         .value_layout = value_layout,
         .branches = match_branches,
         .result_layout = result_layout,
+        .is_try_suffix = match_data.is_try_suffix,
     } }, region);
     return acc.finish(match_expr, result_layout, region);
 }
@@ -2839,8 +2930,16 @@ fn lowerCall(self: *Self, call_data: anytype, mir_expr_id: MIR.ExprId, region: R
     const mono_idx = self.mir_store.typeOf(mir_expr_id);
     const ret_layout = try self.runtimeValueLayoutFromMirExpr(mir_expr_id);
 
-    // Some annotation-only methods are compiler intrinsics. Lower those directly.
+    // If the callee itself is a type/can/ellipsis error, the whole call is a runtime error.
     const func_mir_expr = self.mir_store.getExpr(call_data.func);
+    switch (func_mir_expr) {
+        .runtime_err_can, .runtime_err_type, .runtime_err_ellipsis => {
+            return self.lir_store.addExpr(.{ .runtime_error = .{ .ret_layout = ret_layout } }, region);
+        },
+        else => {},
+    }
+
+    // Some annotation-only methods are compiler intrinsics. Lower those directly.
     if (func_mir_expr == .lookup) {
         const sym = func_mir_expr.lookup;
         if (self.mir_store.getSymbolDef(sym)) |def_expr_id| {
@@ -2848,13 +2947,8 @@ fn lowerCall(self: *Self, call_data: anytype, mir_expr_id: MIR.ExprId, region: R
                 if (try self.lowerAnnotationOnlyIntrinsicCall(call_data, mono_idx, region)) |lowered| {
                     return lowered;
                 }
-                if (std.debug.runtime_safety) {
-                    std.debug.panic(
-                        "MirToLir unsupported: call to annotation-only symbol key={d}",
-                        .{sym.raw()},
-                    );
-                }
-                unreachable;
+                // Non-intrinsic annotation-only function — crash when called.
+                return self.lowerCrashWithMessage(annotation_only_function_crash_message, ret_layout, region);
             }
         }
     }
@@ -2886,14 +2980,15 @@ fn lowerCall(self: *Self, call_data: anytype, mir_expr_id: MIR.ExprId, region: R
             lambda_expr_id,
             self.scratch_layout_idxs.items[save_layouts..],
         );
+        const specialization_ret_layout = try self.specializationRetLayoutOrFallback(lambda_expr_id, specialization);
         const call_expr = try self.lir_store.addExpr(.{ .call = .{
             .callee = .{ .direct = specialization.symbol },
             .fn_layout = fn_layout,
             .args = lir_args,
-            .ret_layout = specialization.ret_layout,
+            .ret_layout = specialization_ret_layout,
             .called_via = .apply,
         } }, region);
-        return acc.finish(call_expr, specialization.ret_layout, region);
+        return acc.finish(call_expr, specialization_ret_layout, region);
     }
 
     // Direct function call — only for inline lambda calls or HOF parameters (which
@@ -3183,15 +3278,16 @@ fn lowerClosureCall(
                 lifted_def,
                 self.scratch_layout_idxs.items[save_layouts..],
             );
+            const specialization_ret_layout = try self.specializationRetLayoutOrFallback(lifted_def, specialization);
             // Zero-capture lambda: call with just user args, no extra captures param
             const call_expr = try self.lir_store.addExpr(.{ .call = .{
                 .callee = .{ .direct = specialization.symbol },
                 .fn_layout = lifted_layout,
                 .args = call_user_args,
-                .ret_layout = specialization.ret_layout,
+                .ret_layout = specialization_ret_layout,
                 .called_via = .apply,
             } }, region);
-            return acc.finish(call_expr, specialization.ret_layout, region);
+            return acc.finish(call_expr, specialization_ret_layout, region);
         }
 
         // Has captures: lower closure val and append as extra arg
@@ -3206,6 +3302,7 @@ fn lowerClosureCall(
             lifted_def,
             self.scratch_layout_idxs.items[save_layouts..],
         );
+        const specialization_ret_layout = try self.specializationRetLayoutOrFallback(lifted_def, specialization);
 
         // Build args: [user_args..., closure_val]
         // Re-read the span after lowering closure_val; lowerExpr may append to
@@ -3223,10 +3320,10 @@ fn lowerClosureCall(
             .callee = .{ .direct = specialization.symbol },
             .fn_layout = lifted_layout,
             .args = all_args,
-            .ret_layout = specialization.ret_layout,
+            .ret_layout = specialization_ret_layout,
             .called_via = .apply,
         } }, region);
-        return acc.finish(call_expr, specialization.ret_layout, region);
+        return acc.finish(call_expr, specialization_ret_layout, region);
     }
 
     // Multi-member lambda set: discriminant_switch on the tag union closure value
@@ -3281,15 +3378,16 @@ fn lowerClosureCall(
             lifted_def,
             self.scratch_layout_idxs.items[save_layouts..],
         );
+        const specialization_ret_layout = try self.specializationRetLayoutOrFallback(lifted_def, specialization);
         const branch_call = try self.lir_store.addExpr(.{ .call = .{
             .callee = .{ .direct = specialization.symbol },
             .fn_layout = lifted_layout,
             .args = branch_args,
-            .ret_layout = specialization.ret_layout,
+            .ret_layout = specialization_ret_layout,
             .called_via = .apply,
         } }, region);
 
-        const branch_expr = try branch_acc.finish(branch_call, specialization.ret_layout, region);
+        const branch_expr = try branch_acc.finish(branch_call, specialization_ret_layout, region);
         try self.scratch_lir_expr_ids.append(self.allocator, branch_expr);
     }
 
@@ -3658,6 +3756,21 @@ fn adaptValueLayout(
 ) Allocator.Error!LirExprId {
     if (source_layout == target_layout) return value_expr;
 
+    const source_layout_val = self.layout_store.getLayout(source_layout);
+    const target_layout_val = self.layout_store.getLayout(target_layout);
+
+    if ((target_layout_val.tag == .box or target_layout_val.tag == .box_of_zst) and
+        source_layout_val.tag != .box and source_layout_val.tag != .box_of_zst)
+    {
+        return self.adaptLayoutWithBoxIntrinsic(value_expr, source_layout, target_layout, .box_box, region);
+    }
+
+    if ((source_layout_val.tag == .box or source_layout_val.tag == .box_of_zst) and
+        target_layout_val.tag != .box and target_layout_val.tag != .box_of_zst)
+    {
+        return self.adaptLayoutWithBoxIntrinsic(value_expr, source_layout, target_layout, .box_unbox, region);
+    }
+
     const adapt_resolved = self.mir_store.monotype_store.resolve(mono_idx);
     return switch (adapt_resolved.kind) {
         .record => self.adaptRecordValueLayout(value_expr, adapt_resolved, source_layout, target_layout, region),
@@ -3665,6 +3778,25 @@ fn adaptValueLayout(
         .func => self.adaptLayoutByStructure(value_expr, source_layout, target_layout, region),
         .builtin, .tag_union, .list, .box, .rec => value_expr,
     };
+}
+
+fn adaptLayoutWithBoxIntrinsic(
+    self: *Self,
+    value_expr: LirExprId,
+    source_layout: layout.Idx,
+    target_layout: layout.Idx,
+    op: LirExpr.LowLevel,
+    region: Region,
+) Allocator.Error!LirExprId {
+    var acc = self.startLetAccumulator();
+    const source_value = try acc.ensureSymbol(value_expr, source_layout, region);
+    const args = try self.lir_store.addExprSpan(&[_]LirExprId{source_value});
+    const low_level = try self.lir_store.addExpr(.{ .low_level = .{
+        .op = op,
+        .args = args,
+        .ret_layout = target_layout,
+    } }, region);
+    return acc.finish(low_level, target_layout, region);
 }
 
 fn adaptLayoutByStructure(
@@ -4056,6 +4188,9 @@ fn lowerLowLevel(self: *Self, ll: anytype, mir_expr_id: MIR.ExprId, region: Regi
             const args_slice = self.lir_store.getExprSpan(lir_args);
             break :blk try self.lir_store.addExpr(.{ .dec_to_str = args_slice[0] }, region);
         },
+        .str_concat => blk: {
+            break :blk try self.lir_store.addExpr(.{ .str_concat = lir_args }, region);
+        },
         else => blk: {
             break :blk try self.lir_store.addExpr(.{ .low_level = .{
                 .op = ll.op,
@@ -4264,7 +4399,7 @@ fn runtimeLayoutForBindingSymbol(
     const binding_resolved = self.mir_store.monotype_store.resolve(mono_idx);
 
     if (binding_resolved.kind != .func and !(try self.monotypeContainsFunctionValue(mono_idx))) {
-        return self.layoutFromMonotype(mono_idx);
+        return existing_layout orelse fallback_layout;
     }
 
     var layout_idx = existing_layout orelse fallback_layout;
@@ -4374,17 +4509,12 @@ fn runtimeTagPayloadLayout(
     std.debug.assert(arg_count > 0);
 
     const union_layout = self.layout_store.getLayout(union_runtime_layout);
-    const discriminant = self.tagDiscriminant(tag_name, mono_idx);
+    const discriminant = self.maybeTagDiscriminant(tag_name, mono_idx) orelse return .zst;
     return switch (union_layout.tag) {
         .tag_union => blk: {
             const tu_data = self.layout_store.getTagUnionData(union_layout.data.tag_union.idx);
             const variants = self.layout_store.getTagUnionVariants(tu_data);
-            if (builtin.mode == .Debug and discriminant >= variants.len) {
-                std.debug.panic(
-                    "MirToLir invariant violated: tag discriminant {d} out of bounds for runtime tag_union layout",
-                    .{discriminant},
-                );
-            }
+            if (discriminant >= variants.len) break :blk .zst;
             break :blk variants.get(discriminant).payload_layout;
         },
         .box => blk: {
@@ -4397,12 +4527,7 @@ fn runtimeTagPayloadLayout(
             }
             const tu_data = self.layout_store.getTagUnionData(inner_layout.data.tag_union.idx);
             const variants = self.layout_store.getTagUnionVariants(tu_data);
-            if (builtin.mode == .Debug and discriminant >= variants.len) {
-                std.debug.panic(
-                    "MirToLir invariant violated: tag discriminant {d} out of bounds for boxed runtime tag_union layout",
-                    .{discriminant},
-                );
-            }
+            if (discriminant >= variants.len) break :blk .zst;
             break :blk variants.get(discriminant).payload_layout;
         },
         .scalar, .zst => blk: {

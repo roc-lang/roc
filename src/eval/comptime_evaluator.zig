@@ -7,7 +7,6 @@ const std = @import("std");
 const base = @import("base");
 const builtins = @import("builtins");
 const Io = @import("io").Io;
-const i128h = builtins.compiler_rt_128;
 const can = @import("can");
 const check_mod = @import("check");
 const types_mod = @import("types");
@@ -33,7 +32,6 @@ const LirProgram = eval_mod.LirProgram;
 const LirInterpreter = eval_mod.LirInterpreter;
 const Value = eval_mod.Value;
 const LayoutHelper = eval_mod.value.LayoutHelper;
-const EvalError = LirInterpreter.Error;
 const CrashContext = eval_mod.CrashContext;
 const BuiltinTypes = eval_mod.BuiltinTypes;
 const layout_mod = @import("layout");
@@ -131,6 +129,287 @@ fn comptimeRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv
     evaluator.halted = true;
 }
 
+const TypeWalkState = enum {
+    visiting,
+    done,
+};
+
+const TypeWalkResult = enum {
+    ok,
+    unresolved_rigid,
+    recursive_cycle,
+};
+
+fn shouldSkipComptimeEvalForType(allocator: Allocator, types_store: *const types_mod.Store, var_: types_mod.Var) bool {
+    var visited = std.AutoHashMap(types_mod.Var, TypeWalkState).init(allocator);
+    defer visited.deinit();
+    return containsUnresolvedRigidVarInner(types_store, var_, &visited) != .ok;
+}
+
+fn containsUnresolvedRigidVarInner(
+    types_store: *const types_mod.Store,
+    var_: types_mod.Var,
+    visited: *std.AutoHashMap(types_mod.Var, TypeWalkState),
+) TypeWalkResult {
+    const gop = visited.getOrPut(var_) catch return .unresolved_rigid;
+    if (gop.found_existing) {
+        return switch (gop.value_ptr.*) {
+            .visiting => .recursive_cycle,
+            .done => .ok,
+        };
+    }
+    gop.value_ptr.* = .visiting;
+
+    const resolved = types_store.resolveVar(var_);
+    const result = containsUnresolvedRigidContent(types_store, resolved.desc.content, visited);
+    visited.put(var_, .done) catch {};
+    return result;
+}
+
+fn containsUnresolvedRigidContent(
+    types_store: *const types_mod.Store,
+    content: types_mod.Content,
+    visited: *std.AutoHashMap(types_mod.Var, TypeWalkState),
+) TypeWalkResult {
+    return switch (content) {
+        .rigid => .unresolved_rigid,
+        .flex, .err => .ok,
+        .alias => |alias| blk: {
+            var saw_cycle = false;
+            for (types_store.sliceVars(alias.vars.nonempty)) |arg_var| {
+                switch (containsUnresolvedRigidVarInner(types_store, arg_var, visited)) {
+                    .unresolved_rigid => break :blk .unresolved_rigid,
+                    .recursive_cycle => saw_cycle = true,
+                    .ok => {},
+                }
+            }
+            break :blk if (saw_cycle) .recursive_cycle else .ok;
+        },
+        .structure => |flat_type| containsUnresolvedRigidFlatType(types_store, flat_type, visited),
+    };
+}
+
+fn containsUnresolvedRigidFlatType(
+    types_store: *const types_mod.Store,
+    flat_type: types_mod.FlatType,
+    visited: *std.AutoHashMap(types_mod.Var, TypeWalkState),
+) TypeWalkResult {
+    return switch (flat_type) {
+        .tuple => |tuple| blk: {
+            var saw_cycle = false;
+            for (types_store.sliceVars(tuple.elems)) |elem_var| {
+                switch (containsUnresolvedRigidVarInner(types_store, elem_var, visited)) {
+                    .unresolved_rigid => break :blk .unresolved_rigid,
+                    .recursive_cycle => saw_cycle = true,
+                    .ok => {},
+                }
+            }
+            break :blk if (saw_cycle) .recursive_cycle else .ok;
+        },
+        .nominal_type => |nominal| blk: {
+            var saw_cycle = false;
+            for (types_store.sliceVars(nominal.vars.nonempty)) |arg_var| {
+                switch (containsUnresolvedRigidVarInner(types_store, arg_var, visited)) {
+                    .unresolved_rigid => break :blk .unresolved_rigid,
+                    .recursive_cycle => saw_cycle = true,
+                    .ok => {},
+                }
+            }
+            break :blk if (saw_cycle) .recursive_cycle else .ok;
+        },
+        .fn_pure, .fn_effectful, .fn_unbound => |func| blk: {
+            var saw_cycle = false;
+            for (types_store.sliceVars(func.args)) |arg_var| {
+                switch (containsUnresolvedRigidVarInner(types_store, arg_var, visited)) {
+                    .unresolved_rigid => break :blk .unresolved_rigid,
+                    .recursive_cycle => saw_cycle = true,
+                    .ok => {},
+                }
+            }
+            switch (containsUnresolvedRigidVarInner(types_store, func.ret, visited)) {
+                .unresolved_rigid => break :blk .unresolved_rigid,
+                .recursive_cycle => saw_cycle = true,
+                .ok => {},
+            }
+            break :blk if (saw_cycle) .recursive_cycle else .ok;
+        },
+        .record => |record| blk: {
+            const fields = types_store.getRecordFieldsSlice(record.fields);
+            var saw_cycle = false;
+            for (fields.items(.var_)) |field_var| {
+                switch (containsUnresolvedRigidVarInner(types_store, field_var, visited)) {
+                    .unresolved_rigid => break :blk .unresolved_rigid,
+                    .recursive_cycle => saw_cycle = true,
+                    .ok => {},
+                }
+            }
+            switch (containsUnresolvedRigidVarInner(types_store, record.ext, visited)) {
+                .unresolved_rigid => break :blk .unresolved_rigid,
+                .recursive_cycle => saw_cycle = true,
+                .ok => {},
+            }
+            break :blk if (saw_cycle) .recursive_cycle else .ok;
+        },
+        .record_unbound => |fields| blk: {
+            const slice = types_store.getRecordFieldsSlice(fields);
+            var saw_cycle = false;
+            for (slice.items(.var_)) |field_var| {
+                switch (containsUnresolvedRigidVarInner(types_store, field_var, visited)) {
+                    .unresolved_rigid => break :blk .unresolved_rigid,
+                    .recursive_cycle => saw_cycle = true,
+                    .ok => {},
+                }
+            }
+            break :blk if (saw_cycle) .recursive_cycle else .ok;
+        },
+        .tag_union => |tag_union| blk: {
+            const tags = types_store.getTagsSlice(tag_union.tags);
+            var saw_cycle = false;
+            for (tags.items(.args)) |tag_args| {
+                for (types_store.sliceVars(tag_args)) |arg_var| {
+                    switch (containsUnresolvedRigidVarInner(types_store, arg_var, visited)) {
+                        .unresolved_rigid => break :blk .unresolved_rigid,
+                        .recursive_cycle => saw_cycle = true,
+                        .ok => {},
+                    }
+                }
+            }
+            switch (containsUnresolvedRigidVarInner(types_store, tag_union.ext, visited)) {
+                .unresolved_rigid => break :blk .unresolved_rigid,
+                .recursive_cycle => saw_cycle = true,
+                .ok => {},
+            }
+            break :blk if (saw_cycle) .recursive_cycle else .ok;
+        },
+        .empty_record, .empty_tag_union => .ok,
+    };
+}
+
+const BuiltinIntValidation = struct {
+    type_name: []const u8,
+    min_value: []const u8,
+    max_value: []const u8,
+    positive_limit: u128,
+    negative_limit: u128,
+    is_unsigned: bool,
+};
+
+const try_suffix_type_error_crash_message =
+    "The ? operator was used on a value that is not a Try type. The ? operator expects a value of type [Ok(a), Err(e)].";
+
+fn builtinNumKindFromDisplayName(type_name: []const u8) ?CIR.NumKind {
+    if (std.mem.eql(u8, type_name, "U8")) return .u8;
+    if (std.mem.eql(u8, type_name, "I8")) return .i8;
+    if (std.mem.eql(u8, type_name, "U16")) return .u16;
+    if (std.mem.eql(u8, type_name, "I16")) return .i16;
+    if (std.mem.eql(u8, type_name, "U32")) return .u32;
+    if (std.mem.eql(u8, type_name, "I32")) return .i32;
+    if (std.mem.eql(u8, type_name, "U64")) return .u64;
+    if (std.mem.eql(u8, type_name, "I64")) return .i64;
+    if (std.mem.eql(u8, type_name, "U128")) return .u128;
+    if (std.mem.eql(u8, type_name, "I128")) return .i128;
+    if (std.mem.eql(u8, type_name, "F32")) return .f32;
+    if (std.mem.eql(u8, type_name, "F64")) return .f64;
+    if (std.mem.eql(u8, type_name, "Dec")) return .dec;
+    return null;
+}
+
+fn numeralAbsValue(num_lit_info: types_mod.NumeralInfo) u128 {
+    if (num_lit_info.is_u128) return num_lit_info.toU128();
+
+    const signed_value = num_lit_info.toI128();
+    if (signed_value >= 0) return @intCast(signed_value);
+
+    const magnitude: i128 = -%signed_value;
+    return @bitCast(magnitude);
+}
+
+fn builtinIntValidationForKind(num_kind: CIR.NumKind) ?BuiltinIntValidation {
+    return switch (num_kind) {
+        .u8 => .{
+            .type_name = "U8",
+            .min_value = "0",
+            .max_value = "255",
+            .positive_limit = std.math.maxInt(u8),
+            .negative_limit = 0,
+            .is_unsigned = true,
+        },
+        .i8 => .{
+            .type_name = "I8",
+            .min_value = "-128",
+            .max_value = "127",
+            .positive_limit = std.math.maxInt(i8),
+            .negative_limit = 128,
+            .is_unsigned = false,
+        },
+        .u16 => .{
+            .type_name = "U16",
+            .min_value = "0",
+            .max_value = "65535",
+            .positive_limit = std.math.maxInt(u16),
+            .negative_limit = 0,
+            .is_unsigned = true,
+        },
+        .i16 => .{
+            .type_name = "I16",
+            .min_value = "-32768",
+            .max_value = "32767",
+            .positive_limit = std.math.maxInt(i16),
+            .negative_limit = 32768,
+            .is_unsigned = false,
+        },
+        .u32 => .{
+            .type_name = "U32",
+            .min_value = "0",
+            .max_value = "4294967295",
+            .positive_limit = std.math.maxInt(u32),
+            .negative_limit = 0,
+            .is_unsigned = true,
+        },
+        .i32 => .{
+            .type_name = "I32",
+            .min_value = "-2147483648",
+            .max_value = "2147483647",
+            .positive_limit = std.math.maxInt(i32),
+            .negative_limit = 2147483648,
+            .is_unsigned = false,
+        },
+        .u64 => .{
+            .type_name = "U64",
+            .min_value = "0",
+            .max_value = "18446744073709551615",
+            .positive_limit = std.math.maxInt(u64),
+            .negative_limit = 0,
+            .is_unsigned = true,
+        },
+        .i64 => .{
+            .type_name = "I64",
+            .min_value = "-9223372036854775808",
+            .max_value = "9223372036854775807",
+            .positive_limit = std.math.maxInt(i64),
+            .negative_limit = 9223372036854775808,
+            .is_unsigned = false,
+        },
+        .u128 => .{
+            .type_name = "U128",
+            .min_value = "0",
+            .max_value = "340282366920938463463374607431768211455",
+            .positive_limit = std.math.maxInt(u128),
+            .negative_limit = 0,
+            .is_unsigned = true,
+        },
+        .i128 => .{
+            .type_name = "I128",
+            .min_value = "-170141183460469231731687303715884105728",
+            .max_value = "170141183460469231731687303715884105727",
+            .positive_limit = @intCast(std.math.maxInt(i128)),
+            .negative_limit = @as(u128, 1) << 127,
+            .is_unsigned = false,
+        },
+        else => null,
+    };
+}
+
 /// Result of evaluating a single declaration
 const EvalResult = union(enum) {
     success: void, // Declaration evaluated successfully
@@ -143,7 +422,7 @@ const EvalResult = union(enum) {
         region: base.Region,
     },
     error_eval: struct {
-        err: EvalError,
+        message: []const u8,
         region: base.Region,
     },
 };
@@ -292,12 +571,11 @@ pub const ComptimeEvaluator = struct {
         // Skip lambdas - they don't need to be evaluated at the top level
         if (is_lambda) return EvalResult{ .success = {} };
 
-        // Skip defs whose types contain unresolved flex/rigid variables (e.g., platform
-        // module defs that reference the `model` type parameter from a `requires` clause).
-        // The MIR monotypification pipeline panics on these — they will be lowered later
-        // with concrete types when the app provides them.
+        // Skip defs whose types still contain unresolved rigid vars (e.g. platform
+        // module defs that reference a `requires` clause type parameter like `model`).
+        // Ordinary polymorphic constants such as numeric literals should still evaluate.
         const type_var = ModuleEnv.varFrom(expr_idx);
-        if (self.env.types.needsInstantiation(type_var)) {
+        if (shouldSkipComptimeEvalForType(self.allocator, &self.env.types, type_var)) {
             return EvalResult{ .success = {} };
         }
 
@@ -315,9 +593,17 @@ pub const ComptimeEvaluator = struct {
             self.all_module_envs,
             null,
         ) catch {
+            if (expr == .e_match and expr.e_match.is_try_suffix) {
+                return EvalResult{
+                    .crash = .{
+                        .message = try_suffix_type_error_crash_message,
+                        .region = region,
+                    },
+                };
+            }
             return EvalResult{
                 .error_eval = .{
-                    .err = error.RuntimeError,
+                    .message = @errorName(error.RuntimeError),
                     .region = region,
                 },
             };
@@ -339,11 +625,21 @@ pub const ComptimeEvaluator = struct {
                         },
                     };
                 },
-                else => return EvalResult{
-                    .error_eval = .{
-                        .err = err,
-                        .region = region,
-                    },
+                else => {
+                    if (expr == .e_match and expr.e_match.is_try_suffix) {
+                        return EvalResult{
+                            .crash = .{
+                                .message = try_suffix_type_error_crash_message,
+                                .region = region,
+                            },
+                        };
+                    }
+                    return EvalResult{
+                        .error_eval = .{
+                            .message = interp.getRuntimeErrorMessage() orelse @errorName(err),
+                            .region = region,
+                        },
+                    };
                 },
             }
         };
@@ -359,6 +655,15 @@ pub const ComptimeEvaluator = struct {
         self.tryFoldExprFromValue(expr_idx, result_value, lower_result.result_layout, lower_result.layout_store) catch {
             // If folding fails, just continue - the original expression is still valid
         };
+
+        if (interp.getExpectMessage()) |_| {
+            return EvalResult{
+                .expect_failed = .{
+                    .message = "expect failed",
+                    .region = region,
+                },
+            };
+        }
 
         return EvalResult{ .success = {} };
     }
@@ -438,6 +743,85 @@ pub const ComptimeEvaluator = struct {
         }
     }
 
+    fn builtinNumKindFromTypeIdent(self: *const ComptimeEvaluator, type_ident: base.Ident.Idx) ?CIR.NumKind {
+        if (self.builtin_types.indices.numKindFromIdent(type_ident)) |num_kind| {
+            return num_kind;
+        }
+
+        const display_name = import_mapping_mod.getDisplayName(
+            self.import_mapping,
+            self.env.common.getIdentStore(),
+            type_ident,
+        );
+
+        return builtinNumKindFromDisplayName(display_name);
+    }
+
+    fn validateBuiltinNumericLiteral(
+        self: *ComptimeEvaluator,
+        type_ident: base.Ident.Idx,
+        num_lit_info: types_mod.NumeralInfo,
+        region: base.Region,
+    ) !bool {
+        const num_kind = self.builtinNumKindFromTypeIdent(type_ident) orelse return true;
+        if (num_kind == .f32 or num_kind == .f64 or num_kind == .dec) {
+            return true;
+        }
+
+        const int_info = builtinIntValidationForKind(num_kind) orelse return true;
+        const source_text = self.env.common.source[region.start.offset..region.end.offset];
+        const abs_value = numeralAbsValue(num_lit_info);
+        const dec_scale: u128 = 1_000_000_000_000_000_000;
+        const integer_value = if (num_lit_info.is_fractional) abs_value / dec_scale else abs_value;
+        const has_fractional_part = num_lit_info.is_fractional and (abs_value % dec_scale != 0);
+
+        if (int_info.is_unsigned and num_lit_info.is_negative) {
+            const message = try std.fmt.allocPrint(
+                self.allocator,
+                "The number {s} is not a valid {s}. {s} values cannot be negative.",
+                .{ source_text, int_info.type_name, int_info.type_name },
+            );
+            defer self.allocator.free(message);
+            try self.reportProblem(message, region, .error_eval);
+            return false;
+        }
+
+        if (has_fractional_part) {
+            const message = try std.fmt.allocPrint(
+                self.allocator,
+                "The number {s} is not a valid {s}. {s} values must be whole numbers, not fractions.",
+                .{ source_text, int_info.type_name, int_info.type_name },
+            );
+            defer self.allocator.free(message);
+            try self.reportProblem(message, region, .error_eval);
+            return false;
+        }
+
+        const limit = if (num_lit_info.is_negative and !int_info.is_unsigned)
+            int_info.negative_limit
+        else
+            int_info.positive_limit;
+
+        if (integer_value > limit) {
+            const message = try std.fmt.allocPrint(
+                self.allocator,
+                "The number {s} is not a valid {s}. Valid {s} values are integers between {s} and {s}.",
+                .{
+                    source_text,
+                    int_info.type_name,
+                    int_info.type_name,
+                    int_info.min_value,
+                    int_info.max_value,
+                },
+            );
+            defer self.allocator.free(message);
+            try self.reportProblem(message, region, .error_eval);
+            return false;
+        }
+
+        return true;
+    }
+
     /// Validates all deferred numeric literals by invoking their from_numeral constraints
     ///
     /// This function is called at the beginning of compile-time evaluation, after type checking
@@ -466,8 +850,6 @@ pub const ComptimeEvaluator = struct {
     ///    - For Ok: validation succeeded
     ///    - For Err: extract error message string and report via self.reportProblem()
     ///
-    /// For now, validation is skipped - literals are allowed without validation.
-    /// This preserves current behavior while the infrastructure is in place.
     fn validateDeferredNumericLiterals(self: *ComptimeEvaluator) !void {
         const literals = self.env.deferred_numeric_literals.items.items;
 
@@ -524,6 +906,27 @@ pub const ComptimeEvaluator = struct {
             // Get the module where the type is defined
             const origin_module_ident = nominal_type.origin_module;
             const is_builtin = origin_module_ident.eql(self.env.idents.builtin_module);
+
+            const num_lit_info = literal.constraint.num_literal orelse {
+                // No NumeralInfo means this isn't a from_numeral constraint
+                continue;
+            };
+
+            if (is_builtin) {
+                const is_valid = try self.validateBuiltinNumericLiteral(
+                    nominal_type.ident.ident_idx,
+                    num_lit_info,
+                    literal.region,
+                );
+
+                if (!is_valid) {
+                    try self.failed_literal_exprs.put(literal.expr_idx, {});
+                    continue;
+                }
+
+                try self.rewriteNumericLiteralExpr(literal.expr_idx, nominal_type.ident.ident_idx, num_lit_info);
+                continue;
+            }
 
             const origin_env: *const ModuleEnv = if (is_builtin) blk: {
                 break :blk self.builtin_module_env orelse {
@@ -595,12 +998,6 @@ pub const ComptimeEvaluator = struct {
 
             const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(node_idx_in_origin)));
 
-            // Get num_lit_info for validation
-            const num_lit_info = literal.constraint.num_literal orelse {
-                // No NumeralInfo means this isn't a from_numeral constraint
-                continue;
-            };
-
             // Step 3: Validate the literal by invoking from_numeral
             // All types (builtin and user-defined) use the same unified path
             const is_valid = try self.invokeFromNumeral(
@@ -634,10 +1031,7 @@ pub const ComptimeEvaluator = struct {
         type_ident: base.Ident.Idx,
         num_lit_info: types_mod.NumeralInfo,
     ) !void {
-        const builtin_indices = self.builtin_types.indices;
-
-        // Use direct ident comparison to determine NumKind
-        const num_kind = builtin_indices.numKindFromIdent(type_ident) orelse {
+        const num_kind = self.builtinNumKindFromTypeIdent(type_ident) orelse {
             // Unknown type - nothing to rewrite
             return;
         };
@@ -1088,7 +1482,7 @@ pub const ComptimeEvaluator = struct {
                         try self.reportProblem(expect_info.message, expect_info.region, .expect_failed);
                     },
                     .error_eval => |error_info| {
-                        try self.reportProblem(@errorName(error_info.err), error_info.region, .error_eval);
+                        try self.reportProblem(error_info.message, error_info.region, .error_eval);
                     },
                 }
             }

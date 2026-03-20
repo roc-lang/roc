@@ -14,11 +14,10 @@ const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
 const Var = types_mod.Var;
-const Content = types_mod.Content;
 const Ident = base.Ident;
-const Layout = layout_mod.Layout;
 const TypesStore = types_mod.Store;
 
+/// A simplified type representation used for folding/interpreting values.
 pub const FoldType = union(enum) {
     int: IntKind,
     float: FloatKind,
@@ -68,6 +67,7 @@ const TagUnionResult = struct {
     tags_range: types_mod.Tag.SafeMultiList.Range,
 };
 
+/// Derives a `FoldType` from a CIR expression and its layout.
 pub fn fromExpr(
     allocator: Allocator,
     env: *const ModuleEnv,
@@ -79,6 +79,7 @@ pub fn fromExpr(
     return fromVar(allocator, &env.types, type_var, layout_idx, layout_store);
 }
 
+/// Derives a `FoldType` from a type variable and its layout.
 pub fn fromVar(
     allocator: Allocator,
     types_store: *const TypesStore,

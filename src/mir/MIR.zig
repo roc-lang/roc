@@ -335,6 +335,7 @@ pub const Expr = union(enum) {
     match_expr: struct {
         cond: ExprId,
         branches: BranchSpan,
+        is_try_suffix: bool = false,
     },
 
     // --- Functions ---

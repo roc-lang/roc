@@ -26,6 +26,7 @@ const EvalModuleResult = struct {
     evaluator: ComptimeEvaluator,
     problems: *check.problem.Store,
     builtin_module: builtin_loading.LoadedModule,
+    other_envs: []const *const ModuleEnv,
 };
 
 /// Helper to parse, canonicalize, type-check, and run comptime evaluation on a full module
@@ -85,13 +86,17 @@ fn parseCheckAndEvalModuleWithName(src: []const u8, module_name: []const u8) !Ev
     // Canonicalize the module
     try czer.canonicalizeFile();
 
-    // Type check the module with builtins
-    const imported_envs = [_]*const ModuleEnv{builtin_module.env};
+    // Production (compile_package.zig) builds imported_envs WITHOUT self — only
+    // Builtin and other imports. ComptimeEvaluator.init prepends self internally.
+    // resolveImports and Check.init also expect this same list (without self).
+    const imported_envs = try gpa.alloc(*const ModuleEnv, 1);
+    errdefer gpa.free(imported_envs);
+    imported_envs[0] = builtin_module.env;
 
     // Resolve imports - map each import to its index in imported_envs
-    module_env.imports.resolveImports(module_env, &imported_envs);
+    module_env.imports.resolveImports(module_env, imported_envs);
 
-    var checker = try Check.init(gpa, &module_env.types, module_env, &imported_envs, null, &module_env.store.regions, builtin_ctx);
+    var checker = try Check.init(gpa, &module_env.types, module_env, imported_envs, null, &module_env.store.regions, builtin_ctx);
     defer checker.deinit();
 
     try checker.checkFile();
@@ -103,13 +108,14 @@ fn parseCheckAndEvalModuleWithName(src: []const u8, module_name: []const u8) !Ev
 
     // Create and run comptime evaluator with real builtins
     const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-    const evaluator = try ComptimeEvaluator.init(gpa, module_env, &.{}, problems, builtin_types, builtin_module.env, &checker.import_mapping, roc_target.RocTarget.detectNative(), null);
+    const evaluator = try ComptimeEvaluator.init(gpa, module_env, imported_envs, problems, builtin_types, builtin_module.env, &checker.import_mapping, roc_target.RocTarget.detectNative(), null);
 
     return .{
         .module_env = module_env,
         .evaluator = evaluator,
         .problems = problems,
         .builtin_module = builtin_module,
+        .other_envs = imported_envs,
     };
 }
 
@@ -241,6 +247,8 @@ fn cleanupEvalModule(result: anytype) void {
     // Clean up builtin module
     var builtin_module_mut = result.builtin_module;
     builtin_module_mut.deinit();
+
+    test_allocator.free(result.other_envs);
 }
 
 fn cleanupEvalModuleWithImport(result: anytype) void {
@@ -3306,4 +3314,27 @@ test "issue 9262: dev evaluator handles opaque function field lookup" {
     try testing.expectEqual(@as(usize, 0), result.problems.len());
     try testing.expect(code_result.code.len > 0);
     try testing.expect(code_result.entry_offset < code_result.code.len);
+}
+
+test "comptime eval - closure with single capture" {
+    const src =
+        \\func = |x| {
+        \\    add_x = |y| x + y
+        \\    add_x(10)
+        \\}
+        \\result = func(42)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+    try testing.expectEqual(@as(u32, 0), result.problems.len());
+
+    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
+    const folded = result.module_env.store.getExpr(result.module_env.store.getDef(defs[1]).expr);
+    try testing.expect(folded == .e_num);
+    try testing.expectEqual(@as(i128, 52), @as(i128, @bitCast(folded.e_num.value.bytes)));
 }

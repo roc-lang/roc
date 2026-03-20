@@ -713,37 +713,17 @@ pub const Store = struct {
         };
     }
 
-    /// Dynamically compute the discriminant offset for a tag union.
-    /// This computes the offset based on current variant payload sizes,
-    /// which is necessary for recursive types where placeholder layouts
-    /// may have been updated after the tag union was initially created.
+    /// Return the stored discriminant offset for a tag union.
+    /// Recursive layouts are finalized with their physical payload shapes already
+    /// accounted for, so recomputing from child layouts can re-enter cycles.
     pub fn getTagUnionDiscriminantOffset(self: *const Self, tu_idx: TagUnionIdx) u16 {
-        const tu_data = self.getTagUnionData(tu_idx);
-        const variants = self.getTagUnionVariants(tu_data);
-
-        // Find the maximum payload size across all variants
-        var max_payload_size: u32 = 0;
-        for (0..variants.len) |i| {
-            const variant = variants.get(i);
-            const variant_layout = self.getLayout(variant.payload_layout);
-            const variant_size = self.layoutSize(variant_layout);
-            if (variant_size > max_payload_size) {
-                max_payload_size = variant_size;
-            }
-        }
-
-        // Align the discriminant offset to the discriminant's alignment
-        const disc_align = tu_data.discriminantAlignment();
-        return @intCast(std.mem.alignForward(u32, max_payload_size, @intCast(disc_align.toByteUnits())));
+        return self.getTagUnionData(tu_idx).discriminant_offset;
     }
 
-    /// Dynamically compute the total size of a tag union.
-    /// This computes the size based on current variant payload sizes.
+    /// Return the stored total size of a tag union.
     pub fn getTagUnionSize(self: *const Self, tu_idx: TagUnionIdx, alignment: std.mem.Alignment) u32 {
-        const tu_data = self.getTagUnionData(tu_idx);
-        const disc_offset = self.getTagUnionDiscriminantOffset(tu_idx);
-        const total_unaligned = disc_offset + tu_data.discriminant_size;
-        return std.mem.alignForward(u32, total_unaligned, @intCast(alignment.toByteUnits()));
+        _ = alignment;
+        return self.getTagUnionData(tu_idx).size;
     }
 
     /// Create a new tag_union layout with a specific variant's payload layout replaced.
@@ -802,22 +782,10 @@ pub const Store = struct {
         return Layout.tagUnion(tag_union_alignment, .{ .int_idx = @intCast(tag_union_data_idx) });
     }
 
-    /// Dynamically compute the total size of a struct.
-    /// This computes the size based on current field layout sizes.
+    /// Return the stored total size of a struct.
     pub fn getStructSize(self: *const Self, struct_idx: StructIdx, struct_alignment: std.mem.Alignment) u32 {
-        const sd = self.getStructData(struct_idx);
-        const fields = self.struct_fields.sliceRange(sd.getFields());
-
-        var current_offset: u32 = 0;
-        for (0..fields.len) |i| {
-            const field = fields.get(i);
-            const field_layout = self.getLayout(field.layout);
-            const field_size_align = self.layoutSizeAlign(field_layout);
-            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_size_align.alignment.toByteUnits()))));
-            current_offset += field_size_align.size;
-        }
-
-        return std.mem.alignForward(u32, current_offset, @intCast(struct_alignment.toByteUnits()));
+        _ = struct_alignment;
+        return self.getStructData(struct_idx).size;
     }
 
     /// Backwards-compat aliases

@@ -110,6 +110,7 @@ pub const Repl = struct {
             .interpreter => .interpreter,
             .dev => .dev,
             .llvm => .llvm,
+            .wasm => .wasm,
         };
         return initInternal(allocator, roc_ops, crash_ctx, execution_backend);
     }

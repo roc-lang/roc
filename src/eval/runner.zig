@@ -27,6 +27,7 @@ const ExecutableMemory = eval_mod.ExecutableMemory;
 const BuiltinModules = eval_mod.BuiltinModules;
 const EvalBackend = eval_mod.EvalBackend;
 
+/// Errors that can occur when running a Roc program.
 pub const RunError = error{
     EvalFailed,
     CompilationFailed,
@@ -112,9 +113,7 @@ pub fn runtimeRun(
     }
 }
 
-// ──────────────────────────────────────────────────────────────
 // Backend implementations (private)
-// ──────────────────────────────────────────────────────────────
 
 /// Run via the dev backend: JIT-compile CIR to native code and execute.
 fn runViaDev(

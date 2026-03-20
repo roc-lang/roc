@@ -11834,9 +11834,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .lookup => |lookup| {
                             if (std.debug.runtime_safety) std.debug.panic(
                                 "generateCall: unexpected lookup callee after backend peeling deletion symbol={d}",
-                                .{
-                                    lookup.symbol.raw(),
-                                },
+                                .{lookup.symbol.raw()},
                             );
                             unreachable;
                         },

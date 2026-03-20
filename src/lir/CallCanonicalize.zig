@@ -225,6 +225,9 @@ pub const CallCanonicalizePass = struct {
                         try self.visitExpr(callee_expr, scope_mark);
                         if (self.resolveCanonicalCallee(callee_expr, scope_mark)) |target| {
                             call.callee = target;
+                        } else if (std.debug.runtime_safety and self.store.getExpr(callee_expr) == .lookup) {
+                            const lookup = self.store.getExpr(callee_expr).lookup;
+                            std.debug.panic("CallCanonicalize unresolved lookup callee symbol={d}", .{lookup.symbol.raw()});
                         }
                     },
                     .direct => {},

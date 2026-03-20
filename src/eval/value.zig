@@ -9,8 +9,6 @@
 
 const std = @import("std");
 const layout_mod = @import("layout");
-const Layout = layout_mod.Layout;
-const builtins = @import("builtins");
 
 const Allocator = std.mem.Allocator;
 

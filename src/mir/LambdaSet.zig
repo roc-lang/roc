@@ -206,12 +206,14 @@ fn seedSymbolDefs(
             continue;
         }
 
-        if (isLambdaExpr(mir_store, expr_id)) {
+        if (resolveToLambdaParams(mir_store, expr_id) != null and resolveToLambdaBody(mir_store, expr_id) != null) {
             const member = plainLambdaMember(symbol);
             const singleton = try singletonLambdaSet(allocator, store, member);
             try store.symbol_lambda_sets.put(allocator, symbol.raw(), singleton);
             try store.expr_lambda_sets.put(allocator, @intFromEnum(expr_id), singleton);
-            try lambda_expr_symbols.put(allocator, @intFromEnum(expr_id), symbol);
+            if (isLambdaExpr(mir_store, expr_id)) {
+                try lambda_expr_symbols.put(allocator, @intFromEnum(expr_id), symbol);
+            }
         }
     }
 }
@@ -533,6 +535,7 @@ fn resolveToLambdaParams(mir_store: *const MIR.Store, expr_id: MIR.ExprId) ?MIR.
     const expr = mir_store.getExpr(expr_id);
     return switch (expr) {
         .lambda => |lam| lam.params,
+        .hosted => |hosted| hosted.params,
         .block => |block| resolveToLambdaParams(mir_store, block.final_expr),
         else => null,
     };
@@ -542,6 +545,7 @@ fn resolveToLambdaBody(mir_store: *const MIR.Store, expr_id: MIR.ExprId) ?MIR.Ex
     const expr = mir_store.getExpr(expr_id);
     return switch (expr) {
         .lambda => |lam| lam.body,
+        .hosted => |hosted| hosted.body,
         .block => |block| resolveToLambdaBody(mir_store, block.final_expr),
         else => null,
     };

@@ -95,6 +95,10 @@ type_scope_caller_module_idx: ?u32,
 /// Used to resolve CIR local lookups to global symbols.
 pattern_symbols: std.AutoHashMap(u128, MIR.Symbol),
 
+/// Parent lexical scope for each scoped lowering context.
+/// Used so deferred/nested lambdas can reuse bindings from the enclosing scope.
+pattern_scope_parents: std.AutoHashMap(u64, u64),
+
 /// Concrete monotype for each bound MIR symbol introduced from a lowered pattern.
 /// This is authoritative for local lookups that do not have a symbol_def yet
 /// (lambda params, destructures, closure locals, synthetic temporaries).
@@ -187,6 +191,7 @@ pub fn init(
         .type_scope_module_idx = null,
         .type_scope_caller_module_idx = null,
         .pattern_symbols = std.AutoHashMap(u128, MIR.Symbol).init(allocator),
+        .pattern_scope_parents = std.AutoHashMap(u64, u64).init(allocator),
         .symbol_monotypes = std.AutoHashMap(u64, Monotype.Idx).init(allocator),
         .type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(allocator),
         .lowered_symbols = std.AutoHashMap(u64, MIR.ExprId).init(allocator),
@@ -217,6 +222,7 @@ pub fn init(
 
 pub fn deinit(self: *Self) void {
     self.pattern_symbols.deinit();
+    self.pattern_scope_parents.deinit();
     self.symbol_monotypes.deinit();
     self.type_var_seen.deinit();
     self.lowered_symbols.deinit();
@@ -2156,6 +2162,7 @@ pub fn makeSymbol(self: *Self, module_idx: u32, ident_idx: Ident.Idx) Allocator.
 pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId {
     const module_env = self.all_module_envs[self.current_module_idx];
     const region = module_env.store.getExprRegion(expr_idx);
+    const expr = module_env.store.getExpr(expr_idx);
 
     // Error types from the type checker become runtime_error nodes.
     // This early return ensures resolveMonotype (below) is never called
@@ -2163,10 +2170,14 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
     const type_var = ModuleEnv.varFrom(expr_idx);
     const resolved = self.types_store.resolveVar(type_var);
     if (resolved.desc.content == .err) {
-        return try self.store.addExpr(self.allocator, .{ .runtime_err_type = {} }, self.store.monotype_store.unit_idx, region);
+        return switch (expr) {
+            .e_str => |str_expr| self.lowerErroredStringExpr(module_env, str_expr, region),
+            .e_call => |call_expr| self.lowerCall(module_env, call_expr, self.store.monotype_store.unit_idx, region),
+            .e_block => |block_expr| self.lowerBlock(module_env, block_expr, self.store.monotype_store.unit_idx, region),
+            else => self.store.addExpr(self.allocator, .{ .runtime_err_type = {} }, self.store.monotype_store.unit_idx, region),
+        };
     }
 
-    const expr = module_env.store.getExpr(expr_idx);
     const monotype = try self.resolveMonotype(expr_idx);
 
     return switch (expr) {
@@ -2348,6 +2359,7 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                         }
                         try self.bindTypeVarMonotypes(ModuleEnv.varFrom(cir_def_expr), monotype);
                         const saved_pattern_scope = self.current_pattern_scope;
+                        try self.pattern_scope_parents.put(spec_symbol_key, saved_pattern_scope);
                         self.current_pattern_scope = spec_symbol_key;
                         defer self.current_pattern_scope = saved_pattern_scope;
                         const spec_lowered = try self.lowerExpr(cir_def_expr);
@@ -2400,13 +2412,7 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
             const target_module_idx: u32 = self.resolveImportedModuleIdx(module_env, ext.module_idx) orelse unreachable;
             const target_env = self.all_module_envs[target_module_idx];
             if (!target_env.store.isDefNode(ext.target_node_idx)) {
-                if (builtin.mode == .Debug) {
-                    std.debug.panic(
-                        "e_lookup_external: target node {d} is not a def node (target_module_idx={d})",
-                        .{ ext.target_node_idx, target_module_idx },
-                    );
-                }
-                unreachable;
+                return try self.store.addExpr(self.allocator, .{ .runtime_err_type = {} }, monotype, region);
             }
 
             const symbol = try self.internExternalDefSymbol(target_module_idx, ext.target_node_idx);
@@ -2622,6 +2628,36 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
     };
 }
 
+fn lowerErroredStringExpr(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    str_expr: anytype,
+    region: Region,
+) Allocator.Error!MIR.ExprId {
+    const str_mono = self.store.monotype_store.primIdx(.str);
+    const span = module_env.store.sliceExpr(str_expr.span);
+
+    if (span.len == 0) {
+        const mir_str = try self.store.strings.insert(self.allocator, "");
+        return try self.store.addExpr(self.allocator, .{ .str = mir_str }, str_mono, region);
+    }
+
+    if (span.len == 1) {
+        return try self.lowerExpr(span[0]);
+    }
+
+    var acc = try self.lowerExpr(span[0]);
+    for (span[1..]) |seg_idx| {
+        const seg = try self.lowerExpr(seg_idx);
+        const args = try self.store.addExprSpan(self.allocator, &.{ acc, seg });
+        acc = try self.store.addExpr(self.allocator, .{ .run_low_level = .{
+            .op = .str_concat,
+            .args = args,
+        } }, str_mono, region);
+    }
+    return acc;
+}
+
 // --- Helpers ---
 
 fn isTopLevelPattern(module_env: *const ModuleEnv, pattern_idx: CIR.Pattern.Idx) bool {
@@ -2744,13 +2780,20 @@ fn patternToSymbol(self: *Self, pattern_idx: CIR.Pattern.Idx) Allocator.Error!MI
         return existing;
     }
 
-    // In a specialized scope, captures can reference symbols from an outer
-    // unscoped block. Reuse the existing unscoped mapping when available.
+    // In nested/specialized scopes, captures can reference bindings from an
+    // enclosing lambda/block scope. Reuse the nearest existing lexical binding
+    // before creating a fresh scoped symbol.
     if (self.current_pattern_scope != 0) {
-        const unscoped_key: u128 = @as(u128, base_key);
-        if (self.pattern_symbols.get(unscoped_key)) |outer| {
-            try self.pattern_symbols.put(key, outer);
-            return outer;
+        var scope = self.current_pattern_scope;
+        while (true) {
+            const parent_scope = self.pattern_scope_parents.get(scope) orelse 0;
+            const parent_key: u128 = (@as(u128, parent_scope) << 64) | @as(u128, base_key);
+            if (self.pattern_symbols.get(parent_key)) |outer| {
+                try self.pattern_symbols.put(key, outer);
+                return outer;
+            }
+            if (parent_scope == 0) break;
+            scope = parent_scope;
         }
     }
 
@@ -3102,6 +3145,7 @@ fn lowerMatch(self: *Self, module_env: *const ModuleEnv, match_expr: CIR.Expr.Ma
     return try self.store.addExpr(self.allocator, .{ .match_expr = .{
         .cond = cond,
         .branches = branch_span,
+        .is_try_suffix = match_expr.is_try_suffix,
     } }, monotype, region);
 }
 
@@ -3193,6 +3237,7 @@ fn lowerClosure(self: *Self, module_env: *const ModuleEnv, closure: CIR.Expr.Clo
 
     // --- Step 5: Enter a new scope for the lifted function body ---
     const saved_pattern_scope = self.current_pattern_scope;
+    try self.pattern_scope_parents.put(lifted_fn_symbol.raw(), saved_pattern_scope);
     self.current_pattern_scope = lifted_fn_symbol.raw();
     defer self.current_pattern_scope = saved_pattern_scope;
 
@@ -3353,6 +3398,7 @@ fn lowerDeferredBlockLambda(
     }
 
     const saved_pattern_scope = self.current_pattern_scope;
+    try self.pattern_scope_parents.put(symbol_key, saved_pattern_scope);
     self.current_pattern_scope = symbol_key;
     defer self.current_pattern_scope = saved_pattern_scope;
 
@@ -5443,6 +5489,7 @@ fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.E
     const saved_type_var_seen = self.type_var_seen;
     const saved_ident_store = self.mono_scratches.ident_store;
     const saved_module_env = self.mono_scratches.module_env;
+    try self.pattern_scope_parents.put(symbol_key, saved_pattern_scope);
     self.current_pattern_scope = symbol_key;
     if (switching_module) {
         self.current_module_idx = symbol_module_idx;

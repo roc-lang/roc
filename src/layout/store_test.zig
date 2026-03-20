@@ -1726,6 +1726,74 @@ test "type and monotype layout resolvers agree for recursive nominal layouts" {
     try expectTypeAndMonotypeResolversAgree(testing.allocator, &lt, nat_var);
 }
 
+test "type and monotype layout resolvers agree for direct recursive nominal payload layouts" {
+    var lt = try LayoutTest.initWithIdents(testing.allocator);
+    defer lt.deinit();
+
+    const builtin_module_idx = try lt.module_env.insertIdent(base.Ident.for_text("Builtin"));
+    lt.module_env.idents.builtin_module = builtin_module_idx;
+    try lt.initLayoutStore();
+
+    const tree_ident = try lt.module_env.insertIdent(Ident.for_text("Tree"));
+    const recursive_var = try lt.type_store.freshFromContent(.{ .flex = types.Flex.init() });
+
+    const text_tag = types.Tag{
+        .name = try lt.module_env.insertIdent(Ident.for_text("Text")),
+        .args = try lt.type_store.appendVars(&[_]types.Var{}),
+    };
+    const wrapper_tag = types.Tag{
+        .name = try lt.module_env.insertIdent(Ident.for_text("Wrapper")),
+        .args = try lt.type_store.appendVars(&[_]types.Var{recursive_var}),
+    };
+    const tags_range = try lt.type_store.appendTags(&[_]types.Tag{ text_tag, wrapper_tag });
+    const tag_union = types.TagUnion{
+        .tags = tags_range,
+        .ext = try lt.type_store.freshFromContent(.{ .structure = .empty_tag_union }),
+    };
+    const tag_union_var = try lt.type_store.freshFromContent(.{ .structure = .{ .tag_union = tag_union } });
+
+    const tree_content = try lt.type_store.mkNominal(
+        .{ .ident_idx = tree_ident },
+        tag_union_var,
+        &[_]types.Var{},
+        builtin_module_idx,
+        false,
+    );
+    try lt.type_store.setVarContent(recursive_var, tree_content);
+    const tree_var = try lt.type_store.freshFromContent(tree_content);
+
+    try expectTypeAndMonotypeResolversAgree(testing.allocator, &lt, tree_var);
+
+    const tree_layout_idx = try resolveTypeVar(&lt, tree_var);
+    const tree_layout = lt.layout_store.getLayout(tree_layout_idx);
+    try testing.expect(tree_layout.tag == .tag_union);
+
+    const tu_data = lt.layout_store.getTagUnionData(tree_layout.data.tag_union.idx);
+    const variants = lt.layout_store.getTagUnionVariants(tu_data);
+    try testing.expectEqual(@as(usize, 2), variants.len);
+
+    var wrapper_variant_idx: usize = 0;
+    for (0..variants.len) |i| {
+        const payload_layout = lt.layout_store.getLayout(variants.get(i).payload_layout);
+        if (payload_layout.tag != .zst) {
+            wrapper_variant_idx = i;
+            break;
+        }
+    }
+
+    const wrapper_payload = lt.layout_store.getLayout(variants.get(wrapper_variant_idx).payload_layout);
+    try testing.expect(wrapper_payload.tag == .struct_);
+
+    const payload_data = lt.layout_store.getStructData(wrapper_payload.data.struct_.idx);
+    const payload_fields = lt.layout_store.struct_fields.sliceRange(payload_data.getFields());
+    try testing.expectEqual(@as(usize, 1), payload_fields.len);
+    try testing.expectEqual(@as(u16, 0), payload_fields.get(0).index);
+
+    // The recursive payload layout must remain usable by size queries.
+    try testing.expect(lt.layout_store.layoutSize(tree_layout) > 0);
+    try testing.expect(lt.layout_store.layoutSize(wrapper_payload) > 0);
+}
+
 test "fromTypeVar - no-payload nominal tag union gets canonical tag_union layout, not box" {
     var lt = try LayoutTest.init(testing.allocator);
     defer lt.deinit();

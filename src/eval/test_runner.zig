@@ -5,9 +5,7 @@
 
 const std = @import("std");
 const base = @import("base");
-const builtins = @import("builtins");
 const can = @import("can");
-const layout = @import("layout");
 const reporting = @import("reporting");
 const eval_mod = @import("mod.zig");
 
@@ -17,7 +15,6 @@ const CIR = can.CIR;
 
 const LirProgram = eval_mod.LirProgram;
 const LirInterpreter = eval_mod.LirInterpreter;
-const Value = eval_mod.Value;
 const CrashContext = eval_mod.CrashContext;
 const CrashState = eval_mod.CrashState;
 

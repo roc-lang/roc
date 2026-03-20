@@ -15,7 +15,6 @@ const types = @import("types");
 const collections = @import("collections");
 const eval = @import("eval");
 const tracy = @import("tracy");
-const roc_target = @import("roc_target");
 
 // Module tracing flag - enabled via `zig build -Dtrace-modules`
 const trace_modules = if (@hasDecl(build_options, "trace_modules")) build_options.trace_modules else false;
@@ -602,7 +601,19 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
         arg_ptr,
         ret_ptr,
     ) catch |err| {
-        const err_msg = std.fmt.bufPrint(&buf, "INTERPRETER SHIM: Evaluation failed: {s}", .{@errorName(err)}) catch "Evaluation failed";
+        const err_msg = switch (err) {
+            error.Crash => blk: {
+                if (interp.getCrashMessage()) |crash_msg| break :blk crash_msg;
+                break :blk std.fmt.bufPrint(&buf, "INTERPRETER SHIM: Evaluation failed: {s}", .{@errorName(err)}) catch "Evaluation failed";
+            },
+            error.RuntimeError => blk: {
+                if (interp.getRuntimeErrorMessage()) |runtime_msg| {
+                    break :blk std.fmt.bufPrint(&buf, "INTERPRETER SHIM: Evaluation failed: {s}: {s}", .{ @errorName(err), runtime_msg }) catch "Evaluation failed";
+                }
+                break :blk std.fmt.bufPrint(&buf, "INTERPRETER SHIM: Evaluation failed: {s}", .{@errorName(err)}) catch "Evaluation failed";
+            },
+            else => std.fmt.bufPrint(&buf, "INTERPRETER SHIM: Evaluation failed: {s}", .{@errorName(err)}) catch "Evaluation failed",
+        };
         roc_ops.crash(err_msg);
         return error.EvaluationFailed;
     };

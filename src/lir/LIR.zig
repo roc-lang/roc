@@ -385,6 +385,7 @@ pub const LirExpr = union(enum) {
         /// Branches to try
         branches: LirMatchBranchSpan,
         result_layout: layout.Idx,
+        is_try_suffix: bool = false,
     },
 
     /// Block with statements and final expression

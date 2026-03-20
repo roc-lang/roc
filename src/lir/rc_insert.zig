@@ -1005,6 +1005,7 @@ pub const RcInsertPass = struct {
                     .value_layout = match_expr.value_layout,
                     .branches = try self.store.addMatchBranches(new_branches.items),
                     .result_layout = match_expr.result_layout,
+                    .is_try_suffix = match_expr.is_try_suffix,
                 } }, region);
                 if (!changed) return expr_id;
                 return self.wrapPreludeAroundExpr(rebuilt, match_expr.result_layout, region, value_prelude.items);
@@ -1389,6 +1390,7 @@ pub const RcInsertPass = struct {
                     .value_layout = match_expr.value_layout,
                     .branches = try self.store.addMatchBranches(new_branches.items),
                     .result_layout = match_expr.result_layout,
+                    .is_try_suffix = match_expr.is_try_suffix,
                 } }, region);
             },
             .for_loop => |fl| {
@@ -2858,7 +2860,7 @@ pub const RcInsertPass = struct {
         return switch (expr) {
             .block => |block| self.processBlock(expr_id, block.stmts, block.final_expr, block.result_layout, region),
             .if_then_else => |ite| self.processIfThenElse(ite.branches, ite.final_else, ite.result_layout, region),
-            .match_expr => |w| self.processMatch(w.value, w.value_layout, w.branches, w.result_layout, region),
+            .match_expr => |w| self.processMatch(w.value, w.value_layout, w.branches, w.result_layout, w.is_try_suffix, region),
             .lambda => |lam| self.processLambda(lam, region, expr_id),
             .for_loop => |fl| self.processForLoop(fl, region, expr_id),
             .while_loop => |wl| self.processWhileLoop(wl, region, expr_id),
@@ -3789,6 +3791,7 @@ pub const RcInsertPass = struct {
         value_layout: LayoutIdx,
         branches_span: LIR.LirMatchBranchSpan,
         result_layout: LayoutIdx,
+        is_try_suffix: bool,
         region: Region,
     ) Allocator.Error!LirExprId {
         // Copy branches to a local buffer to avoid iterator invalidation.
@@ -3896,6 +3899,7 @@ pub const RcInsertPass = struct {
             .value_layout = value_layout,
             .branches = new_branch_span,
             .result_layout = result_layout,
+            .is_try_suffix = is_try_suffix,
         } }, region);
     }
 

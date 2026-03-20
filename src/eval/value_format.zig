@@ -22,6 +22,7 @@ const i128h = builtins.compiler_rt_128;
 
 const Allocator = std.mem.Allocator;
 
+/// Errors that can occur when formatting a value for display.
 pub const FormatError = error{
     OutOfMemory,
     Unsupported,
@@ -58,7 +59,7 @@ fn formatWithLayout(
     }
 }
 
-// ─── Scalars ────────────────────────────────────────────────────────────
+// Scalars
 
 fn formatScalar(allocator: Allocator, val: Value, lay: Layout, layout_idx: Idx) FormatError![]u8 {
     const scalar = lay.data.scalar;
@@ -146,7 +147,7 @@ fn formatScalar(allocator: Allocator, val: Value, lay: Layout, layout_idx: Idx) 
     }
 }
 
-// ─── Structs (tuples and records) ────────────────────────────────────────
+// Structs (tuples and records)
 
 fn formatStruct(
     allocator: Allocator,
@@ -194,7 +195,7 @@ fn formatStruct(
     return out.toOwnedSlice() catch return error.OutOfMemory;
 }
 
-// ─── Lists ──────────────────────────────────────────────────────────────
+// Lists
 
 fn formatList(
     allocator: Allocator,
@@ -250,7 +251,7 @@ fn formatListOfZst(allocator: Allocator, val: Value) FormatError![]u8 {
     return out.toOwnedSlice() catch return error.OutOfMemory;
 }
 
-// ─── Box ────────────────────────────────────────────────────────────────
+// Box
 
 fn formatBox(
     allocator: Allocator,

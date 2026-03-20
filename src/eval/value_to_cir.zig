@@ -10,7 +10,6 @@
 const std = @import("std");
 const base = @import("base");
 const can = @import("can");
-const types_mod = @import("types");
 const layout_mod = @import("layout");
 const builtins = @import("builtins");
 const fold_type_mod = @import("fold_type.zig");
@@ -23,9 +22,7 @@ const LayoutHelper = @import("value.zig").LayoutHelper;
 const FoldType = fold_type_mod.FoldType;
 const Ident = base.Ident;
 
-// ---------------------------------------------------------------------------
 // Public API
-// ---------------------------------------------------------------------------
 
 /// Reconstruct a CIR constant expression from a raw evaluated value.
 ///
@@ -233,9 +230,7 @@ pub fn createExpr(
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tag union helpers
-// ---------------------------------------------------------------------------
 
 /// Replace an expression in-place with a tag union constant.
 fn replaceTagUnion(
@@ -480,9 +475,7 @@ fn createTagUnionExpr(
     }, region);
 }
 
-// ---------------------------------------------------------------------------
 // Tuple helpers
-// ---------------------------------------------------------------------------
 
 /// Replace an expression in-place with a tuple constant.
 fn replaceTuple(
@@ -583,9 +576,7 @@ fn createTupleExpr(
     }, region);
 }
 
-// ---------------------------------------------------------------------------
 // Scalar reading utilities
-// ---------------------------------------------------------------------------
 
 /// Read a value as i128, sign-extending signed types and zero-extending unsigned types.
 fn readAsI128(val: Value, kind: FoldType.IntKind) i128 {
