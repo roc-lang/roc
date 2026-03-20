@@ -1171,8 +1171,19 @@ test "fx platform index out of bounds in instantiate regression" {
 }
 
 test "fx platform index out of bounds in instantiate regression (dev backend)" {
-    // TODO: dev backend crashes with SIGABRT (exit code 134)
-    return error.SkipZigTest;
+    // Regression test: same scenario as the interpreter variant above, but using
+    // the dev (native) backend. Previously panicked with:
+    //   generateCall: unexpected lookup callee after backend peeling deletion
+    // because hosted functions (e.g. Stdout.line!) were not tracked in lambda
+    // sets, so passing them as callbacks to higher-order functions like
+    // for_each! produced unresolvable lookup callees in the code generator.
+    const allocator = testing.allocator;
+
+    const run_result = try util.runRoc(allocator, &.{}, "test/fx/index_oob_instantiate.roc");
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    try util.checkSuccess(run_result);
 }
 
 test "fx platform fold_rev static dispatch regression" {
