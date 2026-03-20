@@ -2767,15 +2767,26 @@ fn lowerExprWithMonotypeOverride(
 
         // --- Lookups ---
         .e_lookup_local => |lookup| {
-            if (self.currentScopedPatternSymbol(self.current_module_idx, lookup.pattern_idx) == null and
-                self.isSkippedProcBackedBindingPattern(self.current_module_idx, lookup.pattern_idx))
-            {
-                if (self.monomorphization.getContextPatternProcInsts(self.current_proc_inst_context, self.current_module_idx, lookup.pattern_idx)) |proc_inst_ids| {
+            const scoped_symbol = self.currentScopedPatternSymbol(self.current_module_idx, lookup.pattern_idx);
+            const skipped_proc_backed_binding = self.isSkippedProcBackedBindingPattern(
+                self.current_module_idx,
+                lookup.pattern_idx,
+            );
+            const lower_lookup_as_proc_value =
+                scoped_symbol == null and skipped_proc_backed_binding;
+
+            if (lower_lookup_as_proc_value) {
+                if (self.monomorphization.getContextPatternProcInsts(
+                    self.current_proc_inst_context,
+                    self.current_module_idx,
+                    lookup.pattern_idx,
+                )) |proc_inst_ids| {
                     if (proc_inst_ids.len == 0) unreachable;
                     if (proc_inst_ids.len == 1) {
                         return try self.lowerProcInst(proc_inst_ids[0]);
                     }
-                } else if (self.monomorphization.getLookupExprProcInst(
+                }
+                if (self.monomorphization.getLookupExprProcInst(
                     self.current_proc_inst_context,
                     self.monomorphizationRootExprContext(self.current_proc_inst_context),
                     self.current_module_idx,
@@ -4419,18 +4430,23 @@ fn buildClosureValueFromCaptureRequests(
             request.module_idx,
             request.pattern_idx,
         );
+        const has_runtime_binding = self.store.getValueDef(outer_symbol) != null;
         // Proc-backed captures already have explicit runtime callable identity.
-        // Keep that runtime value intact instead of routing it through a synthetic
-        // lookup alias, which would reintroduce def/lookup-based callable recovery
-        // into MIR and can lose lambda-set ownership facts for the captured value.
-        const runtime_capture_expr = if (!capture_is_lexical_owner_param and !proc_backed_capture_expr.isNone())
+        // Reuse a proc-backed expression only when this capture has no actual
+        // runtime carrier symbol in scope. If a bound value already exists
+        // (for example `add5 = make_adder(5)`), that binding is the real
+        // runtime closure instance and reconstructing from proc identity would
+        // lose its captured payload.
+        const runtime_capture_expr = if (!capture_is_lexical_owner_param and
+            !proc_backed_capture_expr.isNone() and
+            !has_runtime_binding)
             proc_backed_capture_expr
         else
             runtime_lookup_expr;
 
         try self.scratch_expr_ids.append(runtime_capture_expr);
 
-        const semantic_fallback_expr = if (!capture_is_lexical_owner_param and !proc_backed_capture_expr.isNone() and self.store.getValueDef(outer_symbol) == null)
+        const semantic_fallback_expr = if (!proc_backed_capture_expr.isNone() and self.store.getValueDef(outer_symbol) == null)
             proc_backed_capture_expr
         else
             runtime_lookup_expr;
@@ -4656,26 +4672,6 @@ fn lowerClosureSpecialized(
         try self.pattern_symbols.put(scoped_key, local_symbol);
         try self.symbol_monotypes.put(local_symbol.raw(), capture_monotypes_snapshot.items[capture_local_symbols.items.len]);
         try capture_local_symbols.append(self.allocator, local_symbol);
-    }
-
-    for (lower_plan.capture_requests.items, capture_local_symbols.items) |request, local_symbol| {
-        const capture_proc_inst_id = self.monomorphization.getClosureCaptureProcInst(
-            request.closure_proc_inst_id,
-            request.module_idx,
-            request.closure_expr_idx,
-            request.pattern_idx,
-        ) orelse continue;
-        const capture_proc_expr = try self.lowerProcInst(capture_proc_inst_id);
-        const capture_proc_id = self.resolveProcIdFromCallableExpr(capture_proc_expr) orelse {
-            if (builtin.mode == .Debug) {
-                std.debug.panic(
-                    "MIR Lower invariant: closure capture proc inst {d} lowered to non-callable expr {}",
-                    .{ @intFromEnum(capture_proc_inst_id), @intFromEnum(capture_proc_expr) },
-                );
-            }
-            unreachable;
-        };
-        try self.store.registerSymbolSeedProcSet(self.allocator, local_symbol, &.{capture_proc_id});
     }
 
     for (lower_plan.recursive_members.items) |member| {
@@ -5309,7 +5305,6 @@ fn lowerCall(
     }
 
     const lowered_func = try self.lowerExpr(call.func);
-
     return self.lowerCallWithLoweredFunc(
         lowered_func,
         module_env.store.sliceExpr(call.args),

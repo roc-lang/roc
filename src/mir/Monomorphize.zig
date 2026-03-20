@@ -1829,6 +1829,14 @@ pub const Pass = struct {
                         );
                     }
                     try self.scanDemandedValueDefExpr(result, source.module_idx, source.expr_idx);
+                    try self.recordLookupProcInstsFromSourceExpr(
+                        result,
+                        module_idx,
+                        expr_idx,
+                        lookup.pattern_idx,
+                        source.module_idx,
+                        source.expr_idx,
+                    );
                 }
             },
             .e_lookup_external => |lookup| {
@@ -1857,6 +1865,14 @@ pub const Pass = struct {
                     try self.resolveLookupExprProcInst(result, module_idx, expr_idx, template_id);
                 } else {
                     try self.scanDemandedValueDefExpr(result, target_module_idx, def.expr);
+                    try self.recordLookupProcInstsFromSourceExpr(
+                        result,
+                        module_idx,
+                        expr_idx,
+                        null,
+                        target_module_idx,
+                        def.expr,
+                    );
                 }
             },
             .e_lookup_required => |lookup| {
@@ -1883,6 +1899,14 @@ pub const Pass = struct {
                     try self.resolveLookupExprProcInst(result, module_idx, expr_idx, template_id);
                 } else {
                     try self.scanDemandedValueDefExpr(result, target.module_idx, def.expr);
+                    try self.recordLookupProcInstsFromSourceExpr(
+                        result,
+                        module_idx,
+                        expr_idx,
+                        null,
+                        target.module_idx,
+                        def.expr,
+                    );
                 }
             },
             .e_str => |str_expr| try self.scanValueExprSpan(result, module_idx, module_env.store.sliceExpr(str_expr.span)),
@@ -1936,6 +1960,7 @@ pub const Pass = struct {
                     ) == null)
                 {
                     try self.scanExpr(result, module_idx, call_expr.func);
+                    try self.resolveDirectCallSite(result, module_idx, expr_idx, call_expr);
                 }
                 try self.assignCallableArgProcInstsFromCallMonotype(result, module_idx, expr_idx, call_expr);
                 try self.scanExprSpan(result, module_idx, module_env.store.sliceExpr(call_expr.args));
@@ -2043,6 +2068,72 @@ pub const Pass = struct {
                     );
                 }
             },
+        }
+    }
+
+    fn recordLookupProcInstsFromSourceExpr(
+        self: *Pass,
+        result: *Result,
+        lookup_module_idx: u32,
+        lookup_expr_idx: CIR.Expr.Idx,
+        maybe_pattern_idx: ?CIR.Pattern.Idx,
+        source_module_idx: u32,
+        source_expr_idx: CIR.Expr.Idx,
+    ) Allocator.Error!void {
+        var visiting: std.AutoHashMapUnmanaged(u64, void) = .empty;
+        defer visiting.deinit(self.allocator);
+        var source_proc_insts = std.ArrayList(ProcInstId).empty;
+        defer source_proc_insts.deinit(self.allocator);
+
+        try self.collectValueExprProcInstsInContext(
+            result,
+            self.active_proc_inst_context,
+            source_module_idx,
+            source_expr_idx,
+            &visiting,
+            &source_proc_insts,
+        );
+
+        if (source_proc_insts.items.len == 0) return;
+
+        if (source_proc_insts.items.len == 1) {
+            const proc_inst_id = source_proc_insts.items[0];
+            try self.recordLookupExprProcInst(
+                result,
+                self.active_proc_inst_context,
+                lookup_module_idx,
+                lookup_expr_idx,
+                proc_inst_id,
+            );
+            if (maybe_pattern_idx) |pattern_idx| {
+                try self.recordContextPatternProcInst(
+                    result,
+                    self.active_proc_inst_context,
+                    lookup_module_idx,
+                    pattern_idx,
+                    proc_inst_id,
+                );
+            }
+            return;
+        }
+
+        try self.recordLookupExprProcInstSet(
+            result,
+            self.active_proc_inst_context,
+            lookup_module_idx,
+            lookup_expr_idx,
+            source_proc_insts.items,
+        );
+        if (maybe_pattern_idx) |pattern_idx| {
+            for (source_proc_insts.items) |proc_inst_id| {
+                try self.recordContextPatternProcInst(
+                    result,
+                    self.active_proc_inst_context,
+                    lookup_module_idx,
+                    pattern_idx,
+                    proc_inst_id,
+                );
+            }
         }
     }
 
@@ -2309,6 +2400,18 @@ pub const Pass = struct {
             module_idx,
         );
         const resolved_template_id = try self.lookupDirectCalleeTemplate(result, module_idx, callee_expr_idx);
+        if (resolved_template_id == null and !desired_fn_monotype.isNone()) {
+            var visiting: std.AutoHashMapUnmanaged(u64, void) = .empty;
+            defer visiting.deinit(self.allocator);
+            try self.propagateDemandedCallableFnMonotypeToValueExpr(
+                result,
+                module_idx,
+                callee_expr_idx,
+                desired_fn_monotype.idx,
+                desired_fn_monotype.module_idx,
+                &visiting,
+            );
+        }
         if (resolved_template_id) |template_id| {
             if (self.procTemplateLowLevelOp(result, template_id)) |low_level_op| {
                 const arg_exprs = module_env.store.sliceExpr(call_expr.args);
@@ -2320,6 +2423,24 @@ pub const Pass = struct {
                     );
                 }
                 return;
+            }
+        }
+        if (resolved_template_id) |template_id| {
+            if (!(templateRequiresConcreteOwnerProcInst(result, template_id) and
+                self.active_proc_inst_context.isNone()))
+            {
+                if (try self.inferDirectCallProcInst(result, module_idx, call_expr_idx, call_expr, template_id)) |proc_inst_id| {
+                    try self.finalizeResolvedDirectCallProcInst(
+                        result,
+                        module_idx,
+                        call_expr_idx,
+                        call_expr,
+                        callee_expr_idx,
+                        callee_expr,
+                        proc_inst_id,
+                    );
+                    return;
+                }
             }
         }
         switch (try self.selectExistingValueExprProcInstResolution(
@@ -2361,31 +2482,14 @@ pub const Pass = struct {
                     },
                     else => {},
                 }
-                const proc_inst = result.getProcInst(proc_inst_id);
-                const callee_template = result.getProcTemplate(proc_inst.template);
-                try self.recordExprProcInst(
-                    result,
-                    self.active_proc_inst_context,
-                    callee_template.module_idx,
-                    callee_template.cir_expr,
-                    proc_inst_id,
-                );
-                try self.bindCurrentCallFromProcInst(result, module_idx, call_expr_idx, call_expr, proc_inst_id);
-                const proc_inst_fn_mono = switch (result.monotype_store.getMonotype(proc_inst.fn_monotype)) {
-                    .func => |func| func,
-                    else => unreachable,
-                };
-                const arg_exprs = module_env.store.sliceExpr(call_expr.args);
-                try self.prepareCallableArgsForProcInst(result, module_idx, arg_exprs, proc_inst_id);
-                try self.scanProcInst(result, proc_inst_id);
-                try self.recordCallResultProcInstsFromProcInst(result, module_idx, call_expr_idx, proc_inst_id);
-                try self.ensureCallableArgProcInstsScanned(result, module_idx, call_expr.args);
-                try self.recordCurrentExprMonotype(
+                try self.finalizeResolvedDirectCallProcInst(
                     result,
                     module_idx,
                     call_expr_idx,
-                    proc_inst_fn_mono.ret,
-                    proc_inst.fn_monotype_module_idx,
+                    call_expr,
+                    callee_expr_idx,
+                    callee_expr,
+                    proc_inst_id,
                 );
                 return;
             },
@@ -2427,6 +2531,9 @@ pub const Pass = struct {
                             desired_fn_monotype.module_idx,
                         );
                     } else if (std.debug.runtime_safety and self.active_proc_inst_context.isNone()) {
+                        if (!self.visited_exprs.contains(exprVisitKey(module_idx, callee_expr_idx))) {
+                            return;
+                        }
                         std.debug.panic(
                             "Monomorphize missing direct-callee template for expr={d} module={d} callee_expr={d} tag={s}",
                             .{
@@ -2494,6 +2601,29 @@ pub const Pass = struct {
             }
             break :blk try self.ensureProcInstUnscanned(result, template_id, desired_fn_monotype.idx, desired_fn_monotype.module_idx);
         };
+        try self.finalizeResolvedDirectCallProcInst(
+            result,
+            module_idx,
+            call_expr_idx,
+            call_expr,
+            callee_expr_idx,
+            callee_expr,
+            proc_inst_id,
+        );
+    }
+
+    fn finalizeResolvedDirectCallProcInst(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        call_expr_idx: CIR.Expr.Idx,
+        call_expr: anytype,
+        callee_expr_idx: CIR.Expr.Idx,
+        callee_expr: anytype,
+        proc_inst_id: ProcInstId,
+    ) Allocator.Error!void {
+        const module_env = self.all_module_envs[module_idx];
+
         try self.recordCallSiteProcInst(
             result,
             self.active_proc_inst_context,
@@ -2525,7 +2655,9 @@ pub const Pass = struct {
             },
             else => {},
         }
-        const callee_template = result.getProcTemplate(template_id);
+
+        const proc_inst = result.getProcInst(proc_inst_id);
+        const callee_template = result.getProcTemplate(proc_inst.template);
         try self.recordExprProcInst(
             result,
             self.active_proc_inst_context,
@@ -2534,7 +2666,6 @@ pub const Pass = struct {
             proc_inst_id,
         );
         try self.bindCurrentCallFromProcInst(result, module_idx, call_expr_idx, call_expr, proc_inst_id);
-        const proc_inst = result.getProcInst(proc_inst_id);
         const proc_inst_fn_mono = switch (result.monotype_store.getMonotype(proc_inst.fn_monotype)) {
             .func => |func| func,
             else => unreachable,
@@ -3633,6 +3764,201 @@ pub const Pass = struct {
         try self.recordCurrentExprMonotype(result, module_idx, call_expr_idx, fn_mono.ret, fn_monotype_module_idx);
     }
 
+    fn propagateDemandedCallableFnMonotypeToValueExpr(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        fn_monotype: Monotype.Idx,
+        fn_monotype_module_idx: u32,
+        visiting: *std.AutoHashMapUnmanaged(u64, void),
+    ) Allocator.Error!void {
+        const visit_key = exprVisitKey(module_idx, expr_idx);
+        if (visiting.contains(visit_key)) return;
+        try visiting.put(self.allocator, visit_key, {});
+        defer _ = visiting.remove(visit_key);
+
+        try self.recordCurrentExprMonotype(
+            result,
+            module_idx,
+            expr_idx,
+            fn_monotype,
+            fn_monotype_module_idx,
+        );
+
+        const module_env = self.all_module_envs[module_idx];
+        switch (module_env.store.getExpr(expr_idx)) {
+            .e_lookup_local => |lookup| {
+                if (result.getPatternSourceExpr(module_idx, lookup.pattern_idx)) |source| {
+                    try self.propagateDemandedCallableFnMonotypeToValueExpr(
+                        result,
+                        source.module_idx,
+                        source.expr_idx,
+                        fn_monotype,
+                        fn_monotype_module_idx,
+                        visiting,
+                    );
+                }
+            },
+            .e_lookup_external => |lookup| {
+                const target_module_idx = self.resolveImportedModuleIdx(module_env, lookup.module_idx) orelse return;
+                const source = try self.resolveExternalDefSourceExpr(result, target_module_idx, lookup.target_node_idx) orelse return;
+                try self.propagateDemandedCallableFnMonotypeToValueExpr(
+                    result,
+                    source.module_idx,
+                    source.expr_idx,
+                    fn_monotype,
+                    fn_monotype_module_idx,
+                    visiting,
+                );
+            },
+            .e_lookup_required => |lookup| {
+                const target = self.resolveRequiredLookupTarget(module_env, lookup) orelse return;
+                const target_node_idx: u16 = @intCast(@intFromEnum(target.def_idx));
+                const source = try self.resolveExternalDefSourceExpr(result, target.module_idx, target_node_idx) orelse return;
+                try self.propagateDemandedCallableFnMonotypeToValueExpr(
+                    result,
+                    source.module_idx,
+                    source.expr_idx,
+                    fn_monotype,
+                    fn_monotype_module_idx,
+                    visiting,
+                );
+            },
+            .e_if => |if_expr| {
+                for (module_env.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
+                    const branch = module_env.store.getIfBranch(branch_idx);
+                    try self.propagateDemandedCallableFnMonotypeToValueExpr(
+                        result,
+                        module_idx,
+                        branch.body,
+                        fn_monotype,
+                        fn_monotype_module_idx,
+                        visiting,
+                    );
+                }
+                try self.propagateDemandedCallableFnMonotypeToValueExpr(
+                    result,
+                    module_idx,
+                    if_expr.final_else,
+                    fn_monotype,
+                    fn_monotype_module_idx,
+                    visiting,
+                );
+            },
+            .e_match => |match_expr| {
+                for (module_env.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
+                    const branch = module_env.store.getMatchBranch(branch_idx);
+                    try self.propagateDemandedCallableFnMonotypeToValueExpr(
+                        result,
+                        module_idx,
+                        branch.value,
+                        fn_monotype,
+                        fn_monotype_module_idx,
+                        visiting,
+                    );
+                }
+            },
+            .e_block => |block_expr| {
+                try self.propagateDemandedCallableFnMonotypeToValueExpr(
+                    result,
+                    module_idx,
+                    block_expr.final_expr,
+                    fn_monotype,
+                    fn_monotype_module_idx,
+                    visiting,
+                );
+            },
+            .e_dbg => |dbg_expr| {
+                try self.propagateDemandedCallableFnMonotypeToValueExpr(
+                    result,
+                    module_idx,
+                    dbg_expr.expr,
+                    fn_monotype,
+                    fn_monotype_module_idx,
+                    visiting,
+                );
+            },
+            .e_expect => |expect_expr| {
+                try self.propagateDemandedCallableFnMonotypeToValueExpr(
+                    result,
+                    module_idx,
+                    expect_expr.body,
+                    fn_monotype,
+                    fn_monotype_module_idx,
+                    visiting,
+                );
+            },
+            .e_return => |return_expr| {
+                try self.propagateDemandedCallableFnMonotypeToValueExpr(
+                    result,
+                    module_idx,
+                    return_expr.expr,
+                    fn_monotype,
+                    fn_monotype_module_idx,
+                    visiting,
+                );
+            },
+            .e_nominal => |nominal_expr| {
+                try self.propagateDemandedCallableFnMonotypeToValueExpr(
+                    result,
+                    module_idx,
+                    nominal_expr.backing_expr,
+                    fn_monotype,
+                    fn_monotype_module_idx,
+                    visiting,
+                );
+            },
+            .e_nominal_external => |nominal_expr| {
+                try self.propagateDemandedCallableFnMonotypeToValueExpr(
+                    result,
+                    module_idx,
+                    nominal_expr.backing_expr,
+                    fn_monotype,
+                    fn_monotype_module_idx,
+                    visiting,
+                );
+            },
+            .e_dot_access => |dot_expr| {
+                if (dot_expr.args != null) return;
+                const field_expr = try self.resolveRecordFieldExpr(
+                    result,
+                    module_idx,
+                    dot_expr.receiver,
+                    module_idx,
+                    dot_expr.field_name,
+                    visiting,
+                ) orelse return;
+                try self.propagateDemandedCallableFnMonotypeToValueExpr(
+                    result,
+                    field_expr.module_idx,
+                    field_expr.expr_idx,
+                    fn_monotype,
+                    fn_monotype_module_idx,
+                    visiting,
+                );
+            },
+            .e_tuple_access => |tuple_access| {
+                const elem_expr = try self.resolveTupleElemExpr(
+                    result,
+                    module_idx,
+                    tuple_access.tuple,
+                    tuple_access.elem_index,
+                    visiting,
+                ) orelse return;
+                try self.propagateDemandedCallableFnMonotypeToValueExpr(
+                    result,
+                    elem_expr.module_idx,
+                    elem_expr.expr_idx,
+                    fn_monotype,
+                    fn_monotype_module_idx,
+                    visiting,
+                );
+            },
+            else => {},
+        }
+    }
+
     fn recordCallResultProcInstsFromProcInst(
         self: *Pass,
         result: *Result,
@@ -3716,6 +4042,21 @@ pub const Pass = struct {
         }
 
         const module_env = self.all_module_envs[module_idx];
+        if (callableKind(module_env.store.getExpr(expr_idx)) != null) {
+            if (try self.materializeCallableExprProcInstInContext(
+                result,
+                context_proc_inst,
+                module_idx,
+                expr_idx,
+            )) |proc_inst_id| {
+                for (out.items) |existing| {
+                    if (existing == proc_inst_id) return;
+                }
+                try out.append(self.allocator, proc_inst_id);
+                return;
+            }
+        }
+
         switch (module_env.store.getExpr(expr_idx)) {
             .e_lookup_local => |lookup| {
                 if (result.getPatternSourceExpr(module_idx, lookup.pattern_idx)) |source| {
@@ -3786,6 +4127,30 @@ pub const Pass = struct {
             },
             else => {},
         }
+    }
+
+    fn materializeCallableExprProcInstInContext(
+        self: *Pass,
+        result: *Result,
+        context_proc_inst: ProcInstId,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) Allocator.Error!?ProcInstId {
+        const template_id = (try self.resolveExprCallableTemplate(result, module_idx, expr_idx)) orelse return null;
+        if (templateRequiresConcreteOwnerProcInst(result, template_id) and context_proc_inst.isNone()) {
+            return null;
+        }
+
+        const saved_proc_inst_context = self.active_proc_inst_context;
+        self.active_proc_inst_context = context_proc_inst;
+        defer self.active_proc_inst_context = saved_proc_inst_context;
+
+        const fn_monotype = try self.resolveExprMonotypeIfMonomorphizableResolved(result, module_idx, expr_idx);
+        if (fn_monotype.isNone()) return null;
+
+        const proc_inst_id = try self.ensureProcInst(result, template_id, fn_monotype.idx, fn_monotype.module_idx);
+        try self.recordExprProcInst(result, context_proc_inst, module_idx, expr_idx, proc_inst_id);
+        return proc_inst_id;
     }
 
     fn appendDispatchActualArgs(
@@ -7129,6 +7494,7 @@ pub const Pass = struct {
                 );
             },
             .e_if => |if_expr| {
+                try self.recordDemandedValueExprProcInsts(result, module_idx, expr_idx, proc_inst_ids);
                 for (module_env.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
                     const branch = module_env.store.getIfBranch(branch_idx);
                     try self.propagateDemandedProcInstsToValueExpr(result, module_idx, branch.body, proc_inst_ids, visiting);
@@ -7136,19 +7502,39 @@ pub const Pass = struct {
                 try self.propagateDemandedProcInstsToValueExpr(result, module_idx, if_expr.final_else, proc_inst_ids, visiting);
             },
             .e_match => |match_expr| {
+                try self.recordDemandedValueExprProcInsts(result, module_idx, expr_idx, proc_inst_ids);
                 for (module_env.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
                     const branch = module_env.store.getMatchBranch(branch_idx);
                     try self.propagateDemandedProcInstsToValueExpr(result, module_idx, branch.value, proc_inst_ids, visiting);
                 }
             },
-            .e_block => |block_expr| try self.propagateDemandedProcInstsToValueExpr(result, module_idx, block_expr.final_expr, proc_inst_ids, visiting),
-            .e_dbg => |dbg_expr| try self.propagateDemandedProcInstsToValueExpr(result, module_idx, dbg_expr.expr, proc_inst_ids, visiting),
-            .e_expect => |expect_expr| try self.propagateDemandedProcInstsToValueExpr(result, module_idx, expect_expr.body, proc_inst_ids, visiting),
-            .e_return => |return_expr| try self.propagateDemandedProcInstsToValueExpr(result, module_idx, return_expr.expr, proc_inst_ids, visiting),
-            .e_nominal => |nominal_expr| try self.propagateDemandedProcInstsToValueExpr(result, module_idx, nominal_expr.backing_expr, proc_inst_ids, visiting),
-            .e_nominal_external => |nominal_expr| try self.propagateDemandedProcInstsToValueExpr(result, module_idx, nominal_expr.backing_expr, proc_inst_ids, visiting),
+            .e_block => |block_expr| {
+                try self.recordDemandedValueExprProcInsts(result, module_idx, expr_idx, proc_inst_ids);
+                try self.propagateDemandedProcInstsToValueExpr(result, module_idx, block_expr.final_expr, proc_inst_ids, visiting);
+            },
+            .e_dbg => |dbg_expr| {
+                try self.recordDemandedValueExprProcInsts(result, module_idx, expr_idx, proc_inst_ids);
+                try self.propagateDemandedProcInstsToValueExpr(result, module_idx, dbg_expr.expr, proc_inst_ids, visiting);
+            },
+            .e_expect => |expect_expr| {
+                try self.recordDemandedValueExprProcInsts(result, module_idx, expr_idx, proc_inst_ids);
+                try self.propagateDemandedProcInstsToValueExpr(result, module_idx, expect_expr.body, proc_inst_ids, visiting);
+            },
+            .e_return => |return_expr| {
+                try self.recordDemandedValueExprProcInsts(result, module_idx, expr_idx, proc_inst_ids);
+                try self.propagateDemandedProcInstsToValueExpr(result, module_idx, return_expr.expr, proc_inst_ids, visiting);
+            },
+            .e_nominal => |nominal_expr| {
+                try self.recordDemandedValueExprProcInsts(result, module_idx, expr_idx, proc_inst_ids);
+                try self.propagateDemandedProcInstsToValueExpr(result, module_idx, nominal_expr.backing_expr, proc_inst_ids, visiting);
+            },
+            .e_nominal_external => |nominal_expr| {
+                try self.recordDemandedValueExprProcInsts(result, module_idx, expr_idx, proc_inst_ids);
+                try self.propagateDemandedProcInstsToValueExpr(result, module_idx, nominal_expr.backing_expr, proc_inst_ids, visiting);
+            },
             .e_dot_access => |dot_expr| {
                 if (dot_expr.args != null) return;
+                try self.recordDemandedValueExprProcInsts(result, module_idx, expr_idx, proc_inst_ids);
                 const field_expr = try self.resolveRecordFieldExpr(
                     result,
                     module_idx,
@@ -7166,6 +7552,7 @@ pub const Pass = struct {
                 );
             },
             .e_tuple_access => |tuple_access| {
+                try self.recordDemandedValueExprProcInsts(result, module_idx, expr_idx, proc_inst_ids);
                 const elem_expr = try self.resolveTupleElemExpr(
                     result,
                     module_idx,
@@ -7183,6 +7570,34 @@ pub const Pass = struct {
             },
             else => {},
         }
+    }
+
+    fn recordDemandedValueExprProcInsts(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        proc_inst_ids: []const ProcInstId,
+    ) Allocator.Error!void {
+        if (proc_inst_ids.len == 0) return;
+        if (proc_inst_ids.len == 1) {
+            try self.recordExprProcInst(
+                result,
+                self.active_proc_inst_context,
+                module_idx,
+                expr_idx,
+                proc_inst_ids[0],
+            );
+            return;
+        }
+
+        try self.recordExprProcInstSet(
+            result,
+            self.active_proc_inst_context,
+            module_idx,
+            expr_idx,
+            proc_inst_ids,
+        );
     }
 
     fn resolveRecordFieldExpr(
@@ -8119,8 +8534,8 @@ pub const Pass = struct {
 
         if (std.debug.runtime_safety) {
             std.debug.panic(
-                "Monomorphize: record field '{s}' missing from monotype",
-                .{self.all_module_envs[template_module_idx].getIdent(field_name)},
+                "Monomorphize: record field '{s}' missing from monotype (template_module={d}, mono_module={d})",
+                .{ self.all_module_envs[template_module_idx].getIdent(field_name), template_module_idx, mono_module_idx },
             );
         }
         unreachable;
@@ -8149,8 +8564,8 @@ pub const Pass = struct {
 
         if (std.debug.runtime_safety) {
             std.debug.panic(
-                "Monomorphize: record field '{s}' missing from monotype",
-                .{self.all_module_envs[template_module_idx].getIdent(field_name)},
+                "Monomorphize: record field '{s}' missing from monotype (template_module={d}, mono_module={d})",
+                .{ self.all_module_envs[template_module_idx].getIdent(field_name), template_module_idx, mono_module_idx },
             );
         }
         unreachable;
