@@ -1772,6 +1772,15 @@ pub fn checkPlatformRequirements(
         }
         // Note: If the export is not found, the canonicalizer should have already reported an error
     }
+
+    // Process any deferred static dispatch constraints that arose from unifying
+    // platform types with app types. Without this, constraints on app expressions
+    // (e.g., method calls like `args.drop_first(1)`) whose receiver types are only
+    // resolved by platform requirements would never get their dispatch targets set,
+    // causing panics during MIR lowering.
+    if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
+        try self.checkStaticDispatchConstraints(&env, false);
+    }
 }
 
 /// Find a type alias declaration by name and return the var for its underlying type.
@@ -6292,6 +6301,12 @@ pub fn finalizeNumericDefaults(self: *Self) std.mem.Allocator.Error!void {
     var env = try self.env_pool.acquire();
     defer self.env_pool.release(env);
     try self.finalizeNumericDefaultsInternal(&env);
+
+    // After finalizing numeric defaults, resolve any remaining deferred
+    // static dispatch constraints (e.g., Dec.plus, Dec.to_str).
+    if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
+        try self.checkStaticDispatchConstraints(&env, true);
+    }
 }
 
 fn finalizeNumericDefaultsInternal(self: *Self, env: *Env) std.mem.Allocator.Error!void {
