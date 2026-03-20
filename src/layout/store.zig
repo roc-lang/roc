@@ -1,7 +1,6 @@
 //! Stores Layout values by index.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const tracy = @import("tracy");
 const base = @import("base");
 const types = @import("types");
@@ -79,9 +78,6 @@ pub const Store = struct {
 
     // Cache to avoid duplicate work - keyed by (module_idx, var) for cross-module correctness
     layouts_by_module_var: std.AutoHashMap(ModuleVarKey, Idx),
-
-    // Stable abstract layout parameters keyed by the unresolved type variable they represent.
-    param_layouts_by_module_var: std.AutoHashMap(ModuleVarKey, Idx),
 
     // Structural interning cache for non-scalar layouts. Keys are canonical
     // binary encodings of layout shape.
@@ -232,7 +228,6 @@ pub const Store = struct {
             .tag_union_variants = tag_union_variants,
             .tag_union_data = tag_union_data,
             .layouts_by_module_var = std.AutoHashMap(ModuleVarKey, Idx).init(allocator),
-            .param_layouts_by_module_var = std.AutoHashMap(ModuleVarKey, Idx).init(allocator),
             .interned_layouts = std.StringHashMap(Idx).init(allocator),
             .interned_recursive_graphs = std.StringHashMap(Idx).init(allocator),
             .scratch_intern_key = .empty,
@@ -295,22 +290,6 @@ pub const Store = struct {
         self.mutable_env = env;
     }
 
-    pub fn ensureParamLayout(self: *Self, module_idx: u32, var_: types.Var) std.mem.Allocator.Error!Idx {
-        const key = ModuleVarKey{ .module_idx = module_idx, .var_ = var_ };
-        if (self.param_layouts_by_module_var.get(key)) |existing| return existing;
-
-        const next_param_id = self.param_layouts_by_module_var.count();
-        if (builtin.mode == .Debug and next_param_id > std.math.maxInt(@FieldType(layout_mod.ParamLayout, "id"))) {
-            std.debug.panic("layout param id overflow for module={d} var={d}", .{ module_idx, @intFromEnum(var_) });
-        }
-
-        const layout_idx = try self.insertLayout(Layout.param(.{
-            .id = @intCast(next_param_id),
-        }));
-        try self.param_layouts_by_module_var.put(key, layout_idx);
-        return layout_idx;
-    }
-
     pub fn deinit(self: *Self) void {
         self.layouts.deinit(self.allocator);
         self.tuple_elems.deinit(self.allocator);
@@ -319,7 +298,6 @@ pub const Store = struct {
         self.tag_union_variants.deinit(self.allocator);
         self.tag_union_data.deinit(self.allocator);
         self.layouts_by_module_var.deinit();
-        self.param_layouts_by_module_var.deinit();
         var interned_keys = self.interned_layouts.keyIterator();
         while (interned_keys.next()) |key_ptr| {
             self.allocator.free(key_ptr.*);
@@ -424,10 +402,6 @@ pub const Store = struct {
     fn buildExistingLayoutInternKey(self: *Self, layout: Layout) std.mem.Allocator.Error!void {
         switch (layout.tag) {
             .scalar => unreachable,
-            .param => {
-                try self.startInternKey(.param);
-                try self.appendInternKeyValue(layout.data.param.id);
-            },
             .zst => try self.startInternKey(.zst),
             .box => {
                 try self.startInternKey(.box);
@@ -1493,12 +1467,6 @@ pub const Store = struct {
                     .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(target_usize.size())),
                 },
             },
-            .param => {
-                if (builtin.mode == .Debug) {
-                    std.debug.panic("layoutSizeAlign: abstract layout param has no concrete size/alignment", .{});
-                }
-                unreachable;
-            },
             .box, .box_of_zst => .{
                 .size = @intCast(target_usize.size()), // a Box is just a pointer to refcounted memory
                 .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(target_usize.size())),
@@ -1553,12 +1521,6 @@ pub const Store = struct {
             .scalar => switch (l.data.scalar.tag) {
                 .str => true,
                 else => false,
-            },
-            .param => {
-                if (builtin.mode == .Debug) {
-                    std.debug.panic("layoutContainsRefcounted: abstract layout param requires explicit RC metadata", .{});
-                }
-                unreachable;
             },
             .list, .list_of_zst => true,
             .box, .box_of_zst => true,
@@ -2850,8 +2812,21 @@ pub const Store = struct {
                             break :blk Layout.default_num();
                         }
 
-                        const param_layout_idx = try self.ensureParamLayout(self.current_module_idx, current.var_);
-                        break :blk self.getLayout(param_layout_idx);
+                        // By the time we ask the layout store for a non-numeric unresolved type
+                        // variable, the only legitimate survivors are zero-sized cases whose
+                        // runtime representation is fully determined without ever materializing
+                        // the abstract type variable itself. Examples include empty-list element
+                        // vars, phantom-only values, and aggregates whose remaining unresolved
+                        // pieces are all representationless. Those must collapse to ZST here so
+                        // layout never grows its own shadow "abstract layout param" notion.
+                        //
+                        // If an earlier compiler bug lets a representationful unresolved type
+                        // variable reach this point, collapsing it to ZST is still not ideal.
+                        // However, keeping a polymorphic placeholder in the runtime-layout layer
+                        // is worse: layout is supposed to describe concrete representation, and
+                        // inventing a first-class abstract layout variant only obscures the real
+                        // invariant violation upstream.
+                        break :blk Layout.zst();
                     },
                     .rigid => |rigid| blk: {
                         // Only look up in TypeScope if we're doing cross-module resolution.
@@ -2902,8 +2877,10 @@ pub const Store = struct {
                             break :blk Layout.default_num();
                         }
 
-                        const param_layout_idx = try self.ensureParamLayout(self.current_module_idx, current.var_);
-                        break :blk self.getLayout(param_layout_idx);
+                        // Same rationale as the unresolved flex-var case above: by the time a
+                        // non-numeric rigid reaches the layout layer, the only valid survivors
+                        // are representationless/ZST cases.
+                        break :blk Layout.zst();
                     },
                     .alias => |alias| {
                         // Follow the alias by updating the work item

@@ -512,7 +512,7 @@ fn registerSpecializedMonotypeLayout(
     const layout_val = self.layout_store.getLayout(layout_idx);
 
     switch (monotype) {
-        .recursive_placeholder, .unit, .prim, .param => {},
+        .recursive_placeholder, .unit, .prim => {},
         .func => {},
         .box => |b| {
             if (layout_val.tag == .box) {
@@ -626,17 +626,7 @@ fn retStmtForExpr(self: *Self, expr_id: LirExprId) Allocator.Error!CFStmtId {
 }
 
 fn verifyFunctionLayouts(self: *Self, _: LirExprId) void {
-    var i: usize = 0;
-    const count = self.lir_store.exprCount();
-    while (i < count) : (i += 1) {
-        const expr_id: LirExprId = @enumFromInt(@as(u32, @intCast(i)));
-        const expr = self.lir_store.getExpr(expr_id);
-        switch (expr) {
-            .proc_call => {},
-            .lookup => {},
-            else => {},
-        }
-    }
+    _ = self;
 }
 
 fn runtimeTupleLayoutFromExprs(self: *Self, mir_expr_ids: []const MIR.ExprId) Allocator.Error!layout.Idx {
@@ -2235,7 +2225,7 @@ fn tagDiscriminant(self: *const Self, tag_name: Ident.Idx, union_mono_idx: Monot
             }
             unreachable;
         },
-        .param, .prim, .unit, .record, .tuple, .list, .box, .func, .recursive_placeholder => {
+        .prim, .unit, .record, .tuple, .list, .box, .func, .recursive_placeholder => {
             if (builtin.mode == .Debug) {
                 std.debug.panic(
                     "tagDiscriminant expected tag_union; got {s} for tag ident idx {d} mono_idx={d}",
@@ -3353,7 +3343,7 @@ fn lowerProcWithParamLayouts(
     }
     const func_args = switch (monotype) {
         .func => |f| self.mir_store.monotype_store.getIdxSpan(f.args),
-        .param, .prim, .unit, .record, .tuple, .tag_union, .list, .box, .recursive_placeholder => unreachable,
+        .prim, .unit, .record, .tuple, .tag_union, .list, .box, .recursive_placeholder => unreachable,
     };
     const expected_param_len = func_args.len + @intFromBool(!proc.captures_param.isNone());
     if (builtin.mode == .Debug and expected_param_len != param_layouts.len) {
@@ -3472,7 +3462,7 @@ fn lowerProcWithParamLayouts(
             try self.registerSpecializedMonotypeLayout(f.ret, inferred, &saved_monotype_layouts);
             break :blk inferred;
         },
-        .param, .prim, .unit, .record, .tuple, .tag_union, .list, .box, .recursive_placeholder => unreachable, // Proc expressions always have .func monotype
+        .prim, .unit, .record, .tuple, .tag_union, .list, .box, .recursive_placeholder => unreachable, // Proc expressions always have .func monotype
     };
 
     var lir_body = if (proc.hosted) |hosted|
@@ -3940,7 +3930,6 @@ fn monotypesStructurallyEqualRec(
     return switch (lhs_mono) {
         .recursive_placeholder => unreachable,
         .unit => true,
-        .param => |param| param.module_idx == rhs_mono.param.module_idx and param.var_ == rhs_mono.param.var_,
         .prim => |p| p == rhs_mono.prim,
         .list => |l| try self.monotypesStructurallyEqualRec(l.elem, rhs_mono.list.elem, seen),
         .box => |b| try self.monotypesStructurallyEqualRec(b.inner, rhs_mono.box.inner, seen),
@@ -4669,15 +4658,6 @@ fn adaptValueLayout(
         .record => |record| self.adaptRecordValueLayout(value_expr, record, source_layout, target_layout, region),
         .tuple => |tuple| self.adaptTupleValueLayout(value_expr, tuple, source_layout, target_layout, region),
         .func => self.adaptLayoutByStructure(value_expr, source_layout, target_layout, region),
-        .param => {
-            if (builtin.mode == .Debug) {
-                std.debug.panic(
-                    "MirToLir invariant violated: abstract param layout adaptation requested mono_idx={d} source_layout={} target_layout={}",
-                    .{ @intFromEnum(mono_idx), source_layout, target_layout },
-                );
-            }
-            unreachable;
-        },
         .prim, .unit, .tag_union, .list, .box, .recursive_placeholder => value_expr,
     };
 }
@@ -5229,11 +5209,6 @@ fn runtimeLayoutForBindingSymbol(
 }
 
 /// Returns whether this MIR monotype may carry a runtime function value.
-///
-/// For fully concrete monotypes this is exact. For `.param` monotypes the
-/// answer is conservative by design: an abstract type parameter may legally
-/// instantiate to a function-valued type, so it must stay on the runtime-layout
-/// path instead of being treated like definitely non-callable data.
 fn monotypeMayContainFunctionValue(self: *Self, mono_idx: Monotype.Idx) Allocator.Error!bool {
     var visited = std.AutoHashMap(u32, void).init(self.allocator);
     defer visited.deinit();
@@ -5251,7 +5226,6 @@ fn monotypeMayContainFunctionValueInner(
 
     return switch (self.mir_store.monotype_store.getMonotype(mono_idx)) {
         .func => true,
-        .param => true,
         .record => |record| blk: {
             const fields = self.mir_store.monotype_store.getFields(record.fields);
             for (fields) |field| {
@@ -5685,7 +5659,7 @@ fn lowerPatternInternal(
             const list_monotype = self.mir_store.monotype_store.getMonotype(mono_idx);
             const elem_layout = switch (list_monotype) {
                 .list => |l| try self.layoutFromMonotype(l.elem),
-                .param, .prim, .unit, .record, .tuple, .tag_union, .box, .func, .recursive_placeholder => unreachable,
+                .prim, .unit, .record, .tuple, .tag_union, .box, .func, .recursive_placeholder => unreachable,
             };
             const all_patterns = self.mir_store.getPatternSpan(ld.patterns);
             const has_rest = !ld.rest_index.isNone();

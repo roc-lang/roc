@@ -47,16 +47,6 @@ fn packExprSourceKey(module_idx: u32, expr_idx: CIR.Expr.Idx) u64 {
     return packCallableSourceKey(.expr, module_idx, @intFromEnum(expr_idx));
 }
 
-fn hasNumeralConstraint(types_store: *const types.Store, constraints: types.StaticDispatchConstraint.SafeList.Range) bool {
-    for (types_store.sliceStaticDispatchConstraints(constraints)) |constraint| {
-        switch (constraint.origin) {
-            .from_numeral, .desugared_binop, .desugared_unaryop => return true,
-            .method_call, .where_clause => {},
-        }
-    }
-    return false;
-}
-
 /// Identifies a semantic callable template before monomorphic instantiation.
 pub const ProcTemplateId = enum(u32) {
     _,
@@ -2275,7 +2265,16 @@ pub const Pass = struct {
         const template_id = resolved_template_id orelse {
             switch (callee_expr) {
                 .e_lookup_local, .e_lookup_external, .e_lookup_required => {
-                    if (std.debug.runtime_safety and self.active_proc_inst_context.isNone()) {
+                    if (self.active_bindings != null and !desired_fn_monotype.isNone()) {
+                        try self.bindCurrentCallFromFnMonotype(
+                            result,
+                            module_idx,
+                            call_expr_idx,
+                            call_expr,
+                            desired_fn_monotype.idx,
+                            desired_fn_monotype.module_idx,
+                        );
+                    } else if (std.debug.runtime_safety and self.active_proc_inst_context.isNone()) {
                         std.debug.panic(
                             "Monomorphize missing direct-callee template for expr={d} module={d} callee_expr={d} tag={s}",
                             .{
@@ -3089,6 +3088,48 @@ pub const Pass = struct {
         try self.recordCurrentExprMonotype(result, module_idx, call_expr_idx, fn_mono.ret, proc_inst.fn_monotype_module_idx);
     }
 
+    fn bindCurrentCallFromFnMonotype(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        call_expr_idx: CIR.Expr.Idx,
+        call_expr: anytype,
+        fn_monotype: Monotype.Idx,
+        fn_monotype_module_idx: u32,
+    ) Allocator.Error!void {
+        const fn_mono = switch (result.monotype_store.getMonotype(fn_monotype)) {
+            .func => |func| func,
+            else => return,
+        };
+
+        try self.bindCurrentCallableExprTypeRoot(
+            result,
+            module_idx,
+            call_expr.func,
+            fn_monotype,
+            fn_monotype_module_idx,
+        );
+        try self.recordCurrentExprMonotype(
+            result,
+            module_idx,
+            call_expr.func,
+            fn_monotype,
+            fn_monotype_module_idx,
+        );
+
+        const arg_exprs = self.all_module_envs[module_idx].store.sliceExpr(call_expr.args);
+        const param_monos = result.monotype_store.getIdxSpan(fn_mono.args);
+        if (arg_exprs.len != param_monos.len) return;
+
+        for (arg_exprs, param_monos) |arg_expr_idx, param_mono| {
+            try self.bindCurrentExprTypeRoot(result, module_idx, arg_expr_idx, param_mono, fn_monotype_module_idx);
+            try self.recordCurrentExprMonotype(result, module_idx, arg_expr_idx, param_mono, fn_monotype_module_idx);
+        }
+
+        try self.bindCurrentExprTypeRoot(result, module_idx, call_expr_idx, fn_mono.ret, fn_monotype_module_idx);
+        try self.recordCurrentExprMonotype(result, module_idx, call_expr_idx, fn_mono.ret, fn_monotype_module_idx);
+    }
+
     fn appendDispatchActualArgs(
         self: *Pass,
         module_idx: u32,
@@ -3282,6 +3323,35 @@ pub const Pass = struct {
             bindings,
             &ordered_entries,
             ModuleEnv.varFrom(expr_idx),
+            monotype,
+            monotype_module_idx,
+        );
+    }
+
+    fn bindCurrentCallableExprTypeRoot(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        monotype: Monotype.Idx,
+        monotype_module_idx: u32,
+    ) Allocator.Error!void {
+        const bindings = self.active_bindings orelse return;
+        const module_env = self.all_module_envs[module_idx];
+        const type_root = switch (module_env.store.getExpr(expr_idx)) {
+            .e_lookup_local => |lookup| ModuleEnv.varFrom(lookup.pattern_idx),
+            else => ModuleEnv.varFrom(expr_idx),
+        };
+
+        var ordered_entries = std.ArrayList(TypeSubstEntry).empty;
+        defer ordered_entries.deinit(self.allocator);
+        try self.bindTypeVarMonotypes(
+            result,
+            module_idx,
+            &module_env.types,
+            bindings,
+            &ordered_entries,
+            type_root,
             monotype,
             monotype_module_idx,
         );
@@ -5161,7 +5231,6 @@ pub const Pass = struct {
         switch (mono) {
             .unit => return result.monotype_store.unit_idx,
             .prim => |prim| return result.monotype_store.primIdx(prim),
-            .param => |param| return try result.monotype_store.addMonotype(self.allocator, .{ .param = param }),
             .recursive_placeholder => {
                 if (builtin.mode == .Debug) {
                     std.debug.panic("remapMonotypeBetweenModules: unexpected recursive_placeholder", .{});
@@ -5175,7 +5244,6 @@ pub const Pass = struct {
         try remapped.put(monotype, placeholder);
 
         const mapped_mono: Monotype.Monotype = switch (mono) {
-            .param => |param| .{ .param = param },
             .list => |list_mono| .{ .list = .{
                 .elem = try self.remapMonotypeBetweenModulesRec(
                     result,
@@ -5926,7 +5994,7 @@ pub const Pass = struct {
         if (monotype.isNone()) return;
 
         switch (result.monotype_store.getMonotype(monotype)) {
-            .unit, .prim, .param => {},
+            .unit, .prim => {},
             .list => |list_mono| try self.resolveStrInspektHelperProcInstsForMonotype(result, module_idx, list_mono.elem),
             .box => |box_mono| {
                 try self.ensureBuiltinBoxUnboxProcInst(result, module_idx, monotype, box_mono.inner);
@@ -8808,7 +8876,6 @@ pub const Pass = struct {
         return switch (lhs_mono) {
             .recursive_placeholder => unreachable,
             .unit => true,
-            .param => |lhs_param| lhs_param.module_idx == rhs_mono.param.module_idx and lhs_param.var_ == rhs_mono.param.var_,
             .prim => |lhs_prim| lhs_prim == rhs_mono.prim,
             .list => |lhs_list| try self.monotypesStructurallyEqualRec(result, lhs_list.elem, rhs_mono.list.elem, seen),
             .box => |lhs_box| try self.monotypesStructurallyEqualRec(result, lhs_box.inner, rhs_mono.box.inner, seen),
@@ -8890,7 +8957,6 @@ pub const Pass = struct {
         return switch (lhs_mono) {
             .recursive_placeholder => unreachable,
             .unit => true,
-            .param => |lhs_param| lhs_param.module_idx == rhs_mono.param.module_idx and lhs_param.var_ == rhs_mono.param.var_,
             .prim => |lhs_prim| lhs_prim == rhs_mono.prim,
             .list => |lhs_list| try self.monotypesStructurallyEqualAcrossModulesRec(
                 result,

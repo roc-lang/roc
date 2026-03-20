@@ -456,7 +456,6 @@ fn remapMonotypeBetweenModulesRec(
     switch (mono) {
         .unit => return self.store.monotype_store.unit_idx,
         .prim => |prim| return self.store.monotype_store.primIdx(prim),
-        .param => |param| return try self.store.monotype_store.addMonotype(self.allocator, .{ .param = param }),
         .recursive_placeholder => {
             if (builtin.mode == .Debug) {
                 std.debug.panic("remapMonotypeBetweenModules: unexpected recursive_placeholder", .{});
@@ -470,7 +469,6 @@ fn remapMonotypeBetweenModulesRec(
     try remapped.put(monotype, placeholder);
 
     const mapped_mono: Monotype.Monotype = switch (mono) {
-        .param => |param| .{ .param = param },
         .list => |list_mono| .{ .list = .{
             .elem = try self.remapMonotypeBetweenModulesRec(
                 list_mono.elem,
@@ -703,7 +701,6 @@ fn importMonotypeFromStoreRec(
     switch (mono) {
         .unit => return self.store.monotype_store.unit_idx,
         .prim => |prim| return self.store.monotype_store.primIdx(prim),
-        .param => |param| return try self.store.monotype_store.addMonotype(self.allocator, .{ .param = param }),
         .recursive_placeholder => {
             if (builtin.mode == .Debug) {
                 std.debug.panic("importMonotypeFromStore: unexpected recursive_placeholder", .{});
@@ -717,7 +714,6 @@ fn importMonotypeFromStoreRec(
     try imported.put(monotype, placeholder);
 
     const mapped_mono: Monotype.Monotype = switch (mono) {
-        .param => |param| .{ .param = param },
         .list => |list_mono| .{ .list = .{
             .elem = try self.importMonotypeFromStoreRec(
                 source_store,
@@ -893,7 +889,7 @@ fn monotypeIsWellFormedRec(
     seen.put(monotype, {}) catch return false;
 
     return switch (self.store.monotype_store.getMonotype(monotype)) {
-        .unit, .prim, .param => true,
+        .unit, .prim => true,
         .recursive_placeholder => false,
         .list => |list_mono| self.monotypeIsWellFormedRec(list_mono.elem, seen),
         .box => |box_mono| self.monotypeIsWellFormedRec(box_mono.inner, seen),
@@ -2327,12 +2323,6 @@ fn lowerStrInspektExprByMonotype(
 ) Allocator.Error!MIR.ExprId {
     const mono = self.store.monotype_store.getMonotype(mono_idx);
     return switch (mono) {
-        .param => {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("lowerStrInspektExprByMonotype reached abstract param mono_idx={d}", .{@intFromEnum(mono_idx)});
-            }
-            unreachable;
-        },
         .prim => |prim| switch (prim) {
             .str => blk: {
                 break :blk try self.store.addExpr(
@@ -3416,7 +3406,6 @@ fn monotypesStructurallyEqualRec(
             unreachable;
         },
         .unit => true,
-        .param => |lhs_param| lhs_param.module_idx == rhs_mono.param.module_idx and lhs_param.var_ == rhs_mono.param.var_,
         .prim => |lhs_prim| lhs_prim == rhs_mono.prim,
         .list => |lhs_list| try self.monotypesStructurallyEqualRec(lhs_list.elem, rhs_mono.list.elem, seen),
         .box => |lhs_box| try self.monotypesStructurallyEqualRec(lhs_box.inner, rhs_mono.box.inner, seen),
@@ -5044,6 +5033,7 @@ fn lowerCall(
     region: Region,
 ) Allocator.Error!MIR.ExprId {
     const callee_expr = module_env.store.getExpr(call.func);
+    const call_low_level_op = self.getCallLowLevelOp(module_env, callee_expr);
     const call_site_proc_inst = self.monomorphization.getCallSiteProcInst(
         self.current_proc_inst_context,
         self.monomorphizationRootExprContext(self.current_proc_inst_context),
@@ -5058,7 +5048,7 @@ fn lowerCall(
             call_expr_idx,
         );
         const callee_template_id = self.monomorphization.getExprProcTemplate(self.current_module_idx, call.func);
-        if (callee_expr == .e_lookup_external and callee_template_id != null) {
+        if (call_low_level_op == null and callee_expr == .e_lookup_external and callee_template_id != null) {
             const rooted_lookup = self.monomorphization.getCallSiteProcInst(
                 self.current_proc_inst_context,
                 self.monomorphizationRootExprContext(self.current_proc_inst_context),
@@ -5091,7 +5081,7 @@ fn lowerCall(
     else
         monotype;
 
-    if (self.getCallLowLevelOp(module_env, callee_expr)) |ll_op| {
+    if (call_low_level_op) |ll_op| {
         if (ll_op == .list_append_unsafe) {
             const arg_exprs = module_env.store.sliceExpr(call.args);
             if (arg_exprs.len == 2) {

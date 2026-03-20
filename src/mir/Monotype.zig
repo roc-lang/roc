@@ -2,9 +2,8 @@
 //!
 //! Monotypes are MIR-visible types with no extensions, no aliases, and no
 //! nominal/opaque/structural distinction. Records, tag unions, and tuples are
-//! just records, tag unions, and tuples. They may still contain explicit
-//! abstract type parameters when a callable is well-typed but not yet fully
-//! concrete.
+//! just records, tag unions, and tuples. MIR is required to stay monomorphic:
+//! non-numeric unresolved type vars must never survive into this IR.
 //!
 //! Each MIR expression has exactly one Monotype via a 1:1 Expr.Idx → Monotype.Idx mapping.
 
@@ -62,13 +61,6 @@ pub const Span = extern struct {
 
 /// A monomorphic type — fully concrete, no type variables, no extensions.
 pub const Monotype = union(enum) {
-    /// An explicit abstract type parameter carried through MIR without
-    /// defaulting to unit/ZST.
-    param: struct {
-        module_idx: u32,
-        var_: types.Var,
-    },
-
     /// Function type: args -> ret
     func: struct {
         args: Span,
@@ -453,19 +445,32 @@ pub const Store = struct {
                 }
                 if (hasNumeralConstraint(types_store, flex.constraints))
                     return self.primIdx(.dec);
-                return try self.addMonotype(allocator, .{ .param = .{
-                    .module_idx = scratches.module_idx orelse unreachable,
-                    .var_ = resolved.var_,
-                } });
+                // MIR must remain monomorphic. By the time we are manufacturing a
+                // MIR-visible type, the only surviving unresolved non-numeric vars
+                // should come from roots whose runtime representation is provably
+                // zero-sized already: empty-list element vars, phantom-only
+                // top-level constants, or larger shapes composed entirely of such
+                // ZST pieces.
+                //
+                // In those cases, collapsing to `unit` is representation-preserving:
+                // there is no runtime data to carry, and later layout lowering can
+                // still produce `.zst`, `.list_of_zst`, or `.box_of_zst` as needed.
+                //
+                // If an earlier compiler bug lets a representationful unresolved
+                // var reach MIR here, this branch will still collapse it to `unit`.
+                // That is not ideal, but carrying polymorphism into MIR is worse:
+                // MIR is explicitly required to be monomorphic. Unfortunately this
+                // branch is also hit by legitimate ZST cases, so there is no useful
+                // debug assert we can place here without rejecting correct programs.
+                return self.unit_idx;
             },
             .rigid => |rigid| {
                 if (lookupNamedSpecialization(scratches, rigid.name)) |specialized| return specialized;
                 if (hasNumeralConstraint(types_store, rigid.constraints))
                     return self.primIdx(.dec);
-                return try self.addMonotype(allocator, .{ .param = .{
-                    .module_idx = scratches.module_idx orelse unreachable,
-                    .var_ = resolved.var_,
-                } });
+                // See the unresolved flex branch above. The same monomorphic-MIR
+                // invariant applies to unresolved rigid vars.
+                return self.unit_idx;
             },
             .alias => |alias| {
                 // Aliases are transparent — follow the backing var

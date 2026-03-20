@@ -12589,15 +12589,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const ls = self.layout_store;
                     const layout_val = ls.getLayout(result_layout);
                     switch (layout_val.tag) {
-                        .param => {
-                            if (builtin.mode == .Debug) {
-                                std.debug.panic(
-                                    "dev codegen reached abstract return layout {} while materializing entrypoint result",
-                                    .{result_layout},
-                                );
-                            }
-                            unreachable;
-                        },
                         .struct_ => {
                             const struct_data = ls.getStructData(layout_val.data.struct_.idx);
                             try self.copyStackToPtr(loc, saved_ptr_reg, struct_data.size);
@@ -14007,15 +13998,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             switch (layout_val.tag) {
-                .param => {
-                    if (builtin.mode == .Debug) {
-                        std.debug.panic(
-                            "dev codegen reached abstract return layout {} in moveToReturnRegisterWithLayout",
-                            .{ret_layout},
-                        );
-                    }
-                    unreachable;
-                },
                 // 3 registers (24 bytes): lists
                 .list, .list_of_zst => {
                     const stack_offset: i32 = switch (loc) {

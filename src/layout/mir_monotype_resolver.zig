@@ -111,9 +111,6 @@ pub const Resolver = struct {
         const resolved_ref: GraphRef = switch (mono) {
             .recursive_placeholder => unreachable,
             .unit => GraphRef{ .canonical = .zst },
-            .param => |param| GraphRef{
-                .canonical = try self.layout_store.ensureParamLayout(param.module_idx, param.var_),
-            },
             .prim => |p| GraphRef{ .canonical = switch (p) {
                 .str => layout.Idx.str,
                 .u8 => layout.Idx.u8,
