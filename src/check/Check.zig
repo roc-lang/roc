@@ -3727,7 +3727,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             _ = try self.unify(expr_var, flex_var, env);
 
             // Record for deferred validation during comptime eval
-            _ = try self.cir.deferred_numeric_literals.append(self.gpa, .{
+            // Use cir.gpa since deferred_numeric_literals belongs to the ModuleEnv
+            _ = try self.cir.deferred_numeric_literals.append(self.cir.gpa, .{
                 .expr_idx = expr_idx,
                 .type_var = flex_var,
                 .constraint = constraint,
@@ -3763,7 +3764,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             _ = try self.unify(expr_var, flex_var, env);
 
             // Record for deferred validation during comptime eval
-            _ = try self.cir.deferred_numeric_literals.append(self.gpa, .{
+            // Use cir.gpa since deferred_numeric_literals belongs to the ModuleEnv
+            _ = try self.cir.deferred_numeric_literals.append(self.cir.gpa, .{
                 .expr_idx = expr_idx,
                 .type_var = flex_var,
                 .constraint = constraint,
