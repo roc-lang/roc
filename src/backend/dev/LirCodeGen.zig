@@ -14250,6 +14250,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .let_stmt => |let_s| {
                     // Evaluate the value
                     const value_loc = try self.generateExpr(let_s.value);
+                    if (value_loc == .noreturn) return;
                     // Bind to pattern
                     try self.bindPattern(let_s.pattern, value_loc);
                     // Continue with next statement
@@ -14313,6 +14314,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .ret => |r| {
                     // Evaluate the return value
                     const value_loc = try self.generateExpr(r.value);
+                    if (value_loc == .noreturn) return;
                     const ret_layout = self.exprLayout(r.value);
                     try self.moveToReturnRegisterWithLayout(value_loc, ret_layout);
                     // Emit jump to shared epilogue (patched after body gen knows actual frame size)
@@ -14322,7 +14324,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 .expr_stmt => |e| {
                     // Evaluate expression for side effects
-                    _ = try self.generateExpr(e.value);
+                    const value_loc = try self.generateExpr(e.value);
+                    if (value_loc == .noreturn) return;
                     // Continue with next
                     try self.generateStmt(e.next);
                 },
@@ -15335,6 +15338,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 for (self.codegen.relocations.items[relocs_before..]) |*reloc| {
                     reloc.adjustOffset(prologue_size_x86);
                 }
+
+                self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size_x86, std.math.maxInt(u64));
+                self.shiftPendingCalls(body_start, body_end, prologue_size_x86);
+                // Re-patch internal calls/addr whose targets are outside the shifted body
+                self.repatchInternalCalls(body_start, body_end, prologue_size_x86, body_start);
+                self.repatchInternalAddrPatches(body_start, body_end, prologue_size_x86, body_start);
 
                 // Patch early return jumps
                 for (self.early_return_patches.items[saved_early_return_patches_len..]) |*patch| {

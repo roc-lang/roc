@@ -1,7 +1,7 @@
 //! Utilities for CLI tests using the actual roc binary.
 
 const std = @import("std");
-var next_cache_dir_id: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+var next_cache_dir_id: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 
 pub const roc_binary_path = if (@import("builtin").os.tag == .windows) ".\\zig-out\\bin\\roc.exe" else "./zig-out/bin/roc";
 

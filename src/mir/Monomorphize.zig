@@ -615,6 +615,8 @@ pub const Pass = struct {
     active_proc_inst_context: ProcInstId,
     active_root_expr_context: ?CIR.Expr.Idx,
     suppress_direct_call_resolution: bool,
+    binding_probe_mode: bool,
+    binding_probe_failed: bool,
 
     pub fn init(
         allocator: Allocator,
@@ -648,6 +650,8 @@ pub const Pass = struct {
             .active_proc_inst_context = .none,
             .active_root_expr_context = null,
             .suppress_direct_call_resolution = false,
+            .binding_probe_mode = false,
+            .binding_probe_failed = false,
         };
     }
 
@@ -2702,36 +2706,33 @@ pub const Pass = struct {
         }
         const proc_inst_id = if (try self.inferDirectCallProcInst(result, module_idx, call_expr_idx, call_expr, template_id)) |proc_inst_id|
             proc_inst_id
-        else blk: {
-            if (desired_fn_monotype.isNone()) {
-                if (std.debug.runtime_safety) {
-                    const template = result.getProcTemplate(template_id);
-                    const template_env = self.all_module_envs[template.module_idx];
-                    const binding_name = if (template.binding_pattern) |binding_pattern|
-                        switch (template_env.store.getPattern(binding_pattern)) {
-                            .assign => |assign_pat| template_env.getIdent(assign_pat.ident),
-                            else => "<non-assign>",
-                        }
-                    else
-                        "<anonymous>";
-                    std.debug.panic(
-                        "Monomorphize unresolved direct callee '{s}' template={d} kind={s} template_module={d} template_expr={d} call_module={d} call_expr={d} context={d} root_expr={d}",
-                        .{
-                            binding_name,
-                            @intFromEnum(template_id),
-                            @tagName(template.kind),
-                            template.module_idx,
-                            @intFromEnum(template.cir_expr),
-                            module_idx,
-                            @intFromEnum(call_expr_idx),
-                            @intFromEnum(self.active_proc_inst_context),
-                            if (self.active_root_expr_context) |root_expr_idx| @intFromEnum(root_expr_idx) else std.math.maxInt(u32),
-                        },
-                    );
-                }
-                return;
+        else {
+            if (desired_fn_monotype.isNone() and std.debug.runtime_safety) {
+                const template = result.getProcTemplate(template_id);
+                const template_env = self.all_module_envs[template.module_idx];
+                const binding_name = if (template.binding_pattern) |binding_pattern|
+                    switch (template_env.store.getPattern(binding_pattern)) {
+                        .assign => |assign_pat| template_env.getIdent(assign_pat.ident),
+                        else => "<non-assign>",
+                    }
+                else
+                    "<anonymous>";
+                std.debug.panic(
+                    "Monomorphize unresolved direct callee '{s}' template={d} kind={s} template_module={d} template_expr={d} call_module={d} call_expr={d} context={d} root_expr={d}",
+                    .{
+                        binding_name,
+                        @intFromEnum(template_id),
+                        @tagName(template.kind),
+                        template.module_idx,
+                        @intFromEnum(template.cir_expr),
+                        module_idx,
+                        @intFromEnum(call_expr_idx),
+                        @intFromEnum(self.active_proc_inst_context),
+                        if (self.active_root_expr_context) |root_expr_idx| @intFromEnum(root_expr_idx) else std.math.maxInt(u32),
+                    },
+                );
             }
-            break :blk try self.ensureProcInstUnscanned(result, template_id, desired_fn_monotype.idx, desired_fn_monotype.module_idx);
+            return;
         };
         try self.finalizeResolvedDirectCallProcInst(
             result,
@@ -3224,6 +3225,19 @@ pub const Pass = struct {
         call_expr: anytype,
         template_id: ProcTemplateId,
     ) Allocator.Error!?ProcInstId {
+        if (try self.directCallContainsErrorType(module_idx, call_expr_idx, call_expr)) {
+            return null;
+        }
+
+        const saved_binding_probe_mode = self.binding_probe_mode;
+        const saved_binding_probe_failed = self.binding_probe_failed;
+        self.binding_probe_mode = true;
+        self.binding_probe_failed = false;
+        defer {
+            self.binding_probe_mode = saved_binding_probe_mode;
+            self.binding_probe_failed = saved_binding_probe_failed;
+        }
+
         const template = result.getProcTemplate(template_id).*;
         const template_env = self.all_module_envs[template.module_idx];
         const template_types = &template_env.types;
@@ -3240,6 +3254,7 @@ pub const Pass = struct {
         defer ordered_entries.deinit(self.allocator);
 
         try self.seedTemplateBindingsFromFnMonotype(result, template, desired_fn_monotype, &callee_bindings);
+        if (self.binding_probe_failed) return null;
 
         if (resolveFuncTypeInStore(template_types, template.type_root)) |resolved_func| {
             const ret_mono = try self.resolveExprMonotypeIfExactResolved(result, module_idx, call_expr_idx);
@@ -3255,6 +3270,7 @@ pub const Pass = struct {
                         ret_mono.idx,
                         ret_mono.module_idx,
                     );
+                    if (self.binding_probe_failed) return null;
                 }
                 var seen: std.AutoHashMapUnmanaged(types.Var, void) = .empty;
                 defer seen.deinit(self.allocator);
@@ -3277,6 +3293,7 @@ pub const Pass = struct {
                         ret_mono.idx,
                         ret_mono.module_idx,
                     );
+                    if (self.binding_probe_failed) return null;
                 }
             }
 
@@ -3307,9 +3324,11 @@ pub const Pass = struct {
                 &ordered_entries,
                 true,
             );
+            if (self.binding_probe_failed) return null;
         }
 
         try self.completeTemplateBindingsFromBody(result, template, &callee_bindings, defining_context_proc_inst);
+        if (self.binding_probe_failed) return null;
 
         var seen: std.AutoHashMapUnmanaged(types.Var, void) = .empty;
         defer seen.deinit(self.allocator);
@@ -3333,7 +3352,232 @@ pub const Pass = struct {
         );
         if (fn_monotype.isNone()) return null;
 
+        if (!try self.procSignatureAcceptsFnMonotype(
+            result,
+            template_id,
+            template,
+            fn_monotype,
+            template.module_idx,
+            defining_context_proc_inst,
+        )) {
+            return null;
+        }
+
         return try self.ensureProcInstUnscanned(result, template_id, fn_monotype, template.module_idx);
+    }
+
+    fn procSignatureAcceptsFnMonotype(
+        self: *Pass,
+        result: *Result,
+        template_id: ProcTemplateId,
+        template: ProcTemplate,
+        fn_monotype: Monotype.Idx,
+        fn_monotype_module_idx: u32,
+        defining_context_proc_inst: ProcInstId,
+    ) Allocator.Error!bool {
+        const saved_binding_probe_mode = self.binding_probe_mode;
+        const saved_binding_probe_failed = self.binding_probe_failed;
+        self.binding_probe_mode = true;
+        self.binding_probe_failed = false;
+        defer {
+            self.binding_probe_mode = saved_binding_probe_mode;
+            self.binding_probe_failed = saved_binding_probe_failed;
+        }
+
+        var signature_bindings = std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype).init(self.allocator);
+        defer signature_bindings.deinit();
+
+        try self.seedProcBodyBindingsFromSignature(
+            result,
+            template.module_idx,
+            template.cir_expr,
+            .{
+                .template = template_id,
+                .subst = TypeSubstId.none,
+                .fn_monotype = fn_monotype,
+                .fn_monotype_module_idx = fn_monotype_module_idx,
+                .defining_context_proc_inst = defining_context_proc_inst,
+            },
+            &signature_bindings,
+        );
+
+        return !self.binding_probe_failed;
+    }
+
+    fn directCallContainsErrorType(
+        self: *Pass,
+        module_idx: u32,
+        call_expr_idx: CIR.Expr.Idx,
+        call_expr: anytype,
+    ) Allocator.Error!bool {
+        const module_env = self.all_module_envs[module_idx];
+        var seen: std.AutoHashMapUnmanaged(types.Var, void) = .empty;
+        defer seen.deinit(self.allocator);
+
+        if (try self.typeVarContainsError(&module_env.types, ModuleEnv.varFrom(call_expr_idx), &seen)) {
+            return true;
+        }
+        if (try self.typeVarContainsError(&module_env.types, ModuleEnv.varFrom(call_expr.func), &seen)) {
+            return true;
+        }
+
+        for (module_env.store.sliceExpr(call_expr.args)) |arg_expr_idx| {
+            if (try self.typeVarContainsError(&module_env.types, ModuleEnv.varFrom(arg_expr_idx), &seen)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    fn typeVarContainsError(
+        self: *Pass,
+        store_types: *const types.Store,
+        var_: types.Var,
+        seen: *std.AutoHashMapUnmanaged(types.Var, void),
+    ) Allocator.Error!bool {
+        const resolved = store_types.resolveVar(var_);
+        if (seen.contains(resolved.var_)) return false;
+        try seen.put(self.allocator, resolved.var_, {});
+
+        return switch (resolved.desc.content) {
+            .err => true,
+            .flex, .rigid => false,
+            .alias => |alias| self.typeVarContainsError(
+                store_types,
+                store_types.getAliasBackingVar(alias),
+                seen,
+            ),
+            .structure => |flat_type| switch (flat_type) {
+                .fn_pure, .fn_effectful, .fn_unbound => |func| blk: {
+                    for (store_types.sliceVars(func.args)) |arg_var| {
+                        if (try self.typeVarContainsError(store_types, arg_var, seen)) break :blk true;
+                    }
+                    break :blk try self.typeVarContainsError(store_types, func.ret, seen);
+                },
+                .nominal_type => |nominal| blk: {
+                    for (store_types.sliceNominalArgs(nominal)) |arg_var| {
+                        if (try self.typeVarContainsError(store_types, arg_var, seen)) break :blk true;
+                    }
+                    break :blk try self.typeVarContainsError(
+                        store_types,
+                        store_types.getNominalBackingVar(nominal),
+                        seen,
+                    );
+                },
+                .record => |record| self.recordTypeContainsError(store_types, record, seen),
+                .record_unbound => |fields_range| self.recordFieldsContainError(
+                    store_types,
+                    store_types.getRecordFieldsSlice(fields_range).items(.var_),
+                    seen,
+                ),
+                .tuple => |tuple| blk: {
+                    for (store_types.sliceVars(tuple.elems)) |elem_var| {
+                        if (try self.typeVarContainsError(store_types, elem_var, seen)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .tag_union => |tag_union| self.tagUnionContainsError(store_types, tag_union, seen),
+                .empty_record, .empty_tag_union => false,
+            },
+        };
+    }
+
+    fn recordFieldsContainError(
+        self: *Pass,
+        store_types: *const types.Store,
+        field_vars: []const types.Var,
+        seen: *std.AutoHashMapUnmanaged(types.Var, void),
+    ) Allocator.Error!bool {
+        for (field_vars) |field_var| {
+            if (try self.typeVarContainsError(store_types, field_var, seen)) return true;
+        }
+        return false;
+    }
+
+    fn recordTypeContainsError(
+        self: *Pass,
+        store_types: *const types.Store,
+        record: types.Record,
+        seen: *std.AutoHashMapUnmanaged(types.Var, void),
+    ) Allocator.Error!bool {
+        var current_row = record;
+
+        rows: while (true) {
+            const fields_slice = store_types.getRecordFieldsSlice(current_row.fields);
+            if (try self.recordFieldsContainError(store_types, fields_slice.items(.var_), seen)) {
+                return true;
+            }
+
+            var ext_var = current_row.ext;
+            while (true) {
+                const ext_resolved = store_types.resolveVar(ext_var);
+                switch (ext_resolved.desc.content) {
+                    .err => return true,
+                    .alias => |alias| {
+                        ext_var = store_types.getAliasBackingVar(alias);
+                        continue;
+                    },
+                    .flex, .rigid => return false,
+                    .structure => |ext_flat| switch (ext_flat) {
+                        .record => |next_row| {
+                            current_row = next_row;
+                            continue :rows;
+                        },
+                        .record_unbound => |fields_range| {
+                            return self.recordFieldsContainError(
+                                store_types,
+                                store_types.getRecordFieldsSlice(fields_range).items(.var_),
+                                seen,
+                            );
+                        },
+                        .empty_record => return false,
+                        else => return false,
+                    },
+                }
+            }
+        }
+    }
+
+    fn tagUnionContainsError(
+        self: *Pass,
+        store_types: *const types.Store,
+        tag_union: types.TagUnion,
+        seen: *std.AutoHashMapUnmanaged(types.Var, void),
+    ) Allocator.Error!bool {
+        var current_row = tag_union;
+
+        rows: while (true) {
+            const tags_slice = store_types.getTagsSlice(current_row.tags);
+            for (tags_slice.items(.args)) |payloads_range| {
+                for (store_types.sliceVars(payloads_range)) |payload_var| {
+                    if (try self.typeVarContainsError(store_types, payload_var, seen)) {
+                        return true;
+                    }
+                }
+            }
+
+            var ext_var = current_row.ext;
+            while (true) {
+                const ext_resolved = store_types.resolveVar(ext_var);
+                switch (ext_resolved.desc.content) {
+                    .err => return true,
+                    .alias => |alias| {
+                        ext_var = store_types.getAliasBackingVar(alias);
+                        continue;
+                    },
+                    .flex, .rigid => return false,
+                    .structure => |ext_flat| switch (ext_flat) {
+                        .tag_union => |next_row| {
+                            current_row = next_row;
+                            continue :rows;
+                        },
+                        .empty_tag_union => return false,
+                        else => return false,
+                    },
+                }
+            }
+        }
     }
 
     fn bindCurrentPatternFromExprIfExact(
@@ -4247,6 +4491,19 @@ pub const Pass = struct {
         const fn_monotype = try self.resolveExprMonotypeIfExactResolved(result, module_idx, expr_idx);
         if (fn_monotype.isNone()) return null;
 
+        const template = result.getProcTemplate(template_id).*;
+        const defining_context_proc_inst = self.resolveTemplateDefiningContextProcInst(result, template);
+        if (!try self.procSignatureAcceptsFnMonotype(
+            result,
+            template_id,
+            template,
+            fn_monotype.idx,
+            fn_monotype.module_idx,
+            defining_context_proc_inst,
+        )) {
+            return null;
+        }
+
         const proc_inst_id = try self.ensureProcInst(result, template_id, fn_monotype.idx, fn_monotype.module_idx);
         try self.recordExprProcInst(result, context_proc_inst, module_idx, expr_idx, proc_inst_id);
         return proc_inst_id;
@@ -4390,6 +4647,17 @@ pub const Pass = struct {
             &callee_bindings,
         );
         if (fn_monotype.isNone()) return null;
+
+        if (!try self.procSignatureAcceptsFnMonotype(
+            result,
+            template_id,
+            template,
+            fn_monotype,
+            template.module_idx,
+            defining_context_proc_inst,
+        )) {
+            return null;
+        }
 
         return try self.ensureProcInstUnscanned(result, template_id, fn_monotype, template.module_idx);
     }
@@ -5658,6 +5926,18 @@ pub const Pass = struct {
             break :blk proc_inst_id;
         } else blk: {
             if (desired_fn_monotype.isNone()) return;
+            const template = result.getProcTemplate(template_id).*;
+            const defining_context_proc_inst = self.resolveTemplateDefiningContextProcInst(result, template);
+            if (!try self.procSignatureAcceptsFnMonotype(
+                result,
+                template_id,
+                template,
+                desired_fn_monotype.idx,
+                desired_fn_monotype.module_idx,
+                defining_context_proc_inst,
+            )) {
+                return;
+            }
             break :blk try self.ensureProcInst(result, template_id, desired_fn_monotype.idx, desired_fn_monotype.module_idx);
         };
         try self.recordLookupExprProcInst(
@@ -8291,6 +8571,13 @@ pub const Pass = struct {
         var iteration_expr_monotypes: std.AutoHashMapUnmanaged(ContextExprKey, ResolvedMonotype) = .empty;
         defer iteration_expr_monotypes.deinit(self.allocator);
 
+        const saved_template_context = self.active_template_context;
+        self.active_template_context = proc_inst.template;
+        defer self.active_template_context = saved_template_context;
+        const saved_proc_inst_context = self.active_proc_inst_context;
+        self.active_proc_inst_context = proc_inst_id;
+        defer self.active_proc_inst_context = saved_proc_inst_context;
+
         try self.seedBindingsForProcInst(result, proc_inst_id, &bindings);
 
         const saved_bindings = self.active_bindings;
@@ -8299,12 +8586,6 @@ pub const Pass = struct {
         const saved_iteration_expr_monotypes = self.active_iteration_expr_monotypes;
         self.active_iteration_expr_monotypes = &iteration_expr_monotypes;
         defer self.active_iteration_expr_monotypes = saved_iteration_expr_monotypes;
-        const saved_template_context = self.active_template_context;
-        self.active_template_context = proc_inst.template;
-        defer self.active_template_context = saved_template_context;
-        const saved_proc_inst_context = self.active_proc_inst_context;
-        self.active_proc_inst_context = proc_inst_id;
-        defer self.active_proc_inst_context = saved_proc_inst_context;
         if (template.binding_pattern) |binding_pattern| {
             try self.recordContextPatternProcInst(
                 result,
@@ -9095,6 +9376,7 @@ pub const Pass = struct {
         monotype: Monotype.Idx,
         mono_module_idx: u32,
     ) Allocator.Error!void {
+        if (self.binding_probe_mode and self.binding_probe_failed) return;
         if (monotype.isNone()) return;
         const normalized_mono = if (mono_module_idx == template_module_idx)
             monotype
@@ -9187,6 +9469,7 @@ pub const Pass = struct {
         monotype: Monotype.Idx,
         mono_module_idx: u32,
     ) Allocator.Error!void {
+        if (self.binding_probe_mode and self.binding_probe_failed) return;
         if (monotype.isNone()) return;
 
         const mono = result.monotype_store.getMonotype(monotype);
@@ -9196,7 +9479,10 @@ pub const Pass = struct {
             .fn_pure, .fn_effectful, .fn_unbound => |func| {
                 const mfunc = switch (mono) {
                     .func => |mfunc| mfunc,
-                    else => unreachable,
+                    else => {
+                        self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                        return;
+                    },
                 };
 
                 const type_args = template_types.sliceVars(func.args);
@@ -9233,7 +9519,10 @@ pub const Pass = struct {
                 if (origin.eql(common_idents.builtin_module) and ident.eql(common_idents.list)) {
                     const mlist = switch (mono) {
                         .list => |mlist| mlist,
-                        else => unreachable,
+                        else => {
+                            self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                            return;
+                        },
                     };
                     const type_args = template_types.sliceNominalArgs(nominal);
                     if (type_args.len != 1) unreachable;
@@ -9253,7 +9542,10 @@ pub const Pass = struct {
                 if (origin.eql(common_idents.builtin_module) and ident.eql(common_idents.box)) {
                     const mbox = switch (mono) {
                         .box => |mbox| mbox,
-                        else => unreachable,
+                        else => {
+                            self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                            return;
+                        },
                     };
                     const type_args = template_types.sliceNominalArgs(nominal);
                     if (type_args.len != 1) unreachable;
@@ -9273,7 +9565,10 @@ pub const Pass = struct {
                 if (origin.eql(common_idents.builtin_module) and builtinPrimForNominal(ident, common_idents) != null) {
                     switch (mono) {
                         .prim => {},
-                        else => unreachable,
+                        else => {
+                            self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                            return;
+                        },
                     }
                     return;
                 }
@@ -9394,7 +9689,10 @@ pub const Pass = struct {
                                     break :rows;
                                 },
                                 .empty_record => break :rows,
-                                else => unreachable,
+                                else => {
+                                    self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                                    return;
+                                },
                             },
                             .flex, .rigid => {
                                 try self.bindRecordRowTail(
@@ -9410,7 +9708,10 @@ pub const Pass = struct {
                                 );
                                 break :rows;
                             },
-                            .err => unreachable,
+                            .err => {
+                                self.bindFlatTypeErrorTail(flat_type, template_module_idx, mono_module_idx, monotype);
+                                return;
+                            },
                         }
                     }
                 }
@@ -9420,9 +9721,13 @@ pub const Pass = struct {
                     .record => |mrec| mrec,
                     .unit => {
                         if (template_types.getRecordFieldsSlice(fields_range).len == 0) return;
-                        unreachable;
+                        self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                        return;
                     },
-                    else => unreachable,
+                    else => {
+                        self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                        return;
+                    },
                 };
                 const fields_slice = template_types.getRecordFieldsSlice(fields_range);
                 const field_names = fields_slice.items(.name);
@@ -9451,7 +9756,10 @@ pub const Pass = struct {
             .tuple => |tuple| {
                 const mtup = switch (mono) {
                     .tuple => |mtup| mtup,
-                    else => unreachable,
+                    else => {
+                        self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                        return;
+                    },
                 };
                 const elem_vars = template_types.sliceVars(tuple.elems);
                 if (elem_vars.len != mtup.elems.len) unreachable;
@@ -9472,7 +9780,10 @@ pub const Pass = struct {
             .tag_union => |tag_union| {
                 const mtag = switch (mono) {
                     .tag_union => |mtag| mtag,
-                    else => unreachable,
+                    else => {
+                        self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                        return;
+                    },
                 };
                 var seen_tag_indices: std.ArrayListUnmanaged(u32) = .empty;
                 defer seen_tag_indices.deinit(self.allocator);
@@ -9518,7 +9829,10 @@ pub const Pass = struct {
                                     continue :rows;
                                 },
                                 .empty_tag_union => break :rows,
-                                else => unreachable,
+                                else => {
+                                    self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                                    return;
+                                },
                             },
                             .flex, .rigid => {
                                 try self.bindTagUnionRowTail(
@@ -9534,20 +9848,87 @@ pub const Pass = struct {
                                 );
                                 break :rows;
                             },
-                            .err => unreachable,
+                            .err => {
+                                self.bindFlatTypeErrorTail(flat_type, template_module_idx, mono_module_idx, monotype);
+                                return;
+                            },
                         }
                     }
                 }
             },
             .empty_record => switch (mono) {
                 .unit, .record => {},
-                else => unreachable,
+                else => {
+                    self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                    return;
+                },
             },
             .empty_tag_union => switch (mono) {
                 .tag_union => {},
-                else => unreachable,
+                else => {
+                    self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                    return;
+                },
             },
         }
+    }
+
+    fn bindFlatTypeMismatch(
+        self: *Pass,
+        flat_type: types.FlatType,
+        mono: Monotype.Monotype,
+        template_module_idx: u32,
+        mono_module_idx: u32,
+        monotype: Monotype.Idx,
+    ) void {
+        if (self.binding_probe_mode) {
+            self.binding_probe_failed = true;
+            return;
+        }
+        if (std.debug.runtime_safety) {
+            std.debug.panic(
+                "Monomorphize bindFlatTypeMonotypes mismatch: flat_type={s} mono={s} template_module={d} mono_module={d} active_template={d} active_proc_inst={d} monotype={d} probe_mode={}",
+                .{
+                    @tagName(flat_type),
+                    @tagName(mono),
+                    template_module_idx,
+                    mono_module_idx,
+                    @intFromEnum(self.active_template_context),
+                    @intFromEnum(self.active_proc_inst_context),
+                    @intFromEnum(monotype),
+                    self.binding_probe_mode,
+                },
+            );
+        }
+        unreachable;
+    }
+
+    fn bindFlatTypeErrorTail(
+        self: *Pass,
+        flat_type: types.FlatType,
+        template_module_idx: u32,
+        mono_module_idx: u32,
+        monotype: Monotype.Idx,
+    ) void {
+        if (self.binding_probe_mode) {
+            self.binding_probe_failed = true;
+            return;
+        }
+        if (std.debug.runtime_safety) {
+            std.debug.panic(
+                "Monomorphize bindFlatTypeMonotypes hit err tail: flat_type={s} template_module={d} mono_module={d} active_template={d} active_proc_inst={d} monotype={d} probe_mode={}",
+                .{
+                    @tagName(flat_type),
+                    template_module_idx,
+                    mono_module_idx,
+                    @intFromEnum(self.active_template_context),
+                    @intFromEnum(self.active_proc_inst_context),
+                    @intFromEnum(monotype),
+                    self.binding_probe_mode,
+                },
+            );
+        }
+        unreachable;
     }
 
     fn resolveExprMonotype(

@@ -9,7 +9,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
-var next_cache_dir_id: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+var next_cache_dir_id: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 
 /// Result of a test execution
 pub const TestResult = enum {
