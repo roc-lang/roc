@@ -16,20 +16,8 @@ handleTry = |result| {
 }
 ~~~
 # EXPECTED
-MODULE NOT FOUND - nominal_external_fully_qualified.md:1:1:1:19
 UNUSED VARIABLE - nominal_external_fully_qualified.md:7:35:7:39
 # PROBLEMS
-**MODULE NOT FOUND**
-The module `MyTryModule` was not found in this Roc project.
-
-You're attempting to use this module here:
-**nominal_external_fully_qualified.md:1:1:1:19:**
-```roc
-import MyTryModule
-```
-^^^^^^^^^^^^^^^^^^
-
-
 **UNUSED VARIABLE**
 Variable `code` is not used anywhere in your code.
 

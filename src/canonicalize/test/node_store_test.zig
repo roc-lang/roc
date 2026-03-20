@@ -453,7 +453,7 @@ test "NodeStore round trip - Expressions" {
     });
     try expressions.append(gpa, CIR.Expr{
         .e_run_low_level = .{
-            .op = .str_is_empty,
+            .op = .str_count_utf8_bytes,
             .args = .{ .span = .{ .start = rand.random().int(u32), .len = rand.random().int(u32) } },
         },
     });

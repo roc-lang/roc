@@ -484,7 +484,7 @@ fn compareFieldNames(
         var found = false;
 
         for (act_names) |act_name_idx| {
-            if (exp_name_idx == act_name_idx) {
+            if (exp_name_idx.eql(act_name_idx)) {
                 found = true;
                 break;
             }
@@ -554,7 +554,7 @@ fn compareTagUnions(
         var found = false;
 
         for (exp_tag_names) |exp_name_idx| {
-            if (act_name_idx == exp_name_idx) {
+            if (act_name_idx.eql(exp_name_idx)) {
                 found = true;
                 break;
             }

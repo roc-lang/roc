@@ -36,6 +36,8 @@ pub const Context = union(enum) {
     if_branch: IfBranchContext,
     /// Pattern in a match branch
     match_pattern: MatchPatternContext,
+    /// Shared binder across alternative patterns in one match branch
+    match_alt_binder: MatchAltBinderContext,
     /// Body of a match branch
     match_branch: MatchBranchContext,
 
@@ -129,6 +131,25 @@ pub const Context = union(enum) {
         num_branches: u32,
         /// Total number of patterns in the branch
         num_patterns: u32,
+        /// The match expression (for source highlighting)
+        match_expr: CIR.Expr.Idx,
+    };
+
+    /// Context for a shared binder that appears in multiple alternative patterns
+    /// within the same match branch but gets incompatible types.
+    pub const MatchAltBinderContext = struct {
+        /// 0-based index of the branch
+        branch_index: u32,
+        /// 0-based index of the first pattern that introduced the binder
+        first_pattern_index: u32,
+        /// 0-based index of the later pattern whose binder mismatched
+        pattern_index: u32,
+        /// Total number of branches
+        num_branches: u32,
+        /// Total number of patterns in the branch
+        num_patterns: u32,
+        /// The shared binder name
+        binder_ident: Ident.Idx,
         /// The match expression (for source highlighting)
         match_expr: CIR.Expr.Idx,
     };

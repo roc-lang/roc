@@ -7,7 +7,7 @@
 const std = @import("std");
 const helpers = @import("helpers.zig");
 const can = @import("can");
-const layout = @import("layout");
+const layout = @import("interpreter_layout");
 const builtins = @import("builtins");
 const eval_mod = @import("../mod.zig");
 const Interpreter = @import("../interpreter.zig").Interpreter;
@@ -680,7 +680,7 @@ test "interpreter: match result tag payload" {
 }
 
 test "interpreter: match record destructures fields" {
-    const roc_src = "match { x: 1, y: 2 } { { x, y } => x + y, _ => 0 }";
+    const roc_src = "match { x: 1, y: 2 } { { x, y } => x + y }";
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
@@ -773,7 +773,7 @@ test "interpreter: match tuple payload tag" {
 }
 
 test "interpreter: match record payload tag" {
-    const roc_src = "match Err({ code: 1, msg: \"boom\" }) { Err({ code, msg }) => code, Ok(_) => 0 }";
+    const roc_src = "match Err({ code: 1, msg: \"boom\" }) { Err({ code, msg: _msg }) => code, Ok(_) => 0 }";
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
@@ -1244,7 +1244,7 @@ test "interpreter: decimal literal renders 0.125" {
 }
 
 test "interpreter: f64 equality True" {
-    //     const roc_src = "3.25f64 == 3.25f64";
+    //     const roc_src = "3.25.F64 == 3.25.F64";
     //     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
@@ -1282,7 +1282,7 @@ test "interpreter: decimal equality True" {
 }
 
 test "interpreter: int and f64 equality True" {
-    //     const roc_src = "1 == 1.0f64";
+    //     const roc_src = "1 == 1.0.F64";
     //     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
@@ -1397,7 +1397,7 @@ test "interpreter: 0.1 + 0.2 yields 0.3" {
 }
 
 test "interpreter: f64 greater-than yields True" {
-    //     const roc_src = "3.5f64 > 1.25f64";
+    //     const roc_src = "3.5.F64 > 1.25.F64";
     //     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
@@ -1435,7 +1435,7 @@ test "interpreter: decimal less-than-or-equal yields True" {
 }
 
 test "interpreter: int and f64 less-than yields True" {
-    //     const roc_src = "1 < 2.0f64";
+    //     const roc_src = "1 < 2.0.F64";
     //     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
@@ -1511,7 +1511,7 @@ test "interpreter: decimal inequality yields False" {
 }
 
 test "interpreter: f64 equality False" {
-    //     const roc_src = "3.25f64 == 4.0f64";
+    //     const roc_src = "3.25.F64 == 4.0.F64";
     //     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
@@ -2016,7 +2016,7 @@ test "dbg: list of integers" {
     // Note: Using list without explicit type annotation since List I64 annotation causes issues
     const roc_src =
         \\{
-        \\    xs = [1i64, 2i64, 3i64]
+        \\    xs = [1.I64, 2.I64, 3.I64]
         \\    dbg xs
         \\    xs
         \\}

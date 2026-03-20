@@ -17,6 +17,29 @@
 
 const std = @import("std");
 
+/// Policy for whether a function frame should establish a dedicated frame pointer.
+pub const FramePointerPolicy = enum {
+    /// Always establish a frame pointer in prologue/epilogue.
+    always,
+    /// Omit frame pointer when no locals or callee-saved slots require frame-relative access.
+    omit_if_possible,
+
+    /// Target-default frame pointer policy.
+    pub fn forTarget(comptime _: anytype) FramePointerPolicy {
+        // Current backend policy is explicit and centralized:
+        // all supported targets always use a frame pointer today.
+        return .always;
+    }
+
+    /// Resolve whether this function must establish a frame pointer.
+    pub fn usesFramePointer(self: FramePointerPolicy, stack_size: u32, callee_saved_mask: u32) bool {
+        return switch (self) {
+            .always => true,
+            .omit_if_possible => stack_size > 0 or callee_saved_mask != 0,
+        };
+    }
+};
+
 /// DeferredFrameBuilder - For the mask-based pattern where body is generated first.
 ///
 /// Used when you don't know which callee-saved registers will be used until
@@ -64,8 +87,8 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
         /// This does NOT include space for callee-saved registers.
         stack_size: u32 = 0,
 
-        /// Whether to use frame pointer. Always true for now.
-        use_frame_pointer: bool = true,
+        /// Frame-pointer strategy for this function.
+        frame_pointer_policy: FramePointerPolicy = FramePointerPolicy.forTarget(roc_target),
 
         /// Computed values (set by emitPrologue, used by emitEpilogue)
         actual_stack_alloc: u32 = 0,
@@ -86,9 +109,21 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
             self.stack_size = size;
         }
 
+        /// Override the frame-pointer strategy for this function.
+        pub fn setFramePointerPolicy(self: *Self, policy: FramePointerPolicy) void {
+            self.frame_pointer_policy = policy;
+        }
+
+        /// Whether this frame must establish a frame pointer.
+        pub fn usesFramePointer(self: *const Self) bool {
+            return self.frame_pointer_policy.usesFramePointer(self.stack_size, self.callee_saved_mask);
+        }
+
         /// Calculate the prologue size without emitting.
         /// Useful for deferred prologue pattern where body is generated first.
         pub fn calculatePrologueSize(self: *const Self) u32 {
+            if (!self.usesFramePointer()) return 0;
+
             if (is_x86_64) {
                 return self.calculatePrologueSizeX86_64();
             } else if (is_aarch64) {
@@ -101,6 +136,11 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
         /// Emit function prologue.
         /// Returns the initial stack_offset for use with stack slot allocation.
         pub fn emitPrologue(self: *Self, emit: *EmitType) !i32 {
+            if (!self.usesFramePointer()) {
+                self.actual_stack_alloc = 0;
+                return 0;
+            }
+
             if (is_x86_64) {
                 return self.emitPrologueX86_64(emit);
             } else if (is_aarch64) {
@@ -112,6 +152,11 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
 
         /// Emit function epilogue.
         pub fn emitEpilogue(self: *Self, emit: *EmitType) !void {
+            if (!self.usesFramePointer()) {
+                try emit.ret();
+                return;
+            }
+
             if (is_x86_64) {
                 return self.emitEpilogueX86_64(emit);
             } else if (is_aarch64) {
@@ -757,6 +802,47 @@ test "DeferredFrameBuilder basic prologue/epilogue x86_64" {
     try std.testing.expect(emit.buf.items.len > 10);
 
     // Check for push rbp (0x55)
+    try std.testing.expectEqual(@as(u8, 0x55), emit.buf.items[0]);
+}
+
+test "DeferredFrameBuilder omit_if_possible skips empty frame x86_64" {
+    const Emit = x86_64.LinuxEmit;
+    const Builder = DeferredFrameBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var frame = Builder.init();
+    frame.setFramePointerPolicy(.omit_if_possible);
+    frame.setStackSize(0);
+    frame.setCalleeSavedMask(0);
+
+    try std.testing.expect(!frame.usesFramePointer());
+    try std.testing.expectEqual(@as(u32, 0), frame.calculatePrologueSize());
+
+    _ = try frame.emitPrologue(&emit);
+    try frame.emitEpilogue(&emit);
+
+    // No prologue emitted; epilogue is just `ret`.
+    try std.testing.expectEqual(@as(usize, 1), emit.buf.items.len);
+    try std.testing.expectEqual(@as(u8, 0xC3), emit.buf.items[0]);
+}
+
+test "DeferredFrameBuilder omit_if_possible keeps frame when needed x86_64" {
+    const Emit = x86_64.LinuxEmit;
+    const Builder = DeferredFrameBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var frame = Builder.init();
+    frame.setFramePointerPolicy(.omit_if_possible);
+    frame.setStackSize(16);
+
+    try std.testing.expect(frame.usesFramePointer());
+    _ = try frame.emitPrologue(&emit);
+
+    // Prologue starts with push rbp when frame pointer is used.
     try std.testing.expectEqual(@as(u8, 0x55), emit.buf.items[0]);
 }
 

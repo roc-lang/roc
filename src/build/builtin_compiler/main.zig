@@ -3,7 +3,7 @@
 //! This executable runs during `zig build` on the host machine to:
 //! 1. Parse and type-check the Builtin.roc module (which contains nested Bool, Try, Str, Dict, Set types)
 //! 2. Serialize the resulting ModuleEnv to a binary file
-//! 3. Output Builtin.bin to zig-out/builtins/ (which gets embedded in the roc binary)
+//! 3. Output Builtin.bin and builtin_indices.bin to paths provided by the build system
 
 const std = @import("std");
 const base = @import("base");
@@ -72,9 +72,6 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     // Add all low-level operations to the map using full qualified names
     // Associated items are stored as defs with qualified names like "Builtin.Str.is_empty"
     // We need to find the actual ident that was created during canonicalization
-    if (env.common.findIdent("Builtin.Str.is_empty")) |str_is_empty_ident| {
-        try low_level_map.put(str_is_empty_ident, .str_is_empty);
-    }
     if (env.common.findIdent("Builtin.Str.is_eq")) |str_is_eq_ident| {
         try low_level_map.put(str_is_eq_ident, .str_is_eq);
     }
@@ -110,9 +107,6 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     }
     if (env.common.findIdent("Builtin.Str.repeat")) |str_repeat_ident| {
         try low_level_map.put(str_repeat_ident, .str_repeat);
-    }
-    if (env.common.findIdent("Builtin.Str.with_prefix")) |str_with_prefix_ident| {
-        try low_level_map.put(str_with_prefix_ident, .str_with_prefix);
     }
     if (env.common.findIdent("Builtin.Str.drop_prefix")) |str_drop_prefix_ident| {
         try low_level_map.put(str_drop_prefix_ident, .str_drop_prefix);
@@ -153,14 +147,8 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     if (env.common.findIdent("Builtin.List.len")) |list_len_ident| {
         try low_level_map.put(list_len_ident, .list_len);
     }
-    if (env.common.findIdent("Builtin.List.is_empty")) |list_is_empty_ident| {
-        try low_level_map.put(list_is_empty_ident, .list_is_empty);
-    }
     if (env.common.findIdent("Builtin.List.concat")) |list_concat_ident| {
         try low_level_map.put(list_concat_ident, .list_concat);
-    }
-    if (env.common.findIdent("Builtin.List.append")) |list_append_ident| {
-        try low_level_map.put(list_append_ident, .list_append);
     }
     if (env.common.findIdent("Builtin.List.with_capacity")) |list_with_capacity_ident| {
         try low_level_map.put(list_with_capacity_ident, .list_with_capacity);
@@ -180,40 +168,8 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     if (env.common.findIdent("Builtin.List.sublist")) |list_sublist_ident| {
         try low_level_map.put(list_sublist_ident, .list_sublist);
     }
-    if (env.common.findIdent("Builtin.Bool.is_eq")) |bool_is_eq_ident| {
-        try low_level_map.put(bool_is_eq_ident, .bool_is_eq);
-    }
-
-    // Numeric type checking operations (all numeric types)
     const numeric_types = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64" };
-    for (numeric_types) |num_type| {
-        var buf: [256]u8 = undefined;
-
-        // is_zero (all types)
-        const is_zero = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.is_zero", .{num_type});
-        if (env.common.findIdent(is_zero)) |ident| {
-            try low_level_map.put(ident, .num_is_zero);
-        }
-    }
-
-    // Numeric sign checking operations (signed types only)
     const signed_types = [_][]const u8{ "I8", "I16", "I32", "I64", "I128", "Dec", "F32", "F64" };
-    for (signed_types) |num_type| {
-        var buf: [256]u8 = undefined;
-
-        // is_negative
-        const is_negative = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.is_negative", .{num_type});
-        if (env.common.findIdent(is_negative)) |ident| {
-            try low_level_map.put(ident, .num_is_negative);
-        }
-
-        // is_positive
-        const is_positive = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.is_positive", .{num_type});
-        if (env.common.findIdent(is_positive)) |ident| {
-            try low_level_map.put(ident, .num_is_positive);
-        }
-    }
-
     // Numeric equality operations (integer types + Dec only, NOT F32/F64)
     const eq_types = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec" };
     for (eq_types) |num_type| {
@@ -1309,8 +1265,12 @@ fn readFileAllocPath(gpa: Allocator, path: []const u8) ![]u8 {
 /// This runs during `zig build` on the host machine to generate .bin files
 /// that get embedded into the final roc executable.
 ///
-/// The build system passes the absolute path to Builtin.roc as the first argument for cache tracking;
-/// we honor that when present so the compiler works regardless of the current working directory.
+/// The build system passes:
+/// 1. the absolute path to Builtin.roc for cache tracking
+/// 2. the output path for Builtin.bin
+/// 3. the output path for builtin_indices.bin
+///
+/// We also keep project-relative defaults so manual runs still succeed.
 pub fn main() !void {
     var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
     defer {
@@ -1324,9 +1284,11 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(gpa);
     defer std.process.argsFree(gpa, args);
 
-    // Prefer the absolute path provided by the build system, but fall back to the
-    // project-relative path so manual runs (e.g. `zig build run`) still succeed.
+    // Prefer the explicit paths provided by the build system, but fall back to the
+    // project-relative defaults so manual runs still succeed.
     const builtin_src_path = if (args.len >= 2) args[1] else "src/build/roc/Builtin.roc";
+    const builtin_bin_path = if (args.len >= 3) args[2] else "zig-out/builtins/Builtin.bin";
+    const builtin_indices_path = if (args.len >= 4) args[3] else "zig-out/builtins/builtin_indices.bin";
 
     // Read the Builtin.roc source file at runtime
     // NOTE: We must free this source manually; CommonEnv.deinit() does not free the source.
@@ -1432,11 +1394,16 @@ pub fn main() !void {
     try builtin_env.common.setNodeIndexById(gpa, f64_ident, @intCast(@intFromEnum(f64_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, numeral_ident, @intCast(@intFromEnum(numeral_type_idx)));
 
-    // Create output directory
-    try std.fs.cwd().makePath("zig-out/builtins");
+    // Create output directories when needed.
+    if (std.fs.path.dirname(builtin_bin_path)) |dir| {
+        try std.fs.cwd().makePath(dir);
+    }
+    if (std.fs.path.dirname(builtin_indices_path)) |dir| {
+        try std.fs.cwd().makePath(dir);
+    }
 
     // Serialize the single Builtin module
-    try serializeModuleEnv(gpa, builtin_env, "zig-out/builtins/Builtin.bin");
+    try serializeModuleEnv(gpa, builtin_env, builtin_bin_path);
 
     // Create and serialize builtin indices
     const builtin_indices = BuiltinIndices{
@@ -1493,7 +1460,7 @@ pub fn main() !void {
     // This ensures BuiltinIndices stays in sync with the actual Builtin module content
     try validateBuiltinIndicesCompleteness(builtin_env, builtin_indices);
 
-    try serializeBuiltinIndices(builtin_indices, "zig-out/builtins/builtin_indices.bin");
+    try serializeBuiltinIndices(builtin_indices, builtin_indices_path);
 }
 
 /// Validates that BuiltinIndices contains all nominal type declarations in the Builtin module.
@@ -1640,8 +1607,7 @@ fn compileModule(
         gpa.destroy(can_result);
     }
 
-    // When compiling Builtin itself, pass null for module_envs so setupAutoImportedBuiltinTypes doesn't run
-    can_result.* = try Can.init(&allocators, module_env, parse_ast, null);
+    can_result.* = try Can.initBuiltin(&allocators, module_env, parse_ast);
 
     try can_result.canonicalizeFile();
     try can_result.validateForChecking();

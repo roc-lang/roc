@@ -356,12 +356,25 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.subsRegRegReg(width, .ZRSP, src1, src2);
         }
 
-        /// SBC reg, reg, reg (subtract with carry/borrow)
+        /// SBC reg, reg, reg (subtract with carry/borrow, no flag update)
         pub fn sbcRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
             // SBC <Xd>, <Xn>, <Xm>
             const sf = width.sf();
             const inst: u32 = (@as(u32, sf) << 31) |
                 (0b1011010000 << 21) |
+                (@as(u32, src2.enc()) << 16) |
+                (0b000000 << 10) |
+                (@as(u32, src1.enc()) << 5) |
+                dst.enc();
+            try self.emit32(inst);
+        }
+
+        /// SBCS reg, reg, reg (subtract with carry/borrow, sets flags)
+        pub fn sbcsRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+            // SBCS <Xd>, <Xn>, <Xm> — same as SBC but with S bit (bit 29) set
+            const sf = width.sf();
+            const inst: u32 = (@as(u32, sf) << 31) |
+                (0b1111010000 << 21) |
                 (@as(u32, src2.enc()) << 16) |
                 (0b000000 << 10) |
                 (@as(u32, src1.enc()) << 5) |

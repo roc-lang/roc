@@ -13,16 +13,8 @@ result = func(1, 2)
 ~~~
 # MONO
 ~~~roc
-c1_add_ab = |x, captures| captures.a + captures.b + x
-
-func = |a, b| {
-	add_ab = C1_add_ab({ a, b })
-	match add_ab {
-		C1_add_ab(captures) => c1_add_ab(10, captures)
-	}
-}
-
-result = func(1, 2)
+result : Dec
+result = 13
 ~~~
 # FORMATTED
 ~~~roc
@@ -86,40 +78,28 @@ EndOfFile,
 			(e-block
 				(s-let
 					(p-assign (ident "add_ab"))
-					(e-tag (name "#1_add_ab")
-						(args
-							(e-record
-								(fields
-									(field (name "a")
-										(e-lookup-local
-											(p-assign (ident "a"))))
-									(field (name "b")
-										(e-lookup-local
-											(p-assign (ident "b")))))))))
-				(e-match
-					(match
-						(cond
-							(e-lookup-local
-								(p-assign (ident "add_ab"))))
-						(branches
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag)))
-								(value
-									(e-call
-										(e-lookup-local
-											(p-assign (ident "c1_add_ab")))
-										(e-num (value "10"))
-										(e-lookup-local
-											(p-assign (ident "captures"))))))))))))
+					(e-closure
+						(captures
+							(capture (ident "a"))
+							(capture (ident "b")))
+						(e-lambda
+							(args
+								(p-assign (ident "x")))
+							(e-binop (op "add")
+								(e-binop (op "add")
+									(e-lookup-local
+										(p-assign (ident "a")))
+									(e-lookup-local
+										(p-assign (ident "b"))))
+								(e-lookup-local
+									(p-assign (ident "x")))))))
+				(e-call
+					(e-lookup-local
+						(p-assign (ident "add_ab")))
+					(e-num (value "10"))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call
-			(e-lookup-local
-				(p-assign (ident "func")))
-			(e-num (value "1"))
-			(e-num (value "2")))))
+		(e-num (value "13"))))
 ~~~
 # TYPES
 ~~~clojure
@@ -128,6 +108,6 @@ EndOfFile,
 		(patt (type "c, Dec -> c where [c.plus : c, Dec -> c]"))
 		(patt (type "Dec")))
 	(expressions
-		(expr (type "c, Dec -> _ret where [c.plus : c, Dec -> c]"))
-		(expr (type "_c where [_d.plus : e, Dec -> e]"))))
+		(expr (type "c, Dec -> c where [c.plus : c, Dec -> c]"))
+		(expr (type "Dec"))))
 ~~~

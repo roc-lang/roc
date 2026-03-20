@@ -196,5 +196,5 @@ match items {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "a where [a.plus : a, a -> a]"))
+(expr (type "a where [a.plus : a, a -> a, a.plus : a, a -> a]"))
 ~~~

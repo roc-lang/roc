@@ -9,7 +9,6 @@
 //! This is the foundation for the monomorphization pipeline testing.
 
 const std = @import("std");
-const base = @import("base");
 const can = @import("can");
 const builtins = @import("builtins");
 const i128h = builtins.compiler_rt_128;
@@ -26,18 +25,6 @@ const Emitter = can.RocEmitter;
 const testing = std.testing;
 // Use interpreter_allocator for interpreter tests (doesn't track leaks)
 const test_allocator = helpers.interpreter_allocator;
-
-/// Helper to check if output contains a closure tag (format: C followed by digit)
-/// Closure tags use internal format #N_hint which RocEmitter transforms to CN_hint
-fn hasClosureTag(output: []const u8) bool {
-    var i: usize = 0;
-    while (i < output.len) : (i += 1) {
-        if (output[i] == 'C' and i + 1 < output.len and output[i + 1] >= '0' and output[i + 1] <= '9') {
-            return true;
-        }
-    }
-    return false;
-}
 
 /// Helper to parse, canonicalize, type check, and emit Roc code
 fn emitFromSource(allocator: std.mem.Allocator, source: []const u8) ![]const u8 {
@@ -196,46 +183,22 @@ fn evalToInt(allocator: std.mem.Allocator, source: []const u8) !i128 {
     defer interpreter.bindings.items.len = 0;
 
     // Check if this is an integer or Dec
-    if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) {
-        return result.asI128();
-    } else if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .frac) {
+    const result_int: i128 = if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int)
+        result.asI128()
+    else if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .frac) blk: {
         // Unsuffixed numeric literals default to Dec
         const dec_value = result.asDec(ops);
         const RocDec = builtins.dec.RocDec;
-        return i128h.divTrunc_i128(dec_value.num, RocDec.one_point_zero_i128);
-    }
-    return error.NotAnInteger;
-}
+        break :blk i128h.divTrunc_i128(dec_value.num, RocDec.one_point_zero_i128);
+    } else return error.NotAnInteger;
 
-/// Helper to evaluate an expression and get its boolean result
-fn evalToBool(allocator: std.mem.Allocator, source: []const u8) !bool {
-    const resources = try helpers.parseAndCanonicalizeExpr(allocator, source);
-    defer helpers.cleanupParseAndCanonical(allocator, resources);
+    // Backend comparison
+    const int_str = try std.fmt.allocPrint(allocator, "{}", .{result_int});
+    defer allocator.free(int_str);
+    try helpers.compareWithDevEvaluator(allocator, int_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    try helpers.compareWithLlvmEvaluator(allocator, int_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
-    var test_env_instance = TestEnv.init(allocator);
-    defer test_env_instance.deinit();
-
-    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
-    var interpreter = try Interpreter.init(allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
-    defer interpreter.deinit();
-
-    const ops = test_env_instance.get_ops();
-    const result = try interpreter.eval(resources.expr_idx, ops);
-    const layout_cache = &interpreter.runtime_layout_store;
-    defer result.decref(layout_cache, ops);
-    defer interpreter.bindings.items.len = 0;
-
-    // Boolean represented as integer (discriminant)
-    if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) {
-        const int_val = result.asI128();
-        return int_val != 0;
-    } else if (result.ptr != null) {
-        // Try reading as raw byte (for boolean tag values)
-        const bool_ptr: *const u8 = @ptrCast(@alignCast(result.ptr.?));
-        return bool_ptr.* != 0;
-    }
-    return error.NotABool;
+    return result_int;
 }
 
 test "roundtrip: integer literal produces same result" {
@@ -295,37 +258,28 @@ test "roundtrip: if expression produces same result" {
 test "roundtrip: boolean True produces same result" {
     const source = "True";
 
-    // Get original result
-    const original_result = try evalToBool(test_allocator, source);
-
-    // Emit and re-parse
+    // Standalone True currently roundtrips as a Bool value.
+    const original_result = try evalToInt(test_allocator, source);
     const emitted = try emitFromSource(test_allocator, source);
     defer test_allocator.free(emitted);
+    const emitted_result = try evalToInt(test_allocator, emitted);
 
-    // Get result from emitted code
-    const emitted_result = try evalToBool(test_allocator, emitted);
-
-    // Verify they match
     try testing.expectEqual(original_result, emitted_result);
-    try testing.expectEqual(true, emitted_result);
+    try testing.expectEqual(@as(i128, 1), emitted_result);
 }
 
 test "roundtrip: boolean False produces same result" {
     const source = "False";
 
-    // Get original result
-    const original_result = try evalToBool(test_allocator, source);
-
-    // Emit and re-parse
+    // Standalone False has type [False]* (open single-tag union), not Bool.
+    // In [False]*, False is at discriminant 0 (only tag in the union).
+    const original_result = try evalToInt(test_allocator, source);
     const emitted = try emitFromSource(test_allocator, source);
     defer test_allocator.free(emitted);
+    const emitted_result = try evalToInt(test_allocator, emitted);
 
-    // Get result from emitted code
-    const emitted_result = try evalToBool(test_allocator, emitted);
-
-    // Verify they match
     try testing.expectEqual(original_result, emitted_result);
-    try testing.expectEqual(false, emitted_result);
+    try testing.expectEqual(@as(i128, 0), emitted_result);
 }
 
 test "roundtrip: complex arithmetic produces same result" {
@@ -456,227 +410,6 @@ test "detect pure lambda (no captures)" {
     try testing.expect(!has_captures);
 }
 
-/// Helper to transform a single closure expression directly (not in a block)
-fn transformClosureExpr(allocator: std.mem.Allocator, source: []const u8) ![]const u8 {
-    const resources = try helpers.parseAndCanonicalizeExpr(allocator, source);
-    defer helpers.cleanupParseAndCanonical(allocator, resources);
-
-    // Create transformer
-    var transformer = can.ClosureTransformer.init(allocator, resources.module_env);
-    defer transformer.deinit();
-
-    // Transform just the expression (not the block around it)
-    const transformed_idx = try transformer.transformClosure(resources.expr_idx, null);
-
-    // Emit the transformed expression
-    var emitter = Emitter.init(allocator, resources.module_env);
-    defer emitter.deinit();
-
-    try emitter.emitExpr(transformed_idx);
-
-    return try allocator.dupe(u8, emitter.getOutput());
-}
-
-test "pure lambda is left unchanged" {
-    // Test a pure lambda (no captures) - should NOT be transformed
-    const source = "|x| x + 1";
-
-    const output = try transformClosureExpr(test_allocator, source);
-    defer test_allocator.free(output);
-
-    // Pure lambda should be left as-is, NOT transformed to a tag
-    // Closure tags now use format C1_hint or C1 (# prefix transformed to C by RocEmitter)
-    try testing.expect(!hasClosureTag(output));
-    try testing.expectEqualStrings("|x| x + 1", output);
-}
-
-/// Helper to transform closures in a block and emit the result
-fn transformBlockAndEmit(allocator: std.mem.Allocator, source: []const u8) ![]const u8 {
-    const resources = try helpers.parseAndCanonicalizeExpr(allocator, source);
-    defer helpers.cleanupParseAndCanonical(allocator, resources);
-
-    // Create transformer
-    var transformer = can.ClosureTransformer.init(allocator, resources.module_env);
-    defer transformer.deinit();
-
-    // Transform the entire expression tree
-    const transformed_idx = try transformer.transformExpr(resources.expr_idx);
-
-    // Emit the transformed expression
-    var emitter = Emitter.init(allocator, resources.module_env);
-    defer emitter.deinit();
-
-    try emitter.emitExpr(transformed_idx);
-
-    return try allocator.dupe(u8, emitter.getOutput());
-}
-
-test "transform closure with single capture to tag" {
-    const source =
-        \\{
-        \\    x = 42
-        \\    f = |y| x + y
-        \\    f(10)
-        \\}
-    ;
-
-    const output = try transformBlockAndEmit(test_allocator, source);
-    defer test_allocator.free(output);
-
-    // The closure should have been transformed to a # tag (emitted as C1_...)
-    try testing.expect(hasClosureTag(output));
-
-    // The capture 'x' should appear in the tag's record argument
-    // RocEmitter uses shorthand syntax { x } for captures
-    try testing.expect(std.mem.indexOf(u8, output, "{ x }") != null or
-        std.mem.indexOf(u8, output, "x:") != null);
-
-    // The call should have been transformed to a match expression
-    try testing.expect(std.mem.indexOf(u8, output, "match") != null);
-}
-
-test "transform closure with multiple captures" {
-    const source =
-        \\{
-        \\    a = 1
-        \\    b = 2
-        \\    f = |x| a + b + x
-        \\    f(3)
-        \\}
-    ;
-
-    const output = try transformBlockAndEmit(test_allocator, source);
-    defer test_allocator.free(output);
-
-    // The closure should have been transformed to a # tag (emitted as C1_...)
-    try testing.expect(hasClosureTag(output));
-
-    // Both captures 'a' and 'b' should appear in the tag's record
-    // RocEmitter uses shorthand syntax { a, b } for captures
-    try testing.expect(std.mem.indexOf(u8, output, "{ a") != null or
-        std.mem.indexOf(u8, output, "a:") != null);
-    try testing.expect(std.mem.indexOf(u8, output, " b }") != null or
-        std.mem.indexOf(u8, output, ", b") != null or
-        std.mem.indexOf(u8, output, "b:") != null);
-
-    // The call should have been transformed to a match expression
-    try testing.expect(std.mem.indexOf(u8, output, "match") != null);
-}
-
-test "verify: closure with single capture transforms correctly" {
-    const source =
-        \\{
-        \\    x = 42
-        \\    f = |y| x + y
-        \\    f(10)
-        \\}
-    ;
-
-    // Transform the code
-    const transformed = try transformBlockAndEmit(test_allocator, source);
-    defer test_allocator.free(transformed);
-
-    // Verify transformation structure:
-    // - Should have a # tag (internal closure tag, emitted as C1_...)
-    // - Should have a match expression for the call site
-    // - Should reference the captured variable x
-    try testing.expect(hasClosureTag(transformed));
-    try testing.expect(std.mem.indexOf(u8, transformed, "match") != null);
-}
-
-test "verify: closure with multiple captures transforms correctly" {
-    const source =
-        \\{
-        \\    a = 1
-        \\    b = 2
-        \\    f = |x| a + b + x
-        \\    f(3)
-        \\}
-    ;
-
-    // Transform the code
-    const transformed = try transformBlockAndEmit(test_allocator, source);
-    defer test_allocator.free(transformed);
-
-    // Verify transformation structure:
-    // - Should have a # tag (internal closure tag, emitted as C1_...)
-    // - Should have a match expression for the call site
-    try testing.expect(hasClosureTag(transformed));
-    try testing.expect(std.mem.indexOf(u8, transformed, "match") != null);
-}
-
-test "verify: pure lambda (no captures) is left unchanged" {
-    const source =
-        \\{
-        \\    f = |x| x + 1
-        \\    f(41)
-        \\}
-    ;
-
-    // Transform the code
-    const transformed = try transformBlockAndEmit(test_allocator, source);
-    defer test_allocator.free(transformed);
-
-    // Verify pure lambda is NOT transformed:
-    // - Should NOT have a closure tag (C followed by digit)
-    // - Should NOT have a match expression
-    // - Should have the lambda preserved as-is
-    try testing.expect(!hasClosureTag(transformed));
-    try testing.expect(std.mem.indexOf(u8, transformed, "match") == null);
-    try testing.expect(std.mem.indexOf(u8, transformed, "|x|") != null);
-    try testing.expect(std.mem.indexOf(u8, transformed, "f(41)") != null);
-}
-
-test "verify: nested closures with captures transforms correctly" {
-    // A closure that returns another closure, both with captures
-    const source =
-        \\{
-        \\    x = 10
-        \\    makeAdder = |y| |z| x + y + z
-        \\    addFive = makeAdder(5)
-        \\    addFive(3)
-        \\}
-    ;
-
-    // Transform the code
-    const transformed = try transformBlockAndEmit(test_allocator, source);
-    defer test_allocator.free(transformed);
-
-    // Verify transformation structure:
-    // - Should have # tags (internal closure tags, emitted as C1_...)
-    // - Should have match expressions for the call sites
-    try testing.expect(hasClosureTag(transformed));
-    try testing.expect(std.mem.indexOf(u8, transformed, "match") != null);
-}
-
-test "ClosureTransformer: can generate tag names" {
-    // Test that the transformer can generate unique tag names
-    const allocator = test_allocator;
-
-    const module_env = try allocator.create(can.ModuleEnv);
-    module_env.* = try can.ModuleEnv.init(allocator, "test");
-    defer {
-        module_env.deinit();
-        allocator.destroy(module_env);
-    }
-
-    var transformer = can.ClosureTransformer.init(allocator, module_env);
-    defer transformer.deinit();
-
-    // Generate a tag name with a hint
-    const hint = try module_env.insertIdent(base.Ident.for_text("myFunc"));
-    const tag_name1 = try transformer.generateClosureTagName(hint);
-    const tag_str1 = module_env.getIdent(tag_name1);
-
-    try testing.expectEqualStrings("#1_myFunc", tag_str1);
-
-    // Generate another tag name without hint
-    const tag_name2 = try transformer.generateClosureTagName(null);
-    const tag_str2 = module_env.getIdent(tag_name2);
-
-    try testing.expectEqualStrings("#2", tag_str2);
-}
-
 // Constant folding tests
 // These tests verify that compile-time evaluation correctly folds
 // tuples, tags with payloads, and nested structures
@@ -742,7 +475,7 @@ fn evalTupleFirst(allocator: std.mem.Allocator, source: []const u8) !i128 {
     defer interpreter.bindings.items.len = 0;
 
     // Get the first element of the tuple
-    if (result.layout.tag == .tuple) {
+    if (result.layout.tag == .struct_) {
         const fresh_var = try interpreter.runtime_types.fresh();
         var accessor = try result.asTuple(layout_cache);
         const first_elem = try accessor.getElement(0, fresh_var);

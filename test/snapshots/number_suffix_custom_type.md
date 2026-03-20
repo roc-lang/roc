@@ -99,11 +99,11 @@ main = 123.Foo
 (inferred-types
 	(defs
 		(patt (type "I64, U8 -> Foo"))
-		(patt (type "Foo")))
+		(patt (type "Error")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo"))))
 	(expressions
 		(expr (type "I64, U8 -> Foo"))
-		(expr (type "Foo"))))
+		(expr (type "Error"))))
 ~~~

@@ -8,6 +8,6 @@ type=repl
 » Try.Err("error") ?? 99
 ~~~
 # OUTPUT
-99
+99.0
 # PROBLEMS
 NIL

@@ -15,15 +15,14 @@ result = add_five(10.I64)
 ~~~
 # MONO
 ~~~roc
-c1_make_adder = |y, captures| captures.x + y
+make_adder : a -> (b -> a) where [a.plus : a, b -> a]
+make_adder = |x| |y| x + y
 
-make_adder = |x| C1_make_adder({ x: x })
-
+add_five : I64 -> I64
 add_five = make_adder(5.I64)
 
-result = match add_five {
-	C1_make_adder(captures) => c1_make_adder(10.I64, captures)
-}
+result : I64
+result = 15
 ~~~
 # FORMATTED
 ~~~roc
@@ -75,13 +74,17 @@ EndOfFile,
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-tag (name "#1_make_adder")
-				(args
-					(e-record
-						(fields
-							(field (name "x")
-								(e-lookup-local
-									(p-assign (ident "x"))))))))))
+			(e-closure
+				(captures
+					(capture (ident "x")))
+				(e-lambda
+					(args
+						(p-assign (ident "y")))
+					(e-binop (op "add")
+						(e-lookup-local
+							(p-assign (ident "x")))
+						(e-lookup-local
+							(p-assign (ident "y"))))))))
 	(d-let
 		(p-assign (ident "add_five"))
 		(e-call
@@ -90,33 +93,17 @@ EndOfFile,
 			(e-typed-int (value "5") (type "I64"))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-match
-			(match
-				(cond
-					(e-lookup-local
-						(p-assign (ident "add_five"))))
-				(branches
-					(branch
-						(patterns
-							(pattern (degenerate false)
-								(p-applied-tag)))
-						(value
-							(e-call
-								(e-lookup-local
-									(p-assign (ident "c1_make_adder")))
-								(e-typed-int (value "10") (type "I64"))
-								(e-lookup-local
-									(p-assign (ident "captures")))))))))))
+		(e-num (value "15"))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "[#1_make_adder({ x: <RecursiveType>, .. }), ..a] -> (_arg -> [#1_make_adder({ x: <RecursiveType>, .. }), ..a])"))
+		(patt (type "a -> (b -> a) where [a.plus : a, b -> a]"))
 		(patt (type "I64 -> I64"))
 		(patt (type "I64")))
 	(expressions
-		(expr (type "[#1_make_adder({ x: <RecursiveType>, .. }), ..a] -> [#1_make_adder({ x: [#1_make_adder(<RecursiveType>), ..a], .. }), ..a]"))
-		(expr (type "[#1_make_adder({ x: <RecursiveType>, .. }), ..]"))
-		(expr (type "[]"))))
+		(expr (type "a -> (b -> a) where [a.plus : a, b -> a]"))
+		(expr (type "I64 -> I64"))
+		(expr (type "I64"))))
 ~~~

@@ -68,19 +68,12 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
         .builtin_indices = builtin_indices,
     };
 
-    // Create module_envs map for canonicalization (enables qualified calls to List, Str, etc.)
-    var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
-    defer module_envs_map.deinit();
-
-    // Use shared function to populate ALL builtin types - ensures Builtin.roc is single source of truth
-    try Can.populateModuleEnvs(
-        &module_envs_map,
-        module_env,
-        builtin_module.env,
-        builtin_indices,
-    );
-
-    var czer = try Can.init(&allocators, module_env, parse_ast, &module_envs_map);
+    var czer = try Can.initModule(&allocators, module_env, parse_ast, .{
+        .builtin_types = .{
+            .builtin_module_env = builtin_module.env,
+            .builtin_indices = builtin_indices,
+        },
+    });
     defer czer.deinit();
 
     try czer.canonicalizeFile();
@@ -109,7 +102,7 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     problems.* = try check.problem.Store.init(gpa);
 
     const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-    const evaluator = try ComptimeEvaluator.init(gpa, module_env, imported_envs, problems, builtin_types, builtin_module.env, &checker.import_mapping, roc_target.RocTarget.detectNative());
+    const evaluator = try ComptimeEvaluator.init(gpa, module_env, imported_envs, problems, builtin_types, builtin_module.env, &checker.import_mapping, roc_target.RocTarget.detectNative(), null);
 
     return .{
         .module_env = module_env,

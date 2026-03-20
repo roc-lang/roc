@@ -15,8 +15,8 @@ const can = @import("can");
 const uri_util = @import("uri.zig");
 
 const BuildEnv = compile.BuildEnv;
+const Io = compile.Io;
 const ModuleEnv = can.ModuleEnv;
-const FileProvider = compile.package.FileProvider;
 const Allocator = std.mem.Allocator;
 
 /// A single build session with automatic cleanup.
@@ -35,11 +35,6 @@ pub const BuildSession = struct {
 
     /// Whether we've cached the module env yet
     module_env_cached: bool = false,
-
-    const OverrideProviderState = struct {
-        override_path: []const u8,
-        override_text: []const u8,
-    };
 
     /// Initialize a build session for the given URI.
     /// This handles:
@@ -61,22 +56,14 @@ pub const BuildSession = struct {
             try allocator.dupe(u8, path);
         errdefer allocator.free(absolute_path);
 
-        // Set up file provider if override text provided.
-        // SAFETY: provider_state lives on the stack and its address is passed to
-        // env via setFileProvider. This is safe because env.build() is synchronous
-        // and we clear the provider before returning.
-        var provider_state: ?OverrideProviderState = null;
+        // Set up file override if override text provided.
+        // SAFETY: override lives on the stack and its address is stored in env.filesystem.
+        // This is safe because env.build() is synchronous and we restore the Io before returning.
+        var override: Io.ReadFileOverride = undefined;
+        const saved_io = env.filesystem;
         if (override_text) |text| {
-            provider_state = .{
-                .override_path = absolute_path,
-                .override_text = text,
-            };
-
-            const provider = FileProvider{
-                .ctx = &provider_state.?,
-                .read = OverrideProvider.read,
-            };
-            env.setFileProvider(provider);
+            override = .{ .path = absolute_path, .content = text };
+            env.filesystem = override.io();
         }
 
         // Build
@@ -87,11 +74,9 @@ pub const BuildSession = struct {
             break :blk true;
         };
 
-        // Clear the file provider now that the build is complete.
-        // The provider's ctx pointer references stack-local state that
-        // becomes invalid once this function returns.
+        // Restore the original Io now that the build is complete.
         if (override_text != null) {
-            env.setFileProvider(null);
+            env.filesystem = saved_io;
         }
 
         // Drain reports regardless of build success to capture parse errors
@@ -181,18 +166,5 @@ pub const BuildSession = struct {
             self.allocator.free(entry.reports);
         }
         self.allocator.free(drained);
-    }
-};
-
-/// File provider that overrides a specific file's content.
-const OverrideProvider = struct {
-    fn read(ctx: ?*anyopaque, path: []const u8, gpa: std.mem.Allocator) Allocator.Error!?[]u8 {
-        const self: *BuildSession.OverrideProviderState = @ptrCast(@alignCast(ctx.?));
-        if (std.mem.eql(u8, path, self.override_path)) {
-            return try gpa.dupe(u8, self.override_text);
-        }
-        // Fall back to filesystem for all other files so the compiler can resolve
-        // platform modules and package imports without failing on FileNotFound.
-        return FileProvider.filesystem.read(null, path, gpa);
     }
 };

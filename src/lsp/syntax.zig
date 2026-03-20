@@ -5,7 +5,7 @@ const std = @import("std");
 const compile = @import("compile");
 const reporting = @import("reporting");
 const build_options = @import("build_options");
-const Filesystem = @import("fs").Filesystem;
+const Io = @import("io").Io;
 const Allocator = std.mem.Allocator;
 const base = @import("base");
 const can = @import("can");
@@ -29,7 +29,6 @@ const BuildEnv = compile.BuildEnv;
 const CacheManager = compile.CacheManager;
 const roc_target = @import("roc_target");
 const CacheConfig = compile.CacheConfig;
-const FileProvider = compile.package.FileProvider;
 const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
 const Region = base.Region;
@@ -248,7 +247,7 @@ pub const SyntaxChecker = struct {
 
         if (self.cache_config.enabled) {
             const cache_manager = try self.allocator.create(CacheManager);
-            cache_manager.* = CacheManager.init(self.allocator, self.cache_config, Filesystem.default());
+            cache_manager.* = CacheManager.init(self.allocator, self.cache_config, Io.default());
             env.setCacheManager(cache_manager);
         }
 
@@ -623,22 +622,6 @@ pub const SyntaxChecker = struct {
         }
         return false;
     }
-
-    const OverrideProvider = struct {
-        override_path: []const u8,
-        override_text: ?[]const u8,
-
-        fn read(ctx: ?*anyopaque, path: []const u8, gpa: std.mem.Allocator) Allocator.Error!?[]u8 {
-            const self: *OverrideProvider = @ptrCast(@alignCast(ctx.?));
-            if (std.mem.eql(u8, path, self.override_path)) {
-                if (self.override_text) |text| {
-                    return try gpa.dupe(u8, text);
-                }
-            }
-            // Fall back to filesystem for non-override files (e.g., platform modules)
-            return FileProvider.filesystem.read(null, path, gpa);
-        }
-    };
 
     /// Range in LSP coordinates
     // LspRange moved to cir_queries.zig
@@ -1015,7 +998,7 @@ pub const SyntaxChecker = struct {
     ) ?[]const u8 {
         const entries = module_env.method_idents.entries.items;
         for (entries) |entry| {
-            if (entry.key.type_ident != type_ident) continue;
+            if (!entry.key.type_ident.eql(type_ident)) continue;
 
             const entry_method_name = module_env.getIdentText(entry.key.method_ident);
             if (!std.mem.eql(u8, entry_method_name, method_name)) continue;
@@ -1088,7 +1071,7 @@ pub const SyntaxChecker = struct {
                 else => continue,
             };
 
-            if (ident_idx == qualified_ident) {
+            if (ident_idx.eql(qualified_ident)) {
                 return doc_comments.extractDocForDef(allocator, source, store, def) catch null;
             }
         }
@@ -1109,7 +1092,7 @@ pub const SyntaxChecker = struct {
                 else => continue,
             };
 
-            if (ident_idx == qualified_ident) {
+            if (ident_idx.eql(qualified_ident)) {
                 return doc_comments.extractDocForStatement(allocator, source, store, stmt, stmt_idx) catch null;
             }
         }
@@ -1790,17 +1773,11 @@ pub const SyntaxChecker = struct {
             allocator.dupe(u8, path) catch return &[_]SymbolInformation{};
         defer allocator.free(absolute_path);
 
-        // Set up file provider with source as override text
-        var provider_state = OverrideProvider{
-            .override_path = absolute_path,
-            .override_text = source,
-        };
-        const provider: FileProvider = .{
-            .ctx = &provider_state,
-            .read = OverrideProvider.read,
-        };
-        env.setFileProvider(provider);
-        defer env.setFileProvider(null);
+        // Override readFile for the current file so in-memory source is used.
+        var override = Io.ReadFileOverride{ .path = absolute_path, .content = source };
+        const saved_io = env.filesystem;
+        env.filesystem = override.io();
+        defer env.filesystem = saved_io;
 
         self.logDebug(.build, "symbols: building {s}", .{absolute_path});
         env.build(absolute_path) catch |err| {

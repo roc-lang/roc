@@ -12,7 +12,6 @@ foo = Json.parse(data)
 ~~~
 # EXPECTED
 FILE NOT FOUND - inline_ingested_file.md:1:1:1:34
-MODULE NOT FOUND - inline_ingested_file.md:2:1:2:12
 UNDEFINED VARIABLE - inline_ingested_file.md:4:7:4:17
 # PROBLEMS
 **FILE NOT FOUND**
@@ -24,17 +23,6 @@ Make sure the file exists relative to your source file:
 import "users.json" as data : Str
 ```
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**MODULE NOT FOUND**
-The module `Json` was not found in this Roc project.
-
-You're attempting to use this module here:
-**inline_ingested_file.md:2:1:2:12:**
-```roc
-import Json
-```
-^^^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**

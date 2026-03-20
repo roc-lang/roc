@@ -106,50 +106,47 @@ result = duplicate(["a", "b", "c"])
 (can-ir
 	(d-let
 		(p-assign (ident "duplicate"))
-		(e-closure
-			(captures
-				(capture (ident "duplicate")))
-			(e-lambda
-				(args
-					(p-assign (ident "l")))
-				(e-block
-					(e-match
-						(match
-							(cond
-								(e-lookup-local
-									(p-assign (ident "l"))))
-							(branches
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-list
-												(patterns))))
-									(value
-										(e-empty_list)))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-list
-												(patterns
-													(p-assign (ident "e")))
-												(rest-at (index 1)
-													(p-assign (ident "rest"))))))
-									(value
-										(e-block
+		(e-lambda
+			(args
+				(p-assign (ident "l")))
+			(e-block
+				(e-match
+					(match
+						(cond
+							(e-lookup-local
+								(p-assign (ident "l"))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-list
+											(patterns))))
+								(value
+									(e-empty_list)))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-list
+											(patterns
+												(p-assign (ident "e")))
+											(rest-at (index 1)
+												(p-assign (ident "rest"))))))
+								(value
+									(e-block
+										(e-call
+											(e-lookup-external
+												(builtin))
+											(e-list
+												(elems
+													(e-lookup-local
+														(p-assign (ident "e")))
+													(e-lookup-local
+														(p-assign (ident "e")))))
 											(e-call
-												(e-lookup-external
-													(builtin))
-												(e-list
-													(elems
-														(e-lookup-local
-															(p-assign (ident "e")))
-														(e-lookup-local
-															(p-assign (ident "e")))))
-												(e-call
-													(e-lookup-local
-														(p-assign (ident "duplicate")))
-													(e-lookup-local
-														(p-assign (ident "rest"))))))))))))))
+												(e-lookup-local
+													(p-assign (ident "duplicate")))
+												(e-lookup-local
+													(p-assign (ident "rest")))))))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)

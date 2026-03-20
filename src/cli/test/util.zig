@@ -2,6 +2,8 @@
 
 const std = @import("std");
 
+pub const roc_binary_path = if (@import("builtin").os.tag == .windows) ".\\zig-out\\bin\\roc.exe" else "./zig-out/bin/roc";
+
 /// Result of executing a Roc command during testing.
 /// Contains the captured output streams and process termination status.
 pub const RocResult = struct {
@@ -10,8 +12,38 @@ pub const RocResult = struct {
     term: std.process.Child.Term,
 };
 
+fn runChild(
+    allocator: std.mem.Allocator,
+    argv: []const []const u8,
+    cwd_path: []const u8,
+    extra_env: ?*const std.process.EnvMap,
+) !RocResult {
+    const result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = argv,
+        .cwd = cwd_path,
+        .env_map = extra_env,
+        .max_output_bytes = 10 * 1024 * 1024, // 10MB
+    });
+
+    return RocResult{
+        .stdout = result.stdout,
+        .stderr = result.stderr,
+        .term = result.term,
+    };
+}
+
 /// Helper to run roc with arguments that don't require a test file
 pub fn runRocCommand(allocator: std.mem.Allocator, args: []const []const u8) !RocResult {
+    return runRocCommandWithEnv(allocator, args, null);
+}
+
+/// Run a roc CLI command with optional extra environment variables.
+pub fn runRocCommandWithEnv(
+    allocator: std.mem.Allocator,
+    args: []const []const u8,
+    extra_env: ?*const std.process.EnvMap,
+) !RocResult {
     // Get absolute path to roc binary from current working directory
     const cwd_path = try std.fs.cwd().realpathAlloc(allocator, ".");
     defer allocator.free(cwd_path);
@@ -26,23 +58,21 @@ pub fn runRocCommand(allocator: std.mem.Allocator, args: []const []const u8) !Ro
     });
     defer allocator.free(argv);
 
-    // Run roc and capture output
-    const result = try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = argv,
-        .cwd = cwd_path,
-        .max_output_bytes = 10 * 1024 * 1024, // 10MB
-    });
-
-    return RocResult{
-        .stdout = result.stdout,
-        .stderr = result.stderr,
-        .term = result.term,
-    };
+    return runChild(allocator, argv, cwd_path, extra_env);
 }
 
 /// Helper to set up and run roc with arbitrary arguments
 pub fn runRoc(allocator: std.mem.Allocator, args: []const []const u8, test_file_path: []const u8) !RocResult {
+    return runRocWithEnv(allocator, args, test_file_path, null);
+}
+
+/// Run roc on a test file with optional extra environment variables.
+pub fn runRocWithEnv(
+    allocator: std.mem.Allocator,
+    args: []const []const u8,
+    test_file_path: []const u8,
+    extra_env: ?*const std.process.EnvMap,
+) !RocResult {
     // Get absolute path to roc binary from current working directory
     const cwd_path = try std.fs.cwd().realpathAlloc(allocator, ".");
     defer allocator.free(cwd_path);
@@ -61,19 +91,103 @@ pub fn runRoc(allocator: std.mem.Allocator, args: []const []const u8, test_file_
     });
     defer allocator.free(argv);
 
-    // Run roc and capture output
-    const result = try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = argv,
-        .cwd = cwd_path,
-        .max_output_bytes = 10 * 1024 * 1024, // 10MB
-    });
+    return runChild(allocator, argv, cwd_path, extra_env);
+}
 
-    return RocResult{
-        .stdout = result.stdout,
-        .stderr = result.stderr,
-        .term = result.term,
-    };
+/// Runs a roc app with --test mode using the given IO spec.
+/// Spec format: "0<stdin|1>stdout|2>stderr" (pipe-separated)
+/// Returns success if the app's IO matches the spec exactly.
+pub fn runRocTest(allocator: std.mem.Allocator, roc_file: []const u8, spec: []const u8) !RocResult {
+    return runRocCommand(allocator, &.{ roc_file, "--", "--test", spec });
+}
+
+/// Check if a run result indicates success (exit code 0).
+/// Also checks for GPA memory errors in stderr.
+pub fn checkSuccess(result: RocResult) !void {
+    if (std.mem.indexOf(u8, result.stderr, "error(gpa):") != null) {
+        std.debug.print("Memory error detected (GPA)\n", .{});
+        std.debug.print("STDOUT: {s}\n", .{result.stdout});
+        std.debug.print("STDERR: {s}\n", .{result.stderr});
+        return error.MemoryError;
+    }
+
+    switch (result.term) {
+        .Exited => |code| {
+            if (code != 0) {
+                std.debug.print("Run failed with exit code {}\n", .{code});
+                std.debug.print("STDOUT: {s}\n", .{result.stdout});
+                std.debug.print("STDERR: {s}\n", .{result.stderr});
+                return error.RunFailed;
+            }
+        },
+        .Signal => |sig| {
+            std.debug.print("Process terminated by signal: {}\n", .{sig});
+            std.debug.print("STDOUT: {s}\n", .{result.stdout});
+            std.debug.print("STDERR: {s}\n", .{result.stderr});
+            return error.SegFault;
+        },
+        else => {
+            std.debug.print("Run terminated abnormally: {}\n", .{result.term});
+            std.debug.print("STDOUT: {s}\n", .{result.stdout});
+            std.debug.print("STDERR: {s}\n", .{result.stderr});
+            return error.RunFailed;
+        },
+    }
+}
+
+/// Check if a run result indicates failure (non-zero exit code).
+/// Verifies the process exited cleanly with a non-zero code, NOT that it crashed.
+pub fn checkFailure(result: RocResult) !void {
+    switch (result.term) {
+        .Exited => |code| {
+            if (code == 0) {
+                std.debug.print("ERROR: roc succeeded but we expected it to fail\n", .{});
+                return error.UnexpectedSuccess;
+            }
+        },
+        .Signal => |sig| {
+            std.debug.print("ERROR: Process crashed with signal {} (expected clean failure with non-zero exit code)\n", .{sig});
+            std.debug.print("STDOUT: {s}\n", .{result.stdout});
+            std.debug.print("STDERR: {s}\n", .{result.stderr});
+            return error.SegFault;
+        },
+        else => {
+            std.debug.print("ERROR: Process terminated abnormally: {} (expected clean failure with non-zero exit code)\n", .{result.term});
+            std.debug.print("STDOUT: {s}\n", .{result.stdout});
+            std.debug.print("STDERR: {s}\n", .{result.stderr});
+            return error.RunFailed;
+        },
+    }
+}
+
+/// Check if a test mode run succeeded (exit code 0).
+/// Also checks for GPA memory errors.
+pub fn checkTestSuccess(result: RocResult) !void {
+    if (std.mem.indexOf(u8, result.stderr, "error(gpa):") != null) {
+        std.debug.print("Memory error detected (GPA)\n", .{});
+        std.debug.print("STDERR: {s}\n", .{result.stderr});
+        return error.MemoryError;
+    }
+
+    switch (result.term) {
+        .Exited => |code| {
+            if (code != 0) {
+                std.debug.print("Test failed with exit code {}\n", .{code});
+                std.debug.print("STDERR: {s}\n", .{result.stderr});
+                return error.TestFailed;
+            }
+        },
+        .Signal => |sig| {
+            std.debug.print("Process terminated by signal: {}\n", .{sig});
+            std.debug.print("STDERR: {s}\n", .{result.stderr});
+            return error.SegFault;
+        },
+        else => {
+            std.debug.print("Test terminated abnormally: {}\n", .{result.term});
+            std.debug.print("STDERR: {s}\n", .{result.stderr});
+            return error.TestFailed;
+        },
+    }
 }
 
 /// Helper to run roc with stdin input (for REPL testing)

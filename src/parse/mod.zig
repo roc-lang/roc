@@ -155,3 +155,37 @@ test "parse error triggers errdefer cleanup" {
     const result = parseExpr(&allocators, &env);
     try std.testing.expectError(error.TooNested, result);
 }
+
+test "parse diagnostic report handles invalid mutable identifier spelling" {
+    const gpa = std.testing.allocator;
+    const source =
+        \\{
+        \\    test_fn = |l| {
+        \\        var $total = 0
+        \\        for e in l {
+        \\            var _$temp = [e]
+        \\            $total = $total + e
+        \\        }
+        \\        $total
+        \\    }
+        \\    test_fn([1, 2])
+        \\}
+    ;
+
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
+
+    var env = try CommonEnv.init(gpa, source);
+    defer env.deinit(gpa);
+
+    const ast = try parseExpr(&allocators, &env);
+    defer ast.deinit();
+
+    try std.testing.expect(ast.parse_diagnostics.items.len > 0);
+
+    for (ast.parse_diagnostics.items) |diag| {
+        var report = try ast.parseDiagnosticToReport(&env, diag, gpa, "test");
+        defer report.deinit();
+    }
+}

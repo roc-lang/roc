@@ -8,26 +8,28 @@
 //!
 //! The compilation pipeline:
 //! ```
-//! Roc Source → CIR → Mono IR → Machine Code → Object File
+//! Roc Source → CIR → MIR → LIR → Machine Code → Object File
 //! ```
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const layout = @import("layout");
-const mono = @import("mono");
+const lir = @import("lir");
+const LirExprStore = lir.LirExprStore;
+const LirProc = lir.LirProc;
 const RocTarget = @import("roc_target").RocTarget;
 
 const ObjectWriter = @import("ObjectWriter.zig");
-const MonoExprCodeGenMod = @import("MonoExprCodeGen.zig");
+const LirCodeGenMod = @import("LirCodeGen.zig");
 const StaticDataInterner = @import("StaticDataInterner.zig");
 
 /// Information about an entrypoint to compile
 pub const Entrypoint = struct {
     /// The exported symbol name (e.g., "roc__main")
     symbol_name: []const u8,
-    /// The Mono IR expression ID for the entrypoint body
-    body_expr: mono.MonoExprId,
+    /// The LIR expression ID for the entrypoint body
+    body_expr: lir.LirExprId,
     /// Layouts of the arguments
     arg_layouts: []const layout.Idx,
     /// Layout of the return value
@@ -55,7 +57,7 @@ pub const CompilationError = error{
     UnsupportedTarget,
 };
 
-/// Object file compiler that generates object files from Mono IR.
+/// Object file compiler that generates object files from LIR.
 /// Supports compilation to any RocTarget via runtime-to-comptime dispatch.
 pub const ObjectFileCompiler = struct {
     allocator: Allocator,
@@ -64,36 +66,36 @@ pub const ObjectFileCompiler = struct {
         return .{ .allocator = allocator };
     }
 
-    /// Compile Mono IR to a native object file for the given RocTarget.
+    /// Compile LIR to a native object file for the given RocTarget.
     ///
-    /// Dispatches at runtime to the correct compile-time MonoExprCodeGen
+    /// Dispatches at runtime to the correct compile-time LirCodeGen
     /// instantiation for the requested target. Works for both native and
     /// cross-compilation — the caller just passes the desired target.
     ///
     /// Returns CompilationError.UnsupportedTarget for arm32 and wasm32 targets.
     pub fn compileToObjectFile(
         self: *ObjectFileCompiler,
-        mono_store: *const mono.MonoExprStore,
+        lir_store: *const LirExprStore,
         layout_store: *const layout.Store,
         entrypoints: []const Entrypoint,
-        procs: []const mono.MonoProc,
+        procs: []const LirProc,
         target: RocTarget,
     ) CompilationError!CompilationResult {
-        return crossCompileDispatch(self.allocator, mono_store, layout_store, entrypoints, procs, target);
+        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, procs, target);
     }
 
     /// Compile to an object file and write it to a path.
     pub fn compileToObjectFileAndWrite(
         self: *ObjectFileCompiler,
-        mono_store: *const mono.MonoExprStore,
+        lir_store: *const LirExprStore,
         layout_store: *const layout.Store,
         entrypoints: []const Entrypoint,
-        procs: []const mono.MonoProc,
+        procs: []const LirProc,
         target: RocTarget,
         output_path: []const u8,
     ) CompilationError!void {
         var result = try self.compileToObjectFile(
-            mono_store,
+            lir_store,
             layout_store,
             entrypoints,
             procs,
@@ -115,10 +117,10 @@ pub const ObjectFileCompiler = struct {
 fn compileWithCodeGen(
     comptime CodeGen: type,
     allocator: Allocator,
-    mono_store: *const mono.MonoExprStore,
+    lir_store: *const LirExprStore,
     layout_store: *const layout.Store,
     entrypoints: []const Entrypoint,
-    procs: []const mono.MonoProc,
+    procs: []const LirProc,
     target: RocTarget,
 ) CompilationError!CompilationResult {
     if (entrypoints.len == 0) {
@@ -136,10 +138,10 @@ fn compileWithCodeGen(
     // Initialize the code generator
     var codegen = CodeGen.init(
         allocator,
-        mono_store,
+        lir_store,
         layout_store,
         &static_interner,
-    ) catch return CompilationError.CodeGenerationFailed;
+    ) catch return CompilationError.OutOfMemory;
     defer codegen.deinit();
 
     // Set object file mode to generate relocatable symbol references instead of direct pointers
@@ -147,10 +149,7 @@ fn compileWithCodeGen(
 
     // Compile all procedures first
     if (procs.len > 0) {
-        codegen.compileAllProcs(procs) catch |err| {
-            std.debug.print("ERROR in compileAllProcs: {}\n", .{err});
-            return CompilationError.CodeGenerationFailed;
-        };
+        codegen.compileAllProcs(procs) catch return CompilationError.OutOfMemory;
     }
 
     // Track symbols for object file generation
@@ -164,10 +163,7 @@ fn compileWithCodeGen(
             entrypoint.body_expr,
             entrypoint.arg_layouts,
             entrypoint.ret_layout,
-        ) catch |err| {
-            std.debug.print("ERROR in generateEntrypointWrapper: {}\n", .{err});
-            return CompilationError.CodeGenerationFailed;
-        };
+        ) catch return CompilationError.OutOfMemory;
 
         symbols.append(allocator, .{
             .name = entrypoint.symbol_name,
@@ -235,7 +231,7 @@ fn compileWithCodeGen(
                     };
                 }
             },
-            else => {},
+            .local_data, .jmp_to_return => {},
         }
     }
 
@@ -250,8 +246,9 @@ fn compileWithCodeGen(
         symbols.items,
         relocations,
         &output,
-    ) catch {
-        return CompilationError.ObjectGenerationFailed;
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return CompilationError.OutOfMemory,
+        error.UnsupportedTarget => return CompilationError.UnsupportedTarget,
     };
 
     return CompilationResult{
@@ -263,13 +260,13 @@ fn compileWithCodeGen(
 }
 
 /// Runtime-to-comptime dispatch for compilation.
-/// Uses inline for over RocTarget enum fields to select the correct MonoExprCodeGen instantiation.
+/// Uses inline for over RocTarget enum fields to select the correct LirCodeGen instantiation.
 fn crossCompileDispatch(
     allocator: Allocator,
-    mono_store: *const mono.MonoExprStore,
+    lir_store: *const LirExprStore,
     layout_store: *const layout.Store,
     entrypoints: []const Entrypoint,
-    procs: []const mono.MonoProc,
+    procs: []const LirProc,
     target: RocTarget,
 ) CompilationError!CompilationResult {
     const enum_info = @typeInfo(RocTarget).@"enum";
@@ -279,9 +276,9 @@ fn crossCompileDispatch(
             const arch = comptime comptime_target.toCpuArch();
             if (comptime (arch == .x86_64 or arch == .aarch64 or arch == .aarch64_be)) {
                 return compileWithCodeGen(
-                    MonoExprCodeGenMod.MonoExprCodeGen(comptime_target),
+                    LirCodeGenMod.LirCodeGen(comptime_target),
                     allocator,
-                    mono_store,
+                    lir_store,
                     layout_store,
                     entrypoints,
                     procs,
@@ -305,4 +302,4 @@ test "ObjectFileCompiler initialization" {
 
 // Note: Full integration tests for compileToObjectFile require complex setup
 // of mono stores and layout stores. These are tested via integration tests
-// in the CLI (roc build --backend=dev).
+// in the CLI (roc build --opt=dev).

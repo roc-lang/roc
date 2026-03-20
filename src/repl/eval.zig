@@ -11,6 +11,7 @@ const check = @import("check");
 const Check = check.Check;
 const builtins = @import("builtins");
 const eval_mod = @import("eval");
+const wasm_runner = @import("wasm_runner.zig");
 const roc_target = @import("roc_target");
 const compile = @import("compile");
 const single_module = compile.single_module;
@@ -26,7 +27,14 @@ const LoadedModule = builtin_loading.LoadedModule;
 const DevEvaluator = eval_mod.DevEvaluator;
 
 pub const Backend = @import("backend").EvalBackend;
+const ExecutionBackend = enum {
+    interpreter,
+    dev,
+    llvm,
+    wasm,
+};
 const CommonEnv = base.CommonEnv;
+const RocStr = builtins.str.RocStr;
 
 /// Render a parse diagnostic for REPL output (without source context for cleaner display).
 /// The REPL already shows the input, so we don't need to repeat it in error messages.
@@ -77,8 +85,8 @@ pub const Repl = struct {
     /// Shared crash context managed by the host (optional)
     crash_ctx: ?*CrashContext,
     /// Backend for code evaluation
-    backend: Backend,
-    /// DevEvaluator instance (only initialized when backend is .dev)
+    backend: ExecutionBackend,
+    /// DevEvaluator instance (initialized when backend is .dev or .llvm)
     dev_evaluator: ?DevEvaluator,
     /// ModuleEnv from last successful evaluation (for snapshot generation)
     last_module_env: ?*ModuleEnv,
@@ -94,10 +102,23 @@ pub const Repl = struct {
     builtin_module: LoadedModule,
 
     pub fn init(allocator: Allocator, roc_ops: *RocOps, crash_ctx: ?*CrashContext) !Repl {
-        return initWithBackend(allocator, roc_ops, crash_ctx, .interpreter);
+        return initInternal(allocator, roc_ops, crash_ctx, .interpreter);
     }
 
     pub fn initWithBackend(allocator: Allocator, roc_ops: *RocOps, crash_ctx: ?*CrashContext, backend: Backend) !Repl {
+        const execution_backend: ExecutionBackend = switch (backend) {
+            .interpreter => .interpreter,
+            .dev => .dev,
+            .llvm => .llvm,
+        };
+        return initInternal(allocator, roc_ops, crash_ctx, execution_backend);
+    }
+
+    pub fn initWithWasmBackend(allocator: Allocator, roc_ops: *RocOps, crash_ctx: ?*CrashContext) !Repl {
+        return initInternal(allocator, roc_ops, crash_ctx, .wasm);
+    }
+
+    fn initInternal(allocator: Allocator, roc_ops: *RocOps, crash_ctx: ?*CrashContext, backend: ExecutionBackend) !Repl {
         const compiled_builtins = @import("compiled_builtins");
 
         // Load builtin indices once at startup (generated at build time)
@@ -108,10 +129,10 @@ pub const Repl = struct {
         var builtin_module = try builtin_loading.loadCompiledModule(allocator, compiled_builtins.builtin_bin, "Builtin", builtin_source);
         errdefer builtin_module.deinit();
 
-        // Initialize DevEvaluator if using dev backend
+        // Initialize DevEvaluator if using a native-code backend
         var dev_evaluator: ?DevEvaluator = null;
-        if (backend == .dev) {
-            dev_evaluator = DevEvaluator.init(allocator) catch null;
+        if (backend == .dev or backend == .llvm) {
+            dev_evaluator = DevEvaluator.init(allocator, null) catch null;
         }
 
         return Repl{
@@ -577,18 +598,12 @@ pub const Repl = struct {
         const cir = module_env;
         try cir.initCIRFields("repl");
 
-        // Populate all auto-imported builtin types using the shared helper to keep behavior consistent
-        var module_envs_map = std.AutoHashMap(base.Ident.Idx, can.Can.AutoImportedType).init(self.allocator);
-        defer module_envs_map.deinit();
-
-        try Can.populateModuleEnvs(
-            &module_envs_map,
-            module_env,
-            self.builtin_module.env,
-            self.builtin_indices,
-        );
-
-        var czer = Can.init(&allocators, cir, parse_ast, &module_envs_map) catch |err| {
+        var czer = Can.initModule(&allocators, cir, parse_ast, .{
+            .builtin_types = .{
+                .builtin_module_env = self.builtin_module.env,
+                .builtin_indices = self.builtin_indices,
+            },
+        }) catch |err| {
             return .{ .canonicalize_error = try std.fmt.allocPrint(self.allocator, "Canonicalize init error: {}", .{err}) };
         };
         defer czer.deinit();
@@ -617,7 +632,9 @@ pub const Repl = struct {
         };
         const final_expr_idx = canonical_expr.get_idx();
 
-        const imported_modules = [_]*const ModuleEnv{self.builtin_module.env};
+        // Keep imported module order aligned with resolveImports/getResolvedModule indices.
+        // For REPL expressions with Builtin imports, Builtin must come first.
+        const imported_modules = [_]*const ModuleEnv{ self.builtin_module.env, module_env };
 
         // Resolve imports - map each import to its index in imported_modules
         module_env.imports.resolveImports(module_env, &imported_modules);
@@ -636,7 +653,7 @@ pub const Repl = struct {
             &module_env.types,
             cir,
             &imported_modules,
-            &module_envs_map,
+            null,
             &cir.store.regions,
             builtin_ctx,
         ) catch |err| {
@@ -650,60 +667,185 @@ pub const Repl = struct {
 
         // Check for type problems (e.g., type mismatches)
         if (checker.problems.problems.items.len > 0) {
-            // Return a generic type error message
-            // TODO: Use ReportBuilder to produce a more detailed error message
-            return .{ .type_error = try self.allocator.dupe(u8, "TYPE MISMATCH") };
+            const problem = checker.problems.problems.items[0];
+            const empty_modules: []const *const ModuleEnv = &.{};
+            var report_builder = check.ReportBuilder.init(
+                self.allocator,
+                module_env,
+                cir,
+                &checker.snapshots,
+                &checker.problems,
+                "repl",
+                empty_modules,
+                &checker.import_mapping,
+                &checker.regions,
+            ) catch {
+                return .{ .type_error = try self.allocator.dupe(u8, "TYPE MISMATCH") };
+            };
+            defer report_builder.deinit();
+
+            var report = report_builder.build(problem) catch {
+                return .{ .type_error = try self.allocator.dupe(u8, "TYPE MISMATCH") };
+            };
+            defer report.deinit();
+
+            var output = std.array_list.Managed(u8).init(self.allocator);
+            var unmanaged = output.moveToUnmanaged();
+            var writer_alloc = std.Io.Writer.Allocating.fromArrayList(self.allocator, &unmanaged);
+            report.render(&writer_alloc.writer, .markdown) catch |err| switch (err) {
+                error.WriteFailed => return error.OutOfMemory,
+                else => return err,
+            };
+            unmanaged = writer_alloc.toArrayList();
+            output = unmanaged.toManaged(self.allocator);
+            // Trim trailing whitespace from the rendered report
+            const rendered = output.items;
+            const trimmed = std.mem.trimRight(u8, rendered, " \t\r\n");
+            const result = try self.allocator.dupe(u8, trimmed);
+            output.deinit();
+            return .{ .type_error = result };
         }
 
-        // Use DevEvaluator if backend is .dev and we have a DevEvaluator instance
-        // ExecutableMemory is not available on freestanding targets (wasm32)
-        if (comptime builtin.os.tag != .freestanding) {
-            if (self.backend == .dev) {
-                if (self.dev_evaluator) |*dev_eval| {
-                    // Generate and execute native code
-                    const all_module_envs = &.{module_env};
-                    var code_result = dev_eval.generateCode(module_env, final_expr_idx, all_module_envs) catch {
-                        // Fall back to interpreter on unsupported expressions
-                        return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker);
-                    };
-                    defer code_result.deinit();
+        // If the expression is a function (lambda or closure), skip lowering entirely —
+        // the function is never called, so its body should never be specialized.
+        // Just return "<function>" directly.
+        switch (module_env.store.getExpr(final_expr_idx)) {
+            .e_lambda,
+            .e_closure,
+            .e_hosted_lambda,
+            => return .{ .expression = try self.allocator.dupe(u8, "<function>") },
 
-                    // Execute the compiled code
-                    var executable = eval_mod.ExecutableMemory.init(code_result.code) catch {
-                        return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker);
-                    };
-                    defer executable.deinit();
+            // Non-function expressions: proceed with normal evaluation
+            .e_num,
+            .e_frac_f32,
+            .e_frac_f64,
+            .e_dec,
+            .e_dec_small,
+            .e_typed_int,
+            .e_typed_frac,
+            .e_bytes_literal,
+            .e_str_segment,
+            .e_str,
+            .e_lookup_local,
+            .e_lookup_external,
+            .e_lookup_pending,
+            .e_lookup_required,
+            .e_list,
+            .e_empty_list,
+            .e_tuple,
+            .e_match,
+            .e_if,
+            .e_call,
+            .e_record,
+            .e_empty_record,
+            .e_block,
+            .e_tag,
+            .e_nominal,
+            .e_nominal_external,
+            .e_zero_argument_tag,
+            .e_binop,
+            .e_unary_minus,
+            .e_unary_not,
+            .e_dot_access,
+            .e_tuple_access,
+            .e_runtime_error,
+            .e_crash,
+            .e_dbg,
+            .e_expect,
+            .e_ellipsis,
+            .e_anno_only,
+            .e_return,
+            .e_type_var_dispatch,
+            .e_for,
+            .e_run_low_level,
+            => {},
+        }
 
-                    // Format result based on layout
-                    const LayoutIdx = eval_mod.layout.Idx;
-                    const output = switch (code_result.result_layout) {
-                        LayoutIdx.i64, LayoutIdx.i8, LayoutIdx.i16, LayoutIdx.i32 => try std.fmt.allocPrint(self.allocator, "{} : I64", .{executable.callReturnI64()}),
-                        LayoutIdx.u64, LayoutIdx.u8, LayoutIdx.u16, LayoutIdx.u32 => try std.fmt.allocPrint(self.allocator, "{} : U64", .{executable.callReturnU64()}),
-                        LayoutIdx.bool => if (executable.callReturnU64() != 0) try self.allocator.dupe(u8, "Bool.true : Bool") else try self.allocator.dupe(u8, "Bool.false : Bool"),
-                        LayoutIdx.f64, LayoutIdx.f32 => blk: {
-                            break :blk try std.fmt.allocPrint(self.allocator, "{d} : F64", .{executable.callReturnF64()});
-                        },
-                        LayoutIdx.dec => blk: {
-                            var dec_bytes: [16]u8 align(16) = undefined;
-                            executable.callWithResultPtr(@ptrCast(&dec_bytes));
-                            const dec_val: i128 = @bitCast(dec_bytes);
-                            const d = builtins.dec.RocDec{ .num = dec_val };
-                            var buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
-                            const formatted = d.format_to_buf(&buf);
-                            break :blk try std.fmt.allocPrint(self.allocator, "{s} : Dec", .{formatted});
-                        },
-                        else => return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker),
-                    };
-                    return .{ .expression = output };
-                }
+        if (self.backend == .dev or self.backend == .llvm or self.backend == .wasm) {
+            if (try self.getDeferredCompileCrash(module_env, final_expr_idx)) |crash_msg| {
+                return .{ .eval_error = crash_msg };
             }
         }
 
-        return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker);
+        // Wrap expression in Str.inspect so both backends produce a string
+        const inspect_expr = wrapInStrInspect(module_env, final_expr_idx) catch {
+            return .{ .eval_error = try self.allocator.dupe(u8, "Failed to wrap expression in Str.inspect") };
+        };
+
+        if (comptime builtin.os.tag != .freestanding) {
+            switch (self.backend) {
+                .dev, .llvm => return self.evaluateWithDev(module_env, inspect_expr),
+                .wasm => return self.evaluateWithWasm(module_env, inspect_expr),
+                .interpreter => {},
+            }
+        }
+
+        return self.evaluateWithInterpreter(module_env, inspect_expr, &imported_modules, &checker);
     }
 
-    /// Evaluate using the interpreter (fallback path)
-    fn evaluateWithInterpreter(self: *Repl, module_env: *ModuleEnv, final_expr_idx: can.CIR.Expr.Idx, imported_modules: *const [1]*const ModuleEnv, checker: *Check) !StepResult {
+    fn dupResultStr(self: *Repl, result_buf: *align(16) [512]u8, backend_name: []const u8) ![]const u8 {
+        const roc_str: *const RocStr = @ptrCast(@alignCast(result_buf));
+        const slice = if (roc_str.isSmallStr())
+            roc_str.asSlice()
+        else if (roc_str.len() > 0 and roc_str.len() < 1024 * 1024)
+            roc_str.asSlice()
+        else
+            return std.fmt.allocPrint(self.allocator, "{s} backend returned invalid string", .{backend_name});
+
+        return self.allocator.dupe(u8, slice);
+    }
+
+    fn evaluateWithDev(self: *Repl, module_env: *ModuleEnv, inspect_expr: can.CIR.Expr.Idx) !StepResult {
+        if (self.dev_evaluator == null) {
+            return .{ .eval_error = try self.allocator.dupe(u8, "Dev backend unavailable") };
+        }
+        const backend_name = if (self.backend == .llvm) "LLVM" else "Dev";
+        const all_module_envs: []const *ModuleEnv = &.{ self.builtin_module.env, module_env };
+        var code_result = self.dev_evaluator.?.generateCode(module_env, inspect_expr, all_module_envs, null) catch |err| {
+            return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "{s} backend codegen error: {s}", .{ backend_name, @errorName(err) }) };
+        };
+        defer code_result.deinit();
+
+        var executable = eval_mod.ExecutableMemory.initWithEntryOffset(code_result.code, code_result.entry_offset) catch |err| {
+            return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "{s} backend executable error: {s}", .{ backend_name, @errorName(err) }) };
+        };
+        defer executable.deinit();
+
+        var result_buf: [512]u8 align(16) = @splat(0);
+        self.dev_evaluator.?.callWithCrashProtection(&executable, @ptrCast(&result_buf)) catch |err| switch (err) {
+            error.RocCrashed => {
+                if (self.dev_evaluator.?.getCrashMessage()) |msg| {
+                    return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "{s} backend crash: {s}", .{ backend_name, msg }) };
+                }
+                if (self.crash_ctx) |ctx| {
+                    if (ctx.crashMessage()) |msg| {
+                        return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "{s} backend crash: {s}", .{ backend_name, msg }) };
+                    }
+                }
+                return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "{s} backend execution error: {s}", .{ backend_name, @errorName(err) }) };
+            },
+            error.Segfault => {
+                return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "{s} backend execution error: {s}", .{ backend_name, @errorName(err) }) };
+            },
+        };
+
+        const output = self.dupResultStr(&result_buf, backend_name) catch {
+            return .{ .eval_error = try self.allocator.dupe(u8, "Out of memory") };
+        };
+        return .{ .expression = output };
+    }
+
+    fn evaluateWithWasm(self: *Repl, module_env: *ModuleEnv, inspect_expr: can.CIR.Expr.Idx) !StepResult {
+        const output = wasm_runner.wasmEvaluatorStr(self.allocator, module_env, inspect_expr, self.builtin_module.env) catch |err| {
+            return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Wasm backend execution error: {s}", .{@errorName(err)}) };
+        };
+
+        return .{ .expression = output };
+    }
+
+    /// Evaluate a str_inspekt-wrapped expression using the interpreter.
+    /// The expression should already be wrapped in Str.inspect, so the result is a Str.
+    fn evaluateWithInterpreter(self: *Repl, module_env: *ModuleEnv, inspect_expr: can.CIR.Expr.Idx, imported_modules: []const *const ModuleEnv, checker: *Check) !StepResult {
         const builtin_types_for_eval = BuiltinTypes.init(self.builtin_indices, self.builtin_module.env, self.builtin_module.env, self.builtin_module.env);
         var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, builtin_types_for_eval, self.builtin_module.env, imported_modules, &checker.import_mapping, null, null, roc_target.RocTarget.detectNative()) catch |err| {
             return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Interpreter init error: {}", .{err}) };
@@ -714,7 +856,7 @@ pub const Repl = struct {
             ctx.reset();
         }
 
-        const result = interpreter.eval(final_expr_idx, self.roc_ops) catch |err| switch (err) {
+        const result = interpreter.eval(inspect_expr, self.roc_ops) catch |err| switch (err) {
             error.Crash => {
                 if (self.crash_ctx) |ctx| {
                     if (ctx.crashMessage()) |msg| {
@@ -727,13 +869,638 @@ pub const Repl = struct {
         };
 
         if (self.debug_store_snapshots) {
-            try self.generateAndStoreDebugHtml(module_env, final_expr_idx);
+            try self.generateAndStoreDebugHtml(module_env, inspect_expr);
         }
 
-        const output = try interpreter.renderValueRocForRepl(result, result.rt_var, self.roc_ops);
+        // The result is a Str from Str.inspect — extract it directly
+        const roc_str = result.asRocStr() orelse
+            return .{ .eval_error = try self.allocator.dupe(u8, "Str.inspect did not produce a string") };
+        const output = try self.allocator.dupe(u8, roc_str.asSlice());
 
         result.decref(&interpreter.runtime_layout_store, self.roc_ops);
         interpreter.cleanupBindings(self.roc_ops);
         return .{ .expression = output };
     }
+
+    fn getDeferredCompileCrash(self: *Repl, module_env: *ModuleEnv, expr_idx: can.CIR.Expr.Idx) !?[]u8 {
+        const expr = module_env.store.getExpr(expr_idx);
+
+        switch (expr) {
+            .e_runtime_error => |runtime_err| {
+                const msg = try self.runtimeDiagnosticMessage(module_env, runtime_err.diagnostic, false);
+                defer self.allocator.free(msg);
+                const crash = try std.fmt.allocPrint(self.allocator, "Crash: {s}", .{msg});
+                return crash;
+            },
+            .e_anno_only => {
+                const crash = try self.allocator.dupe(u8, "Crash: Compile-time error encountered at runtime");
+                return crash;
+            },
+            .e_call => |call| {
+                if (try self.callTargetCompileError(module_env, call.func)) |msg| {
+                    defer self.allocator.free(msg);
+                    const crash = try std.fmt.allocPrint(self.allocator, "Crash: {s}", .{msg});
+                    return crash;
+                }
+            },
+            else => {},
+        }
+
+        return null;
+    }
+
+    fn callTargetCompileError(self: *Repl, module_env: *ModuleEnv, func_expr_idx: can.CIR.Expr.Idx) !?[]u8 {
+        const func_expr = module_env.store.getExpr(func_expr_idx);
+
+        switch (func_expr) {
+            .e_runtime_error => |runtime_err| {
+                const msg = try self.runtimeDiagnosticMessage(module_env, runtime_err.diagnostic, true);
+                return msg;
+            },
+            .e_anno_only, .e_crash => {
+                const msg = try self.allocator.dupe(u8, "Cannot call function: this function has only a type annotation with no implementation");
+                return msg;
+            },
+            .e_lookup_local => |lookup| {
+                const defs = module_env.store.sliceDefs(module_env.all_defs);
+                for (defs) |def_idx| {
+                    const def = module_env.store.getDef(def_idx);
+                    if (def.pattern != lookup.pattern_idx) continue;
+
+                    const def_expr = module_env.store.getExpr(def.expr);
+                    switch (def_expr) {
+                        .e_runtime_error => |runtime_err| {
+                            const msg = try self.runtimeDiagnosticMessage(module_env, runtime_err.diagnostic, true);
+                            return msg;
+                        },
+                        .e_anno_only, .e_crash => {
+                            const msg = try self.allocator.dupe(u8, "Cannot call function: this function has only a type annotation with no implementation");
+                            return msg;
+                        },
+                        else => {},
+                    }
+                }
+            },
+            else => {},
+        }
+
+        return null;
+    }
+
+    fn runtimeDiagnosticMessage(self: *Repl, module_env: *ModuleEnv, diagnostic_idx: can.CIR.Diagnostic.Idx, for_call: bool) ![]u8 {
+        const diag_int = @intFromEnum(diagnostic_idx);
+        const node_count = module_env.store.nodes.len();
+        if (diag_int >= node_count) {
+            return if (for_call)
+                self.allocator.dupe(u8, "Cannot call function: this function contains a compile-time error")
+            else
+                self.allocator.dupe(u8, "Compile-time error encountered at runtime");
+        }
+
+        const diag = module_env.store.getDiagnostic(diagnostic_idx);
+        if (for_call) {
+            switch (diag) {
+                .not_implemented => |ni| {
+                    const feature = module_env.getString(ni.feature);
+                    return std.fmt.allocPrint(self.allocator, "Cannot call function: {s}", .{feature});
+                },
+                .exposed_but_not_implemented => |e| {
+                    const ident = module_env.getIdent(e.ident);
+                    return std.fmt.allocPrint(self.allocator, "Cannot call '{s}': it is exposed but not implemented", .{ident});
+                },
+                .nested_value_not_found => |nvnf| {
+                    const parent = module_env.getIdent(nvnf.parent_name);
+                    const nested = module_env.getIdent(nvnf.nested_name);
+                    return std.fmt.allocPrint(self.allocator, "Cannot call function: nested value not found: {s}.{s}", .{ parent, nested });
+                },
+                else => {
+                    return std.fmt.allocPrint(self.allocator, "Cannot call function: compile-time error ({s})", .{@tagName(diag)});
+                },
+            }
+        }
+
+        switch (diag) {
+            .not_implemented => |ni| {
+                const feature = module_env.getString(ni.feature);
+                return std.fmt.allocPrint(self.allocator, "Not implemented: {s}", .{feature});
+            },
+            .exposed_but_not_implemented => |e| {
+                const ident = module_env.getIdent(e.ident);
+                return std.fmt.allocPrint(self.allocator, "'{s}' is exposed but not implemented", .{ident});
+            },
+            else => {
+                return self.allocator.dupe(u8, "Compile-time error encountered at runtime");
+            },
+        }
+    }
 };
+
+const layout_mod = @import("layout");
+const Layout = layout_mod.Layout;
+const RocValue = @import("values").RocValue;
+
+/// Wrap a CIR expression in `Str.inspect(expr)` by creating an `e_run_low_level(.str_inspekt, [expr])` node.
+/// The result type is Str but the CIR type variable is left unresolved; the MIR lowerer
+/// overrides the monotype to Str for str_inspekt ops.
+fn wrapInStrInspect(module_env: *ModuleEnv, inner_expr: can.CIR.Expr.Idx) !can.CIR.Expr.Idx {
+    const top = module_env.store.scratchExprTop();
+    try module_env.store.addScratchExpr(inner_expr);
+    const args_span = try module_env.store.exprSpanFrom(top);
+    const region = module_env.store.getExprRegion(inner_expr);
+    return module_env.addExpr(.{ .e_run_low_level = .{
+        .op = .str_inspekt,
+        .args = args_span,
+    } }, region);
+}
+
+const FormatError = error{OutOfMemory};
+
+/// Format a dev backend result using the type variable for semantic info (tag names,
+/// list element types, etc.) and the layout for memory structure. This is the dev
+/// backend analog of the interpreter's `renderValueRocWithType`.
+fn formatWithTypes(
+    allocator: Allocator,
+    ptr: ?[*]const u8,
+    lay: Layout,
+    type_var: types.Var,
+    module_env: *const ModuleEnv,
+    layout_store: *const layout_mod.Store,
+) FormatError![]u8 {
+    const types_store = &module_env.types;
+    const ident_store = module_env.getIdentStoreConst();
+    var resolved = types_store.resolveVar(type_var);
+
+    // Unwrap aliases and nominal types to get the underlying structural type
+    var guard: u32 = 0;
+    while (guard < 100) : (guard += 1) {
+        switch (resolved.desc.content) {
+            .alias => |al| {
+                const backing = types_store.getAliasBackingVar(al);
+                resolved = types_store.resolveVar(backing);
+            },
+            .structure => |st| switch (st) {
+                .nominal_type => |nt| {
+                    // Check for List and Box before unwrapping — they need special handling
+                    const ident_text = ident_store.getText(nt.ident.ident_idx);
+                    if (std.mem.eql(u8, ident_text, "List")) {
+                        return formatList(allocator, ptr, lay, nt, module_env, layout_store);
+                    }
+                    if (std.mem.eql(u8, ident_text, "Box")) {
+                        return formatBox(allocator, ptr, lay, nt, module_env, layout_store);
+                    }
+                    const backing = types_store.getNominalBackingVar(nt);
+                    resolved = types_store.resolveVar(backing);
+                },
+                else => break,
+            },
+            else => break,
+        }
+    }
+
+    // Now dispatch based on the resolved structural content + layout
+    if (resolved.desc.content == .structure) switch (resolved.desc.content.structure) {
+        .tag_union => |tu| {
+            return formatTagUnion(allocator, ptr, lay, tu, module_env, layout_store);
+        },
+        .record => |rec| {
+            if (lay.tag == .struct_) {
+                return formatRecord(allocator, ptr, lay, rec, module_env, layout_store);
+            }
+        },
+        .tuple => |tup| {
+            if (lay.tag == .struct_) {
+                return formatTuple(allocator, ptr, lay, tup, module_env, layout_store);
+            }
+        },
+        .empty_record => return try allocator.dupe(u8, "{}"),
+        .empty_tag_union => return try allocator.dupe(u8, "{}"),
+        else => {},
+    };
+
+    // Use layout-only formatting for scalars and other types
+    const roc_val = RocValue{ .ptr = ptr, .lay = lay };
+    const fmt_ctx = RocValue.FormatContext{
+        .layout_store = layout_store,
+        .ident_store = ident_store,
+    };
+    return roc_val.format(allocator, fmt_ctx);
+}
+
+/// Format a tag union using type info for tag names and recursive payload formatting.
+fn formatTagUnion(
+    allocator: Allocator,
+    ptr: ?[*]const u8,
+    lay: Layout,
+    tu: types.TagUnion,
+    module_env: *const ModuleEnv,
+    layout_store: *const layout_mod.Store,
+) FormatError![]u8 {
+    const types_store = &module_env.types;
+    const ident_store = module_env.getIdentStoreConst();
+
+    // Get the sorted tag at a given discriminant index
+    const sorted_tag = getSortedTag(allocator, types_store, ident_store, tu);
+
+    if (lay.tag == .zst) {
+        // Single-variant ZST tag union — just output the tag name
+        if (sorted_tag) |tags| {
+            defer allocator.free(tags);
+            if (tags.len > 0) {
+                return try allocator.dupe(u8, ident_store.getText(tags[0].name));
+            }
+        }
+        return try allocator.dupe(u8, "{}");
+    }
+
+    if (lay.tag == .scalar) {
+        // Tag union optimized to scalar — discriminant only, no multi-variant payload
+        if (sorted_tag) |tags| {
+            defer allocator.free(tags);
+            if (lay.data.scalar.tag == .int) {
+                const raw = ptr orelse unreachable;
+                const disc: usize = switch (lay.data.scalar.data.int) {
+                    .u8 => raw[0],
+                    .u16 => @as(u16, raw[0]) | (@as(u16, raw[1]) << 8),
+                    .u32 => @intCast(@as(u32, raw[0]) | (@as(u32, raw[1]) << 8) | (@as(u32, raw[2]) << 16) | (@as(u32, raw[3]) << 24)),
+                    else => 0,
+                };
+                if (disc < tags.len) {
+                    const tag = tags[disc];
+                    const tag_name = ident_store.getText(tag.name);
+                    // Check if this tag has payload args
+                    const args = types_store.sliceVars(toVarRange(tag.args));
+                    if (args.len == 0) {
+                        return try allocator.dupe(u8, tag_name);
+                    }
+                }
+            }
+        }
+        // Fall through to default scalar formatting
+        const roc_val = RocValue{ .ptr = ptr, .lay = lay };
+        const fmt_ctx = RocValue.FormatContext{
+            .layout_store = layout_store,
+            .ident_store = ident_store,
+        };
+        return roc_val.format(allocator, fmt_ctx);
+    }
+
+    if (lay.tag == .tag_union) {
+        const tu_idx = lay.data.tag_union.idx;
+        const tu_data = layout_store.getTagUnionData(tu_idx);
+        const disc_offset = layout_store.getTagUnionDiscriminantOffset(tu_idx);
+
+        const raw = ptr orelse unreachable;
+        const discriminant = tu_data.readDiscriminantFromPtr(raw + disc_offset);
+
+        if (sorted_tag) |tags| {
+            defer allocator.free(tags);
+            if (discriminant < tags.len) {
+                const tag = tags[discriminant];
+                const tag_name = ident_store.getText(tag.name);
+                const arg_vars = types_store.sliceVars(toVarRange(tag.args));
+
+                var out = std.array_list.AlignedManaged(u8, null).init(allocator);
+                errdefer out.deinit();
+                try out.appendSlice(tag_name);
+
+                if (arg_vars.len > 0) {
+                    try out.append('(');
+                    // Get the payload layout from the variant
+                    const variants = layout_store.getTagUnionVariants(tu_data);
+                    const payload_layout = layout_store.getLayout(variants.get(discriminant).payload_layout);
+
+                    if (arg_vars.len == 1) {
+                        const rendered = try formatWithTypes(allocator, raw, payload_layout, arg_vars[0], module_env, layout_store);
+                        defer allocator.free(rendered);
+                        try out.appendSlice(rendered);
+                    } else {
+                        // Multi-arg: payload is a tuple
+                        for (arg_vars, 0..) |arg_var, i| {
+                            const rendered = try formatWithTypes(allocator, raw, payload_layout, arg_var, module_env, layout_store);
+                            defer allocator.free(rendered);
+                            try out.appendSlice(rendered);
+                            if (i + 1 < arg_vars.len) try out.appendSlice(", ");
+                        }
+                    }
+                    try out.append(')');
+                }
+                return out.toOwnedSlice();
+            }
+        }
+
+        unreachable; // sorted_tag must resolve for all tag unions with tag_union layout
+    }
+
+    // Single-variant tag union with unwrapped payload layout.
+    // When a tag union has exactly one variant, the layout optimizer removes the
+    // discriminant and uses the payload's layout directly (record, tuple, scalar, etc.).
+    // We still need to display the tag name wrapping the payload.
+    if (sorted_tag) |tags| {
+        defer allocator.free(tags);
+        if (tags.len == 1) {
+            const tag = tags[0];
+            const tag_name = ident_store.getText(tag.name);
+            const arg_vars = types_store.sliceVars(toVarRange(tag.args));
+
+            var out = std.array_list.AlignedManaged(u8, null).init(allocator);
+            errdefer out.deinit();
+            try out.appendSlice(tag_name);
+
+            if (arg_vars.len > 0) {
+                try out.append('(');
+                if (arg_vars.len == 1) {
+                    const rendered = try formatWithTypes(allocator, ptr, lay, arg_vars[0], module_env, layout_store);
+                    defer allocator.free(rendered);
+                    try out.appendSlice(rendered);
+                } else {
+                    // Multi-arg: the payload layout is a tuple
+                    for (arg_vars, 0..) |arg_var, i| {
+                        const rendered = try formatWithTypes(allocator, ptr, lay, arg_var, module_env, layout_store);
+                        defer allocator.free(rendered);
+                        try out.appendSlice(rendered);
+                        if (i + 1 < arg_vars.len) try out.appendSlice(", ");
+                    }
+                }
+                try out.append(')');
+            }
+            return out.toOwnedSlice();
+        }
+    }
+
+    // Fallback: use layout-only formatting for unresolvable tag unions
+    const roc_val = RocValue{ .ptr = ptr, .lay = lay };
+    const fmt_ctx = RocValue.FormatContext{
+        .layout_store = layout_store,
+        .ident_store = ident_store,
+    };
+    return roc_val.format(allocator, fmt_ctx);
+}
+
+/// Format a list using element type info from the nominal List type.
+fn formatList(
+    allocator: Allocator,
+    ptr: ?[*]const u8,
+    lay: Layout,
+    nt: types.NominalType,
+    module_env: *const ModuleEnv,
+    layout_store: *const layout_mod.Store,
+) FormatError![]u8 {
+    const types_store = &module_env.types;
+    const arg_vars = types_store.sliceNominalArgs(nt);
+    const elem_type_var = if (arg_vars.len == 1) arg_vars[0] else unreachable;
+
+    var out = std.array_list.AlignedManaged(u8, null).init(allocator);
+    errdefer out.deinit();
+    try out.append('[');
+
+    if (lay.tag == .list) {
+        const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(ptr.?));
+        const len = roc_list.len();
+        if (len > 0) {
+            const elem_layout_idx = lay.data.list;
+            const elem_layout = layout_store.getLayout(elem_layout_idx);
+            const elem_size = layout_store.layoutSize(elem_layout);
+            var i: usize = 0;
+            while (i < len) : (i += 1) {
+                if (roc_list.bytes) |bytes| {
+                    const elem_ptr: [*]const u8 = bytes + i * elem_size;
+                    const rendered = try formatWithTypes(allocator, elem_ptr, elem_layout, elem_type_var, module_env, layout_store);
+                    defer allocator.free(rendered);
+                    try out.appendSlice(rendered);
+                    if (i + 1 < len) try out.appendSlice(", ");
+                }
+            }
+        }
+    } else if (lay.tag == .list_of_zst) {
+        const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(ptr.?));
+        const len = roc_list.len();
+        const zst_layout = Layout{ .tag = .zst, .data = .{ .zst = {} } };
+        var i: usize = 0;
+        while (i < len) : (i += 1) {
+            const rendered = try formatWithTypes(allocator, null, zst_layout, elem_type_var, module_env, layout_store);
+            defer allocator.free(rendered);
+            try out.appendSlice(rendered);
+            if (i + 1 < len) try out.appendSlice(", ");
+        }
+    }
+
+    try out.append(']');
+    return out.toOwnedSlice();
+}
+
+/// Format a Box value by dereferencing the pointer and rendering the inner value.
+fn formatBox(
+    allocator: Allocator,
+    ptr: ?[*]const u8,
+    lay: Layout,
+    nt: types.NominalType,
+    module_env: *const ModuleEnv,
+    layout_store: *const layout_mod.Store,
+) FormatError![]u8 {
+    const types_store = &module_env.types;
+    const arg_vars = types_store.sliceNominalArgs(nt);
+    if (arg_vars.len != 1) return try allocator.dupe(u8, "Box(<unknown>)");
+    const inner_type_var = arg_vars[0];
+
+    var out = std.array_list.AlignedManaged(u8, null).init(allocator);
+    errdefer out.deinit();
+    try out.appendSlice("Box(");
+
+    if (lay.tag == .box) {
+        // Box layout: the value at ptr is a machine word (pointer to heap-allocated inner value)
+        const inner_layout = layout_store.getLayout(lay.data.box);
+        if (ptr) |p| {
+            const box_ptr: *const usize = @ptrCast(@alignCast(p));
+            const inner_ptr: [*]const u8 = @ptrFromInt(box_ptr.*);
+            const rendered = try formatWithTypes(allocator, inner_ptr, inner_layout, inner_type_var, module_env, layout_store);
+            defer allocator.free(rendered);
+            try out.appendSlice(rendered);
+        }
+    } else if (lay.tag == .box_of_zst) {
+        const zst_layout = Layout{ .tag = .zst, .data = .{ .zst = {} } };
+        const rendered = try formatWithTypes(allocator, null, zst_layout, inner_type_var, module_env, layout_store);
+        defer allocator.free(rendered);
+        try out.appendSlice(rendered);
+    }
+
+    try out.append(')');
+    return out.toOwnedSlice();
+}
+
+/// Format a record using type info for field names and recursive field formatting.
+/// Fields are displayed in type-field order (alphabetical), matching the user's
+/// mental model. The layout fields may be in a different order (sorted by
+/// alignment/size for memory efficiency), so we iterate canonical type fields
+/// and map them to layout slots by canonical field index.
+fn formatRecord(
+    allocator: Allocator,
+    ptr: ?[*]const u8,
+    lay: Layout,
+    rec: types.Record,
+    module_env: *const ModuleEnv,
+    layout_store: *const layout_mod.Store,
+) FormatError![]u8 {
+    const types_store = &module_env.types;
+    const rec_data = layout_store.getStructData(lay.data.struct_.idx);
+
+    if (rec_data.fields.count == 0) {
+        return try allocator.dupe(u8, "{}");
+    }
+
+    var out = std.array_list.AlignedManaged(u8, null).init(allocator);
+    errdefer out.deinit();
+    try out.appendSlice("{ ");
+
+    const type_fields = types_store.getRecordFieldsSlice(rec.fields);
+    const layout_fields = layout_store.struct_fields.sliceRange(rec_data.getFields());
+    var canonical_type_fields = try allocator.alloc(types.RecordField, type_fields.len);
+    defer allocator.free(canonical_type_fields);
+    for (type_fields, 0..) |field, i| canonical_type_fields[i] = field;
+    std.mem.sort(
+        types.RecordField,
+        canonical_type_fields,
+        module_env.getIdentStoreConst(),
+        types.RecordField.sortByNameAsc,
+    );
+    const count = @min(layout_fields.len, canonical_type_fields.len);
+
+    // Iterate in type-field order (alphabetical) for display
+    for (0..count) |ti| {
+        const t_fld = canonical_type_fields[ti];
+        const layout_idx = blk: {
+            for (0..layout_fields.len) |li| {
+                if (layout_fields.get(li).index == ti) {
+                    break :blk li;
+                }
+            }
+            unreachable;
+        };
+        const l_fld = layout_fields.get(layout_idx);
+
+        const name_text = module_env.getIdent(t_fld.name);
+        try out.appendSlice(name_text);
+        try out.appendSlice(": ");
+
+        const offset = layout_store.getStructFieldOffset(lay.data.struct_.idx, @intCast(layout_idx));
+        const field_layout = layout_store.getLayout(l_fld.layout);
+        const base_ptr = ptr.?;
+        const field_ptr = base_ptr + offset;
+        const rendered = try formatWithTypes(allocator, field_ptr, field_layout, t_fld.var_, module_env, layout_store);
+        defer allocator.free(rendered);
+        try out.appendSlice(rendered);
+        if (ti + 1 < count) try out.appendSlice(", ");
+    }
+
+    try out.appendSlice(" }");
+    return out.toOwnedSlice();
+}
+
+/// Format a tuple using type info for element types.
+fn formatTuple(
+    allocator: Allocator,
+    ptr: ?[*]const u8,
+    lay: Layout,
+    tup: types.Tuple,
+    module_env: *const ModuleEnv,
+    layout_store: *const layout_mod.Store,
+) FormatError![]u8 {
+    const types_store = &module_env.types;
+    const tuple_data = layout_store.getStructData(lay.data.struct_.idx);
+    const layout_fields = layout_store.struct_fields.sliceRange(tuple_data.getFields());
+    const elem_vars = types_store.sliceVars(tup.elems);
+    const count = @min(layout_fields.len, elem_vars.len);
+
+    var out = std.array_list.AlignedManaged(u8, null).init(allocator);
+    errdefer out.deinit();
+    try out.append('(');
+
+    // Iterate by original source index
+    var original_idx: usize = 0;
+    while (original_idx < count) : (original_idx += 1) {
+        const sorted_idx = blk: {
+            for (0..count) |si| {
+                if (layout_fields.get(si).index == original_idx) break :blk si;
+            }
+            unreachable;
+        };
+        const fld = layout_fields.get(sorted_idx);
+        const field_layout = layout_store.getLayout(fld.layout);
+        const elem_offset = layout_store.getStructFieldOffset(lay.data.struct_.idx, @intCast(sorted_idx));
+        const base_ptr = ptr.?;
+        const elem_ptr = base_ptr + elem_offset;
+        const rendered = try formatWithTypes(allocator, elem_ptr, field_layout, elem_vars[original_idx], module_env, layout_store);
+        defer allocator.free(rendered);
+        try out.appendSlice(rendered);
+        if (original_idx + 1 < count) try out.appendSlice(", ");
+    }
+
+    try out.append(')');
+    return out.toOwnedSlice();
+}
+
+/// Collect all tags from a tag union (following extension chains), sort alphabetically,
+/// and return as an owned slice. Caller must free the returned slice.
+fn getSortedTag(
+    allocator: Allocator,
+    types_store: *const types.Store,
+    ident_store: *const base.Ident.Store,
+    tu: types.TagUnion,
+) ?[]types.Tag {
+    var all_tags = std.ArrayList(types.Tag).empty;
+
+    // Collect from initial row
+    const tags_slice = types_store.getTagsSlice(tu.tags);
+    const names = tags_slice.items(.name);
+    const args = tags_slice.items(.args);
+    for (names, args) |name, arg| {
+        all_tags.append(allocator, .{ .name = name, .args = arg }) catch return null;
+    }
+
+    // Follow extension variable chain
+    var current_ext = tu.ext;
+    var guard: u32 = 0;
+    while (guard < 100) : (guard += 1) {
+        const ext_resolved = types_store.resolveVar(current_ext);
+        switch (ext_resolved.desc.content) {
+            .structure => |ext_flat| switch (ext_flat) {
+                .tag_union => |ext_tu| {
+                    const ext_tags = types_store.getTagsSlice(ext_tu.tags);
+                    const ext_names = ext_tags.items(.name);
+                    const ext_args = ext_tags.items(.args);
+                    for (ext_names, ext_args) |name, arg| {
+                        all_tags.append(allocator, .{ .name = name, .args = arg }) catch return null;
+                    }
+                    current_ext = ext_tu.ext;
+                },
+                .empty_tag_union => break,
+                .nominal_type => |nominal| {
+                    const backing_var = types_store.getNominalBackingVar(nominal);
+                    current_ext = backing_var;
+                },
+                else => break,
+            },
+            .alias => |alias| {
+                current_ext = types_store.getAliasBackingVar(alias);
+            },
+            .flex, .rigid => break,
+            else => break,
+        }
+    }
+
+    if (all_tags.items.len == 0) {
+        all_tags.deinit(allocator);
+        return null;
+    }
+
+    // Sort alphabetically — matches discriminant assignment order
+    std.mem.sort(types.Tag, all_tags.items, ident_store, types.Tag.sortByNameAsc);
+    return all_tags.toOwnedSlice(allocator) catch null;
+}
+
+fn toVarRange(range: anytype) types.Var.SafeList.Range {
+    const RangeType = types.Var.SafeList.Range;
+    if (comptime @hasField(@TypeOf(range), "nonempty")) {
+        return @field(range, "nonempty");
+    }
+    return @as(RangeType, range);
+}
