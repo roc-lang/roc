@@ -2817,6 +2817,38 @@ test "cross-module: U32.until range method lowers without error" {
     try testing.expect(result != .runtime_err_type);
 }
 
+test "cross-module: U32.to reachable function lookups retain lambda sets" {
+    var env = try MirTestEnv.initExpr("1.U32.to(5.U32)");
+    defer env.deinit();
+
+    _ = try env.lowerFirstDef();
+
+    var all_module_envs = [_]*ModuleEnv{
+        @constCast(env.builtin_module.env),
+        env.module_env,
+    };
+    var ls_store = try LambdaSet.infer(test_allocator, env.mir_store, @as([]const *ModuleEnv, all_module_envs[0..]));
+    defer ls_store.deinit(test_allocator);
+
+    for (env.mir_store.getProcs(), 0..) |proc, proc_idx| {
+        if (proc.body.isNone()) continue;
+        if (firstReachableMissingFunctionLookup(env.mir_store, &ls_store, proc.body)) |missing| {
+            std.debug.print(
+                "missing range method function lookup lambda set: proc={d} body={d} fn_mono={d} expr={d} symbol={d}\n",
+                .{
+                    proc_idx,
+                    @intFromEnum(proc.body),
+                    @intFromEnum(proc.fn_monotype),
+                    @intFromEnum(missing.expr_id),
+                    missing.symbol.raw(),
+                },
+            );
+            dumpMirExpr(env.mir_store, proc.body, 1);
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
 test "cross-module: I32.to range method lowers without error" {
     var env = try MirTestEnv.initExpr("1.I32.to(5.I32)");
     defer env.deinit();

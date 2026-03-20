@@ -3176,6 +3176,17 @@ fn isTopLevelPattern(module_env: *const ModuleEnv, pattern_idx: CIR.Pattern.Idx)
     return false;
 }
 
+fn topLevelProcBackedDefExpr(module_env: *const ModuleEnv, pattern_idx: CIR.Pattern.Idx) ?CIR.Expr.Idx {
+    const defs = module_env.store.sliceDefs(module_env.all_defs);
+    for (defs) |def_idx| {
+        const def = module_env.store.getDef(def_idx);
+        if (def.pattern == pattern_idx and cirExprIsProcBacked(module_env, def.expr)) {
+            return def.expr;
+        }
+    }
+    return null;
+}
+
 fn patternBoundSymbol(self: *Self, pattern_id: MIR.PatternId) ?MIR.Symbol {
     const pattern = self.store.getPattern(pattern_id);
     return switch (pattern) {
@@ -5839,7 +5850,18 @@ fn lowerCall(
         } }, call_result_monotype, region);
     }
 
-    const lowered_func = try self.lowerExpr(call.func);
+    const lowered_func = if (call_site_proc_inst) |proc_inst_id|
+        switch (callee_expr) {
+            .e_lookup_local => |lookup| if (self.isSkippedProcBackedBindingPattern(self.current_module_idx, lookup.pattern_idx) or
+                topLevelProcBackedDefExpr(module_env, lookup.pattern_idx) != null)
+                try self.lowerProcInst(proc_inst_id)
+            else
+                try self.lowerExpr(call.func),
+            .e_lookup_external, .e_lookup_required => try self.lowerProcInst(proc_inst_id),
+            else => try self.lowerExpr(call.func),
+        }
+    else
+        try self.lowerExpr(call.func);
     return self.lowerCallWithLoweredFunc(
         lowered_func,
         module_env.store.sliceExpr(call.args),

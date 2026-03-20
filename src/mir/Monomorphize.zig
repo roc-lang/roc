@@ -1812,7 +1812,7 @@ pub const Pass = struct {
             }
 
             if (!capture_mono.isNone()) {
-                try self.putTracked(.closure_capture_monotypes, &result.closure_capture_monotypes, key, capture_mono);
+                try self.mergeTrackedClosureCaptureMonotype(result, key, capture_mono);
             }
             if (local_capture_proc_inst orelse source_capture_proc_inst) |capture_proc_inst_id| {
                 try self.putTracked(.closure_capture_proc_insts, &result.closure_capture_proc_insts, key, capture_proc_inst_id);
@@ -2503,18 +2503,16 @@ pub const Pass = struct {
                 &visiting,
             );
         }
-        if (resolved_template_id) |template_id| {
-            if (self.procTemplateLowLevelOp(result, template_id)) |low_level_op| {
-                const arg_exprs = module_env.store.sliceExpr(call_expr.args);
-                if (low_level_op == .str_inspekt and arg_exprs.len != 0) {
-                    try self.resolveStrInspektHelperProcInstsForTypeVar(
-                        result,
-                        module_idx,
-                        ModuleEnv.varFrom(arg_exprs[0]),
-                    );
-                }
-                return;
+        if (self.getCallLowLevelOp(module_env, call_expr.func)) |low_level_op| {
+            const arg_exprs = module_env.store.sliceExpr(call_expr.args);
+            if (low_level_op == .str_inspekt and arg_exprs.len != 0) {
+                try self.resolveStrInspektHelperProcInstsForTypeVar(
+                    result,
+                    module_idx,
+                    ModuleEnv.varFrom(arg_exprs[0]),
+                );
             }
+            return;
         }
         if (resolved_template_id) |template_id| {
             if (!(templateRequiresConcreteOwnerProcInst(result, template_id) and
@@ -4489,12 +4487,45 @@ pub const Pass = struct {
         key: ContextExprKey,
         resolved: ResolvedMonotype,
     ) Allocator.Error!void {
-        const gop = try result.context_expr_monotypes.getOrPut(self.allocator, key);
+        return self.mergeTrackedResolvedMonotypeMap(
+            result,
+            .context_expr_monotypes,
+            &result.context_expr_monotypes,
+            key,
+            resolved,
+            "exact expr",
+        );
+    }
+
+    fn mergeTrackedClosureCaptureMonotype(
+        self: *Pass,
+        result: *Result,
+        key: ContextCaptureKey,
+        resolved: ResolvedMonotype,
+    ) Allocator.Error!void {
+        return self.mergeTrackedResolvedMonotypeMap(
+            result,
+            .closure_capture_monotypes,
+            &result.closure_capture_monotypes,
+            key,
+            resolved,
+            "closure capture",
+        );
+    }
+
+    fn mergeTrackedResolvedMonotypeMap(
+        self: *Pass,
+        result: *Result,
+        comptime kind: MutationKind,
+        map: anytype,
+        key: anytype,
+        resolved: ResolvedMonotype,
+        comptime label: []const u8,
+    ) Allocator.Error!void {
+        const gop = try map.getOrPut(self.allocator, key);
         if (!gop.found_existing) {
             gop.value_ptr.* = resolved;
-            if (self.scratch_context_expr_monotypes_depth == 0) {
-                self.noteMutation(.context_expr_monotypes);
-            }
+            self.noteMutation(kind);
             return;
         }
 
@@ -4511,11 +4542,10 @@ pub const Pass = struct {
 
         if (std.debug.runtime_safety) {
             std.debug.panic(
-                "Monomorphize: conflicting exact expr monotypes while merging ctx={d} module={d} expr={d} existing={d}@{d} existing_mono={any} new={d}@{d} new_mono={any}",
+                "Monomorphize: conflicting {s} monotypes while merging key={any} existing={d}@{d} existing_mono={any} new={d}@{d} new_mono={any}",
                 .{
-                    key.context_proc_inst_raw,
-                    key.module_idx,
-                    key.expr_raw,
+                    label,
+                    key,
                     @intFromEnum(existing.idx),
                     existing.module_idx,
                     result.monotype_store.getMonotype(existing.idx),
@@ -5497,8 +5527,6 @@ pub const Pass = struct {
         expr_idx: CIR.Expr.Idx,
         template_id: ProcTemplateId,
     ) Allocator.Error!void {
-        if (self.procTemplateLowLevelOp(result, template_id) != null) return;
-
         const module_env = self.all_module_envs[module_idx];
         const desired_fn_monotype = try self.resolveExprMonotypeIfExactResolved(result, module_idx, expr_idx);
         const existing_proc_inst_id = if (module_env.store.getExpr(expr_idx) == .e_lookup_local) blk: {
@@ -7476,22 +7504,6 @@ pub const Pass = struct {
         };
     }
 
-    fn procTemplateLowLevelOp(
-        self: *Pass,
-        result: *const Result,
-        template_id: ProcTemplateId,
-    ) ?CIR.Expr.LowLevel {
-        const template = result.getProcTemplate(template_id);
-        const module_env = self.all_module_envs[template.module_idx];
-        return switch (module_env.store.getExpr(template.cir_expr)) {
-            .e_lambda => |lambda_expr| switch (module_env.store.getExpr(lambda_expr.body)) {
-                .e_run_low_level => |run_low_level| run_low_level.op,
-                else => null,
-            },
-            else => null,
-        };
-    }
-
     fn collectMatchingDemandedProcInstsForTemplate(
         self: *Pass,
         result: *Result,
@@ -8202,7 +8214,9 @@ pub const Pass = struct {
             if (std.debug.runtime_safety and iterations > 32) {
                 std.debug.panic(
                     "Monomorphize: proc-inst binding fixed point did not converge for proc_inst={d}",
-                    .{@intFromEnum(proc_inst_id)},
+                    .{
+                        @intFromEnum(proc_inst_id),
+                    },
                 );
             }
 
@@ -8242,7 +8256,6 @@ pub const Pass = struct {
             {
                 break;
             }
-
         }
 
         var it = iteration_expr_monotypes.iterator();
