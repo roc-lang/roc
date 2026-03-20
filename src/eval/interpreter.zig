@@ -263,6 +263,11 @@ pub const LirInterpreter = struct {
     /// when the hosted_call has 0 explicit args (same pattern as dev backend).
     current_lambda_params: ?lir.LirPatternSpan = null,
 
+    /// When running via evalEntrypoint, points to the platform's RocOps.
+    /// Hosted functions must receive this (not the interpreter's own RocOps)
+    /// because they cast ops.env to the platform's HostEnv type.
+    caller_roc_ops: ?*RocOps = null,
+
     pub const Error = error{
         OutOfMemory,
         RuntimeError,
@@ -418,11 +423,13 @@ pub const LirInterpreter = struct {
         const prev_hosted_fns = self.roc_ops.hosted_fns;
         self.roc_ops.hosted_fns = caller_roc_ops.hosted_fns;
         self.roc_env.forwardMemoryOpsFrom(caller_roc_ops);
+        self.caller_roc_ops = caller_roc_ops;
         const prev_recover_runtime_placeholders = self.recover_runtime_placeholders;
         self.recover_runtime_placeholders = true;
         defer {
             self.roc_env.resetForwardedMemoryOps();
             self.roc_ops.hosted_fns = prev_hosted_fns;
+            self.caller_roc_ops = null;
             self.recover_runtime_placeholders = prev_recover_runtime_placeholders;
         }
 
@@ -1564,9 +1571,12 @@ pub const LirInterpreter = struct {
         @memset(ret_buf[0..@max(ret_size, 1)], 0);
 
         // Call: hosted_fn(roc_ops, ret_ptr, args_ptr)
+        // Pass the caller's RocOps so the hosted function gets the platform's env
+        // (the host casts ops.env to its own HostEnv type).
         const hosted_fn = self.roc_ops.hosted_fns.fns[hc.index];
         self.roc_env.resetCrash();
-        hosted_fn(@ptrCast(&self.roc_ops), @ptrCast(&ret_buf), @ptrCast(args_buf.ptr));
+        const ops_for_host: *RocOps = self.caller_roc_ops orelse &self.roc_ops;
+        hosted_fn(@ptrCast(ops_for_host), @ptrCast(&ret_buf), @ptrCast(args_buf.ptr));
 
         if (self.roc_env.crashed) return error.Crash;
 
