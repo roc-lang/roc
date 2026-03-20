@@ -99,7 +99,7 @@ const LayoutIdxSpan = lir.LayoutIdxSpan;
 /// Generation mode determines how builtin function calls are emitted.
 /// This is important because the dev backend can be used in two ways:
 /// 1. In-process execution (dev evaluator): Direct function pointers work
-/// 2. Object file generation (roc build --backend=dev): Need symbol references
+/// 2. Object file generation (roc build --opt=dev): Need symbol references
 pub const GenerationMode = enum {
     /// Code runs in-process (dev evaluator), direct function pointers are valid.
     /// The compiled code calls builtins via absolute addresses embedded in the code.
@@ -9687,29 +9687,55 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Emit a roc_crashed call via RocOps with a static message.
         /// Used for runtime_error expressions (dead code paths that should
         /// never execute, e.g. the Err branch of `?` at the top level).
+        ///
+        /// The message bytes are stored on the stack so that this works in both
+        /// native execution and object file modes (compile-time pointers are
+        /// invalid in the final executable).
         fn emitRocCrash(self: *Self, msg: []const u8) Allocator.Error!void {
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
 
+            // Allocate stack space for the message bytes
+            const msg_aligned_size: u32 = std.mem.alignForward(u32, @intCast(msg.len), 8);
+            const msg_slot = self.codegen.allocStackSlot(if (msg_aligned_size == 0) 8 else msg_aligned_size);
+
             // Allocate a 16-byte stack slot for the RocCrashed struct { utf8_bytes, len }
             const crashed_slot = self.codegen.allocStackSlot(16);
-
-            const msg_ptr_val: i64 = @bitCast(@as(u64, @intFromPtr(msg.ptr)));
-            const msg_len_val: i64 = @bitCast(@as(u64, msg.len));
 
             {
                 const base_reg = frame_ptr;
                 const tmp = try self.allocTempGeneral();
 
-                // Store utf8_bytes pointer at offset 0
+                // Store message bytes on the stack in 8-byte chunks
+                var offset: u32 = 0;
+                while (offset < msg.len) {
+                    const remaining = msg.len - offset;
+                    if (remaining >= 8) {
+                        const chunk: u64 = @bitCast(msg[offset..][0..8].*);
+                        try self.codegen.emitLoadImm(tmp, @bitCast(chunk));
+                        try self.emitStore(.w64, base_reg, msg_slot + @as(i32, @intCast(offset)), tmp);
+                    } else {
+                        // Handle the last partial chunk byte-by-byte
+                        // Build a zero-padded 8-byte value
+                        var padded: [8]u8 = .{0} ** 8;
+                        @memcpy(padded[0..remaining], msg[offset..][0..remaining]);
+                        const chunk: u64 = @bitCast(padded);
+                        try self.codegen.emitLoadImm(tmp, @bitCast(chunk));
+                        try self.emitStore(.w64, base_reg, msg_slot + @as(i32, @intCast(offset)), tmp);
+                    }
+                    offset += 8;
+                }
+
+                // Store pointer to stack-resident message bytes at RocCrashed offset 0
                 if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emitLoadImm(tmp, msg_ptr_val);
+                    try self.codegen.emit.addRegRegImm12(.w64, tmp, base_reg, @intCast(msg_slot));
                     try self.codegen.emit.strRegMemSoff(.w64, tmp, base_reg, crashed_slot);
                 } else {
-                    try self.codegen.emit.movRegImm64(tmp, @bitCast(@as(u64, @intFromPtr(msg.ptr))));
+                    try self.codegen.emit.leaRegMem(tmp, base_reg, msg_slot);
                     try self.codegen.emit.movMemReg(.w64, base_reg, crashed_slot, tmp);
                 }
 
                 // Store len at offset 8
+                const msg_len_val: i64 = @bitCast(@as(u64, msg.len));
                 if (comptime target.toCpuArch() == .aarch64) {
                     try self.codegen.emitLoadImm(tmp, msg_len_val);
                     try self.codegen.emit.strRegMemSoff(.w64, tmp, base_reg, crashed_slot + 8);

@@ -612,6 +612,34 @@ pub const DevEvaluator = struct {
         executable.callWithResultPtrAndRocOps(result_ptr, @constCast(&self.roc_ops));
     }
 
+    /// Execute compiled code with crash protection using the RocCall ABI.
+    ///
+    /// Like callWithCrashProtection, but for entrypoint functions that take
+    /// arguments via the RocCall ABI: fn(roc_ops, ret_ptr, args_ptr).
+    /// Uses the DevEvaluator's own RocOps (with setjmp/longjmp crash handling)
+    /// so that roc_crashed returns an error instead of exiting the process.
+    ///
+    /// Callers should set `self.roc_ops.hosted_fns` before calling if the
+    /// entrypoint needs hosted functions.
+    pub fn callRocABIWithCrashProtection(self: *DevEvaluator, executable: *const backend.ExecutableMemory, result_ptr: *anyopaque, args_ptr: ?*anyopaque) error{ RocCrashed, Segfault }!void {
+        self.roc_env.crashed = false;
+
+        const veh_handle = WindowsSEH.install(&self.roc_env.jmp_buf);
+        defer WindowsSEH.remove(veh_handle);
+
+        const jmp_result = setjmp(&self.roc_env.jmp_buf);
+        if (jmp_result != 0) {
+            if (jmp_result == 2) {
+                const code = WindowsSEH.getExceptionCode();
+                std.debug.print("\nSegfault caught: {s} (code 0x{X:0>8})\n", .{ WindowsSEH.formatException(code), code });
+                return error.Segfault;
+            } else {
+                return error.RocCrashed;
+            }
+        }
+        executable.callRocABI(@ptrCast(@constCast(&self.roc_ops)), result_ptr, args_ptr);
+    }
+
     /// Clean up resources
     pub fn deinit(self: *DevEvaluator) void {
         if (self.global_type_layout_resolver) |resolver| {

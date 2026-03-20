@@ -303,4 +303,4 @@ test "ObjectFileCompiler initialization" {
 
 // Note: Full integration tests for compileToObjectFile require complex setup
 // of mono stores and layout stores. These are tested via integration tests
-// in the CLI (roc build --backend=dev).
+// in the CLI (roc build --opt=dev).

@@ -316,6 +316,26 @@ test "error test - crash statement" {
     , error.Crash, .no_trace);
 }
 
+test "inline expect statement fails" {
+    // Regression test for #9261: s_expect statements must be lowered as
+    // .expect MIR nodes so the dev backend generates the assertion check.
+    try runExpectError(
+        \\{
+        \\    expect 1 == 2
+        \\    {}
+        \\}
+    , error.Crash, .no_trace);
+}
+
+test "inline expect statement passes" {
+    try runExpectI64(
+        \\{
+        \\    expect 1 == 1
+        \\    42
+        \\}
+    , 42, .no_trace);
+}
+
 test "crash message storage and retrieval - host-managed context" {
     // Verify the crash callback stores the message in the host CrashContext
     const test_message = "Direct API test message";
@@ -2006,6 +2026,21 @@ test "list equality - nested lists - regression" {
 
 test "list equality - single string element list - regression" {
     try runExpectBool("[\"hello\"] == [\"hello\"]", true, .no_trace);
+}
+
+test "record with list equality - large stack offset regression #9250" {
+    // Regression test for #9250: comparing records containing lists with
+    // unequal values/lengths caused aarch64 stack offset overflow in
+    // emitLoadStackByte (u12 immediate field).
+    try runExpectBool("{ a: [1] } == { a: [1, 2] }", false, .no_trace);
+    try runExpectBool("{ a: [1] } == { a: [2] }", false, .no_trace);
+    try runExpectBool("{ a: [] } == { a: [1] }", false, .no_trace);
+    try runExpectBool("{ a: [1] } == { a: [] }", false, .no_trace);
+    try runExpectBool("{ a: [], b: 1 } == { a: [2], b: 1 }", false, .no_trace);
+    try runExpectBool("{ a: [1] } != { a: [1, 2] }", true, .no_trace);
+    // Also verify equal cases still work
+    try runExpectBool("{ a: [1] } == { a: [1] }", true, .no_trace);
+    try runExpectBool("{ a: [] } == { a: [] }", true, .no_trace);
 }
 
 test "if block with local bindings - regression" {

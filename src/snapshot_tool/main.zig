@@ -981,6 +981,12 @@ fn processSnapshotContent(
     var success = true;
     log("Generating snapshot for: {s}", .{output_path});
 
+    // Skip snapshots marked with skip=true in META
+    if (content.meta.skip) {
+        log("Skipping snapshot (skip=true): {s}", .{output_path});
+        return true;
+    }
+
     // Handle REPL snapshots separately
     if (content.meta.node_type == .repl) {
         return processReplSnapshot(allocator, content, output_path, config);
@@ -1737,15 +1743,18 @@ const Meta = struct {
     description: []const u8,
     node_type: NodeType,
     filename: ?[]const u8 = null,
+    skip: bool = false,
 
     const DESC_START: []const u8 = "description=";
     const TYPE_START: []const u8 = "type=";
+    const SKIP_START: []const u8 = "skip=";
 
     fn fromString(text: []const u8) Error!Meta {
         var lines = std.mem.splitScalar(u8, text, '\n');
         var desc: []const u8 = "";
         var node_type: NodeType = .file;
         var filename: ?[]const u8 = null;
+        var skip: bool = false;
         while (true) {
             var line = lines.next() orelse break;
             if (std.mem.startsWith(u8, line, DESC_START)) {
@@ -1759,6 +1768,8 @@ const Meta = struct {
                 } else {
                     node_type = try NodeType.fromString(ty);
                 }
+            } else if (std.mem.startsWith(u8, line, SKIP_START)) {
+                skip = std.mem.eql(u8, line[(SKIP_START.len)..], "true");
             }
         }
 
@@ -1766,6 +1777,7 @@ const Meta = struct {
             .description = desc,
             .node_type = node_type,
             .filename = filename,
+            .skip = skip,
         };
     }
 
@@ -1778,6 +1790,11 @@ const Meta = struct {
         if (self.filename) |fname| {
             try writer.writeAll(":");
             try writer.writeAll(fname);
+        }
+        if (self.skip) {
+            try writer.writeAll("\n");
+            try writer.writeAll(SKIP_START);
+            try writer.writeAll("true");
         }
     }
 
@@ -4556,9 +4573,9 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
     }) |cfg| {
         var backend_snapshot_ops = SnapshotOps.init(output.gpa);
         defer backend_snapshot_ops.deinit();
-        if (Repl.initWithBackend(output.gpa, backend_snapshot_ops.get_ops(), backend_snapshot_ops.crashContextPtr(), cfg.backend)) |backend_repl_val| {
+        const backend_repl_result = Repl.initWithBackend(output.gpa, backend_snapshot_ops.get_ops(), backend_snapshot_ops.crashContextPtr(), cfg.backend);
+        if (backend_repl_result) |backend_repl_val| {
             var backend_repl = backend_repl_val;
-            defer backend_repl.deinit();
 
             for (inputs.items, 0..) |input, i| {
                 // Set up panic protection via setjmp. If the backend panics,
@@ -4607,6 +4624,21 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
                         );
                         success = false;
                     }
+                }
+            }
+
+            // Deinit with panic protection — after a codegen panic, the REPL
+            // state may be corrupted and cleanup (e.g. GPA leak detection) can
+            // trigger secondary panics that would otherwise terminate the process.
+            {
+                var deinit_jmp_buf: sljmp.JmpBuf = undefined;
+                const deinit_jmp_result = sljmp.setjmp(&deinit_jmp_buf);
+                if (deinit_jmp_result != 0) {
+                    panic_msg = null;
+                } else {
+                    panic_jmp = &deinit_jmp_buf;
+                    backend_repl.deinit();
+                    panic_jmp = null;
                 }
             }
         } else |err| {

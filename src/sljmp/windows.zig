@@ -1,19 +1,26 @@
 //! Windows x64 implementation of setjmp/longjmp using naked functions.
 //!
 //! On Windows, the C library setjmp is a compiler intrinsic that cannot be
-//! linked directly, so we provide our own implementation based on musl libc.
+//! linked directly, so we provide our own implementation.
+//!
+//! The Windows x64 ABI requires saving both GP registers (RBX, RBP, RSI, RDI,
+//! R12-R15) and XMM registers (XMM6-XMM15) as callee-saved ("nonvolatile").
+//! Failing to save/restore XMM6-XMM15 causes corrupted state after longjmp
+//! in ReleaseFast builds where the optimizer uses SIMD registers aggressively.
 
 const std = @import("std");
 
-/// Windows x64 jmp_buf: 10 * 8 = 80 bytes
-/// Stores: RBX, RBP, RSI, RDI, R12-R15, RSP, RIP
-pub const JmpBuf = [10]u64;
+/// Windows x64 jmp_buf layout (240 bytes total):
+///   0x00-0x48: GP registers (RBX, RBP, RSI, RDI, R12-R15, RSP, RIP) — 10 * 8 = 80 bytes
+///   0x50-0xE0: XMM registers (XMM6-XMM15) — 10 * 16 = 160 bytes
+pub const JmpBuf = [30]u64;
 
 /// Naked function implementation for setjmp.
-/// Saves callee-saved registers per Windows x64 ABI.
+/// Saves all callee-saved registers per Windows x64 ABI.
 fn setjmpImpl() callconv(.naked) void {
     // Windows x64: first arg in RCX, return in EAX
     asm volatile (
+    // Save GP callee-saved registers
         \\mov %%rbx, 0x00(%%rcx)
         \\mov %%rbp, 0x08(%%rcx)
         \\mov %%rsi, 0x10(%%rcx)
@@ -28,6 +35,17 @@ fn setjmpImpl() callconv(.naked) void {
         // Save return address
         \\mov (%%rsp), %%rdx
         \\mov %%rdx, 0x48(%%rcx)
+        // Save XMM callee-saved registers (XMM6-XMM15)
+        \\movups %%xmm6,  0x50(%%rcx)
+        \\movups %%xmm7,  0x60(%%rcx)
+        \\movups %%xmm8,  0x70(%%rcx)
+        \\movups %%xmm9,  0x80(%%rcx)
+        \\movups %%xmm10, 0x90(%%rcx)
+        \\movups %%xmm11, 0xA0(%%rcx)
+        \\movups %%xmm12, 0xB0(%%rcx)
+        \\movups %%xmm13, 0xC0(%%rcx)
+        \\movups %%xmm14, 0xD0(%%rcx)
+        \\movups %%xmm15, 0xE0(%%rcx)
         // Return 0 on first call
         \\xor %%eax, %%eax
         \\ret
@@ -35,7 +53,7 @@ fn setjmpImpl() callconv(.naked) void {
 }
 
 /// Naked function implementation for longjmp.
-/// Restores callee-saved registers and jumps to saved return address.
+/// Restores all callee-saved registers and jumps to saved return address.
 fn longjmpImpl() callconv(.naked) void {
     // Windows x64: first arg in RCX, second in EDX
     asm volatile (
@@ -45,7 +63,18 @@ fn longjmpImpl() callconv(.naked) void {
         \\jnz 1f
         \\mov $1, %%eax
         \\1:
-        // Restore callee-saved registers
+        // Restore XMM callee-saved registers (XMM6-XMM15)
+        \\movups 0x50(%%rcx), %%xmm6
+        \\movups 0x60(%%rcx), %%xmm7
+        \\movups 0x70(%%rcx), %%xmm8
+        \\movups 0x80(%%rcx), %%xmm9
+        \\movups 0x90(%%rcx), %%xmm10
+        \\movups 0xA0(%%rcx), %%xmm11
+        \\movups 0xB0(%%rcx), %%xmm12
+        \\movups 0xC0(%%rcx), %%xmm13
+        \\movups 0xD0(%%rcx), %%xmm14
+        \\movups 0xE0(%%rcx), %%xmm15
+        // Restore GP callee-saved registers
         \\mov 0x00(%%rcx), %%rbx
         \\mov 0x08(%%rcx), %%rbp
         \\mov 0x10(%%rcx), %%rsi

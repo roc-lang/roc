@@ -489,9 +489,12 @@ pub const Store = struct {
             .structure => |flat_type| {
                 return try self.fromFlatType(allocator, types_store, resolved.var_, flat_type, common_idents, specializations, nominal_cycle_breakers, scratches);
             },
-            // Error types are caught in lowerExpr before resolveMonotype;
-            // reaching here means a compiler bug in an earlier phase.
-            .err => unreachable,
+            // Error types can appear nested inside function types (as argument
+            // or return types) when --allow-errors is used. The guard in
+            // lowerExpr only catches top-level error types, so we need to handle
+            // them here too. Return unit as a safe placeholder so lowering can
+            // continue and the runtime-error path is hit at runtime.
+            .err => return self.unit_idx,
         };
     }
 

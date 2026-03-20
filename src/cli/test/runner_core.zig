@@ -45,26 +45,22 @@ fn currentProcessId() u64 {
 }
 
 fn createIsolatedTestCacheDir(allocator: Allocator) ![]u8 {
-    const temp_base = switch (builtin.target.os.tag) {
-        .windows => std.process.getEnvVarOwned(allocator, "TEMP") catch
-            std.process.getEnvVarOwned(allocator, "TMP") catch
-            try allocator.dupe(u8, "C:\\Windows\\Temp"),
-        else => std.process.getEnvVarOwned(allocator, "TMPDIR") catch
-            try allocator.dupe(u8, "/tmp"),
-    };
-    defer allocator.free(temp_base);
-
     const cache_dir_id = next_cache_dir_id.fetchAdd(1, .monotonic);
     const cache_leaf = try std.fmt.allocPrint(allocator, "{d}-{d}", .{ currentProcessId(), cache_dir_id });
     defer allocator.free(cache_leaf);
 
-    const cache_dir = try std.fs.path.join(allocator, &.{ temp_base, "roc-test-cache", cache_leaf });
-    std.fs.cwd().makePath(cache_dir) catch |err| switch (err) {
+    const cwd_path = try std.fs.cwd().realpathAlloc(allocator, ".");
+    defer allocator.free(cwd_path);
+
+    const cache_rel = try std.fs.path.join(allocator, &.{ ".zig-cache", "roc-test-cache", cache_leaf });
+    defer allocator.free(cache_rel);
+
+    std.fs.cwd().makePath(cache_rel) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
 
-    return cache_dir;
+    return std.fs.path.join(allocator, &.{ cwd_path, cache_rel });
 }
 
 fn runRocChild(allocator: Allocator, argv: []const []const u8) !std.process.Child.RunResult {
@@ -100,7 +96,7 @@ pub fn crossCompile(
     const output_arg = try std.fmt.allocPrint(allocator, "--output={s}", .{output_name});
     defer allocator.free(output_arg);
 
-    const backend_arg = if (backend) |b| try std.fmt.allocPrint(allocator, "--backend={s}", .{b}) else null;
+    const backend_arg = if (backend) |b| try std.fmt.allocPrint(allocator, "--opt={s}", .{b}) else null;
     defer if (backend_arg) |b| allocator.free(b);
 
     var argv_buf: [6][]const u8 = undefined;
@@ -142,7 +138,7 @@ pub fn buildNative(
     const output_arg = try std.fmt.allocPrint(allocator, "--output={s}", .{output_name});
     defer allocator.free(output_arg);
 
-    const backend_arg = if (backend) |b| try std.fmt.allocPrint(allocator, "--backend={s}", .{b}) else null;
+    const backend_arg = if (backend) |b| try std.fmt.allocPrint(allocator, "--opt={s}", .{b}) else null;
     defer if (backend_arg) |b| allocator.free(b);
 
     var argv_buf: [5][]const u8 = undefined;
@@ -222,7 +218,7 @@ pub fn runNative(
 }
 
 /// Run a Roc app with --test mode and IO spec verification.
-/// When backend is set, builds the executable first with `roc build --backend=<name>`
+/// When backend is set, builds the executable first with `roc build --opt=<name>`
 /// then runs the resulting binary with `--test <spec>`.
 /// When backend is null, uses `roc run --test=<spec>` (interpreter).
 pub fn runWithIoSpec(

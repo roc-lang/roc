@@ -767,7 +767,7 @@ test "zst combinatorics matrix for nested singleton ordinary-data wrappers" {
     try lt.initLayoutStore();
 
     for (cases) |case| {
-        std.debug.print("running zst combinatorics case: {s}\n", .{case.name});
+        // std.debug.print("running zst combinatorics case: {s}\n", .{case.name});
 
         const type_var = try buildWrappedZstCase(&lt, builtin_module_idx, case.leaf, case.wrappers);
         try expectTypeAndMonotypeResolversAgree(testing.allocator, &lt, type_var);

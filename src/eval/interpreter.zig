@@ -5652,7 +5652,6 @@ pub const Interpreter = struct {
             std.debug.assert(value.layout.data.scalar.tag == .int);
             std.debug.assert(value.layout.data.scalar.data.int == .u8);
             const bool_byte = builtins.utils.readAs(u8, ptr, @src());
-            // Debug removed
             return (bool_byte != 0) == equals;
         } else if (value.layout.tag == .tag_union) {
             // Tag union Bool: read discriminant at the correct offset
@@ -5661,7 +5660,6 @@ pub const Interpreter = struct {
             const base_ptr: [*]u8 = @ptrCast(ptr);
             const disc_ptr = base_ptr + disc_offset;
             const bool_byte = disc_ptr[0];
-            // Debug removed
             // discriminant 1 = True, discriminant 0 = False
             return (bool_byte == 1) == equals;
         } else {
@@ -12092,10 +12090,21 @@ pub const Interpreter = struct {
                     } } });
                 }
 
-                // Schedule evaluation of the backing expression
+                // Schedule evaluation of the backing expression.
+                // Use the backing type var (not the nominal) as expected_rt_var to avoid
+                // layout inconsistencies: translateTypeVar may produce different nominal
+                // rt_vars for the same type on first vs. subsequent calls, leading to
+                // different layouts (scalar vs box). Using the backing var directly
+                // ensures all values of the same nominal type get consistent layouts.
+                // Pre-compute the nominal's layout to cache it for recursive types
+                // (e.g. IntList := [Nil, Cons(I64, IntList)]) - without this, the
+                // backing expression's layout computation would fail on self-references.
+                if (backing_info.nominal) |nominal_rt_var| {
+                    _ = try self.getRuntimeLayout(nominal_rt_var);
+                }
                 try work_stack.push(.{ .eval_expr = .{
                     .expr_idx = nom.backing_expr,
-                    .expected_rt_var = backing_info.nominal orelse backing_info.backing,
+                    .expected_rt_var = backing_info.backing,
                 } });
             },
 
