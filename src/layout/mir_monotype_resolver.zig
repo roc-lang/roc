@@ -91,7 +91,51 @@ pub const Resolver = struct {
             }
         }
 
-        return self.layout_store.internGraph(&graph, root);
+        const result = try self.layout_store.internGraph(&graph, root);
+
+        // Recursive tag unions must be boxed at the top level: the internGraph
+        // materializer creates box placeholders for back-edges but returns the
+        // inner tag_union as the root. Check if the result is a self-recursive
+        // tag_union (has variants that transitively contain box(self)) and if
+        // so, wrap it in a box.
+        if (root == .local) {
+            const result_layout = self.layout_store.getLayout(result);
+            if (result_layout.tag == .tag_union) {
+                if (self.tagUnionIsSelfRecursive(result)) {
+                    return try self.layout_store.insertBox(result);
+                }
+            }
+        }
+
+        return result;
+    }
+
+    fn tagUnionIsSelfRecursive(self: *Resolver, tag_union_idx: layout.Idx) bool {
+        const l = self.layout_store.getLayout(tag_union_idx);
+        const tu_data = self.layout_store.getTagUnionData(l.data.tag_union.idx);
+        const variants = self.layout_store.getTagUnionVariants(tu_data);
+        for (0..variants.len) |i| {
+            if (self.payloadContainsBoxOf(variants.get(i).payload_layout, tag_union_idx)) return true;
+        }
+        return false;
+    }
+
+    fn payloadContainsBoxOf(self: *Resolver, payload_idx: layout.Idx, target: layout.Idx) bool {
+        const l = self.layout_store.getLayout(payload_idx);
+        return switch (l.tag) {
+            .box => l.data.box == target,
+            .struct_ => blk: {
+                const data = self.layout_store.getStructData(l.data.struct_.idx);
+                const fields = self.layout_store.struct_fields.sliceRange(data.getFields());
+                for (0..fields.len) |fi| {
+                    if (self.payloadContainsBoxOf(fields.get(fi).layout, target)) break :blk true;
+                }
+                break :blk false;
+            },
+            .list => self.payloadContainsBoxOf(l.data.list, target),
+            // Don't recurse into tag_union/box_of_zst to avoid cycles
+            else => false,
+        };
     }
 
     fn buildRefForMonotype(
@@ -146,32 +190,36 @@ pub const Resolver = struct {
                 break :blk GraphRef{ .canonical = try self.layout_store.insertLayout(layout.Layout.closure(empty_captures)) };
             },
             .box => blk: {
-                const local_ref = try self.reserveLocalRef(mono_key, resolved_key, graph, refs_by_mono);
+                // Don't cache non-tag-union types in refs_by_mono. Only tag_union
+                // types can be the root of recursion; caching intermediate types
+                // like box, list, record, tuple causes back-edges at the wrong
+                // level, producing box(List) instead of List(box(tag_union)).
+                const node_id = try graph.reserveNode(self.allocator);
                 const child_ref = try self.buildRefForMonotype(self.monotype_store.boxInner(resolved_id), overrides, graph, refs_by_mono);
-                graph.setNode(local_ref.local, .{ .box = child_ref });
-                break :blk local_ref;
+                graph.setNode(node_id, .{ .box = child_ref });
+                break :blk GraphRef{ .local = node_id };
             },
             .list => blk: {
-                const local_ref = try self.reserveLocalRef(mono_key, resolved_key, graph, refs_by_mono);
+                const node_id = try graph.reserveNode(self.allocator);
                 const child_ref = try self.buildRefForMonotype(self.monotype_store.listElem(resolved_id), overrides, graph, refs_by_mono);
-                graph.setNode(local_ref.local, .{ .list = child_ref });
-                break :blk local_ref;
+                graph.setNode(node_id, .{ .list = child_ref });
+                break :blk GraphRef{ .local = node_id };
             },
             .record => blk: {
                 const fields = self.monotype_store.recordFields(resolved_id);
                 if (fields.len == 0) break :blk .{ .canonical = .zst };
 
-                const local_ref = try self.reserveLocalRef(mono_key, resolved_key, graph, refs_by_mono);
-                try self.fillStructNodeFromFields(local_ref.local, fields, overrides, graph, refs_by_mono);
-                break :blk local_ref;
+                const node_id = try graph.reserveNode(self.allocator);
+                try self.fillStructNodeFromFields(node_id, fields, overrides, graph, refs_by_mono);
+                break :blk GraphRef{ .local = node_id };
             },
             .tuple => blk: {
                 const elems = self.monotype_store.tupleElems(resolved_id);
                 if (elems.len == 0) break :blk .{ .canonical = .zst };
 
-                const local_ref = try self.reserveLocalRef(mono_key, resolved_key, graph, refs_by_mono);
-                try self.fillStructNodeFromElems(local_ref.local, elems, overrides, graph, refs_by_mono);
-                break :blk local_ref;
+                const node_id = try graph.reserveNode(self.allocator);
+                try self.fillStructNodeFromElems(node_id, elems, overrides, graph, refs_by_mono);
+                break :blk GraphRef{ .local = node_id };
             },
             .tag_union => blk: {
                 const tags = self.monotype_store.tagUnionTags(resolved_id);
@@ -184,7 +232,13 @@ pub const Resolver = struct {
             .rec => unreachable, // already resolved above
         };
 
-        try self.cacheResolvedRef(mono_key, resolved_key, resolved_ref, refs_by_mono);
+        // Only cache tag_union types in refs_by_mono for cycle detection.
+        // Non-tag-union types are rebuilt fresh when encountered multiple
+        // times so that self-references within recursive tag unions produce
+        // back-edges at the tag_union level, not at intermediate types.
+        if (resolved_id.kind == .tag_union) {
+            try self.cacheResolvedRef(mono_key, resolved_key, resolved_ref, refs_by_mono);
+        }
         return resolved_ref;
     }
 
