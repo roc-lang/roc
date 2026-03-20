@@ -26,7 +26,7 @@ const RocOps = builtins.host_abi.RocOps;
 const LoadedModule = builtin_loading.LoadedModule;
 const DevEvaluator = eval_mod.DevEvaluator;
 
-pub const Backend = @import("backend").EvalBackend;
+pub const Backend = @import("eval").EvalBackend;
 const ExecutionBackend = enum {
     interpreter,
     dev,

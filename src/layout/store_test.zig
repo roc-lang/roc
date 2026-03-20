@@ -91,7 +91,7 @@ fn expectTypeAndMonotypeResolversAgree(
     const type_layout_idx = try type_layout_resolver.resolve(0, type_var, &lt.type_scope, null);
 
     var mono_store = try mir.Monotype.Store.init(allocator);
-    defer mono_store.deinit(allocator);
+    defer mono_store.deinit();
 
     var scratches = try mir.Monotype.Store.Scratches.init(allocator);
     defer scratches.deinit();
@@ -99,8 +99,6 @@ fn expectTypeAndMonotypeResolversAgree(
 
     var specializations = std.AutoHashMap(types.Var, mir.Monotype.Idx).init(allocator);
     defer specializations.deinit();
-    var nominal_cycle_breakers = std.AutoHashMap(types.Var, mir.Monotype.Idx).init(allocator);
-    defer nominal_cycle_breakers.deinit();
 
     const mono_idx = try mono_store.fromTypeVar(
         allocator,
@@ -108,7 +106,6 @@ fn expectTypeAndMonotypeResolversAgree(
         type_var,
         lt.module_env.idents,
         &specializations,
-        &nominal_cycle_breakers,
         &scratches,
     );
 

@@ -604,7 +604,7 @@ pub const Store = struct {
         self.borrow_bindings.deinit(allocator);
         self.captures.deinit(allocator);
         self.capture_bindings.deinit(allocator);
-        self.monotype_store.deinit(allocator);
+        self.monotype_store.deinit();
         self.closure_members.deinit(allocator);
         self.expr_closure_members.deinit(allocator);
         self.fn_closure_members.deinit(allocator);

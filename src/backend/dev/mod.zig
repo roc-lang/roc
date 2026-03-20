@@ -13,19 +13,8 @@ const base = @import("base");
 const layout = @import("layout");
 const builtins = @import("builtins");
 
-/// Backend selection for code evaluation
-pub const EvalBackend = enum {
-    dev,
-    interpreter,
-    llvm,
-
-    pub fn fromString(s: []const u8) ?EvalBackend {
-        if (std.mem.eql(u8, s, "dev")) return .dev;
-        if (std.mem.eql(u8, s, "interpreter")) return .interpreter;
-        if (std.mem.eql(u8, s, "llvm")) return .llvm;
-        return null;
-    }
-};
+// EvalBackend was removed from here — it is defined in src/eval/mod.zig.
+// Callers should import via @import("eval").EvalBackend.
 
 pub const x86_64 = @import("x86_64/mod.zig");
 pub const aarch64 = @import("aarch64/mod.zig");

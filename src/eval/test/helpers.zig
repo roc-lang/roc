@@ -28,8 +28,9 @@ const loadCompiledModule = builtin_loading_mod.loadCompiledModule;
 const backend = @import("backend");
 const bytebox = @import("bytebox");
 const WasmEvaluator = eval_mod.WasmEvaluator;
+const LirProgram = eval_mod.LirProgram;
+const LirInterpreter = eval_mod.LirInterpreter;
 const i128h = builtins.compiler_rt_128;
-
 const posix = std.posix;
 
 const has_fork = builtin.os.tag != .windows;
@@ -564,6 +565,74 @@ fn compareFloatWithBackends(
         );
         return error.EvaluatorMismatch;
     }
+}
+
+/// Evaluate an expression using the LIR interpreter and return the formatted result.
+/// The LIR interpreter lowers CIR → MIR → LIR → RC, then interprets the LIR directly.
+/// Returns an error if any stage fails (lowering, evaluation, or formatting).
+fn lirInterpreterStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) ![]const u8 {
+    // Wrap in Str.inspect — same approach as devEvaluatorStr/wasmEvaluatorStr.
+    // This lets Roc's own inspect implementation handle field names, tag names, etc.
+    const inspect_expr = try wrapInStrInspect(module_env, expr_idx);
+
+    var lir_prog = LirProgram.init(allocator, base.target.TargetUsize.native);
+    defer lir_prog.deinit();
+
+    // Keep module order aligned with resolveImports/getResolvedModule indices.
+    const all_module_envs = [_]*ModuleEnv{ @constCast(builtin_module_env), module_env };
+
+    var lower_result = try lir_prog.lowerExpr(module_env, inspect_expr, &all_module_envs, null);
+    defer lower_result.deinit();
+
+    var interp = LirInterpreter.init(allocator, &lower_result.lir_store, lower_result.layout_store, null);
+    defer interp.deinit();
+
+    const eval_result = try interp.eval(lower_result.final_expr_id);
+    const value = switch (eval_result) {
+        .value => |v| v,
+        .early_return => |v| v,
+        .break_expr => return error.RuntimeError,
+    };
+
+    // Result is a RocStr — read and dupe the string content
+    var roc_str: builtins.str.RocStr = undefined;
+    @memcpy(std.mem.asBytes(&roc_str), value.ptr[0..@sizeOf(builtins.str.RocStr)]);
+    return allocator.dupe(u8, roc_str.asSlice());
+}
+
+/// Compare the CIR interpreter's formatted output with the LIR interpreter.
+/// Silently skips when the LIR interpreter can't handle an expression (any error).
+/// Prints a diagnostic on mismatch for visibility during incremental development.
+fn compareWithLirInterpreter(allocator: std.mem.Allocator, interpreter_str: []const u8, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv, ret_addr: usize) void {
+    const lir_str = lirInterpreterStr(allocator, module_env, expr_idx, builtin_module_env) catch return;
+    defer allocator.free(lir_str);
+    if (!std.mem.eql(u8, interpreter_str, lir_str)) {
+        const test_name = findCurrentTestName(ret_addr);
+        std.debug.print("\nLIR mismatch in \"{s}\"\n  expected: '{s}'\n  lir:      '{s}'\n  repro:    zig build test-eval -- --test-filter \"{s}\"\n", .{ test_name, interpreter_str, lir_str, test_name });
+    }
+}
+
+/// Look up the current test name by finding which test function's address range
+/// contains the given return address.
+fn findCurrentTestName(ret_addr: usize) []const u8 {
+    var best_name: []const u8 = "<unknown>";
+    var best_dist: usize = std.math.maxInt(usize);
+    for (builtin.test_functions) |tf| {
+        const fn_addr = @intFromPtr(tf.func);
+        if (ret_addr >= fn_addr) {
+            const dist = ret_addr - fn_addr;
+            if (dist < best_dist) {
+                best_dist = dist;
+                best_name = tf.name;
+            }
+        }
+    }
+    // Strip "module.test." prefix to get just the test name for --test-filter
+    // Names look like "eval_test.test.My test name", find ".test." boundary
+    if (std.mem.indexOf(u8, best_name, ".test.")) |idx| {
+        return best_name[idx + ".test.".len ..];
+    }
+    return best_name;
 }
 
 fn boolStringsEquivalent(a: []const u8, b: []const u8) bool {
@@ -2546,6 +2615,7 @@ pub fn runExpectI64(src: []const u8, expected_int: i128, should_trace: enum { tr
     const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
     defer test_allocator.free(interpreter_str);
     try compareFloatWithBackends(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env, f32);
+    compareWithLirInterpreter(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env, @returnAddress());
 
     try std.testing.expectEqual(expected_int, int_value);
 }
@@ -2593,6 +2663,7 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
     const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
     defer test_allocator.free(interpreter_str);
     try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    compareWithLirInterpreter(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env, @returnAddress());
 
     const bool_val = int_val != 0;
     try std.testing.expectEqual(expected_bool, bool_val);
@@ -2631,6 +2702,7 @@ pub fn runExpectF32(src: []const u8, expected_f32: f32, should_trace: enum { tra
     const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
     defer test_allocator.free(interpreter_str);
     try compareFloatWithBackends(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env, f32);
+    compareWithLirInterpreter(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env, @returnAddress());
 
     const epsilon: f32 = 0.0001;
     const diff = @abs(actual - expected_f32);
@@ -2673,6 +2745,7 @@ pub fn runExpectF64(src: []const u8, expected_f64: f64, should_trace: enum { tra
     const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
     defer test_allocator.free(interpreter_str);
     try compareFloatWithBackends(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env, f64);
+    compareWithLirInterpreter(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env, @returnAddress());
 
     const epsilon: f64 = 0.000000001;
     const diff = @abs(actual - expected_f64);
@@ -2719,6 +2792,7 @@ pub fn runExpectIntDec(src: []const u8, expected_int: i128, should_trace: enum {
     const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
     defer test_allocator.free(interpreter_str);
     try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    compareWithLirInterpreter(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env, @returnAddress());
 
     const expected_dec = expected_int * dec_scale;
     if (actual_dec.num != expected_dec) {
@@ -2762,6 +2836,7 @@ pub fn runExpectDec(src: []const u8, expected_dec_num: i128, should_trace: enum 
     const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
     defer test_allocator.free(interpreter_str);
     try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    compareWithLirInterpreter(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env, @returnAddress());
 
     if (actual_dec.num != expected_dec_num) {
         std.debug.print("Expected Dec({d}), got Dec({d})\n", .{ expected_dec_num, actual_dec.num });
@@ -2805,6 +2880,7 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
     const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
     defer test_allocator.free(interpreter_str);
     try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    compareWithLirInterpreter(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env, @returnAddress());
 
     try std.testing.expectEqualStrings(expected_str, str_slice);
 
@@ -2887,6 +2963,7 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
     const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
     defer test_allocator.free(interpreter_str);
     try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    compareWithLirInterpreter(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env, @returnAddress());
 }
 
 /// Helpers to setup and run an interpreter expecting a record result.
@@ -2965,6 +3042,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
     defer test_allocator.free(interpreter_str);
     try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    compareWithLirInterpreter(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env, @returnAddress());
 }
 
 /// Helpers to setup and run an interpreter expecting a list of zst result.
@@ -3008,6 +3086,7 @@ pub fn runExpectListZst(src: []const u8, expected_element_count: usize, should_t
     const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
     defer test_allocator.free(interpreter_str);
     try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    compareWithLirInterpreter(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env, @returnAddress());
 }
 
 /// Helpers to setup and run an interpreter expecting a list of i64 result.
@@ -3068,6 +3147,7 @@ pub fn runExpectListI64(src: []const u8, expected_elements: []const i64, should_
     const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
     defer test_allocator.free(interpreter_str);
     try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    compareWithLirInterpreter(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env, @returnAddress());
 }
 
 /// Like runExpectListI64 but expects an empty list with .list_of_zst layout.
@@ -3113,6 +3193,7 @@ pub fn runExpectEmptyListI64(src: []const u8, should_trace: enum { trace, no_tra
     const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
     defer test_allocator.free(interpreter_str);
     try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    compareWithLirInterpreter(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env, @returnAddress());
 }
 
 /// Helper function to run an expression and expect a unit/ZST result.
@@ -3160,6 +3241,7 @@ pub fn runExpectUnit(src: []const u8, should_trace: enum { trace, no_trace }) !v
     const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
     defer test_allocator.free(interpreter_str);
     try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    compareWithLirInterpreter(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env, @returnAddress());
 }
 
 /// Run an expression through the dev evaluator only and assert on the formatted string output.
