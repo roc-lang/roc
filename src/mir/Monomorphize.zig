@@ -2595,21 +2595,18 @@ pub const Pass = struct {
                         lookup.pattern_idx,
                         proc_inst_id,
                     );
+                    try self.recordLookupSourceExprProcInst(result, module_idx, arg_expr_idx, proc_inst_id);
                 },
-                .e_lookup_external => try self.recordLookupExprProcInst(
-                    result,
-                    self.active_proc_inst_context,
-                    module_idx,
-                    arg_expr_idx,
-                    proc_inst_id,
-                ),
-                .e_lookup_required => try self.recordLookupExprProcInst(
-                    result,
-                    self.active_proc_inst_context,
-                    module_idx,
-                    arg_expr_idx,
-                    proc_inst_id,
-                ),
+                .e_lookup_external, .e_lookup_required => {
+                    try self.recordLookupExprProcInst(
+                        result,
+                        self.active_proc_inst_context,
+                        module_idx,
+                        arg_expr_idx,
+                        proc_inst_id,
+                    );
+                    try self.recordLookupSourceExprProcInst(result, module_idx, arg_expr_idx, proc_inst_id);
+                },
                 .e_lambda, .e_closure, .e_hosted_lambda => try self.recordExprProcInst(
                     result,
                     self.active_proc_inst_context,

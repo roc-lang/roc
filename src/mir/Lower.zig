@@ -2811,7 +2811,7 @@ fn lowerExprWithMonotypeOverride(
                         const def_key: u64 = @bitCast(def_symbol);
 
                         if (!self.lowered_symbols.contains(def_key) and !self.in_progress_defs.contains(def_key)) {
-                            _ = try self.lowerExternalDefWithType(def_symbol, def.expr);
+                            _ = try self.lowerExternalDefWithType(def_symbol, def.expr, null);
                         }
 
                         break;
@@ -2881,7 +2881,14 @@ fn lowerExprWithMonotypeOverride(
             if (!self.lowered_symbols.contains(symbol_key) and !self.in_progress_defs.contains(symbol_key)) {
                 const def_idx: CIR.Def.Idx = @enumFromInt(ext.target_node_idx);
                 const def = target_env.store.getDef(def_idx);
-                _ = try self.lowerExternalDefWithType(symbol, def.expr);
+                _ = try self.lowerExternalDefWithType(
+                    symbol,
+                    def.expr,
+                    if (self.monotypeIsWellFormed(monotype))
+                        .{ .idx = monotype, .module_idx = self.current_module_idx }
+                    else
+                        null,
+                );
                 if (self.lowered_symbols.get(symbol_key)) |cached_expr| {
                     const cached_monotype = self.store.typeOf(cached_expr);
                     if (self.monotypeIsUnit(monotype) and !self.monotypeIsUnit(cached_monotype)) {
@@ -2959,7 +2966,14 @@ fn lowerExprWithMonotypeOverride(
                 self.types_store,
                 ModuleEnv.varFrom(required_type.type_anno),
             );
-            _ = try self.lowerExternalDef(symbol, def.expr);
+            _ = try self.lowerExternalDefWithType(
+                symbol,
+                def.expr,
+                if (self.monotypeIsWellFormed(required_lookup_monotype))
+                    .{ .idx = required_lookup_monotype, .module_idx = self.current_module_idx }
+                else
+                    null,
+            );
             return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, required_lookup_monotype, region);
         },
 
@@ -3936,6 +3950,39 @@ fn bindProcTemplateBoundaryMonotypes(
     try self.bindTypeVarMonotypes(ModuleEnv.varFrom(boundary.body_expr), func.ret);
 }
 
+fn lexicalOwnerBoundaryContainsPattern(
+    self: *const Self,
+    closure_proc_inst_id: Monomorphize.ProcInstId,
+    module_idx: u32,
+    pattern_idx: CIR.Pattern.Idx,
+) bool {
+    const closure_proc_inst = self.monomorphization.getProcInst(closure_proc_inst_id);
+    const closure_template = self.monomorphization.getProcTemplate(closure_proc_inst.template);
+    if (closure_template.lexical_owner_template.isNone()) return false;
+
+    const owner_template = self.monomorphization.getProcTemplate(closure_template.lexical_owner_template);
+    if (owner_template.module_idx != module_idx) return false;
+
+    const module_env = self.all_module_envs[owner_template.module_idx];
+    const proc_expr = module_env.store.getExpr(owner_template.cir_expr);
+    const arg_patterns = switch (proc_expr) {
+        .e_lambda => |lambda| module_env.store.slicePatterns(lambda.args),
+        .e_closure => blk: {
+            const lambda_expr = module_env.store.getExpr(proc_expr.e_closure.lambda_idx);
+            if (lambda_expr != .e_lambda) break :blk &[_]CIR.Pattern.Idx{};
+            break :blk module_env.store.slicePatterns(lambda_expr.e_lambda.args);
+        },
+        .e_hosted_lambda => |hosted| module_env.store.slicePatterns(hosted.args),
+        else => &[_]CIR.Pattern.Idx{},
+    };
+
+    for (arg_patterns) |arg_pattern_idx| {
+        if (arg_pattern_idx == pattern_idx) return true;
+    }
+
+    return false;
+}
+
 fn lowerLambdaSpecialized(
     self: *Self,
     module_env: *const ModuleEnv,
@@ -4367,17 +4414,23 @@ fn buildClosureValueFromCaptureRequests(
             try self.lowerProcInst(capture_proc_inst_id)
         else
             MIR.ExprId.none;
+        const capture_is_lexical_owner_param = self.lexicalOwnerBoundaryContainsPattern(
+            request.closure_proc_inst_id,
+            request.module_idx,
+            request.pattern_idx,
+        );
         // Proc-backed captures already have explicit runtime callable identity.
         // Keep that runtime value intact instead of routing it through a synthetic
         // lookup alias, which would reintroduce def/lookup-based callable recovery
         // into MIR and can lose lambda-set ownership facts for the captured value.
-        const runtime_capture_expr = if (!proc_backed_capture_expr.isNone())
+        const runtime_capture_expr = if (!capture_is_lexical_owner_param and !proc_backed_capture_expr.isNone())
             proc_backed_capture_expr
         else
             runtime_lookup_expr;
+
         try self.scratch_expr_ids.append(runtime_capture_expr);
 
-        const semantic_fallback_expr = if (!proc_backed_capture_expr.isNone() and self.store.getValueDef(outer_symbol) == null)
+        const semantic_fallback_expr = if (!capture_is_lexical_owner_param and !proc_backed_capture_expr.isNone() and self.store.getValueDef(outer_symbol) == null)
             proc_backed_capture_expr
         else
             runtime_lookup_expr;
@@ -6471,11 +6524,19 @@ pub fn lowerExternalDef(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.Expr.
         self.current_root_expr_context = cir_expr_idx;
     }
     defer self.current_root_expr_context = saved_root_expr_context;
-    return self.lowerExternalDefWithType(symbol, cir_expr_idx);
+    return self.lowerExternalDefWithType(symbol, cir_expr_idx, null);
 }
 
 /// Lower an external definition by its own declared identity.
-fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId {
+fn lowerExternalDefWithType(
+    self: *Self,
+    symbol: MIR.Symbol,
+    cir_expr_idx: CIR.Expr.Idx,
+    requested_monotype: ?struct {
+        idx: Monotype.Idx,
+        module_idx: u32,
+    },
+) Allocator.Error!MIR.ExprId {
     const symbol_key: u64 = @bitCast(symbol);
     const symbol_meta = self.getSymbolMetadata(symbol);
     const symbol_module_idx = symbolMetadataModuleIdx(symbol_meta);
@@ -6605,7 +6666,14 @@ fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.E
             }
             unreachable;
         };
-        const proc_inst_id = self.lookupMonomorphizedExprProcInst(cir_expr_idx) orelse {
+        const proc_inst_id = proc_inst_blk: {
+            if (requested_monotype) |req| {
+                if (self.monotypeIsWellFormed(req.idx) and self.store.monotype_store.getMonotype(req.idx) == .func) {
+                    break :proc_inst_blk try self.lookupMonomorphizedProcInst(template_id, req.idx, req.module_idx);
+                }
+            }
+
+            break :proc_inst_blk self.lookupMonomorphizedExprProcInst(cir_expr_idx) orelse {
             if (builtin.mode == .Debug) {
                 const binding_name = switch (symbol_meta) {
                     .external_def => |ext| ext_blk: {
@@ -6620,7 +6688,7 @@ fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.E
                     .local_ident => "<local-ident>",
                 };
                 std.debug.panic(
-                    "MIR Lower invariant: callable def '{s}' symbol={d} expr={d} in module {d} template={d} has no monomorphized proc inst in context {d} root_expr={d} current_proc_template={d} current_proc_expr={d}",
+                    "MIR Lower invariant: callable def '{s}' symbol={d} expr={d} in module {d} template={d} has no monomorphized proc inst in context {d} root_expr={d} current_proc_template={d} current_proc_expr={d} requested_monotype={d} requested_monotype_module={d}",
                     .{
                         binding_name,
                         symbol.raw(),
@@ -6631,10 +6699,13 @@ fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.E
                         if (self.current_root_expr_context) |root_expr_idx| @intFromEnum(root_expr_idx) else std.math.maxInt(u32),
                         if (!self.current_proc_inst_context.isNone()) @intFromEnum(self.monomorphization.getProcInst(self.current_proc_inst_context).template) else std.math.maxInt(u32),
                         if (!self.current_proc_inst_context.isNone()) @intFromEnum(self.monomorphization.getProcTemplate(self.monomorphization.getProcInst(self.current_proc_inst_context).template).cir_expr) else std.math.maxInt(u32),
+                        if (requested_monotype) |req| @intFromEnum(req.idx) else std.math.maxInt(u32),
+                        if (requested_monotype) |req| req.module_idx else std.math.maxInt(u32),
                     },
                 );
             }
             unreachable;
+            };
         };
         break :blk try self.lowerProcInst(proc_inst_id);
     } else try self.lowerExpr(cir_expr_idx);

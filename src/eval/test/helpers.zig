@@ -6400,7 +6400,8 @@ test "LIR proc-backed closures have no dangling lookups" {
                 "dangling proc-body lookup proc={d} expr={d} symbol={d}\n",
                 .{ proc_spec.name.raw(), @intFromEnum(found.expr_id), found.symbol.raw() },
             );
-            std.debug.print("  proc body tag={s}\n", .{@tagName(lir_store.getCFStmt(proc_spec.body))});
+            std.debug.print("  proc body\n", .{});
+            FindDanglingLookup.printStmtTree(&lir_store, proc_spec.body, 1);
             for (lir_store.getPatternSpan(proc_spec.args), 0..) |arg_pat, arg_idx| {
                 switch (lir_store.getPattern(arg_pat)) {
                     .bind => |bind| std.debug.print(
