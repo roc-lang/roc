@@ -3778,6 +3778,9 @@ pub const Pass = struct {
         try visiting.put(self.allocator, visit_key, {});
         defer _ = visiting.remove(visit_key);
 
+        const module_env = self.all_module_envs[module_idx];
+        if (module_env.store.getExpr(expr_idx) == .e_anno_only) return;
+
         try self.recordCurrentExprMonotype(
             result,
             module_idx,
@@ -3786,7 +3789,6 @@ pub const Pass = struct {
             fn_monotype_module_idx,
         );
 
-        const module_env = self.all_module_envs[module_idx];
         switch (module_env.store.getExpr(expr_idx)) {
             .e_lookup_local => |lookup| {
                 if (result.getPatternSourceExpr(module_idx, lookup.pattern_idx)) |source| {
