@@ -1287,8 +1287,11 @@ test "lambda set: higher-order param receives both closure members" {
     const members = ls_store.getMembers(ls_store.getLambdaSet(f_ls).members);
     try testing.expectEqual(@as(usize, 2), members.len);
     for (members) |member| {
-        const closure_member = env.mir_store.getClosureMember(member.closure_member);
-        try testing.expectEqual(@as(usize, 1), env.mir_store.getCaptureBindings(closure_member.capture_bindings).len);
+        const capture_bindings = if (!member.closure_member.isNone())
+            env.mir_store.getCaptureBindings(env.mir_store.getClosureMember(member.closure_member).capture_bindings)
+        else
+            env.mir_store.getCaptureBindings(env.mir_store.getProc(member.proc).capture_bindings);
+        try testing.expectEqual(@as(usize, 1), capture_bindings.len);
     }
 }
 
@@ -1329,8 +1332,10 @@ test "lambda set: higher-order closure captures monotype stays numeric tuple" {
     const members = ls_store.getMembers(ls_store.getLambdaSet(f_ls).members);
     try testing.expectEqual(@as(usize, 2), members.len);
 
-    const closure_member = env.mir_store.getClosureMember(members[0].closure_member);
-    const capture_bindings = env.mir_store.getCaptureBindings(closure_member.capture_bindings);
+    const capture_bindings = if (!members[0].closure_member.isNone())
+        env.mir_store.getCaptureBindings(env.mir_store.getClosureMember(members[0].closure_member).capture_bindings)
+    else
+        env.mir_store.getCaptureBindings(env.mir_store.getProc(members[0].proc).capture_bindings);
     try testing.expectEqual(@as(usize, 1), capture_bindings.len);
     const elem_mono = env.mir_store.monotype_store.getMonotype(capture_bindings[0].monotype);
     try testing.expect(elem_mono == .prim);
@@ -2306,6 +2311,52 @@ test "cross-module runExpr: REPL-style List.keep_if function lookups retain lamb
     }
 }
 
+test "cross-module runExpr: REPL-style List.contains lowers without unbound captures" {
+    var env = try MirTestEnv.initExpr("List.contains([1.I64, 2.I64, 3.I64, 4.I64, 5.I64], 3.I64)");
+    defer env.deinit();
+
+    const defs = env.module_env.store.sliceDefs(env.module_env.all_defs);
+    const main_def = env.module_env.store.getDef(defs[0]);
+    const region = env.module_env.store.getExprRegion(main_def.expr);
+
+    const scratch_top = env.module_env.store.scratchExprTop();
+    defer env.module_env.store.clearScratchExprsFrom(scratch_top);
+    try env.module_env.store.addScratchExpr(main_def.expr);
+    const inspect_args = try env.module_env.store.exprSpanFrom(scratch_top);
+    const inspect_expr = try env.module_env.addExpr(.{ .e_run_low_level = .{
+        .op = .str_inspekt,
+        .args = inspect_args,
+    } }, region);
+
+    const all_module_envs = [_]*ModuleEnv{ @constCast(env.builtin_module.env), env.module_env };
+
+    var monomorphization = try Monomorphize.runExpr(
+        test_allocator,
+        @as([]const *ModuleEnv, all_module_envs[0..]),
+        &env.module_env.types,
+        1,
+        null,
+        inspect_expr,
+    );
+    defer monomorphization.deinit(test_allocator);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    var lower = try Lower.init(
+        test_allocator,
+        &mir_store,
+        &monomorphization,
+        @as([]const *ModuleEnv, all_module_envs[0..]),
+        &env.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    _ = try lower.lowerExpr(inspect_expr);
+}
+
 test "runExpr: top-level local function lookup materializes callable def proc inst" {
     var env = try MirTestEnv.initFull("Test",
         \\fn0 = |a| a + 1
@@ -2973,7 +3024,7 @@ test "cross-module: repl-style recursive fibonacci block materializes one proc i
         user_proc_inst_count += 1;
     }
 
-    try testing.expectEqual(@as(usize, 2), user_template_count);
+    try testing.expectEqual(@as(usize, 1), user_template_count);
     try testing.expectEqual(@as(usize, 1), user_proc_inst_count);
 }
 

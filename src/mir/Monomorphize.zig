@@ -586,6 +586,7 @@ pub const Pass = struct {
     active_template_context: ProcTemplateId,
     active_proc_inst_context: ProcInstId,
     active_root_expr_context: ?CIR.Expr.Idx,
+    suppress_direct_call_resolution: bool,
 
     pub fn init(
         allocator: Allocator,
@@ -614,6 +615,7 @@ pub const Pass = struct {
             .active_template_context = .none,
             .active_proc_inst_context = .none,
             .active_root_expr_context = null,
+            .suppress_direct_call_resolution = false,
         };
     }
 
@@ -2004,19 +2006,23 @@ pub const Pass = struct {
                         );
                     }
                 }
-                try self.resolveDirectCallSite(result, module_idx, expr_idx, call_expr);
-                if (self.getCallSiteProcInstInContext(result, self.active_proc_inst_context, module_idx, expr_idx) == null and
-                    result.getCallSiteProcInsts(
-                        self.active_proc_inst_context,
-                        self.exprRootContext(self.active_proc_inst_context),
-                        module_idx,
-                        expr_idx,
-                    ) == null)
-                {
-                    try self.scanExpr(result, module_idx, call_expr.func);
+                if (!self.suppress_direct_call_resolution) {
                     try self.resolveDirectCallSite(result, module_idx, expr_idx, call_expr);
+                    if (self.getCallSiteProcInstInContext(result, self.active_proc_inst_context, module_idx, expr_idx) == null and
+                        result.getCallSiteProcInsts(
+                            self.active_proc_inst_context,
+                            self.exprRootContext(self.active_proc_inst_context),
+                            module_idx,
+                            expr_idx,
+                        ) == null)
+                    {
+                        try self.scanExpr(result, module_idx, call_expr.func);
+                        try self.resolveDirectCallSite(result, module_idx, expr_idx, call_expr);
+                    }
+                    try self.assignCallableArgProcInstsFromCallMonotype(result, module_idx, expr_idx, call_expr);
+                } else {
+                    try self.scanExpr(result, module_idx, call_expr.func);
                 }
-                try self.assignCallableArgProcInstsFromCallMonotype(result, module_idx, expr_idx, call_expr);
                 try self.scanExprSpan(result, module_idx, module_env.store.sliceExpr(call_expr.args));
                 if (self.active_bindings != null) {
                     try self.scanExpr(result, module_idx, call_expr.func);
@@ -2049,14 +2055,13 @@ pub const Pass = struct {
             .e_nominal => |nominal_expr| try self.scanValueExpr(result, module_idx, nominal_expr.backing_expr),
             .e_nominal_external => |nominal_expr| try self.scanValueExpr(result, module_idx, nominal_expr.backing_expr),
             .e_closure => |closure_expr| {
-                try self.scanExpr(result, module_idx, closure_expr.lambda_idx);
+                // Callable bodies are scanned exclusively from `scanProcInst`, after
+                // the proc template/inst has established its own lexical owner and
+                // defining-context chain. Generic expr traversal only records the
+                // closure value's capture sources in the surrounding proc.
                 try self.scanClosureCaptureSources(result, self.active_proc_inst_context, module_idx, expr_idx, closure_expr);
             },
-            .e_lambda => |lambda_expr| {
-                if (self.active_bindings != null) {
-                    try self.scanValueExpr(result, module_idx, lambda_expr.body);
-                }
-            },
+            .e_lambda => {},
             .e_binop => |binop_expr| {
                 try self.scanExpr(result, module_idx, binop_expr.lhs);
                 try self.scanExpr(result, module_idx, binop_expr.rhs);
@@ -2106,11 +2111,7 @@ pub const Pass = struct {
                 try self.scanExpr(result, module_idx, for_expr.expr);
                 try self.scanExpr(result, module_idx, for_expr.body);
             },
-            .e_hosted_lambda => |hosted_expr| {
-                if (self.active_bindings != null) {
-                    try self.scanValueExpr(result, module_idx, hosted_expr.body);
-                }
-            },
+            .e_hosted_lambda => {},
             .e_run_low_level => |run_low_level| {
                 const args = module_env.store.sliceExpr(run_low_level.args);
                 try self.scanExprSpan(result, module_idx, args);
@@ -3077,6 +3078,10 @@ pub const Pass = struct {
         const saved_root_expr_context = self.active_root_expr_context;
         self.active_root_expr_context = if (proc_inst_context.isNone()) template.cir_expr else null;
         defer self.active_root_expr_context = saved_root_expr_context;
+
+        const saved_suppress_direct_call_resolution = self.suppress_direct_call_resolution;
+        self.suppress_direct_call_resolution = true;
+        defer self.suppress_direct_call_resolution = saved_suppress_direct_call_resolution;
 
         var iterations: u32 = 0;
         while (true) {
@@ -10467,12 +10472,12 @@ pub const Pass = struct {
     fn getCallLowLevelOp(self: *Pass, caller_env: *const ModuleEnv, func_expr_idx: CIR.Expr.Idx) ?CIR.Expr.LowLevel {
         return switch (caller_env.store.getExpr(func_expr_idx)) {
             .e_lookup_external => |lookup| self.getExternalLowLevelOp(caller_env, lookup),
-            .e_lookup_local => |lookup| self.getLocalLowLevelOp(caller_env, lookup.pattern_idx),
+            .e_lookup_local => |lookup| getLocalLowLevelOp(caller_env, lookup.pattern_idx),
             else => null,
         };
     }
 
-    fn getLocalLowLevelOp(self: *Pass, module_env: *const ModuleEnv, pattern_idx: CIR.Pattern.Idx) ?CIR.Expr.LowLevel {
+    fn getLocalLowLevelOp(module_env: *const ModuleEnv, pattern_idx: CIR.Pattern.Idx) ?CIR.Expr.LowLevel {
         const defs = module_env.store.sliceDefs(module_env.all_defs);
         for (defs) |def_idx| {
             const def = module_env.store.getDef(def_idx);
@@ -10484,7 +10489,6 @@ pub const Pass = struct {
             }
             return null;
         }
-        _ = self;
         return null;
     }
 
