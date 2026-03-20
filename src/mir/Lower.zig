@@ -1215,6 +1215,42 @@ fn registerPatternSymbolMonotypes(self: *Self, pattern_id: MIR.PatternId) Alloca
     }
 }
 
+fn setPatternSymbolsReassignable(self: *Self, pattern_id: MIR.PatternId, reassignable: bool) Allocator.Error!void {
+    switch (self.store.getPattern(pattern_id)) {
+        .bind => |symbol| try self.store.setSymbolReassignable(self.allocator, symbol, reassignable),
+        .as_pattern => |as_pat| {
+            try self.store.setSymbolReassignable(self.allocator, as_pat.symbol, reassignable);
+            try self.setPatternSymbolsReassignable(as_pat.pattern, reassignable);
+        },
+        .tag => |tag| {
+            for (self.store.getPatternSpan(tag.args)) |arg_pat| {
+                try self.setPatternSymbolsReassignable(arg_pat, reassignable);
+            }
+        },
+        .struct_destructure => |destructure| {
+            for (self.store.getPatternSpan(destructure.fields)) |field_pat| {
+                try self.setPatternSymbolsReassignable(field_pat, reassignable);
+            }
+        },
+        .list_destructure => |destructure| {
+            for (self.store.getPatternSpan(destructure.patterns)) |elem_pat| {
+                try self.setPatternSymbolsReassignable(elem_pat, reassignable);
+            }
+            if (!destructure.rest_pattern.isNone()) {
+                try self.setPatternSymbolsReassignable(destructure.rest_pattern, reassignable);
+            }
+        },
+        .wildcard,
+        .int_literal,
+        .str_literal,
+        .dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .runtime_error,
+        => {},
+    }
+}
+
 fn registerBoundSymbolDefIfNeeded(self: *Self, pattern: MIR.PatternId, expr: MIR.ExprId) Allocator.Error!void {
     try self.registerPatternSymbolMonotypes(pattern);
     if (self.patternBoundSymbol(pattern)) |symbol| {
@@ -5958,6 +5994,7 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
                     continue;
                 }
                 const pat = try self.lowerPattern(module_env, var_decl.pattern_idx);
+                try self.setPatternSymbolsReassignable(pat, true);
                 const expr = try self.lowerExpr(var_decl.expr);
                 try self.registerBoundSymbolDefIfNeeded(pat, expr);
                 try self.scratch_stmts.append(.{ .decl_var = .{ .pattern = pat, .expr = expr } });

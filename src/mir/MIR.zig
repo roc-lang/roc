@@ -1002,4 +1002,13 @@ pub const Store = struct {
             unreachable;
         };
     }
+
+    /// Explicitly set mutability metadata for a symbol.
+    /// This is used when statement-level mutability (`var`) overrides the
+    /// underlying identifier attributes that were present when the symbol was interned.
+    pub fn setSymbolReassignable(self: *Store, allocator: Allocator, symbol: Symbol, reassignable: bool) !void {
+        const key = symbol.raw();
+        const gop = try self.symbol_reassignable.getOrPut(allocator, key);
+        gop.value_ptr.* = reassignable;
+    }
 };

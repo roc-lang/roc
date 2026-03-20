@@ -220,6 +220,30 @@ const ContextPatternKey = struct {
     pattern_raw: u32,
 };
 
+const MutationKind = enum(u8) {
+    proc_templates,
+    proc_template_ids_by_source,
+    source_exprs,
+    deferred_local_callables,
+    expr_proc_insts,
+    closure_capture_monotypes,
+    closure_capture_proc_insts,
+    context_expr_monotypes,
+    dispatch_expr_proc_insts,
+    proc_inst_sets,
+    context_pattern_proc_inst_sets,
+    expr_proc_inst_sets,
+    lookup_expr_proc_inst_sets,
+    call_site_proc_inst_sets,
+    call_site_proc_insts,
+    context_pattern_proc_insts,
+    lookup_expr_proc_insts,
+    proc_insts,
+    substs,
+};
+
+const mutation_kind_count = std.meta.fields(MutationKind).len;
+
 const ResolvedDispatchTarget = struct {
     origin: Ident.Idx,
     method_ident: Ident.Idx,
@@ -579,8 +603,12 @@ pub const Pass = struct {
     visited_exprs: std.AutoHashMapUnmanaged(u64, void),
     in_progress_value_defs: std.AutoHashMapUnmanaged(ContextExprKey, void),
     resolved_dispatch_targets: std.AutoHashMapUnmanaged(ContextExprKey, ResolvedDispatchTarget),
-    scanned_proc_insts: std.AutoHashMapUnmanaged(u32, void),
+    in_progress_proc_scans: std.AutoHashMapUnmanaged(u32, void),
+    completed_proc_scans: std.AutoHashMapUnmanaged(u32, void),
     in_progress_template_body_completions: std.AutoHashMapUnmanaged(TemplateBodyCompletionKey, void),
+    mutation_revision: u64,
+    mutation_counts: [mutation_kind_count]u32,
+    scratch_context_expr_monotypes_depth: u32,
     active_bindings: ?*std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
     active_iteration_expr_monotypes: ?*std.AutoHashMapUnmanaged(ContextExprKey, ResolvedMonotype),
     active_template_context: ProcTemplateId,
@@ -608,8 +636,12 @@ pub const Pass = struct {
             .visited_exprs = .empty,
             .in_progress_value_defs = .empty,
             .resolved_dispatch_targets = .empty,
-            .scanned_proc_insts = .empty,
+            .in_progress_proc_scans = .empty,
+            .completed_proc_scans = .empty,
             .in_progress_template_body_completions = .empty,
+            .mutation_revision = 0,
+            .mutation_counts = [_]u32{0} ** mutation_kind_count,
+            .scratch_context_expr_monotypes_depth = 0,
             .active_bindings = null,
             .active_iteration_expr_monotypes = null,
             .active_template_context = .none,
@@ -780,7 +812,8 @@ pub const Pass = struct {
         self.visited_exprs.deinit(self.allocator);
         self.in_progress_value_defs.deinit(self.allocator);
         self.resolved_dispatch_targets.deinit(self.allocator);
-        self.scanned_proc_insts.deinit(self.allocator);
+        self.in_progress_proc_scans.deinit(self.allocator);
+        self.completed_proc_scans.deinit(self.allocator);
         self.in_progress_template_body_completions.deinit(self.allocator);
     }
 
@@ -850,50 +883,64 @@ pub const Pass = struct {
             iterations += 1;
             if (std.debug.runtime_safety and iterations > 32) {
                 std.debug.panic(
-                    "Monomorphize: root fixed point did not converge (module={d}, contextualize_roots={})",
-                    .{ self.current_module_idx, contextualize_roots },
+                    "Monomorphize: root fixed point did not converge (module={d}, contextualize_roots={}, revision={d}, templates={d}, proc_insts={d}, expr_proc_insts={d}, expr_proc_inst_sets={d}, call_sites={d}, call_site_sets={d}, dispatch={d}, lookups={d}, lookup_sets={d}, context_monos={d}, context_pattern_proc_insts={d}, context_pattern_sets={d}, closure_capture_monos={d}, closure_capture_proc_insts={d}, mutation_counts={any})",
+                    .{
+                        self.current_module_idx,
+                        contextualize_roots,
+                        self.mutation_revision,
+                        result.proc_templates.items.len,
+                        result.proc_insts.items.len,
+                        result.expr_proc_insts.count(),
+                        result.expr_proc_inst_sets.count(),
+                        result.call_site_proc_insts.count(),
+                        result.call_site_proc_inst_sets.count(),
+                        result.dispatch_expr_proc_insts.count(),
+                        result.lookup_expr_proc_insts.count(),
+                        result.lookup_expr_proc_inst_sets.count(),
+                        result.context_expr_monotypes.count(),
+                        result.context_pattern_proc_insts.count(),
+                        result.context_pattern_proc_inst_sets.count(),
+                        result.closure_capture_monotypes.count(),
+                        result.closure_capture_proc_insts.count(),
+                        self.mutation_counts,
+                    },
                 );
             }
 
             self.visited_exprs.clearRetainingCapacity();
             self.in_progress_value_defs.clearRetainingCapacity();
+            self.completed_proc_scans.clearRetainingCapacity();
 
-            const proc_insts_before = result.proc_insts.items.len;
-            const expr_proc_insts_before = result.expr_proc_insts.count();
-            const expr_proc_inst_sets_before = result.expr_proc_inst_sets.count();
-            const call_sites_before = result.call_site_proc_insts.count();
-            const call_site_sets_before = result.call_site_proc_inst_sets.count();
-            const dispatch_before = result.dispatch_expr_proc_insts.count();
-            const lookups_before = result.lookup_expr_proc_insts.count();
-            const lookup_sets_before = result.lookup_expr_proc_inst_sets.count();
-            const context_monos_before = result.context_expr_monotypes.count();
-            const context_pattern_proc_insts_before = result.context_pattern_proc_insts.count();
-            const context_pattern_proc_inst_sets_before = result.context_pattern_proc_inst_sets.count();
-            const closure_capture_monos_before = result.closure_capture_monotypes.count();
-            const closure_capture_proc_insts_before = result.closure_capture_proc_insts.count();
-
+            const mutation_revision_before = self.mutation_revision;
             for (exprs) |expr_idx| {
                 self.active_root_expr_context = if (contextualize_roots) expr_idx else null;
                 try self.scanValueExpr(result, self.current_module_idx, expr_idx);
             }
 
-            if (result.proc_insts.items.len == proc_insts_before and
-                result.expr_proc_insts.count() == expr_proc_insts_before and
-                result.expr_proc_inst_sets.count() == expr_proc_inst_sets_before and
-                result.call_site_proc_insts.count() == call_sites_before and
-                result.call_site_proc_inst_sets.count() == call_site_sets_before and
-                result.dispatch_expr_proc_insts.count() == dispatch_before and
-                result.lookup_expr_proc_insts.count() == lookups_before and
-                result.lookup_expr_proc_inst_sets.count() == lookup_sets_before and
-                result.context_expr_monotypes.count() == context_monos_before and
-                result.context_pattern_proc_insts.count() == context_pattern_proc_insts_before and
-                result.context_pattern_proc_inst_sets.count() == context_pattern_proc_inst_sets_before and
-                result.closure_capture_monotypes.count() == closure_capture_monos_before and
-                result.closure_capture_proc_insts.count() == closure_capture_proc_insts_before)
-            {
+            if (self.mutation_revision == mutation_revision_before) {
                 break;
             }
         }
+    }
+
+    fn noteMutation(self: *Pass, comptime kind: MutationKind) void {
+        self.mutation_revision +%= 1;
+        self.mutation_counts[@intFromEnum(kind)] +%= 1;
+    }
+
+    fn putTracked(self: *Pass, comptime kind: MutationKind, map: anytype, key: anytype, value: anytype) Allocator.Error!void {
+        const gop = try map.getOrPut(self.allocator, key);
+        const typed_value: @TypeOf(gop.value_ptr.*) = value;
+        if (!gop.found_existing or !std.meta.eql(gop.value_ptr.*, typed_value)) {
+            gop.value_ptr.* = typed_value;
+            self.noteMutation(kind);
+        }
+    }
+
+    fn appendTracked(self: *Pass, comptime kind: MutationKind, list: anytype, value: anytype) Allocator.Error!void {
+        const typed_value: @TypeOf(list.items[0]) = value;
+        try list.append(self.allocator, typed_value);
+        self.noteMutation(kind);
     }
 
     fn scanSeedModules(self: *Pass, result: *Result) Allocator.Error!void {
@@ -975,7 +1022,7 @@ pub const Pass = struct {
             .none;
 
         const proc_template_id: ProcTemplateId = @enumFromInt(result.proc_templates.items.len);
-        try result.proc_templates.append(self.allocator, .{
+        try self.appendTracked(.proc_templates, &result.proc_templates, ProcTemplate{
             .source_key = source_key,
             .module_idx = module_idx,
             .cir_expr = cir_expr,
@@ -985,7 +1032,7 @@ pub const Pass = struct {
             .lexical_owner_template = lexical_owner_template,
             .source_region = source_region,
         });
-        try result.proc_template_ids_by_source.put(self.allocator, source_key, proc_template_id);
+        try self.putTracked(.proc_template_ids_by_source, &result.proc_template_ids_by_source, source_key, proc_template_id);
 
         return proc_template_id;
     }
@@ -1009,7 +1056,7 @@ pub const Pass = struct {
             return;
         }
 
-        try result.proc_template_ids_by_source.put(self.allocator, source_key, template_id);
+        try self.putTracked(.proc_template_ids_by_source, &result.proc_template_ids_by_source, source_key, template_id);
     }
 
     fn recordSourceExpr(
@@ -1038,7 +1085,7 @@ pub const Pass = struct {
             return;
         }
 
-        try result.source_exprs.put(self.allocator, source_key, .{
+        try self.putTracked(.source_exprs, &result.source_exprs, source_key, ExprSource{
             .module_idx = module_idx,
             .expr_idx = expr_idx,
         });
@@ -1253,7 +1300,7 @@ pub const Pass = struct {
         const source_key = packLocalPatternSourceKey(module_idx, pattern_idx);
         if (result.deferred_local_callables.contains(source_key)) return;
 
-        try result.deferred_local_callables.put(self.allocator, source_key, .{
+        try self.putTracked(.deferred_local_callables, &result.deferred_local_callables, source_key, DeferredLocalCallable{
             .pattern_idx = pattern_idx,
             .cir_expr = expr_idx,
             .module_idx = module_idx,
@@ -1580,13 +1627,13 @@ pub const Pass = struct {
                 return;
             }
             if (!existing_proc_inst_id.isNone()) {
-                try result.expr_proc_insts.put(self.allocator, key, ProcInstId.none);
+                try self.putTracked(.expr_proc_insts, &result.expr_proc_insts, key, ProcInstId.none);
             }
             try self.mergeExprProcInstSet(result, context_proc_inst, module_idx, expr_idx, proc_inst_id);
             return;
         }
 
-        try result.expr_proc_insts.put(self.allocator, key, proc_inst_id);
+        try self.putTracked(.expr_proc_insts, &result.expr_proc_insts, key, proc_inst_id);
         try self.mergeExprProcInstSet(result, context_proc_inst, module_idx, expr_idx, proc_inst_id);
     }
 
@@ -1603,10 +1650,10 @@ pub const Pass = struct {
         const key = self.resultExprKey(context_proc_inst, module_idx, expr_idx);
         if (result.expr_proc_insts.get(key)) |existing_proc_inst_id| {
             if (!existing_proc_inst_id.isNone()) {
-                try result.expr_proc_insts.put(self.allocator, key, ProcInstId.none);
+                try self.putTracked(.expr_proc_insts, &result.expr_proc_insts, key, ProcInstId.none);
             }
         } else {
-            try result.expr_proc_insts.put(self.allocator, key, ProcInstId.none);
+            try self.putTracked(.expr_proc_insts, &result.expr_proc_insts, key, ProcInstId.none);
         }
 
         for (proc_inst_ids) |proc_inst_id| {
@@ -1765,18 +1812,10 @@ pub const Pass = struct {
             }
 
             if (!capture_mono.isNone()) {
-                try result.closure_capture_monotypes.put(
-                    self.allocator,
-                    key,
-                    capture_mono,
-                );
+                try self.putTracked(.closure_capture_monotypes, &result.closure_capture_monotypes, key, capture_mono);
             }
             if (local_capture_proc_inst orelse source_capture_proc_inst) |capture_proc_inst_id| {
-                try result.closure_capture_proc_insts.put(
-                    self.allocator,
-                    key,
-                    capture_proc_inst_id,
-                );
+                try self.putTracked(.closure_capture_proc_insts, &result.closure_capture_proc_insts, key, capture_proc_inst_id);
                 continue;
             }
 
@@ -1789,11 +1828,7 @@ pub const Pass = struct {
                             capture_mono.idx,
                             capture_mono.module_idx,
                         );
-                        try result.closure_capture_proc_insts.put(
-                            self.allocator,
-                            key,
-                            capture_proc_inst_id,
-                        );
+                        try self.putTracked(.closure_capture_proc_insts, &result.closure_capture_proc_insts, key, capture_proc_inst_id);
                         try self.scanProcInst(result, capture_proc_inst_id);
                         continue;
                     }
@@ -1801,11 +1836,7 @@ pub const Pass = struct {
             }
 
             if (enclosing_capture_proc_inst) |capture_proc_inst_id| {
-                try result.closure_capture_proc_insts.put(
-                    self.allocator,
-                    key,
-                    capture_proc_inst_id,
-                );
+                try self.putTracked(.closure_capture_proc_insts, &result.closure_capture_proc_insts, key, capture_proc_inst_id);
                 continue;
             }
 
@@ -1817,11 +1848,7 @@ pub const Pass = struct {
                         capture_mono.idx,
                         capture_mono.module_idx,
                     );
-                    try result.closure_capture_proc_insts.put(
-                        self.allocator,
-                        key,
-                        capture_proc_inst_id,
-                    );
+                    try self.putTracked(.closure_capture_proc_insts, &result.closure_capture_proc_insts, key, capture_proc_inst_id);
                     try self.scanProcInst(result, capture_proc_inst_id);
                 }
             }
@@ -2025,7 +2052,16 @@ pub const Pass = struct {
                 }
                 try self.scanExprSpan(result, module_idx, module_env.store.sliceExpr(call_expr.args));
                 if (self.active_bindings != null) {
-                    try self.scanExpr(result, module_idx, call_expr.func);
+                    if (self.getCallSiteProcInstInContext(result, self.active_proc_inst_context, module_idx, expr_idx) == null and
+                        result.getCallSiteProcInsts(
+                            self.active_proc_inst_context,
+                            self.exprRootContext(self.active_proc_inst_context),
+                            module_idx,
+                            expr_idx,
+                        ) == null)
+                    {
+                        try self.scanExpr(result, module_idx, call_expr.func);
+                    }
                     try self.scanExprSpan(result, module_idx, module_env.store.sliceExpr(call_expr.args));
                 }
             },
@@ -2490,7 +2526,6 @@ pub const Pass = struct {
                         module_idx,
                         call_expr_idx,
                         call_expr,
-                        callee_expr_idx,
                         callee_expr,
                         proc_inst_id,
                     );
@@ -2524,25 +2559,11 @@ pub const Pass = struct {
                     .e_lookup_external, .e_lookup_required => {},
                     else => {},
                 }
-                switch (callee_expr) {
-                    .e_lookup_local, .e_lookup_external, .e_lookup_required => {
-                        try self.recordLookupExprProcInst(
-                            result,
-                            self.active_proc_inst_context,
-                            module_idx,
-                            callee_expr_idx,
-                            proc_inst_id,
-                        );
-                        try self.recordLookupSourceExprProcInst(result, module_idx, callee_expr_idx, proc_inst_id);
-                    },
-                    else => {},
-                }
                 try self.finalizeResolvedDirectCallProcInst(
                     result,
                     module_idx,
                     call_expr_idx,
                     call_expr,
-                    callee_expr_idx,
                     callee_expr,
                     proc_inst_id,
                 );
@@ -2661,7 +2682,6 @@ pub const Pass = struct {
             module_idx,
             call_expr_idx,
             call_expr,
-            callee_expr_idx,
             callee_expr,
             proc_inst_id,
         );
@@ -2673,7 +2693,6 @@ pub const Pass = struct {
         module_idx: u32,
         call_expr_idx: CIR.Expr.Idx,
         call_expr: anytype,
-        callee_expr_idx: CIR.Expr.Idx,
         callee_expr: anytype,
         proc_inst_id: ProcInstId,
     ) Allocator.Error!void {
@@ -2695,19 +2714,6 @@ pub const Pass = struct {
                 proc_inst_id,
             ),
             .e_lookup_external, .e_lookup_required => {},
-            else => {},
-        }
-        switch (callee_expr) {
-            .e_lookup_local, .e_lookup_external, .e_lookup_required => {
-                try self.recordLookupExprProcInst(
-                    result,
-                    self.active_proc_inst_context,
-                    module_idx,
-                    callee_expr_idx,
-                    proc_inst_id,
-                );
-                try self.recordLookupSourceExprProcInst(result, module_idx, callee_expr_idx, proc_inst_id);
-            },
             else => {},
         }
 
@@ -3041,13 +3047,6 @@ pub const Pass = struct {
         const module_env = self.all_module_envs[template.module_idx];
         const expr = module_env.store.getExpr(template.cir_expr);
 
-        const saved_context_expr_monotypes = result.context_expr_monotypes;
-        result.context_expr_monotypes = .empty;
-        defer {
-            result.context_expr_monotypes.deinit(self.allocator);
-            result.context_expr_monotypes = saved_context_expr_monotypes;
-        }
-
         var iteration_expr_monotypes: std.AutoHashMapUnmanaged(ContextExprKey, ResolvedMonotype) = .empty;
         defer iteration_expr_monotypes.deinit(self.allocator);
 
@@ -3083,6 +3082,9 @@ pub const Pass = struct {
         self.suppress_direct_call_resolution = true;
         defer self.suppress_direct_call_resolution = saved_suppress_direct_call_resolution;
 
+        self.scratch_context_expr_monotypes_depth += 1;
+        defer self.scratch_context_expr_monotypes_depth -= 1;
+
         var iterations: u32 = 0;
         while (true) {
             iterations += 1;
@@ -3093,19 +3095,8 @@ pub const Pass = struct {
                 );
             }
 
-            iteration_expr_monotypes.clearRetainingCapacity();
-
             const bindings_before = bindings.count();
-            const proc_insts_before = result.proc_insts.items.len;
-            const expr_proc_insts_before = result.expr_proc_insts.count();
-            const expr_proc_inst_sets_before = result.expr_proc_inst_sets.count();
-            const call_sites_before = result.call_site_proc_insts.count();
-            const call_site_sets_before = result.call_site_proc_inst_sets.count();
-            const dispatch_before = result.dispatch_expr_proc_insts.count();
-            const lookups_before = result.lookup_expr_proc_insts.count();
-            const lookup_sets_before = result.lookup_expr_proc_inst_sets.count();
-            const context_pattern_proc_insts_before = result.context_pattern_proc_insts.count();
-            const context_pattern_proc_inst_sets_before = result.context_pattern_proc_inst_sets.count();
+            const mutation_revision_before = self.mutation_revision;
 
             try self.seedTemplateBodyBindingsFromCurrentBindings(result, template, bindings);
 
@@ -3129,16 +3120,7 @@ pub const Pass = struct {
             }
 
             if (bindings.count() == bindings_before and
-                result.proc_insts.items.len == proc_insts_before and
-                result.expr_proc_insts.count() == expr_proc_insts_before and
-                result.expr_proc_inst_sets.count() == expr_proc_inst_sets_before and
-                result.call_site_proc_insts.count() == call_sites_before and
-                result.call_site_proc_inst_sets.count() == call_site_sets_before and
-                result.dispatch_expr_proc_insts.count() == dispatch_before and
-                result.lookup_expr_proc_insts.count() == lookups_before and
-                result.lookup_expr_proc_inst_sets.count() == lookup_sets_before and
-                result.context_pattern_proc_insts.count() == context_pattern_proc_insts_before and
-                result.context_pattern_proc_inst_sets.count() == context_pattern_proc_inst_sets_before)
+                self.mutation_revision == mutation_revision_before)
             {
                 break;
             }
@@ -4206,7 +4188,7 @@ pub const Pass = struct {
         self.active_proc_inst_context = context_proc_inst;
         defer self.active_proc_inst_context = saved_proc_inst_context;
 
-        const fn_monotype = try self.resolveExprMonotypeIfMonomorphizableResolved(result, module_idx, expr_idx);
+        const fn_monotype = try self.resolveExprMonotypeIfExactResolved(result, module_idx, expr_idx);
         if (fn_monotype.isNone()) return null;
 
         const proc_inst_id = try self.ensureProcInst(result, template_id, fn_monotype.idx, fn_monotype.module_idx);
@@ -4493,8 +4475,57 @@ pub const Pass = struct {
         if (self.active_iteration_expr_monotypes) |iteration_map| {
             try iteration_map.put(self.allocator, key, resolved);
         } else {
-            try result.context_expr_monotypes.put(self.allocator, key, resolved);
+            if (self.scratch_context_expr_monotypes_depth != 0) {
+                try result.context_expr_monotypes.put(self.allocator, key, resolved);
+            } else {
+                try self.mergeTrackedContextExprMonotype(result, key, resolved);
+            }
         }
+    }
+
+    fn mergeTrackedContextExprMonotype(
+        self: *Pass,
+        result: *Result,
+        key: ContextExprKey,
+        resolved: ResolvedMonotype,
+    ) Allocator.Error!void {
+        const gop = try result.context_expr_monotypes.getOrPut(self.allocator, key);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = resolved;
+            if (self.scratch_context_expr_monotypes_depth == 0) {
+                self.noteMutation(.context_expr_monotypes);
+            }
+            return;
+        }
+
+        const existing = gop.value_ptr.*;
+        if (try self.monotypesStructurallyEqualAcrossModules(
+            result,
+            existing.idx,
+            existing.module_idx,
+            resolved.idx,
+            resolved.module_idx,
+        )) {
+            return;
+        }
+
+        if (std.debug.runtime_safety) {
+            std.debug.panic(
+                "Monomorphize: conflicting exact expr monotypes while merging ctx={d} module={d} expr={d} existing={d}@{d} existing_mono={any} new={d}@{d} new_mono={any}",
+                .{
+                    key.context_proc_inst_raw,
+                    key.module_idx,
+                    key.expr_raw,
+                    @intFromEnum(existing.idx),
+                    existing.module_idx,
+                    result.monotype_store.getMonotype(existing.idx),
+                    @intFromEnum(resolved.idx),
+                    resolved.module_idx,
+                    result.monotype_store.getMonotype(resolved.idx),
+                },
+            );
+        }
+        unreachable;
     }
 
     fn recordDemandedRecordFieldMonotypes(
@@ -4769,20 +4800,24 @@ pub const Pass = struct {
         expr: CIR.Expr,
         proc_inst_id: ProcInstId,
     ) Allocator.Error!void {
-        try result.dispatch_expr_proc_insts.put(
-            self.allocator,
-            self.resultExprKey(self.active_proc_inst_context, module_idx, expr_idx),
-            proc_inst_id,
-        );
-        const proc_inst = result.getProcInst(proc_inst_id);
-        const template = result.getProcTemplate(proc_inst.template);
-        try self.recordExprProcInst(
-            result,
-            self.active_proc_inst_context,
-            template.module_idx,
-            template.cir_expr,
-            proc_inst_id,
-        );
+        if (self.scratch_context_expr_monotypes_depth == 0) {
+            const key = self.resultExprKey(self.active_proc_inst_context, module_idx, expr_idx);
+            try self.putTracked(
+                .dispatch_expr_proc_insts,
+                &result.dispatch_expr_proc_insts,
+                key,
+                proc_inst_id,
+            );
+            const proc_inst = result.getProcInst(proc_inst_id);
+            const template = result.getProcTemplate(proc_inst.template);
+            try self.recordExprProcInst(
+                result,
+                self.active_proc_inst_context,
+                template.module_idx,
+                template.cir_expr,
+                proc_inst_id,
+            );
+        }
         var actual_args = std.ArrayList(CIR.Expr.Idx).empty;
         defer actual_args.deinit(self.allocator);
         try self.appendDispatchActualArgs(module_idx, expr, &actual_args);
@@ -5465,7 +5500,7 @@ pub const Pass = struct {
         if (self.procTemplateLowLevelOp(result, template_id) != null) return;
 
         const module_env = self.all_module_envs[module_idx];
-        const desired_fn_monotype = try self.resolveExprMonotypeIfMonomorphizableResolved(result, module_idx, expr_idx);
+        const desired_fn_monotype = try self.resolveExprMonotypeIfExactResolved(result, module_idx, expr_idx);
         const existing_proc_inst_id = if (module_env.store.getExpr(expr_idx) == .e_lookup_local) blk: {
             const lookup = module_env.store.getExpr(expr_idx).e_lookup_local;
             if (result.getContextPatternProcInsts(self.active_proc_inst_context, module_idx, lookup.pattern_idx)) |proc_inst_ids| {
@@ -5591,7 +5626,7 @@ pub const Pass = struct {
         };
 
         const set_id: ProcInstSetId = @enumFromInt(result.proc_inst_sets.items.len);
-        try result.proc_inst_sets.append(self.allocator, .{ .members = span });
+        try self.appendTracked(.proc_inst_sets, &result.proc_inst_sets, ProcInstSet{ .members = span });
         return set_id;
     }
 
@@ -5629,7 +5664,7 @@ pub const Pass = struct {
         );
 
         const set_id = try self.internProcInstSet(result, merged.items);
-        try result.context_pattern_proc_inst_sets.put(self.allocator, key, set_id);
+        try self.putTracked(.context_pattern_proc_inst_sets, &result.context_pattern_proc_inst_sets, key, set_id);
     }
 
     fn mergeExprProcInstSet(
@@ -5666,7 +5701,7 @@ pub const Pass = struct {
         );
 
         const set_id = try self.internProcInstSet(result, merged.items);
-        try result.expr_proc_inst_sets.put(self.allocator, key, set_id);
+        try self.putTracked(.expr_proc_inst_sets, &result.expr_proc_inst_sets, key, set_id);
     }
 
     fn mergeLookupExprProcInstSet(
@@ -5703,7 +5738,7 @@ pub const Pass = struct {
         );
 
         const set_id = try self.internProcInstSet(result, merged.items);
-        try result.lookup_expr_proc_inst_sets.put(self.allocator, key, set_id);
+        try self.putTracked(.lookup_expr_proc_inst_sets, &result.lookup_expr_proc_inst_sets, key, set_id);
     }
 
     fn mergeCallSiteProcInstSet(
@@ -5740,7 +5775,7 @@ pub const Pass = struct {
         );
 
         const set_id = try self.internProcInstSet(result, merged.items);
-        try result.call_site_proc_inst_sets.put(self.allocator, key, set_id);
+        try self.putTracked(.call_site_proc_inst_sets, &result.call_site_proc_inst_sets, key, set_id);
     }
 
     fn recordCallSiteProcInstSet(
@@ -5756,10 +5791,10 @@ pub const Pass = struct {
         const key = self.resultExprKey(context_proc_inst, module_idx, expr_idx);
         if (result.call_site_proc_insts.get(key)) |existing_proc_inst_id| {
             if (!existing_proc_inst_id.isNone()) {
-                try result.call_site_proc_insts.put(self.allocator, key, ProcInstId.none);
+                try self.putTracked(.call_site_proc_insts, &result.call_site_proc_insts, key, ProcInstId.none);
             }
         } else {
-            try result.call_site_proc_insts.put(self.allocator, key, ProcInstId.none);
+            try self.putTracked(.call_site_proc_insts, &result.call_site_proc_insts, key, ProcInstId.none);
         }
 
         for (proc_inst_ids) |proc_inst_id| {
@@ -5777,9 +5812,9 @@ pub const Pass = struct {
     ) Allocator.Error!void {
         const key = self.resultExprKey(context_proc_inst, module_idx, expr_idx);
         if (!context_proc_inst.isNone()) {
-            try result.call_site_proc_insts.put(self.allocator, key, proc_inst_id);
+            try self.putTracked(.call_site_proc_insts, &result.call_site_proc_insts, key, proc_inst_id);
             const singleton_set_id = try self.internProcInstSet(result, &.{proc_inst_id});
-            try result.call_site_proc_inst_sets.put(self.allocator, key, singleton_set_id);
+            try self.putTracked(.call_site_proc_inst_sets, &result.call_site_proc_inst_sets, key, singleton_set_id);
             return;
         }
 
@@ -5789,13 +5824,13 @@ pub const Pass = struct {
                 return;
             }
             if (!existing_proc_inst_id.isNone()) {
-                try result.call_site_proc_insts.put(self.allocator, key, ProcInstId.none);
+                try self.putTracked(.call_site_proc_insts, &result.call_site_proc_insts, key, ProcInstId.none);
             }
             try self.mergeCallSiteProcInstSet(result, context_proc_inst, module_idx, expr_idx, proc_inst_id);
             return;
         }
 
-        try result.call_site_proc_insts.put(self.allocator, key, proc_inst_id);
+        try self.putTracked(.call_site_proc_insts, &result.call_site_proc_insts, key, proc_inst_id);
         try self.mergeCallSiteProcInstSet(result, context_proc_inst, module_idx, expr_idx, proc_inst_id);
     }
 
@@ -5815,12 +5850,12 @@ pub const Pass = struct {
                 return;
             }
             if (!existing_proc_inst_id.isNone()) {
-                try result.context_pattern_proc_insts.put(self.allocator, key, ProcInstId.none);
+                try self.putTracked(.context_pattern_proc_insts, &result.context_pattern_proc_insts, key, ProcInstId.none);
             }
             try self.mergeContextPatternProcInstSet(result, context_proc_inst, module_idx, pattern_idx, proc_inst_id);
             return;
         }
-        try result.context_pattern_proc_insts.put(self.allocator, key, proc_inst_id);
+        try self.putTracked(.context_pattern_proc_insts, &result.context_pattern_proc_insts, key, proc_inst_id);
         try self.mergeContextPatternProcInstSet(result, context_proc_inst, module_idx, pattern_idx, proc_inst_id);
     }
 
@@ -5834,9 +5869,9 @@ pub const Pass = struct {
     ) Allocator.Error!void {
         const key = self.resultExprKey(context_proc_inst, module_idx, expr_idx);
         if (!context_proc_inst.isNone()) {
-            try result.lookup_expr_proc_insts.put(self.allocator, key, proc_inst_id);
+            try self.putTracked(.lookup_expr_proc_insts, &result.lookup_expr_proc_insts, key, proc_inst_id);
             const singleton_set_id = try self.internProcInstSet(result, &.{proc_inst_id});
-            try result.lookup_expr_proc_inst_sets.put(self.allocator, key, singleton_set_id);
+            try self.putTracked(.lookup_expr_proc_inst_sets, &result.lookup_expr_proc_inst_sets, key, singleton_set_id);
             return;
         }
 
@@ -5846,13 +5881,13 @@ pub const Pass = struct {
                 return;
             }
             if (!existing_proc_inst_id.isNone()) {
-                try result.lookup_expr_proc_insts.put(self.allocator, key, ProcInstId.none);
+                try self.putTracked(.lookup_expr_proc_insts, &result.lookup_expr_proc_insts, key, ProcInstId.none);
             }
             try self.mergeLookupExprProcInstSet(result, context_proc_inst, module_idx, expr_idx, proc_inst_id);
             return;
         }
 
-        try result.lookup_expr_proc_insts.put(self.allocator, key, proc_inst_id);
+        try self.putTracked(.lookup_expr_proc_insts, &result.lookup_expr_proc_insts, key, proc_inst_id);
         try self.mergeLookupExprProcInstSet(result, context_proc_inst, module_idx, expr_idx, proc_inst_id);
     }
 
@@ -5869,10 +5904,10 @@ pub const Pass = struct {
         const key = self.resultExprKey(context_proc_inst, module_idx, expr_idx);
         if (result.lookup_expr_proc_insts.get(key)) |existing_proc_inst_id| {
             if (!existing_proc_inst_id.isNone()) {
-                try result.lookup_expr_proc_insts.put(self.allocator, key, ProcInstId.none);
+                try self.putTracked(.lookup_expr_proc_insts, &result.lookup_expr_proc_insts, key, ProcInstId.none);
             }
         } else {
-            try result.lookup_expr_proc_insts.put(self.allocator, key, ProcInstId.none);
+            try self.putTracked(.lookup_expr_proc_insts, &result.lookup_expr_proc_insts, key, ProcInstId.none);
         }
 
         for (proc_inst_ids) |proc_inst_id| {
@@ -8058,7 +8093,7 @@ pub const Pass = struct {
         }
 
         const proc_inst_id: ProcInstId = @enumFromInt(result.proc_insts.items.len);
-        try result.proc_insts.append(self.allocator, .{
+        try self.appendTracked(.proc_insts, &result.proc_insts, ProcInst{
             .template = template_id,
             .subst = subst_id,
             .fn_monotype = fn_monotype,
@@ -8119,15 +8154,16 @@ pub const Pass = struct {
 
     fn scanProcInst(self: *Pass, result: *Result, proc_inst_id: ProcInstId) Allocator.Error!void {
         const proc_inst_key = @intFromEnum(proc_inst_id);
-        if (self.scanned_proc_insts.contains(proc_inst_key)) return;
+        if (self.completed_proc_scans.contains(proc_inst_key)) return;
+        if (self.in_progress_proc_scans.contains(proc_inst_key)) return;
         // Snapshot these by value before scanning. `scanModule` can discover more
         // demanded callables and append to both arrays, which would invalidate pointers.
         const proc_inst = result.getProcInst(proc_inst_id).*;
         const template = result.getProcTemplate(proc_inst.template).*;
         const defining_context_proc_inst = proc_inst.defining_context_proc_inst;
         try self.primeModuleDefs(result, template.module_idx);
-        try self.scanned_proc_insts.put(self.allocator, proc_inst_key, {});
-        defer _ = self.scanned_proc_insts.remove(proc_inst_key);
+        try self.in_progress_proc_scans.put(self.allocator, proc_inst_key, {});
+        defer _ = self.in_progress_proc_scans.remove(proc_inst_key);
 
         const module_env = self.all_module_envs[template.module_idx];
 
@@ -8170,22 +8206,9 @@ pub const Pass = struct {
                 );
             }
 
-            iteration_expr_monotypes.clearRetainingCapacity();
-
             const bindings_before = bindings.count();
-            const proc_insts_before = result.proc_insts.items.len;
-            const expr_proc_insts_before = result.expr_proc_insts.count();
-            const expr_proc_inst_sets_before = result.expr_proc_inst_sets.count();
-            const call_sites_before = result.call_site_proc_insts.count();
-            const call_site_sets_before = result.call_site_proc_inst_sets.count();
-            const dispatch_before = result.dispatch_expr_proc_insts.count();
-            const lookups_before = result.lookup_expr_proc_insts.count();
-            const lookup_sets_before = result.lookup_expr_proc_inst_sets.count();
-            const context_monos_before = result.context_expr_monotypes.count();
-            const context_pattern_proc_insts_before = result.context_pattern_proc_insts.count();
-            const context_pattern_proc_inst_sets_before = result.context_pattern_proc_inst_sets.count();
-            const closure_capture_monos_before = result.closure_capture_monotypes.count();
-            const closure_capture_proc_insts_before = result.closure_capture_proc_insts.count();
+            const mutation_revision_before = self.mutation_revision;
+            iteration_expr_monotypes.clearRetainingCapacity();
 
             switch (module_env.store.getExpr(template.cir_expr)) {
                 .e_lambda => |lambda_expr| try self.scanValueExpr(result, template.module_idx, lambda_expr.body),
@@ -8215,27 +8238,20 @@ pub const Pass = struct {
             }
 
             if (bindings.count() == bindings_before and
-                result.proc_insts.items.len == proc_insts_before and
-                result.expr_proc_insts.count() == expr_proc_insts_before and
-                result.expr_proc_inst_sets.count() == expr_proc_inst_sets_before and
-                result.call_site_proc_insts.count() == call_sites_before and
-                result.call_site_proc_inst_sets.count() == call_site_sets_before and
-                result.dispatch_expr_proc_insts.count() == dispatch_before and
-                result.lookup_expr_proc_insts.count() == lookups_before and
-                result.lookup_expr_proc_inst_sets.count() == lookup_sets_before and
-                result.context_expr_monotypes.count() == context_monos_before and
-                result.context_pattern_proc_insts.count() == context_pattern_proc_insts_before and
-                result.context_pattern_proc_inst_sets.count() == context_pattern_proc_inst_sets_before and
-                result.closure_capture_monotypes.count() == closure_capture_monos_before and
-                result.closure_capture_proc_insts.count() == closure_capture_proc_insts_before)
+                self.mutation_revision == mutation_revision_before)
             {
                 break;
             }
+
         }
 
         var it = iteration_expr_monotypes.iterator();
         while (it.next()) |entry| {
-            try result.context_expr_monotypes.put(self.allocator, entry.key_ptr.*, entry.value_ptr.*);
+            try self.mergeTrackedContextExprMonotype(result, entry.key_ptr.*, entry.value_ptr.*);
+        }
+
+        if (self.scratch_context_expr_monotypes_depth == 0) {
+            try self.completed_proc_scans.put(self.allocator, proc_inst_key, {});
         }
     }
 
@@ -8648,7 +8664,7 @@ pub const Pass = struct {
         };
 
         const subst_id: TypeSubstId = @enumFromInt(result.substs.items.len);
-        try result.substs.append(self.allocator, .{ .entries = entries_span });
+        try self.appendTracked(.substs, &result.substs, TypeSubst{ .entries = entries_span });
         return subst_id;
     }
 

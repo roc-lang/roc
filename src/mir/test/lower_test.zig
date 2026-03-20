@@ -135,6 +135,12 @@ fn dumpMirExpr(mir_store: *const MIR.Store, expr_id: MIR.ExprId, depth: usize) v
                 dumpMirExpr(mir_store, branch.body, depth + 2);
             }
         },
+        .run_low_level => |low_level| {
+            std.debug.print(" op={s}\n", .{@tagName(low_level.op)});
+            for (mir_store.getExprSpan(low_level.args)) |arg| {
+                dumpMirExpr(mir_store, arg, depth + 1);
+            }
+        },
         else => {
             std.debug.print("\n", .{});
         },

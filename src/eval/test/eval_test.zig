@@ -3528,6 +3528,52 @@ test "dev only: !Bool.False formats as True" {
     try runDevOnlyExpectStr("!Bool.False", "True");
 }
 
+test "dev only: nested List.append on U32 formats as [1, 2]" {
+    try runDevOnlyExpectStr("List.append(List.append([], 1.U32), 2.U32)", "[1, 2]");
+}
+
+test "dev only: U32 literal formats as 15" {
+    try runDevOnlyExpectStr("15.U32", "15");
+}
+
+test "dev only: U32 comparison formats as True" {
+    try runDevOnlyExpectStr("1.U32 <= 5.U32", "True");
+}
+
+test "dev only: U32 addition formats as 3" {
+    try runDevOnlyExpectStr("1.U32 + 2.U32", "3");
+}
+
+test "dev only: while loop increment over U32 formats as 6" {
+    try runDevOnlyExpectStr(
+        \\{
+        \\    var current = 1.U32
+        \\
+        \\    while current <= 5.U32 {
+        \\        current = current + 1.U32
+        \\    }
+        \\
+        \\    current
+        \\}
+    , "6");
+}
+
+test "dev only: while loop sum over U32 formats as 15" {
+    try runDevOnlyExpectStr(
+        \\{
+        \\    var current = 1.U32
+        \\    var sum = 0.U32
+        \\
+        \\    while current <= 5.U32 {
+        \\        sum = sum + current
+        \\        current = current + 1.U32
+        \\    }
+        \\
+        \\    sum
+        \\}
+    , "15");
+}
+
 test "Str.trim" {
     try runExpectStr("Str.trim(\"  hello  \")", "hello", .no_trace);
     try runExpectStr("Str.trim(\"hello\")", "hello", .no_trace);
