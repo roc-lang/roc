@@ -875,22 +875,9 @@ pub const DevEvaluator = struct {
         ) catch return error.OutOfMemory;
         defer mir_lower.deinit();
 
-        var mir_expr_id = mir_lower.lowerExpr(expr_idx) catch {
+        const mir_expr_id = mir_lower.lowerExpr(expr_idx) catch {
             return error.RuntimeError;
         };
-
-        // Zero-arg function entrypoints like `main! : () => {}` must be lowered
-        // as calls, not as first-class function values.
-        if (arg_layouts.len == 0) {
-            const func_mono_idx = mir_store.typeOf(mir_expr_id);
-            const func_mono = mir_store.monotype_store.getMonotype(func_mono_idx);
-            if (func_mono == .func) {
-                mir_expr_id = mir_store.addExpr(self.allocator, .{ .call = .{
-                    .func = mir_expr_id,
-                    .args = MIR.ExprSpan.empty(),
-                } }, func_mono.func.ret, base.Region.zero()) catch return error.OutOfMemory;
-            }
-        }
 
         // Run lambda set inference
         const mir_mod = @import("mir");

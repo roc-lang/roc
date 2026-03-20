@@ -4359,26 +4359,10 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         }
 
         // Lower CIR → MIR
-        var mir_expr_id = mir_lower.lowerExpr(expr_idx) catch |err| {
+        const mir_expr_id = mir_lower.lowerExpr(expr_idx) catch |err| {
             std.log.err("Failed to lower expression for entrypoint {s} ({s}): {}", .{ entry.roc_ident, entry.ffi_symbol, err });
             continue;
         };
-
-        // Zero-arg platform entrypoints like `main! : () => {}` must be lowered
-        // as calls, not as first-class function values.
-        if (maybe_func) |func| {
-            const arg_vars = platform_types.sliceVars(func.args);
-            if (arg_vars.len == 0) {
-                const func_mono_idx = mir_store.typeOf(mir_expr_id);
-                const func_mono = mir_store.monotype_store.getMonotype(func_mono_idx);
-                if (func_mono == .func) {
-                    mir_expr_id = try mir_store.addExpr(ctx.gpa, .{ .call = .{
-                        .func = mir_expr_id,
-                        .args = MIR.ExprSpan.empty(),
-                    } }, func_mono.func.ret, base.Region.zero());
-                }
-            }
-        }
 
         try pending_entrypoints.append(ctx.gpa, .{
             .ffi_symbol = entry.ffi_symbol,

@@ -1479,6 +1479,50 @@ pub const Pass = struct {
         try self.visited_exprs.put(self.allocator, visit_key, {});
 
         try self.scanExprChildren(result, module_idx, expr_idx, expr);
+
+        if (materialize_if_callable and callableKind(expr) == null) {
+            if (self.getValueExprProcInstInContext(result, self.active_proc_inst_context, module_idx, expr_idx) == null and
+                self.getValueExprProcInstsInContext(result, self.active_proc_inst_context, module_idx, expr_idx) == null)
+            {
+                if (try self.materializeCallableExprProcInstInContext(
+                    result,
+                    self.active_proc_inst_context,
+                    module_idx,
+                    expr_idx,
+                )) |proc_inst_id| {
+                    switch (expr) {
+                        .e_lookup_local => |lookup| {
+                            try self.recordLookupExprProcInst(
+                                result,
+                                self.active_proc_inst_context,
+                                module_idx,
+                                expr_idx,
+                                proc_inst_id,
+                            );
+                            try self.recordContextPatternProcInst(
+                                result,
+                                self.active_proc_inst_context,
+                                module_idx,
+                                lookup.pattern_idx,
+                                proc_inst_id,
+                            );
+                            try self.recordLookupSourceExprProcInst(result, module_idx, expr_idx, proc_inst_id);
+                        },
+                        .e_lookup_external, .e_lookup_required => {
+                            try self.recordLookupExprProcInst(
+                                result,
+                                self.active_proc_inst_context,
+                                module_idx,
+                                expr_idx,
+                                proc_inst_id,
+                            );
+                            try self.recordLookupSourceExprProcInst(result, module_idx, expr_idx, proc_inst_id);
+                        },
+                        else => {},
+                    }
+                }
+            }
+        }
     }
 
     fn materializeDemandedExprProcInst(
@@ -1950,6 +1994,16 @@ pub const Pass = struct {
                 try self.scanValueExpr(result, module_idx, if_expr.final_else);
             },
             .e_call => |call_expr| {
+                if (self.getCallLowLevelOp(module_env, call_expr.func)) |low_level_op| {
+                    const arg_exprs = module_env.store.sliceExpr(call_expr.args);
+                    if (low_level_op == .str_inspekt and arg_exprs.len != 0) {
+                        try self.resolveStrInspektHelperProcInstsForTypeVar(
+                            result,
+                            module_idx,
+                            ModuleEnv.varFrom(arg_exprs[0]),
+                        );
+                    }
+                }
                 try self.resolveDirectCallSite(result, module_idx, expr_idx, call_expr);
                 if (self.getCallSiteProcInstInContext(result, self.active_proc_inst_context, module_idx, expr_idx) == null and
                     result.getCallSiteProcInsts(
@@ -6885,12 +6939,28 @@ pub const Pass = struct {
         module_idx: u32,
         type_var: types.Var,
     ) Allocator.Error!void {
+        var visiting: std.AutoHashMapUnmanaged(types.Var, void) = .empty;
+        defer visiting.deinit(self.allocator);
+        try self.resolveStrInspektHelperProcInstsForTypeVarWithSeen(result, module_idx, type_var, &visiting);
+    }
+
+    fn resolveStrInspektHelperProcInstsForTypeVarWithSeen(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        type_var: types.Var,
+        visiting: *std.AutoHashMapUnmanaged(types.Var, void),
+    ) Allocator.Error!void {
         const module_env = self.all_module_envs[module_idx];
 
         var resolved = module_env.types.resolveVar(type_var);
         while (resolved.desc.content == .alias) {
             resolved = module_env.types.resolveVar(module_env.types.getAliasBackingVar(resolved.desc.content.alias));
         }
+
+        if (visiting.contains(resolved.var_)) return;
+        try visiting.put(self.allocator, resolved.var_, {});
+        defer _ = visiting.remove(resolved.var_);
 
         if (resolved.desc.content == .structure) {
             switch (resolved.desc.content.structure) {
@@ -6904,7 +6974,7 @@ pub const Pass = struct {
                         if (ident.eql(common.list)) {
                             const type_args = module_env.types.sliceNominalArgs(nominal);
                             if (type_args.len == 1) {
-                                try self.resolveStrInspektHelperProcInstsForTypeVar(result, module_idx, type_args[0]);
+                                try self.resolveStrInspektHelperProcInstsForTypeVarWithSeen(result, module_idx, type_args[0], visiting);
                             }
                             return;
                         }
@@ -6914,7 +6984,7 @@ pub const Pass = struct {
                             const outer_box = result.monotype_store.getMonotype(outer_mono).box;
                             try self.ensureBuiltinBoxUnboxProcInst(result, module_idx, outer_mono, outer_box.inner);
                             if (type_args.len == 1) {
-                                try self.resolveStrInspektHelperProcInstsForTypeVar(result, module_idx, type_args[0]);
+                                try self.resolveStrInspektHelperProcInstsForTypeVarWithSeen(result, module_idx, type_args[0], visiting);
                             }
                             return;
                         }
@@ -6983,6 +7053,28 @@ pub const Pass = struct {
                     );
                     return;
                 },
+                .record => |record| {
+                    try self.resolveStrInspektHelperProcInstsForRecordType(result, module_idx, &module_env.types, record, visiting);
+                    return;
+                },
+                .record_unbound => |fields_range| {
+                    const fields = module_env.types.getRecordFieldsSlice(fields_range);
+                    for (fields.items(.var_)) |field_var| {
+                        try self.resolveStrInspektHelperProcInstsForTypeVarWithSeen(result, module_idx, field_var, visiting);
+                    }
+                    return;
+                },
+                .tuple => |tuple| {
+                    for (module_env.types.sliceVars(tuple.elems)) |elem_var| {
+                        try self.resolveStrInspektHelperProcInstsForTypeVarWithSeen(result, module_idx, elem_var, visiting);
+                    }
+                    return;
+                },
+                .tag_union => |tag_union| {
+                    try self.resolveStrInspektHelperProcInstsForTagUnionType(result, module_idx, &module_env.types, tag_union, visiting);
+                    return;
+                },
+                .empty_record, .empty_tag_union => return,
                 else => {},
             }
         }
@@ -6992,6 +7084,91 @@ pub const Pass = struct {
             module_idx,
             try self.resolveTypeVarMonotype(result, module_idx, resolved.var_),
         );
+    }
+
+    fn resolveStrInspektHelperProcInstsForRecordType(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        store_types: *const types.Store,
+        record: types.Record,
+        visiting: *std.AutoHashMapUnmanaged(types.Var, void),
+    ) Allocator.Error!void {
+        var current_row = record;
+
+        rows: while (true) {
+            const fields = store_types.getRecordFieldsSlice(current_row.fields);
+            for (fields.items(.var_)) |field_var| {
+                try self.resolveStrInspektHelperProcInstsForTypeVarWithSeen(result, module_idx, field_var, visiting);
+            }
+
+            var ext_var = current_row.ext;
+            while (true) {
+                const ext_resolved = store_types.resolveVar(ext_var);
+                switch (ext_resolved.desc.content) {
+                    .alias => |alias| {
+                        ext_var = store_types.getAliasBackingVar(alias);
+                        continue;
+                    },
+                    .structure => |ext_flat| switch (ext_flat) {
+                        .record => |next_row| {
+                            current_row = next_row;
+                            continue :rows;
+                        },
+                        .record_unbound => |fields_range| {
+                            const ext_fields = store_types.getRecordFieldsSlice(fields_range);
+                            for (ext_fields.items(.var_)) |field_var| {
+                                try self.resolveStrInspektHelperProcInstsForTypeVarWithSeen(result, module_idx, field_var, visiting);
+                            }
+                            break :rows;
+                        },
+                        .empty_record => break :rows,
+                        else => break :rows,
+                    },
+                    .flex, .rigid, .err => break :rows,
+                }
+            }
+        }
+    }
+
+    fn resolveStrInspektHelperProcInstsForTagUnionType(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        store_types: *const types.Store,
+        tag_union: types.TagUnion,
+        visiting: *std.AutoHashMapUnmanaged(types.Var, void),
+    ) Allocator.Error!void {
+        var current_row = tag_union;
+
+        rows: while (true) {
+            const tags = store_types.getTagsSlice(current_row.tags);
+            for (tags.items(.args)) |args_range| {
+                for (store_types.sliceVars(args_range)) |payload_var| {
+                    try self.resolveStrInspektHelperProcInstsForTypeVarWithSeen(result, module_idx, payload_var, visiting);
+                }
+            }
+
+            var ext_var = current_row.ext;
+            while (true) {
+                const ext_resolved = store_types.resolveVar(ext_var);
+                switch (ext_resolved.desc.content) {
+                    .alias => |alias| {
+                        ext_var = store_types.getAliasBackingVar(alias);
+                        continue;
+                    },
+                    .structure => |ext_flat| switch (ext_flat) {
+                        .tag_union => |next_row| {
+                            current_row = next_row;
+                            continue :rows;
+                        },
+                        .empty_tag_union => break :rows,
+                        else => break :rows,
+                    },
+                    .flex, .rigid, .err => break :rows,
+                }
+            }
+        }
     }
 
     fn resolveStrInspektHelperProcInstsForMonotype(
@@ -10284,6 +10461,48 @@ pub const Pass = struct {
             }
         }
 
+        return null;
+    }
+
+    fn getCallLowLevelOp(self: *Pass, caller_env: *const ModuleEnv, func_expr_idx: CIR.Expr.Idx) ?CIR.Expr.LowLevel {
+        return switch (caller_env.store.getExpr(func_expr_idx)) {
+            .e_lookup_external => |lookup| self.getExternalLowLevelOp(caller_env, lookup),
+            .e_lookup_local => |lookup| self.getLocalLowLevelOp(caller_env, lookup.pattern_idx),
+            else => null,
+        };
+    }
+
+    fn getLocalLowLevelOp(self: *Pass, module_env: *const ModuleEnv, pattern_idx: CIR.Pattern.Idx) ?CIR.Expr.LowLevel {
+        const defs = module_env.store.sliceDefs(module_env.all_defs);
+        for (defs) |def_idx| {
+            const def = module_env.store.getDef(def_idx);
+            if (def.pattern != pattern_idx) continue;
+            const def_expr = module_env.store.getExpr(def.expr);
+            if (def_expr == .e_lambda) {
+                const body_expr = module_env.store.getExpr(def_expr.e_lambda.body);
+                if (body_expr == .e_run_low_level) return body_expr.e_run_low_level.op;
+            }
+            return null;
+        }
+        _ = self;
+        return null;
+    }
+
+    fn getExternalLowLevelOp(
+        self: *Pass,
+        caller_env: *const ModuleEnv,
+        lookup: @TypeOf(@as(CIR.Expr, undefined).e_lookup_external),
+    ) ?CIR.Expr.LowLevel {
+        const ext_module_idx = self.resolveImportedModuleIdx(caller_env, lookup.module_idx) orelse return null;
+        const ext_env = self.all_module_envs[ext_module_idx];
+        if (!ext_env.store.isDefNode(lookup.target_node_idx)) return null;
+        const def_idx: CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
+        const def = ext_env.store.getDef(def_idx);
+        const def_expr = ext_env.store.getExpr(def.expr);
+        if (def_expr == .e_lambda) {
+            const body_expr = ext_env.store.getExpr(def_expr.e_lambda.body);
+            if (body_expr == .e_run_low_level) return body_expr.e_run_low_level.op;
+        }
         return null;
     }
 };

@@ -344,10 +344,13 @@ pub fn lowerEntrypointProc(
     else
         try self.lir_store.addLayoutIdxSpan(arg_layouts);
 
-    var body_expr = if (arg_layouts.len == 0)
-        try self.lowerExpr(mir_expr_id)
+    const mir_expr_mono = self.mir_store.monotype_store.getMonotype(self.mir_store.typeOf(mir_expr_id));
+    const zero_arg_fn_entrypoint = arg_layouts.len == 0 and mir_expr_mono == .func;
+
+    var body_expr = if (arg_layouts.len != 0 or zero_arg_fn_entrypoint)
+        try self.lowerEntrypointApply(mir_expr_id, lir_args, arg_layouts, ret_layout, region)
     else
-        try self.lowerEntrypointApply(mir_expr_id, lir_args, arg_layouts, ret_layout, region);
+        try self.lowerExpr(mir_expr_id);
     self.verifyFunctionLayouts(body_expr);
 
     var proc_rc_pass = try RcInsert.RcInsertPass.init(self.allocator, self.lir_store, self.layout_store);

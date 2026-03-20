@@ -357,6 +357,27 @@ fn lookupMonomorphizedExprProcInst(self: *const Self, expr_idx: CIR.Expr.Idx) ?M
     return null;
 }
 
+fn lookupMonomorphizedLookupProcInst(self: *const Self, expr_idx: CIR.Expr.Idx) ?Monomorphize.ProcInstId {
+    const rooted = self.monomorphization.getLookupExprProcInst(
+        self.current_proc_inst_context,
+        self.monomorphizationRootExprContext(self.current_proc_inst_context),
+        self.current_module_idx,
+        expr_idx,
+    );
+    if (rooted != null) return rooted;
+
+    if (self.current_proc_inst_context.isNone()) {
+        return self.monomorphization.getLookupExprProcInst(.none, null, self.current_module_idx, expr_idx);
+    }
+
+    return null;
+}
+
+fn lookupMonomorphizedValueExprProcInst(self: *const Self, expr_idx: CIR.Expr.Idx) ?Monomorphize.ProcInstId {
+    if (self.lookupMonomorphizedExprProcInst(expr_idx)) |proc_inst_id| return proc_inst_id;
+    return self.lookupMonomorphizedLookupProcInst(expr_idx);
+}
+
 fn lookupMonomorphizedDispatchProcInst(self: *const Self, expr_idx: CIR.Expr.Idx) ?Monomorphize.ProcInstId {
     const rooted = self.monomorphization.getDispatchExprProcInst(
         self.current_proc_inst_context,
@@ -2767,6 +2788,10 @@ fn lowerExprWithMonotypeOverride(
 
         // --- Lookups ---
         .e_lookup_local => |lookup| {
+            if (self.lookupMonomorphizedValueExprProcInst(expr_idx)) |proc_inst_id| {
+                return try self.lowerProcInst(proc_inst_id);
+            }
+
             const scoped_symbol = self.currentScopedPatternSymbol(self.current_module_idx, lookup.pattern_idx);
             const skipped_proc_backed_binding = self.isSkippedProcBackedBindingPattern(
                 self.current_module_idx,
@@ -2822,7 +2847,9 @@ fn lowerExprWithMonotypeOverride(
                         const def_key: u64 = @bitCast(def_symbol);
 
                         if (!self.lowered_symbols.contains(def_key) and !self.in_progress_defs.contains(def_key)) {
-                            _ = try self.lowerExternalDefWithType(def_symbol, def.expr, null);
+                            if (!cirExprIsProcBacked(module_env, def.expr)) {
+                                _ = try self.lowerExternalDefWithType(def_symbol, def.expr, null);
+                            }
                         }
 
                         break;
@@ -2862,12 +2889,7 @@ fn lowerExprWithMonotypeOverride(
             return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, monotype, region);
         },
         .e_lookup_external => |ext| {
-            if (self.monomorphization.getLookupExprProcInst(
-                self.current_proc_inst_context,
-                self.monomorphizationRootExprContext(self.current_proc_inst_context),
-                self.current_module_idx,
-                expr_idx,
-            )) |proc_inst_id| {
+            if (self.lookupMonomorphizedValueExprProcInst(expr_idx)) |proc_inst_id| {
                 return try self.lowerProcInst(proc_inst_id);
             }
 
@@ -2892,18 +2914,20 @@ fn lowerExprWithMonotypeOverride(
             if (!self.lowered_symbols.contains(symbol_key) and !self.in_progress_defs.contains(symbol_key)) {
                 const def_idx: CIR.Def.Idx = @enumFromInt(ext.target_node_idx);
                 const def = target_env.store.getDef(def_idx);
-                _ = try self.lowerExternalDefWithType(
-                    symbol,
-                    def.expr,
-                    if (self.monotypeIsWellFormed(monotype))
-                        .{ .idx = monotype, .module_idx = self.current_module_idx }
-                    else
-                        null,
-                );
-                if (self.lowered_symbols.get(symbol_key)) |cached_expr| {
-                    const cached_monotype = self.store.typeOf(cached_expr);
-                    if (self.monotypeIsUnit(monotype) and !self.monotypeIsUnit(cached_monotype)) {
-                        return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, cached_monotype, region);
+                if (!cirExprIsProcBacked(target_env, def.expr)) {
+                    _ = try self.lowerExternalDefWithType(
+                        symbol,
+                        def.expr,
+                        if (self.monotypeIsWellFormed(monotype))
+                            .{ .idx = monotype, .module_idx = self.current_module_idx }
+                        else
+                            null,
+                    );
+                    if (self.lowered_symbols.get(symbol_key)) |cached_expr| {
+                        const cached_monotype = self.store.typeOf(cached_expr);
+                        if (self.monotypeIsUnit(monotype) and !self.monotypeIsUnit(cached_monotype)) {
+                            return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, cached_monotype, region);
+                        }
                     }
                 }
                 return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, monotype, region);
@@ -2927,6 +2951,10 @@ fn lowerExprWithMonotypeOverride(
             unreachable;
         },
         .e_lookup_required => |lookup| {
+            if (self.lookupMonomorphizedValueExprProcInst(expr_idx)) |proc_inst_id| {
+                return try self.lowerProcInst(proc_inst_id);
+            }
+
             const app_idx = self.app_module_idx orelse {
                 if (builtin.mode == .Debug) {
                     std.debug.panic(
@@ -2977,14 +3005,16 @@ fn lowerExprWithMonotypeOverride(
                 self.types_store,
                 ModuleEnv.varFrom(required_type.type_anno),
             );
-            _ = try self.lowerExternalDefWithType(
-                symbol,
-                def.expr,
-                if (self.monotypeIsWellFormed(required_lookup_monotype))
-                    .{ .idx = required_lookup_monotype, .module_idx = self.current_module_idx }
-                else
-                    null,
-            );
+            if (!cirExprIsProcBacked(app_env, def.expr)) {
+                _ = try self.lowerExternalDefWithType(
+                    symbol,
+                    def.expr,
+                    if (self.monotypeIsWellFormed(required_lookup_monotype))
+                        .{ .idx = required_lookup_monotype, .module_idx = self.current_module_idx }
+                    else
+                        null,
+                );
+            }
             return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, required_lookup_monotype, region);
         },
 
