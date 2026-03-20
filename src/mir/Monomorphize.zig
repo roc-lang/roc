@@ -672,9 +672,24 @@ pub const Pass = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ContextExprKey {
-        return Result.contextExprKey(
+        return self.resultExprKeyWithRoot(
             context_proc_inst,
             self.exprRootContext(context_proc_inst),
+            module_idx,
+            expr_idx,
+        );
+    }
+
+    fn resultExprKeyWithRoot(
+        _: *const Pass,
+        context_proc_inst: ProcInstId,
+        root_expr_context: ?CIR.Expr.Idx,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) ContextExprKey {
+        return Result.contextExprKey(
+            context_proc_inst,
+            root_expr_context,
             module_idx,
             expr_idx,
         );
@@ -1587,6 +1602,8 @@ pub const Pass = struct {
             return;
         }
 
+        const root_expr_context = self.exprRootContext(self.active_proc_inst_context);
+
         const fn_monotype = try self.resolveExprMonotypeIfExactResolved(
             result,
             module_idx,
@@ -1595,9 +1612,10 @@ pub const Pass = struct {
         if (fn_monotype.isNone()) return;
 
         const proc_inst_id = try self.ensureProcInst(result, template_id, fn_monotype.idx, fn_monotype.module_idx);
-        try self.recordExprProcInst(
+        try self.recordExprProcInstWithRoot(
             result,
             self.active_proc_inst_context,
+            root_expr_context,
             module_idx,
             expr_idx,
             proc_inst_id,
@@ -1620,21 +1638,61 @@ pub const Pass = struct {
         expr_idx: CIR.Expr.Idx,
         proc_inst_id: ProcInstId,
     ) Allocator.Error!void {
-        const key = self.resultExprKey(context_proc_inst, module_idx, expr_idx);
+        return self.recordExprProcInstWithRoot(
+            result,
+            context_proc_inst,
+            self.exprRootContext(context_proc_inst),
+            module_idx,
+            expr_idx,
+            proc_inst_id,
+        );
+    }
+
+    fn recordExprProcInstWithRoot(
+        self: *Pass,
+        result: *Result,
+        context_proc_inst: ProcInstId,
+        root_expr_context: ?CIR.Expr.Idx,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        proc_inst_id: ProcInstId,
+    ) Allocator.Error!void {
+        const key = self.resultExprKeyWithRoot(context_proc_inst, root_expr_context, module_idx, expr_idx);
         if (result.expr_proc_insts.get(key)) |existing_proc_inst_id| {
             if (existing_proc_inst_id == proc_inst_id) {
-                try self.mergeExprProcInstSet(result, context_proc_inst, module_idx, expr_idx, proc_inst_id);
+                try self.mergeExprProcInstSetWithRoot(
+                    result,
+                    context_proc_inst,
+                    root_expr_context,
+                    module_idx,
+                    expr_idx,
+                    proc_inst_id,
+                );
                 return;
             }
             if (!existing_proc_inst_id.isNone()) {
                 try self.putTracked(.expr_proc_insts, &result.expr_proc_insts, key, ProcInstId.none);
             }
-            try self.mergeExprProcInstSet(result, context_proc_inst, module_idx, expr_idx, proc_inst_id);
+            try self.mergeExprProcInstSetWithRoot(
+                result,
+                context_proc_inst,
+                root_expr_context,
+                module_idx,
+                expr_idx,
+                proc_inst_id,
+            );
             return;
         }
 
         try self.putTracked(.expr_proc_insts, &result.expr_proc_insts, key, proc_inst_id);
-        try self.mergeExprProcInstSet(result, context_proc_inst, module_idx, expr_idx, proc_inst_id);
+        try self.mergeExprProcInstSetWithRoot(
+            result,
+            context_proc_inst,
+            root_expr_context,
+            module_idx,
+            expr_idx,
+            proc_inst_id,
+        );
     }
 
     fn recordExprProcInstSet(
@@ -5075,6 +5133,8 @@ pub const Pass = struct {
         var first_unresolved: ?types.StaticDispatchConstraint = null;
         var unresolved_count: u32 = 0;
         var ambiguous_resolved_targets = false;
+        var unique_unresolved = std.ArrayList(types.StaticDispatchConstraint).empty;
+        defer unique_unresolved.deinit(self.allocator);
 
         for (module_env.types.sliceAllStaticDispatchConstraints()) |constraint| {
             if (constraint.source_expr_idx != @intFromEnum(expr_idx)) continue;
@@ -5090,7 +5150,7 @@ pub const Pass = struct {
                     .fn_var = constraint.fn_var,
                     .module_idx = target_module_idx,
                 };
-                const fn_monotype = try self.resolveTypeVarMonotypeIfExactResolved(result, module_idx, constraint.fn_var);
+                const fn_monotype = try self.resolveTypeVarMonotypeIfMonomorphizableResolved(result, module_idx, constraint.fn_var);
                 if (!fn_monotype.isNone() and
                     !try self.resolvedDispatchTargetMatchesMonotype(result, module_idx, candidate, fn_monotype.idx))
                 {
@@ -5112,10 +5172,20 @@ pub const Pass = struct {
                 continue;
             }
 
-            if (first_unresolved == null) first_unresolved = constraint;
-            unresolved_count += 1;
+            var seen_unresolved = false;
+            for (unique_unresolved.items) |existing| {
+                if (staticDispatchConstraintsEqual(existing, constraint)) {
+                    seen_unresolved = true;
+                    break;
+                }
+            }
+            if (!seen_unresolved) {
+                if (first_unresolved == null) first_unresolved = constraint;
+                unresolved_count += 1;
+                try unique_unresolved.append(self.allocator, constraint);
+            }
 
-            const fn_monotype = try self.resolveTypeVarMonotypeIfExactResolved(result, module_idx, constraint.fn_var);
+            const fn_monotype = try self.resolveTypeVarMonotypeIfMonomorphizableResolved(result, module_idx, constraint.fn_var);
             if (fn_monotype.isNone()) continue;
             if (unresolved_match == null) unresolved_match = constraint;
         }
@@ -5143,6 +5213,8 @@ pub const Pass = struct {
         var unresolved_match: ?types.StaticDispatchConstraint = null;
         var first_unresolved: ?types.StaticDispatchConstraint = null;
         var unresolved_count: u32 = 0;
+        var unique_unresolved = std.ArrayList(types.StaticDispatchConstraint).empty;
+        defer unique_unresolved.deinit(self.allocator);
 
         for (module_env.types.sliceAllStaticDispatchConstraints()) |constraint| {
             if (constraint.source_expr_idx != @intFromEnum(expr_idx)) continue;
@@ -5157,17 +5229,27 @@ pub const Pass = struct {
                 continue;
             }
 
-            if (first_unresolved == null) first_unresolved = constraint;
-            unresolved_count += 1;
+            var seen_unresolved = false;
+            for (unique_unresolved.items) |existing| {
+                if (staticDispatchConstraintsEqual(existing, constraint)) {
+                    seen_unresolved = true;
+                    break;
+                }
+            }
+            if (!seen_unresolved) {
+                if (first_unresolved == null) first_unresolved = constraint;
+                unresolved_count += 1;
+                try unique_unresolved.append(self.allocator, constraint);
+            }
             if (receiver_monotype.isNone()) {
                 if (unresolved_match == null) unresolved_match = constraint;
                 continue;
             }
 
-            const fn_monotype = try self.resolveTypeVarMonotype(result, module_idx, constraint.fn_var);
+            const fn_monotype = try self.resolveTypeVarMonotypeIfMonomorphizableResolved(result, module_idx, constraint.fn_var);
             if (fn_monotype.isNone()) continue;
 
-            const mono = result.monotype_store.getMonotype(fn_monotype);
+            const mono = result.monotype_store.getMonotype(fn_monotype.idx);
             if (mono != .func) continue;
 
             const fn_args = result.monotype_store.getIdxSpan(mono.func.args);
@@ -5178,13 +5260,26 @@ pub const Pass = struct {
                 fn_args[0],
                 module_idx,
                 receiver_monotype,
-                module_idx,
+                fn_monotype.module_idx,
             )) continue;
 
             if (unresolved_match == null) unresolved_match = constraint;
         }
 
         return resolved_match orelse unresolved_match orelse if (unresolved_count == 1) first_unresolved else null;
+    }
+
+    fn staticDispatchConstraintsEqual(
+        lhs: types.StaticDispatchConstraint,
+        rhs: types.StaticDispatchConstraint,
+    ) bool {
+        return lhs.fn_name.eql(rhs.fn_name) and
+            lhs.fn_var == rhs.fn_var and
+            lhs.origin == rhs.origin and
+            std.meta.eql(lhs.num_literal, rhs.num_literal) and
+            lhs.source_expr_idx == rhs.source_expr_idx and
+            lhs.resolved_target.origin_module.eql(rhs.resolved_target.origin_module) and
+            lhs.resolved_target.method_ident.eql(rhs.resolved_target.method_ident);
     }
 
     fn resolvedTargetIsUsable(
@@ -5219,7 +5314,7 @@ pub const Pass = struct {
             unreachable;
         };
 
-        const desired_func_monotype = try self.resolveTypeVarMonotypeIfExactResolved(result, module_idx, constraint.fn_var);
+        const desired_func_monotype = try self.resolveTypeVarMonotypeIfMonomorphizableResolved(result, module_idx, constraint.fn_var);
 
         const resolved = blk: {
             if (!constraint.resolved_target.isNone() and
@@ -5410,7 +5505,7 @@ pub const Pass = struct {
         if (candidate_func.args.len != actual_args.items.len) return false;
 
         for (actual_args.items, 0..) |arg_expr_idx, i| {
-            const actual_mono = try self.resolveExprMonotypeIfExactResolved(result, source_module_idx, arg_expr_idx);
+            const actual_mono = try self.resolveExprMonotypeIfMonomorphizableResolved(result, source_module_idx, arg_expr_idx);
             if (actual_mono.isNone()) continue;
 
             const expected_mono = result.monotype_store.getIdxSpanItem(candidate_func.args, i);
@@ -5703,7 +5798,26 @@ pub const Pass = struct {
         expr_idx: CIR.Expr.Idx,
         proc_inst_id: ProcInstId,
     ) Allocator.Error!void {
-        const key = self.resultExprKey(context_proc_inst, module_idx, expr_idx);
+        return self.mergeExprProcInstSetWithRoot(
+            result,
+            context_proc_inst,
+            self.exprRootContext(context_proc_inst),
+            module_idx,
+            expr_idx,
+            proc_inst_id,
+        );
+    }
+
+    fn mergeExprProcInstSetWithRoot(
+        self: *Pass,
+        result: *Result,
+        context_proc_inst: ProcInstId,
+        root_expr_context: ?CIR.Expr.Idx,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        proc_inst_id: ProcInstId,
+    ) Allocator.Error!void {
+        const key = self.resultExprKeyWithRoot(context_proc_inst, root_expr_context, module_idx, expr_idx);
         const existing_set_id = result.expr_proc_inst_sets.get(key);
 
         var merged = std.ArrayList(ProcInstId).empty;

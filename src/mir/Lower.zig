@@ -1701,6 +1701,13 @@ fn bindFlatTypeMonotypesInStore(
         .record => |record| {
             const mrec = switch (mono) {
                 .record => |mrec| mrec,
+                .unit => {
+                    if (flatRecordRepresentsEmpty(store_types, record)) return;
+                    typeBindingInvariant(
+                        "bindFlatTypeMonotypesInStore(record): non-empty record matched unit monotype",
+                        .{},
+                    );
+                },
                 else => typeBindingInvariant(
                     "bindFlatTypeMonotypesInStore(record): expected record monotype, found '{s}'",
                     .{@tagName(mono)},
@@ -1763,6 +1770,13 @@ fn bindFlatTypeMonotypesInStore(
         .record_unbound => |fields_range| {
             const mrec = switch (mono) {
                 .record => |mrec| mrec,
+                .unit => {
+                    if (store_types.getRecordFieldsSlice(fields_range).len == 0) return;
+                    typeBindingInvariant(
+                        "bindFlatTypeMonotypesInStore(record_unbound): non-empty record matched unit monotype",
+                        .{},
+                    );
+                },
                 else => typeBindingInvariant(
                     "bindFlatTypeMonotypesInStore(record_unbound): expected record monotype, found '{s}'",
                     .{@tagName(mono)},
@@ -6914,6 +6928,15 @@ fn lowerRecord(self: *Self, module_env: *const ModuleEnv, record: anytype, monot
     const cir_field_indices = module_env.store.sliceRecordFields(record.fields);
     const mono_record = switch (self.store.monotype_store.getMonotype(monotype)) {
         .record => |mono_record| mono_record,
+        .unit => {
+            if (cir_field_indices.len == 0) {
+                return try self.emitMirStructExpr(&.{}, monotype, region);
+            }
+            typeBindingInvariant(
+                "lowerRecord: non-empty record matched unit monotype",
+                .{},
+            );
+        },
         else => typeBindingInvariant(
             "lowerRecord: expected record monotype, found '{s}'",
             .{@tagName(self.store.monotype_store.getMonotype(monotype))},
@@ -7298,6 +7321,35 @@ fn typeBindingInvariant(comptime fmt: []const u8, args: anytype) noreturn {
         std.debug.panic(fmt, args);
     }
     unreachable;
+}
+
+fn flatRecordRepresentsEmpty(store_types: *const types.Store, record: types.Record) bool {
+    var current_row = record;
+
+    rows: while (true) {
+        if (store_types.getRecordFieldsSlice(current_row.fields).len != 0) return false;
+
+        var ext_var = current_row.ext;
+        while (true) {
+            const ext_resolved = store_types.resolveVar(ext_var);
+            switch (ext_resolved.desc.content) {
+                .alias => |alias| {
+                    ext_var = store_types.getAliasBackingVar(alias);
+                    continue;
+                },
+                .structure => |ext_flat| switch (ext_flat) {
+                    .record => |next_row| {
+                        current_row = next_row;
+                        continue :rows;
+                    },
+                    .record_unbound => |fields_range| return store_types.getRecordFieldsSlice(fields_range).len == 0,
+                    .empty_record => return true,
+                    else => return false,
+                },
+                .flex, .rigid, .err => return false,
+            }
+        }
+    }
 }
 
 fn builtinPrimForNominal(ident: Ident.Idx, common: ModuleEnv.CommonIdents) ?Monotype.Prim {
@@ -7695,6 +7747,13 @@ fn bindFlatTypeMonotypes(self: *Self, flat_type: types.FlatType, monotype: Monot
         .record => |record| {
             const mrec = switch (mono) {
                 .record => |mrec| mrec,
+                .unit => {
+                    if (flatRecordRepresentsEmpty(self.types_store, record)) return;
+                    typeBindingInvariant(
+                        "bindFlatTypeMonotypes(record): non-empty record matched unit monotype",
+                        .{},
+                    );
+                },
                 else => typeBindingInvariant(
                     "bindFlatTypeMonotypes(record): expected record monotype, found '{s}'",
                     .{@tagName(mono)},
@@ -7774,6 +7833,13 @@ fn bindFlatTypeMonotypes(self: *Self, flat_type: types.FlatType, monotype: Monot
         .record_unbound => |fields_range| {
             const mrec = switch (mono) {
                 .record => |mrec| mrec,
+                .unit => {
+                    if (self.types_store.getRecordFieldsSlice(fields_range).len == 0) return;
+                    typeBindingInvariant(
+                        "bindFlatTypeMonotypes(record_unbound): non-empty record matched unit monotype",
+                        .{},
+                    );
+                },
                 else => typeBindingInvariant(
                     "bindFlatTypeMonotypes(record_unbound): expected record monotype, found '{s}'",
                     .{@tagName(mono)},

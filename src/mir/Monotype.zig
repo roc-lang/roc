@@ -339,6 +339,15 @@ pub const Store = struct {
     }
 
     pub fn addMonotype(self: *Store, allocator: Allocator, mono: Monotype) !Idx {
+        switch (mono) {
+            .record => |record| {
+                if (record.fields.isEmpty()) {
+                    return self.unit_idx;
+                }
+            },
+            else => {},
+        }
+
         const idx: u32 = @intCast(self.monotypes.items.len);
         try self.monotypes.append(allocator, mono);
         return @enumFromInt(idx);

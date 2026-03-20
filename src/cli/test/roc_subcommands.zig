@@ -3,6 +3,10 @@
 const std = @import("std");
 const util = @import("util.zig");
 
+fn createPerTestCacheEnv(allocator: std.mem.Allocator) !std.process.EnvMap {
+    return util.buildIsolatedTestEnvMap(allocator, null);
+}
+
 test "roc check writes parse errors to stderr" {
     const testing = std.testing;
     const gpa = testing.allocator;
@@ -773,9 +777,11 @@ test "roc build glibc target gives helpful error on non-Linux" {
 test "roc test caches passing results" {
     const testing = std.testing;
     const gpa = testing.allocator;
+    var env_map = try createPerTestCacheEnv(gpa);
+    defer env_map.deinit();
 
     // First run - should compile and cache
-    const result1 = try util.runRoc(gpa, &.{"test"}, "test/cli/AllPassTests.roc");
+    const result1 = try util.runRocWithEnv(gpa, &.{"test"}, "test/cli/AllPassTests.roc", &env_map);
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
 
@@ -783,7 +789,7 @@ test "roc test caches passing results" {
     try testing.expect(result1.term == .Exited and result1.term.Exited == 0);
 
     // Second run - should hit cache
-    const result2 = try util.runRoc(gpa, &.{"test"}, "test/cli/AllPassTests.roc");
+    const result2 = try util.runRocWithEnv(gpa, &.{"test"}, "test/cli/AllPassTests.roc", &env_map);
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
 
@@ -797,9 +803,11 @@ test "roc test caches passing results" {
 test "roc test caches failing results" {
     const testing = std.testing;
     const gpa = testing.allocator;
+    var env_map = try createPerTestCacheEnv(gpa);
+    defer env_map.deinit();
 
     // First run - should compile and cache
-    const result1 = try util.runRoc(gpa, &.{"test"}, "test/cli/SomeFailTests.roc");
+    const result1 = try util.runRocWithEnv(gpa, &.{"test"}, "test/cli/SomeFailTests.roc", &env_map);
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
 
@@ -807,7 +815,7 @@ test "roc test caches failing results" {
     try testing.expect(result1.term == .Exited and result1.term.Exited == 1);
 
     // Second run - should hit cache
-    const result2 = try util.runRoc(gpa, &.{"test"}, "test/cli/SomeFailTests.roc");
+    const result2 = try util.runRocWithEnv(gpa, &.{"test"}, "test/cli/SomeFailTests.roc", &env_map);
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
 
@@ -821,6 +829,8 @@ test "roc test caches failing results" {
 test "roc test cache invalidated by source change" {
     const testing = std.testing;
     const gpa = testing.allocator;
+    var env_map = try createPerTestCacheEnv(gpa);
+    defer env_map.deinit();
 
     // Create a temporary copy of the test file
     var tmp_dir = testing.tmpDir(.{});
@@ -849,6 +859,7 @@ test "roc test cache invalidated by source change" {
         .allocator = gpa,
         .argv = &.{ roc_path, "test", temp_file_path },
         .cwd = cwd_path,
+        .env_map = &env_map,
         .max_output_bytes = 10 * 1024 * 1024,
     });
     defer gpa.free(result1.stdout);
@@ -865,6 +876,7 @@ test "roc test cache invalidated by source change" {
         .allocator = gpa,
         .argv = &.{ roc_path, "test", temp_file_path },
         .cwd = cwd_path,
+        .env_map = &env_map,
         .max_output_bytes = 10 * 1024 * 1024,
     });
     defer gpa.free(result2.stdout);
@@ -879,16 +891,18 @@ test "roc test cache invalidated by source change" {
 test "roc test --verbose works from cache" {
     const testing = std.testing;
     const gpa = testing.allocator;
+    var env_map = try createPerTestCacheEnv(gpa);
+    defer env_map.deinit();
 
     // First run (non-verbose) - populates cache
-    const result1 = try util.runRoc(gpa, &.{"test"}, "test/cli/AllPassTests.roc");
+    const result1 = try util.runRocWithEnv(gpa, &.{"test"}, "test/cli/AllPassTests.roc", &env_map);
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
 
     try testing.expect(result1.term == .Exited and result1.term.Exited == 0);
 
     // Second run (verbose) - should use cache
-    const result2 = try util.runRoc(gpa, &.{ "test", "--verbose" }, "test/cli/AllPassTests.roc");
+    const result2 = try util.runRocWithEnv(gpa, &.{ "test", "--verbose" }, "test/cli/AllPassTests.roc", &env_map);
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
 
@@ -902,9 +916,11 @@ test "roc test --verbose works from cache" {
 test "roc test --verbose caches failure reports" {
     const testing = std.testing;
     const gpa = testing.allocator;
+    var env_map = try createPerTestCacheEnv(gpa);
+    defer env_map.deinit();
 
     // First run (verbose) - compiles and caches
-    const result1 = try util.runRoc(gpa, &.{ "test", "--verbose" }, "test/cli/SomeFailTests.roc");
+    const result1 = try util.runRocWithEnv(gpa, &.{ "test", "--verbose" }, "test/cli/SomeFailTests.roc", &env_map);
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
 
@@ -912,7 +928,7 @@ test "roc test --verbose caches failure reports" {
     try testing.expect(result1.term == .Exited and result1.term.Exited == 1);
 
     // Second run (verbose) - should use cache
-    const result2 = try util.runRoc(gpa, &.{ "test", "--verbose" }, "test/cli/SomeFailTests.roc");
+    const result2 = try util.runRocWithEnv(gpa, &.{ "test", "--verbose" }, "test/cli/SomeFailTests.roc", &env_map);
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
 
@@ -930,9 +946,11 @@ test "roc test --verbose caches failure reports" {
 test "roc test non-verbose run caches verbose failure reports for later verbose run" {
     const testing = std.testing;
     const gpa = testing.allocator;
+    var env_map = try createPerTestCacheEnv(gpa);
+    defer env_map.deinit();
 
     // First run: non-verbose on failing tests — populates cache with verbose failure reports
-    const result1 = try util.runRoc(gpa, &.{"test"}, "test/cli/SomeFailTests.roc");
+    const result1 = try util.runRocWithEnv(gpa, &.{"test"}, "test/cli/SomeFailTests.roc", &env_map);
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
 
@@ -942,7 +960,7 @@ test "roc test non-verbose run caches verbose failure reports for later verbose 
     try testing.expect(std.mem.indexOf(u8, result1.stderr, "expect failed") == null);
 
     // Second run: verbose — should hit cache and show detailed failure reports
-    const result2 = try util.runRoc(gpa, &.{ "test", "--verbose" }, "test/cli/SomeFailTests.roc");
+    const result2 = try util.runRocWithEnv(gpa, &.{ "test", "--verbose" }, "test/cli/SomeFailTests.roc", &env_map);
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
 

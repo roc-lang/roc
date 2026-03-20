@@ -17,6 +17,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const testing = std.testing;
 const fx_test_specs = @import("fx_test_specs.zig");
+const util = @import("util.zig");
 
 // Wire up tests from fx_test_specs module
 comptime {
@@ -37,6 +38,8 @@ const RunOptions = struct {
 fn runRoc(allocator: std.mem.Allocator, roc_file: []const u8, options: RunOptions) !std.process.Child.RunResult {
     var args = std.ArrayList([]const u8){};
     defer args.deinit(allocator);
+    var env_map = try util.buildIsolatedTestEnvMap(allocator, null);
+    defer env_map.deinit();
 
     try args.append(allocator, roc_binary_path);
     try args.appendSlice(allocator, options.extra_args);
@@ -46,6 +49,7 @@ fn runRoc(allocator: std.mem.Allocator, roc_file: []const u8, options: RunOption
         .allocator = allocator,
         .argv = args.items,
         .cwd = options.cwd,
+        .env_map = &env_map,
     });
 }
 
@@ -777,6 +781,8 @@ test "fx platform run from different cwd" {
     // Get absolute path to roc binary since we'll change cwd
     const roc_abs_path = try std.fs.cwd().realpathAlloc(allocator, roc_binary_path);
     defer allocator.free(roc_abs_path);
+    var env_map = try util.buildIsolatedTestEnvMap(allocator, null);
+    defer env_map.deinit();
 
     // Run roc from the test/fx directory with a relative path to app.roc
     const run_result = try std.process.Child.run(.{
@@ -786,6 +792,7 @@ test "fx platform run from different cwd" {
             "app.roc",
         },
         .cwd = "test/fx",
+        .env_map = &env_map,
     });
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);

@@ -107,7 +107,8 @@ pub const ObjectFileCompiler = struct {
         std.fs.cwd().writeFile(.{
             .sub_path = output_path,
             .data = result.object_bytes,
-        }) catch {
+        }) catch |err| {
+            std.log.err("failed to write object file {s}: {}", .{ output_path, err });
             return CompilationError.ObjectGenerationFailed;
         };
     }

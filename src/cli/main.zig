@@ -947,6 +947,13 @@ fn generatePlatformHostShim(ctx: *CliContext, cache_dir: []const u8, entrypoint_
     return object_path;
 }
 
+fn ensureCompilerCacheDirExists(path: []const u8) !void {
+    std.fs.cwd().makePath(path) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+}
+
 fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -4430,6 +4437,11 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     std.log.debug("Generating native code...", .{});
     var object_compiler = backend.ObjectFileCompiler.init(ctx.gpa);
 
+    ensureCompilerCacheDirExists(build_cache_dir) catch |err| {
+        std.log.err("Failed to create compiler build cache dir {s}: {}", .{ build_cache_dir, err });
+        return err;
+    };
+
     const obj_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_{s}.o", .{@tagName(target)});
     const obj_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, obj_filename });
 
@@ -4857,6 +4869,13 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     // object_files = the Roc application files
     // platform_files_pre/post = files declared in link spec before/after 'app'
     var object_files = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 4);
+
+    ensureCompilerCacheDirExists(build_cache_dir) catch |err| {
+        return ctx.fail(.{ .directory_create_failed = .{
+            .path = build_cache_dir,
+            .err = err,
+        } });
+    };
 
     // Extract shim library (interpreter shim) - now works for both native and wasm32 targets
     // Include target name in filename to support different targets in the same cache
