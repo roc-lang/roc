@@ -1161,6 +1161,7 @@ fn resolveToLambda(self: *Self, expr_id: MIR.ExprId) ?struct { params: MIR.Patte
     const expr = self.mir_store.getExpr(expr_id);
     return switch (expr) {
         .lambda => |lam| .{ .params = lam.params, .body = lam.body },
+        .hosted => |h| .{ .params = h.params, .body = h.body },
         .block => |block| self.resolveToLambda(block.final_expr),
         .lookup => |sym| blk: {
             const def_expr_id = self.mir_store.getSymbolDef(sym) orelse break :blk null;
@@ -1173,7 +1174,7 @@ fn resolveToLambda(self: *Self, expr_id: MIR.ExprId) ?struct { params: MIR.Patte
 fn resolveToLambdaExprId(self: *Self, expr_id: MIR.ExprId) ?MIR.ExprId {
     const expr = self.mir_store.getExpr(expr_id);
     return switch (expr) {
-        .lambda => expr_id,
+        .lambda, .hosted => expr_id,
         .block => |block| self.resolveToLambdaExprId(block.final_expr),
         .lookup => |sym| blk: {
             const def_expr_id = self.mir_store.getSymbolDef(sym) orelse break :blk null;
@@ -1311,36 +1312,55 @@ fn ensureSpecializedDirectCallee(
         try self.prepareLiftedDefCaptureLayout(original_fn_symbol, lifted_def);
     }
 
-    const inferred_ret_layout = try self.runtimeLayoutForLambdaBodyWithParamLayouts(
-        lifted_def,
-        specialization.?.param_layouts,
-    );
-    if (builtin.mode == .Debug and inferred_ret_layout == null) {
-        std.debug.panic(
-            "MirToLir invariant violated: could not infer specialized return layout for direct callee key {d}",
-            .{callee_key},
+    const callable_expr = self.mir_store.getExpr(lambda_expr_id);
+    const callable_mono_idx = self.mir_store.typeOf(lambda_expr_id);
+
+    // Hosted functions compute the return layout from their monotype directly,
+    // since their MIR body is a crash placeholder (the real impl is in the host).
+    // Lambdas infer it from the body expression with specialized param layouts.
+    const specialization_ret_layout = if (callable_expr == .hosted) blk: {
+        const monotype = self.mir_store.monotype_store.getMonotype(callable_mono_idx);
+        break :blk switch (monotype) {
+            .func => |f| try self.layoutFromMonotype(f.ret),
+            .prim, .unit, .record, .tuple, .tag_union, .list, .box, .recursive_placeholder => unreachable,
+        };
+    } else blk: {
+        const inferred_ret_layout = try self.runtimeLayoutForLambdaBodyWithParamLayouts(
+            lifted_def,
+            specialization.?.param_layouts,
         );
-    }
-    const specialization_ret_layout = inferred_ret_layout orelse unreachable;
+        if (builtin.mode == .Debug and inferred_ret_layout == null) {
+            std.debug.panic(
+                "MirToLir invariant violated: could not infer specialized return layout for direct callee key {d}",
+                .{callee_key},
+            );
+        }
+        break :blk inferred_ret_layout orelse unreachable;
+    };
 
     const refreshed_key_before_lower = try self.specializationKeyBytes(callee_key, param_layouts);
     if (self.specialized_direct_callees.getPtr(refreshed_key_before_lower)) |entry| {
         entry.ret_layout = specialization_ret_layout;
     } else unreachable;
 
-    const lambda_expr = self.mir_store.getExpr(lambda_expr_id);
-    if (builtin.mode == .Debug and lambda_expr != .lambda) {
-        std.debug.panic(
-            "MirToLir invariant violated: resolved specialized direct-call expr {} is not lambda",
-            .{@intFromEnum(lambda_expr_id)},
+    // Hosted functions are lowered through lowerHosted which creates a lambda
+    // wrapping a hosted_call. Lambdas go through lowerLambdaWithParamLayouts.
+    const lir_def = if (callable_expr == .hosted)
+        try self.lowerHosted(callable_expr.hosted, callable_mono_idx, Region.zero())
+    else blk: {
+        if (builtin.mode == .Debug and callable_expr != .lambda) {
+            std.debug.panic(
+                "MirToLir invariant violated: resolved specialized direct-call expr {} is not lambda or hosted",
+                .{@intFromEnum(lambda_expr_id)},
+            );
+        }
+        break :blk try self.lowerLambdaWithParamLayouts(
+            callable_expr.lambda,
+            callable_mono_idx,
+            specialization.?.param_layouts,
+            Region.zero(),
         );
-    }
-    const lir_def = try self.lowerLambdaWithParamLayouts(
-        lambda_expr.lambda,
-        self.mir_store.typeOf(lambda_expr_id),
-        specialization.?.param_layouts,
-        Region.zero(),
-    );
+    };
     try self.lir_store.registerSymbolDef(resolved_symbol, lir_def);
     try self.lir_store.registerCallableDef(resolved_symbol, lir_def);
 
@@ -3076,11 +3096,12 @@ fn monotypesStructurallyEqualRec(
     };
 }
 
-/// Follow lookups/blocks/closure origins to recover the lambda parameter span.
+/// Follow lookups/blocks/closure origins to recover the lambda/hosted parameter span.
 fn resolveToLambdaParams(self: *Self, expr_id: MIR.ExprId) ?MIR.PatternSpan {
     const expr = self.mir_store.getExpr(expr_id);
     return switch (expr) {
         .lambda => |lam| lam.params,
+        .hosted => |h| h.params,
         .block => |block| self.resolveToLambdaParams(block.final_expr),
         .lookup => |sym| blk: {
             const def_expr_id = self.mir_store.getSymbolDef(sym) orelse break :blk null;
