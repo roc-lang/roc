@@ -1289,9 +1289,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.codegen.patchJump(patch + prologue_size, final_epilogue);
             }
 
-            // Patch all pending calls now that all procedures are compiled
-            try self.patchPendingCalls();
-
             const all_code = self.codegen.getCode();
             const code_copy = self.allocator.dupe(u8, all_code) catch return error.OutOfMemory;
 
@@ -12842,6 +12839,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             for (proc_specs, 0..) |proc, i| {
                 try self.compileProcSpec(@enumFromInt(i), proc);
             }
+
+            try self.patchPendingCalls();
         }
 
         /// Compile a single procedure as a complete unit.
@@ -15091,6 +15090,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 };
                 self.patchCallTarget(pending.call_site, proc.code_start);
             }
+            self.pending_calls.clearRetainingCapacity();
         }
 
         /// Patch a call instruction to target a specific offset

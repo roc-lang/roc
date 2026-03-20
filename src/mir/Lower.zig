@@ -3370,19 +3370,6 @@ fn isSkippedProcBackedBindingPattern(
     return self.skipped_proc_backed_binding_patterns.contains(bindingPatternKey(module_idx, pattern_idx));
 }
 
-fn calleeNeedsProcInstMaterialization(
-    self: *const Self,
-    module_env: *const ModuleEnv,
-    func_expr_idx: CIR.Expr.Idx,
-) bool {
-    return switch (module_env.store.getExpr(func_expr_idx)) {
-        .e_lookup_local => |lookup| self.currentScopedPatternSymbol(self.current_module_idx, lookup.pattern_idx) == null and
-            self.isSkippedProcBackedBindingPattern(self.current_module_idx, lookup.pattern_idx),
-        .e_lookup_external, .e_lookup_required => false,
-        else => true,
-    };
-}
-
 fn monotypesStructurallyEqual(self: *Self, lhs: Monotype.Idx, rhs: Monotype.Idx) Allocator.Error!bool {
     if (lhs == rhs) return true;
 
@@ -4275,6 +4262,8 @@ fn buildClosureValueFromCaptureRequests(
 
         const semantic_capture_expr = if (!proc_backed_capture_expr.isNone())
             proc_backed_capture_expr
+        else if (self.monomorphization.getPatternSourceExpr(request.module_idx, request.pattern_idx)) |source|
+            (try self.lowerCaptureSemanticAliasSourceExpr(source, cap_monotype)) orelse runtime_capture_expr
         else
             runtime_capture_expr;
         if (capture_source_exprs_snapshot) |snapshot| {
@@ -4305,6 +4294,77 @@ fn buildClosureValueFromCaptureRequests(
         } }, monotype, region),
         .captures_tuple_monotype = captures_tuple_monotype,
     };
+}
+
+fn lowerCaptureSemanticAliasSourceExpr(
+    self: *Self,
+    source: Monomorphize.ExprSource,
+    monotype: Monotype.Idx,
+) Allocator.Error!?MIR.ExprId {
+    const source_env = self.all_module_envs[source.module_idx];
+    return switch (source_env.store.getExpr(source.expr_idx)) {
+        .e_lookup_local,
+        .e_lookup_external,
+        .e_lookup_required,
+        .e_dot_access,
+        .e_tuple_access,
+        => try self.lowerCaptureSemanticSourceExpr(source, monotype),
+        .e_block => |block| try self.lowerCaptureSemanticAliasSourceExpr(.{
+            .module_idx = source.module_idx,
+            .expr_idx = block.final_expr,
+        }, monotype),
+        .e_dbg => |dbg_expr| try self.lowerCaptureSemanticAliasSourceExpr(.{
+            .module_idx = source.module_idx,
+            .expr_idx = dbg_expr.expr,
+        }, monotype),
+        .e_expect => |expect_expr| try self.lowerCaptureSemanticAliasSourceExpr(.{
+            .module_idx = source.module_idx,
+            .expr_idx = expect_expr.body,
+        }, monotype),
+        .e_return => |ret| try self.lowerCaptureSemanticAliasSourceExpr(.{
+            .module_idx = source.module_idx,
+            .expr_idx = ret.expr,
+        }, monotype),
+        .e_nominal => |nominal_expr| try self.lowerCaptureSemanticAliasSourceExpr(.{
+            .module_idx = source.module_idx,
+            .expr_idx = nominal_expr.backing_expr,
+        }, monotype),
+        .e_nominal_external => |nominal_expr| try self.lowerCaptureSemanticAliasSourceExpr(.{
+            .module_idx = source.module_idx,
+            .expr_idx = nominal_expr.backing_expr,
+        }, monotype),
+        else => null,
+    };
+}
+
+fn lowerCaptureSemanticSourceExpr(
+    self: *Self,
+    source: Monomorphize.ExprSource,
+    monotype: Monotype.Idx,
+) Allocator.Error!MIR.ExprId {
+    const saved_module_idx = self.current_module_idx;
+    defer self.current_module_idx = saved_module_idx;
+    self.current_module_idx = source.module_idx;
+
+    const saved_pattern_scope = self.current_pattern_scope;
+    defer self.current_pattern_scope = saved_pattern_scope;
+    if (source.module_idx != saved_module_idx) {
+        self.current_pattern_scope = 0;
+        if (builtin.mode == .Debug and self.all_module_envs[source.module_idx].store.getExpr(source.expr_idx) == .e_lookup_local) {
+            std.debug.panic(
+                "MIR Lower invariant: cross-module semantic capture source expr {d} in module {d} cannot be a local lookup",
+                .{ @intFromEnum(source.expr_idx), source.module_idx },
+            );
+        }
+    }
+
+    const saved_root_expr_context = self.current_root_expr_context;
+    defer self.current_root_expr_context = saved_root_expr_context;
+    if (source.module_idx != saved_module_idx and self.current_proc_inst_context.isNone()) {
+        self.current_root_expr_context = null;
+    }
+
+    return self.lowerExprWithMonotypeOverride(source.expr_idx, monotype);
 }
 
 fn buildSpecializedClosureValue(
@@ -4979,6 +5039,42 @@ fn lowerCall(
         self.current_module_idx,
         call_expr_idx,
     );
+    if (call_site_proc_inst == null and builtin.mode == .Debug) {
+        const call_site_proc_insts = self.monomorphization.getCallSiteProcInsts(
+            self.current_proc_inst_context,
+            self.monomorphizationRootExprContext(self.current_proc_inst_context),
+            self.current_module_idx,
+            call_expr_idx,
+        );
+        const callee_template_id = self.monomorphization.getExprProcTemplate(self.current_module_idx, call.func);
+        if (callee_expr == .e_lookup_external and callee_template_id != null) {
+            const rooted_lookup = self.monomorphization.getCallSiteProcInst(
+                self.current_proc_inst_context,
+                self.monomorphizationRootExprContext(self.current_proc_inst_context),
+                self.current_module_idx,
+                call_expr_idx,
+            );
+            const canonical_lookup = if (self.current_proc_inst_context.isNone())
+                self.monomorphization.getCallSiteProcInst(.none, null, self.current_module_idx, call_expr_idx)
+            else
+                null;
+            std.debug.panic(
+                "MIR Lower invariant: direct external call expr {d} in module {d} has callable callee expr {d} ({s}) but no singular call-site proc inst (context={d}, root_expr={d}, template={d}, rooted={d}, canonical={d}, proc_inst_set_len={d})",
+                .{
+                    @intFromEnum(call_expr_idx),
+                    self.current_module_idx,
+                    @intFromEnum(call.func),
+                    @tagName(callee_expr),
+                    @intFromEnum(self.current_proc_inst_context),
+                    if (self.current_root_expr_context) |root_expr_idx| @intFromEnum(root_expr_idx) else std.math.maxInt(u32),
+                    @intFromEnum(callee_template_id.?),
+                    if (rooted_lookup) |id| @intFromEnum(id) else std.math.maxInt(u32),
+                    if (canonical_lookup) |id| @intFromEnum(id) else std.math.maxInt(u32),
+                    if (call_site_proc_insts) |ids| ids.len else 0,
+                },
+            );
+        }
+    }
     const call_result_monotype = if (call_site_proc_inst) |proc_inst_id|
         try self.procInstReturnMonotype(proc_inst_id)
     else
@@ -5019,10 +5115,7 @@ fn lowerCall(
     }
 
     const lowered_func = if (call_site_proc_inst) |proc_inst_id|
-        if (self.calleeNeedsProcInstMaterialization(module_env, call.func))
-            try self.lowerProcInst(proc_inst_id)
-        else
-            try self.lowerExpr(call.func)
+        try self.lowerProcInst(proc_inst_id)
     else
         try self.lowerExpr(call.func);
 
@@ -5083,19 +5176,6 @@ fn cirExprIsProcBacked(module_env: *const ModuleEnv, expr_idx: CIR.Expr.Idx) boo
         .e_nominal => |nominal_expr| cirExprIsProcBacked(module_env, nominal_expr.backing_expr),
         .e_nominal_external => |nominal_expr| cirExprIsProcBacked(module_env, nominal_expr.backing_expr),
         else => false,
-    };
-}
-
-fn procBackedLeafExpr(module_env: *const ModuleEnv, expr_idx: CIR.Expr.Idx) ?CIR.Expr.Idx {
-    return switch (module_env.store.getExpr(expr_idx)) {
-        .e_lambda, .e_closure, .e_hosted_lambda => expr_idx,
-        .e_block => |block| procBackedLeafExpr(module_env, block.final_expr),
-        .e_dbg => |dbg_expr| procBackedLeafExpr(module_env, dbg_expr.expr),
-        .e_expect => |expect_expr| procBackedLeafExpr(module_env, expect_expr.body),
-        .e_return => |return_expr| procBackedLeafExpr(module_env, return_expr.expr),
-        .e_nominal => |nominal_expr| procBackedLeafExpr(module_env, nominal_expr.backing_expr),
-        .e_nominal_external => |nominal_expr| procBackedLeafExpr(module_env, nominal_expr.backing_expr),
-        else => null,
     };
 }
 
@@ -6391,17 +6471,15 @@ fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.E
 
     const current_env = self.all_module_envs[self.current_module_idx];
     const result = if (cirExprIsProcBacked(current_env, cir_expr_idx)) blk: {
-        const callable_expr_idx = procBackedLeafExpr(current_env, cir_expr_idx) orelse unreachable;
-        const template_id = self.monomorphization.getExprProcTemplate(self.current_module_idx, callable_expr_idx) orelse {
+        const template_id = self.monomorphization.getExprProcTemplate(self.current_module_idx, cir_expr_idx) orelse {
             if (builtin.mode == .Debug) {
                 const module_name = current_env.getIdent(current_env.qualified_module_ident);
                 std.debug.panic(
-                    "MIR Lower invariant: callable def symbol={d} expr={d} leaf={d} tag={s} in module {d} ('{s}') has no proc template",
+                    "MIR Lower invariant: callable def symbol={d} expr={d} tag={s} in module {d} ('{s}') has no proc template",
                     .{
                         symbol.raw(),
                         @intFromEnum(cir_expr_idx),
-                        @intFromEnum(callable_expr_idx),
-                        @tagName(current_env.store.getExpr(callable_expr_idx)),
+                        @tagName(current_env.store.getExpr(cir_expr_idx)),
                         self.current_module_idx,
                         module_name,
                     },
@@ -6409,18 +6487,32 @@ fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.E
             }
             unreachable;
         };
-        const proc_inst_id = self.lookupMonomorphizedExprProcInst(callable_expr_idx) orelse {
+        const proc_inst_id = self.lookupMonomorphizedExprProcInst(cir_expr_idx) orelse {
             if (builtin.mode == .Debug) {
+                const binding_name = switch (symbol_meta) {
+                    .external_def => |ext| ext_blk: {
+                        const target_env = self.all_module_envs[ext.module_idx];
+                        const def_idx: CIR.Def.Idx = @enumFromInt(ext.def_node_idx);
+                        const def = target_env.store.getDef(def_idx);
+                        break :ext_blk switch (target_env.store.getPattern(def.pattern)) {
+                            .assign => |assign_pat| target_env.getIdent(assign_pat.ident),
+                            else => "<non-assign>",
+                        };
+                    },
+                    .local_ident => "<local-ident>",
+                };
                 std.debug.panic(
-                    "MIR Lower invariant: callable def symbol={d} expr={d} leaf={d} in module {d} template={d} has no monomorphized proc inst in context {d} root_expr={d}",
+                    "MIR Lower invariant: callable def '{s}' symbol={d} expr={d} in module {d} template={d} has no monomorphized proc inst in context {d} root_expr={d} current_proc_template={d} current_proc_expr={d}",
                     .{
+                        binding_name,
                         symbol.raw(),
                         @intFromEnum(cir_expr_idx),
-                        @intFromEnum(callable_expr_idx),
                         self.current_module_idx,
                         @intFromEnum(template_id),
                         @intFromEnum(self.current_proc_inst_context),
                         if (self.current_root_expr_context) |root_expr_idx| @intFromEnum(root_expr_idx) else std.math.maxInt(u32),
+                        if (!self.current_proc_inst_context.isNone()) @intFromEnum(self.monomorphization.getProcInst(self.current_proc_inst_context).template) else std.math.maxInt(u32),
+                        if (!self.current_proc_inst_context.isNone()) @intFromEnum(self.monomorphization.getProcTemplate(self.monomorphization.getProcInst(self.current_proc_inst_context).template).cir_expr) else std.math.maxInt(u32),
                     },
                 );
             }

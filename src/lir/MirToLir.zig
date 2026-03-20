@@ -3287,49 +3287,42 @@ fn lowerClosureMake(
 fn lowerHostedProcBody(
     self: *Self,
     hosted: MIR.HostedProc,
-    mir_params: []const MIR.PatternId,
-    func_args: []const Monotype.Idx,
+    hosted_args: LirExprSpan,
     ret_layout: layout.Idx,
     region: Region,
 ) Allocator.Error!LirExprId {
-    const save_len = self.scratch_lir_expr_ids.items.len;
-    defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_len);
+    return self.lir_store.addExpr(.{ .hosted_call = .{
+        .index = hosted.index,
+        .args = hosted_args,
+        .ret_layout = ret_layout,
+    } }, region);
+}
 
-    for (mir_params, 0..) |mir_param_id, i| {
-        const mir_pat = self.mir_store.getPattern(mir_param_id);
-        const symbol = switch (mir_pat) {
-            .bind => |sym| sym,
-            .wildcard => continue,
-            .tag,
-            .int_literal,
-            .str_literal,
-            .dec_literal,
-            .frac_f32_literal,
-            .frac_f64_literal,
-            .struct_destructure,
-            .list_destructure,
-            .as_pattern,
-            .runtime_error,
-            => unreachable,
-        };
-        const param_layout = if (i < func_args.len)
-            try self.layoutFromMonotype(func_args[i])
-        else
-            unreachable;
+fn lowerHostedProcParams(
+    self: *Self,
+    param_layouts: []const layout.Idx,
+    region: Region,
+) Allocator.Error!struct { params: LirPatternSpan, args: LirExprSpan } {
+    const save_param_patterns = self.scratch_lir_pattern_ids.items.len;
+    defer self.scratch_lir_pattern_ids.shrinkRetainingCapacity(save_param_patterns);
+    const save_arg_exprs = self.scratch_lir_expr_ids.items.len;
+    defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_arg_exprs);
+
+    for (param_layouts) |param_layout| {
+        const bind = try self.freshBindPattern(param_layout, false, region);
+        try self.scratch_lir_pattern_ids.append(self.allocator, bind.pattern);
 
         const lookup = try self.lir_store.addExpr(.{ .lookup = .{
-            .symbol = symbol,
+            .symbol = bind.symbol,
             .layout_idx = param_layout,
         } }, region);
         try self.scratch_lir_expr_ids.append(self.allocator, lookup);
     }
 
-    const lir_args = try self.lir_store.addExprSpan(self.scratch_lir_expr_ids.items[save_len..]);
-    return self.lir_store.addExpr(.{ .hosted_call = .{
-        .index = hosted.index,
-        .args = lir_args,
-        .ret_layout = ret_layout,
-    } }, region);
+    return .{
+        .params = try self.lir_store.addPatternSpan(self.scratch_lir_pattern_ids.items[save_param_patterns..]),
+        .args = try self.lir_store.addExprSpan(self.scratch_lir_expr_ids.items[save_arg_exprs..]),
+    };
 }
 
 fn lowerProcWithParamLayouts(
@@ -3387,8 +3380,6 @@ fn lowerProcWithParamLayouts(
     try self.beginBindingScope();
     defer self.endBindingScope();
 
-    const save_param_patterns = self.scratch_lir_pattern_ids.items.len;
-    defer self.scratch_lir_pattern_ids.shrinkRetainingCapacity(save_param_patterns);
     var bound_symbols = std.ArrayList(u64).empty;
     defer bound_symbols.deinit(self.allocator);
     for (mir_params) |mir_param_id| {
@@ -3433,22 +3424,34 @@ fn lowerProcWithParamLayouts(
             &saved_monotype_layouts,
         );
     }
-    for (mir_params, 0..) |mir_param_id, i| {
-        const param_layout = param_layouts[i];
-        try self.registerBindingPatternSymbols(mir_param_id, param_layout);
-        const lowered = try self.lowerBindingPatternForRuntimeLayout(mir_param_id, param_layout, .owned, region);
-        try param_infos.append(self.allocator, lowered);
-        const rewrite = try self.rewriteTopLevelRestBinding(lowered, param_layout, .owned, region);
-        try param_rewrites.append(self.allocator, rewrite);
-        const entry_pattern = try self.rewriteProcEntryMutableBindings(
-            if (rewrite) |rw| rw.source_pattern else lowered.pattern,
-            .owned,
-            &param_cell_init_stmts,
-            region,
-        );
-        try self.scratch_lir_pattern_ids.append(self.allocator, entry_pattern);
-    }
-    const lir_params = try self.lir_store.addPatternSpan(self.scratch_lir_pattern_ids.items[save_param_patterns..]);
+    const lir_params, const hosted_arg_span = if (proc.hosted != null) blk: {
+        const hosted_params = try self.lowerHostedProcParams(param_layouts, region);
+        break :blk .{ hosted_params.params, hosted_params.args };
+    } else blk: {
+        const save_param_patterns = self.scratch_lir_pattern_ids.items.len;
+        defer self.scratch_lir_pattern_ids.shrinkRetainingCapacity(save_param_patterns);
+
+        for (mir_params, 0..) |mir_param_id, i| {
+            const param_layout = param_layouts[i];
+            try self.registerBindingPatternSymbols(mir_param_id, param_layout);
+            const lowered = try self.lowerBindingPatternForRuntimeLayout(mir_param_id, param_layout, .owned, region);
+            try param_infos.append(self.allocator, lowered);
+            const rewrite = try self.rewriteTopLevelRestBinding(lowered, param_layout, .owned, region);
+            try param_rewrites.append(self.allocator, rewrite);
+            const entry_pattern = try self.rewriteProcEntryMutableBindings(
+                if (rewrite) |rw| rw.source_pattern else lowered.pattern,
+                .owned,
+                &param_cell_init_stmts,
+                region,
+            );
+            try self.scratch_lir_pattern_ids.append(self.allocator, entry_pattern);
+        }
+
+        break :blk .{
+            try self.lir_store.addPatternSpan(self.scratch_lir_pattern_ids.items[save_param_patterns..]),
+            LirExprSpan.empty(),
+        };
+    };
     if (builtin.mode == .Debug) {
         for (self.lir_store.getPatternSpan(lir_params)) |pat_id| {
             const pat_index = @intFromEnum(pat_id);
@@ -3473,45 +3476,47 @@ fn lowerProcWithParamLayouts(
     };
 
     var lir_body = if (proc.hosted) |hosted|
-        try self.lowerHostedProcBody(hosted, mir_params, func_args, ret_layout, region)
+        try self.lowerHostedProcBody(hosted, hosted_arg_span, ret_layout, region)
     else
         try self.lowerExpr(proc.body);
-    var lambda_param_idx = param_infos.items.len;
-    while (lambda_param_idx > 0) {
-        lambda_param_idx -= 1;
-        const info = param_infos.items[lambda_param_idx];
-        var mutable_prelude_stmts = std.ArrayList(LirStmt).empty;
-        defer mutable_prelude_stmts.deinit(self.allocator);
-        const rewrite = if (param_rewrites.items[lambda_param_idx]) |rw|
-            TopLevelRestBindingRewrite{
-                .source_pattern = rw.source_pattern,
-                .destructure_pattern = if (rw.destructure_pattern.isNone())
-                    LirPatternId.none
-                else
-                    try self.rewriteProcEntryMutableBindings(
-                        rw.destructure_pattern,
-                        .borrowed,
-                        &mutable_prelude_stmts,
-                        region,
-                    ),
-                .source_symbol = rw.source_symbol,
-                .source_layout = rw.source_layout,
-            }
-        else
-            null;
-        lir_body = try self.wrapExprWithTopLevelRestBindingPrelude(
-            lir_body,
-            ret_layout,
-            rewrite,
-            mutable_prelude_stmts.items,
-            info.deferred_rest_start,
-            info.deferred_rest_len,
-            region,
-        );
-    }
+    if (proc.hosted == null) {
+        var lambda_param_idx = param_infos.items.len;
+        while (lambda_param_idx > 0) {
+            lambda_param_idx -= 1;
+            const info = param_infos.items[lambda_param_idx];
+            var mutable_prelude_stmts = std.ArrayList(LirStmt).empty;
+            defer mutable_prelude_stmts.deinit(self.allocator);
+            const rewrite = if (param_rewrites.items[lambda_param_idx]) |rw|
+                TopLevelRestBindingRewrite{
+                    .source_pattern = rw.source_pattern,
+                    .destructure_pattern = if (rw.destructure_pattern.isNone())
+                        LirPatternId.none
+                    else
+                        try self.rewriteProcEntryMutableBindings(
+                            rw.destructure_pattern,
+                            .borrowed,
+                            &mutable_prelude_stmts,
+                            region,
+                        ),
+                    .source_symbol = rw.source_symbol,
+                    .source_layout = rw.source_layout,
+                }
+            else
+                null;
+            lir_body = try self.wrapExprWithTopLevelRestBindingPrelude(
+                lir_body,
+                ret_layout,
+                rewrite,
+                mutable_prelude_stmts.items,
+                info.deferred_rest_start,
+                info.deferred_rest_len,
+                region,
+            );
+        }
 
-    if (param_cell_init_stmts.items.len != 0) {
-        lir_body = try self.wrapExprWithPreludeStmts(lir_body, ret_layout, param_cell_init_stmts.items, region);
+        if (param_cell_init_stmts.items.len != 0) {
+            lir_body = try self.wrapExprWithPreludeStmts(lir_body, ret_layout, param_cell_init_stmts.items, region);
+        }
     }
 
     var proc_rc_pass = try RcInsert.RcInsertPass.init(self.allocator, self.lir_store, self.layout_store);
@@ -5111,8 +5116,16 @@ fn lowerExpect(self: *Self, e: anytype, mono_idx: Monotype.Idx, region: Region) 
     } }, region);
 }
 
+fn monotypeRepresentsUnit(self: *Self, mono_idx: Monotype.Idx) bool {
+    return switch (self.mir_store.monotype_store.getMonotype(mono_idx)) {
+        .unit => true,
+        .record => |record| self.mir_store.monotype_store.getFields(record.fields).len == 0,
+        else => false,
+    };
+}
+
 fn lowerForLoop(self: *Self, f: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
-    std.debug.assert(mono_idx == self.mir_store.monotype_store.unit_idx);
+    std.debug.assert(self.monotypeRepresentsUnit(mono_idx));
     var acc = self.startLetAccumulator();
     const list_layout = try self.runtimeValueLayoutFromMirExpr(f.list);
     const lir_list_raw = try self.lowerExpr(f.list);
@@ -5151,7 +5164,7 @@ fn lowerForLoop(self: *Self, f: anytype, mono_idx: Monotype.Idx, region: Region)
 }
 
 fn lowerWhileLoop(self: *Self, w: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
-    std.debug.assert(mono_idx == self.mir_store.monotype_store.unit_idx);
+    std.debug.assert(self.monotypeRepresentsUnit(mono_idx));
     const lir_cond = try self.lowerExpr(w.cond);
     const lir_body = try self.lowerExpr(w.body);
 
