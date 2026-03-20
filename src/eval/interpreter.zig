@@ -59,6 +59,10 @@ const InterpreterRocEnv = struct {
     runtime_error_message: ?[]const u8 = null,
     expect_message: ?[]const u8 = null,
     jmp_buf: JmpBuf = undefined,
+    forwarded_memory_env: *anyopaque = undefined,
+    forwarded_roc_alloc: ?*const fn (*RocAlloc, *anyopaque) callconv(.c) void = null,
+    forwarded_roc_dealloc: ?*const fn (*RocDealloc, *anyopaque) callconv(.c) void = null,
+    forwarded_roc_realloc: ?*const fn (*RocRealloc, *anyopaque) callconv(.c) void = null,
 
     /// Thread-local static buffer for allocations from builtins.
     const StaticAlloc = struct {
@@ -117,12 +121,30 @@ const InterpreterRocEnv = struct {
         self.crashed = false;
     }
 
+    fn forwardMemoryOpsFrom(self: *InterpreterRocEnv, caller_roc_ops: *RocOps) void {
+        self.forwarded_memory_env = caller_roc_ops.env;
+        self.forwarded_roc_alloc = caller_roc_ops.roc_alloc;
+        self.forwarded_roc_dealloc = caller_roc_ops.roc_dealloc;
+        self.forwarded_roc_realloc = caller_roc_ops.roc_realloc;
+    }
+
+    fn resetForwardedMemoryOps(self: *InterpreterRocEnv) void {
+        self.forwarded_roc_alloc = null;
+        self.forwarded_roc_dealloc = null;
+        self.forwarded_roc_realloc = null;
+    }
+
     fn rocAllocFn(roc_alloc: *RocAlloc, env: *anyopaque) callconv(.c) void {
+        const self: *InterpreterRocEnv = @ptrCast(@alignCast(env));
+        if (self.forwarded_roc_alloc) |forwarded_roc_alloc| {
+            forwarded_roc_alloc(roc_alloc, self.forwarded_memory_env);
+            return;
+        }
+
         const alignment = roc_alloc.alignment;
         const mask = alignment - 1;
         const aligned_offset = (StaticAlloc.offset + mask) & ~mask;
         if (aligned_offset + roc_alloc.length > StaticAlloc.buffer.len) {
-            const self: *InterpreterRocEnv = @ptrCast(@alignCast(env));
             self.crashed = true;
             if (self.crash_message) |old| self.allocator.free(old);
             self.crash_message = self.allocator.dupe(u8, "static buffer overflow in alloc") catch null;
@@ -134,14 +156,24 @@ const InterpreterRocEnv = struct {
         roc_alloc.answer = @ptrCast(ptr);
     }
 
-    fn rocDeallocFn(_: *RocDealloc, _: *anyopaque) callconv(.c) void {}
+    fn rocDeallocFn(roc_dealloc: *RocDealloc, env: *anyopaque) callconv(.c) void {
+        const self: *InterpreterRocEnv = @ptrCast(@alignCast(env));
+        if (self.forwarded_roc_dealloc) |forwarded_roc_dealloc| {
+            forwarded_roc_dealloc(roc_dealloc, self.forwarded_memory_env);
+        }
+    }
 
     fn rocReallocFn(roc_realloc: *RocRealloc, env: *anyopaque) callconv(.c) void {
+        const self: *InterpreterRocEnv = @ptrCast(@alignCast(env));
+        if (self.forwarded_roc_realloc) |forwarded_roc_realloc| {
+            forwarded_roc_realloc(roc_realloc, self.forwarded_memory_env);
+            return;
+        }
+
         const alignment = roc_realloc.alignment;
         const mask = alignment - 1;
         const aligned_offset = (StaticAlloc.offset + mask) & ~mask;
         if (aligned_offset + roc_realloc.new_length > StaticAlloc.buffer.len) {
-            const self: *InterpreterRocEnv = @ptrCast(@alignCast(env));
             self.crashed = true;
             if (self.crash_message) |old| self.allocator.free(old);
             self.crash_message = self.allocator.dupe(u8, "static buffer overflow in realloc") catch null;
@@ -255,8 +287,8 @@ pub const LirInterpreter = struct {
         store: *const LirExprStore,
         layout_store: *const layout_mod.Store,
         io: ?Io,
-    ) LirInterpreter {
-        const roc_env = allocator.create(InterpreterRocEnv) catch @panic("OOM");
+    ) Allocator.Error!LirInterpreter {
+        const roc_env = try allocator.create(InterpreterRocEnv);
         roc_env.* = InterpreterRocEnv.init(allocator, io orelse Io.default());
 
         const empty_hosted_fns = struct {
@@ -351,10 +383,14 @@ pub const LirInterpreter = struct {
     /// Use this for data that RocList.bytes or RocStr.bytes will point to,
     /// so builtins can safely call isUnique()/decref() on it.
     fn allocRocData(self: *LirInterpreter, data_bytes: usize, element_alignment: u32) Error![*]u8 {
+        return self.allocRocDataWithRc(data_bytes, element_alignment, false);
+    }
+
+    fn allocRocDataWithRc(self: *LirInterpreter, data_bytes: usize, element_alignment: u32, elements_refcounted: bool) Error![*]u8 {
         self.roc_env.resetCrash();
         const sj = setjmp(&self.roc_env.jmp_buf);
         if (sj != 0) return error.Crash;
-        return builtins.utils.allocateWithRefcount(data_bytes, element_alignment, false, &self.roc_ops);
+        return builtins.utils.allocateWithRefcount(data_bytes, element_alignment, elements_refcounted, &self.roc_ops);
     }
 
     // Entrypoint evaluation (for roc run / interpreter shim)
@@ -365,8 +401,9 @@ pub const LirInterpreter = struct {
     /// extracted from `arg_ptr` (a packed tuple of arg values). Otherwise the
     /// expression is evaluated directly. The result is copied to `ret_ptr`.
     ///
-    /// `caller_roc_ops` provides hosted functions from the platform; the
-    /// interpreter splices them into its own RocOps for builtin dispatch.
+    /// `caller_roc_ops` provides hosted functions and runtime memory ops from
+    /// the platform; the interpreter splices them into its own RocOps adapter
+    /// while preserving interpreter-local crash/expect/dbg handling.
     pub fn evalEntrypoint(
         self: *LirInterpreter,
         final_expr_id: LirExprId,
@@ -376,11 +413,18 @@ pub const LirInterpreter = struct {
         arg_ptr: ?*anyopaque,
         ret_ptr: *anyopaque,
     ) Error!void {
-        // Splice in the caller's hosted functions so builtins can call them.
+        // Splice in the caller's runtime-facing pieces while keeping
+        // interpreter-local handlers for crash/expect/dbg.
+        const prev_hosted_fns = self.roc_ops.hosted_fns;
         self.roc_ops.hosted_fns = caller_roc_ops.hosted_fns;
+        self.roc_env.forwardMemoryOpsFrom(caller_roc_ops);
         const prev_recover_runtime_placeholders = self.recover_runtime_placeholders;
         self.recover_runtime_placeholders = true;
-        defer self.recover_runtime_placeholders = prev_recover_runtime_placeholders;
+        defer {
+            self.roc_env.resetForwardedMemoryOps();
+            self.roc_ops.hosted_fns = prev_hosted_fns;
+            self.recover_runtime_placeholders = prev_recover_runtime_placeholders;
+        }
 
         // Check if the expression is a function that needs to be called.
         const final_expr = self.store.getExpr(final_expr_id);
@@ -1033,10 +1077,7 @@ pub const LirInterpreter = struct {
 
             if (payload_layout_val.tag != .struct_) {
                 if (std.debug.runtime_safety and arg_exprs.len != 1) {
-                    std.debug.panic(
-                        "LIR interpreter invariant violated: non-struct tag payload can only have one arg, got {d}",
-                        .{arg_exprs.len},
-                    );
+                    return self.triggerCrash("LIR interpreter invariant violated: non-struct tag payload can only have one arg");
                 }
 
                 const arg_result = try self.eval(arg_exprs[0]);
@@ -1104,10 +1145,13 @@ pub const LirInterpreter = struct {
 
         // Allocate element storage through roc_ops so builtins can safely
         // call isUnique()/decref() on the data pointer.
+        // Pass elements_refcounted so allocateWithRefcount reserves space for
+        // the heap element count (needed by incref/decref when elements are RC'd).
         const total_elem_bytes = elem_size * count;
         const sa = self.helper.sizeAlignOf(l.elem_layout);
         const elem_alignment: u32 = @intCast(sa.alignment.toByteUnits());
-        const elem_data = try self.allocRocData(total_elem_bytes, elem_alignment);
+        const elems_rc = self.helper.containsRefcounted(l.elem_layout);
+        const elem_data = try self.allocRocDataWithRc(total_elem_bytes, elem_alignment, elems_rc);
         const elem_mem = elem_data[0..total_elem_bytes];
         @memset(elem_mem, 0);
 

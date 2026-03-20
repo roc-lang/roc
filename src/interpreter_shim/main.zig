@@ -590,7 +590,7 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
     defer lower_result.deinit();
 
     // Create LIR interpreter and evaluate
-    var interp = LirInterpreter.init(allocator, &lower_result.lir_store, lower_result.layout_store, null);
+    var interp = try LirInterpreter.init(allocator, &lower_result.lir_store, lower_result.layout_store, null);
     defer interp.deinit();
 
     interp.evalEntrypoint(

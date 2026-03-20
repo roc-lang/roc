@@ -423,6 +423,24 @@ pub const RcInsertPass = struct {
         return total;
     }
 
+    fn consumedUsesContainOwnerSymbol(self: *const RcInsertPass, uses: *const std.AutoHashMap(u64, u32), symbol: Symbol) bool {
+        const symbol_key = @as(u64, @bitCast(symbol));
+
+        var it = uses.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.* == 0) continue;
+
+            const owner_key = self.consumedOwnerKey(entry.key_ptr.*) orelse continue;
+            if (self.keyInfo(owner_key)) |info| {
+                if (info.symbol == symbol) return true;
+            } else if (owner_key == symbol_key) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     fn liveOwnedRefCountForKey(self: *const RcInsertPass, key: u64, reassignable: bool) u32 {
         if (self.keyInfo(key)) |info| {
             switch (info.owner_kind) {
@@ -2298,8 +2316,12 @@ pub const RcInsertPass = struct {
             },
             .str_concat => |span| {
                 const parts = self.store.getExprSpan(span);
-                for (parts) |part_id| {
-                    try self.countConsumedUsesInto(part_id, target);
+                for (parts, 0..) |part_id, i| {
+                    if (i == 0) {
+                        try self.countConsumedValueInto(part_id, target);
+                    } else {
+                        try self.countConsumedUsesInto(part_id, target);
+                    }
                 }
             },
             .int_to_str => |its| try self.countConsumedUsesInto(its.value, target),
@@ -2531,8 +2553,12 @@ pub const RcInsertPass = struct {
             },
             .str_concat => |span| {
                 const parts = self.store.getExprSpan(span);
-                for (parts) |part_id| {
-                    try self.countBorrowOwnerDemandUsesInto(part_id, target);
+                for (parts, 0..) |part_id, i| {
+                    if (i == 0) {
+                        try self.countBorrowOwnerDemandValueInto(part_id, target);
+                    } else {
+                        try self.countBorrowOwnerDemandUsesInto(part_id, target);
+                    }
                 }
             },
             .int_to_str => |its| try self.countBorrowOwnerDemandUsesInto(its.value, target),
@@ -3579,6 +3605,10 @@ pub const RcInsertPass = struct {
         var new_final = processed_final;
         if (processed_final != final_expr) changed = true;
 
+        var final_consumed_uses = std.AutoHashMap(u64, u32).init(self.allocator);
+        defer final_consumed_uses.deinit();
+        try self.countConsumedValueInto(processed_final, &final_consumed_uses);
+
         var pending_idx = pending_binding_increfs.items.len;
         while (pending_idx > 0) {
             pending_idx -= 1;
@@ -3645,7 +3675,7 @@ pub const RcInsertPass = struct {
         while (live_cell_index > saved_live_cells_len) {
             live_cell_index -= 1;
             const live_cell = self.live_cells.items[live_cell_index];
-            if (self.layoutNeedsRc(live_cell.layout_idx)) {
+            if (self.layoutNeedsRc(live_cell.layout_idx) and !self.consumedUsesContainOwnerSymbol(&final_consumed_uses, live_cell.cell)) {
                 try self.emitCellDecrefInto(live_cell.cell, live_cell.layout_idx, region, &tail_cell_stmts);
             }
             try tail_cell_stmts.append(self.allocator, .{ .cell_drop = .{
@@ -4184,7 +4214,7 @@ pub const RcInsertPass = struct {
 
         // Find which symbols the return expression consumes (using scratch_uses)
         self.scratch_consumed_uses.clearRetainingCapacity();
-        try self.countConsumedValueInto(ret.expr, &self.scratch_consumed_uses);
+        try self.countConsumedValueInto(new_expr, &self.scratch_consumed_uses);
 
         // Collect cleanup decrefs for live RC symbols not consumed by the return
         var cleanup_stmts = std.ArrayList(LirStmt).empty;
@@ -4221,6 +4251,7 @@ pub const RcInsertPass = struct {
             cell_index -= 1;
             const live_cell = live_cells[cell_index];
             if (!self.layoutNeedsRc(live_cell.layout_idx)) continue;
+            if (self.consumedUsesContainOwnerSymbol(&self.scratch_consumed_uses, live_cell.cell)) continue;
             try self.emitCellDecrefInto(live_cell.cell, live_cell.layout_idx, region, &cleanup_stmts);
         }
 
@@ -4236,9 +4267,14 @@ pub const RcInsertPass = struct {
 
         var stmts = std.ArrayList(LirStmt).empty;
         defer stmts.deinit(self.allocator);
+        const ret_semantics: LirStmt.BindingSemantics = if (self.exprAliasesManagedRef(new_expr, ret.ret_layout))
+            .retained
+        else
+            .owned;
         try stmts.append(self.allocator, .{ .decl = .{
             .pattern = ret_temp.pattern,
             .expr = new_expr,
+            .semantics = ret_semantics,
         } });
         try stmts.appendSlice(self.allocator, cleanup_stmts.items);
 
@@ -4801,12 +4837,17 @@ pub const RcInsertPass = struct {
         if (tail_stmts.len == 0) return expr;
 
         const result_bind = try self.freshResultPattern(result_layout, region);
+        const result_semantics: LirStmt.BindingSemantics = if (self.exprAliasesManagedRef(expr, result_layout))
+            .retained
+        else
+            .owned;
         var stmts = std.ArrayList(LirStmt).empty;
         defer stmts.deinit(self.allocator);
 
         try stmts.append(self.allocator, .{ .decl = .{
             .pattern = result_bind.pattern,
             .expr = expr,
+            .semantics = result_semantics,
         } });
         try stmts.appendSlice(self.allocator, tail_stmts);
 
@@ -5939,7 +5980,11 @@ fn countRcOps(store: *const LirExprStore, expr_id: LirExprId) RcOpCounts {
         .block => |block| {
             const stmts = store.getStmts(block.stmts);
             for (stmts) |stmt| {
-                const sub = countRcOps(store, stmt.binding().expr);
+                const sub = switch (stmt) {
+                    .decl, .mutate => |binding| countRcOps(store, binding.expr),
+                    .cell_init, .cell_store => |binding| countRcOps(store, binding.expr),
+                    .cell_drop => RcOpCounts{ .increfs = 0, .decrefs = 0 },
+                };
                 increfs += sub.increfs;
                 decrefs += sub.decrefs;
             }
@@ -6144,7 +6189,11 @@ fn countDecrefsForSymbol(store: *const LirExprStore, expr_id: LirExprId, symbol:
         .block => |block| blk: {
             var total: u32 = 0;
             for (store.getStmts(block.stmts)) |stmt| {
-                total += countDecrefsForSymbol(store, stmt.binding().expr, symbol);
+                total += switch (stmt) {
+                    .decl, .mutate => |binding| countDecrefsForSymbol(store, binding.expr, symbol),
+                    .cell_init, .cell_store => |binding| countDecrefsForSymbol(store, binding.expr, symbol),
+                    .cell_drop => 0,
+                };
             }
             total += countDecrefsForSymbol(store, block.final_expr, symbol);
             break :blk total;
@@ -6239,6 +6288,121 @@ fn countDecrefsForSymbol(store: *const LirExprStore, expr_id: LirExprId, symbol:
     };
 }
 
+fn countCellDecrefsForSymbol(store: *const LirExprStore, expr_id: LirExprId, symbol: LIR.Symbol) u32 {
+    if (expr_id.isNone()) return 0;
+
+    const key = @as(u64, @bitCast(symbol));
+    const expr = store.getExpr(expr_id);
+    return switch (expr) {
+        .block => |block| blk: {
+            var total: u32 = 0;
+            for (store.getStmts(block.stmts)) |stmt| {
+                total += switch (stmt) {
+                    .decl, .mutate => |binding| countCellDecrefsForSymbol(store, binding.expr, symbol),
+                    .cell_init, .cell_store => |binding| countCellDecrefsForSymbol(store, binding.expr, symbol),
+                    .cell_drop => 0,
+                };
+            }
+            total += countCellDecrefsForSymbol(store, block.final_expr, symbol);
+            break :blk total;
+        },
+        .if_then_else => |ite| blk: {
+            var total: u32 = 0;
+            for (store.getIfBranches(ite.branches)) |branch| {
+                total += countCellDecrefsForSymbol(store, branch.cond, symbol);
+                total += countCellDecrefsForSymbol(store, branch.body, symbol);
+            }
+            total += countCellDecrefsForSymbol(store, ite.final_else, symbol);
+            break :blk total;
+        },
+        .match_expr => |m| blk: {
+            var total: u32 = countCellDecrefsForSymbol(store, m.value, symbol);
+            for (store.getMatchBranches(m.branches)) |branch| {
+                total += countCellDecrefsForSymbol(store, branch.guard, symbol);
+                total += countCellDecrefsForSymbol(store, branch.body, symbol);
+            }
+            break :blk total;
+        },
+        .lambda => |lam| countCellDecrefsForSymbol(store, lam.body, symbol),
+        .for_loop => |fl| countCellDecrefsForSymbol(store, fl.list_expr, symbol) + countCellDecrefsForSymbol(store, fl.body, symbol),
+        .while_loop => |wl| countCellDecrefsForSymbol(store, wl.cond, symbol) + countCellDecrefsForSymbol(store, wl.body, symbol),
+        .discriminant_switch => |ds| blk: {
+            var total: u32 = countCellDecrefsForSymbol(store, ds.value, symbol);
+            for (store.getExprSpan(ds.branches)) |branch_id| {
+                total += countCellDecrefsForSymbol(store, branch_id, symbol);
+            }
+            break :blk total;
+        },
+        .call => |call| blk: {
+            var total: u32 = 0;
+            switch (call.callee) {
+                .expr => |callee_expr| total += countCellDecrefsForSymbol(store, callee_expr, symbol),
+                .direct => {},
+            }
+            for (store.getExprSpan(call.args)) |arg_id| {
+                total += countCellDecrefsForSymbol(store, arg_id, symbol);
+            }
+            break :blk total;
+        },
+        .low_level => |ll| blk: {
+            var total: u32 = 0;
+            for (store.getExprSpan(ll.args)) |arg_id| {
+                total += countCellDecrefsForSymbol(store, arg_id, symbol);
+            }
+            break :blk total;
+        },
+        .hosted_call => |hc| blk: {
+            var total: u32 = 0;
+            for (store.getExprSpan(hc.args)) |arg_id| {
+                total += countCellDecrefsForSymbol(store, arg_id, symbol);
+            }
+            break :blk total;
+        },
+        .list => |l| blk: {
+            var total: u32 = 0;
+            for (store.getExprSpan(l.elems)) |elem_id| {
+                total += countCellDecrefsForSymbol(store, elem_id, symbol);
+            }
+            break :blk total;
+        },
+        .struct_ => |s| blk: {
+            var total: u32 = 0;
+            for (store.getExprSpan(s.fields)) |field_id| {
+                total += countCellDecrefsForSymbol(store, field_id, symbol);
+            }
+            break :blk total;
+        },
+        .tag => |t| blk: {
+            var total: u32 = 0;
+            for (store.getExprSpan(t.args)) |arg_id| {
+                total += countCellDecrefsForSymbol(store, arg_id, symbol);
+            }
+            break :blk total;
+        },
+        .struct_access => |sa| countCellDecrefsForSymbol(store, sa.struct_expr, symbol),
+        .nominal => |n| countCellDecrefsForSymbol(store, n.backing_expr, symbol),
+        .early_return => |ret| countCellDecrefsForSymbol(store, ret.expr, symbol),
+        .dbg => |d| countCellDecrefsForSymbol(store, d.expr, symbol),
+        .str_concat => |parts| blk: {
+            var total: u32 = 0;
+            for (store.getExprSpan(parts)) |part_id| {
+                total += countCellDecrefsForSymbol(store, part_id, symbol);
+            }
+            break :blk total;
+        },
+        .int_to_str => |its| countCellDecrefsForSymbol(store, its.value, symbol),
+        .float_to_str => |fts| countCellDecrefsForSymbol(store, fts.value, symbol),
+        .dec_to_str => |d| countCellDecrefsForSymbol(store, d, symbol),
+        .str_escape_and_quote => |s| countCellDecrefsForSymbol(store, s, symbol),
+        .tag_payload_access => |tpa| countCellDecrefsForSymbol(store, tpa.value, symbol),
+        .decref => |dec| blk: {
+            const dec_expr = store.getExpr(dec.value);
+            break :blk if (dec_expr == .cell_load and @as(u64, @bitCast(dec_expr.cell_load.cell)) == key) 1 else 0;
+        },
+        else => 0,
+    };
+}
+
 fn countIncrefsForSymbol(store: *const LirExprStore, expr_id: LirExprId, symbol: LIR.Symbol) u32 {
     if (expr_id.isNone()) return 0;
 
@@ -6248,7 +6412,11 @@ fn countIncrefsForSymbol(store: *const LirExprStore, expr_id: LirExprId, symbol:
         .block => |block| blk: {
             var total: u32 = 0;
             for (store.getStmts(block.stmts)) |stmt| {
-                total += countIncrefsForSymbol(store, stmt.binding().expr, symbol);
+                total += switch (stmt) {
+                    .decl, .mutate => |binding| countIncrefsForSymbol(store, binding.expr, symbol),
+                    .cell_init, .cell_store => |binding| countIncrefsForSymbol(store, binding.expr, symbol),
+                    .cell_drop => 0,
+                };
             }
             total += countIncrefsForSymbol(store, block.final_expr, symbol);
             break :blk total;
@@ -7738,6 +7906,104 @@ test "RC mutable list binding tail-cleans borrowed final use" {
 
     try std.testing.expectEqual(@as(u32, 0), rc.increfs);
     try std.testing.expectEqual(@as(u32, 1), rc.decrefs);
+}
+
+test "RC live cell borrowed final use tail-cleans current binding" {
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_layout: LayoutIdx = .i64;
+    const list_layout = try env.layout_store.insertLayout(layout_mod.Layout.list(i64_layout));
+    const sym_acc = makeSymbol(1);
+
+    const zero = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 0, .layout_idx = i64_layout } }, Region.zero());
+    const elems = try env.lir_store.addExprSpan(&.{zero});
+    const acc_init = try env.lir_store.addExpr(.{ .list = .{
+        .list_layout = list_layout,
+        .elem_layout = i64_layout,
+        .elems = elems,
+    } }, Region.zero());
+
+    const load_acc = try env.lir_store.addExpr(.{ .cell_load = .{
+        .cell = sym_acc,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+    const len_args = try env.lir_store.addExprSpan(&.{load_acc});
+    const len_expr = try env.lir_store.addExpr(.{ .low_level = .{
+        .op = .list_len,
+        .args = len_args,
+        .ret_layout = i64_layout,
+    } }, Region.zero());
+
+    const stmts = try env.lir_store.addStmts(&.{.{ .cell_init = .{
+        .cell = sym_acc,
+        .layout_idx = list_layout,
+        .expr = acc_init,
+    } }});
+    const block_expr = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = len_expr,
+        .result_layout = i64_layout,
+    } }, Region.zero());
+
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(block_expr);
+
+    try std.testing.expectEqual(@as(u32, 1), countCellDecrefsForSymbol(&env.lir_store, result, sym_acc));
+}
+
+test "RC live cell consumed final use transfers ownership out of cell" {
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_layout: LayoutIdx = .i64;
+    const list_layout = try env.layout_store.insertLayout(layout_mod.Layout.list(i64_layout));
+    const sym_acc = makeSymbol(1);
+
+    const zero = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 0, .layout_idx = i64_layout } }, Region.zero());
+    const elems = try env.lir_store.addExprSpan(&.{zero});
+    const acc_init = try env.lir_store.addExpr(.{ .list = .{
+        .list_layout = list_layout,
+        .elem_layout = i64_layout,
+        .elems = elems,
+    } }, Region.zero());
+
+    const load_acc = try env.lir_store.addExpr(.{ .cell_load = .{
+        .cell = sym_acc,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+    const append_args = try env.lir_store.addExprSpan(&.{ load_acc, zero });
+    const append_expr = try env.lir_store.addExpr(.{ .low_level = .{
+        .op = .list_append_unsafe,
+        .args = append_args,
+        .ret_layout = list_layout,
+    } }, Region.zero());
+
+    const stmts = try env.lir_store.addStmts(&.{.{ .cell_init = .{
+        .cell = sym_acc,
+        .layout_idx = list_layout,
+        .expr = acc_init,
+    } }});
+    const block_expr = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = append_expr,
+        .result_layout = list_layout,
+    } }, Region.zero());
+
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(block_expr);
+
+    try std.testing.expectEqual(@as(u32, 0), countCellDecrefsForSymbol(&env.lir_store, result, sym_acc));
 }
 
 test "RC mutable list loop accumulator tail-cleans current binding after borrowed final use" {

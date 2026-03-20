@@ -143,7 +143,7 @@ pub const TestRunner = struct {
         defer lower_result.deinit();
 
         // Create LIR interpreter and evaluate
-        var interp = LirInterpreter.init(
+        var interp = try LirInterpreter.init(
             self.allocator,
             &lower_result.lir_store,
             lower_result.layout_store,

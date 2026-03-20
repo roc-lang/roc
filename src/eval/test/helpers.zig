@@ -584,7 +584,7 @@ fn lirInterpreterStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_
     var lower_result = try lir_prog.lowerExpr(module_env, inspect_expr, &all_module_envs, null);
     defer lower_result.deinit();
 
-    var interp = LirInterpreter.init(allocator, &lower_result.lir_store, lower_result.layout_store, null);
+    var interp = try LirInterpreter.init(allocator, &lower_result.lir_store, lower_result.layout_store, null);
     defer interp.deinit();
 
     const eval_result = try interp.eval(lower_result.final_expr_id);

@@ -320,7 +320,7 @@ fn registerSpecializedMonotypeLayout(
     // composite type, because lowerLambda/lowerHosted rely on
     // layoutFromMonotype returning a callable (closure) layout for the
     // lambda's fn_layout field.
-    if (resolved.kind == .func) return;
+    if (resolved.kind == .func or resolved.kind == .builtin) return;
 
     const mono_key = @as(u32, @bitCast(mono_idx));
     try self.saveMonotypeOverrideIfNeeded(saved, mono_key);
@@ -1059,14 +1059,9 @@ fn runtimeValueLayoutFromMirExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator
 
     switch (expr) {
         .call => |call_data| {
-            const func_expr = self.mir_store.getExpr(call_data.func);
-            if (func_expr == .lookup) {
-                if (self.mir_store.getSymbolDef(func_expr.lookup)) |def_expr_id| {
-                    if (self.mir_store.getExpr(def_expr_id) == .runtime_err_anno_only) {
-                        if (try self.annotationOnlyIntrinsicForFunc(self.mir_store.typeOf(call_data.func))) |intrinsic| {
-                            return self.layoutFromMonotype(intrinsic.result_mono);
-                        }
-                    }
+            if (self.resolveCalleeFailure(call_data.func, 0) == .annotation_only) {
+                if (try self.annotationOnlyIntrinsicForFunc(self.mir_store.typeOf(call_data.func))) |intrinsic| {
+                    return self.layoutFromMonotype(intrinsic.result_mono);
                 }
             }
             if (try self.runtimeLayoutFromSpecializedDirectCall(call_data.func, self.mir_store.getExprSpan(call_data.args))) |layout_idx| {
@@ -1224,6 +1219,63 @@ fn resolveToCallableExprId(self: *Self, expr_id: MIR.ExprId) ?MIR.ExprId {
             const def_expr_id = self.mir_store.getSymbolDef(sym) orelse break :blk null;
             break :blk self.resolveToCallableExprId(def_expr_id);
         },
+        else => null,
+    };
+}
+
+const CalleeFailure = enum {
+    runtime_error,
+    annotation_only,
+};
+
+fn resolveMirStructFieldExpr(self: *Self, expr_id: MIR.ExprId, field_idx: u32, depth: u16) ?MIR.ExprId {
+    if (depth > 256) std.debug.panic(
+        "resolveMirStructFieldExpr: debug-only heuristic detected likely infinite recursion (depth > 256) at expr {}",
+        .{@intFromEnum(expr_id)},
+    );
+
+    return switch (self.mir_store.getExpr(expr_id)) {
+        .struct_ => |struct_| blk: {
+            const fields = self.mir_store.getExprSpan(struct_.fields);
+            if (field_idx >= fields.len) break :blk null;
+            break :blk fields[field_idx];
+        },
+        .lookup => |sym| blk: {
+            const def_expr_id = self.mir_store.getSymbolDef(sym) orelse break :blk null;
+            break :blk self.resolveMirStructFieldExpr(def_expr_id, field_idx, depth + 1);
+        },
+        .block => |block| self.resolveMirStructFieldExpr(block.final_expr, field_idx, depth + 1),
+        .borrow_scope => |scope| self.resolveMirStructFieldExpr(scope.body, field_idx, depth + 1),
+        .dbg_expr => |dbg_expr| self.resolveMirStructFieldExpr(dbg_expr.expr, field_idx, depth + 1),
+        .expect => |expect| self.resolveMirStructFieldExpr(expect.body, field_idx, depth + 1),
+        .return_expr => |ret| self.resolveMirStructFieldExpr(ret.expr, field_idx, depth + 1),
+        else => null,
+    };
+}
+
+fn resolveCalleeFailure(self: *Self, expr_id: MIR.ExprId, depth: u16) ?CalleeFailure {
+    if (depth > 256) std.debug.panic(
+        "resolveCalleeFailure: debug-only heuristic detected likely infinite recursion (depth > 256) at expr {}",
+        .{@intFromEnum(expr_id)},
+    );
+
+    const expr = self.mir_store.getExpr(expr_id);
+    return switch (expr) {
+        .runtime_err_can, .runtime_err_type, .runtime_err_ellipsis => .runtime_error,
+        .runtime_err_anno_only => .annotation_only,
+        .block => |block| self.resolveCalleeFailure(block.final_expr, depth + 1),
+        .lookup => |sym| blk: {
+            const def_expr_id = self.mir_store.getSymbolDef(sym) orelse break :blk null;
+            break :blk self.resolveCalleeFailure(def_expr_id, depth + 1);
+        },
+        .struct_access => |sa| blk: {
+            const field_expr_id = self.resolveMirStructFieldExpr(sa.struct_, sa.field_idx, depth + 1) orelse break :blk null;
+            break :blk self.resolveCalleeFailure(field_expr_id, depth + 1);
+        },
+        .borrow_scope => |scope| self.resolveCalleeFailure(scope.body, depth + 1),
+        .dbg_expr => |dbg_expr| self.resolveCalleeFailure(dbg_expr.expr, depth + 1),
+        .expect => |expect| self.resolveCalleeFailure(expect.body, depth + 1),
+        .return_expr => |ret| self.resolveCalleeFailure(ret.expr, depth + 1),
         else => null,
     };
 }
@@ -2930,26 +2982,19 @@ fn lowerCall(self: *Self, call_data: anytype, mir_expr_id: MIR.ExprId, region: R
     const mono_idx = self.mir_store.typeOf(mir_expr_id);
     const ret_layout = try self.runtimeValueLayoutFromMirExpr(mir_expr_id);
 
-    // If the callee itself is a type/can/ellipsis error, the whole call is a runtime error.
     const func_mir_expr = self.mir_store.getExpr(call_data.func);
-    switch (func_mir_expr) {
-        .runtime_err_can, .runtime_err_type, .runtime_err_ellipsis => {
-            return self.lir_store.addExpr(.{ .runtime_error = .{ .ret_layout = ret_layout } }, region);
-        },
-        else => {},
-    }
-
-    // Some annotation-only methods are compiler intrinsics. Lower those directly.
-    if (func_mir_expr == .lookup) {
-        const sym = func_mir_expr.lookup;
-        if (self.mir_store.getSymbolDef(sym)) |def_expr_id| {
-            if (self.mir_store.getExpr(def_expr_id) == .runtime_err_anno_only) {
+    if (self.resolveCalleeFailure(call_data.func, 0)) |callee_failure| {
+        switch (callee_failure) {
+            .runtime_error => {
+                return self.lir_store.addExpr(.{ .runtime_error = .{ .ret_layout = ret_layout } }, region);
+            },
+            .annotation_only => {
                 if (try self.lowerAnnotationOnlyIntrinsicCall(call_data, mono_idx, region)) |lowered| {
                     return lowered;
                 }
                 // Non-intrinsic annotation-only function — crash when called.
                 return self.lowerCrashWithMessage(annotation_only_function_crash_message, ret_layout, region);
-            }
+            },
         }
     }
 
@@ -3303,7 +3348,6 @@ fn lowerClosureCall(
             self.scratch_layout_idxs.items[save_layouts..],
         );
         const specialization_ret_layout = try self.specializationRetLayoutOrFallback(lifted_def, specialization);
-
         // Build args: [user_args..., closure_val]
         // Re-read the span after lowering closure_val; lowerExpr may append to
         // extra_data and invalidate previously borrowed slices.
@@ -4399,7 +4443,7 @@ fn runtimeLayoutForBindingSymbol(
     const binding_resolved = self.mir_store.monotype_store.resolve(mono_idx);
 
     if (binding_resolved.kind != .func and !(try self.monotypeContainsFunctionValue(mono_idx))) {
-        return existing_layout orelse fallback_layout;
+        return self.layoutFromMonotype(mono_idx);
     }
 
     var layout_idx = existing_layout orelse fallback_layout;

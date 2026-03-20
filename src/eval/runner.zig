@@ -271,7 +271,7 @@ fn runViaInterpreter(
     defer lower_result.deinit();
 
     // Create LIR interpreter and evaluate
-    var interp = eval_mod.LirInterpreter.init(gpa, &lower_result.lir_store, lower_result.layout_store, null);
+    var interp = try eval_mod.LirInterpreter.init(gpa, &lower_result.lir_store, lower_result.layout_store, null);
     defer interp.deinit();
 
     interp.evalEntrypoint(

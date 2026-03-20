@@ -611,13 +611,14 @@ pub const ComptimeEvaluator = struct {
         defer lower_result.deinit();
 
         // Evaluate via LIR interpreter
-        var interp = LirInterpreter.init(self.allocator, &lower_result.lir_store, lower_result.layout_store, self.io);
+        var interp = try LirInterpreter.init(self.allocator, &lower_result.lir_store, lower_result.layout_store, self.io);
         defer interp.deinit();
 
         const eval_result = interp.eval(lower_result.final_expr_id) catch |err| {
             switch (err) {
                 error.Crash => {
-                    const msg = interp.getCrashMessage() orelse "crash during compile-time evaluation";
+                    // Dupe the message: it's owned by the interpreter and freed by defer interp.deinit()
+                    const msg = self.allocator.dupe(u8, interp.getCrashMessage() orelse "crash during compile-time evaluation") catch "crash during compile-time evaluation";
                     return EvalResult{
                         .crash = .{
                             .message = msg,
@@ -690,6 +691,7 @@ pub const ComptimeEvaluator = struct {
             layout_idx,
             layout_store,
         ) catch return;
+        defer fold_ty.deinit(self.allocator);
 
         // Reconstruct the CIR constant expression
         _ = value_to_cir.replaceExpr(
@@ -1211,7 +1213,7 @@ pub const ComptimeEvaluator = struct {
         };
 
         // Evaluate via LIR interpreter
-        var interp = LirInterpreter.init(self.allocator, &lower_result.lir_store, lower_result.layout_store, self.io);
+        var interp = try LirInterpreter.init(self.allocator, &lower_result.lir_store, lower_result.layout_store, self.io);
         defer interp.deinit();
 
         const arg_layouts = [_]layout_mod.Idx{param_layout_idx};
@@ -1508,7 +1510,7 @@ pub const ComptimeEvaluator = struct {
         defer lower_result.deinit();
 
         // Evaluate via LIR interpreter
-        var interp = LirInterpreter.init(self.allocator, &lower_result.lir_store, lower_result.layout_store, self.io);
+        var interp = try LirInterpreter.init(self.allocator, &lower_result.lir_store, lower_result.layout_store, self.io);
         defer interp.deinit();
 
         const eval_result = interp.eval(lower_result.final_expr_id) catch return false;

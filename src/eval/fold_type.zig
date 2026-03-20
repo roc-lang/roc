@@ -59,6 +59,24 @@ pub const FoldType = union(enum) {
         name: Ident.Idx,
         payloads: []const FoldType,
     };
+
+    /// Free all heap-allocated memory owned by this FoldType.
+    pub fn deinit(self: FoldType, allocator: Allocator) void {
+        switch (self) {
+            .tuple => |elems| {
+                for (elems) |elem| elem.deinit(allocator);
+                allocator.free(elems);
+            },
+            .tag_union => |tu| {
+                for (tu.tags) |tag| {
+                    for (tag.payloads) |p| p.deinit(allocator);
+                    if (tag.payloads.len > 0) allocator.free(tag.payloads);
+                }
+                allocator.free(tu.tags);
+            },
+            else => {},
+        }
+    }
 };
 
 const TagUnionResult = struct {
