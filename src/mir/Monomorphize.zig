@@ -6010,13 +6010,6 @@ pub const Pass = struct {
         proc_inst_id: ProcInstId,
     ) Allocator.Error!void {
         const key = self.resultExprKey(context_proc_inst, module_idx, expr_idx);
-        if (!context_proc_inst.isNone()) {
-            try self.putTracked(.lookup_expr_proc_insts, &result.lookup_expr_proc_insts, key, proc_inst_id);
-            const singleton_set_id = try self.internProcInstSet(result, &.{proc_inst_id});
-            try self.putTracked(.lookup_expr_proc_inst_sets, &result.lookup_expr_proc_inst_sets, key, singleton_set_id);
-            return;
-        }
-
         if (result.lookup_expr_proc_insts.get(key)) |existing_proc_inst_id| {
             if (existing_proc_inst_id == proc_inst_id) {
                 try self.mergeLookupExprProcInstSet(result, context_proc_inst, module_idx, expr_idx, proc_inst_id);
