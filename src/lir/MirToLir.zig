@@ -5463,6 +5463,15 @@ fn lowerBindingPatternForRuntimeLayout(
     ownership_mode: BindingOwnershipMode,
     region: Region,
 ) Allocator.Error!LoweredBindingPattern {
+    if (builtin.mode == .Debug) {
+        const layout_index = @intFromEnum(runtime_layout);
+        if (layout_index >= self.layout_store.layouts.len()) {
+            std.debug.panic(
+                "MirToLir invariant violated: runtime layout {d} out of bounds (len {d}) for pattern {d}",
+                .{ layout_index, self.layout_store.layouts.len(), @intFromEnum(mir_pat_id) },
+            );
+        }
+    }
     const save_rest_len = self.scratch_deferred_list_rest_bindings.items.len;
     const pattern = try self.lowerPatternInternal(mir_pat_id, runtime_layout, true, ownership_mode, region);
     return .{
@@ -5500,8 +5509,33 @@ fn lowerPatternInternal(
     ownership_mode: BindingOwnershipMode,
     region: Region,
 ) Allocator.Error!LirPatternId {
+    if (builtin.mode == .Debug) {
+        const mir_pat_index = @intFromEnum(mir_pat_id);
+        if (mir_pat_index >= self.mir_store.patterns.items.len) {
+            std.debug.panic(
+                "MirToLir invariant violated: MIR pattern {d} out of bounds (len {d})",
+                .{ mir_pat_index, self.mir_store.patterns.items.len },
+            );
+        }
+        const layout_index = @intFromEnum(runtime_layout);
+        if (layout_index >= self.layout_store.layouts.len()) {
+            std.debug.panic(
+                "MirToLir invariant violated: pattern runtime layout {d} out of bounds (len {d}) for pattern {d}",
+                .{ layout_index, self.layout_store.layouts.len(), mir_pat_index },
+            );
+        }
+    }
     const pat = self.mir_store.getPattern(mir_pat_id);
     const mono_idx = self.mir_store.patternTypeOf(mir_pat_id);
+    if (builtin.mode == .Debug) {
+        const mono_index = @intFromEnum(mono_idx);
+        if (mono_index >= self.mir_store.monotype_store.monotypes.items.len) {
+            std.debug.panic(
+                "MirToLir invariant violated: pattern monotype {d} out of bounds (len {d}) for pattern {d}",
+                .{ mono_index, self.mir_store.monotype_store.monotypes.items.len, @intFromEnum(mir_pat_id) },
+            );
+        }
+    }
 
     return switch (pat) {
         .bind => |sym| blk: {
@@ -5854,8 +5888,32 @@ fn appendDeferredListRestBindingDecls(
                 .expr = binding_expr,
             } });
         } else {
+            if (builtin.mode == .Debug) {
+                const mir_pat_index = @intFromEnum(binding.target_pattern);
+                if (mir_pat_index >= self.mir_store.patterns.items.len) {
+                    std.debug.panic(
+                        "MirToLir invariant violated: deferred list-rest target pattern {d} out of bounds (len {d}, start {d}, len {d}, i {d})",
+                        .{
+                            mir_pat_index,
+                            self.mir_store.patterns.items.len,
+                            deferred_start,
+                            deferred_len,
+                            i,
+                        },
+                    );
+                }
+            }
             try self.registerBindingPatternSymbols(binding.target_pattern, binding.list_layout);
             const lowered = try self.lowerBindingPatternForRuntimeLayout(binding.target_pattern, binding.list_layout, .owned, region);
+            if (builtin.mode == .Debug) {
+                const lir_pat_index = @intFromEnum(lowered.pattern);
+                if (lir_pat_index >= self.lir_store.patterns.items.len) {
+                    std.debug.panic(
+                        "MirToLir invariant violated: lowered deferred list-rest pattern {d} out of bounds (len {d})",
+                        .{ lir_pat_index, self.lir_store.patterns.items.len },
+                    );
+                }
+            }
             try self.scratch_lir_stmts.append(self.allocator, .{ .decl = .{
                 .pattern = lowered.pattern,
                 .expr = binding_expr,

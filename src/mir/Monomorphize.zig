@@ -4051,10 +4051,10 @@ pub const Pass = struct {
         };
 
         const arg_exprs = self.all_module_envs[module_idx].store.sliceExpr(call_expr.args);
-        const param_monos = result.monotype_store.getIdxSpan(fn_mono.args);
-        if (arg_exprs.len != param_monos.len) unreachable;
+        if (arg_exprs.len != fn_mono.args.len) unreachable;
 
-        for (arg_exprs, param_monos) |arg_expr_idx, param_mono| {
+        for (arg_exprs, 0..) |arg_expr_idx, i| {
+            const param_mono = result.monotype_store.getIdxSpanItem(fn_mono.args, i);
             try self.bindCurrentExprTypeRoot(result, module_idx, arg_expr_idx, param_mono, proc_inst.fn_monotype_module_idx);
             try self.recordCurrentExprMonotype(result, module_idx, arg_expr_idx, param_mono, proc_inst.fn_monotype_module_idx);
         }
@@ -4093,10 +4093,10 @@ pub const Pass = struct {
         );
 
         const arg_exprs = self.all_module_envs[module_idx].store.sliceExpr(call_expr.args);
-        const param_monos = result.monotype_store.getIdxSpan(fn_mono.args);
-        if (arg_exprs.len != param_monos.len) return;
+        if (arg_exprs.len != fn_mono.args.len) return;
 
-        for (arg_exprs, param_monos) |arg_expr_idx, param_mono| {
+        for (arg_exprs, 0..) |arg_expr_idx, i| {
+            const param_mono = result.monotype_store.getIdxSpanItem(fn_mono.args, i);
             try self.bindCurrentExprTypeRoot(result, module_idx, arg_expr_idx, param_mono, fn_monotype_module_idx);
             try self.recordCurrentExprMonotype(result, module_idx, arg_expr_idx, param_mono, fn_monotype_module_idx);
         }
@@ -4680,10 +4680,10 @@ pub const Pass = struct {
         defer actual_args.deinit(self.allocator);
         try self.appendDispatchActualArgs(module_idx, expr, &actual_args);
 
-        const param_monos = result.monotype_store.getIdxSpan(fn_mono.args);
-        if (actual_args.items.len != param_monos.len) unreachable;
+        if (actual_args.items.len != fn_mono.args.len) unreachable;
 
-        for (actual_args.items, param_monos) |arg_expr_idx, param_mono| {
+        for (actual_args.items, 0..) |arg_expr_idx, i| {
+            const param_mono = result.monotype_store.getIdxSpanItem(fn_mono.args, i);
             try self.bindCurrentExprTypeRoot(result, module_idx, arg_expr_idx, param_mono, proc_inst.fn_monotype_module_idx);
             try self.recordCurrentExprMonotype(result, module_idx, arg_expr_idx, param_mono, proc_inst.fn_monotype_module_idx);
         }
@@ -5936,8 +5936,8 @@ pub const Pass = struct {
                 template,
                 desired_fn_monotype.idx,
                 desired_fn_monotype.module_idx,
-                    defining_context_proc_inst,
-                )) {
+                defining_context_proc_inst,
+            )) {
                 return;
             }
             break :blk if (self.scratch_context_expr_monotypes_depth == 0)
