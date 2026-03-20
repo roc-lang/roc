@@ -100,7 +100,22 @@ fn dumpMirExpr(mir_store: *const MIR.Store, expr_id: MIR.ExprId, depth: usize) v
             std.debug.print("\n", .{});
             for (mir_store.getStmts(block.stmts), 0..) |stmt, stmt_i| {
                 for (0..indent + 2) |_| std.debug.print(" ", .{});
-                std.debug.print("stmt {d}: {s}\n", .{ stmt_i, @tagName(stmt) });
+                switch (stmt) {
+                    .decl_const, .decl_var, .mutate_var => |binding| {
+                        const pat = mir_store.getPattern(binding.pattern);
+                        switch (pat) {
+                            .bind => |sym| std.debug.print(
+                                "stmt {d}: {s} pattern_symbol={d}\n",
+                                .{ stmt_i, @tagName(stmt), sym.raw() },
+                            ),
+                            .as_pattern => |as_pat| std.debug.print(
+                                "stmt {d}: {s} pattern_symbol={d}\n",
+                                .{ stmt_i, @tagName(stmt), as_pat.symbol.raw() },
+                            ),
+                            else => std.debug.print("stmt {d}: {s}\n", .{ stmt_i, @tagName(stmt) }),
+                        }
+                    },
+                }
                 switch (stmt) {
                     .decl_const, .decl_var, .mutate_var => |binding| dumpMirExpr(mir_store, binding.expr, depth + 2),
                 }
@@ -2300,6 +2315,36 @@ test "cross-module runExpr: REPL-style List.keep_if function lookups retain lamb
                 "missing REPL-style function lookup lambda set: expr={d} symbol={d}\n",
                 .{ @intFromEnum(missing.expr_id), missing.symbol.raw() },
             );
+            const missing_expr = mir_store.getExpr(missing.expr_id);
+            if (missing_expr == .lookup) {
+                std.debug.print(
+                    "  missing symbol ls={any} source_expr={any}\n",
+                    .{
+                        ls_store.getSymbolLambdaSet(missing.symbol),
+                        ls_store.getSymbolSourceExpr(missing.symbol),
+                    },
+                );
+            }
+            if (missing_expr == .lookup) {
+                for (mir_store.exprs.items, 0..) |expr, expr_index| {
+                    if (expr != .struct_access) continue;
+                    if (expr.struct_access.field_idx != 0) continue;
+                    const base_expr = mir_store.getExpr(expr.struct_access.struct_);
+                    if (base_expr != .lookup) continue;
+                    if (missing.symbol != mir_store.getPattern(mir_store.getStmts(mir_store.getExpr(proc.body).block.stmts)[0].decl_const.pattern).bind) continue;
+                    std.debug.print(
+                        "  base lookup symbol={d} base_symbol_ls={any} field_ls={any} field_expr={any} source_expr={any}\n",
+                        .{
+                            base_expr.lookup.raw(),
+                            ls_store.getSymbolLambdaSet(base_expr.lookup),
+                            ls_store.getSymbolFieldLambdaSet(base_expr.lookup, 0),
+                            ls_store.getSymbolFieldExpr(base_expr.lookup, 0),
+                            ls_store.getSymbolSourceExpr(base_expr.lookup),
+                        },
+                    );
+                    break;
+                }
+            }
             dumpMirExpr(&mir_store, proc.body, 1);
             return error.TestUnexpectedResult;
         }

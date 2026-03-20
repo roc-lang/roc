@@ -6674,37 +6674,37 @@ fn lowerExternalDefWithType(
             }
 
             break :proc_inst_blk self.lookupMonomorphizedExprProcInst(cir_expr_idx) orelse {
-            if (builtin.mode == .Debug) {
-                const binding_name = switch (symbol_meta) {
-                    .external_def => |ext| ext_blk: {
-                        const target_env = self.all_module_envs[ext.module_idx];
-                        const def_idx: CIR.Def.Idx = @enumFromInt(ext.def_node_idx);
-                        const def = target_env.store.getDef(def_idx);
-                        break :ext_blk switch (target_env.store.getPattern(def.pattern)) {
-                            .assign => |assign_pat| target_env.getIdent(assign_pat.ident),
-                            else => "<non-assign>",
-                        };
-                    },
-                    .local_ident => "<local-ident>",
-                };
-                std.debug.panic(
-                    "MIR Lower invariant: callable def '{s}' symbol={d} expr={d} in module {d} template={d} has no monomorphized proc inst in context {d} root_expr={d} current_proc_template={d} current_proc_expr={d} requested_monotype={d} requested_monotype_module={d}",
-                    .{
-                        binding_name,
-                        symbol.raw(),
-                        @intFromEnum(cir_expr_idx),
-                        self.current_module_idx,
-                        @intFromEnum(template_id),
-                        @intFromEnum(self.current_proc_inst_context),
-                        if (self.current_root_expr_context) |root_expr_idx| @intFromEnum(root_expr_idx) else std.math.maxInt(u32),
-                        if (!self.current_proc_inst_context.isNone()) @intFromEnum(self.monomorphization.getProcInst(self.current_proc_inst_context).template) else std.math.maxInt(u32),
-                        if (!self.current_proc_inst_context.isNone()) @intFromEnum(self.monomorphization.getProcTemplate(self.monomorphization.getProcInst(self.current_proc_inst_context).template).cir_expr) else std.math.maxInt(u32),
-                        if (requested_monotype) |req| @intFromEnum(req.idx) else std.math.maxInt(u32),
-                        if (requested_monotype) |req| req.module_idx else std.math.maxInt(u32),
-                    },
-                );
-            }
-            unreachable;
+                if (builtin.mode == .Debug) {
+                    const binding_name = switch (symbol_meta) {
+                        .external_def => |ext| ext_blk: {
+                            const target_env = self.all_module_envs[ext.module_idx];
+                            const def_idx: CIR.Def.Idx = @enumFromInt(ext.def_node_idx);
+                            const def = target_env.store.getDef(def_idx);
+                            break :ext_blk switch (target_env.store.getPattern(def.pattern)) {
+                                .assign => |assign_pat| target_env.getIdent(assign_pat.ident),
+                                else => "<non-assign>",
+                            };
+                        },
+                        .local_ident => "<local-ident>",
+                    };
+                    std.debug.panic(
+                        "MIR Lower invariant: callable def '{s}' symbol={d} expr={d} in module {d} template={d} has no monomorphized proc inst in context {d} root_expr={d} current_proc_template={d} current_proc_expr={d} requested_monotype={d} requested_monotype_module={d}",
+                        .{
+                            binding_name,
+                            symbol.raw(),
+                            @intFromEnum(cir_expr_idx),
+                            self.current_module_idx,
+                            @intFromEnum(template_id),
+                            @intFromEnum(self.current_proc_inst_context),
+                            if (self.current_root_expr_context) |root_expr_idx| @intFromEnum(root_expr_idx) else std.math.maxInt(u32),
+                            if (!self.current_proc_inst_context.isNone()) @intFromEnum(self.monomorphization.getProcInst(self.current_proc_inst_context).template) else std.math.maxInt(u32),
+                            if (!self.current_proc_inst_context.isNone()) @intFromEnum(self.monomorphization.getProcTemplate(self.monomorphization.getProcInst(self.current_proc_inst_context).template).cir_expr) else std.math.maxInt(u32),
+                            if (requested_monotype) |req| @intFromEnum(req.idx) else std.math.maxInt(u32),
+                            if (requested_monotype) |req| req.module_idx else std.math.maxInt(u32),
+                        },
+                    );
+                }
+                unreachable;
             };
         };
         break :blk try self.lowerProcInst(proc_inst_id);

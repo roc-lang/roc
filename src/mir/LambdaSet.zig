@@ -423,10 +423,24 @@ fn propagateExprAndBindingSetsForExpr(
                 const binding = switch (stmt) {
                     .decl_const, .decl_var, .mutate_var => |b| b,
                 };
-                if (store.getExprLambdaSet(binding.expr)) |ls_idx| {
-                    if (patternBoundSymbol(mir_store, binding.pattern)) |symbol| {
+                if (patternBoundSymbol(mir_store, binding.pattern)) |symbol| {
+                    if (store.getExprLambdaSet(binding.expr)) |ls_idx| {
                         changed = (try mergeIntoSymbol(allocator, store, symbol, ls_idx)) or changed;
                     }
+                    changed = (try propagateStructFieldLambdaSetsToSymbol(
+                        allocator,
+                        mir_store,
+                        store,
+                        binding.expr,
+                        symbol,
+                    )) or changed;
+                    changed = (try propagateCallReturnFieldLambdaSetsToSymbol(
+                        allocator,
+                        mir_store,
+                        store,
+                        binding.expr,
+                        symbol,
+                    )) or changed;
                 }
             }
         },
@@ -435,10 +449,24 @@ fn propagateExprAndBindingSetsForExpr(
                 changed = (try mergeExprLambdaSet(allocator, store, expr_id, ls_idx)) or changed;
             }
             for (mir_store.getBorrowBindings(scope.bindings)) |binding| {
-                if (store.getExprLambdaSet(binding.expr)) |ls_idx| {
-                    if (patternBoundSymbol(mir_store, binding.pattern)) |symbol| {
+                if (patternBoundSymbol(mir_store, binding.pattern)) |symbol| {
+                    if (store.getExprLambdaSet(binding.expr)) |ls_idx| {
                         changed = (try mergeIntoSymbol(allocator, store, symbol, ls_idx)) or changed;
                     }
+                    changed = (try propagateStructFieldLambdaSetsToSymbol(
+                        allocator,
+                        mir_store,
+                        store,
+                        binding.expr,
+                        symbol,
+                    )) or changed;
+                    changed = (try propagateCallReturnFieldLambdaSetsToSymbol(
+                        allocator,
+                        mir_store,
+                        store,
+                        binding.expr,
+                        symbol,
+                    )) or changed;
                 }
             }
         },
