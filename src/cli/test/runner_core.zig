@@ -37,16 +37,12 @@ pub const TestStats = struct {
     }
 };
 
-fn currentProcessId() u64 {
-    return switch (builtin.target.os.tag) {
-        .windows => std.os.windows.kernel32.GetCurrentProcessId(),
-        else => @intCast(std.c.getpid()),
-    };
-}
-
 fn createIsolatedTestCacheDir(allocator: Allocator) ![]u8 {
     const cache_dir_id = next_cache_dir_id.fetchAdd(1, .monotonic);
-    const cache_leaf = try std.fmt.allocPrint(allocator, "{d}-{d}", .{ currentProcessId(), cache_dir_id });
+    const cache_leaf = try std.fmt.allocPrint(allocator, "{d}-{d}", .{
+        @as(u64, @intCast(std.time.nanoTimestamp())),
+        cache_dir_id,
+    });
     defer allocator.free(cache_leaf);
 
     const cwd_path = try std.fs.cwd().realpathAlloc(allocator, ".");
