@@ -2603,6 +2603,13 @@ pub const Pass = struct {
                     arg_expr_idx,
                     proc_inst_id,
                 ),
+                .e_lookup_required => try self.recordLookupExprProcInst(
+                    result,
+                    self.active_proc_inst_context,
+                    module_idx,
+                    arg_expr_idx,
+                    proc_inst_id,
+                ),
                 .e_lambda, .e_closure, .e_hosted_lambda => try self.recordExprProcInst(
                     result,
                     self.active_proc_inst_context,
@@ -2850,76 +2857,6 @@ pub const Pass = struct {
         defer {
             result.context_expr_monotypes.deinit(self.allocator);
             result.context_expr_monotypes = saved_context_expr_monotypes;
-        }
-
-        const saved_expr_proc_insts = result.expr_proc_insts;
-        result.expr_proc_insts = .empty;
-        defer {
-            result.expr_proc_insts.deinit(self.allocator);
-            result.expr_proc_insts = saved_expr_proc_insts;
-        }
-
-        const saved_expr_proc_inst_sets = result.expr_proc_inst_sets;
-        result.expr_proc_inst_sets = .empty;
-        defer {
-            result.expr_proc_inst_sets.deinit(self.allocator);
-            result.expr_proc_inst_sets = saved_expr_proc_inst_sets;
-        }
-
-        const saved_call_site_proc_insts = result.call_site_proc_insts;
-        result.call_site_proc_insts = .empty;
-        defer {
-            result.call_site_proc_insts.deinit(self.allocator);
-            result.call_site_proc_insts = saved_call_site_proc_insts;
-        }
-
-        const saved_call_site_proc_inst_sets = result.call_site_proc_inst_sets;
-        result.call_site_proc_inst_sets = .empty;
-        defer {
-            result.call_site_proc_inst_sets.deinit(self.allocator);
-            result.call_site_proc_inst_sets = saved_call_site_proc_inst_sets;
-        }
-
-        const saved_dispatch_expr_proc_insts = result.dispatch_expr_proc_insts;
-        result.dispatch_expr_proc_insts = .empty;
-        defer {
-            result.dispatch_expr_proc_insts.deinit(self.allocator);
-            result.dispatch_expr_proc_insts = saved_dispatch_expr_proc_insts;
-        }
-
-        const saved_lookup_expr_proc_insts = result.lookup_expr_proc_insts;
-        result.lookup_expr_proc_insts = .empty;
-        defer {
-            result.lookup_expr_proc_insts.deinit(self.allocator);
-            result.lookup_expr_proc_insts = saved_lookup_expr_proc_insts;
-        }
-
-        const saved_lookup_expr_proc_inst_sets = result.lookup_expr_proc_inst_sets;
-        result.lookup_expr_proc_inst_sets = .empty;
-        defer {
-            result.lookup_expr_proc_inst_sets.deinit(self.allocator);
-            result.lookup_expr_proc_inst_sets = saved_lookup_expr_proc_inst_sets;
-        }
-
-        const saved_context_pattern_proc_insts = result.context_pattern_proc_insts;
-        result.context_pattern_proc_insts = .empty;
-        defer {
-            result.context_pattern_proc_insts.deinit(self.allocator);
-            result.context_pattern_proc_insts = saved_context_pattern_proc_insts;
-        }
-
-        const saved_context_pattern_proc_inst_sets = result.context_pattern_proc_inst_sets;
-        result.context_pattern_proc_inst_sets = .empty;
-        defer {
-            result.context_pattern_proc_inst_sets.deinit(self.allocator);
-            result.context_pattern_proc_inst_sets = saved_context_pattern_proc_inst_sets;
-        }
-
-        const saved_proc_inst_set_entries_len = result.proc_inst_set_entries.items.len;
-        const saved_proc_inst_sets_len = result.proc_inst_sets.items.len;
-        defer {
-            result.proc_inst_set_entries.shrinkRetainingCapacity(saved_proc_inst_set_entries_len);
-            result.proc_inst_sets.shrinkRetainingCapacity(saved_proc_inst_sets_len);
         }
 
         var iteration_expr_monotypes: std.AutoHashMapUnmanaged(ContextExprKey, ResolvedMonotype) = .empty;
@@ -3373,16 +3310,17 @@ pub const Pass = struct {
         defer deferred_actuals.deinit(self.allocator);
 
         for (param_vars, actual_args, 0..) |param_var, arg_expr_idx, arg_i| {
-            const expected_param_mono = try self.resolveTemplateTypeVarWithBindings(
-                result,
-                template.module_idx,
-                template_types,
-                param_var,
-                bindings,
-            );
             const callable_template = try self.resolveExprCallableTemplate(result, actual_module_idx, arg_expr_idx);
             if (callable_template != null) {
-                if (expected_param_mono) |bound_param_mono| {
+                if (try self.inferCallableActualFromCallerParam(
+                    result,
+                    actual_module_idx,
+                    arg_expr_idx,
+                    template,
+                    template_types,
+                    param_var,
+                    bindings,
+                )) |callable_mono| {
                     try self.bindTemplateParamActualMonotype(
                         result,
                         template,
@@ -3390,7 +3328,7 @@ pub const Pass = struct {
                         bindings,
                         ordered_entries,
                         param_var,
-                        bound_param_mono,
+                        callable_mono,
                         skip_fully_bound_params,
                     );
                     continue;
@@ -3400,6 +3338,13 @@ pub const Pass = struct {
                 continue;
             }
 
+            const expected_param_mono = try self.resolveTemplateTypeVarIfFullyBoundWithBindings(
+                result,
+                template.module_idx,
+                template_types,
+                param_var,
+                bindings,
+            );
             const exact_arg_mono = try self.resolveExprMonotypeIfExactResolved(result, actual_module_idx, arg_expr_idx);
             if (!exact_arg_mono.isNone()) {
                 try self.bindTemplateParamActualMonotype(
@@ -3435,19 +3380,41 @@ pub const Pass = struct {
         for (deferred_actuals.items) |arg_i| {
             const param_var = param_vars[arg_i];
             const arg_expr_idx = actual_args[arg_i];
+            const callable_template = try self.resolveExprCallableTemplate(result, actual_module_idx, arg_expr_idx);
+            if (callable_template != null) {
+                if (try self.inferCallableActualFromCallerParam(
+                    result,
+                    actual_module_idx,
+                    arg_expr_idx,
+                    template,
+                    template_types,
+                    param_var,
+                    bindings,
+                )) |callable_mono| {
+                    try self.bindTemplateParamActualMonotype(
+                        result,
+                        template,
+                        template_types,
+                        bindings,
+                        ordered_entries,
+                        param_var,
+                        callable_mono,
+                        skip_fully_bound_params,
+                    );
+                }
+                continue;
+            }
+
             const exact_arg_mono = try self.resolveExprMonotypeIfExactResolved(result, actual_module_idx, arg_expr_idx);
-            const bound_param_mono = try self.resolveTemplateTypeVarWithBindings(
+            const bound_param_mono = try self.resolveTemplateTypeVarIfFullyBoundWithBindings(
                 result,
                 template.module_idx,
                 template_types,
                 param_var,
                 bindings,
             );
-            const callable_template = try self.resolveExprCallableTemplate(result, actual_module_idx, arg_expr_idx);
 
-            const arg_mono = if (callable_template != null and bound_param_mono != null)
-                bound_param_mono.?
-            else if (bound_param_mono) |bound|
+            const arg_mono = if (bound_param_mono) |bound|
                 bound
             else if (!exact_arg_mono.isNone())
                 exact_arg_mono
@@ -3468,6 +3435,89 @@ pub const Pass = struct {
                 skip_fully_bound_params,
             );
         }
+    }
+
+    fn inferCallableActualFromCallerParam(
+        self: *Pass,
+        result: *Result,
+        actual_module_idx: u32,
+        arg_expr_idx: CIR.Expr.Idx,
+        caller_template: ProcTemplate,
+        caller_template_types: *const types.Store,
+        caller_param_var: types.Var,
+        caller_bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
+    ) Allocator.Error!?ResolvedMonotype {
+        const actual_template_id = (try self.resolveExprCallableTemplate(result, actual_module_idx, arg_expr_idx)) orelse return null;
+        const actual_template = result.getProcTemplate(actual_template_id).*;
+        if (actual_template.kind == .closure and self.active_proc_inst_context.isNone()) {
+            return null;
+        }
+        const actual_template_types = &self.all_module_envs[actual_template.module_idx].types;
+        const actual_func = resolveFuncTypeInStore(actual_template_types, actual_template.type_root) orelse return null;
+        const caller_func = resolveFuncTypeInStore(caller_template_types, caller_param_var) orelse return null;
+        const caller_arg_vars = caller_template_types.sliceVars(caller_func.func.args);
+        const actual_arg_vars = actual_template_types.sliceVars(actual_func.func.args);
+        if (caller_arg_vars.len != actual_arg_vars.len) return null;
+
+        var actual_bindings = std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype).init(self.allocator);
+        defer actual_bindings.deinit();
+        var ordered_entries = std.ArrayList(TypeSubstEntry).empty;
+        defer ordered_entries.deinit(self.allocator);
+
+        for (caller_arg_vars, actual_arg_vars) |caller_arg_var, actual_arg_var| {
+            if (try self.resolveTemplateTypeVarIfFullyBoundWithBindings(
+                result,
+                caller_template.module_idx,
+                caller_template_types,
+                caller_arg_var,
+                caller_bindings,
+            )) |caller_arg_mono| {
+                try self.bindTypeVarMonotypes(
+                    result,
+                    actual_template.module_idx,
+                    actual_template_types,
+                    &actual_bindings,
+                    &ordered_entries,
+                    actual_arg_var,
+                    caller_arg_mono.idx,
+                    caller_arg_mono.module_idx,
+                );
+            }
+        }
+
+        if (try self.resolveTemplateTypeVarIfFullyBoundWithBindings(
+            result,
+            caller_template.module_idx,
+            caller_template_types,
+            caller_func.func.ret,
+            caller_bindings,
+        )) |caller_ret_mono| {
+            try self.bindTypeVarMonotypes(
+                result,
+                actual_template.module_idx,
+                actual_template_types,
+                &actual_bindings,
+                &ordered_entries,
+                actual_func.func.ret,
+                caller_ret_mono.idx,
+                caller_ret_mono.module_idx,
+            );
+        }
+
+        const defining_context_proc_inst = self.resolveTemplateDefiningContextProcInst(result, actual_template);
+        try self.completeTemplateBindingsFromBody(result, actual_template, &actual_bindings, defining_context_proc_inst);
+
+        if ((try self.resolveTemplateTypeVarIfFullyBoundWithBindings(
+            result,
+            actual_template.module_idx,
+            actual_template_types,
+            actual_template.type_root,
+            &actual_bindings,
+        ))) |callable_mono| {
+            return callable_mono;
+        }
+
+        return null;
     }
 
     fn bindTemplateParamActualMonotype(
@@ -7788,6 +7838,39 @@ pub const Pass = struct {
         return resolvedMonotype(mono, module_idx);
     }
 
+    fn resolveTemplateTypeVarIfFullyBoundWithBindings(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        store_types: *const types.Store,
+        type_var: types.Var,
+        bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
+    ) Allocator.Error!?ResolvedMonotype {
+        var seen: std.AutoHashMapUnmanaged(types.Var, void) = .empty;
+        defer seen.deinit(self.allocator);
+
+        if (!try self.typeVarFullyBoundWithBindings(
+            result,
+            module_idx,
+            store_types,
+            type_var,
+            bindings,
+            &seen,
+        )) {
+            return null;
+        }
+
+        const mono = try self.resolveTypeVarMonotypeWithBindings(
+            result,
+            module_idx,
+            store_types,
+            type_var,
+            bindings,
+        );
+        if (mono.isNone()) return null;
+        return resolvedMonotype(mono, module_idx);
+    }
+
     fn seedTemplateBoundaryBindingsFromActuals(
         self: *Pass,
         result: *Result,
@@ -9234,11 +9317,11 @@ pub const Pass = struct {
         return switch (flat_type) {
             .fn_pure, .fn_effectful, .fn_unbound => |func| blk: {
                 for (store_types.sliceVars(func.args)) |arg_var| {
-                    if (!try self.typeVarMonomorphizableWithoutBindings(result, module_idx, store_types, arg_var, seen)) {
+                    if (!try self.typeVarFullyBoundWithoutBindings(result, module_idx, store_types, arg_var, seen)) {
                         break :blk false;
                     }
                 }
-                break :blk try self.typeVarMonomorphizableWithoutBindings(result, module_idx, store_types, func.ret, seen);
+                break :blk try self.typeVarFullyBoundWithoutBindings(result, module_idx, store_types, func.ret, seen);
             },
             .nominal_type => |nominal| blk: {
                 for (store_types.sliceNominalArgs(nominal)) |arg_var| {
@@ -9355,11 +9438,11 @@ pub const Pass = struct {
         return switch (flat_type) {
             .fn_pure, .fn_effectful, .fn_unbound => |func| blk: {
                 for (store_types.sliceVars(func.args)) |arg_var| {
-                    if (!try self.typeVarMonomorphizableWithBindings(result, module_idx, store_types, arg_var, bindings, seen)) {
+                    if (!try self.typeVarFullyBoundWithBindings(result, module_idx, store_types, arg_var, bindings, seen)) {
                         break :blk false;
                     }
                 }
-                break :blk try self.typeVarMonomorphizableWithBindings(result, module_idx, store_types, func.ret, bindings, seen);
+                break :blk try self.typeVarFullyBoundWithBindings(result, module_idx, store_types, func.ret, bindings, seen);
             },
             .nominal_type => |nominal| blk: {
                 for (store_types.sliceNominalArgs(nominal)) |arg_var| {
