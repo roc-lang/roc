@@ -4658,6 +4658,26 @@ fn lowerClosureSpecialized(
         try capture_local_symbols.append(self.allocator, local_symbol);
     }
 
+    for (lower_plan.capture_requests.items, capture_local_symbols.items) |request, local_symbol| {
+        const capture_proc_inst_id = self.monomorphization.getClosureCaptureProcInst(
+            request.closure_proc_inst_id,
+            request.module_idx,
+            request.closure_expr_idx,
+            request.pattern_idx,
+        ) orelse continue;
+        const capture_proc_expr = try self.lowerProcInst(capture_proc_inst_id);
+        const capture_proc_id = self.resolveProcIdFromCallableExpr(capture_proc_expr) orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "MIR Lower invariant: closure capture proc inst {d} lowered to non-callable expr {}",
+                    .{ @intFromEnum(capture_proc_inst_id), @intFromEnum(capture_proc_expr) },
+                );
+            }
+            unreachable;
+        };
+        try self.store.registerSymbolSeedProcSet(self.allocator, local_symbol, &.{capture_proc_id});
+    }
+
     for (lower_plan.recursive_members.items) |member| {
         const member_proc_inst = self.monomorphization.getProcInst(member.proc_inst_id);
         const member_monotype = try self.importMonotypeFromStore(

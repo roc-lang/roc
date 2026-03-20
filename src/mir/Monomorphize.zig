@@ -1665,15 +1665,21 @@ pub const Pass = struct {
                 module_idx,
                 capture.pattern_idx,
             );
-            const source_capture_proc_inst = if (source) |capture_source|
-                self.getExprProcInstInContext(
+            const source_capture_proc_inst = if (source) |capture_source| blk: {
+                var visiting: std.AutoHashMapUnmanaged(u64, void) = .empty;
+                defer visiting.deinit(self.allocator);
+                var source_proc_insts = std.ArrayList(ProcInstId).empty;
+                defer source_proc_insts.deinit(self.allocator);
+                try self.collectValueExprProcInstsInContext(
                     result,
                     capture_context_proc_inst,
                     capture_source.module_idx,
                     capture_source.expr_idx,
-                )
-            else
-                null;
+                    &visiting,
+                    &source_proc_insts,
+                );
+                break :blk if (source_proc_insts.items.len == 1) source_proc_insts.items[0] else null;
+            } else null;
             const enclosing_capture_proc_inst = result.getContextPatternProcInst(
                 enclosing_context_proc_inst,
                 module_idx,
@@ -3711,6 +3717,18 @@ pub const Pass = struct {
 
         const module_env = self.all_module_envs[module_idx];
         switch (module_env.store.getExpr(expr_idx)) {
+            .e_lookup_local => |lookup| {
+                if (result.getPatternSourceExpr(module_idx, lookup.pattern_idx)) |source| {
+                    try self.collectValueExprProcInstsInContext(
+                        result,
+                        context_proc_inst,
+                        source.module_idx,
+                        source.expr_idx,
+                        visiting,
+                        out,
+                    );
+                }
+            },
             .e_if => |if_expr| {
                 for (module_env.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
                     const branch = module_env.store.getIfBranch(branch_idx);
