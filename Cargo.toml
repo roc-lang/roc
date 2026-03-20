@@ -151,7 +151,7 @@ strip-ansi-escapes = "0.1.1"
 strum = { version = "0.24.1", features = ["derive"] }
 strum_macros = "0.24.3"
 syn = { version = "1.0.109", features = ["full", "extra-traits"] }
-tar = "0.4.38"
+tar = "0.4.45"
 target-lexicon = "0.12.6"
 tempfile = "=3.2.0"
 tracing = { version = "0.1.40", features = ["release_max_level_off"] }
