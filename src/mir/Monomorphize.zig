@@ -5922,7 +5922,9 @@ pub const Pass = struct {
         } else null;
 
         const proc_inst_id = if (existing_proc_inst_id) |proc_inst_id| blk: {
-            try self.scanProcInst(result, proc_inst_id);
+            if (self.scratch_context_expr_monotypes_depth == 0) {
+                try self.scanProcInst(result, proc_inst_id);
+            }
             break :blk proc_inst_id;
         } else blk: {
             if (desired_fn_monotype.isNone()) return;
@@ -5934,11 +5936,14 @@ pub const Pass = struct {
                 template,
                 desired_fn_monotype.idx,
                 desired_fn_monotype.module_idx,
-                defining_context_proc_inst,
-            )) {
+                    defining_context_proc_inst,
+                )) {
                 return;
             }
-            break :blk try self.ensureProcInst(result, template_id, desired_fn_monotype.idx, desired_fn_monotype.module_idx);
+            break :blk if (self.scratch_context_expr_monotypes_depth == 0)
+                try self.ensureProcInst(result, template_id, desired_fn_monotype.idx, desired_fn_monotype.module_idx)
+            else
+                try self.ensureProcInstUnscanned(result, template_id, desired_fn_monotype.idx, desired_fn_monotype.module_idx);
         };
         try self.recordLookupExprProcInst(
             result,
@@ -9887,13 +9892,12 @@ pub const Pass = struct {
         }
         if (std.debug.runtime_safety) {
             std.debug.panic(
-                "Monomorphize bindFlatTypeMonotypes mismatch: flat_type={s} mono={s} template_module={d} mono_module={d} active_template={d} active_proc_inst={d} monotype={d} probe_mode={}",
+                "Monomorphize bindFlatTypeMonotypes mismatch: flat_type={s} mono={s} template_module={d} mono_module={d} active_proc_inst={d} monotype={d} probe_mode={}",
                 .{
                     @tagName(flat_type),
                     @tagName(mono),
                     template_module_idx,
                     mono_module_idx,
-                    @intFromEnum(self.active_template_context),
                     @intFromEnum(self.active_proc_inst_context),
                     @intFromEnum(monotype),
                     self.binding_probe_mode,
@@ -9916,12 +9920,11 @@ pub const Pass = struct {
         }
         if (std.debug.runtime_safety) {
             std.debug.panic(
-                "Monomorphize bindFlatTypeMonotypes hit err tail: flat_type={s} template_module={d} mono_module={d} active_template={d} active_proc_inst={d} monotype={d} probe_mode={}",
+                "Monomorphize bindFlatTypeMonotypes hit err tail: flat_type={s} template_module={d} mono_module={d} active_proc_inst={d} monotype={d} probe_mode={}",
                 .{
                     @tagName(flat_type),
                     template_module_idx,
                     mono_module_idx,
-                    @intFromEnum(self.active_template_context),
                     @intFromEnum(self.active_proc_inst_context),
                     @intFromEnum(monotype),
                     self.binding_probe_mode,
