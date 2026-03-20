@@ -8334,8 +8334,7 @@ pub const Pass = struct {
         defer _ = seen.remove(resolved.var_);
 
         return switch (resolved.desc.content) {
-            .flex => |flex| hasNumeralConstraint(store_types, flex.constraints),
-            .rigid => |rigid| hasNumeralConstraint(store_types, rigid.constraints),
+            .flex, .rigid => true,
             .alias => |alias| self.typeVarMonomorphizableWithBindings(
                 result,
                 module_idx,
@@ -8376,8 +8375,7 @@ pub const Pass = struct {
         defer _ = seen.remove(resolved.var_);
 
         return switch (resolved.desc.content) {
-            .flex => |flex| hasNumeralConstraint(store_types, flex.constraints),
-            .rigid => |rigid| hasNumeralConstraint(store_types, rigid.constraints),
+            .flex, .rigid => true,
             .alias => |alias| self.typeVarMonomorphizableWithoutBindings(
                 result,
                 module_idx,

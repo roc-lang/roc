@@ -1232,7 +1232,7 @@ fn runtimeValueLayoutFromMirExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator
 
     switch (expr) {
         .call => |call_data| {
-            if (!(try self.monotypeContainsFunctionValue(mono_idx))) {
+            if (!(try self.monotypeMayContainFunctionValue(mono_idx))) {
                 return self.layoutFromMonotype(mono_idx);
             }
             const func_expr = self.mir_store.getExpr(call_data.func);
@@ -1250,7 +1250,7 @@ fn runtimeValueLayoutFromMirExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator
             }
         },
         .list => |list_data| {
-            if (!(try self.monotypeContainsFunctionValue(mono_idx))) {
+            if (!(try self.monotypeMayContainFunctionValue(mono_idx))) {
                 return self.layoutFromMonotype(mono_idx);
             }
             return self.runtimeListLayoutFromExprs(
@@ -1260,7 +1260,7 @@ fn runtimeValueLayoutFromMirExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator
         },
         .tag => |tag_data| {
             if (mono == .tag_union) {
-                if (!(try self.monotypeContainsFunctionValue(mono_idx))) {
+                if (!(try self.monotypeMayContainFunctionValue(mono_idx))) {
                     return self.layoutFromMonotype(mono_idx);
                 }
                 return self.runtimeTagLayoutFromExpr(tag_data, mono_idx);
@@ -1293,13 +1293,13 @@ fn runtimeValueLayoutFromMirExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator
         },
         .struct_ => |struct_| switch (mono) {
             .tuple => {
-                if (!(try self.monotypeContainsFunctionValue(mono_idx))) {
+                if (!(try self.monotypeMayContainFunctionValue(mono_idx))) {
                     return self.layoutFromMonotype(mono_idx);
                 }
                 return self.runtimeTupleLayoutFromExprs(self.mir_store.getExprSpan(struct_.fields));
             },
             .record => {
-                if (!(try self.monotypeContainsFunctionValue(mono_idx))) {
+                if (!(try self.monotypeMayContainFunctionValue(mono_idx))) {
                     return self.layoutFromMonotype(mono_idx);
                 }
                 return self.runtimeRecordLayoutFromExprs(self.mir_store.getExprSpan(struct_.fields));
@@ -1774,7 +1774,7 @@ fn runtimeLayoutForProcBodyWithParamLayouts(
     param_layouts: []const layout.Idx,
 ) Allocator.Error!?layout.Idx {
     const proc = self.mir_store.getProc(callee_proc);
-    if (proc.hosted != null or !(try self.monotypeContainsFunctionValue(proc.ret_monotype))) {
+    if (proc.hosted != null or !(try self.monotypeMayContainFunctionValue(proc.ret_monotype))) {
         return try self.layoutFromMonotype(proc.ret_monotype);
     }
     const params = self.mir_store.getPatternSpan(proc.params);
@@ -5203,7 +5203,7 @@ fn runtimeLayoutForBindingSymbol(
     const existing_layout = self.symbol_layouts.get(sym.raw());
     const mono = self.mir_store.monotype_store.getMonotype(mono_idx);
 
-    if (mono != .func and !(try self.monotypeContainsFunctionValue(mono_idx))) {
+    if (mono != .func and !(try self.monotypeMayContainFunctionValue(mono_idx))) {
         return existing_layout orelse fallback_layout;
     }
 
@@ -5228,13 +5228,19 @@ fn runtimeLayoutForBindingSymbol(
     return layout_idx;
 }
 
-fn monotypeContainsFunctionValue(self: *Self, mono_idx: Monotype.Idx) Allocator.Error!bool {
+/// Returns whether this MIR monotype may carry a runtime function value.
+///
+/// For fully concrete monotypes this is exact. For `.param` monotypes the
+/// answer is conservative by design: an abstract type parameter may legally
+/// instantiate to a function-valued type, so it must stay on the runtime-layout
+/// path instead of being treated like definitely non-callable data.
+fn monotypeMayContainFunctionValue(self: *Self, mono_idx: Monotype.Idx) Allocator.Error!bool {
     var visited = std.AutoHashMap(u32, void).init(self.allocator);
     defer visited.deinit();
-    return self.monotypeContainsFunctionValueInner(mono_idx, &visited);
+    return self.monotypeMayContainFunctionValueInner(mono_idx, &visited);
 }
 
-fn monotypeContainsFunctionValueInner(
+fn monotypeMayContainFunctionValueInner(
     self: *Self,
     mono_idx: Monotype.Idx,
     visited: *std.AutoHashMap(u32, void),
@@ -5245,26 +5251,18 @@ fn monotypeContainsFunctionValueInner(
 
     return switch (self.mir_store.monotype_store.getMonotype(mono_idx)) {
         .func => true,
-        .param => {
-            if (builtin.mode == .Debug) {
-                std.debug.panic(
-                    "MirToLir invariant violated: function-value containment query reached abstract param mono_idx={d}",
-                    .{@intFromEnum(mono_idx)},
-                );
-            }
-            unreachable;
-        },
+        .param => true,
         .record => |record| blk: {
             const fields = self.mir_store.monotype_store.getFields(record.fields);
             for (fields) |field| {
-                if (try self.monotypeContainsFunctionValueInner(field.type_idx, visited)) break :blk true;
+                if (try self.monotypeMayContainFunctionValueInner(field.type_idx, visited)) break :blk true;
             }
             break :blk false;
         },
         .tuple => |tuple| blk: {
             const elems = self.mir_store.monotype_store.getIdxSpan(tuple.elems);
             for (elems) |elem_mono| {
-                if (try self.monotypeContainsFunctionValueInner(elem_mono, visited)) break :blk true;
+                if (try self.monotypeMayContainFunctionValueInner(elem_mono, visited)) break :blk true;
             }
             break :blk false;
         },
@@ -5273,13 +5271,13 @@ fn monotypeContainsFunctionValueInner(
             for (tags) |tag| {
                 const payloads = self.mir_store.monotype_store.getIdxSpan(tag.payloads);
                 for (payloads) |payload_mono| {
-                    if (try self.monotypeContainsFunctionValueInner(payload_mono, visited)) break :blk true;
+                    if (try self.monotypeMayContainFunctionValueInner(payload_mono, visited)) break :blk true;
                 }
             }
             break :blk false;
         },
-        .list => |list| self.monotypeContainsFunctionValueInner(list.elem, visited),
-        .box => |box| self.monotypeContainsFunctionValueInner(box.inner, visited),
+        .list => |list| self.monotypeMayContainFunctionValueInner(list.elem, visited),
+        .box => |box| self.monotypeMayContainFunctionValueInner(box.inner, visited),
         .prim, .unit, .recursive_placeholder => false,
     };
 }
