@@ -56,7 +56,7 @@ NO CHANGE
 		(annotation
 			(ty-tag-union
 				(ty-malformed)
-				(ty-rigid-var (name "#open_ext_0"))))))
+				(ty-rigid-var (name "#others"))))))
 ~~~
 # TYPES
 ~~~clojure
