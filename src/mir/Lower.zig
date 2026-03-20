@@ -5118,10 +5118,7 @@ fn lowerCall(
         } }, call_result_monotype, region);
     }
 
-    const lowered_func = if (call_site_proc_inst) |proc_inst_id|
-        try self.lowerProcInst(proc_inst_id)
-    else
-        try self.lowerExpr(call.func);
+    const lowered_func = try self.lowerExpr(call.func);
 
     return self.lowerCallWithLoweredFunc(
         lowered_func,
