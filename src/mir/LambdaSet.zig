@@ -139,12 +139,13 @@ pub const Store = struct {
     }
 };
 
-/// Whether an expression evaluates directly to a lambda, ignoring block wrappers.
+/// Whether an expression evaluates directly to a callable (lambda or hosted function),
+/// ignoring block wrappers.
 pub fn isLambdaExpr(mir_store: *const MIR.Store, expr_id: MIR.ExprId) bool {
     const expr = mir_store.getExpr(expr_id);
     return switch (expr) {
         .block => |block| isLambdaExpr(mir_store, block.final_expr),
-        .lambda => true,
+        .lambda, .hosted => true,
         else => false,
     };
 }
@@ -533,6 +534,7 @@ fn resolveToLambdaParams(mir_store: *const MIR.Store, expr_id: MIR.ExprId) ?MIR.
     const expr = mir_store.getExpr(expr_id);
     return switch (expr) {
         .lambda => |lam| lam.params,
+        .hosted => |h| h.params,
         .block => |block| resolveToLambdaParams(mir_store, block.final_expr),
         else => null,
     };
@@ -542,6 +544,7 @@ fn resolveToLambdaBody(mir_store: *const MIR.Store, expr_id: MIR.ExprId) ?MIR.Ex
     const expr = mir_store.getExpr(expr_id);
     return switch (expr) {
         .lambda => |lam| lam.body,
+        .hosted => |h| h.body,
         .block => |block| resolveToLambdaBody(mir_store, block.final_expr),
         else => null,
     };
