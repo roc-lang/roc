@@ -1391,10 +1391,21 @@ pub const Pass = struct {
         try self.in_progress_value_defs.put(self.allocator, key, {});
         defer _ = self.in_progress_value_defs.remove(key);
 
-        try self.scanValueExprForced(result, module_idx, expr_idx);
         if (try self.resolveExprCallableTemplate(result, module_idx, expr_idx)) |template_id| {
             try self.materializeDemandedExprProcInst(result, module_idx, expr_idx, template_id);
+            if (self.getExprProcInstsInContext(result, self.active_proc_inst_context, module_idx, expr_idx)) |proc_inst_ids| {
+                for (proc_inst_ids) |proc_inst_id| {
+                    try self.scanProcInst(result, proc_inst_id);
+                }
+                return;
+            }
+            if (self.getExprProcInstInContext(result, self.active_proc_inst_context, module_idx, expr_idx)) |proc_inst_id| {
+                try self.scanProcInst(result, proc_inst_id);
+            }
+            return;
         }
+
+        try self.scanValueExprForced(result, module_idx, expr_idx);
     }
 
     fn resolveRequiredLookupTarget(
@@ -3358,16 +3369,39 @@ pub const Pass = struct {
     ) Allocator.Error!void {
         if (param_vars.len != actual_args.len) unreachable;
 
-        var deferred_numeric_actuals = std.ArrayList(usize).empty;
-        defer deferred_numeric_actuals.deinit(self.allocator);
+        var deferred_actuals = std.ArrayList(usize).empty;
+        defer deferred_actuals.deinit(self.allocator);
 
         for (param_vars, actual_args, 0..) |param_var, arg_expr_idx, arg_i| {
-            if (self.exprUsesContextSensitiveNumericDefault(actual_module_idx, arg_expr_idx)) {
-                const arg_mono = try self.resolveExprMonotypeIfExactResolved(result, actual_module_idx, arg_expr_idx);
-                if (arg_mono.isNone()) {
-                    try deferred_numeric_actuals.append(self.allocator, arg_i);
+            const expected_param_mono = try self.resolveTemplateTypeVarWithBindings(
+                result,
+                template.module_idx,
+                template_types,
+                param_var,
+                bindings,
+            );
+            const callable_template = try self.resolveExprCallableTemplate(result, actual_module_idx, arg_expr_idx);
+            if (callable_template != null) {
+                if (expected_param_mono) |bound_param_mono| {
+                    try self.bindTemplateParamActualMonotype(
+                        result,
+                        template,
+                        template_types,
+                        bindings,
+                        ordered_entries,
+                        param_var,
+                        bound_param_mono,
+                        skip_fully_bound_params,
+                    );
                     continue;
                 }
+
+                try deferred_actuals.append(self.allocator, arg_i);
+                continue;
+            }
+
+            const exact_arg_mono = try self.resolveExprMonotypeIfExactResolved(result, actual_module_idx, arg_expr_idx);
+            if (!exact_arg_mono.isNone()) {
                 try self.bindTemplateParamActualMonotype(
                     result,
                     template,
@@ -3375,40 +3409,52 @@ pub const Pass = struct {
                     bindings,
                     ordered_entries,
                     param_var,
-                    arg_mono,
+                    exact_arg_mono,
                     skip_fully_bound_params,
                 );
                 continue;
             }
 
-            const arg_mono = try self.resolveExprMonotypeResolved(result, actual_module_idx, arg_expr_idx);
-            if (arg_mono.isNone()) continue;
-            try self.bindTemplateParamActualMonotype(
-                result,
-                template,
-                template_types,
-                bindings,
-                ordered_entries,
-                param_var,
-                arg_mono,
-                skip_fully_bound_params,
-            );
+            if (expected_param_mono) |bound_param_mono| {
+                try self.bindTemplateParamActualMonotype(
+                    result,
+                    template,
+                    template_types,
+                    bindings,
+                    ordered_entries,
+                    param_var,
+                    bound_param_mono,
+                    skip_fully_bound_params,
+                );
+                continue;
+            }
+
+            try deferred_actuals.append(self.allocator, arg_i);
         }
 
-        for (deferred_numeric_actuals.items) |arg_i| {
+        for (deferred_actuals.items) |arg_i| {
             const param_var = param_vars[arg_i];
             const arg_expr_idx = actual_args[arg_i];
-
-            const arg_mono = if (try self.resolveTemplateTypeVarWithBindings(
+            const exact_arg_mono = try self.resolveExprMonotypeIfExactResolved(result, actual_module_idx, arg_expr_idx);
+            const bound_param_mono = try self.resolveTemplateTypeVarWithBindings(
                 result,
                 template.module_idx,
                 template_types,
                 param_var,
                 bindings,
-            )) |bound|
+            );
+            const callable_template = try self.resolveExprCallableTemplate(result, actual_module_idx, arg_expr_idx);
+
+            const arg_mono = if (callable_template != null and bound_param_mono != null)
+                bound_param_mono.?
+            else if (bound_param_mono) |bound|
                 bound
+            else if (!exact_arg_mono.isNone())
+                exact_arg_mono
+            else if (self.exprUsesContextSensitiveNumericDefault(actual_module_idx, arg_expr_idx))
+                resolvedMonotype(.none, actual_module_idx)
             else
-                try self.resolveExprMonotypeIfExactResolved(result, actual_module_idx, arg_expr_idx);
+                try self.resolveExprMonotypeResolved(result, actual_module_idx, arg_expr_idx);
 
             if (arg_mono.isNone()) continue;
             try self.bindTemplateParamActualMonotype(
@@ -3744,18 +3790,6 @@ pub const Pass = struct {
                 unreachable;
             }
 
-            try self.bindTemplateParamsFromActualArgs(
-                result,
-                module_idx,
-                template,
-                template_types,
-                param_vars,
-                actual_args.items,
-                &callee_bindings,
-                &ordered_entries,
-                false,
-            );
-
             const ret_mono = try self.resolveExprMonotypeIfExactResolved(result, module_idx, expr_idx);
             if (!ret_mono.isNone()) {
                 if (self.procBoundaryInfo(template.module_idx, template.cir_expr)) |boundary| {
@@ -3781,6 +3815,18 @@ pub const Pass = struct {
                     ret_mono.module_idx,
                 );
             }
+
+            try self.bindTemplateParamsFromActualArgs(
+                result,
+                module_idx,
+                template,
+                template_types,
+                param_vars,
+                actual_args.items,
+                &callee_bindings,
+                &ordered_entries,
+                false,
+            );
         }
 
         try self.seedTemplateBoundaryBindingsFromActuals(
@@ -5239,6 +5285,13 @@ pub const Pass = struct {
         proc_inst_id: ProcInstId,
     ) Allocator.Error!void {
         const key = self.resultExprKey(context_proc_inst, module_idx, expr_idx);
+        if (!context_proc_inst.isNone()) {
+            try result.call_site_proc_insts.put(self.allocator, key, proc_inst_id);
+            const singleton_set_id = try self.internProcInstSet(result, &.{proc_inst_id});
+            try result.call_site_proc_inst_sets.put(self.allocator, key, singleton_set_id);
+            return;
+        }
+
         if (result.call_site_proc_insts.get(key)) |existing_proc_inst_id| {
             if (existing_proc_inst_id == proc_inst_id) {
                 try self.mergeCallSiteProcInstSet(result, context_proc_inst, module_idx, expr_idx, proc_inst_id);
@@ -5289,6 +5342,13 @@ pub const Pass = struct {
         proc_inst_id: ProcInstId,
     ) Allocator.Error!void {
         const key = self.resultExprKey(context_proc_inst, module_idx, expr_idx);
+        if (!context_proc_inst.isNone()) {
+            try result.lookup_expr_proc_insts.put(self.allocator, key, proc_inst_id);
+            const singleton_set_id = try self.internProcInstSet(result, &.{proc_inst_id});
+            try result.lookup_expr_proc_inst_sets.put(self.allocator, key, singleton_set_id);
+            return;
+        }
+
         if (result.lookup_expr_proc_insts.get(key)) |existing_proc_inst_id| {
             if (existing_proc_inst_id == proc_inst_id) {
                 try self.mergeLookupExprProcInstSet(result, context_proc_inst, module_idx, expr_idx, proc_inst_id);
@@ -5692,13 +5752,6 @@ pub const Pass = struct {
         scratches.module_env = module_env;
         scratches.module_idx = module_idx;
         scratches.all_module_envs = self.all_module_envs;
-        const named_specializations_top = try self.pushBindingNamedSpecializations(
-            result,
-            bindings,
-            &scratches,
-        );
-        defer scratches.named_specializations.clearFrom(named_specializations_top);
-
         return result.monotype_store.fromTypeVar(
             self.allocator,
             store_types,
@@ -5708,63 +5761,6 @@ pub const Pass = struct {
             &nominal_cycle_breakers,
             &scratches,
         );
-    }
-
-    fn pushBindingNamedSpecializations(
-        self: *Pass,
-        result: *Result,
-        bindings: *const std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
-        scratches: *Monotype.Store.Scratches,
-    ) Allocator.Error!u32 {
-        const top = scratches.named_specializations.top();
-
-        var named_bindings: std.StringHashMapUnmanaged(Monotype.Idx) = .empty;
-        defer named_bindings.deinit(self.allocator);
-
-        var it = bindings.iterator();
-        while (it.next()) |entry| {
-            const name_text = resolvedBindingName(
-                self,
-                entry.key_ptr.module_idx,
-                entry.key_ptr.type_var,
-            ) orelse continue;
-            const monotype = entry.value_ptr.idx;
-
-            if (named_bindings.get(name_text)) |existing| {
-                if (!try self.monotypesStructurallyEqual(result, existing, monotype)) {
-                    if (std.debug.runtime_safety) {
-                        std.debug.panic(
-                            "Monomorphize: conflicting named proc binding for type var '{s}'",
-                            .{name_text},
-                        );
-                    }
-                    unreachable;
-                }
-                continue;
-            }
-
-            try named_bindings.put(self.allocator, name_text, monotype);
-        }
-
-        var named_it = named_bindings.iterator();
-        while (named_it.next()) |entry| {
-            try scratches.named_specializations.append(.{
-                .name_text = entry.key_ptr.*,
-                .type_idx = entry.value_ptr.*,
-            });
-        }
-
-        return top;
-    }
-
-    fn resolvedBindingName(self: *const Pass, module_idx: u32, var_: types.Var) ?[]const u8 {
-        const store_types = &self.all_module_envs[module_idx].types;
-        const resolved = store_types.resolveVar(var_);
-        return switch (resolved.desc.content) {
-            .rigid => |rigid| self.all_module_envs[module_idx].getIdent(rigid.name),
-            .flex => |flex| if (flex.name) |name| self.all_module_envs[module_idx].getIdent(name) else null,
-            else => null,
-        };
     }
 
     fn remapMonotypeBetweenModules(

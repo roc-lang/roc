@@ -4377,12 +4377,15 @@ fn buildClosureValueFromCaptureRequests(
             runtime_lookup_expr;
         try self.scratch_expr_ids.append(runtime_capture_expr);
 
-        const semantic_capture_expr = if (!proc_backed_capture_expr.isNone())
+        const semantic_fallback_expr = if (!proc_backed_capture_expr.isNone() and self.store.getValueDef(outer_symbol) == null)
             proc_backed_capture_expr
-        else if (self.monomorphization.getPatternSourceExpr(request.module_idx, request.pattern_idx)) |source|
-            (try self.lowerCaptureSemanticAliasSourceExpr(source, cap_monotype)) orelse runtime_capture_expr
         else
-            runtime_capture_expr;
+            runtime_lookup_expr;
+
+        const semantic_capture_expr = if (self.monomorphization.getPatternSourceExpr(request.module_idx, request.pattern_idx)) |source|
+            (try self.lowerCaptureSemanticAliasSourceExpr(source, cap_monotype)) orelse semantic_fallback_expr
+        else
+            semantic_fallback_expr;
         if (capture_source_exprs_snapshot) |snapshot| {
             try snapshot.append(self.allocator, semantic_capture_expr);
         }
