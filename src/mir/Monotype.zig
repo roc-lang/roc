@@ -1,9 +1,10 @@
 //! Monomorphic type system for MIR.
 //!
-//! Monotypes are fully concrete types with no type variables, no extensions,
-//! no aliases, and no nominal/opaque/structural distinction. Records, tag unions,
-//! and tuples are just records, tag unions, and tuples — the distinctions that
-//! existed for static dispatch and module boundary enforcement are no longer needed.
+//! Monotypes are MIR-visible types with no extensions, no aliases, and no
+//! nominal/opaque/structural distinction. Records, tag unions, and tuples are
+//! just records, tag unions, and tuples. They may still contain explicit
+//! abstract type parameters when a callable is well-typed but not yet fully
+//! concrete.
 //!
 //! Each MIR expression has exactly one Monotype via a 1:1 Expr.Idx → Monotype.Idx mapping.
 
@@ -61,6 +62,13 @@ pub const Span = extern struct {
 
 /// A monomorphic type — fully concrete, no type variables, no extensions.
 pub const Monotype = union(enum) {
+    /// An explicit abstract type parameter carried through MIR without
+    /// defaulting to unit/ZST.
+    param: struct {
+        module_idx: u32,
+        var_: types.Var,
+    },
+
     /// Function type: args -> ret
     func: struct {
         args: Span,
@@ -445,13 +453,19 @@ pub const Store = struct {
                 }
                 if (hasNumeralConstraint(types_store, flex.constraints))
                     return self.primIdx(.dec);
-                return self.unit_idx;
+                return try self.addMonotype(allocator, .{ .param = .{
+                    .module_idx = scratches.module_idx orelse unreachable,
+                    .var_ = resolved.var_,
+                } });
             },
             .rigid => |rigid| {
                 if (lookupNamedSpecialization(scratches, rigid.name)) |specialized| return specialized;
                 if (hasNumeralConstraint(types_store, rigid.constraints))
                     return self.primIdx(.dec);
-                return self.unit_idx;
+                return try self.addMonotype(allocator, .{ .param = .{
+                    .module_idx = scratches.module_idx orelse unreachable,
+                    .var_ = resolved.var_,
+                } });
             },
             .alias => |alias| {
                 // Aliases are transparent — follow the backing var

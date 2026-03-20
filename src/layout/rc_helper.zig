@@ -1,5 +1,7 @@
 //! Canonical deep-RC helper plans derived from canonical layout identities.
 
+const std = @import("std");
+const builtin = @import("builtin");
 const builtins = @import("builtins");
 
 const layout_mod = @import("./layout.zig");
@@ -108,6 +110,12 @@ pub const Resolver = struct {
 
         return switch (l.tag) {
             .zst => .noop,
+            .param => {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("RC helper planning reached abstract layout param {}", .{helper_key.layout_idx});
+                }
+                unreachable;
+            },
             .scalar => if (l.data.scalar.tag == .str)
                 switch (helper_key.op) {
                     .incref => .str_incref,

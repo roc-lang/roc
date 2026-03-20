@@ -456,6 +456,7 @@ fn remapMonotypeBetweenModulesRec(
     switch (mono) {
         .unit => return self.store.monotype_store.unit_idx,
         .prim => |prim| return self.store.monotype_store.primIdx(prim),
+        .param => |param| return try self.store.monotype_store.addMonotype(self.allocator, .{ .param = param }),
         .recursive_placeholder => {
             if (builtin.mode == .Debug) {
                 std.debug.panic("remapMonotypeBetweenModules: unexpected recursive_placeholder", .{});
@@ -469,6 +470,7 @@ fn remapMonotypeBetweenModulesRec(
     try remapped.put(monotype, placeholder);
 
     const mapped_mono: Monotype.Monotype = switch (mono) {
+        .param => |param| .{ .param = param },
         .list => |list_mono| .{ .list = .{
             .elem = try self.remapMonotypeBetweenModulesRec(
                 list_mono.elem,
@@ -701,6 +703,7 @@ fn importMonotypeFromStoreRec(
     switch (mono) {
         .unit => return self.store.monotype_store.unit_idx,
         .prim => |prim| return self.store.monotype_store.primIdx(prim),
+        .param => |param| return try self.store.monotype_store.addMonotype(self.allocator, .{ .param = param }),
         .recursive_placeholder => {
             if (builtin.mode == .Debug) {
                 std.debug.panic("importMonotypeFromStore: unexpected recursive_placeholder", .{});
@@ -714,6 +717,7 @@ fn importMonotypeFromStoreRec(
     try imported.put(monotype, placeholder);
 
     const mapped_mono: Monotype.Monotype = switch (mono) {
+        .param => |param| .{ .param = param },
         .list => |list_mono| .{ .list = .{
             .elem = try self.importMonotypeFromStoreRec(
                 source_store,
@@ -889,7 +893,7 @@ fn monotypeIsWellFormedRec(
     seen.put(monotype, {}) catch return false;
 
     return switch (self.store.monotype_store.getMonotype(monotype)) {
-        .unit, .prim => true,
+        .unit, .prim, .param => true,
         .recursive_placeholder => false,
         .list => |list_mono| self.monotypeIsWellFormedRec(list_mono.elem, seen),
         .box => |box_mono| self.monotypeIsWellFormedRec(box_mono.inner, seen),
@@ -2323,6 +2327,12 @@ fn lowerStrInspektExprByMonotype(
 ) Allocator.Error!MIR.ExprId {
     const mono = self.store.monotype_store.getMonotype(mono_idx);
     return switch (mono) {
+        .param => {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("lowerStrInspektExprByMonotype reached abstract param mono_idx={d}", .{@intFromEnum(mono_idx)});
+            }
+            unreachable;
+        },
         .prim => |prim| switch (prim) {
             .str => blk: {
                 break :blk try self.store.addExpr(
@@ -3406,6 +3416,7 @@ fn monotypesStructurallyEqualRec(
             unreachable;
         },
         .unit => true,
+        .param => |lhs_param| lhs_param.module_idx == rhs_mono.param.module_idx and lhs_param.var_ == rhs_mono.param.var_,
         .prim => |lhs_prim| lhs_prim == rhs_mono.prim,
         .list => |lhs_list| try self.monotypesStructurallyEqualRec(lhs_list.elem, rhs_mono.list.elem, seen),
         .box => |lhs_box| try self.monotypesStructurallyEqualRec(lhs_box.inner, rhs_mono.box.inner, seen),

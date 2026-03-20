@@ -512,7 +512,7 @@ fn registerSpecializedMonotypeLayout(
     const layout_val = self.layout_store.getLayout(layout_idx);
 
     switch (monotype) {
-        .recursive_placeholder, .unit, .prim => {},
+        .recursive_placeholder, .unit, .prim, .param => {},
         .func => {},
         .box => |b| {
             if (layout_val.tag == .box) {
@@ -2235,7 +2235,7 @@ fn tagDiscriminant(self: *const Self, tag_name: Ident.Idx, union_mono_idx: Monot
             }
             unreachable;
         },
-        .prim, .unit, .record, .tuple, .list, .box, .func, .recursive_placeholder => {
+        .param, .prim, .unit, .record, .tuple, .list, .box, .func, .recursive_placeholder => {
             if (builtin.mode == .Debug) {
                 std.debug.panic(
                     "tagDiscriminant expected tag_union; got {s} for tag ident idx {d} mono_idx={d}",
@@ -3353,7 +3353,7 @@ fn lowerProcWithParamLayouts(
     }
     const func_args = switch (monotype) {
         .func => |f| self.mir_store.monotype_store.getIdxSpan(f.args),
-        .prim, .unit, .record, .tuple, .tag_union, .list, .box, .recursive_placeholder => unreachable,
+        .param, .prim, .unit, .record, .tuple, .tag_union, .list, .box, .recursive_placeholder => unreachable,
     };
     const expected_param_len = func_args.len + @intFromBool(!proc.captures_param.isNone());
     if (builtin.mode == .Debug and expected_param_len != param_layouts.len) {
@@ -3472,7 +3472,7 @@ fn lowerProcWithParamLayouts(
             try self.registerSpecializedMonotypeLayout(f.ret, inferred, &saved_monotype_layouts);
             break :blk inferred;
         },
-        .prim, .unit, .record, .tuple, .tag_union, .list, .box, .recursive_placeholder => unreachable, // Proc expressions always have .func monotype
+        .param, .prim, .unit, .record, .tuple, .tag_union, .list, .box, .recursive_placeholder => unreachable, // Proc expressions always have .func monotype
     };
 
     var lir_body = if (proc.hosted) |hosted|
@@ -3940,6 +3940,7 @@ fn monotypesStructurallyEqualRec(
     return switch (lhs_mono) {
         .recursive_placeholder => unreachable,
         .unit => true,
+        .param => |param| param.module_idx == rhs_mono.param.module_idx and param.var_ == rhs_mono.param.var_,
         .prim => |p| p == rhs_mono.prim,
         .list => |l| try self.monotypesStructurallyEqualRec(l.elem, rhs_mono.list.elem, seen),
         .box => |b| try self.monotypesStructurallyEqualRec(b.inner, rhs_mono.box.inner, seen),
@@ -4668,6 +4669,15 @@ fn adaptValueLayout(
         .record => |record| self.adaptRecordValueLayout(value_expr, record, source_layout, target_layout, region),
         .tuple => |tuple| self.adaptTupleValueLayout(value_expr, tuple, source_layout, target_layout, region),
         .func => self.adaptLayoutByStructure(value_expr, source_layout, target_layout, region),
+        .param => {
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "MirToLir invariant violated: abstract param layout adaptation requested mono_idx={d} source_layout={} target_layout={}",
+                    .{ @intFromEnum(mono_idx), source_layout, target_layout },
+                );
+            }
+            unreachable;
+        },
         .prim, .unit, .tag_union, .list, .box, .recursive_placeholder => value_expr,
     };
 }
@@ -5235,6 +5245,15 @@ fn monotypeContainsFunctionValueInner(
 
     return switch (self.mir_store.monotype_store.getMonotype(mono_idx)) {
         .func => true,
+        .param => {
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "MirToLir invariant violated: function-value containment query reached abstract param mono_idx={d}",
+                    .{@intFromEnum(mono_idx)},
+                );
+            }
+            unreachable;
+        },
         .record => |record| blk: {
             const fields = self.mir_store.monotype_store.getFields(record.fields);
             for (fields) |field| {
@@ -5668,7 +5687,7 @@ fn lowerPatternInternal(
             const list_monotype = self.mir_store.monotype_store.getMonotype(mono_idx);
             const elem_layout = switch (list_monotype) {
                 .list => |l| try self.layoutFromMonotype(l.elem),
-                .prim, .unit, .record, .tuple, .tag_union, .box, .func, .recursive_placeholder => unreachable,
+                .param, .prim, .unit, .record, .tuple, .tag_union, .box, .func, .recursive_placeholder => unreachable,
             };
             const all_patterns = self.mir_store.getPatternSpan(ld.patterns);
             const has_rest = !ld.rest_index.isNone();

@@ -1,6 +1,7 @@
 //! Stores Layout values by index.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const tracy = @import("tracy");
 const base = @import("base");
 const types = @import("types");
@@ -78,6 +79,9 @@ pub const Store = struct {
 
     // Cache to avoid duplicate work - keyed by (module_idx, var) for cross-module correctness
     layouts_by_module_var: std.AutoHashMap(ModuleVarKey, Idx),
+
+    // Stable abstract layout parameters keyed by the unresolved type variable they represent.
+    param_layouts_by_module_var: std.AutoHashMap(ModuleVarKey, Idx),
 
     // Structural interning cache for non-scalar layouts. Keys are canonical
     // binary encodings of layout shape.
@@ -228,6 +232,7 @@ pub const Store = struct {
             .tag_union_variants = tag_union_variants,
             .tag_union_data = tag_union_data,
             .layouts_by_module_var = std.AutoHashMap(ModuleVarKey, Idx).init(allocator),
+            .param_layouts_by_module_var = std.AutoHashMap(ModuleVarKey, Idx).init(allocator),
             .interned_layouts = std.StringHashMap(Idx).init(allocator),
             .interned_recursive_graphs = std.StringHashMap(Idx).init(allocator),
             .scratch_intern_key = .empty,
@@ -290,6 +295,22 @@ pub const Store = struct {
         self.mutable_env = env;
     }
 
+    pub fn ensureParamLayout(self: *Self, module_idx: u32, var_: types.Var) std.mem.Allocator.Error!Idx {
+        const key = ModuleVarKey{ .module_idx = module_idx, .var_ = var_ };
+        if (self.param_layouts_by_module_var.get(key)) |existing| return existing;
+
+        const next_param_id = self.param_layouts_by_module_var.count();
+        if (builtin.mode == .Debug and next_param_id > std.math.maxInt(@FieldType(layout_mod.ParamLayout, "id"))) {
+            std.debug.panic("layout param id overflow for module={d} var={d}", .{ module_idx, @intFromEnum(var_) });
+        }
+
+        const layout_idx = try self.insertLayout(Layout.param(.{
+            .id = @intCast(next_param_id),
+        }));
+        try self.param_layouts_by_module_var.put(key, layout_idx);
+        return layout_idx;
+    }
+
     pub fn deinit(self: *Self) void {
         self.layouts.deinit(self.allocator);
         self.tuple_elems.deinit(self.allocator);
@@ -298,6 +319,7 @@ pub const Store = struct {
         self.tag_union_variants.deinit(self.allocator);
         self.tag_union_data.deinit(self.allocator);
         self.layouts_by_module_var.deinit();
+        self.param_layouts_by_module_var.deinit();
         var interned_keys = self.interned_layouts.keyIterator();
         while (interned_keys.next()) |key_ptr| {
             self.allocator.free(key_ptr.*);
@@ -402,6 +424,10 @@ pub const Store = struct {
     fn buildExistingLayoutInternKey(self: *Self, layout: Layout) std.mem.Allocator.Error!void {
         switch (layout.tag) {
             .scalar => unreachable,
+            .param => {
+                try self.startInternKey(.param);
+                try self.appendInternKeyValue(layout.data.param.id);
+            },
             .zst => try self.startInternKey(.zst),
             .box => {
                 try self.startInternKey(.box);
@@ -1467,6 +1493,12 @@ pub const Store = struct {
                     .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(target_usize.size())),
                 },
             },
+            .param => {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("layoutSizeAlign: abstract layout param has no concrete size/alignment", .{});
+                }
+                unreachable;
+            },
             .box, .box_of_zst => .{
                 .size = @intCast(target_usize.size()), // a Box is just a pointer to refcounted memory
                 .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(target_usize.size())),
@@ -1521,6 +1553,12 @@ pub const Store = struct {
             .scalar => switch (l.data.scalar.tag) {
                 .str => true,
                 else => false,
+            },
+            .param => {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("layoutContainsRefcounted: abstract layout param requires explicit RC metadata", .{});
+                }
+                unreachable;
             },
             .list, .list_of_zst => true,
             .box, .box_of_zst => true,
@@ -2812,21 +2850,8 @@ pub const Store = struct {
                             break :blk Layout.default_num();
                         }
 
-                        // For unconstrained flex vars inside containers (list, box),
-                        // treat them as zero-sized until type scope resolves them.
-                        if (self.work.pending_containers.len > 0) {
-                            const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
-                            if (pending_item.container == .box or pending_item.container == .list) {
-                                if (!flex.constraints.isEmpty()) {
-                                    break :blk Layout.default_num();
-                                }
-                                break :blk Layout.zst();
-                            }
-                        }
-
-                        // Unconstrained flex vars (like the element type of an empty list)
-                        // have no concrete type, so they're zero-sized.
-                        break :blk Layout.zst();
+                        const param_layout_idx = try self.ensureParamLayout(self.current_module_idx, current.var_);
+                        break :blk self.getLayout(param_layout_idx);
                     },
                     .rigid => |rigid| blk: {
                         // Only look up in TypeScope if we're doing cross-module resolution.
@@ -2877,27 +2902,8 @@ pub const Store = struct {
                             break :blk Layout.default_num();
                         }
 
-                        // For rigid vars inside containers (list, box), we need to determine
-                        // the element layout. If the rigid var has constraints, default to Dec.
-                        if (self.work.pending_containers.len > 0) {
-                            const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
-                            if (pending_item.container == .box or pending_item.container == .list) {
-                                // If the rigid var has any constraints, assume it's numeric and default to Dec.
-                                if (!rigid.constraints.isEmpty()) {
-                                    break :blk Layout.default_num();
-                                }
-                                break :blk Layout.zst();
-                            }
-                        }
-                        // Unconstrained rigid vars (like from empty list element types) can be ZST.
-                        // This is safe because the code using them either runs with concrete
-                        // types or doesn't run at all (like for empty list iterations).
-                        if (rigid.constraints.isEmpty()) {
-                            break :blk Layout.zst();
-                        }
-
-                        // Rigid vars with constraints must be resolvable.
-                        unreachable;
+                        const param_layout_idx = try self.ensureParamLayout(self.current_module_idx, current.var_);
+                        break :blk self.getLayout(param_layout_idx);
                     },
                     .alias => |alias| {
                         // Follow the alias by updating the work item

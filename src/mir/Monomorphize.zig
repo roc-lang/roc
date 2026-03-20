@@ -5161,6 +5161,7 @@ pub const Pass = struct {
         switch (mono) {
             .unit => return result.monotype_store.unit_idx,
             .prim => |prim| return result.monotype_store.primIdx(prim),
+            .param => |param| return try result.monotype_store.addMonotype(self.allocator, .{ .param = param }),
             .recursive_placeholder => {
                 if (builtin.mode == .Debug) {
                     std.debug.panic("remapMonotypeBetweenModules: unexpected recursive_placeholder", .{});
@@ -5174,6 +5175,7 @@ pub const Pass = struct {
         try remapped.put(monotype, placeholder);
 
         const mapped_mono: Monotype.Monotype = switch (mono) {
+            .param => |param| .{ .param = param },
             .list => |list_mono| .{ .list = .{
                 .elem = try self.remapMonotypeBetweenModulesRec(
                     result,
@@ -5924,7 +5926,7 @@ pub const Pass = struct {
         if (monotype.isNone()) return;
 
         switch (result.monotype_store.getMonotype(monotype)) {
-            .unit, .prim => {},
+            .unit, .prim, .param => {},
             .list => |list_mono| try self.resolveStrInspektHelperProcInstsForMonotype(result, module_idx, list_mono.elem),
             .box => |box_mono| {
                 try self.ensureBuiltinBoxUnboxProcInst(result, module_idx, monotype, box_mono.inner);
@@ -8808,6 +8810,7 @@ pub const Pass = struct {
         return switch (lhs_mono) {
             .recursive_placeholder => unreachable,
             .unit => true,
+            .param => |lhs_param| lhs_param.module_idx == rhs_mono.param.module_idx and lhs_param.var_ == rhs_mono.param.var_,
             .prim => |lhs_prim| lhs_prim == rhs_mono.prim,
             .list => |lhs_list| try self.monotypesStructurallyEqualRec(result, lhs_list.elem, rhs_mono.list.elem, seen),
             .box => |lhs_box| try self.monotypesStructurallyEqualRec(result, lhs_box.inner, rhs_mono.box.inner, seen),
@@ -8889,6 +8892,7 @@ pub const Pass = struct {
         return switch (lhs_mono) {
             .recursive_placeholder => unreachable,
             .unit => true,
+            .param => |lhs_param| lhs_param.module_idx == rhs_mono.param.module_idx and lhs_param.var_ == rhs_mono.param.var_,
             .prim => |lhs_prim| lhs_prim == rhs_mono.prim,
             .list => |lhs_list| try self.monotypesStructurallyEqualAcrossModulesRec(
                 result,

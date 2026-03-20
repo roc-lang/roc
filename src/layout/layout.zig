@@ -4,6 +4,7 @@
 //! (using type and target information from previous steps in compilation).
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const types = @import("types");
 const collections = @import("collections");
@@ -17,6 +18,7 @@ const target = base.target;
 /// Tag for Layout variants
 pub const LayoutTag = enum(u4) {
     scalar,
+    param,
     box,
     box_of_zst, // Box of a zero-sized type, e.g. Box({}) - needs a special-cased runtime implementation
     list,
@@ -148,6 +150,7 @@ pub const Closure = struct {
 /// The largest variant must fit in 28 bits to leave room for the u4 tag
 pub const LayoutUnion = packed union {
     scalar: Scalar,
+    param: ParamLayout,
     box: Idx,
     box_of_zst: void,
     list: Idx,
@@ -536,8 +539,9 @@ pub const ScalarInfo = struct {
 /// sizes on 32-bit and 64-bit targets. No other target information is needed.
 ///
 /// When a Roc type gets converted to a Layout, zero-sized types (ZSTs)
-/// like empty records, empty tag unions, and phantom type parameters are
-/// represented with a first-class ZST layout (`.zst` tag). ZST fields in
+/// like empty records and empty tag unions are represented with a first-class
+/// ZST layout (`.zst` tag). Explicit abstract layout parameters remain first-
+/// class `.param` layouts instead of collapsing to ZST. ZST fields in
 /// records and tuples are kept (not dropped) since they're a normal part
 /// of the type structure, they just happen to have size 0.
 /// (Exception: List({}) and Box({}) get special layouts `.list_of_zst` and
@@ -563,6 +567,12 @@ pub const Layout = packed struct {
                 .int => self.data.scalar.data.int.alignment(),
                 .frac => self.data.scalar.data.frac.alignment(),
                 .str => target_usize.alignment(),
+            },
+            .param => {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("Layout.alignment: abstract layout param has no concrete alignment", .{});
+                }
+                unreachable;
             },
             .box, .box_of_zst => target_usize.alignment(),
             .list, .list_of_zst => target_usize.alignment(),
@@ -602,6 +612,10 @@ pub const Layout = packed struct {
     /// str layout
     pub fn str() Layout {
         return Layout{ .data = .{ .scalar = .{ .data = .{ .str = {} }, .tag = .str } }, .tag = .scalar };
+    }
+
+    pub fn param(id: ParamLayout) Layout {
+        return Layout{ .data = .{ .param = id }, .tag = .param };
     }
 
     /// box layout with the given element layout
@@ -658,6 +672,12 @@ pub const Layout = packed struct {
                 .str => true, // RocStr needs refcounting
                 else => false,
             },
+            .param => {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("Layout.isRefcounted: abstract layout param requires explicit RC metadata", .{});
+                }
+                unreachable;
+            },
             .list, .list_of_zst => true, // Lists need refcounting
             .box, .box_of_zst => true, // Boxes need refcounting
             else => false,
@@ -675,6 +695,7 @@ pub const Layout = packed struct {
                 .int => self.data.scalar.data.int == other.data.scalar.data.int,
                 .frac => self.data.scalar.data.frac == other.data.scalar.data.frac,
             },
+            .param => self.data.param.id == other.data.param.id,
             .box => self.data.box == other.data.box,
             .box_of_zst => true, // No additional data
             .list => self.data.list == other.data.list,
@@ -957,3 +978,11 @@ test "Layout scalar precision coverage" {
         try testing.expectEqual(expected_tag, layout.tag);
     }
 }
+pub const ParamLayout = packed struct {
+    id: @Type(.{
+        .int = .{
+            .signedness = .unsigned,
+            .bits = layout_bit_size - @bitSizeOf(LayoutTag),
+        },
+    }),
+};
