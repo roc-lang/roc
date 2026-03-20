@@ -3191,6 +3191,16 @@ test "dev lowering: imported List.any directly calls passed predicate member" {
     );
     defer lower.deinit();
 
+    const root_cir_expr = resources.module_env.store.getExpr(resources.expr_idx);
+    if (root_cir_expr == .e_binop) {
+        if (monomorphization.getExprMonotype(.none, null, 1, root_cir_expr.e_binop.lhs)) |lhs_mono| {
+            std.debug.print("root lhs mono={any}\n", .{monomorphization.monotype_store.getMonotype(lhs_mono.idx)});
+        }
+        if (monomorphization.getExprMonotype(.none, null, 1, root_cir_expr.e_binop.rhs)) |rhs_mono| {
+            std.debug.print("root rhs mono={any}\n", .{monomorphization.monotype_store.getMonotype(rhs_mono.idx)});
+        }
+    }
+
     const mir_expr = try lower.lowerExpr(resources.expr_idx);
     const FindCall = struct {
         fn findCall(store: *const MIR.Store, expr_id: MIR.ExprId) ?MIR.ExprId {
@@ -7610,6 +7620,50 @@ test "debug Try equality lowering" {
     defer lower.deinit();
 
     const mir_expr = try lower.lowerExpr(resources.expr_idx);
+    if (monomorphization.getDispatchExprProcInst(.none, null, 1, resources.expr_idx)) |root_proc_inst_id| {
+        const proc_inst = monomorphization.getProcInst(root_proc_inst_id);
+        const template = monomorphization.getProcTemplate(proc_inst.template);
+        const template_env = all_module_envs[template.module_idx];
+        const template_expr = template_env.store.getExpr(template.cir_expr);
+        std.debug.print(
+            "root dispatch proc_inst={d} template={d} kind={s} module={d} expr={d} expr_tag={s}\n",
+            .{
+                @intFromEnum(root_proc_inst_id),
+                @intFromEnum(proc_inst.template),
+                @tagName(template.kind),
+                template.module_idx,
+                @intFromEnum(template.cir_expr),
+                @tagName(template_expr),
+            },
+        );
+        if (template_expr == .e_lambda) {
+            const lambda = template_expr.e_lambda;
+            std.debug.print(
+                "  template lambda body={d} body_tag={s} arg_count={d}\n",
+                .{
+                    @intFromEnum(lambda.body),
+                    @tagName(template_env.store.getExpr(lambda.body)),
+                    template_env.store.slicePatterns(lambda.args).len,
+                },
+            );
+        }
+    }
+    if (monomorphization.getCallSiteProcInst(.none, null, 1, resources.expr_idx)) |root_proc_inst_id| {
+        const proc_inst = monomorphization.getProcInst(root_proc_inst_id);
+        const template = monomorphization.getProcTemplate(proc_inst.template);
+        const template_env = all_module_envs[template.module_idx];
+        std.debug.print(
+            "root proc_inst={d} template={d} kind={s} module={d} expr={d} expr_tag={s}\n",
+            .{
+                @intFromEnum(root_proc_inst_id),
+                @intFromEnum(proc_inst.template),
+                @tagName(template.kind),
+                template.module_idx,
+                @intFromEnum(template.cir_expr),
+                @tagName(template_env.store.getExpr(template.cir_expr)),
+            },
+        );
+    }
 
     const DumpMir = struct {
         fn printExpr(store: *const MIR.Store, expr_id: MIR.ExprId, depth: usize) void {
@@ -7663,6 +7717,22 @@ test "debug Try equality lowering" {
     std.debug.print("TRY EQ MIR\n", .{});
     DumpMir.printExpr(&mir_store, mir_expr, 1);
     for (mir_store.getProcs(), 0..) |proc, proc_idx| {
+        const fn_mono = mir_store.monotype_store.getMonotype(proc.fn_monotype);
+        if (fn_mono == .func) {
+            for (mir_store.monotype_store.getIdxSpan(fn_mono.func.args), 0..) |arg_mono_idx, arg_i| {
+                const arg_mono = mir_store.monotype_store.getMonotype(arg_mono_idx);
+                if (arg_mono == .tag_union) {
+                    const tags = mir_store.monotype_store.getTags(arg_mono.tag_union.tags);
+                    std.debug.print("  fn arg mono[{d}] tags={d}\n", .{ arg_i, tags.len });
+                    for (tags, 0..) |tag, tag_i| {
+                        std.debug.print(
+                            "    tag[{d}] name={s} payloads={d}\n",
+                            .{ tag_i, tag.name.text(all_module_envs[0..]), tag.payloads.len },
+                        );
+                    }
+                }
+            }
+        }
         std.debug.print(
             "mir proc {d} body={d} fn_mono={any} ret_mono={any}\n",
             .{

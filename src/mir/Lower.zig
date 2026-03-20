@@ -3540,6 +3540,135 @@ fn lowerPatternSpan(self: *Self, module_env: *const ModuleEnv, span: CIR.Pattern
     return try self.store.addPatternSpan(self.allocator, self.scratch_pattern_ids.sliceFromStart(scratch_top));
 }
 
+fn bindPatternMonotypes(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    pattern_idx: CIR.Pattern.Idx,
+    monotype: Monotype.Idx,
+) Allocator.Error!void {
+    if (monotype.isNone()) return;
+
+    if (builtin.mode == .Debug) {
+        const pattern = module_env.store.getPattern(pattern_idx);
+        if (pattern == .assign) {
+            std.debug.print(
+                "bindPatternMonotypes pattern={d} ident={s} mono={s} proc_ctx={d}\n",
+                .{
+                    @intFromEnum(pattern_idx),
+                    module_env.getIdent(pattern.assign.ident),
+                    @tagName(self.store.monotype_store.getMonotype(monotype)),
+                    @intFromEnum(self.current_proc_inst_context),
+                },
+            );
+        }
+    }
+
+    try self.bindTypeVarMonotypes(ModuleEnv.varFrom(pattern_idx), monotype);
+
+    const pattern = module_env.store.getPattern(pattern_idx);
+    switch (pattern) {
+        .assign,
+        .underscore,
+        .num_literal,
+        .str_literal,
+        .dec_literal,
+        .small_dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .runtime_error,
+        => {},
+        .as => |a| {
+            try self.bindPatternMonotypes(module_env, a.pattern, monotype);
+        },
+        .nominal => |nom| {
+            try self.bindPatternMonotypes(module_env, nom.backing_pattern, monotype);
+        },
+        .nominal_external => |nom| {
+            try self.bindPatternMonotypes(module_env, nom.backing_pattern, monotype);
+        },
+        .applied_tag => |tag| {
+            const mono_tags = switch (self.store.monotype_store.getMonotype(monotype)) {
+                .tag_union => |tag_union| self.store.monotype_store.getTags(tag_union.tags),
+                else => typeBindingInvariant(
+                    "bindPatternMonotypes(applied_tag): expected tag_union monotype, found '{s}'",
+                    .{@tagName(self.store.monotype_store.getMonotype(monotype))},
+                ),
+            };
+            const tag_idx = self.tagIndexByName(tag.name, mono_tags);
+            const mono_payloads = self.store.monotype_store.getIdxSpan(mono_tags[tag_idx].payloads);
+            const payload_patterns = module_env.store.slicePatterns(tag.args);
+
+            if (builtin.mode == .Debug and payload_patterns.len != mono_payloads.len) {
+                std.debug.panic(
+                    "bindPatternMonotypes(applied_tag): payload arity mismatch for tag '{s}' (patterns={d}, monos={d})",
+                    .{ module_env.getIdent(tag.name), payload_patterns.len, mono_payloads.len },
+                );
+            }
+
+            for (payload_patterns, mono_payloads) |payload_pattern_idx, payload_mono| {
+                try self.bindPatternMonotypes(module_env, payload_pattern_idx, payload_mono);
+            }
+        },
+        .record_destructure => |record_pat| {
+            const mono_fields = switch (self.store.monotype_store.getMonotype(monotype)) {
+                .record => |record_mono| self.store.monotype_store.getFields(record_mono.fields),
+                .unit => &.{},
+                else => typeBindingInvariant(
+                    "bindPatternMonotypes(record_destructure): expected record monotype, found '{s}'",
+                    .{@tagName(self.store.monotype_store.getMonotype(monotype))},
+                ),
+            };
+
+            for (module_env.store.sliceRecordDestructs(record_pat.destructs)) |destruct_idx| {
+                const destruct = module_env.store.getRecordDestruct(destruct_idx);
+                const pat_idx = destruct.kind.toPatternIdx();
+                const field_idx = self.recordFieldIndexByName(destruct.label, mono_fields);
+                try self.bindPatternMonotypes(module_env, pat_idx, mono_fields[field_idx].type_idx);
+            }
+        },
+        .list => |list_pat| {
+            const elem_mono = switch (self.store.monotype_store.getMonotype(monotype)) {
+                .list => |list_mono| list_mono.elem,
+                else => typeBindingInvariant(
+                    "bindPatternMonotypes(list): expected list monotype, found '{s}'",
+                    .{@tagName(self.store.monotype_store.getMonotype(monotype))},
+                ),
+            };
+
+            for (module_env.store.slicePatterns(list_pat.patterns)) |elem_pattern_idx| {
+                try self.bindPatternMonotypes(module_env, elem_pattern_idx, elem_mono);
+            }
+
+            if (list_pat.rest_info) |rest| {
+                if (rest.pattern) |rest_pattern_idx| {
+                    try self.bindPatternMonotypes(module_env, rest_pattern_idx, monotype);
+                }
+            }
+        },
+        .tuple => |tuple_pat| {
+            const mono_elems = switch (self.store.monotype_store.getMonotype(monotype)) {
+                .tuple => |tuple_mono| self.store.monotype_store.getIdxSpan(tuple_mono.elems),
+                else => typeBindingInvariant(
+                    "bindPatternMonotypes(tuple): expected tuple monotype, found '{s}'",
+                    .{@tagName(self.store.monotype_store.getMonotype(monotype))},
+                ),
+            };
+            const elem_patterns = module_env.store.slicePatterns(tuple_pat.patterns);
+
+            if (builtin.mode == .Debug and elem_patterns.len != mono_elems.len) {
+                std.debug.panic(
+                    "bindPatternMonotypes(tuple): arity mismatch (patterns={d}, monos={d})",
+                    .{ elem_patterns.len, mono_elems.len },
+                );
+            }
+
+            for (elem_patterns, mono_elems) |elem_pattern_idx, elem_mono| {
+                try self.bindPatternMonotypes(module_env, elem_pattern_idx, elem_mono);
+            }
+        },
+    }
+}
+
 /// Lower a CIR pattern to an MIR pattern.
 fn lowerPattern(self: *Self, module_env: *const ModuleEnv, pattern_idx: CIR.Pattern.Idx) Allocator.Error!MIR.PatternId {
     const pattern = module_env.store.getPattern(pattern_idx);
@@ -3551,6 +3680,7 @@ fn lowerPattern(self: *Self, module_env: *const ModuleEnv, pattern_idx: CIR.Patt
         &self.type_var_seen,
         &self.nominal_cycle_breakers,
     );
+    try self.bindPatternMonotypes(module_env, pattern_idx, monotype);
 
     const lowered = switch (pattern) {
         .assign => blk: {
@@ -3687,6 +3817,19 @@ fn lowerIf(self: *Self, module_env: *const ModuleEnv, if_expr: anytype, monotype
 /// Lower `e_match` to MIR match.
 fn lowerMatch(self: *Self, module_env: *const ModuleEnv, match_expr: CIR.Expr.Match, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
     const cond = try self.lowerExpr(match_expr.cond);
+    const cond_monotype = self.store.typeOf(cond);
+    if (builtin.mode == .Debug) {
+        std.debug.print(
+            "lowerMatch expr={d} cond_expr={d} cond_tag={s} cond_mono={s} proc_ctx={d}\n",
+            .{
+                @intFromEnum(match_expr.cond),
+                @intFromEnum(match_expr.cond),
+                @tagName(module_env.store.getExpr(match_expr.cond)),
+                @tagName(self.store.monotype_store.getMonotype(cond_monotype)),
+                @intFromEnum(self.current_proc_inst_context),
+            },
+        );
+    }
     const cir_branch_indices = module_env.store.sliceMatchBranches(match_expr.branches);
 
     const branches_top = self.scratch_branches.top();
@@ -3694,13 +3837,6 @@ fn lowerMatch(self: *Self, module_env: *const ModuleEnv, match_expr: CIR.Expr.Ma
 
     for (cir_branch_indices) |branch_idx| {
         const cir_branch = module_env.store.getMatchBranch(branch_idx);
-        const body = try self.lowerExpr(cir_branch.value);
-        const guard = if (cir_branch.guard) |guard_idx|
-            try self.lowerExpr(guard_idx)
-        else
-            MIR.ExprId.none;
-
-        // Lower branch patterns
         const cir_bp_indices = module_env.store.sliceMatchBranchPatterns(cir_branch.patterns);
         const bp_top = self.scratch_branch_patterns.top();
         defer self.scratch_branch_patterns.clearFrom(bp_top);
@@ -3717,9 +3853,16 @@ fn lowerMatch(self: *Self, module_env: *const ModuleEnv, match_expr: CIR.Expr.Ma
                     try self.alignAlternativePatternSymbols(module_env, rep_pattern_idx, cir_bp.pattern);
                 }
             }
+            try self.bindPatternMonotypes(module_env, cir_bp.pattern, cond_monotype);
             const pat = try self.lowerPattern(module_env, cir_bp.pattern);
             try self.scratch_branch_patterns.append(.{ .pattern = pat, .degenerate = cir_bp.degenerate });
         }
+
+        const body = try self.lowerExpr(cir_branch.value);
+        const guard = if (cir_branch.guard) |guard_idx|
+            try self.lowerExpr(guard_idx)
+        else
+            MIR.ExprId.none;
 
         const bp_span = try self.store.addBranchPatterns(self.allocator, self.scratch_branch_patterns.sliceFromStart(bp_top));
         try self.scratch_branches.append(.{ .patterns = bp_span, .body = body, .guard = guard });
@@ -4882,6 +5025,143 @@ fn lowerProcInst(self: *Self, proc_inst_id: Monomorphize.ProcInstId) Allocator.E
                 module_idx,
             );
             try self.type_var_seen.put(entry.key.type_var, imported_mono);
+        }
+    }
+
+    if (builtin.mode == .Debug) {
+        const proc_mono = self.store.monotype_store.getMonotype(proc_monotype);
+        if (proc_mono == .func) {
+            const arg_monos = self.store.monotype_store.getIdxSpan(proc_mono.func.args);
+            if (arg_monos.len == 2) {
+                const lhs_mono = self.store.monotype_store.getMonotype(arg_monos[0]);
+                const rhs_mono = self.store.monotype_store.getMonotype(arg_monos[1]);
+                if (lhs_mono == .tag_union and rhs_mono == .tag_union) {
+                    const template_expr = module_env.store.getExpr(template.cir_expr);
+                    std.debug.print(
+                        "lowerProcInst proc_inst={d} template={d} module={d} expr={d} expr_tag={s}",
+                        .{
+                            @intFromEnum(proc_inst_id),
+                            @intFromEnum(proc_inst.template),
+                            module_idx,
+                            @intFromEnum(template.cir_expr),
+                            @tagName(template_expr),
+                        },
+                    );
+                    if (template_expr == .e_lambda) {
+                        const lambda = template_expr.e_lambda;
+                        const body_expr = module_env.store.getExpr(lambda.body);
+                        std.debug.print(
+                            " body={d} body_tag={s}",
+                            .{
+                                @intFromEnum(lambda.body),
+                                @tagName(body_expr),
+                            },
+                        );
+                        if (body_expr == .e_match) {
+                            const branches = module_env.store.sliceMatchBranches(body_expr.e_match.branches);
+                            std.debug.print(" branches={d}", .{branches.len});
+                            for (branches, 0..) |branch_idx, branch_i| {
+                                const branch = module_env.store.getMatchBranch(branch_idx);
+                                const branch_patterns = module_env.store.sliceMatchBranchPatterns(branch.patterns);
+                                const body = module_env.store.getExpr(branch.value);
+                                std.debug.print(
+                                    " [b{d} pats={d} body={s}",
+                                    .{ branch_i, branch_patterns.len, @tagName(body) },
+                                );
+                                for (branch_patterns) |bp_idx| {
+                                    const bp = module_env.store.getMatchBranchPattern(bp_idx);
+                                    const pat = module_env.store.getPattern(bp.pattern);
+                                    std.debug.print(" pat={d}:{s}", .{ @intFromEnum(bp.pattern), @tagName(pat) });
+                                    if (pat == .applied_tag) {
+                                        for (module_env.store.slicePatterns(pat.applied_tag.args)) |payload_pat_idx| {
+                                            const payload_pat = module_env.store.getPattern(payload_pat_idx);
+                                            std.debug.print(
+                                                " payload={d}:{s}",
+                                                .{ @intFromEnum(payload_pat_idx), @tagName(payload_pat) },
+                                            );
+                                            if (payload_pat == .assign) {
+                                                std.debug.print("({s})", .{module_env.getIdent(payload_pat.assign.ident)});
+                                            }
+                                        }
+                                    } else if (pat == .nominal_external) {
+                                        const backing = module_env.store.getPattern(pat.nominal_external.backing_pattern);
+                                        std.debug.print(
+                                            " backing={d}:{s}",
+                                            .{ @intFromEnum(pat.nominal_external.backing_pattern), @tagName(backing) },
+                                        );
+                                        if (backing == .applied_tag) {
+                                            for (module_env.store.slicePatterns(backing.applied_tag.args)) |payload_pat_idx| {
+                                                const payload_pat = module_env.store.getPattern(payload_pat_idx);
+                                                std.debug.print(
+                                                    " payload={d}:{s}",
+                                                    .{ @intFromEnum(payload_pat_idx), @tagName(payload_pat) },
+                                                );
+                                                if (payload_pat == .assign) {
+                                                    std.debug.print("({s})", .{module_env.getIdent(payload_pat.assign.ident)});
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                std.debug.print("]", .{});
+                                if (body == .e_block) {
+                                    const final_expr = module_env.store.getExpr(body.e_block.final_expr);
+                                    std.debug.print(" final={s}", .{@tagName(final_expr)});
+                                    if (final_expr == .e_match) {
+                                        const inner_branches = module_env.store.sliceMatchBranches(final_expr.e_match.branches);
+                                        std.debug.print(" inner_branches={d}", .{inner_branches.len});
+                                        for (inner_branches, 0..) |inner_branch_idx, inner_i| {
+                                            const inner_branch = module_env.store.getMatchBranch(inner_branch_idx);
+                                            const inner_patterns = module_env.store.sliceMatchBranchPatterns(inner_branch.patterns);
+                                            std.debug.print(
+                                                " [ib{d} pats={d} body={s}",
+                                                .{ inner_i, inner_patterns.len, @tagName(module_env.store.getExpr(inner_branch.value)) },
+                                            );
+                                            for (inner_patterns) |inner_bp_idx| {
+                                                const inner_bp = module_env.store.getMatchBranchPattern(inner_bp_idx);
+                                                const inner_pat = module_env.store.getPattern(inner_bp.pattern);
+                                                std.debug.print(" pat={d}:{s}", .{ @intFromEnum(inner_bp.pattern), @tagName(inner_pat) });
+                                                if (inner_pat == .applied_tag) {
+                                                    for (module_env.store.slicePatterns(inner_pat.applied_tag.args)) |payload_pat_idx| {
+                                                        const payload_pat = module_env.store.getPattern(payload_pat_idx);
+                                                        std.debug.print(
+                                                            " payload={d}:{s}",
+                                                            .{ @intFromEnum(payload_pat_idx), @tagName(payload_pat) },
+                                                        );
+                                                        if (payload_pat == .assign) {
+                                                            std.debug.print("({s})", .{module_env.getIdent(payload_pat.assign.ident)});
+                                                        }
+                                                    }
+                                                } else if (inner_pat == .nominal_external) {
+                                                    const backing = module_env.store.getPattern(inner_pat.nominal_external.backing_pattern);
+                                                    std.debug.print(
+                                                        " backing={d}:{s}",
+                                                        .{ @intFromEnum(inner_pat.nominal_external.backing_pattern), @tagName(backing) },
+                                                    );
+                                                    if (backing == .applied_tag) {
+                                                        for (module_env.store.slicePatterns(backing.applied_tag.args)) |payload_pat_idx| {
+                                                            const payload_pat = module_env.store.getPattern(payload_pat_idx);
+                                                            std.debug.print(
+                                                                " payload={d}:{s}",
+                                                                .{ @intFromEnum(payload_pat_idx), @tagName(payload_pat) },
+                                                            );
+                                                            if (payload_pat == .assign) {
+                                                                std.debug.print("({s})", .{module_env.getIdent(payload_pat.assign.ident)});
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            std.debug.print("]", .{});
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    std.debug.print("\n", .{});
+                }
+            }
         }
     }
 
@@ -6072,6 +6352,34 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
             const rcv_mono_idx = try self.resolveMonotype(da.receiver);
             if (rcv_mono_idx.isNone()) break :structural_eq;
             const rcv_mono = self.store.monotype_store.getMonotype(rcv_mono_idx);
+            if (builtin.mode == .Debug and std.mem.eql(u8, module_env.getIdent(da.field_name), "is_eq")) {
+                const receiver_expr = module_env.store.getExpr(da.receiver);
+                std.debug.print(
+                    "lowerDotAccess is_eq expr={d} receiver_expr={d} receiver_tag={s} receiver_mono={s} proc_ctx={d}",
+                    .{
+                        @intFromEnum(expr_idx),
+                        @intFromEnum(da.receiver),
+                        @tagName(receiver_expr),
+                        @tagName(rcv_mono),
+                        @intFromEnum(self.current_proc_inst_context),
+                    },
+                );
+                if (receiver_expr == .e_lookup_local) {
+                    const pat_idx = receiver_expr.e_lookup_local.pattern_idx;
+                    const pat = module_env.store.getPattern(pat_idx);
+                    std.debug.print(
+                        " lookup_pattern={d} pattern_tag={s}",
+                        .{
+                            @intFromEnum(pat_idx),
+                            @tagName(pat),
+                        },
+                    );
+                    if (pat == .assign) {
+                        std.debug.print(" ident={s}", .{module_env.getIdent(pat.assign.ident)});
+                    }
+                }
+                std.debug.print("\n", .{});
+            }
             switch (rcv_mono) {
                 // Records, tuples, lists, and unit are always structural.
                 .record, .tuple, .list, .unit => {},
