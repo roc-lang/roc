@@ -68,6 +68,11 @@ const ForeignParamLookup = struct {
     owner_proc: MIR.ProcId,
 };
 
+const MissingFunctionLookup = struct {
+    expr_id: MIR.ExprId,
+    symbol: MIR.Symbol,
+};
+
 fn dumpMirExpr(mir_store: *const MIR.Store, expr_id: MIR.ExprId, depth: usize) void {
     const indent = depth * 2;
     for (0..indent) |_| std.debug.print(" ", .{});
@@ -240,6 +245,109 @@ fn firstForeignParamLookup(
             return firstForeignParamLookup(mir_store, while_loop.body, proc_id, all_param_symbols);
         },
         .return_expr => |ret| return firstForeignParamLookup(mir_store, ret.expr, proc_id, all_param_symbols),
+    }
+}
+
+fn firstReachableMissingFunctionLookup(
+    mir_store: *const MIR.Store,
+    ls_store: *const LambdaSet.Store,
+    expr_id: MIR.ExprId,
+) ?MissingFunctionLookup {
+    const expr = mir_store.getExpr(expr_id);
+    switch (expr) {
+        .lookup => |symbol| {
+            if (mir_store.monotype_store.getMonotype(mir_store.typeOf(expr_id)) != .func) return null;
+            if (ls_store.getExprLambdaSet(expr_id) != null) return null;
+            if (ls_store.getSymbolLambdaSet(symbol) != null) return null;
+            return .{
+                .expr_id = expr_id,
+                .symbol = symbol,
+            };
+        },
+        .list => |list| {
+            for (mir_store.getExprSpan(list.elems)) |elem| {
+                if (firstReachableMissingFunctionLookup(mir_store, ls_store, elem)) |found| return found;
+            }
+            return null;
+        },
+        .struct_ => |struct_| {
+            for (mir_store.getExprSpan(struct_.fields)) |field| {
+                if (firstReachableMissingFunctionLookup(mir_store, ls_store, field)) |found| return found;
+            }
+            return null;
+        },
+        .tag => |tag| {
+            for (mir_store.getExprSpan(tag.args)) |arg| {
+                if (firstReachableMissingFunctionLookup(mir_store, ls_store, arg)) |found| return found;
+            }
+            return null;
+        },
+        .match_expr => |match_expr| {
+            if (firstReachableMissingFunctionLookup(mir_store, ls_store, match_expr.cond)) |found| return found;
+            for (mir_store.getBranches(match_expr.branches)) |branch| {
+                if (!branch.guard.isNone()) {
+                    if (firstReachableMissingFunctionLookup(mir_store, ls_store, branch.guard)) |found| return found;
+                }
+                if (firstReachableMissingFunctionLookup(mir_store, ls_store, branch.body)) |found| return found;
+            }
+            return null;
+        },
+        .closure_make => |closure| return firstReachableMissingFunctionLookup(mir_store, ls_store, closure.captures),
+        .call => |call| {
+            if (firstReachableMissingFunctionLookup(mir_store, ls_store, call.func)) |found| return found;
+            for (mir_store.getExprSpan(call.args)) |arg| {
+                if (firstReachableMissingFunctionLookup(mir_store, ls_store, arg)) |found| return found;
+            }
+            return null;
+        },
+        .block => |block| {
+            for (mir_store.getStmts(block.stmts)) |stmt| {
+                switch (stmt) {
+                    .decl_const, .decl_var, .mutate_var => |binding| {
+                        if (firstReachableMissingFunctionLookup(mir_store, ls_store, binding.expr)) |found| return found;
+                    },
+                }
+            }
+            return firstReachableMissingFunctionLookup(mir_store, ls_store, block.final_expr);
+        },
+        .borrow_scope => |borrow_scope| {
+            for (mir_store.getBorrowBindings(borrow_scope.bindings)) |binding| {
+                if (firstReachableMissingFunctionLookup(mir_store, ls_store, binding.expr)) |found| return found;
+            }
+            return firstReachableMissingFunctionLookup(mir_store, ls_store, borrow_scope.body);
+        },
+        .struct_access => |access| return firstReachableMissingFunctionLookup(mir_store, ls_store, access.struct_),
+        .str_escape_and_quote => |inner| return firstReachableMissingFunctionLookup(mir_store, ls_store, inner),
+        .run_low_level => |low_level| {
+            for (mir_store.getExprSpan(low_level.args)) |arg| {
+                if (firstReachableMissingFunctionLookup(mir_store, ls_store, arg)) |found| return found;
+            }
+            return null;
+        },
+        .dbg_expr => |dbg_expr| return firstReachableMissingFunctionLookup(mir_store, ls_store, dbg_expr.expr),
+        .expect => |expect| return firstReachableMissingFunctionLookup(mir_store, ls_store, expect.body),
+        .for_loop => |for_loop| {
+            if (firstReachableMissingFunctionLookup(mir_store, ls_store, for_loop.list)) |found| return found;
+            return firstReachableMissingFunctionLookup(mir_store, ls_store, for_loop.body);
+        },
+        .while_loop => |while_loop| {
+            if (firstReachableMissingFunctionLookup(mir_store, ls_store, while_loop.cond)) |found| return found;
+            return firstReachableMissingFunctionLookup(mir_store, ls_store, while_loop.body);
+        },
+        .return_expr => |ret| return firstReachableMissingFunctionLookup(mir_store, ls_store, ret.expr),
+        .proc_ref,
+        .runtime_err_can,
+        .runtime_err_type,
+        .runtime_err_ellipsis,
+        .runtime_err_anno_only,
+        .int,
+        .frac_f32,
+        .frac_f64,
+        .dec,
+        .str,
+        .crash,
+        .break_expr,
+        => return null,
     }
 }
 
@@ -2134,6 +2242,67 @@ test "cross-module runExpr: List.keep_if callable lookup sites retain lambda set
             ls_store.getExprLambdaSet(func_expr_id) != null or
                 ls_store.getSymbolLambdaSet(func_expr.lookup) != null,
         );
+    }
+}
+
+test "cross-module runExpr: REPL-style List.keep_if function lookups retain lambda sets" {
+    var env = try MirTestEnv.initExpr("List.keep_if([1.I64, 2.I64, 3.I64, 4.I64, 5.I64], |x| x > 2)");
+    defer env.deinit();
+
+    const defs = env.module_env.store.sliceDefs(env.module_env.all_defs);
+    const main_def = env.module_env.store.getDef(defs[0]);
+    const region = env.module_env.store.getExprRegion(main_def.expr);
+
+    const scratch_top = env.module_env.store.scratchExprTop();
+    defer env.module_env.store.clearScratchExprsFrom(scratch_top);
+    try env.module_env.store.addScratchExpr(main_def.expr);
+    const inspect_args = try env.module_env.store.exprSpanFrom(scratch_top);
+    const inspect_expr = try env.module_env.addExpr(.{ .e_run_low_level = .{
+        .op = .str_inspekt,
+        .args = inspect_args,
+    } }, region);
+
+    const all_module_envs = [_]*ModuleEnv{ @constCast(env.builtin_module.env), env.module_env };
+
+    var monomorphization = try Monomorphize.runExpr(
+        test_allocator,
+        @as([]const *ModuleEnv, all_module_envs[0..]),
+        &env.module_env.types,
+        1,
+        null,
+        inspect_expr,
+    );
+    defer monomorphization.deinit(test_allocator);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    var lower = try Lower.init(
+        test_allocator,
+        &mir_store,
+        &monomorphization,
+        @as([]const *ModuleEnv, all_module_envs[0..]),
+        &env.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    _ = try lower.lowerExpr(inspect_expr);
+
+    var ls_store = try LambdaSet.infer(test_allocator, &mir_store, @as([]const *ModuleEnv, all_module_envs[0..]));
+    defer ls_store.deinit(test_allocator);
+
+    for (mir_store.getProcs()) |proc| {
+        if (proc.body.isNone()) continue;
+        if (firstReachableMissingFunctionLookup(&mir_store, &ls_store, proc.body)) |missing| {
+            std.debug.print(
+                "missing REPL-style function lookup lambda set: expr={d} symbol={d}\n",
+                .{ @intFromEnum(missing.expr_id), missing.symbol.raw() },
+            );
+            dumpMirExpr(&mir_store, proc.body, 1);
+            return error.TestUnexpectedResult;
+        }
     }
 }
 

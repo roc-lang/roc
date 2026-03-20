@@ -4253,8 +4253,11 @@ fn buildClosureValueFromCaptureRequests(
             try self.lowerProcInst(capture_proc_inst_id)
         else
             MIR.ExprId.none;
-        const runtime_capture_expr = if (!proc_backed_capture_expr.isNone() and
-            self.isSkippedProcBackedBindingPattern(self.current_module_idx, request.pattern_idx))
+        // Proc-backed captures already have explicit runtime callable identity.
+        // Keep that runtime value intact instead of routing it through a synthetic
+        // lookup alias, which would reintroduce def/lookup-based callable recovery
+        // into MIR and can lose lambda-set ownership facts for the captured value.
+        const runtime_capture_expr = if (!proc_backed_capture_expr.isNone())
             proc_backed_capture_expr
         else
             runtime_lookup_expr;

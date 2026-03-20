@@ -2265,6 +2265,9 @@ pub const Pass = struct {
         const template_id = resolved_template_id orelse {
             switch (callee_expr) {
                 .e_lookup_local, .e_lookup_external, .e_lookup_required => {
+                    if (try self.callUsesAnnotationOnlyIntrinsic(module_idx, callee_expr_idx)) {
+                        return;
+                    }
                     if (self.active_bindings != null and !desired_fn_monotype.isNone()) {
                         try self.bindCurrentCallFromFnMonotype(
                             result,
@@ -6223,6 +6226,31 @@ pub const Pass = struct {
             try self.aliasProcTemplateSource(result, packExprSourceKey(module_idx, expr_idx), template_id);
         }
         return resolved;
+    }
+
+    fn callUsesAnnotationOnlyIntrinsic(
+        self: *Pass,
+        module_idx: u32,
+        callee_expr_idx: CIR.Expr.Idx,
+    ) Allocator.Error!bool {
+        const module_env = self.all_module_envs[module_idx];
+        return switch (module_env.store.getExpr(callee_expr_idx)) {
+            .e_lookup_external => |lookup| blk: {
+                const target_module_idx = self.resolveImportedModuleIdx(module_env, lookup.module_idx) orelse break :blk false;
+                const target_env = self.all_module_envs[target_module_idx];
+                if (!target_env.store.isDefNode(lookup.target_node_idx)) break :blk false;
+                const def_idx: CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
+                const def = target_env.store.getDef(def_idx);
+                break :blk target_env.store.getExpr(def.expr) == .e_anno_only;
+            },
+            .e_lookup_required => |lookup| blk: {
+                const target = self.resolveRequiredLookupTarget(module_env, lookup) orelse break :blk false;
+                const target_env = self.all_module_envs[target.module_idx];
+                const def = target_env.store.getDef(target.def_idx);
+                break :blk target_env.store.getExpr(def.expr) == .e_anno_only;
+            },
+            else => false,
+        };
     }
 
     fn procTemplateLowLevelOp(
