@@ -188,6 +188,8 @@ pub const CommonIdents = extern struct {
     // Synthetic identifiers for ? operator desugaring
     question_ok: Ident.Idx,
     question_err: Ident.Idx,
+    // Synthetic identifier for .. implicit rigids in open tag unions or records
+    open_ext: Ident.Idx,
 
     /// Insert all well-known identifiers into a CommonEnv.
     /// Use this when creating a fresh ModuleEnv from scratch.
@@ -277,6 +279,8 @@ pub const CommonIdents = extern struct {
             // Synthetic identifiers for ? operator desugaring
             .question_ok = try common.insertIdent(gpa, Ident.for_text("#ok")),
             .question_err = try common.insertIdent(gpa, Ident.for_text("#err")),
+            // Synthetic identifier for .. implicit rigids in open tag unions or records
+            .open_ext = try common.insertIdent(gpa, Ident.for_text("#others")),
         };
     }
 
@@ -369,6 +373,8 @@ pub const CommonIdents = extern struct {
             // Synthetic identifiers for ? operator desugaring
             .question_ok = common.findIdent("#ok") orelse unreachable,
             .question_err = common.findIdent("#err") orelse unreachable,
+            // Synthetic identifier for .. implicit rigids in open tag unions or records
+            .open_ext = common.findIdent("#others") orelse unreachable,
         };
     }
 };
@@ -1761,6 +1767,36 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
                 self.getSourceAll(),
                 self.getLineStartsAll(),
             );
+
+            break :blk report;
+        },
+        .open_ext_not_allowed_in_type_decl => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "OPEN EXT NOT ALLOWED IN TYPE DECLARATION", .warning);
+
+            // Format the message to match origin/main
+            try report.document.addText("You cannot use a ");
+            try report.document.addInlineCode("..");
+            try report.document.addReflowingText(" inside a type declaration:");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addAnnotated("Hint:", .emphasized);
+            try report.document.addReflowingText(" You need a named variable, like ");
+            try report.document.addInlineCode("..others");
+            try report.document.addReflowingText(", to use this here.");
 
             break :blk report;
         },

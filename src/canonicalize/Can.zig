@@ -125,6 +125,8 @@ scratch_bound_vars: base.Scratch(Pattern.Idx),
 scratch_local_type_decls: std.ArrayList(CIR.Statement.Idx),
 /// Counter for generating unique malformed import placeholder names
 malformed_import_count: u32 = 0,
+/// Counter for generating unique anonymous open extension rigid var names
+anon_open_ext_count: u32 = 0,
 /// Counter for generating unique closure tag names (e.g., "Closure_addX_1", "Closure_addX_2")
 closure_counter: u32 = 0,
 /// Current loop depth for validating break statements
@@ -1006,7 +1008,7 @@ fn collectTypeReferencesFromAST(
             }
             // Also check the named extension if present
             if (tag_union.ext == .named) {
-                try self.collectTypeReferencesFromAST(tag_union.ext.named, refs);
+                try self.collectTypeReferencesFromAST(tag_union.ext.named.anno, refs);
             }
         },
         .tuple => |tuple| {
@@ -1022,8 +1024,8 @@ fn collectTypeReferencesFromAST(
                 try self.collectTypeReferencesFromAST(field.ty, refs);
             }
             // Also check the extension type if present
-            if (record.ext) |ext_idx| {
-                try self.collectTypeReferencesFromAST(ext_idx, refs);
+            if (record.ext == .named) {
+                try self.collectTypeReferencesFromAST(record.ext.named.anno, refs);
             }
         },
         .@"fn" => |func| {
@@ -10260,10 +10262,29 @@ fn canonicalizeTypeAnnoRecord(
     const record_fields_scratch = self.scratch_record_fields.sliceFromStart(scratch_record_fields_top);
     std.mem.sort(types.RecordField, record_fields_scratch, self.env.common.getIdentStore(), comptime types.RecordField.sortByNameAsc);
 
-    // Canonicalize the extension, if it exists
-    const mb_ext_anno = if (record.ext) |ext_idx| blk: {
-        break :blk try self.canonicalizeTypeAnnoHelp(ext_idx, type_anno_ctx);
-    } else null;
+    // Canonicalize the extension based on extension type
+    const mb_ext_anno: ?TypeAnno.Idx = switch (record.ext) {
+        .closed => null,
+        .open => |open_tok| blk: {
+            switch (type_anno_ctx.type) {
+                .local_anno => {
+                    break :blk try self.env.addTypeAnno(.{ .rigid_var = .{
+                        .name = self.env.idents.open_ext,
+                    } }, region);
+                },
+                .type_decl_anno, .for_clause_anno => {
+                    return try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{
+                        .open_ext_not_allowed_in_type_decl = .{
+                            .region = self.parse_ir.tokenizedRegionToRegion(.{ .start = open_tok, .end = open_tok + 1 }),
+                        },
+                    });
+                },
+            }
+        },
+        .named => |named| blk: {
+            break :blk try self.canonicalizeTypeAnnoHelp(named.anno, type_anno_ctx);
+        },
+    };
 
     return try self.env.addTypeAnno(.{ .record = .{
         .fields = field_anno_idxs,
@@ -10282,6 +10303,31 @@ fn canonicalizeTypeAnnoTagUnion(
 
     const region = self.parse_ir.tokenizedRegionToRegion(tag_union.region);
 
+    // Canonicalize the ext based on extension type
+    const mb_ext_anno: ?TypeAnno.Idx = switch (tag_union.ext) {
+        .closed => null,
+        .open => blk: {
+            switch (type_anno_ctx.type) {
+                .local_anno, .for_clause_anno => {
+                    break :blk try self.env.addTypeAnno(.{ .rigid_var = .{
+                        .name = self.env.idents.open_ext,
+                    } }, region);
+                },
+                .type_decl_anno => {
+                    return try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{
+                        .open_ext_not_allowed_in_type_decl = .{
+                            .region = self.parse_ir.tokenizedRegionToRegion(.{ .start = tag_union.ext.open, .end = tag_union.ext.open + 1 }),
+                        },
+                    });
+                },
+            }
+        },
+        .named => |named| blk: {
+            // Named extension like `..ext`
+            break :blk try self.canonicalizeTypeAnnoHelp(named.anno, type_anno_ctx);
+        },
+    };
+
     // Canonicalize all tags in the union using tag-specific canonicalization
     const scratch_annos_top = self.env.store.scratchTypeAnnoTop();
     defer self.env.store.clearScratchTypeAnnosFrom(scratch_annos_top);
@@ -10294,19 +10340,6 @@ fn canonicalizeTypeAnnoTagUnion(
     }
 
     const tag_anno_idxs = try self.env.store.typeAnnoSpanFrom(scratch_annos_top);
-
-    // Canonicalize the ext based on extension type
-    const mb_ext_anno: ?TypeAnno.Idx = switch (tag_union.ext) {
-        .closed => null,
-        .open => blk: {
-            // Anonymous open union `..` - create an anonymous underscore (inferred) type
-            break :blk try self.env.addTypeAnno(.{ .underscore = {} }, region);
-        },
-        .named => |open_idx| blk: {
-            // Named extension like `..ext`
-            break :blk try self.canonicalizeTypeAnnoHelp(open_idx, type_anno_ctx);
-        },
-    };
 
     return try self.env.addTypeAnno(.{ .tag_union = .{
         .tags = tag_anno_idxs,
@@ -12003,6 +12036,10 @@ fn extractTypeVarIdentsFromASTAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, iden
                 };
                 try self.extractTypeVarIdentsFromASTAnno(field.ty, idents_start_idx);
             }
+            // Extract type variable from named extension if present
+            if (record.ext == .named) {
+                try self.extractTypeVarIdentsFromASTAnno(record.ext.named.anno, idents_start_idx);
+            }
         },
         .tag_union => |tag_union| {
             // Extract type variables from tags
@@ -12011,7 +12048,7 @@ fn extractTypeVarIdentsFromASTAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, iden
             }
             // Extract type variable from named extension if present
             if (tag_union.ext == .named) {
-                try self.extractTypeVarIdentsFromASTAnno(tag_union.ext.named, idents_start_idx);
+                try self.extractTypeVarIdentsFromASTAnno(tag_union.ext.named.anno, idents_start_idx);
             }
         },
         .ty, .underscore, .malformed => {
@@ -12077,6 +12114,9 @@ fn getTypeVarRegionFromAST(self: *Self, anno_idx: AST.TypeAnno.Idx, target_ident
                     return region;
                 }
             }
+            if (record.ext == .named) {
+                return self.getTypeVarRegionFromAST(record.ext.named.anno, target_ident);
+            }
             return null;
         },
         .tag_union => |tag_union| {
@@ -12086,7 +12126,7 @@ fn getTypeVarRegionFromAST(self: *Self, anno_idx: AST.TypeAnno.Idx, target_ident
                 }
             }
             if (tag_union.ext == .named) {
-                return self.getTypeVarRegionFromAST(tag_union.ext.named, target_ident);
+                return self.getTypeVarRegionFromAST(tag_union.ext.named.anno, target_ident);
             }
             return null;
         },

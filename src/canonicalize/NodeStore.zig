@@ -278,7 +278,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 69;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 70;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 45;
 /// Count of the statement nodes in the ModuleEnv
@@ -3329,6 +3329,10 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
             node.tag = .diag_where_clause_not_allowed_in_type_decl;
             region = r.region;
         },
+        .open_ext_not_allowed_in_type_decl => |r| {
+            node.tag = .diag_open_ext_not_allowed_in_type_decl;
+            region = r.region;
+        },
         .type_module_missing_matching_type => |r| {
             node.tag = .diag_type_module_missing_matching_type;
             region = r.region;
@@ -3805,6 +3809,9 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .region = store.getRegionAt(node_idx),
         } },
         .diag_where_clause_not_allowed_in_type_decl => return CIR.Diagnostic{ .where_clause_not_allowed_in_type_decl = .{
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_open_ext_not_allowed_in_type_decl => return CIR.Diagnostic{ .open_ext_not_allowed_in_type_decl = .{
             .region = store.getRegionAt(node_idx),
         } },
         .diag_type_module_missing_matching_type => return CIR.Diagnostic{ .type_module_missing_matching_type = .{
