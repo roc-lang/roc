@@ -11923,7 +11923,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
             const arg_infos = self.scratch_arg_infos.sliceFromStart(arg_infos_start);
             // Pass 2: Place arguments and emit call
-            const pbp_plan = try self.computePassByPtrPlan(arg_infos, 0, true);
+            const initial_arg_reg_idx: u8 = if (needs_ret_ptr) 1 else 0;
+            const pbp_plan = try self.computePassByPtrPlan(arg_infos, initial_arg_reg_idx, true);
             defer self.scratch_pass_by_ptr.clearFrom(pbp_plan.start);
             const stack_spill_size = try self.placeCallArguments(arg_infos, .{
                 .needs_ret_ptr = needs_ret_ptr,
@@ -12740,9 +12741,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     self.codegen.freeGeneral(temp_reg);
                 },
                 else => {
-                    // Not a stack location - try to store as single value
-                    const reg = try self.ensureInGeneralReg(loc);
-                    try self.emitStoreToMem(ptr_reg, reg);
+                    // Materialize non-stack values to a stack slot first so we preserve the
+                    // requested byte width for narrow results like Bool and small tag unions.
+                    const temp_slot = self.codegen.allocStackSlot(size);
+                    try self.copyBytesToStackOffset(temp_slot, loc, size);
+                    try self.copyStackToPtr(.{ .stack = .{ .offset = temp_slot } }, ptr_reg, size);
                 },
             }
         }
@@ -14316,7 +14319,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const value_loc = try self.generateExpr(r.value);
                     if (value_loc == .noreturn) return;
                     const ret_layout = self.exprLayout(r.value);
-                    try self.moveToReturnRegisterWithLayout(value_loc, ret_layout);
+                    const preserved_return_loc = self.normalizeResultLocForLayout(value_loc, ret_layout);
+
+                    if (self.ret_ptr_slot) |ret_slot| {
+                        try self.copyResultToReturnPointer(preserved_return_loc, ret_layout, ret_slot);
+                    } else {
+                        try self.moveToReturnRegisterWithLayout(preserved_return_loc, ret_layout);
+                    }
                     // Emit jump to shared epilogue (patched after body gen knows actual frame size)
                     const patch = try self.codegen.emitJump();
                     try self.early_return_patches.append(self.allocator, patch);
@@ -15599,6 +15608,8 @@ pub const HostLirCodeGen = blk: {
 
 // Tests
 
+const ExecutableMemory = @import("ExecutableMemory.zig").ExecutableMemory;
+
 const TestLayoutState = struct {
     layout_store: layout.Store,
     module_env: *@import("can").ModuleEnv,
@@ -15721,7 +15732,6 @@ test "two-arg proc list loop returns full length" {
     }
 
     const RcInsertPass = lir.RcInsert.RcInsertPass;
-    const ExecutableMemory = @import("ExecutableMemory.zig").ExecutableMemory;
     const RocAlloc = builtins.host_abi.RocAlloc;
     const RocDealloc = builtins.host_abi.RocDealloc;
     const RocRealloc = builtins.host_abi.RocRealloc;

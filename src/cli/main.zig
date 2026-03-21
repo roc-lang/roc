@@ -5736,8 +5736,12 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
                         defer executable.deinit();
 
                         // Execute with crash protection and check bool result
-                        var result_byte: u8 = 0;
-                        dev.callWithCrashProtection(&executable, @ptrCast(&result_byte)) catch {
+                        // DevEvaluator returns small tag unions like Bool through an
+                        // ABI-sized result slot, even when the logical layout is 1 byte.
+                        // Use a machine word here and inspect the low byte for the Bool
+                        // discriminant instead of passing a raw `*u8`.
+                        var result_word: u64 = 0;
+                        dev.callWithCrashProtection(&executable, @ptrCast(&result_word)) catch {
                             failed += 1;
                             const crash_msg = dev.getCrashMessage() orelse "Test crashed";
                             results_list.append(.{
@@ -5748,7 +5752,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
                             continue;
                         };
 
-                        if (result_byte != 0) {
+                        if (@as(u8, @truncate(result_word)) != 0) {
                             passed += 1;
                             results_list.append(.{
                                 .result = .passed,
