@@ -3032,7 +3032,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     // Allocate result struct
                     const result_offset = self.codegen.allocStackSlot(result_size);
-
+                    const list_dst_offset = result_offset + list_field_offset;
+                    const elem_dst_offset = result_offset + elem_field_offset;
                     // elem_field_offset should be set to a temporary stack value in case of a list_of_zst, just like how list_set does it,
                     // otherwise should be the returned struct's appropriate field offset.
 
@@ -3042,7 +3043,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         const base_reg = frame_ptr;
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
 
-                        try builder.addLeaArg(base_reg, list_field_offset);
+                        try builder.addLeaArg(base_reg, list_dst_offset);
                         try builder.addMemArg(base_reg, list_off);
                         try builder.addMemArg(base_reg, list_off + 8);
                         try builder.addMemArg(base_reg, list_off + 16);
@@ -3050,7 +3051,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addMemArg(base_reg, index_off);
                         try builder.addLeaArg(base_reg, elem_off);
                         try builder.addImmArg(@intCast(elem_size));
-                        try builder.addLeaArg(base_reg, elem_field_offset);
+                        try builder.addLeaArg(base_reg, elem_dst_offset);
                         try builder.addRegArg(roc_ops_reg);
 
                         try self.callBuiltin(&builder, fn_addr, .list_replace);
