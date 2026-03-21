@@ -11,19 +11,25 @@
 //! * numbers (polymorphic & compacted)
 //! * effect and purity tracking
 //!
-//! The primary entrypoint is `unify`, which takes two type variables (`Var`) and attempts
-//! to unify their structure in the given `Store`, using a mutable `Scratch` context
-//! to hold intermediate buffers and allocations.
+//! Entrypoints:
+//! * `unify` — unify two vars with no context (no error reporting)
+//! * `unifyInContext` — unify and record a problem with a pre-built context on failure
+//! * `unifyRaw` — unify and capture snapshots on failure, without recording the problem
+//!   or clobbering vars; lets callers build the context lazily before committing
+//!
+//! All entrypoints take two type variables (`Var`) and attempt to unify their structure
+//! in the given `Store`, using a mutable `Scratch` context to hold intermediate buffers
+//! and allocations.
 //!
 //! The `Scratch` struct is designed to be reused across many unification calls.
 //! It owns internal scratch buffers for record fields, shared fields, and fresh variables.
 //!
-//! Each call to `unify` will reset the scratch buffer. If the unification succeeds,
+//! Each unification call will reset the scratch buffer. If the unification succeeds,
 //! the caller can access `scratch.fresh_vars` to retrieve all type variables created
 //! during that unification pass. These fresh variables are useful for later type
 //! generalization, let-binding, or monomorphization.
 //!
-//! NOTE: Subsequent calls to `unify` will reset `fresh_vars`. It is up to the caller
+//! NOTE: Subsequent unification calls will reset `fresh_vars`. It is up to the caller
 //! to use/store them if necessary.
 //!
 //! ### Example
@@ -140,6 +146,56 @@ pub fn unify(
     );
 }
 
+/// The raw result of unification: either success, or a type mismatch with snapshots
+/// captured before vars are clobbered. Does not include a context.
+pub const RawResult = union(enum) {
+    ok,
+    mismatch: problem_mod.TypePair,
+};
+
+/// Runs unification and captures snapshots on failure, but does NOT record the problem,
+/// build a context, or clobber vars. This enables lazy context construction on the failure
+/// path (e.g. to skip expensive lookups on the success path).
+///
+/// Callers must handle the `.mismatch` case by: building the context, recording the
+/// problem via `problems.appendProblem`, and clobbering vars via `types.union_`.
+pub fn unifyRaw(
+    module_env: *ModuleEnv,
+    types: *types_mod.Store,
+    snapshots: *snapshot_mod.Store,
+    type_writer: *types_mod.TypeWriter,
+    unify_scratch: *Scratch,
+    occurs_scratch: *occurs.Scratch,
+    /// The "expected" variable
+    a: Var,
+    /// The "actual" variable
+    b: Var,
+) std.mem.Allocator.Error!RawResult {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    unify_scratch.reset();
+
+    var unifier = Unifier.init(module_env, types, unify_scratch, occurs_scratch);
+    unifier.unifyGuarded(a, b) catch |err| {
+        switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.TypeMismatch => {
+                const expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, a);
+                const actual_snapshot = try snapshots.snapshotVarForError(types, type_writer, b);
+                return .{ .mismatch = .{
+                    .expected_var = a,
+                    .expected_snapshot = expected_snapshot,
+                    .actual_var = b,
+                    .actual_snapshot = actual_snapshot,
+                } };
+            },
+        }
+    };
+
+    return .ok;
+}
+
 /// Unify two type variables
 ///
 /// This function
@@ -147,7 +203,9 @@ pub fn unify(
 /// * Compares variable contents for equality
 /// * Merges unified variables so 1 is "root" and the other is "redirect"
 ///
-/// This function accepts a context and optional constraint origin var (for better error reporting)
+/// Accepts a context for error reporting. For lazy context construction, call
+/// unifyRaw directly and handle the mismatch case yourself. Note: Check.zig uses
+/// unifyRaw via unifyBuildingContext rather than calling this function.
 pub fn unifyInContext(
     module_env: *ModuleEnv,
     types: *types_mod.Store,
@@ -165,42 +223,18 @@ pub fn unifyInContext(
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    // First reset the scratch store
-    unify_scratch.reset();
-
-    // Unify
-    var unifier = Unifier.init(module_env, types, unify_scratch, occurs_scratch);
-    unifier.unifyGuarded(a, b) catch |err| {
-        const problem: Problem = blk: {
-            switch (err) {
-                error.OutOfMemory => {
-                    return error.OutOfMemory;
-                },
-                error.TypeMismatch => {
-                    const expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, a);
-                    const actual_snapshot = try snapshots.snapshotVarForError(types, type_writer, b);
-
-                    break :blk .{ .type_mismatch = .{
-                        .types = .{
-                            .expected_var = a,
-                            .expected_snapshot = expected_snapshot,
-                            .actual_var = b,
-                            .actual_snapshot = actual_snapshot,
-                        },
-                        .context = context,
-                    } };
-                },
-            }
-        };
-        const problem_idx = try problems.appendProblem(module_env.gpa, problem);
-        types.union_(a, b, .{
-            .content = .err,
-            .rank = Rank.generalized,
-        });
-        return Result{ .problem = problem_idx };
-    };
-
-    return .ok;
+    const raw = try unifyRaw(module_env, types, snapshots, type_writer, unify_scratch, occurs_scratch, a, b);
+    switch (raw) {
+        .ok => return .ok,
+        .mismatch => |types_pair| {
+            const problem_idx = try problems.appendProblem(module_env.gpa, .{ .type_mismatch = .{
+                .types = types_pair,
+                .context = context,
+            } });
+            types.union_(a, b, .{ .content = .err, .rank = Rank.generalized });
+            return .{ .problem = problem_idx };
+        },
+    }
 }
 
 /// A temporary unification context used to unify two type variables within a `Store`.
