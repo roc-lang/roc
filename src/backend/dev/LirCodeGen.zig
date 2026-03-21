@@ -2994,23 +2994,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // List.replace_unsafe: List(item), U64, item -> { list: List(item), prev: item }
                     // Reuses wrapListReplace but constructs the return struct manually
                     if (args.len != 3) unreachable;
-
-                    const ls = self.layout_store;
-                    const roc_ops_reg = self.roc_ops_reg orelse unreachable;
-
-                    // Generate arguments
                     const list_loc = try self.generateExpr(args[0]);
                     const index_loc = try self.generateExpr(args[1]);
                     const elem_loc = try self.generateExpr(args[2]);
 
-                    // Get return layout - should be a struct { list: List, prev: element }
+                    const ls = self.layout_store;
+                    const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+
+                    // Get the return record layout
                     const ret_layout = ls.getLayout(ll.ret_layout);
                     if (ret_layout.tag != .struct_) unreachable;
                     const record_idx = ret_layout.data.struct_.idx;
                     const record_data = ls.getStructData(record_idx);
                     const result_size: u32 = record_data.size;
 
-                    // Get field offsets and layouts
+                    // Find which field is the list and which is the element.
+                    // The record has exactly 2 fields.
                     const field0_layout_idx = ls.getStructFieldLayout(record_idx, 0);
                     const field0_layout = ls.getLayout(field0_layout_idx);
                     const field0_offset: i32 = @intCast(ls.getStructFieldOffset(record_idx, 0));
@@ -3018,15 +3017,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const field1_layout = ls.getLayout(field1_layout_idx);
                     const field1_offset: i32 = @intCast(ls.getStructFieldOffset(record_idx, 1));
 
-                    // Determine which field is list and which is element
                     const field0_is_list = field0_layout.tag == .list or field0_layout.tag == .list_of_zst;
                     const list_field_offset: i32 = if (field0_is_list) field0_offset else field1_offset;
                     const elem_field_offset: i32 = if (field0_is_list) field1_offset else field0_offset;
                     const elem_layout = if (field0_is_list) field1_layout else field0_layout;
 
                     const elem_size_align = ls.layoutSizeAlign(elem_layout);
+                    const elem_size: u32 = elem_size_align.size;
+                    const alignment_bytes = elem_size_align.alignment.toByteUnits();
 
-                    // Ensure arguments are on stack
                     const list_off = try self.ensureOnStack(list_loc, roc_list_size);
                     const index_off = try self.ensureOnStack(index_loc, 8);
                     const elem_off = try self.ensureOnStack(elem_loc, elem_size_align.size);
@@ -3034,31 +3033,28 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Allocate result struct
                     const result_offset = self.codegen.allocStackSlot(result_size);
 
-                    // Call wrapListReplace
+                    // elem_field_offset should be set to a temporary stack value in case of a list_of_zst, just like how list_set does it,
+                    // otherwise should be the returned struct's appropriate field offset.
+
                     const fn_addr: usize = @intFromPtr(&wrapListReplace);
-                    const base_reg = frame_ptr;
-                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    {
+                        // wrapListReplace(out, list_bytes, list_len, list_cap, alignment, index, element, element_width, out_element, roc_ops)
+                        const base_reg = frame_ptr;
+                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
 
-                    // out: pointer to list field in result struct
-                    try builder.addLeaArg(base_reg, result_offset + list_field_offset);
-                    // list_bytes, list_len, list_cap
-                    try builder.addMemArg(base_reg, list_off);
-                    try builder.addMemArg(base_reg, list_off + 8);
-                    try builder.addMemArg(base_reg, list_off + 16);
-                    // alignment
-                    try builder.addImmArg(@intCast(elem_size_align.alignment.toByteUnits()));
-                    // index
-                    try builder.addMemArg(base_reg, index_off);
-                    // element
-                    try builder.addLeaArg(base_reg, elem_off);
-                    // element_width
-                    try builder.addImmArg(@intCast(elem_size_align.size));
-                    // out_element: pointer to prev field in result struct
-                    try builder.addLeaArg(base_reg, result_offset + elem_field_offset);
-                    // roc_ops
-                    try builder.addRegArg(roc_ops_reg);
+                        try builder.addLeaArg(base_reg, list_field_offset);
+                        try builder.addMemArg(base_reg, list_off);
+                        try builder.addMemArg(base_reg, list_off + 8);
+                        try builder.addMemArg(base_reg, list_off + 16);
+                        try builder.addImmArg(@intCast(alignment_bytes));
+                        try builder.addMemArg(base_reg, index_off);
+                        try builder.addLeaArg(base_reg, elem_off);
+                        try builder.addImmArg(@intCast(elem_size));
+                        try builder.addLeaArg(base_reg, elem_field_offset);
+                        try builder.addRegArg(roc_ops_reg);
 
-                    try self.callBuiltin(&builder, fn_addr, .list_replace);
+                        try self.callBuiltin(&builder, fn_addr, .list_replace);
+                    }
 
                     return .{ .stack = .{ .offset = result_offset } };
                 },

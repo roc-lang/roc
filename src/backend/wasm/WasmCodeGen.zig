@@ -7272,6 +7272,11 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.generateLLListSortWith(ll, args, ll.ret_layout);
         },
 
+        .list_replace_unsafe => {
+            // TODO: implement list_replace_unsafe for wasm.
+            @panic("TODO: wasm list_replace_unsafe is not implemented");
+        },
+
         .list_drop_at => {
             // TODO: implement list_drop_at for wasm.
             @panic("TODO: wasm list_drop_at is not implemented");
