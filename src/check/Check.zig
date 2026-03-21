@@ -4380,17 +4380,27 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     .record = .{ .fields = record_field_range, .ext = record_ext_var },
                 } }, env, expr_region);
 
-                // Check if the field name is actually a method on the receiver type.
-                // This helps provide a better error when the user writes `receiver.method`
-                // instead of `receiver.method()`.
-                const is_method = try self.isMethodOnNominalType(receiver_var, dot_access.field_name);
-
-                // Then, unify the actual receiver type with the expected record
-                _ = try self.unifyInContext(record_being_accessed, receiver_var, env, .{ .record_access = .{
+                // Snapshot the receiver's nominal type (O(1)) before unifyInContext, which
+                // clobbers vars to .err on failure. The expensive method lookup (isMethodOnNominal)
+                // is deferred to the failure path so we don't pay for it on successful field accesses.
+                //
+                // If more context fields need this lazy-evaluation pattern, refactor unifyInContext
+                // to accept a context-builder (anytype with a build() method) called only on failure,
+                // rather than patching the stored problem afterward.
+                const receiver_nominal = self.nominalTypeOf(receiver_var);
+                const unify_result = try self.unifyInContext(record_being_accessed, receiver_var, env, .{ .record_access = .{
                     .field_name = dot_access.field_name,
                     .field_region = dot_access.field_name_region,
-                    .is_method = is_method,
                 } });
+                if (unify_result == .problem) {
+                    if (receiver_nominal) |nominal| {
+                        const is_method = try self.isMethodOnNominal(nominal, dot_access.field_name);
+                        // This assumes unifyInContext always stores a type_mismatch problem, which is
+                        // currently true. If that changes, this will panic. The refactor mentioned above
+                        // would eliminate this assumption.
+                        self.problems.getPtr(unify_result.problem).type_mismatch.context.record_access.is_method = is_method;
+                    }
+                }
                 _ = try self.unify(expr_var, record_field_var, env);
             }
         },
@@ -5939,18 +5949,21 @@ fn checkConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     self.constraints.items.clearRetainingCapacity();
 }
 
-/// Returns true if `method_ident` is a known method on the nominal type of `receiver_var`.
-/// Used to detect when a user writes `receiver.method` (missing parentheses) instead of
-/// `receiver.method()`.
-fn isMethodOnNominalType(self: *Self, receiver_var: Var, method_ident: Ident.Idx) std.mem.Allocator.Error!bool {
-    const nominal = switch (self.types.resolveVar(receiver_var).desc.content) {
+/// Extracts the NominalType from a var if it resolves to one, otherwise returns null.
+/// Cheap (O(1)) — safe to call before unification, which may clobber the var.
+fn nominalTypeOf(self: *Self, var_: Var) ?types_mod.NominalType {
+    return switch (self.types.resolveVar(var_).desc.content) {
         .structure => |s| switch (s) {
             .nominal_type => |n| n,
-            else => return false,
+            else => null,
         },
-        else => return false,
+        else => null,
     };
+}
 
+/// Returns true if `method_ident` is a known method on `nominal`.
+/// Expensive — searches module environments. Call only when needed (e.g. on unification failure).
+fn isMethodOnNominal(self: *Self, nominal: types_mod.NominalType, method_ident: Ident.Idx) std.mem.Allocator.Error!bool {
     const origin_module_ident = nominal.origin_module;
     // Find the module env that owns the type's method definitions.
     const original_env: *const ModuleEnv = blk: {
