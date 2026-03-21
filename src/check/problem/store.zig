@@ -91,12 +91,6 @@ pub const Store = struct {
         return self.problems.items[@intFromEnum(idx)];
     }
 
-    /// Get a mutable pointer to a stored problem. Useful when some context fields can only
-    /// be computed after unification (e.g. expensive lookups deferred to the failure path).
-    pub fn getPtr(self: *Self, idx: Problem.Idx) *Problem {
-        return &self.problems.items[@intFromEnum(idx)];
-    }
-
     pub fn len(self: *Self) usize {
         return self.problems.items.len;
     }
