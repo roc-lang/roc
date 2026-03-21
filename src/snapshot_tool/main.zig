@@ -4567,10 +4567,16 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
     // so we can report the failure and continue with the next snapshot.
     // Install signal handlers for SIGSEGV/SIGBUS/SIGILL from generated code.
     installCrashSignalHandlers();
+    // After a signal-handler longjmp (SIGALRM timeout, SIGSEGV), the GPA
+    // allocator mutex may be permanently locked.  Any subsequent alloc/free
+    // through the same GPA would deadlock, so we must skip all remaining
+    // backend iterations once this flag is set.
+    var gpa_poisoned = false;
     inline for (.{
         .{ .backend = repl.Backend.dev, .label = "dev" },
         .{ .backend = repl.Backend.llvm, .label = "llvm" },
     }) |cfg| {
+        if (!gpa_poisoned) {
         var backend_snapshot_ops = SnapshotOps.init(output.gpa);
         defer backend_snapshot_ops.deinit();
         const backend_repl_result = Repl.initWithBackend(output.gpa, backend_snapshot_ops.get_ops(), backend_snapshot_ops.crashContextPtr(), cfg.backend);
@@ -4588,6 +4594,10 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
                     const msg = panic_msg orelse "unknown";
                     std.debug.print("{s} REPL panic at input {d} in {s}: {s}\n", .{ cfg.label, i, snapshot_path, msg });
                     panic_msg = null;
+                    // jmp_result >= 2 means we arrived via a signal handler (SIGSEGV/SIGALRM).
+                    // Signal-handler longjmps can leave the allocator mutex locked, so
+                    // any subsequent free/alloc through the same GPA would deadlock.
+                    if (jmp_result >= 2) gpa_poisoned = true;
                     break;
                 }
                 panic_jmp = &jmp_buf;
@@ -4630,7 +4640,12 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
             // Deinit with panic protection — after a codegen panic, the REPL
             // state may be corrupted and cleanup (e.g. GPA leak detection) can
             // trigger secondary panics that would otherwise terminate the process.
-            {
+            //
+            // After a signal-handler longjmp (SIGALRM timeout, SIGSEGV) the
+            // allocator mutex may be permanently locked, so calling deinit would
+            // deadlock. Skip cleanup entirely in that case — we leak, but we
+            // don't crash the whole test suite.
+            if (!gpa_poisoned) {
                 var deinit_jmp_buf: sljmp.JmpBuf = undefined;
                 const deinit_jmp_result = sljmp.setjmp(&deinit_jmp_buf);
                 if (deinit_jmp_result != 0) {
@@ -4645,6 +4660,7 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
             std.debug.print("{s} REPL init failed in {s}: {}\n", .{ cfg.label, snapshot_path, err });
             success = false;
         }
+        } // if (!gpa_poisoned)
     }
 
     switch (config.output_section_command) {
