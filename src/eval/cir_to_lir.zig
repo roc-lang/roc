@@ -14,6 +14,7 @@ const can = @import("can");
 const layout = @import("layout");
 const mir = @import("mir");
 const MIR = mir.MIR;
+const Monomorphize = mir.Monomorphize;
 const lir = @import("lir");
 const LirExprStore = lir.LirExprStore;
 
@@ -34,7 +35,7 @@ pub fn lirExprResultLayout(store: *const LirExprStore, expr_id: lir.LirExprId) l
         .match_expr => |w| w.result_layout,
         .dbg => |d| d.result_layout,
         .expect => |e| e.result_layout,
-        .call => |c| c.ret_layout,
+        .proc_call => |pc| pc.ret_layout,
         .low_level => |ll| ll.ret_layout,
         .early_return => |er| er.ret_layout,
         .lookup => |l| l.layout_idx,
@@ -56,7 +57,6 @@ pub fn lirExprResultLayout(store: *const LirExprStore, expr_id: lir.LirExprId) l
         .empty_list => |l| l.list_layout,
         .hosted_call => |hc| hc.ret_layout,
         .tag_payload_access => |tpa| tpa.payload_layout,
-        .lambda => |l| l.fn_layout,
         .for_loop, .while_loop, .incref, .decref, .free => .zst,
         .crash => |c| c.ret_layout,
         .runtime_error => |re| re.ret_layout,
@@ -302,9 +302,13 @@ pub const LirProgram = struct {
         var mir_store = MIR.Store.init(self.allocator) catch return error.OutOfMemory;
         defer mir_store.deinit(self.allocator);
 
+        var mono_result = Monomorphize.Result.init(self.allocator, module_idx, expr_idx) catch return error.OutOfMemory;
+        defer mono_result.deinit(self.allocator);
+
         var mir_lower = mir.Lower.init(
             self.allocator,
             &mir_store,
+            &mono_result,
             all_module_envs,
             &module_env.types,
             module_idx,
@@ -357,9 +361,13 @@ pub const LirProgram = struct {
         var mir_store = MIR.Store.init(self.allocator) catch return error.OutOfMemory;
         defer mir_store.deinit(self.allocator);
 
+        var mono_result2 = Monomorphize.Result.init(self.allocator, module_idx, expr_idx) catch return error.OutOfMemory;
+        defer mono_result2.deinit(self.allocator);
+
         var mir_lower = mir.Lower.init(
             self.allocator,
             &mir_store,
+            &mono_result2,
             all_module_envs,
             &module_env.types,
             module_idx,
@@ -403,18 +411,12 @@ pub const LirProgram = struct {
             return error.RuntimeError;
         };
 
-        // Canonicalize direct calls before RC insertion
-        lir.CallCanonicalize.canonicalizeDirectCalls(self.allocator, &lir_store, &.{lir_expr_id}) catch return error.OutOfMemory;
-
         // RC insertion
         var rc_pass = lir.RcInsert.RcInsertPass.init(self.allocator, &lir_store, layout_store_ptr) catch return error.OutOfMemory;
         defer rc_pass.deinit();
         const final_expr_id = rc_pass.insertRcOps(lir_expr_id) catch lir_expr_id;
 
         lir.RcInsert.insertRcOpsIntoSymbolDefsBestEffort(self.allocator, &lir_store, layout_store_ptr);
-
-        // Canonicalize direct calls after RC insertion (RC may introduce new calls)
-        lir.CallCanonicalize.canonicalizeDirectCalls(self.allocator, &lir_store, &.{final_expr_id}) catch return error.OutOfMemory;
 
         // Extract result metadata from the CIR expression
         const cir_expr = module_env.store.getExpr(expr_idx);

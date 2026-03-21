@@ -5,7 +5,7 @@
 //! 1. **DeferredFrameBuilder** - For the deferred prologue pattern where the function
 //!    body is generated first to determine which callee-saved registers are used,
 //!    then the prologue is prepended. Uses MOV-based saves at fixed RBP offsets.
-//!    Used by: `compileProc`, `compileLambdaAsProc`
+//!    Used by: `compileProcSpec`
 //!
 //! 2. **ForwardFrameBuilder** - For the forward prologue pattern where the prologue
 //!    is emitted first with explicit register saves via PUSH.
@@ -57,7 +57,7 @@ pub const FramePointerPolicy = enum {
 /// // 3. Prepend prologue to body
 /// ```
 ///
-/// Callers: compileProc, compileLambdaAsProc, x86_64/CodeGen, aarch64/CodeGen
+/// Callers: compileProcSpec, x86_64/CodeGen, aarch64/CodeGen
 pub fn DeferredFrameBuilder(comptime EmitType: type) type {
     const roc_target = EmitType.roc_target;
     const is_x86_64 = roc_target.toCpuArch() == .x86_64;

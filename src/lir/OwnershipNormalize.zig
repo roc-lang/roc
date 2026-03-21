@@ -359,20 +359,8 @@ const Analyzer = struct {
                     self.result.cell_load_ref_ids.items[@intFromEnum(expr_id)] = ref_id;
                 }
             },
-            .call => |call| {
-                switch (call.callee) {
-                    .expr => |callee_expr| try self.analyzeExpr(callee_expr),
-                    .direct => {},
-                }
+            .proc_call => |call| {
                 for (self.store.getExprSpan(call.args)) |arg| try self.analyzeExpr(arg);
-            },
-            .lambda => |lam| {
-                const mark = self.pushScope();
-                defer self.popScope(mark);
-                for (self.store.getPatternSpan(lam.params)) |param| {
-                    try self.registerPattern(param, .owned, .consume);
-                }
-                try self.analyzeExpr(lam.body);
             },
             .list => |list_expr| {
                 for (self.store.getExprSpan(list_expr.elems)) |elem| try self.analyzeExpr(elem);
@@ -486,6 +474,30 @@ pub fn analyze(allocator: Allocator, store: *const LirExprStore, root_expr: LirE
     }
     defer analyzer.deinit();
 
+    try analyzer.analyzeExpr(root_expr);
+    return analyzer.finish();
+}
+
+/// Normalize one proc body expression with its parameter bindings already in scope.
+pub fn analyzeWithParams(
+    allocator: Allocator,
+    store: *const LirExprStore,
+    params: lir.LirPatternSpan,
+    root_expr: LirExprId,
+) Allocator.Error!Result {
+    var analyzer = try Analyzer.init(allocator, store);
+    errdefer {
+        var tmp = analyzer.finish();
+        tmp.deinit();
+    }
+    defer analyzer.deinit();
+
+    const mark = analyzer.pushScope();
+    defer analyzer.popScope(mark);
+
+    for (store.getPatternSpan(params)) |param| {
+        try analyzer.registerPattern(param, .owned, .consume);
+    }
     try analyzer.analyzeExpr(root_expr);
     return analyzer.finish();
 }

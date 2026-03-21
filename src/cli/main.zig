@@ -947,6 +947,15 @@ fn generatePlatformHostShim(ctx: *CliContext, cache_dir: []const u8, entrypoint_
     return object_path;
 }
 
+fn ensureCompilerCacheDirExists(path: []const u8) !void {
+    // This helper is only for compiler-owned internal cache directories.
+    // User-facing output paths should still fail normally if the parent directory is missing.
+    std.fs.cwd().makePath(path) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+}
+
 fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -974,7 +983,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
         return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
     };
 
-    std.fs.cwd().makePath(exe_cache_dir) catch |err| switch (err) {
+    ensureCompilerCacheDirExists(exe_cache_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => {
             return ctx.fail(.{ .directory_create_failed = .{ .path = exe_cache_dir, .err = err } });
@@ -1342,7 +1351,7 @@ fn rocRunDevShim(ctx: *CliContext, args: cli_args.RunArgs) !void {
         return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
     };
 
-    std.fs.cwd().makePath(exe_cache_dir) catch |err| switch (err) {
+    ensureCompilerCacheDirExists(exe_cache_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => {
             return ctx.fail(.{ .directory_create_failed = .{ .path = exe_cache_dir, .err = err } });
@@ -3343,7 +3352,7 @@ fn resolveUrlPlatform(ctx: *CliContext, url: []const u8) (CliError || error{OutO
         std.log.info("Downloading platform from {s}...", .{url});
 
         // Create cache directory structure
-        std.fs.cwd().makePath(cache_dir_path) catch |make_err| {
+        ensureCompilerCacheDirExists(cache_dir_path) catch |make_err| {
             return ctx.fail(.{ .directory_create_failed = .{
                 .path = cache_dir_path,
                 .err = make_err,
@@ -3983,7 +3992,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     const cache_dir = try cache_manager.config.getCacheEntriesDir(ctx.arena);
     const build_cache_dir = try std.fs.path.join(ctx.arena, &.{ cache_dir, "roc_build" });
 
-    std.fs.cwd().makePath(build_cache_dir) catch |err| switch (err) {
+    ensureCompilerCacheDirExists(build_cache_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
@@ -4206,27 +4215,6 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     };
     defer mir_store.deinit(ctx.gpa);
 
-    var mir_lower = mir.Lower.init(ctx.gpa, &mir_store, all_module_envs, platform_types, platform_module_idx, app_module_idx) catch {
-        std.log.err("Failed to create MIR lowerer", .{});
-        return error.OutOfMemory;
-    };
-    defer mir_lower.deinit();
-
-    // Find and lower entrypoint expressions from platform module
-    // The platform's provides clause maps Roc identifiers to FFI symbols
-    // e.g., provides { main_for_host!: "main" } means we look for main_for_host! in platform
-    const PendingEntrypoint = struct {
-        ffi_symbol: []const u8,
-        mir_expr_id: MIR.ExprId,
-        ret_type_var: @import("types").Var,
-        arg_layouts: []const layout.Idx,
-    };
-    var pending_entrypoints = try std.ArrayList(PendingEntrypoint).initCapacity(ctx.gpa, provides_entries.len);
-    defer pending_entrypoints.deinit(ctx.gpa);
-
-    var type_layout_resolver = layout.TypeLayoutResolver.init(&layout_store);
-    defer type_layout_resolver.deinit();
-
     const types_mod = @import("types");
     const findTypeAliasBodyVar = struct {
         fn run(module_env: *const can.ModuleEnv, name: base.Ident.Idx) ?types_mod.Var {
@@ -4270,14 +4258,19 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
                 try rigid_scope.put(alias_stmt_var, app_var);
             }
         }
-
-        try mir_lower.setTypeScope(platform_module_idx, &platform_type_scope, resolved_app_module_idx);
     }
 
     const platform_defs = platform_module.env.store.sliceDefs(platform_module.env.all_defs);
 
+    const PendingEntrypointSource = struct {
+        ffi_symbol: []const u8,
+        roc_ident: []const u8,
+        expr_idx: can.CIR.Expr.Idx,
+    };
+    var pending_entrypoint_sources = try std.ArrayList(PendingEntrypointSource).initCapacity(ctx.gpa, provides_entries.len);
+    defer pending_entrypoint_sources.deinit(ctx.gpa);
+
     for (provides_entries) |entry| {
-        // Find declaration matching the Roc identifier in the platform module's defs
         var found_expr: ?can.CIR.Expr.Idx = null;
         for (platform_defs) |def_idx| {
             const def = platform_module.env.store.getDef(def_idx);
@@ -4295,63 +4288,120 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         }
 
         if (found_expr) |expr_idx| {
-            const expr_type_var = can.ModuleEnv.varFrom(expr_idx);
-            const resolved_expr_var = platform_types.resolveVar(expr_type_var);
-            const maybe_func = resolved_expr_var.desc.content.unwrapFunc();
-
-            var arg_layouts: []const layout.Idx = &.{};
-            var ret_type_var = expr_type_var;
-
-            if (maybe_func) |func| {
-                const arg_vars = platform_types.sliceVars(func.args);
-                if (arg_vars.len > 0) {
-                    var mutable_arg_layouts = try ctx.arena.alloc(layout.Idx, arg_vars.len);
-                    for (arg_vars, 0..) |arg_var, i| {
-                        mutable_arg_layouts[i] = try type_layout_resolver.resolve(
-                            platform_module_idx,
-                            arg_var,
-                            &platform_type_scope,
-                            app_module_idx,
-                        );
-                    }
-                    arg_layouts = mutable_arg_layouts;
-                }
-                ret_type_var = func.ret;
-            }
-
-            // Lower CIR → MIR
-            var mir_expr_id = mir_lower.lowerExpr(expr_idx) catch |err| {
-                std.log.err("Failed to lower expression for entrypoint {s} ({s}): {}", .{ entry.roc_ident, entry.ffi_symbol, err });
-                continue;
-            };
-
-            // Zero-arg platform entrypoints like `main! : () => {}` must be lowered
-            // as calls, not as first-class function values.
-            if (maybe_func) |func| {
-                const arg_vars = platform_types.sliceVars(func.args);
-                if (arg_vars.len == 0) {
-                    const func_mono_idx = mir_store.typeOf(mir_expr_id);
-                    const resolved_func = mir_store.monotype_store.resolve(func_mono_idx);
-                    if (resolved_func.kind == .func) {
-                        mir_expr_id = try mir_store.addExpr(ctx.gpa, .{ .call = .{
-                            .func = mir_expr_id,
-                            .args = MIR.ExprSpan.empty(),
-                        } }, mir_store.monotype_store.funcRet(resolved_func), base.Region.zero());
-                    }
-                }
-            }
-
-            try pending_entrypoints.append(ctx.gpa, .{
+            try pending_entrypoint_sources.append(ctx.gpa, .{
                 .ffi_symbol = entry.ffi_symbol,
-                .mir_expr_id = mir_expr_id,
-                .ret_type_var = ret_type_var,
-                .arg_layouts = arg_layouts,
+                .roc_ident = entry.roc_ident,
+                .expr_idx = expr_idx,
             });
-
-            std.log.debug("Found entrypoint: {s} -> roc__{s}", .{ entry.roc_ident, entry.ffi_symbol });
         } else {
             std.log.warn("Entrypoint '{s}' not found in platform module", .{entry.roc_ident});
         }
+    }
+
+    if (pending_entrypoint_sources.items.len == 0) {
+        std.log.err("No entrypoint expressions found in platform module", .{});
+        return error.NoEntrypointsLowered;
+    }
+
+    const entrypoint_root_exprs = try ctx.arena.alloc(can.CIR.Expr.Idx, pending_entrypoint_sources.items.len);
+    for (pending_entrypoint_sources.items, 0..) |entrypoint_source, i| {
+        entrypoint_root_exprs[i] = entrypoint_source.expr_idx;
+    }
+
+    var monomorphization = blk: {
+        const mono = if (app_module_idx) |resolved_app_module_idx|
+            mir.Monomorphize.runRootsWithTypeScope(
+                ctx.gpa,
+                all_module_envs,
+                platform_types,
+                platform_module_idx,
+                app_module_idx,
+                entrypoint_root_exprs,
+                platform_module_idx,
+                &platform_type_scope,
+                resolved_app_module_idx,
+            )
+        else
+            mir.Monomorphize.runRoots(
+                ctx.gpa,
+                all_module_envs,
+                platform_types,
+                platform_module_idx,
+                app_module_idx,
+                entrypoint_root_exprs,
+            );
+        break :blk mono catch {
+            std.log.err("Failed to monomorphize platform module", .{});
+            return error.OutOfMemory;
+        };
+    };
+    defer monomorphization.deinit(ctx.gpa);
+
+    var mir_lower = mir.Lower.init(ctx.gpa, &mir_store, &monomorphization, all_module_envs, platform_types, platform_module_idx, app_module_idx) catch {
+        std.log.err("Failed to create MIR lowerer", .{});
+        return error.OutOfMemory;
+    };
+    defer mir_lower.deinit();
+
+    if (app_module_idx) |resolved_app_module_idx| {
+        try mir_lower.setTypeScope(platform_module_idx, &platform_type_scope, resolved_app_module_idx);
+    }
+
+    // Find and lower entrypoint expressions from platform module
+    // The platform's provides clause maps Roc identifiers to FFI symbols
+    // e.g., provides { main_for_host!: "main" } means we look for main_for_host! in platform
+    const PendingEntrypoint = struct {
+        ffi_symbol: []const u8,
+        mir_expr_id: MIR.ExprId,
+        ret_type_var: @import("types").Var,
+        arg_layouts: []const layout.Idx,
+    };
+    var pending_entrypoints = try std.ArrayList(PendingEntrypoint).initCapacity(ctx.gpa, provides_entries.len);
+    defer pending_entrypoints.deinit(ctx.gpa);
+
+    var type_layout_resolver = layout.TypeLayoutResolver.init(&layout_store);
+    defer type_layout_resolver.deinit();
+
+    for (pending_entrypoint_sources.items) |entry| {
+        const expr_idx = entry.expr_idx;
+        const expr_type_var = can.ModuleEnv.varFrom(expr_idx);
+        const resolved_expr_var = platform_types.resolveVar(expr_type_var);
+        const maybe_func = resolved_expr_var.desc.content.unwrapFunc();
+
+        var arg_layouts: []const layout.Idx = &.{};
+        var ret_type_var = expr_type_var;
+
+        if (maybe_func) |func| {
+            const arg_vars = platform_types.sliceVars(func.args);
+            if (arg_vars.len > 0) {
+                var mutable_arg_layouts = try ctx.arena.alloc(layout.Idx, arg_vars.len);
+                for (arg_vars, 0..) |arg_var, i| {
+                    mutable_arg_layouts[i] = try type_layout_resolver.resolve(
+                        platform_module_idx,
+                        arg_var,
+                        &platform_type_scope,
+                        app_module_idx,
+                    );
+                }
+                arg_layouts = mutable_arg_layouts;
+            }
+            ret_type_var = func.ret;
+        }
+
+        // Lower CIR → MIR
+        const mir_expr_id = mir_lower.lowerExpr(expr_idx) catch |err| {
+            std.log.err("Failed to lower expression for entrypoint {s} ({s}): {}", .{ entry.roc_ident, entry.ffi_symbol, err });
+            continue;
+        };
+
+        try pending_entrypoints.append(ctx.gpa, .{
+            .ffi_symbol = entry.ffi_symbol,
+            .mir_expr_id = mir_expr_id,
+            .ret_type_var = ret_type_var,
+            .arg_layouts = arg_layouts,
+        });
+
+        std.log.debug("Found entrypoint: {s} -> roc__{s}", .{ entry.roc_ident, entry.ffi_symbol });
     }
 
     if (pending_entrypoints.items.len == 0) {
@@ -4373,11 +4423,6 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     defer entrypoints.deinit(ctx.gpa);
 
     for (pending_entrypoints.items) |pending| {
-        const lir_expr_id = mir_to_lir.lower(pending.mir_expr_id) catch |err| {
-            std.log.err("Failed to lower MIR to LIR for entrypoint {s}: {}", .{ pending.ffi_symbol, err });
-            continue;
-        };
-
         const ret_layout = type_layout_resolver.resolve(
             platform_module_idx,
             pending.ret_type_var,
@@ -4388,52 +4433,37 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
             continue;
         };
 
+        const entry_proc = mir_to_lir.lowerEntrypointProc(pending.mir_expr_id, pending.arg_layouts, ret_layout) catch |err| {
+            std.log.err("Failed to lower entrypoint proc {s}: {}", .{ pending.ffi_symbol, err });
+            continue;
+        };
+
         try entrypoints.append(ctx.gpa, .{
             .symbol_name = try std.fmt.allocPrint(ctx.arena, "roc__{s}", .{pending.ffi_symbol}),
-            .body_expr = lir_expr_id,
+            .proc = entry_proc,
             .arg_layouts = pending.arg_layouts,
             .ret_layout = ret_layout,
         });
     }
-
-    const pre_rc_root_exprs = try ctx.gpa.alloc(lir.LirExprId, entrypoints.items.len);
-    defer ctx.gpa.free(pre_rc_root_exprs);
-    for (entrypoints.items, 0..) |entrypoint, i| {
-        pre_rc_root_exprs[i] = entrypoint.body_expr;
-    }
-    try lir.CallCanonicalize.canonicalizeDirectCalls(ctx.gpa, &lir_store, pre_rc_root_exprs);
 
     if (entrypoints.items.len == 0) {
         std.log.err("No entrypoints could be lowered to LIR", .{});
         return error.NoEntrypointsLowered;
     }
 
-    // Run RC insertion pass
-    var rc_pass = lir.RcInsert.RcInsertPass.init(ctx.gpa, &lir_store, &layout_store) catch {
-        std.log.err("Failed to create RC insertion pass", .{});
-        return error.OutOfMemory;
-    };
-    defer rc_pass.deinit();
-
-    for (entrypoints.items) |*ep| {
-        ep.body_expr = rc_pass.insertRcOps(ep.body_expr) catch ep.body_expr;
-    }
-
     lir.RcInsert.insertRcOpsIntoSymbolDefsBestEffort(ctx.gpa, &lir_store, &layout_store);
 
-    const root_exprs = try ctx.gpa.alloc(lir.LirExprId, entrypoints.items.len);
-    defer ctx.gpa.free(root_exprs);
-    for (entrypoints.items, 0..) |entrypoint, i| {
-        root_exprs[i] = entrypoint.body_expr;
-    }
-    try lir.CallCanonicalize.canonicalizeDirectCalls(ctx.gpa, &lir_store, root_exprs);
-
     // Get procedures from the LIR store
-    const procs = lir_store.getProcs();
+    const procs = lir_store.getProcSpecs();
 
     // Compile to object file
     std.log.debug("Generating native code...", .{});
     var object_compiler = backend.ObjectFileCompiler.init(ctx.gpa);
+
+    ensureCompilerCacheDirExists(build_cache_dir) catch |err| {
+        std.log.err("Failed to create compiler build cache dir {s}: {}", .{ build_cache_dir, err });
+        return err;
+    };
 
     const obj_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_{s}.o", .{@tagName(target)});
     const obj_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, obj_filename });
@@ -4615,7 +4645,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     const cache_dir = try cache_manager.config.getCacheEntriesDir(ctx.arena);
     const build_cache_dir = try std.fs.path.join(ctx.arena, &.{ cache_dir, "roc_build" });
 
-    std.fs.cwd().makePath(build_cache_dir) catch |err| switch (err) {
+    ensureCompilerCacheDirExists(build_cache_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
@@ -4862,6 +4892,13 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     // object_files = the Roc application files
     // platform_files_pre/post = files declared in link spec before/after 'app'
     var object_files = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 4);
+
+    ensureCompilerCacheDirExists(build_cache_dir) catch |err| {
+        return ctx.fail(.{ .directory_create_failed = .{
+            .path = build_cache_dir,
+            .err = err,
+        } });
+    };
 
     // Extract shim library (interpreter shim) - now works for both native and wasm32 targets
     // Include target name in filename to support different targets in the same cache

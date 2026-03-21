@@ -4071,39 +4071,6 @@ fn processDevObjectSnapshot(
     };
     defer mir_store.deinit(allocator);
 
-    var mir_lower = mir_mod.Lower.init(allocator, &mir_store, all_module_envs, platform_types, platform_module_idx, app_module_idx) catch {
-        std.log.err("Failed to create MIR lowerer", .{});
-        return false;
-    };
-    defer mir_lower.deinit();
-
-    // Use provides entries from build pipeline (centralized in CompiledModuleInfo)
-    const backend_mod = @import("backend");
-    var entrypoints = std.ArrayList(backend_mod.Entrypoint).empty;
-    defer {
-        for (entrypoints.items) |ep| {
-            allocator.free(ep.symbol_name);
-        }
-        entrypoints.deinit(allocator);
-    }
-
-    const provides_entries = platform_module.provides_entries;
-    if (provides_entries.len == 0) {
-        std.log.err("No provides entries found in platform module", .{});
-        return false;
-    }
-
-    const PendingEntrypoint = struct {
-        ffi_symbol: []const u8,
-        mir_expr_id: MIR.ExprId,
-        ret_layout: layout_mod.Idx,
-    };
-    var pending_entrypoints = std.ArrayList(PendingEntrypoint).empty;
-    defer pending_entrypoints.deinit(allocator);
-
-    var type_layout_resolver = layout_mod.TypeLayoutResolver.init(&layout_store);
-    defer type_layout_resolver.deinit();
-
     const findTypeAliasBodyVar = struct {
         fn run(module_env: *const can.ModuleEnv, name: base.Ident.Idx) ?types.Var {
             const stmts_slice = module_env.store.sliceStatements(module_env.all_statements);
@@ -4146,13 +4113,26 @@ fn processDevObjectSnapshot(
                 try rigid_scope.put(alias_stmt_var, app_var);
             }
         }
-
-        try mir_lower.setTypeScope(platform_module_idx, &platform_type_scope, resolved_app_module_idx);
     }
 
-    // Match provides entries to platform defs and lower them
+    const provides_entries = platform_module.provides_entries;
+    if (provides_entries.len == 0) {
+        std.log.err("No provides entries found in platform module", .{});
+        return false;
+    }
+
     const platform_defs = platform_module.env.store.sliceDefs(platform_module.env.all_defs);
+
+    const PendingEntrypointSource = struct {
+        ffi_symbol: []const u8,
+        roc_ident: []const u8,
+        expr_idx: can.CIR.Expr.Idx,
+    };
+    var pending_entrypoint_sources = std.ArrayList(PendingEntrypointSource).empty;
+    defer pending_entrypoint_sources.deinit(allocator);
+
     for (provides_entries) |entry| {
+        var found_expr: ?can.CIR.Expr.Idx = null;
         for (platform_defs) |def_idx| {
             const def = platform_module.env.store.getDef(def_idx);
             const pattern = platform_module.env.store.getPattern(def.pattern);
@@ -4160,28 +4140,111 @@ fn processDevObjectSnapshot(
                 .assign => |assign| {
                     const ident_name = platform_module.env.getIdent(assign.ident);
                     if (std.mem.eql(u8, ident_name, entry.roc_ident)) {
-                        // Lower CIR → MIR.
-                        const mir_expr_id = mir_lower.lowerExpr(def.expr) catch continue;
-
-                        const type_var = can.ModuleEnv.varFrom(def.expr);
-                        const ret_layout = type_layout_resolver.resolve(
-                            platform_module_idx,
-                            type_var,
-                            &platform_type_scope,
-                            app_module_idx,
-                        ) catch continue;
-
-                        pending_entrypoints.append(allocator, .{
-                            .ffi_symbol = entry.ffi_symbol,
-                            .mir_expr_id = mir_expr_id,
-                            .ret_layout = ret_layout,
-                        }) catch continue;
+                        found_expr = def.expr;
                         break;
                     }
                 },
                 else => {},
             }
         }
+
+        if (found_expr) |expr_idx| {
+            pending_entrypoint_sources.append(allocator, .{
+                .ffi_symbol = entry.ffi_symbol,
+                .roc_ident = entry.roc_ident,
+                .expr_idx = expr_idx,
+            }) catch return false;
+        }
+    }
+
+    if (pending_entrypoint_sources.items.len == 0) {
+        std.log.err("No entrypoint expressions found in platform module", .{});
+        return false;
+    }
+
+    const entrypoint_root_exprs = allocator.alloc(can.CIR.Expr.Idx, pending_entrypoint_sources.items.len) catch return false;
+    defer allocator.free(entrypoint_root_exprs);
+    for (pending_entrypoint_sources.items, 0..) |entrypoint_source, i| {
+        entrypoint_root_exprs[i] = entrypoint_source.expr_idx;
+    }
+
+    var monomorphization = blk: {
+        const mono = if (app_module_idx) |resolved_app_module_idx|
+            mir_mod.Monomorphize.runRootsWithTypeScope(
+                allocator,
+                all_module_envs,
+                platform_types,
+                platform_module_idx,
+                app_module_idx,
+                entrypoint_root_exprs,
+                platform_module_idx,
+                &platform_type_scope,
+                resolved_app_module_idx,
+            )
+        else
+            mir_mod.Monomorphize.runRoots(
+                allocator,
+                all_module_envs,
+                platform_types,
+                platform_module_idx,
+                app_module_idx,
+                entrypoint_root_exprs,
+            );
+        break :blk mono catch {
+            std.log.err("Failed to monomorphize platform module", .{});
+            return false;
+        };
+    };
+    defer monomorphization.deinit(allocator);
+
+    var mir_lower = mir_mod.Lower.init(allocator, &mir_store, &monomorphization, all_module_envs, platform_types, platform_module_idx, app_module_idx) catch {
+        std.log.err("Failed to create MIR lowerer", .{});
+        return false;
+    };
+    defer mir_lower.deinit();
+
+    if (app_module_idx) |resolved_app_module_idx| {
+        try mir_lower.setTypeScope(platform_module_idx, &platform_type_scope, resolved_app_module_idx);
+    }
+
+    // Use provides entries from build pipeline (centralized in CompiledModuleInfo)
+    const backend_mod = @import("backend");
+    var entrypoints = std.ArrayList(backend_mod.Entrypoint).empty;
+    defer {
+        for (entrypoints.items) |ep| {
+            allocator.free(ep.symbol_name);
+        }
+        entrypoints.deinit(allocator);
+    }
+
+    const PendingEntrypoint = struct {
+        ffi_symbol: []const u8,
+        mir_expr_id: MIR.ExprId,
+        ret_layout: layout_mod.Idx,
+    };
+    var pending_entrypoints = std.ArrayList(PendingEntrypoint).empty;
+    defer pending_entrypoints.deinit(allocator);
+
+    var type_layout_resolver = layout_mod.TypeLayoutResolver.init(&layout_store);
+    defer type_layout_resolver.deinit();
+
+    // Match provides entries to platform defs and lower them
+    for (pending_entrypoint_sources.items) |entry| {
+        const mir_expr_id = mir_lower.lowerExpr(entry.expr_idx) catch continue;
+
+        const type_var = can.ModuleEnv.varFrom(entry.expr_idx);
+        const ret_layout = type_layout_resolver.resolve(
+            platform_module_idx,
+            type_var,
+            &platform_type_scope,
+            app_module_idx,
+        ) catch continue;
+
+        pending_entrypoints.append(allocator, .{
+            .ffi_symbol = entry.ffi_symbol,
+            .mir_expr_id = mir_expr_id,
+            .ret_layout = ret_layout,
+        }) catch continue;
     }
 
     if (pending_entrypoints.items.len == 0) {
@@ -4211,11 +4274,11 @@ fn processDevObjectSnapshot(
     defer mir_to_lir.deinit();
 
     for (pending_entrypoints.items) |pending| {
-        const lir_expr_id = mir_to_lir.lower(pending.mir_expr_id) catch continue;
+        const entry_proc = mir_to_lir.lowerEntrypointProc(pending.mir_expr_id, &[_]layout_mod.Idx{}, pending.ret_layout) catch continue;
         const symbol_name = std.fmt.allocPrint(allocator, "roc__{s}", .{pending.ffi_symbol}) catch continue;
         entrypoints.append(allocator, .{
             .symbol_name = symbol_name,
-            .body_expr = lir_expr_id,
+            .proc = entry_proc,
             .arg_layouts = &[_]layout_mod.Idx{},
             .ret_layout = pending.ret_layout,
         }) catch continue;
@@ -4226,33 +4289,9 @@ fn processDevObjectSnapshot(
         return false;
     }
 
-    const pre_rc_root_exprs = try allocator.alloc(lir_mod.LirExprId, entrypoints.items.len);
-    defer allocator.free(pre_rc_root_exprs);
-    for (entrypoints.items, 0..) |ep, i| {
-        pre_rc_root_exprs[i] = ep.body_expr;
-    }
-    try lir_mod.CallCanonicalize.canonicalizeDirectCalls(allocator, &lir_store, pre_rc_root_exprs);
-
-    // 9. RC insertion
-    var rc_pass = lir_mod.RcInsert.RcInsertPass.init(allocator, &lir_store, &layout_store) catch {
-        std.log.err("Failed to create RC insertion pass", .{});
-        return false;
-    };
-    defer rc_pass.deinit();
-
-    for (entrypoints.items) |*ep| {
-        ep.body_expr = rc_pass.insertRcOps(ep.body_expr) catch ep.body_expr;
-    }
-
     lir_mod.RcInsert.insertRcOpsIntoSymbolDefsBestEffort(allocator, &lir_store, &layout_store);
-    const root_exprs = try allocator.alloc(lir_mod.LirExprId, entrypoints.items.len);
-    defer allocator.free(root_exprs);
-    for (entrypoints.items, 0..) |ep, i| {
-        root_exprs[i] = ep.body_expr;
-    }
-    try lir_mod.CallCanonicalize.canonicalizeDirectCalls(allocator, &lir_store, root_exprs);
 
-    const procs = lir_store.getProcs();
+    const procs = lir_store.getProcSpecs();
 
     // 10. Cross-compile for all targets and hash
     const RocTarget = roc_target.RocTarget;

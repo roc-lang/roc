@@ -334,7 +334,7 @@ pub const TypeInterner = struct {
         /// Module env owning the current types_store / ident_store.
         module_env: ?*const ModuleEnv = null,
         /// Shared module env slice for resolving nominal definitions.
-        all_module_envs: ?[]const *ModuleEnv = null,
+        all_module_envs: ?[]const *const ModuleEnv = null,
 
         pub fn init(allocator: Allocator) Allocator.Error!Scratches {
             return .{
@@ -719,12 +719,31 @@ pub const TypeInterner = struct {
                 }
                 if (hasNumeralConstraint(types_store, flex.constraints))
                     return self.primIdx(.dec);
+                // MIR must remain monomorphic. By the time we are manufacturing a
+                // MIR-visible type, the only surviving unresolved non-numeric vars
+                // should come from roots whose runtime representation is provably
+                // zero-sized already: empty-list element vars, phantom-only
+                // top-level constants, or larger shapes composed entirely of such
+                // ZST pieces.
+                //
+                // In those cases, collapsing to `unit` is representation-preserving:
+                // there is no runtime data to carry, and later layout lowering can
+                // still produce `.zst`, `.list_of_zst`, or `.box_of_zst` as needed.
+                //
+                // If an earlier compiler bug lets a representationful unresolved
+                // var reach MIR here, this branch will still collapse it to `unit`.
+                // That is not ideal, but carrying polymorphism into MIR is worse:
+                // MIR is explicitly required to be monomorphic. Unfortunately this
+                // branch is also hit by legitimate ZST cases, so there is no useful
+                // debug assert we can place here without rejecting correct programs.
                 return self.unit_idx;
             },
             .rigid => |rigid| {
                 if (lookupNamedSpecialization(scratches, rigid.name)) |specialized| return specialized;
                 if (hasNumeralConstraint(types_store, rigid.constraints))
                     return self.primIdx(.dec);
+                // See the unresolved flex branch above. The same monomorphic-MIR
+                // invariant applies to unresolved rigid vars.
                 return self.unit_idx;
             },
             .alias => |alias| {
@@ -1276,7 +1295,7 @@ pub const TypeInterner = struct {
 
     fn findNominalDefinitionEnv(
         source_env: *const ModuleEnv,
-        all_module_envs: []const *ModuleEnv,
+        all_module_envs: []const *const ModuleEnv,
         origin_module: Ident.Idx,
     ) ?*const ModuleEnv {
         const origin_name = source_env.getIdent(origin_module);

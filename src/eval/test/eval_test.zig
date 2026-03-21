@@ -1,20 +1,16 @@
 //! Tests for the expression evaluator
 const std = @import("std");
 const parse = @import("parse");
-const types = @import("types");
 const base = @import("base");
 const can = @import("can");
 const check = @import("check");
 const builtins = @import("builtins");
 const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
-const roc_target = @import("roc_target");
 
 const helpers = @import("helpers.zig");
 const builtin_loading = @import("../builtin_loading.zig");
 const TestEnv = @import("TestEnv.zig");
-const Interpreter = @import("../cir_interpreter.zig").Interpreter;
-const BuiltinTypes = @import("../builtins.zig").BuiltinTypes;
 
 const Can = can.Can;
 const Check = check.Check;
@@ -465,28 +461,16 @@ test "lambdas nested closures" {
 
 // Helper function to test that evaluation succeeds without checking specific values
 fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !void {
-    var test_env_instance = TestEnv.init(helpers.interpreter_allocator);
-    defer test_env_instance.deinit();
+    _ = should_trace;
+    const resources = try helpers.parseAndCanonicalizeExpr(test_allocator, src);
+    defer helpers.cleanupParseAndCanonical(test_allocator, resources);
 
-    const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, src);
-    defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
+    // Use LIR interpreter - if lowering + evaluation succeeds, the test passes
+    const interpreter_str = try helpers.lirInterpreterStr(test_allocator, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    defer test_allocator.free(interpreter_str);
 
-    var interpreter = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
-    defer interpreter.deinit();
-
-    const enable_trace = should_trace == .trace;
-    if (enable_trace) {
-        interpreter.startTrace();
-    }
-    defer if (enable_trace) interpreter.endTrace();
-
-    const ops = test_env_instance.get_ops();
-    const result = try interpreter.eval(resources.expr_idx, ops);
-    const layout_cache = &interpreter.runtime_layout_store;
-    defer result.decref(layout_cache, ops);
-
-    // Minimal smoke check: the helper only succeeds if evaluation produced a value without crashing.
-    try std.testing.expect(test_env_instance.crashState() == .did_not_crash);
+    // Minimal smoke check: we got a non-empty result string
+    try std.testing.expect(interpreter_str.len > 0);
 }
 
 test "integer type evaluation" {
@@ -758,10 +742,10 @@ test "recursive factorial function" {
 
 test "ModuleEnv serialization and interpreter evaluation" {
     // This test demonstrates that a ModuleEnv can be successfully:
-    // 1. Created and used with the Interpreter to evaluate expressions
+    // 1. Created and used with the LIR interpreter to evaluate expressions
     // 2. Serialized to bytes and written to disk
     // 3. Deserialized from those bytes read back from disk
-    // 4. Used with a new Interpreter to evaluate the same expressions with identical results
+    // 4. Used with a new LIR interpreter to evaluate the same expressions with identical results
     //
     // This verifies the complete round-trip of compilation state preservation
     // through serialization, which is critical for incremental compilation
@@ -770,8 +754,6 @@ test "ModuleEnv serialization and interpreter evaluation" {
     const source = "5 + 8";
 
     const gpa = test_allocator;
-    var test_env_instance = TestEnv.init(gpa);
-    defer test_env_instance.deinit();
 
     // Load builtin module
     const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
@@ -840,26 +822,11 @@ test "ModuleEnv serialization and interpreter evaluation" {
 
     _ = try checker.checkExprRepl(canonicalized_expr_idx.get_idx());
 
-    // Test 1: Evaluate with the original ModuleEnv
+    // Test 1: Evaluate with the original ModuleEnv using LIR interpreter
     {
-        const builtin_types_local = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-        var interpreter = try Interpreter.init(gpa, &original_env, builtin_types_local, builtin_module.env, &[_]*const can.ModuleEnv{}, &checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
-        defer interpreter.deinit();
-
-        const ops = test_env_instance.get_ops();
-        const result = try interpreter.eval(canonicalized_expr_idx.get_idx(), ops);
-        const layout_cache = &interpreter.runtime_layout_store;
-        defer result.decref(layout_cache, ops);
-
-        // Extract integer value (handles both integer and Dec types)
-        const int_value = if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) blk: {
-            break :blk result.asI128();
-        } else blk: {
-            const dec_value = result.asDec(ops);
-            const RocDec = builtins.dec.RocDec;
-            break :blk @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
-        };
-        try testing.expectEqual(@as(i128, 13), int_value);
+        const interpreter_str = try helpers.lirInterpreterStr(gpa, &original_env, canonicalized_expr_idx.get_idx(), builtin_module.env);
+        defer gpa.free(interpreter_str);
+        try testing.expectEqualStrings("13", interpreter_str);
     }
 
     // Test 2: Full serialization and deserialization with interpreter evaluation
@@ -939,25 +906,10 @@ test "ModuleEnv serialization and interpreter evaluation" {
                 @constCast(builtin_module.env).qualified_module_ident = builtin_module.env.display_module_name_idx;
             }
 
-            const builtin_types_local = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-            var interpreter = try Interpreter.init(gpa, deserialized_env, builtin_types_local, builtin_module.env, &[_]*const can.ModuleEnv{}, &checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
-            defer interpreter.deinit();
-
-            const ops = test_env_instance.get_ops();
-            const result = try interpreter.eval(canonicalized_expr_idx.get_idx(), ops);
-            const layout_cache = &interpreter.runtime_layout_store;
-            defer result.decref(layout_cache, ops);
-
-            // Verify we get the same result from the deserialized ModuleEnv
-            // Extract integer value (handles both integer and Dec types)
-            const int_value = if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) blk: {
-                break :blk result.asI128();
-            } else blk: {
-                const dec_value = result.asDec(ops);
-                const RocDec = builtins.dec.RocDec;
-                break :blk @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
-            };
-            try testing.expectEqual(@as(i128, 13), int_value);
+            // Evaluate with the deserialized ModuleEnv using LIR interpreter
+            const deserialized_str = try helpers.lirInterpreterStr(gpa, deserialized_env, canonicalized_expr_idx.get_idx(), builtin_module.env);
+            defer gpa.free(deserialized_str);
+            try testing.expectEqualStrings("13", deserialized_str);
         }
     }
 }
@@ -2026,6 +1978,21 @@ test "list equality - nested lists - regression" {
 
 test "list equality - single string element list - regression" {
     try runExpectBool("[\"hello\"] == [\"hello\"]", true, .no_trace);
+}
+
+test "record with list equality - large stack offset regression #9250" {
+    // Regression test for #9250: comparing records containing lists with
+    // unequal values/lengths caused aarch64 stack offset overflow in
+    // emitLoadStackByte (u12 immediate field).
+    try runExpectBool("{ a: [1] } == { a: [1, 2] }", false, .no_trace);
+    try runExpectBool("{ a: [1] } == { a: [2] }", false, .no_trace);
+    try runExpectBool("{ a: [] } == { a: [1] }", false, .no_trace);
+    try runExpectBool("{ a: [1] } == { a: [] }", false, .no_trace);
+    try runExpectBool("{ a: [], b: 1 } == { a: [2], b: 1 }", false, .no_trace);
+    try runExpectBool("{ a: [1] } != { a: [1, 2] }", true, .no_trace);
+    // Also verify equal cases still work
+    try runExpectBool("{ a: [1] } == { a: [1] }", true, .no_trace);
+    try runExpectBool("{ a: [] } == { a: [] }", true, .no_trace);
 }
 
 test "if block with local bindings - regression" {
@@ -3548,6 +3515,52 @@ test "dev only: !Bool.False formats as True" {
     try runDevOnlyExpectStr("!Bool.False", "True");
 }
 
+test "dev only: nested List.append on U32 formats as [1, 2]" {
+    try runDevOnlyExpectStr("List.append(List.append([], 1.U32), 2.U32)", "[1, 2]");
+}
+
+test "dev only: U32 literal formats as 15" {
+    try runDevOnlyExpectStr("15.U32", "15");
+}
+
+test "dev only: U32 comparison formats as True" {
+    try runDevOnlyExpectStr("1.U32 <= 5.U32", "True");
+}
+
+test "dev only: U32 addition formats as 3" {
+    try runDevOnlyExpectStr("1.U32 + 2.U32", "3");
+}
+
+test "dev only: while loop increment over U32 formats as 6" {
+    try runDevOnlyExpectStr(
+        \\{
+        \\    var current = 1.U32
+        \\
+        \\    while current <= 5.U32 {
+        \\        current = current + 1.U32
+        \\    }
+        \\
+        \\    current
+        \\}
+    , "6");
+}
+
+test "dev only: while loop sum over U32 formats as 15" {
+    try runDevOnlyExpectStr(
+        \\{
+        \\    var current = 1.U32
+        \\    var sum = 0.U32
+        \\
+        \\    while current <= 5.U32 {
+        \\        sum = sum + current
+        \\        current = current + 1.U32
+        \\    }
+        \\
+        \\    sum
+        \\}
+    , "15");
+}
+
 test "Str.trim" {
     try runExpectStr("Str.trim(\"  hello  \")", "hello", .no_trace);
     try runExpectStr("Str.trim(\"hello\")", "hello", .no_trace);
@@ -3932,6 +3945,20 @@ test "direct List.contains captured Str control" {
         \\{
         \\    out = ["a"]
         \\    out.contains("a")
+        \\}
+    ,
+        true,
+        .no_trace,
+    );
+}
+
+test "forwarding tag union with Str payload through proc call does not leak" {
+    try runExpectBool(
+        \\{
+        \\    consume = |value| value == Ok({ x: "x" })
+        \\    forward = |value| consume(value)
+        \\    value = Ok({ x: "x" })
+        \\    forward(value)
         \\}
     ,
         true,

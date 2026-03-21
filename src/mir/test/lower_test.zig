@@ -6,10 +6,10 @@ const testing = std.testing;
 const base = @import("base");
 const can = @import("can");
 const types = @import("types");
-
 const MIR = @import("../MIR.zig");
 const LambdaSet = @import("../LambdaSet.zig");
 const Monotype = @import("../Monotype.zig");
+const Monomorphize = @import("../Monomorphize.zig");
 const Lower = @import("../Lower.zig");
 const MirTestEnv = @import("MirTestEnv.zig");
 
@@ -21,6 +21,340 @@ const test_allocator = testing.allocator;
 
 fn testSymbolFromIdent(ident: Ident.Idx) MIR.Symbol {
     return MIR.Symbol.fromRaw(@as(u64, @as(u32, @bitCast(ident))));
+}
+
+fn procIdFromExpr(mir_store: *const MIR.Store, expr_id: MIR.ExprId) ?MIR.ProcId {
+    return switch (mir_store.getExpr(expr_id)) {
+        .proc_ref => |proc_id| proc_id,
+        .closure_make => |closure| closure.proc,
+        .block => |block| procIdFromExpr(mir_store, block.final_expr),
+        .dbg_expr => |dbg_expr| procIdFromExpr(mir_store, dbg_expr.expr),
+        .expect => |expect| procIdFromExpr(mir_store, expect.body),
+        .return_expr => |ret| procIdFromExpr(mir_store, ret.expr),
+        else => null,
+    };
+}
+
+fn procIdFromValueDef(mir_store: *const MIR.Store, symbol: MIR.Symbol) ?MIR.ProcId {
+    const def_expr = mir_store.getValueDef(symbol) orelse return null;
+    return procIdFromExpr(mir_store, def_expr);
+}
+
+fn procIdFromCallableExpr(mir_store: *const MIR.Store, expr_id: MIR.ExprId) ?MIR.ProcId {
+    const expr = mir_store.getExpr(expr_id);
+    return switch (expr) {
+        .lookup => |sym| procIdFromValueDef(mir_store, sym),
+        else => procIdFromExpr(mir_store, expr_id),
+    };
+}
+
+fn firstCalledProcInStmts(mir_store: *const MIR.Store, stmts: []const MIR.Stmt) ?MIR.ProcId {
+    for (stmts) |stmt| {
+        const binding = switch (stmt) {
+            .decl_const, .decl_var, .mutate_var => |b| b,
+        };
+        if (mir_store.getExpr(binding.expr) != .call) continue;
+        if (procIdFromCallableExpr(mir_store, mir_store.getExpr(binding.expr).call.func)) |proc_id| {
+            return proc_id;
+        }
+    }
+
+    return null;
+}
+
+const ForeignParamLookup = struct {
+    expr_id: MIR.ExprId,
+    symbol: MIR.Symbol,
+    owner_proc: MIR.ProcId,
+};
+
+const MissingFunctionLookup = struct {
+    expr_id: MIR.ExprId,
+    symbol: MIR.Symbol,
+};
+
+fn dumpMirExpr(mir_store: *const MIR.Store, expr_id: MIR.ExprId, depth: usize) void {
+    const indent = depth * 2;
+    for (0..indent) |_| std.debug.print(" ", .{});
+
+    const expr = mir_store.getExpr(expr_id);
+    std.debug.print("expr {d}: {s}", .{ @intFromEnum(expr_id), @tagName(expr) });
+
+    switch (expr) {
+        .lookup => |symbol| {
+            std.debug.print(" symbol={d}\n", .{symbol.raw()});
+        },
+        .proc_ref => |proc_id| {
+            std.debug.print(" proc={d}\n", .{@intFromEnum(proc_id)});
+        },
+        .closure_make => |closure| {
+            std.debug.print(" proc={d}\n", .{@intFromEnum(closure.proc)});
+            dumpMirExpr(mir_store, closure.captures, depth + 1);
+        },
+        .call => |call| {
+            std.debug.print("\n", .{});
+            dumpMirExpr(mir_store, call.func, depth + 1);
+            for (mir_store.getExprSpan(call.args)) |arg| dumpMirExpr(mir_store, arg, depth + 1);
+        },
+        .block => |block| {
+            std.debug.print("\n", .{});
+            for (mir_store.getStmts(block.stmts), 0..) |stmt, stmt_i| {
+                for (0..indent + 2) |_| std.debug.print(" ", .{});
+                std.debug.print("stmt {d}: {s}\n", .{ stmt_i, @tagName(stmt) });
+                switch (stmt) {
+                    .decl_const, .decl_var, .mutate_var => |binding| dumpMirExpr(mir_store, binding.expr, depth + 2),
+                }
+            }
+            dumpMirExpr(mir_store, block.final_expr, depth + 1);
+        },
+        .struct_access => |access| {
+            std.debug.print(" field={d}\n", .{access.field_idx});
+            dumpMirExpr(mir_store, access.struct_, depth + 1);
+        },
+        .struct_ => |struct_| {
+            std.debug.print("\n", .{});
+            for (mir_store.getExprSpan(struct_.fields)) |field| dumpMirExpr(mir_store, field, depth + 1);
+        },
+        .for_loop => |for_loop| {
+            std.debug.print("\n", .{});
+            dumpMirExpr(mir_store, for_loop.list, depth + 1);
+            dumpMirExpr(mir_store, for_loop.body, depth + 1);
+        },
+        .while_loop => |while_loop| {
+            std.debug.print("\n", .{});
+            dumpMirExpr(mir_store, while_loop.cond, depth + 1);
+            dumpMirExpr(mir_store, while_loop.body, depth + 1);
+        },
+        .match_expr => |match_expr| {
+            std.debug.print("\n", .{});
+            dumpMirExpr(mir_store, match_expr.cond, depth + 1);
+            for (mir_store.getBranches(match_expr.branches), 0..) |branch, branch_i| {
+                for (0..indent + 2) |_| std.debug.print(" ", .{});
+                std.debug.print("branch {d}\n", .{branch_i});
+                if (!branch.guard.isNone()) dumpMirExpr(mir_store, branch.guard, depth + 2);
+                dumpMirExpr(mir_store, branch.body, depth + 2);
+            }
+        },
+        .run_low_level => |low_level| {
+            std.debug.print(" op={s}\n", .{@tagName(low_level.op)});
+            for (mir_store.getExprSpan(low_level.args)) |arg| {
+                dumpMirExpr(mir_store, arg, depth + 1);
+            }
+        },
+        else => {
+            std.debug.print("\n", .{});
+        },
+    }
+}
+
+fn firstForeignParamLookup(
+    mir_store: *const MIR.Store,
+    expr_id: MIR.ExprId,
+    proc_id: MIR.ProcId,
+    all_param_symbols: *const std.AutoHashMap(MIR.Symbol, MIR.ProcId),
+) ?ForeignParamLookup {
+    const expr = mir_store.getExpr(expr_id);
+    switch (expr) {
+        .lookup => |symbol| {
+            if (all_param_symbols.get(symbol)) |owner_proc| {
+                if (owner_proc != proc_id) {
+                    return .{
+                        .expr_id = expr_id,
+                        .symbol = symbol,
+                        .owner_proc = owner_proc,
+                    };
+                }
+            }
+            return null;
+        },
+        .list => |list| {
+            for (mir_store.getExprSpan(list.elems)) |elem| {
+                if (firstForeignParamLookup(mir_store, elem, proc_id, all_param_symbols)) |found| return found;
+            }
+            return null;
+        },
+        .struct_ => |struct_| {
+            for (mir_store.getExprSpan(struct_.fields)) |field| {
+                if (firstForeignParamLookup(mir_store, field, proc_id, all_param_symbols)) |found| return found;
+            }
+            return null;
+        },
+        .tag => |tag| {
+            for (mir_store.getExprSpan(tag.args)) |arg| {
+                if (firstForeignParamLookup(mir_store, arg, proc_id, all_param_symbols)) |found| return found;
+            }
+            return null;
+        },
+        .match_expr => |match_expr| {
+            if (firstForeignParamLookup(mir_store, match_expr.cond, proc_id, all_param_symbols)) |found| return found;
+            for (mir_store.getBranches(match_expr.branches)) |branch| {
+                if (!branch.guard.isNone()) {
+                    if (firstForeignParamLookup(mir_store, branch.guard, proc_id, all_param_symbols)) |found| return found;
+                }
+                if (firstForeignParamLookup(mir_store, branch.body, proc_id, all_param_symbols)) |found| return found;
+            }
+            return null;
+        },
+        .proc_ref,
+        .runtime_err_can,
+        .runtime_err_type,
+        .runtime_err_ellipsis,
+        .runtime_err_anno_only,
+        .int,
+        .frac_f32,
+        .frac_f64,
+        .dec,
+        .str,
+        .crash,
+        .break_expr,
+        => return null,
+        .closure_make => |closure| return firstForeignParamLookup(mir_store, closure.captures, proc_id, all_param_symbols),
+        .call => |call| {
+            if (firstForeignParamLookup(mir_store, call.func, proc_id, all_param_symbols)) |found| return found;
+            for (mir_store.getExprSpan(call.args)) |arg| {
+                if (firstForeignParamLookup(mir_store, arg, proc_id, all_param_symbols)) |found| return found;
+            }
+            return null;
+        },
+        .block => |block| {
+            for (mir_store.getStmts(block.stmts)) |stmt| {
+                switch (stmt) {
+                    .decl_const, .decl_var, .mutate_var => |binding| {
+                        if (firstForeignParamLookup(mir_store, binding.expr, proc_id, all_param_symbols)) |found| return found;
+                    },
+                }
+            }
+            return firstForeignParamLookup(mir_store, block.final_expr, proc_id, all_param_symbols);
+        },
+        .borrow_scope => |borrow_scope| {
+            for (mir_store.getBorrowBindings(borrow_scope.bindings)) |binding| {
+                if (firstForeignParamLookup(mir_store, binding.expr, proc_id, all_param_symbols)) |found| return found;
+            }
+            return firstForeignParamLookup(mir_store, borrow_scope.body, proc_id, all_param_symbols);
+        },
+        .struct_access => |access| return firstForeignParamLookup(mir_store, access.struct_, proc_id, all_param_symbols),
+        .str_escape_and_quote => |inner| return firstForeignParamLookup(mir_store, inner, proc_id, all_param_symbols),
+        .run_low_level => |low_level| {
+            for (mir_store.getExprSpan(low_level.args)) |arg| {
+                if (firstForeignParamLookup(mir_store, arg, proc_id, all_param_symbols)) |found| return found;
+            }
+            return null;
+        },
+        .dbg_expr => |dbg_expr| return firstForeignParamLookup(mir_store, dbg_expr.expr, proc_id, all_param_symbols),
+        .expect => |expect| return firstForeignParamLookup(mir_store, expect.body, proc_id, all_param_symbols),
+        .for_loop => |for_loop| {
+            if (firstForeignParamLookup(mir_store, for_loop.list, proc_id, all_param_symbols)) |found| return found;
+            return firstForeignParamLookup(mir_store, for_loop.body, proc_id, all_param_symbols);
+        },
+        .while_loop => |while_loop| {
+            if (firstForeignParamLookup(mir_store, while_loop.cond, proc_id, all_param_symbols)) |found| return found;
+            return firstForeignParamLookup(mir_store, while_loop.body, proc_id, all_param_symbols);
+        },
+        .return_expr => |ret| return firstForeignParamLookup(mir_store, ret.expr, proc_id, all_param_symbols),
+    }
+}
+
+fn firstReachableMissingFunctionLookup(
+    mir_store: *const MIR.Store,
+    ls_store: *const LambdaSet.Store,
+    expr_id: MIR.ExprId,
+) ?MissingFunctionLookup {
+    const expr = mir_store.getExpr(expr_id);
+    switch (expr) {
+        .lookup => |symbol| {
+            if (mir_store.monotype_store.resolve(mir_store.typeOf(expr_id)).kind != .func) return null;
+            if (ls_store.getExprLambdaSet(expr_id) != null) return null;
+            if (ls_store.getSymbolLambdaSet(symbol) != null) return null;
+            return .{
+                .expr_id = expr_id,
+                .symbol = symbol,
+            };
+        },
+        .list => |list| {
+            for (mir_store.getExprSpan(list.elems)) |elem| {
+                if (firstReachableMissingFunctionLookup(mir_store, ls_store, elem)) |found| return found;
+            }
+            return null;
+        },
+        .struct_ => |struct_| {
+            for (mir_store.getExprSpan(struct_.fields)) |field| {
+                if (firstReachableMissingFunctionLookup(mir_store, ls_store, field)) |found| return found;
+            }
+            return null;
+        },
+        .tag => |tag| {
+            for (mir_store.getExprSpan(tag.args)) |arg| {
+                if (firstReachableMissingFunctionLookup(mir_store, ls_store, arg)) |found| return found;
+            }
+            return null;
+        },
+        .match_expr => |match_expr| {
+            if (firstReachableMissingFunctionLookup(mir_store, ls_store, match_expr.cond)) |found| return found;
+            for (mir_store.getBranches(match_expr.branches)) |branch| {
+                if (!branch.guard.isNone()) {
+                    if (firstReachableMissingFunctionLookup(mir_store, ls_store, branch.guard)) |found| return found;
+                }
+                if (firstReachableMissingFunctionLookup(mir_store, ls_store, branch.body)) |found| return found;
+            }
+            return null;
+        },
+        .closure_make => |closure| return firstReachableMissingFunctionLookup(mir_store, ls_store, closure.captures),
+        .call => |call| {
+            if (firstReachableMissingFunctionLookup(mir_store, ls_store, call.func)) |found| return found;
+            for (mir_store.getExprSpan(call.args)) |arg| {
+                if (firstReachableMissingFunctionLookup(mir_store, ls_store, arg)) |found| return found;
+            }
+            return null;
+        },
+        .block => |block| {
+            for (mir_store.getStmts(block.stmts)) |stmt| {
+                switch (stmt) {
+                    .decl_const, .decl_var, .mutate_var => |binding| {
+                        if (firstReachableMissingFunctionLookup(mir_store, ls_store, binding.expr)) |found| return found;
+                    },
+                }
+            }
+            return firstReachableMissingFunctionLookup(mir_store, ls_store, block.final_expr);
+        },
+        .borrow_scope => |borrow_scope| {
+            for (mir_store.getBorrowBindings(borrow_scope.bindings)) |binding| {
+                if (firstReachableMissingFunctionLookup(mir_store, ls_store, binding.expr)) |found| return found;
+            }
+            return firstReachableMissingFunctionLookup(mir_store, ls_store, borrow_scope.body);
+        },
+        .struct_access => |access| return firstReachableMissingFunctionLookup(mir_store, ls_store, access.struct_),
+        .str_escape_and_quote => |inner| return firstReachableMissingFunctionLookup(mir_store, ls_store, inner),
+        .run_low_level => |low_level| {
+            for (mir_store.getExprSpan(low_level.args)) |arg| {
+                if (firstReachableMissingFunctionLookup(mir_store, ls_store, arg)) |found| return found;
+            }
+            return null;
+        },
+        .dbg_expr => |dbg_expr| return firstReachableMissingFunctionLookup(mir_store, ls_store, dbg_expr.expr),
+        .expect => |expect| return firstReachableMissingFunctionLookup(mir_store, ls_store, expect.body),
+        .for_loop => |for_loop| {
+            if (firstReachableMissingFunctionLookup(mir_store, ls_store, for_loop.list)) |found| return found;
+            return firstReachableMissingFunctionLookup(mir_store, ls_store, for_loop.body);
+        },
+        .while_loop => |while_loop| {
+            if (firstReachableMissingFunctionLookup(mir_store, ls_store, while_loop.cond)) |found| return found;
+            return firstReachableMissingFunctionLookup(mir_store, ls_store, while_loop.body);
+        },
+        .return_expr => |ret| return firstReachableMissingFunctionLookup(mir_store, ls_store, ret.expr),
+        .proc_ref,
+        .runtime_err_can,
+        .runtime_err_type,
+        .runtime_err_ellipsis,
+        .runtime_err_anno_only,
+        .int,
+        .frac_f32,
+        .frac_f64,
+        .dec,
+        .str,
+        .crash,
+        .break_expr,
+        => return null,
+    }
 }
 
 // --- MIR Store tests ---
@@ -155,8 +489,8 @@ test "MIR Store: symbol def registration" {
     } }, monotype, Region.zero());
     const symbol = testSymbolFromIdent(Ident.Idx.NONE);
 
-    try store.registerSymbolDef(test_allocator, symbol, expr_id);
-    const result = store.getSymbolDef(symbol);
+    try store.registerValueDef(test_allocator, symbol, expr_id);
+    const result = store.getValueDef(symbol);
     try testing.expect(result != null);
     try testing.expectEqual(expr_id, result.?);
 }
@@ -372,9 +706,13 @@ test "Lower: init and deinit" {
 
     const all_module_envs = [_]*ModuleEnv{module_env};
 
+    var monomorphization = try Monomorphize.Result.init(test_allocator, 0, null);
+    defer monomorphization.deinit(test_allocator);
+
     var lower = try Lower.init(
         test_allocator,
         &store,
+        &monomorphization,
         @as([]const *ModuleEnv, &all_module_envs),
         &module_env.types,
         0,
@@ -527,10 +865,6 @@ test "lowerExpr: block local closure call has resolvable symbol def and lambda s
     const final_expr = env.mir_store.getExpr(final_expr_id);
     try testing.expect(final_expr == .call);
 
-    const callee = env.mir_store.getExpr(final_expr.call.func);
-    try testing.expect(callee == .lookup);
-    const closure_sym = callee.lookup;
-
     const all_module_envs = [_]*ModuleEnv{
         @constCast(env.builtin_module.env),
         env.module_env,
@@ -538,9 +872,10 @@ test "lowerExpr: block local closure call has resolvable symbol def and lambda s
     var ls_store = try LambdaSet.infer(test_allocator, env.mir_store, all_module_envs[0..]);
     defer ls_store.deinit(test_allocator);
 
-    const closure_ls = ls_store.getSymbolLambdaSet(closure_sym) orelse return error.TestUnexpectedResult;
-    const members = ls_store.getMembers(ls_store.getLambdaSet(closure_ls).members);
+    const callee_ls = ls_store.getExprLambdaSet(final_expr.call.func) orelse return error.TestUnexpectedResult;
+    const members = ls_store.getMembers(ls_store.getLambdaSet(callee_ls).members);
     try testing.expectEqual(@as(usize, 1), members.len);
+    try testing.expect(!members[0].proc.isNone());
     const closure_member = env.mir_store.getClosureMember(members[0].closure_member);
     try testing.expectEqual(@as(usize, 1), env.mir_store.getCaptureBindings(closure_member.capture_bindings).len);
 }
@@ -559,24 +894,12 @@ test "lambda set: closure-returning binding keeps resolvable lifted member" {
     const block = env.mir_store.getExpr(expr);
     try testing.expect(block == .block);
 
-    const stmts = env.mir_store.getStmts(block.block.stmts);
-    try testing.expect(stmts.len >= 2);
-    try testing.expect(stmts[1] == .decl_const);
-
     const all_module_envs = [_]*ModuleEnv{
         @constCast(env.builtin_module.env),
         env.module_env,
     };
     var ls_store = try LambdaSet.infer(test_allocator, env.mir_store, all_module_envs[0..]);
     defer ls_store.deinit(test_allocator);
-
-    const returned_closure_ls = ls_store.getExprLambdaSet(stmts[1].decl_const.expr) orelse return error.TestUnexpectedResult;
-
-    const members = ls_store.getMembers(ls_store.getLambdaSet(returned_closure_ls).members);
-    try testing.expectEqual(@as(usize, 1), members.len);
-    try testing.expect(env.mir_store.getSymbolDef(members[0].fn_symbol) != null);
-    const returned_closure_member = env.mir_store.getClosureMember(members[0].closure_member);
-    try testing.expectEqual(@as(usize, 1), env.mir_store.getCaptureBindings(returned_closure_member.capture_bindings).len);
 
     var final_expr_id = block.block.final_expr;
     while (env.mir_store.getExpr(final_expr_id) == .block) {
@@ -589,7 +912,9 @@ test "lambda set: closure-returning binding keeps resolvable lifted member" {
 
     const callee_members = ls_store.getMembers(ls_store.getLambdaSet(callee_ls).members);
     try testing.expectEqual(@as(usize, 1), callee_members.len);
-    try testing.expect(env.mir_store.getSymbolDef(callee_members[0].fn_symbol) != null);
+    try testing.expect(!callee_members[0].proc.isNone());
+    const returned_closure_member = env.mir_store.getClosureMember(callee_members[0].closure_member);
+    try testing.expectEqual(@as(usize, 1), env.mir_store.getCaptureBindings(returned_closure_member.capture_bindings).len);
 }
 
 test "lambda set: higher-order closure param propagation keeps member defs stable" {
@@ -625,7 +950,7 @@ test "lambda set: higher-order closure param propagation keeps member defs stabl
 
     const members = ls_store.getMembers(ls_store.getLambdaSet(callee_ls).members);
     try testing.expectEqual(@as(usize, 1), members.len);
-    try testing.expect(env.mir_store.getSymbolDef(members[0].fn_symbol) != null);
+    try testing.expect(!members[0].proc.isNone());
 }
 
 test "lambda set: exact closure factory program keeps symbol defs stable" {
@@ -653,7 +978,7 @@ test "lambda set: exact closure factory program keeps symbol defs stable" {
 
     try testing.expect(ls_store.lambda_sets.items.len > 0);
     try testing.expect(ls_store.members.items.len > 0);
-    try testing.expect(env.mir_store.getSymbolDef(ls_store.members.items[0].fn_symbol) != null);
+    try testing.expect(!ls_store.members.items[0].proc.isNone());
 }
 
 test "lambda set: factory-produced closure alias keeps captured symbol lambda set" {
@@ -747,7 +1072,7 @@ test "lambda set: closure extracted from record field keeps member defs stable" 
     const f_ls = ls_store.getSymbolLambdaSet(resolved_f_sym) orelse return error.TestUnexpectedResult;
     const members = ls_store.getMembers(ls_store.getLambdaSet(f_ls).members);
     try testing.expectEqual(@as(usize, 1), members.len);
-    try testing.expect(env.mir_store.getSymbolDef(members[0].fn_symbol) != null);
+    try testing.expect(!members[0].proc.isNone());
     const closure_member = env.mir_store.getClosureMember(members[0].closure_member);
     try testing.expectEqual(@as(usize, 1), env.mir_store.getCaptureBindings(closure_member.capture_bindings).len);
 }
@@ -790,8 +1115,8 @@ test "lambda set: plain lambda extracted from record field gets symbol identity"
     const members = ls_store.getMembers(ls_store.getLambdaSet(f_ls).members);
     try testing.expectEqual(@as(usize, 1), members.len);
     try testing.expect(members[0].closure_member.isNone());
-    const lifted_def = env.mir_store.getSymbolDef(members[0].fn_symbol) orelse return error.TestUnexpectedResult;
-    try testing.expect(LambdaSet.isLambdaExpr(env.mir_store, lifted_def));
+    try testing.expect(!members[0].proc.isNone());
+    try testing.expect(env.mir_store.getProc(members[0].proc).capture_bindings.isEmpty());
 }
 
 test "lambda set: plain lambda extracted from tuple field gets symbol identity" {
@@ -832,8 +1157,8 @@ test "lambda set: plain lambda extracted from tuple field gets symbol identity" 
     const members = ls_store.getMembers(ls_store.getLambdaSet(f_ls).members);
     try testing.expectEqual(@as(usize, 1), members.len);
     try testing.expect(members[0].closure_member.isNone());
-    const lifted_def = env.mir_store.getSymbolDef(members[0].fn_symbol) orelse return error.TestUnexpectedResult;
-    try testing.expect(LambdaSet.isLambdaExpr(env.mir_store, lifted_def));
+    try testing.expect(!members[0].proc.isNone());
+    try testing.expect(env.mir_store.getProc(members[0].proc).capture_bindings.isEmpty());
 }
 
 test "lambda set: plain lambda extracted from tag payload gets symbol identity" {
@@ -875,8 +1200,8 @@ test "lambda set: plain lambda extracted from tag payload gets symbol identity" 
     const members = ls_store.getMembers(ls_store.getLambdaSet(f_ls).members);
     try testing.expectEqual(@as(usize, 1), members.len);
     try testing.expect(members[0].closure_member.isNone());
-    const lifted_def = env.mir_store.getSymbolDef(members[0].fn_symbol) orelse return error.TestUnexpectedResult;
-    try testing.expect(LambdaSet.isLambdaExpr(env.mir_store, lifted_def));
+    try testing.expect(!members[0].proc.isNone());
+    try testing.expect(env.mir_store.getProc(members[0].proc).capture_bindings.isEmpty());
 }
 
 test "lambda set: plain lambda extracted from list element gets symbol identity" {
@@ -918,8 +1243,8 @@ test "lambda set: plain lambda extracted from list element gets symbol identity"
     const members = ls_store.getMembers(ls_store.getLambdaSet(f_ls).members);
     try testing.expectEqual(@as(usize, 1), members.len);
     try testing.expect(members[0].closure_member.isNone());
-    const lifted_def = env.mir_store.getSymbolDef(members[0].fn_symbol) orelse return error.TestUnexpectedResult;
-    try testing.expect(LambdaSet.isLambdaExpr(env.mir_store, lifted_def));
+    try testing.expect(!members[0].proc.isNone());
+    try testing.expect(env.mir_store.getProc(members[0].proc).capture_bindings.isEmpty());
 }
 
 test "lambda set: higher-order param receives both closure members" {
@@ -940,22 +1265,9 @@ test "lambda set: higher-order param receives both closure members" {
     try testing.expect(block == .block);
 
     const stmts = env.mir_store.getStmts(block.block.stmts);
-    var apply_sym: ?MIR.Symbol = null;
-    for (stmts) |stmt| {
-        if (stmt != .decl_const) continue;
-        const stmt_expr = env.mir_store.getExpr(stmt.decl_const.expr);
-        if (stmt_expr != .lambda) continue;
-        const pat = env.mir_store.getPattern(stmt.decl_const.pattern);
-        if (pat != .bind) continue;
-        apply_sym = pat.bind;
-        break;
-    }
-    const resolved_apply_sym = apply_sym orelse return error.TestUnexpectedResult;
-    const apply_def = env.mir_store.getSymbolDef(resolved_apply_sym) orelse return error.TestUnexpectedResult;
-    const apply_expr = env.mir_store.getExpr(apply_def);
-    try testing.expect(apply_expr == .lambda);
-
-    const apply_params = env.mir_store.getPatternSpan(apply_expr.lambda.params);
+    const apply_proc_id = firstCalledProcInStmts(env.mir_store, stmts) orelse return error.TestUnexpectedResult;
+    const apply_proc = env.mir_store.getProc(apply_proc_id);
+    const apply_params = env.mir_store.getPatternSpan(apply_proc.params);
     try testing.expectEqual(@as(usize, 2), apply_params.len);
     const f_pat = env.mir_store.getPattern(apply_params[0]);
     try testing.expect(f_pat == .bind);
@@ -972,8 +1284,11 @@ test "lambda set: higher-order param receives both closure members" {
     const members = ls_store.getMembers(ls_store.getLambdaSet(f_ls).members);
     try testing.expectEqual(@as(usize, 2), members.len);
     for (members) |member| {
-        const closure_member = env.mir_store.getClosureMember(member.closure_member);
-        try testing.expectEqual(@as(usize, 1), env.mir_store.getCaptureBindings(closure_member.capture_bindings).len);
+        const capture_bindings = if (!member.closure_member.isNone())
+            env.mir_store.getCaptureBindings(env.mir_store.getClosureMember(member.closure_member).capture_bindings)
+        else
+            env.mir_store.getCaptureBindings(env.mir_store.getProc(member.proc).capture_bindings);
+        try testing.expectEqual(@as(usize, 1), capture_bindings.len);
     }
 }
 
@@ -1003,22 +1318,9 @@ test "lambda set: higher-order closure captures monotype stays numeric tuple" {
     try testing.expect(block == .block);
 
     const stmts = env.mir_store.getStmts(block.block.stmts);
-    var apply_sym: ?MIR.Symbol = null;
-    for (stmts) |stmt| {
-        if (stmt != .decl_const) continue;
-        const stmt_expr = env.mir_store.getExpr(stmt.decl_const.expr);
-        if (stmt_expr != .lambda) continue;
-        const pat = env.mir_store.getPattern(stmt.decl_const.pattern);
-        if (pat != .bind) continue;
-        apply_sym = pat.bind;
-        break;
-    }
-    const resolved_apply_sym = apply_sym orelse return error.TestUnexpectedResult;
-    const apply_def = env.mir_store.getSymbolDef(resolved_apply_sym) orelse return error.TestUnexpectedResult;
-    const apply_expr = env.mir_store.getExpr(apply_def);
-    try testing.expect(apply_expr == .lambda);
-
-    const apply_params = env.mir_store.getPatternSpan(apply_expr.lambda.params);
+    const apply_proc_id = firstCalledProcInStmts(env.mir_store, stmts) orelse return error.TestUnexpectedResult;
+    const apply_proc = env.mir_store.getProc(apply_proc_id);
+    const apply_params = env.mir_store.getPatternSpan(apply_proc.params);
     const f_pat = env.mir_store.getPattern(apply_params[0]);
     try testing.expect(f_pat == .bind);
     const f_sym = f_pat.bind;
@@ -1027,8 +1329,10 @@ test "lambda set: higher-order closure captures monotype stays numeric tuple" {
     const members = ls_store.getMembers(ls_store.getLambdaSet(f_ls).members);
     try testing.expectEqual(@as(usize, 2), members.len);
 
-    const closure_member = env.mir_store.getClosureMember(members[0].closure_member);
-    const capture_bindings = env.mir_store.getCaptureBindings(closure_member.capture_bindings);
+    const capture_bindings = if (!members[0].closure_member.isNone())
+        env.mir_store.getCaptureBindings(env.mir_store.getClosureMember(members[0].closure_member).capture_bindings)
+    else
+        env.mir_store.getCaptureBindings(env.mir_store.getProc(members[0].proc).capture_bindings);
     try testing.expectEqual(@as(usize, 1), capture_bindings.len);
     const elem_mono = env.mir_store.monotype_store.resolve(capture_bindings[0].monotype);
     try testing.expectEqual(Monotype.Prim.dec, elem_mono.builtinPrim().?);
@@ -1045,27 +1349,10 @@ test "lambda set: imported List.any receives predicate lambda set" {
     const root_args = env.mir_store.getExprSpan(root_expr.call.args);
     try testing.expectEqual(@as(usize, 2), root_args.len);
 
-    const callee_expr = env.mir_store.getExpr(root_expr.call.func);
-    try testing.expect(callee_expr == .lookup);
-    const any_sym = callee_expr.lookup;
-    const any_def = env.mir_store.getSymbolDef(any_sym) orelse return error.TestUnexpectedResult;
-
-    var lambda_def = any_def;
-    var params: MIR.PatternSpan = undefined;
-    var lambda_body: MIR.ExprId = undefined;
-    while (true) {
-        switch (env.mir_store.getExpr(lambda_def)) {
-            .lambda => |lam| {
-                params = lam.params;
-                lambda_body = lam.body;
-                break;
-            },
-            .block => |block| {
-                lambda_def = block.final_expr;
-            },
-            else => return error.TestUnexpectedResult,
-        }
-    }
+    const any_proc_id = procIdFromCallableExpr(env.mir_store, root_expr.call.func) orelse return error.TestUnexpectedResult;
+    const any_proc = env.mir_store.getProc(any_proc_id);
+    const params = any_proc.params;
+    const lambda_body = any_proc.body;
 
     const param_ids = env.mir_store.getPatternSpan(params);
     try testing.expectEqual(@as(usize, 2), param_ids.len);
@@ -1132,8 +1419,8 @@ test "lambda set: imported List.any receives predicate lambda set" {
     const predicate_ls = ls_store.getSymbolLambdaSet(predicate_sym) orelse return error.TestUnexpectedResult;
     const members = ls_store.getMembers(ls_store.getLambdaSet(predicate_ls).members);
     try testing.expectEqual(@as(usize, 1), members.len);
-    try testing.expectEqual(arg_members[0].fn_symbol, members[0].fn_symbol);
-    try testing.expect(env.mir_store.getSymbolDef(members[0].fn_symbol) != null);
+    try testing.expectEqual(arg_members[0].proc, members[0].proc);
+    try testing.expect(!members[0].proc.isNone());
     try testing.expect(members[0].closure_member.isNone());
 }
 
@@ -1145,8 +1432,8 @@ test "lowerExpr: lambda" {
     defer env.deinit();
     const expr = try env.lowerFirstDef();
     const result = env.mir_store.getExpr(expr);
-    try testing.expect(result == .lambda);
-    try testing.expectEqual(@as(u16, 1), result.lambda.params.len);
+    try testing.expect(result == .proc_ref);
+    try testing.expectEqual(@as(u16, 1), env.mir_store.getProc(result.proc_ref).params.len);
 }
 
 test "lowerExpr: Bool.and short-circuit desugars to match" {
@@ -1348,7 +1635,7 @@ test "lambda set: opaque function field call through param gets field lambda set
         var field_access_expr = func_expr;
 
         if (field_access_expr == .lookup) {
-            const def_expr_id = env.mir_store.getSymbolDef(field_access_expr.lookup) orelse continue;
+            const def_expr_id = env.mir_store.getValueDef(field_access_expr.lookup) orelse continue;
             const def_expr = env.mir_store.getExpr(def_expr_id);
             if (def_expr != .struct_access) continue;
             field_access_expr_id = def_expr_id;
@@ -1496,9 +1783,8 @@ test "cross-module: imported value call uses target def identity" {
     try testing.expect(result != .runtime_err_type);
 
     try testing.expect(result == .call);
-    const func = env_app.mir_store.getExpr(result.call.func);
-    try testing.expect(func == .lookup);
-    try testing.expect(env_app.mir_store.getSymbolDef(func.lookup) != null);
+    const proc_id = procIdFromCallableExpr(env_app.mir_store, result.call.func) orelse return error.TestUnexpectedResult;
+    try testing.expect(!proc_id.isNone());
 }
 
 test "cross-module: imported top-level value call uses target def identity" {
@@ -1538,9 +1824,8 @@ test "cross-module: imported top-level value call uses target def identity" {
     try testing.expect(result != .runtime_err_type);
 
     try testing.expect(result == .call);
-    const func = env_app.mir_store.getExpr(result.call.func);
-    try testing.expect(func == .lookup);
-    try testing.expect(env_app.mir_store.getSymbolDef(func.lookup) != null);
+    const proc_id = procIdFromCallableExpr(env_app.mir_store, result.call.func) orelse return error.TestUnexpectedResult;
+    try testing.expect(!proc_id.isNone());
 }
 
 // --- Additional Lower code path tests ---
@@ -1721,15 +2006,8 @@ test "cross-module: dot-access method call ensures method is lowered" {
 
     // The result should be a call to a cross-module method
     try testing.expect(result == .call);
-    const func = env_b.mir_store.getExpr(result.call.func);
-    try testing.expect(func == .lookup);
-    const method_sym = func.lookup;
-
-    // Symbol IDs are opaque; we only require that lowering resolved a real symbol.
-    try testing.expect(!method_sym.isNone());
-
-    // The cross-module method body must have been lowered into the MIR store
-    try testing.expect(env_b.mir_store.getSymbolDef(method_sym) != null);
+    const method_proc = procIdFromCallableExpr(env_b.mir_store, result.call.func) orelse return error.TestUnexpectedResult;
+    try testing.expect(!method_proc.isNone());
 }
 
 // --- Gap #10: Recursive symbol monotype patching ---
@@ -1763,6 +2041,29 @@ test "lowerExternalDef: mutually recursive defs get monotypes patched (not left 
     const odd_resolved = env.mir_store.monotype_store.resolve(odd_type);
     try testing.expect(even_resolved.kind == .func);
     try testing.expect(odd_resolved.kind == .func);
+}
+
+test "lowerExpr: mutually recursive local closures lower to a finite recursive proc set" {
+    var env = try MirTestEnv.initExpr(
+        \\{
+        \\    is_even = |n| if (n == 0) True else is_odd(n - 1)
+        \\    is_odd = |n| if (n == 0) False else is_even(n - 1)
+        \\    if (is_even(4)) 1 else 0
+        \\}
+    );
+    defer env.deinit();
+
+    const expr = try env.lowerFirstDef();
+    try testing.expect(env.mir_store.getExpr(expr) != .runtime_err_type);
+
+    var recursive_proc_count: usize = 0;
+    for (env.mir_store.getProcs()) |proc| {
+        if (proc.recursion != .recursive) continue;
+        try testing.expectEqual(@as(usize, 0), env.mir_store.getCaptureBindings(proc.capture_bindings).len);
+        recursive_proc_count += 1;
+    }
+
+    try testing.expectEqual(@as(usize, 2), recursive_proc_count);
 }
 
 // --- Cross-module builtin call lowering ---
@@ -1799,6 +2100,496 @@ test "cross-module: List.keep_if lowers without error" {
     const expr = try env.lowerFirstDef();
     const result = env.mir_store.getExpr(expr);
     try testing.expect(result != .runtime_err_type);
+}
+
+test "cross-module: proc bodies do not directly lookup foreign proc params" {
+    var env = try MirTestEnv.initExpr("List.contains([1.I64, 2.I64, 3.I64, 4.I64, 5.I64], 3.I64)");
+    defer env.deinit();
+    _ = try env.lowerFirstDef();
+
+    var all_param_symbols = std.AutoHashMap(MIR.Symbol, MIR.ProcId).init(test_allocator);
+    defer all_param_symbols.deinit();
+
+    for (env.mir_store.getProcs(), 0..) |proc, proc_idx_usize| {
+        const proc_id: MIR.ProcId = @enumFromInt(proc_idx_usize);
+        for (env.mir_store.getPatternSpan(proc.params)) |param_id| {
+            const symbol = switch (env.mir_store.getPattern(param_id)) {
+                .bind => |sym| sym,
+                .as_pattern => |as_pat| as_pat.symbol,
+                else => continue,
+            };
+            try all_param_symbols.put(symbol, proc_id);
+        }
+    }
+
+    for (env.mir_store.getProcs(), 0..) |proc, proc_idx_usize| {
+        const proc_id: MIR.ProcId = @enumFromInt(proc_idx_usize);
+        if (proc.body.isNone()) continue;
+        if (firstForeignParamLookup(env.mir_store, proc.body, proc_id, &all_param_symbols)) |found| {
+            std.debug.print("proc {d} body={d} captures_param={d} capture_bindings={d}\n", .{
+                proc_idx_usize,
+                @intFromEnum(proc.body),
+                @intFromEnum(proc.captures_param),
+                proc.capture_bindings.len,
+            });
+            for (env.mir_store.getPatternSpan(proc.params), 0..) |param_id, param_i| {
+                const symbol = switch (env.mir_store.getPattern(param_id)) {
+                    .bind => |sym| sym,
+                    .as_pattern => |as_pat| as_pat.symbol,
+                    else => continue,
+                };
+                std.debug.print("  param {d} symbol={d}\n", .{ param_i, symbol.raw() });
+            }
+            for (env.mir_store.getCaptureBindings(proc.capture_bindings), 0..) |binding, binding_i| {
+                std.debug.print(
+                    "  capture_binding {d} local_symbol={d} source_expr={d}\n",
+                    .{ binding_i, binding.local_symbol.raw(), @intFromEnum(binding.source_expr) },
+                );
+            }
+            dumpMirExpr(env.mir_store, proc.body, 1);
+            std.debug.print(
+                "foreign param lookup in proc {d}: symbol={d} owner_proc={d} expr={d}\n",
+                .{
+                    proc_idx_usize,
+                    found.symbol.raw(),
+                    @intFromEnum(found.owner_proc),
+                    @intFromEnum(found.expr_id),
+                },
+            );
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+test "cross-module: List.keep_if seeds lambda sets for reachable callable params" {
+    var env = try MirTestEnv.initExpr("List.keep_if([1.I64, 2.I64, 3.I64, 4.I64, 5.I64], |x| x > 2)");
+    defer env.deinit();
+    _ = try env.lowerFirstDef();
+
+    var ls_store = try LambdaSet.infer(test_allocator, env.mir_store, env.lower.all_module_envs);
+    defer ls_store.deinit(test_allocator);
+
+    for (env.mir_store.getProcs(), 0..) |proc, proc_idx| {
+        for (env.mir_store.getPatternSpan(proc.params)) |param_id| {
+            const param_mono = env.mir_store.patternTypeOf(param_id);
+            if (env.mir_store.monotype_store.resolve(param_mono).kind != .func) continue;
+            const symbol = switch (env.mir_store.getPattern(param_id)) {
+                .bind => |sym| sym,
+                .as_pattern => |as_pat| as_pat.symbol,
+                else => continue,
+            };
+            if (ls_store.getSymbolLambdaSet(symbol) == null) {
+                std.debug.print(
+                    "missing lambda set for proc {d} callable param symbol={d}\n",
+                    .{ proc_idx, symbol.raw() },
+                );
+            }
+            try testing.expect(ls_store.getSymbolLambdaSet(symbol) != null);
+        }
+    }
+}
+
+test "cross-module runExpr: List.keep_if callable lookup sites retain lambda sets" {
+    var env = try MirTestEnv.initExpr("List.keep_if([1.I64, 2.I64, 3.I64, 4.I64, 5.I64], |x| x > 2)");
+    defer env.deinit();
+
+    const defs = env.module_env.store.sliceDefs(env.module_env.all_defs);
+    const main_def = env.module_env.store.getDef(defs[0]);
+    const all_module_envs = [_]*ModuleEnv{ @constCast(env.builtin_module.env), env.module_env };
+
+    var monomorphization = try Monomorphize.runExpr(
+        test_allocator,
+        @as([]const *ModuleEnv, all_module_envs[0..]),
+        &env.module_env.types,
+        1,
+        null,
+        main_def.expr,
+    );
+    defer monomorphization.deinit(test_allocator);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    var lower = try Lower.init(
+        test_allocator,
+        &mir_store,
+        &monomorphization,
+        @as([]const *ModuleEnv, all_module_envs[0..]),
+        &env.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    _ = try lower.lowerExpr(main_def.expr);
+
+    var ls_store = try LambdaSet.infer(test_allocator, &mir_store, @as([]const *ModuleEnv, all_module_envs[0..]));
+    defer ls_store.deinit(test_allocator);
+
+    for (mir_store.exprs.items) |expr| {
+        if (expr != .call) continue;
+        const func_expr_id = expr.call.func;
+        const func_expr = mir_store.getExpr(func_expr_id);
+        if (func_expr != .lookup) continue;
+        if (mir_store.monotype_store.resolve(mir_store.typeOf(func_expr_id)).kind != .func) continue;
+        try testing.expect(
+            ls_store.getExprLambdaSet(func_expr_id) != null or
+                ls_store.getSymbolLambdaSet(func_expr.lookup) != null,
+        );
+    }
+}
+
+test "cross-module runExpr: REPL-style List.keep_if function lookups retain lambda sets" {
+    var env = try MirTestEnv.initExpr("List.keep_if([1.I64, 2.I64, 3.I64, 4.I64, 5.I64], |x| x > 2)");
+    defer env.deinit();
+
+    const defs = env.module_env.store.sliceDefs(env.module_env.all_defs);
+    const main_def = env.module_env.store.getDef(defs[0]);
+    const region = env.module_env.store.getExprRegion(main_def.expr);
+
+    const scratch_top = env.module_env.store.scratchExprTop();
+    defer env.module_env.store.clearScratchExprsFrom(scratch_top);
+    try env.module_env.store.addScratchExpr(main_def.expr);
+    const inspect_args = try env.module_env.store.exprSpanFrom(scratch_top);
+    const inspect_expr = try env.module_env.addExpr(.{ .e_run_low_level = .{
+        .op = .str_inspekt,
+        .args = inspect_args,
+    } }, region);
+
+    const all_module_envs = [_]*ModuleEnv{ @constCast(env.builtin_module.env), env.module_env };
+
+    var monomorphization = try Monomorphize.runExpr(
+        test_allocator,
+        @as([]const *ModuleEnv, all_module_envs[0..]),
+        &env.module_env.types,
+        1,
+        null,
+        inspect_expr,
+    );
+    defer monomorphization.deinit(test_allocator);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    var lower = try Lower.init(
+        test_allocator,
+        &mir_store,
+        &monomorphization,
+        @as([]const *ModuleEnv, all_module_envs[0..]),
+        &env.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    _ = try lower.lowerExpr(inspect_expr);
+
+    var ls_store = try LambdaSet.infer(test_allocator, &mir_store, @as([]const *ModuleEnv, all_module_envs[0..]));
+    defer ls_store.deinit(test_allocator);
+
+    for (mir_store.getProcs()) |proc| {
+        if (proc.body.isNone()) continue;
+        if (firstReachableMissingFunctionLookup(&mir_store, &ls_store, proc.body)) |missing| {
+            std.debug.print(
+                "missing REPL-style function lookup lambda set: expr={d} symbol={d}\n",
+                .{ @intFromEnum(missing.expr_id), missing.symbol.raw() },
+            );
+            dumpMirExpr(&mir_store, proc.body, 1);
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+test "cross-module runExpr: REPL-style List.contains lowers without unbound captures" {
+    var env = try MirTestEnv.initExpr("List.contains([1.I64, 2.I64, 3.I64, 4.I64, 5.I64], 3.I64)");
+    defer env.deinit();
+
+    const defs = env.module_env.store.sliceDefs(env.module_env.all_defs);
+    const main_def = env.module_env.store.getDef(defs[0]);
+    const region = env.module_env.store.getExprRegion(main_def.expr);
+
+    const scratch_top = env.module_env.store.scratchExprTop();
+    defer env.module_env.store.clearScratchExprsFrom(scratch_top);
+    try env.module_env.store.addScratchExpr(main_def.expr);
+    const inspect_args = try env.module_env.store.exprSpanFrom(scratch_top);
+    const inspect_expr = try env.module_env.addExpr(.{ .e_run_low_level = .{
+        .op = .str_inspekt,
+        .args = inspect_args,
+    } }, region);
+
+    const all_module_envs = [_]*ModuleEnv{ @constCast(env.builtin_module.env), env.module_env };
+
+    var monomorphization = try Monomorphize.runExpr(
+        test_allocator,
+        @as([]const *ModuleEnv, all_module_envs[0..]),
+        &env.module_env.types,
+        1,
+        null,
+        inspect_expr,
+    );
+    defer monomorphization.deinit(test_allocator);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    var lower = try Lower.init(
+        test_allocator,
+        &mir_store,
+        &monomorphization,
+        @as([]const *ModuleEnv, all_module_envs[0..]),
+        &env.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    _ = try lower.lowerExpr(inspect_expr);
+}
+
+test "runExpr: top-level local function lookup materializes callable def proc inst" {
+    var env = try MirTestEnv.initFull("Test",
+        \\fn0 = |a| a + 1
+        \\main = fn0(10)
+    );
+    defer env.deinit();
+
+    const def = try env.getDefExprByName("main");
+    const all_module_envs = [_]*ModuleEnv{ @constCast(env.builtin_module.env), env.module_env };
+
+    var monomorphization = try Monomorphize.runExpr(
+        test_allocator,
+        @as([]const *ModuleEnv, all_module_envs[0..]),
+        &env.module_env.types,
+        1,
+        null,
+        def.expr_idx,
+    );
+    defer monomorphization.deinit(test_allocator);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    var lower = try Lower.init(
+        test_allocator,
+        &mir_store,
+        &monomorphization,
+        @as([]const *ModuleEnv, all_module_envs[0..]),
+        &env.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    const expr = try lower.lowerExpr(def.expr_idx);
+    const result = mir_store.getExpr(expr);
+    try testing.expect(result == .call);
+
+    const proc_id = procIdFromCallableExpr(&mir_store, result.call.func) orelse return error.TestUnexpectedResult;
+    try testing.expect(!proc_id.isNone());
+}
+
+test "runExpr: block-carried local function lookup materializes callable stmt proc inst" {
+    var env = try MirTestEnv.initExpr(
+        \\{
+        \\    fn0 = |a| a + 1
+        \\    fn0(10)
+        \\}
+    );
+    defer env.deinit();
+
+    const defs = env.module_env.store.sliceDefs(env.module_env.all_defs);
+    const main_def = env.module_env.store.getDef(defs[0]);
+    const all_module_envs = [_]*ModuleEnv{ @constCast(env.builtin_module.env), env.module_env };
+
+    var monomorphization = try Monomorphize.runExpr(
+        test_allocator,
+        @as([]const *ModuleEnv, all_module_envs[0..]),
+        &env.module_env.types,
+        1,
+        null,
+        main_def.expr,
+    );
+    defer monomorphization.deinit(test_allocator);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    var lower = try Lower.init(
+        test_allocator,
+        &mir_store,
+        &monomorphization,
+        @as([]const *ModuleEnv, all_module_envs[0..]),
+        &env.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    const expr = try lower.lowerExpr(main_def.expr);
+    const result = mir_store.getExpr(expr);
+    try testing.expect(result == .block);
+
+    const final_expr = mir_store.getExpr(result.block.final_expr);
+    try testing.expect(final_expr == .call);
+
+    const proc_id = procIdFromCallableExpr(&mir_store, final_expr.call.func) orelse return error.TestUnexpectedResult;
+    try testing.expect(!proc_id.isNone());
+}
+
+test "runExpr: block-carried arrow call materializes callable stmt proc inst" {
+    var env = try MirTestEnv.initExpr(
+        \\{
+        \\    fn0 = |a| a + 1
+        \\    10->fn0
+        \\}
+    );
+    defer env.deinit();
+
+    const defs = env.module_env.store.sliceDefs(env.module_env.all_defs);
+    const main_def = env.module_env.store.getDef(defs[0]);
+    const all_module_envs = [_]*ModuleEnv{ @constCast(env.builtin_module.env), env.module_env };
+
+    var monomorphization = try Monomorphize.runExpr(
+        test_allocator,
+        @as([]const *ModuleEnv, all_module_envs[0..]),
+        &env.module_env.types,
+        1,
+        null,
+        main_def.expr,
+    );
+    defer monomorphization.deinit(test_allocator);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    var lower = try Lower.init(
+        test_allocator,
+        &mir_store,
+        &monomorphization,
+        @as([]const *ModuleEnv, all_module_envs[0..]),
+        &env.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    const expr = try lower.lowerExpr(main_def.expr);
+    const result = mir_store.getExpr(expr);
+    try testing.expect(result == .block);
+
+    const final_expr = mir_store.getExpr(result.block.final_expr);
+    try testing.expect(final_expr == .call);
+
+    const proc_id = procIdFromCallableExpr(&mir_store, final_expr.call.func) orelse return error.TestUnexpectedResult;
+    try testing.expect(!proc_id.isNone());
+}
+
+test "runExpr: proc-backed closure capture sources retain lambda sets" {
+    var env = try MirTestEnv.initExpr(
+        \\{
+        \\    append_one = |acc, x| List.append(acc, x)
+        \\    clone_via_fold = |xs| xs.fold(List.with_capacity(1), append_one)
+        \\    _first_len = clone_via_fold([1.I64, 2.I64]).len()
+        \\    clone_via_fold([[1.I64, 2.I64], [3.I64, 4.I64]]).len()
+        \\}
+    );
+    defer env.deinit();
+
+    const defs = env.module_env.store.sliceDefs(env.module_env.all_defs);
+    const main_def = env.module_env.store.getDef(defs[0]);
+    const all_module_envs = [_]*ModuleEnv{ @constCast(env.builtin_module.env), env.module_env };
+
+    var monomorphization = try Monomorphize.runExpr(
+        test_allocator,
+        @as([]const *ModuleEnv, all_module_envs[0..]),
+        &env.module_env.types,
+        1,
+        null,
+        main_def.expr,
+    );
+    defer monomorphization.deinit(test_allocator);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    var lower = try Lower.init(
+        test_allocator,
+        &mir_store,
+        &monomorphization,
+        @as([]const *ModuleEnv, all_module_envs[0..]),
+        &env.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    _ = try lower.lowerExpr(main_def.expr);
+
+    var ls_store = try LambdaSet.infer(test_allocator, &mir_store, @as([]const *ModuleEnv, all_module_envs[0..]));
+    defer ls_store.deinit(test_allocator);
+
+    for (mir_store.closure_members.items) |closure_member| {
+        for (mir_store.getCaptureBindings(closure_member.capture_bindings)) |binding| {
+            const source_expr = mir_store.getExpr(binding.source_expr);
+            if (source_expr != .lookup) continue;
+            if (mir_store.monotype_store.resolve(binding.monotype).kind != .func) continue;
+            try testing.expect(
+                ls_store.getExprLambdaSet(binding.source_expr) != null or
+                    ls_store.getSymbolLambdaSet(source_expr.lookup) != null,
+            );
+        }
+    }
+}
+
+test "runExpr: repl-style multi-definition arrow call materializes callable stmt proc inst" {
+    var env = try MirTestEnv.initExpr(
+        \\{
+        \\    fn0 = |a| a + 1
+        \\    fn1 = |a, b| a + b
+        \\    fn2 = |a, b, c| a + b + c
+        \\    fn3 = |a, b, c, d| a + b + c + d
+        \\    10->fn0
+        \\}
+    );
+    defer env.deinit();
+
+    const defs = env.module_env.store.sliceDefs(env.module_env.all_defs);
+    const main_def = env.module_env.store.getDef(defs[0]);
+    const all_module_envs = [_]*ModuleEnv{ @constCast(env.builtin_module.env), env.module_env };
+
+    var monomorphization = try Monomorphize.runExpr(
+        test_allocator,
+        @as([]const *ModuleEnv, all_module_envs[0..]),
+        &env.module_env.types,
+        1,
+        null,
+        main_def.expr,
+    );
+    defer monomorphization.deinit(test_allocator);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    var lower = try Lower.init(
+        test_allocator,
+        &mir_store,
+        &monomorphization,
+        @as([]const *ModuleEnv, all_module_envs[0..]),
+        &env.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    const expr = try lower.lowerExpr(main_def.expr);
+    const result = mir_store.getExpr(expr);
+    try testing.expect(result == .block);
+
+    const final_expr = mir_store.getExpr(result.block.final_expr);
+    try testing.expect(final_expr == .call);
+
+    const proc_id = procIdFromCallableExpr(&mir_store, final_expr.call.func) orelse return error.TestUnexpectedResult;
+    try testing.expect(!proc_id.isNone());
 }
 
 test "cross-module: List.keep_if with always-false predicate lowers without error" {
@@ -2009,6 +2800,38 @@ test "cross-module: U32.until range method lowers without error" {
     try testing.expect(result != .runtime_err_type);
 }
 
+test "cross-module: U32.to reachable function lookups retain lambda sets" {
+    var env = try MirTestEnv.initExpr("1.U32.to(5.U32)");
+    defer env.deinit();
+
+    _ = try env.lowerFirstDef();
+
+    var all_module_envs = [_]*ModuleEnv{
+        @constCast(env.builtin_module.env),
+        env.module_env,
+    };
+    var ls_store = try LambdaSet.infer(test_allocator, env.mir_store, @as([]const *ModuleEnv, all_module_envs[0..]));
+    defer ls_store.deinit(test_allocator);
+
+    for (env.mir_store.getProcs(), 0..) |proc, proc_idx| {
+        if (proc.body.isNone()) continue;
+        if (firstReachableMissingFunctionLookup(env.mir_store, &ls_store, proc.body)) |missing| {
+            std.debug.print(
+                "missing range method function lookup lambda set: proc={d} body={d} fn_mono={d} expr={d} symbol={d}\n",
+                .{
+                    proc_idx,
+                    @intFromEnum(proc.body),
+                    @as(u32, @bitCast(proc.fn_monotype)),
+                    @intFromEnum(missing.expr_id),
+                    missing.symbol.raw(),
+                },
+            );
+            dumpMirExpr(env.mir_store, proc.body, 1);
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
 test "cross-module: I32.to range method lowers without error" {
     var env = try MirTestEnv.initExpr("1.I32.to(5.I32)");
     defer env.deinit();
@@ -2150,6 +2973,39 @@ test "cross-module: deeply nested polymorphic HOF lowers without error" {
     try testing.expect(result != .runtime_err_type);
 }
 
+test "cross-module: deeply nested polymorphic HOF nested lookup callee keeps both members" {
+    var env = try MirTestEnv.initExpr("(|twice, identity| { a: twice(identity, 42.I64), b: twice(|x| x + 1, 100.I64) })(|f, val| f(f(val)), |x| x)");
+    defer env.deinit();
+    _ = try env.lowerFirstDef();
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(env.builtin_module.env),
+        env.module_env,
+    };
+    var ls_store = try LambdaSet.infer(test_allocator, env.mir_store, all_module_envs[0..]);
+    defer ls_store.deinit(test_allocator);
+
+    var nested_lookup_count: usize = 0;
+    for (env.mir_store.exprs.items) |expr| {
+        if (expr != .call) continue;
+        const func_expr_id = expr.call.func;
+        const func_expr = env.mir_store.getExpr(func_expr_id);
+        if (func_expr != .lookup) continue;
+
+        const expr_ls = ls_store.getExprLambdaSet(func_expr_id) orelse continue;
+        const symbol_ls = ls_store.getSymbolLambdaSet(func_expr.lookup) orelse continue;
+        const expr_members = ls_store.getMembers(ls_store.getLambdaSet(expr_ls).members);
+        const symbol_members = ls_store.getMembers(ls_store.getLambdaSet(symbol_ls).members);
+        if (expr_members.len != 2 or symbol_members.len != 2) continue;
+
+        try testing.expectEqual(@as(usize, 2), expr_members.len);
+        try testing.expectEqual(@as(usize, 2), symbol_members.len);
+        nested_lookup_count += 1;
+    }
+
+    try testing.expectEqual(@as(usize, 2), nested_lookup_count);
+}
+
 // -- Fibonacci / recursive with cross-module numeric ops (snapshot: fibonacci.md) --
 
 test "cross-module: recursive fibonacci with numeric ops lowers without error" {
@@ -2163,6 +3019,34 @@ test "cross-module: recursive fibonacci with numeric ops lowers without error" {
     const expr = try env.lowerFirstDef();
     const result = env.mir_store.getExpr(expr);
     try testing.expect(result != .runtime_err_type);
+}
+
+test "cross-module: repl-style recursive fibonacci block materializes one proc inst" {
+    var env = try MirTestEnv.initExpr(
+        \\{
+        \\    fib = |n| if n <= 1 n else fib(n - 1) + fib(n - 2)
+        \\    fib(5)
+        \\}
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result == .block);
+
+    var user_template_count: usize = 0;
+    var user_proc_inst_count: usize = 0;
+    for (env.monomorphization.proc_templates.items) |template| {
+        if (template.module_idx != 1) continue;
+        user_template_count += 1;
+    }
+    for (env.monomorphization.proc_insts.items) |proc_inst| {
+        const template = env.monomorphization.getProcTemplate(proc_inst.template);
+        if (template.module_idx != 1) continue;
+        user_proc_inst_count += 1;
+    }
+
+    try testing.expectEqual(@as(usize, 1), user_template_count);
+    try testing.expectEqual(@as(usize, 1), user_proc_inst_count);
 }
 
 // -- String equality (snapshot: string_equality_basic.md) --
@@ -2502,9 +3386,7 @@ test "cross-module type resolution: U32.to dispatches with concrete U32 function
     try testing.expect(top == .call);
 
     // The call's function should be a lookup whose monotype is a func
-    const func_expr = env.mir_store.getExpr(top.call.func);
-    try testing.expect(func_expr == .lookup);
-
+    const proc_id = procIdFromCallableExpr(env.mir_store, top.call.func) orelse return error.TestUnexpectedResult;
     const func_mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(top.call.func));
     try testing.expect(func_mono_id.kind == .func);
 
@@ -2515,12 +3397,9 @@ test "cross-module type resolution: U32.to dispatches with concrete U32 function
     const elem_mono_id = env.mir_store.monotype_store.listElem(ret_mono_id);
     try testing.expectEqual(Monotype.Prim.u32, elem_mono_id.builtinPrim().?);
 
-    // Verify the function DEFINITION body was also lowered with concrete types.
-    const method_symbol = func_expr.lookup;
-    const sym_key: u64 = @bitCast(method_symbol);
-    const def_expr_id = env.mir_store.symbol_defs.get(sym_key) orelse
-        return error.TestUnexpectedResult;
-    const def_mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(def_expr_id));
+    // Verify the specialized proc body was lowered with concrete types.
+    const proc = env.mir_store.getProc(proc_id);
+    const def_mono_id = env.mir_store.monotype_store.resolve(proc.fn_monotype);
     try testing.expect(def_mono_id.kind == .func);
     const def_ret_id = env.mir_store.monotype_store.resolve(env.mir_store.monotype_store.funcRet(def_mono_id));
     try testing.expect(def_ret_id.kind == .list);
@@ -2564,16 +3443,21 @@ test "polymorphic lambda in block: sum called with U64 gets U64 monotype, not De
         try testing.expectEqual(Monotype.Prim.u64, arg_mono_id.builtinPrim().?);
     }
 
-    // The lambda itself (first stmt's expr) should have params typed as U64
-    const stmts = env.mir_store.getStmts(result.block.stmts);
-    try testing.expect(stmts.len >= 1);
-    const decl_expr = env.mir_store.getExpr(stmts[0].decl_const.expr);
-    try testing.expect(decl_expr == .lambda);
-    const lambda_mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(stmts[0].decl_const.expr));
+    // The called proc itself should have U64 params and return type.
+    const sum_proc_id = procIdFromCallableExpr(env.mir_store, final_expr.call.func) orelse return error.TestUnexpectedResult;
+    const lambda_mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(final_expr.call.func));
     try testing.expect(lambda_mono_id.kind == .func);
     // Return type of the lambda must be U64
     const ret_mono_id = env.mir_store.monotype_store.funcRet(lambda_mono_id);
     try testing.expectEqual(Monotype.Prim.u64, ret_mono_id.builtinPrim().?);
+
+    const sum_proc = env.mir_store.getProc(sum_proc_id);
+    for (env.mir_store.getPatternSpan(sum_proc.params)) |param_id| {
+        const param = env.mir_store.getPattern(param_id);
+        try testing.expect(param == .bind);
+        const param_mono_id = env.mir_store.monotype_store.resolve(env.mir_store.patternTypeOf(param_id));
+        try testing.expectEqual(Monotype.Prim.u64, param_mono_id.builtinPrim().?);
+    }
 }
 
 test "polymorphic lambda in block: fn called via arrow syntax gets correct type" {
@@ -2610,14 +3494,13 @@ test "polymorphic lambda with literal in body: a + b + 0 called with U64" {
     const call_mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(result.block.final_expr));
     try testing.expectEqual(Monotype.Prim.u64, call_mono_id.builtinPrim().?);
 
-    // Check the lambda body
-    const stmts = env.mir_store.getStmts(result.block.stmts);
-    try testing.expect(stmts.len >= 1);
-    const decl_expr = env.mir_store.getExpr(stmts[0].decl_const.expr);
-    try testing.expect(decl_expr == .lambda);
+    const final_expr = env.mir_store.getExpr(result.block.final_expr);
+    try testing.expect(final_expr == .call);
+    const sum_proc_id = procIdFromCallableExpr(env.mir_store, final_expr.call.func) orelse return error.TestUnexpectedResult;
+    const decl_proc = env.mir_store.getProc(sum_proc_id);
 
     // Lambda return must be U64
-    const lambda_mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(stmts[0].decl_const.expr));
+    const lambda_mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(final_expr.call.func));
     try testing.expect(lambda_mono_id.kind == .func);
     const ret_mono_id = env.mir_store.monotype_store.funcRet(lambda_mono_id);
     try testing.expectEqual(Monotype.Prim.u64, ret_mono_id.builtinPrim().?);
@@ -2625,8 +3508,8 @@ test "polymorphic lambda with literal in body: a + b + 0 called with U64" {
     // Check that the lambda body's subexpressions are all U64, not Dec
     // The body is `a + b + 0` which desugars to `(a + b) + 0`
     // The body is either a call or run_low_level for the outer `+`
-    const body = env.mir_store.getExpr(decl_expr.lambda.body);
-    const body_mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(decl_expr.lambda.body));
+    const body = env.mir_store.getExpr(decl_proc.body);
+    const body_mono_id = env.mir_store.monotype_store.resolve(env.mir_store.typeOf(decl_proc.body));
     try testing.expectEqual(Monotype.Prim.u64, body_mono_id.builtinPrim().?);
 
     // The outer `+` has args: (a + b) and 0

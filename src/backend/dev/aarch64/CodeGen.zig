@@ -598,12 +598,19 @@ pub fn CodeGen(comptime target: RocTarget) type {
             if (offset >= -256 and offset <= 255) {
                 try self.emit.ldurRegMem(width, dst, .FP, @intCast(offset));
             } else if (offset > 0) {
-                // Positive offset - use scaled unsigned form
-                const uoffset: u12 = @intCast(@as(u32, @intCast(offset)) >> (if (width == .w64) 3 else 2));
-                try self.emit.ldrRegMemUoff(width, dst, .FP, uoffset);
+                // Positive offset - try scaled unsigned form
+                const shift: u5 = if (width == .w64) 3 else 2;
+                const shifted = @as(u32, @intCast(offset)) >> shift;
+                if (shifted <= std.math.maxInt(u12)) {
+                    try self.emit.ldrRegMemUoff(width, dst, .FP, @intCast(shifted));
+                    return;
+                }
+                // Large positive offset - add offset to FP, then load
+                try self.emit.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
+                try self.emit.addRegRegReg(.w64, .IP0, .FP, .IP0);
+                try self.emit.ldrRegMemUoff(width, dst, .IP0, 0);
             } else {
                 // Large negative offset - add offset to FP, then load
-                // Use IP0 as scratch register
                 try self.emit.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
                 try self.emit.addRegRegReg(.w64, .IP0, .FP, .IP0);
                 try self.emit.ldrRegMemUoff(width, dst, .IP0, 0);
@@ -615,12 +622,19 @@ pub fn CodeGen(comptime target: RocTarget) type {
             if (offset >= -256 and offset <= 255) {
                 try self.emit.sturRegMem(width, src, .FP, @intCast(offset));
             } else if (offset > 0) {
-                // Positive offset - use scaled unsigned form
-                const uoffset: u12 = @intCast(@as(u32, @intCast(offset)) >> (if (width == .w64) 3 else 2));
-                try self.emit.strRegMemUoff(width, src, .FP, uoffset);
+                // Positive offset - try scaled unsigned form
+                const shift: u5 = if (width == .w64) 3 else 2;
+                const shifted = @as(u32, @intCast(offset)) >> shift;
+                if (shifted <= std.math.maxInt(u12)) {
+                    try self.emit.strRegMemUoff(width, src, .FP, @intCast(shifted));
+                    return;
+                }
+                // Large positive offset - add offset to FP, then store
+                try self.emit.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
+                try self.emit.addRegRegReg(.w64, .IP0, .FP, .IP0);
+                try self.emit.strRegMemUoff(width, src, .IP0, 0);
             } else {
                 // Large negative offset - add offset to FP, then store
-                // Use IP0 as scratch register
                 try self.emit.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
                 try self.emit.addRegRegReg(.w64, .IP0, .FP, .IP0);
                 try self.emit.strRegMemUoff(width, src, .IP0, 0);
@@ -655,12 +669,12 @@ pub fn CodeGen(comptime target: RocTarget) type {
         pub fn emitLoadStackByte(self: *Self, dst: GeneralReg, offset: i32) !void {
             if (offset >= -256 and offset <= 255) {
                 try self.emit.ldurbRegMem(dst, .FP, @intCast(offset));
-            } else if (offset > 0) {
+            } else if (offset > 0 and offset <= 4095) {
                 // Positive offset - use scaled unsigned form (byte: no shift needed)
                 const uoffset: u12 = @intCast(@as(u32, @intCast(offset)));
                 try self.emit.ldrbRegMem(dst, .FP, uoffset);
             } else {
-                // Large negative offset - add offset to FP, then load
+                // Large offset - add offset to FP, then load
                 try self.emit.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
                 try self.emit.addRegRegReg(.w64, .IP0, .FP, .IP0);
                 try self.emit.ldrbRegMem(dst, .IP0, 0);
@@ -671,12 +685,12 @@ pub fn CodeGen(comptime target: RocTarget) type {
         pub fn emitLoadStackHalfword(self: *Self, dst: GeneralReg, offset: i32) !void {
             if (offset >= -256 and offset <= 255) {
                 try self.emit.ldurhRegMem(dst, .FP, @intCast(offset));
-            } else if (offset > 0) {
+            } else if (offset > 0 and offset <= 8190) {
                 // Positive offset - use scaled unsigned form (halfword: shift by 1)
                 const uoffset: u12 = @intCast(@as(u32, @intCast(offset)) >> 1);
                 try self.emit.ldrhRegMem(dst, .FP, uoffset);
             } else {
-                // Large negative offset - add offset to FP, then load
+                // Large offset - add offset to FP, then load
                 try self.emit.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
                 try self.emit.addRegRegReg(.w64, .IP0, .FP, .IP0);
                 try self.emit.ldrhRegMem(dst, .IP0, 0);
@@ -685,12 +699,12 @@ pub fn CodeGen(comptime target: RocTarget) type {
 
         /// Load float64 from stack slot
         pub fn emitLoadStackF64(self: *Self, dst: FloatReg, offset: i32) !void {
-            if (offset >= 0) {
+            if (offset >= 0 and offset <= 32760) {
                 // Positive offset - use scaled unsigned form
                 const uoffset: u12 = @intCast(@as(u32, @intCast(offset)) >> 3);
                 try self.emit.fldrRegMemUoff(.double, dst, .FP, uoffset);
             } else {
-                // Negative offset - add offset to FP, then load
+                // Large or negative offset - add offset to FP, then load
                 try self.emit.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
                 try self.emit.addRegRegReg(.w64, .IP0, .FP, .IP0);
                 try self.emit.fldrRegMemUoff(.double, dst, .IP0, 0);
@@ -699,12 +713,12 @@ pub fn CodeGen(comptime target: RocTarget) type {
 
         /// Store float64 to stack slot
         pub fn emitStoreStackF64(self: *Self, offset: i32, src: FloatReg) !void {
-            if (offset >= 0) {
+            if (offset >= 0 and offset <= 32760) {
                 // Positive offset - use scaled unsigned form
                 const uoffset: u12 = @intCast(@as(u32, @intCast(offset)) >> 3);
                 try self.emit.fstrRegMemUoff(.double, src, .FP, uoffset);
             } else {
-                // Negative offset - add offset to FP, then store
+                // Large or negative offset - add offset to FP, then store
                 try self.emit.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
                 try self.emit.addRegRegReg(.w64, .IP0, .FP, .IP0);
                 try self.emit.fstrRegMemUoff(.double, src, .IP0, 0);

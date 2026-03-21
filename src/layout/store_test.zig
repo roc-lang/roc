@@ -32,6 +32,7 @@ const LayoutTest = struct {
         var result: LayoutTest = undefined;
         result.gpa = gpa;
         result.module_env = try ModuleEnv.init(gpa, "");
+        try result.module_env.initModuleEnvFields("LayoutTest");
         result.type_store = try types_store.Store.init(gpa);
         result.type_scope = TypeScope.init(gpa);
         // Note: module_env_ptr must be set AFTER the struct is in its final location
@@ -44,6 +45,7 @@ const LayoutTest = struct {
         var result: LayoutTest = undefined;
         result.gpa = gpa;
         result.module_env = try ModuleEnv.init(gpa, "");
+        try result.module_env.initModuleEnvFields("LayoutTest");
         result.type_store = try types_store.Store.init(gpa);
         result.type_scope = TypeScope.init(gpa);
         // Note: layout_store and module_env_ptr should be initialized AFTER
@@ -96,6 +98,8 @@ fn expectTypeAndMonotypeResolversAgree(
     var scratches = try mir.Monotype.Store.Scratches.init(allocator);
     defer scratches.deinit();
     scratches.ident_store = lt.module_env.getIdentStoreConst();
+    scratches.module_env = &lt.module_env;
+    scratches.all_module_envs = &lt.module_env_ptr;
 
     var specializations = std.AutoHashMap(types.Var, mir.Monotype.Idx).init(allocator);
     defer specializations.deinit();
@@ -759,7 +763,7 @@ test "zst combinatorics matrix for nested singleton ordinary-data wrappers" {
     try lt.initLayoutStore();
 
     for (cases) |case| {
-        std.debug.print("running zst combinatorics case: {s}\n", .{case.name});
+        // std.debug.print("running zst combinatorics case: {s}\n", .{case.name});
 
         const type_var = try buildWrappedZstCase(&lt, builtin_module_idx, case.leaf, case.wrappers);
         try expectTypeAndMonotypeResolversAgree(testing.allocator, &lt, type_var);
@@ -1050,7 +1054,7 @@ test "fromTypeVar - recursive nominal type with nested Box at depth 2+ (issue #8
         .{ .ident_idx = rich_doc_ident_idx },
         tag_union_var,
         &[_]types.Var{},
-        builtin_module_idx,
+        lt.module_env.qualified_module_ident,
         false,
     );
 
@@ -1163,7 +1167,7 @@ test "layoutSizeAlign - recursive nominal type with record containing List (issu
         .{ .ident_idx = statement_ident_idx },
         tag_union_var,
         &[_]types.Var{},
-        builtin_module_idx,
+        lt.module_env.qualified_module_ident,
         false,
     );
 
@@ -1251,7 +1255,7 @@ test "fromTypeVar - recursive nominal with Box has no double-boxing (issue #8916
         .{ .ident_idx = nat_ident_idx },
         tag_union_var,
         &[_]types.Var{},
-        builtin_module_idx,
+        lt.module_env.qualified_module_ident,
         false,
     );
 
@@ -1718,7 +1722,7 @@ test "type and monotype layout resolvers agree for recursive nominal layouts" {
         .{ .ident_idx = nat_ident },
         tag_union_var,
         &[_]types.Var{},
-        builtin_module_idx,
+        lt.module_env.qualified_module_ident,
         false,
     );
     try lt.type_store.setVarContent(recursive_var, nat_content);
@@ -1827,7 +1831,7 @@ test "fromTypeVar - no-payload nominal tag union gets canonical tag_union layout
         .{ .ident_idx = my_enum_ident_idx },
         enum_backing_var,
         &[_]types.Var{},
-        builtin_module_idx,
+        lt.module_env.qualified_module_ident,
         false,
     );
     const my_enum_var = try lt.type_store.freshFromContent(my_enum_content);

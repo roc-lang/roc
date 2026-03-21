@@ -25,6 +25,9 @@ const Allocator = std.mem.Allocator;
 const LirExprStore = lir.LirExprStore;
 const LirExprId = lir.LirExprId;
 const LirPatternId = lir.LirPatternId;
+const LirProcSpecId = lir.LirProcSpecId;
+const LirProcSpec = lir.LirProcSpec;
+const CFStmtId = lir.CFStmtId;
 const Symbol = lir.Symbol;
 const Layout = layout_mod.Layout;
 const Value = lir_value.Value;
@@ -277,6 +280,17 @@ pub const LirInterpreter = struct {
     /// because they cast ops.env to the platform's HostEnv type.
     caller_roc_ops: ?*RocOps = null,
 
+    /// Join point registry for tail-recursive CF statement evaluation.
+    join_points: JoinPointMap = .{},
+
+    const JoinPointMap = std.AutoHashMapUnmanaged(u32, JoinPointInfo);
+
+    const JoinPointInfo = struct {
+        params: lir.LirPatternSpan,
+        param_layouts: lir.LayoutIdxSpan,
+        body: CFStmtId,
+    };
+
     pub const Error = error{
         OutOfMemory,
         RuntimeError,
@@ -342,6 +356,7 @@ pub const LirInterpreter = struct {
         self.top_level_cache.deinit();
         self.cells.deinit();
         self.bindings.deinit();
+        self.join_points.deinit(self.allocator);
     }
 
     /// Get the crash message from the last evaluation (if any).
@@ -411,7 +426,7 @@ pub const LirInterpreter = struct {
 
     /// Evaluate an entrypoint expression, handling function calls with args.
     ///
-    /// If the expression is a function (lambda), it is called with arguments
+    /// If the expression is a proc_call, it is called with arguments
     /// extracted from `arg_ptr` (a packed tuple of arg values). Otherwise the
     /// expression is evaluated directly. The result is copied to `ret_ptr`.
     ///
@@ -442,18 +457,19 @@ pub const LirInterpreter = struct {
             self.recover_runtime_placeholders = prev_recover_runtime_placeholders;
         }
 
-        // Check if the expression is a function that needs to be called.
+        // Check if the expression is a proc_call that needs argument extraction from host.
         const final_expr = self.store.getExpr(final_expr_id);
-        const is_lambda = (final_expr == .lambda);
+        const is_proc_call = (final_expr == .proc_call);
 
-        if (is_lambda) {
-            // Function entrypoint: call the lambda with args from arg_ptr.
-            const lambda = final_expr.lambda;
+        if (is_proc_call) {
+            // Function entrypoint: call the proc with args from arg_ptr.
+            const pc = final_expr.proc_call;
+            const proc_spec = self.store.getProcSpec(pc.proc);
 
             // Extract arguments from the packed arg tuple.
             // The host packs args as a struct sorted by alignment (descending),
-            // then by original index (ascending) — matching the Roc ABI.
-            // Lambda params are in semantic (signature) order, so we compute
+            // then by original index (ascending) -- matching the Roc ABI.
+            // Proc params are in semantic (signature) order, so we compute
             // each arg's byte offset in the sorted layout and extract accordingly.
             var args_buf: [16]Value = undefined;
             const arg_count = arg_layouts.len;
@@ -499,7 +515,7 @@ pub const LirInterpreter = struct {
                 }
             }
 
-            const call_result = try self.callLambda(lambda, args_buf[0..arg_count]);
+            const call_result = try self.callProcSpec(proc_spec, args_buf[0..arg_count]);
             const ret_val = switch (call_result) {
                 .value => |v| v,
                 .early_return => |v| v,
@@ -659,8 +675,7 @@ pub const LirInterpreter = struct {
                 .zero_arg_tag => |z| return .{ .value = try self.evalZeroArgTag(z) },
                 .tag => |t| return try self.evalTag(t),
                 .tag_payload_access => |tpa| return .{ .value = try self.evalTagPayloadAccess(tpa) },
-                .call => |c| return try self.evalCall(c),
-                .lambda => |l| return .{ .value = try self.evalLambda(l, expr_id) },
+                .proc_call => |pc| return try self.evalProcCall(pc),
                 .empty_list => |l| return .{ .value = try self.evalEmptyList(l) },
                 .list => |l| return try self.evalList(l),
                 .early_return => |er| return try self.evalEarlyReturn(er),
@@ -730,13 +745,6 @@ pub const LirInterpreter = struct {
         return self.triggerCrash(msg);
     }
 
-    fn callCalleeExprId(call: anytype) ?LirExprId {
-        return switch (call.callee) {
-            .expr => |expr_id| expr_id,
-            .direct => null,
-        };
-    }
-
     fn exprInvolvesMutableCell(self: *const LirInterpreter, expr_id: LirExprId) bool {
         const expr = self.store.getExpr(expr_id);
         return switch (expr) {
@@ -764,14 +772,10 @@ pub const LirInterpreter = struct {
                 }
                 break :blk false;
             },
-            .lambda => false,
             .for_loop => |loop| self.exprInvolvesMutableCell(loop.list_expr) or self.exprInvolvesMutableCell(loop.body),
             .while_loop => |loop| self.exprInvolvesMutableCell(loop.cond) or self.exprInvolvesMutableCell(loop.body),
-            .call => |call| blk: {
-                if (callCalleeExprId(call)) |callee_expr| {
-                    if (self.exprInvolvesMutableCell(callee_expr)) break :blk true;
-                }
-                for (self.store.getExprSpan(call.args)) |arg| {
+            .proc_call => |pc| blk: {
+                for (self.store.getExprSpan(pc.args)) |arg| {
                     if (self.exprInvolvesMutableCell(arg)) break :blk true;
                 }
                 break :blk false;
@@ -838,7 +842,7 @@ pub const LirInterpreter = struct {
         const expr = self.store.getExpr(expr_id);
         return switch (expr) {
             .early_return, .break_expr => true,
-            .lambda, .for_loop, .while_loop => false,
+            .for_loop, .while_loop => false,
             .block => |block| blk: {
                 for (self.store.getStmts(block.stmts)) |stmt| {
                     switch (stmt) {
@@ -862,11 +866,8 @@ pub const LirInterpreter = struct {
                 }
                 break :blk false;
             },
-            .call => |call| blk: {
-                if (callCalleeExprId(call)) |callee_expr| {
-                    if (self.exprHasLoopExit(callee_expr)) break :blk true;
-                }
-                for (self.store.getExprSpan(call.args)) |arg| {
+            .proc_call => |pc| blk: {
+                for (self.store.getExprSpan(pc.args)) |arg| {
                     if (self.exprHasLoopExit(arg)) break :blk true;
                 }
                 break :blk false;
@@ -1484,9 +1485,9 @@ pub const LirInterpreter = struct {
 
     // Function calls
 
-    fn evalCall(self: *LirInterpreter, c: anytype) Error!EvalResult {
+    fn evalProcCall(self: *LirInterpreter, pc: anytype) Error!EvalResult {
         // Evaluate arguments
-        const arg_exprs = self.store.getExprSpan(c.args);
+        const arg_exprs = self.store.getExprSpan(pc.args);
         var args = std.array_list.AlignedManaged(Value, null).init(self.allocator);
         defer args.deinit();
         for (arg_exprs) |arg_expr_id| {
@@ -1498,83 +1499,24 @@ pub const LirInterpreter = struct {
             args.append(arg_val) catch return error.OutOfMemory;
         }
 
-        // Resolve the function via CallTarget
-        switch (c.callee) {
-            .direct => |symbol| {
-                // Direct call to a named function
-                if (self.store.getSymbolDef(symbol)) |def_expr_id| {
-                    const def_expr = self.store.getExpr(def_expr_id);
-                    if (def_expr == .lambda) {
-                        return self.callLambda(def_expr.lambda, args.items);
-                    }
-                    if (self.store.getCallableDef(symbol)) |callable_expr_id| {
-                        const callable_expr = self.store.getExpr(callable_expr_id);
-                        if (callable_expr == .lambda) {
-                            return self.callLambda(callable_expr.lambda, args.items);
-                        }
-                    }
-                } else {
-                    if (self.store.getCallableDef(symbol)) |callable_expr_id| {
-                        const callable_expr = self.store.getExpr(callable_expr_id);
-                        if (callable_expr == .lambda) {
-                            return self.callLambda(callable_expr.lambda, args.items);
-                        }
-                    }
-                }
-                const msg = std.fmt.allocPrint(
-                    self.arena.allocator(),
-                    "Could not resolve direct call target for symbol {d}",
-                    .{symbol.raw()},
-                ) catch return error.OutOfMemory;
-                return self.runtimeError(msg);
-            },
-            .expr => |fn_expr_id| {
-                const fn_expr = self.store.getExpr(fn_expr_id);
-                switch (fn_expr) {
-                    .lookup => |l| {
-                        // Indirect call through a lookup
-                        if (self.store.getSymbolDef(l.symbol)) |def_expr_id| {
-                            const def_expr = self.store.getExpr(def_expr_id);
-                            if (def_expr == .lambda) {
-                                return self.callLambda(def_expr.lambda, args.items);
-                            }
-                        }
-                        const msg = std.fmt.allocPrint(
-                            self.arena.allocator(),
-                            "Could not resolve indirect call target for symbol {d}",
-                            .{l.symbol.raw()},
-                        ) catch return error.OutOfMemory;
-                        return self.runtimeError(msg);
-                    },
-                    .lambda => |lambda| {
-                        return self.callLambda(lambda, args.items);
-                    },
-                    else => {
-                        const msg = std.fmt.allocPrint(
-                            self.arena.allocator(),
-                            "Cannot call non-function expression of kind {s}",
-                            .{@tagName(fn_expr)},
-                        ) catch return error.OutOfMemory;
-                        return self.runtimeError(msg);
-                    },
-                }
-            },
-        }
+        // Look up the proc spec and call it
+        const proc_spec = self.store.getProcSpec(pc.proc);
+        return self.callProcSpec(proc_spec, args.items);
     }
 
-    fn callLambda(self: *LirInterpreter, lambda: anytype, args: []const Value) Error!EvalResult {
+    fn callProcSpec(self: *LirInterpreter, proc_spec: LirProcSpec, args: []const Value) Error!EvalResult {
         if (self.call_depth >= max_call_depth) {
             return self.triggerCrash(stack_overflow_message);
         }
 
-        const params = self.store.getPatternSpan(lambda.params);
+        const params = self.store.getPatternSpan(proc_spec.args);
         self.call_depth += 1;
         defer self.call_depth -= 1;
 
         // Save current bindings and lambda context
         const saved_bindings = self.bindings.clone() catch return error.OutOfMemory;
         const saved_lambda_params = self.current_lambda_params;
-        self.current_lambda_params = lambda.params;
+        self.current_lambda_params = proc_spec.args;
         defer {
             self.bindings.deinit();
             self.bindings = saved_bindings;
@@ -1587,21 +1529,103 @@ pub const LirInterpreter = struct {
             try self.bindPattern(params[i], args[i]);
         }
 
-        // Evaluate body
-        const result = try self.eval(lambda.body);
+        // Evaluate the CF statement body
+        const result = try self.evalCFStmt(proc_spec.body);
         return switch (result) {
             .early_return => |v| .{ .value = v },
             else => result,
         };
     }
 
-    fn evalLambda(self: *LirInterpreter, _: anytype, expr_id: LirExprId) Error!Value {
-        // Lambda as a value — store a reference to the expression.
-        // The actual call will resolve via the expression ID.
-        // Return a value that encodes the expr_id for later dispatch
-        const val = try self.allocBytes(8);
-        val.write(u32, @intFromEnum(expr_id));
-        return val;
+    /// Evaluate a control-flow statement chain (used for proc spec bodies).
+    fn evalCFStmt(self: *LirInterpreter, initial_stmt_id: CFStmtId) Error!EvalResult {
+        var stmt_id = initial_stmt_id;
+        while (true) {
+            if (stmt_id.isNone()) return .{ .value = Value.zst };
+            const stmt = self.store.getCFStmt(stmt_id);
+            switch (stmt) {
+                .let_stmt => |ls| {
+                    const result = try self.eval(ls.value);
+                    switch (result) {
+                        .value => |val| try self.bindPattern(ls.pattern, val),
+                        .early_return => return result,
+                        .break_expr => return result,
+                    }
+                    stmt_id = ls.next;
+                },
+                .ret => |r| {
+                    const result = try self.eval(r.value);
+                    return switch (result) {
+                        .value => |v| .{ .value = v },
+                        .early_return => |v| .{ .value = v },
+                        .break_expr => result,
+                    };
+                },
+                .join => |j| {
+                    // Register the join point body, then execute the remainder.
+                    // When a Jump is encountered, we re-bind params and re-execute the body.
+                    self.join_points.put(self.allocator, @intFromEnum(j.id), .{
+                        .params = j.params,
+                        .param_layouts = j.param_layouts,
+                        .body = j.body,
+                    }) catch return error.OutOfMemory;
+                    stmt_id = j.remainder;
+                },
+                .jump => |j| {
+                    // Look up the join point and re-execute it with new args.
+                    const jp = self.join_points.get(@intFromEnum(j.target)) orelse return error.RuntimeError;
+                    const jump_args = self.store.getExprSpan(j.args);
+                    const jp_params = self.store.getPatternSpan(jp.params);
+                    const count = @min(jp_params.len, jump_args.len);
+                    for (0..count) |i| {
+                        const val = try self.evalValue(jump_args[i]);
+                        try self.bindPattern(jp_params[i], val);
+                    }
+                    stmt_id = jp.body;
+                },
+                .expr_stmt => |es| {
+                    const result = try self.eval(es.value);
+                    switch (result) {
+                        .value => {},
+                        .early_return => return result,
+                        .break_expr => return result,
+                    }
+                    stmt_id = es.next;
+                },
+                .switch_stmt => |ss| {
+                    const cond_val = try self.evalValue(ss.cond);
+                    const disc = self.helper.readTagDiscriminant(cond_val, ss.cond_layout);
+                    const branches = self.store.getCFSwitchBranches(ss.branches);
+                    var found = false;
+                    for (branches) |branch| {
+                        if (branch.value == disc) {
+                            stmt_id = branch.body;
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        stmt_id = ss.default_branch;
+                    }
+                },
+                .match_stmt => |ms| {
+                    const match_val = try self.evalValue(ms.value);
+                    const match_branches = self.store.getCFMatchBranches(ms.branches);
+                    var matched = false;
+                    for (match_branches) |branch| {
+                        if (try self.matchPattern(branch.pattern, match_val)) {
+                            try self.bindPattern(branch.pattern, match_val);
+                            stmt_id = branch.body;
+                            matched = true;
+                            break;
+                        }
+                    }
+                    if (!matched) {
+                        return error.RuntimeError;
+                    }
+                },
+            }
+        }
     }
 
     // Crash / dbg / expect
@@ -2375,7 +2399,7 @@ pub const LirInterpreter = struct {
             .list_contains => self.evalListContains(args[0], args[1], arg_layout, ll.ret_layout),
             .list_reverse => self.evalListReverse(args[0], arg_layout, ll.ret_layout),
             .list_sort_with => blk: {
-                break :blk try self.evalListSortWith(args[0], arg_layout, ll.ret_layout, arg_exprs[1]);
+                break :blk try self.evalListSortWith(args[0], arg_layout, ll.ret_layout, ll.callable_proc);
             },
             .list_split_first => self.evalListSplitFirst(args[0], arg_layout, ll.ret_layout),
             .list_split_last => self.evalListSplitLast(args[0], arg_layout, ll.ret_layout),
@@ -3391,7 +3415,7 @@ pub const LirInterpreter = struct {
         return self.rocListToValue(new_list, ret_layout);
     }
 
-    fn evalListSortWith(self: *LirInterpreter, list_val: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx, comparator_expr_id: LirExprId) Error!Value {
+    fn evalListSortWith(self: *LirInterpreter, list_val: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx, comparator_proc_id: LirProcSpecId) Error!Value {
         const rl = valueToRocList(list_val);
         const info = self.listElemInfo(list_layout);
         const list_len = rl.len();
@@ -3399,10 +3423,10 @@ pub const LirInterpreter = struct {
         if (list_len < 2 or rl.bytes == null or info.width == 0)
             return self.rocListToValue(rl, ret_layout);
 
-        // Resolve the comparator to a lambda
-        const lambda_id = self.resolveLambdaExprId(comparator_expr_id) orelse
-            return error.RuntimeError;
-        const lambda = self.store.getExpr(lambda_id).lambda;
+        if (comparator_proc_id.isNone()) return error.RuntimeError;
+
+        // Look up the comparator proc spec
+        const comparator = self.store.getProcSpec(comparator_proc_id);
 
         // Clone the list data for in-place sorting
         self.roc_env.resetCrash();
@@ -3411,7 +3435,7 @@ pub const LirInterpreter = struct {
         const new_list = builtins.list.shallowClone(rl, rl.len(), info.width, info.alignment, false, &self.roc_ops);
         const sorted_bytes = new_list.bytes orelse return self.rocListToValue(new_list, ret_layout);
 
-        // Insertion sort using the comparator lambda
+        // Insertion sort using the comparator proc
         const tmp = self.arena.allocator().alloc(u8, info.width) catch return error.OutOfMemory;
 
         var i: usize = 1;
@@ -3427,7 +3451,7 @@ pub const LirInterpreter = struct {
 
                 // Call comparator(temp, elem[j-1])
                 const call_args = [2]Value{ temp_val, elem_prev };
-                const result = try self.callLambda(lambda, &call_args);
+                const result = try self.callProcSpec(comparator, &call_args);
                 const cmp_val = switch (result) {
                     .value => |v| v,
                     else => return error.RuntimeError,
@@ -3446,25 +3470,6 @@ pub const LirInterpreter = struct {
         }
 
         return self.rocListToValue(new_list, ret_layout);
-    }
-
-    /// Resolve a LIR expression ID to a lambda expression ID.
-    /// Handles direct lambdas and lookups to lambdas.
-    fn resolveLambdaExprId(self: *LirInterpreter, expr_id: LirExprId) ?LirExprId {
-        const expr = self.store.getExpr(expr_id);
-        switch (expr) {
-            .lambda => return expr_id,
-            .lookup => |l| {
-                if (self.store.getSymbolDef(l.symbol)) |def_id| {
-                    if (self.store.getExpr(def_id) == .lambda) return def_id;
-                }
-                if (self.store.getCallableDef(l.symbol)) |callable_id| {
-                    if (self.store.getExpr(callable_id) == .lambda) return callable_id;
-                }
-                return null;
-            },
-            else => return null,
-        }
     }
 
     fn evalListSplitFirst(self: *LirInterpreter, list_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx) Error!Value {

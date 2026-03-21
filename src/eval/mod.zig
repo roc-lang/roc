@@ -30,22 +30,6 @@ pub const CrashState = crash_context.CrashState;
 /// Compile-time expression evaluator for constant folding
 pub const ComptimeEvaluator = @import("comptime_evaluator.zig").ComptimeEvaluator;
 
-// --- CIR interpreter (legacy, retained for comptime_evaluator) ---
-/// CIR interpreter for running CIR expressions directly
-pub const CirInterpreter = @import("cir_interpreter.zig").Interpreter;
-/// Backwards-compat alias used by compile/runner.zig and interpreter_shim
-pub const Interpreter = CirInterpreter;
-/// Stack value representation for CIR interpreter
-pub const StackValue = @import("StackValue.zig");
-/// Render helpers for outputting CIR interpreter values
-pub const render_helpers = @import("render_helpers.zig");
-/// Stack memory allocator for CIR interpreter
-const stack_mod = @import("stack.zig");
-pub const Stack = stack_mod.Stack;
-pub const StackOverflow = stack_mod.StackOverflow;
-/// Eval error type alias (CIR interpreter)
-pub const EvalError = CirInterpreter.Error;
-
 // --- LIR interpreter (primary) ---
 /// Shared CIR → MIR → LIR → RC lowering pipeline
 pub const cir_to_lir = @import("cir_to_lir.zig");
@@ -96,7 +80,6 @@ test "eval tests" {
     std.testing.refAllDecls(@import("builtins.zig"));
     std.testing.refAllDecls(@import("crash_context.zig"));
     std.testing.refAllDecls(@import("comptime_evaluator.zig"));
-    std.testing.refAllDecls(@import("cir_interpreter.zig"));
     std.testing.refAllDecls(@import("StackValue.zig"));
     std.testing.refAllDecls(@import("render_helpers.zig"));
     std.testing.refAllDecls(@import("llvm_evaluator.zig"));
@@ -127,8 +110,6 @@ test "eval tests" {
     std.testing.refAllDecls(@import("test/arithmetic_comprehensive_test.zig"));
     std.testing.refAllDecls(@import("test/anno_only_interp_test.zig"));
     std.testing.refAllDecls(@import("test/comptime_eval_test.zig"));
-    std.testing.refAllDecls(@import("test/interpreter_polymorphism_test.zig"));
-    std.testing.refAllDecls(@import("test/interpreter_style_test.zig"));
     std.testing.refAllDecls(@import("test/low_level_interp_test.zig"));
     std.testing.refAllDecls(@import("test/mono_emit_test.zig"));
     std.testing.refAllDecls(@import("test/closure_test.zig"));

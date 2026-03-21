@@ -25,6 +25,7 @@ const MIR = mir.MIR;
 const builtin_loading = @import("builtin_loading.zig");
 const builtins = @import("builtins");
 const i128h = builtins.compiler_rt_128;
+const lir = @import("lir");
 const lir_program_mod = @import("cir_to_lir.zig");
 const LirProgram = lir_program_mod.LirProgram;
 
@@ -620,10 +621,12 @@ pub const DevEvaluator = struct {
         ) catch return error.OutOfMemory;
         defer codegen.deinit();
 
-        // Compile all procedures first (for recursive functions)
-        const procs = lower_result.lir_store.getProcs();
+        // Compile all procedures first (for recursive functions).
+        // This ensures recursive closures are compiled as complete procedures
+        // before we generate calls to them.
+        const procs = lower_result.lir_store.getProcSpecs();
         if (procs.len > 0) {
-            codegen.compileAllProcs(procs) catch {
+            codegen.compileAllProcSpecs(procs) catch {
                 return error.RuntimeError;
             };
         }
@@ -645,8 +648,8 @@ pub const DevEvaluator = struct {
 
     /// Generate code for an entrypoint using the RocCall ABI: fn(roc_ops, ret_ptr, args_ptr).
     ///
-    /// Uses `generateEntrypointWrapper` which handles argument unpacking from args_ptr,
-    /// lambda/lookup/nominal resolution, and proper ABI slot sizing.
+    /// Uses `generateEntrypointWrapper` which handles argument unpacking from args_ptr
+    /// and invokes a synthetic entrypoint proc using the RocCall ABI.
     /// This is for `roc run` where the host passes its own RocOps.
     pub fn generateEntrypointCode(
         self: *DevEvaluator,
@@ -680,9 +683,20 @@ pub const DevEvaluator = struct {
         var mir_store = MIR.Store.init(self.allocator) catch return error.OutOfMemory;
         defer mir_store.deinit(self.allocator);
 
+        var monomorphization = mir.Monomorphize.runExpr(
+            self.allocator,
+            all_module_envs,
+            &module_env.types,
+            module_idx,
+            app_module_idx,
+            expr_idx,
+        ) catch return error.OutOfMemory;
+        defer monomorphization.deinit(self.allocator);
+
         var mir_lower = mir.Lower.init(
             self.allocator,
             &mir_store,
+            &monomorphization,
             all_module_envs,
             &module_env.types,
             module_idx,
@@ -731,16 +745,28 @@ pub const DevEvaluator = struct {
         ) catch return error.OutOfMemory;
         defer codegen.deinit();
 
-        // Compile all procedures first
-        const procs = lower_result.lir_store.getProcs();
+        // Wrap the final expression into an entry proc spec for the entrypoint wrapper
+        const entry_ret_stmt = lower_result.lir_store.addCFStmt(.{ .ret = .{ .value = lower_result.final_expr_id } }) catch return error.OutOfMemory;
+        const entry_proc_id = lower_result.lir_store.addProcSpec(.{
+            .name = lir.Symbol.none,
+            .args = lir.LirPatternSpan.empty(),
+            .arg_layouts = lir.LayoutIdxSpan.empty(),
+            .body = entry_ret_stmt,
+            .ret_layout = ret_layout,
+            .closure_data_layout = null,
+            .is_self_recursive = .not_self_recursive,
+        }) catch return error.OutOfMemory;
+
+        // Compile all procedures (including entry proc)
+        const procs = lower_result.lir_store.getProcSpecs();
         if (procs.len > 0) {
-            codegen.compileAllProcs(procs) catch {
+            codegen.compileAllProcSpecs(procs) catch {
                 return error.RuntimeError;
             };
         }
 
         // Generate entrypoint wrapper using RocCall ABI
-        const exported = codegen.generateEntrypointWrapper("", lower_result.final_expr_id, arg_layouts, ret_layout) catch {
+        const exported = codegen.generateEntrypointWrapper("", entry_proc_id, arg_layouts, ret_layout) catch {
             return error.RuntimeError;
         };
 
