@@ -342,7 +342,7 @@ test "fx platform all_syntax_test.roc prints expected output (interpreter)" {
 }
 
 test "fx platform all_syntax_test.roc prints expected output (dev backend)" {
-    // TODO: dev backend fails with bindFlatTypeMonotypes panic in Lower.zig
+    // TODO: dev backend runtime panic "integer does not fit in destination type"
     return error.SkipZigTest;
 }
 
@@ -396,8 +396,28 @@ test "fx platform wildcard match on open union (interpreter)" {
 }
 
 test "fx platform wildcard match on open union (dev backend)" {
-    // TODO: dev backend fails with bindFlatTypeMonotypes panic in Lower.zig
-    return error.SkipZigTest;
+    const allocator = testing.allocator;
+
+    const run_result = try util.runRoc(allocator, &.{"--opt=dev"}, "test/fx/wildcard_match_open_union_bug.roc");
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    try util.checkSuccess(run_result);
+
+    // Verify that the wildcard match worked correctly
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "PASS: Wildcard match worked correctly") != null);
+}
+
+test "fx platform nested tag match in statement position (dev backend)" {
+    const allocator = testing.allocator;
+
+    const run_result = try util.runRoc(allocator, &.{"--opt=dev"}, "test/fx/nested_tag_match_stmt.roc");
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    try util.checkSuccess(run_result);
+
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "PASS: statement-position nested tag match works") != null);
 }
 
 test "fx platform dbg missing return value (interpreter)" {
