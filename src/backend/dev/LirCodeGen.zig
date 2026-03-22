@@ -1628,9 +1628,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                     const ls = self.layout_store;
 
-                    const roc_ops_reg = self.roc_ops_reg orelse {
-                        unreachable;
-                    };
+                    const roc_ops_reg = self.roc_ops_reg orelse unreachable;
 
                     // Generate list argument (must be on stack - 24 bytes)
                     const list_loc = try self.generateExpr(args[0]);
@@ -3004,9 +3002,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Get the return record layout
                     const ret_layout = ls.getLayout(ll.ret_layout);
                     if (ret_layout.tag != .struct_) unreachable;
+
+                    const result_size = ls.layoutSizeAlign(ret_layout).size;
                     const record_idx = ret_layout.data.struct_.idx;
-                    const record_data = ls.getStructData(record_idx);
-                    const result_size: u32 = record_data.size;
 
                     // Find which field is the list and which is the element.
                     // The record has exactly 2 fields.
@@ -3032,11 +3030,24 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     // Allocate result struct
                     const result_offset = self.codegen.allocStackSlot(result_size);
+                    // For ZST elements, we can't call listReplace (it would try to dereference NULL)
+                    // Instead, just copy the list to the result and zero out the prev field.
+                    // todo: do I need to handle refcounting somehow?
+                    if (elem_size_align.size == 0) {
+                        const temp = try self.allocTempGeneral();
+                        for (0..3) |i| {
+                            try self.emitLoad(.w64, temp, frame_ptr, list_off + @as(i32, @intCast(i * 8)));
+                            try self.emitStore(.w64, frame_ptr, result_offset + list_field_offset + @as(i32, @intCast(i * 8)), temp);
+                        }
+                        self.codegen.freeGeneral(temp);
+
+                        return .{ .stack = .{ .offset = result_offset } };
+                    }
+
                     const list_dst_offset = result_offset + list_field_offset;
                     const elem_dst_offset = result_offset + elem_field_offset;
-                    // elem_field_offset should be set to a temporary stack value in case of a list_of_zst, just like how list_set does it,
-                    // otherwise should be the returned struct's appropriate field offset.
 
+                    // todo: do I need to handle elements being refcounted or not? (see list_append_unsafe which works)
                     const fn_addr: usize = @intFromPtr(&wrapListReplace);
                     {
                         // wrapListReplace(out, list_bytes, list_len, list_cap, alignment, index, element, element_width, out_element, roc_ops)

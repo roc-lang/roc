@@ -26,7 +26,7 @@ const std = @import("std");
 /// This prevents debug logs from polluting stderr which should only contain
 /// actual program output (like Stderr.line! calls).
 pub const std_options: std.Options = .{
-    .log_level = .warn,
+    .log_level = .debug,
 };
 const build_options = @import("build_options");
 const builtin = @import("builtin");
@@ -1188,7 +1188,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
 
         // Determine ABI from target (for musl detection)
         const target_abi: linker.TargetAbi = if (validated_link_spec.target.isStatic()) .musl else .gnu;
-        std.log.debug("Target ABI: {?}", .{target_abi});
+        std.log.debug("Target ABI: {any}", .{target_abi});
 
         // No pre/post files needed - everything comes from link spec in order
         const empty_files: []const []const u8 = &.{};
