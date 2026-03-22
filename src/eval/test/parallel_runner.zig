@@ -1,12 +1,15 @@
 //! Parallel eval test runner.
 //!
 //! A standalone binary that runs eval tests across multiple threads using a
-//! work-stealing job queue. Each thread loads its own builtin module to avoid
-//! shared mutable state, and crash protection (setjmp/longjmp + signal handlers)
-//! allows the runner to recover from segfaults and continue.
+//! work-stealing job queue. Each test runs the interpreter, dev backend,
+//! wasm backend, and "llvm" backend (currently aliases dev), then compares
+//! all results via Str.inspect string comparison.
+//!
+//! Crash protection (setjmp/longjmp + signal handlers) allows the runner to
+//! recover from segfaults and continue.
 //!
 //! Usage:
-//!   zig build eval-test [-- [--filter <pattern>] [--threads <N>] [--verbose]]
+//!   zig build test-eval [-- [--filter <pattern>] [--threads <N>] [--verbose]]
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -20,6 +23,7 @@ const compiled_builtins = @import("compiled_builtins");
 const roc_target = @import("roc_target");
 const eval_mod = @import("eval");
 const interpreter_layout = eval_mod.interpreter_layout;
+const interpreter_values = eval_mod.interpreter_values;
 
 const Can = can.Can;
 const Check = check.Check;
@@ -28,9 +32,15 @@ const ModuleEnv = can.ModuleEnv;
 const Allocators = base.Allocators;
 const Interpreter = eval_mod.Interpreter;
 const BuiltinTypes = eval_mod.BuiltinTypes;
+const StackValue = eval_mod.StackValue;
 const LoadedModule = eval_mod.builtin_loading.LoadedModule;
 const deserializeBuiltinIndices = eval_mod.builtin_loading.deserializeBuiltinIndices;
 const loadCompiledModule = eval_mod.builtin_loading.loadCompiledModule;
+
+// Import backend evaluator functions from helpers (shared with zig test runner)
+const helpers = eval_mod.test_helpers;
+
+const posix = std.posix;
 
 const AtomicUsize = std.atomic.Value(usize);
 
@@ -61,31 +71,6 @@ pub const TestCase = struct {
     };
 };
 
-/// Per-thread builtin module. Each thread loads its own copy so that
-/// enableRuntimeInserts / MIR lowering mutations are thread-local.
-const ThreadBuiltins = struct {
-    builtin_indices: CIR.BuiltinIndices,
-    builtin_module: LoadedModule,
-
-    fn load(allocator: std.mem.Allocator) !ThreadBuiltins {
-        const indices = try deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
-        const module = try loadCompiledModule(allocator, compiled_builtins.builtin_bin, "Builtin", compiled_builtins.builtin_source);
-        return .{ .builtin_indices = indices, .builtin_module = module };
-    }
-
-    fn deinit(self: *ThreadBuiltins) void {
-        var m = self.builtin_module;
-        m.deinit();
-    }
-};
-
-const TestOutcome = struct {
-    status: Status,
-    message: ?[]const u8 = null,
-
-    const Status = enum { pass, fail, crash };
-};
-
 // ---------------------------------------------------------------------------
 // Crash protection (following src/snapshot_tool/main.zig pattern)
 // ---------------------------------------------------------------------------
@@ -94,7 +79,6 @@ pub const panic = std.debug.FullPanic(panicHandler);
 
 threadlocal var panic_jmp: ?*sljmp.JmpBuf = null;
 threadlocal var panic_msg: ?[]const u8 = null;
-threadlocal var gpa_poisoned: bool = false;
 
 fn panicHandler(msg: []const u8, _: ?usize) noreturn {
     if (panic_jmp) |jmp| {
@@ -108,42 +92,52 @@ fn panicHandler(msg: []const u8, _: ?usize) noreturn {
 fn crashSignalHandler(_: i32) callconv(.c) void {
     if (panic_jmp) |jmp| {
         panic_msg = "signal: segfault or illegal instruction in generated code";
-        gpa_poisoned = true;
         panic_jmp = null;
         sljmp.longjmp(jmp, 2);
     }
-    const dfl = std.posix.Sigaction{
-        .handler = .{ .handler = std.posix.SIG.DFL },
-        .mask = std.posix.sigemptyset(),
+    const dfl = posix.Sigaction{
+        .handler = .{ .handler = posix.SIG.DFL },
+        .mask = posix.sigemptyset(),
         .flags = 0,
     };
-    std.posix.sigaction(std.posix.SIG.SEGV, &dfl, null);
-    std.posix.sigaction(std.posix.SIG.BUS, &dfl, null);
-    std.posix.sigaction(std.posix.SIG.ILL, &dfl, null);
+    posix.sigaction(posix.SIG.SEGV, &dfl, null);
+    posix.sigaction(posix.SIG.BUS, &dfl, null);
+    posix.sigaction(posix.SIG.ILL, &dfl, null);
 }
 
 fn installCrashSignalHandlers() void {
     if (comptime builtin.os.tag == .windows) return;
 
-    const sa = std.posix.Sigaction{
+    const sa = posix.Sigaction{
         .handler = .{ .handler = &crashSignalHandler },
-        .mask = std.posix.sigemptyset(),
-        .flags = std.os.linux.SA.NODEFER,
+        .mask = posix.sigemptyset(),
+        .flags = posix.SA.NODEFER,
     };
-    std.posix.sigaction(std.posix.SIG.SEGV, &sa, null);
-    std.posix.sigaction(std.posix.SIG.BUS, &sa, null);
-    std.posix.sigaction(std.posix.SIG.ILL, &sa, null);
+    posix.sigaction(posix.SIG.SEGV, &sa, null);
+    posix.sigaction(posix.SIG.BUS, &sa, null);
+    posix.sigaction(posix.SIG.ILL, &sa, null);
 }
 
 // ---------------------------------------------------------------------------
-// Runner context
+// Test outcome
 // ---------------------------------------------------------------------------
+
+const TestOutcome = struct {
+    status: Status,
+    message: ?[]const u8 = null,
+
+    const Status = enum { pass, fail, crash };
+};
 
 const TestResult = struct {
     status: TestOutcome.Status,
     message: ?[]const u8,
     duration_ns: u64,
 };
+
+// ---------------------------------------------------------------------------
+// Runner context
+// ---------------------------------------------------------------------------
 
 const RunnerContext = struct {
     tests: []const TestCase,
@@ -154,7 +148,21 @@ const RunnerContext = struct {
 
 const MAX_THREADS = 64;
 
-/// Parse and canonicalize a Roc expression (mirrors helpers.parseAndCanonicalizeExprInternal).
+// ---------------------------------------------------------------------------
+// Parse and canonicalize (shared by all backends)
+// ---------------------------------------------------------------------------
+
+const ParsedResources = struct {
+    module_env: *ModuleEnv,
+    parse_ast: *parse.AST,
+    can: *Can,
+    checker: *Check,
+    expr_idx: CIR.Expr.Idx,
+    builtin_module: LoadedModule,
+    builtin_indices: CIR.BuiltinIndices,
+    builtin_types: BuiltinTypes,
+};
+
 fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) !ParsedResources {
     const builtin_indices = try deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
     var builtin_module = try loadCompiledModule(allocator, compiled_builtins.builtin_bin, "Builtin", compiled_builtins.builtin_source);
@@ -169,7 +177,6 @@ fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) !P
     allocators.initInPlace(allocator);
     const parse_ast = try parse.parseExpr(&allocators, &module_env.common);
 
-    // Check for parse errors
     if (parse_ast.tokenize_diagnostics.items.len > 0 or parse_ast.parse_diagnostics.items.len > 0) {
         return error.ParseError;
     }
@@ -178,15 +185,11 @@ fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) !P
     try module_env.initCIRFields("test");
     _ = try module_env.imports.getOrPut(allocator, &module_env.common.strings, "Builtin");
 
-    const bool_stmt_in_bool_module = builtin_indices.bool_type;
-    const try_stmt_in_result_module = builtin_indices.try_type;
-    const str_stmt_in_builtin_module = builtin_indices.str_type;
-
     const builtin_ctx: Check.BuiltinContext = .{
         .module_name = try module_env.insertIdent(base.Ident.for_text("test")),
-        .bool_stmt = bool_stmt_in_bool_module,
-        .try_stmt = try_stmt_in_result_module,
-        .str_stmt = str_stmt_in_builtin_module,
+        .bool_stmt = builtin_indices.bool_type,
+        .try_stmt = builtin_indices.try_type,
+        .str_stmt = builtin_indices.str_type,
         .builtin_module = builtin_module.env,
         .builtin_indices = builtin_indices,
     };
@@ -211,10 +214,6 @@ fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) !P
     checker.* = try Check.init(allocator, &module_env.types, module_env, &imported_envs, null, &module_env.store.regions, builtin_ctx);
     _ = try checker.checkExprReplWithDefs(canonical_expr_idx);
 
-    // Note: deferred numeric literal rewriting is skipped in the parallel runner.
-    // Unsuffixed integer literals default to Dec, which the interpreter handles.
-    // The runTestI64 function does Dec-to-integer conversion if needed.
-
     const bts = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
     return .{
         .module_env = module_env,
@@ -227,17 +226,6 @@ fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) !P
         .builtin_types = bts,
     };
 }
-
-const ParsedResources = struct {
-    module_env: *ModuleEnv,
-    parse_ast: *parse.AST,
-    can: *Can,
-    checker: *Check,
-    expr_idx: CIR.Expr.Idx,
-    builtin_module: LoadedModule,
-    builtin_indices: CIR.BuiltinIndices,
-    builtin_types: BuiltinTypes,
-};
 
 fn cleanupResources(allocator: std.mem.Allocator, resources: ParsedResources) void {
     var builtin_module_copy = resources.builtin_module;
@@ -252,10 +240,9 @@ fn cleanupResources(allocator: std.mem.Allocator, resources: ParsedResources) vo
 }
 
 // ---------------------------------------------------------------------------
-// Test execution
+// ParTestEnv — Roc host ops for the interpreter
 // ---------------------------------------------------------------------------
 
-/// TestEnv for the parallel runner (simplified from TestEnv.zig).
 const ParTestEnv = struct {
     allocator: std.mem.Allocator,
     crash: eval_mod.CrashContext,
@@ -334,6 +321,113 @@ const ParTestEnv = struct {
     }
 };
 
+// ---------------------------------------------------------------------------
+// Str.inspect wrapping — converts CIR expression to Str.inspect(expr)
+// ---------------------------------------------------------------------------
+
+fn wrapInStrInspect(module_env: *ModuleEnv, inner_expr: CIR.Expr.Idx) !CIR.Expr.Idx {
+    const top = module_env.store.scratchExprTop();
+    try module_env.store.addScratchExpr(inner_expr);
+    const args_span = try module_env.store.exprSpanFrom(top);
+    const region = module_env.store.getExprRegion(inner_expr);
+    return module_env.addExpr(.{ .e_run_low_level = .{
+        .op = .str_inspekt,
+        .args = args_span,
+    } }, region);
+}
+
+/// Convert a StackValue to a RocValue for formatting.
+fn stackValueToRocValue(result: StackValue, layout_idx_hint: ?interpreter_layout.Idx) interpreter_values.RocValue {
+    return .{
+        .ptr = if (result.ptr) |p| @ptrCast(p) else null,
+        .lay = result.layout,
+        .layout_idx = layout_idx_hint,
+    };
+}
+
+/// Build FormatContext from interpreter state.
+fn interpreterFormatCtx(layout_cache: *const interpreter_layout.Store) interpreter_values.RocValue.FormatContext {
+    return .{
+        .layout_store = layout_cache,
+        .ident_store = layout_cache.getEnv().common.getIdentStore(),
+    };
+}
+
+// ---------------------------------------------------------------------------
+// Backend comparison helpers
+// ---------------------------------------------------------------------------
+
+fn numericStringsEqual(a: []const u8, b: []const u8) bool {
+    if (std.mem.eql(u8, a, b)) return true;
+    // "42" == "42.0" and vice versa
+    if (a.len + 2 == b.len and std.mem.endsWith(u8, b, ".0") and std.mem.startsWith(u8, b, a)) return true;
+    if (b.len + 2 == a.len and std.mem.endsWith(u8, a, ".0") and std.mem.startsWith(u8, a, b)) return true;
+    return false;
+}
+
+fn boolStringsEquivalent(a: []const u8, b: []const u8) bool {
+    return (std.mem.eql(u8, a, "True") and std.mem.eql(u8, b, "1")) or
+        (std.mem.eql(u8, a, "False") and std.mem.eql(u8, b, "0")) or
+        (std.mem.eql(u8, a, "1") and std.mem.eql(u8, b, "True")) or
+        (std.mem.eql(u8, a, "0") and std.mem.eql(u8, b, "False"));
+}
+
+/// Per-backend result for comparison reporting.
+const BackendResult = struct {
+    name: []const u8,
+    value: union(enum) {
+        ok: []const u8,
+        err: []const u8,
+    },
+};
+
+/// Compare all backend results. Returns null if they all agree, or an error message.
+fn compareBackendResults(
+    allocator: std.mem.Allocator,
+    backends: []const BackendResult,
+) ?[]const u8 {
+    // Collect all successful results
+    var ok_count: usize = 0;
+    var first_ok: ?[]const u8 = null;
+    for (backends) |br| {
+        if (br.value == .ok) {
+            ok_count += 1;
+            if (first_ok == null) first_ok = br.value.ok;
+        }
+    }
+
+    if (ok_count < 2) return null; // can't compare with fewer than 2 successes
+
+    // Check all successful results agree
+    var mismatch = false;
+    for (backends) |br| {
+        if (br.value == .ok) {
+            if (!numericStringsEqual(first_ok.?, br.value.ok) and !boolStringsEquivalent(first_ok.?, br.value.ok)) {
+                mismatch = true;
+                break;
+            }
+        }
+    }
+
+    if (!mismatch) return null;
+
+    // Build mismatch message
+    var msg_buf: std.ArrayListUnmanaged(u8) = .empty;
+    const writer = msg_buf.writer(allocator);
+    writer.print("Backend mismatch:", .{}) catch {};
+    for (backends) |br| {
+        switch (br.value) {
+            .ok => |s| writer.print(" {s}='{s}'", .{ br.name, s }) catch {},
+            .err => |e| writer.print(" {s}=err({s})", .{ br.name, e }) catch {},
+        }
+    }
+    return msg_buf.toOwnedSlice(allocator) catch null;
+}
+
+// ---------------------------------------------------------------------------
+// Test execution — runs all backends and compares
+// ---------------------------------------------------------------------------
+
 fn runSingleTest(allocator: std.mem.Allocator, tc: TestCase) TestOutcome {
     return runSingleTestInner(allocator, tc) catch |err| {
         return .{ .status = .fail, .message = @errorName(err) };
@@ -352,10 +446,11 @@ fn runSingleTestInner(allocator: std.mem.Allocator, tc: TestCase) !TestOutcome {
         .dec_val => |expected_dec| return runTestDec(allocator, tc.source, expected_dec),
         .int_dec => |expected_int| return runTestI64(allocator, tc.source, expected_int),
         .type_mismatch_crash => return runTestTypeMismatchCrash(allocator, tc.source),
-        .dev_only_str => return .{ .status = .fail, .message = "dev_only_str not yet supported in parallel runner" },
+        .dev_only_str => |expected_str| return runTestDevOnlyStr(allocator, tc.source, expected_str),
     }
 }
 
+/// Run interpreter, check the value, then compare all backends via Str.inspect.
 fn runTestI64(allocator: std.mem.Allocator, src: []const u8, expected_int: i128) !TestOutcome {
     const resources = try parseAndCanonicalizeExpr(allocator, src);
     defer cleanupResources(allocator, resources);
@@ -363,9 +458,8 @@ fn runTestI64(allocator: std.mem.Allocator, src: []const u8, expected_int: i128)
     var test_env_instance = ParTestEnv.init(allocator);
     defer test_env_instance.deinit();
 
-    const bt = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
-    var interpreter = try Interpreter.init(allocator, resources.module_env, bt, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
+    const imported_envs = [_]*const ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interpreter.deinit();
 
     var ops = test_env_instance.get_ops();
@@ -385,7 +479,14 @@ fn runTestI64(allocator: std.mem.Allocator, src: []const u8, expected_int: i128)
     if (int_value != expected_int) {
         return .{ .status = .fail, .message = "integer value mismatch" };
     }
-    return .{ .status = .pass };
+
+    // Format interpreter result for cross-backend comparison
+    const roc_val = stackValueToRocValue(result, null);
+    const fmt_ctx = interpreterFormatCtx(layout_cache);
+    const interp_str = roc_val.format(allocator, fmt_ctx) catch return .{ .status = .pass };
+    defer allocator.free(interp_str);
+
+    return compareAllBackends(allocator, interp_str, resources);
 }
 
 fn runTestBool(allocator: std.mem.Allocator, src: []const u8, expected_bool: bool) !TestOutcome {
@@ -395,9 +496,8 @@ fn runTestBool(allocator: std.mem.Allocator, src: []const u8, expected_bool: boo
     var test_env_instance = ParTestEnv.init(allocator);
     defer test_env_instance.deinit();
 
-    const bt = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
-    var interpreter = try Interpreter.init(allocator, resources.module_env, bt, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
+    const imported_envs = [_]*const ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interpreter.deinit();
 
     var ops = test_env_instance.get_ops();
@@ -418,7 +518,13 @@ fn runTestBool(allocator: std.mem.Allocator, src: []const u8, expected_bool: boo
     if (bool_val != expected_bool) {
         return .{ .status = .fail, .message = "boolean value mismatch" };
     }
-    return .{ .status = .pass };
+
+    const roc_val = stackValueToRocValue(result, interpreter_layout.Idx.bool);
+    const fmt_ctx = interpreterFormatCtx(layout_cache);
+    const interp_str = roc_val.format(allocator, fmt_ctx) catch return .{ .status = .pass };
+    defer allocator.free(interp_str);
+
+    return compareAllBackends(allocator, interp_str, resources);
 }
 
 fn runTestStr(allocator: std.mem.Allocator, src: []const u8, expected_str: []const u8) !TestOutcome {
@@ -428,9 +534,8 @@ fn runTestStr(allocator: std.mem.Allocator, src: []const u8, expected_str: []con
     var test_env_instance = ParTestEnv.init(allocator);
     defer test_env_instance.deinit();
 
-    const bt = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
-    var interpreter = try Interpreter.init(allocator, resources.module_env, bt, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
+    const imported_envs = [_]*const ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interpreter.deinit();
 
     var ops = test_env_instance.get_ops();
@@ -446,6 +551,20 @@ fn runTestStr(allocator: std.mem.Allocator, src: []const u8, expected_str: []con
     const str_slice = roc_str.asSlice();
     const matches = std.mem.eql(u8, expected_str, str_slice);
 
+    // Format interpreter result for cross-backend comparison
+    const roc_val = stackValueToRocValue(result, null);
+    const fmt_ctx = interpreterFormatCtx(layout_cache);
+    const interp_str = roc_val.format(allocator, fmt_ctx) catch {
+        if (!roc_str.isSmallStr()) {
+            @constCast(roc_str).decref(&ops);
+        } else {
+            result.decref(layout_cache, &ops);
+        }
+        if (!matches) return .{ .status = .fail, .message = "string value mismatch" };
+        return .{ .status = .pass };
+    };
+    defer allocator.free(interp_str);
+
     if (!roc_str.isSmallStr()) {
         @constCast(roc_str).decref(&ops);
     } else {
@@ -455,7 +574,8 @@ fn runTestStr(allocator: std.mem.Allocator, src: []const u8, expected_str: []con
     if (!matches) {
         return .{ .status = .fail, .message = "string value mismatch" };
     }
-    return .{ .status = .pass };
+
+    return compareAllBackends(allocator, interp_str, resources);
 }
 
 fn runTestError(allocator: std.mem.Allocator, src: []const u8, expected_err: anyerror) !TestOutcome {
@@ -465,9 +585,8 @@ fn runTestError(allocator: std.mem.Allocator, src: []const u8, expected_err: any
     var test_env_instance = ParTestEnv.init(allocator);
     defer test_env_instance.deinit();
 
-    const bt = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
-    var interpreter = try Interpreter.init(allocator, resources.module_env, bt, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
+    const imported_envs = [_]*const ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interpreter.deinit();
 
     var ops = test_env_instance.get_ops();
@@ -482,32 +601,26 @@ fn runTestError(allocator: std.mem.Allocator, src: []const u8, expected_err: any
 }
 
 fn runTestProblem(allocator: std.mem.Allocator, src: []const u8) !TestOutcome {
-    // Use the allow-problems variant to avoid panicking on diagnostics
     const builtin_indices = try deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
-    var builtin_module = try loadCompiledModule(allocator, compiled_builtins.builtin_bin, "Builtin", compiled_builtins.builtin_source);
-    errdefer builtin_module.deinit();
+    const builtin_module = try loadCompiledModule(allocator, compiled_builtins.builtin_bin, "Builtin", compiled_builtins.builtin_source);
+    defer {
+        var bm = builtin_module;
+        bm.deinit();
+    }
 
     const module_env = try allocator.create(ModuleEnv);
     module_env.* = try ModuleEnv.init(allocator, src);
     module_env.common.source = src;
     try module_env.common.calcLineStarts(module_env.gpa);
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(allocator);
-    const parse_ast = try parse.parseExpr(&allocators, &module_env.common);
+    var allocators_inst: Allocators = undefined;
+    allocators_inst.initInPlace(allocator);
+    const parse_ast = try parse.parseExpr(&allocators_inst, &module_env.common);
 
     if (parse_ast.tokenize_diagnostics.items.len > 0 or parse_ast.parse_diagnostics.items.len > 0) {
-        // Parse problem found
-        cleanupResources(allocator, .{
-            .module_env = module_env,
-            .parse_ast = parse_ast,
-            .can = undefined,
-            .checker = undefined,
-            .expr_idx = undefined,
-            .builtin_module = builtin_module,
-            .builtin_indices = builtin_indices,
-            .builtin_types = undefined,
-        });
+        parse_ast.deinit();
+        module_env.deinit();
+        allocator.destroy(module_env);
         return .{ .status = .pass };
     }
 
@@ -525,7 +638,7 @@ fn runTestProblem(allocator: std.mem.Allocator, src: []const u8) !TestOutcome {
     };
 
     const czer = try allocator.create(Can);
-    czer.* = try Can.initModule(&allocators, module_env, parse_ast, .{
+    czer.* = try Can.initModule(&allocators_inst, module_env, parse_ast, .{
         .builtin_types = .{
             .builtin_module_env = builtin_module.env,
             .builtin_indices = builtin_indices,
@@ -534,17 +647,11 @@ fn runTestProblem(allocator: std.mem.Allocator, src: []const u8) !TestOutcome {
 
     const expr_idx_raw: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
     _ = czer.canonicalizeExpr(expr_idx_raw) catch {
-        const resources = ParsedResources{
-            .module_env = module_env,
-            .parse_ast = parse_ast,
-            .can = czer,
-            .checker = undefined,
-            .expr_idx = undefined,
-            .builtin_module = builtin_module,
-            .builtin_indices = builtin_indices,
-            .builtin_types = undefined,
-        };
-        _ = resources;
+        czer.deinit();
+        parse_ast.deinit();
+        module_env.deinit();
+        allocator.destroy(czer);
+        allocator.destroy(module_env);
         return .{ .status = .pass };
     };
 
@@ -561,8 +668,6 @@ fn runTestProblem(allocator: std.mem.Allocator, src: []const u8) !TestOutcome {
     const type_problems = checker.problems.problems.items.len;
     const has_problems = can_diags.len + type_problems > 0;
 
-    var bm_copy = builtin_module;
-    bm_copy.deinit();
     checker.deinit();
     czer.deinit();
     parse_ast.deinit();
@@ -584,9 +689,8 @@ fn runTestF32(allocator: std.mem.Allocator, src: []const u8, expected_f32: f32) 
     var test_env_instance = ParTestEnv.init(allocator);
     defer test_env_instance.deinit();
 
-    const bt = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
-    var interpreter = try Interpreter.init(allocator, resources.module_env, bt, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
+    const imported_envs = [_]*const ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interpreter.deinit();
 
     var ops = test_env_instance.get_ops();
@@ -600,7 +704,13 @@ fn runTestF32(allocator: std.mem.Allocator, src: []const u8, expected_f32: f32) 
     if (diff > epsilon) {
         return .{ .status = .fail, .message = "f32 value mismatch" };
     }
-    return .{ .status = .pass };
+
+    const roc_val = stackValueToRocValue(result, null);
+    const fmt_ctx = interpreterFormatCtx(layout_cache);
+    const interp_str = roc_val.format(allocator, fmt_ctx) catch return .{ .status = .pass };
+    defer allocator.free(interp_str);
+
+    return compareAllBackends(allocator, interp_str, resources);
 }
 
 fn runTestF64(allocator: std.mem.Allocator, src: []const u8, expected_f64: f64) !TestOutcome {
@@ -610,9 +720,8 @@ fn runTestF64(allocator: std.mem.Allocator, src: []const u8, expected_f64: f64) 
     var test_env_instance = ParTestEnv.init(allocator);
     defer test_env_instance.deinit();
 
-    const bt = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
-    var interpreter = try Interpreter.init(allocator, resources.module_env, bt, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
+    const imported_envs = [_]*const ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interpreter.deinit();
 
     var ops = test_env_instance.get_ops();
@@ -626,7 +735,13 @@ fn runTestF64(allocator: std.mem.Allocator, src: []const u8, expected_f64: f64) 
     if (diff > epsilon) {
         return .{ .status = .fail, .message = "f64 value mismatch" };
     }
-    return .{ .status = .pass };
+
+    const roc_val = stackValueToRocValue(result, null);
+    const fmt_ctx = interpreterFormatCtx(layout_cache);
+    const interp_str = roc_val.format(allocator, fmt_ctx) catch return .{ .status = .pass };
+    defer allocator.free(interp_str);
+
+    return compareAllBackends(allocator, interp_str, resources);
 }
 
 fn runTestDec(allocator: std.mem.Allocator, src: []const u8, expected_dec: i128) !TestOutcome {
@@ -636,9 +751,8 @@ fn runTestDec(allocator: std.mem.Allocator, src: []const u8, expected_dec: i128)
     var test_env_instance = ParTestEnv.init(allocator);
     defer test_env_instance.deinit();
 
-    const bt = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
-    var interpreter = try Interpreter.init(allocator, resources.module_env, bt, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
+    const imported_envs = [_]*const ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interpreter.deinit();
 
     var ops = test_env_instance.get_ops();
@@ -650,13 +764,17 @@ fn runTestDec(allocator: std.mem.Allocator, src: []const u8, expected_dec: i128)
     if (dec_value.num != expected_dec) {
         return .{ .status = .fail, .message = "Dec value mismatch" };
     }
-    return .{ .status = .pass };
+
+    const roc_val = stackValueToRocValue(result, null);
+    const fmt_ctx = interpreterFormatCtx(layout_cache);
+    const interp_str = roc_val.format(allocator, fmt_ctx) catch return .{ .status = .pass };
+    defer allocator.free(interp_str);
+
+    return compareAllBackends(allocator, interp_str, resources);
 }
 
 fn runTestTypeMismatchCrash(allocator: std.mem.Allocator, src: []const u8) !TestOutcome {
-    // Similar to runTestProblem but also verifies the interpreter crashes
     const resources = parseAndCanonicalizeExpr(allocator, src) catch {
-        // If parse/canonicalize fails, that counts as detecting the problem
         return .{ .status = .pass };
     };
     defer cleanupResources(allocator, resources);
@@ -664,18 +782,92 @@ fn runTestTypeMismatchCrash(allocator: std.mem.Allocator, src: []const u8) !Test
     var test_env_instance = ParTestEnv.init(allocator);
     defer test_env_instance.deinit();
 
-    const bt = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
-    var interpreter = try Interpreter.init(allocator, resources.module_env, bt, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
+    const imported_envs = [_]*const ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interpreter.deinit();
 
     var ops = test_env_instance.get_ops();
     _ = interpreter.eval(resources.expr_idx, &ops) catch {
-        // Expected: crash or type mismatch error
         return .{ .status = .pass };
     };
 
     return .{ .status = .fail, .message = "expected crash but evaluation succeeded" };
+}
+
+/// Run a test that only checks the dev backend output (no interpreter comparison).
+fn runTestDevOnlyStr(allocator: std.mem.Allocator, src: []const u8, expected_str: []const u8) !TestOutcome {
+    const resources = try parseAndCanonicalizeExpr(allocator, src);
+    defer cleanupResources(allocator, resources);
+
+    const inspect_expr = wrapInStrInspect(resources.module_env, resources.expr_idx) catch {
+        return .{ .status = .fail, .message = "failed to wrap in Str.inspect" };
+    };
+
+    const dev_str = helpers.devEvaluatorStr(allocator, resources.module_env, inspect_expr, resources.builtin_module.env) catch |err| {
+        return .{ .status = .fail, .message = @errorName(err) };
+    };
+    defer allocator.free(dev_str);
+
+    if (!std.mem.eql(u8, expected_str, dev_str)) {
+        return .{ .status = .fail, .message = "dev_only_str value mismatch" };
+    }
+    return .{ .status = .pass };
+}
+
+// ---------------------------------------------------------------------------
+// Cross-backend comparison — the core of this runner
+// ---------------------------------------------------------------------------
+
+/// Run dev, wasm, and llvm backends on the same expression, compare Str.inspect
+/// output with the interpreter's formatted result.
+/// Returns .pass if all backends agree, .fail with mismatch details otherwise.
+fn compareAllBackends(allocator: std.mem.Allocator, interp_str: []const u8, resources: ParsedResources) TestOutcome {
+    // Wrap the expression in Str.inspect for compiled backends
+    const inspect_expr = wrapInStrInspect(resources.module_env, resources.expr_idx) catch {
+        // If wrapping fails, skip comparison (interpreter value was already checked)
+        return .{ .status = .pass };
+    };
+
+    // Run dev backend
+    const dev_result: BackendResult = blk: {
+        const str = helpers.devEvaluatorStr(allocator, resources.module_env, inspect_expr, resources.builtin_module.env) catch |err| {
+            break :blk BackendResult{ .name = "dev", .value = .{ .err = @errorName(err) } };
+        };
+        break :blk BackendResult{ .name = "dev", .value = .{ .ok = str } };
+    };
+    defer if (dev_result.value == .ok) allocator.free(dev_result.value.ok);
+
+    // Run wasm backend
+    const wasm_result: BackendResult = blk: {
+        const str = helpers.wasmEvaluatorStr(allocator, resources.module_env, inspect_expr, resources.builtin_module.env) catch |err| {
+            break :blk BackendResult{ .name = "wasm", .value = .{ .err = @errorName(err) } };
+        };
+        break :blk BackendResult{ .name = "wasm", .value = .{ .ok = str } };
+    };
+    defer if (wasm_result.value == .ok) allocator.free(wasm_result.value.ok);
+
+    // Run "llvm" backend (currently aliases dev)
+    const llvm_result: BackendResult = blk: {
+        const str = helpers.llvmEvaluatorStr(allocator, resources.module_env, inspect_expr, resources.builtin_module.env) catch |err| {
+            break :blk BackendResult{ .name = "llvm", .value = .{ .err = @errorName(err) } };
+        };
+        break :blk BackendResult{ .name = "llvm", .value = .{ .ok = str } };
+    };
+    defer if (llvm_result.value == .ok) allocator.free(llvm_result.value.ok);
+
+    // Compare all backends including interpreter
+    const all_backends = [_]BackendResult{
+        .{ .name = "interpreter", .value = .{ .ok = interp_str } },
+        dev_result,
+        wasm_result,
+        llvm_result,
+    };
+
+    if (compareBackendResults(allocator, &all_backends)) |msg| {
+        return .{ .status = .fail, .message = msg };
+    }
+
+    return .{ .status = .pass };
 }
 
 // ---------------------------------------------------------------------------
@@ -683,7 +875,6 @@ fn runTestTypeMismatchCrash(allocator: std.mem.Allocator, src: []const u8) !Test
 // ---------------------------------------------------------------------------
 
 fn threadMain(ctx: *RunnerContext) void {
-    // Per-test arena allocator (reset between tests)
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
 

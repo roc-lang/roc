@@ -273,7 +273,7 @@ pub const ModuleTest = struct {
 /// unnamed wrappers) so callers can correct the reported totals.
 pub const ModuleTestsResult = struct {
     /// Compile/run steps for each module's tests, in creation order.
-    tests: [26]ModuleTest,
+    tests: [27]ModuleTest,
     /// Number of synthetic passes the summary must subtract when filters were injected.
     /// Includes aggregator ensures and unconditional wrapper tests.
     forced_passes: usize,
@@ -613,6 +613,7 @@ pub const RocModules = struct {
             .io,
             .layout,
             .values,
+            .eval,
             .ipc,
             .repl,
             .fmt,

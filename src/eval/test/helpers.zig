@@ -248,7 +248,7 @@ fn dumpHex(data: []const u8) void {
 }
 
 /// Errors that can occur during DevEvaluator string generation
-const DevEvalError = error{
+pub const DevEvalError = error{
     DevEvaluatorInitFailed,
     GenerateCodeFailed,
     ExecInitFailed,
@@ -266,7 +266,7 @@ const DevEvalError = error{
 /// Unwraps aliases and nominal types, then returns the tag name for single-tag unions
 /// or "{}" for empty records.
 /// Evaluate an expression using the DevEvaluator and return the result as a string.
-fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) DevEvalError![]const u8 {
+pub fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) DevEvalError![]const u8 {
     // Initialize DevEvaluator
     var dev_eval = DevEvaluator.init(allocator, null) catch {
         return error.DevEvaluatorInitFailed;
@@ -494,7 +494,7 @@ pub fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []
     }
 }
 
-fn llvmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) ![]const u8 {
+pub fn llvmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) ![]const u8 {
     return devEvaluatorStr(allocator, module_env, expr_idx, builtin_module_env);
 }
 
@@ -597,7 +597,7 @@ fn numericStringsEqual(a: []const u8, b: []const u8) bool {
 }
 
 /// Errors that can occur during WasmEvaluator string generation
-const WasmEvalError = error{
+pub const WasmEvalError = error{
     WasmEvaluatorInitFailed,
     WasmGenerateCodeFailed,
     WasmExecFailed,
