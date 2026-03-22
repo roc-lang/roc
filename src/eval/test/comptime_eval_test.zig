@@ -6,11 +6,13 @@ const types = @import("types");
 const base = @import("base");
 const can = @import("can");
 const check = @import("check");
+const compile_build = @import("compile_build");
 const compiled_builtins = @import("compiled_builtins");
 const ComptimeEvaluator = @import("../comptime_evaluator.zig").ComptimeEvaluator;
 const DevEvaluator = @import("../mod.zig").DevEvaluator;
 const BuiltinTypes = @import("../builtins.zig").BuiltinTypes;
 const builtin_loading = @import("../builtin_loading.zig");
+const layout = @import("layout");
 const roc_target = @import("roc_target");
 
 const Can = can.Can;
@@ -3304,6 +3306,145 @@ test "issue 9262: dev evaluator handles opaque function field lookup" {
     defer code_result.deinit();
 
     try testing.expectEqual(@as(usize, 0), result.problems.len());
+    try testing.expect(code_result.code.len > 0);
+    try testing.expect(code_result.entry_offset < code_result.code.len);
+}
+
+test "issue 9281: dev evaluator stack overflow with nested recursive opaque types across modules" {
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const tmp_path = try tmp_dir.dir.realpathAlloc(test_allocator, ".");
+    defer test_allocator.free(tmp_path);
+
+    const repo_root = try std.fs.cwd().realpathAlloc(test_allocator, ".");
+    defer test_allocator.free(repo_root);
+
+    const platform_main_path = try std.fs.path.join(test_allocator, &.{ repo_root, "test", "fx", "platform", "main.roc" });
+    defer test_allocator.free(platform_main_path);
+
+    const platform_header_path = try test_allocator.dupe(u8, platform_main_path);
+    defer test_allocator.free(platform_header_path);
+    std.mem.replaceScalar(u8, platform_header_path, '\\', '/');
+
+    try tmp_dir.dir.makePath("pkg");
+    try tmp_dir.dir.writeFile(.{
+        .sub_path = "pkg/main.roc",
+        .data = "package [Inner, Outer] {}\n",
+    });
+    try tmp_dir.dir.writeFile(.{
+        .sub_path = "pkg/Inner.roc",
+        .data =
+        \\Inner := [
+        \\    Leaf(I64),
+        \\    Branch(Inner),
+        \\]
+        ,
+    });
+    try tmp_dir.dir.writeFile(.{
+        .sub_path = "pkg/Outer.roc",
+        .data =
+        \\import Inner exposing [Inner]
+        \\
+        \\Outer := [
+        \\    Div(List(Outer)),
+        \\    Node(Inner),
+        \\    Text(Str),
+        \\].{
+        \\    div : List(Outer) -> Outer
+        \\    div = |children| Div(children)
+        \\
+        \\    text : Str -> Outer
+        \\    text = |s| Text(s)
+        \\}
+        ,
+    });
+
+    const app_source = try std.fmt.allocPrint(
+        test_allocator,
+        \\app [main!] {{
+        \\    pf: platform "{s}",
+        \\    pkg: "./pkg/main.roc",
+        \\}}
+        \\
+        \\import pf.Stdout
+        \\import pkg.Outer
+        \\
+        \\main! = || {{
+        \\    tree = Outer.div([Outer.text("hello")])
+        \\    match tree {{
+        \\        Div(_) => Stdout.line!("Div (correct)")
+        \\        _ => Stdout.line!("other")
+        \\    }}
+        \\}}
+        \\
+    , .{platform_header_path});
+    defer test_allocator.free(app_source);
+
+    try tmp_dir.dir.writeFile(.{
+        .sub_path = "app.roc",
+        .data = app_source,
+    });
+
+    const app_path = try std.fs.path.join(test_allocator, &.{ tmp_path, "app.roc" });
+    defer test_allocator.free(app_path);
+
+    var build_env = try compile_build.BuildEnv.init(test_allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), tmp_path);
+    defer build_env.deinit();
+
+    try build_env.discoverDependencies(app_path);
+    try build_env.compileDiscovered();
+
+    var resolved = try build_env.getResolvedModuleEnvs(test_allocator);
+    defer test_allocator.free(resolved.compiled_modules);
+    defer test_allocator.free(resolved.all_module_envs);
+
+    try resolved.processHostedFunctions(test_allocator, null);
+    const entry = try resolved.findEntrypoint();
+
+    var dev_eval = try DevEvaluator.init(test_allocator, null);
+    defer dev_eval.deinit();
+
+    const layout_store_ptr = try dev_eval.ensureGlobalLayoutStore(resolved.all_module_envs);
+    const module_idx: u32 = for (resolved.all_module_envs, 0..) |env, i| {
+        if (env == entry.platform_env) break @intCast(i);
+    } else unreachable;
+
+    const expr_type_var = ModuleEnv.varFrom(entry.entrypoint_expr);
+    const resolved_type = entry.platform_env.types.resolveVar(expr_type_var);
+    const maybe_func = resolved_type.desc.content.unwrapFunc();
+
+    var arg_layouts_buf: [16]layout.Idx = undefined;
+    var arg_layouts_len: usize = 0;
+    var ret_layout: layout.Idx = undefined;
+
+    if (maybe_func) |func| {
+        const arg_vars = entry.platform_env.types.sliceVars(func.args);
+        var type_scope = types.TypeScope.init(test_allocator);
+        defer type_scope.deinit();
+
+        for (arg_vars, 0..) |arg_var, i| {
+            arg_layouts_buf[i] = try layout_store_ptr.fromTypeVar(module_idx, arg_var, &type_scope, null);
+        }
+
+        arg_layouts_len = arg_vars.len;
+        ret_layout = try layout_store_ptr.fromTypeVar(module_idx, func.ret, &type_scope, null);
+    } else {
+        var type_scope = types.TypeScope.init(test_allocator);
+        defer type_scope.deinit();
+        ret_layout = try layout_store_ptr.fromTypeVar(module_idx, expr_type_var, &type_scope, null);
+    }
+
+    var code_result = try dev_eval.generateEntrypointCode(
+        entry.platform_env,
+        entry.entrypoint_expr,
+        resolved.all_module_envs,
+        entry.app_module_env,
+        arg_layouts_buf[0..arg_layouts_len],
+        ret_layout,
+    );
+    defer code_result.deinit();
+
     try testing.expect(code_result.code.len > 0);
     try testing.expect(code_result.entry_offset < code_result.code.len);
 }
