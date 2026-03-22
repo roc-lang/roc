@@ -12,11 +12,9 @@ const Check = check.Check;
 const builtins = @import("builtins");
 const eval_mod = @import("eval");
 const wasm_runner = @import("wasm_runner.zig");
-const roc_target = @import("roc_target");
 const compile = @import("compile");
 const single_module = compile.single_module;
 const CrashContext = eval_mod.CrashContext;
-const BuiltinTypes = eval_mod.BuiltinTypes;
 const builtin_loading = eval_mod.builtin_loading;
 
 const AST = parse.AST;
@@ -26,7 +24,7 @@ const RocOps = builtins.host_abi.RocOps;
 const LoadedModule = builtin_loading.LoadedModule;
 const DevEvaluator = eval_mod.DevEvaluator;
 
-pub const Backend = @import("backend").EvalBackend;
+pub const Backend = @import("eval").EvalBackend;
 const ExecutionBackend = enum {
     interpreter,
     dev,
@@ -110,6 +108,7 @@ pub const Repl = struct {
             .interpreter => .interpreter,
             .dev => .dev,
             .llvm => .llvm,
+            .wasm => .wasm,
         };
         return initInternal(allocator, roc_ops, crash_ctx, execution_backend);
     }
@@ -843,42 +842,70 @@ pub const Repl = struct {
         return .{ .expression = output };
     }
 
-    /// Evaluate a str_inspekt-wrapped expression using the interpreter.
+    /// Evaluate a str_inspekt-wrapped expression using the LIR interpreter.
     /// The expression should already be wrapped in Str.inspect, so the result is a Str.
     fn evaluateWithInterpreter(self: *Repl, module_env: *ModuleEnv, inspect_expr: can.CIR.Expr.Idx, imported_modules: []const *const ModuleEnv, checker: *Check) !StepResult {
-        const builtin_types_for_eval = BuiltinTypes.init(self.builtin_indices, self.builtin_module.env, self.builtin_module.env, self.builtin_module.env);
-        var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, builtin_types_for_eval, self.builtin_module.env, imported_modules, &checker.import_mapping, null, null, roc_target.RocTarget.detectNative()) catch |err| {
-            return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Interpreter init error: {}", .{err}) };
-        };
-        defer interpreter.deinitAndFreeOtherEnvs();
+        _ = checker;
 
-        if (self.crash_ctx) |ctx| {
-            ctx.reset();
+        // Lower CIR → MIR → LIR → RC
+        var lir_program = eval_mod.LirProgram.init(self.allocator, .u64);
+        defer lir_program.deinit();
+
+        // Cast const module env pointers to mutable (required by lowerExpr API)
+        var mutable_envs_buf: [2]*ModuleEnv = undefined;
+        for (imported_modules, 0..) |env, i| {
+            mutable_envs_buf[i] = @constCast(env);
         }
+        const mutable_envs: []const *ModuleEnv = mutable_envs_buf[0..imported_modules.len];
 
-        const result = interpreter.eval(inspect_expr, self.roc_ops) catch |err| switch (err) {
+        var lower_result = lir_program.lowerExpr(
+            module_env,
+            inspect_expr,
+            mutable_envs,
+            null,
+        ) catch |err| {
+            return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "LIR lowering error: {s}", .{@errorName(err)}) };
+        };
+        defer lower_result.deinit();
+
+        // Create and run LIR interpreter
+        var interp = eval_mod.LirInterpreter.init(
+            self.allocator,
+            &lower_result.lir_store,
+            lower_result.layout_store,
+            null,
+        ) catch |err| {
+            return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Interpreter init error: {s}", .{@errorName(err)}) };
+        };
+        defer interp.deinit();
+
+        const eval_result = interp.eval(lower_result.final_expr_id) catch |err| switch (err) {
             error.Crash => {
-                if (self.crash_ctx) |ctx| {
-                    if (ctx.crashMessage()) |msg| {
-                        return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Crash: {s}", .{msg}) };
-                    }
-                }
-                return .{ .eval_error = try self.allocator.dupe(u8, "Evaluation error: error.Crash") };
+                const msg = interp.getCrashMessage() orelse "crash during evaluation";
+                return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Crash: {s}", .{msg}) };
             },
-            else => return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Evaluation error: {}", .{err}) },
+            else => return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Evaluation error: {s}", .{@errorName(err)}) },
         };
 
         if (self.debug_store_snapshots) {
             try self.generateAndStoreDebugHtml(module_env, inspect_expr);
         }
 
-        // The result is a Str from Str.inspect — extract it directly
-        const roc_str = result.asRocStr() orelse
-            return .{ .eval_error = try self.allocator.dupe(u8, "Str.inspect did not produce a string") };
-        const output = try self.allocator.dupe(u8, roc_str.asSlice());
+        // The result is a Str from Str.inspect — read it from the Value pointer
+        const result_value = switch (eval_result) {
+            .value => |v| v,
+            .early_return => |v| v,
+            .break_expr => unreachable,
+        };
+        const roc_str = result_value.read(RocStr);
+        const slice = if (roc_str.isSmallStr())
+            roc_str.asSlice()
+        else if (roc_str.len() > 0 and roc_str.len() < 1024 * 1024)
+            roc_str.asSlice()
+        else
+            return .{ .eval_error = try self.allocator.dupe(u8, "Str.inspect returned invalid string") };
+        const output = try self.allocator.dupe(u8, slice);
 
-        result.decref(&interpreter.runtime_layout_store, self.roc_ops);
-        interpreter.cleanupBindings(self.roc_ops);
         return .{ .expression = output };
     }
 

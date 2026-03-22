@@ -1486,6 +1486,23 @@ const ProcessContext = struct {
 /// Worker function that processes a single work item
 fn processWorkItem(allocator: Allocator, context: *ProcessContext, item_id: usize) void {
     const work_item = context.work_list.items[item_id];
+
+    // Top-level panic protection for worker threads. Panics from any
+    // snapshot processing phase (monomorphization, lowering, codegen) are
+    // caught here so that one failing snapshot doesn't crash the entire
+    // parallel test suite.
+    var jmp_buf: sljmp.JmpBuf = undefined;
+    const jmp_result = sljmp.setjmp(&jmp_buf);
+    if (jmp_result != 0) {
+        const msg = panic_msg orelse "unknown";
+        std.debug.print("snapshot panic in {s}: {s}\n", .{ work_item.path, msg });
+        panic_msg = null;
+        _ = context.failed_count.fetchAdd(1, .monotonic);
+        return;
+    }
+    panic_jmp = &jmp_buf;
+    defer panic_jmp = null;
+
     const success = switch (work_item.kind) {
         .snapshot_file => processSnapshotFile(allocator, work_item.path, context.config) catch false,
         .multi_file_snapshot => blk: {
@@ -4179,6 +4196,19 @@ fn processDevObjectSnapshot(
         entrypoint_root_exprs[i] = entrypoint_source.expr_idx;
     }
 
+    // Protect MIR lowering from panics in the monomorphization / lowering passes.
+    // Some Builtin module interactions hit unimplemented paths that panic.
+    var mir_jmp_buf: sljmp.JmpBuf = undefined;
+    const mir_jmp_result = sljmp.setjmp(&mir_jmp_buf);
+    if (mir_jmp_result != 0) {
+        const msg = panic_msg orelse "unknown";
+        std.debug.print("dev_object MIR panic in {s}: {s}\n", .{ output_path, msg });
+        panic_msg = null;
+        return false;
+    }
+    panic_jmp = &mir_jmp_buf;
+    defer panic_jmp = null;
+
     var monomorphization = blk: {
         const mono = if (app_module_idx) |resolved_app_module_idx|
             mir_mod.Monomorphize.runRootsWithTypeScope(
@@ -4573,8 +4603,25 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
         actual_outputs.deinit();
     };
 
-    for (inputs.items) |input| {
-        const repl_output = try repl_instance.step(input);
+    for (inputs.items, 0..) |input, i| {
+        var jmp_buf: sljmp.JmpBuf = undefined;
+        const jmp_result = sljmp.setjmp(&jmp_buf);
+        if (jmp_result != 0) {
+            const msg = panic_msg orelse "unknown";
+            std.debug.print("interpreter REPL panic at input {d} in {s}: {s}\n", .{ i, snapshot_path, msg });
+            panic_msg = null;
+            // Don't set success=false here — the missing output will be
+            // compared against expected and updated by --update-output.
+            break;
+        }
+        panic_jmp = &jmp_buf;
+        defer panic_jmp = null;
+
+        const repl_output = repl_instance.step(input) catch |err| {
+            std.debug.print("interpreter REPL error at input {d} in {s}: {}\n", .{ i, snapshot_path, err });
+            try actual_outputs.append(try std.fmt.allocPrint(output.gpa, "Evaluation error: {s}", .{@errorName(err)}));
+            continue;
+        };
         try actual_outputs.append(repl_output);
     }
 

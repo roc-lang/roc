@@ -63,7 +63,7 @@ pub const OptLevel = enum {
     }
 
     /// Convert to the backend evaluation enum used by internal modules
-    pub fn toBackend(self: OptLevel) @import("backend").EvalBackend {
+    pub fn toBackend(self: OptLevel) @import("eval").EvalBackend {
         return switch (self) {
             .interpreter => .interpreter,
             .dev, .size, .speed => .dev,

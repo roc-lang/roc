@@ -7,15 +7,13 @@ const std = @import("std");
 const base = @import("base");
 const builtins = @import("builtins");
 const Io = @import("io").Io;
-const i128h = builtins.compiler_rt_128;
 const can = @import("can");
 const check_mod = @import("check");
 const types_mod = @import("types");
 const import_mapping_mod = types_mod.import_mapping;
-const interpreter_mod = @import("interpreter.zig");
-const Interpreter = interpreter_mod.Interpreter;
-const isRecordStyleStruct = interpreter_mod.isRecordStyleStruct;
 const eval_mod = @import("mod.zig");
+const fold_type = @import("fold_type.zig");
+const value_to_cir = @import("value_to_cir.zig");
 
 const RocOps = builtins.host_abi.RocOps;
 const RocAlloc = builtins.host_abi.RocAlloc;
@@ -30,11 +28,15 @@ const CIR = can.CIR;
 const Problem = check_mod.problem.Problem;
 const ProblemStore = check_mod.problem.Store;
 
-const EvalError = Interpreter.Error;
+const LirProgram = eval_mod.LirProgram;
+const LirInterpreter = eval_mod.LirInterpreter;
+const Value = eval_mod.Value;
+const LayoutHelper = eval_mod.value.LayoutHelper;
 const CrashContext = eval_mod.CrashContext;
 const BuiltinTypes = eval_mod.BuiltinTypes;
-const layout_mod = @import("interpreter_layout");
+const layout_mod = @import("layout");
 const roc_target = @import("roc_target");
+const RocList = builtins.list.RocList;
 
 fn comptimeRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
     const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
@@ -127,9 +129,290 @@ fn comptimeRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv
     evaluator.halted = true;
 }
 
+const TypeWalkState = enum {
+    visiting,
+    done,
+};
+
+const TypeWalkResult = enum {
+    ok,
+    unresolved_rigid,
+    recursive_cycle,
+};
+
+fn shouldSkipComptimeEvalForType(allocator: Allocator, types_store: *const types_mod.Store, var_: types_mod.Var) bool {
+    var visited = std.AutoHashMap(types_mod.Var, TypeWalkState).init(allocator);
+    defer visited.deinit();
+    return containsUnresolvedRigidVarInner(types_store, var_, &visited) != .ok;
+}
+
+fn containsUnresolvedRigidVarInner(
+    types_store: *const types_mod.Store,
+    var_: types_mod.Var,
+    visited: *std.AutoHashMap(types_mod.Var, TypeWalkState),
+) TypeWalkResult {
+    const gop = visited.getOrPut(var_) catch return .unresolved_rigid;
+    if (gop.found_existing) {
+        return switch (gop.value_ptr.*) {
+            .visiting => .recursive_cycle,
+            .done => .ok,
+        };
+    }
+    gop.value_ptr.* = .visiting;
+
+    const resolved = types_store.resolveVar(var_);
+    const result = containsUnresolvedRigidContent(types_store, resolved.desc.content, visited);
+    visited.put(var_, .done) catch {};
+    return result;
+}
+
+fn containsUnresolvedRigidContent(
+    types_store: *const types_mod.Store,
+    content: types_mod.Content,
+    visited: *std.AutoHashMap(types_mod.Var, TypeWalkState),
+) TypeWalkResult {
+    return switch (content) {
+        .rigid => .unresolved_rigid,
+        .flex, .err => .ok,
+        .alias => |alias| blk: {
+            var saw_cycle = false;
+            for (types_store.sliceVars(alias.vars.nonempty)) |arg_var| {
+                switch (containsUnresolvedRigidVarInner(types_store, arg_var, visited)) {
+                    .unresolved_rigid => break :blk .unresolved_rigid,
+                    .recursive_cycle => saw_cycle = true,
+                    .ok => {},
+                }
+            }
+            break :blk if (saw_cycle) .recursive_cycle else .ok;
+        },
+        .structure => |flat_type| containsUnresolvedRigidFlatType(types_store, flat_type, visited),
+    };
+}
+
+fn containsUnresolvedRigidFlatType(
+    types_store: *const types_mod.Store,
+    flat_type: types_mod.FlatType,
+    visited: *std.AutoHashMap(types_mod.Var, TypeWalkState),
+) TypeWalkResult {
+    return switch (flat_type) {
+        .tuple => |tuple| blk: {
+            var saw_cycle = false;
+            for (types_store.sliceVars(tuple.elems)) |elem_var| {
+                switch (containsUnresolvedRigidVarInner(types_store, elem_var, visited)) {
+                    .unresolved_rigid => break :blk .unresolved_rigid,
+                    .recursive_cycle => saw_cycle = true,
+                    .ok => {},
+                }
+            }
+            break :blk if (saw_cycle) .recursive_cycle else .ok;
+        },
+        .nominal_type => |nominal| blk: {
+            var saw_cycle = false;
+            for (types_store.sliceVars(nominal.vars.nonempty)) |arg_var| {
+                switch (containsUnresolvedRigidVarInner(types_store, arg_var, visited)) {
+                    .unresolved_rigid => break :blk .unresolved_rigid,
+                    .recursive_cycle => saw_cycle = true,
+                    .ok => {},
+                }
+            }
+            break :blk if (saw_cycle) .recursive_cycle else .ok;
+        },
+        .fn_pure, .fn_effectful, .fn_unbound => |func| blk: {
+            var saw_cycle = false;
+            for (types_store.sliceVars(func.args)) |arg_var| {
+                switch (containsUnresolvedRigidVarInner(types_store, arg_var, visited)) {
+                    .unresolved_rigid => break :blk .unresolved_rigid,
+                    .recursive_cycle => saw_cycle = true,
+                    .ok => {},
+                }
+            }
+            switch (containsUnresolvedRigidVarInner(types_store, func.ret, visited)) {
+                .unresolved_rigid => break :blk .unresolved_rigid,
+                .recursive_cycle => saw_cycle = true,
+                .ok => {},
+            }
+            break :blk if (saw_cycle) .recursive_cycle else .ok;
+        },
+        .record => |record| blk: {
+            const fields = types_store.getRecordFieldsSlice(record.fields);
+            var saw_cycle = false;
+            for (fields.items(.var_)) |field_var| {
+                switch (containsUnresolvedRigidVarInner(types_store, field_var, visited)) {
+                    .unresolved_rigid => break :blk .unresolved_rigid,
+                    .recursive_cycle => saw_cycle = true,
+                    .ok => {},
+                }
+            }
+            switch (containsUnresolvedRigidVarInner(types_store, record.ext, visited)) {
+                .unresolved_rigid => break :blk .unresolved_rigid,
+                .recursive_cycle => saw_cycle = true,
+                .ok => {},
+            }
+            break :blk if (saw_cycle) .recursive_cycle else .ok;
+        },
+        .record_unbound => |fields| blk: {
+            const slice = types_store.getRecordFieldsSlice(fields);
+            var saw_cycle = false;
+            for (slice.items(.var_)) |field_var| {
+                switch (containsUnresolvedRigidVarInner(types_store, field_var, visited)) {
+                    .unresolved_rigid => break :blk .unresolved_rigid,
+                    .recursive_cycle => saw_cycle = true,
+                    .ok => {},
+                }
+            }
+            break :blk if (saw_cycle) .recursive_cycle else .ok;
+        },
+        .tag_union => |tag_union| blk: {
+            const tags = types_store.getTagsSlice(tag_union.tags);
+            var saw_cycle = false;
+            for (tags.items(.args)) |tag_args| {
+                for (types_store.sliceVars(tag_args)) |arg_var| {
+                    switch (containsUnresolvedRigidVarInner(types_store, arg_var, visited)) {
+                        .unresolved_rigid => break :blk .unresolved_rigid,
+                        .recursive_cycle => saw_cycle = true,
+                        .ok => {},
+                    }
+                }
+            }
+            switch (containsUnresolvedRigidVarInner(types_store, tag_union.ext, visited)) {
+                .unresolved_rigid => break :blk .unresolved_rigid,
+                .recursive_cycle => saw_cycle = true,
+                .ok => {},
+            }
+            break :blk if (saw_cycle) .recursive_cycle else .ok;
+        },
+        .empty_record, .empty_tag_union => .ok,
+    };
+}
+
+const BuiltinIntValidation = struct {
+    type_name: []const u8,
+    min_value: []const u8,
+    max_value: []const u8,
+    positive_limit: u128,
+    negative_limit: u128,
+    is_unsigned: bool,
+};
+
+const try_suffix_type_error_crash_message =
+    "The ? operator was used on a value that is not a Try type. The ? operator expects a value of type [Ok(a), Err(e)].";
+
+fn builtinNumKindFromDisplayName(type_name: []const u8) ?CIR.NumKind {
+    if (std.mem.eql(u8, type_name, "U8")) return .u8;
+    if (std.mem.eql(u8, type_name, "I8")) return .i8;
+    if (std.mem.eql(u8, type_name, "U16")) return .u16;
+    if (std.mem.eql(u8, type_name, "I16")) return .i16;
+    if (std.mem.eql(u8, type_name, "U32")) return .u32;
+    if (std.mem.eql(u8, type_name, "I32")) return .i32;
+    if (std.mem.eql(u8, type_name, "U64")) return .u64;
+    if (std.mem.eql(u8, type_name, "I64")) return .i64;
+    if (std.mem.eql(u8, type_name, "U128")) return .u128;
+    if (std.mem.eql(u8, type_name, "I128")) return .i128;
+    if (std.mem.eql(u8, type_name, "F32")) return .f32;
+    if (std.mem.eql(u8, type_name, "F64")) return .f64;
+    if (std.mem.eql(u8, type_name, "Dec")) return .dec;
+    return null;
+}
+
+fn numeralAbsValue(num_lit_info: types_mod.NumeralInfo) u128 {
+    if (num_lit_info.is_u128) return num_lit_info.toU128();
+
+    const signed_value = num_lit_info.toI128();
+    if (signed_value >= 0) return @intCast(signed_value);
+
+    const magnitude: i128 = -%signed_value;
+    return @bitCast(magnitude);
+}
+
+fn builtinIntValidationForKind(num_kind: CIR.NumKind) ?BuiltinIntValidation {
+    return switch (num_kind) {
+        .u8 => .{
+            .type_name = "U8",
+            .min_value = "0",
+            .max_value = "255",
+            .positive_limit = std.math.maxInt(u8),
+            .negative_limit = 0,
+            .is_unsigned = true,
+        },
+        .i8 => .{
+            .type_name = "I8",
+            .min_value = "-128",
+            .max_value = "127",
+            .positive_limit = std.math.maxInt(i8),
+            .negative_limit = 128,
+            .is_unsigned = false,
+        },
+        .u16 => .{
+            .type_name = "U16",
+            .min_value = "0",
+            .max_value = "65535",
+            .positive_limit = std.math.maxInt(u16),
+            .negative_limit = 0,
+            .is_unsigned = true,
+        },
+        .i16 => .{
+            .type_name = "I16",
+            .min_value = "-32768",
+            .max_value = "32767",
+            .positive_limit = std.math.maxInt(i16),
+            .negative_limit = 32768,
+            .is_unsigned = false,
+        },
+        .u32 => .{
+            .type_name = "U32",
+            .min_value = "0",
+            .max_value = "4294967295",
+            .positive_limit = std.math.maxInt(u32),
+            .negative_limit = 0,
+            .is_unsigned = true,
+        },
+        .i32 => .{
+            .type_name = "I32",
+            .min_value = "-2147483648",
+            .max_value = "2147483647",
+            .positive_limit = std.math.maxInt(i32),
+            .negative_limit = 2147483648,
+            .is_unsigned = false,
+        },
+        .u64 => .{
+            .type_name = "U64",
+            .min_value = "0",
+            .max_value = "18446744073709551615",
+            .positive_limit = std.math.maxInt(u64),
+            .negative_limit = 0,
+            .is_unsigned = true,
+        },
+        .i64 => .{
+            .type_name = "I64",
+            .min_value = "-9223372036854775808",
+            .max_value = "9223372036854775807",
+            .positive_limit = std.math.maxInt(i64),
+            .negative_limit = 9223372036854775808,
+            .is_unsigned = false,
+        },
+        .u128 => .{
+            .type_name = "U128",
+            .min_value = "0",
+            .max_value = "340282366920938463463374607431768211455",
+            .positive_limit = std.math.maxInt(u128),
+            .negative_limit = 0,
+            .is_unsigned = true,
+        },
+        .i128 => .{
+            .type_name = "I128",
+            .min_value = "-170141183460469231731687303715884105728",
+            .max_value = "170141183460469231731687303715884105727",
+            .positive_limit = @intCast(std.math.maxInt(i128)),
+            .negative_limit = @as(u128, 1) << 127,
+            .is_unsigned = false,
+        },
+        else => null,
+    };
+}
+
 /// Result of evaluating a single declaration
 const EvalResult = union(enum) {
-    success: ?eval_mod.StackValue, // Optional value to add to bindings (null for lambdas)
+    success: void, // Declaration evaluated successfully
     crash: struct {
         message: []const u8,
         region: base.Region,
@@ -139,7 +422,7 @@ const EvalResult = union(enum) {
         region: base.Region,
     },
     error_eval: struct {
-        err: EvalError,
+        message: []const u8,
         region: base.Region,
     },
 };
@@ -154,7 +437,8 @@ pub const EvalSummary = struct {
 pub const ComptimeEvaluator = struct {
     allocator: Allocator,
     env: *ModuleEnv,
-    interpreter: Interpreter,
+    lir_program: LirProgram,
+    all_module_envs: []const *ModuleEnv,
     crash: CrashContext,
     expect: CrashContext, // Reuse CrashContext for expect failures
     roc_ops: ?RocOps,
@@ -171,6 +455,14 @@ pub const ComptimeEvaluator = struct {
     roc_alloc_sizes: std.AutoHashMap(usize, usize),
     /// Io context for routing [dbg] output
     io: Io,
+    /// Builtin module environment (for from_numeral validation)
+    builtin_module_env: ?*const ModuleEnv,
+    /// Other module environments (for from_numeral lookup)
+    other_envs: []const *const ModuleEnv,
+    /// Import mapping (for display names in diagnostics)
+    import_mapping: *const import_mapping_mod.ImportMapping,
+    /// Builtin types (for numKindFromIdent)
+    builtin_types: BuiltinTypes,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -183,12 +475,23 @@ pub const ComptimeEvaluator = struct {
         target: roc_target.RocTarget,
         io: ?Io,
     ) !ComptimeEvaluator {
-        const interp = try Interpreter.init(allocator, cir, builtin_types, builtin_module_env, other_envs, import_mapping, null, null, target);
+        _ = target;
+        const target_usize: base.target.TargetUsize = if (@import("builtin").cpu.arch == .wasm32) .u32 else .u64;
+
+        // Build all_module_envs slice including the current env
+        var envs = try std.ArrayList(*ModuleEnv).initCapacity(allocator, other_envs.len + 1);
+        defer envs.deinit(allocator);
+        envs.appendAssumeCapacity(cir);
+        for (other_envs) |other_env| {
+            envs.appendAssumeCapacity(@constCast(other_env));
+        }
+        const all_module_envs = try allocator.dupe(*ModuleEnv, envs.items);
 
         return ComptimeEvaluator{
             .allocator = allocator,
             .env = cir,
-            .interpreter = interp,
+            .lir_program = LirProgram.init(allocator, target_usize),
+            .all_module_envs = @ptrCast(all_module_envs),
             .crash = CrashContext.init(allocator),
             .expect = CrashContext.init(allocator),
             .roc_ops = null,
@@ -199,6 +502,10 @@ pub const ComptimeEvaluator = struct {
             .roc_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
             .roc_alloc_sizes = std.AutoHashMap(usize, usize).init(allocator),
             .io = io orelse Io.default(),
+            .builtin_module_env = builtin_module_env,
+            .other_envs = other_envs,
+            .import_mapping = import_mapping,
+            .builtin_types = builtin_types,
         };
     }
 
@@ -209,7 +516,10 @@ pub const ComptimeEvaluator = struct {
         self.roc_arena.deinit();
         self.roc_alloc_sizes.deinit();
 
-        self.interpreter.deinit();
+        self.lir_program.deinit();
+        // Free the all_module_envs slice we allocated
+        const mutable_envs: []*ModuleEnv = @constCast(self.all_module_envs);
+        self.allocator.free(mutable_envs);
         self.crash.deinit();
         self.expect.deinit();
     }
@@ -232,7 +542,7 @@ pub const ComptimeEvaluator = struct {
         return &(self.roc_ops.?);
     }
 
-    /// Evaluates a single declaration
+    /// Evaluates a single declaration via LIR interpreter
     fn evalDecl(self: *ComptimeEvaluator, def_idx: CIR.Def.Idx) !EvalResult {
         const def = self.env.store.getDef(def_idx);
         const expr_idx = def.expr;
@@ -241,7 +551,7 @@ pub const ComptimeEvaluator = struct {
         const expr = self.env.store.getExpr(expr_idx);
 
         const is_lambda = switch (expr) {
-            .e_lambda, .e_closure => true,
+            .e_lambda, .e_closure, .e_hosted_lambda => true,
             .e_runtime_error => return EvalResult{
                 .crash = .{
                     .message = "Runtime error in expression",
@@ -250,13 +560,24 @@ pub const ComptimeEvaluator = struct {
             },
             // Nothing to evaluate at the declaration site for these;
             // by design, they cause crashes when lookups happen on them
-            .e_anno_only => return EvalResult{ .success = null },
+            .e_anno_only => return EvalResult{ .success = {} },
             // Required lookups reference values from the app's `main` that provides
             // values to the platform's `requires` clause. These values are not available
             // during compile-time evaluation of the platform - they will be linked at runtime.
-            .e_lookup_required => return EvalResult{ .success = null },
+            .e_lookup_required => return EvalResult{ .success = {} },
             else => false,
         };
+
+        // Skip lambdas - they don't need to be evaluated at the top level
+        if (is_lambda) return EvalResult{ .success = {} };
+
+        // Skip defs whose types still contain unresolved rigid vars (e.g. platform
+        // module defs that reference a `requires` clause type parameter like `model`).
+        // Ordinary polymorphic constants such as numeric literals should still evaluate.
+        const type_var = ModuleEnv.varFrom(expr_idx);
+        if (shouldSkipComptimeEvalForType(self.allocator, &self.env.types, type_var)) {
+            return EvalResult{ .success = {} };
+        }
 
         // Reset halted flag at the start of each def - crashes only halt within a single def
         self.halted = false;
@@ -265,30 +586,40 @@ pub const ComptimeEvaluator = struct {
         self.current_expr_region = region;
         defer self.current_expr_region = null;
 
-        const ops = self.get_ops();
-
-        const result = self.interpreter.eval(expr_idx, ops) catch |err| {
-            // If this is a lambda/closure and it failed to evaluate, just skip it
-            // Top-level function definitions can fail for various reasons and that's ok
-            // The interpreter will evaluate them on-demand when they're called
-            // IMPORTANT: We do NOT skip blocks - blocks can have side effects like crash/expect
-            if (is_lambda) {
-                // Lambdas that fail to evaluate won't be added to bindings
-                // They'll be re-evaluated on-demand when called
-                return EvalResult{ .success = null };
+        // Lower CIR → MIR → LIR → RC
+        var lower_result = self.lir_program.lowerExpr(
+            self.env,
+            expr_idx,
+            self.all_module_envs,
+            null,
+        ) catch {
+            if (expr == .e_match and expr.e_match.is_try_suffix) {
+                return EvalResult{
+                    .crash = .{
+                        .message = try_suffix_type_error_crash_message,
+                        .region = region,
+                    },
+                };
             }
+            return EvalResult{
+                .error_eval = .{
+                    .message = @errorName(error.RuntimeError),
+                    .region = region,
+                },
+            };
+        };
+        defer lower_result.deinit();
 
+        // Evaluate via LIR interpreter
+        var interp = try LirInterpreter.init(self.allocator, &lower_result.lir_store, lower_result.layout_store, self.io);
+        interp.detect_infinite_while_loops = true;
+        defer interp.deinit();
+
+        const eval_result = interp.eval(lower_result.final_expr_id) catch |err| {
             switch (err) {
                 error.Crash => {
-                    if (self.expect.crashMessage()) |msg| {
-                        return EvalResult{
-                            .expect_failed = .{
-                                .message = msg,
-                                .region = region,
-                            },
-                        };
-                    }
-                    const msg = self.crash.crashMessage() orelse unreachable;
+                    // Dupe the message: it's owned by the interpreter and freed by defer interp.deinit()
+                    const msg = self.allocator.dupe(u8, interp.getCrashMessage() orelse "crash during compile-time evaluation") catch "crash during compile-time evaluation";
                     return EvalResult{
                         .crash = .{
                             .message = msg,
@@ -296,949 +627,83 @@ pub const ComptimeEvaluator = struct {
                         },
                     };
                 },
-                else => return EvalResult{
-                    .error_eval = .{
-                        .err = err,
-                        .region = region,
-                    },
+                else => {
+                    if (expr == .e_match and expr.e_match.is_try_suffix) {
+                        return EvalResult{
+                            .crash = .{
+                                .message = try_suffix_type_error_crash_message,
+                                .region = region,
+                            },
+                        };
+                    }
+                    return EvalResult{
+                        .error_eval = .{
+                            .message = interp.getRuntimeErrorMessage() orelse @errorName(err),
+                            .region = region,
+                        },
+                    };
                 },
             }
         };
 
-        // Try to fold the result to a constant expression (only for non-lambdas)
-        if (!is_lambda) {
-            self.tryFoldConstant(def_idx, result) catch {
-                // If folding fails, just continue - the original expression is still valid
-                // NotImplemented is expected for non-foldable types
+        // Extract the value from the eval result
+        const result_value = switch (eval_result) {
+            .value => |v| v,
+            .early_return => |v| v,
+            .break_expr => return EvalResult{ .success = {} },
+        };
+
+        // Try to fold the result to a constant expression
+        self.tryFoldExprFromValue(expr_idx, result_value, lower_result.result_layout, lower_result.layout_store) catch {
+            // If folding fails, just continue - the original expression is still valid
+        };
+
+        if (interp.getExpectMessage()) |_| {
+            return EvalResult{
+                .expect_failed = .{
+                    .message = "expect failed",
+                    .region = region,
+                },
             };
         }
 
-        // Return the result value so it can be stored in bindings
-        // Note: We don't decref here because the value needs to stay alive in bindings
-        return EvalResult{ .success = result };
+        return EvalResult{ .success = {} };
     }
 
-    /// Try to fold a successfully evaluated constant into a constant expression
-    /// This replaces the expression in-place so future references see the constant value
-    fn tryFoldConstant(self: *ComptimeEvaluator, def_idx: CIR.Def.Idx, stack_value: eval_mod.StackValue) !void {
-        const def = self.env.store.getDef(def_idx);
-        try self.tryFoldExpr(def.expr, stack_value);
-    }
-
-    /// Fold an expression to a constant value. Takes expr_idx directly for standalone expressions.
-    fn tryFoldExpr(self: *ComptimeEvaluator, expr_idx: CIR.Expr.Idx, stack_value: eval_mod.StackValue) !void {
+    /// Fold an expression to a constant value using FoldType + value_to_cir.
+    fn tryFoldExprFromValue(
+        self: *ComptimeEvaluator,
+        expr_idx: CIR.Expr.Idx,
+        value: Value,
+        layout_idx: layout_mod.Idx,
+        layout_store: *const layout_mod.Store,
+    ) !void {
         // Don't fold if the expression is already a constant
         const old_expr = self.env.store.getExpr(expr_idx);
         if (old_expr == .e_num or old_expr == .e_zero_argument_tag) {
             return; // Already folded, nothing to do
         }
 
-        // Convert StackValue to CIR expression based on layout
-        const layout = stack_value.layout;
-
-        // Get the runtime type variable from the StackValue
-        const rt_var = stack_value.rt_var;
-
-        const resolved = self.interpreter.runtime_types.resolveVar(rt_var);
-
-        // Check if this is a non-opaque nominal type (declared with :=) whose backing
-        // is a tag union (e.g. Color := [Red, Green, Blue]). We must NOT fold these because
-        // the folded expression loses the nominal type information, causing layout
-        // inconsistencies when the test runner's interpreter later evaluates it.
-        // Opaque types (declared with ::) like builtin numeric types (Dec, I64) are safe
-        // to fold since they go through numeric paths (e_num) that preserve type info.
-        if (resolved.desc.content == .structure and
-            resolved.desc.content.structure == .nominal_type)
-        {
-            const nom = resolved.desc.content.structure.nominal_type;
-            if (!nom.is_opaque) {
-                const backing_var = self.interpreter.runtime_types.getNominalBackingVar(nom);
-                const backing_resolved = self.interpreter.runtime_types.resolveVar(backing_var);
-                if (backing_resolved.desc.content == .structure and
-                    backing_resolved.desc.content.structure == .tag_union) return;
-            }
-        }
-
-        // Check if it's a tag union type (without unwrapping nominals/aliases)
-        const is_tag_union = resolved.desc.content == .structure and
-            resolved.desc.content.structure == .tag_union;
-
-        // Special case for Bool type: u8 scalar with value 0 or 1
-        // This handles Bool types (which may be aliases or nominals not fully tracked
-        // through rt_var). Only apply when the type is NOT detected as a bare tag union,
-        // to avoid misidentifying tag union discriminants as Bool.
-        if (!is_tag_union and layout.tag == .scalar and layout.data.scalar.tag == .int and
-            layout.data.scalar.data.int == .u8)
-        {
-            const val = stack_value.asI128();
-            if (val == 0 or val == 1) {
-                // This is a Bool value - fold it directly
-                try self.foldBoolScalar(expr_idx, val == 1);
-                return;
-            }
-        }
-
-        if (is_tag_union) {
-            // Tag unions can be scalars (no payload) or structs (with payload)
-            switch (layout.tag) {
-                .scalar => try self.foldTagUnionScalar(expr_idx, stack_value),
-                .struct_ => try self.foldTagUnionTuple(expr_idx, stack_value),
-                .tag_union => try self.foldTagUnionWithPayload(expr_idx, stack_value),
-                // List, closure, box layouts for tag unions can't be constant-folded
-                .list, .closure, .box, .box_of_zst, .list_of_zst, .zst => return,
-            }
-        } else {
-            // Not a tag union - check layout type
-            switch (layout.tag) {
-                .scalar => try self.foldScalar(expr_idx, stack_value, layout),
-                .struct_ => try self.foldTuple(expr_idx, stack_value),
-                // These remain as-is - no constant folding needed or possible
-                .closure, .list, .tag_union, .box, .box_of_zst, .list_of_zst, .zst => return,
-            }
-        }
-    }
-
-    /// Fold a scalar value (int, frac) to an e_num expression
-    fn foldScalar(self: *ComptimeEvaluator, expr_idx: CIR.Expr.Idx, stack_value: eval_mod.StackValue, layout: layout_mod.Layout) !void {
-        const scalar_tag = layout.data.scalar.tag;
-        switch (scalar_tag) {
-            .int => {
-                // Extract integer value
-                const value = stack_value.asI128();
-                const precision = layout.data.scalar.data.int;
-
-                // Map precision to NumKind
-                const num_kind: CIR.NumKind = switch (precision) {
-                    .i8 => .i8,
-                    .i16 => .i16,
-                    .i32 => .i32,
-                    .i64 => .i64,
-                    .i128 => .i128,
-                    .u8 => .u8,
-                    .u16 => .u16,
-                    .u32 => .u32,
-                    .u64 => .u64,
-                    .u128 => .u128,
-                };
-
-                // Create IntValue
-                const int_value = CIR.IntValue{
-                    .bytes = @bitCast(value),
-                    .kind = switch (precision) {
-                        .u8, .u16, .u32, .u64, .u128 => .u128,
-                        .i8, .i16, .i32, .i64, .i128 => .i128,
-                    },
-                };
-
-                // Replace the expression with e_num in-place
-                try self.env.store.replaceExprWithNum(expr_idx, int_value, num_kind);
-            },
-            .frac => {
-                // Handle fractional/decimal types (Dec, F32, F64)
-                const frac_precision = layout.data.scalar.data.frac;
-
-                switch (frac_precision) {
-                    .dec => {
-                        // Dec is stored as RocDec struct with .num field of type i128
-                        // The value is scaled by 10^18, so we need to unscale it to get the literal value
-                        const dec_value = stack_value.asDec(self.get_ops());
-                        const scaled_value = dec_value.num;
-
-                        // Unscale by dividing by 10^18 to get the original literal value
-                        const unscaled_value = i128h.divTrunc_i128(scaled_value, builtins.dec.RocDec.one_point_zero_i128);
-
-                        // Create IntValue and fold as Dec
-                        const int_value = CIR.IntValue{
-                            .bytes = @bitCast(unscaled_value),
-                            .kind = .i128,
-                        };
-
-                        try self.env.store.replaceExprWithNum(expr_idx, int_value, .dec);
-                    },
-                    .f32 => {
-                        // Extract f32 value and fold to e_frac_f32
-                        const f32_value = stack_value.asF32();
-                        const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
-                        var node = CIR.Node.init(.expr_frac_f32);
-                        node.setPayload(.{ .expr_frac_f32 = .{
-                            .value = @bitCast(f32_value),
-                            .has_suffix = true,
-                        } });
-                        self.env.store.nodes.set(node_idx, node);
-                    },
-                    .f64 => {
-                        // Extract f64 value and fold to e_frac_f64
-                        const f64_value = stack_value.asF64();
-                        const f64_bits: u64 = @bitCast(f64_value);
-                        const low: u32 = @truncate(f64_bits);
-                        const high: u32 = @truncate(f64_bits >> 32);
-                        const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
-                        var node = CIR.Node.init(.expr_frac_f64);
-                        node.setPayload(.{ .expr_frac_f64 = .{
-                            .value_lo = low,
-                            .value_hi = high,
-                            .has_suffix = true,
-                        } });
-                        self.env.store.nodes.set(node_idx, node);
-                    },
-                }
-            },
-            // Str scalars can't be meaningfully folded to simpler expressions
-            .str => return,
-        }
-    }
-
-    /// Fold a Bool value to an e_zero_argument_tag expression (True or False)
-    fn foldBoolScalar(self: *ComptimeEvaluator, expr_idx: CIR.Expr.Idx, is_true: bool) !void {
-        // Bool tags: 0 = False, 1 = True
-        // Get the canonical Bool type variable from builtins
-        const bool_rt_var = try self.interpreter.getCanonicalBoolRuntimeVar();
-        const resolved = self.interpreter.runtime_types.resolveVar(bool_rt_var);
-
-        // For Bool, we need to find the correct tag name
-        const tag_name_str = if (is_true) "True" else "False";
-        const tag_name_ident = try self.env.insertIdent(base.Ident.for_text(tag_name_str));
-
-        // Get variant_var and ext_var
-        const variant_var: types_mod.Var = bool_rt_var;
-        // ext_var will be set if this is a tag_union type
-        var ext_var: types_mod.Var = undefined;
-
-        if (resolved.desc.content == .structure) {
-            if (resolved.desc.content.structure == .tag_union) {
-                ext_var = resolved.desc.content.structure.tag_union.ext;
-            }
-        }
-
-        // Replace the expression with e_zero_argument_tag
-        try self.env.store.replaceExprWithZeroArgumentTag(
+        // Build the fold type descriptor from checked types + layout
+        const fold_ty = fold_type.fromExpr(
+            self.allocator,
+            self.env,
             expr_idx,
-            tag_name_ident, // closure_name
-            variant_var,
-            ext_var,
-            tag_name_ident,
-        );
-    }
+            layout_idx,
+            layout_store,
+        ) catch return;
+        defer fold_ty.deinit(self.allocator);
 
-    /// Fold a tag union (represented as scalar, like Bool) to an e_zero_argument_tag expression
-    fn foldTagUnionScalar(self: *ComptimeEvaluator, expr_idx: CIR.Expr.Idx, stack_value: eval_mod.StackValue) !void {
-        // The value is the tag index directly (scalar integer).
-        // The caller already verified layout.tag == .scalar, and scalar tag unions are always ints.
-        std.debug.assert(stack_value.layout.tag == .scalar and stack_value.layout.data.scalar.tag == .int);
-        const tag_index: usize = @intCast(stack_value.asI128());
-
-        // Get the runtime type variable from the StackValue
-        const rt_var = stack_value.rt_var;
-
-        // Get the list of tags for this union type
-        var tag_list = std.array_list.AlignedManaged(types_mod.Tag, null).init(self.allocator);
-        defer tag_list.deinit();
-        try self.interpreter.appendUnionTags(rt_var, &tag_list);
-
-        // Tag index from the value must be valid
-        std.debug.assert(tag_index < tag_list.items.len);
-
-        const tag_info = tag_list.items[tag_index];
-        const arg_vars = self.interpreter.runtime_types.sliceVars(tag_info.args);
-
-        // Scalar tag unions don't have payloads, so arg_vars must be empty
-        std.debug.assert(arg_vars.len == 0);
-
-        // Get variant_var and ext_var from type information
-        const resolved = self.interpreter.runtime_types.resolveVar(rt_var);
-        const variant_var: types_mod.Var = rt_var;
-        // ext_var will be set if this is a tag_union type
-        var ext_var: types_mod.Var = undefined;
-
-        if (resolved.desc.content == .structure) {
-            if (resolved.desc.content.structure == .tag_union) {
-                ext_var = resolved.desc.content.structure.tag_union.ext;
-            }
-        }
-
-        // Replace the expression with e_zero_argument_tag
-        try self.env.store.replaceExprWithZeroArgumentTag(
+        // Reconstruct the CIR constant expression
+        _ = value_to_cir.replaceExpr(
+            self.allocator,
+            value,
+            layout_idx,
+            fold_ty,
+            layout_store,
+            self.env,
             expr_idx,
-            tag_info.name, // closure_name
-            variant_var,
-            ext_var,
-            tag_info.name,
-        );
-    }
-
-    /// Fold a tag union (represented as tuple) to a constant expression
-    /// Handles both zero-argument tags and tags with payloads
-    fn foldTagUnionTuple(self: *ComptimeEvaluator, expr_idx: CIR.Expr.Idx, stack_value: eval_mod.StackValue) !void {
-        // Tag unions are now represented as tuples (payload, tag)
-        var acc = try stack_value.asTuple(&self.interpreter.runtime_layout_store);
-
-        // Element 1 is the tag discriminant - getElement takes original index directly
-        const tag_elem_rt_var = try self.interpreter.runtime_types.fresh();
-        const tag_field = try acc.getElement(1, tag_elem_rt_var);
-
-        // Extract tag index - if not a scalar int, can't fold
-        if (tag_field.layout.tag != .scalar or tag_field.layout.data.scalar.tag != .int) {
-            return;
-        }
-        const tmp_sv = eval_mod.StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true, .rt_var = tag_elem_rt_var };
-        const tag_index: usize = @intCast(tmp_sv.asI128());
-
-        // Get the runtime type variable from the StackValue
-        const rt_var = stack_value.rt_var;
-
-        // Get the list of tags for this union type
-        var tag_list = std.array_list.AlignedManaged(types_mod.Tag, null).init(self.allocator);
-        defer tag_list.deinit();
-        try self.interpreter.appendUnionTags(rt_var, &tag_list);
-
-        // If tag index is out of range, can't fold
-        if (tag_index >= tag_list.items.len) {
-            return;
-        }
-
-        const tag_info = tag_list.items[tag_index];
-        const arg_vars = self.interpreter.runtime_types.sliceVars(tag_info.args);
-
-        // Get variant_var and ext_var from type information
-        const resolved = self.interpreter.runtime_types.resolveVar(rt_var);
-        const variant_var: types_mod.Var = rt_var;
-        var ext_var: types_mod.Var = undefined;
-
-        if (resolved.desc.content == .structure) {
-            if (resolved.desc.content.structure == .tag_union) {
-                ext_var = resolved.desc.content.structure.tag_union.ext;
-            }
-        }
-
-        if (arg_vars.len == 0) {
-            // Zero-argument tag (like True, False, Ok with no payload variant, etc.)
-            const closure_name = tag_info.name;
-
-            try self.env.store.replaceExprWithZeroArgumentTag(
-                expr_idx,
-                closure_name,
-                variant_var,
-                ext_var,
-                tag_info.name,
-            );
-        } else {
-            // Tag with payload - get the payload value (element 0)
-            const payload_rt_var = try self.interpreter.runtime_types.fresh();
-            const payload_value = try acc.getElement(0, payload_rt_var);
-
-            // Get source expression's region for folded elements
-            const region = self.env.store.getExprRegion(expr_idx);
-
-            // Create expressions for each argument
-            var arg_indices = std.array_list.AlignedManaged(CIR.Expr.Idx, null).init(self.allocator);
-            defer arg_indices.deinit();
-
-            // Check if payload is a tuple (multiple args) or single value
-            if (payload_value.layout.tag == .struct_ and arg_vars.len > 1) {
-                // Multiple arguments - payload is a tuple
-                var payload_acc = try payload_value.asTuple(&self.interpreter.runtime_layout_store);
-                for (0..arg_vars.len) |i| {
-                    const arg_rt_var = arg_vars[i];
-                    const arg_value = try payload_acc.getElement(i, arg_rt_var);
-                    const arg_expr_idx = try self.createConstantExpr(arg_value, region);
-                    try arg_indices.append(arg_expr_idx);
-                }
-            } else {
-                // Single argument
-                const arg_expr_idx = try self.createConstantExpr(payload_value, region);
-                try arg_indices.append(arg_expr_idx);
-            }
-
-            // Replace the original expression with an e_tag
-            try self.env.store.replaceExprWithTag(expr_idx, tag_info.name, arg_indices.items);
-        }
-    }
-
-    /// Fold a tag union with explicit tag_union layout
-    /// Handles both zero-argument tags and tags with payloads
-    fn foldTagUnionWithPayload(self: *ComptimeEvaluator, expr_idx: CIR.Expr.Idx, stack_value: eval_mod.StackValue) !void {
-        // Get the tag union data from the layout store
-        const tag_union_layout = stack_value.layout.data.tag_union;
-        const tag_union_data = self.interpreter.runtime_layout_store.getTagUnionData(tag_union_layout.idx);
-
-        // Read the discriminant using dynamic offset calculation
-        const base_ptr = stack_value.ptr orelse return;
-        const disc_offset = self.interpreter.runtime_layout_store.getTagUnionDiscriminantOffset(tag_union_layout.idx);
-        const disc_ptr: [*]const u8 = @ptrCast(base_ptr);
-        const tag_index: usize = disc_ptr[disc_offset];
-
-        // Get the runtime type variable from the StackValue
-        const rt_var = stack_value.rt_var;
-
-        // Get the list of tags for this union type
-        var tag_list = std.array_list.AlignedManaged(types_mod.Tag, null).init(self.allocator);
-        defer tag_list.deinit();
-        try self.interpreter.appendUnionTags(rt_var, &tag_list);
-
-        // If tag index is out of range, can't fold
-        if (tag_index >= tag_list.items.len) {
-            return;
-        }
-
-        const tag_info = tag_list.items[tag_index];
-        const arg_vars = self.interpreter.runtime_types.sliceVars(tag_info.args);
-
-        // Get variant_var and ext_var from type information
-        const resolved = self.interpreter.runtime_types.resolveVar(rt_var);
-        const variant_var: types_mod.Var = rt_var;
-        var ext_var: types_mod.Var = undefined;
-
-        if (resolved.desc.content == .structure) {
-            if (resolved.desc.content.structure == .tag_union) {
-                ext_var = resolved.desc.content.structure.tag_union.ext;
-            }
-        }
-
-        if (arg_vars.len == 0) {
-            // Zero-argument tag
-            try self.env.store.replaceExprWithZeroArgumentTag(
-                expr_idx,
-                tag_info.name,
-                variant_var,
-                ext_var,
-                tag_info.name,
-            );
-        } else {
-            // Tag with payload - get the payload from the tag union
-            const variants = self.interpreter.runtime_layout_store.getTagUnionVariants(tag_union_data);
-            const variant = variants.get(tag_index);
-            const payload_layout = self.interpreter.runtime_layout_store.getLayout(variant.payload_layout);
-
-            // Payload is at offset 0 in our tag union layout
-            const payload_rt_var = try self.interpreter.runtime_types.fresh();
-            const payload_value = eval_mod.StackValue{
-                .layout = payload_layout,
-                .ptr = base_ptr,
-                .is_initialized = true,
-                .rt_var = payload_rt_var,
-            };
-
-            // Get source expression's region for folded elements
-            const region = self.env.store.getExprRegion(expr_idx);
-
-            // Create expressions for each argument
-            var arg_indices = std.array_list.AlignedManaged(CIR.Expr.Idx, null).init(self.allocator);
-            defer arg_indices.deinit();
-
-            // Check if payload is a tuple (multiple args) or single value
-            if (payload_layout.tag == .struct_ and arg_vars.len > 1) {
-                // Multiple arguments - payload is a tuple
-                var payload_acc = try payload_value.asTuple(&self.interpreter.runtime_layout_store);
-                for (0..arg_vars.len) |i| {
-                    const arg_rt_var = arg_vars[i];
-                    const arg_value = try payload_acc.getElement(i, arg_rt_var);
-                    const arg_expr_idx = try self.createConstantExpr(arg_value, region);
-                    try arg_indices.append(arg_expr_idx);
-                }
-            } else {
-                // Single argument
-                const arg_expr_idx = try self.createConstantExpr(payload_value, region);
-                try arg_indices.append(arg_expr_idx);
-            }
-
-            // Replace the original expression with an e_tag
-            try self.env.store.replaceExprWithTag(expr_idx, tag_info.name, arg_indices.items);
-        }
-    }
-
-    /// Fold a tuple value by recursively folding each element
-    /// Creates constant expressions for each element and replaces the tuple expression
-    fn foldTuple(self: *ComptimeEvaluator, expr_idx: CIR.Expr.Idx, stack_value: eval_mod.StackValue) !void {
-        // Unit/empty tuples can be represented with a null pointer; no elements to fold.
-        const struct_info = self.interpreter.runtime_layout_store.getStructInfo(stack_value.layout);
-        if (struct_info.fields.len == 0) return;
-
-        // Get the tuple accessor
-        var accessor = try stack_value.asTuple(&self.interpreter.runtime_layout_store);
-        const elem_count = accessor.getElementCount();
-
-        // If empty tuple, nothing to fold
-        if (elem_count == 0) {
-            return;
-        }
-
-        // Get the runtime type for the tuple to extract element types
-        const rt_var = stack_value.rt_var;
-        const resolved = self.interpreter.runtime_types.resolveVar(rt_var);
-
-        // Extract element type variables from the tuple type
-        var elem_rt_vars = std.array_list.AlignedManaged(types_mod.Var, null).init(self.allocator);
-        defer elem_rt_vars.deinit();
-
-        if (resolved.desc.content == .structure) {
-            const struct_content = resolved.desc.content.structure;
-            if (struct_content == .tuple) {
-                const elems = self.interpreter.runtime_types.sliceVars(struct_content.tuple.elems);
-                for (elems) |elem_var| {
-                    try elem_rt_vars.append(elem_var);
-                }
-            }
-        }
-
-        // Create constant expressions for each element
-        var elem_indices = std.array_list.AlignedManaged(CIR.Expr.Idx, null).init(self.allocator);
-        defer elem_indices.deinit();
-
-        // Use source expression's region for folded elements
-        const region = self.env.store.getExprRegion(expr_idx);
-
-        for (0..elem_count) |i| {
-            // Get the runtime type variable for this element
-            const elem_rt_var = if (i < elem_rt_vars.items.len)
-                elem_rt_vars.items[i]
-            else
-                try self.interpreter.runtime_types.fresh();
-
-            // Get the element value
-            const elem_value = try accessor.getElement(i, elem_rt_var);
-
-            // Create a constant expression for this element
-            const elem_expr_idx = try self.createConstantExpr(elem_value, region);
-            try elem_indices.append(elem_expr_idx);
-        }
-
-        // Replace the original expression with a tuple of the constant expressions
-        try self.env.store.replaceExprWithTuple(expr_idx, elem_indices.items);
-    }
-
-    /// Create a new CIR expression representing a constant value from a StackValue.
-    /// This is used when we need to create NEW expressions (e.g., for tuple elements)
-    /// rather than modifying existing ones in-place.
-    fn createConstantExpr(self: *ComptimeEvaluator, stack_value: eval_mod.StackValue, region: base.Region) EvalError!CIR.Expr.Idx {
-        const layout = stack_value.layout;
-        const rt_var = stack_value.rt_var;
-        const resolved = self.interpreter.runtime_types.resolveVar(rt_var);
-
-        // Check if it's a tag union type
-        const is_tag_union = resolved.desc.content == .structure and
-            resolved.desc.content.structure == .tag_union;
-
-        // Handle Bool type specially (u8 scalar with value 0 or 1)
-        if (layout.tag == .scalar and layout.data.scalar.tag == .int and
-            layout.data.scalar.data.int == .u8)
-        {
-            const val = stack_value.asI128();
-            if (val == 0 or val == 1) {
-                // This is likely a Bool value
-                return try self.createBoolExpr(val == 1, region);
-            }
-        }
-
-        if (is_tag_union) {
-            // Handle tag union types
-            switch (layout.tag) {
-                .scalar => return try self.createTagUnionScalarExpr(stack_value, region),
-                .struct_ => return try self.createTagUnionTupleExpr(stack_value, region),
-                .tag_union => return try self.createTagUnionWithPayloadExpr(stack_value, region),
-                // These can't be constant-folded to expressions
-                .list, .closure, .box, .box_of_zst, .list_of_zst, .zst => {
-                    return error.NotImplemented;
-                },
-            }
-        } else {
-            // Non-tag union types
-            switch (layout.tag) {
-                .scalar => return try self.createScalarExpr(stack_value, layout, region),
-                .struct_ => return try self.createTupleExpr(stack_value, region),
-                // These can't be constant-folded
-                .closure, .list, .tag_union, .box, .box_of_zst, .list_of_zst, .zst => {
-                    return error.NotImplemented;
-                },
-            }
-        }
-    }
-
-    /// Create a constant expression for a scalar value
-    fn createScalarExpr(self: *ComptimeEvaluator, stack_value: eval_mod.StackValue, layout: layout_mod.Layout, region: base.Region) EvalError!CIR.Expr.Idx {
-        const scalar_tag = layout.data.scalar.tag;
-        switch (scalar_tag) {
-            .int => {
-                const value = stack_value.asI128();
-                const precision = layout.data.scalar.data.int;
-
-                const num_kind: CIR.NumKind = switch (precision) {
-                    .i8 => .i8,
-                    .i16 => .i16,
-                    .i32 => .i32,
-                    .i64 => .i64,
-                    .i128 => .i128,
-                    .u8 => .u8,
-                    .u16 => .u16,
-                    .u32 => .u32,
-                    .u64 => .u64,
-                    .u128 => .u128,
-                };
-
-                const int_value = CIR.IntValue{
-                    .bytes = @bitCast(value),
-                    .kind = switch (precision) {
-                        .u8, .u16, .u32, .u64, .u128 => .u128,
-                        .i8, .i16, .i32, .i64, .i128 => .i128,
-                    },
-                };
-
-                // Create a new e_num expression
-                const expr = CIR.Expr{
-                    .e_num = .{
-                        .value = int_value,
-                        .kind = num_kind,
-                    },
-                };
-                return try self.env.addExpr(expr, region);
-            },
-            .frac => {
-                const frac_precision = layout.data.scalar.data.frac;
-                switch (frac_precision) {
-                    .dec => {
-                        const dec_value = stack_value.asDec(self.get_ops());
-                        const scaled_value = dec_value.num;
-                        const unscaled_value = i128h.divTrunc_i128(scaled_value, builtins.dec.RocDec.one_point_zero_i128);
-
-                        const int_value = CIR.IntValue{
-                            .bytes = @bitCast(unscaled_value),
-                            .kind = .i128,
-                        };
-
-                        const expr = CIR.Expr{
-                            .e_num = .{
-                                .value = int_value,
-                                .kind = .dec,
-                            },
-                        };
-                        return try self.env.addExpr(expr, region);
-                    },
-                    .f32 => {
-                        const f32_value = stack_value.asF32();
-                        const expr = CIR.Expr{
-                            .e_frac_f32 = .{
-                                .value = f32_value,
-                                .has_suffix = true,
-                            },
-                        };
-                        return try self.env.addExpr(expr, region);
-                    },
-                    .f64 => {
-                        const f64_value = stack_value.asF64();
-                        const expr = CIR.Expr{
-                            .e_frac_f64 = .{
-                                .value = f64_value,
-                                .has_suffix = true,
-                            },
-                        };
-                        return try self.env.addExpr(expr, region);
-                    },
-                }
-            },
-            .str => return error.NotImplemented,
-        }
-    }
-
-    /// Create a Bool expression (True or False tag)
-    fn createBoolExpr(self: *ComptimeEvaluator, is_true: bool, region: base.Region) EvalError!CIR.Expr.Idx {
-        const bool_rt_var = try self.interpreter.getCanonicalBoolRuntimeVar();
-        const resolved = self.interpreter.runtime_types.resolveVar(bool_rt_var);
-
-        const tag_name_str = if (is_true) "True" else "False";
-        const tag_name_ident = try self.env.insertIdent(base.Ident.for_text(tag_name_str));
-
-        const variant_var: types_mod.Var = bool_rt_var;
-        var ext_var: types_mod.Var = undefined;
-
-        if (resolved.desc.content == .structure) {
-            if (resolved.desc.content.structure == .tag_union) {
-                ext_var = resolved.desc.content.structure.tag_union.ext;
-            }
-        }
-
-        const expr = CIR.Expr{
-            .e_zero_argument_tag = .{
-                .closure_name = tag_name_ident,
-                .variant_var = variant_var,
-                .ext_var = ext_var,
-                .name = tag_name_ident,
-            },
-        };
-        return try self.env.addExpr(expr, region);
-    }
-
-    /// Create a zero-argument tag expression for a scalar tag union
-    fn createTagUnionScalarExpr(self: *ComptimeEvaluator, stack_value: eval_mod.StackValue, region: base.Region) EvalError!CIR.Expr.Idx {
-        std.debug.assert(stack_value.layout.tag == .scalar and stack_value.layout.data.scalar.tag == .int);
-        const tag_index: usize = @intCast(stack_value.asI128());
-        const rt_var = stack_value.rt_var;
-
-        var tag_list = std.array_list.AlignedManaged(types_mod.Tag, null).init(self.allocator);
-        defer tag_list.deinit();
-        try self.interpreter.appendUnionTags(rt_var, &tag_list);
-
-        std.debug.assert(tag_index < tag_list.items.len);
-        const tag_info = tag_list.items[tag_index];
-
-        const resolved = self.interpreter.runtime_types.resolveVar(rt_var);
-        const variant_var: types_mod.Var = rt_var;
-        var ext_var: types_mod.Var = undefined;
-
-        if (resolved.desc.content == .structure) {
-            if (resolved.desc.content.structure == .tag_union) {
-                ext_var = resolved.desc.content.structure.tag_union.ext;
-            }
-        }
-
-        const expr = CIR.Expr{
-            .e_zero_argument_tag = .{
-                .closure_name = tag_info.name,
-                .variant_var = variant_var,
-                .ext_var = ext_var,
-                .name = tag_info.name,
-            },
-        };
-        return try self.env.addExpr(expr, region);
-    }
-
-    /// Create an expression for a tag union represented as a tuple
-    fn createTagUnionTupleExpr(self: *ComptimeEvaluator, stack_value: eval_mod.StackValue, region: base.Region) EvalError!CIR.Expr.Idx {
-        var acc = try stack_value.asTuple(&self.interpreter.runtime_layout_store);
-
-        // Element 1 is the tag discriminant
-        const tag_elem_rt_var = try self.interpreter.runtime_types.fresh();
-        const tag_field = try acc.getElement(1, tag_elem_rt_var);
-
-        if (tag_field.layout.tag != .scalar or tag_field.layout.data.scalar.tag != .int) {
-            return error.NotImplemented;
-        }
-
-        const tmp_sv = eval_mod.StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true, .rt_var = tag_elem_rt_var };
-        const tag_index: usize = @intCast(tmp_sv.asI128());
-        const rt_var = stack_value.rt_var;
-
-        var tag_list = std.array_list.AlignedManaged(types_mod.Tag, null).init(self.allocator);
-        defer tag_list.deinit();
-        try self.interpreter.appendUnionTags(rt_var, &tag_list);
-
-        if (tag_index >= tag_list.items.len) {
-            return error.NotImplemented;
-        }
-
-        const tag_info = tag_list.items[tag_index];
-        const arg_vars = self.interpreter.runtime_types.sliceVars(tag_info.args);
-
-        if (arg_vars.len == 0) {
-            // Zero-argument tag
-            const resolved = self.interpreter.runtime_types.resolveVar(rt_var);
-            const variant_var: types_mod.Var = rt_var;
-            var ext_var: types_mod.Var = undefined;
-
-            if (resolved.desc.content == .structure) {
-                if (resolved.desc.content.structure == .tag_union) {
-                    ext_var = resolved.desc.content.structure.tag_union.ext;
-                }
-            }
-
-            const expr = CIR.Expr{
-                .e_zero_argument_tag = .{
-                    .closure_name = tag_info.name,
-                    .variant_var = variant_var,
-                    .ext_var = ext_var,
-                    .name = tag_info.name,
-                },
-            };
-            return try self.env.addExpr(expr, region);
-        } else {
-            // Tag with payload - get the payload value (element 0)
-            const payload_rt_var = try self.interpreter.runtime_types.fresh();
-            const payload_value = try acc.getElement(0, payload_rt_var);
-
-            // Create expressions for each argument
-            var arg_indices = std.array_list.AlignedManaged(CIR.Expr.Idx, null).init(self.allocator);
-            defer arg_indices.deinit();
-
-            // Check if payload is a tuple (multiple args) or single value
-            if (payload_value.layout.tag == .struct_ and arg_vars.len > 1) {
-                // Multiple arguments - payload is a tuple
-                var payload_acc = try payload_value.asTuple(&self.interpreter.runtime_layout_store);
-                for (0..arg_vars.len) |i| {
-                    const arg_rt_var = arg_vars[i];
-                    const arg_value = try payload_acc.getElement(i, arg_rt_var);
-                    const arg_expr_idx = try self.createConstantExpr(arg_value, region);
-                    try arg_indices.append(arg_expr_idx);
-                }
-            } else {
-                // Single argument
-                const arg_expr_idx = try self.createConstantExpr(payload_value, region);
-                try arg_indices.append(arg_expr_idx);
-            }
-
-            // Create the span for args in index_data
-            const index_data_start = self.env.store.index_data.len();
-            for (arg_indices.items) |arg_idx| {
-                _ = try self.env.store.index_data.append(self.env.store.gpa, @intFromEnum(arg_idx));
-            }
-
-            // Create and return the tag expression
-            const tag_expr = CIR.Expr{
-                .e_tag = .{
-                    .name = tag_info.name,
-                    .args = .{ .span = .{ .start = @intCast(index_data_start), .len = @intCast(arg_indices.items.len) } },
-                },
-            };
-            return try self.env.addExpr(tag_expr, region);
-        }
-    }
-
-    /// Create an expression for a tag union with explicit tag_union layout
-    fn createTagUnionWithPayloadExpr(self: *ComptimeEvaluator, stack_value: eval_mod.StackValue, region: base.Region) EvalError!CIR.Expr.Idx {
-        const tag_union_layout = stack_value.layout.data.tag_union;
-        const tag_union_data = self.interpreter.runtime_layout_store.getTagUnionData(tag_union_layout.idx);
-
-        const base_ptr = stack_value.ptr orelse return error.NotImplemented;
-        const disc_offset = self.interpreter.runtime_layout_store.getTagUnionDiscriminantOffset(tag_union_layout.idx);
-        const disc_ptr: [*]const u8 = @ptrCast(base_ptr);
-        const tag_index: usize = disc_ptr[disc_offset];
-
-        const rt_var = stack_value.rt_var;
-
-        var tag_list = std.array_list.AlignedManaged(types_mod.Tag, null).init(self.allocator);
-        defer tag_list.deinit();
-        try self.interpreter.appendUnionTags(rt_var, &tag_list);
-
-        if (tag_index >= tag_list.items.len) {
-            return error.NotImplemented;
-        }
-
-        const tag_info = tag_list.items[tag_index];
-        const arg_vars = self.interpreter.runtime_types.sliceVars(tag_info.args);
-
-        if (arg_vars.len == 0) {
-            // Zero-argument tag
-            const resolved = self.interpreter.runtime_types.resolveVar(rt_var);
-            const variant_var: types_mod.Var = rt_var;
-            var ext_var: types_mod.Var = undefined;
-
-            if (resolved.desc.content == .structure) {
-                if (resolved.desc.content.structure == .tag_union) {
-                    ext_var = resolved.desc.content.structure.tag_union.ext;
-                }
-            }
-
-            const expr = CIR.Expr{
-                .e_zero_argument_tag = .{
-                    .closure_name = tag_info.name,
-                    .variant_var = variant_var,
-                    .ext_var = ext_var,
-                    .name = tag_info.name,
-                },
-            };
-            return try self.env.addExpr(expr, region);
-        } else {
-            // Tag with payload - get the payload from the tag union
-            const variants = self.interpreter.runtime_layout_store.getTagUnionVariants(tag_union_data);
-            const variant = variants.get(tag_index);
-            const payload_layout = self.interpreter.runtime_layout_store.getLayout(variant.payload_layout);
-
-            // Payload is at the payload offset (which is 0 in our tag union layout)
-            const payload_rt_var = try self.interpreter.runtime_types.fresh();
-            const payload_value = eval_mod.StackValue{
-                .layout = payload_layout,
-                .ptr = base_ptr, // Payload is at offset 0
-                .is_initialized = true,
-                .rt_var = payload_rt_var,
-            };
-
-            // Create expressions for each argument
-            var arg_indices = std.array_list.AlignedManaged(CIR.Expr.Idx, null).init(self.allocator);
-            defer arg_indices.deinit();
-
-            // Check if payload is a tuple (multiple args) or single value
-            if (payload_layout.tag == .struct_ and arg_vars.len > 1) {
-                // Multiple arguments - payload is a tuple
-                var payload_acc = try payload_value.asTuple(&self.interpreter.runtime_layout_store);
-                for (0..arg_vars.len) |i| {
-                    const arg_rt_var = arg_vars[i];
-                    const arg_value = try payload_acc.getElement(i, arg_rt_var);
-                    const arg_expr_idx = try self.createConstantExpr(arg_value, region);
-                    try arg_indices.append(arg_expr_idx);
-                }
-            } else {
-                // Single argument
-                const arg_expr_idx = try self.createConstantExpr(payload_value, region);
-                try arg_indices.append(arg_expr_idx);
-            }
-
-            // Create the tag expression with arguments
-            // First, create the span for args in index_data
-            const index_data_start = self.env.store.index_data.len();
-            for (arg_indices.items) |arg_idx| {
-                _ = try self.env.store.index_data.append(self.env.store.gpa, @intFromEnum(arg_idx));
-            }
-
-            const tag_expr = CIR.Expr{
-                .e_tag = .{
-                    .name = tag_info.name,
-                    .args = .{ .span = .{ .start = @intCast(index_data_start), .len = @intCast(arg_indices.items.len) } },
-                },
-            };
-            return try self.env.addExpr(tag_expr, region);
-        }
-    }
-
-    /// Create a tuple expression from a tuple StackValue
-    fn createTupleExpr(self: *ComptimeEvaluator, stack_value: eval_mod.StackValue, region: base.Region) EvalError!CIR.Expr.Idx {
-        var accessor = try stack_value.asTuple(&self.interpreter.runtime_layout_store);
-        const elem_count = accessor.getElementCount();
-
-        if (elem_count == 0) {
-            // Empty tuple
-            const expr = CIR.Expr{ .e_tuple = .{ .elems = .{ .span = .{ .start = 0, .len = 0 } } } };
-            return try self.env.addExpr(expr, region);
-        }
-
-        const rt_var = stack_value.rt_var;
-        const resolved = self.interpreter.runtime_types.resolveVar(rt_var);
-
-        var elem_rt_vars = std.array_list.AlignedManaged(types_mod.Var, null).init(self.allocator);
-        defer elem_rt_vars.deinit();
-
-        if (resolved.desc.content == .structure) {
-            const struct_content = resolved.desc.content.structure;
-            if (struct_content == .tuple) {
-                const elems = self.interpreter.runtime_types.sliceVars(struct_content.tuple.elems);
-                for (elems) |elem_var| {
-                    try elem_rt_vars.append(elem_var);
-                }
-            }
-        }
-
-        var elem_indices = std.array_list.AlignedManaged(CIR.Expr.Idx, null).init(self.allocator);
-        defer elem_indices.deinit();
-
-        for (0..elem_count) |i| {
-            const elem_rt_var = if (i < elem_rt_vars.items.len)
-                elem_rt_vars.items[i]
-            else
-                try self.interpreter.runtime_types.fresh();
-
-            const elem_value = try accessor.getElement(i, elem_rt_var);
-            const elem_expr_idx = try self.createConstantExpr(elem_value, region);
-            try elem_indices.append(elem_expr_idx);
-        }
-
-        // Create span in index_data for tuple elements
-        const index_data_start = self.env.store.index_data.len();
-        for (elem_indices.items) |elem_idx| {
-            _ = try self.env.store.index_data.append(self.env.store.gpa, @intFromEnum(elem_idx));
-        }
-
-        const tuple_expr = CIR.Expr{
-            .e_tuple = .{
-                .elems = .{ .span = .{ .start = @intCast(index_data_start), .len = @intCast(elem_indices.items.len) } },
-            },
-        };
-        return try self.env.addExpr(tuple_expr, region);
+        ) catch return;
     }
 
     /// Helper to report a problem and track allocated message
@@ -1281,6 +746,85 @@ pub const ComptimeEvaluator = struct {
         }
     }
 
+    fn builtinNumKindFromTypeIdent(self: *const ComptimeEvaluator, type_ident: base.Ident.Idx) ?CIR.NumKind {
+        if (self.builtin_types.indices.numKindFromIdent(type_ident)) |num_kind| {
+            return num_kind;
+        }
+
+        const display_name = import_mapping_mod.getDisplayName(
+            self.import_mapping,
+            self.env.common.getIdentStore(),
+            type_ident,
+        );
+
+        return builtinNumKindFromDisplayName(display_name);
+    }
+
+    fn validateBuiltinNumericLiteral(
+        self: *ComptimeEvaluator,
+        type_ident: base.Ident.Idx,
+        num_lit_info: types_mod.NumeralInfo,
+        region: base.Region,
+    ) !bool {
+        const num_kind = self.builtinNumKindFromTypeIdent(type_ident) orelse return true;
+        if (num_kind == .f32 or num_kind == .f64 or num_kind == .dec) {
+            return true;
+        }
+
+        const int_info = builtinIntValidationForKind(num_kind) orelse return true;
+        const source_text = self.env.common.source[region.start.offset..region.end.offset];
+        const abs_value = numeralAbsValue(num_lit_info);
+        const dec_scale: u128 = 1_000_000_000_000_000_000;
+        const integer_value = if (num_lit_info.is_fractional) abs_value / dec_scale else abs_value;
+        const has_fractional_part = num_lit_info.is_fractional and (abs_value % dec_scale != 0);
+
+        if (int_info.is_unsigned and num_lit_info.is_negative) {
+            const message = try std.fmt.allocPrint(
+                self.allocator,
+                "The number {s} is not a valid {s}. {s} values cannot be negative.",
+                .{ source_text, int_info.type_name, int_info.type_name },
+            );
+            defer self.allocator.free(message);
+            try self.reportProblem(message, region, .error_eval);
+            return false;
+        }
+
+        if (has_fractional_part) {
+            const message = try std.fmt.allocPrint(
+                self.allocator,
+                "The number {s} is not a valid {s}. {s} values must be whole numbers, not fractions.",
+                .{ source_text, int_info.type_name, int_info.type_name },
+            );
+            defer self.allocator.free(message);
+            try self.reportProblem(message, region, .error_eval);
+            return false;
+        }
+
+        const limit = if (num_lit_info.is_negative and !int_info.is_unsigned)
+            int_info.negative_limit
+        else
+            int_info.positive_limit;
+
+        if (integer_value > limit) {
+            const message = try std.fmt.allocPrint(
+                self.allocator,
+                "The number {s} is not a valid {s}. Valid {s} values are integers between {s} and {s}.",
+                .{
+                    source_text,
+                    int_info.type_name,
+                    int_info.type_name,
+                    int_info.min_value,
+                    int_info.max_value,
+                },
+            );
+            defer self.allocator.free(message);
+            try self.reportProblem(message, region, .error_eval);
+            return false;
+        }
+
+        return true;
+    }
+
     /// Validates all deferred numeric literals by invoking their from_numeral constraints
     ///
     /// This function is called at the beginning of compile-time evaluation, after type checking
@@ -1309,8 +853,6 @@ pub const ComptimeEvaluator = struct {
     ///    - For Ok: validation succeeded
     ///    - For Err: extract error message string and report via self.reportProblem()
     ///
-    /// For now, validation is skipped - literals are allowed without validation.
-    /// This preserves current behavior while the infrastructure is in place.
     fn validateDeferredNumericLiterals(self: *ComptimeEvaluator) !void {
         const literals = self.env.deferred_numeric_literals.items.items;
 
@@ -1368,14 +910,35 @@ pub const ComptimeEvaluator = struct {
             const origin_module_ident = nominal_type.origin_module;
             const is_builtin = origin_module_ident.eql(self.env.idents.builtin_module);
 
+            const num_lit_info = literal.constraint.num_literal orelse {
+                // No NumeralInfo means this isn't a from_numeral constraint
+                continue;
+            };
+
+            if (is_builtin) {
+                const is_valid = try self.validateBuiltinNumericLiteral(
+                    nominal_type.ident.ident_idx,
+                    num_lit_info,
+                    literal.region,
+                );
+
+                if (!is_valid) {
+                    try self.failed_literal_exprs.put(literal.expr_idx, {});
+                    continue;
+                }
+
+                try self.rewriteNumericLiteralExpr(literal.expr_idx, nominal_type.ident.ident_idx, num_lit_info);
+                continue;
+            }
+
             const origin_env: *const ModuleEnv = if (is_builtin) blk: {
-                break :blk self.interpreter.builtin_module_env orelse {
+                break :blk self.builtin_module_env orelse {
                     // No builtin module available (shouldn't happen in normal compilation)
                     continue;
                 };
             } else blk: {
-                // For user-defined types, use interpreter's module lookup
-                break :blk self.interpreter.module_envs.get(origin_module_ident) orelse {
+                // For user-defined types, search through other module envs
+                break :blk self.findModuleEnvByIdent(origin_module_ident) orelse {
                     // Module not found - might be current module
                     if (origin_module_ident.eql(self.env.qualified_module_ident)) {
                         break :blk self.env;
@@ -1395,7 +958,7 @@ pub const ComptimeEvaluator = struct {
                 // Method not found - the type doesn't have a from_numeral method
                 // Use import mapping to get the user-facing display name
                 const short_type_name = import_mapping_mod.getDisplayName(
-                    self.interpreter.import_mapping,
+                    self.import_mapping,
                     self.env.common.getIdentStore(),
                     nominal_type.ident.ident_idx,
                 );
@@ -1418,7 +981,7 @@ pub const ComptimeEvaluator = struct {
                 // Definition not exposed - this is also an error
                 // Use import mapping to get the user-facing display name
                 const short_type_name = import_mapping_mod.getDisplayName(
-                    self.interpreter.import_mapping,
+                    self.import_mapping,
                     self.env.common.getIdentStore(),
                     nominal_type.ident.ident_idx,
                 );
@@ -1437,12 +1000,6 @@ pub const ComptimeEvaluator = struct {
             };
 
             const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(node_idx_in_origin)));
-
-            // Get num_lit_info for validation
-            const num_lit_info = literal.constraint.num_literal orelse {
-                // No NumeralInfo means this isn't a from_numeral constraint
-                continue;
-            };
 
             // Step 3: Validate the literal by invoking from_numeral
             // All types (builtin and user-defined) use the same unified path
@@ -1477,10 +1034,7 @@ pub const ComptimeEvaluator = struct {
         type_ident: base.Ident.Idx,
         num_lit_info: types_mod.NumeralInfo,
     ) !void {
-        const builtin_indices = self.interpreter.builtins.indices;
-
-        // Use direct ident comparison to determine NumKind
-        const num_kind = builtin_indices.numKindFromIdent(type_ident) orelse {
+        const num_kind = self.builtinNumKindFromTypeIdent(type_ident) orelse {
             // Unknown type - nothing to rewrite
             return;
         };
@@ -1557,7 +1111,7 @@ pub const ComptimeEvaluator = struct {
         }
     }
 
-    /// Invoke a user-defined from_numeral function and check the result.
+    /// Invoke a from_numeral function via LIR and check the result.
     /// Returns true if validation passed (Ok), false if it failed (Err).
     fn invokeFromNumeral(
         self: *ComptimeEvaluator,
@@ -1565,38 +1119,161 @@ pub const ComptimeEvaluator = struct {
         def_idx: CIR.Def.Idx,
         num_lit_info: types_mod.NumeralInfo,
         region: base.Region,
-        target_ct_type_var: types_mod.Var, // The compile-time type variable the literal is being converted to
+        _: types_mod.Var, // target_ct_type_var — not needed for LIR path
     ) !bool {
-        const roc_ops = self.get_ops();
-
-        // Look up the from_numeral function
         const target_def = origin_env.store.getDef(def_idx);
 
-        // Save current environment and switch to origin_env BEFORE building the record
-        // This is critical because the record's field names (ident indices) must come from
-        // the same ident store that will be used when the interpreter reads them
-        const saved_env = self.interpreter.env;
-        const saved_bindings_len = self.interpreter.bindings.items.len;
-        self.interpreter.env = @constCast(origin_env);
-        defer {
-            self.interpreter.env = saved_env;
-            self.interpreter.bindings.items.len = saved_bindings_len;
+        // Lower the from_numeral function to LIR
+        var lower_result = self.lir_program.lowerExpr(
+            @constCast(origin_env),
+            target_def.expr,
+            self.all_module_envs,
+            null,
+        ) catch {
+            const error_msg = try self.problems.putExtraString("Failed to lower from_numeral function");
+            const problem = Problem{
+                .comptime_eval_error = .{
+                    .error_name = error_msg,
+                    .region = region,
+                },
+            };
+            _ = try self.problems.appendProblem(self.allocator, problem);
+            return false;
+        };
+        defer lower_result.deinit();
+
+        // Build the Numeral argument as raw bytes
+        const numeral_size = lower_result.layout_store.layoutSize(
+            lower_result.layout_store.getLayout(lower_result.result_layout),
+        );
+        // For a function, the result_layout is the function's layout, not the arg layout.
+        // We need to get the arg layout from the function type.
+        const expr_type_var = ModuleEnv.varFrom(target_def.expr);
+        const resolved_type = origin_env.types.resolveVar(expr_type_var);
+        const maybe_func = resolved_type.desc.content.unwrapFunc();
+        if (maybe_func == null) {
+            const error_msg = try self.problems.putExtraString("from_numeral is not a function");
+            const problem = Problem{
+                .comptime_eval_error = .{
+                    .error_name = error_msg,
+                    .region = region,
+                },
+            };
+            _ = try self.problems.appendProblem(self.allocator, problem);
+            return false;
+        }
+        const func = maybe_func.?;
+        const arg_vars = origin_env.types.sliceVars(func.args);
+        if (arg_vars.len != 1) {
+            const error_msg = try self.problems.putFmtExtraString(
+                "from_numeral has wrong number of parameters (expected 1, got {d})",
+                .{arg_vars.len},
+            );
+            const problem = Problem{
+                .comptime_eval_error = .{
+                    .error_name = error_msg,
+                    .region = region,
+                },
+            };
+            _ = try self.problems.appendProblem(self.allocator, problem);
+            return false;
         }
 
-        // Build Numeral record: { is_negative: Bool, digits_before_pt: List(U8), digits_after_pt: List(U8) }
-        // Must be built AFTER switching to origin_env so ident indices are from the correct store
+        // Get module index for layout resolution
+        const module_idx: u32 = for (self.all_module_envs, 0..) |env, i| {
+            if (env == origin_env) break @intCast(i);
+        } else {
+            return false;
+        };
+
+        var type_scope = types_mod.TypeScope.init(self.allocator);
+        defer type_scope.deinit();
+
+        const param_layout_idx = lower_result.layout_store.fromTypeVar(module_idx, arg_vars[0], &type_scope, null) catch {
+            return false;
+        };
+        const ret_layout_idx = lower_result.layout_store.fromTypeVar(module_idx, func.ret, &type_scope, null) catch {
+            return false;
+        };
+
+        const param_size = lower_result.layout_store.layoutSize(lower_result.layout_store.getLayout(param_layout_idx));
+        const ret_size = lower_result.layout_store.layoutSize(lower_result.layout_store.getLayout(ret_layout_idx));
+
+        _ = numeral_size;
+
+        // Allocate buffers for argument and result
+        const arena_alloc = self.roc_arena.allocator();
+        const arg_buf = arena_alloc.alloc(u8, param_size) catch return false;
+        @memset(arg_buf, 0);
+        const ret_buf = arena_alloc.alloc(u8, if (ret_size > 0) ret_size else 1) catch return false;
+        @memset(ret_buf, 0);
+
+        // Build the Numeral record in arg_buf
+        self.writeNumeralToBuffer(arg_buf, param_layout_idx, lower_result.layout_store, num_lit_info) catch {
+            return false;
+        };
+
+        // Evaluate via LIR interpreter
+        var interp = try LirInterpreter.init(self.allocator, &lower_result.lir_store, lower_result.layout_store, self.io);
+        interp.detect_infinite_while_loops = true;
+        defer interp.deinit();
+
+        const arg_layouts = [_]layout_mod.Idx{param_layout_idx};
+        interp.evalEntrypoint(
+            lower_result.final_expr_id,
+            &arg_layouts,
+            ret_layout_idx,
+            self.get_ops(),
+            @ptrCast(arg_buf.ptr),
+            @ptrCast(ret_buf.ptr),
+        ) catch |err| {
+            const crash_msg = interp.getCrashMessage() orelse @errorName(err);
+            const error_msg = try self.problems.putFmtExtraString(
+                "from_numeral evaluation failed: {s}",
+                .{crash_msg},
+            );
+            const problem = Problem{
+                .comptime_eval_error = .{
+                    .error_name = error_msg,
+                    .region = region,
+                },
+            };
+            _ = try self.problems.appendProblem(self.allocator, problem);
+            return false;
+        };
+
+        // Check the Try result
+        const result_value = Value{ .ptr = ret_buf.ptr };
+        return try self.checkTryResult(result_value, ret_layout_idx, lower_result.layout_store, region);
+    }
+
+    /// Write a Numeral record into a pre-allocated buffer using layout offsets.
+    ///
+    /// Numeral record: { digits_after_pt: List(U8), digits_before_pt: List(U8), is_negative: Bool }
+    /// Fields are in alphabetical order: digits_after_pt(0), digits_before_pt(1), is_negative(2)
+    fn writeNumeralToBuffer(
+        self: *ComptimeEvaluator,
+        buf: []u8,
+        numeral_layout_idx: layout_mod.Idx,
+        layout_store: *const layout_mod.Store,
+        num_lit_info: types_mod.NumeralInfo,
+    ) !void {
+        const layout = layout_store.getLayout(numeral_layout_idx);
+        if (layout.tag != .struct_) return error.OutOfMemory;
+        const struct_idx = layout.data.struct_.idx;
+
+        // Alphabetical field order: digits_after_pt(0), digits_before_pt(1), is_negative(2)
+        const after_offset = layout_store.getStructFieldOffsetByOriginalIndex(struct_idx, 0);
+        const before_offset = layout_store.getStructFieldOffsetByOriginalIndex(struct_idx, 1);
+        const neg_offset = layout_store.getStructFieldOffsetByOriginalIndex(struct_idx, 2);
 
         // Convert the numeric value to base-256 digits
-        // Use @abs to safely handle minimum i128 value without overflow
         var base256_buf_before: [16]u8 = undefined;
         var base256_buf_after: [16]u8 = undefined;
-
         var digits_before: []const u8 = undefined;
         var digits_after: []const u8 = undefined;
 
         if (num_lit_info.is_fractional) {
-            // For fractional literals, value is scaled by 10^18 (Dec representation)
-            // Extract integer and fractional parts
             const scale: u128 = 1_000_000_000_000_000_000; // 10^18
             const abs_value: u128 = if (num_lit_info.is_u128) num_lit_info.toU128() else @abs(num_lit_info.toI128());
             const integer_part = abs_value / scale;
@@ -1604,16 +1281,10 @@ pub const ComptimeEvaluator = struct {
 
             digits_before = toBase256(integer_part, &base256_buf_before);
 
-            // Convert fractional part to base-256
-            // The fractional part is already in decimal scaled form (0 to 10^18-1)
-            // We need to convert it to base-256 fractional representation
             if (fractional_part > 0) {
-                // Convert decimal fractional to binary fractional
-                // frac = fractional_part / 10^18
-                // We multiply by 256 repeatedly to get base-256 digits
                 var frac_num: u128 = fractional_part;
                 var frac_digits: usize = 0;
-                const max_frac_digits = 8; // Enough precision for most cases
+                const max_frac_digits = 8;
                 while (frac_num > 0 and frac_digits < max_frac_digits) {
                     frac_num *= 256;
                     base256_buf_after[frac_digits] = @truncate(frac_num / scale);
@@ -1625,176 +1296,41 @@ pub const ComptimeEvaluator = struct {
                 digits_after = &[_]u8{};
             }
         } else {
-            // Integer literal - no fractional part
             const abs_value: u128 = if (num_lit_info.is_u128) num_lit_info.toU128() else @abs(num_lit_info.toI128());
             digits_before = toBase256(abs_value, &base256_buf_before);
             digits_after = &[_]u8{};
         }
 
-        // Build is_negative Bool
-        const bool_rt_var = try self.interpreter.getCanonicalBoolRuntimeVar();
-        const is_neg_value = try self.interpreter.pushRaw(layout_mod.Layout.int(.u8), 0, bool_rt_var);
-        if (is_neg_value.ptr) |ptr| {
-            @as(*u8, @ptrCast(@alignCast(ptr))).* = @intFromBool(num_lit_info.is_negative);
+        // Write is_negative
+        buf[neg_offset] = @intFromBool(num_lit_info.is_negative);
+
+        // Build and write digits_before_pt List(U8)
+        const roc_ops = self.get_ops();
+        const before_list = self.buildRocU8List(digits_before, roc_ops);
+        @memcpy(buf[before_offset..][0..@sizeOf(RocList)], std.mem.asBytes(&before_list));
+
+        // Build and write digits_after_pt List(U8)
+        const after_list = self.buildRocU8List(digits_after, roc_ops);
+        @memcpy(buf[after_offset..][0..@sizeOf(RocList)], std.mem.asBytes(&after_list));
+    }
+
+    /// Build a RocList(U8) from a slice of bytes using the comptime evaluator's arena.
+    fn buildRocU8List(_: *ComptimeEvaluator, bytes: []const u8, roc_ops: *RocOps) RocList {
+        if (bytes.len == 0) return RocList.empty();
+
+        var list = RocList.allocateExact(
+            1, // alignment for u8
+            bytes.len,
+            1, // element size for u8
+            false, // u8 is not refcounted
+            roc_ops,
+        );
+
+        if (list.elements(u8)) |elems| {
+            @memcpy(elems[0..bytes.len], bytes);
         }
 
-        // Build digits_before_pt List(U8)
-        const before_list = try self.buildU8List(digits_before, roc_ops);
-        // Note: Don't decref these lists - ownership is transferred to the record below
-
-        // Build digits_after_pt List(U8)
-        const after_list = try self.buildU8List(digits_after, roc_ops);
-        // Note: Don't decref these lists - ownership is transferred to the record below
-
-        // Build the Numeral record
-        // Ownership of before_list and after_list is transferred to this record
-        const num_literal_record = try self.buildNumeralRecord(is_neg_value, before_list, after_list, roc_ops);
-        defer num_literal_record.decref(&self.interpreter.runtime_layout_store, roc_ops);
-
-        // Evaluate the from_numeral function to get a closure
-        const func_value = self.interpreter.eval(target_def.expr, roc_ops) catch |err| {
-            const error_msg = try self.problems.putFmtExtraString(
-                "Failed to evaluate from_numeral function: {s}",
-                .{@errorName(err)},
-            );
-            const problem = Problem{
-                .comptime_eval_error = .{
-                    .error_name = error_msg,
-                    .region = region,
-                },
-            };
-            _ = try self.problems.appendProblem(self.allocator, problem);
-            return false;
-        };
-        defer func_value.decref(&self.interpreter.runtime_layout_store, roc_ops);
-
-        // Check if func_value is a closure
-        if (func_value.layout.tag != .closure) {
-            const error_msg = try self.problems.putFmtExtraString(
-                "from_numeral is not a function",
-                .{},
-            );
-            const problem = Problem{
-                .comptime_eval_error = .{
-                    .error_name = error_msg,
-                    .region = region,
-                },
-            };
-            _ = try self.problems.appendProblem(self.allocator, problem);
-            return false;
-        }
-
-        const closure_header: *const layout_mod.Closure = @ptrCast(@alignCast(func_value.ptr.?));
-
-        // Get the parameters
-        const params = origin_env.store.slicePatterns(closure_header.params);
-        if (params.len != 1) {
-            const error_msg = try self.problems.putFmtExtraString(
-                "from_numeral has wrong number of parameters (expected 1, got {d})",
-                .{params.len},
-            );
-            const problem = Problem{
-                .comptime_eval_error = .{
-                    .error_name = error_msg,
-                    .region = region,
-                },
-            };
-            _ = try self.problems.appendProblem(self.allocator, problem);
-            return false;
-        }
-
-        // Check if this is a low-level operation (builtin type) or a user-defined function
-        const lambda_expr = origin_env.store.getExpr(closure_header.lambda_expr_idx);
-
-        // Extract low-level op from e_lambda whose body is e_run_low_level
-        const ll_op: ?CIR.Expr.LowLevel = if (lambda_expr == .e_lambda) blk: {
-            const body = origin_env.store.getExpr(lambda_expr.e_lambda.body);
-            break :blk if (body == .e_run_low_level) body.e_run_low_level.op else null;
-        } else null;
-
-        var result: eval_mod.StackValue = undefined;
-        if (ll_op) |low_level_op| {
-            // Builtin type: dispatch directly to low-level implementation
-
-            // Get return type for low-level builtin
-            // We need to translate the type variable for the result type
-            const ct_var = can.ModuleEnv.varFrom(def_idx);
-            const rt_var = try self.interpreter.translateTypeVar(@constCast(origin_env), ct_var);
-
-            // Get the return type from the function type
-            const resolved = self.interpreter.runtime_types.resolveVar(rt_var);
-            const return_rt_var = blk: {
-                if (resolved.desc.content == .structure) {
-                    const struct_content = resolved.desc.content.structure;
-                    if (struct_content == .fn_pure or struct_content == .fn_effectful or struct_content == .fn_unbound) {
-                        const func = switch (struct_content) {
-                            .fn_pure => |f| f,
-                            .fn_effectful => |f| f,
-                            .fn_unbound => |f| f,
-                            else => unreachable,
-                        };
-                        break :blk func.ret;
-                    }
-                }
-                break :blk rt_var;
-            };
-
-            // Translate the target type variable (e.g., U8) to runtime
-            // This tells the interpreter what type the literal is being converted to
-            const target_rt_var = try self.interpreter.translateTypeVar(self.env, target_ct_type_var);
-
-            // Call the low-level builtin with our Numeral argument and target type
-            var args = [_]eval_mod.StackValue{num_literal_record};
-            result = self.interpreter.callLowLevelBuiltinWithTargetType(low_level_op, &args, roc_ops, return_rt_var, target_rt_var) catch |err| {
-                // Include crash message if available for better debugging
-                const crash_msg = self.crash.crashMessage() orelse "no crash message";
-                const error_msg = try self.problems.putFmtExtraString(
-                    "from_numeral builtin failed: {s} ({s})",
-                    .{ @errorName(err), crash_msg },
-                );
-                const problem = Problem{
-                    .comptime_eval_error = .{
-                        .error_name = error_msg,
-                        .region = region,
-                    },
-                };
-                _ = try self.problems.appendProblem(self.allocator, problem);
-                return false;
-            };
-        } else {
-            // User-defined type: bind argument and evaluate body
-            try self.interpreter.bindings.append(.{
-                .pattern_idx = params[0],
-                .value = num_literal_record,
-                .expr_idx = null, // No source expression for synthetic binding
-                .source_env = origin_env,
-            });
-            defer _ = self.interpreter.bindings.pop();
-
-            // Provide closure context
-            try self.interpreter.active_closures.append(func_value);
-            defer _ = self.interpreter.active_closures.pop();
-
-            // Call the function body
-            result = self.interpreter.eval(closure_header.body_idx, roc_ops) catch |err| {
-                const error_msg = try self.problems.putFmtExtraString(
-                    "from_numeral evaluation failed: {s}",
-                    .{@errorName(err)},
-                );
-                const problem = Problem{
-                    .comptime_eval_error = .{
-                        .error_name = error_msg,
-                        .region = region,
-                    },
-                };
-                _ = try self.problems.appendProblem(self.allocator, problem);
-                return false;
-            };
-        }
-        defer result.decref(&self.interpreter.runtime_layout_store, roc_ops);
-
-        // Check the Try result
-        return try self.checkTryResult(result, region);
+        return list;
     }
 
     /// Convert a u128 value to base-256 representation (big-endian)
@@ -1815,121 +1351,25 @@ pub const ComptimeEvaluator = struct {
         return buf[i..16];
     }
 
-    /// Build a List(U8) StackValue from a slice of bytes
-    fn buildU8List(
-        self: *ComptimeEvaluator,
-        bytes: []const u8,
-        roc_ops: *RocOps,
-    ) !eval_mod.StackValue {
-        const list_layout_idx = try self.interpreter.runtime_layout_store.insertList(layout_mod.Idx.u8);
-        const list_layout = self.interpreter.runtime_layout_store.getLayout(list_layout_idx);
-
-        // rt_var not needed for List(U8) construction - only layout matters
-        const dest = try self.interpreter.pushRaw(list_layout, 0, undefined);
-        if (dest.ptr == null) return dest;
-
-        const header: *builtins.list.RocList = @ptrCast(@alignCast(dest.ptr.?));
-
-        if (bytes.len == 0) {
-            header.* = builtins.list.RocList.empty();
-            return dest;
-        }
-
-        var runtime_list = builtins.list.RocList.allocateExact(
-            1, // alignment for u8
-            bytes.len,
-            1, // element size for u8
-            false, // u8 is not refcounted
-            roc_ops,
-        );
-
-        if (runtime_list.elements(u8)) |elems| {
-            @memcpy(elems[0..bytes.len], bytes);
-        }
-
-        header.* = runtime_list;
-        return dest;
-    }
-
-    /// Build a Numeral record from its components
-    /// Uses self.env for layout store operations (since layout store was initialized with user's env)
-    /// but uses self.interpreter.env for field index lookups during value setting
-    fn buildNumeralRecord(
-        self: *ComptimeEvaluator,
-        is_negative: eval_mod.StackValue,
-        digits_before_pt: eval_mod.StackValue,
-        digits_after_pt: eval_mod.StackValue,
-        roc_ops: *RocOps,
-    ) !eval_mod.StackValue {
-        // Use precomputed idents from self.env for field names
-        const field_layouts = [_]layout_mod.Layout{
-            is_negative.layout,
-            digits_before_pt.layout,
-            digits_after_pt.layout,
-        };
-        const field_names = [_]base.Ident.Idx{
-            self.env.idents.is_negative,
-            self.env.idents.digits_before_pt,
-            self.env.idents.digits_after_pt,
-        };
-
-        const record_layout_idx = try self.interpreter.runtime_layout_store.putRecord(self.env, &field_layouts, &field_names);
-        const record_layout = self.interpreter.runtime_layout_store.getLayout(record_layout_idx);
-
-        // rt_var not needed for Numeral record construction - only layout matters
-        var dest = try self.interpreter.pushRaw(record_layout, 0, undefined);
-        var accessor = try dest.asRecord(&self.interpreter.runtime_layout_store);
-
-        // Use self.env for field lookups since the record was built with self.env's idents
-        const is_neg_idx = accessor.findFieldIndex(self.env.getIdent(self.env.idents.is_negative)) orelse return error.OutOfMemory;
-        try accessor.setFieldByIndex(is_neg_idx, is_negative, roc_ops);
-
-        const before_pt_idx = accessor.findFieldIndex(self.env.getIdent(self.env.idents.digits_before_pt)) orelse return error.OutOfMemory;
-        try accessor.setFieldByIndex(before_pt_idx, digits_before_pt, roc_ops);
-
-        const after_pt_idx = accessor.findFieldIndex(self.env.getIdent(self.env.idents.digits_after_pt)) orelse return error.OutOfMemory;
-        try accessor.setFieldByIndex(after_pt_idx, digits_after_pt, roc_ops);
-
-        return dest;
-    }
-
-    /// Check a Try result value - returns true if Ok, false if Err
-    /// For Err case, extracts the InvalidNumeral(Str) message if present
+    /// Check a Try result value using layout-based reading.
+    /// Returns true if Ok (discriminant 1), false if Err (discriminant 0).
+    /// "Err" < "Ok" alphabetically, so Err = 0, Ok = 1.
     fn checkTryResult(
         self: *ComptimeEvaluator,
-        result: eval_mod.StackValue,
+        result_value: Value,
+        result_layout_idx: layout_mod.Idx,
+        layout_store: *const layout_mod.Store,
         region: base.Region,
     ) !bool {
-        // First check if the interpreter stored an error message directly
-        // (happens when payload area is too small for RocStr)
-        if (self.interpreter.last_error_message) |msg| {
-            // Copy the message to our allocator
-            const error_msg = try self.problems.putExtraString(msg);
-            // Free the original message from the interpreter's allocator
-            self.interpreter.allocator.free(msg);
-            const problem = Problem{
-                .comptime_eval_error = .{
-                    .error_name = error_msg,
-                    .region = region,
-                },
-            };
-            _ = try self.problems.appendProblem(self.allocator, problem);
-            // Clear the message for next call
-            self.interpreter.last_error_message = null;
-            return false;
-        }
+        const result_layout = layout_store.getLayout(result_layout_idx);
 
-        // Try is a tag union [Ok(val), Err(err)]
-        if (result.layout.tag == .scalar) {
-            if (result.layout.data.scalar.tag == .int) {
-                const tag_value = result.asI128();
-                // "Err" < "Ok" alphabetically, so Err = 0, Ok = 1
-                if (tag_value == 0) {
-                    // Err with no payload - generic error
-                    const error_msg = try self.problems.putFmtExtraString(
-                        "Numeric literal validation failed",
-                        .{},
-                    );
+        switch (result_layout.tag) {
+            .scalar => {
+                // Scalar tag union: value IS the discriminant
+                // For Try with no payloads, Err = 0, Ok = 1
+                const disc = result_value.read(u8);
+                if (disc == 0) {
+                    const error_msg = try self.problems.putExtraString("Numeric literal validation failed");
                     const problem = Problem{
                         .comptime_eval_error = .{
                             .error_name = error_msg,
@@ -1939,147 +1379,68 @@ pub const ComptimeEvaluator = struct {
                     _ = try self.problems.appendProblem(self.allocator, problem);
                     return false;
                 }
-                return tag_value == 1;
-            }
-            return true; // Unknown format, optimistically allow
-        } else if (result.layout.tag == .struct_) {
-            // Struct tag union (record-style or tuple-style)
-            const tag_field = blk: {
-                if (isRecordStyleStruct(result.layout, &self.interpreter.runtime_layout_store)) {
-                    var accessor = result.asRecord(&self.interpreter.runtime_layout_store) catch return true;
-                    const layout_env = self.interpreter.runtime_layout_store.getEnv();
-                    const tag_idx = accessor.findFieldIndex(layout_env.getIdent(layout_env.idents.tag)) orelse return true;
-                    const tag_rt_var = self.interpreter.runtime_types.fresh() catch return true;
-                    break :blk accessor.getFieldByIndex(tag_idx, tag_rt_var) catch return true;
-                } else {
-                    var accessor = result.asTuple(&self.interpreter.runtime_layout_store) catch return true;
-                    const tag_elem_rt_var = self.interpreter.runtime_types.fresh() catch return true;
-                    break :blk accessor.getElement(1, tag_elem_rt_var) catch return true;
-                }
-            };
-
-            if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
-                const tag_value = tag_field.asI128();
-                if (tag_value == 0) {
-                    // This is an Err - try to extract error message
-                    if (isRecordStyleStruct(result.layout, &self.interpreter.runtime_layout_store)) {
-                        const accessor = result.asRecord(&self.interpreter.runtime_layout_store) catch return true;
-                        const error_msg = try self.problems.putExtraString(try self.extractInvalidNumeralMessage(accessor, region));
-                        const problem = Problem{
-                            .comptime_eval_error = .{
-                                .error_name = error_msg,
-                                .region = region,
-                            },
-                        };
-                        _ = try self.problems.appendProblem(self.allocator, problem);
-                    } else {
-                        const error_msg = try self.problems.putFmtExtraString(
-                            "Numeric literal validation failed",
-                            .{},
-                        );
-                        const problem = Problem{
-                            .comptime_eval_error = .{
-                                .error_name = error_msg,
-                                .region = region,
-                            },
-                        };
-                        _ = try self.problems.appendProblem(self.allocator, problem);
-                    }
+                return disc == 1;
+            },
+            .tag_union => {
+                // Full tag union layout: read discriminant via helper
+                const helper = LayoutHelper.init(layout_store);
+                const disc = helper.readTagDiscriminant(result_value, result_layout_idx);
+                if (disc == 0) {
+                    // Err case - try to extract error message from payload
+                    const tu_data = layout_store.getTagUnionData(result_layout.data.tag_union.idx);
+                    const variants = layout_store.getTagUnionVariants(tu_data);
+                    const err_variant = variants.get(0); // Err is at discriminant 0
+                    const err_payload_layout = layout_store.getLayout(err_variant.payload_layout);
+                    const err_msg = self.tryExtractErrorMessage(result_value, err_payload_layout, layout_store);
+                    const error_msg = try self.problems.putExtraString(err_msg);
+                    const problem = Problem{
+                        .comptime_eval_error = .{
+                            .error_name = error_msg,
+                            .region = region,
+                        },
+                    };
+                    _ = try self.problems.appendProblem(self.allocator, problem);
                     return false;
                 }
                 return true; // Ok
-            }
-            return true; // Unknown format, optimistically allow
-        } else if (result.layout.tag == .tag_union) {
-            // Tag union layout: payload at offset 0, discriminant at discriminant_offset
-            // For Try types from num.from_numeral, the interpreter should have stored
-            // the error message in last_error_message, which was already checked above.
-            // If we reach here without a last_error_message, assume it's Ok.
-            return true;
+            },
+            .struct_ => {
+                // Struct-represented tag union: discriminant is the last field
+                const struct_idx = result_layout.data.struct_.idx;
+                const sd = layout_store.getStructData(struct_idx);
+                const num_fields = sd.fields.count;
+                const disc_field_idx: u32 = @intCast(num_fields - 1);
+                const disc_offset = layout_store.getStructFieldOffsetByOriginalIndex(struct_idx, disc_field_idx);
+                const disc_value = result_value.offset(disc_offset);
+                const disc = disc_value.read(u8);
+                if (disc == 0) {
+                    const error_msg = try self.problems.putExtraString("Numeric literal validation failed");
+                    const problem = Problem{
+                        .comptime_eval_error = .{
+                            .error_name = error_msg,
+                            .region = region,
+                        },
+                    };
+                    _ = try self.problems.appendProblem(self.allocator, problem);
+                    return false;
+                }
+                return true; // Ok
+            },
+            else => return true, // Unknown format, optimistically allow
         }
-
-        return true; // Unknown format, optimistically allow
     }
 
-    /// Extract the error message from an Err(InvalidNumeral(Str)) payload
-    fn extractInvalidNumeralMessage(
-        self: *ComptimeEvaluator,
-        try_accessor: eval_mod.StackValue.RecordAccessor,
-        _: base.Region,
-    ) ![]const u8 {
-
-        // Get the payload field from the Try record
-        // Use layout store's env for field lookups
-        const layout_env = self.interpreter.runtime_layout_store.getEnv();
-        const payload_idx = try_accessor.findFieldIndex(layout_env.getIdent(layout_env.idents.payload)) orelse {
-            // This should never happen - Try type must have a payload field
-            return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral returned malformed Try value (missing payload field)", .{});
-        };
-        const payload_rt_var = self.interpreter.runtime_types.fresh() catch {
-            return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral returned malformed Try value (could not create rt_var)", .{});
-        };
-        const payload_field = try_accessor.getFieldByIndex(payload_idx, payload_rt_var) catch {
-            return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral returned malformed Try value (could not access payload)", .{});
-        };
-
-        // The payload for Err is the error type: [InvalidNumeral(Str), ...]
-        // This is itself a tag union which may be a record { tag, payload } or just a scalar
-        if (payload_field.layout.tag == .struct_) {
-            // Tag union with payload - look for InvalidNumeral tag
-            var err_accessor = payload_field.asRecord(&self.interpreter.runtime_layout_store) catch {
-                return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral error payload is not a valid record", .{});
-            };
-
-            // Check if this has a payload field (for the Str)
-            // Single-tag unions might not have a "tag" field, so we look for payload first
-            if (err_accessor.findFieldIndex(layout_env.getIdent(layout_env.idents.payload))) |err_payload_idx| {
-                const err_payload_rt_var = self.interpreter.runtime_types.fresh() catch {
-                    return try std.fmt.allocPrint(self.allocator, "Internal error: could not create rt_var for InvalidNumeral payload", .{});
-                };
-                const err_payload = err_accessor.getFieldByIndex(err_payload_idx, err_payload_rt_var) catch {
-                    return try std.fmt.allocPrint(self.allocator, "Internal error: could not access InvalidNumeral payload", .{});
-                };
-                return try self.extractStrFromValue(err_payload);
-            }
-
-            // If no payload field, try to find a Str field directly (might be named differently)
-            // Iterate through fields looking for a Str
-            var field_idx: usize = 0;
-            while (true) : (field_idx += 1) {
-                const iter_field_rt_var = self.interpreter.runtime_types.fresh() catch break;
-                const field = err_accessor.getFieldByIndex(field_idx, iter_field_rt_var) catch break;
-                if (field.layout.tag == .scalar and field.layout.data.scalar.tag == .str) {
-                    return try self.extractStrFromValue(field);
-                }
-            }
-
-            return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral error has no string message in InvalidNumeral", .{});
-        } else if (payload_field.layout.tag == .scalar and payload_field.layout.data.scalar.tag == .str) {
-            // Direct Str payload (single-tag union optimized to just the payload)
-            return try self.extractStrFromValue(payload_field);
+    /// Try to extract a string error message from an Err payload.
+    /// Returns a human-readable error message.
+    fn tryExtractErrorMessage(self: *ComptimeEvaluator, _: Value, payload_layout: layout_mod.Layout, _: *const layout_mod.Store) []const u8 {
+        _ = self;
+        // The Err payload is [InvalidNumeral Str, ...]
+        // For now, return a generic message. Full string extraction from RocStr
+        // would require reading the RocStr struct and its bytes.
+        if (payload_layout.tag == .scalar) {
+            return "Numeric literal validation failed";
         }
-
-        return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral returned unexpected error type (expected InvalidNumeral with Str payload)", .{});
-    }
-
-    /// Extract a Str value from a StackValue
-    fn extractStrFromValue(self: *ComptimeEvaluator, value: eval_mod.StackValue) ![]const u8 {
-        if (value.layout.tag == .scalar and value.layout.data.scalar.tag == .str) {
-            if (value.ptr) |ptr| {
-                const roc_str: *const builtins.str.RocStr = @ptrCast(@alignCast(ptr));
-                const str_bytes = roc_str.asSlice();
-                if (str_bytes.len > 0) {
-                    // Copy the string to our allocator so we own it
-                    return try self.allocator.dupe(u8, str_bytes);
-                }
-                return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral returned empty error message", .{});
-            }
-            return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral error string has null pointer", .{});
-        }
-        if (value.layout.tag == .scalar) {
-            return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral error payload is not a string (layout tag: scalar.{s})", .{@tagName(value.layout.data.scalar.tag)});
-        }
-        return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral error payload is not a string (layout tag: {s})", .{@tagName(value.layout.tag)});
+        return "Numeric literal validation failed";
     }
 
     /// Evaluates all top-level declarations in the module
@@ -2112,18 +1473,10 @@ pub const ComptimeEvaluator = struct {
                 };
 
                 switch (eval_result) {
-                    .success => |maybe_value| {
-                        // Declaration evaluated successfully
-                        // If we got a value, add it to bindings so later defs can reference it
-                        if (maybe_value) |value| {
-                            const def_info = self.env.store.getDef(def_idx);
-                            try self.interpreter.bindings.append(.{
-                                .pattern_idx = def_info.pattern,
-                                .value = value,
-                                .expr_idx = def_info.expr,
-                                .source_env = self.env,
-                            });
-                        }
+                    .success => {
+                        // Declaration evaluated and folded successfully.
+                        // No bindings needed — the LIR pipeline re-lowers each def
+                        // from CIR, seeing any previously-folded constants.
                     },
                     .crash => |crash_info| {
                         crashed += 1;
@@ -2133,12 +1486,7 @@ pub const ComptimeEvaluator = struct {
                         try self.reportProblem(expect_info.message, expect_info.region, .expect_failed);
                     },
                     .error_eval => |error_info| {
-                        // Provide user-friendly messages for specific errors
-                        const error_message = switch (error_info.err) {
-                            error.DivisionByZero => "Division by zero",
-                            else => @errorName(error_info.err),
-                        };
-                        try self.reportProblem(error_message, error_info.region, .error_eval);
+                        try self.reportProblem(error_info.message, error_info.region, .error_eval);
                     },
                 }
             }
@@ -2154,14 +1502,38 @@ pub const ComptimeEvaluator = struct {
     /// This is used for mono tests where we have a single expression to evaluate.
     /// Returns true if the expression was successfully evaluated and folded.
     pub fn evalAndFoldExpr(self: *ComptimeEvaluator, expr_idx: CIR.Expr.Idx) !bool {
-        const ops = self.get_ops();
+        // Lower CIR → LIR
+        var lower_result = self.lir_program.lowerExpr(
+            self.env,
+            expr_idx,
+            self.all_module_envs,
+            null,
+        ) catch return false;
+        defer lower_result.deinit();
 
-        // Evaluate the expression
-        const result = try self.interpreter.eval(expr_idx, ops);
+        // Evaluate via LIR interpreter
+        var interp = try LirInterpreter.init(self.allocator, &lower_result.lir_store, lower_result.layout_store, self.io);
+        interp.detect_infinite_while_loops = true;
+        defer interp.deinit();
+
+        const eval_result = interp.eval(lower_result.final_expr_id) catch return false;
+        const result_value = switch (eval_result) {
+            .value => |v| v,
+            .early_return => |v| v,
+            .break_expr => return false,
+        };
 
         // Fold the result into a constant
-        try self.tryFoldExpr(expr_idx, result);
+        self.tryFoldExprFromValue(expr_idx, result_value, lower_result.result_layout, lower_result.layout_store) catch return false;
 
         return true;
+    }
+
+    /// Find a module environment by its qualified ident.
+    fn findModuleEnvByIdent(self: *const ComptimeEvaluator, module_ident: base.Ident.Idx) ?*const ModuleEnv {
+        for (self.other_envs) |env| {
+            if (env.qualified_module_ident.eql(module_ident)) return env;
+        }
+        return null;
     }
 };

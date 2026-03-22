@@ -1,6 +1,7 @@
 //! Evaluation module for the Roc compiler.
 //!
-//! Provides native code generation and execution for Roc expressions.
+//! Provides expression evaluation via interpreter, native code generation,
+//! and WebAssembly execution for Roc expressions.
 
 const std = @import("std");
 
@@ -14,8 +15,7 @@ const backend = @import("backend");
 pub const ExecutableMemory = backend.ExecutableMemory;
 /// Layout module (re-exported for result type information)
 pub const layout = @import("layout");
-/// Interpreter-specific layout module, forked to keep runtime evaluation isolated
-/// from future dev-backend layout changes.
+/// Interpreter-specific layout module (still needed by comptime_evaluator)
 pub const interpreter_layout = @import("interpreter_layout");
 /// Utilities for loading compiled builtin modules
 pub const builtin_loading = @import("builtin_loading.zig");
@@ -29,19 +29,40 @@ pub const CrashContext = crash_context.CrashContext;
 pub const CrashState = crash_context.CrashState;
 /// Compile-time expression evaluator for constant folding
 pub const ComptimeEvaluator = @import("comptime_evaluator.zig").ComptimeEvaluator;
-/// Interpreter for running CIR expressions
-pub const Interpreter = @import("interpreter.zig").Interpreter;
-/// Stack value representation for interpreter
-pub const StackValue = @import("StackValue.zig");
-/// Render helpers for outputting values
-pub const render_helpers = @import("render_helpers.zig");
-/// Stack memory allocator for evaluating Roc IR
-const stack_mod = @import("stack.zig");
-pub const Stack = stack_mod.Stack;
-pub const StackOverflow = stack_mod.StackOverflow;
-/// Eval error type alias
-pub const EvalError = Interpreter.Error;
-/// Test runner for expect expressions
+
+// --- LIR interpreter (primary) ---
+/// Shared CIR → MIR → LIR → RC lowering pipeline
+pub const cir_to_lir = @import("cir_to_lir.zig");
+pub const LirProgram = cir_to_lir.LirProgram;
+/// Concrete runtime value for the LIR interpreter
+pub const value = @import("value.zig");
+pub const Value = value.Value;
+/// LIR expression interpreter
+pub const interpreter = @import("interpreter.zig");
+pub const LirInterpreter = interpreter.LirInterpreter;
+/// Layout-based value formatter for the LIR interpreter
+pub const value_format = @import("value_format.zig");
+
+/// Backend selection for expression evaluation
+pub const EvalBackend = enum {
+    interpreter,
+    dev,
+    llvm,
+    wasm,
+
+    pub fn fromString(s: []const u8) ?EvalBackend {
+        if (std.mem.eql(u8, s, "interpreter")) return .interpreter;
+        if (std.mem.eql(u8, s, "dev")) return .dev;
+        if (std.mem.eql(u8, s, "llvm")) return .llvm;
+        if (std.mem.eql(u8, s, "wasm")) return .wasm;
+        return null;
+    }
+};
+
+/// Unified evaluation runner for all backends
+pub const runner = @import("runner.zig");
+
+/// Test runner for expect expressions (uses LIR interpreter)
 pub const TestRunner = @import("test_runner.zig").TestRunner;
 /// LLVM-based evaluator for optimized code generation
 pub const LlvmEvaluator = @import("llvm_evaluator.zig").LlvmEvaluator;
@@ -51,6 +72,7 @@ pub const WasmEvaluator = wasm_evaluator_mod.WasmEvaluator;
 
 test "eval tests" {
     std.testing.refAllDecls(@This());
+    std.testing.refAllDecls(@import("runner.zig"));
 
     std.testing.refAllDecls(@import("dev_evaluator.zig"));
     std.testing.refAllDecls(@import("comptime_value.zig"));
@@ -58,10 +80,15 @@ test "eval tests" {
     std.testing.refAllDecls(@import("builtins.zig"));
     std.testing.refAllDecls(@import("crash_context.zig"));
     std.testing.refAllDecls(@import("comptime_evaluator.zig"));
-    std.testing.refAllDecls(@import("interpreter.zig"));
     std.testing.refAllDecls(@import("StackValue.zig"));
     std.testing.refAllDecls(@import("render_helpers.zig"));
     std.testing.refAllDecls(@import("llvm_evaluator.zig"));
+    std.testing.refAllDecls(@import("cir_to_lir.zig"));
+    std.testing.refAllDecls(@import("value.zig"));
+    std.testing.refAllDecls(@import("interpreter.zig"));
+    std.testing.refAllDecls(@import("fold_type.zig"));
+    std.testing.refAllDecls(@import("value_to_cir.zig"));
+    std.testing.refAllDecls(@import("value_format.zig"));
     std.testing.refAllDecls(@import("wasm_evaluator.zig"));
     std.testing.refAllDecls(@import("stack.zig"));
     std.testing.refAllDecls(@import("test/TestEnv.zig"));
@@ -83,8 +110,6 @@ test "eval tests" {
     std.testing.refAllDecls(@import("test/arithmetic_comprehensive_test.zig"));
     std.testing.refAllDecls(@import("test/anno_only_interp_test.zig"));
     std.testing.refAllDecls(@import("test/comptime_eval_test.zig"));
-    std.testing.refAllDecls(@import("test/interpreter_polymorphism_test.zig"));
-    std.testing.refAllDecls(@import("test/interpreter_style_test.zig"));
     std.testing.refAllDecls(@import("test/low_level_interp_test.zig"));
     std.testing.refAllDecls(@import("test/mono_emit_test.zig"));
     std.testing.refAllDecls(@import("test/closure_test.zig"));

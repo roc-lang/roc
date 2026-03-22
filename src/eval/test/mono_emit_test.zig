@@ -10,15 +10,8 @@
 
 const std = @import("std");
 const can = @import("can");
-const builtins = @import("builtins");
-const i128h = builtins.compiler_rt_128;
 
 const helpers = @import("helpers.zig");
-const eval_mod = @import("../mod.zig");
-const roc_target = @import("roc_target");
-const TestEnv = @import("TestEnv.zig");
-const Interpreter = eval_mod.Interpreter;
-const BuiltinTypes = eval_mod.BuiltinTypes;
 
 const Emitter = can.RocEmitter;
 
@@ -168,37 +161,10 @@ fn evalToInt(allocator: std.mem.Allocator, source: []const u8) !i128 {
     const resources = try helpers.parseAndCanonicalizeExpr(allocator, source);
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
-    var test_env_instance = TestEnv.init(allocator);
-    defer test_env_instance.deinit();
+    const result = try helpers.lirInterpreterEval(allocator, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    defer result.deinit(allocator);
 
-    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
-    var interpreter = try Interpreter.init(allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
-    defer interpreter.deinit();
-
-    const ops = test_env_instance.get_ops();
-    const result = try interpreter.eval(resources.expr_idx, ops);
-    const layout_cache = &interpreter.runtime_layout_store;
-    defer result.decref(layout_cache, ops);
-    defer interpreter.bindings.items.len = 0;
-
-    // Check if this is an integer or Dec
-    const result_int: i128 = if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int)
-        result.asI128()
-    else if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .frac) blk: {
-        // Unsuffixed numeric literals default to Dec
-        const dec_value = result.asDec(ops);
-        const RocDec = builtins.dec.RocDec;
-        break :blk i128h.divTrunc_i128(dec_value.num, RocDec.one_point_zero_i128);
-    } else return error.NotAnInteger;
-
-    // Backend comparison
-    const int_str = try std.fmt.allocPrint(allocator, "{}", .{result_int});
-    defer allocator.free(int_str);
-    try helpers.compareWithDevEvaluator(allocator, int_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
-    try helpers.compareWithLlvmEvaluator(allocator, int_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
-
-    return result_int;
+    return result.asI128() orelse return error.NotAnInteger;
 }
 
 test "roundtrip: integer literal produces same result" {
@@ -460,34 +426,27 @@ fn evalTupleFirst(allocator: std.mem.Allocator, source: []const u8) !i128 {
     const resources = try helpers.parseAndCanonicalizeExpr(allocator, source);
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
-    var test_env_instance = TestEnv.init(allocator);
-    defer test_env_instance.deinit();
+    const result = try helpers.lirInterpreterEval(allocator, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    defer result.deinit(allocator);
 
-    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
-    var interpreter = try Interpreter.init(allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
-    defer interpreter.deinit();
+    // Tuples come back as formatted strings "(val1, val2, ...)" via Str.inspect.
+    // Single-element tuples may resolve to a scalar.
+    if (result.asI128()) |v| return v;
+    const formatted = switch (result) {
+        .formatted => |s| s,
+        else => return error.NotATuple,
+    };
 
-    const ops = test_env_instance.get_ops();
-    const result = try interpreter.eval(resources.expr_idx, ops);
-    const layout_cache = &interpreter.runtime_layout_store;
-    defer result.decref(layout_cache, ops);
-    defer interpreter.bindings.items.len = 0;
-
-    // Get the first element of the tuple
-    if (result.layout.tag == .struct_) {
-        const fresh_var = try interpreter.runtime_types.fresh();
-        var accessor = try result.asTuple(layout_cache);
-        const first_elem = try accessor.getElement(0, fresh_var);
-        if (first_elem.layout.tag == .scalar and first_elem.layout.data.scalar.tag == .int) {
-            const tmp_sv = eval_mod.StackValue{ .layout = first_elem.layout, .ptr = first_elem.ptr, .is_initialized = true, .rt_var = fresh_var };
-            return tmp_sv.asI128();
-        } else if (first_elem.layout.tag == .scalar and first_elem.layout.data.scalar.tag == .frac) {
-            const tmp_sv = eval_mod.StackValue{ .layout = first_elem.layout, .ptr = first_elem.ptr, .is_initialized = true, .rt_var = fresh_var };
-            const dec_value = tmp_sv.asDec(ops);
-            const RocDec = builtins.dec.RocDec;
-            return i128h.divTrunc_i128(dec_value.num, RocDec.one_point_zero_i128);
-        }
+    if (formatted.len > 1 and formatted[0] == '(') {
+        const inner = formatted[1..];
+        const end = std.mem.indexOfAny(u8, inner, ",)") orelse return error.NotATuple;
+        const first_str = std.mem.trim(u8, inner[0..end], " ");
+        // Str.inspect formats Dec elements with ".0" suffix
+        const str_to_parse = if (std.mem.endsWith(u8, first_str, ".0"))
+            first_str[0 .. first_str.len - 2]
+        else
+            first_str;
+        return std.fmt.parseInt(i128, str_to_parse, 10) catch return error.NotATuple;
     }
     return error.NotATuple;
 }

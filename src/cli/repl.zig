@@ -10,7 +10,7 @@ const Repl = repl_mod.Repl;
 
 const cli_context = @import("CliContext.zig");
 const CliContext = cli_context.CliContext;
-const Backend = @import("backend").EvalBackend;
+const Backend = @import("eval").EvalBackend;
 
 const ReplLine = @import("ReplLine.zig");
 
