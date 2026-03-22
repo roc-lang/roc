@@ -817,6 +817,10 @@ fn checkSnapshotExpectations(gpa: Allocator) !bool {
     var fail_count: usize = 0;
 
     for (work_list.items) |work_item| {
+        // A signal-handler longjmp poisoned the GPA — we cannot allocate or
+        // free through it without deadlocking.  Stop processing immediately.
+        if (gpa_poisoned) break;
+
         const success = switch (work_item.kind) {
             .snapshot_file => processSnapshotFile(gpa, work_item.path, &config) catch false,
             .multi_file_snapshot => blk: {
@@ -4469,19 +4473,21 @@ fn processDevObjectSnapshot(
 // REPL Snapshot Processing
 
 fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []const u8, config: *const Config) !bool {
+    if (gpa_poisoned) return false;
+
     var success = true;
     log("Processing REPL snapshot: {s}", .{output_path});
 
     // Buffer all output in memory before writing files
     var md_buffer_unmanaged = std.ArrayList(u8).empty;
     var md_writer_allocating: std.Io.Writer.Allocating = .fromArrayList(allocator, &md_buffer_unmanaged);
-    defer md_buffer_unmanaged.deinit(allocator);
+    defer if (!gpa_poisoned) md_buffer_unmanaged.deinit(allocator);
 
     var html_buffer_unmanaged: ?std.ArrayList(u8) = if (config.generate_html) std.ArrayList(u8).empty else null;
     var html_writer_allocating: ?std.Io.Writer.Allocating = if (config.generate_html) .fromArrayList(allocator, &html_buffer_unmanaged.?) else null;
-    defer {
+    defer if (!gpa_poisoned) {
         if (html_buffer_unmanaged) |*buf| buf.deinit(allocator);
-    }
+    };
 
     var output = DualOutput.init(allocator, &md_writer_allocating, if (html_writer_allocating) |*hw| hw else null);
 
@@ -4607,11 +4613,13 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
                         panic_jmp = null;
                     }
 
-                    // Set a 10-second timeout to catch infinite loops in generated code.
+                    // Set a 60-second timeout to catch infinite loops in generated code.
+                    // Compilation of recursive functions can take 10+ seconds on slow CI
+                    // machines, so we use a generous limit.
                     // Note: alarm() is process-wide — in parallel mode, SIGALRM may be
                     // delivered to the wrong thread. The handler checks threadlocal panic_jmp,
                     // so it's harmless if the receiving thread isn't evaluating.
-                    _ = std.c.alarm(10);
+                    _ = std.c.alarm(60);
                     defer _ = std.c.alarm(0);
 
                     const backend_output = backend_repl.step(input) catch |err| {
