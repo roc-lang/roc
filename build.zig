@@ -2087,6 +2087,7 @@ pub fn build(b: *std.Build) void {
     const fmt_step = b.step("fmt", "Format all zig code");
     const check_fmt_step = b.step("check-fmt", "Check formatting of all zig code");
     const snapshot_step = b.step("snapshot", "Run the snapshot tool to update snapshot files");
+    const eval_test_step = b.step("test-eval", "Run eval tests in parallel");
     const playground_step = b.step("playground", "Build the WASM playground");
     const playground_test_step = b.step("test-playground", "Build the integration test suite for the WASM playground");
     const serialization_size_step = b.step("test-serialization-sizes", "Verify Serialized types have platform-independent sizes");
@@ -2563,6 +2564,40 @@ pub fn build(b: *std.Build) void {
     add_tracy(b, roc_modules.build_options, snapshot_exe, target, true, flag_enable_tracy);
     install_and_run(b, no_bin, snapshot_exe, snapshot_step, snapshot_step, run_args);
 
+    // Add parallel eval test runner
+    const eval_test_exe = b.addExecutable(.{
+        .name = "eval-test-runner",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/eval/test/parallel_runner.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true, // needed for sljmp/setjmp
+        }),
+    });
+    configureBackend(eval_test_exe, target);
+    roc_modules.addAll(eval_test_exe);
+    eval_test_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
+    eval_test_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
+    eval_test_exe.step.dependOn(&write_compiled_builtins.step);
+    eval_test_exe.step.dependOn(&copy_builtins_bc.step);
+    try addLlvmSupportToStep(
+        b,
+        eval_test_exe,
+        target,
+        use_system_llvm,
+        user_llvm_path,
+        roc_modules,
+        llvm_codegen_module,
+        &copy_builtins_bc.step,
+        zstd,
+    );
+    if (eval_test_exe.root_module.resolved_target.?.result.os.tag != .windows or
+        eval_test_exe.root_module.resolved_target.?.result.abi != .msvc)
+    {
+        eval_test_exe.root_module.link_libcpp = true;
+    }
+    install_and_run(b, no_bin, eval_test_exe, eval_test_step, eval_test_step, run_args);
+
     const playground_exe = b.addExecutable(.{
         .name = "playground",
         .root_module = b.createModule(.{
@@ -2758,42 +2793,6 @@ pub fn build(b: *std.Build) void {
 
         if (std.mem.eql(u8, module_test.test_step.name, "repl")) {
             module_test.test_step.root_module.addImport("bytebox", bytebox.module("bytebox"));
-        }
-
-        // Add bytebox to eval tests for wasm backend testing
-        if (std.mem.eql(u8, module_test.test_step.name, "eval")) {
-            module_test.test_step.root_module.addImport("bytebox", bytebox.module("bytebox"));
-            const compile_build_module = b.createModule(.{
-                .root_source_file = b.path("src/compile/compile_build.zig"),
-            });
-            compile_build_module.addImport("tracy", roc_modules.tracy);
-            compile_build_module.addImport("build_options", roc_modules.build_options);
-            compile_build_module.addImport("io", roc_modules.io);
-            compile_build_module.addImport("builtins", roc_modules.builtins);
-            compile_build_module.addImport("collections", roc_modules.collections);
-            compile_build_module.addImport("base", roc_modules.base);
-            compile_build_module.addImport("types", roc_modules.types);
-            compile_build_module.addImport("parse", roc_modules.parse);
-            compile_build_module.addImport("can", roc_modules.can);
-            compile_build_module.addImport("check", roc_modules.check);
-            compile_build_module.addImport("reporting", roc_modules.reporting);
-            compile_build_module.addImport("layout", roc_modules.layout);
-            compile_build_module.addImport("eval", module_test.test_step.root_module);
-            compile_build_module.addImport("unbundle", roc_modules.unbundle);
-            compile_build_module.addImport("roc_target", roc_modules.roc_target);
-            compile_build_module.addImport("compiled_builtins", compiled_builtins_module);
-            module_test.test_step.root_module.addImport("compile_build", compile_build_module);
-            try addLlvmSupportToStep(
-                b,
-                module_test.test_step,
-                target,
-                use_system_llvm,
-                user_llvm_path,
-                roc_modules,
-                llvm_codegen_module,
-                &copy_builtins_bc.step,
-                zstd,
-            );
         }
 
         if (std.mem.eql(u8, module_test.test_step.name, "repl")) {

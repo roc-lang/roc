@@ -1717,7 +1717,7 @@ fn hostListListEq(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
 }
 
 /// Host-side heap pointer for wasm bump allocation (starts after stack at 65536).
-var wasm_heap_ptr: u32 = 65536;
+threadlocal var wasm_heap_ptr: u32 = 65536;
 
 fn allocExtraBytes(alignment: u32) u32 {
     const ptr_width: u32 = 8;
