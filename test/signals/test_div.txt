@@ -1,0 +1,3 @@
+# Div with children - two text elements inside a div
+expect_text span:0 "hello"
+expect_text span:1 "world"
