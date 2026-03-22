@@ -2089,7 +2089,7 @@ pub fn build(b: *std.Build) void {
     const fmt_step = b.step("fmt", "Format all zig code");
     const check_fmt_step = b.step("check-fmt", "Check formatting of all zig code");
     const snapshot_step = b.step("snapshot", "Run the snapshot tool to update snapshot files");
-    const eval_test_step = b.step("test-eval-parallel", "Run eval tests in parallel across all backends");
+    const eval_test_step = b.step("test-eval", "Run eval tests in parallel across all backends");
     const playground_step = b.step("playground", "Build the WASM playground");
     const playground_test_step = b.step("test-playground", "Build the integration test suite for the WASM playground");
     const serialization_size_step = b.step("test-serialization-sizes", "Verify Serialized types have platform-independent sizes");
@@ -2795,22 +2795,6 @@ pub fn build(b: *std.Build) void {
 
         if (std.mem.eql(u8, module_test.test_step.name, "repl")) {
             module_test.test_step.root_module.addImport("bytebox", bytebox.module("bytebox"));
-        }
-
-        // Add bytebox to eval tests for wasm backend testing
-        if (std.mem.eql(u8, module_test.test_step.name, "eval")) {
-            module_test.test_step.root_module.addImport("bytebox", bytebox.module("bytebox"));
-            try addLlvmSupportToStep(
-                b,
-                module_test.test_step,
-                target,
-                use_system_llvm,
-                user_llvm_path,
-                roc_modules,
-                llvm_codegen_module,
-                &copy_builtins_bc.step,
-                zstd,
-            );
         }
 
         if (std.mem.eql(u8, module_test.test_step.name, "repl")) {
