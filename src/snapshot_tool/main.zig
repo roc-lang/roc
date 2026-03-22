@@ -4663,6 +4663,10 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
         } // if (!gpa_poisoned)
     }
 
+    // The GPA allocator is permanently broken — any alloc/free will deadlock.
+    // Bail out now; the snapshot is already marked as failed above.
+    if (gpa_poisoned) return false;
+
     switch (config.output_section_command) {
         .update => {
             try output.begin_section("OUTPUT");
