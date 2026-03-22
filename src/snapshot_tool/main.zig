@@ -4577,89 +4577,89 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
         .{ .backend = repl.Backend.llvm, .label = "llvm" },
     }) |cfg| {
         if (!gpa_poisoned) {
-        var backend_snapshot_ops = SnapshotOps.init(output.gpa);
-        defer backend_snapshot_ops.deinit();
-        const backend_repl_result = Repl.initWithBackend(output.gpa, backend_snapshot_ops.get_ops(), backend_snapshot_ops.crashContextPtr(), cfg.backend);
-        if (backend_repl_result) |backend_repl_val| {
-            var backend_repl = backend_repl_val;
+            var backend_snapshot_ops = SnapshotOps.init(output.gpa);
+            defer backend_snapshot_ops.deinit();
+            const backend_repl_result = Repl.initWithBackend(output.gpa, backend_snapshot_ops.get_ops(), backend_snapshot_ops.crashContextPtr(), cfg.backend);
+            if (backend_repl_result) |backend_repl_val| {
+                var backend_repl = backend_repl_val;
 
-            for (inputs.items, 0..) |input, i| {
-                // Set up panic protection via setjmp. If the backend panics,
-                // the custom panic handler longjmps back here with jmp_result != 0.
-                var jmp_buf: sljmp.JmpBuf = undefined;
-                const jmp_result = sljmp.setjmp(&jmp_buf);
-                if (jmp_result != 0) {
-                    // Returned from a panic — report it and stop this snapshot's run.
-                    // The backend REPL state is corrupted after a panic, so we can't continue.
-                    const msg = panic_msg orelse "unknown";
-                    std.debug.print("{s} REPL panic at input {d} in {s}: {s}\n", .{ cfg.label, i, snapshot_path, msg });
-                    panic_msg = null;
-                    // jmp_result >= 2 means we arrived via a signal handler (SIGSEGV/SIGALRM).
-                    // Signal-handler longjmps can leave the allocator mutex locked, so
-                    // any subsequent free/alloc through the same GPA would deadlock.
-                    if (jmp_result >= 2) gpa_poisoned = true;
-                    break;
-                }
-                panic_jmp = &jmp_buf;
-                defer {
-                    panic_jmp = null;
-                }
+                for (inputs.items, 0..) |input, i| {
+                    // Set up panic protection via setjmp. If the backend panics,
+                    // the custom panic handler longjmps back here with jmp_result != 0.
+                    var jmp_buf: sljmp.JmpBuf = undefined;
+                    const jmp_result = sljmp.setjmp(&jmp_buf);
+                    if (jmp_result != 0) {
+                        // Returned from a panic — report it and stop this snapshot's run.
+                        // The backend REPL state is corrupted after a panic, so we can't continue.
+                        const msg = panic_msg orelse "unknown";
+                        std.debug.print("{s} REPL panic at input {d} in {s}: {s}\n", .{ cfg.label, i, snapshot_path, msg });
+                        panic_msg = null;
+                        // jmp_result >= 2 means we arrived via a signal handler (SIGSEGV/SIGALRM).
+                        // Signal-handler longjmps can leave the allocator mutex locked, so
+                        // any subsequent free/alloc through the same GPA would deadlock.
+                        if (jmp_result >= 2) gpa_poisoned = true;
+                        break;
+                    }
+                    panic_jmp = &jmp_buf;
+                    defer {
+                        panic_jmp = null;
+                    }
 
-                // Set a 10-second timeout to catch infinite loops in generated code.
-                // Note: alarm() is process-wide — in parallel mode, SIGALRM may be
-                // delivered to the wrong thread. The handler checks threadlocal panic_jmp,
-                // so it's harmless if the receiving thread isn't evaluating.
-                _ = std.c.alarm(10);
-                defer _ = std.c.alarm(0);
+                    // Set a 10-second timeout to catch infinite loops in generated code.
+                    // Note: alarm() is process-wide — in parallel mode, SIGALRM may be
+                    // delivered to the wrong thread. The handler checks threadlocal panic_jmp,
+                    // so it's harmless if the receiving thread isn't evaluating.
+                    _ = std.c.alarm(10);
+                    defer _ = std.c.alarm(0);
 
-                const backend_output = backend_repl.step(input) catch |err| {
-                    std.debug.print("{s} REPL error at input {d} in {s}: {}\n", .{ cfg.label, i, snapshot_path, err });
-                    continue;
-                };
-                defer output.gpa.free(backend_output);
+                    const backend_output = backend_repl.step(input) catch |err| {
+                        std.debug.print("{s} REPL error at input {d} in {s}: {}\n", .{ cfg.label, i, snapshot_path, err });
+                        continue;
+                    };
+                    defer output.gpa.free(backend_output);
 
-                // Cap backend output to prevent flooding terminal with corrupted string data.
-                const max_output_len = 4096;
-                const backend_display = if (backend_output.len > max_output_len)
-                    backend_output[0..max_output_len]
-                else
-                    backend_output;
+                    // Cap backend output to prevent flooding terminal with corrupted string data.
+                    const max_output_len = 4096;
+                    const backend_display = if (backend_output.len > max_output_len)
+                        backend_output[0..max_output_len]
+                    else
+                        backend_output;
 
-                if (i < actual_outputs.items.len) {
-                    const interp_output = actual_outputs.items[i];
-                    if (!std.mem.eql(u8, interp_output, backend_output)) {
-                        std.debug.print(
-                            "REPL backend mismatch at input {d} in {s}:\n  interpreter: '{s}'\n  {s}:         '{s}'{s}\n",
-                            .{ i, snapshot_path, interp_output, cfg.label, backend_display, if (backend_output.len > max_output_len) "... (truncated)" else "" },
-                        );
-                        success = false;
+                    if (i < actual_outputs.items.len) {
+                        const interp_output = actual_outputs.items[i];
+                        if (!std.mem.eql(u8, interp_output, backend_output)) {
+                            std.debug.print(
+                                "REPL backend mismatch at input {d} in {s}:\n  interpreter: '{s}'\n  {s}:         '{s}'{s}\n",
+                                .{ i, snapshot_path, interp_output, cfg.label, backend_display, if (backend_output.len > max_output_len) "... (truncated)" else "" },
+                            );
+                            success = false;
+                        }
                     }
                 }
-            }
 
-            // Deinit with panic protection — after a codegen panic, the REPL
-            // state may be corrupted and cleanup (e.g. GPA leak detection) can
-            // trigger secondary panics that would otherwise terminate the process.
-            //
-            // After a signal-handler longjmp (SIGALRM timeout, SIGSEGV) the
-            // allocator mutex may be permanently locked, so calling deinit would
-            // deadlock. Skip cleanup entirely in that case — we leak, but we
-            // don't crash the whole test suite.
-            if (!gpa_poisoned) {
-                var deinit_jmp_buf: sljmp.JmpBuf = undefined;
-                const deinit_jmp_result = sljmp.setjmp(&deinit_jmp_buf);
-                if (deinit_jmp_result != 0) {
-                    panic_msg = null;
-                } else {
-                    panic_jmp = &deinit_jmp_buf;
-                    backend_repl.deinit();
-                    panic_jmp = null;
+                // Deinit with panic protection — after a codegen panic, the REPL
+                // state may be corrupted and cleanup (e.g. GPA leak detection) can
+                // trigger secondary panics that would otherwise terminate the process.
+                //
+                // After a signal-handler longjmp (SIGALRM timeout, SIGSEGV) the
+                // allocator mutex may be permanently locked, so calling deinit would
+                // deadlock. Skip cleanup entirely in that case — we leak, but we
+                // don't crash the whole test suite.
+                if (!gpa_poisoned) {
+                    var deinit_jmp_buf: sljmp.JmpBuf = undefined;
+                    const deinit_jmp_result = sljmp.setjmp(&deinit_jmp_buf);
+                    if (deinit_jmp_result != 0) {
+                        panic_msg = null;
+                    } else {
+                        panic_jmp = &deinit_jmp_buf;
+                        backend_repl.deinit();
+                        panic_jmp = null;
+                    }
                 }
+            } else |err| {
+                std.debug.print("{s} REPL init failed in {s}: {}\n", .{ cfg.label, snapshot_path, err });
+                success = false;
             }
-        } else |err| {
-            std.debug.print("{s} REPL init failed in {s}: {}\n", .{ cfg.label, snapshot_path, err });
-            success = false;
-        }
         } // if (!gpa_poisoned)
     }
 
