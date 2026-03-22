@@ -29,6 +29,11 @@ pub const panic = std.debug.FullPanic(panicHandler);
 
 threadlocal var panic_jmp: ?*sljmp.JmpBuf = null;
 threadlocal var panic_msg: ?[]const u8 = null;
+/// Set by signal handlers (SIGALRM/SIGSEGV) when a longjmp interrupts an
+/// allocation.  Once true the GPA mutex is permanently locked and any
+/// alloc/free through it will deadlock, so all further GPA use must be
+/// skipped for the rest of this thread's lifetime.
+threadlocal var gpa_poisoned: bool = false;
 
 fn panicHandler(msg: []const u8, ret_addr: ?usize) noreturn {
     if (panic_jmp) |jmp| {
@@ -53,6 +58,7 @@ fn panicHandler(msg: []const u8, ret_addr: ?usize) noreturn {
 fn crashSignalHandler(_: i32) callconv(.c) void {
     if (panic_jmp) |jmp| {
         panic_msg = "signal: segfault or illegal instruction in generated code";
+        gpa_poisoned = true;
         panic_jmp = null;
         sljmp.longjmp(jmp, 2);
     }
@@ -71,6 +77,7 @@ fn crashSignalHandler(_: i32) callconv(.c) void {
 fn alarmSignalHandler(_: i32) callconv(.c) void {
     if (panic_jmp) |jmp| {
         panic_msg = "timeout: dev backend execution exceeded time limit";
+        gpa_poisoned = true;
         panic_jmp = null;
         sljmp.longjmp(jmp, 3);
     }
@@ -4513,6 +4520,10 @@ fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []co
 }
 
 fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, content: *const Content, config: *const Config) !bool {
+    // A previous signal-handler longjmp left the GPA mutex locked — any
+    // alloc/free would deadlock.  Nothing useful we can do for this snapshot.
+    if (gpa_poisoned) return false;
+
     var success = true;
     // Parse REPL inputs from the source using » as delimiter
     var inputs = std.array_list.Managed([]const u8).init(output.gpa);
@@ -4567,11 +4578,6 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
     // so we can report the failure and continue with the next snapshot.
     // Install signal handlers for SIGSEGV/SIGBUS/SIGILL from generated code.
     installCrashSignalHandlers();
-    // After a signal-handler longjmp (SIGALRM timeout, SIGSEGV), the GPA
-    // allocator mutex may be permanently locked.  Any subsequent alloc/free
-    // through the same GPA would deadlock, so we must skip all remaining
-    // backend iterations once this flag is set.
-    var gpa_poisoned = false;
     inline for (.{
         .{ .backend = repl.Backend.dev, .label = "dev" },
         .{ .backend = repl.Backend.llvm, .label = "llvm" },
@@ -4594,10 +4600,6 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
                         const msg = panic_msg orelse "unknown";
                         std.debug.print("{s} REPL panic at input {d} in {s}: {s}\n", .{ cfg.label, i, snapshot_path, msg });
                         panic_msg = null;
-                        // jmp_result >= 2 means we arrived via a signal handler (SIGSEGV/SIGALRM).
-                        // Signal-handler longjmps can leave the allocator mutex locked, so
-                        // any subsequent free/alloc through the same GPA would deadlock.
-                        if (jmp_result >= 2) gpa_poisoned = true;
                         break;
                     }
                     panic_jmp = &jmp_buf;
