@@ -4527,7 +4527,7 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
     var success = true;
     // Parse REPL inputs from the source using » as delimiter
     var inputs = std.array_list.Managed([]const u8).init(output.gpa);
-    defer inputs.deinit();
+    defer if (!gpa_poisoned) inputs.deinit();
 
     // Split by the » character, each section is a separate REPL input
     var parts = std.mem.splitSequence(u8, content.source, "»");
@@ -4544,11 +4544,11 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
     }
 
     var snapshot_ops = SnapshotOps.init(output.gpa);
-    defer snapshot_ops.deinit();
+    defer if (!gpa_poisoned) snapshot_ops.deinit();
 
     // Initialize REPL
     var repl_instance = try Repl.init(output.gpa, snapshot_ops.get_ops(), snapshot_ops.crashContextPtr());
-    defer repl_instance.deinit();
+    defer if (!gpa_poisoned) repl_instance.deinit();
 
     // Enable debug snapshots for CAN/TYPES generation
     repl_instance.enableDebugSnapshots();
@@ -4560,12 +4560,12 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
 
     // Process each input and generate output
     var actual_outputs = std.array_list.Managed([]const u8).init(output.gpa);
-    defer {
+    defer if (!gpa_poisoned) {
         for (actual_outputs.items) |item| {
             output.gpa.free(item);
         }
         actual_outputs.deinit();
-    }
+    };
 
     for (inputs.items) |input| {
         const repl_output = try repl_instance.step(input);
@@ -4584,7 +4584,7 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
     }) |cfg| {
         if (!gpa_poisoned) {
             var backend_snapshot_ops = SnapshotOps.init(output.gpa);
-            defer backend_snapshot_ops.deinit();
+            defer if (!gpa_poisoned) backend_snapshot_ops.deinit();
             const backend_repl_result = Repl.initWithBackend(output.gpa, backend_snapshot_ops.get_ops(), backend_snapshot_ops.crashContextPtr(), cfg.backend);
             if (backend_repl_result) |backend_repl_val| {
                 var backend_repl = backend_repl_val;
