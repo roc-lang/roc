@@ -163,6 +163,27 @@ test "Repl - Str.from_utf8 Ok" {
     try expectAllNative("Str.from_utf8([72, 105])", "Ok(\"Hi\")");
 }
 
+test "Repl - Str.from_utf8 ok_or" {
+    try expectAllNative("Str.from_utf8([72, 105]).ok_or(\"fallback\")", "\"Hi\"");
+}
+
+test "Repl - Str.from_utf8 snapshot sequence" {
+    const steps = &[_][2][]const u8{
+        .{ "Str.from_utf8([72, 105])", "Ok(\"Hi\")" },
+        .{ "Str.from_utf8([])", "Ok(\"\")" },
+        .{ "Str.from_utf8([82, 111, 99])", "Ok(\"Roc\")" },
+        .{ "Str.from_utf8([240, 159, 144, 166])", "Ok(\"🐦\")" },
+        .{ "Str.from_utf8([195, 169])", "Ok(\"é\")" },
+        .{ "Str.from_utf8([255]).is_err()", "True" },
+        .{ "Str.from_utf8([72, 105]).is_ok()", "True" },
+        .{ "Str.from_utf8([72, 105]).ok_or(\"fallback\")", "\"Hi\"" },
+        .{ "Str.from_utf8([255]).ok_or(\"fallback\")", "\"fallback\"" },
+        .{ "Str.from_utf8([255])", "Err(BadUtf8({ index: 0, problem: InvalidStartByte }))" },
+    };
+    try expectStateful(.interpreter, steps);
+    try expectStateful(.dev, steps);
+}
+
 test "Repl - U8.from_str result format" {
     try expectAllNative("U8.from_str(\"42\")", "Ok(42)");
 }
@@ -259,6 +280,16 @@ test "Repl - silent assignments" {
     try expectStateful(.dev, steps);
     try expectStateful(.wasm, steps);
     try expectStateful(.llvm, steps);
+}
+
+test "Repl - polymorphic numeric in comparison snapshot sequence" {
+    const steps = &[_][2][]const u8{
+        .{ "is_positive = |x| x > 0", "assigned `is_positive`" },
+        .{ "List.any([-1, 0, 1], is_positive)", "True" },
+        .{ "List.any([-1, 0, -2], is_positive)", "False" },
+    };
+    try expectStateful(.interpreter, steps);
+    try expectStateful(.dev, steps);
 }
 
 test "Repl - variable redefinition" {

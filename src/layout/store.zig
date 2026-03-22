@@ -132,6 +132,21 @@ pub const Store = struct {
     // This is critical for cross-compilation (e.g., compiling for wasm32 on a 64-bit host)
     target_usize: target.TargetUsize,
 
+    fn debugAssertPendingTupleFieldsSane(self: *const Self, site: []const u8) void {
+        if (@import("builtin").mode != .Debug) return;
+
+        if (self.work.pending_tuple_fields.len > self.work.pending_tuple_fields.capacity) {
+            std.debug.panic(
+                "layout.Store invariant violated at {s}: pending_tuple_fields len {d} exceeds capacity {d}",
+                .{
+                    site,
+                    self.work.pending_tuple_fields.len,
+                    self.work.pending_tuple_fields.capacity,
+                },
+            );
+        }
+    }
+
     // Number of sentinel layouts that are pre-populated in the layout store.
     // Must be kept in sync with the sentinel values in layout.zig Idx enum.
     const num_primitives = 16;
@@ -1707,6 +1722,7 @@ pub const Store = struct {
         const num_fields = elem_slice.len;
 
         for (elem_slice, 0..) |var_, index| {
+            self.debugAssertPendingTupleFieldsSane("gatherTupleFields:before-append");
             try self.work.pending_tuple_fields.append(self.allocator, .{ .index = @intCast(index), .var_ = var_ });
         }
 
@@ -2363,32 +2379,6 @@ pub const Store = struct {
                                                 };
                                             }
                                         }
-                                        // No mapping found for this rigid type parameter.
-                                        // Try to find ANY rigid mapping as a heuristic - in a monomorphized
-                                        // function, all unmapped rigids should map to the same concrete type.
-                                        if (caller_module_idx) |caller_mod| {
-                                            if (type_scope.scopes.items.len > 0) {
-                                                var iter = type_scope.scopes.items[0].iterator();
-                                                while (iter.next()) |entry| {
-                                                    // Check if this mapping is from a rigid (not a specific structure)
-                                                    const ext_env = self.all_module_envs[self.current_module_idx];
-                                                    const key_resolved = ext_env.types.resolveVar(entry.key_ptr.*);
-                                                    if (key_resolved.desc.content == .rigid) {
-                                                        // Found a rigid mapping - use it
-                                                        const caller_env = self.all_module_envs[caller_mod];
-                                                        const mapped_resolved = caller_env.types.resolveVar(entry.value_ptr.*);
-                                                        break :blk switch (mapped_resolved.desc.content) {
-                                                            .structure => |ft| switch (ft) {
-                                                                .empty_record, .empty_tag_union => true,
-                                                                else => false,
-                                                            },
-                                                            .flex, .rigid => false,
-                                                            else => false,
-                                                        };
-                                                    }
-                                                }
-                                            }
-                                        }
                                         // Mark this computation as depending on unresolved params
                                         // so the result won't be cached.
                                         depends_on_unresolved_type_params = true;
@@ -2675,6 +2665,7 @@ pub const Store = struct {
                             } else {
                                 // Multi-arg variant - set up tuple processing
                                 for (args_slice, 0..) |var_, index| {
+                                    self.debugAssertPendingTupleFieldsSane("tag-union:init-variant:before-append");
                                     try self.work.pending_tuple_fields.append(self.allocator, .{
                                         .index = @intCast(index),
                                         .var_ = var_,
@@ -2794,7 +2785,9 @@ pub const Store = struct {
                                 // Pass target_module as caller so chained type scope lookups
                                 // work (e.g., rigid → flex → concrete via two scope entries).
                                 // Cycle detection prevents infinite loops.
+                                const saved_module_idx = self.current_module_idx;
                                 layout_idx = try self.fromTypeVar(target_module, mapped_var, type_scope, target_module);
+                                self.current_module_idx = saved_module_idx;
                                 skip_layout_computation = true;
                                 break :blk self.getLayout(layout_idx);
                             }
@@ -2812,20 +2805,20 @@ pub const Store = struct {
                             break :blk Layout.default_num();
                         }
 
-                        // For unconstrained flex vars inside containers (list, box),
-                        // treat them as zero-sized until type scope resolves them.
-                        if (self.work.pending_containers.len > 0) {
-                            const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
-                            if (pending_item.container == .box or pending_item.container == .list) {
-                                if (!flex.constraints.isEmpty()) {
-                                    break :blk Layout.default_num();
-                                }
-                                break :blk Layout.zst();
-                            }
-                        }
-
-                        // Unconstrained flex vars (like the element type of an empty list)
-                        // have no concrete type, so they're zero-sized.
+                        // By the time we ask the layout store for a non-numeric unresolved type
+                        // variable, the only legitimate survivors are zero-sized cases whose
+                        // runtime representation is fully determined without ever materializing
+                        // the abstract type variable itself. Examples include empty-list element
+                        // vars, phantom-only values, and aggregates whose remaining unresolved
+                        // pieces are all representationless. Those must collapse to ZST here so
+                        // layout never grows its own shadow "abstract layout param" notion.
+                        //
+                        // If an earlier compiler bug lets a representationful unresolved type
+                        // variable reach this point, collapsing it to ZST is still not ideal.
+                        // However, keeping a polymorphic placeholder in the runtime-layout layer
+                        // is worse: layout is supposed to describe concrete representation, and
+                        // inventing a first-class abstract layout variant only obscures the real
+                        // invariant violation upstream.
                         break :blk Layout.zst();
                     },
                     .rigid => |rigid| blk: {
@@ -2860,7 +2853,9 @@ pub const Store = struct {
                                 // Pass target_module as caller so chained type scope lookups
                                 // work (e.g., rigid → flex → concrete via two scope entries).
                                 // Cycle detection prevents infinite loops.
+                                const saved_module_idx = self.current_module_idx;
                                 layout_idx = try self.fromTypeVar(target_module, mapped_var, type_scope, target_module);
+                                self.current_module_idx = saved_module_idx;
                                 skip_layout_computation = true;
                                 break :blk self.getLayout(layout_idx);
                             }
@@ -2877,27 +2872,10 @@ pub const Store = struct {
                             break :blk Layout.default_num();
                         }
 
-                        // For rigid vars inside containers (list, box), we need to determine
-                        // the element layout. If the rigid var has constraints, default to Dec.
-                        if (self.work.pending_containers.len > 0) {
-                            const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
-                            if (pending_item.container == .box or pending_item.container == .list) {
-                                // If the rigid var has any constraints, assume it's numeric and default to Dec.
-                                if (!rigid.constraints.isEmpty()) {
-                                    break :blk Layout.default_num();
-                                }
-                                break :blk Layout.zst();
-                            }
-                        }
-                        // Unconstrained rigid vars (like from empty list element types) can be ZST.
-                        // This is safe because the code using them either runs with concrete
-                        // types or doesn't run at all (like for empty list iterations).
-                        if (rigid.constraints.isEmpty()) {
-                            break :blk Layout.zst();
-                        }
-
-                        // Rigid vars with constraints must be resolvable.
-                        unreachable;
+                        // Same rationale as the unresolved flex-var case above: by the time a
+                        // non-numeric rigid reaches the layout layer, the only valid survivors
+                        // are representationless/ZST cases.
+                        break :blk Layout.zst();
                     },
                     .alias => |alias| {
                         // Follow the alias by updating the work item
@@ -3047,6 +3025,7 @@ pub const Store = struct {
                         pending_tuple.pending_fields -= 1;
 
                         // Pop the field we just processed
+                        self.debugAssertPendingTupleFieldsSane("tuple:before-pop");
                         const pending_field = self.work.pending_tuple_fields.pop() orelse unreachable;
 
                         // Add to resolved fields
@@ -3095,6 +3074,7 @@ pub const Store = struct {
                             } else {
                                 // Multi-arg variant - set up tuple processing
                                 for (next_args_slice, 0..) |var_, index| {
+                                    self.debugAssertPendingTupleFieldsSane("tag-union:next-variant:before-append");
                                     try self.work.pending_tuple_fields.append(self.allocator, .{
                                         .index = @intCast(index),
                                         .var_ = var_,

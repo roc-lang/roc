@@ -1999,32 +1999,6 @@ pub const Store = struct {
                                                 };
                                             }
                                         }
-                                        // No mapping found for this rigid type parameter.
-                                        // Try to find ANY rigid mapping as a heuristic - in a monomorphized
-                                        // function, all unmapped rigids should map to the same concrete type.
-                                        if (caller_module_idx) |caller_mod| {
-                                            if (type_scope.scopes.items.len > 0) {
-                                                var iter = type_scope.scopes.items[0].iterator();
-                                                while (iter.next()) |entry| {
-                                                    // Check if this mapping is from a rigid (not a specific structure)
-                                                    const ext_env = self.all_module_envs[self.current_module_idx];
-                                                    const key_resolved = ext_env.types.resolveVar(entry.key_ptr.*);
-                                                    if (key_resolved.desc.content == .rigid) {
-                                                        // Found a rigid mapping - use it
-                                                        const caller_env = self.all_module_envs[caller_mod];
-                                                        const mapped_resolved = caller_env.types.resolveVar(entry.value_ptr.*);
-                                                        break :blk switch (mapped_resolved.desc.content) {
-                                                            .structure => |ft| switch (ft) {
-                                                                .empty_record, .empty_tag_union => true,
-                                                                else => false,
-                                                            },
-                                                            .flex, .rigid => false,
-                                                            else => false,
-                                                        };
-                                                    }
-                                                }
-                                            }
-                                        }
                                         // Mark this computation as depending on unresolved params
                                         // so the result won't be cached.
                                         depends_on_unresolved_type_params = true;
@@ -2423,7 +2397,9 @@ pub const Store = struct {
                                 // Pass target_module as caller so chained type scope lookups
                                 // work (e.g., rigid → flex → concrete via two scope entries).
                                 // Cycle detection prevents infinite loops.
+                                const saved_module_idx = self.current_module_idx;
                                 layout_idx = try self.fromTypeVar(target_module, mapped_var, type_scope, target_module);
+                                self.current_module_idx = saved_module_idx;
                                 skip_layout_computation = true;
                                 break :blk self.getLayout(layout_idx);
                             }
@@ -2489,7 +2465,9 @@ pub const Store = struct {
                                 // Pass target_module as caller so chained type scope lookups
                                 // work (e.g., rigid → flex → concrete via two scope entries).
                                 // Cycle detection prevents infinite loops.
+                                const saved_module_idx = self.current_module_idx;
                                 layout_idx = try self.fromTypeVar(target_module, mapped_var, type_scope, target_module);
+                                self.current_module_idx = saved_module_idx;
                                 skip_layout_computation = true;
                                 break :blk self.getLayout(layout_idx);
                             }

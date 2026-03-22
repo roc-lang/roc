@@ -40,9 +40,6 @@ pub const OwnershipNormalize = @import("OwnershipNormalize.zig");
 /// LIR-level reference counting insertion pass
 pub const RcInsert = @import("rc_insert.zig");
 
-/// Post-RC direct-call canonicalization
-pub const CallCanonicalize = @import("CallCanonicalize.zig");
-
 /// Re-export commonly used types from LIR
 pub const LirExpr = LIR.LirExpr;
 /// Re-export pattern type
@@ -79,8 +76,10 @@ pub const CFMatchBranch = LIR.CFMatchBranch;
 pub const CFMatchBranchSpan = LIR.CFMatchBranchSpan;
 /// Layout index span type
 pub const LayoutIdxSpan = LIR.LayoutIdxSpan;
-/// LIR procedure type
-pub const LirProc = LIR.LirProc;
+/// LIR proc-spec ID type
+pub const LirProcSpecId = LIR.LirProcSpecId;
+/// LIR proc-spec type
+pub const LirProcSpec = LIR.LirProcSpec;
 
 test "lir tests" {
     std.testing.refAllDecls(@This());
@@ -90,5 +89,4 @@ test "lir tests" {
     std.testing.refAllDecls(OwnershipNormalize);
     std.testing.refAllDecls(TailRecursion);
     std.testing.refAllDecls(RcInsert);
-    std.testing.refAllDecls(CallCanonicalize);
 }

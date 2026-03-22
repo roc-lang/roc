@@ -2626,6 +2626,7 @@ test "Coordinator shutdown does not drain buffered tasks" {
         "test",
         null, // cache_manager
     );
+    defer coord.deinit();
 
     // Buffer several tasks BEFORE starting workers, so they are sitting
     // in the channel when shutdown fires.
@@ -2656,13 +2657,11 @@ test "Coordinator shutdown does not drain buffered tasks" {
     // Some may have been popped by close() waking a blocked recv,
     // but with no workers started, all 4 must remain.
     try std.testing.expectEqual(@as(usize, 4), coord.task_channel.len());
-
-    coord.deinit();
 }
 
 test "Coordinator shutdown stops spawned workers promptly" {
-    // With real workers running, shutdown must cause them to exit even
-    // though the task channel still has buffered items.
+    // With real workers running, shutdown must return cleanly and join all
+    // spawned workers even when work is still buffered.
     if (is_freestanding) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
@@ -2676,6 +2675,7 @@ test "Coordinator shutdown stops spawned workers promptly" {
         "test",
         null, // cache_manager
     );
+    defer coord.deinit();
 
     // Buffer tasks before starting workers
     for (0..8) |i| {
@@ -2702,8 +2702,8 @@ test "Coordinator shutdown stops spawned workers promptly" {
     // unpredictable number of tasks between start() and shutdown()
     // depending on scheduling, so we don't assert a specific count.
     // The deterministic drain test above covers the flag+close path.
-
-    coord.deinit();
+    try std.testing.expect(coord.shutting_down.load(.acquire));
+    try std.testing.expectEqual(@as(usize, 0), coord.workers.items.len);
 }
 
 test "Channel in coordinator context" {

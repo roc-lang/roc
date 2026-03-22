@@ -20,9 +20,9 @@ const Allocator = std.mem.Allocator;
 
 const LirExpr = ir.LirExpr;
 const LirPattern = ir.LirPattern;
-const CallTarget = ir.CallTarget;
 const LirExprId = ir.LirExprId;
 const LirPatternId = ir.LirPatternId;
+const LirProcSpecId = ir.LirProcSpecId;
 const LirExprSpan = ir.LirExprSpan;
 const LirPatternSpan = ir.LirPatternSpan;
 const LirCaptureSpan = ir.LirCaptureSpan;
@@ -43,7 +43,7 @@ const CFSwitchBranchSpan = ir.CFSwitchBranchSpan;
 const CFMatchBranch = ir.CFMatchBranch;
 const CFMatchBranchSpan = ir.CFMatchBranchSpan;
 const LayoutIdxSpan = ir.LayoutIdxSpan;
-const LirProc = ir.LirProc;
+const LirProcSpec = ir.LirProcSpec;
 
 const Self = @This();
 
@@ -84,22 +84,12 @@ cf_switch_branches: std.ArrayList(CFSwitchBranch),
 /// Control flow match branches (pattern matching)
 cf_match_branches: std.ArrayList(CFMatchBranch),
 
-/// Complete procedures (for two-pass compilation)
-procs: std.ArrayList(LirProc),
+/// Complete proc specs (for two-pass compilation)
+proc_specs: std.ArrayList(LirProcSpec),
 
 /// Map from global symbol to its definition expression
 /// Used for looking up top-level definitions
 symbol_defs: std.AutoHashMap(u64, LirExprId),
-
-/// Map from direct-callable symbol to its callable definition expression.
-/// This is separate from symbol_defs so direct calls never depend on
-/// value-level wrapper structure.
-callable_defs: std.AutoHashMap(u64, LirExprId),
-
-/// Canonical callable targets for backend-visible expressions.
-/// Populated by post-RC canonicalization so backends never need to
-/// rediscover callable identity from expression structure.
-expr_callable_targets: std.AutoHashMap(u32, CallTarget),
 
 /// String literal store for strings generated during lowering (e.g., by str_inspekt)
 /// This allows us to add new string literals without needing mutable module envs.
@@ -128,10 +118,8 @@ pub fn init(allocator: Allocator) Self {
         .cf_stmts = std.ArrayList(CFStmt).empty,
         .cf_switch_branches = std.ArrayList(CFSwitchBranch).empty,
         .cf_match_branches = std.ArrayList(CFMatchBranch).empty,
-        .procs = std.ArrayList(LirProc).empty,
+        .proc_specs = std.ArrayList(LirProcSpec).empty,
         .symbol_defs = std.AutoHashMap(u64, LirExprId).init(allocator),
-        .callable_defs = std.AutoHashMap(u64, LirExprId).init(allocator),
-        .expr_callable_targets = std.AutoHashMap(u32, CallTarget).init(allocator),
         .strings = base.StringLiteral.Store{},
         .allocator = allocator,
         .next_synthetic_symbol = 0xf000_0000_0000_0000,
@@ -171,10 +159,8 @@ pub fn deinit(self: *Self) void {
     self.cf_stmts.deinit(self.allocator);
     self.cf_switch_branches.deinit(self.allocator);
     self.cf_match_branches.deinit(self.allocator);
-    self.procs.deinit(self.allocator);
+    self.proc_specs.deinit(self.allocator);
     self.symbol_defs.deinit();
-    self.callable_defs.deinit();
-    self.expr_callable_targets.deinit();
     self.strings.deinit(self.allocator);
 }
 
@@ -417,49 +403,6 @@ pub fn setSymbolDef(self: *Self, symbol: Symbol, expr_id: LirExprId) Allocator.E
     try self.symbol_defs.put(@bitCast(symbol), expr_id);
 }
 
-/// Register a direct-callable definition.
-pub fn registerCallableDef(self: *Self, symbol: Symbol, expr_id: LirExprId) Allocator.Error!void {
-    const key: u64 = @bitCast(symbol);
-    const gop = try self.callable_defs.getOrPut(key);
-    if (!gop.found_existing) {
-        gop.value_ptr.* = expr_id;
-        return;
-    }
-
-    if (std.debug.runtime_safety) {
-        std.debug.panic(
-            "LIR duplicate callable definition for symbol key {d}: existing expr {}, new expr {}",
-            .{ key, @intFromEnum(gop.value_ptr.*), @intFromEnum(expr_id) },
-        );
-    }
-    unreachable;
-}
-
-/// Set or replace a direct-callable definition.
-pub fn setCallableDef(self: *Self, symbol: Symbol, expr_id: LirExprId) Allocator.Error!void {
-    try self.callable_defs.put(@bitCast(symbol), expr_id);
-}
-
-/// Look up a direct-callable definition.
-pub fn getCallableDef(self: *const Self, symbol: Symbol) ?LirExprId {
-    return self.callable_defs.get(@bitCast(symbol));
-}
-
-/// Remove all canonical callable targets so a later pass can rebuild them.
-pub fn clearExprCallableTargets(self: *Self) void {
-    self.expr_callable_targets.clearRetainingCapacity();
-}
-
-/// Set or replace a canonical callable target for an expression.
-pub fn setExprCallableTarget(self: *Self, expr_id: LirExprId, target: CallTarget) Allocator.Error!void {
-    try self.expr_callable_targets.put(@intFromEnum(expr_id), target);
-}
-
-/// Look up the canonical callable target for an expression.
-pub fn getExprCallableTarget(self: *const Self, expr_id: LirExprId) ?CallTarget {
-    return self.expr_callable_targets.get(@intFromEnum(expr_id));
-}
-
 /// Insert a string literal and return its index
 pub fn insertString(self: *Self, text: []const u8) Allocator.Error!base.StringLiteral.Idx {
     return self.strings.insert(self.allocator, text);
@@ -562,27 +505,32 @@ pub fn getLayoutIdxSpan(self: *const Self, span: LayoutIdxSpan) []const layout.I
     return @ptrCast(slice);
 }
 
-/// Add a procedure and return its index
-pub fn addProc(self: *Self, proc: LirProc) Allocator.Error!usize {
+/// Add a proc spec and return its index
+pub fn addProcSpec(self: *Self, proc: LirProcSpec) Allocator.Error!LirProcSpecId {
     std.debug.assert(proc.args.len == proc.arg_layouts.len);
-    const idx = self.procs.items.len;
-    try self.procs.append(self.allocator, proc);
-    return idx;
+    const idx = self.proc_specs.items.len;
+    try self.proc_specs.append(self.allocator, proc);
+    return @enumFromInt(@as(u32, @intCast(idx)));
 }
 
-/// Get a procedure by index
-pub fn getProc(self: *const Self, idx: usize) LirProc {
-    return self.procs.items[idx];
+/// Get a proc spec by index
+pub fn getProcSpec(self: *const Self, idx: LirProcSpecId) LirProcSpec {
+    return self.proc_specs.items[@intFromEnum(idx)];
 }
 
-/// Get all procedures
-pub fn getProcs(self: *const Self) []const LirProc {
-    return self.procs.items;
+/// Get a mutable proc spec by index.
+pub fn getProcSpecPtr(self: *Self, idx: LirProcSpecId) *LirProcSpec {
+    return &self.proc_specs.items[@intFromEnum(idx)];
 }
 
-/// Get the number of procedures
-pub fn procCount(self: *const Self) usize {
-    return self.procs.items.len;
+/// Get all proc specs
+pub fn getProcSpecs(self: *const Self) []const LirProcSpec {
+    return self.proc_specs.items;
+}
+
+/// Get the number of proc specs
+pub fn procSpecCount(self: *const Self) usize {
+    return self.proc_specs.items.len;
 }
 
 /// Get the number of expressions in the store

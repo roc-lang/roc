@@ -29,6 +29,11 @@ pub const panic = std.debug.FullPanic(panicHandler);
 
 threadlocal var panic_jmp: ?*sljmp.JmpBuf = null;
 threadlocal var panic_msg: ?[]const u8 = null;
+/// Set by signal handlers (SIGALRM/SIGSEGV) when a longjmp interrupts an
+/// allocation.  Once true the GPA mutex is permanently locked and any
+/// alloc/free through it will deadlock, so all further GPA use must be
+/// skipped for the rest of this thread's lifetime.
+threadlocal var gpa_poisoned: bool = false;
 
 fn panicHandler(msg: []const u8, ret_addr: ?usize) noreturn {
     if (panic_jmp) |jmp| {
@@ -53,6 +58,7 @@ fn panicHandler(msg: []const u8, ret_addr: ?usize) noreturn {
 fn crashSignalHandler(_: i32) callconv(.c) void {
     if (panic_jmp) |jmp| {
         panic_msg = "signal: segfault or illegal instruction in generated code";
+        gpa_poisoned = true;
         panic_jmp = null;
         sljmp.longjmp(jmp, 2);
     }
@@ -71,6 +77,7 @@ fn crashSignalHandler(_: i32) callconv(.c) void {
 fn alarmSignalHandler(_: i32) callconv(.c) void {
     if (panic_jmp) |jmp| {
         panic_msg = "timeout: dev backend execution exceeded time limit";
+        gpa_poisoned = true;
         panic_jmp = null;
         sljmp.longjmp(jmp, 3);
     }
@@ -810,6 +817,10 @@ fn checkSnapshotExpectations(gpa: Allocator) !bool {
     var fail_count: usize = 0;
 
     for (work_list.items) |work_item| {
+        // A signal-handler longjmp poisoned the GPA — we cannot allocate or
+        // free through it without deadlocking.  Stop processing immediately.
+        if (gpa_poisoned) break;
+
         const success = switch (work_item.kind) {
             .snapshot_file => processSnapshotFile(gpa, work_item.path, &config) catch false,
             .multi_file_snapshot => blk: {
@@ -4071,39 +4082,6 @@ fn processDevObjectSnapshot(
     };
     defer mir_store.deinit(allocator);
 
-    var mir_lower = mir_mod.Lower.init(allocator, &mir_store, all_module_envs, platform_types, platform_module_idx, app_module_idx) catch {
-        std.log.err("Failed to create MIR lowerer", .{});
-        return false;
-    };
-    defer mir_lower.deinit();
-
-    // Use provides entries from build pipeline (centralized in CompiledModuleInfo)
-    const backend_mod = @import("backend");
-    var entrypoints = std.ArrayList(backend_mod.Entrypoint).empty;
-    defer {
-        for (entrypoints.items) |ep| {
-            allocator.free(ep.symbol_name);
-        }
-        entrypoints.deinit(allocator);
-    }
-
-    const provides_entries = platform_module.provides_entries;
-    if (provides_entries.len == 0) {
-        std.log.err("No provides entries found in platform module", .{});
-        return false;
-    }
-
-    const PendingEntrypoint = struct {
-        ffi_symbol: []const u8,
-        mir_expr_id: MIR.ExprId,
-        ret_layout: layout_mod.Idx,
-    };
-    var pending_entrypoints = std.ArrayList(PendingEntrypoint).empty;
-    defer pending_entrypoints.deinit(allocator);
-
-    var type_layout_resolver = layout_mod.TypeLayoutResolver.init(&layout_store);
-    defer type_layout_resolver.deinit();
-
     const findTypeAliasBodyVar = struct {
         fn run(module_env: *const can.ModuleEnv, name: base.Ident.Idx) ?types.Var {
             const stmts_slice = module_env.store.sliceStatements(module_env.all_statements);
@@ -4146,13 +4124,26 @@ fn processDevObjectSnapshot(
                 try rigid_scope.put(alias_stmt_var, app_var);
             }
         }
-
-        try mir_lower.setTypeScope(platform_module_idx, &platform_type_scope, resolved_app_module_idx);
     }
 
-    // Match provides entries to platform defs and lower them
+    const provides_entries = platform_module.provides_entries;
+    if (provides_entries.len == 0) {
+        std.log.err("No provides entries found in platform module", .{});
+        return false;
+    }
+
     const platform_defs = platform_module.env.store.sliceDefs(platform_module.env.all_defs);
+
+    const PendingEntrypointSource = struct {
+        ffi_symbol: []const u8,
+        roc_ident: []const u8,
+        expr_idx: can.CIR.Expr.Idx,
+    };
+    var pending_entrypoint_sources = std.ArrayList(PendingEntrypointSource).empty;
+    defer pending_entrypoint_sources.deinit(allocator);
+
     for (provides_entries) |entry| {
+        var found_expr: ?can.CIR.Expr.Idx = null;
         for (platform_defs) |def_idx| {
             const def = platform_module.env.store.getDef(def_idx);
             const pattern = platform_module.env.store.getPattern(def.pattern);
@@ -4160,28 +4151,111 @@ fn processDevObjectSnapshot(
                 .assign => |assign| {
                     const ident_name = platform_module.env.getIdent(assign.ident);
                     if (std.mem.eql(u8, ident_name, entry.roc_ident)) {
-                        // Lower CIR → MIR.
-                        const mir_expr_id = mir_lower.lowerExpr(def.expr) catch continue;
-
-                        const type_var = can.ModuleEnv.varFrom(def.expr);
-                        const ret_layout = type_layout_resolver.resolve(
-                            platform_module_idx,
-                            type_var,
-                            &platform_type_scope,
-                            app_module_idx,
-                        ) catch continue;
-
-                        pending_entrypoints.append(allocator, .{
-                            .ffi_symbol = entry.ffi_symbol,
-                            .mir_expr_id = mir_expr_id,
-                            .ret_layout = ret_layout,
-                        }) catch continue;
+                        found_expr = def.expr;
                         break;
                     }
                 },
                 else => {},
             }
         }
+
+        if (found_expr) |expr_idx| {
+            pending_entrypoint_sources.append(allocator, .{
+                .ffi_symbol = entry.ffi_symbol,
+                .roc_ident = entry.roc_ident,
+                .expr_idx = expr_idx,
+            }) catch return false;
+        }
+    }
+
+    if (pending_entrypoint_sources.items.len == 0) {
+        std.log.err("No entrypoint expressions found in platform module", .{});
+        return false;
+    }
+
+    const entrypoint_root_exprs = allocator.alloc(can.CIR.Expr.Idx, pending_entrypoint_sources.items.len) catch return false;
+    defer allocator.free(entrypoint_root_exprs);
+    for (pending_entrypoint_sources.items, 0..) |entrypoint_source, i| {
+        entrypoint_root_exprs[i] = entrypoint_source.expr_idx;
+    }
+
+    var monomorphization = blk: {
+        const mono = if (app_module_idx) |resolved_app_module_idx|
+            mir_mod.Monomorphize.runRootsWithTypeScope(
+                allocator,
+                all_module_envs,
+                platform_types,
+                platform_module_idx,
+                app_module_idx,
+                entrypoint_root_exprs,
+                platform_module_idx,
+                &platform_type_scope,
+                resolved_app_module_idx,
+            )
+        else
+            mir_mod.Monomorphize.runRoots(
+                allocator,
+                all_module_envs,
+                platform_types,
+                platform_module_idx,
+                app_module_idx,
+                entrypoint_root_exprs,
+            );
+        break :blk mono catch {
+            std.log.err("Failed to monomorphize platform module", .{});
+            return false;
+        };
+    };
+    defer monomorphization.deinit(allocator);
+
+    var mir_lower = mir_mod.Lower.init(allocator, &mir_store, &monomorphization, all_module_envs, platform_types, platform_module_idx, app_module_idx) catch {
+        std.log.err("Failed to create MIR lowerer", .{});
+        return false;
+    };
+    defer mir_lower.deinit();
+
+    if (app_module_idx) |resolved_app_module_idx| {
+        try mir_lower.setTypeScope(platform_module_idx, &platform_type_scope, resolved_app_module_idx);
+    }
+
+    // Use provides entries from build pipeline (centralized in CompiledModuleInfo)
+    const backend_mod = @import("backend");
+    var entrypoints = std.ArrayList(backend_mod.Entrypoint).empty;
+    defer {
+        for (entrypoints.items) |ep| {
+            allocator.free(ep.symbol_name);
+        }
+        entrypoints.deinit(allocator);
+    }
+
+    const PendingEntrypoint = struct {
+        ffi_symbol: []const u8,
+        mir_expr_id: MIR.ExprId,
+        ret_layout: layout_mod.Idx,
+    };
+    var pending_entrypoints = std.ArrayList(PendingEntrypoint).empty;
+    defer pending_entrypoints.deinit(allocator);
+
+    var type_layout_resolver = layout_mod.TypeLayoutResolver.init(&layout_store);
+    defer type_layout_resolver.deinit();
+
+    // Match provides entries to platform defs and lower them
+    for (pending_entrypoint_sources.items) |entry| {
+        const mir_expr_id = mir_lower.lowerExpr(entry.expr_idx) catch continue;
+
+        const type_var = can.ModuleEnv.varFrom(entry.expr_idx);
+        const ret_layout = type_layout_resolver.resolve(
+            platform_module_idx,
+            type_var,
+            &platform_type_scope,
+            app_module_idx,
+        ) catch continue;
+
+        pending_entrypoints.append(allocator, .{
+            .ffi_symbol = entry.ffi_symbol,
+            .mir_expr_id = mir_expr_id,
+            .ret_layout = ret_layout,
+        }) catch continue;
     }
 
     if (pending_entrypoints.items.len == 0) {
@@ -4211,11 +4285,11 @@ fn processDevObjectSnapshot(
     defer mir_to_lir.deinit();
 
     for (pending_entrypoints.items) |pending| {
-        const lir_expr_id = mir_to_lir.lower(pending.mir_expr_id) catch continue;
+        const entry_proc = mir_to_lir.lowerEntrypointProc(pending.mir_expr_id, &[_]layout_mod.Idx{}, pending.ret_layout) catch continue;
         const symbol_name = std.fmt.allocPrint(allocator, "roc__{s}", .{pending.ffi_symbol}) catch continue;
         entrypoints.append(allocator, .{
             .symbol_name = symbol_name,
-            .body_expr = lir_expr_id,
+            .proc = entry_proc,
             .arg_layouts = &[_]layout_mod.Idx{},
             .ret_layout = pending.ret_layout,
         }) catch continue;
@@ -4226,33 +4300,9 @@ fn processDevObjectSnapshot(
         return false;
     }
 
-    const pre_rc_root_exprs = try allocator.alloc(lir_mod.LirExprId, entrypoints.items.len);
-    defer allocator.free(pre_rc_root_exprs);
-    for (entrypoints.items, 0..) |ep, i| {
-        pre_rc_root_exprs[i] = ep.body_expr;
-    }
-    try lir_mod.CallCanonicalize.canonicalizeDirectCalls(allocator, &lir_store, pre_rc_root_exprs);
-
-    // 9. RC insertion
-    var rc_pass = lir_mod.RcInsert.RcInsertPass.init(allocator, &lir_store, &layout_store) catch {
-        std.log.err("Failed to create RC insertion pass", .{});
-        return false;
-    };
-    defer rc_pass.deinit();
-
-    for (entrypoints.items) |*ep| {
-        ep.body_expr = rc_pass.insertRcOps(ep.body_expr) catch ep.body_expr;
-    }
-
     lir_mod.RcInsert.insertRcOpsIntoSymbolDefsBestEffort(allocator, &lir_store, &layout_store);
-    const root_exprs = try allocator.alloc(lir_mod.LirExprId, entrypoints.items.len);
-    defer allocator.free(root_exprs);
-    for (entrypoints.items, 0..) |ep, i| {
-        root_exprs[i] = ep.body_expr;
-    }
-    try lir_mod.CallCanonicalize.canonicalizeDirectCalls(allocator, &lir_store, root_exprs);
 
-    const procs = lir_store.getProcs();
+    const procs = lir_store.getProcSpecs();
 
     // 10. Cross-compile for all targets and hash
     const RocTarget = roc_target.RocTarget;
@@ -4423,19 +4473,21 @@ fn processDevObjectSnapshot(
 // REPL Snapshot Processing
 
 fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []const u8, config: *const Config) !bool {
+    if (gpa_poisoned) return false;
+
     var success = true;
     log("Processing REPL snapshot: {s}", .{output_path});
 
     // Buffer all output in memory before writing files
     var md_buffer_unmanaged = std.ArrayList(u8).empty;
     var md_writer_allocating: std.Io.Writer.Allocating = .fromArrayList(allocator, &md_buffer_unmanaged);
-    defer md_buffer_unmanaged.deinit(allocator);
+    defer if (!gpa_poisoned) md_buffer_unmanaged.deinit(allocator);
 
     var html_buffer_unmanaged: ?std.ArrayList(u8) = if (config.generate_html) std.ArrayList(u8).empty else null;
     var html_writer_allocating: ?std.Io.Writer.Allocating = if (config.generate_html) .fromArrayList(allocator, &html_buffer_unmanaged.?) else null;
-    defer {
+    defer if (!gpa_poisoned) {
         if (html_buffer_unmanaged) |*buf| buf.deinit(allocator);
-    }
+    };
 
     var output = DualOutput.init(allocator, &md_writer_allocating, if (html_writer_allocating) |*hw| hw else null);
 
@@ -4474,10 +4526,14 @@ fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []co
 }
 
 fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, content: *const Content, config: *const Config) !bool {
+    // A previous signal-handler longjmp left the GPA mutex locked — any
+    // alloc/free would deadlock.  Nothing useful we can do for this snapshot.
+    if (gpa_poisoned) return false;
+
     var success = true;
     // Parse REPL inputs from the source using » as delimiter
     var inputs = std.array_list.Managed([]const u8).init(output.gpa);
-    defer inputs.deinit();
+    defer if (!gpa_poisoned) inputs.deinit();
 
     // Split by the » character, each section is a separate REPL input
     var parts = std.mem.splitSequence(u8, content.source, "»");
@@ -4494,11 +4550,11 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
     }
 
     var snapshot_ops = SnapshotOps.init(output.gpa);
-    defer snapshot_ops.deinit();
+    defer if (!gpa_poisoned) snapshot_ops.deinit();
 
     // Initialize REPL
     var repl_instance = try Repl.init(output.gpa, snapshot_ops.get_ops(), snapshot_ops.crashContextPtr());
-    defer repl_instance.deinit();
+    defer if (!gpa_poisoned) repl_instance.deinit();
 
     // Enable debug snapshots for CAN/TYPES generation
     repl_instance.enableDebugSnapshots();
@@ -4510,12 +4566,12 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
 
     // Process each input and generate output
     var actual_outputs = std.array_list.Managed([]const u8).init(output.gpa);
-    defer {
+    defer if (!gpa_poisoned) {
         for (actual_outputs.items) |item| {
             output.gpa.free(item);
         }
         actual_outputs.deinit();
-    }
+    };
 
     for (inputs.items) |input| {
         const repl_output = try repl_instance.step(input);
@@ -4532,81 +4588,94 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
         .{ .backend = repl.Backend.dev, .label = "dev" },
         .{ .backend = repl.Backend.llvm, .label = "llvm" },
     }) |cfg| {
-        var backend_snapshot_ops = SnapshotOps.init(output.gpa);
-        defer backend_snapshot_ops.deinit();
-        const backend_repl_result = Repl.initWithBackend(output.gpa, backend_snapshot_ops.get_ops(), backend_snapshot_ops.crashContextPtr(), cfg.backend);
-        if (backend_repl_result) |backend_repl_val| {
-            var backend_repl = backend_repl_val;
+        if (!gpa_poisoned) {
+            var backend_snapshot_ops = SnapshotOps.init(output.gpa);
+            defer if (!gpa_poisoned) backend_snapshot_ops.deinit();
+            const backend_repl_result = Repl.initWithBackend(output.gpa, backend_snapshot_ops.get_ops(), backend_snapshot_ops.crashContextPtr(), cfg.backend);
+            if (backend_repl_result) |backend_repl_val| {
+                var backend_repl = backend_repl_val;
 
-            for (inputs.items, 0..) |input, i| {
-                // Set up panic protection via setjmp. If the backend panics,
-                // the custom panic handler longjmps back here with jmp_result != 0.
-                var jmp_buf: sljmp.JmpBuf = undefined;
-                const jmp_result = sljmp.setjmp(&jmp_buf);
-                if (jmp_result != 0) {
-                    // Returned from a panic — report it and stop this snapshot's run.
-                    // The backend REPL state is corrupted after a panic, so we can't continue.
-                    const msg = panic_msg orelse "unknown";
-                    std.debug.print("{s} REPL panic at input {d} in {s}: {s}\n", .{ cfg.label, i, snapshot_path, msg });
-                    panic_msg = null;
-                    break;
-                }
-                panic_jmp = &jmp_buf;
-                defer {
-                    panic_jmp = null;
-                }
+                for (inputs.items, 0..) |input, i| {
+                    // Set up panic protection via setjmp. If the backend panics,
+                    // the custom panic handler longjmps back here with jmp_result != 0.
+                    var jmp_buf: sljmp.JmpBuf = undefined;
+                    const jmp_result = sljmp.setjmp(&jmp_buf);
+                    if (jmp_result != 0) {
+                        // Returned from a panic — report it and stop this snapshot's run.
+                        // The backend REPL state is corrupted after a panic, so we can't continue.
+                        const msg = panic_msg orelse "unknown";
+                        std.debug.print("{s} REPL panic at input {d} in {s}: {s}\n", .{ cfg.label, i, snapshot_path, msg });
+                        panic_msg = null;
+                        break;
+                    }
+                    panic_jmp = &jmp_buf;
+                    defer {
+                        panic_jmp = null;
+                    }
 
-                // Set a 10-second timeout to catch infinite loops in generated code.
-                // Note: alarm() is process-wide — in parallel mode, SIGALRM may be
-                // delivered to the wrong thread. The handler checks threadlocal panic_jmp,
-                // so it's harmless if the receiving thread isn't evaluating.
-                _ = std.c.alarm(10);
-                defer _ = std.c.alarm(0);
+                    // Set a 60-second timeout to catch infinite loops in generated code.
+                    // Compilation of recursive functions can take 10+ seconds on slow CI
+                    // machines, so we use a generous limit.
+                    // Note: alarm() is process-wide — in parallel mode, SIGALRM may be
+                    // delivered to the wrong thread. The handler checks threadlocal panic_jmp,
+                    // so it's harmless if the receiving thread isn't evaluating.
+                    _ = std.c.alarm(60);
+                    defer _ = std.c.alarm(0);
 
-                const backend_output = backend_repl.step(input) catch |err| {
-                    std.debug.print("{s} REPL error at input {d} in {s}: {}\n", .{ cfg.label, i, snapshot_path, err });
-                    continue;
-                };
-                defer output.gpa.free(backend_output);
+                    const backend_output = backend_repl.step(input) catch |err| {
+                        std.debug.print("{s} REPL error at input {d} in {s}: {}\n", .{ cfg.label, i, snapshot_path, err });
+                        continue;
+                    };
+                    defer output.gpa.free(backend_output);
 
-                // Cap backend output to prevent flooding terminal with corrupted string data.
-                const max_output_len = 4096;
-                const backend_display = if (backend_output.len > max_output_len)
-                    backend_output[0..max_output_len]
-                else
-                    backend_output;
+                    // Cap backend output to prevent flooding terminal with corrupted string data.
+                    const max_output_len = 4096;
+                    const backend_display = if (backend_output.len > max_output_len)
+                        backend_output[0..max_output_len]
+                    else
+                        backend_output;
 
-                if (i < actual_outputs.items.len) {
-                    const interp_output = actual_outputs.items[i];
-                    if (!std.mem.eql(u8, interp_output, backend_output)) {
-                        std.debug.print(
-                            "REPL backend mismatch at input {d} in {s}:\n  interpreter: '{s}'\n  {s}:         '{s}'{s}\n",
-                            .{ i, snapshot_path, interp_output, cfg.label, backend_display, if (backend_output.len > max_output_len) "... (truncated)" else "" },
-                        );
-                        success = false;
+                    if (i < actual_outputs.items.len) {
+                        const interp_output = actual_outputs.items[i];
+                        if (!std.mem.eql(u8, interp_output, backend_output)) {
+                            std.debug.print(
+                                "REPL backend mismatch at input {d} in {s}:\n  interpreter: '{s}'\n  {s}:         '{s}'{s}\n",
+                                .{ i, snapshot_path, interp_output, cfg.label, backend_display, if (backend_output.len > max_output_len) "... (truncated)" else "" },
+                            );
+                            success = false;
+                        }
                     }
                 }
-            }
 
-            // Deinit with panic protection — after a codegen panic, the REPL
-            // state may be corrupted and cleanup (e.g. GPA leak detection) can
-            // trigger secondary panics that would otherwise terminate the process.
-            {
-                var deinit_jmp_buf: sljmp.JmpBuf = undefined;
-                const deinit_jmp_result = sljmp.setjmp(&deinit_jmp_buf);
-                if (deinit_jmp_result != 0) {
-                    panic_msg = null;
-                } else {
-                    panic_jmp = &deinit_jmp_buf;
-                    backend_repl.deinit();
-                    panic_jmp = null;
+                // Deinit with panic protection — after a codegen panic, the REPL
+                // state may be corrupted and cleanup (e.g. GPA leak detection) can
+                // trigger secondary panics that would otherwise terminate the process.
+                //
+                // After a signal-handler longjmp (SIGALRM timeout, SIGSEGV) the
+                // allocator mutex may be permanently locked, so calling deinit would
+                // deadlock. Skip cleanup entirely in that case — we leak, but we
+                // don't crash the whole test suite.
+                if (!gpa_poisoned) {
+                    var deinit_jmp_buf: sljmp.JmpBuf = undefined;
+                    const deinit_jmp_result = sljmp.setjmp(&deinit_jmp_buf);
+                    if (deinit_jmp_result != 0) {
+                        panic_msg = null;
+                    } else {
+                        panic_jmp = &deinit_jmp_buf;
+                        backend_repl.deinit();
+                        panic_jmp = null;
+                    }
                 }
+            } else |err| {
+                std.debug.print("{s} REPL init failed in {s}: {}\n", .{ cfg.label, snapshot_path, err });
+                success = false;
             }
-        } else |err| {
-            std.debug.print("{s} REPL init failed in {s}: {}\n", .{ cfg.label, snapshot_path, err });
-            success = false;
-        }
+        } // if (!gpa_poisoned)
     }
+
+    // The GPA allocator is permanently broken — any alloc/free will deadlock.
+    // Bail out now; the snapshot is already marked as failed above.
+    if (gpa_poisoned) return false;
 
     switch (config.output_section_command) {
         .update => {

@@ -3,6 +3,10 @@
 const std = @import("std");
 const util = @import("util.zig");
 
+fn createPerTestCacheEnv(allocator: std.mem.Allocator) !std.process.EnvMap {
+    return util.buildIsolatedTestEnvMap(allocator, null);
+}
+
 test "roc check writes parse errors to stderr" {
     const testing = std.testing;
     const gpa = testing.allocator;
@@ -771,12 +775,15 @@ test "roc build glibc target gives helpful error on non-Linux" {
 
 fn testCachesPassingResults(opt: []const u8) !void {
     const gpa = std.testing.allocator;
-    const result1 = try util.runRoc(gpa, &.{ "test", opt }, "test/cli/AllPassTests.roc");
+    var env_map = try createPerTestCacheEnv(gpa);
+    defer env_map.deinit();
+
+    const result1 = try util.runRocWithEnv(gpa, &.{ "test", opt }, "test/cli/AllPassTests.roc", &env_map);
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
     try std.testing.expect(result1.term == .Exited and result1.term.Exited == 0);
 
-    const result2 = try util.runRoc(gpa, &.{ "test", opt }, "test/cli/AllPassTests.roc");
+    const result2 = try util.runRocWithEnv(gpa, &.{ "test", opt }, "test/cli/AllPassTests.roc", &env_map);
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
     try std.testing.expect(result2.term == .Exited and result2.term.Exited == 0);
@@ -793,12 +800,15 @@ test "roc test caches passing results (dev)" {
 
 fn testCachesFailingResults(opt: []const u8) !void {
     const gpa = std.testing.allocator;
-    const result1 = try util.runRoc(gpa, &.{ "test", opt }, "test/cli/SomeFailTests.roc");
+    var env_map = try createPerTestCacheEnv(gpa);
+    defer env_map.deinit();
+
+    const result1 = try util.runRocWithEnv(gpa, &.{ "test", opt }, "test/cli/SomeFailTests.roc", &env_map);
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
     try std.testing.expect(result1.term == .Exited and result1.term.Exited == 1);
 
-    const result2 = try util.runRoc(gpa, &.{ "test", opt }, "test/cli/SomeFailTests.roc");
+    const result2 = try util.runRocWithEnv(gpa, &.{ "test", opt }, "test/cli/SomeFailTests.roc", &env_map);
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
     try std.testing.expect(result2.term == .Exited and result2.term.Exited == 1);
@@ -816,6 +826,8 @@ test "roc test caches failing results (dev)" {
 test "roc test cache invalidated by source change (interpreter)" {
     const testing = std.testing;
     const gpa = testing.allocator;
+    var env_map = try createPerTestCacheEnv(gpa);
+    defer env_map.deinit();
 
     // Create a temporary copy of the test file
     var tmp_dir = testing.tmpDir(.{});
@@ -844,6 +856,7 @@ test "roc test cache invalidated by source change (interpreter)" {
         .allocator = gpa,
         .argv = &.{ roc_path, "test", "--opt=interpreter", temp_file_path },
         .cwd = cwd_path,
+        .env_map = &env_map,
         .max_output_bytes = 10 * 1024 * 1024,
     });
     defer gpa.free(result1.stdout);
@@ -860,6 +873,7 @@ test "roc test cache invalidated by source change (interpreter)" {
         .allocator = gpa,
         .argv = &.{ roc_path, "test", "--opt=interpreter", temp_file_path },
         .cwd = cwd_path,
+        .env_map = &env_map,
         .max_output_bytes = 10 * 1024 * 1024,
     });
     defer gpa.free(result2.stdout);
@@ -878,12 +892,15 @@ test "roc test cache invalidated by source change (dev)" {
 
 fn testVerboseWorksFromCache(opt: []const u8) !void {
     const gpa = std.testing.allocator;
-    const result1 = try util.runRoc(gpa, &.{ "test", opt }, "test/cli/AllPassTests.roc");
+    var env_map = try createPerTestCacheEnv(gpa);
+    defer env_map.deinit();
+
+    const result1 = try util.runRocWithEnv(gpa, &.{ "test", opt }, "test/cli/AllPassTests.roc", &env_map);
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
     try std.testing.expect(result1.term == .Exited and result1.term.Exited == 0);
 
-    const result2 = try util.runRoc(gpa, &.{ "test", opt, "--verbose" }, "test/cli/AllPassTests.roc");
+    const result2 = try util.runRocWithEnv(gpa, &.{ "test", opt, "--verbose" }, "test/cli/AllPassTests.roc", &env_map);
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
     try std.testing.expect(result2.term == .Exited and result2.term.Exited == 0);
@@ -900,12 +917,15 @@ test "roc test --verbose works from cache (dev)" {
 
 fn testVerboseCachesFailureReports(opt: []const u8) !void {
     const gpa = std.testing.allocator;
-    const result1 = try util.runRoc(gpa, &.{ "test", opt, "--verbose" }, "test/cli/SomeFailTests.roc");
+    var env_map = try createPerTestCacheEnv(gpa);
+    defer env_map.deinit();
+
+    const result1 = try util.runRocWithEnv(gpa, &.{ "test", opt, "--verbose" }, "test/cli/SomeFailTests.roc", &env_map);
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
     try std.testing.expect(result1.term == .Exited and result1.term.Exited == 1);
 
-    const result2 = try util.runRoc(gpa, &.{ "test", opt, "--verbose" }, "test/cli/SomeFailTests.roc");
+    const result2 = try util.runRocWithEnv(gpa, &.{ "test", opt, "--verbose" }, "test/cli/SomeFailTests.roc", &env_map);
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
     try std.testing.expect(result2.term == .Exited and result2.term.Exited == 1);
@@ -924,13 +944,16 @@ test "roc test --verbose caches failure reports (dev)" {
 
 fn testNonVerboseCachesVerboseReports(opt: []const u8) !void {
     const gpa = std.testing.allocator;
-    const result1 = try util.runRoc(gpa, &.{ "test", opt }, "test/cli/SomeFailTests.roc");
+    var env_map = try createPerTestCacheEnv(gpa);
+    defer env_map.deinit();
+
+    const result1 = try util.runRocWithEnv(gpa, &.{ "test", opt }, "test/cli/SomeFailTests.roc", &env_map);
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
     try std.testing.expect(result1.term == .Exited and result1.term.Exited == 1);
     try std.testing.expect(std.mem.indexOf(u8, result1.stderr, "expect failed") == null);
 
-    const result2 = try util.runRoc(gpa, &.{ "test", opt, "--verbose" }, "test/cli/SomeFailTests.roc");
+    const result2 = try util.runRocWithEnv(gpa, &.{ "test", opt, "--verbose" }, "test/cli/SomeFailTests.roc", &env_map);
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
     try std.testing.expect(result2.term == .Exited and result2.term.Exited == 1);
