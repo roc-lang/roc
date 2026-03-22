@@ -5,10 +5,10 @@ import pf.Stdout
 ## Test nested tag matching in statement-position (generateMatchStmt path).
 ## The match is the last expression in main!, returning {}.
 
-read_something! : {} => Try(Str, [NotFound, ..])
+read_something! : {} => Try(Str, [NotFound, Exit(I64)])
 read_something! = |{}| Err(NotFound)
 
-do_init! : {} => Try(Str, [Exit(I64), ..])
+do_init! : {} => Try(Str, [NotFound, Exit(I64)])
 do_init! = |{}| {
     result = read_something!({})?
     Ok(result)
