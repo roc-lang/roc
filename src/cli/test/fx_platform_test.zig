@@ -1015,8 +1015,21 @@ test "fx platform var with string interpolation segfault (interpreter)" {
 }
 
 test "fx platform var with string interpolation segfault (dev backend)" {
-    // TODO: dev backend fails with unresolved symbol panic in LirCodeGen.zig
-    return error.SkipZigTest;
+    // Regression test: same as the interpreter variant but using the dev backend.
+    // Previously crashed with unresolved symbol panic in LirCodeGen.zig because
+    // Stdout.line! (a hosted function) was passed directly to for_each!.
+    const allocator = testing.allocator;
+
+    const run_result = try util.runRoc(allocator, &.{}, "test/fx/var_interp_segfault.roc");
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    try util.checkSuccess(run_result);
+
+    // Verify the expected output
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "A1: 1") != null);
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "A2: 1") != null);
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "A3: 1") != null);
 }
 
 test "fx platform sublist method on inferred type" {
@@ -1045,6 +1058,22 @@ test "fx platform repeating pattern segfault (interpreter)" {
     defer allocator.free(run_result.stderr);
 
     try util.checkSuccess(run_result);
+}
+
+test "fx platform hosted function passed as argument to higher-order function" {
+    // Regression test for https://github.com/roc-lang/roc/issues/9264
+    // The dev backend panics with "unresolved symbol" when a hosted effectful
+    // function (e.g. Stdout.line!) is passed directly as an argument to a
+    // higher-order function (e.g. for_each!), instead of being wrapped in a lambda.
+    const allocator = testing.allocator;
+
+    const run_result = try util.runRoc(allocator, &.{}, "test/fx/hosted_fn_as_arg.roc");
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    try util.checkSuccess(run_result);
+
+    try testing.expectEqualStrings("hello\n", run_result.stdout);
 }
 
 test "fx platform runtime stack overflow" {
