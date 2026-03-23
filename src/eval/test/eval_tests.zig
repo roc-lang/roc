@@ -9,6 +9,9 @@ const RocDec = @import("builtins").dec.RocDec;
 /// Skip all backends — used for tests that document bugs (crash/fail).
 const SKIP_ALL: TestCase.Skip = .{ .interpreter = true, .dev = true, .wasm = true, .llvm = true };
 
+/// Skip only the interpreter — test passes on dev/wasm but interpreter has a bug.
+const SKIP_INTERP: TestCase.Skip = .{ .interpreter = true };
+
 /// All eval test cases, consumed by the parallel runner.
 pub const tests = [_]TestCase{
     // --- proof of concept tests ---
@@ -7760,234 +7763,505 @@ pub const tests = [_]TestCase{
         .skip = .{ .interpreter = true, .dev = true, .wasm = true, .llvm = true },
     },
 
-    // --- coverage: non-Dec numeric method dispatch (Gap #1, lines 17681-17729) ---
+    // --- non-Dec numeric method dispatch (Gap #1, lines 17681-17729) ---
     .{
-        .name = "coverage: I32 addition via method dispatch",
+        .name = "I32 addition via method dispatch",
         .source = "1.I32 + 2.I32",
         .expected = .{ .i32_val = 3 },
     },
     .{
-        .name = "coverage: I32 subtraction via method dispatch",
+        .name = "I32 subtraction via method dispatch",
         .source = "10.I32 - 3.I32",
         .expected = .{ .i32_val = 7 },
     },
     .{
-        .name = "coverage: I32 multiplication via method dispatch",
+        .name = "I32 multiplication via method dispatch",
         .source = "4.I32 * 5.I32",
         .expected = .{ .i32_val = 20 },
     },
     .{
-        .name = "coverage: I64 addition via method dispatch",
+        .name = "I64 addition via method dispatch",
         .source = "100.I64 + 200.I64",
         .expected = .{ .i64_val = 300 },
     },
     .{
-        .name = "coverage: U64 addition via method dispatch",
+        .name = "U64 addition via method dispatch",
         .source = "10.U64 + 20.U64",
         .expected = .{ .u64_val = 30 },
     },
     .{
-        .name = "coverage: U32 addition via method dispatch",
+        .name = "U32 addition via method dispatch",
         .source = "7.U32 + 3.U32",
         .expected = .{ .u32_val = 10 },
     },
     .{
-        .name = "coverage: I32 greater than comparison",
+        .name = "I32 greater than comparison",
         .source = "5.I32 > 3.I32",
         .expected = .{ .bool_val = true },
     },
     .{
-        .name = "coverage: I32 less than comparison",
+        .name = "I32 less than comparison",
         .source = "2.I32 < 10.I32",
         .expected = .{ .bool_val = true },
     },
     .{
-        .name = "coverage: I32 greater than or equal comparison",
+        .name = "I32 greater than or equal comparison",
         .source = "5.I32 >= 5.I32",
         .expected = .{ .bool_val = true },
     },
     .{
-        .name = "coverage: I32 less than or equal comparison",
+        .name = "I32 less than or equal comparison",
         .source = "3.I32 <= 5.I32",
         .expected = .{ .bool_val = true },
     },
     .{
-        .name = "coverage: I32 equality comparison",
+        .name = "I32 equality comparison",
         .source = "42.I32 == 42.I32",
         .expected = .{ .bool_val = true },
     },
     .{
-        .name = "coverage: I32 inequality comparison",
+        .name = "I32 inequality comparison",
         .source = "42.I32 != 43.I32",
         .expected = .{ .bool_val = true },
     },
     .{
-        .name = "coverage: I64 division via method dispatch",
+        .name = "I64 division via method dispatch",
         .source = "20.I64 // 4.I64",
         .expected = .{ .i64_val = 5 },
     },
     .{
-        .name = "coverage: I64 remainder via method dispatch",
+        .name = "I64 remainder via method dispatch",
         .source = "17.I64 % 5.I64",
         .expected = .{ .i64_val = 2 },
     },
 
-    // --- coverage: integer type conversions (Gaps #5-#12) ---
+    // --- integer type conversions (Gaps #5-#12) ---
     .{
-        .name = "coverage: I64 to I128",
+        .name = "I64 to I128",
         .source = "{ 42.I64.to_i128() }",
         .expected = .{ .i128_val = 42 },
     },
     .{
-        .name = "coverage: I64 to F32",
+        .name = "I64 to F32",
         .source = "{ 42.I64.to_f32() }",
         .expected = .{ .f32_val = 42.0 },
     },
     .{
-        .name = "coverage: I64 to F64",
+        .name = "I64 to F64",
         .source = "{ 42.I64.to_f64() }",
         .expected = .{ .f64_val = 42.0 },
     },
     .{
-        .name = "coverage: U64 to I128",
+        .name = "U64 to I128",
         .source = "{ 42.U64.to_i128() }",
         .expected = .{ .i128_val = 42 },
     },
     .{
-        .name = "coverage: U64 to F64",
+        .name = "U64 to F64",
         .source = "{ 42.U64.to_f64() }",
         .expected = .{ .f64_val = 42.0 },
     },
     .{
-        .name = "coverage: I32 to I128",
+        .name = "I32 to I128",
         .source = "{ 42.I32.to_i128() }",
         .expected = .{ .i128_val = 42 },
     },
     .{
-        .name = "coverage: I32 to F64",
+        .name = "I32 to F64",
         .source = "{ 42.I32.to_f64() }",
         .expected = .{ .f64_val = 42.0 },
     },
     .{
-        .name = "coverage: U32 to I128",
+        .name = "U32 to I128",
         .source = "{ 42.U32.to_i128() }",
         .expected = .{ .i128_val = 42 },
     },
     .{
-        .name = "coverage: U32 to F64",
+        .name = "U32 to F64",
         .source = "{ 42.U32.to_f64() }",
         .expected = .{ .f64_val = 42.0 },
     },
     .{
-        .name = "coverage: I16 to I128",
+        .name = "I16 to I128",
         .source = "{ 42.I16.to_i128() }",
         .expected = .{ .i128_val = 42 },
     },
     .{
-        .name = "coverage: I16 to F64",
+        .name = "I16 to F64",
         .source = "{ 42.I16.to_f64() }",
         .expected = .{ .f64_val = 42.0 },
     },
     .{
-        .name = "coverage: U16 to I128",
+        .name = "U16 to I128",
         .source = "{ 42.U16.to_i128() }",
         .expected = .{ .i128_val = 42 },
     },
     .{
-        .name = "coverage: U16 to F64",
+        .name = "U16 to F64",
         .source = "{ 42.U16.to_f64() }",
         .expected = .{ .f64_val = 42.0 },
     },
     .{
-        .name = "coverage: I8 to I128",
+        .name = "I8 to I128",
         .source = "{ 42.I8.to_i128() }",
         .expected = .{ .i128_val = 42 },
     },
     .{
-        .name = "coverage: I8 to F64",
+        .name = "I8 to F64",
         .source = "{ 42.I8.to_f64() }",
         .expected = .{ .f64_val = 42.0 },
     },
     .{
-        .name = "coverage: I128 to F64",
+        .name = "I128 to F64",
         .source = "{ 42.I128.to_f64() }",
         .expected = .{ .f64_val = 42.0 },
     },
     .{
-        .name = "coverage: U128 to F64",
+        .name = "U128 to F64",
         .source = "{ 42.U128.to_f64() }",
         .expected = .{ .f64_val = 42.0 },
     },
-    // TODO: narrowing/wrapping conversions crash in interpreter
+    // TODO: narrowing/wrapping conversions crash across all backends
+    .{ .name = "U64 to U8 wrapping", .source = "{ 300.U64.to_u8() }", .expected = .{ .u8_val = 44 }, .skip = SKIP_ALL },
+    .{ .name = "U64 to I8 wrapping", .source = "{ 200.U64.to_i8() }", .expected = .{ .i8_val = -56 }, .skip = SKIP_ALL },
+    .{ .name = "I64 to U8 wrapping", .source = "{ 256.I64.to_u8() }", .expected = .{ .u8_val = 0 }, .skip = SKIP_ALL },
+    .{ .name = "I64 to I8 wrapping", .source = "{ 300.I64.to_i8() }", .expected = .{ .i8_val = 44 }, .skip = SKIP_ALL },
+    .{ .name = "U32 to U8 wrapping", .source = "{ 300.U32.to_u8() }", .expected = .{ .u8_val = 44 }, .skip = SKIP_ALL },
     .{
-        .name = "coverage: U64 to U8 wrapping",
-        .source = "{ 300.U64.to_u8() }",
-        .expected = .{ .u8_val = 44 },
-        .skip = SKIP_ALL,
-    },
-    .{
-        .name = "coverage: U64 to I8 wrapping",
-        .source = "{ 200.U64.to_i8() }",
-        .expected = .{ .i8_val = -56 },
-        .skip = SKIP_ALL,
-    },
-    .{
-        .name = "coverage: I64 to U8 wrapping",
-        .source = "{ 256.I64.to_u8() }",
-        .expected = .{ .u8_val = 0 },
-        .skip = SKIP_ALL,
-    },
-    .{
-        .name = "coverage: I64 to I8 wrapping",
-        .source = "{ 300.I64.to_i8() }",
-        .expected = .{ .i8_val = 44 },
-        .skip = SKIP_ALL,
-    },
-    .{
-        .name = "coverage: U32 to U8 wrapping",
-        .source = "{ 300.U32.to_u8() }",
-        .expected = .{ .u8_val = 44 },
-        .skip = SKIP_ALL,
-    },
-    .{
-        .name = "coverage: U32 to U64",
+        .name = "U32 to U64",
         .source = "{ 42.U32.to_u64() }",
         .expected = .{ .u64_val = 42 },
     },
     .{
-        .name = "coverage: U16 to U32",
+        .name = "U16 to U32",
         .source = "{ 42.U16.to_u32() }",
         .expected = .{ .u32_val = 42 },
     },
+    .{ .name = "I128 to I8 wrapping", .source = "{ 300.I128.to_i8() }", .expected = .{ .i8_val = 44 }, .skip = SKIP_ALL },
+    .{ .name = "U128 to U8 wrapping", .source = "{ 300.U128.to_u8() }", .expected = .{ .u8_val = 44 }, .skip = SKIP_ALL },
+    // TODO: signed-to-unsigned conversions crash across all backends
+    .{ .name = "I64 to U64", .source = "{ 42.I64.to_u64() }", .expected = .{ .u64_val = 42 }, .skip = SKIP_ALL },
+    .{ .name = "I64 to U32", .source = "{ 42.I64.to_u32() }", .expected = .{ .u32_val = 42 }, .skip = SKIP_ALL },
+    .{ .name = "I64 to U16", .source = "{ 42.I64.to_u16() }", .expected = .{ .u16_val = 42 }, .skip = SKIP_ALL },
+
+    // --- shift operations (Gaps #10, #13) ---
     .{
-        .name = "coverage: I128 to I8 wrapping",
-        .source = "{ 300.I128.to_i8() }",
-        .expected = .{ .i8_val = 44 },
+        .name = "shift left I64",
+        .source = "{ 1.I64.shift_left_by(4.U8) }",
+        .expected = .{ .i64_val = 16 },
+    },
+    .{
+        .name = "shift left U64",
+        .source = "{ 1.U64.shift_left_by(8.U8) }",
+        .expected = .{ .u64_val = 256 },
+    },
+    .{
+        .name = "shift left I32",
+        .source = "{ 1.I32.shift_left_by(3.U8) }",
+        .expected = .{ .i32_val = 8 },
+    },
+    .{
+        .name = "shift left U32",
+        .source = "{ 1.U32.shift_left_by(5.U8) }",
+        .expected = .{ .u32_val = 32 },
+    },
+    .{
+        .name = "shift left I16",
+        .source = "{ 1.I16.shift_left_by(2.U8) }",
+        .expected = .{ .i16_val = 4 },
+    },
+    .{
+        .name = "shift left U8",
+        .source = "{ 1.U8.shift_left_by(7.U8) }",
+        .expected = .{ .u8_val = 128 },
+    },
+    .{
+        .name = "shift right zf I64",
+        .source = "{ 128.I64.shift_right_zf_by(2.U8) }",
+        .expected = .{ .i64_val = 32 },
+    },
+    .{
+        .name = "shift right zf U64",
+        .source = "{ 256.U64.shift_right_zf_by(4.U8) }",
+        .expected = .{ .u64_val = 16 },
+    },
+    .{
+        .name = "shift right zf I32",
+        .source = "{ 64.I32.shift_right_zf_by(3.U8) }",
+        .expected = .{ .i32_val = 8 },
+    },
+    .{
+        .name = "shift right zf U32",
+        .source = "{ 1024.U32.shift_right_zf_by(5.U8) }",
+        .expected = .{ .u32_val = 32 },
+    },
+    .{
+        .name = "shift right zf U16",
+        .source = "{ 512.U16.shift_right_zf_by(4.U8) }",
+        .expected = .{ .u16_val = 32 },
+    },
+    .{
+        .name = "shift right zf U8",
+        .source = "{ 240.U8.shift_right_zf_by(4.U8) }",
+        .expected = .{ .u8_val = 15 },
+    },
+
+    // --- F32/F64 to int conversions (Gaps #3, #4) ---
+    // TODO: float-to-int and float narrowing conversions crash across all backends
+    .{ .name = "F64 to I64", .source = "{ 42.0.F64.to_i64() }", .expected = .{ .i64_val = 42 }, .skip = SKIP_ALL },
+    .{ .name = "F64 to I32", .source = "{ 42.0.F64.to_i32() }", .expected = .{ .i32_val = 42 }, .skip = SKIP_ALL },
+    .{ .name = "F64 to I16", .source = "{ 42.0.F64.to_i16() }", .expected = .{ .i16_val = 42 }, .skip = SKIP_ALL },
+    .{ .name = "F64 to I8", .source = "{ 42.0.F64.to_i8() }", .expected = .{ .i8_val = 42 }, .skip = SKIP_ALL },
+    .{ .name = "F64 to U64", .source = "{ 42.0.F64.to_u64() }", .expected = .{ .u64_val = 42 }, .skip = SKIP_ALL },
+    .{ .name = "F64 to U32", .source = "{ 42.0.F64.to_u32() }", .expected = .{ .u32_val = 42 }, .skip = SKIP_ALL },
+    .{ .name = "F64 to U16", .source = "{ 42.0.F64.to_u16() }", .expected = .{ .u16_val = 42 }, .skip = SKIP_ALL },
+    .{ .name = "F64 to U8", .source = "{ 42.0.F64.to_u8() }", .expected = .{ .u8_val = 42 }, .skip = SKIP_ALL },
+    .{ .name = "F64 to F32", .source = "{ 1.5.F64.to_f32() }", .expected = .{ .f32_val = 1.5 }, .skip = SKIP_ALL },
+    .{ .name = "F32 to I64", .source = "{ 42.0.F32.to_i64() }", .expected = .{ .i64_val = 42 }, .skip = SKIP_ALL },
+    .{ .name = "F32 to I32", .source = "{ 42.0.F32.to_i32() }", .expected = .{ .i32_val = 42 }, .skip = SKIP_ALL },
+    .{ .name = "F32 to U64", .source = "{ 42.0.F32.to_u64() }", .expected = .{ .u64_val = 42 }, .skip = SKIP_ALL },
+    .{ .name = "F32 to U32", .source = "{ 42.0.F32.to_u32() }", .expected = .{ .u32_val = 42 }, .skip = SKIP_ALL },
+    .{
+        .name = "F32 to F64",
+        .source = "{ 1.5.F32.to_f64() }",
+        .expected = .{ .f64_val = 1.5 },
+    },
+
+    // --- Dec to int/float conversions (Gap #2) ---
+    // TODO: Dec-to-int and Dec-to-F32 conversions crash across all backends
+    .{ .name = "Dec to I64", .source = "{ 42.to_i64() }", .expected = .{ .i64_val = 42 }, .skip = SKIP_ALL },
+    .{ .name = "Dec to I32", .source = "{ 42.to_i32() }", .expected = .{ .i32_val = 42 }, .skip = SKIP_ALL },
+    .{ .name = "Dec to I16", .source = "{ 42.to_i16() }", .expected = .{ .i16_val = 42 }, .skip = SKIP_ALL },
+    .{ .name = "Dec to I8", .source = "{ 42.to_i8() }", .expected = .{ .i8_val = 42 }, .skip = SKIP_ALL },
+    .{ .name = "Dec to U64", .source = "{ 42.to_u64() }", .expected = .{ .u64_val = 42 }, .skip = SKIP_ALL },
+    .{ .name = "Dec to U32", .source = "{ 42.to_u32() }", .expected = .{ .u32_val = 42 }, .skip = SKIP_ALL },
+    .{ .name = "Dec to U16", .source = "{ 42.to_u16() }", .expected = .{ .u16_val = 42 }, .skip = SKIP_ALL },
+    .{ .name = "Dec to U8", .source = "{ 42.to_u8() }", .expected = .{ .u8_val = 42 }, .skip = SKIP_ALL },
+    .{ .name = "Dec to I128", .source = "{ 42.to_i128() }", .expected = .{ .i128_val = 42 }, .skip = SKIP_ALL },
+    .{ .name = "Dec to U128", .source = "{ 42.to_u128() }", .expected = .{ .u128_val = 42 }, .skip = SKIP_ALL },
+    .{ .name = "Dec to F32", .source = "{ 1.5.to_f32() }", .expected = .{ .f32_val = 1.5 }, .skip = SKIP_ALL },
+    .{
+        .name = "Dec to F64",
+        .source = "{ 1.5.to_f64() }",
+        .expected = .{ .f64_val = 1.5 },
+    },
+
+    // --- typed int arithmetic (U8, U16, I8, I16) ---
+    .{ .name = "U8 addition", .source = "1.U8 + 2.U8", .expected = .{ .u8_val = 3 } },
+    .{ .name = "U8 subtraction", .source = "10.U8 - 3.U8", .expected = .{ .u8_val = 7 } },
+    .{ .name = "U8 multiplication", .source = "5.U8 * 4.U8", .expected = .{ .u8_val = 20 } },
+    .{ .name = "U16 addition", .source = "100.U16 + 200.U16", .expected = .{ .u16_val = 300 } },
+    .{ .name = "U16 multiplication", .source = "10.U16 * 20.U16", .expected = .{ .u16_val = 200 } },
+    .{ .name = "I8 addition", .source = "10.I8 + 20.I8", .expected = .{ .i8_val = 30 } },
+    .{ .name = "I8 subtraction", .source = "50.I8 - 20.I8", .expected = .{ .i8_val = 30 } },
+    .{ .name = "I16 addition", .source = "100.I16 + 200.I16", .expected = .{ .i16_val = 300 } },
+    .{ .name = "I16 multiplication", .source = "10.I16 * 30.I16", .expected = .{ .i16_val = 300 } },
+    .{ .name = "I128 addition", .source = "100.I128 + 200.I128", .expected = .{ .i128_val = 300 } },
+    .{ .name = "U128 addition", .source = "100.U128 + 200.U128", .expected = .{ .u128_val = 300 } },
+
+    // --- typed int comparisons on more types ---
+    .{ .name = "U64 greater than", .source = "10.U64 > 5.U64", .expected = .{ .bool_val = true } },
+    .{ .name = "U64 less than", .source = "3.U64 < 7.U64", .expected = .{ .bool_val = true } },
+    .{ .name = "U64 equality", .source = "42.U64 == 42.U64", .expected = .{ .bool_val = true } },
+    .{ .name = "I64 greater than", .source = "10.I64 > 5.I64", .expected = .{ .bool_val = true } },
+    .{ .name = "I64 less than", .source = "3.I64 < 7.I64", .expected = .{ .bool_val = true } },
+    .{ .name = "I64 equality", .source = "42.I64 == 42.I64", .expected = .{ .bool_val = true } },
+    .{ .name = "U32 greater than", .source = "10.U32 > 5.U32", .expected = .{ .bool_val = true } },
+    .{ .name = "U8 equality", .source = "42.U8 == 42.U8", .expected = .{ .bool_val = true } },
+    .{ .name = "I8 less than", .source = "3.I8 < 7.I8", .expected = .{ .bool_val = true } },
+    .{ .name = "I128 equality", .source = "42.I128 == 42.I128", .expected = .{ .bool_val = true } },
+    .{ .name = "U128 greater than", .source = "100.U128 > 50.U128", .expected = .{ .bool_val = true } },
+
+    // --- division and remainder on more int types ---
+    .{ .name = "I32 truncating division", .source = "20.I32 // 3.I32", .expected = .{ .i32_val = 6 } },
+    .{ .name = "I32 remainder", .source = "17.I32 % 5.I32", .expected = .{ .i32_val = 2 } },
+    .{ .name = "U64 truncating division", .source = "100.U64 // 7.U64", .expected = .{ .u64_val = 14 } },
+    .{ .name = "U64 remainder", .source = "100.U64 % 7.U64", .expected = .{ .u64_val = 2 } },
+    .{ .name = "U32 truncating division", .source = "100.U32 // 3.U32", .expected = .{ .u32_val = 33 } },
+
+    // --- to_str on typed ints (exercises render_helpers) ---
+    .{ .name = "I32 to_str", .source = "42.I32.to_str()", .expected = .{ .str_val = "42" } },
+    .{ .name = "U64 to_str", .source = "255.U64.to_str()", .expected = .{ .str_val = "255" } },
+    .{ .name = "I8 to_str", .source = "42.I8.to_str()", .expected = .{ .str_val = "42" } },
+    .{ .name = "U8 to_str", .source = "255.U8.to_str()", .expected = .{ .str_val = "255" } },
+    .{ .name = "I16 to_str", .source = "1000.I16.to_str()", .expected = .{ .str_val = "1000" } },
+    .{ .name = "F64 to_str", .source = "3.14.F64.to_str()", .expected = .{ .str_val = "3.14" } },
+    .{ .name = "F32 to_str", .source = "1.5.F32.to_str()", .expected = .{ .str_val = "1.5" } },
+
+    // --- list operations with typed elements ---
+    // TODO: list of typed ints crashes across all backends
+    .{
+        .name = "list of I32 len",
+        .source =
+            \\{
+            \\    xs = [1.I32, 2.I32, 3.I32]
+            \\    xs.len().to_i64()
+            \\}
+        ,
+        .expected = .{ .i64_val = 3 },
         .skip = SKIP_ALL,
     },
     .{
-        .name = "coverage: U128 to U8 wrapping",
-        .source = "{ 300.U128.to_u8() }",
-        .expected = .{ .u8_val = 44 },
+        .name = "list of U8 len",
+        .source =
+            \\{
+            \\    xs = [10.U8, 20.U8, 30.U8]
+            \\    xs.len().to_i64()
+            \\}
+        ,
+        .expected = .{ .i64_val = 3 },
         .skip = SKIP_ALL,
     },
-    // TODO: signed-to-unsigned conversions crash in interpreter
+
+    // --- tag union with payload ---
     .{
-        .name = "coverage: I64 to U64",
-        .source = "{ 42.I64.to_u64() }",
-        .expected = .{ .u64_val = 42 },
-        .skip = SKIP_ALL,
+        .name = "match Ok tag with int payload",
+        .source =
+            \\match Ok(42) {
+            \\    Ok(n) => n
+            \\    Err(_) => 0
+            \\}
+        ,
+        .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 },
     },
     .{
-        .name = "coverage: I64 to U32",
-        .source = "{ 42.I64.to_u32() }",
-        .expected = .{ .u32_val = 42 },
-        .skip = SKIP_ALL,
+        .name = "match Err tag",
+        .source =
+            \\match Err("bad") {
+            \\    Ok(_) => "good"
+            \\    Err(msg) => msg
+            \\}
+        ,
+        .expected = .{ .str_val = "bad" },
     },
     .{
-        .name = "coverage: I64 to U16",
-        .source = "{ 42.I64.to_u16() }",
-        .expected = .{ .u16_val = 42 },
-        .skip = SKIP_ALL,
+        .name = "tag union with two-element payload",
+        .source =
+            \\match Pair(1, 2) {
+            \\    Pair(a, b) => a + b
+            \\    _ => 0
+            \\}
+        ,
+        .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
     },
+
+    // --- F64 and F32 arithmetic ---
+    .{ .name = "F64 addition", .source = "1.5.F64 + 2.5.F64", .expected = .{ .f64_val = 4.0 } },
+    .{ .name = "F64 subtraction", .source = "10.0.F64 - 3.5.F64", .expected = .{ .f64_val = 6.5 } },
+    .{ .name = "F64 multiplication", .source = "2.0.F64 * 3.0.F64", .expected = .{ .f64_val = 6.0 } },
+    .{ .name = "F64 division", .source = "10.0.F64 / 4.0.F64", .expected = .{ .f64_val = 2.5 } },
+    .{ .name = "F32 addition", .source = "1.5.F32 + 2.5.F32", .expected = .{ .f32_val = 4.0 } },
+    .{ .name = "F32 multiplication", .source = "2.0.F32 * 3.0.F32", .expected = .{ .f32_val = 6.0 } },
+
+    // --- F64/F32 comparisons ---
+    .{ .name = "F64 greater than", .source = "3.14.F64 > 2.71.F64", .expected = .{ .bool_val = true } },
+    // TODO: F64 equality crashes across all backends (reached unreachable code)
+    .{ .name = "F64 equality", .source = "1.0.F64 == 1.0.F64", .expected = .{ .bool_val = true }, .skip = SKIP_ALL },
+    .{ .name = "F32 less than", .source = "1.0.F32 < 2.0.F32", .expected = .{ .bool_val = true } },
+
+    // --- polymorphic functions with typed numerics (try to hit fallback numeric dispatch) ---
+    .{
+        .name = "closure returning I32 add",
+        .source =
+            \\{
+            \\    id = |x| x
+            \\    a = id(3.I32)
+            \\    b = id(5.I32)
+            \\    a + b
+            \\}
+        ,
+        .expected = .{ .i32_val = 8 },
+    },
+    .{
+        .name = "closure returning I64 comparison",
+        .source =
+            \\{
+            \\    id = |x| x
+            \\    a = id(10.I64)
+            \\    b = id(5.I64)
+            \\    a > b
+            \\}
+        ,
+        .expected = .{ .bool_val = true },
+    },
+    .{
+        .name = "I32 arithmetic through let binding chain",
+        .source =
+            \\{
+            \\    x = 1.I32 + 2.I32
+            \\    y = x * 3.I32
+            \\    y + 1.I32
+            \\}
+        ,
+        .expected = .{ .i32_val = 10 },
+    },
+    .{
+        .name = "nested closure I64 subtraction",
+        .source =
+            \\{
+            \\    apply = |f, x| f(x)
+            \\    sub5 = |n| n - 5.I64
+            \\    apply(sub5, 20.I64)
+            \\}
+        ,
+        .expected = .{ .i64_val = 15 },
+    },
+
+    // --- more shift operations for wider coverage ---
+    .{ .name = "shift right I64", .source = "{ 128.I64.shift_right_by(3.U8) }", .expected = .{ .i64_val = 16 } },
+    .{ .name = "shift right U64", .source = "{ 256.U64.shift_right_by(4.U8) }", .expected = .{ .u64_val = 16 } },
+    .{ .name = "shift right I32", .source = "{ 64.I32.shift_right_by(2.U8) }", .expected = .{ .i32_val = 16 } },
+    .{ .name = "shift left I8", .source = "{ 1.I8.shift_left_by(3.U8) }", .expected = .{ .i8_val = 8 } },
+    // TODO: I128/U128 shift crashes across all backends
+    .{ .name = "shift left I128", .source = "{ 1.I128.shift_left_by(10.U8) }", .expected = .{ .i128_val = 1024 }, .skip = SKIP_ALL },
+    .{ .name = "shift left U128", .source = "{ 1.U128.shift_left_by(16.U8) }", .expected = .{ .u128_val = 65536 }, .skip = SKIP_ALL },
+
+    // --- negation on typed ints ---
+    .{ .name = "I32 negation", .source = "{ -(5.I32) }", .expected = .{ .i32_val = -5 } },
+    .{ .name = "I64 negation", .source = "{ -(10.I64) }", .expected = .{ .i64_val = -10 } },
+
+    // --- F64 arithmetic through let bindings ---
+    .{
+        .name = "F64 arithmetic chain",
+        .source =
+            \\{
+            \\    x = 10.0.F64 + 5.0.F64
+            \\    y = x * 2.0.F64
+            \\    y - 1.0.F64
+            \\}
+        ,
+        .expected = .{ .f64_val = 29.0 },
+    },
+
+    // --- tag union with typed payload ---
+    .{
+        .name = "match custom tag returning I64",
+        .source =
+            \\match Val(42.I64) {
+            \\    Val(n) => n
+            \\    _ => 0.I64
+            \\}
+        ,
+        .expected = .{ .i64_val = 42 },
+    },
+    .{
+        .name = "match nested tags",
+        .source =
+            \\match Some(Ok(10)) {
+            \\    Some(Ok(n)) => n
+            \\    _ => 0
+            \\}
+        ,
+        .expected = .{ .dec_val = 10 * RocDec.one_point_zero_i128 },
+    },
+
+    // --- Str operations for render_helpers coverage ---
+    .{ .name = "Str.is_empty on empty", .source = "Str.is_empty(\"\")", .expected = .{ .bool_val = true } },
+    .{ .name = "Str.is_empty on non-empty", .source = "Str.is_empty(\"hello\")", .expected = .{ .bool_val = false } },
+    .{ .name = "Str.starts_with", .source = "Str.starts_with(\"hello world\", \"hello\")", .expected = .{ .bool_val = true } },
+    .{ .name = "Str.ends_with", .source = "Str.ends_with(\"hello world\", \"world\")", .expected = .{ .bool_val = true } },
+    .{ .name = "Str.count_utf8_bytes", .source = "Str.count_utf8_bytes(\"hello\")", .expected = .{ .u64_val = 5 } },
+    .{ .name = "Str.trim leading and trailing", .source = "Str.trim(\"  hello  \")", .expected = .{ .str_val = "hello" } },
+    .{ .name = "Str.trim_start", .source = "Str.trim_start(\"  hello\")", .expected = .{ .str_val = "hello" } },
+    .{ .name = "Str.trim_end", .source = "Str.trim_end(\"hello  \")", .expected = .{ .str_val = "hello" } },
 };
