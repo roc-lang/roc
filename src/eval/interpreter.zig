@@ -982,79 +982,22 @@ pub const LirInterpreter = struct {
     // String helpers (RocStr construction)
 
     fn makeRocStr(self: *LirInterpreter, bytes: []const u8) Error!Value {
-        const str_size = self.helper.sizeOf(.str);
-        const val = try self.allocBytes(str_size);
-
-        const target_usize = self.layout_store.targetUsize();
-        const ptr_size = target_usize.size();
-
-        if (ptr_size == 8) {
-            // 64-bit: RocStr = { ptr, len, cap }
-            const small_str_max = 3 * 8 - 1; // 23 bytes
-            if (bytes.len <= small_str_max) {
-                // Small string: store inline
-                const dest = val.ptr[0..small_str_max];
-                @memcpy(dest[0..bytes.len], bytes);
-                // Set length in the last byte with high bit set
-                val.ptr[small_str_max] = @intCast(bytes.len | 0x80);
-            } else {
-                // Heap string: allocate through roc_ops so builtins
-                // can safely call isUnique()/decref() on the data.
-                const heap_data = try self.allocRocData(bytes.len, 1);
-                @memcpy(heap_data[0..bytes.len], bytes);
-                val.write(usize, @intFromPtr(heap_data)); // ptr
-                val.offset(8).write(usize, bytes.len); // len
-                val.offset(16).write(usize, bytes.len); // cap
-            }
-        } else {
-            // 32-bit: same layout but smaller
-            const small_str_max = 3 * 4 - 1; // 11 bytes
-            if (bytes.len <= small_str_max) {
-                const dest = val.ptr[0..small_str_max];
-                @memcpy(dest[0..bytes.len], bytes);
-                val.ptr[small_str_max] = @intCast(bytes.len | 0x80);
-            } else {
-                const heap_data = try self.allocRocData(bytes.len, 1);
-                @memcpy(heap_data[0..bytes.len], bytes);
-                val.write(u32, @intCast(@intFromPtr(heap_data)));
-                val.offset(4).write(u32, @intCast(bytes.len));
-                val.offset(8).write(u32, @intCast(bytes.len));
-            }
-        }
-        return val;
+        const rs = builtins.str.RocStr.fromSlice(bytes, &self.roc_ops);
+        return self.rocStrToValue(rs, .str);
     }
 
     /// Read the bytes from a RocStr value.
-    fn readRocStr(self: *LirInterpreter, val: Value) []const u8 {
-        const target_usize = self.layout_store.targetUsize();
-        const ptr_size = target_usize.size();
-
-        if (ptr_size == 8) {
-            const last_byte = val.ptr[23];
-            if (last_byte & 0x80 != 0) {
-                // Small string
-                const len = last_byte & 0x7F;
-                return val.ptr[0..len];
-            } else {
-                const str_ptr = val.read(usize);
-                const len = val.offset(8).read(usize);
-                if (str_ptr == 0 or len == 0) return "";
-                const p: [*]const u8 = @ptrFromInt(str_ptr);
-                return p[0..len];
-            }
-        } else {
-            const last_byte = val.ptr[11];
-            if (last_byte & 0x80 != 0) {
-                const len = last_byte & 0x7F;
-                return val.ptr[0..len];
-            } else {
-                const str_ptr = val.read(u32);
-                const len = val.offset(4).read(u32);
-                if (str_ptr == 0 or len == 0) return "";
-                const p: [*]const u8 = @ptrFromInt(str_ptr);
-                return p[0..len];
-            }
+    /// Note: we cannot simply do `valueToRocStr(val).asSlice()` because for
+    /// small strings `asSlice` returns a pointer into the RocStr struct itself,
+    /// which would be a dangling stack reference. Instead, for small strings we
+    /// return a slice of `val.ptr` (the arena-backed Value buffer where the
+    /// inline data actually lives).
+    fn readRocStr(_: *LirInterpreter, val: Value) []const u8 {
+        const rs = valueToRocStr(val);
+        if (rs.isSmallStr()) {
+            return val.ptr[0..rs.len()];
         }
+        return rs.asSlice();
     }
 
     // Lookup
@@ -1353,20 +1296,17 @@ pub const LirInterpreter = struct {
         const elem_size = self.helper.sizeOf(l.elem_layout);
         const count = elem_exprs.len;
 
-        // Allocate the RocList header
-        const val = try self.alloc(l.list_layout);
-
-        if (count == 0) return .{ .value = val };
+        if (count == 0) {
+            return .{ .value = try self.rocListToValue(RocList.empty(), l.list_layout) };
+        }
 
         // ZST lists need no element storage, but must record the length.
         if (elem_size == 0) {
-            const target_usize = self.layout_store.targetUsize();
-            if (target_usize.size() == 8) {
-                val.offset(8).write(usize, count);
-            } else {
-                val.offset(4).write(u32, @intCast(count));
-            }
-            return .{ .value = val };
+            return .{ .value = try self.rocListToValue(.{
+                .bytes = null,
+                .length = count,
+                .capacity_or_alloc_ptr = count,
+            }, l.list_layout) };
         }
 
         // Allocate element storage through roc_ops so builtins can safely
@@ -1393,20 +1333,11 @@ pub const LirInterpreter = struct {
             @memcpy(elem_mem[dest_offset..][0..elem_size], elem_val.ptr[0..elem_size]);
         }
 
-        // Write the RocList fields
-        const target_usize = self.layout_store.targetUsize();
-        const ptr_size = target_usize.size();
-        if (ptr_size == 8) {
-            val.write(usize, @intFromPtr(elem_mem.ptr)); // bytes ptr
-            val.offset(8).write(usize, count); // length
-            val.offset(16).write(usize, count); // capacity
-        } else {
-            val.write(u32, @intCast(@intFromPtr(elem_mem.ptr)));
-            val.offset(4).write(u32, @intCast(count));
-            val.offset(8).write(u32, @intCast(count));
-        }
-
-        return .{ .value = val };
+        return .{ .value = try self.rocListToValue(.{
+            .bytes = elem_mem.ptr,
+            .length = count,
+            .capacity_or_alloc_ptr = count,
+        }, l.list_layout) };
     }
 
     fn evalTagPayloadAccess(self: *LirInterpreter, tpa: anytype) Error!Value {
@@ -1425,23 +1356,13 @@ pub const LirInterpreter = struct {
     fn evalForLoop(self: *LirInterpreter, fl: anytype) Error!EvalResult {
         const list_val = try self.evalValue(fl.list_expr);
         const elem_size = self.helper.sizeOf(fl.elem_layout);
-        const target_usize = self.layout_store.targetUsize();
-        const ptr_size = target_usize.size();
 
-        // Read list length and data pointer
-        var data_ptr: usize = 0;
-        var count: usize = 0;
-        if (ptr_size == 8) {
-            data_ptr = list_val.read(usize);
-            count = list_val.offset(8).read(usize);
-        } else {
-            data_ptr = list_val.read(u32);
-            count = list_val.offset(4).read(u32);
-        }
+        const rl = valueToRocList(list_val);
+        const count = rl.len();
 
         if (count == 0) return .{ .value = Value.zst };
 
-        const data: [*]u8 = if (data_ptr != 0) @ptrFromInt(data_ptr) else undefined;
+        const data: [*]u8 = @ptrCast(rl.bytes orelse return .{ .value = Value.zst });
         var i: usize = 0;
         while (i < count) : (i += 1) {
             const elem_val = if (elem_size > 0)
