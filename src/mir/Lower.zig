@@ -7012,7 +7012,11 @@ fn lowerRecord(self: *Self, module_env: *const ModuleEnv, record: anytype, monot
         // Bind the update base once so:
         // 1) `{ ..expr, all_fields_overridden }` still evaluates `expr`, and
         // 2) synthesized field accesses never re-evaluate `expr`.
-        const ext_symbol = try self.internSymbol(self.current_module_idx, self.makeSyntheticIdent(Ident.Idx.NONE));
+        const ext_ident_template: Ident.Idx = .{
+            .attributes = .{ .effectful = false, .ignored = false, .reassignable = false },
+            .idx = 0,
+        };
+        const ext_symbol = try self.internSymbol(self.current_module_idx, self.makeSyntheticIdent(ext_ident_template));
         const ext_pattern = try self.store.addPattern(self.allocator, .{ .bind = ext_symbol }, ext_expr_mono);
         const ext_lookup = try self.store.addExpr(self.allocator, .{ .lookup = ext_symbol }, ext_expr_mono, region);
         extension_binding = .{

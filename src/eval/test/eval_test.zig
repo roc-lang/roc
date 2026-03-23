@@ -1448,18 +1448,17 @@ test "List.fold with record accumulator - record update syntax" {
     );
 }
 
-// TODO: cell symbol identity mismatch in MIR→LIR lowering for record updates with partial field overrides.
-// test "List.fold with record accumulator - partial update" {
-//     const expected_fields = [_]ExpectedField{
-//         .{ .name = "sum", .value = 10 },
-//         .{ .name = "multiplier", .value = 2 },
-//     };
-//     try runExpectRecord(
-//         "List.fold([1, 2, 3, 4], {sum: 0, multiplier: 2}, |acc, item| {..acc, sum: acc.sum + item})",
-//         &expected_fields,
-//         .no_trace,
-//     );
-// }
+test "List.fold with record accumulator - partial update" {
+    const expected_fields = [_]ExpectedField{
+        .{ .name = "sum", .value = 10 },
+        .{ .name = "multiplier", .value = 2 },
+    };
+    try runExpectRecord(
+        "List.fold([1, 2, 3, 4], {sum: 0, multiplier: 2}, |acc, item| {..acc, sum: acc.sum + item})",
+        &expected_fields,
+        .no_trace,
+    );
+}
 
 test "List.fold with record accumulator - nested field access" {
     // Test accessing nested record fields in accumulator
@@ -1685,22 +1684,21 @@ test "record update evaluates extension expression once" {
     , 160, .no_trace);
 }
 
-// TODO: cell symbol identity mismatch in MIR→LIR lowering for record updates with partial field overrides.
-// test "record update synthesizes missing fields without re-evaluating extension" {
-//     try runExpectI64(
-//         \\{
-//         \\    var $calls = 0.I64
-//         \\    rec = {
-//         \\        ..({
-//         \\            $calls = $calls + 1.I64
-//         \\            { a: $calls, b: $calls, c: $calls }
-//         \\        }),
-//         \\        c: 99.I64
-//         \\    }
-//         \\    rec.a * 1000.I64 + rec.b * 100.I64 + rec.c + $calls * 10.I64
-//         \\}
-//     , 1209, .no_trace);
-// }
+test "record update synthesizes missing fields without re-evaluating extension" {
+    try runExpectI64(
+        \\{
+        \\    var $calls = 0.I64
+        \\    rec = {
+        \\        ..({
+        \\            $calls = $calls + 1.I64
+        \\            { a: $calls, b: $calls, c: $calls }
+        \\        }),
+        \\        c: 99.I64
+        \\    }
+        \\    rec.a * 1000.I64 + rec.b * 100.I64 + rec.c + $calls * 10.I64
+        \\}
+    , 1209, .no_trace);
+}
 
 test "List.fold with record accumulator - nested list and record" {
     // Test combining list destructuring with record accumulator updates
@@ -3959,18 +3957,17 @@ test "focused: fold single-field record" {
     );
 }
 
-// TODO: cell symbol identity mismatch in MIR→LIR lowering for record updates with partial field overrides.
-// test "focused: fold record partial update" {
-//     const expected = [_]ExpectedField{
-//         .{ .name = "sum", .value = 10 },
-//         .{ .name = "multiplier", .value = 2 },
-//     };
-//     try runExpectRecord(
-//         "List.fold([1, 2, 3, 4], {sum: 0, multiplier: 2}, |acc, item| {..acc, sum: acc.sum + item})",
-//         &expected,
-//         .no_trace,
-//     );
-// }
+test "focused: fold record partial update" {
+    const expected = [_]ExpectedField{
+        .{ .name = "sum", .value = 10 },
+        .{ .name = "multiplier", .value = 2 },
+    };
+    try runExpectRecord(
+        "List.fold([1, 2, 3, 4], {sum: 0, multiplier: 2}, |acc, item| {..acc, sum: acc.sum + item})",
+        &expected,
+        .no_trace,
+    );
+}
 
 test "focused: fold record nested field access" {
     const expected = [_]ExpectedField{.{ .name = "value", .value = 6 }};
