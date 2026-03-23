@@ -4924,10 +4924,18 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
         }
         const lowered_call_args = self.scratch_expr_ids.sliceFromStart(args_top);
 
-        for (explicit_args, 0..) |_, i| {
+        for (explicit_args, 0..) |arg_idx, i| {
             const param_i = i + receiver_param_offset;
             if (param_i >= lowered_call_args.len or param_i >= fn_arg_vars.len) break;
-            const arg_mono = self.store.typeOf(lowered_call_args[param_i]);
+            // Prefer the CIR type-var resolution over the lowered MIR monotype.
+            // Closure lifting replaces a function expression with a captures tuple,
+            // so the MIR monotype may be a tuple while the CIR type var correctly
+            // reflects the semantic function type.
+            const arg_mono = blk: {
+                const cir_mono = try self.resolveMonotype(arg_idx);
+                if (!cir_mono.isNone()) break :blk cir_mono;
+                break :blk self.store.typeOf(lowered_call_args[param_i]);
+            };
             if (arg_mono.isNone()) continue;
             try self.bindTypeVarMonotypes(fn_arg_vars[param_i], arg_mono);
         }
