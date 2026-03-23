@@ -67,6 +67,18 @@ const targets_fx = [_]TargetInfo{
     .{ .name = "arm64win", .requires_linux = false },
 };
 
+/// Fx-open platform test apps - test effectful apps with open union errors and List(Str) args
+const fx_open_tests = [_]SimpleTestSpec{
+    .{
+        .roc_file = "test/fx-open/app.roc",
+        .description = "Basic fx-open app with no args usage",
+    },
+    .{
+        .roc_file = "test/fx-open/method_on_platform_args.roc",
+        .description = "Method call on platform-typed args (dispatch resolved via platform requirements)",
+    },
+};
+
 /// Str platform test apps - test cross-module function calls
 const str_tests = [_]SimpleTestSpec{
     // Basic test - no module imports from app
@@ -156,7 +168,7 @@ pub const platforms = [_]PlatformConfig{
         .name = "fx-open",
         .base_dir = "test/fx-open",
         .targets = &targets_fx,
-        .test_apps = .{ .single = "app.roc" },
+        .test_apps = .{ .simple_list = &fx_open_tests },
         .supports_native_exec = true,
         .supports_io_specs = false,
         .valgrind_safe = true,
