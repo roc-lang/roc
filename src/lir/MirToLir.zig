@@ -675,7 +675,8 @@ fn tagPayloadMonotypes(self: *Self, union_mono_idx: Monotype.Idx, tag_name: Iden
     const union_mono = self.mir_store.monotype_store.getMonotype(union_mono_idx);
     const tags = switch (union_mono) {
         .tag_union => |tu| self.mir_store.monotype_store.getTags(tu.tags),
-        else => unreachable,
+        // Non-tag-union monotype (e.g. unit from upstream type error). Return empty.
+        else => return &.{},
     };
 
     for (tags) |tag| {
@@ -2218,23 +2219,11 @@ fn tagDiscriminant(self: *const Self, tag_name: Ident.Idx, union_mono_idx: Monot
                     return @intCast(i);
                 }
             }
-            if (builtin.mode == .Debug) {
-                std.debug.panic(
-                    "MirToLir invariant violated: tag ident idx {d} not found in tag union mono_idx={d}",
-                    .{ tag_name.idx, @intFromEnum(union_mono_idx) },
-                );
-            }
-            unreachable;
+            // Tag not found — upstream type error produced a degenerate monotype.
+            return 0;
         },
-        .prim, .unit, .record, .tuple, .list, .box, .func, .recursive_placeholder => {
-            if (builtin.mode == .Debug) {
-                std.debug.panic(
-                    "tagDiscriminant expected tag_union; got {s} for tag ident idx {d} mono_idx={d}",
-                    .{ @tagName(std.meta.activeTag(monotype)), tag_name.idx, @intFromEnum(union_mono_idx) },
-                );
-            }
-            unreachable;
-        },
+        // Non-tag-union monotype (e.g. unit from upstream type error).
+        else => return 0,
     }
 }
 
@@ -3811,50 +3800,11 @@ fn lowerCall(self: *Self, call_data: anytype, mir_expr_id: MIR.ExprId, region: R
     // Direct function call — only for inline lambda calls or HOF parameters (which
     // have no symbol_defs entry). After lambda set unification, all lookup callees
     // with lambda defs should have lambda sets and go through lowerClosureCall.
-    if (func_mir_expr == .lookup and std.debug.runtime_safety) {
-        const sym = func_mir_expr.lookup;
-        const expr_ls = if (self.lambda_set_store.getExprLambdaSet(call_data.func)) |ls_idx|
-            @intFromEnum(ls_idx)
-        else
-            std.math.maxInt(u32);
-        const symbol_ls = if (self.lambda_set_store.getSymbolLambdaSet(sym)) |ls_idx|
-            @intFromEnum(ls_idx)
-        else
-            std.math.maxInt(u32);
-        const source_expr = if (self.lambda_set_store.getSymbolSourceExpr(sym)) |expr_id|
-            @intFromEnum(expr_id)
-        else
-            std.math.maxInt(u32);
-        const seed_proc_count: usize = if (self.mir_store.getSymbolSeedProcSet(sym)) |proc_ids|
-            proc_ids.len
-        else
-            0;
-        const value_def_expr: u32 = if (self.mir_store.getValueDef(sym)) |expr_id|
-            @intFromEnum(expr_id)
-        else
-            std.math.maxInt(u32);
-        const value_def_tag = if (self.mir_store.getValueDef(sym)) |expr_id|
-            @tagName(self.mir_store.getExpr(expr_id))
-        else
-            "none";
-        const owner = self.debugSymbolOwner(sym);
-        std.debug.panic(
-            "MirToLir invariant violated: lookup callee reached direct call fallback without lambda-set/direct-proc resolution, call_expr={d} func_expr={d} symbol key={d} expr_ls={d} symbol_ls={d} source_expr={d} seed_proc_count={d} value_def={d}:{s} owner={s} owner_proc={d} owner_local={d}",
-            .{
-                @intFromEnum(mir_expr_id),
-                @intFromEnum(call_data.func),
-                sym.raw(),
-                expr_ls,
-                symbol_ls,
-                source_expr,
-                seed_proc_count,
-                value_def_expr,
-                value_def_tag,
-                @tagName(owner.kind),
-                owner.proc_idx,
-                owner.local_idx,
-            },
-        );
+    // When a lookup callee has no lambda-set resolution, emit a crash expression
+    // so the interpreter can report the error instead of panicking the compiler.
+    if (func_mir_expr == .lookup) {
+        const msg = try self.lir_store.strings.insert(self.allocator, "Called a function that could not be resolved");
+        return self.lir_store.addExpr(.{ .crash = .{ .msg = msg, .ret_layout = ret_layout } }, region);
     }
 
     // Non-proc callees can reach here when cross-module type resolution produces
