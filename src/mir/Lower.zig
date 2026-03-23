@@ -7001,10 +7001,13 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
         const receiver_monotype = self.store.typeOf(receiver);
         const receiver_record = switch (self.store.monotype_store.getMonotype(receiver_monotype)) {
             .record => |record| record,
-            else => typeBindingInvariant(
-                "lowerDotAccess: field access receiver is not a record monotype (field='{s}', monotype='{s}')",
-                .{ module_env.getIdent(da.field_name), @tagName(self.store.monotype_store.getMonotype(receiver_monotype)) },
-            ),
+            else => {
+                // Type error: field access on a non-record (e.g. unit from an
+                // unresolved type or upstream type error).  Emit a runtime error
+                // expression so the lowering pipeline can report the problem
+                // instead of crashing.
+                return try self.store.addExpr(self.allocator, .{ .runtime_err_type = {} }, monotype, region);
+            },
         };
         const field_idx = self.recordFieldIndexByName(
             da.field_name,

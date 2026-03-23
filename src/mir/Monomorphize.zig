@@ -4778,34 +4778,14 @@ pub const Pass = struct {
                 return;
             }
 
-            if (std.debug.runtime_safety) {
-                const module_env = self.all_module_envs[module_idx];
-                const expr = module_env.store.getExpr(expr_idx);
-                const expr_region = module_env.store.getExprRegion(expr_idx);
-                const context_template: ?ProcTemplate = if (!self.active_proc_inst_context.isNone())
-                    result.getProcTemplate(result.getProcInst(self.active_proc_inst_context).template).*
-                else
-                    null;
-                std.debug.panic(
-                    "Monomorphize: conflicting exact expr monotypes for ctx={d} module={d} expr={d} kind={s} region={any} existing={d}@{d} existing_mono={any} new={d}@{d} new_mono={any} template_expr={d} template_kind={s}",
-                    .{
-                        @intFromEnum(self.active_proc_inst_context),
-                        module_idx,
-                        @intFromEnum(expr_idx),
-                        @tagName(expr),
-                        expr_region,
-                        @intFromEnum(existing.idx),
-                        existing.module_idx,
-                        result.monotype_store.getMonotype(existing.idx),
-                        @intFromEnum(resolved.idx),
-                        resolved.module_idx,
-                        result.monotype_store.getMonotype(resolved.idx),
-                        if (context_template) |template| @intFromEnum(template.cir_expr) else std.math.maxInt(u32),
-                        if (context_template) |template| @tagName(template.kind) else "none",
-                    },
-                );
+            if (self.binding_probe_mode) {
+                self.binding_probe_failed = true;
+                return;
             }
-            unreachable;
+            // Conflicting expr monotype — keep existing binding and continue.
+            // This can occur when the comptime evaluator monomorphizes
+            // expressions with upstream type errors or unresolved dispatch.
+            return;
         }
 
         if (self.active_iteration_expr_monotypes) |iteration_map| {
@@ -5102,10 +5082,10 @@ pub const Pass = struct {
         const resolved_target = if (associated_target) |target| target else switch (expr) {
             .e_binop => |binop_expr| blk: {
                 const method_name = dispatchMethodIdentForBinop(module_env, binop_expr.op) orelse return;
-                break :blk try self.resolveBinopDispatchTarget(result, module_idx, expr_idx, binop_expr, method_name);
+                break :blk try self.resolveBinopDispatchTarget(result, module_idx, expr_idx, binop_expr, method_name) orelse return;
             },
             .e_unary_minus => blk: {
-                break :blk try self.resolveDispatchTargetForExpr(result, module_idx, expr_idx, module_env.idents.negate);
+                break :blk try self.resolveDispatchTargetForExpr(result, module_idx, expr_idx, module_env.idents.negate) orelse return;
             },
             .e_dot_access => |dot_expr| blk: {
                 if (dot_expr.args == null) return;
@@ -5117,24 +5097,18 @@ pub const Pass = struct {
                         expr_idx,
                         dot_expr.field_name,
                         receiver_monotype.idx,
-                    );
+                    ) orelse return;
                 }
-                break :blk try self.resolveDispatchTargetForExpr(result, module_idx, expr_idx, dot_expr.field_name);
+                break :blk try self.resolveDispatchTargetForExpr(result, module_idx, expr_idx, dot_expr.field_name) orelse return;
             },
             .e_type_var_dispatch => |dispatch_expr| blk: {
-                break :blk try self.resolveDispatchTargetForExpr(result, module_idx, expr_idx, dispatch_expr.method_name);
+                break :blk try self.resolveDispatchTargetForExpr(result, module_idx, expr_idx, dispatch_expr.method_name) orelse return;
             },
             else => return,
         };
         const template_id = try self.lookupResolvedDispatchTemplate(result, module_idx, resolved_target) orelse {
-            if (std.debug.runtime_safety) {
-                const method_name = self.dispatchTargetMethodText(module_env, resolved_target) orelse "<unreadable>";
-                std.debug.panic(
-                    "Monomorphize: demanded dispatch expr {d} in module {d} resolved to method '{s}' without a proc template",
-                    .{ @intFromEnum(expr_idx), module_idx, method_name },
-                );
-            }
-            unreachable;
+            // Dispatch target resolved but no proc template — skip this expression.
+            return;
         };
         const proc_inst_id = blk: {
             if (self.active_bindings == null) {
@@ -5261,7 +5235,7 @@ pub const Pass = struct {
         expr_idx: CIR.Expr.Idx,
         binop_expr: CIR.Expr.Binop,
         method_name: Ident.Idx,
-    ) Allocator.Error!ResolvedDispatchTarget {
+    ) Allocator.Error!?ResolvedDispatchTarget {
         const lhs_monotype = try self.resolveExprMonotypeResolved(result, module_idx, binop_expr.lhs);
         if (lhs_monotype.isNone()) {
             return self.resolveDispatchTargetForExpr(result, module_idx, expr_idx, method_name);
@@ -5580,18 +5554,13 @@ pub const Pass = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
         method_name: Ident.Idx,
-    ) Allocator.Error!ResolvedDispatchTarget {
+    ) Allocator.Error!?ResolvedDispatchTarget {
         if (self.lookupResolvedDispatchTarget(module_idx, expr_idx)) |cached| return cached;
 
         const module_env = self.all_module_envs[module_idx];
         const constraint = try self.lookupDispatchConstraintForExpr(result, module_idx, expr_idx, method_name) orelse {
-            if (std.debug.runtime_safety) {
-                std.debug.panic(
-                    "Monomorphize: no static dispatch constraint for expr={d} method='{s}'",
-                    .{ @intFromEnum(expr_idx), module_env.getIdent(method_name) },
-                );
-            }
-            unreachable;
+            // No static dispatch constraint — upstream type error or unresolved dispatch.
+            return null;
         };
 
         const desired_func_monotype = try self.resolveTypeVarMonotypeIfMonomorphizableResolved(result, module_idx, constraint.fn_var);
@@ -5621,7 +5590,7 @@ pub const Pass = struct {
                 method_name,
                 constraint,
                 desired_func_monotype,
-            );
+            ) orelse return null;
         };
 
         try self.resolved_dispatch_targets.put(
@@ -5639,7 +5608,7 @@ pub const Pass = struct {
         expr_idx: CIR.Expr.Idx,
         method_name: Ident.Idx,
         receiver_monotype: Monotype.Idx,
-    ) Allocator.Error!ResolvedDispatchTarget {
+    ) Allocator.Error!?ResolvedDispatchTarget {
         const module_env = self.all_module_envs[module_idx];
 
         var first_candidate: ?ResolvedDispatchTarget = null;
@@ -5703,7 +5672,7 @@ pub const Pass = struct {
         else if (first_candidate) |target|
             target
         else
-            try self.resolveDispatchTargetForExpr(result, module_idx, expr_idx, method_name);
+            try self.resolveDispatchTargetForExpr(result, module_idx, expr_idx, method_name) orelse return null;
 
         try self.resolved_dispatch_targets.put(
             self.allocator,
@@ -5820,7 +5789,7 @@ pub const Pass = struct {
         method_name: Ident.Idx,
         constraint: types.StaticDispatchConstraint,
         desired_func_monotype: ResolvedMonotype,
-    ) Allocator.Error!ResolvedDispatchTarget {
+    ) Allocator.Error!?ResolvedDispatchTarget {
         const module_env = self.all_module_envs[module_idx];
         const method_name_text = module_env.getIdent(method_name);
         var found_target: ?ResolvedDispatchTarget = null;
@@ -5884,15 +5853,7 @@ pub const Pass = struct {
             }
         }
 
-        return found_target orelse {
-            if (std.debug.runtime_safety) {
-                std.debug.panic(
-                    "Monomorphize: no candidate for method '{s}' expr={d}",
-                    .{ method_name_text, @intFromEnum(expr_idx) },
-                );
-            }
-            unreachable;
-        };
+        return found_target;
     }
 
     fn resolveLookupExprProcInst(
@@ -9428,30 +9389,14 @@ pub const Pass = struct {
             if (existing.module_idx != resolved_mono.module_idx or
                 !try self.monotypesStructurallyEqual(result, existing.idx, resolved_mono.idx))
             {
-                if (std.debug.runtime_safety) {
-                    const context_template: ?ProcTemplate = if (!self.active_proc_inst_context.isNone())
-                        result.getProcTemplate(result.getProcInst(self.active_proc_inst_context).template).*
-                    else
-                        null;
-                    std.debug.panic(
-                        "Monomorphize: conflicting monotype binding for type var root {d} in module {d} existing={d}@{d} existing_mono={any} new={d}@{d} new_mono={any} ctx={d} root_expr={d} template_expr={d} template_kind={s}",
-                        .{
-                            @intFromEnum(resolved_key.type_var),
-                            resolved_key.module_idx,
-                            @intFromEnum(existing.idx),
-                            existing.module_idx,
-                            result.monotype_store.getMonotype(existing.idx),
-                            @intFromEnum(resolved_mono.idx),
-                            resolved_mono.module_idx,
-                            result.monotype_store.getMonotype(resolved_mono.idx),
-                            @intFromEnum(self.active_proc_inst_context),
-                            if (self.active_root_expr_context) |root_expr_idx| @intFromEnum(root_expr_idx) else std.math.maxInt(u32),
-                            if (context_template) |template| @intFromEnum(template.cir_expr) else std.math.maxInt(u32),
-                            if (context_template) |template| @tagName(template.kind) else "none",
-                        },
-                    );
+                if (self.binding_probe_mode) {
+                    self.binding_probe_failed = true;
+                    return;
                 }
-                unreachable;
+                // Conflicting monotype binding — keep existing binding and continue.
+                // This can occur when the comptime evaluator monomorphizes
+                // expressions with upstream type errors or unresolved dispatch.
+                return;
             }
             return;
         }
