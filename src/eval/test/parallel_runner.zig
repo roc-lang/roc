@@ -490,9 +490,19 @@ fn compareBackendResults(
 // ---------------------------------------------------------------------------
 
 fn runSingleTest(allocator: std.mem.Allocator, tc: TestCase) TestOutcome {
-    return runSingleTestInner(allocator, tc) catch |err| {
+    const outcome = runSingleTestInner(allocator, tc) catch |err| {
         return .{ .status = .fail, .message = @errorName(err) };
     };
+
+    // Any skipped backend means the test didn't get full coverage — report as skip.
+    if (outcome.status == .pass and hasAnySkip(tc.skip)) {
+        return .{ .status = .skip, .message = outcome.message, .timings = outcome.timings };
+    }
+    return outcome;
+}
+
+fn hasAnySkip(skip: TestCase.Skip) bool {
+    return skip.interpreter or skip.dev or skip.wasm or skip.llvm;
 }
 
 fn runSingleTestInner(allocator: std.mem.Allocator, tc: TestCase) !TestOutcome {
@@ -1103,7 +1113,10 @@ fn parseCliArgs(args: []const []const u8) CliArgs {
     var result = CliArgs{};
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
-        if (std.mem.eql(u8, args[i], "--filter") and i + 1 < args.len) {
+        if (std.mem.eql(u8, args[i], "--help") or std.mem.eql(u8, args[i], "-h")) {
+            printHelp();
+            std.process.exit(0);
+        } else if (std.mem.eql(u8, args[i], "--filter") and i + 1 < args.len) {
             i += 1;
             result.filter = args[i];
         } else if (std.mem.eql(u8, args[i], "--threads") and i + 1 < args.len) {
@@ -1116,6 +1129,58 @@ fn parseCliArgs(args: []const []const u8) CliArgs {
         }
     }
     return result;
+}
+
+fn printHelp() void {
+    const help =
+        \\Roc Eval Test Runner
+        \\
+        \\Runs eval tests across all backends (interpreter, dev, wasm, llvm) in
+        \\parallel and compares results via Str.inspect. Crash protection via
+        \\setjmp/longjmp allows the runner to recover from segfaults and continue.
+        \\
+        \\USAGE:
+        \\  zig build test-eval [-- <OPTIONS>]
+        \\  ./zig-out/bin/eval-test-runner [<OPTIONS>]
+        \\
+        \\OPTIONS:
+        \\  -h, --help            Show this help message and exit.
+        \\  --filter <PATTERN>    Run only tests whose name or source contains PATTERN.
+        \\  --threads <N>         Max worker threads (default: number of CPU cores).
+        \\  --verbose             Print PASS and SKIP results (default: only FAIL/CRASH).
+        \\  --coverage            Coverage mode: single-threaded, no fork. Use with kcov.
+        \\
+        \\TIMING:
+        \\  Every test is instrumented with per-phase monotonic timing (std.time.Timer):
+        \\    parse    - builtin loading + source parsing
+        \\    can      - canonicalization (CIR generation)
+        \\    check    - type checking / constraint solving
+        \\    interp   - interpreter evaluation
+        \\    dev      - dev backend codegen + native execution
+        \\    wasm     - wasm backend codegen + bytebox execution
+        \\    llvm     - llvm backend codegen + execution
+        \\
+        \\  A performance summary table is printed after all tests with min, max,
+        \\  mean, median, standard deviation, P95, and total for each phase, plus
+        \\  the 5 slowest tests with full breakdowns.
+        \\
+        \\BACKEND COVERAGE:
+        \\  The baseline goal is 100% of backends testing 100% of tests. Tests may
+        \\  use `skip = .{ .wasm = true }` etc. to disable specific backends, but
+        \\  any test with a skip reports as SKIP rather than PASS to keep partial
+        \\  coverage visible.
+        \\
+        \\  Test outcomes:
+        \\    PASS  - all backends ran and agreed
+        \\    FAIL  - value mismatch or backend disagreement
+        \\    CRASH - segfault or panic in generated code (recovered via signal handler)
+        \\    SKIP  - one or more backends were skipped
+        \\
+        \\EXIT CODE:
+        \\  0 if all tests pass or skip, 1 if any test fails or crashes.
+        \\
+    ;
+    std.debug.print("{s}", .{help});
 }
 
 // ---------------------------------------------------------------------------

@@ -76,6 +76,32 @@ pub const tests = [_]TestCase{
 };
 ```
 
+### Skipping Backends
+
+Use the optional `skip` field to disable specific backends for a test.
+Skipped backends are excluded from cross-backend comparison. If **any**
+backend is skipped, the test reports as **SKIP** rather than PASS — the
+baseline goal is 100% of backends testing 100% of tests, and skip makes
+it visible that a test isn't there yet.
+
+```zig
+// Skip wasm and llvm backends (e.g. known codegen bug)
+.{ .name = "str: concat edge case",
+   .source = "\"a\" ++ \"b\"",
+   .expected = .{ .str_val = "ab" },
+   .skip = .{ .wasm = true, .llvm = true },
+},
+
+// Skip all compiled backends — interpreter only
+.{ .name = "interp only: complex pattern",
+   .source = "...",
+   .expected = .{ .i64_val = 42 },
+   .skip = .{ .dev = true, .wasm = true, .llvm = true },
+},
+```
+
+Available skip flags: `.interpreter`, `.dev`, `.wasm`, `.llvm`.
+
 ### Available `Expected` Variants
 
 | Variant | Old helper | Notes |
