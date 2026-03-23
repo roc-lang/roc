@@ -61,6 +61,15 @@ pub const TestCase = struct {
 
     pub const Expected = union(enum) {
         i64_val: i64,
+        u8_val: u8,
+        u16_val: u16,
+        u32_val: u32,
+        u64_val: u64,
+        u128_val: u128,
+        i8_val: i8,
+        i16_val: i16,
+        i32_val: i32,
+        i128_val: i128,
         bool_val: bool,
         str_val: []const u8,
         dec_val: i128,
@@ -70,6 +79,30 @@ pub const TestCase = struct {
         problem: void,
         type_mismatch_crash: void,
         dev_only_str: []const u8,
+
+        /// Returns the expected value as i128 for integer variant comparison.
+        pub fn intExpected(self: Expected) i128 {
+            return switch (self) {
+                .i64_val => |v| v,
+                .u8_val => |v| v,
+                .u16_val => |v| v,
+                .u32_val => |v| v,
+                .u64_val => |v| v,
+                .u128_val => |v| @bitCast(v),
+                .i8_val => |v| v,
+                .i16_val => |v| v,
+                .i32_val => |v| v,
+                .i128_val => |v| v,
+                else => unreachable,
+            };
+        }
+
+        pub fn isInt(self: Expected) bool {
+            return switch (self) {
+                .i64_val, .u8_val, .u16_val, .u32_val, .u64_val, .u128_val, .i8_val, .i16_val, .i32_val, .i128_val => true,
+                else => false,
+            };
+        }
     };
 
     pub const Skip = packed struct {
@@ -423,7 +456,7 @@ fn hasAnySkip(skip: TestCase.Skip) bool {
 fn runSingleTestInner(allocator: std.mem.Allocator, tc: TestCase) !TestOutcome {
     return switch (tc.expected) {
         // Normal value tests: interpret, check value, compare all backends
-        .i64_val, .bool_val, .str_val, .f32_val, .f64_val, .dec_val => runNormalTest(allocator, tc.source, tc.expected, tc.skip),
+        .i64_val, .u8_val, .u16_val, .u32_val, .u64_val, .u128_val, .i8_val, .i16_val, .i32_val, .i128_val, .bool_val, .str_val, .f32_val, .f64_val, .dec_val => runNormalTest(allocator, tc.source, tc.expected, tc.skip),
         // Special tests with unique flows
         .err_val => |expected_err| runTestError(allocator, tc.source, expected_err),
         .problem => runTestProblem(allocator, tc.source),
@@ -463,11 +496,11 @@ fn runNormalTest(allocator: std.mem.Allocator, src: []const u8, expected: TestCa
     // Check interpreter result against expected value
     var layout_hint: ?interpreter_layout.Idx = null;
     switch (expected) {
-        .i64_val => |exp| {
+        .i64_val, .u8_val, .u16_val, .u32_val, .u64_val, .u128_val, .i8_val, .i16_val, .i32_val, .i128_val => {
             if (result.layout.tag != .scalar or result.layout.data.scalar.tag != .int) {
                 return .{ .status = .fail, .message = "expected integer layout", .timings = fe_timings };
             }
-            if (result.asI128() != exp) {
+            if (result.asI128() != expected.intExpected()) {
                 return .{ .status = .fail, .message = "integer value mismatch", .timings = fe_timings };
             }
         },

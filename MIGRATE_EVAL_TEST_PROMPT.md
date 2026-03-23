@@ -38,7 +38,6 @@ automatically gets cross-backend coverage.
 
 | File | Tests | Notes |
 |------|-------|-------|
-| `arithmetic_comprehensive_test.zig` | ~82 | Mixed helpers — fully portable |
 | `list_refcount_basic.zig` | varies | `runExpectI64` — fully portable |
 | `list_refcount_simple.zig` | varies | `runExpectI64` — fully portable |
 | `list_refcount_nested.zig` | varies | `runExpectI64` — fully portable |
@@ -205,7 +204,16 @@ Available skip flags: `.interpreter`, `.dev`, `.wasm`, `.llvm`.
 
 | Variant | Old helper | Notes |
 |---------|-----------|-------|
-| `.i64_val` | `runExpectI64` | i64 value. **Only for suffixed int literals** (e.g. `42.I64`, `255.U8`). See "Critical" section above. |
+| `.i64_val` | `runExpectI64` | i64 value. **Only for suffixed int literals** (e.g. `42.I64`). See "Critical" section above. |
+| `.u8_val` | `runExpectI64` | u8 value. For `: U8` annotated expressions. |
+| `.u16_val` | `runExpectI64` | u16 value. For `: U16` annotated expressions. |
+| `.u32_val` | `runExpectI64` | u32 value. For `: U32` annotated expressions. |
+| `.u64_val` | `runExpectI64` | u64 value. For `: U64` annotated expressions. |
+| `.u128_val` | `runExpectI64` | u128 value. For `: U128` annotated expressions. |
+| `.i8_val` | `runExpectI64` | i8 value. For `: I8` annotated expressions. |
+| `.i16_val` | `runExpectI64` | i16 value. For `: I16` annotated expressions. |
+| `.i32_val` | `runExpectI64` | i32 value. For `: I32` annotated expressions. |
+| `.i128_val` | `runExpectI64` | i128 value. For `: I128` annotated expressions. |
 | `.bool_val` | `runExpectBool` | `true` or `false`. |
 | `.str_val` | `runExpectStr` | Expected string content. |
 | `.dec_val` | `runExpectDec` | Raw i128 Dec representation (scaled by 10^18). Use `N * RocDec.one_point_zero_i128` for whole numbers. |
@@ -395,13 +403,12 @@ manually skipped. They cannot be expressed as TestCase entries:
 53 tests migrated. All used unsuffixed literals → `.dec_val` for numeric
 results. File deleted.
 
-### Batch 3: arithmetic_comprehensive_test.zig
+### Batch 3: arithmetic_comprehensive_test.zig — DONE
 
-~82 tests. Uses `runExpectI64`, `runExpectF32`, `runExpectF64`,
-`runExpectDec`, `runExpectStr`, `runExpectTypeMismatchAndCrash`.
-
-**Important:** Many arithmetic tests use unsuffixed literals. The old
-`runExpectI64` calls masked the Dec type. Use `.dec_val` for those.
+226 test entries migrated (82 test blocks, each with multiple assertions).
+Added new Expected variants (`.u8_val`, `.u16_val`, `.u32_val`, `.u64_val`,
+`.u128_val`, `.i8_val`, `.i16_val`, `.i32_val`, `.i128_val`) to the
+parallel runner. File deleted.
 
 ### Batch 4: list_refcount_*.zig (8 files)
 
