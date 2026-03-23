@@ -46,10 +46,15 @@ const TestEnv = eval_mod.TestEnv;
 const posix = std.posix;
 
 const AtomicUsize = std.atomic.Value(usize);
-const AtomicI64 = std.atomic.Value(i64);
+const AtomicI32 = std.atomic.Value(i32);
 const AtomicBool = std.atomic.Value(bool);
 
 extern "c" fn pthread_kill(thread: std.c.pthread_t, sig: c_int) c_int;
+
+/// Current wall-clock time in milliseconds, truncated to i32 (~24 day range).
+fn nowMs() i32 {
+    return @truncate(@divFloor(std.time.milliTimestamp(), 1));
+}
 
 // Test definition modules
 const eval_tests = @import("eval_tests.zig");
@@ -238,8 +243,9 @@ const Timer = std.time.Timer;
 
 /// Per-worker tracking state for the hang watchdog.
 const WorkerState = struct {
-    /// Nanosecond timestamp when the worker started its current test (0 = idle).
-    start_time_ns: AtomicI64 = AtomicI64.init(0),
+    /// Millisecond timestamp when the worker started its current test (0 = idle).
+    /// Uses i32 for 32-bit atomic compatibility (good for ~24 days of uptime).
+    start_time_ms: AtomicI32 = AtomicI32.init(0),
     /// Index of the test currently being run (max = done).
     current_test: AtomicUsize = AtomicUsize.init(std.math.maxInt(usize)),
     /// Set by the watchdog before sending SIGUSR1; checked by crash recovery.
@@ -258,7 +264,7 @@ const RunnerContext = struct {
     /// Counter for workers to claim their worker ID.
     worker_id_counter: AtomicUsize = AtomicUsize.init(0),
     /// Per-test timeout in nanoseconds (0 = no timeout).
-    hang_timeout_ns: u64 = 0,
+    hang_timeout_ms: u64 = 0,
 };
 
 //
@@ -938,7 +944,7 @@ fn threadMain(ctx: *RunnerContext) void {
             // Mark worker as done.
             if (my_state) |ws| {
                 ws.current_test.store(std.math.maxInt(usize), .release);
-                ws.start_time_ns.store(0, .release);
+                ws.start_time_ms.store(0, .release);
             }
             break;
         }
@@ -953,7 +959,7 @@ fn threadMain(ctx: *RunnerContext) void {
         if (my_state) |ws| {
             ws.current_test.store(i, .release);
             ws.timed_out.store(false, .release);
-            ws.start_time_ns.store(@as(i64, @truncate(std.time.nanoTimestamp())), .release);
+            ws.start_time_ms.store(nowMs(), .release);
         }
 
         // Set up crash protection
@@ -969,26 +975,29 @@ fn threadMain(ctx: *RunnerContext) void {
             // Check if this was a watchdog timeout (jmp_result == 3) or a real crash.
             const was_timeout = if (my_state) |ws| ws.timed_out.swap(false, .acquire) else false;
             const elapsed = wall_timer.read();
+            const raw_msg = panic_msg orelse "unknown crash";
+            // Dup to GPA so all result messages are GPA-owned (freed uniformly in main).
+            const stable_msg = ctx.msg_allocator.dupe(u8, raw_msg) catch raw_msg;
             ctx.results[i] = .{
                 .status = if (was_timeout or jmp_result == 3) .timeout else .crash,
-                .message = panic_msg orelse "unknown crash",
+                .message = stable_msg,
                 .duration_ns = elapsed,
                 .timings = .{},
             };
-            if (my_state) |ws| ws.start_time_ns.store(0, .release);
+            if (my_state) |ws| ws.start_time_ms.store(0, .release);
             continue;
         }
 
         const outcome = runSingleTest(allocator, tc);
 
         panic_jmp = null;
-        if (my_state) |ws| ws.start_time_ns.store(0, .release);
+        if (my_state) |ws| ws.start_time_ms.store(0, .release);
         const elapsed = wall_timer.read();
 
         // Dup the message to the stable GPA so it survives arena reset.
-        // Conservative: dup everything — static strings are tiny, cost is negligible.
+        // All messages in results must be GPA-owned (freed uniformly in main).
         const stable_msg: ?[]const u8 = if (outcome.message) |msg|
-            (ctx.msg_allocator.dupe(u8, msg) catch msg)
+            (ctx.msg_allocator.dupe(u8, msg) catch null)
         else
             null;
 
@@ -1322,7 +1331,7 @@ fn countCompletedResults(results: []const TestResult) usize {
 
 /// Watchdog that polls worker threads, prints progress, and kills hangs.
 /// Runs on the main thread while workers are executing.
-fn hangWatchdog(ctx: *RunnerContext, threads: []std.Thread, timeout_ns: u64) void {
+fn hangWatchdog(ctx: *RunnerContext, threads: []std.Thread, timeout_ms: u64) void {
     const ws = ctx.worker_states orelse return;
     var progress_timer = Timer.start() catch unreachable;
     var last_progress_ns: u64 = 0;
@@ -1331,7 +1340,7 @@ fn hangWatchdog(ctx: *RunnerContext, threads: []std.Thread, timeout_ns: u64) voi
         // Sleep 500ms between polls.
         std.Thread.sleep(500_000_000);
 
-        const now = @as(i64, @truncate(std.time.nanoTimestamp()));
+        const now = nowMs();
         var all_done = true;
 
         for (ws, 0..) |*worker, idx| {
@@ -1339,15 +1348,14 @@ fn hangWatchdog(ctx: *RunnerContext, threads: []std.Thread, timeout_ns: u64) voi
             if (test_idx == std.math.maxInt(usize)) continue; // worker finished
 
             all_done = false;
-            const start = worker.start_time_ns.load(.acquire);
+            const start = worker.start_time_ms.load(.acquire);
             if (start <= 0) continue; // not actively running a test
 
-            const elapsed: u64 = @intCast(@max(0, now - start));
-            if (elapsed > timeout_ns) {
+            const elapsed_ms: u64 = @intCast(@max(0, now -% start));
+            if (elapsed_ms > timeout_ms) {
                 // This worker is hung. Mark it timed-out and kill it.
                 worker.timed_out.store(true, .release);
                 const test_name = if (test_idx < ctx.tests.len) ctx.tests[test_idx].name else "?";
-                const elapsed_ms = elapsed / 1_000_000;
                 std.debug.print("\n  HANG  {s}  ({d}ms) — killing", .{ test_name, elapsed_ms });
                 if (comptime builtin.os.tag != .windows) {
                     // Kill any forked child process first (unblocks waitpid).
@@ -1438,17 +1446,17 @@ pub fn main() !void {
 
     const results = try gpa.alloc(TestResult, tests.len);
     defer gpa.free(results);
-    @memset(results, .{ .status = .crash, .message = "not started", .duration_ns = 0, .timings = .{} });
+    @memset(results, .{ .status = .crash, .message = null, .duration_ns = 0, .timings = .{} });
 
     var wall_timer = Timer.start() catch unreachable;
 
-    // Default timeout: 10s in multi-threaded mode, disabled in single-threaded/coverage.
-    const hang_timeout_ns: u64 = if (thread_count <= 1)
+    // Default timeout: 5s in multi-threaded mode, disabled in single-threaded/coverage.
+    const hang_timeout_ms: u64 = if (thread_count <= 1)
         0
     else if (cli.timeout_ms > 0)
-        cli.timeout_ms * 1_000_000
+        cli.timeout_ms
     else
-        5_000_000_000; // 5 seconds
+        10_000; // 10 seconds
 
     // Allocate per-worker state for hang detection (multi-threaded only).
     const worker_states: ?[]WorkerState = if (thread_count > 1) blk: {
@@ -1471,7 +1479,7 @@ pub fn main() !void {
         .verbose = cli.verbose,
         .msg_allocator = gpa,
         .worker_states = worker_states,
-        .hang_timeout_ns = hang_timeout_ns,
+        .hang_timeout_ms = hang_timeout_ms,
     };
 
     if (thread_count <= 1) {
@@ -1484,8 +1492,8 @@ pub fn main() !void {
         }
 
         // Watchdog loop: poll workers for hangs until all are done.
-        if (hang_timeout_ns > 0) {
-            hangWatchdog(&context, threads, hang_timeout_ns);
+        if (hang_timeout_ms > 0) {
+            hangWatchdog(&context, threads, hang_timeout_ms);
         }
 
         for (threads) |t| {
