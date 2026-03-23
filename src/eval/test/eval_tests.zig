@@ -2483,4 +2483,634 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .i64_val = 2 },
     },
+
+    // --- from closure_test.zig ---
+
+    // TIER 1: Basic closure with captures
+    .{ .name = "closure: lambda capturing one local variable",
+        .source =
+            \\{
+            \\    y = 10
+            \\    f = |x| x + y
+            \\    f(5)
+            \\}
+        ,
+        .expected = .{ .dec_val = 15 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "closure: lambda capturing two local variables",
+        .source =
+            \\{
+            \\    a = 3
+            \\    b = 7
+            \\    f = |x| x + a + b
+            \\    f(10)
+            \\}
+        ,
+        .expected = .{ .dec_val = 20 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "closure: lambda capturing a string",
+        .source =
+            \\{
+            \\    greeting = "Hello"
+            \\    f = |name| Str.concat(greeting, name)
+            \\    f(" World")
+            \\}
+        ,
+        .expected = .{ .str_val = "Hello World" },
+    },
+    .{ .name = "closure: lambda capturing multiple strings",
+        .source =
+            \\{
+            \\    prefix = "Hello"
+            \\    suffix = "!"
+            \\    f = |name| Str.concat(Str.concat(prefix, name), suffix)
+            \\    f(" World")
+            \\}
+        ,
+        .expected = .{ .str_val = "Hello World!" },
+    },
+
+    // TIER 2: Functions returning functions (closure escaping defining scope)
+    .{ .name = "closure: function returning a closure (make_adder)",
+        .source =
+            \\{
+            \\    make_adder = |n| |x| x + n
+            \\    add5 = make_adder(5)
+            \\    add5(10)
+            \\}
+        ,
+        .expected = .{ .dec_val = 15 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "closure: function returning a closure, called twice",
+        .source =
+            \\{
+            \\    make_adder = |n| |x| x + n
+            \\    add5 = make_adder(5)
+            \\    a = add5(10)
+            \\    b = add5(20)
+            \\    a + b
+            \\}
+        ,
+        .expected = .{ .dec_val = 40 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "closure: two different closures from same factory",
+        .source =
+            \\{
+            \\    make_adder = |n| |x| x + n
+            \\    add3 = make_adder(3)
+            \\    add7 = make_adder(7)
+            \\    add3(10) + add7(10)
+            \\}
+        ,
+        .expected = .{ .dec_val = 30 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "closure: function returning a closure over string",
+        .source =
+            \\{
+            \\    make_greeter = |greeting| |name| Str.concat(greeting, name)
+            \\    greet = make_greeter("Hi ")
+            \\    greet("Alice")
+            \\}
+        ,
+        .expected = .{ .str_val = "Hi Alice" },
+    },
+    .{ .name = "closure: two-level deep closure (function returning function returning function)",
+        .source =
+            \\{
+            \\    make_op = |a| |b| |x| x + a + b
+            \\    add_3_and_4 = make_op(3)(4)
+            \\    add_3_and_4(10)
+            \\}
+        ,
+        .expected = .{ .dec_val = 17 * RocDec.one_point_zero_i128 },
+    },
+
+    // TIER 3: Higher-order functions with closure arguments
+    .{ .name = "closure: passing closure to higher-order function",
+        .source =
+            \\{
+            \\    apply = |f, x| f(x)
+            \\    y = 10
+            \\    apply(|x| x + y, 5)
+            \\}
+        ,
+        .expected = .{ .dec_val = 15 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "closure: passing two different closures to same HOF",
+        .source =
+            \\{
+            \\    apply = |f, x| f(x)
+            \\    a = 10
+            \\    b = 20
+            \\    r1 = apply(|x| x + a, 5)
+            \\    r2 = apply(|x| x + b, 5)
+            \\    r1 + r2
+            \\}
+        ,
+        .expected = .{ .dec_val = 40 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "closure: passing two different closures to same HOF returns first result",
+        .source =
+            \\{
+            \\    apply = |f, x| f(x)
+            \\    a = 10
+            \\    b = 20
+            \\    r1 = apply(|x| x + a, 5)
+            \\    _r2 = apply(|x| x + b, 5)
+            \\    r1
+            \\}
+        ,
+        .expected = .{ .dec_val = 15 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "closure: passing two different closures to same HOF returns second result",
+        .source =
+            \\{
+            \\    apply = |f, x| f(x)
+            \\    a = 10
+            \\    b = 20
+            \\    _r1 = apply(|x| x + a, 5)
+            \\    r2 = apply(|x| x + b, 5)
+            \\    r2
+            \\}
+        ,
+        .expected = .{ .dec_val = 25 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "closure: HOF calling closure argument twice",
+        .source =
+            \\{
+            \\    apply_twice = |f, x| f(f(x))
+            \\    y = 3
+            \\    apply_twice(|x| x + y, 10)
+            \\}
+        ,
+        .expected = .{ .dec_val = 16 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "closure: HOF with closure returning string",
+        .source =
+            \\{
+            \\    apply = |f, x| f(x)
+            \\    prefix = "Hello "
+            \\    apply(|name| Str.concat(prefix, name), "World")
+            \\}
+        ,
+        .expected = .{ .str_val = "Hello World" },
+    },
+
+    // TIER 4: Polymorphic functions with closures
+    .{ .name = "closure: polymorphic identity applied to closure result",
+        .source =
+            \\{
+            \\    id = |x| x
+            \\    y = 10
+            \\    f = |x| x + y
+            \\    id(f(5))
+            \\}
+        ,
+        .expected = .{ .dec_val = 15 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "closure: polymorphic function used with both int and string closures",
+        .source =
+            \\{
+            \\    apply = |f, x| f(x)
+            \\    n = 10
+            \\    prefix = "Hi "
+            \\    num_result = apply(|x| x + n, 5)
+            \\    str_result = apply(|s| Str.concat(prefix, s), "Bob")
+            \\    if (num_result > 0) str_result else ""
+            \\}
+        ,
+        .expected = .{ .str_val = "Hi Bob" },
+    },
+
+    // TIER 5: Closure over closure (nested captures)
+    .{ .name = "closure: closure forwarding to captured closure (no multiply)",
+        .source =
+            \\{
+            \\    y = 5
+            \\    inner = |x| x + y
+            \\    outer = |x| inner(x)
+            \\    outer(10)
+            \\}
+        ,
+        .expected = .{ .dec_val = 15 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "closure: closure capturing another closure",
+        .source =
+            \\{
+            \\    y = 5
+            \\    inner = |x| x + y
+            \\    outer = |x| inner(x) * 2
+            \\    outer(10)
+            \\}
+        ,
+        .expected = .{ .dec_val = 30 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "closure: closure capturing a factory-produced closure",
+        .source =
+            \\{
+            \\    make_adder = |n| |x| x + n
+            \\    add5 = make_adder(5)
+            \\    double_add5 = |x| add5(x) * 2
+            \\    double_add5(10)
+            \\}
+        ,
+        .expected = .{ .dec_val = 30 * RocDec.one_point_zero_i128 },
+    },
+
+    // TIER 6: Multiple closures with different captures at same call site (lambda set dispatch)
+    .{ .name = "closure: if-else choosing between two closures with different captures",
+        .source =
+            \\{
+            \\    a = 10
+            \\    b = 20
+            \\    f = if (True) |x| x + a else |x| x + b
+            \\    f(5)
+            \\}
+        ,
+        .expected = .{ .dec_val = 15 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "closure: if-else choosing between two closures, false branch",
+        .source =
+            \\{
+            \\    a = 10
+            \\    b = 20
+            \\    f = if (False) |x| x + a else |x| x + b
+            \\    f(5)
+            \\}
+        ,
+        .expected = .{ .dec_val = 25 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "closure: if-else choosing between closures with different capture counts",
+        .source =
+            \\{
+            \\    a = 10
+            \\    b = 20
+            \\    c = 30
+            \\    f = if (True) |x| x + a else |x| x + b + c
+            \\    f(5)
+            \\}
+        ,
+        .expected = .{ .dec_val = 15 * RocDec.one_point_zero_i128 },
+    },
+
+    // TIER 7: Closure used in data structures
+    .{ .name = "closure: closure stored in record field then called",
+        .source =
+            \\{
+            \\    y = 10
+            \\    rec = { f: |x| x + y }
+            \\    f = rec.f
+            \\    f(5)
+            \\}
+        ,
+        .expected = .{ .dec_val = 15 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "closure: two closures in record, each with own captures",
+        .source =
+            \\{
+            \\    a = 10
+            \\    b = 20
+            \\    rec = { add_a: |x| x + a, add_b: |x| x + b }
+            \\    add_a = rec.add_a
+            \\    add_b = rec.add_b
+            \\    add_a(5) + add_b(5)
+            \\}
+        ,
+        .expected = .{ .dec_val = 40 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "closure: record field closure add_a preserves its capture",
+        .source =
+            \\{
+            \\    a = 10
+            \\    b = 20
+            \\    rec = { add_a: |x| x + a, add_b: |x| x + b }
+            \\    add_a = rec.add_a
+            \\    add_a(5)
+            \\}
+        ,
+        .expected = .{ .dec_val = 15 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "closure: parenthesized record field closure add_b preserves its capture",
+        .source =
+            \\{
+            \\    a = 10
+            \\    b = 20
+            \\    rec = { add_a: |x| x + a, add_b: |x| x + b }
+            \\    (rec.add_b)(5)
+            \\}
+        ,
+        .expected = .{ .dec_val = 25 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "closure: record field closure add_b preserves its capture",
+        .source =
+            \\{
+            \\    a = 10
+            \\    b = 20
+            \\    rec = { add_a: |x| x + a, add_b: |x| x + b }
+            \\    add_b = rec.add_b
+            \\    add_b(5)
+            \\}
+        ,
+        .expected = .{ .dec_val = 25 * RocDec.one_point_zero_i128 },
+    },
+
+    // TIER 8: Composition and chaining
+    .{ .name = "closure: compose two functions",
+        .source =
+            \\{
+            \\    compose = |f, g| |x| f(g(x))
+            \\    double = |x| x * 2
+            \\    add1 = |x| x + 1
+            \\    double_then_add1 = compose(add1, double)
+            \\    double_then_add1(5)
+            \\}
+        ,
+        .expected = .{ .dec_val = 11 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "closure: compose with captures",
+        .source =
+            \\{
+            \\    compose = |f, g| |x| f(g(x))
+            \\    a = 3
+            \\    b = 7
+            \\    add_a = |x| x + a
+            \\    add_b = |x| x + b
+            \\    add_both = compose(add_a, add_b)
+            \\    add_both(10)
+            \\}
+        ,
+        .expected = .{ .dec_val = 20 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "closure: pipe (flip of compose)",
+        .source =
+            \\{
+            \\    pipe = |x, f| f(x)
+            \\    y = 10
+            \\    pipe(5, |x| x + y)
+            \\}
+        ,
+        .expected = .{ .dec_val = 15 * RocDec.one_point_zero_i128 },
+    },
+
+    // TIER 9: Recursive closures and self-reference
+    .{ .name = "closure: recursive function in let binding",
+        .source =
+            \\{
+            \\    factorial = |n| if (n <= 1) 1 else n * factorial(n - 1)
+            \\    factorial(5)
+            \\}
+        ,
+        .expected = .{ .dec_val = 120 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "closure: mutual recursion between two closures",
+        .source =
+            \\{
+            \\    is_even = |n| if (n == 0) True else is_odd(n - 1)
+            \\    is_odd = |n| if (n == 0) False else is_even(n - 1)
+            \\    if (is_even(4)) 1 else 0
+            \\}
+        ,
+        .expected = .{ .dec_val = 1 * RocDec.one_point_zero_i128 },
+    },
+
+    // TIER 10: Extremely complex / stress tests
+    .{ .name = "closure: triple-nested closure factory",
+        .source =
+            \\{
+            \\    level1 = |a| |b| |c| |x| x + a + b + c
+            \\    level2 = level1(1)
+            \\    level3 = level2(2)
+            \\    level4 = level3(3)
+            \\    level4(10)
+            \\}
+        ,
+        .expected = .{ .dec_val = 16 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "closure: closure capturing another closure (2 levels)",
+        .source =
+            \\{
+            \\    a = 1
+            \\    f = |x| x + a
+            \\    b = 2
+            \\    g = |x| f(x) + b
+            \\    g(10)
+            \\}
+        ,
+        .expected = .{ .dec_val = 13 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "closure: closure capturing another closure that captures a third",
+        .source =
+            \\{
+            \\    a = 1
+            \\    f = |x| x + a
+            \\    b = 2
+            \\    g = |x| f(x) + b
+            \\    c = 3
+            \\    h = |x| g(x) + c
+            \\    h(10)
+            \\}
+        ,
+        .expected = .{ .dec_val = 16 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "closure: HOF receiving closure, returning closure that captures the argument closure",
+        .source =
+            \\{
+            \\    make_doubler = |f| |x| f(f(x))
+            \\    add3 = |x| x + 3
+            \\    double_add3 = make_doubler(add3)
+            \\    double_add3(10)
+            \\}
+        ,
+        .expected = .{ .dec_val = 16 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "closure: HOF receiving closure with captures, returning closure that captures it",
+        .source =
+            \\{
+            \\    n = 5
+            \\    add_n = |x| x + n
+            \\    make_doubler = |f| |x| f(f(x))
+            \\    double_add_n = make_doubler(add_n)
+            \\    double_add_n(10)
+            \\}
+        ,
+        .expected = .{ .dec_val = 20 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "closure: chained closure factories with accumulating captures",
+        .source =
+            \\{
+            \\    step1 = |a| |b| |c| a + b + c
+            \\    step2 = step1(100)
+            \\    step3 = step2(20)
+            \\    step3(3)
+            \\}
+        ,
+        .expected = .{ .dec_val = 123 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "closure: polymorphic HOF with closures capturing different types",
+        .source =
+            \\{
+            \\    apply = |f, x| f(x)
+            \\    offset = 100
+            \\    prefix = "Result: "
+            \\    num = apply(|x| x + offset, 23)
+            \\    if (num > 0) apply(|s| Str.concat(prefix, s), "yes") else "no"
+            \\}
+        ,
+        .expected = .{ .str_val = "Result: yes" },
+    },
+    .{ .name = "closure: closure over bool used in conditional",
+        .source =
+            \\{
+            \\    flag = True
+            \\    choose = |a, b| if (flag) a else b
+            \\    choose(42, 0)
+            \\}
+        ,
+        .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "closure: deeply nested blocks each adding captures",
+        .source =
+            \\{
+            \\    a = 1
+            \\    r1 = {
+            \\        b = 2
+            \\        r2 = {
+            \\            c = 3
+            \\            f = |x| x + a + b + c
+            \\            f(10)
+            \\        }
+            \\        r2
+            \\    }
+            \\    r1
+            \\}
+        ,
+        .expected = .{ .dec_val = 16 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "closure: same variable captured by multiple independent closures",
+        .source =
+            \\{
+            \\    shared = 10
+            \\    f = |x| x + shared
+            \\    g = |x| x * shared
+            \\    f(5) + g(3)
+            \\}
+        ,
+        .expected = .{ .dec_val = 45 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "closure: closure returning a string that includes a captured string",
+        .source =
+            \\{
+            \\    make_greeter = |greeting|
+            \\        |name|
+            \\            Str.concat(Str.concat(greeting, ", "), name)
+            \\    hello = make_greeter("Hello")
+            \\    hi = make_greeter("Hi")
+            \\    r1 = hello("Alice")
+            \\    r2 = hi("Bob")
+            \\    Str.concat(Str.concat(r1, " and "), r2)
+            \\}
+        ,
+        .expected = .{ .str_val = "Hello, Alice and Hi, Bob" },
+    },
+    .{ .name = "closure: applying the same closure to different arguments",
+        .source =
+            \\{
+            \\    base = 100
+            \\    f = |x| x + base
+            \\    a = f(1)
+            \\    b = f(2)
+            \\    c = f(3)
+            \\    a + b + c
+            \\}
+        ,
+        .expected = .{ .dec_val = 306 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "closure: immediately invoked closure with capture",
+        .source =
+            \\{
+            \\    y = 42
+            \\    (|x| x + y)(8)
+            \\}
+        ,
+        .expected = .{ .dec_val = 50 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "closure: closure that ignores its argument but uses capture",
+        .source =
+            \\{
+            \\    val = 99
+            \\    f = |_| val
+            \\    f(0)
+            \\}
+        ,
+        .expected = .{ .dec_val = 99 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "closure: closure that ignores capture and uses argument",
+        .source =
+            \\{
+            \\    _unused = 999
+            \\    f = |x| x + 1
+            \\    f(41)
+            \\}
+        ,
+        .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 },
+    },
+
+    // TIER 11: Monomorphic identity -- isolating polymorphic specialization
+    .{ .name = "closure: monomorphic Str identity (no polymorphism)",
+        .source =
+            \\{
+            \\    identity : Str -> Str
+            \\    identity = |val| val
+            \\    identity("Hello")
+            \\}
+        ,
+        .expected = .{ .str_val = "Hello" },
+    },
+    .{ .name = "closure: monomorphic Dec identity (no polymorphism)",
+        .source =
+            \\{
+            \\    identity : Dec -> Dec
+            \\    identity = |val| val
+            \\    num = identity(5)
+            \\    num
+            \\}
+        ,
+        .expected = .{ .dec_val = 5 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "closure: monomorphic Str identity with if-else (exact failing scenario but monomorphic)",
+        .source =
+            \\{
+            \\    str_id : Str -> Str
+            \\    str_id = |val| val
+            \\    num = 5
+            \\    str = str_id("Hello")
+            \\    if (num > 0) str else ""
+            \\}
+        ,
+        .expected = .{ .str_val = "Hello" },
+    },
+
+    // Regression: refcounting closures with heap-allocated captures
+    .{ .name = "closure: multi-use closure with captured short string (SSO)",
+        .source =
+            \\{
+            \\    s = "short"
+            \\    f = |_x| s
+            \\    _a = f(0)
+            \\    f(0)
+            \\}
+        ,
+        .expected = .{ .str_val = "short" },
+    },
+    .{ .name = "closure: multi-use closure with captured heap string needs incref",
+        .source =
+            \\{
+            \\    s = "This string is definitely longer than twenty three bytes"
+            \\    f = |_x| s
+            \\    _a = f(0)
+            \\    f(0)
+            \\}
+        ,
+        .expected = .{ .str_val = "This string is definitely longer than twenty three bytes" },
+    },
 };

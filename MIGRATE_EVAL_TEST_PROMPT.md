@@ -10,6 +10,46 @@ The parallel runner exercises **every backend** (interpreter, dev, wasm,
 llvm) on each test and compares results, so every migrated test
 automatically gets cross-backend coverage.
 
+## Progress
+
+### Completed
+
+- **eval_test.zig**: 306 test blocks migrated → 524 TestCase entries.
+  62 test blocks remain (use unsupported helpers — see "Remaining Work").
+- **closure_test.zig**: 53 test blocks migrated → 53 TestCase entries. File deleted.
+
+### Remaining Work
+
+**eval_test.zig** — 62 test blocks still use unsupported helpers:
+
+| Helper | Count | Example tests |
+|--------|-------|---------------|
+| `runExpectRecord` | ~25 | `List.fold with record accumulator - *`, `focused: fold *` |
+| `runExpectListI64` | ~16 | `for loop - *`, `List.map - *`, `List.append - *`, `List.repeat - *` |
+| `runExpectListZst` | ~5 | `List.map - empty list`, `List.append - zst case`, `focused: list append zst` |
+| `runExpectIntDec` | ~5 | `List.sum - *`, `simple fold without records - Dec result` |
+| `runExpectSuccess` | ~5 | `decimal literal evaluation`, `float literal evaluation`, `string literals and interpolation` |
+| `runExpectTuple` | 1 | `tuples` |
+| `runExpectEmptyListI64` | 1 | `List.repeat - empty case` |
+| Custom infra | 2 | `ModuleEnv serialization`, `crash message storage` |
+| Manually skipped | 3 | `TODO RE-ENABLE` tests, `early return: ? in closure passed to List.fold` |
+
+**Other files** — not yet started:
+
+| File | Tests | Notes |
+|------|-------|-------|
+| `arithmetic_comprehensive_test.zig` | ~82 | Mixed helpers — fully portable |
+| `list_refcount_basic.zig` | varies | `runExpectI64` — fully portable |
+| `list_refcount_simple.zig` | varies | `runExpectI64` — fully portable |
+| `list_refcount_nested.zig` | varies | `runExpectI64` — fully portable |
+| `list_refcount_pattern.zig` | varies | `runExpectI64` — fully portable |
+| `list_refcount_alias.zig` | varies | `runExpectI64` — fully portable |
+| `list_refcount_complex.zig` | varies | `runExpectI64` — fully portable |
+| `list_refcount_conditional.zig` | varies | `runExpectI64` — fully portable |
+| `list_refcount_containers.zig` | varies | `runExpectI64` — fully portable |
+
+---
+
 ## Ground Rules
 
 1. **Work in small batches.** Migrate one test file (or one logical group
@@ -38,6 +78,62 @@ automatically gets cross-backend coverage.
 
 ---
 
+## Critical: Unsuffixed Numeric Literals Default to Dec, Not I64
+
+**This is the most common migration mistake.** In Roc, unsuffixed numeric
+literals like `1`, `42`, `1 + 2` evaluate to **Dec** (decimal), not I64.
+Only literals with an explicit suffix like `42.I64`, `255.U8`, `3.U32`
+produce integer types.
+
+The old `runExpectI64` helper silently converted Dec values to integers,
+masking the actual runtime type. **Do not replicate this behavior.** Use
+the correct `Expected` variant:
+
+```zig
+// WRONG — "42" produces Dec, not I64:
+.{ .name = "...", .source = "42", .expected = .{ .i64_val = 42 } },
+
+// CORRECT — unsuffixed literal is Dec:
+.{ .name = "...", .source = "42", .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 } },
+
+// CORRECT — suffixed literal is I64:
+.{ .name = "...", .source = "42.I64", .expected = .{ .i64_val = 42 } },
+```
+
+### How to decide `.i64_val` vs `.dec_val`
+
+Trace the **result type** of the expression. The result type is determined
+by the final expression that gets returned, not just the source literals.
+
+**Use `.dec_val = N * RocDec.one_point_zero_i128`** when the result comes from:
+- Unsuffixed numeric literals: `"42"`, `"1 + 2"`, `"-5"`
+- Record field access on unsuffixed values: `"{x: 42}.x"`
+- Arithmetic on unsuffixed values: `"100 // 20"`, `"7 % 3"`
+- Conditionals returning unsuffixed values: `"if (1 == 1) 42 else 99"`
+- Match branches returning unsuffixed values: `"match Ok(10) { Ok(n) => n + 5, Err(_) => 0 }"`
+- Function calls where the result chain is all unsuffixed: `"factorial(5)"`
+- Hex/binary literals without suffix: `"0xFF"`, `"0b1010"`
+
+**Use `.i64_val = N`** when the result comes from:
+- Suffixed integer literals: `"42.I64"`, `"255.U8"`, `"1000.U32"`
+- Arithmetic on suffixed values: `"(|x| x + 1.I64)(5.I64)"`
+- `.len()` calls (returns U64, an integer type)
+- `.to_i64()` conversions
+- Any expression where type inference resolves to an integer type through
+  suffixed literals in the call chain
+
+**Edge cases:**
+- `"(|x| x)(42)"` → Dec (42 is unsuffixed, identity doesn't change type)
+- `"(|x| x)(42.I64)"` → I64 (42.I64 is suffixed)
+- `"List.len([1, 2, 3])"` → I64 (len returns U64)
+- `"[1.I64, 2.I64, 3.I64].len()"` → I64 (len returns U64)
+- `"if True { x = 0; x } else 99"` → Dec (0 and 99 are unsuffixed)
+
+**When in doubt:** Run the test with `.i64_val`. If it fails with
+`"expected integer layout"`, the result is Dec — change to `.dec_val`.
+
+---
+
 ## The TestCase Format
 
 ```zig
@@ -46,8 +142,11 @@ const TestCase = @import("parallel_runner.zig").TestCase;
 const RocDec = @import("builtins").dec.RocDec;
 
 pub const tests = [_]TestCase{
-    // --- integers ---
-    .{ .name = "eval simple number: 1", .source = "1", .expected = .{ .i64_val = 1 } },
+    // --- integers (suffixed) ---
+    .{ .name = "integer: I64 literal", .source = "42.I64", .expected = .{ .i64_val = 42 } },
+
+    // --- decimals (unsuffixed numeric literals default to Dec) ---
+    .{ .name = "eval simple number: 42", .source = "42", .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 } },
 
     // --- booleans ---
     .{ .name = "bool: true literal", .source = "True", .expected = .{ .bool_val = true } },
@@ -55,7 +154,7 @@ pub const tests = [_]TestCase{
     // --- strings ---
     .{ .name = "str: hello", .source = "\"hello\"", .expected = .{ .str_val = "hello" } },
 
-    // --- decimals ---
+    // --- decimals (explicit Dec suffix) ---
     .{ .name = "dec: 1.5", .source = "1.5", .expected = .{ .dec_val = 1500000000000000000 } },
 
     // --- floats ---
@@ -95,7 +194,7 @@ it visible that a test isn't there yet.
 // Skip all compiled backends — interpreter only
 .{ .name = "interp only: complex pattern",
    .source = "...",
-   .expected = .{ .i64_val = 42 },
+   .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 },
    .skip = .{ .dev = true, .wasm = true, .llvm = true },
 },
 ```
@@ -106,10 +205,10 @@ Available skip flags: `.interpreter`, `.dev`, `.wasm`, `.llvm`.
 
 | Variant | Old helper | Notes |
 |---------|-----------|-------|
-| `.i64_val` | `runExpectI64` | i64 value. Only for suffixed int literals (e.g. `42.I64`). Unsuffixed literals default to Dec — use `.dec_val` with `N * RocDec.one_point_zero_i128` instead. |
+| `.i64_val` | `runExpectI64` | i64 value. **Only for suffixed int literals** (e.g. `42.I64`, `255.U8`). See "Critical" section above. |
 | `.bool_val` | `runExpectBool` | `true` or `false`. |
 | `.str_val` | `runExpectStr` | Expected string content. |
-| `.dec_val` | `runExpectDec` | Raw i128 Dec representation (scaled by 10^18). |
+| `.dec_val` | `runExpectDec` | Raw i128 Dec representation (scaled by 10^18). Use `N * RocDec.one_point_zero_i128` for whole numbers. |
 | `.f32_val` | `runExpectF32` | f32 with epsilon tolerance. |
 | `.f64_val` | `runExpectF64` | f64 with epsilon tolerance. |
 | `.err_val` | `runExpectError` | `error.Crash`, etc. |
@@ -124,10 +223,15 @@ Available skip flags: `.interpreter`, `.dev`, `.wasm`, `.llvm`.
 ### Direct mappings (migrate these)
 
 ```zig
-// OLD:
+// OLD (suffixed — result is I64):
+try runExpectI64("(|x| x + 1.I64)(5.I64)", 6, .no_trace);
+// NEW:
+.{ .name = "...", .source = "(|x| x + 1.I64)(5.I64)", .expected = .{ .i64_val = 6 } },
+
+// OLD (unsuffixed — result is Dec, NOT I64):
 try runExpectI64("1 + 2", 3, .no_trace);
 // NEW:
-.{ .name = "...", .source = "1 + 2", .expected = .{ .i64_val = 3 } },
+.{ .name = "...", .source = "1 + 2", .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 } },
 
 // OLD:
 try runExpectBool("True", true, .no_trace);
@@ -184,14 +288,35 @@ table, use the same syntax:
 // OLD:
 try runExpectI64(
     \\{
+    \\    x = 10.I64
+    \\    y = 20.I64
+    \\    x + y
+    \\}
+, 30, .no_trace);
+
+// NEW (suffixed .I64 → i64_val):
+.{ .name = "block: x + y",
+   .source =
+       \\{
+       \\    x = 10.I64
+       \\    y = 20.I64
+       \\    x + y
+       \\}
+   ,
+   .expected = .{ .i64_val = 30 },
+},
+
+// OLD (unsuffixed):
+try runExpectI64(
+    \\{
     \\    x = 10
     \\    y = 20
     \\    x + y
     \\}
 , 30, .no_trace);
 
-// NEW:
-.{ .name = "block: x + y",
+// NEW (unsuffixed → dec_val):
+.{ .name = "block: x + y unsuffixed",
    .source =
        \\{
        \\    x = 10
@@ -199,7 +324,7 @@ try runExpectI64(
        \\    x + y
        \\}
    ,
-   .expected = .{ .i64_val = 30 },
+   .expected = .{ .dec_val = 30 * RocDec.one_point_zero_i128 },
 },
 ```
 
@@ -231,59 +356,60 @@ table. **Skip these entirely** — they will continue running via the old
 These old helpers have **no TestCase variant yet**. Do not migrate them
 until a variant is added (see "Adding New Expected Variants" below):
 
-| Old helper | What it checks |
-|-----------|---------------|
-| `runExpectRecord` | Record with named fields + i128 values |
-| `runExpectTuple` | Tuple with indexed i128 elements |
-| `runExpectListI64` | List of i64 values |
-| `runExpectListZst` | List of ZST elements (checks length only) |
-| `runExpectEmptyListI64` | Empty i64 list |
-| `runExpectUnit` | Unit value `{}` |
+| Old helper | What it checks | Remaining count in eval_test.zig |
+|-----------|---------------|----------------------------------|
+| `runExpectRecord` | Record with named fields + i128 values | ~25 |
+| `runExpectTuple` | Tuple with indexed i128 elements | 1 |
+| `runExpectListI64` | List of i64 values | ~16 |
+| `runExpectListZst` | List of ZST elements (checks length only) | ~5 |
+| `runExpectEmptyListI64` | Empty i64 list | 1 |
+| `runExpectIntDec` | Dec value compared as truncated integer | ~5 |
+| `runExpectSuccess` | Evaluation succeeds (no value check) | ~5 |
+| `runExpectUnit` | Unit value `{}` | 0 |
 
 When you encounter a test that uses one of these, **skip it** and leave a
 comment in your commit message noting the count skipped and why.
+
+### Also not migrateable
+
+These test blocks in eval_test.zig use custom infrastructure or are
+manually skipped. They cannot be expressed as TestCase entries:
+
+| Test | Reason |
+|------|--------|
+| `crash message storage and retrieval - host-managed context` | Direct `TestEnv`/`RocCrashed` API |
+| `ModuleEnv serialization and interpreter evaluation` | Full serialization round-trip with file I/O |
+| `early return: ? in closure passed to List.fold` | Manually skipped (`return error.SkipZigTest`) |
+| `TODO RE-ENABLE: ...` (2 tests) | Known compiler crash, skip-guarded |
 
 ---
 
 ## Files to Migrate (in recommended order)
 
-Migrate these files. Each contains tests that use `runExpectI64`,
-`runExpectBool`, `runExpectStr`, `runExpectF32`, `runExpectF64`,
-`runExpectDec`, `runExpectError`, `runExpectProblem`,
-`runExpectTypeMismatchAndCrash`, or `runDevOnlyExpectStr`.
+### Batch 1: eval_test.zig — DONE (partially)
 
-### Batch 1: eval_test.zig (the big one — do in sub-batches)
+306 of 368 test blocks migrated. 62 remain using unsupported helpers.
 
-~371 tests. Work through it in groups of ~30-50 tests at a time. Suggested
-sub-batches based on the test names / logical sections:
+### Batch 2: closure_test.zig — DONE
 
-1. Simple numbers, if-else, nested if-else, records (field access)
-2. Arithmetic, comparisons, boolean logic
-3. Let bindings, closures, function application
-4. String operations
-5. Dec / float operations
-6. Pattern matching (when/match)
-7. Tags and tag unions
-8. Remaining `runExpectI64` / `runExpectBool` tests
-9. `runExpectStr` tests
-10. `runExpectError`, `runExpectProblem`, `runExpectTypeMismatchAndCrash`
-11. `runDevOnlyExpectStr` tests
-12. **Skip** `runExpectRecord`, `runExpectTuple`, `runExpectListI64`,
-    `runExpectListZst`, `runExpectEmptyListI64` tests (no variant yet)
-
-### Batch 2: closure_test.zig
-
-~53 tests. All use `runExpectI64` or `runExpectStr` — fully portable.
+53 tests migrated. All used unsuffixed literals → `.dec_val` for numeric
+results. File deleted.
 
 ### Batch 3: arithmetic_comprehensive_test.zig
 
 ~82 tests. Uses `runExpectI64`, `runExpectF32`, `runExpectF64`,
 `runExpectDec`, `runExpectStr`, `runExpectTypeMismatchAndCrash`.
 
+**Important:** Many arithmetic tests use unsuffixed literals. The old
+`runExpectI64` calls masked the Dec type. Use `.dec_val` for those.
+
 ### Batch 4: list_refcount_*.zig (8 files)
 
 These all use `runExpectI64` — fully portable. Migrate all 8 files
 together or one at a time.
+
+**Important:** Check whether these use `.I64` suffixed literals. If so,
+`.i64_val` is correct. If unsuffixed, use `.dec_val`.
 
 - `list_refcount_basic.zig`
 - `list_refcount_simple.zig`
@@ -310,6 +436,11 @@ Open the old test file. Identify all `test "..."` blocks and the
 For each `runExpect*` call, create a `.{ .name = ..., .source = ...,
 .expected = ... }` entry. Follow the mapping rules above.
 
+**For `runExpectI64` calls:** Check whether the source expression produces
+an integer type (suffixed literals like `.I64`, `.U8`, or `.len()` calls)
+or a Dec type (unsuffixed literals). Use `.i64_val` or `.dec_val`
+accordingly. See the "Critical" section above.
+
 Skip any calls that use unsupported helpers (record, tuple, list, unit).
 
 ### 3. Append to eval_tests.zig
@@ -330,6 +461,8 @@ zig build test-eval -- --verbose
 ```
 
 All tests should pass. If any fail, check:
+- **"expected integer layout"** → The result is Dec, not I64. Change to
+  `.dec_val = N * RocDec.one_point_zero_i128`.
 - Source string escaping (especially `\"` inside strings)
 - Dec values (must be raw i128 scaled by 10^18)
 - Float epsilon (f32 uses 0.0001, f64 uses 0.000000001)
@@ -371,6 +504,42 @@ When you're ready to support `runExpectRecord`, `runExpectListI64`, etc.:
 4. Add tests using the new variant to `eval_tests.zig`.
 
 5. Run `zig build test-eval -- --verbose` to verify.
+
+---
+
+## Lessons Learned
+
+### The `runExpectI64` trap
+
+The old `runExpectI64` helper accepted both integer and Dec results by
+silently converting Dec→int via `@divTrunc(dec.num, one_point_zero)`.
+This masked type bugs — a test could pass with `.i64_val` even though
+the expression actually produced Dec. The parallel runner's `.i64_val`
+variant correctly requires an integer layout, so you must determine the
+actual result type when migrating.
+
+### Batch size
+
+The eval_test.zig migration was done as one large batch (306 test blocks
+→ 524 TestCase entries). This worked well because the conversion is
+mechanical. For files with complex or unusual test patterns, smaller
+batches are safer.
+
+### Programmatic conversion
+
+For large batches, a Python script to do the `.i64_val` → `.dec_val`
+fixup was essential. After the initial migration, running the tests
+identified 132 failures (all "expected integer layout"), and a script
+replaced the expected variants in bulk based on the failing test names.
+This is a reliable workflow: migrate optimistically, run tests, fix
+failures programmatically.
+
+### Test names from multi-assertion blocks
+
+When a single `test "foo"` block has multiple `runExpect*` calls, each
+becomes a separate TestCase. The naming convention used was:
+`"foo: distinguishing suffix"` where the suffix describes the specific
+case (e.g. `"eval simple number: 1"`, `"eval simple number: 42"`).
 
 ---
 
