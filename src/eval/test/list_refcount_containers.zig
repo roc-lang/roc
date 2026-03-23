@@ -19,7 +19,7 @@ test "list refcount containers - single list in tuple" {
         \\    x = [1, 2]
         \\    match x { [a, b] => a + b, _ => 0 }
         \\}
-    , 3, .no_trace);
+    , 3);
 }
 
 test "list refcount containers - multiple lists in tuple" {
@@ -30,7 +30,7 @@ test "list refcount containers - multiple lists in tuple" {
         \\    t = (x, y)
         \\    match t { (first, _) => match first { [a, b] => a + b, _ => 0 } }
         \\}
-    , 3, .no_trace);
+    , 3);
 }
 
 test "list refcount containers - same list twice in tuple" {
@@ -41,7 +41,7 @@ test "list refcount containers - same list twice in tuple" {
         \\    t = (x, x)
         \\    match t { (first, _) => match first { [a, b] => a + b, _ => 0 } }
         \\}
-    , 3, .no_trace);
+    , 3);
 }
 
 test "list refcount containers - tuple with string list" {
@@ -51,7 +51,7 @@ test "list refcount containers - tuple with string list" {
         \\    t = (x, 42)
         \\    match t { (lst, _) => match lst { [first, ..] => first, _ => "" } }
         \\}
-    , "a", .no_trace);
+    , "a");
 }
 
 // Records with Lists
@@ -63,7 +63,7 @@ test "list refcount containers - single field record with list" {
         \\    r = {items: lst}
         \\    match r.items { [a, b, c] => a + b + c, _ => 0 }
         \\}
-    , 6, .no_trace);
+    , 6);
 }
 
 test "list refcount containers - multiple fields with lists" {
@@ -74,7 +74,7 @@ test "list refcount containers - multiple fields with lists" {
         \\    r = {first: x, second: y}
         \\    match r.first { [a, b] => a + b, _ => 0 }
         \\}
-    , 3, .no_trace);
+    , 3);
 }
 
 test "list refcount containers - same list in multiple fields" {
@@ -84,7 +84,7 @@ test "list refcount containers - same list in multiple fields" {
         \\    r = {a: lst, b: lst}
         \\    match r.a { [x, y] => x + y, _ => 0 }
         \\}
-    , 30, .no_trace);
+    , 30);
 }
 
 test "list refcount containers - nested record with list" {
@@ -95,7 +95,7 @@ test "list refcount containers - nested record with list" {
         \\    outer = {nested: inner}
         \\    match outer.nested.data { [a, b] => a + b, _ => 0 }
         \\}
-    , 11, .no_trace);
+    , 11);
 }
 
 test "list refcount containers - record with string list" {
@@ -105,7 +105,7 @@ test "list refcount containers - record with string list" {
         \\    r = {items: lst}
         \\    match r.items { [first, ..] => first, _ => "" }
         \\}
-    , "hello", .no_trace);
+    , "hello");
 }
 
 test "list refcount containers - record with mixed types" {
@@ -115,7 +115,7 @@ test "list refcount containers - record with mixed types" {
         \\    r = {count: 42, items: lst}
         \\    r.count
         \\}
-    , 42, .no_trace);
+    , 42);
 }
 
 // Tags with Lists
@@ -124,7 +124,7 @@ test "list refcount containers - tag with list payload" {
     // Simplified: Direct list in tag construction
     try runExpectI64(
         \\match Some([1, 2]) { Some(lst) => match lst { [a, b] => a + b, _ => 0 }, None => 0 }
-    , 3, .no_trace);
+    , 3);
 }
 
 test "list refcount containers - tag with multiple list payloads" {
@@ -135,21 +135,21 @@ test "list refcount containers - tag with multiple list payloads" {
         \\    tag = Pair(x, y)
         \\    match tag { Pair(first, _) => match first { [a, b] => a + b, _ => 0 }, _ => 0 }
         \\}
-    , 3, .no_trace);
+    , 3);
 }
 
 test "list refcount containers - tag with string list payload" {
     // Simplified: Direct string list in tag
     try runExpectStr(
         \\match Some(["tag", "value"]) { Some(lst) => match lst { [first, ..] => first, _ => "" }, None => "" }
-    , "tag", .no_trace);
+    , "tag");
 }
 
 test "list refcount containers - Ok/Err with lists" {
     // Simplified: Direct list in Ok
     try runExpectI64(
         \\match Ok([1, 2, 3]) { Ok(lst) => match lst { [a, b, c] => a + b + c, _ => 0 }, Err(_) => 0 }
-    , 6, .no_trace);
+    , 6);
 }
 
 // Complex Combinations
@@ -164,7 +164,7 @@ test "list refcount containers - tuple of records with lists" {
         \\    t = (r1, r2)
         \\    match t { (first, _) => match first.items { [a, b] => a + b, _ => 0 } }
         \\}
-    , 3, .no_trace);
+    , 3);
 }
 
 test "list refcount containers - record of tuples with lists" {
@@ -175,7 +175,7 @@ test "list refcount containers - record of tuples with lists" {
         \\    r = {data: t}
         \\    match r.data { (items, _) => match items { [a, b] => a + b, _ => 0 } }
         \\}
-    , 11, .no_trace);
+    , 11);
 }
 
 test "list refcount containers - tag with record containing list" {
@@ -186,7 +186,7 @@ test "list refcount containers - tag with record containing list" {
         \\    tag = Some(r)
         \\    match tag { Some(rec) => match rec.items { [a, b] => a + b, _ => 0 }, None => 0 }
         \\}
-    , 15, .no_trace);
+    , 15);
 }
 
 test "list refcount containers - empty list in record" {
@@ -196,5 +196,5 @@ test "list refcount containers - empty list in record" {
         \\    r = {lst: empty}
         \\    match r.lst { [] => 42, _ => 0 }
         \\}
-    , 42, .no_trace);
+    , 42);
 }

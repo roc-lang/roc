@@ -17,7 +17,7 @@ test "list refcount alias - variable aliasing" {
         \\    y = x
         \\    match y { [a, b, c] => a + b + c, _ => 0 }
         \\}
-    , 6, .no_trace);
+    , 6);
 }
 
 test "list refcount alias - return original after aliasing" {
@@ -28,7 +28,7 @@ test "list refcount alias - return original after aliasing" {
         \\    _y = x
         \\    match x { [a, b, c] => a + b + c, _ => 0 }
         \\}
-    , 6, .no_trace);
+    , 6);
 }
 
 test "list refcount alias - triple aliasing" {
@@ -40,7 +40,7 @@ test "list refcount alias - triple aliasing" {
         \\    z = y
         \\    match z { [a, b] => a + b, _ => 0 }
         \\}
-    , 3, .no_trace);
+    , 3);
 }
 
 test "list refcount alias - mutable reassignment decrefs old list" {
@@ -51,7 +51,7 @@ test "list refcount alias - mutable reassignment decrefs old list" {
         \\    $x = [3, 4]
         \\    match $x { [a, b] => a + b, _ => 0 }
         \\}
-    , 7, .no_trace);
+    , 7);
 }
 
 test "list refcount alias - multiple independent lists" {
@@ -62,7 +62,7 @@ test "list refcount alias - multiple independent lists" {
         \\    _y = [3, 4]
         \\    match x { [a, b] => a + b, _ => 0 }
         \\}
-    , 3, .no_trace);
+    , 3);
 }
 
 test "list refcount alias - empty list aliasing" {
@@ -73,7 +73,7 @@ test "list refcount alias - empty list aliasing" {
         \\    y = x
         \\    match y { [] => 42, _ => 0 }
         \\}
-    , 42, .no_trace);
+    , 42);
 }
 
 test "list refcount alias - alias then shadow" {
@@ -85,7 +85,7 @@ test "list refcount alias - alias then shadow" {
         \\    $x = [3, 4]
         \\    match y { [a, b] => a + b, _ => 0 }
         \\}
-    , 3, .no_trace);
+    , 3);
 }
 
 test "list refcount alias - both references used" {
@@ -98,5 +98,5 @@ test "list refcount alias - both references used" {
         \\    b = match y { [first, ..] => first, _ => 0 }
         \\    a + b
         \\}
-    , 2, .no_trace);
+    , 2);
 }

@@ -247,6 +247,10 @@ const CheckTypeCheckerPatternsStep = struct {
         // modules has different Ident.Idx values, so we must compare the underlying strings.
         // This exclusion can go away once the deprecated interpreter is finally removed.
         .{ .file = "StackValue.zig", .start = 1150, .end = 1220 },
+        // Cross-module ident matching in cir_to_lir.zig requires string comparison
+        // because platform and app modules have separate ident stores — the same alias
+        // name has different Ident.Idx values across modules, so we must compare via text.
+        .{ .file = "cir_to_lir.zig", .start = 110, .end = 115 },
     };
 
     fn isInExcludedRange(file_path: []const u8, line_number: usize) bool {

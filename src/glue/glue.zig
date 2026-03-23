@@ -428,7 +428,6 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         &roc_ops,
         @ptrCast(&types_list),
         @ptrCast(&result_buf),
-        RocTarget.detectNative(),
     ) catch |err| {
         stderr.print("Error running glue spec: {}\n", .{err}) catch {};
         return error.CompilationFailed;

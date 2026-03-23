@@ -14,7 +14,6 @@ const can = @import("can");
 const types = @import("types");
 const layout = @import("layout");
 const builtins = @import("builtins");
-const roc_target = @import("roc_target");
 
 const eval_mod = @import("mod.zig");
 
@@ -52,7 +51,6 @@ pub fn run(
     roc_ops: *RocOps,
     args_ptr: ?*anyopaque,
     result_ptr: *anyopaque,
-    target: roc_target.RocTarget,
 ) RunError!void {
     switch (eval_backend) {
         .dev, .llvm => try runViaDev(
@@ -75,7 +73,6 @@ pub fn run(
             roc_ops,
             args_ptr,
             result_ptr,
-            target,
         ),
     }
 }
@@ -94,7 +91,6 @@ pub fn runtimeRun(
     roc_ops: *RocOps,
     args_ptr: ?*anyopaque,
     result_ptr: *anyopaque,
-    target: roc_target.RocTarget,
 ) RunError!void {
     switch (eval_backend) {
         inline else => |comptime_backend| try run(
@@ -108,7 +104,6 @@ pub fn runtimeRun(
             roc_ops,
             args_ptr,
             result_ptr,
-            target,
         ),
     }
 }
@@ -207,12 +202,10 @@ fn runViaInterpreter(
     roc_ops: *RocOps,
     args_ptr: ?*anyopaque,
     result_ptr: *anyopaque,
-    target: roc_target.RocTarget,
 ) RunError!void {
     const const_module_envs: []const *ModuleEnv = @ptrCast(all_module_envs);
 
     // Create LIR lowering pipeline
-    _ = target;
     const target_usize: base.target.TargetUsize = if (builtin.cpu.arch == .wasm32) .u32 else .u64;
     var lir_program = eval_mod.LirProgram.init(gpa, target_usize);
     defer lir_program.deinit();

@@ -47,200 +47,200 @@ const TraceWriterState = struct {
 };
 
 test "eval simple number" {
-    try runExpectI64("1", 1, .no_trace);
-    try runExpectI64("42", 42, .no_trace);
-    try runExpectI64("-1234", -1234, .no_trace);
+    try runExpectI64("1", 1);
+    try runExpectI64("42", 42);
+    try runExpectI64("-1234", -1234);
 }
 
 test "if-else" {
-    try runExpectI64("if (1 == 1) 42 else 99", 42, .no_trace);
-    try runExpectI64("if (1 == 2) 42 else 99", 99, .no_trace);
-    try runExpectI64("if (5 > 3) 100 else 200", 100, .no_trace);
-    try runExpectI64("if (3 > 5) 100 else 200", 200, .no_trace);
+    try runExpectI64("if (1 == 1) 42 else 99", 42);
+    try runExpectI64("if (1 == 2) 42 else 99", 99);
+    try runExpectI64("if (5 > 3) 100 else 200", 100);
+    try runExpectI64("if (3 > 5) 100 else 200", 200);
 }
 
 test "nested if-else" {
-    try runExpectI64("if (1 == 1) (if (2 == 2) 100 else 200) else 300", 100, .no_trace);
-    try runExpectI64("if (1 == 1) (if (2 == 3) 100 else 200) else 300", 200, .no_trace);
-    try runExpectI64("if (1 == 2) (if (2 == 2) 100 else 200) else 300", 300, .no_trace);
+    try runExpectI64("if (1 == 1) (if (2 == 2) 100 else 200) else 300", 100);
+    try runExpectI64("if (1 == 1) (if (2 == 3) 100 else 200) else 300", 200);
+    try runExpectI64("if (1 == 2) (if (2 == 2) 100 else 200) else 300", 300);
 }
 
 test "eval single element record" {
-    try runExpectI64("{x: 42}.x", 42, .no_trace);
-    try runExpectI64("{foo: 100}.foo", 100, .no_trace);
-    try runExpectI64("{bar: 1 + 2}.bar", 3, .no_trace);
+    try runExpectI64("{x: 42}.x", 42);
+    try runExpectI64("{foo: 100}.foo", 100);
+    try runExpectI64("{bar: 1 + 2}.bar", 3);
 }
 
 test "eval multi-field record" {
-    try runExpectI64("{x: 10, y: 20}.x", 10, .no_trace);
-    try runExpectI64("{x: 10, y: 20}.y", 20, .no_trace);
-    try runExpectI64("{a: 1, b: 2, c: 3}.a", 1, .no_trace);
-    try runExpectI64("{a: 1, b: 2, c: 3}.b", 2, .no_trace);
-    try runExpectI64("{a: 1, b: 2, c: 3}.c", 3, .no_trace);
+    try runExpectI64("{x: 10, y: 20}.x", 10);
+    try runExpectI64("{x: 10, y: 20}.y", 20);
+    try runExpectI64("{a: 1, b: 2, c: 3}.a", 1);
+    try runExpectI64("{a: 1, b: 2, c: 3}.b", 2);
+    try runExpectI64("{a: 1, b: 2, c: 3}.c", 3);
 }
 
 test "nested record access" {
-    try runExpectI64("{outer: {inner: 42}}.outer.inner", 42, .no_trace);
-    try runExpectI64("{a: {b: {c: 100}}}.a.b.c", 100, .no_trace);
+    try runExpectI64("{outer: {inner: 42}}.outer.inner", 42);
+    try runExpectI64("{a: {b: {c: 100}}}.a.b.c", 100);
 }
 
 test "record field order independence" {
-    try runExpectI64("{x: 1, y: 2}.x + {y: 2, x: 1}.x", 2, .no_trace);
-    try runExpectI64("{a: 10, b: 20, c: 30}.b", 20, .no_trace);
-    try runExpectI64("{c: 30, a: 10, b: 20}.b", 20, .no_trace);
+    try runExpectI64("{x: 1, y: 2}.x + {y: 2, x: 1}.x", 2);
+    try runExpectI64("{a: 10, b: 20, c: 30}.b", 20);
+    try runExpectI64("{c: 30, a: 10, b: 20}.b", 20);
 }
 
 test "arithmetic binops" {
-    try runExpectI64("1 + 2", 3, .no_trace);
-    try runExpectI64("5 - 3", 2, .no_trace);
-    try runExpectI64("4 * 5", 20, .no_trace);
-    try runExpectI64("10 // 2", 5, .no_trace);
-    try runExpectI64("7 % 3", 1, .no_trace);
+    try runExpectI64("1 + 2", 3);
+    try runExpectI64("5 - 3", 2);
+    try runExpectI64("4 * 5", 20);
+    try runExpectI64("10 // 2", 5);
+    try runExpectI64("7 % 3", 1);
 }
 
 test "simple Dec division - larger numbers" {
     // Single division with numbers similar to failing tests
-    try runExpectI64("100 // 20", 5, .no_trace);
+    try runExpectI64("100 // 20", 5);
 }
 
 test "simple Dec modulo - larger numbers" {
     // Single modulo - does this work?
-    try runExpectI64("100 % 30", 10, .no_trace);
+    try runExpectI64("100 % 30", 10);
 }
 
 test "Dec division result used in arithmetic" {
     // Division result used in subsequent arithmetic (addition, not another division)
-    try runExpectI64("(100 // 20) + 1", 6, .no_trace);
+    try runExpectI64("(100 // 20) + 1", 6);
 }
 
 test "comparison binops" {
-    try runExpectI64("if 1 < 2 100 else 200", 100, .no_trace);
-    try runExpectI64("if 2 < 1 100 else 200", 200, .no_trace);
-    try runExpectI64("if 5 > 3 100 else 200", 100, .no_trace);
-    try runExpectI64("if 3 > 5 100 else 200", 200, .no_trace);
-    try runExpectI64("if 10 <= 10 100 else 200", 100, .no_trace);
-    try runExpectI64("if 10 <= 9 100 else 200", 200, .no_trace);
-    try runExpectI64("if 10 >= 10 100 else 200", 100, .no_trace);
-    try runExpectI64("if 9 >= 10 100 else 200", 200, .no_trace);
-    try runExpectI64("if 5 == 5 100 else 200", 100, .no_trace);
-    try runExpectI64("if 5 == 6 100 else 200", 200, .no_trace);
-    try runExpectI64("if 5 != 6 100 else 200", 100, .no_trace);
-    try runExpectI64("if 5 != 5 100 else 200", 200, .no_trace);
+    try runExpectI64("if 1 < 2 100 else 200", 100);
+    try runExpectI64("if 2 < 1 100 else 200", 200);
+    try runExpectI64("if 5 > 3 100 else 200", 100);
+    try runExpectI64("if 3 > 5 100 else 200", 200);
+    try runExpectI64("if 10 <= 10 100 else 200", 100);
+    try runExpectI64("if 10 <= 9 100 else 200", 200);
+    try runExpectI64("if 10 >= 10 100 else 200", 100);
+    try runExpectI64("if 9 >= 10 100 else 200", 200);
+    try runExpectI64("if 5 == 5 100 else 200", 100);
+    try runExpectI64("if 5 == 6 100 else 200", 200);
+    try runExpectI64("if 5 != 6 100 else 200", 100);
+    try runExpectI64("if 5 != 5 100 else 200", 200);
 }
 
 test "unary minus" {
-    try runExpectI64("-5", -5, .no_trace);
-    try runExpectI64("-(-10)", 10, .no_trace);
-    try runExpectI64("-(3 + 4)", -7, .no_trace);
-    try runExpectI64("-0", 0, .no_trace);
+    try runExpectI64("-5", -5);
+    try runExpectI64("-(-10)", 10);
+    try runExpectI64("-(3 + 4)", -7);
+    try runExpectI64("-0", 0);
 }
 
 test "parentheses and precedence" {
-    try runExpectI64("2 + 3 * 4", 14, .no_trace);
-    try runExpectI64("(2 + 3) * 4", 20, .no_trace);
-    try runExpectI64("100 - 20 - 10", 70, .no_trace);
-    try runExpectI64("100 - (20 - 10)", 90, .no_trace);
+    try runExpectI64("2 + 3 * 4", 14);
+    try runExpectI64("(2 + 3) * 4", 20);
+    try runExpectI64("100 - 20 - 10", 70);
+    try runExpectI64("100 - (20 - 10)", 90);
 }
 
 test "operator associativity - addition" {
     // Left associative: a + b + c should parse as (a + b) + c
-    try runExpectI64("100 + 20 + 10", 130, .no_trace); // (100 + 20) + 10 = 130
-    try runExpectI64("100 + (20 + 10)", 130, .no_trace); // Same result, but explicitly grouped
+    try runExpectI64("100 + 20 + 10", 130); // (100 + 20) + 10 = 130
+    try runExpectI64("100 + (20 + 10)", 130); // Same result, but explicitly grouped
 
     // More complex case
-    try runExpectI64("10 + 20 + 30 + 40", 100, .no_trace); // ((10 + 20) + 30) + 40 = 100
+    try runExpectI64("10 + 20 + 30 + 40", 100); // ((10 + 20) + 30) + 40 = 100
 }
 
 test "operator associativity - subtraction" {
     // Left associative: a - b - c should parse as (a - b) - c
-    try runExpectI64("100 - 20 - 10", 70, .no_trace); // (100 - 20) - 10 = 70
-    try runExpectI64("100 - (20 - 10)", 90, .no_trace); // Different result with explicit grouping
+    try runExpectI64("100 - 20 - 10", 70); // (100 - 20) - 10 = 70
+    try runExpectI64("100 - (20 - 10)", 90); // Different result with explicit grouping
 
     // More complex case showing the difference
-    try runExpectI64("100 - 50 - 25 - 5", 20, .no_trace); // ((100 - 50) - 25) - 5 = 20
-    try runExpectI64("100 - (50 - (25 - 5))", 70, .no_trace); // Right associative would give 70
+    try runExpectI64("100 - 50 - 25 - 5", 20); // ((100 - 50) - 25) - 5 = 20
+    try runExpectI64("100 - (50 - (25 - 5))", 70); // Right associative would give 70
 }
 
 test "operator associativity - mixed addition and subtraction" {
     // Regression test: + and - should have equal precedence and be left-associative
     // Previously + had higher precedence than -, causing 1 - 2 + 3 to parse as 1 - (2 + 3) = -4
-    try runExpectI64("1 - 2 + 3", 2, .no_trace); // (1 - 2) + 3 = 2, NOT 1 - (2 + 3) = -4
-    try runExpectI64("5 + 3 - 2", 6, .no_trace); // (5 + 3) - 2 = 6
-    try runExpectI64("10 - 5 + 3 - 2", 6, .no_trace); // ((10 - 5) + 3) - 2 = 6
-    try runExpectI64("1 + 2 - 3 + 4 - 5", -1, .no_trace); // (((1 + 2) - 3) + 4) - 5 = -1
+    try runExpectI64("1 - 2 + 3", 2); // (1 - 2) + 3 = 2, NOT 1 - (2 + 3) = -4
+    try runExpectI64("5 + 3 - 2", 6); // (5 + 3) - 2 = 6
+    try runExpectI64("10 - 5 + 3 - 2", 6); // ((10 - 5) + 3) - 2 = 6
+    try runExpectI64("1 + 2 - 3 + 4 - 5", -1); // (((1 + 2) - 3) + 4) - 5 = -1
 }
 
 test "operator associativity - multiplication" {
     // Left associative: a * b * c should parse as (a * b) * c
-    try runExpectI64("2 * 3 * 4", 24, .no_trace); // (2 * 3) * 4 = 24
-    try runExpectI64("2 * (3 * 4)", 24, .no_trace); // Same result for multiplication
+    try runExpectI64("2 * 3 * 4", 24); // (2 * 3) * 4 = 24
+    try runExpectI64("2 * (3 * 4)", 24); // Same result for multiplication
 
     // Chain of multiplications
-    try runExpectI64("2 * 3 * 4 * 5", 120, .no_trace); // ((2 * 3) * 4) * 5 = 120
+    try runExpectI64("2 * 3 * 4 * 5", 120); // ((2 * 3) * 4) * 5 = 120
 }
 
 test "operator associativity - division" {
     // Left associative: a / b / c should parse as (a / b) / c
     // Note: Using integer division (//) for predictable integer results
-    try runExpectI64("100 // 20 // 2", 2, .no_trace); // (100 // 20) // 2 = 5 // 2 = 2
-    try runExpectI64("100 // (20 // 2)", 10, .no_trace); // Different result: 100 // 10 = 10
+    try runExpectI64("100 // 20 // 2", 2); // (100 // 20) // 2 = 5 // 2 = 2
+    try runExpectI64("100 // (20 // 2)", 10); // Different result: 100 // 10 = 10
 
     // More complex case showing the difference
     // Using small numbers to avoid Dec overflow with multiple divisions
-    try runExpectI64("80 // 8 // 2", 5, .no_trace); // ((80 // 8) // 2) = (10 // 2) = 5
-    try runExpectI64("80 // (8 // 2)", 20, .no_trace); // 80 // 4 = 20
+    try runExpectI64("80 // 8 // 2", 5); // ((80 // 8) // 2) = (10 // 2) = 5
+    try runExpectI64("80 // (8 // 2)", 20); // 80 // 4 = 20
 }
 
 test "operator associativity - modulo" {
     // Left associative: a % b % c should parse as (a % b) % c
-    try runExpectI64("100 % 30 % 7", 3, .no_trace); // (100 % 30) % 7 = 10 % 7 = 3
-    try runExpectI64("100 % (30 % 7)", 0, .no_trace); // Different result: 100 % 2 = 0
+    try runExpectI64("100 % 30 % 7", 3); // (100 % 30) % 7 = 10 % 7 = 3
+    try runExpectI64("100 % (30 % 7)", 0); // Different result: 100 % 2 = 0
 
     // Another example
-    try runExpectI64("50 % 20 % 6", 4, .no_trace); // (50 % 20) % 6 = 10 % 6 = 4
-    try runExpectI64("50 % (20 % 6)", 0, .no_trace); // Right associative: 50 % 2 = 0
+    try runExpectI64("50 % 20 % 6", 4); // (50 % 20) % 6 = 10 % 6 = 4
+    try runExpectI64("50 % (20 % 6)", 0); // Right associative: 50 % 2 = 0
 }
 
 test "operator associativity - mixed precedence" {
     // Verify that precedence still works correctly with fixed associativity
-    try runExpectI64("2 + 3 * 4", 14, .no_trace); // 2 + (3 * 4) = 14
-    try runExpectI64("2 * 3 + 4", 10, .no_trace); // (2 * 3) + 4 = 10
+    try runExpectI64("2 + 3 * 4", 14); // 2 + (3 * 4) = 14
+    try runExpectI64("2 * 3 + 4", 10); // (2 * 3) + 4 = 10
 
     // More complex mixed operations
-    try runExpectI64("10 - 2 * 3", 4, .no_trace); // 10 - (2 * 3) = 4
-    try runExpectI64("100 // 5 + 10", 30, .no_trace); // (100 // 5) + 10 = 30
-    try runExpectI64("100 // 5 % 3", 2, .no_trace); // (100 // 5) % 3 = 20 % 3 = 2
+    try runExpectI64("10 - 2 * 3", 4); // 10 - (2 * 3) = 4
+    try runExpectI64("100 // 5 + 10", 30); // (100 // 5) + 10 = 30
+    try runExpectI64("100 // 5 % 3", 2); // (100 // 5) % 3 = 20 % 3 = 2
 }
 
 test "operator associativity - edge cases" {
     // Very long chains to ensure associativity is consistent
-    try runExpectI64("1000 - 100 - 50 - 25 - 10 - 5", 810, .no_trace);
+    try runExpectI64("1000 - 100 - 50 - 25 - 10 - 5", 810);
     // ((((1000 - 100) - 50) - 25) - 10) - 5 = 810
 
     // Complex nested expressions
-    try runExpectI64("(100 - 50)", 50, .no_trace);
-    try runExpectI64("(30 - 10)", 20, .no_trace);
-    try runExpectI64("50 - 20", 30, .no_trace);
-    try runExpectI64("100 - (50 - 30) - 10", 70, .no_trace); // 100 - 20 - 10 = 70
-    try runExpectI64("(100 - 50) - (30 - 10)", 30, .no_trace); // 50 - 20 = 30
+    try runExpectI64("(100 - 50)", 50);
+    try runExpectI64("(30 - 10)", 20);
+    try runExpectI64("50 - 20", 30);
+    try runExpectI64("100 - (50 - 30) - 10", 70); // 100 - 20 - 10 = 70
+    try runExpectI64("(100 - 50) - (30 - 10)", 30); // 50 - 20 = 30
 
     // Division chains that would overflow if right-associative
     // Using very small numbers to avoid Dec overflow with chained divisions
-    try runExpectI64("80 // 4 // 2", 10, .no_trace);
+    try runExpectI64("80 // 4 // 2", 10);
     // (((80 // 4) // 2) = (20 // 2) = 10
 
     // Modulo chains
-    try runExpectI64("1000 % 300 % 40 % 7", 6, .no_trace);
+    try runExpectI64("1000 % 300 % 40 % 7", 6);
     // ((1000 % 300) % 40) % 7 = (100 % 40) % 7 = 20 % 7 = 6
 }
 
 test "comparison operators - non-associative" {
     // Comparison operators should be non-associative
     // These should work with parentheses
-    try runExpectBool("(5 > 3)", true, .no_trace); // true
-    try runExpectBool("(10 < 20)", true, .no_trace); // true
-    try runExpectBool("(5 >= 5)", true, .no_trace); // true
-    try runExpectBool("(10 <= 9)", false, .no_trace); // false
+    try runExpectBool("(5 > 3)", true); // true
+    try runExpectBool("(10 < 20)", true); // true
+    try runExpectBool("(5 >= 5)", true); // true
+    try runExpectBool("(10 <= 9)", false); // false
 
     // But chaining without parentheses should fail to parse
     // We can't test parse errors in eval tests, so we just verify the operators work
@@ -251,12 +251,12 @@ test "operator associativity - documentation" {
 
     // LEFT ASSOCIATIVE (most arithmetic operators)
     // a op b op c = (a op b) op c
-    try runExpectI64("8 - 4 - 2", 2, .no_trace); // (8-4)-2 = 2, NOT 8-(4-2) = 6
-    try runExpectI64("16 // 4 // 2", 2, .no_trace); // (16//4)//2 = 2, NOT 16//(4//2) = 8
+    try runExpectI64("8 - 4 - 2", 2); // (8-4)-2 = 2, NOT 8-(4-2) = 6
+    try runExpectI64("16 // 4 // 2", 2); // (16//4)//2 = 2, NOT 16//(4//2) = 8
 
     // NON-ASSOCIATIVE (comparison operators)
     // Can't chain without parentheses
-    try runExpectBool("(5 > 3) and (3 > 1)", true, .no_trace); // Must use parentheses
+    try runExpectBool("(5 > 3) and (3 > 1)", true); // Must use parentheses
 
     // RIGHT ASSOCIATIVE (logical operators)
     // a op b op c = a op (b op c)
@@ -265,13 +265,13 @@ test "operator associativity - documentation" {
 }
 
 test "error test - divide by zero" {
-    try runExpectError("5 // 0", error.DivisionByZero, .no_trace);
-    try runExpectError("10 % 0", error.DivisionByZero, .no_trace);
+    try runExpectError("5 // 0", error.DivisionByZero);
+    try runExpectError("10 % 0", error.DivisionByZero);
 }
 
 test "simple lambda with if-else" {
-    try runExpectI64("(|x| if x > 0.I64 x else 0.I64)(5.I64)", 5, .no_trace);
-    try runExpectI64("(|x| if x > 0.I64 x else 0.I64)(-3.I64)", 0, .no_trace);
+    try runExpectI64("(|x| if x > 0.I64 x else 0.I64)(5.I64)", 5);
+    try runExpectI64("(|x| if x > 0.I64 x else 0.I64)(-3.I64)", 0);
 }
 
 test "crash in else branch inside lambda" {
@@ -281,7 +281,7 @@ test "crash in else branch inside lambda" {
         \\    crash "crash in else!"
         \\    0.I64
         \\})(-5.I64)
-    , error.Crash, .no_trace);
+    , error.Crash);
 }
 
 test "crash NOT taken when condition true" {
@@ -291,7 +291,7 @@ test "crash NOT taken when condition true" {
         \\    crash "this should not execute"
         \\    0.I64
         \\})(10.I64)
-    , 10, .no_trace);
+    , 10);
 }
 
 test "error test - crash statement" {
@@ -301,7 +301,7 @@ test "error test - crash statement" {
         \\    crash "test"
         \\    0
         \\}
-    , error.Crash, .no_trace);
+    , error.Crash);
 
     // Test crash in block with final expression
     try runExpectError(
@@ -309,7 +309,7 @@ test "error test - crash statement" {
         \\    crash "This is a crash statement"
         \\    42
         \\}
-    , error.Crash, .no_trace);
+    , error.Crash);
 }
 
 test "inline expect statement fails" {
@@ -320,7 +320,7 @@ test "inline expect statement fails" {
         \\    expect 1 == 2
         \\    {}
         \\}
-    , error.Crash, .no_trace);
+    , error.Crash);
 }
 
 test "inline expect statement passes" {
@@ -329,7 +329,7 @@ test "inline expect statement passes" {
         \\    expect 1 == 1
         \\    42
         \\}
-    , 42, .no_trace);
+    , 42);
 }
 
 test "crash message storage and retrieval - host-managed context" {
@@ -361,56 +361,56 @@ test "tuples" {
         .{ .index = 0, .value = 10 },
         .{ .index = 1, .value = 20 },
     };
-    try helpers.runExpectTuple("(10, 20)", expected_elements1, .no_trace);
+    try helpers.runExpectTuple("(10, 20)", expected_elements1);
 
     // Tuple with elements from arithmetic expressions
     const expected_elements3 = &[_]helpers.ExpectedElement{
         .{ .index = 0, .value = 6 },
         .{ .index = 1, .value = 15 },
     };
-    try helpers.runExpectTuple("(5 + 1, 5 * 3)", expected_elements3, .no_trace);
+    try helpers.runExpectTuple("(5 + 1, 5 * 3)", expected_elements3);
 }
 
 test "simple lambdas" {
-    try runExpectI64("(|x| x + 1.I64)(5.I64)", 6, .no_trace);
-    try runExpectI64("(|x| x * 2.I64 + 1.I64)(10.I64)", 21, .no_trace);
-    try runExpectI64("(|x| x - 3.I64)(8.I64)", 5, .no_trace);
-    try runExpectI64("(|x| 100.I64 - x)(25.I64)", 75, .no_trace);
-    try runExpectI64("(|_x| 5.I64)(99.I64)", 5, .no_trace);
-    try runExpectI64("(|x| x + x)(7.I64)", 14, .no_trace);
+    try runExpectI64("(|x| x + 1.I64)(5.I64)", 6);
+    try runExpectI64("(|x| x * 2.I64 + 1.I64)(10.I64)", 21);
+    try runExpectI64("(|x| x - 3.I64)(8.I64)", 5);
+    try runExpectI64("(|x| 100.I64 - x)(25.I64)", 75);
+    try runExpectI64("(|_x| 5.I64)(99.I64)", 5);
+    try runExpectI64("(|x| x + x)(7.I64)", 14);
 }
 
 test "multi-parameter lambdas" {
-    try runExpectI64("(|x, y| x + y)(3.I64, 4.I64)", 7, .no_trace);
-    try runExpectI64("(|x, y| x * y)(5.I64, 6.I64)", 30, .no_trace);
-    try runExpectI64("(|a, b, c| a + b + c)(1.I64, 2.I64, 3.I64)", 6, .no_trace);
+    try runExpectI64("(|x, y| x + y)(3.I64, 4.I64)", 7);
+    try runExpectI64("(|x, y| x * y)(5.I64, 6.I64)", 30);
+    try runExpectI64("(|a, b, c| a + b + c)(1.I64, 2.I64, 3.I64)", 6);
 }
 
 test "lambdas with if-then bodies" {
-    try runExpectI64("(|x| if x > 0.I64 x else 0.I64)(5.I64)", 5, .no_trace);
-    try runExpectI64("(|x| if x > 0.I64 x else 0.I64)(-3.I64)", 0, .no_trace);
-    try runExpectI64("(|x| if x == 0.I64 1.I64 else x)(0.I64)", 1, .no_trace);
-    try runExpectI64("(|x| if x == 0.I64 1.I64 else x)(42.I64)", 42, .no_trace);
+    try runExpectI64("(|x| if x > 0.I64 x else 0.I64)(5.I64)", 5);
+    try runExpectI64("(|x| if x > 0.I64 x else 0.I64)(-3.I64)", 0);
+    try runExpectI64("(|x| if x == 0.I64 1.I64 else x)(0.I64)", 1);
+    try runExpectI64("(|x| if x == 0.I64 1.I64 else x)(42.I64)", 42);
 }
 
 test "lambdas with unary minus" {
-    try runExpectI64("(|x| -x)(5.I64)", -5, .no_trace);
-    try runExpectI64("(|x| -x)(0.I64)", 0, .no_trace);
-    try runExpectI64("(|x| -x)(-3.I64)", 3, .no_trace);
-    try runExpectI64("(|_x| -5.I64)(999.I64)", -5, .no_trace);
-    try runExpectI64("(|x| if True -x else 0.I64)(5.I64)", -5, .no_trace);
-    try runExpectI64("(|x| if True -10.I64 else x)(999.I64)", -10, .no_trace);
+    try runExpectI64("(|x| -x)(5.I64)", -5);
+    try runExpectI64("(|x| -x)(0.I64)", 0);
+    try runExpectI64("(|x| -x)(-3.I64)", 3);
+    try runExpectI64("(|_x| -5.I64)(999.I64)", -5);
+    try runExpectI64("(|x| if True -x else 0.I64)(5.I64)", -5);
+    try runExpectI64("(|x| if True -10.I64 else x)(999.I64)", -10);
 }
 
 test "lambdas closures" {
     // Curried functions - lambdas returning lambdas
-    try runExpectI64("(|a| |b| a * b)(5.I64)(10.I64)", 50, .no_trace);
+    try runExpectI64("(|a| |b| a * b)(5.I64)(10.I64)", 50);
     // Triple curried
-    try runExpectI64("(((|a| |b| |c| a + b + c)(100.I64))(20.I64))(3.I64)", 123, .no_trace);
+    try runExpectI64("(((|a| |b| |c| a + b + c)(100.I64))(20.I64))(3.I64)", 123);
     // Multi-param lambda returning lambda
-    try runExpectI64("(|a, b, c| |d| a + b + c + d)(10.I64, 20.I64, 5.I64)(7.I64)", 42, .no_trace);
+    try runExpectI64("(|a, b, c| |d| a + b + c + d)(10.I64, 20.I64, 5.I64)(7.I64)", 42);
     // Nested lambda calls with captures
-    try runExpectI64("(|y| (|x| (|z| x + y + z)(3.I64))(2.I64))(1.I64)", 6, .no_trace);
+    try runExpectI64("(|y| (|x| (|z| x + y + z)(3.I64))(2.I64))(1.I64)", 6);
 }
 
 test "lambdas with capture" {
@@ -420,7 +420,7 @@ test "lambdas with capture" {
         \\    f = |y| x + y
         \\    f(5.I64)
         \\}
-    , 15, .no_trace);
+    , 15);
 
     try runExpectI64(
         \\{
@@ -429,7 +429,7 @@ test "lambdas with capture" {
         \\    f = |z| x + y + z
         \\    f(10.I64)
         \\}
-    , 60, .no_trace);
+    , 60);
 }
 
 test "closure with many captures (struct_captures)" {
@@ -443,7 +443,7 @@ test "closure with many captures (struct_captures)" {
         \\    f = |n| a + b + c + d + n
         \\    f(5.I64)
         \\}
-    , 1005, .no_trace);
+    , 1005);
 }
 
 test "lambdas nested closures" {
@@ -456,12 +456,11 @@ test "lambdas nested closures" {
         \\        |c| b_loc + c
         \\    }
         \\})(100.I64))(20.I64))(3.I64)
-    , 223, .no_trace);
+    , 223);
 }
 
 // Helper function to test that evaluation succeeds without checking specific values
-fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !void {
-    _ = should_trace;
+fn runExpectSuccess(src: []const u8) !void {
     const resources = try helpers.parseAndCanonicalizeExpr(test_allocator, src);
     defer helpers.cleanupParseAndCanonical(test_allocator, resources);
 
@@ -475,91 +474,91 @@ fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !vo
 
 test "integer type evaluation" {
     // Test integer types to verify basic evaluation works
-    try runExpectI64("255.U8", 255, .no_trace);
-    try runExpectI64("42.I32", 42, .no_trace);
-    try runExpectI64("123.I64", 123, .no_trace);
+    try runExpectI64("255.U8", 255);
+    try runExpectI64("42.I32", 42);
+    try runExpectI64("123.I64", 123);
 }
 
 test "runtime eval helper auto-imports builtin typed suffix types" {
-    try runExpectI64("0.I64 + 42.I64", 42, .no_trace);
-    try runExpectDec("3.14.Dec", 3_140_000_000_000_000_000, .no_trace);
+    try runExpectI64("0.I64 + 42.I64", 42);
+    try runExpectDec("3.14.Dec", 3_140_000_000_000_000_000);
 }
 
 test "decimal literal evaluation" {
     // Test basic decimal literals - these should be parsed and evaluated correctly
-    try runExpectSuccess("1.5.Dec", .no_trace);
-    try runExpectSuccess("0.0.Dec", .no_trace);
-    try runExpectSuccess("123.456.Dec", .no_trace);
-    try runExpectSuccess("-1.5.Dec", .no_trace);
+    try runExpectSuccess("1.5.Dec");
+    try runExpectSuccess("0.0.Dec");
+    try runExpectSuccess("123.456.Dec");
+    try runExpectSuccess("-1.5.Dec");
 }
 
 test "decimal arithmetic with negative values" {
     // one_point_zero = 10^18 = 1_000_000_000_000_000_000
     const one = 1_000_000_000_000_000_000;
-    try runExpectDec("-1.5.Dec", -one - one / 2, .no_trace);
-    try runExpectDec("1.5.Dec", one + one / 2, .no_trace);
-    try runExpectDec("-1.5.Dec + 2.5.Dec", one, .no_trace);
-    try runExpectDec("0.0.Dec - 1.0.Dec", -one, .no_trace);
+    try runExpectDec("-1.5.Dec", -one - one / 2);
+    try runExpectDec("1.5.Dec", one + one / 2);
+    try runExpectDec("-1.5.Dec + 2.5.Dec", one);
+    try runExpectDec("0.0.Dec - 1.0.Dec", -one);
 }
 
 test "float literal evaluation" {
     // Test float literals - these should work correctly
-    try runExpectSuccess("3.14.F64", .no_trace);
-    try runExpectSuccess("2.5.F32", .no_trace);
-    try runExpectSuccess("-3.14.F64", .no_trace);
-    try runExpectSuccess("0.0.F32", .no_trace);
+    try runExpectSuccess("3.14.F64");
+    try runExpectSuccess("2.5.F32");
+    try runExpectSuccess("-3.14.F64");
+    try runExpectSuccess("0.0.F32");
 }
 
 test "comprehensive integer literal formats" {
     // Test various integer literal formats and precisions
 
     // Unsigned integers
-    try runExpectI64("0.U8", 0, .no_trace);
-    try runExpectI64("255.U8", 255, .no_trace);
-    try runExpectI64("1000.U16", 1000, .no_trace);
-    try runExpectI64("65535.U16", 65535, .no_trace);
-    try runExpectI64("100000.U32", 100000, .no_trace);
-    try runExpectI64("999999999.U64", 999999999, .no_trace);
+    try runExpectI64("0.U8", 0);
+    try runExpectI64("255.U8", 255);
+    try runExpectI64("1000.U16", 1000);
+    try runExpectI64("65535.U16", 65535);
+    try runExpectI64("100000.U32", 100000);
+    try runExpectI64("999999999.U64", 999999999);
 
     // Signed integers
-    try runExpectI64("-128.I8", -128, .no_trace);
-    try runExpectI64("127.I8", 127, .no_trace);
-    try runExpectI64("-32768.I16", -32768, .no_trace);
-    try runExpectI64("32767.I16", 32767, .no_trace);
-    try runExpectI64("-2147483648.I32", -2147483648, .no_trace);
-    try runExpectI64("2147483647.I32", 2147483647, .no_trace);
-    try runExpectI64("-999999999.I64", -999999999, .no_trace);
-    try runExpectI64("999999999.I64", 999999999, .no_trace);
+    try runExpectI64("-128.I8", -128);
+    try runExpectI64("127.I8", 127);
+    try runExpectI64("-32768.I16", -32768);
+    try runExpectI64("32767.I16", 32767);
+    try runExpectI64("-2147483648.I32", -2147483648);
+    try runExpectI64("2147483647.I32", 2147483647);
+    try runExpectI64("-999999999.I64", -999999999);
+    try runExpectI64("999999999.I64", 999999999);
 
     // Default integer type (i64)
-    try runExpectI64("42", 42, .no_trace);
-    try runExpectI64("-1234", -1234, .no_trace);
-    try runExpectI64("0", 0, .no_trace);
+    try runExpectI64("42", 42);
+    try runExpectI64("-1234", -1234);
+    try runExpectI64("0", 0);
 }
 
 test "hexadecimal and binary integer literals" {
     // Test alternative number bases
-    try runExpectI64("0xFF", 255, .no_trace);
-    try runExpectI64("0x10", 16, .no_trace);
-    try runExpectI64("0xDEADBEEF", 3735928559, .no_trace);
-    try runExpectI64("0b1010", 10, .no_trace);
-    try runExpectI64("0b11111111", 255, .no_trace);
-    try runExpectI64("0b0", 0, .no_trace);
+    try runExpectI64("0xFF", 255);
+    try runExpectI64("0x10", 16);
+    try runExpectI64("0xDEADBEEF", 3735928559);
+    try runExpectI64("0b1010", 10);
+    try runExpectI64("0b11111111", 255);
+    try runExpectI64("0b0", 0);
 }
 
 test "scientific notation literals" {
     // Test scientific notation - these get parsed as decimals or floats
-    try runExpectSuccess("1e5", .no_trace);
-    try runExpectSuccess("2.5e10", .no_trace);
-    try runExpectSuccess("1.5e-5", .no_trace);
-    try runExpectSuccess("-1.5e-5", .no_trace);
+    try runExpectSuccess("1e5");
+    try runExpectSuccess("2.5e10");
+    try runExpectSuccess("1.5e-5");
+    try runExpectSuccess("-1.5e-5");
 }
 
 test "string literals and interpolation" {
     // Test basic string literals
-    try runExpectSuccess("\"Hello, World!\"", .no_trace);
-    try runExpectSuccess("\"\"", .no_trace);
-    try runExpectSuccess("\"Roc\"", .no_trace);
+    try runExpectSuccess("\"Hello, World!\"");
+    try runExpectSuccess("\"\"");
+    try runExpectSuccess("\"Roc\"");
 
     // Test string interpolation
     try runExpectSuccess(
@@ -568,12 +567,12 @@ test "string literals and interpolation" {
         \\    world = "World"
         \\    "${hello} ${world}"
         \\}
-    , .no_trace);
+    );
 }
 
 test "string refcount - basic literal" {
     // Test basic string literal creation and cleanup
-    try runExpectStr("\"Hello, World!\"", "Hello, World!", .no_trace);
+    try runExpectStr("\"Hello, World!\"", "Hello, World!");
 }
 
 test "polymorphic identity function" {
@@ -586,7 +585,7 @@ test "polymorphic identity function" {
         \\    if (num > 0) str else ""
         \\}
     ;
-    try runExpectStr(code, "Hello", .no_trace);
+    try runExpectStr(code, "Hello");
 }
 
 test "direct polymorphic function usage" {
@@ -611,7 +610,7 @@ test "direct polymorphic function usage" {
         \\        "Failed1"
         \\}
     ;
-    try runExpectStr(code, "Test", .no_trace);
+    try runExpectStr(code, "Test");
 }
 
 test "multiple polymorphic instantiations" {
@@ -636,14 +635,14 @@ test "multiple polymorphic instantiations" {
         \\        "Failed1"
         \\}
     ;
-    try runExpectStr(code, "Hello", .no_trace);
+    try runExpectStr(code, "Hello");
 }
 
 test "string refcount - large string literal" {
     // Test large string that requires heap allocation and reference counting
     // This string is longer than SMALL_STR_MAX_LENGTH to trigger heap allocation
     const large_str = "This is a very long string that definitely exceeds the small string optimization limit in RocStr and will require heap allocation with reference counting";
-    try runExpectStr("\"This is a very long string that definitely exceeds the small string optimization limit in RocStr and will require heap allocation with reference counting\"", large_str, .no_trace);
+    try runExpectStr("\"This is a very long string that definitely exceeds the small string optimization limit in RocStr and will require heap allocation with reference counting\"", large_str);
 }
 
 test "string refcount - heap allocated string" {
@@ -651,79 +650,79 @@ test "string refcount - heap allocated string" {
     const large_str = "This is a very long string that definitely exceeds the small string optimization limit and requires heap allocation";
 
     // Test the large string without trace since it's working
-    try runExpectStr("\"This is a very long string that definitely exceeds the small string optimization limit and requires heap allocation\"", large_str, .no_trace);
+    try runExpectStr("\"This is a very long string that definitely exceeds the small string optimization limit and requires heap allocation\"", large_str);
 }
 
 test "string refcount - small string optimization" {
     // Test small string (≤23 bytes) that uses inline storage instead of heap allocation
     // This should show different behavior in the trace (no heap allocation)
-    try runExpectStr("\"Small string test\"", "Small string test", .no_trace);
+    try runExpectStr("\"Small string test\"", "Small string test");
 }
 
 test "string refcount - empty string" {
     // Test empty string as a special case for reference counting
     // Empty strings are typically optimized differently
-    try runExpectStr("\"\"", "", .no_trace);
+    try runExpectStr("\"\"", "");
 }
 
 test "string refcount - boundary case 25 bytes" {
     // Test string that's 25 bytes - should trigger heap allocation (>23 bytes)
     const boundary_str = "1234567890123456789012345"; // 25 bytes - should be big
-    try runExpectStr("\"1234567890123456789012345\"", boundary_str, .no_trace);
+    try runExpectStr("\"1234567890123456789012345\"", boundary_str);
 }
 
 test "string refcount - max small string 23 bytes" {
     // Test string that's exactly 23 bytes - should still use small string optimization
     const max_small_str = "12345678901234567890123"; // 23 bytes - should be small
-    try runExpectStr("\"12345678901234567890123\"", max_small_str, .no_trace);
+    try runExpectStr("\"12345678901234567890123\"", max_small_str);
 }
 
 test "string refcount - conditional strings" {
     // Test string reference counting with conditional expressions
     // This exercises reference counting when strings are used in if-else branches
-    try runExpectStr("if True \"This is a large string that exceeds small string optimization\" else \"Short\"", "This is a large string that exceeds small string optimization", .no_trace);
+    try runExpectStr("if True \"This is a large string that exceeds small string optimization\" else \"Short\"", "This is a large string that exceeds small string optimization");
 }
 
 test "string refcount - simpler record test" {
     // Test record containing integers first to see if the issue is record-specific or string-specific
-    try runExpectI64("{foo: 42}.foo", 42, .no_trace);
+    try runExpectI64("{foo: 42}.foo", 42);
 }
 
 test "string refcount - mixed string sizes" {
     // Test mixture of small and large strings in conditional expressions
     // Exercise reference counting across different string storage types
-    try runExpectStr("if False \"Small\" else \"This is a very long string that definitely exceeds the small string optimization limit and requires heap allocation\"", "This is a very long string that definitely exceeds the small string optimization limit and requires heap allocation", .no_trace);
+    try runExpectStr("if False \"Small\" else \"This is a very long string that definitely exceeds the small string optimization limit and requires heap allocation\"", "This is a very long string that definitely exceeds the small string optimization limit and requires heap allocation");
 }
 
 test "string refcount - nested conditionals with strings" {
     // Test nested conditional expressions with strings to exercise complex control flow
     // This tests reference counting when strings are created and destroyed in nested scopes
-    try runExpectStr("if True (if False \"Inner small\" else \"Inner large string that exceeds small string optimization\") else \"Outer\"", "Inner large string that exceeds small string optimization", .no_trace);
+    try runExpectStr("if True (if False \"Inner small\" else \"Inner large string that exceeds small string optimization\") else \"Outer\"", "Inner large string that exceeds small string optimization");
 }
 
 test "string refcount - record field access small string" {
     // Test record field access with small strings (uses inline storage)
-    try runExpectStr("{foo: \"Hello\"}.foo", "Hello", .no_trace);
+    try runExpectStr("{foo: \"Hello\"}.foo", "Hello");
 }
 
 test "string refcount - record field access large string" {
     // Test record field access with large strings (uses heap allocation)
     const large_str = "This is a very long string that definitely exceeds the small string optimization limit";
-    try runExpectStr("{foo: \"This is a very long string that definitely exceeds the small string optimization limit\"}.foo", large_str, .no_trace);
+    try runExpectStr("{foo: \"This is a very long string that definitely exceeds the small string optimization limit\"}.foo", large_str);
 }
 
 test "string refcount - record with empty string" {
     // Test record field access with empty string (special case)
-    try runExpectStr("{empty: \"\"}.empty", "", .no_trace);
+    try runExpectStr("{empty: \"\"}.empty", "");
 }
 
 test "string refcount - simple integer closure" {
     // Test basic closure with integer first to see if the issue is closure-specific
-    try runExpectI64("(|x| x)(42)", 42, .no_trace);
+    try runExpectI64("(|x| x)(42)", 42);
 }
 
 test "string refcount - simple string closure" {
-    try runExpectStr("(|s| s)(\"Test\")", "Test", .no_trace);
+    try runExpectStr("(|s| s)(\"Test\")", "Test");
 }
 
 test "recursive factorial function" {
@@ -737,7 +736,7 @@ test "recursive factorial function" {
         \\            n * factorial(n - 1)
         \\    factorial(5)
         \\}
-    , 120, .no_trace);
+    , 120);
 }
 
 test "ModuleEnv serialization and interpreter evaluation" {
@@ -899,22 +898,22 @@ test "ModuleEnv serialization and interpreter evaluation" {
 
 test "anonymous record equality" {
     // Same records should be equal
-    try runExpectBool("{ x: 1, y: 2 } == { x: 1, y: 2 }", true, .no_trace);
+    try runExpectBool("{ x: 1, y: 2 } == { x: 1, y: 2 }", true);
     // Different values should not be equal
-    try runExpectBool("{ x: 1, y: 2 } == { x: 1, y: 3 }", false, .no_trace);
+    try runExpectBool("{ x: 1, y: 2 } == { x: 1, y: 3 }", false);
     // Field order shouldn't matter
-    try runExpectBool("{ x: 1, y: 2 } == { y: 2, x: 1 }", true, .no_trace);
+    try runExpectBool("{ x: 1, y: 2 } == { y: 2, x: 1 }", true);
 }
 
 test "anonymous tuple equality" {
     // Same tuples should be equal
-    try runExpectBool("(1, 2) == (1, 2)", true, .no_trace);
+    try runExpectBool("(1, 2) == (1, 2)", true);
     // Different values should not be equal
-    try runExpectBool("(1, 2) == (1, 3)", false, .no_trace);
+    try runExpectBool("(1, 2) == (1, 3)", false);
 }
 
 test "empty record equality" {
-    try runExpectBool("{} == {}", true, .no_trace);
+    try runExpectBool("{} == {}", true);
 }
 
 test "mutable record equality" {
@@ -924,7 +923,7 @@ test "mutable record equality" {
         \\    var $x = { sum: 6 }
         \\    $x == { sum: 6 }
         \\}
-    , true, .no_trace);
+    , true);
 }
 
 test "mutable record with rebind equality" {
@@ -935,7 +934,7 @@ test "mutable record with rebind equality" {
         \\    $x = { sum: 6 }
         \\    $x == { sum: 6 }
         \\}
-    , true, .no_trace);
+    , true);
 }
 
 test "mutable record loop accumulator equality" {
@@ -948,32 +947,32 @@ test "mutable record loop accumulator equality" {
         \\    }
         \\    $acc == { sum: 6 }
         \\}
-    , true, .no_trace);
+    , true);
 }
 
 test "string field equality" {
-    try runExpectBool("{ name: \"hello\" } == { name: \"hello\" }", true, .no_trace);
-    try runExpectBool("{ name: \"hello\" } == { name: \"world\" }", false, .no_trace);
+    try runExpectBool("{ name: \"hello\" } == { name: \"hello\" }", true);
+    try runExpectBool("{ name: \"hello\" } == { name: \"world\" }", false);
 }
 
 test "nested record equality" {
-    try runExpectBool("{ a: { x: 1 }, b: 2 } == { a: { x: 1 }, b: 2 }", true, .no_trace);
-    try runExpectBool("{ a: { x: 1 }, b: 2 } == { a: { x: 2 }, b: 2 }", false, .no_trace);
-    try runExpectBool("{ outer: { inner: { deep: 42 } } } == { outer: { inner: { deep: 42 } } }", true, .no_trace);
-    try runExpectBool("{ outer: { inner: { deep: 42 } } } == { outer: { inner: { deep: 99 } } }", false, .no_trace);
+    try runExpectBool("{ a: { x: 1 }, b: 2 } == { a: { x: 1 }, b: 2 }", true);
+    try runExpectBool("{ a: { x: 1 }, b: 2 } == { a: { x: 2 }, b: 2 }", false);
+    try runExpectBool("{ outer: { inner: { deep: 42 } } } == { outer: { inner: { deep: 42 } } }", true);
+    try runExpectBool("{ outer: { inner: { deep: 42 } } } == { outer: { inner: { deep: 99 } } }", false);
 }
 
 test "bool field equality" {
     // Use comparison expressions to produce boolean values for record fields
-    try runExpectBool("{ flag: (1 == 1) } == { flag: (1 == 1) }", true, .no_trace);
-    try runExpectBool("{ flag: (1 == 1) } == { flag: (1 != 1) }", false, .no_trace);
+    try runExpectBool("{ flag: (1 == 1) } == { flag: (1 == 1) }", true);
+    try runExpectBool("{ flag: (1 == 1) } == { flag: (1 != 1) }", false);
 }
 
 test "nested tuple equality" {
-    try runExpectBool("((1, 2), 3) == ((1, 2), 3)", true, .no_trace);
-    try runExpectBool("((1, 2), 3) == ((1, 9), 3)", false, .no_trace);
-    try runExpectBool("(1, (2, 3)) == (1, (2, 3))", true, .no_trace);
-    try runExpectBool("(1, (2, 3)) == (1, (2, 9))", false, .no_trace);
+    try runExpectBool("((1, 2), 3) == ((1, 2), 3)", true);
+    try runExpectBool("((1, 2), 3) == ((1, 9), 3)", false);
+    try runExpectBool("(1, (2, 3)) == (1, (2, 3))", true);
+    try runExpectBool("(1, (2, 3)) == (1, (2, 9))", false);
 }
 
 // This test is disabled because it takes too long to run, and we already know
@@ -993,7 +992,7 @@ test "nested tuple equality" {
 //         \\    countdown(100000)
 //         \\}
 //     ;
-//     try runExpectError(code, error.StackOverflow, .no_trace);
+//     try runExpectError(code, error.StackOverflow);
 // }
 
 // This test is disabled because it takes too long to run, and we already know
@@ -1013,7 +1012,7 @@ test "nested tuple equality" {
 //         \\    fib(30)
 //         \\}
 //     ;
-//     try runExpectError(code, error.StackOverflow, .no_trace);
+//     try runExpectError(code, error.StackOverflow);
 // }
 
 // Tests for nominal type equality (is_eq method dispatch)
@@ -1022,54 +1021,54 @@ test "nested tuple equality" {
 test "nominal type equality - Bool" {
     // Bool is a nominal type wrapping [False, True]
     // These test that is_eq is properly dispatched for Bool
-    try runExpectBool("Bool.True == Bool.True", true, .no_trace);
-    try runExpectBool("Bool.False == Bool.False", true, .no_trace);
-    try runExpectBool("Bool.True == Bool.False", false, .no_trace);
-    try runExpectBool("Bool.False == Bool.True", false, .no_trace);
+    try runExpectBool("Bool.True == Bool.True", true);
+    try runExpectBool("Bool.False == Bool.False", true);
+    try runExpectBool("Bool.True == Bool.False", false);
+    try runExpectBool("Bool.False == Bool.True", false);
 }
 
 test "nominal type equality - Bool in expressions" {
     // Bool comparisons within larger expressions
-    try runExpectBool("(1 == 1) == (2 == 2)", true, .no_trace);
-    try runExpectBool("(1 == 1) == (1 == 2)", false, .no_trace);
-    try runExpectBool("(1 != 2) == (3 != 4)", true, .no_trace);
+    try runExpectBool("(1 == 1) == (2 == 2)", true);
+    try runExpectBool("(1 == 1) == (1 == 2)", false);
+    try runExpectBool("(1 != 2) == (3 != 4)", true);
 }
 
 test "nominal type equality - records containing Bool" {
     // Records with Bool fields - exercises roc_ops threading through structural equality
-    try runExpectBool("{ flag: Bool.True } == { flag: Bool.True }", true, .no_trace);
-    try runExpectBool("{ flag: Bool.True } == { flag: Bool.False }", false, .no_trace);
-    try runExpectBool("{ a: Bool.True, b: Bool.False } == { a: Bool.True, b: Bool.False }", true, .no_trace);
-    try runExpectBool("{ a: Bool.True, b: Bool.False } == { a: Bool.False, b: Bool.True }", false, .no_trace);
+    try runExpectBool("{ flag: Bool.True } == { flag: Bool.True }", true);
+    try runExpectBool("{ flag: Bool.True } == { flag: Bool.False }", false);
+    try runExpectBool("{ a: Bool.True, b: Bool.False } == { a: Bool.True, b: Bool.False }", true);
+    try runExpectBool("{ a: Bool.True, b: Bool.False } == { a: Bool.False, b: Bool.True }", false);
 }
 
 test "nominal type equality - tuples containing Bool" {
     // Tuples with Bool elements
-    try runExpectBool("(Bool.True, Bool.False) == (Bool.True, Bool.False)", true, .no_trace);
-    try runExpectBool("(Bool.True, Bool.False) == (Bool.False, Bool.True)", false, .no_trace);
-    try runExpectBool("(1, Bool.True, 2) == (1, Bool.True, 2)", true, .no_trace);
+    try runExpectBool("(Bool.True, Bool.False) == (Bool.True, Bool.False)", true);
+    try runExpectBool("(Bool.True, Bool.False) == (Bool.False, Bool.True)", false);
+    try runExpectBool("(1, Bool.True, 2) == (1, Bool.True, 2)", true);
 }
 
 test "nominal type equality - nested structures with Bool" {
     // Nested records/tuples containing Bool - tests deep roc_ops threading
-    try runExpectBool("{ outer: { inner: Bool.True } } == { outer: { inner: Bool.True } }", true, .no_trace);
-    try runExpectBool("{ outer: { inner: Bool.True } } == { outer: { inner: Bool.False } }", false, .no_trace);
-    try runExpectBool("((Bool.True, Bool.False), Bool.True) == ((Bool.True, Bool.False), Bool.True)", true, .no_trace);
+    try runExpectBool("{ outer: { inner: Bool.True } } == { outer: { inner: Bool.True } }", true);
+    try runExpectBool("{ outer: { inner: Bool.True } } == { outer: { inner: Bool.False } }", false);
+    try runExpectBool("((Bool.True, Bool.False), Bool.True) == ((Bool.True, Bool.False), Bool.True)", true);
 }
 
 // Tests for tag union equality
 
 test "tag union equality - same tag no payload" {
-    try runExpectBool("Ok == Ok", true, .no_trace);
-    try runExpectBool("Err == Err", true, .no_trace);
-    try runExpectBool("Ok == Err", false, .no_trace);
-    try runExpectBool("Err == Ok", false, .no_trace);
+    try runExpectBool("Ok == Ok", true);
+    try runExpectBool("Err == Err", true);
+    try runExpectBool("Ok == Err", false);
+    try runExpectBool("Err == Ok", false);
 }
 
 test "tag union equality - same tag with payload" {
-    try runExpectBool("Ok(1) == Ok(1)", true, .no_trace);
-    try runExpectBool("Ok(1) == Ok(2)", false, .no_trace);
-    try runExpectBool("Err(1) == Err(1)", true, .no_trace);
+    try runExpectBool("Ok(1) == Ok(1)", true);
+    try runExpectBool("Ok(1) == Ok(2)", false);
+    try runExpectBool("Err(1) == Err(1)", true);
 }
 
 test "tag union equality - different tags with payload" {
@@ -1079,24 +1078,23 @@ test "tag union equality - different tags with payload" {
         \\    y = if Bool.False Ok(1) else Err(1)
         \\    x == y
         \\}
-    , false, .no_trace);
+    , false);
 }
 
 test "tag union match - direct numeric payload" {
-    try runExpectI64("match Ok(10) { Ok(n) => n + 5, Err(_) => 0 }", 15, .no_trace);
+    try runExpectI64("match Ok(10) { Ok(n) => n + 5, Err(_) => 0 }", 15);
 }
 
 test "tag union match - direct record payload" {
     try runExpectI64(
         "match Ok({ value: 10 }) { Ok({ value }) => value + 5, Err(_) => 0 }",
         15,
-        .no_trace,
     );
 }
 
 test "tag union equality - string payloads" {
-    try runExpectBool("Ok(\"hello\") == Ok(\"hello\")", true, .no_trace);
-    try runExpectBool("Ok(\"hello\") == Ok(\"world\")", false, .no_trace);
+    try runExpectBool("Ok(\"hello\") == Ok(\"hello\")", true);
+    try runExpectBool("Ok(\"hello\") == Ok(\"world\")", false);
 }
 
 test "tag union equality - three or more tags" {
@@ -1107,89 +1105,89 @@ test "tag union equality - three or more tags" {
         \\    y = Red
         \\    x == y
         \\}
-    , true, .no_trace);
+    , true);
     try runExpectBool(
         \\{
         \\    x = Red
         \\    y = if Bool.True Red else if Bool.True Green else Blue
         \\    x == y
         \\}
-    , true, .no_trace);
+    , true);
     try runExpectBool(
         \\{
         \\    x = Red
         \\    y = if Bool.False Red else Green
         \\    x == y
         \\}
-    , false, .no_trace);
+    , false);
 }
 
 // Tests for inequality operator (!=) on structural types
 
 test "record inequality" {
-    try runExpectBool("{ x: 1, y: 2 } != { x: 1, y: 2 }", false, .no_trace);
-    try runExpectBool("{ x: 1, y: 2 } != { x: 1, y: 3 }", true, .no_trace);
-    try runExpectBool("{ x: 1, y: 2 } != { y: 2, x: 1 }", false, .no_trace);
+    try runExpectBool("{ x: 1, y: 2 } != { x: 1, y: 2 }", false);
+    try runExpectBool("{ x: 1, y: 2 } != { x: 1, y: 3 }", true);
+    try runExpectBool("{ x: 1, y: 2 } != { y: 2, x: 1 }", false);
 }
 
 test "tuple inequality" {
-    try runExpectBool("(1, 2) != (1, 2)", false, .no_trace);
-    try runExpectBool("(1, 2) != (1, 3)", true, .no_trace);
+    try runExpectBool("(1, 2) != (1, 2)", false);
+    try runExpectBool("(1, 2) != (1, 3)", true);
 }
 
 test "tag union inequality" {
-    try runExpectBool("Ok == Ok", true, .no_trace);
-    try runExpectBool("Ok != Ok", false, .no_trace);
-    try runExpectBool("Ok != Err", true, .no_trace);
-    try runExpectBool("Ok(1) != Ok(1)", false, .no_trace);
-    try runExpectBool("Ok(1) != Ok(2)", true, .no_trace);
+    try runExpectBool("Ok == Ok", true);
+    try runExpectBool("Ok != Ok", false);
+    try runExpectBool("Ok != Err", true);
+    try runExpectBool("Ok(1) != Ok(1)", false);
+    try runExpectBool("Ok(1) != Ok(2)", true);
 }
 
 // Tests for mixed structural types (combinations of records, tuples, tag unions)
 
 test "record containing tuple equality" {
-    try runExpectBool("{ pair: (1, 2) } == { pair: (1, 2) }", true, .no_trace);
-    try runExpectBool("{ pair: (1, 2) } == { pair: (1, 3) }", false, .no_trace);
+    try runExpectBool("{ pair: (1, 2) } == { pair: (1, 2) }", true);
+    try runExpectBool("{ pair: (1, 2) } == { pair: (1, 3) }", false);
 }
 
 test "tuple containing record equality" {
-    try runExpectBool("({ x: 1 }, 2) == ({ x: 1 }, 2)", true, .no_trace);
-    try runExpectBool("({ x: 1 }, 2) == ({ x: 9 }, 2)", false, .no_trace);
+    try runExpectBool("({ x: 1 }, 2) == ({ x: 1 }, 2)", true);
+    try runExpectBool("({ x: 1 }, 2) == ({ x: 9 }, 2)", false);
 }
 
 test "record with multiple types" {
     try runExpectBool(
         \\{ name: "alice", age: 30 } == { name: "alice", age: 30 }
-    , true, .no_trace);
+    , true);
     try runExpectBool(
         \\{ name: "alice", age: 30 } == { name: "bob", age: 30 }
-    , false, .no_trace);
+    , false);
     try runExpectBool(
         \\{ name: "alice", age: 30 } == { name: "alice", age: 31 }
-    , false, .no_trace);
+    , false);
 }
 
 test "deeply nested mixed structures" {
     try runExpectBool(
         \\{ a: (1, { b: 2 }), c: 3 } == { a: (1, { b: 2 }), c: 3 }
-    , true, .no_trace);
+    , true);
     try runExpectBool(
         \\{ a: (1, { b: 2 }), c: 3 } == { a: (1, { b: 9 }), c: 3 }
-    , false, .no_trace);
+    , false);
 }
 
 test "tuple of tuples equality" {
-    try runExpectBool("((1, 2), (3, 4)) == ((1, 2), (3, 4))", true, .no_trace);
-    try runExpectBool("((1, 2), (3, 4)) == ((1, 2), (3, 5))", false, .no_trace);
+    try runExpectBool("((1, 2), (3, 4)) == ((1, 2), (3, 4))", true);
+    try runExpectBool("((1, 2), (3, 4)) == ((1, 2), (3, 5))", false);
 }
 
 test "record with string and bool fields" {
     try runExpectBool(
         \\{ name: "hello", active: Bool.True } == { name: "hello", active: Bool.True }
-    , true, .no_trace);
+    , true);
     try runExpectBool(
         \\{ name: "hello", active: Bool.True } == { name: "hello", active: Bool.False }
-    , false, .no_trace);
+    , false);
 }
 
 test "tag union inside record equality" {
@@ -1199,69 +1197,69 @@ test "tag union inside record equality" {
         \\    b = { status: Ok(42) }
         \\    a == b
         \\}
-    , true, .no_trace);
+    , true);
     try runExpectBool(
         \\{
         \\    a = { status: Ok(42) }
         \\    b = { status: Ok(99) }
         \\    a == b
         \\}
-    , false, .no_trace);
+    , false);
 }
 
 test "record inside tag union equality" {
-    try runExpectBool("Ok({ x: 1, y: 2 }) == Ok({ x: 1, y: 2 })", true, .no_trace);
-    try runExpectBool("Ok({ x: 1, y: 2 }) == Ok({ x: 1, y: 9 })", false, .no_trace);
+    try runExpectBool("Ok({ x: 1, y: 2 }) == Ok({ x: 1, y: 2 })", true);
+    try runExpectBool("Ok({ x: 1, y: 2 }) == Ok({ x: 1, y: 9 })", false);
 }
 
 test "tag union inside tuple equality" {
-    try runExpectBool("(Ok(1), 2) == (Ok(1), 2)", true, .no_trace);
-    try runExpectBool("(Ok(1), 2) == (Ok(9), 2)", false, .no_trace);
+    try runExpectBool("(Ok(1), 2) == (Ok(1), 2)", true);
+    try runExpectBool("(Ok(1), 2) == (Ok(9), 2)", false);
 }
 
 test "tuple inside tag union equality" {
-    try runExpectBool("Ok((1, 2)) == Ok((1, 2))", true, .no_trace);
-    try runExpectBool("Ok((1, 2)) == Ok((1, 9))", false, .no_trace);
+    try runExpectBool("Ok((1, 2)) == Ok((1, 2))", true);
+    try runExpectBool("Ok((1, 2)) == Ok((1, 9))", false);
 }
 
 test "record inside tag union inside tuple equality" {
     // Three-deep nesting: tuple containing tag union containing record
     try runExpectBool(
         \\(Ok({ x: 1, y: 2 }), 42) == (Ok({ x: 1, y: 2 }), 42)
-    , true, .no_trace);
+    , true);
     try runExpectBool(
         \\(Ok({ x: 1, y: 2 }), 42) == (Ok({ x: 1, y: 9 }), 42)
-    , false, .no_trace);
+    , false);
 }
 
 test "tuple inside record inside tag union equality" {
     // Three-deep nesting: tag union containing record containing tuple
     try runExpectBool(
         \\Ok({ pair: (1, 2), val: 99 }) == Ok({ pair: (1, 2), val: 99 })
-    , true, .no_trace);
+    , true);
     try runExpectBool(
         \\Ok({ pair: (1, 2), val: 99 }) == Ok({ pair: (1, 9), val: 99 })
-    , false, .no_trace);
+    , false);
 }
 
 test "tag union inside record inside tuple equality" {
     // Three-deep nesting: tuple containing record containing tag union
     try runExpectBool(
         \\({ result: Ok(1) }, 99) == ({ result: Ok(1) }, 99)
-    , true, .no_trace);
+    , true);
     try runExpectBool(
         \\({ result: Ok(1) }, 99) == ({ result: Ok(2) }, 99)
-    , false, .no_trace);
+    , false);
 }
 
 test "four-deep nested equality" {
     // Record → tuple → tag union → record
     try runExpectBool(
         \\{ data: (Ok({ val: 42 }), 1) } == { data: (Ok({ val: 42 }), 1) }
-    , true, .no_trace);
+    , true);
     try runExpectBool(
         \\{ data: (Ok({ val: 42 }), 1) } == { data: (Ok({ val: 99 }), 1) }
-    , false, .no_trace);
+    , false);
 }
 
 // Tests for heap-type fields (long strings beyond SSO) inside structural types.
@@ -1272,64 +1270,64 @@ test "record with long string field equality" {
     // Long strings exceed SSO (~23 bytes), forcing heap allocation
     try runExpectBool(
         \\{ name: "this string is long enough to avoid SSO optimization" } == { name: "this string is long enough to avoid SSO optimization" }
-    , true, .no_trace);
+    , true);
     try runExpectBool(
         \\{ name: "this string is long enough to avoid SSO optimization" } == { name: "different long string that also avoids SSO optimization" }
-    , false, .no_trace);
+    , false);
 }
 
 test "record with long string field inequality" {
     try runExpectBool(
         \\{ name: "this string is long enough to avoid SSO optimization" } != { name: "this string is long enough to avoid SSO optimization" }
-    , false, .no_trace);
+    , false);
     try runExpectBool(
         \\{ name: "this string is long enough to avoid SSO optimization" } != { name: "different long string that also avoids SSO optimization" }
-    , true, .no_trace);
+    , true);
 }
 
 test "tuple with long string element equality" {
     try runExpectBool(
         \\("this string is long enough to avoid SSO optimization", 42) == ("this string is long enough to avoid SSO optimization", 42)
-    , true, .no_trace);
+    , true);
     try runExpectBool(
         \\("this string is long enough to avoid SSO optimization", 42) == ("different long string that also avoids SSO optimization", 42)
-    , false, .no_trace);
+    , false);
 }
 
 test "record with multiple long string fields equality" {
     try runExpectBool(
         \\{ a: "first long string exceeding SSO limit!!", b: "second long string exceeding SSO limit!" } == { a: "first long string exceeding SSO limit!!", b: "second long string exceeding SSO limit!" }
-    , true, .no_trace);
+    , true);
     try runExpectBool(
         \\{ a: "first long string exceeding SSO limit!!", b: "second long string exceeding SSO limit!" } == { a: "first long string exceeding SSO limit!!", b: "DIFFERENT long string exceeding SSO!!!!" }
-    , false, .no_trace);
+    , false);
 }
 
 test "long string inside record inside tuple equality" {
     try runExpectBool(
         \\({ name: "this string is long enough to avoid SSO optimization" }, 1) == ({ name: "this string is long enough to avoid SSO optimization" }, 1)
-    , true, .no_trace);
+    , true);
     try runExpectBool(
         \\({ name: "this string is long enough to avoid SSO optimization" }, 1) == ({ name: "different long string that also avoids SSO optimization" }, 1)
-    , false, .no_trace);
+    , false);
 }
 
 test "tag union with long string payload equality" {
     try runExpectBool(
         \\Ok("this string is long enough to avoid SSO optimization") == Ok("this string is long enough to avoid SSO optimization")
-    , true, .no_trace);
+    , true);
     try runExpectBool(
         \\Ok("this string is long enough to avoid SSO optimization") == Ok("different long string that also avoids SSO optimization")
-    , false, .no_trace);
+    , false);
 }
 
 test "tag union with long string payload inequality" {
     try runExpectBool(
         \\Ok("this string is long enough to avoid SSO optimization") != Ok("this string is long enough to avoid SSO optimization")
-    , false, .no_trace);
+    , false);
     try runExpectBool(
         \\Ok("this string is long enough to avoid SSO optimization") != Ok("different long string that also avoids SSO optimization")
-    , true, .no_trace);
+    , true);
 }
 
 // Tests for equality in control flow contexts
@@ -1337,10 +1335,10 @@ test "tag union with long string payload inequality" {
 test "equality result used in if condition" {
     try runExpectI64(
         \\if { x: 1 } == { x: 1 } 42 else 0
-    , 42, .no_trace);
+    , 42);
     try runExpectI64(
         \\if { x: 1 } == { x: 2 } 42 else 0
-    , 0, .no_trace);
+    , 0);
 }
 
 test "equality with variable bindings" {
@@ -1350,14 +1348,14 @@ test "equality with variable bindings" {
         \\    b = { x: 10, y: 20 }
         \\    a == b
         \\}
-    , true, .no_trace);
+    , true);
     try runExpectBool(
         \\{
         \\    a = { x: 10, y: 20 }
         \\    b = { x: 10, y: 99 }
         \\    a == b
         \\}
-    , false, .no_trace);
+    , false);
 }
 
 test "inequality with variable bindings - tuples" {
@@ -1367,14 +1365,14 @@ test "inequality with variable bindings - tuples" {
         \\    b = (1, 2, 3)
         \\    a != b
         \\}
-    , false, .no_trace);
+    , false);
     try runExpectBool(
         \\{
         \\    a = (1, 2, 3)
         \\    b = (1, 2, 4)
         \\    a != b
         \\}
-    , true, .no_trace);
+    , true);
 }
 
 test "inequality with variable bindings - records" {
@@ -1384,14 +1382,14 @@ test "inequality with variable bindings - records" {
         \\    b = { x: 10, y: 20 }
         \\    a != b
         \\}
-    , false, .no_trace);
+    , false);
     try runExpectBool(
         \\{
         \\    a = { x: 10, y: 20 }
         \\    b = { x: 10, y: 99 }
         \\    a != b
         \\}
-    , true, .no_trace);
+    , true);
 }
 
 // Tests for List.fold with record accumulators
@@ -1406,7 +1404,6 @@ test "List.fold with record accumulator - sum and count" {
     try runExpectRecord(
         "List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1})",
         &expected_fields,
-        .no_trace,
     );
 }
 
@@ -1419,7 +1416,6 @@ test "List.fold with record accumulator - empty list" {
     try runExpectRecord(
         "List.fold([], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1})",
         &expected_fields,
-        .no_trace,
     );
 }
 
@@ -1431,7 +1427,6 @@ test "List.fold with record accumulator - single field" {
     try runExpectRecord(
         "List.fold([1, 2, 3, 4], {total: 0}, |acc, item| {total: acc.total + item})",
         &expected_fields,
-        .no_trace,
     );
 }
 
@@ -1444,7 +1439,6 @@ test "List.fold with record accumulator - record update syntax" {
     try runExpectRecord(
         "List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {..acc, sum: acc.sum + item, count: acc.count + 1})",
         &expected_fields,
-        .no_trace,
     );
 }
 
@@ -1456,7 +1450,6 @@ test "List.fold with record accumulator - partial update" {
     try runExpectRecord(
         "List.fold([1, 2, 3, 4], {sum: 0, multiplier: 2}, |acc, item| {..acc, sum: acc.sum + item})",
         &expected_fields,
-        .no_trace,
     );
 }
 
@@ -1468,7 +1461,6 @@ test "List.fold with record accumulator - nested field access" {
     try runExpectRecord(
         "List.fold([1, 2, 3], {value: 0}, |acc, item| {value: acc.value + item})",
         &expected_fields,
-        .no_trace,
     );
 }
 
@@ -1482,7 +1474,6 @@ test "List.fold with record accumulator - three fields" {
     try runExpectRecord(
         "List.fold([1, 2, 3, 4], {sum: 0, count: 0, product: 1}, |acc, item| {sum: acc.sum + item, count: acc.count + 1, product: acc.product * item})",
         &expected_fields,
-        .no_trace,
     );
 }
 
@@ -1495,7 +1486,6 @@ test "List.fold with record accumulator - conditional update" {
     try runExpectRecord(
         "List.fold([1, 2, 3, 4], {evens: 0, odds: 0}, |acc, item| if item % 2 == 0 {evens: acc.evens + item, odds: acc.odds} else {evens: acc.evens, odds: acc.odds + item})",
         &expected_fields,
-        .no_trace,
     );
 }
 
@@ -1507,7 +1497,6 @@ test "List.fold with record accumulator - string list" {
     try runExpectRecord(
         "List.fold([\"a\", \"bb\", \"ccc\"], {count: 0}, |acc, _| {count: acc.count + 1})",
         &expected_fields,
-        .no_trace,
     );
 }
 
@@ -1515,7 +1504,6 @@ test "simple fold without records - Dec result" {
     try runExpectIntDec(
         "List.fold([1, 2, 3], 0, |acc, item| acc + item)",
         6,
-        .no_trace,
     );
 }
 
@@ -1523,7 +1511,6 @@ test "simple fold without records - Dec equality" {
     try runExpectBool(
         "List.fold([1, 2, 3], 0, |acc, item| acc + item) == 6",
         true,
-        .no_trace,
     );
 }
 
@@ -1532,7 +1519,6 @@ test "List.fold with record accumulator - record equality comparison" {
     try runExpectBool(
         "List.fold([1, 2, 3], {sum: 0}, |acc, item| {sum: acc.sum + item}) == {sum: 6}",
         true,
-        .no_trace,
     );
 }
 
@@ -1541,7 +1527,6 @@ test "List.fold with record accumulator - multi-field record equality" {
     try runExpectBool(
         "List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1}) == {sum: 6, count: 3}",
         true,
-        .no_trace,
     );
 }
 
@@ -1557,7 +1542,6 @@ test "List.fold with record accumulator - record destructuring in lambda" {
     try runExpectRecord(
         "List.fold([{x: 1, y: 2}, {x: 2, y: 5}, {x: 3, y: 8}], {total_x: 0, total_y: 0}, |acc, {x, y}| {total_x: acc.total_x + x, total_y: acc.total_y + y})",
         &expected_fields,
-        .no_trace,
     );
 }
 
@@ -1569,7 +1553,6 @@ test "List.fold with record accumulator - partial record destructuring" {
     try runExpectRecord(
         "List.fold([{a: 1, b: 100}, {a: 2, b: 200}, {a: 3, b: 300}], {sum: 0}, |acc, {a}| {sum: acc.sum + a})",
         &expected_fields,
-        .no_trace,
     );
 }
 
@@ -1581,7 +1564,6 @@ test "List.fold with record accumulator - single field record destructuring" {
     try runExpectRecord(
         "List.fold([{val: 1}, {val: 2}, {val: 3}, {val: 4}], {total: 0}, |acc, {val}| {total: acc.total + val})",
         &expected_fields,
-        .no_trace,
     );
 }
 
@@ -1593,7 +1575,6 @@ test "List.fold with list destructuring - simple first element" {
     try runExpectI64(
         "List.fold([[10], [20], [30]], 0, |acc, [x]| acc + x)",
         60,
-        .no_trace,
     );
 }
 
@@ -1602,7 +1583,6 @@ test "List.fold with list destructuring - two element exact match" {
     try runExpectI64(
         "List.fold([[1, 2], [3, 4]], 0, |acc, [a, b]| acc + a + b)",
         10,
-        .no_trace,
     );
 }
 
@@ -1612,7 +1592,6 @@ test "match with list destructuring - baseline" {
     try runExpectI64(
         "match [1, 2, 3] { [a, b, c] => a + b + c, _ => 0 }",
         6,
-        .no_trace,
     );
 }
 
@@ -1620,7 +1599,6 @@ test "match with pattern alternatives" {
     try runExpectI64(
         "match Err(42) { Ok(x) | Err(x) => x, _ => 0 }",
         42,
-        .no_trace,
     );
 }
 
@@ -1636,7 +1614,6 @@ test "List.fold with record accumulator - list destructuring in lambda" {
     try runExpectRecord(
         "List.fold([[1, 2], [3, 4], [5, 6]], {first_sum: 0, count: 0}, |acc, [first, ..]| {first_sum: acc.first_sum + first, count: acc.count + 1})",
         &expected_fields,
-        .no_trace,
     );
 }
 
@@ -1649,7 +1626,6 @@ test "List.fold with record accumulator - destructure two elements" {
     try runExpectRecord(
         "List.fold([[1, 2, 100], [3, 4, 200], [5, 6, 300]], {sum_firsts: 0, sum_seconds: 0}, |acc, [a, b, ..]| {sum_firsts: acc.sum_firsts + a, sum_seconds: acc.sum_seconds + b})",
         &expected_fields,
-        .no_trace,
     );
 }
 
@@ -1661,7 +1637,6 @@ test "List.fold with record accumulator - exact list pattern" {
     try runExpectRecord(
         "List.fold([[1, 2], [3, 4], [5, 6]], {total: 0}, |acc, [a, b]| {total: acc.total + a + b})",
         &expected_fields,
-        .no_trace,
     );
 }
 
@@ -1681,7 +1656,7 @@ test "record update evaluates extension expression once" {
         \\    }
         \\    rec.a + rec.b + rec.c + $calls * 100.I64
         \\}
-    , 160, .no_trace);
+    , 160);
 }
 
 test "record update synthesizes missing fields without re-evaluating extension" {
@@ -1697,7 +1672,7 @@ test "record update synthesizes missing fields without re-evaluating extension" 
         \\    }
         \\    rec.a * 1000.I64 + rec.b * 100.I64 + rec.c + $calls * 10.I64
         \\}
-    , 1209, .no_trace);
+    , 1209);
 }
 
 test "List.fold with record accumulator - nested list and record" {
@@ -1710,7 +1685,6 @@ test "List.fold with record accumulator - nested list and record" {
     try runExpectRecord(
         "List.fold([[1, 10, 20], [2, 30, 40], [3, 50, 60]], {head_sum: 0, tail_count: 0}, |acc, [head, .. as tail]| {head_sum: acc.head_sum + head, tail_count: acc.tail_count + List.len(tail)})",
         &expected_fields,
-        .no_trace,
     );
 }
 
@@ -1727,7 +1701,6 @@ test "for loop - mutable list append" {
         \\}
     ,
         &[_]i64{ 1, 2, 3 },
-        .no_trace,
     );
 }
 
@@ -1745,7 +1718,6 @@ test "for loop - with closure transform" {
         \\}
     ,
         &[_]i64{ 1, 2, 3 },
-        .no_trace,
     );
 }
 
@@ -1756,7 +1728,6 @@ test "List.map - basic identity" {
     try runExpectListI64(
         "List.map([1.I64, 2.I64, 3.I64], |x| x)",
         &[_]i64{ 1, 2, 3 },
-        .no_trace,
     );
 }
 
@@ -1765,7 +1736,6 @@ test "List.map - single element" {
     try runExpectListI64(
         "List.map([42.I64], |x| x)",
         &[_]i64{42},
-        .no_trace,
     );
 }
 
@@ -1774,7 +1744,6 @@ test "List.map - longer list with squaring" {
     try runExpectListI64(
         "List.map([1.I64, 2.I64, 3.I64, 4.I64, 5.I64], |x| x * x)",
         &[_]i64{ 1, 4, 9, 16, 25 },
-        .no_trace,
     );
 }
 
@@ -1783,7 +1752,6 @@ test "List.map - doubling" {
     try runExpectListI64(
         "List.map([1.I64, 2.I64, 3.I64], |x| x * 2.I64)",
         &[_]i64{ 2, 4, 6 },
-        .no_trace,
     );
 }
 
@@ -1792,7 +1760,6 @@ test "List.map - adding" {
     try runExpectListI64(
         "List.map([10.I64, 20.I64], |x| x + 5.I64)",
         &[_]i64{ 15, 25 },
-        .no_trace,
     );
 }
 
@@ -1801,7 +1768,6 @@ test "List.map - empty list" {
     try runExpectListZst(
         "List.map([], |x| x)",
         0,
-        .no_trace,
     );
 }
 
@@ -1812,7 +1778,6 @@ test "empty list with non-numeric type constraint should be list of zst" {
     try runExpectListZst(
         "[]",
         0,
-        .no_trace,
     );
 }
 
@@ -1823,7 +1788,6 @@ test "List.append - basic case" {
     try runExpectListI64(
         "List.append([1.I64, 2.I64], 3.I64)",
         &[_]i64{ 1, 2, 3 },
-        .no_trace,
     );
 }
 
@@ -1832,7 +1796,6 @@ test "List.append - empty case" {
     try runExpectListI64(
         "List.append([], 42.I64)",
         &[_]i64{42},
-        .no_trace,
     );
 }
 
@@ -1841,7 +1804,6 @@ test "List.append - zst case" {
     try runExpectListZst(
         "List.append([{}], {})",
         2,
-        .no_trace,
     );
 }
 
@@ -1852,13 +1814,12 @@ test "List.repeat - basic case" {
     try runExpectListI64(
         "List.repeat(7.I64, 4)",
         &[_]i64{ 7, 7, 7, 7 },
-        .no_trace,
     );
 }
 
 test "List.repeat - empty case" {
     // Repeat a value zero times returns empty list
-    try helpers.runExpectEmptyListI64("List.repeat(7.I64, 0)", .no_trace);
+    try helpers.runExpectEmptyListI64("List.repeat(7.I64, 0)");
 }
 
 test "List.with_capacity - unknown case" {
@@ -1866,7 +1827,6 @@ test "List.with_capacity - unknown case" {
     try runExpectListZst(
         "List.with_capacity(5)",
         0,
-        .no_trace,
     );
 }
 
@@ -1875,7 +1835,6 @@ test "List.with_capacity - append case" {
     try runExpectListI64(
         "List.with_capacity(5).append(10.I64)",
         &[_]i64{10},
-        .trace,
     );
 }
 
@@ -1883,19 +1842,19 @@ test "List.with_capacity - append case" {
 
 test "List.sum - basic case" {
     // Sum of a list of integers (untyped literals default to Dec)
-    try runExpectIntDec("List.sum([1, 2, 3, 4])", 10, .no_trace);
+    try runExpectIntDec("List.sum([1, 2, 3, 4])", 10);
 }
 
 test "List.sum - single element" {
-    try runExpectIntDec("List.sum([42])", 42, .no_trace);
+    try runExpectIntDec("List.sum([42])", 42);
 }
 
 test "List.sum - negative numbers" {
-    try runExpectIntDec("List.sum([-1, -2, 3, 4])", 4, .no_trace);
+    try runExpectIntDec("List.sum([-1, -2, 3, 4])", 4);
 }
 
 test "List.sum - larger list" {
-    try runExpectIntDec("List.sum([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])", 55, .no_trace);
+    try runExpectIntDec("List.sum([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])", 55);
 }
 
 // Bug regression tests - interpreter crash issues
@@ -1915,7 +1874,7 @@ test "match with tag containing pattern-bound variable - regression" {
         \\    Some(a) => Tagged(a)
         \\    None => Tagged("")
         \\}
-    , .no_trace);
+    );
 }
 
 test "nested match with Result type - regression" {
@@ -1943,36 +1902,36 @@ test "nested match with Result type - regression" {
         \\    }
         \\    _ => Err(Oops)
         \\}
-    , .no_trace);
+    );
 }
 
 // Bug regression tests - segfault issues from bug reports
 
 test "list equality - single element list - regression" {
-    try runExpectBool("[1] == [1]", true, .no_trace);
+    try runExpectBool("[1] == [1]", true);
 }
 
 test "list equality - nested lists - regression" {
-    try runExpectBool("[[1, 2]] == [[1, 2]]", true, .no_trace);
+    try runExpectBool("[[1, 2]] == [[1, 2]]", true);
 }
 
 test "list equality - single string element list - regression" {
-    try runExpectBool("[\"hello\"] == [\"hello\"]", true, .no_trace);
+    try runExpectBool("[\"hello\"] == [\"hello\"]", true);
 }
 
 test "record with list equality - large stack offset regression #9250" {
     // Regression test for #9250: comparing records containing lists with
     // unequal values/lengths caused aarch64 stack offset overflow in
     // emitLoadStackByte (u12 immediate field).
-    try runExpectBool("{ a: [1] } == { a: [1, 2] }", false, .no_trace);
-    try runExpectBool("{ a: [1] } == { a: [2] }", false, .no_trace);
-    try runExpectBool("{ a: [] } == { a: [1] }", false, .no_trace);
-    try runExpectBool("{ a: [1] } == { a: [] }", false, .no_trace);
-    try runExpectBool("{ a: [], b: 1 } == { a: [2], b: 1 }", false, .no_trace);
-    try runExpectBool("{ a: [1] } != { a: [1, 2] }", true, .no_trace);
+    try runExpectBool("{ a: [1] } == { a: [1, 2] }", false);
+    try runExpectBool("{ a: [1] } == { a: [2] }", false);
+    try runExpectBool("{ a: [] } == { a: [1] }", false);
+    try runExpectBool("{ a: [1] } == { a: [] }", false);
+    try runExpectBool("{ a: [], b: 1 } == { a: [2], b: 1 }", false);
+    try runExpectBool("{ a: [1] } != { a: [1, 2] }", true);
     // Also verify equal cases still work
-    try runExpectBool("{ a: [1] } == { a: [1] }", true, .no_trace);
-    try runExpectBool("{ a: [] } == { a: [] }", true, .no_trace);
+    try runExpectBool("{ a: [1] } == { a: [1] }", true);
+    try runExpectBool("{ a: [] } == { a: [] }", true);
 }
 
 test "if block with local bindings - regression" {
@@ -1985,7 +1944,7 @@ test "if block with local bindings - regression" {
         \\    x
         \\}
         \\else 99
-    , 0, .no_trace);
+    , 0);
 }
 
 test "List.len returns proper U64 nominal type for method calls - regression" {
@@ -1999,7 +1958,7 @@ test "List.len returns proper U64 nominal type for method calls - regression" {
         \\    n = List.len([])
         \\    n.to_str()
         \\}
-    , "0", .no_trace);
+    , "0");
 
     // Also test with non-empty list
     try runExpectStr(
@@ -2007,7 +1966,7 @@ test "List.len returns proper U64 nominal type for method calls - regression" {
         \\    n = List.len([1, 2, 3])
         \\    n.to_str()
         \\}
-    , "3", .no_trace);
+    , "3");
 }
 
 test "type annotation on var declaration - regression issue8660" {
@@ -2019,7 +1978,7 @@ test "type annotation on var declaration - regression issue8660" {
         \\    var $foo = 42
         \\    $foo
         \\}
-    , 42, .no_trace);
+    , 42);
 }
 
 test "List.get with polymorphic numeric index - regression #8666" {
@@ -2039,7 +1998,7 @@ test "List.get with polymorphic numeric index - regression #8666" {
         \\    index = 0
         \\    match List.get(list, index) { Ok(v) => v, _ => 0 }
         \\}
-    , 10, .no_trace);
+    , 10);
 }
 
 test "for loop element type extracted from list runtime type - regression #8664" {
@@ -2059,7 +2018,7 @@ test "for loop element type extracted from list runtime type - regression #8664"
         \\    }
         \\    calc([1, 2, 3])
         \\}
-    , "3.0", .no_trace);
+    , "3.0");
 }
 
 test "List.get method dispatch on Try type - issue 8665" {
@@ -2072,7 +2031,7 @@ test "List.get method dispatch on Try type - issue 8665" {
         \\    list = ["hello"]
         \\    List.get(list, 0).ok_or("fallback")
         \\}
-    , "hello", .no_trace);
+    , "hello");
 }
 
 test "List.get with list var and when destructure" {
@@ -2085,7 +2044,7 @@ test "List.get with list var and when destructure" {
         \\        Err(_) => "error"
         \\    }
         \\}
-    , "hello", .no_trace);
+    , "hello");
 }
 
 test "record destructuring with assignment - regression" {
@@ -2097,7 +2056,7 @@ test "record destructuring with assignment - regression" {
         \\    { x, y } = rec
         \\    x + y
         \\}
-    , 3, .no_trace);
+    , 3);
 }
 
 test "record field access - regression 8647" {
@@ -2108,7 +2067,7 @@ test "record field access - regression 8647" {
         \\    rec = { name: "test" }
         \\    rec.name
         \\}
-    , "test", .no_trace);
+    , "test");
 }
 
 test "record field access with multiple string fields - regression 8648" {
@@ -2119,7 +2078,7 @@ test "record field access with multiple string fields - regression 8648" {
         \\    record = { x: "a", y: "b" }
         \\    record.x
         \\}
-    , "a", .no_trace);
+    , "a");
 }
 
 test "method calls on numeric variables with flex types - regression" {
@@ -2135,7 +2094,7 @@ test "method calls on numeric variables with flex types - regression" {
         \\    x = 7.0
         \\    x.to_str()
         \\}
-    , "7.0", .no_trace);
+    , "7.0");
 
     // With integer literal (defaults to Dec, so output has decimal point)
     try runExpectStr(
@@ -2143,20 +2102,20 @@ test "method calls on numeric variables with flex types - regression" {
         \\    x = 42
         \\    x.to_str()
         \\}
-    , "42.0", .no_trace);
+    , "42.0");
 }
 
 test "issue 8667: List.with_capacity should be inferred as List(I64)" {
     // When List.with_capacity is used with List.append(_, 1.I64), the type checker should
     // unify the list element type to I64. This means the layout should be .list (not .list_of_zst).
     // If it's .list_of_zst, that indicates a type inference bug.
-    try runExpectListI64("List.append(List.with_capacity(1), 1.I64)", &[_]i64{1}, .no_trace);
+    try runExpectListI64("List.append(List.with_capacity(1), 1.I64)", &[_]i64{1});
 
     // Test fold with inline lambda that calls append
-    try runExpectListI64("[1.I64].fold(List.with_capacity(1), |acc, item| acc.append(item))", &[_]i64{1}, .no_trace);
+    try runExpectListI64("[1.I64].fold(List.with_capacity(1), |acc, item| acc.append(item))", &[_]i64{1});
 
     // Also test the fold case which is where the bug was originally reported
-    try runExpectListI64("[1.I64].fold(List.with_capacity(1), List.append)", &[_]i64{1}, .no_trace);
+    try runExpectListI64("[1.I64].fold(List.with_capacity(1), List.append)", &[_]i64{1});
 }
 
 test "issue 8710: tag union with heap payload in tuple should not leak" {
@@ -2167,7 +2126,7 @@ test "issue 8710: tag union with heap payload in tuple should not leak" {
     // so the payload was never decremented and would leak.
     // We create a list, wrap in Ok, and return just the list length to verify the
     // tuple is properly cleaned up (the test allocator catches any leaks).
-    try runExpectI64("[1.I64, 2.I64, 3.I64].len()", 3, .no_trace);
+    try runExpectI64("[1.I64, 2.I64, 3.I64].len()", 3);
     // Also test the actual bug scenario: tag union in a tuple
     try runExpectListI64(
         \\{
@@ -2175,7 +2134,7 @@ test "issue 8710: tag union with heap payload in tuple should not leak" {
         \\    _tuple = (Ok(list), 42.I64)
         \\    list
         \\}
-    , &[_]i64{ 1, 2, 3 }, .no_trace);
+    , &[_]i64{ 1, 2, 3 });
 }
 
 test "issue 8727: function returning closure that captures outer variable" {
@@ -2192,13 +2151,13 @@ test "issue 8727: function returning closure that captures outer variable" {
         \\    add_ten = make_adder(10)
         \\    add_ten(5)
         \\}
-    , 15, .no_trace);
+    , 15);
 
     // Curried multiplication
-    try runExpectI64("(|a| |b| a * b)(5)(10)", 50, .no_trace);
+    try runExpectI64("(|a| |b| a * b)(5)(10)", 50);
 
     // Triple currying
-    try runExpectI64("(((|a| |b| |c| a + b + c)(100))(20))(3)", 123, .no_trace);
+    try runExpectI64("(((|a| |b| |c| a + b + c)(100))(20))(3)", 123);
 }
 
 test "issue 8737: tag union with tuple payload containing tag union" {
@@ -2221,7 +2180,7 @@ test "issue 8737: tag union with tuple payload containing tag union" {
         \\        BBB => 0
         \\    }
         \\}
-    , 42, .no_trace);
+    , 42);
 }
 
 test "issue 8737: single tag arg tuple payload can destructure nested tuple pattern" {
@@ -2233,7 +2192,7 @@ test "issue 8737: single tag arg tuple payload can destructure nested tuple patt
         \\        BBB => 0
         \\    }
         \\}
-    , 1, .no_trace);
+    , 1);
 }
 
 test "early return: basic ? operator with Ok" {
@@ -2243,7 +2202,7 @@ test "early return: basic ? operator with Ok" {
         \\    compute = |x| Ok(x?)
         \\    match compute(Ok(42.I64)) { Ok(v) => v, _ => 0 }
         \\}
-    , 42, .no_trace);
+    , 42);
 }
 
 test "early return: basic ? operator with Err" {
@@ -2253,7 +2212,7 @@ test "early return: basic ? operator with Err" {
         \\    compute = |x| Ok(x?)
         \\    match compute(Err({})) { Ok(_) => 1, Err(_) => 0 }
         \\}
-    , 0, .no_trace);
+    , 0);
 }
 
 test "early return: ? in closure passed to List.map" {
@@ -2264,7 +2223,7 @@ test "early return: ? in closure passed to List.map" {
         \\    result = [Ok(1), Err({})].map(|x| Ok(x?))
         \\    List.len(result)
         \\}
-    , 2, .no_trace);
+    , 2);
 }
 
 test "early return: ? in closure passed to List.fold" {
@@ -2276,7 +2235,7 @@ test "early return: ? in closure passed to List.fold" {
         \\    result = List.fold([Ok(1), Err({})], [], |acc, x| List.append(acc, compute(x)))
         \\    List.len(result)
         \\}
-    , 2, .no_trace);
+    , 2);
 }
 
 test "early return: ? in second argument of multi-arg call" {
@@ -2287,7 +2246,7 @@ test "early return: ? in second argument of multi-arg call" {
         \\    compute = |x| Ok(x?)
         \\    match my_func(42, compute(Err({}))) { Ok(_) => 1, Err(_) => 0 }
         \\}
-    , 0, .no_trace);
+    , 0);
 }
 
 test "early return: ? in first argument of multi-arg call" {
@@ -2298,7 +2257,7 @@ test "early return: ? in first argument of multi-arg call" {
         \\    compute = |x| Ok(x?)
         \\    match my_func(compute(Err({})), 42) { Ok(_) => 1, Err(_) => 0 }
         \\}
-    , 0, .no_trace);
+    , 0);
 }
 
 test "issue 8979 runtime: while (True) with conditional break evaluates" {
@@ -2313,11 +2272,11 @@ test "issue 8979 runtime: while (True) with conditional break evaluates" {
         \\    }
         \\    $i
         \\}
-    , 5, .no_trace);
+    , 5);
 }
 
 test "list fold_rev i64 dev regression" {
-    try runExpectI64("List.fold_rev([1.I64, 2.I64, 3.I64], 0.I64, |x, acc| acc * 10 + x)", 321, .no_trace);
+    try runExpectI64("List.fold_rev([1.I64, 2.I64, 3.I64], 0.I64, |x, acc| acc * 10 + x)", 321);
 }
 
 test "Decoder: create ok result - check result is Ok" {
@@ -2330,7 +2289,7 @@ test "Decoder: create ok result - check result is Ok" {
         \\        Err(_) => Bool.False
         \\    }
         \\}
-    , true, .no_trace);
+    , true);
 }
 
 test "Decoder: create ok result - extract value" {
@@ -2343,7 +2302,7 @@ test "Decoder: create ok result - extract value" {
         \\        Err(_) => 0.I64
         \\    }
         \\}
-    , 42, .no_trace);
+    , 42);
 }
 
 test "Decoder: create err result" {
@@ -2356,7 +2315,7 @@ test "Decoder: create err result" {
         \\        Err(_) => Bool.False
         \\    }
         \\}
-    , false, .no_trace);
+    , false);
 }
 
 test "decode: I32.decode with record field format mismatches and crashes" {
@@ -2387,7 +2346,7 @@ test "debug 8783a: lambda with tag match called directly" {
         \\        }
         \\    f(Bbb(42.I64))
         \\}
-    , 1, .no_trace);
+    , 1);
 }
 
 test "debug 8783b: fold with simple addition lambda" {
@@ -2396,7 +2355,7 @@ test "debug 8783b: fold with simple addition lambda" {
         \\    items = [1.I64, 2.I64, 3.I64]
         \\    List.fold(items, 0.I64, |acc, x| acc + x)
         \\}
-    , 6, .no_trace);
+    , 6);
 }
 
 // TODO: test for fold with no-payload tag match (no-payload tag discriminant issue in fold)
@@ -2411,7 +2370,7 @@ test "debug 8783g: match on payload tag without fold" {
         \\        B(x) => x + 200.I64
         \\    }
         \\}
-    , 101, .no_trace);
+    , 101);
 }
 
 test "match on zst-payload tag union" {
@@ -2423,7 +2382,7 @@ test "match on zst-payload tag union" {
         \\        B(_) => 0.I64
         \\    }
         \\}
-    , 1, .no_trace);
+    , 1);
 }
 
 test "proc return of zst-payload tag union" {
@@ -2435,7 +2394,7 @@ test "proc return of zst-payload tag union" {
         \\        _ => 0.I64
         \\    }
         \\}
-    , 1, .no_trace);
+    , 1);
 }
 
 test "debug 8783f: fold with tag match single payload" {
@@ -2449,7 +2408,7 @@ test "debug 8783f: fold with tag match single payload" {
         \\        }
         \\    List.fold(items, 0.I64, f)
         \\}
-    , 11, .no_trace);
+    , 11);
 }
 
 test "debug 8783c: fold with tag match" {
@@ -2463,7 +2422,7 @@ test "debug 8783c: fold with tag match" {
         \\        }
         \\    List.fold(children, 0.I64, count_child)
         \\}
-    , 1, .no_trace);
+    , 1);
 }
 
 test "issue 8783: List.fold with match on tag union elements from pattern match" {
@@ -2483,7 +2442,7 @@ test "issue 8783: List.fold with match on tag union elements from pattern match"
         \\        }
         \\    List.fold(children, 0.I64, count_child)
         \\}
-    , 1, .no_trace);
+    , 1);
 }
 
 test "issue 8821: List.get with records and pattern match on Try type" {
@@ -2500,7 +2459,7 @@ test "issue 8821: List.get with records and pattern match on Try type" {
         \\        Err(_) => "missing"
         \\    }
         \\}
-    , "Alice", .no_trace);
+    , "Alice");
 }
 
 test "issue 8821 reduced: List.get with records and match ignores payload body" {
@@ -2514,7 +2473,7 @@ test "issue 8821 reduced: List.get with records and match ignores payload body" 
         \\        Err(_) => 0
         \\    }
         \\}
-    , 1, .no_trace);
+    , 1);
 }
 
 test "issue 8821 reduced: List.get with records without matching result" {
@@ -2526,7 +2485,7 @@ test "issue 8821 reduced: List.get with records without matching result" {
         \\    _result = List.get(clients, 0)
         \\    1
         \\}
-    , 1, .no_trace);
+    , 1);
 }
 
 test "encode: just convert string to utf8" {
@@ -2536,7 +2495,7 @@ test "encode: just convert string to utf8" {
         \\    bytes = Str.to_utf8("hello")
         \\    Str.from_utf8_lossy(bytes)
         \\}
-    , "hello", .no_trace);
+    , "hello");
 }
 
 test "static dispatch: List.sum uses item.plus and item.default" {
@@ -2549,7 +2508,7 @@ test "static dispatch: List.sum uses item.plus and item.default" {
         \\    list = [1.I64, 2.I64, 3.I64, 4.I64, 5.I64]
         \\    List.sum(list)
         \\}
-    , 15, .no_trace);
+    , 15);
 }
 
 test "issue 8814: List.get with numeric literal on function parameter - regression" {
@@ -2574,7 +2533,7 @@ test "issue 8814: List.get with numeric literal on function parameter - regressi
         \\    }
         \\    process(["hello", "world"])
         \\}
-    , "hello", .no_trace);
+    , "hello");
 }
 
 test "issue 8831: self-referential value definition should produce error, not crash" {
@@ -2632,7 +2591,7 @@ test "issue 9262: opaque function field returning tag union" {
         \\
         \\    W.run(W.mk("x")) == V("x")
         \\}
-    , true, .no_trace);
+    , true);
 }
 
 test "recursive function with record - stack memory restoration (issue #8813)" {
@@ -2645,7 +2604,7 @@ test "recursive function with record - stack memory restoration (issue #8813)" {
         \\            { a: n, b: n * 2, c: n * 3, d: n * 4 }.a + f(n - 1)
         \\    f(1000)
         \\}
-    , 500500, .no_trace);
+    , 500500);
 }
 
 test "issue 8872: polymorphic tag union payload layout in match expressions" {
@@ -2676,7 +2635,7 @@ test "issue 8872: polymorphic tag union payload layout in match expressions" {
         \\        Err(msg) => msg
         \\    }
         \\}
-    , "hello", .no_trace);
+    , "hello");
 }
 
 test "match on tag union with different input/output sizes in proc" {
@@ -2694,7 +2653,7 @@ test "match on tag union with different input/output sizes in proc" {
         \\        Err(msg) => msg
         \\    }
         \\}
-    , "hello", .no_trace);
+    , "hello");
 }
 
 test "polymorphic tag transform with match (transform_err pattern)" {
@@ -2714,7 +2673,7 @@ test "polymorphic tag transform with match (transform_err pattern)" {
         \\        Err(msg) => msg
         \\    }
         \\}
-    , "hello", .no_trace);
+    , "hello");
 }
 
 test "proc with tag match returning non-tag type" {
@@ -2728,7 +2687,7 @@ test "proc with tag match returning non-tag type" {
         \\
         \\    check(Err(42.I32))
         \\}
-    , "was err", .no_trace);
+    , "was err");
 }
 
 test "lambda with list param calling List.len (no allocation)" {
@@ -2739,7 +2698,7 @@ test "lambda with list param calling List.len (no allocation)" {
         \\    get_len = |l| List.len(l)
         \\    get_len([1.I64, 2.I64, 3.I64])
         \\}
-    , 3, .no_trace);
+    , 3);
 }
 
 test "lambda with list param calling List.append (requires allocation)" {
@@ -2750,7 +2709,7 @@ test "lambda with list param calling List.append (requires allocation)" {
         \\    add_one = |l| List.len(List.append(l, 99.I64))
         \\    add_one([1.I64, 2.I64, 3.I64])
         \\}
-    , 4, .no_trace);
+    , 4);
 }
 
 test "lambda with list param and var declaration" {
@@ -2763,7 +2722,7 @@ test "lambda with list param and var declaration" {
         \\    }
         \\    test_fn([1.I64, 2.I64])
         \\}
-    , 1, .no_trace);
+    , 1);
 }
 
 test "lambda with list param and list literal creation" {
@@ -2776,7 +2735,7 @@ test "lambda with list param and list literal creation" {
         \\    }
         \\    test_fn([10.I64, 20.I64])
         \\}
-    , 1, .no_trace);
+    , 1);
 }
 
 test "lambda with list param, var, and for loop" {
@@ -2792,7 +2751,7 @@ test "lambda with list param, var, and for loop" {
         \\    }
         \\    test_fn([10.I64, 20.I64, 30.I64])
         \\}
-    , 60, .no_trace);
+    , 60);
 }
 
 test "lambda with list param, var, and List.append (no for loop)" {
@@ -2806,7 +2765,7 @@ test "lambda with list param, var, and List.append (no for loop)" {
         \\    }
         \\    test_fn([10.I64, 20.I64])
         \\}
-    , 2, .no_trace);
+    , 2);
 }
 
 test "minimal lambda with list param and for loop (no allocation)" {
@@ -2822,7 +2781,7 @@ test "minimal lambda with list param and for loop (no allocation)" {
         \\    }
         \\    test_fn([1.I64, 2.I64])
         \\}
-    , 3, .no_trace);
+    , 3);
 }
 
 test "lambda with list param, for loop, and allocation inside loop (list literal)" {
@@ -2838,7 +2797,7 @@ test "lambda with list param, for loop, and allocation inside loop (list literal
         \\    }
         \\    test_fn([1.I64, 2.I64])
         \\}
-    , 3, .no_trace);
+    , 3);
 }
 
 test "lambda with for loop over internal list, not param (scalar param)" {
@@ -2854,7 +2813,7 @@ test "lambda with for loop over internal list, not param (scalar param)" {
         \\    }
         \\    test_fn(42.I64)
         \\}
-    , 6, .no_trace);
+    , 6);
 }
 
 test "lambda with list param, for loop over internal list, allocation inside" {
@@ -2870,7 +2829,7 @@ test "lambda with list param, for loop over internal list, allocation inside" {
         \\    }
         \\    test_fn([10.I64, 20.I64])
         \\}
-    , 3, .no_trace);
+    , 3);
 }
 
 test "lambda with list param, for loop, but empty iteration" {
@@ -2886,7 +2845,7 @@ test "lambda with list param, for loop, but empty iteration" {
         \\    }
         \\    test_fn([])
         \\}
-    , 1, .no_trace);
+    , 1);
 }
 
 test "lambda with list param, for loop, and List.append in loop with single iteration" {
@@ -2902,7 +2861,7 @@ test "lambda with list param, for loop, and List.append in loop with single iter
         \\    }
         \\    test_fn([10.I64])
         \\}
-    , 2, .no_trace);
+    , 2);
 }
 
 test "lambda with list param, var, for loop, and List.append" {
@@ -2918,7 +2877,7 @@ test "lambda with list param, var, for loop, and List.append" {
         \\    }
         \\    test_fn([10.I64, 20.I64, 30.I64])
         \\}
-    , 4, .no_trace);
+    , 4);
 }
 
 test "issue 8899: closure decref index out of bounds in for loop" {
@@ -2943,7 +2902,7 @@ test "issue 8899: closure decref index out of bounds in for loop" {
         \\    }
         \\    sum_with_last([10.I64, 20.I64, 30.I64])
         \\}
-    , 60, .no_trace);
+    , 60);
 }
 
 test "issue 8892: nominal type wrapping tag union with match expression" {
@@ -2966,7 +2925,7 @@ test "issue 8892: nominal type wrapping tag union with match expression" {
         \\    }
         \\    parse_value()
         \\}
-    , .no_trace);
+    );
 }
 
 test "issue 8927: early return in method argument leaks memory" {
@@ -2999,7 +2958,7 @@ test "issue 8927: early return in method argument leaks memory" {
         \\        Err(_) => 0
         \\    }
         \\}
-    , 0, .no_trace);
+    , 0);
 }
 
 test "issue 8946: closure capturing for-loop element with == comparison" {
@@ -3030,7 +2989,7 @@ test "issue 8946: closure capturing for-loop element with == comparison" {
         \\    }
         \\    check([1, 2])
         \\}
-    , 2, .no_trace);
+    , 2);
 }
 
 test "issue 8978: incref alignment with recursive tag unions in tuples" {
@@ -3064,7 +3023,7 @@ test "issue 8978: incref alignment with recursive tag unions in tuples" {
         \\    (_, n) = make_result()
         \\    n
         \\}
-    , 42, .no_trace);
+    , 42);
 }
 
 test "owned record wildcard field is cleaned up before codegen" {
@@ -3074,11 +3033,11 @@ test "owned record wildcard field is cleaned up before codegen" {
         \\    { ignored: _, kept } = make_record()
         \\    kept
         \\}
-    , 7, .no_trace);
+    , 7);
 }
 
 test "owned tag wildcard payload is cleaned up before codegen" {
-    try runExpectI64("match Ok([1.I64, 2.I64, 3.I64]) { Ok(_) => 9.I64, Err(_) => 0.I64 }", 9, .no_trace);
+    try runExpectI64("match Ok([1.I64, 2.I64, 3.I64]) { Ok(_) => 9.I64, Err(_) => 0.I64 }", 9);
 }
 
 // ============ str_inspekt (Str.inspect) tests ============
@@ -3086,42 +3045,42 @@ test "owned tag wildcard payload is cleaned up before codegen" {
 test "str_inspekt - integer" {
     // Str.inspect on an integer should return its string representation
     // Note: untyped numeric literals default to Dec, so 42 becomes "42.0"
-    try runExpectStr("Str.inspect(42)", "42.0", .no_trace);
+    try runExpectStr("Str.inspect(42)", "42.0");
 }
 
 test "str_inspekt - negative integer" {
-    try runExpectStr("Str.inspect(-123)", "-123.0", .no_trace);
+    try runExpectStr("Str.inspect(-123)", "-123.0");
 }
 
 test "str_inspekt - zero" {
-    try runExpectStr("Str.inspect(0)", "0.0", .no_trace);
+    try runExpectStr("Str.inspect(0)", "0.0");
 }
 
 test "str_inspekt - boolean true" {
     // Str.inspect on Bool.True renders without the nominal prefix
-    try runExpectStr("Str.inspect(Bool.True)", "True", .no_trace);
+    try runExpectStr("Str.inspect(Bool.True)", "True");
 }
 
 test "str_inspekt - boolean false" {
-    try runExpectStr("Str.inspect(Bool.False)", "False", .no_trace);
+    try runExpectStr("Str.inspect(Bool.False)", "False");
 }
 
 test "str_inspekt - simple string" {
     // Str.inspect on a string should return it quoted and escaped
-    try runExpectStr("Str.inspect(\"hello\")", "\"hello\"", .no_trace);
+    try runExpectStr("Str.inspect(\"hello\")", "\"hello\"");
 }
 
 test "str_inspekt - string with quotes" {
     // Quotes inside strings should be escaped
-    try runExpectStr("Str.inspect(\"say \\\"hi\\\"\")", "\"say \\\"hi\\\"\"", .no_trace);
+    try runExpectStr("Str.inspect(\"say \\\"hi\\\"\")", "\"say \\\"hi\\\"\"");
 }
 
 test "str_inspekt - empty string" {
-    try runExpectStr("Str.inspect(\"\")", "\"\"", .no_trace);
+    try runExpectStr("Str.inspect(\"\")", "\"\"");
 }
 
 test "str_inspekt - large integer" {
-    try runExpectStr("Str.inspect(1234567890)", "1234567890.0", .no_trace);
+    try runExpectStr("Str.inspect(1234567890)", "1234567890.0");
 }
 
 // ============ Higher-Order Function Tests ============
@@ -3132,7 +3091,7 @@ test "higher-order function - simple apply" {
         \\    apply = |f, x| f(x)
         \\    apply(|n| n + 1.I64, 5.I64)
         \\}
-    , 6, .no_trace);
+    , 6);
 }
 
 test "higher-order function - apply with closure" {
@@ -3142,7 +3101,7 @@ test "higher-order function - apply with closure" {
         \\    apply = |f, x| f(x)
         \\    apply(|n| n + offset, 5.I64)
         \\}
-    , 15, .no_trace);
+    , 15);
 }
 
 test "higher-order function - twice" {
@@ -3151,7 +3110,7 @@ test "higher-order function - twice" {
         \\    twice = |f, x| f(f(x))
         \\    twice(|n| n * 2.I64, 3.I64)
         \\}
-    , 12, .no_trace);
+    , 12);
 }
 
 // Integer conversion tests
@@ -3159,79 +3118,79 @@ test "higher-order function - twice" {
 test "int conversion: I8.to_i64 positive" {
     try runExpectI64(
         \\{ 42.I8.to_i64() }
-    , 42, .no_trace);
+    , 42);
 }
 
 test "int conversion: I8.to_i64 negative" {
     try runExpectI64(
         \\{ (-1.I8).to_i64() }
-    , -1, .no_trace);
+    , -1);
 }
 
 test "int conversion: I16.to_i64 positive" {
     try runExpectI64(
         \\{ 1000.I16.to_i64() }
-    , 1000, .no_trace);
+    , 1000);
 }
 
 test "int conversion: I16.to_i64 negative" {
     try runExpectI64(
         \\{ (-500.I16).to_i64() }
-    , -500, .no_trace);
+    , -500);
 }
 
 test "int conversion: I32.to_i64 positive" {
     try runExpectI64(
         \\{ 100000.I32.to_i64() }
-    , 100000, .no_trace);
+    , 100000);
 }
 
 test "int conversion: I32.to_i64 negative" {
     try runExpectI64(
         \\{ (-100000.I32).to_i64() }
-    , -100000, .no_trace);
+    , -100000);
 }
 
 test "int conversion: U8.to_i64" {
     try runExpectI64(
         \\{ 255.U8.to_i64() }
-    , 255, .no_trace);
+    , 255);
 }
 
 test "int conversion: U16.to_i64" {
     try runExpectI64(
         \\{ 65535.U16.to_i64() }
-    , 65535, .no_trace);
+    , 65535);
 }
 
 test "int conversion: U32.to_i64" {
     try runExpectI64(
         \\{ 4000000000.U32.to_i64() }
-    , 4000000000, .no_trace);
+    , 4000000000);
 }
 
 test "int conversion: I8.to_i32.to_i64" {
     try runExpectI64(
         \\{ (-10.I8).to_i32().to_i64() }
-    , -10, .no_trace);
+    , -10);
 }
 
 test "int conversion: U8.to_u32.to_i64" {
     try runExpectI64(
         \\{ 200.U8.to_u32().to_i64() }
-    , 200, .no_trace);
+    , 200);
 }
 
 test "int conversion: U8.to_i16.to_i64" {
     try runExpectI64(
         \\{ 128.U8.to_i16().to_i64() }
-    , 128, .no_trace);
+    , 128);
 }
 
 test "diag: match Ok extract payload" {
     try runExpectI64(
         \\match Ok(42) { Ok(v) => v, _ => 0 }
-    , 42, .no_trace);
+    , 42);
 }
 
 test "diag: lambda returning tag union" {
@@ -3240,7 +3199,7 @@ test "diag: lambda returning tag union" {
         \\    f = |x| Ok(x)
         \\    match f(42) { Ok(v) => v, _ => 0 }
         \\}
-    , 42, .no_trace);
+    , 42);
 }
 
 test "diag: identity lambda call" {
@@ -3249,7 +3208,7 @@ test "diag: identity lambda call" {
         \\    f = |x| x
         \\    f(42)
         \\}
-    , 42, .no_trace);
+    , 42);
 }
 
 test "diag: lambda wrapping try suffix result in Ok" {
@@ -3258,21 +3217,21 @@ test "diag: lambda wrapping try suffix result in Ok" {
         \\    compute = |x| Ok(x?)
         \\    match compute(Ok(42.I64)) { Ok(v) => v, _ => 0 }
         \\}
-    , 42, .no_trace);
+    , 42);
 }
 
 test "Bool.True and Bool.False raw values - bug confirmation" {
     // Test that Bool.True and Bool.False have different raw byte values
     // Bug report: both Bool.True and Bool.False write 0x00 to memory
-    try runExpectBool("Bool.True", true, .no_trace);
-    try runExpectBool("Bool.False", false, .no_trace);
+    try runExpectBool("Bool.True", true);
+    try runExpectBool("Bool.False", false);
 }
 
 test "Bool in record field - bug confirmation" {
     // Test Bool values when stored in record fields
     // This is closer to the bug report scenario where Bool is in a struct
-    try runExpectBool("{ flag: Bool.True }.flag", true, .no_trace);
-    try runExpectBool("{ flag: Bool.False }.flag", false, .no_trace);
+    try runExpectBool("{ flag: Bool.True }.flag", true);
+    try runExpectBool("{ flag: Bool.False }.flag", false);
 }
 
 test "TODO RE-ENABLE: known compiler crash repro - polymorphic tag union payload substitution extract payload" {
@@ -3293,7 +3252,7 @@ test "TODO RE-ENABLE: known compiler crash repro - polymorphic tag union payload
         \\    input = Right(42.I64)
         \\    second(input)
         \\}
-    , 42, .no_trace);
+    , 42);
 }
 
 test "polymorphic tag union payload substitution: extract payload" {
@@ -3311,7 +3270,7 @@ test "polymorphic tag union payload substitution: extract payload" {
         \\    input = Right(42.I64)
         \\    second(input, 0.I64)
         \\}
-    , 42, .no_trace);
+    , 42);
 }
 
 test "TODO RE-ENABLE: known compiler crash repro - polymorphic tag union payload substitution multiple type vars" {
@@ -3332,7 +3291,7 @@ test "TODO RE-ENABLE: known compiler crash repro - polymorphic tag union payload
         \\    val = Err("hello")
         \\    get_err(val)
         \\}
-    , "hello", .no_trace);
+    , "hello");
 }
 
 test "polymorphic tag union payload substitution: multiple type vars" {
@@ -3350,7 +3309,7 @@ test "polymorphic tag union payload substitution: multiple type vars" {
         \\    val = Err("hello")
         \\    get_err(val, "")
         \\}
-    , "hello", .no_trace);
+    , "hello");
 }
 
 test "polymorphic tag union: erroneous match branch crashes at runtime" {
@@ -3419,16 +3378,16 @@ test "polymorphic tag union payload substitution: wrap and unwrap" {
         \\        Val(n) => n
         \\    }
         \\}
-    , 42, .no_trace);
+    , 42);
 }
 
 test "Bool in record with mixed alignment fields - bug confirmation" {
     // Test Bool in a record with fields of different alignments
     // Similar to the bug report: { key: U64, childCount: U32, isElement: Bool }
-    try runExpectBool("{ key: 42.U64, flag: Bool.True }.flag", true, .no_trace);
-    try runExpectBool("{ key: 42.U64, flag: Bool.False }.flag", false, .no_trace);
-    try runExpectBool("{ key: 42.U64, count: 1.U32, flag: Bool.True }.flag", true, .no_trace);
-    try runExpectBool("{ key: 42.U64, count: 1.U32, flag: Bool.False }.flag", false, .no_trace);
+    try runExpectBool("{ key: 42.U64, flag: Bool.True }.flag", true);
+    try runExpectBool("{ key: 42.U64, flag: Bool.False }.flag", false);
+    try runExpectBool("{ key: 42.U64, count: 1.U32, flag: Bool.True }.flag", true);
+    try runExpectBool("{ key: 42.U64, count: 1.U32, flag: Bool.False }.flag", false);
 }
 
 // --- Bool.not runtime tests ---
@@ -3436,27 +3395,27 @@ test "Bool in record with mixed alignment fields - bug confirmation" {
 // to narrow down where the negation bug occurs.
 
 test "Bool.not(Bool.True) returns False" {
-    try runExpectBool("Bool.not(Bool.True)", false, .no_trace);
+    try runExpectBool("Bool.not(Bool.True)", false);
 }
 
 test "Bool.not(Bool.False) returns True" {
-    try runExpectBool("Bool.not(Bool.False)", true, .no_trace);
+    try runExpectBool("Bool.not(Bool.False)", true);
 }
 
 test "Bool.not(True) with unqualified arg returns False" {
-    try runExpectBool("Bool.not(True)", false, .no_trace);
+    try runExpectBool("Bool.not(True)", false);
 }
 
 test "Bool.not(False) with unqualified arg returns True" {
-    try runExpectBool("Bool.not(False)", true, .no_trace);
+    try runExpectBool("Bool.not(False)", true);
 }
 
 test "!Bool.True returns False" {
-    try runExpectBool("!Bool.True", false, .no_trace);
+    try runExpectBool("!Bool.True", false);
 }
 
 test "!Bool.False returns True" {
-    try runExpectBool("!Bool.False", true, .no_trace);
+    try runExpectBool("!Bool.False", true);
 }
 
 // --- Dev backend only Bool.not tests ---
@@ -3538,48 +3497,48 @@ test "dev only: while loop sum over U32 formats as 15" {
 }
 
 test "Str.trim" {
-    try runExpectStr("Str.trim(\"  hello  \")", "hello", .no_trace);
-    try runExpectStr("Str.trim(\"hello\")", "hello", .no_trace);
-    try runExpectStr("Str.trim(\"  \")", "", .no_trace);
+    try runExpectStr("Str.trim(\"  hello  \")", "hello");
+    try runExpectStr("Str.trim(\"hello\")", "hello");
+    try runExpectStr("Str.trim(\"  \")", "");
 }
 
 test "Str.trim_start" {
-    try runExpectStr("Str.trim_start(\"  hello  \")", "hello  ", .no_trace);
-    try runExpectStr("Str.trim_start(\"hello\")", "hello", .no_trace);
+    try runExpectStr("Str.trim_start(\"  hello  \")", "hello  ");
+    try runExpectStr("Str.trim_start(\"hello\")", "hello");
 }
 
 test "Str.trim_end" {
-    try runExpectStr("Str.trim_end(\"  hello  \")", "  hello", .no_trace);
-    try runExpectStr("Str.trim_end(\"hello\")", "hello", .no_trace);
+    try runExpectStr("Str.trim_end(\"  hello  \")", "  hello");
+    try runExpectStr("Str.trim_end(\"hello\")", "hello");
 }
 
 test "Str.with_ascii_lowercased" {
-    try runExpectStr("Str.with_ascii_lowercased(\"HELLO\")", "hello", .no_trace);
-    try runExpectStr("Str.with_ascii_lowercased(\"Hello World\")", "hello world", .no_trace);
-    try runExpectStr("Str.with_ascii_lowercased(\"abc\")", "abc", .no_trace);
+    try runExpectStr("Str.with_ascii_lowercased(\"HELLO\")", "hello");
+    try runExpectStr("Str.with_ascii_lowercased(\"Hello World\")", "hello world");
+    try runExpectStr("Str.with_ascii_lowercased(\"abc\")", "abc");
 }
 
 test "Str.with_ascii_uppercased" {
-    try runExpectStr("Str.with_ascii_uppercased(\"hello\")", "HELLO", .no_trace);
-    try runExpectStr("Str.with_ascii_uppercased(\"Hello World\")", "HELLO WORLD", .no_trace);
-    try runExpectStr("Str.with_ascii_uppercased(\"ABC\")", "ABC", .no_trace);
+    try runExpectStr("Str.with_ascii_uppercased(\"hello\")", "HELLO");
+    try runExpectStr("Str.with_ascii_uppercased(\"Hello World\")", "HELLO WORLD");
+    try runExpectStr("Str.with_ascii_uppercased(\"ABC\")", "ABC");
 }
 
 test "Str.caseless_ascii_equals" {
-    try runExpectBool("Str.caseless_ascii_equals(\"hello\", \"HELLO\")", true, .no_trace);
-    try runExpectBool("Str.caseless_ascii_equals(\"abc\", \"abc\")", true, .no_trace);
-    try runExpectBool("Str.caseless_ascii_equals(\"abc\", \"def\")", false, .no_trace);
+    try runExpectBool("Str.caseless_ascii_equals(\"hello\", \"HELLO\")", true);
+    try runExpectBool("Str.caseless_ascii_equals(\"abc\", \"abc\")", true);
+    try runExpectBool("Str.caseless_ascii_equals(\"abc\", \"def\")", false);
 }
 
 test "Str.repeat" {
-    try runExpectStr("Str.repeat(\"ab\", 3)", "ababab", .no_trace);
-    try runExpectStr("Str.repeat(\"x\", 1)", "x", .no_trace);
-    try runExpectStr("Str.repeat(\"x\", 0)", "", .no_trace);
+    try runExpectStr("Str.repeat(\"ab\", 3)", "ababab");
+    try runExpectStr("Str.repeat(\"x\", 1)", "x");
+    try runExpectStr("Str.repeat(\"x\", 0)", "");
 }
 
 test "Str.with_prefix" {
-    try runExpectStr("Str.with_prefix(\"world\", \"hello \")", "hello world", .no_trace);
-    try runExpectStr("Str.with_prefix(\"bar\", \"\")", "bar", .no_trace);
+    try runExpectStr("Str.with_prefix(\"world\", \"hello \")", "hello world");
+    try runExpectStr("Str.with_prefix(\"bar\", \"\")", "bar");
 }
 
 test "polymorphic closure capture duplication during monomorphization" {
@@ -3595,7 +3554,7 @@ test "polymorphic closure capture duplication during monomorphization" {
         \\    get_num = make_getter(42)
         \\    get_num(0)
         \\}
-    , 42, .no_trace);
+    , 42);
 
     try runExpectStr(
         \\{
@@ -3603,7 +3562,7 @@ test "polymorphic closure capture duplication during monomorphization" {
         \\    get_str = make_getter("hello")
         \\    get_str(0)
         \\}
-    , "hello", .no_trace);
+    , "hello");
 }
 
 test "large record - chained higher-order calls with growing intermediates" {
@@ -3615,7 +3574,7 @@ test "large record - chained higher-order calls with growing intermediates" {
         \\    result = apply2("w_val", step1.y, |w, y| { w, y })
         \\    result.w
         \\}
-    , "w_val", .no_trace);
+    , "w_val");
     try runExpectStr(
         \\{
         \\    apply2 = |a, b, f| f(a, b)
@@ -3623,21 +3582,21 @@ test "large record - chained higher-order calls with growing intermediates" {
         \\    result = apply2("w_val", step1.y, |w, y| { w, y })
         \\    result.y
         \\}
-    , "y_val", .no_trace);
+    , "y_val");
 }
 
 test "Str.drop_prefix" {
-    try runExpectStr("Str.drop_prefix(\"foobar\", \"foo\")", "bar", .no_trace);
-    try runExpectStr("Str.drop_prefix(\"foobar\", \"baz\")", "foobar", .no_trace);
+    try runExpectStr("Str.drop_prefix(\"foobar\", \"foo\")", "bar");
+    try runExpectStr("Str.drop_prefix(\"foobar\", \"baz\")", "foobar");
 }
 
 test "Str.drop_suffix" {
-    try runExpectStr("Str.drop_suffix(\"foobar\", \"bar\")", "foo", .no_trace);
-    try runExpectStr("Str.drop_suffix(\"foobar\", \"baz\")", "foobar", .no_trace);
+    try runExpectStr("Str.drop_suffix(\"foobar\", \"bar\")", "foo");
+    try runExpectStr("Str.drop_suffix(\"foobar\", \"baz\")", "foobar");
 }
 
 test "Str.release_excess_capacity" {
-    try runExpectStr("Str.release_excess_capacity(\"hello\")", "hello", .no_trace);
+    try runExpectStr("Str.release_excess_capacity(\"hello\")", "hello");
 }
 
 test "Str.split_on and Str.join_with" {
@@ -3646,13 +3605,13 @@ test "Str.split_on and Str.join_with" {
         \\    parts = Str.split_on("a,b,c", ",")
         \\    Str.join_with(parts, "-")
         \\}
-    , "a-b-c", .no_trace);
+    , "a-b-c");
 }
 
 test "Str.join_with" {
     try runExpectStr(
         \\Str.join_with(["hello", "world"], " ")
-    , "hello world", .no_trace);
+    , "hello world");
 }
 
 // Note: List.contains is implemented as List.any(list, |x| x == needle) in the builtins,
@@ -3807,7 +3766,7 @@ test "polymorphic function called with two list types" {
         \\    my_len(a) + my_len(b)
         \\}
     ;
-    try runExpectI64(code, 5, .no_trace);
+    try runExpectI64(code, 5);
 }
 
 test "direct List.contains I64" {
@@ -3818,7 +3777,7 @@ test "direct List.contains I64" {
         \\    if a.contains(2) { 1 } else { 0 }
         \\}
     ;
-    try runExpectI64(code, 1, .no_trace);
+    try runExpectI64(code, 1);
 }
 
 test "polymorphic function single call I64" {
@@ -3831,7 +3790,7 @@ test "polymorphic function single call I64" {
         \\    if r { 1 } else { 0 }
         \\}
     ;
-    try runExpectI64(code, 1, .no_trace);
+    try runExpectI64(code, 1);
 }
 
 test "polymorphic function single call Str" {
@@ -3844,7 +3803,7 @@ test "polymorphic function single call Str" {
         \\    if r { 1 } else { 0 }
         \\}
     ;
-    try runExpectI64(code, 1, .no_trace);
+    try runExpectI64(code, 1);
 }
 
 test "polymorphic function with List.contains called with two types" {
@@ -3861,7 +3820,7 @@ test "polymorphic function with List.contains called with two types" {
         \\    if r1 and r2 { 1 } else { 0 }
         \\}
     ;
-    try runExpectI64(code, 1, .no_trace);
+    try runExpectI64(code, 1);
 }
 
 test "polymorphic function with List.contains called with multiple types" {
@@ -3889,7 +3848,7 @@ test "polymorphic function with List.contains called with multiple types" {
         \\    u1.len() + u2.len()
         \\}
     ;
-    try runExpectI64(code, 5, .no_trace);
+    try runExpectI64(code, 5);
 }
 
 test "nested List.any true path with captured Str value" {
@@ -3900,7 +3859,6 @@ test "nested List.any true path with captured Str value" {
         \\}
     ,
         true,
-        .no_trace,
     );
 }
 
@@ -3912,7 +3870,6 @@ test "nested List.any false path with captured Str value" {
         \\}
     ,
         false,
-        .no_trace,
     );
 }
 
@@ -3924,7 +3881,6 @@ test "direct List.contains captured Str control" {
         \\}
     ,
         true,
-        .no_trace,
     );
 }
 
@@ -3938,7 +3894,6 @@ test "forwarding tag union with Str payload through proc call does not leak" {
         \\}
     ,
         true,
-        .no_trace,
     );
 }
 
@@ -3950,7 +3905,6 @@ test "focused: fold single-field record" {
     try runExpectRecord(
         "List.fold([1, 2, 3, 4], {total: 0}, |acc, item| {total: acc.total + item})",
         &expected,
-        .no_trace,
     );
 }
 
@@ -3962,7 +3916,6 @@ test "focused: fold record partial update" {
     try runExpectRecord(
         "List.fold([1, 2, 3, 4], {sum: 0, multiplier: 2}, |acc, item| {..acc, sum: acc.sum + item})",
         &expected,
-        .no_trace,
     );
 }
 
@@ -3971,7 +3924,6 @@ test "focused: fold record nested field access" {
     try runExpectRecord(
         "List.fold([1, 2, 3], {value: 0}, |acc, item| {value: acc.value + item})",
         &expected,
-        .no_trace,
     );
 }
 
@@ -3980,7 +3932,6 @@ test "focused: fold record over string list" {
     try runExpectRecord(
         "List.fold([\"a\", \"bb\", \"ccc\"], {count: 0}, |acc, _| {count: acc.count + 1})",
         &expected,
-        .no_trace,
     );
 }
 
@@ -3988,7 +3939,6 @@ test "focused: fold multi-field record equality" {
     try runExpectBool(
         "List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1}) == {sum: 6, count: 3}",
         true,
-        .no_trace,
     );
 }
 
@@ -3998,7 +3948,7 @@ test "focused: fold multi-field record field checks" {
         \\    rec = List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1})
         \\    rec.sum == 6 and rec.count == 3
         \\}
-    , true, .no_trace);
+    , true);
 }
 
 test "focused: fold multi-field record binding identity" {
@@ -4011,7 +3961,7 @@ test "focused: fold multi-field record binding identity" {
         \\    rec = List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1})
         \\    rec
         \\}
-    , &expected, .no_trace);
+    , &expected);
 }
 
 test "focused: fold multi-field record binding survives extra alloc" {
@@ -4025,7 +3975,7 @@ test "focused: fold multi-field record binding survives extra alloc" {
         \\    _tmp = 999
         \\    rec
         \\}
-    , &expected, .no_trace);
+    , &expected);
 }
 
 test "focused: fold multi-field record sum check" {
@@ -4034,7 +3984,7 @@ test "focused: fold multi-field record sum check" {
         \\    rec = List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1})
         \\    rec.sum == 6
         \\}
-    , true, .no_trace);
+    , true);
 }
 
 test "focused: fold multi-field record count check" {
@@ -4043,7 +3993,7 @@ test "focused: fold multi-field record count check" {
         \\    rec = List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1})
         \\    rec.count == 3
         \\}
-    , true, .no_trace);
+    , true);
 }
 
 test "focused: fold multi-field record sum value" {
@@ -4052,7 +4002,7 @@ test "focused: fold multi-field record sum value" {
         \\    rec = List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1})
         \\    rec.sum
         \\}
-    , 6_000_000_000_000_000_000, .no_trace);
+    , 6_000_000_000_000_000_000);
 }
 
 test "focused: fold multi-field record count value" {
@@ -4061,15 +4011,15 @@ test "focused: fold multi-field record count value" {
         \\    rec = List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1})
         \\    rec.count
         \\}
-    , 3_000_000_000_000_000_000, .no_trace);
+    , 3_000_000_000_000_000_000);
 }
 
 test "focused: simple two-field record sum access" {
-    try runExpectDec("{sum: 6, count: 3}.sum", 6_000_000_000_000_000_000, .no_trace);
+    try runExpectDec("{sum: 6, count: 3}.sum", 6_000_000_000_000_000_000);
 }
 
 test "focused: simple two-field record count access" {
-    try runExpectDec("{sum: 6, count: 3}.count", 3_000_000_000_000_000_000, .no_trace);
+    try runExpectDec("{sum: 6, count: 3}.count", 3_000_000_000_000_000_000);
 }
 
 test "focused: fold partial record destructuring" {
@@ -4077,7 +4027,6 @@ test "focused: fold partial record destructuring" {
     try runExpectRecord(
         "List.fold([{a: 1, b: 100}, {a: 2, b: 200}, {a: 3, b: 300}], {sum: 0}, |acc, {a}| {sum: acc.sum + a})",
         &expected,
-        .no_trace,
     );
 }
 
@@ -4086,7 +4035,6 @@ test "focused: fold single-field record destructuring" {
     try runExpectRecord(
         "List.fold([{val: 1}, {val: 2}, {val: 3}, {val: 4}], {total: 0}, |acc, {val}| {total: acc.total + val})",
         &expected,
-        .no_trace,
     );
 }
 
@@ -4095,30 +4043,29 @@ test "focused: fold exact list pattern" {
     try runExpectRecord(
         "List.fold([[1, 2], [3, 4], [5, 6]], {total: 0}, |acc, [a, b]| {total: acc.total + a + b})",
         &expected,
-        .no_trace,
     );
 }
 
 test "focused: list append zst" {
-    try runExpectListZst("List.append([{}], {})", 2, .no_trace);
+    try runExpectListZst("List.append([{}], {})", 2);
 }
 
 test "focused: nested list equality" {
-    try runExpectBool("[[1, 2]] == [[1, 2]]", true, .no_trace);
+    try runExpectBool("[[1, 2]] == [[1, 2]]", true);
 }
 
 test "focused: nested list equality i64 literals" {
-    try runExpectBool("[[1.I64, 2.I64]] == [[1.I64, 2.I64]]", true, .no_trace);
+    try runExpectBool("[[1.I64, 2.I64]] == [[1.I64, 2.I64]]", true);
 }
 
 test "focused: nested list equality multiple elements" {
-    try runExpectBool("[[1, 2], [3, 4]] == [[1, 2], [3, 4]]", true, .no_trace);
-    try runExpectBool("[[1, 2], [3, 4]] == [[1, 2], [4, 3]]", false, .no_trace);
-    try runExpectBool("[[3, 4]] == [[4, 3]]", false, .no_trace);
+    try runExpectBool("[[1, 2], [3, 4]] == [[1, 2], [3, 4]]", true);
+    try runExpectBool("[[1, 2], [3, 4]] == [[1, 2], [4, 3]]", false);
+    try runExpectBool("[[3, 4]] == [[4, 3]]", false);
 }
 
 test "focused: list equality order-sensitive" {
-    try runExpectBool("[3, 4] == [4, 3]", false, .no_trace);
+    try runExpectBool("[3, 4] == [4, 3]", false);
 }
 
 test "focused: polymorphic additional specialization via List.append (non-eq)" {
@@ -4129,5 +4076,5 @@ test "focused: polymorphic additional specialization via List.append (non-eq)" {
         \\    _first_len = clone_via_fold([1.I64, 2.I64]).len()
         \\    clone_via_fold([[1.I64, 2.I64], [3.I64, 4.I64]]).len()
         \\}
-    , 2, .no_trace);
+    , 2);
 }

@@ -25,7 +25,7 @@ test "closure: lambda capturing one local variable" {
         \\    f(5)
         \\}
     ;
-    try runExpectI64(code, 15, .no_trace);
+    try runExpectI64(code, 15);
 }
 
 test "closure: lambda capturing two local variables" {
@@ -37,7 +37,7 @@ test "closure: lambda capturing two local variables" {
         \\    f(10)
         \\}
     ;
-    try runExpectI64(code, 20, .no_trace);
+    try runExpectI64(code, 20);
 }
 
 test "closure: lambda capturing a string" {
@@ -48,7 +48,7 @@ test "closure: lambda capturing a string" {
         \\    f(" World")
         \\}
     ;
-    try runExpectStr(code, "Hello World", .no_trace);
+    try runExpectStr(code, "Hello World");
 }
 
 test "closure: lambda capturing multiple strings" {
@@ -60,7 +60,7 @@ test "closure: lambda capturing multiple strings" {
         \\    f(" World")
         \\}
     ;
-    try runExpectStr(code, "Hello World!", .no_trace);
+    try runExpectStr(code, "Hello World!");
 }
 
 // TIER 2: Functions returning functions (closure escaping defining scope)
@@ -73,7 +73,7 @@ test "closure: function returning a closure (make_adder)" {
         \\    add5(10)
         \\}
     ;
-    try runExpectI64(code, 15, .no_trace);
+    try runExpectI64(code, 15);
 }
 
 test "closure: function returning a closure, called twice" {
@@ -86,7 +86,7 @@ test "closure: function returning a closure, called twice" {
         \\    a + b
         \\}
     ;
-    try runExpectI64(code, 40, .no_trace);
+    try runExpectI64(code, 40);
 }
 
 test "closure: two different closures from same factory" {
@@ -98,7 +98,7 @@ test "closure: two different closures from same factory" {
         \\    add3(10) + add7(10)
         \\}
     ;
-    try runExpectI64(code, 30, .no_trace);
+    try runExpectI64(code, 30);
 }
 
 test "closure: function returning a closure over string" {
@@ -109,7 +109,7 @@ test "closure: function returning a closure over string" {
         \\    greet("Alice")
         \\}
     ;
-    try runExpectStr(code, "Hi Alice", .no_trace);
+    try runExpectStr(code, "Hi Alice");
 }
 
 test "closure: two-level deep closure (function returning function returning function)" {
@@ -120,7 +120,7 @@ test "closure: two-level deep closure (function returning function returning fun
         \\    add_3_and_4(10)
         \\}
     ;
-    try runExpectI64(code, 17, .no_trace);
+    try runExpectI64(code, 17);
 }
 
 // TIER 3: Higher-order functions with closure arguments
@@ -133,7 +133,7 @@ test "closure: passing closure to higher-order function" {
         \\    apply(|x| x + y, 5)
         \\}
     ;
-    try runExpectI64(code, 15, .no_trace);
+    try runExpectI64(code, 15);
 }
 
 test "closure: passing two different closures to same HOF" {
@@ -147,7 +147,7 @@ test "closure: passing two different closures to same HOF" {
         \\    r1 + r2
         \\}
     ;
-    try runExpectI64(code, 40, .no_trace);
+    try runExpectI64(code, 40);
 }
 
 test "closure: passing two different closures to same HOF returns first result" {
@@ -161,7 +161,7 @@ test "closure: passing two different closures to same HOF returns first result" 
         \\    r1
         \\}
     ;
-    try runExpectI64(code, 15, .no_trace);
+    try runExpectI64(code, 15);
 }
 
 test "closure: passing two different closures to same HOF returns second result" {
@@ -175,7 +175,7 @@ test "closure: passing two different closures to same HOF returns second result"
         \\    r2
         \\}
     ;
-    try runExpectI64(code, 25, .no_trace);
+    try runExpectI64(code, 25);
 }
 
 test "closure: HOF calling closure argument twice" {
@@ -186,7 +186,7 @@ test "closure: HOF calling closure argument twice" {
         \\    apply_twice(|x| x + y, 10)
         \\}
     ;
-    try runExpectI64(code, 16, .no_trace);
+    try runExpectI64(code, 16);
 }
 
 test "closure: HOF with closure returning string" {
@@ -197,7 +197,7 @@ test "closure: HOF with closure returning string" {
         \\    apply(|name| Str.concat(prefix, name), "World")
         \\}
     ;
-    try runExpectStr(code, "Hello World", .no_trace);
+    try runExpectStr(code, "Hello World");
 }
 
 // TIER 4: Polymorphic functions with closures
@@ -211,7 +211,7 @@ test "closure: polymorphic identity applied to closure result" {
         \\    id(f(5))
         \\}
     ;
-    try runExpectI64(code, 15, .no_trace);
+    try runExpectI64(code, 15);
 }
 
 test "closure: polymorphic function used with both int and string closures" {
@@ -225,7 +225,7 @@ test "closure: polymorphic function used with both int and string closures" {
         \\    if (num_result > 0) str_result else ""
         \\}
     ;
-    try runExpectStr(code, "Hi Bob", .no_trace);
+    try runExpectStr(code, "Hi Bob");
 }
 
 // TIER 5: Closure over closure (nested captures)
@@ -239,7 +239,7 @@ test "closure: closure forwarding to captured closure (no multiply)" {
         \\    outer(10)
         \\}
     ;
-    try runExpectI64(code, 15, .no_trace);
+    try runExpectI64(code, 15);
 }
 
 test "closure: closure capturing another closure" {
@@ -251,7 +251,7 @@ test "closure: closure capturing another closure" {
         \\    outer(10)
         \\}
     ;
-    try runExpectI64(code, 30, .no_trace);
+    try runExpectI64(code, 30);
 }
 
 test "closure: closure capturing a factory-produced closure" {
@@ -263,7 +263,7 @@ test "closure: closure capturing a factory-produced closure" {
         \\    double_add5(10)
         \\}
     ;
-    try runExpectI64(code, 30, .no_trace);
+    try runExpectI64(code, 30);
 }
 
 // TIER 6: Multiple closures with different captures at same call site
@@ -278,7 +278,7 @@ test "closure: if-else choosing between two closures with different captures" {
         \\    f(5)
         \\}
     ;
-    try runExpectI64(code, 15, .no_trace);
+    try runExpectI64(code, 15);
 }
 
 test "closure: if-else choosing between two closures, false branch" {
@@ -290,7 +290,7 @@ test "closure: if-else choosing between two closures, false branch" {
         \\    f(5)
         \\}
     ;
-    try runExpectI64(code, 25, .no_trace);
+    try runExpectI64(code, 25);
 }
 
 test "closure: if-else choosing between closures with different capture counts" {
@@ -303,7 +303,7 @@ test "closure: if-else choosing between closures with different capture counts" 
         \\    f(5)
         \\}
     ;
-    try runExpectI64(code, 15, .no_trace);
+    try runExpectI64(code, 15);
 }
 
 // TIER 7: Closure used in data structures
@@ -317,7 +317,7 @@ test "closure: closure stored in record field then called" {
         \\    f(5)
         \\}
     ;
-    try runExpectI64(code, 15, .no_trace);
+    try runExpectI64(code, 15);
 }
 
 test "closure: two closures in record, each with own captures" {
@@ -331,7 +331,7 @@ test "closure: two closures in record, each with own captures" {
         \\    add_a(5) + add_b(5)
         \\}
     ;
-    try runExpectI64(code, 40, .no_trace);
+    try runExpectI64(code, 40);
 }
 
 test "closure: record field closure add_a preserves its capture" {
@@ -344,7 +344,7 @@ test "closure: record field closure add_a preserves its capture" {
         \\    add_a(5)
         \\}
     ;
-    try runExpectI64(code, 15, .no_trace);
+    try runExpectI64(code, 15);
 }
 
 test "closure: parenthesized record field closure add_b preserves its capture" {
@@ -356,7 +356,7 @@ test "closure: parenthesized record field closure add_b preserves its capture" {
         \\    (rec.add_b)(5)
         \\}
     ;
-    try runExpectI64(code, 25, .no_trace);
+    try runExpectI64(code, 25);
 }
 
 test "closure: record field closure add_b preserves its capture" {
@@ -369,7 +369,7 @@ test "closure: record field closure add_b preserves its capture" {
         \\    add_b(5)
         \\}
     ;
-    try runExpectI64(code, 25, .no_trace);
+    try runExpectI64(code, 25);
 }
 
 // TIER 8: Composition and chaining
@@ -384,7 +384,7 @@ test "closure: compose two functions" {
         \\    double_then_add1(5)
         \\}
     ;
-    try runExpectI64(code, 11, .no_trace);
+    try runExpectI64(code, 11);
 }
 
 test "closure: compose with captures" {
@@ -399,7 +399,7 @@ test "closure: compose with captures" {
         \\    add_both(10)
         \\}
     ;
-    try runExpectI64(code, 20, .no_trace);
+    try runExpectI64(code, 20);
 }
 
 test "closure: pipe (flip of compose)" {
@@ -410,7 +410,7 @@ test "closure: pipe (flip of compose)" {
         \\    pipe(5, |x| x + y)
         \\}
     ;
-    try runExpectI64(code, 15, .no_trace);
+    try runExpectI64(code, 15);
 }
 
 // TIER 9: Recursive closures and self-reference
@@ -423,7 +423,7 @@ test "closure: recursive function in let binding" {
         \\    factorial(5)
         \\}
     ;
-    try runExpectI64(code, 120, .no_trace);
+    try runExpectI64(code, 120);
 }
 
 test "closure: mutual recursion between two closures" {
@@ -434,7 +434,7 @@ test "closure: mutual recursion between two closures" {
         \\    if (is_even(4)) 1 else 0
         \\}
     ;
-    try runExpectI64(code, 1, .no_trace);
+    try runExpectI64(code, 1);
 }
 
 // TIER 10: Extremely complex / stress tests
@@ -450,7 +450,7 @@ test "closure: triple-nested closure factory" {
         \\    level4(10)
         \\}
     ;
-    try runExpectI64(code, 16, .no_trace);
+    try runExpectI64(code, 16);
 }
 
 test "closure: closure capturing another closure (2 levels)" {
@@ -463,7 +463,7 @@ test "closure: closure capturing another closure (2 levels)" {
         \\    g(10)
         \\}
     ;
-    try runExpectI64(code, 13, .no_trace);
+    try runExpectI64(code, 13);
 }
 
 test "closure: closure capturing another closure that captures a third" {
@@ -478,7 +478,7 @@ test "closure: closure capturing another closure that captures a third" {
         \\    h(10)
         \\}
     ;
-    try runExpectI64(code, 16, .no_trace);
+    try runExpectI64(code, 16);
 }
 
 test "closure: HOF receiving closure, returning closure that captures the argument closure" {
@@ -491,7 +491,7 @@ test "closure: HOF receiving closure, returning closure that captures the argume
         \\    double_add3(10)
         \\}
     ;
-    try runExpectI64(code, 16, .no_trace);
+    try runExpectI64(code, 16);
 }
 
 test "closure: HOF receiving closure with captures, returning closure that captures it" {
@@ -504,7 +504,7 @@ test "closure: HOF receiving closure with captures, returning closure that captu
         \\    double_add_n(10)
         \\}
     ;
-    try runExpectI64(code, 20, .no_trace);
+    try runExpectI64(code, 20);
 }
 
 test "closure: chained closure factories with accumulating captures" {
@@ -516,7 +516,7 @@ test "closure: chained closure factories with accumulating captures" {
         \\    step3(3)
         \\}
     ;
-    try runExpectI64(code, 123, .no_trace);
+    try runExpectI64(code, 123);
 }
 
 test "closure: polymorphic HOF with closures capturing different types" {
@@ -530,7 +530,7 @@ test "closure: polymorphic HOF with closures capturing different types" {
         \\    if (num > 0) apply(|s| Str.concat(prefix, s), "yes") else "no"
         \\}
     ;
-    try runExpectStr(code, "Result: yes", .no_trace);
+    try runExpectStr(code, "Result: yes");
 }
 
 test "closure: closure over bool used in conditional" {
@@ -541,7 +541,7 @@ test "closure: closure over bool used in conditional" {
         \\    choose(42, 0)
         \\}
     ;
-    try runExpectI64(code, 42, .no_trace);
+    try runExpectI64(code, 42);
 }
 
 test "closure: deeply nested blocks each adding captures" {
@@ -560,7 +560,7 @@ test "closure: deeply nested blocks each adding captures" {
         \\    r1
         \\}
     ;
-    try runExpectI64(code, 16, .no_trace);
+    try runExpectI64(code, 16);
 }
 
 test "closure: same variable captured by multiple independent closures" {
@@ -572,7 +572,7 @@ test "closure: same variable captured by multiple independent closures" {
         \\    f(5) + g(3)
         \\}
     ;
-    try runExpectI64(code, 45, .no_trace);
+    try runExpectI64(code, 45);
 }
 
 test "closure: closure returning a string that includes a captured string" {
@@ -588,7 +588,7 @@ test "closure: closure returning a string that includes a captured string" {
         \\    Str.concat(Str.concat(r1, " and "), r2)
         \\}
     ;
-    try runExpectStr(code, "Hello, Alice and Hi, Bob", .no_trace);
+    try runExpectStr(code, "Hello, Alice and Hi, Bob");
 }
 
 test "closure: applying the same closure to different arguments" {
@@ -602,7 +602,7 @@ test "closure: applying the same closure to different arguments" {
         \\    a + b + c
         \\}
     ;
-    try runExpectI64(code, 306, .no_trace);
+    try runExpectI64(code, 306);
 }
 
 test "closure: immediately invoked closure with capture" {
@@ -612,7 +612,7 @@ test "closure: immediately invoked closure with capture" {
         \\    (|x| x + y)(8)
         \\}
     ;
-    try runExpectI64(code, 50, .no_trace);
+    try runExpectI64(code, 50);
 }
 
 test "closure: closure that ignores its argument but uses capture" {
@@ -623,7 +623,7 @@ test "closure: closure that ignores its argument but uses capture" {
         \\    f(0)
         \\}
     ;
-    try runExpectI64(code, 99, .no_trace);
+    try runExpectI64(code, 99);
 }
 
 test "closure: closure that ignores capture and uses argument" {
@@ -634,7 +634,7 @@ test "closure: closure that ignores capture and uses argument" {
         \\    f(41)
         \\}
     ;
-    try runExpectI64(code, 42, .no_trace);
+    try runExpectI64(code, 42);
 }
 
 // TIER 11: Monomorphic identity -- isolating polymorphic specialization
@@ -649,7 +649,7 @@ test "closure: monomorphic Str identity (no polymorphism)" {
         \\    identity("Hello")
         \\}
     ;
-    try runExpectStr(code, "Hello", .no_trace);
+    try runExpectStr(code, "Hello");
 }
 
 test "closure: monomorphic Dec identity (no polymorphism)" {
@@ -661,7 +661,7 @@ test "closure: monomorphic Dec identity (no polymorphism)" {
         \\    num
         \\}
     ;
-    try runExpectI64(code, 5, .no_trace);
+    try runExpectI64(code, 5);
 }
 
 test "closure: monomorphic Str identity with if-else (exact failing scenario but monomorphic)" {
@@ -676,7 +676,7 @@ test "closure: monomorphic Str identity with if-else (exact failing scenario but
         \\    if (num > 0) str else ""
         \\}
     ;
-    try runExpectStr(code, "Hello", .no_trace);
+    try runExpectStr(code, "Hello");
 }
 
 // Regression: refcounting silently skips `.closure` layouts.
@@ -698,7 +698,7 @@ test "closure: multi-use closure with captured short string (SSO)" {
         \\    f(0)
         \\}
     ;
-    try runExpectStr(code, "short", .no_trace);
+    try runExpectStr(code, "short");
 }
 
 test "closure: multi-use closure with captured heap string needs incref" {
@@ -710,5 +710,5 @@ test "closure: multi-use closure with captured heap string needs incref" {
         \\    f(0)
         \\}
     ;
-    try runExpectStr(code, "This string is definitely longer than twenty three bytes", .no_trace);
+    try runExpectStr(code, "This string is definitely longer than twenty three bytes");
 }

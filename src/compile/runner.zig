@@ -4,7 +4,6 @@
 const std = @import("std");
 const can = @import("can");
 const eval = @import("eval");
-const roc_target = @import("roc_target");
 const builtins = @import("builtins");
 
 const ModuleEnv = can.ModuleEnv;
@@ -22,7 +21,6 @@ pub fn runViaInterpreter(
     roc_ops: *RocOps,
     args_ptr: *anyopaque,
     result_ptr: *anyopaque,
-    target: roc_target.RocTarget,
 ) !void {
     eval.runner.run(
         .interpreter,
@@ -35,7 +33,6 @@ pub fn runViaInterpreter(
         roc_ops,
         args_ptr,
         result_ptr,
-        target,
     ) catch |err| switch (err) {
         error.EvalFailed => return error.InterpreterFailed,
         error.CompilationFailed => return error.CompilationFailed,

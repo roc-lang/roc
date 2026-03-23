@@ -777,7 +777,7 @@ pub const Repl = struct {
             }
         }
 
-        return self.evaluateWithInterpreter(module_env, inspect_expr, &imported_modules, &checker);
+        return self.evaluateWithInterpreter(module_env, inspect_expr, &imported_modules);
     }
 
     fn dupResultStr(self: *Repl, result_buf: *align(16) [512]u8, backend_name: []const u8) ![]const u8 {
@@ -842,8 +842,7 @@ pub const Repl = struct {
 
     /// Evaluate a str_inspekt-wrapped expression using the LIR interpreter.
     /// The expression should already be wrapped in Str.inspect, so the result is a Str.
-    fn evaluateWithInterpreter(self: *Repl, module_env: *ModuleEnv, inspect_expr: can.CIR.Expr.Idx, imported_modules: []const *const ModuleEnv, checker: *Check) !StepResult {
-        _ = checker;
+    fn evaluateWithInterpreter(self: *Repl, module_env: *ModuleEnv, inspect_expr: can.CIR.Expr.Idx, imported_modules: []const *const ModuleEnv) !StepResult {
 
         // Lower CIR → MIR → LIR → RC
         var lir_program = eval_mod.LirProgram.init(self.allocator, .u64);

@@ -35,7 +35,6 @@ const LayoutHelper = eval_mod.value.LayoutHelper;
 const CrashContext = eval_mod.CrashContext;
 const BuiltinTypes = eval_mod.BuiltinTypes;
 const layout_mod = @import("layout");
-const roc_target = @import("roc_target");
 const RocList = builtins.list.RocList;
 
 fn comptimeRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
@@ -297,21 +296,24 @@ const BuiltinIntValidation = struct {
 const try_suffix_type_error_crash_message =
     "The ? operator was used on a value that is not a Try type. The ? operator expects a value of type [Ok(a), Err(e)].";
 
+const builtin_num_kind_map = std.StaticStringMap(CIR.NumKind).initComptime(.{
+    .{ "U8", .u8 },
+    .{ "I8", .i8 },
+    .{ "U16", .u16 },
+    .{ "I16", .i16 },
+    .{ "U32", .u32 },
+    .{ "I32", .i32 },
+    .{ "U64", .u64 },
+    .{ "I64", .i64 },
+    .{ "U128", .u128 },
+    .{ "I128", .i128 },
+    .{ "F32", .f32 },
+    .{ "F64", .f64 },
+    .{ "Dec", .dec },
+});
+
 fn builtinNumKindFromDisplayName(type_name: []const u8) ?CIR.NumKind {
-    if (std.mem.eql(u8, type_name, "U8")) return .u8;
-    if (std.mem.eql(u8, type_name, "I8")) return .i8;
-    if (std.mem.eql(u8, type_name, "U16")) return .u16;
-    if (std.mem.eql(u8, type_name, "I16")) return .i16;
-    if (std.mem.eql(u8, type_name, "U32")) return .u32;
-    if (std.mem.eql(u8, type_name, "I32")) return .i32;
-    if (std.mem.eql(u8, type_name, "U64")) return .u64;
-    if (std.mem.eql(u8, type_name, "I64")) return .i64;
-    if (std.mem.eql(u8, type_name, "U128")) return .u128;
-    if (std.mem.eql(u8, type_name, "I128")) return .i128;
-    if (std.mem.eql(u8, type_name, "F32")) return .f32;
-    if (std.mem.eql(u8, type_name, "F64")) return .f64;
-    if (std.mem.eql(u8, type_name, "Dec")) return .dec;
-    return null;
+    return builtin_num_kind_map.get(type_name);
 }
 
 fn numeralAbsValue(num_lit_info: types_mod.NumeralInfo) u128 {
@@ -472,10 +474,8 @@ pub const ComptimeEvaluator = struct {
         builtin_types: BuiltinTypes,
         builtin_module_env: ?*const ModuleEnv,
         import_mapping: *const import_mapping_mod.ImportMapping,
-        target: roc_target.RocTarget,
         io: ?Io,
     ) !ComptimeEvaluator {
-        _ = target;
         const target_usize: base.target.TargetUsize = if (@import("builtin").cpu.arch == .wasm32) .u32 else .u64;
 
         // Build all_module_envs slice including the current env
@@ -1142,10 +1142,6 @@ pub const ComptimeEvaluator = struct {
         };
         defer lower_result.deinit();
 
-        // Build the Numeral argument as raw bytes
-        const numeral_size = lower_result.layout_store.layoutSize(
-            lower_result.layout_store.getLayout(lower_result.result_layout),
-        );
         // For a function, the result_layout is the function's layout, not the arg layout.
         // We need to get the arg layout from the function type.
         const expr_type_var = ModuleEnv.varFrom(target_def.expr);
@@ -1198,8 +1194,6 @@ pub const ComptimeEvaluator = struct {
 
         const param_size = lower_result.layout_store.layoutSize(lower_result.layout_store.getLayout(param_layout_idx));
         const ret_size = lower_result.layout_store.layoutSize(lower_result.layout_store.getLayout(ret_layout_idx));
-
-        _ = numeral_size;
 
         // Allocate buffers for argument and result
         const arena_alloc = self.roc_arena.allocator();
@@ -1391,7 +1385,7 @@ pub const ComptimeEvaluator = struct {
                     const variants = layout_store.getTagUnionVariants(tu_data);
                     const err_variant = variants.get(0); // Err is at discriminant 0
                     const err_payload_layout = layout_store.getLayout(err_variant.payload_layout);
-                    const err_msg = self.tryExtractErrorMessage(result_value, err_payload_layout, layout_store);
+                    const err_msg = tryExtractErrorMessage(err_payload_layout);
                     const error_msg = try self.problems.putExtraString(err_msg);
                     const problem = Problem{
                         .comptime_eval_error = .{
@@ -1432,8 +1426,7 @@ pub const ComptimeEvaluator = struct {
 
     /// Try to extract a string error message from an Err payload.
     /// Returns a human-readable error message.
-    fn tryExtractErrorMessage(self: *ComptimeEvaluator, _: Value, payload_layout: layout_mod.Layout, _: *const layout_mod.Store) []const u8 {
-        _ = self;
+    fn tryExtractErrorMessage(payload_layout: layout_mod.Layout) []const u8 {
         // The Err payload is [InvalidNumeral Str, ...]
         // For now, return a generic message. Full string extraction from RocStr
         // would require reading the RocStr struct and its bytes.

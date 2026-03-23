@@ -2543,8 +2543,7 @@ fn writeFloatParseResult(comptime T: type, buffer: []u8, out_ptr: usize, disc_of
 }
 
 /// Helper function to run an expression and expect a specific error.
-pub fn runExpectError(src: []const u8, expected_error: anyerror, should_trace: enum { trace, no_trace }) !void {
-    _ = should_trace;
+pub fn runExpectError(src: []const u8, expected_error: anyerror) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
@@ -2603,8 +2602,7 @@ pub fn runExpectTypeMismatchAndCrash(src: []const u8) !void {
 }
 
 /// Helpers to setup and run an interpreter expecting an integer result.
-pub fn runExpectI64(src: []const u8, expected_int: i128, should_trace: enum { trace, no_trace }) !void {
-    _ = should_trace;
+pub fn runExpectI64(src: []const u8, expected_int: i128) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
@@ -2625,8 +2623,7 @@ pub fn runExpectI64(src: []const u8, expected_int: i128, should_trace: enum { tr
 }
 
 /// Helper function to run an expression and expect a boolean result.
-pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { trace, no_trace }) !void {
-    _ = should_trace;
+pub fn runExpectBool(src: []const u8, expected_bool: bool) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
@@ -2646,8 +2643,7 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
 }
 
 /// Helper function to run an expression and expect an f32 result (with epsilon tolerance).
-pub fn runExpectF32(src: []const u8, expected_f32: f32, should_trace: enum { trace, no_trace }) !void {
-    _ = should_trace;
+pub fn runExpectF32(src: []const u8, expected_f32: f32) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
@@ -2672,8 +2668,7 @@ pub fn runExpectF32(src: []const u8, expected_f32: f32, should_trace: enum { tra
 }
 
 /// Helper function to run an expression and expect an f64 result (with epsilon tolerance).
-pub fn runExpectF64(src: []const u8, expected_f64: f64, should_trace: enum { trace, no_trace }) !void {
-    _ = should_trace;
+pub fn runExpectF64(src: []const u8, expected_f64: f64) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
@@ -2699,8 +2694,7 @@ pub fn runExpectF64(src: []const u8, expected_f64: f64, should_trace: enum { tra
 
 /// Helper function to run an expression and expect a Dec result from an integer.
 /// Automatically scales the expected value by 10^18 for Dec's fixed-point representation.
-pub fn runExpectIntDec(src: []const u8, expected_int: i128, should_trace: enum { trace, no_trace }) !void {
-    _ = should_trace;
+pub fn runExpectIntDec(src: []const u8, expected_int: i128) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
@@ -2723,8 +2717,7 @@ pub fn runExpectIntDec(src: []const u8, expected_int: i128, should_trace: enum {
 /// Helper function to run an expression and expect a Dec result.
 /// Dec is a fixed-point decimal type stored as i128 with 18 decimal places.
 /// For testing, we compare the raw i128 values directly.
-pub fn runExpectDec(src: []const u8, expected_dec_num: i128, should_trace: enum { trace, no_trace }) !void {
-    _ = should_trace;
+pub fn runExpectDec(src: []const u8, expected_dec_num: i128) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
@@ -2746,8 +2739,7 @@ pub fn runExpectDec(src: []const u8, expected_dec_num: i128, should_trace: enum 
 }
 
 /// Helpers to setup and run an interpreter expecting a string result.
-pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enum { trace, no_trace }) !void {
-    _ = should_trace;
+pub fn runExpectStr(src: []const u8, expected_str: []const u8) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
@@ -2800,8 +2792,7 @@ pub const ExpectedElement = struct {
 };
 
 /// Helpers to setup and run an interpreter expecting a tuple result.
-pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElement, should_trace: enum { trace, no_trace }) !void {
-    _ = should_trace;
+pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElement) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
@@ -2824,8 +2815,7 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
 }
 
 /// Helpers to setup and run an interpreter expecting a record result.
-pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, should_trace: enum { trace, no_trace }) !void {
-    _ = should_trace;
+pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
@@ -2852,8 +2842,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
 }
 
 /// Helpers to setup and run an interpreter expecting a list of zst result.
-pub fn runExpectListZst(src: []const u8, expected_element_count: usize, should_trace: enum { trace, no_trace }) !void {
-    _ = should_trace;
+pub fn runExpectListZst(src: []const u8, expected_element_count: usize) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
@@ -2880,8 +2869,7 @@ pub fn runExpectListZst(src: []const u8, expected_element_count: usize, should_t
 }
 
 /// Helpers to setup and run an interpreter expecting a list of i64 result.
-pub fn runExpectListI64(src: []const u8, expected_elements: []const i64, should_trace: enum { trace, no_trace }) !void {
-    _ = should_trace;
+pub fn runExpectListI64(src: []const u8, expected_elements: []const i64) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
@@ -2905,8 +2893,7 @@ pub fn runExpectListI64(src: []const u8, expected_elements: []const i64, should_
 
 /// Like runExpectListI64 but expects an empty list with .list_of_zst layout.
 /// This is for cases like List.repeat(7.I64, 0) which returns an empty list.
-pub fn runExpectEmptyListI64(src: []const u8, should_trace: enum { trace, no_trace }) !void {
-    _ = should_trace;
+pub fn runExpectEmptyListI64(src: []const u8) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
@@ -2927,8 +2914,7 @@ pub fn runExpectEmptyListI64(src: []const u8, should_trace: enum { trace, no_tra
 /// Helper function to run an expression and expect a unit/ZST result.
 /// This tests expressions that return `{}` (the unit type / empty record).
 /// Accepts both .zst layout and .struct_ layout with size 0 (empty record).
-pub fn runExpectUnit(src: []const u8, should_trace: enum { trace, no_trace }) !void {
-    _ = should_trace;
+pub fn runExpectUnit(src: []const u8) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
@@ -3249,7 +3235,7 @@ pub fn cleanupParseAndCanonical(allocator: std.mem.Allocator, resources: anytype
 }
 
 test "eval runtime error - returns crash error" {
-    try runExpectError("{ crash \"test feature\" 0 }", error.Crash, .no_trace);
+    try runExpectError("{ crash \"test feature\" 0 }", error.Crash);
 }
 
 test "dev lowering: imported List.any directly calls passed predicate member" {

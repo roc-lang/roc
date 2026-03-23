@@ -1884,7 +1884,6 @@ fn rocRunDefaultApp(ctx: *CliContext, args: cli_args.RunArgs, original_source: [
         &roc_ops,
         @ptrCast(&cli_args_list),
         @ptrCast(&result_buf),
-        target,
     ) catch |err| {
         std.debug.print("Execution error: {}\n", .{err});
         std.process.exit(1);
@@ -5571,7 +5570,6 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
         builtin_types,
         builtin_module_env,
         &import_mapping,
-        RocTarget.detectNative(),
         null,
     ) catch |err| {
         try stderr.print("Failed to create compile-time evaluator: {}\n", .{err});

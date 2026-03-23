@@ -22,7 +22,7 @@ test "list refcount nested - simple nested list" {
         \\    outer = [inner]
         \\    match outer { [lst] => match lst { [a, b] => a + b, _ => 0 }, _ => 0 }
         \\}
-    , 3, .no_trace);
+    , 3);
 }
 
 test "list refcount nested - multiple inner lists" {
@@ -33,7 +33,7 @@ test "list refcount nested - multiple inner lists" {
         \\    outer = [a, b]
         \\    match outer { [first, ..] => match first { [x, y] => x + y, _ => 0 }, _ => 0 }
         \\}
-    , 3, .no_trace);
+    , 3);
 }
 
 test "list refcount nested - same inner list multiple times" {
@@ -43,13 +43,13 @@ test "list refcount nested - same inner list multiple times" {
         \\    outer = [inner, inner, inner]
         \\    match outer { [first, ..] => match first { [a, b] => a + b, _ => 0 }, _ => 0 }
         \\}
-    , 3, .no_trace);
+    , 3);
 }
 
 test "list refcount nested - two levels inline" {
     try runExpectI64(
         \\match [[1, 2], [3, 4]] { [first, ..] => match first { [a, b] => a + b, _ => 0 }, _ => 0 }
-    , 3, .no_trace);
+    , 3);
 }
 
 test "list refcount nested - three levels" {
@@ -60,7 +60,7 @@ test "list refcount nested - three levels" {
         \\    c = [b]
         \\    match c { [lst] => match lst { [lst2] => match lst2 { [x] => x, _ => 0 }, _ => 0 }, _ => 0 }
         \\}
-    , 1, .no_trace);
+    , 1);
 }
 
 test "list refcount nested - empty inner list" {
@@ -70,7 +70,7 @@ test "list refcount nested - empty inner list" {
         \\    outer = [inner]
         \\    match outer { [lst] => match lst { [] => 42, _ => 0 }, _ => 0 }
         \\}
-    , 42, .no_trace);
+    , 42);
 }
 
 test "list refcount nested - list of string lists" {
@@ -81,13 +81,13 @@ test "list refcount nested - list of string lists" {
         \\    outer = [a, b]
         \\    match outer { [first, ..] => match first { [s, ..] => s, _ => "" }, _ => "" }
         \\}
-    , "x", .no_trace);
+    , "x");
 }
 
 test "list refcount nested - inline string lists" {
     try runExpectStr(
         \\match [["a", "b"], ["c"]] { [first, ..] => match first { [s, ..] => s, _ => "" }, _ => "" }
-    , "a", .no_trace);
+    , "a");
 }
 
 test "list refcount nested - nested then aliased" {
@@ -98,7 +98,7 @@ test "list refcount nested - nested then aliased" {
         \\    outer2 = outer
         \\    match outer2 { [lst] => match lst { [a, b] => a + b, _ => 0 }, _ => 0 }
         \\}
-    , 3, .no_trace);
+    , 3);
 }
 
 test "list refcount nested - access second inner list" {
@@ -109,13 +109,13 @@ test "list refcount nested - access second inner list" {
         \\    outer = [a, b]
         \\    match outer { [_, second] => match second { [x, y] => x + y, _ => 0 }, _ => 0 }
         \\}
-    , 7, .no_trace);
+    , 7);
 }
 
 test "list refcount nested - deeply nested inline" {
     try runExpectI64(
         \\match [[[1]]] { [lst] => match lst { [lst2] => match lst2 { [x] => x, _ => 0 }, _ => 0 }, _ => 0 }
-    , 1, .no_trace);
+    , 1);
 }
 
 test "list refcount nested - mixed nested and flat" {
@@ -125,5 +125,5 @@ test "list refcount nested - mixed nested and flat" {
         \\    b = match second { [y] => y, _ => 0 }
         \\    a + b
         \\}, _ => 0 }
-    , 4, .no_trace);
+    , 4);
 }

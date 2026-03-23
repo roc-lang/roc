@@ -23,7 +23,7 @@ test "list refcount strings - single string in list" {
         \\    lst = [x]
         \\    match lst { [s] => s, _ => "" }
         \\}
-    , "hi", .no_trace);
+    , "hi");
 }
 
 test "list refcount strings - multiple strings in list" {
@@ -35,7 +35,7 @@ test "list refcount strings - multiple strings in list" {
         \\    lst = [x, y]
         \\    match lst { [first, ..] => first, _ => "" }
         \\}
-    , "a", .no_trace);
+    , "a");
 }
 
 test "list refcount strings - return second string" {
@@ -46,7 +46,7 @@ test "list refcount strings - return second string" {
         \\    lst = [x, y]
         \\    match lst { [_, second] => second, _ => "" }
         \\}
-    , "b", .no_trace);
+    , "b");
 }
 
 test "list refcount strings - same string multiple times" {
@@ -57,7 +57,7 @@ test "list refcount strings - same string multiple times" {
         \\    lst = [x, x, x]
         \\    match lst { [first, ..] => first, _ => "" }
         \\}
-    , "hi", .no_trace);
+    , "hi");
 }
 
 test "list refcount strings - empty string in list" {
@@ -68,7 +68,7 @@ test "list refcount strings - empty string in list" {
         \\    lst = [x]
         \\    match lst { [s] => s, _ => "fallback" }
         \\}
-    , "", .no_trace);
+    , "");
 }
 
 test "list refcount strings - small vs large strings in list" {
@@ -80,7 +80,7 @@ test "list refcount strings - small vs large strings in list" {
         \\    lst = [small, large]
         \\    match lst { [first, ..] => first, _ => "" }
         \\}
-    , "hi", .no_trace);
+    , "hi");
 }
 
 test "list refcount strings - return large string" {
@@ -91,20 +91,20 @@ test "list refcount strings - return large string" {
         \\    lst = [small, large]
         \\    match lst { [_, second] => second, _ => "" }
         \\}
-    , "This is a very long string that will be heap allocated for sure", .no_trace);
+    , "This is a very long string that will be heap allocated for sure");
 }
 
 test "list refcount strings - list of string literals" {
     // Direct string literals in list
     try runExpectStr(
         \\match ["a", "b", "c"] { [first, ..] => first, _ => "" }
-    , "a", .no_trace);
+    , "a");
 }
 
 test "list refcount strings - list of string literals return second" {
     try runExpectStr(
         \\match ["a", "b", "c"] { [_, second, ..] => second, _ => "" }
-    , "b", .no_trace);
+    , "b");
 }
 
 test "list refcount strings - empty list then string list" {
@@ -115,7 +115,7 @@ test "list refcount strings - empty list then string list" {
         \\    strings = ["x", "y"]
         \\    match strings { [first, ..] => first, _ => "" }
         \\}
-    , "x", .no_trace);
+    , "x");
 }
 
 test "list refcount strings - string list aliased" {
@@ -126,7 +126,7 @@ test "list refcount strings - string list aliased" {
         \\    lst2 = lst1
         \\    match lst2 { [first, ..] => first, _ => "" }
         \\}
-    , "a", .no_trace);
+    , "a");
 }
 
 test "list refcount strings - string list aliased return from original" {
@@ -136,7 +136,7 @@ test "list refcount strings - string list aliased return from original" {
         \\    _lst2 = lst1
         \\    match lst1 { [first, ..] => first, _ => "" }
         \\}
-    , "a", .no_trace);
+    , "a");
 }
 
 test "list refcount strings - string list reassigned" {
@@ -147,7 +147,7 @@ test "list refcount strings - string list reassigned" {
         \\    $lst = ["new1", "new2"]
         \\    match $lst { [first, ..] => first, _ => "" }
         \\}
-    , "new1", .no_trace);
+    , "new1");
 }
 
 test "list refcount strings - three string lists" {
@@ -158,7 +158,7 @@ test "list refcount strings - three string lists" {
         \\    _c = ["c1", "c2"]
         \\    match b { [first, ..] => first, _ => "" }
         \\}
-    , "b1", .no_trace);
+    , "b1");
 }
 
 test "list refcount strings - extract string from nested match" {
@@ -173,5 +173,5 @@ test "list refcount strings - extract string from nested match" {
         \\        _ => ""
         \\    }
         \\}
-    , "y", .no_trace);
+    , "y");
 }

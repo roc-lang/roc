@@ -17,7 +17,7 @@ test "list refcount function - pass list to identity function" {
         \\    result = id(x)
         \\    match result { [a, b] => a + b, _ => 0 }
         \\}
-    , 3, .no_trace);
+    , 3);
 }
 
 test "list refcount function - list returned from function" {
@@ -27,7 +27,7 @@ test "list refcount function - list returned from function" {
         \\    result = f(0)
         \\    match result { [a, b] => a + b, _ => 0 }
         \\}
-    , 3, .no_trace);
+    , 3);
 }
 
 test "list refcount function - closure captures list" {
@@ -38,7 +38,7 @@ test "list refcount function - closure captures list" {
         \\    result = f(0)
         \\    match result { [a, b] => a + b, _ => 0 }
         \\}
-    , 3, .no_trace);
+    , 3);
 }
 
 test "list refcount function - function called multiple times" {
@@ -50,7 +50,7 @@ test "list refcount function - function called multiple times" {
         \\    _b = f(x)
         \\    match a { [first, ..] => first, _ => 0 }
         \\}
-    , 1, .no_trace);
+    , 1);
 }
 
 test "list refcount function - string list through function" {
@@ -61,7 +61,7 @@ test "list refcount function - string list through function" {
         \\    result = f(x)
         \\    match result { [first, ..] => first, _ => "" }
         \\}
-    , "a", .no_trace);
+    , "a");
 }
 
 test "list refcount function - function extracts from list" {
@@ -71,7 +71,7 @@ test "list refcount function - function extracts from list" {
         \\    x = [10, 20, 30]
         \\    match x { [first, ..] => first, _ => 0 }
         \\}
-    , 10, .no_trace);
+    , 10);
 }
 
 test "list refcount function - closure captures string list" {
@@ -82,7 +82,7 @@ test "list refcount function - closure captures string list" {
         \\    result = f(0)
         \\    match result { [first, ..] => first, _ => "" }
         \\}
-    , "captured", .no_trace);
+    , "captured");
 }
 
 test "list refcount function - nested function calls with lists" {
@@ -92,7 +92,7 @@ test "list refcount function - nested function calls with lists" {
         \\    x = [5, 10]
         \\    match x { [first, ..] => first + first, _ => 0 }
         \\}
-    , 10, .no_trace);
+    , 10);
 }
 
 test "list refcount function - same list twice in tuple returned from function" {
@@ -106,7 +106,7 @@ test "list refcount function - same list twice in tuple returned from function" 
         \\    t = make_pair(x)
         \\    match t { (first, _) => match first { [a, b] => a + b, _ => 0 } }
         \\}
-    , 3, .no_trace);
+    , 3);
 }
 
 test "list refcount function - same list twice passed to function" {
@@ -121,5 +121,5 @@ test "list refcount function - same list twice passed to function" {
         \\    x = [1, 2]
         \\    add_lens(x, x)
         \\}
-    , 2, .no_trace);
+    , 2);
 }

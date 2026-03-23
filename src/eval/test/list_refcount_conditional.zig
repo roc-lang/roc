@@ -16,7 +16,7 @@ test "list refcount conditional - simple if-else with lists" {
         \\    result = if True {x} else {[3, 4]}
         \\    match result { [a, b] => a + b, _ => 0 }
         \\}
-    , 3, .no_trace);
+    , 3);
 }
 
 test "list refcount conditional - return else branch" {
@@ -26,7 +26,7 @@ test "list refcount conditional - return else branch" {
         \\    result = if False {x} else {[3, 4]}
         \\    match result { [a, b] => a + b, _ => 0 }
         \\}
-    , 7, .no_trace);
+    , 7);
 }
 
 test "list refcount conditional - same list in both branches" {
@@ -36,7 +36,7 @@ test "list refcount conditional - same list in both branches" {
         \\    result = if True {x} else {x}
         \\    match result { [a, b] => a + b, _ => 0 }
         \\}
-    , 3, .no_trace);
+    , 3);
 }
 
 test "list refcount conditional - unused branch decreffed" {
@@ -47,7 +47,7 @@ test "list refcount conditional - unused branch decreffed" {
         \\    result = if True {x} else {y}
         \\    match result { [a, b] => a + b, _ => 0 }
         \\}
-    , 3, .no_trace);
+    , 3);
 }
 
 test "list refcount conditional - nested conditionals" {
@@ -57,7 +57,7 @@ test "list refcount conditional - nested conditionals" {
         \\    result = if True {if False {x} else {[2]}} else {[3]}
         \\    match result { [a] => a, _ => 0 }
         \\}
-    , 2, .no_trace);
+    , 2);
 }
 
 test "list refcount conditional - string lists in conditionals" {
@@ -67,7 +67,7 @@ test "list refcount conditional - string lists in conditionals" {
         \\    result = if True {x} else {["c"]}
         \\    match result { [first, ..] => first, _ => "" }
         \\}
-    , "a", .no_trace);
+    , "a");
 }
 
 test "list refcount conditional - inline list literals" {
@@ -76,7 +76,7 @@ test "list refcount conditional - inline list literals" {
         \\    result = if True {[10, 20]} else {[30, 40]}
         \\    match result { [a, b] => a + b, _ => 0 }
         \\}
-    , 30, .no_trace);
+    , 30);
 }
 
 test "list refcount conditional - empty list in branch" {
@@ -85,5 +85,5 @@ test "list refcount conditional - empty list in branch" {
         \\    result = if True {[]} else {[1, 2]}
         \\    match result { [] => 42, _ => 0 }
         \\}
-    , 42, .no_trace);
+    , 42);
 }

@@ -13,26 +13,26 @@ test "list refcount basic - various small list sizes" {
     // Single element
     try runExpectI64(
         \\match [5] { [x] => x, _ => 0 }
-    , 5, .no_trace);
+    , 5);
 }
 
 test "list refcount basic - two elements" {
     try runExpectI64(
         \\match [10, 20] { [a, b] => a + b, _ => 0 }
-    , 30, .no_trace);
+    , 30);
 }
 
 test "list refcount basic - five elements" {
     try runExpectI64(
         \\match [1, 2, 3, 4, 5] { [a, b, c, d, e] => a + b + c + d + e, _ => 0 }
-    , 15, .no_trace);
+    , 15);
 }
 
 test "list refcount basic - larger list with pattern" {
     // Use list rest pattern for larger lists
     try runExpectI64(
         \\match [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] { [first, second, ..] => first + second, _ => 0 }
-    , 3, .no_trace);
+    , 3);
 }
 
 test "list refcount basic - sequential independent lists" {
@@ -44,7 +44,7 @@ test "list refcount basic - sequential independent lists" {
         \\    _c = [4, 5, 6]
         \\    match a { [x] => x, _ => 0 }
         \\}
-    , 1, .no_trace);
+    , 1);
 }
 
 test "list refcount basic - return middle list" {
@@ -55,7 +55,7 @@ test "list refcount basic - return middle list" {
         \\    _c = [4, 5, 6]
         \\    match b { [x, y] => x + y, _ => 0 }
         \\}
-    , 5, .no_trace);
+    , 5);
 }
 
 test "list refcount basic - return last list" {
@@ -66,7 +66,7 @@ test "list refcount basic - return last list" {
         \\    c = [4, 5, 6]
         \\    match c { [x, y, z] => x + y + z, _ => 0 }
         \\}
-    , 15, .no_trace);
+    , 15);
 }
 
 test "list refcount basic - mix of empty and non-empty" {
@@ -77,7 +77,7 @@ test "list refcount basic - mix of empty and non-empty" {
         \\    _z = []
         \\    match y { [a, b] => a + b, _ => 0 }
         \\}
-    , 3, .no_trace);
+    , 3);
 }
 
 test "list refcount basic - return empty from mix" {
@@ -88,7 +88,7 @@ test "list refcount basic - return empty from mix" {
         \\    _z = []
         \\    match x { [] => 42, _ => 0 }
         \\}
-    , 42, .no_trace);
+    , 42);
 }
 
 test "list refcount basic - nested blocks with lists" {
@@ -101,7 +101,7 @@ test "list refcount basic - nested blocks with lists" {
         \\    }
         \\    result
         \\}
-    , 6, .no_trace);
+    , 6);
 }
 
 test "list refcount basic - list created and used in inner block" {
@@ -113,7 +113,7 @@ test "list refcount basic - list created and used in inner block" {
         \\    }
         \\    result
         \\}
-    , 60, .no_trace);
+    , 60);
 }
 
 test "list refcount basic - multiple lists chained" {
@@ -127,5 +127,5 @@ test "list refcount basic - multiple lists chained" {
         \\    y = match d { [v1, v2] => v1 + v2, _ => 0 }
         \\    x + y
         \\}
-    , 6, .no_trace);
+    , 6);
 }
