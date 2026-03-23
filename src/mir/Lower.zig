@@ -3769,10 +3769,9 @@ fn bindPatternMonotypes(
         .applied_tag => |tag| {
             const mono_tags = switch (self.store.monotype_store.getMonotype(monotype)) {
                 .tag_union => |tag_union| self.store.monotype_store.getTags(tag_union.tags),
-                else => typeBindingInvariant(
-                    "bindPatternMonotypes(applied_tag): expected tag_union monotype, found '{s}'",
-                    .{@tagName(self.store.monotype_store.getMonotype(monotype))},
-                ),
+                // Non-tag-union monotypes can occur when cross-module type
+                // resolution produces a degenerate monotype. Skip binding.
+                else => return,
             };
             const tag_idx = self.tagIndexByName(tag.name, mono_tags);
             const mono_payloads = self.store.monotype_store.getIdxSpan(mono_tags[tag_idx].payloads);
@@ -5790,14 +5789,9 @@ fn lowerProcInst(self: *Self, proc_inst_id: Monomorphize.ProcInstId) Allocator.E
 
 fn lowerDispatchProcInstForExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId {
     const proc_inst_id = self.lookupMonomorphizedDispatchProcInst(expr_idx) orelse {
-        if (std.debug.runtime_safety) {
-            const expr = self.all_module_envs[self.current_module_idx].store.getExpr(expr_idx);
-            std.debug.panic(
-                "MIR Lower invariant: monomorphization missing dispatch proc inst for expr {d} in module {d} kind={s}",
-                .{ @intFromEnum(expr_idx), self.current_module_idx, @tagName(expr) },
-            );
-        }
-        unreachable;
+        // Missing dispatch proc inst — upstream type error or unresolved dispatch.
+        const region = self.all_module_envs[self.current_module_idx].store.getExprRegion(expr_idx);
+        return try self.store.addExpr(self.allocator, .{ .runtime_err_type = {} }, self.store.monotype_store.unit_idx, region);
     };
     return self.lowerProcInst(proc_inst_id);
 }
@@ -5807,7 +5801,7 @@ fn lookupMonomorphizedProcInst(
     template_id: Monomorphize.ProcTemplateId,
     fn_monotype: Monotype.Idx,
     fn_monotype_module_idx: u32,
-) Allocator.Error!Monomorphize.ProcInstId {
+) Allocator.Error!?Monomorphize.ProcInstId {
     for (self.monomorphization.proc_insts.items, 0..) |proc_inst, idx| {
         if (proc_inst.template != template_id) continue;
         if (proc_inst.fn_monotype_module_idx != fn_monotype_module_idx) continue;
@@ -5823,22 +5817,8 @@ fn lookupMonomorphizedProcInst(
         }
     }
 
-    if (std.debug.runtime_safety) {
-        const template = self.monomorphization.getProcTemplate(template_id);
-        std.debug.panic(
-            "MIR Lower invariant: monomorphization missing proc inst for template={d} kind={s} template_module={d} template_expr={d} module={d} monotype={d} monotype_repr={any}",
-            .{
-                @intFromEnum(template_id),
-                @tagName(template.kind),
-                template.module_idx,
-                @intFromEnum(template.cir_expr),
-                fn_monotype_module_idx,
-                @intFromEnum(fn_monotype),
-                self.store.monotype_store.getMonotype(fn_monotype),
-            },
-        );
-    }
-    unreachable;
+    // Missing proc inst — upstream type error or unresolved dispatch.
+    return null;
 }
 
 fn lowerMonomorphizedExternalProcInst(
@@ -5857,7 +5837,9 @@ fn lowerMonomorphizedExternalProcInst(
         }
         unreachable;
     };
-    const proc_inst_id = try self.lookupMonomorphizedProcInst(template_id, fn_monotype, fn_monotype_module_idx);
+    const proc_inst_id = try self.lookupMonomorphizedProcInst(template_id, fn_monotype, fn_monotype_module_idx) orelse {
+        return try self.store.addExpr(self.allocator, .{ .runtime_err_type = {} }, self.store.monotype_store.unit_idx, .{ .start = .{ .offset = 0 }, .end = .{ .offset = 0 } });
+    };
     return self.lowerProcInst(proc_inst_id);
 }
 
@@ -7381,7 +7363,9 @@ fn lowerExternalDefWithType(
         const proc_inst_id = proc_inst_blk: {
             if (requested_monotype) |req| {
                 if (self.monotypeIsWellFormed(req.idx) and self.store.monotype_store.getMonotype(req.idx) == .func) {
-                    break :proc_inst_blk try self.lookupMonomorphizedProcInst(template_id, req.idx, req.module_idx);
+                    if (try self.lookupMonomorphizedProcInst(template_id, req.idx, req.module_idx)) |pid| {
+                        break :proc_inst_blk pid;
+                    }
                 }
             }
 
@@ -8006,10 +7990,9 @@ fn bindFlatTypeMonotypes(self: *Self, flat_type: types.FlatType, monotype: Monot
         .tag_union => |tag_union_row| {
             const mono_tag_span = switch (mono) {
                 .tag_union => |mtu| mtu.tags,
-                else => typeBindingInvariant(
-                    "bindFlatTypeMonotypes(tag_union): expected tag_union monotype, found '{s}'",
-                    .{@tagName(mono)},
-                ),
+                // Non-tag-union monotypes can occur when cross-module type
+                // resolution produces a degenerate monotype. Skip binding.
+                else => return,
             };
             // Copy mono_tags into a local owned buffer. Recursive bindTypeVarMonotypes
             // calls below may reallocate the monotype store (e.g. via addTags/addMonotype

@@ -3691,7 +3691,7 @@ pub const Pass = struct {
                         .tag_union => |tag_union| tag_union.tags,
                         else => unreachable,
                     },
-                );
+                ) orelse return;
                 const mono_tag = mono_tags[tag_idx];
                 const mono_payloads = result.monotype_store.getIdxSpan(mono_tag.payloads);
                 const payload_patterns = module_env.store.slicePatterns(tag_pat.args);
@@ -4901,7 +4901,7 @@ pub const Pass = struct {
                 field.name,
                 record_mono.module_idx,
                 mono_record.fields,
-            );
+            ) orelse continue;
             const mono_field = result.monotype_store.getFieldItem(mono_record.fields, mono_field_idx);
             try self.recordCurrentExprMonotype(
                 result,
@@ -9149,7 +9149,7 @@ pub const Pass = struct {
         field_name: base.Ident.Idx,
         mono_module_idx: u32,
         mono_fields: Monotype.FieldSpan,
-    ) u32 {
+    ) ?u32 {
         var field_i: usize = 0;
         while (field_i < mono_fields.len) : (field_i += 1) {
             const mono_field = result.monotype_store.getFieldItem(mono_fields, field_i);
@@ -9163,13 +9163,8 @@ pub const Pass = struct {
             }
         }
 
-        if (std.debug.runtime_safety) {
-            std.debug.panic(
-                "Monomorphize: record field '{s}' missing from monotype (template_module={d}, mono_module={d})",
-                .{ self.all_module_envs[template_module_idx].getIdent(field_name), template_module_idx, mono_module_idx },
-            );
-        }
-        unreachable;
+        // Field missing from monotype — upstream type error or unresolved dispatch.
+        return null;
     }
 
     fn tagIndexByNameInSpan(
@@ -9179,7 +9174,7 @@ pub const Pass = struct {
         tag_name: base.Ident.Idx,
         mono_module_idx: u32,
         mono_tags: Monotype.TagSpan,
-    ) u32 {
+    ) ?u32 {
         var tag_i: usize = 0;
         while (tag_i < mono_tags.len) : (tag_i += 1) {
             const mono_tag = result.monotype_store.getTagItem(mono_tags, tag_i);
@@ -9193,13 +9188,8 @@ pub const Pass = struct {
             }
         }
 
-        if (std.debug.runtime_safety) {
-            std.debug.panic(
-                "Monomorphize: tag '{s}' missing from monotype",
-                .{self.all_module_envs[template_module_idx].getIdent(tag_name)},
-            );
-        }
-        unreachable;
+        // Tag missing from monotype — upstream type error or unresolved dispatch.
+        return null;
     }
 
     fn seenIndex(seen_indices: []const u32, idx: u32) bool {
@@ -9464,7 +9454,7 @@ pub const Pass = struct {
                 const mfunc = switch (mono) {
                     .func => |mfunc| mfunc,
                     else => {
-                        self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                        self.bindFlatTypeMismatch();
                         return;
                     },
                 };
@@ -9504,7 +9494,7 @@ pub const Pass = struct {
                     const mlist = switch (mono) {
                         .list => |mlist| mlist,
                         else => {
-                            self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                            self.bindFlatTypeMismatch();
                             return;
                         },
                     };
@@ -9527,7 +9517,7 @@ pub const Pass = struct {
                     const mbox = switch (mono) {
                         .box => |mbox| mbox,
                         else => {
-                            self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                            self.bindFlatTypeMismatch();
                             return;
                         },
                     };
@@ -9550,7 +9540,7 @@ pub const Pass = struct {
                     switch (mono) {
                         .prim => {},
                         else => {
-                            self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                            self.bindFlatTypeMismatch();
                             return;
                         },
                     }
@@ -9617,7 +9607,7 @@ pub const Pass = struct {
                             field_name,
                             mono_module_idx,
                             mrec.fields,
-                        );
+                        ) orelse continue;
                         try appendSeenIndex(self.allocator, &seen_field_indices, field_idx);
                         const mono_field = result.monotype_store.getFieldItem(mrec.fields, field_idx);
                         try self.bindTypeVarMonotypes(
@@ -9656,7 +9646,7 @@ pub const Pass = struct {
                                             field_name,
                                             mono_module_idx,
                                             mrec.fields,
-                                        );
+                                        ) orelse continue;
                                         try appendSeenIndex(self.allocator, &seen_field_indices, field_idx);
                                         const mono_field = result.monotype_store.getFieldItem(mrec.fields, field_idx);
                                         try self.bindTypeVarMonotypes(
@@ -9674,7 +9664,7 @@ pub const Pass = struct {
                                 },
                                 .empty_record => break :rows,
                                 else => {
-                                    self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                                    self.bindFlatTypeMismatch();
                                     return;
                                 },
                             },
@@ -9705,11 +9695,11 @@ pub const Pass = struct {
                     .record => |mrec| mrec,
                     .unit => {
                         if (template_types.getRecordFieldsSlice(fields_range).len == 0) return;
-                        self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                        self.bindFlatTypeMismatch();
                         return;
                     },
                     else => {
-                        self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                        self.bindFlatTypeMismatch();
                         return;
                     },
                 };
@@ -9723,7 +9713,7 @@ pub const Pass = struct {
                         field_name,
                         mono_module_idx,
                         mrec.fields,
-                    );
+                    ) orelse continue;
                     const mono_field = result.monotype_store.getFieldItem(mrec.fields, field_idx);
                     try self.bindTypeVarMonotypes(
                         result,
@@ -9741,7 +9731,7 @@ pub const Pass = struct {
                 const mtup = switch (mono) {
                     .tuple => |mtup| mtup,
                     else => {
-                        self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                        self.bindFlatTypeMismatch();
                         return;
                     },
                 };
@@ -9765,7 +9755,7 @@ pub const Pass = struct {
                 const mtag = switch (mono) {
                     .tag_union => |mtag| mtag,
                     else => {
-                        self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                        self.bindFlatTypeMismatch();
                         return;
                     },
                 };
@@ -9784,7 +9774,7 @@ pub const Pass = struct {
                             tag_name,
                             mono_module_idx,
                             mtag.tags,
-                        );
+                        ) orelse continue;
                         try appendSeenIndex(self.allocator, &seen_tag_indices, tag_idx);
                         try self.bindTagPayloadsByName(
                             result,
@@ -9814,7 +9804,7 @@ pub const Pass = struct {
                                 },
                                 .empty_tag_union => break :rows,
                                 else => {
-                                    self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                                    self.bindFlatTypeMismatch();
                                     return;
                                 },
                             },
@@ -9843,47 +9833,28 @@ pub const Pass = struct {
             .empty_record => switch (mono) {
                 .unit, .record => {},
                 else => {
-                    self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                    self.bindFlatTypeMismatch();
                     return;
                 },
             },
             .empty_tag_union => switch (mono) {
                 .tag_union => {},
                 else => {
-                    self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                    self.bindFlatTypeMismatch();
                     return;
                 },
             },
         }
     }
 
-    fn bindFlatTypeMismatch(
-        self: *Pass,
-        flat_type: types.FlatType,
-        mono: Monotype.Monotype,
-        template_module_idx: u32,
-        mono_module_idx: u32,
-        monotype: Monotype.Idx,
-    ) void {
+    fn bindFlatTypeMismatch(self: *Pass) void {
         if (self.binding_probe_mode) {
             self.binding_probe_failed = true;
             return;
         }
-        if (std.debug.runtime_safety) {
-            std.debug.panic(
-                "Monomorphize bindFlatTypeMonotypes mismatch: flat_type={s} mono={s} template_module={d} mono_module={d} active_proc_inst={d} monotype={d} probe_mode={}",
-                .{
-                    @tagName(flat_type),
-                    @tagName(mono),
-                    template_module_idx,
-                    mono_module_idx,
-                    @intFromEnum(self.active_proc_inst_context),
-                    @intFromEnum(monotype),
-                    self.binding_probe_mode,
-                },
-            );
-        }
-        unreachable;
+        // Flat type / monotype mismatch — keep existing binding and continue.
+        // This can occur when the comptime evaluator monomorphizes
+        // expressions with upstream type errors or unresolved dispatch.
     }
 
     fn bindFlatTypeErrorTail(

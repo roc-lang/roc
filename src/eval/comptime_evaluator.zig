@@ -618,8 +618,10 @@ pub const ComptimeEvaluator = struct {
         const eval_result = interp.eval(lower_result.final_expr_id) catch |err| {
             switch (err) {
                 error.Crash => {
-                    // Dupe the message: it's owned by the interpreter and freed by defer interp.deinit()
-                    const msg = self.allocator.dupe(u8, interp.getCrashMessage() orelse "crash during compile-time evaluation") catch "crash during compile-time evaluation";
+                    // Dupe via arena: the message is owned by the interpreter
+                    // and freed by defer interp.deinit(). Arena allocation is
+                    // freed wholesale when the evaluator is torn down.
+                    const msg = self.roc_arena.allocator().dupe(u8, interp.getCrashMessage() orelse "crash during compile-time evaluation") catch "crash during compile-time evaluation";
                     return EvalResult{
                         .crash = .{
                             .message = msg,
