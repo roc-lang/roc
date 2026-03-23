@@ -5816,4 +5816,1016 @@ pub const tests = [_]TestCase{
     .{ .name = "Int + Dec: minus - type mismatch", .source = "1.I64 - 2.0.Dec", .expected = .{ .type_mismatch_crash = {} } },
     .{ .name = "Int + Dec: times - type mismatch", .source = "1.I64 * 2.0.Dec", .expected = .{ .type_mismatch_crash = {} } },
     .{ .name = "Int + Dec: div_by - type mismatch", .source = "1.I64 / 2.0.Dec", .expected = .{ .type_mismatch_crash = {} } },
+
+    // --- from list_refcount_simple.zig ---
+    .{ .name = "list_refcount_simple: empty list pattern match",
+        .source = \\match [] { [] => 42, _ => 0 }
+        ,
+        .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_simple: single element list pattern match",
+        .source = \\match [1] { [x] => x, _ => 0 }
+        ,
+        .expected = .{ .dec_val = 1 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_simple: multi-element list pattern match",
+        .source = \\match [1, 2, 3] { [a, b, c] => a + b + c, _ => 0 }
+        ,
+        .expected = .{ .dec_val = 6 * RocDec.one_point_zero_i128 },
+    },
+
+    // --- from list_refcount_alias.zig ---
+    .{ .name = "list_refcount_alias: variable aliasing",
+        .source =
+            \\{
+            \\    x = [1, 2, 3]
+            \\    y = x
+            \\    match y { [a, b, c] => a + b + c, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 6 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_alias: return original after aliasing",
+        .source =
+            \\{
+            \\    x = [1, 2, 3]
+            \\    _y = x
+            \\    match x { [a, b, c] => a + b + c, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 6 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_alias: triple aliasing",
+        .source =
+            \\{
+            \\    x = [1, 2]
+            \\    y = x
+            \\    z = y
+            \\    match z { [a, b] => a + b, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_alias: mutable reassignment decrefs old list",
+        .source =
+            \\{
+            \\    var $x = [1, 2]
+            \\    $x = [3, 4]
+            \\    match $x { [a, b] => a + b, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 7 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_alias: multiple independent lists",
+        .source =
+            \\{
+            \\    x = [1, 2]
+            \\    _y = [3, 4]
+            \\    match x { [a, b] => a + b, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_alias: empty list aliasing",
+        .source =
+            \\{
+            \\    x = []
+            \\    y = x
+            \\    match y { [] => 42, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_alias: alias then shadow",
+        .source =
+            \\{
+            \\    var $x = [1, 2]
+            \\    y = $x
+            \\    $x = [3, 4]
+            \\    match y { [a, b] => a + b, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_alias: both references used",
+        .source =
+            \\{
+            \\    x = [1, 2]
+            \\    y = x
+            \\    a = match x { [first, ..] => first, _ => 0 }
+            \\    b = match y { [first, ..] => first, _ => 0 }
+            \\    a + b
+            \\}
+        ,
+        .expected = .{ .dec_val = 2 * RocDec.one_point_zero_i128 },
+    },
+
+    // --- from list_refcount_basic.zig ---
+    .{ .name = "list_refcount_basic: various small list sizes: single element",
+        .source = \\match [5] { [x] => x, _ => 0 }
+        ,
+        .expected = .{ .dec_val = 5 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_basic: two elements",
+        .source = \\match [10, 20] { [a, b] => a + b, _ => 0 }
+        ,
+        .expected = .{ .dec_val = 30 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_basic: five elements",
+        .source = \\match [1, 2, 3, 4, 5] { [a, b, c, d, e] => a + b + c + d + e, _ => 0 }
+        ,
+        .expected = .{ .dec_val = 15 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_basic: larger list with pattern",
+        .source = \\match [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] { [first, second, ..] => first + second, _ => 0 }
+        ,
+        .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_basic: sequential independent lists",
+        .source =
+            \\{
+            \\    a = [1]
+            \\    _b = [2, 3]
+            \\    _c = [4, 5, 6]
+            \\    match a { [x] => x, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 1 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_basic: return middle list",
+        .source =
+            \\{
+            \\    _a = [1]
+            \\    b = [2, 3]
+            \\    _c = [4, 5, 6]
+            \\    match b { [x, y] => x + y, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 5 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_basic: return last list",
+        .source =
+            \\{
+            \\    _a = [1]
+            \\    _b = [2, 3]
+            \\    c = [4, 5, 6]
+            \\    match c { [x, y, z] => x + y + z, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 15 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_basic: mix of empty and non-empty",
+        .source =
+            \\{
+            \\    _x = []
+            \\    y = [1, 2]
+            \\    _z = []
+            \\    match y { [a, b] => a + b, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_basic: return empty from mix",
+        .source =
+            \\{
+            \\    x = []
+            \\    _y = [1, 2]
+            \\    _z = []
+            \\    match x { [] => 42, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_basic: nested blocks with lists",
+        .source =
+            \\{
+            \\    outer = [1, 2, 3]
+            \\    result = {
+            \\        inner = outer
+            \\        match inner { [a, b, c] => a + b + c, _ => 0 }
+            \\    }
+            \\    result
+            \\}
+        ,
+        .expected = .{ .dec_val = 6 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_basic: list created and used in inner block",
+        .source =
+            \\{
+            \\    result = {
+            \\        lst = [10, 20, 30]
+            \\        match lst { [a, b, c] => a + b + c, _ => 0 }
+            \\    }
+            \\    result
+            \\}
+        ,
+        .expected = .{ .dec_val = 60 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_basic: multiple lists chained",
+        .source =
+            \\{
+            \\    a = [1]
+            \\    b = a
+            \\    c = [2, 3]
+            \\    d = c
+            \\    x = match b { [v] => v, _ => 0 }
+            \\    y = match d { [v1, v2] => v1 + v2, _ => 0 }
+            \\    x + y
+            \\}
+        ,
+        .expected = .{ .dec_val = 6 * RocDec.one_point_zero_i128 },
+    },
+
+    // --- from list_refcount_strings.zig ---
+    .{ .name = "list_refcount_strings: single string in list",
+        .source =
+            \\{
+            \\    x = "hi"
+            \\    lst = [x]
+            \\    match lst { [s] => s, _ => "" }
+            \\}
+        ,
+        .expected = .{ .str_val = "hi" },
+    },
+    .{ .name = "list_refcount_strings: multiple strings in list",
+        .source =
+            \\{
+            \\    x = "a"
+            \\    y = "b"
+            \\    lst = [x, y]
+            \\    match lst { [first, ..] => first, _ => "" }
+            \\}
+        ,
+        .expected = .{ .str_val = "a" },
+    },
+    .{ .name = "list_refcount_strings: return second string",
+        .source =
+            \\{
+            \\    x = "a"
+            \\    y = "b"
+            \\    lst = [x, y]
+            \\    match lst { [_, second] => second, _ => "" }
+            \\}
+        ,
+        .expected = .{ .str_val = "b" },
+    },
+    .{ .name = "list_refcount_strings: same string multiple times",
+        .source =
+            \\{
+            \\    x = "hi"
+            \\    lst = [x, x, x]
+            \\    match lst { [first, ..] => first, _ => "" }
+            \\}
+        ,
+        .expected = .{ .str_val = "hi" },
+    },
+    .{ .name = "list_refcount_strings: empty string in list",
+        .source =
+            \\{
+            \\    x = ""
+            \\    lst = [x]
+            \\    match lst { [s] => s, _ => "fallback" }
+            \\}
+        ,
+        .expected = .{ .str_val = "" },
+    },
+    .{ .name = "list_refcount_strings: small vs large strings in list",
+        .source =
+            \\{
+            \\    small = "hi"
+            \\    large = "This is a very long string that will be heap allocated for sure"
+            \\    lst = [small, large]
+            \\    match lst { [first, ..] => first, _ => "" }
+            \\}
+        ,
+        .expected = .{ .str_val = "hi" },
+    },
+    .{ .name = "list_refcount_strings: return large string",
+        .source =
+            \\{
+            \\    small = "hi"
+            \\    large = "This is a very long string that will be heap allocated for sure"
+            \\    lst = [small, large]
+            \\    match lst { [_, second] => second, _ => "" }
+            \\}
+        ,
+        .expected = .{ .str_val = "This is a very long string that will be heap allocated for sure" },
+    },
+    .{ .name = "list_refcount_strings: list of string literals",
+        .source = \\match ["a", "b", "c"] { [first, ..] => first, _ => "" }
+        ,
+        .expected = .{ .str_val = "a" },
+    },
+    .{ .name = "list_refcount_strings: list of string literals return second",
+        .source = \\match ["a", "b", "c"] { [_, second, ..] => second, _ => "" }
+        ,
+        .expected = .{ .str_val = "b" },
+    },
+    .{ .name = "list_refcount_strings: empty list then string list",
+        .source =
+            \\{
+            \\    _empty = []
+            \\    strings = ["x", "y"]
+            \\    match strings { [first, ..] => first, _ => "" }
+            \\}
+        ,
+        .expected = .{ .str_val = "x" },
+    },
+    .{ .name = "list_refcount_strings: string list aliased",
+        .source =
+            \\{
+            \\    lst1 = ["a", "b"]
+            \\    lst2 = lst1
+            \\    match lst2 { [first, ..] => first, _ => "" }
+            \\}
+        ,
+        .expected = .{ .str_val = "a" },
+    },
+    .{ .name = "list_refcount_strings: string list aliased return from original",
+        .source =
+            \\{
+            \\    lst1 = ["a", "b"]
+            \\    _lst2 = lst1
+            \\    match lst1 { [first, ..] => first, _ => "" }
+            \\}
+        ,
+        .expected = .{ .str_val = "a" },
+    },
+    .{ .name = "list_refcount_strings: string list reassigned",
+        .source =
+            \\{
+            \\    var $lst = ["old1", "old2"]
+            \\    $lst = ["new1", "new2"]
+            \\    match $lst { [first, ..] => first, _ => "" }
+            \\}
+        ,
+        .expected = .{ .str_val = "new1" },
+    },
+    .{ .name = "list_refcount_strings: three string lists",
+        .source =
+            \\{
+            \\    _a = ["a1", "a2"]
+            \\    b = ["b1", "b2"]
+            \\    _c = ["c1", "c2"]
+            \\    match b { [first, ..] => first, _ => "" }
+            \\}
+        ,
+        .expected = .{ .str_val = "b1" },
+    },
+    .{ .name = "list_refcount_strings: extract string from nested match",
+        .source =
+            \\{
+            \\    lst = ["x", "y", "z"]
+            \\    match lst {
+            \\        [_first, .. as rest] => match rest {
+            \\            [second, ..] => second,
+            \\            _ => ""
+            \\        },
+            \\        _ => ""
+            \\    }
+            \\}
+        ,
+        .expected = .{ .str_val = "y" },
+    },
+
+    // --- from list_refcount_containers.zig ---
+    .{ .name = "list_refcount_containers: single list in tuple",
+        .source =
+            \\{
+            \\    x = [1, 2]
+            \\    match x { [a, b] => a + b, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_containers: multiple lists in tuple",
+        .source =
+            \\{
+            \\    x = [1, 2]
+            \\    y = [3, 4]
+            \\    t = (x, y)
+            \\    match t { (first, _) => match first { [a, b] => a + b, _ => 0 } }
+            \\}
+        ,
+        .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_containers: same list twice in tuple",
+        .source =
+            \\{
+            \\    x = [1, 2]
+            \\    t = (x, x)
+            \\    match t { (first, _) => match first { [a, b] => a + b, _ => 0 } }
+            \\}
+        ,
+        .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_containers: tuple with string list",
+        .source =
+            \\{
+            \\    x = ["a", "b"]
+            \\    t = (x, 42)
+            \\    match t { (lst, _) => match lst { [first, ..] => first, _ => "" } }
+            \\}
+        ,
+        .expected = .{ .str_val = "a" },
+    },
+    .{ .name = "list_refcount_containers: single field record with list",
+        .source =
+            \\{
+            \\    lst = [1, 2, 3]
+            \\    r = {items: lst}
+            \\    match r.items { [a, b, c] => a + b + c, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 6 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_containers: multiple fields with lists",
+        .source =
+            \\{
+            \\    x = [1, 2]
+            \\    y = [3, 4]
+            \\    r = {first: x, second: y}
+            \\    match r.first { [a, b] => a + b, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_containers: same list in multiple fields",
+        .source =
+            \\{
+            \\    lst = [10, 20]
+            \\    r = {a: lst, b: lst}
+            \\    match r.a { [x, y] => x + y, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 30 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_containers: nested record with list",
+        .source =
+            \\{
+            \\    lst = [5, 6]
+            \\    inner = {data: lst}
+            \\    outer = {nested: inner}
+            \\    match outer.nested.data { [a, b] => a + b, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 11 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_containers: record with string list",
+        .source =
+            \\{
+            \\    lst = ["hello", "world"]
+            \\    r = {items: lst}
+            \\    match r.items { [first, ..] => first, _ => "" }
+            \\}
+        ,
+        .expected = .{ .str_val = "hello" },
+    },
+    .{ .name = "list_refcount_containers: record with mixed types",
+        .source =
+            \\{
+            \\    lst = [1, 2, 3]
+            \\    r = {count: 42, items: lst}
+            \\    r.count
+            \\}
+        ,
+        .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_containers: tag with list payload",
+        .source = \\match Some([1, 2]) { Some(lst) => match lst { [a, b] => a + b, _ => 0 }, None => 0 }
+        ,
+        .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_containers: tag with multiple list payloads",
+        .source =
+            \\{
+            \\    x = [1, 2]
+            \\    y = [3, 4]
+            \\    tag = Pair(x, y)
+            \\    match tag { Pair(first, _) => match first { [a, b] => a + b, _ => 0 }, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_containers: tag with string list payload",
+        .source = \\match Some(["tag", "value"]) { Some(lst) => match lst { [first, ..] => first, _ => "" }, None => "" }
+        ,
+        .expected = .{ .str_val = "tag" },
+    },
+    .{ .name = "list_refcount_containers: Ok/Err with lists",
+        .source = \\match Ok([1, 2, 3]) { Ok(lst) => match lst { [a, b, c] => a + b + c, _ => 0 }, Err(_) => 0 }
+        ,
+        .expected = .{ .dec_val = 6 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_containers: tuple of records with lists",
+        .source =
+            \\{
+            \\    lst1 = [1, 2]
+            \\    lst2 = [3, 4]
+            \\    r1 = {items: lst1}
+            \\    r2 = {items: lst2}
+            \\    t = (r1, r2)
+            \\    match t { (first, _) => match first.items { [a, b] => a + b, _ => 0 } }
+            \\}
+        ,
+        .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_containers: record of tuples with lists",
+        .source =
+            \\{
+            \\    lst = [5, 6]
+            \\    t = (lst, 99)
+            \\    r = {data: t}
+            \\    match r.data { (items, _) => match items { [a, b] => a + b, _ => 0 } }
+            \\}
+        ,
+        .expected = .{ .dec_val = 11 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_containers: tag with record containing list",
+        .source =
+            \\{
+            \\    lst = [7, 8]
+            \\    r = {items: lst}
+            \\    tag = Some(r)
+            \\    match tag { Some(rec) => match rec.items { [a, b] => a + b, _ => 0 }, None => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 15 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_containers: empty list in record",
+        .source =
+            \\{
+            \\    empty = []
+            \\    r = {lst: empty}
+            \\    match r.lst { [] => 42, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 },
+    },
+
+    // --- from list_refcount_conditional.zig ---
+    .{ .name = "list_refcount_conditional: simple if-else with lists",
+        .source =
+            \\{
+            \\    x = [1, 2]
+            \\    result = if True {x} else {[3, 4]}
+            \\    match result { [a, b] => a + b, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_conditional: return else branch",
+        .source =
+            \\{
+            \\    x = [1, 2]
+            \\    result = if False {x} else {[3, 4]}
+            \\    match result { [a, b] => a + b, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 7 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_conditional: same list in both branches",
+        .source =
+            \\{
+            \\    x = [1, 2]
+            \\    result = if True {x} else {x}
+            \\    match result { [a, b] => a + b, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_conditional: unused branch decreffed",
+        .source =
+            \\{
+            \\    x = [1, 2]
+            \\    y = [3, 4]
+            \\    result = if True {x} else {y}
+            \\    match result { [a, b] => a + b, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_conditional: nested conditionals",
+        .source =
+            \\{
+            \\    x = [1]
+            \\    result = if True {if False {x} else {[2]}} else {[3]}
+            \\    match result { [a] => a, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 2 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_conditional: string lists in conditionals",
+        .source =
+            \\{
+            \\    x = ["a", "b"]
+            \\    result = if True {x} else {["c"]}
+            \\    match result { [first, ..] => first, _ => "" }
+            \\}
+        ,
+        .expected = .{ .str_val = "a" },
+    },
+    .{ .name = "list_refcount_conditional: inline list literals",
+        .source =
+            \\{
+            \\    result = if True {[10, 20]} else {[30, 40]}
+            \\    match result { [a, b] => a + b, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 30 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_conditional: empty list in branch",
+        .source =
+            \\{
+            \\    result = if True {[]} else {[1, 2]}
+            \\    match result { [] => 42, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 },
+    },
+
+    // --- from list_refcount_function.zig ---
+    .{ .name = "list_refcount_function: pass list to identity function",
+        .source =
+            \\{
+            \\    id = |lst| lst
+            \\    x = [1, 2]
+            \\    result = id(x)
+            \\    match result { [a, b] => a + b, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_function: list returned from function",
+        .source =
+            \\{
+            \\    f = |_| [1, 2]
+            \\    result = f(0)
+            \\    match result { [a, b] => a + b, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_function: closure captures list",
+        .source =
+            \\{
+            \\    x = [1, 2]
+            \\    f = |_| x
+            \\    result = f(0)
+            \\    match result { [a, b] => a + b, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_function: function called multiple times",
+        .source =
+            \\{
+            \\    f = |lst| lst
+            \\    x = [1, 2]
+            \\    a = f(x)
+            \\    _b = f(x)
+            \\    match a { [first, ..] => first, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 1 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_function: string list through function",
+        .source =
+            \\{
+            \\    f = |lst| lst
+            \\    x = ["a", "b"]
+            \\    result = f(x)
+            \\    match result { [first, ..] => first, _ => "" }
+            \\}
+        ,
+        .expected = .{ .str_val = "a" },
+    },
+    .{ .name = "list_refcount_function: function extracts from list",
+        .source =
+            \\{
+            \\    x = [10, 20, 30]
+            \\    match x { [first, ..] => first, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 10 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_function: closure captures string list",
+        .source =
+            \\{
+            \\    x = ["captured", "list"]
+            \\    f = |_| x
+            \\    result = f(0)
+            \\    match result { [first, ..] => first, _ => "" }
+            \\}
+        ,
+        .expected = .{ .str_val = "captured" },
+    },
+    .{ .name = "list_refcount_function: nested function calls with lists",
+        .source =
+            \\{
+            \\    x = [5, 10]
+            \\    match x { [first, ..] => first + first, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 10 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_function: same list twice in tuple returned from function",
+        .source =
+            \\{
+            \\    make_pair = |lst| (lst, lst)
+            \\    x = [1, 2]
+            \\    t = make_pair(x)
+            \\    match t { (first, _) => match first { [a, b] => a + b, _ => 0 } }
+            \\}
+        ,
+        .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_function: same list twice passed to function",
+        .source =
+            \\{
+            \\    add_lens = |a, b|
+            \\        match a {
+            \\            [first, ..] => match b { [second, ..] => first + second, _ => 0 },
+            \\            _ => 0
+            \\        }
+            \\    x = [1, 2]
+            \\    add_lens(x, x)
+            \\}
+        ,
+        .expected = .{ .dec_val = 2 * RocDec.one_point_zero_i128 },
+    },
+
+    // --- from list_refcount_pattern.zig ---
+    .{ .name = "list_refcount_pattern: destructure list from record",
+        .source =
+            \\{
+            \\    r = {lst: [1, 2]}
+            \\    match r { {lst} => match lst { [a, b] => a + b, _ => 0 } }
+            \\}
+        ,
+        .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_pattern: wildcard discards list",
+        .source =
+            \\{
+            \\    pair = {a: [1, 2], b: [3, 4]}
+            \\    match pair { {a, b: _} => match a { [x, y] => x + y, _ => 0 } }
+            \\}
+        ,
+        .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_pattern: list rest pattern",
+        .source = \\match [1, 2, 3, 4] { [first, .. as rest] => match rest { [second, ..] => first + second, _ => 0 }, _ => 0 }
+        ,
+        .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_pattern: string list rest pattern",
+        .source = \\match ["a", "b", "c"] { [_first, .. as rest] => match rest { [second, ..] => second, _ => "" }, _ => "" }
+        ,
+        .expected = .{ .str_val = "b" },
+    },
+    .{ .name = "list_refcount_pattern: nested list patterns",
+        .source =
+            \\{
+            \\    data = {values: [10, 20, 30]}
+            \\    match data { {values} => match values { [a, b, c] => a + b + c, _ => 0 } }
+            \\}
+        ,
+        .expected = .{ .dec_val = 60 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_pattern: tag with list extracted",
+        .source = \\match Some([5, 10]) { Some(lst) => match lst { [a, b] => a + b, _ => 0 }, None => 0 }
+        ,
+        .expected = .{ .dec_val = 15 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_pattern: empty list pattern",
+        .source = \\match {lst: []} { {lst} => match lst { [] => 42, _ => 0 } }
+        ,
+        .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 },
+    },
+
+    // --- from list_refcount_nested.zig ---
+    .{ .name = "list_refcount_nested: simple nested list",
+        .source =
+            \\{
+            \\    inner = [1, 2]
+            \\    outer = [inner]
+            \\    match outer { [lst] => match lst { [a, b] => a + b, _ => 0 }, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_nested: multiple inner lists",
+        .source =
+            \\{
+            \\    a = [1, 2]
+            \\    b = [3, 4]
+            \\    outer = [a, b]
+            \\    match outer { [first, ..] => match first { [x, y] => x + y, _ => 0 }, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_nested: same inner list multiple times",
+        .source =
+            \\{
+            \\    inner = [1, 2]
+            \\    outer = [inner, inner, inner]
+            \\    match outer { [first, ..] => match first { [a, b] => a + b, _ => 0 }, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_nested: two levels inline",
+        .source = \\match [[1, 2], [3, 4]] { [first, ..] => match first { [a, b] => a + b, _ => 0 }, _ => 0 }
+        ,
+        .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_nested: three levels",
+        .source =
+            \\{
+            \\    a = [1]
+            \\    b = [a]
+            \\    c = [b]
+            \\    match c { [lst] => match lst { [lst2] => match lst2 { [x] => x, _ => 0 }, _ => 0 }, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 1 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_nested: empty inner list",
+        .source =
+            \\{
+            \\    inner = []
+            \\    outer = [inner]
+            \\    match outer { [lst] => match lst { [] => 42, _ => 0 }, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_nested: list of string lists",
+        .source =
+            \\{
+            \\    a = ["x", "y"]
+            \\    b = ["z"]
+            \\    outer = [a, b]
+            \\    match outer { [first, ..] => match first { [s, ..] => s, _ => "" }, _ => "" }
+            \\}
+        ,
+        .expected = .{ .str_val = "x" },
+    },
+    .{ .name = "list_refcount_nested: inline string lists",
+        .source = \\match [["a", "b"], ["c"]] { [first, ..] => match first { [s, ..] => s, _ => "" }, _ => "" }
+        ,
+        .expected = .{ .str_val = "a" },
+    },
+    .{ .name = "list_refcount_nested: nested then aliased",
+        .source =
+            \\{
+            \\    inner = [1, 2]
+            \\    outer = [inner]
+            \\    outer2 = outer
+            \\    match outer2 { [lst] => match lst { [a, b] => a + b, _ => 0 }, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_nested: access second inner list",
+        .source =
+            \\{
+            \\    a = [1, 2]
+            \\    b = [3, 4]
+            \\    outer = [a, b]
+            \\    match outer { [_, second] => match second { [x, y] => x + y, _ => 0 }, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 7 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_nested: deeply nested inline",
+        .source = \\match [[[1]]] { [lst] => match lst { [lst2] => match lst2 { [x] => x, _ => 0 }, _ => 0 }, _ => 0 }
+        ,
+        .expected = .{ .dec_val = 1 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_nested: mixed nested and flat",
+        .source =
+            \\match [[1, 2], [3]] { [first, second] => {
+            \\    a = match first { [x, ..] => x, _ => 0 }
+            \\    b = match second { [y] => y, _ => 0 }
+            \\    a + b
+            \\}, _ => 0 }
+        ,
+        .expected = .{ .dec_val = 4 * RocDec.one_point_zero_i128 },
+    },
+
+    // --- from list_refcount_complex.zig ---
+    .{ .name = "list_refcount_complex: list of records with strings",
+        .source =
+            \\{
+            \\    r1 = {s: "a"}
+            \\    r2 = {s: "b"}
+            \\    lst = [r1, r2]
+            \\    match lst { [first, ..] => first.s, _ => "" }
+            \\}
+        ,
+        .expected = .{ .str_val = "a" },
+    },
+    .{ .name = "list_refcount_complex: list of records with integers",
+        .source =
+            \\{
+            \\    r1 = {val: 10}
+            \\    r2 = {val: 20}
+            \\    lst = [r1, r2]
+            \\    match lst { [first, ..] => first.val, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 10 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_complex: same record multiple times in list",
+        .source =
+            \\{
+            \\    r = {val: 42}
+            \\    lst = [r, r, r]
+            \\    match lst { [first, ..] => first.val, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_complex: list of records with nested data",
+        .source =
+            \\{
+            \\    r1 = {inner: {val: 10}}
+            \\    r2 = {inner: {val: 20}}
+            \\    lst = [r1, r2]
+            \\    match lst { [first, ..] => first.inner.val, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 10 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_complex: list of tuples with integers",
+        .source =
+            \\{
+            \\    t1 = (1, 2)
+            \\    t2 = (3, 4)
+            \\    lst = [t1, t2]
+            \\    match lst { [first, ..] => match first { (a, b) => a + b }, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_complex: list of tuples with strings",
+        .source =
+            \\{
+            \\    t1 = ("a", "b")
+            \\    t2 = ("c", "d")
+            \\    lst = [t1, t2]
+            \\    match lst { [first, ..] => match first { (s, _) => s }, _ => "" }
+            \\}
+        ,
+        .expected = .{ .str_val = "a" },
+    },
+    .{ .name = "list_refcount_complex: list of tags with integers",
+        .source = \\match Some([10, 20]) { Some(lst) => match lst { [x, ..] => x, _ => 0 }, None => 0 }
+        ,
+        .expected = .{ .dec_val = 10 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_complex: list of tags with strings",
+        .source = \\match Some(["hello", "world"]) { Some(lst) => match lst { [s, ..] => s, _ => "" }, None => "" }
+        ,
+        .expected = .{ .str_val = "hello" },
+    },
+    .{ .name = "list_refcount_complex: list of records of lists of strings",
+        .source =
+            \\{
+            \\    r1 = {items: ["a", "b"]}
+            \\    r2 = {items: ["c", "d"]}
+            \\    lst = [r1, r2]
+            \\    match lst { [first, ..] => match first.items { [s, ..] => s, _ => "" }, _ => "" }
+            \\}
+        ,
+        .expected = .{ .str_val = "a" },
+    },
+    .{ .name = "list_refcount_complex: inline complex structure",
+        .source =
+            \\{
+            \\    data = [{val: 1}, {val: 2}]
+            \\    match data { [first, ..] => first.val, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 1 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_complex: deeply nested mixed structures",
+        .source =
+            \\{
+            \\    inner = {x: 42}
+            \\    outer = {nested: inner}
+            \\    lst = [outer]
+            \\    match lst { [first, ..] => first.nested.x, _ => 0 }
+            \\}
+        ,
+        .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "list_refcount_complex: list of Ok/Err tags",
+        .source = \\match Ok([1, 2]) { Ok(lst) => match lst { [x, ..] => x, _ => 0 }, Err(_) => 0 }
+        ,
+        .expected = .{ .dec_val = 1 * RocDec.one_point_zero_i128 },
+    },
 };

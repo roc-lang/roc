@@ -34,19 +34,6 @@ automatically gets cross-backend coverage.
 | Custom infra | 2 | `ModuleEnv serialization`, `crash message storage` |
 | Manually skipped | 3 | `TODO RE-ENABLE` tests, `early return: ? in closure passed to List.fold` |
 
-**Other files** — not yet started:
-
-| File | Tests | Notes |
-|------|-------|-------|
-| `list_refcount_basic.zig` | varies | `runExpectI64` — fully portable |
-| `list_refcount_simple.zig` | varies | `runExpectI64` — fully portable |
-| `list_refcount_nested.zig` | varies | `runExpectI64` — fully portable |
-| `list_refcount_pattern.zig` | varies | `runExpectI64` — fully portable |
-| `list_refcount_alias.zig` | varies | `runExpectI64` — fully portable |
-| `list_refcount_complex.zig` | varies | `runExpectI64` — fully portable |
-| `list_refcount_conditional.zig` | varies | `runExpectI64` — fully portable |
-| `list_refcount_containers.zig` | varies | `runExpectI64` — fully portable |
-
 ---
 
 ## Ground Rules
@@ -410,22 +397,11 @@ Added new Expected variants (`.u8_val`, `.u16_val`, `.u32_val`, `.u64_val`,
 `.u128_val`, `.i8_val`, `.i16_val`, `.i32_val`, `.i128_val`) to the
 parallel runner. File deleted.
 
-### Batch 4: list_refcount_*.zig (8 files)
+### Batch 4: list_refcount_*.zig (11 files) — DONE
 
-These all use `runExpectI64` — fully portable. Migrate all 8 files
-together or one at a time.
-
-**Important:** Check whether these use `.I64` suffixed literals. If so,
-`.i64_val` is correct. If unsuffixed, use `.dec_val`.
-
-- `list_refcount_basic.zig`
-- `list_refcount_simple.zig`
-- `list_refcount_nested.zig`
-- `list_refcount_pattern.zig`
-- `list_refcount_alias.zig`
-- `list_refcount_complex.zig`
-- `list_refcount_conditional.zig`
-- `list_refcount_containers.zig`
+105 tests migrated from 10 files (all unsuffixed → `.dec_val`).
+`list_refcount_builtins.zig` was a placeholder — deleted with no tests.
+All 11 files deleted.
 
 ---
 
