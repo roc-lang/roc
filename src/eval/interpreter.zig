@@ -2057,13 +2057,68 @@ pub const LirInterpreter = struct {
                 break :blk self.rocListToValue(result, ll.ret_layout);
             },
             .str_from_utf8 => blk: {
+                // str_from_utf8(list) -> Result Str [BadUtf8 {index: U64, problem: Utf8Problem}]
+                // The C builtin returns FromUtf8Try (a flat struct).
+                // Convert to the Roc tag union layout using layout-resolved offsets,
+                // following the same pattern as the dev backend (LirCodeGen.zig).
                 self.roc_env.resetCrash();
                 const sj = setjmp(&self.roc_env.jmp_buf);
                 if (sj != 0) return error.Crash;
                 const result = builtins.str.fromUtf8C(valueToRocList(args[0]), UpdateMode.Immutable, &self.roc_ops);
-                // FromUtf8Try is { byte_index: u64, string: RocStr, is_ok: bool, problem_code: u8 }
+
+                const ret_layout_val = self.layout_store.getLayout(ll.ret_layout);
+                if (ret_layout_val.tag != .tag_union) {
+                    return self.runtimeError("str_from_utf8 expected a tag union return layout");
+                }
+                const tu_data = self.layout_store.getTagUnionData(ret_layout_val.data.tag_union.idx);
+                const variants = self.layout_store.getTagUnionVariants(tu_data);
+
+                // Discover Ok (Str payload) and Err variant indices from the layout.
+                var ok_disc: ?u16 = null;
+                var err_disc: ?u16 = null;
+                var err_record_idx: ?layout_mod.StructIdx = null;
+                for (0..variants.len) |i| {
+                    const v_payload = variants.get(@intCast(i)).payload_layout;
+                    const candidate = self.unwrapSingleFieldPayloadLayout(v_payload) orelse v_payload;
+                    if (candidate == .str) {
+                        ok_disc = @intCast(i);
+                    } else {
+                        err_disc = @intCast(i);
+                        const err_layout = self.layout_store.getLayout(candidate);
+                        err_record_idx = switch (err_layout.tag) {
+                            .struct_ => err_layout.data.struct_.idx,
+                            .tag_union => inner: {
+                                const inner_tu = self.layout_store.getTagUnionData(err_layout.data.tag_union.idx);
+                                const inner_v = self.layout_store.getTagUnionVariants(inner_tu);
+                                if (inner_v.len == 0) break :inner null;
+                                const inner_payload = inner_v.get(0).payload_layout;
+                                const unwrapped = self.unwrapSingleFieldPayloadLayout(inner_payload) orelse inner_payload;
+                                const inner_layout = self.layout_store.getLayout(unwrapped);
+                                if (inner_layout.tag == .struct_) break :inner inner_layout.data.struct_.idx;
+                                break :inner null;
+                            },
+                            else => null,
+                        };
+                    }
+                }
+
                 const val = try self.alloc(ll.ret_layout);
-                @memcpy(val.ptr[0..@sizeOf(builtins.str.FromUtf8Try)], std.mem.asBytes(&result));
+                @memset(val.ptr[0..tu_data.size], 0);
+
+                const resolved_ok = ok_disc orelse return self.runtimeError("str_from_utf8: no Ok variant in layout");
+                const resolved_err = err_disc orelse return self.runtimeError("str_from_utf8: no Err variant in layout");
+                const rec_idx = err_record_idx orelse return self.runtimeError("str_from_utf8: could not resolve error record layout");
+
+                if (result.is_ok) {
+                    @memcpy(val.ptr[0..@sizeOf(RocStr)], std.mem.asBytes(&result.string));
+                    self.helper.writeTagDiscriminant(val, ll.ret_layout, resolved_ok);
+                } else {
+                    const index_off = self.layout_store.getStructFieldOffsetByOriginalIndex(rec_idx, 0);
+                    const problem_off = self.layout_store.getStructFieldOffsetByOriginalIndex(rec_idx, 1);
+                    val.offset(index_off).write(u64, result.byte_index);
+                    val.offset(problem_off).write(u8, @intFromEnum(result.problem_code));
+                    self.helper.writeTagDiscriminant(val, ll.ret_layout, resolved_err);
+                }
                 break :blk val;
             },
             .str_from_utf8_lossy => blk: {
