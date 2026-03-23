@@ -263,3 +263,26 @@ fn testRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.c)
         std.debug.panic("failed to store crash message in test env: {}", .{err});
     };
 }
+
+test "crash message storage and retrieval - host-managed context" {
+    const testing = std.testing;
+    const test_message = "Direct API test message";
+
+    var test_env_instance = TestEnv.init(std.heap.smp_allocator);
+    defer test_env_instance.deinit();
+
+    try testing.expect(test_env_instance.crashState() == .did_not_crash);
+
+    const crash_args = RocCrashed{
+        .utf8_bytes = @constCast(test_message.ptr),
+        .len = test_message.len,
+    };
+
+    const ops = test_env_instance.get_ops();
+    ops.roc_crashed(&crash_args, ops.env);
+
+    switch (test_env_instance.crashState()) {
+        .did_not_crash => return error.TestUnexpectedResult,
+        .crashed => |msg| try testing.expectEqualStrings(test_message, msg),
+    }
+}

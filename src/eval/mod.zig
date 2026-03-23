@@ -77,7 +77,6 @@ test "eval tests" {
 
     // Test files that compare interpreter output with dev backend
     std.testing.refAllDecls(@import("test/helpers.zig"));
-    std.testing.refAllDecls(@import("test/eval_test.zig"));
     std.testing.refAllDecls(@import("test/anno_only_interp_test.zig"));
     std.testing.refAllDecls(@import("test/comptime_eval_test.zig"));
     std.testing.refAllDecls(@import("test/interpreter_polymorphism_test.zig"));
