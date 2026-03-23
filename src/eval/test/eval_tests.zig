@@ -7759,4 +7759,235 @@ pub const tests = [_]TestCase{
         .expected = .{ .str_val = "hello" },
         .skip = .{ .interpreter = true, .dev = true, .wasm = true, .llvm = true },
     },
+
+    // --- coverage: non-Dec numeric method dispatch (Gap #1, lines 17681-17729) ---
+    .{
+        .name = "coverage: I32 addition via method dispatch",
+        .source = "1.I32 + 2.I32",
+        .expected = .{ .i32_val = 3 },
+    },
+    .{
+        .name = "coverage: I32 subtraction via method dispatch",
+        .source = "10.I32 - 3.I32",
+        .expected = .{ .i32_val = 7 },
+    },
+    .{
+        .name = "coverage: I32 multiplication via method dispatch",
+        .source = "4.I32 * 5.I32",
+        .expected = .{ .i32_val = 20 },
+    },
+    .{
+        .name = "coverage: I64 addition via method dispatch",
+        .source = "100.I64 + 200.I64",
+        .expected = .{ .i64_val = 300 },
+    },
+    .{
+        .name = "coverage: U64 addition via method dispatch",
+        .source = "10.U64 + 20.U64",
+        .expected = .{ .u64_val = 30 },
+    },
+    .{
+        .name = "coverage: U32 addition via method dispatch",
+        .source = "7.U32 + 3.U32",
+        .expected = .{ .u32_val = 10 },
+    },
+    .{
+        .name = "coverage: I32 greater than comparison",
+        .source = "5.I32 > 3.I32",
+        .expected = .{ .bool_val = true },
+    },
+    .{
+        .name = "coverage: I32 less than comparison",
+        .source = "2.I32 < 10.I32",
+        .expected = .{ .bool_val = true },
+    },
+    .{
+        .name = "coverage: I32 greater than or equal comparison",
+        .source = "5.I32 >= 5.I32",
+        .expected = .{ .bool_val = true },
+    },
+    .{
+        .name = "coverage: I32 less than or equal comparison",
+        .source = "3.I32 <= 5.I32",
+        .expected = .{ .bool_val = true },
+    },
+    .{
+        .name = "coverage: I32 equality comparison",
+        .source = "42.I32 == 42.I32",
+        .expected = .{ .bool_val = true },
+    },
+    .{
+        .name = "coverage: I32 inequality comparison",
+        .source = "42.I32 != 43.I32",
+        .expected = .{ .bool_val = true },
+    },
+    .{
+        .name = "coverage: I64 division via method dispatch",
+        .source = "20.I64 // 4.I64",
+        .expected = .{ .i64_val = 5 },
+    },
+    .{
+        .name = "coverage: I64 remainder via method dispatch",
+        .source = "17.I64 % 5.I64",
+        .expected = .{ .i64_val = 2 },
+    },
+
+    // --- coverage: integer type conversions (Gaps #5-#12) ---
+    .{
+        .name = "coverage: I64 to I128",
+        .source = "{ 42.I64.to_i128() }",
+        .expected = .{ .i128_val = 42 },
+    },
+    .{
+        .name = "coverage: I64 to F32",
+        .source = "{ 42.I64.to_f32() }",
+        .expected = .{ .f32_val = 42.0 },
+    },
+    .{
+        .name = "coverage: I64 to F64",
+        .source = "{ 42.I64.to_f64() }",
+        .expected = .{ .f64_val = 42.0 },
+    },
+    .{
+        .name = "coverage: U64 to I128",
+        .source = "{ 42.U64.to_i128() }",
+        .expected = .{ .i128_val = 42 },
+    },
+    .{
+        .name = "coverage: U64 to F64",
+        .source = "{ 42.U64.to_f64() }",
+        .expected = .{ .f64_val = 42.0 },
+    },
+    .{
+        .name = "coverage: I32 to I128",
+        .source = "{ 42.I32.to_i128() }",
+        .expected = .{ .i128_val = 42 },
+    },
+    .{
+        .name = "coverage: I32 to F64",
+        .source = "{ 42.I32.to_f64() }",
+        .expected = .{ .f64_val = 42.0 },
+    },
+    .{
+        .name = "coverage: U32 to I128",
+        .source = "{ 42.U32.to_i128() }",
+        .expected = .{ .i128_val = 42 },
+    },
+    .{
+        .name = "coverage: U32 to F64",
+        .source = "{ 42.U32.to_f64() }",
+        .expected = .{ .f64_val = 42.0 },
+    },
+    .{
+        .name = "coverage: I16 to I128",
+        .source = "{ 42.I16.to_i128() }",
+        .expected = .{ .i128_val = 42 },
+    },
+    .{
+        .name = "coverage: I16 to F64",
+        .source = "{ 42.I16.to_f64() }",
+        .expected = .{ .f64_val = 42.0 },
+    },
+    .{
+        .name = "coverage: U16 to I128",
+        .source = "{ 42.U16.to_i128() }",
+        .expected = .{ .i128_val = 42 },
+    },
+    .{
+        .name = "coverage: U16 to F64",
+        .source = "{ 42.U16.to_f64() }",
+        .expected = .{ .f64_val = 42.0 },
+    },
+    .{
+        .name = "coverage: I8 to I128",
+        .source = "{ 42.I8.to_i128() }",
+        .expected = .{ .i128_val = 42 },
+    },
+    .{
+        .name = "coverage: I8 to F64",
+        .source = "{ 42.I8.to_f64() }",
+        .expected = .{ .f64_val = 42.0 },
+    },
+    .{
+        .name = "coverage: I128 to F64",
+        .source = "{ 42.I128.to_f64() }",
+        .expected = .{ .f64_val = 42.0 },
+    },
+    .{
+        .name = "coverage: U128 to F64",
+        .source = "{ 42.U128.to_f64() }",
+        .expected = .{ .f64_val = 42.0 },
+    },
+    // TODO: narrowing/wrapping conversions crash in interpreter
+    .{
+        .name = "coverage: U64 to U8 wrapping",
+        .source = "{ 300.U64.to_u8() }",
+        .expected = .{ .u8_val = 44 },
+        .skip = SKIP_ALL,
+    },
+    .{
+        .name = "coverage: U64 to I8 wrapping",
+        .source = "{ 200.U64.to_i8() }",
+        .expected = .{ .i8_val = -56 },
+        .skip = SKIP_ALL,
+    },
+    .{
+        .name = "coverage: I64 to U8 wrapping",
+        .source = "{ 256.I64.to_u8() }",
+        .expected = .{ .u8_val = 0 },
+        .skip = SKIP_ALL,
+    },
+    .{
+        .name = "coverage: I64 to I8 wrapping",
+        .source = "{ 300.I64.to_i8() }",
+        .expected = .{ .i8_val = 44 },
+        .skip = SKIP_ALL,
+    },
+    .{
+        .name = "coverage: U32 to U8 wrapping",
+        .source = "{ 300.U32.to_u8() }",
+        .expected = .{ .u8_val = 44 },
+        .skip = SKIP_ALL,
+    },
+    .{
+        .name = "coverage: U32 to U64",
+        .source = "{ 42.U32.to_u64() }",
+        .expected = .{ .u64_val = 42 },
+    },
+    .{
+        .name = "coverage: U16 to U32",
+        .source = "{ 42.U16.to_u32() }",
+        .expected = .{ .u32_val = 42 },
+    },
+    .{
+        .name = "coverage: I128 to I8 wrapping",
+        .source = "{ 300.I128.to_i8() }",
+        .expected = .{ .i8_val = 44 },
+        .skip = SKIP_ALL,
+    },
+    .{
+        .name = "coverage: U128 to U8 wrapping",
+        .source = "{ 300.U128.to_u8() }",
+        .expected = .{ .u8_val = 44 },
+        .skip = SKIP_ALL,
+    },
+    // TODO: signed-to-unsigned conversions crash in interpreter
+    .{
+        .name = "coverage: I64 to U64",
+        .source = "{ 42.I64.to_u64() }",
+        .expected = .{ .u64_val = 42 },
+        .skip = SKIP_ALL,
+    },
+    .{
+        .name = "coverage: I64 to U32",
+        .source = "{ 42.I64.to_u32() }",
+        .expected = .{ .u32_val = 42 },
+        .skip = SKIP_ALL,
+    },
+    .{
+        .name = "coverage: I64 to U16",
+        .source = "{ 42.I64.to_u16() }",
+        .expected = .{ .u16_val = 42 },
+        .skip = SKIP_ALL,
+    },
 };

@@ -32,11 +32,11 @@ uncovered branches will expose interpreter bugs. When a test fails or
 crashes:
 
 ```zig
-// TODO: crashes with "index out of bounds" in evalLowLevel (line 3821)
+// TODO: narrowing conversions crash in interpreter
 .{
-    .name = "coverage: bitwise shift left I64",
-    .source = "Num.shiftLeftBy(1.I64, 4.U8)",
-    .expected = .{ .i64_val = 16 },
+    .name = "coverage: U64 to U8 wrapping",
+    .source = "{ 300.U64.to_u8() }",
+    .expected = .{ .u8_val = 44 },
     .skip = SKIP_ALL,
 },
 ```
@@ -59,17 +59,29 @@ Add 5–15 tests at a time, then run `zig build test-eval`. This catches
 crashes early before you waste time writing tests that depend on broken
 features.
 
-### 3. Do not modify any file except eval_tests.zig
+### 3. Only modify eval_tests.zig (unless fixing runner bugs)
 
-The only file you should edit is `src/eval/test/eval_tests.zig`. Do not
+The primary file you should edit is `src/eval/test/eval_tests.zig`. Do not
 touch:
-- `parallel_runner.zig`
 - `helpers.zig`
 - `interpreter.zig`
 - `build.zig`
-- Any other file
 
-### 4. Commit after each successful batch
+If you discover a bug in `parallel_runner.zig` itself (e.g. skip logic
+not working), fixing the runner is acceptable — but don't modify it just
+to make a failing test pass.
+
+### 4. Roc syntax gotchas
+
+**Type conversions use method syntax**, NOT `Num.toX()`:
+- WRONG: `Num.toF64(42.I32)`, `Num.toI8Wrapping(300.I64)`
+- RIGHT: `{ 42.I32.to_f64() }`, `{ 300.I64.to_i8() }`
+
+Wrap single-expression method calls in `{ }` blocks for clarity.
+Check existing tests in eval_tests.zig for syntax examples before
+writing new ones.
+
+### 5. Commit after each successful batch
 
 After each batch of tests passes (or is properly SKIPped), commit:
 ```
@@ -113,11 +125,11 @@ Common patterns in uncovered interpreter code:
 
 | Uncovered code pattern | Roc expression to trigger |
 |----------------------|--------------------------|
-| `.i64_to_u8_wrap` | `Num.toU8Wrapping(256.I64)` |
-| `.num_shift_left_by` | `Num.shiftLeftBy(1.I64, 4.U8)` |
+| `.i64_to_i128` (widening) | `{ 42.I64.to_i128() }` |
+| `.i32_to_f64` (int→float) | `{ 42.I32.to_f64() }` |
 | `.list_swap` | `List.swap([1,2,3], 0, 2)` |
 | `.str_split` | `Str.split("a,b,c", ",")` |
-| Comparison operators on specific types | `1.U8 > 2.U8` |
+| Comparison operators on specific types | `5.I32 > 3.I32` |
 | Specific match patterns | `match (1, 2) { (a, b) => a + b }` |
 | `for ... in` with index | `for item, idx in [1,2,3] { ... }` |
 | Record update syntax | `{ ..rec, field: newVal }` |
@@ -236,11 +248,30 @@ Focus on these areas in order (largest coverage gaps first):
 
 ### Tier 1: Numeric type conversions (lines ~4000–4600)
 Massive block of `intConvertWrap`, `intConvertTry`, `intToFloat`,
-`intToDec` for every type combination. Write tests like:
+`intToDec` for every type combination.
+
+**IMPORTANT: Roc uses method-style syntax for conversions, not `Num.toX()`.**
+The correct syntax is `value.to_target_type()`:
 ```zig
-.{ .name = "coverage: u64 to i8 wrapping", .source = "Num.toI8Wrapping(300.U64)", .expected = .{ .i8_val = 44 } },
-.{ .name = "coverage: i32 to f64", .source = "Num.toF64(42.I32)", .expected = .{ .f64_val = 42.0 } },
+// Widening conversions (these WORK):
+.{ .name = "coverage: I32 to F64", .source = "{ 42.I32.to_f64() }", .expected = .{ .f64_val = 42.0 } },
+.{ .name = "coverage: I64 to I128", .source = "{ 42.I64.to_i128() }", .expected = .{ .i128_val = 42 } },
+.{ .name = "coverage: U16 to U32", .source = "{ 42.U16.to_u32() }", .expected = .{ .u32_val = 42 } },
+
+// Narrowing/wrapping conversions (these CRASH — skip them):
+// TODO: narrowing conversions crash in interpreter
+.{ .name = "coverage: U64 to U8", .source = "{ 300.U64.to_u8() }", .expected = .{ .u8_val = 44 }, .skip = SKIP_ALL },
+
+// Signed-to-unsigned conversions (these CRASH — skip them):
+// TODO: signed-to-unsigned conversions crash in interpreter
+.{ .name = "coverage: I64 to U64", .source = "{ 42.I64.to_u64() }", .expected = .{ .u64_val = 42 }, .skip = SKIP_ALL },
 ```
+
+**Known working conversions:** widening int→int (e.g. I8→I64, U16→I128),
+int→float (e.g. I32→F64, U64→F64), small-to-large same-sign (e.g. U32→U64).
+
+**Known crashing conversions:** any narrowing (e.g. I64→I8, U64→U8),
+any signed→unsigned (e.g. I64→U64, I64→U32), any wrapping variant.
 
 ### Tier 2: Low-level numeric operations (lines ~3000–4000)
 Bitwise ops, shift ops, comparison ops for specific types:
@@ -256,9 +287,13 @@ String operations and list operations that aren't tested yet:
 ```
 
 ### Tier 4: Method dispatch / binop fallbacks (lines ~17000–18000)
-Numeric method dispatch on various types:
+Numeric method dispatch on various types. These work well and cover
+large gaps:
 ```zig
 .{ .name = "coverage: U32 addition method", .source = "1.U32 + 2.U32", .expected = .{ .u32_val = 3 } },
+.{ .name = "coverage: I32 greater than", .source = "5.I32 > 3.I32", .expected = .{ .bool_val = true } },
+.{ .name = "coverage: I64 division", .source = "20.I64 // 4.I64", .expected = .{ .i64_val = 5 } },
+.{ .name = "coverage: I64 remainder", .source = "17.I64 % 5.I64", .expected = .{ .i64_val = 2 } },
 ```
 
 ### Tier 5: Pattern matching edge cases (lines ~11000–12000, ~15000–16000)
@@ -504,10 +539,10 @@ $ python3 scripts/eval_coverage_gaps.py --min-gap 10 --context 2
 ============================================================
 COVERAGE GAPS: interpreter.zig
 ============================================================
-  Covered:    4560 lines
-  Uncovered:  4996 lines
+  Covered:    4629 lines
+  Uncovered:  4927 lines
   Total:      9556 lines
-  Coverage:   47.7%
+  Coverage:   48.4%
 
   42 uncovered ranges of 10+ lines:
 
@@ -518,12 +553,13 @@ COVERAGE GAPS: interpreter.zig
     ...
 
 # I see this is numeric binop dispatch for method syntax on non-Dec types.
-# Let me write a test:
+# Let me write tests for +, -, *, >, <, >= on I32/I64/U32/U64:
 
 .{ .name = "coverage: I32 addition via method", .source = "1.I32 + 2.I32", .expected = .{ .i32_val = 3 } },
+.{ .name = "coverage: I32 greater than", .source = "5.I32 > 3.I32", .expected = .{ .bool_val = true } },
+.{ .name = "coverage: I64 division", .source = "20.I64 // 4.I64", .expected = .{ .i64_val = 5 } },
 
-$ zig build test-eval    # passes!
-$ # add more tests for the same region...
+$ zig build test-eval    # all pass!
 $ zig build coverage-eval
 $ python3 scripts/eval_coverage_gaps.py --min-gap 10 --context 2
 # Gap #1 is now smaller or gone. Move to next gap.
@@ -546,6 +582,25 @@ Examples:
 - `"coverage: str: split comma"`
 - `"coverage: match: nested tuple destructure"`
 - `"coverage: for loop: with index variable"`
+
+---
+
+## Known Interpreter Crash Patterns
+
+These patterns are known to crash the interpreter. Write the test anyway
+with `.skip = SKIP_ALL` to document the bug, then move on.
+
+| Pattern | Example | Status |
+|---------|---------|--------|
+| Narrowing int conversions | `{ 300.U64.to_u8() }` | Crash |
+| Signed→unsigned conversions | `{ 42.I64.to_u64() }` | Crash |
+| Wrapping conversions | `{ 300.I64.to_i8() }` | Crash |
+
+**Conversions that DO work:** widening same-sign int→int (U16→U32,
+I8→I64), int→float (I32→F64, U64→F64), int→I128 from any type.
+
+**Arithmetic that works:** `+`, `-`, `*`, `//`, `%`, `>`, `<`, `>=`,
+`<=`, `==`, `!=` on I32, I64, U32, U64 types all pass.
 
 ---
 

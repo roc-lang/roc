@@ -477,6 +477,21 @@ fn runNormalTest(allocator: std.mem.Allocator, src: []const u8, expected: TestCa
     const resources = try parseAndCanonicalizeExpr(allocator, src);
     defer cleanupResources(allocator, resources);
 
+    const fe_timings_base = EvalTimings{
+        .parse_ns = resources.parse_ns,
+        .canonicalize_ns = resources.canonicalize_ns,
+        .typecheck_ns = resources.typecheck_ns,
+    };
+
+    // If interpreter is skipped, go straight to backend comparison
+    if (skip.interpreter) {
+        var outcome = compareAllBackends(allocator, null, resources, skip);
+        outcome.timings.parse_ns = resources.parse_ns;
+        outcome.timings.canonicalize_ns = resources.canonicalize_ns;
+        outcome.timings.typecheck_ns = resources.typecheck_ns;
+        return outcome;
+    }
+
     var test_env_instance = TestEnv.init(allocator);
     defer test_env_instance.deinit();
 
@@ -492,12 +507,8 @@ fn runNormalTest(allocator: std.mem.Allocator, src: []const u8, expected: TestCa
     defer result.decref(layout_cache, ops);
     defer interpreter.bindings.items.len = 0;
 
-    const fe_timings = EvalTimings{
-        .parse_ns = resources.parse_ns,
-        .canonicalize_ns = resources.canonicalize_ns,
-        .typecheck_ns = resources.typecheck_ns,
-        .interpreter_ns = interp_ns,
-    };
+    var fe_timings = fe_timings_base;
+    fe_timings.interpreter_ns = interp_ns;
 
     // Check interpreter result against expected value
     var layout_hint: ?interpreter_layout.Idx = null;
@@ -715,6 +726,15 @@ fn runTestInspectStr(allocator: std.mem.Allocator, src: []const u8, expected_str
     const resources = try parseAndCanonicalizeExpr(allocator, src);
     defer cleanupResources(allocator, resources);
 
+    // If interpreter is skipped, go straight to backend comparison
+    if (skip.interpreter) {
+        var outcome = compareAllBackends(allocator, null, resources, skip);
+        outcome.timings.parse_ns = resources.parse_ns;
+        outcome.timings.canonicalize_ns = resources.canonicalize_ns;
+        outcome.timings.typecheck_ns = resources.typecheck_ns;
+        return outcome;
+    }
+
     var test_env_instance = TestEnv.init(allocator);
     defer test_env_instance.deinit();
 
@@ -803,7 +823,7 @@ fn runBackend(
 /// Returns .pass if all backends agree, .fail with mismatch details otherwise.
 /// NOTE: LLVM backend is temporarily disabled — it currently aliases the dev
 /// backend (see helpers.llvmEvaluatorStr). Re-enable here when LLVM is fixed.
-fn compareAllBackends(allocator: std.mem.Allocator, interp_str: []const u8, resources: ParsedResources, skip: TestCase.Skip) TestOutcome {
+fn compareAllBackends(allocator: std.mem.Allocator, interp_str: ?[]const u8, resources: ParsedResources, skip: TestCase.Skip) TestOutcome {
     var timings = EvalTimings{};
 
     // Wrap the expression in Str.inspect for compiled backends
@@ -836,9 +856,14 @@ fn compareAllBackends(allocator: std.mem.Allocator, interp_str: []const u8, reso
     //     runBackend(allocator, "llvm", helpers.llvmEvaluatorStr, resources.module_env, inspect_expr, resources.builtin_module.env, &timings, .llvm_ns);
     // defer if (llvm_result.value == .ok) allocator.free(llvm_result.value.ok);
 
-    // Compare all backends including interpreter
+    // Compare all backends including interpreter (if it ran)
+    const interp_backend: BackendResult = if (interp_str) |s|
+        .{ .name = "interpreter", .value = .{ .ok = s } }
+    else
+        .{ .name = "interpreter", .value = .{ .err = "skipped" } };
+
     const all_backends = [_]BackendResult{
-        .{ .name = "interpreter", .value = .{ .ok = interp_str } },
+        interp_backend,
         dev_result,
         wasm_result,
     };
@@ -1040,6 +1065,30 @@ fn writeTimingBreakdown(t: EvalTimings) void {
         }
     }
     std.debug.print("]\n", .{});
+}
+
+/// Print per-backend status summary for failed/crashed tests.
+/// Uses timing info and skip flags to infer what happened in each backend.
+fn writeBackendSummary(t: EvalTimings, skip: TestCase.Skip) void {
+    const Backend = struct { name: []const u8, skipped: bool, ran: bool };
+    const backends = [_]Backend{
+        .{ .name = "interp", .skipped = skip.interpreter, .ran = t.interpreter_ns > 0 },
+        .{ .name = "dev", .skipped = skip.dev, .ran = t.dev_ns > 0 },
+        .{ .name = "wasm", .skipped = skip.wasm, .ran = t.wasm_ns > 0 },
+    };
+    std.debug.print("        backends:", .{});
+    for (backends) |b| {
+        if (b.skipped) {
+            std.debug.print(" {s}=skip", .{b.name});
+        } else if (b.ran) {
+            std.debug.print(" {s}=ran({d:.1}ms)", .{ b.name, @as(f64, @floatFromInt(
+                if (std.mem.eql(u8, b.name, "interp")) t.interpreter_ns else if (std.mem.eql(u8, b.name, "dev")) t.dev_ns else t.wasm_ns,
+            )) / 1_000_000.0 });
+        } else {
+            std.debug.print(" {s}=not_reached", .{b.name});
+        }
+    }
+    std.debug.print("\n", .{});
 }
 
 //
@@ -1293,6 +1342,7 @@ pub fn main() !void {
                 if (r.message) |msg| {
                     std.debug.print("        {s}\n", .{msg});
                 }
+                writeBackendSummary(t, tc.skip);
             },
             .crash => {
                 crashed += 1;
@@ -1301,6 +1351,7 @@ pub fn main() !void {
                 if (r.message) |msg| {
                     std.debug.print("        {s}\n", .{msg});
                 }
+                writeBackendSummary(t, tc.skip);
             },
             .skip => {
                 skipped += 1;
