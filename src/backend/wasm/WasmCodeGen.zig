@@ -8297,7 +8297,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitFpOffset(result_offset);
         },
 
-        .str_inspekt,
+        .str_inspect,
         .u8_to_str,
         .i8_to_str,
         .u16_to_str,
