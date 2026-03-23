@@ -4143,3 +4143,17 @@ test "focused: polymorphic additional specialization via List.append (non-eq)" {
         \\}
     , 2, .no_trace);
 }
+
+test "closure passed to method call - type var binding regression" {
+    // Regression test: passing a closure (capturing outer variables) to a method
+    // like List.fold caused a panic in bindTypeVarMonotypes because closure lifting
+    // replaces the function expression with a captures tuple, and the post-binding
+    // loop tried to bind the method's function type var to the tuple monotype.
+    try runExpectBool(
+        \\{
+        \\    keep_oks = |list, fun| list.fold([], |out_list, elem| match fun(elem) { Ok(result) => out_list.append(result), Err(_) => out_list })
+        \\    always_ok = |_| Ok(1)
+        \\    keep_oks([10], always_ok) == [1]
+        \\}
+    , true, .no_trace);
+}
