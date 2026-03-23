@@ -106,7 +106,7 @@ Available skip flags: `.interpreter`, `.dev`, `.wasm`, `.llvm`.
 
 | Variant | Old helper | Notes |
 |---------|-----------|-------|
-| `.i64_val` | `runExpectI64` | i128 value. Handles both true ints and Dec-as-int. |
+| `.i64_val` | `runExpectI64` | i64 value. Only for suffixed int literals (e.g. `42.I64`). Unsuffixed literals default to Dec — use `.dec_val` with `N * RocDec.one_point_zero_i128` instead. |
 | `.bool_val` | `runExpectBool` | `true` or `false`. |
 | `.str_val` | `runExpectStr` | Expected string content. |
 | `.dec_val` | `runExpectDec` | Raw i128 Dec representation (scaled by 10^18). |
