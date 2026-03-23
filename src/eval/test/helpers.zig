@@ -500,6 +500,7 @@ pub fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []
 // TODO: llvmEvaluatorStr currently aliases devEvaluatorStr because the
 // LlvmEvaluator/MonoLlvmCodeGen have bitrotted. See LLVM_EVAL_ISSUE.md
 // for details. Once fixed, this should use the real LLVM pipeline.
+/// Evaluate via the LLVM backend (currently aliases dev — see comment above).
 pub fn llvmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) ![]const u8 {
     return devEvaluatorStr(allocator, module_env, expr_idx, builtin_module_env);
 }

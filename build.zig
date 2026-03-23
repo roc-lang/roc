@@ -1042,7 +1042,6 @@ const CoverageSummaryStep = struct {
     /// CUs parse successfully. This causes kcov to find only stdlib files, not user
     /// source files. ARM64 Zig generates valid DWARF, so coverage works there.
     /// See: https://github.com/roc-lang/roc/pull/8864 for investigation details.
-
     fn create(b: *std.Build, coverage_dir: []const u8, exe_name: []const u8) *CoverageSummaryStep {
         return createWithOptions(b, coverage_dir, exe_name, "PARSER", 28.0);
     }

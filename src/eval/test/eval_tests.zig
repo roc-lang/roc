@@ -6,6 +6,7 @@
 const TestCase = @import("parallel_runner.zig").TestCase;
 const RocDec = @import("builtins").dec.RocDec;
 
+/// All eval test cases, consumed by the parallel runner.
 pub const tests = [_]TestCase{
     // --- proof of concept tests ---
     .{ .name = "dec: simple number", .source = "1", .expected = .{ .dec_val = 1 * RocDec.one_point_zero_i128 } },
@@ -166,65 +167,71 @@ pub const tests = [_]TestCase{
     .{ .name = "simple lambda with if-else: negative", .source = "(|x| if x > 0.I64 x else 0.I64)(-3.I64)", .expected = .{ .i64_val = 0 } },
 
     // --- from eval_test.zig: crash in else branch inside lambda ---
-    .{ .name = "crash in else branch inside lambda",
+    .{
+        .name = "crash in else branch inside lambda",
         .source =
-            \\(|x| if x > 0.I64 x else {
-            \\    crash "crash in else!"
-            \\    0.I64
-            \\})(-5.I64)
+        \\(|x| if x > 0.I64 x else {
+        \\    crash "crash in else!"
+        \\    0.I64
+        \\})(-5.I64)
         ,
         .expected = .{ .err_val = error.Crash },
     },
 
     // --- from eval_test.zig: crash NOT taken when condition true ---
-    .{ .name = "crash NOT taken when condition true",
+    .{
+        .name = "crash NOT taken when condition true",
         .source =
-            \\(|x| if x > 0.I64 x else {
-            \\    crash "this should not execute"
-            \\    0.I64
-            \\})(10.I64)
+        \\(|x| if x > 0.I64 x else {
+        \\    crash "this should not execute"
+        \\    0.I64
+        \\})(10.I64)
         ,
         .expected = .{ .i64_val = 10 },
     },
 
     // --- from eval_test.zig: error test - crash statement ---
-    .{ .name = "error test - crash statement: basic",
+    .{
+        .name = "error test - crash statement: basic",
         .source =
-            \\{
-            \\    crash "test"
-            \\    0
-            \\}
+        \\{
+        \\    crash "test"
+        \\    0
+        \\}
         ,
         .expected = .{ .err_val = error.Crash },
     },
-    .{ .name = "error test - crash statement: with message",
+    .{
+        .name = "error test - crash statement: with message",
         .source =
-            \\{
-            \\    crash "This is a crash statement"
-            \\    42
-            \\}
+        \\{
+        \\    crash "This is a crash statement"
+        \\    42
+        \\}
         ,
         .expected = .{ .err_val = error.Crash },
     },
 
     // --- from eval_test.zig: inline expect statement fails ---
-    .{ .name = "inline expect statement fails",
+    .{
+        .name = "inline expect statement fails",
         .source =
-            \\{
-            \\    expect 1 == 2
-            \\    {}
-            \\}
+        \\{
+        \\    expect 1 == 2
+        \\    {}
+        \\}
         ,
         .expected = .{ .err_val = error.Crash },
     },
 
     // --- from eval_test.zig: inline expect statement passes ---
-    .{ .name = "inline expect statement passes",
+    .{
+        .name = "inline expect statement passes",
         .source =
-            \\{
-            \\    expect 1 == 1
-            \\    42
-            \\}
+        \\{
+        \\    expect 1 == 1
+        \\    42
+        \\}
         ,
         .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 },
     },
@@ -263,53 +270,57 @@ pub const tests = [_]TestCase{
     .{ .name = "lambdas closures: nested captures", .source = "(|y| (|x| (|z| x + y + z)(3.I64))(2.I64))(1.I64)", .expected = .{ .i64_val = 6 } },
 
     // --- from eval_test.zig: lambdas with capture ---
-    .{ .name = "lambdas with capture: x+y",
+    .{
+        .name = "lambdas with capture: x+y",
         .source =
-            \\{
-            \\    x = 10.I64
-            \\    f = |y| x + y
-            \\    f(5.I64)
-            \\}
+        \\{
+        \\    x = 10.I64
+        \\    f = |y| x + y
+        \\    f(5.I64)
+        \\}
         ,
         .expected = .{ .i64_val = 15 },
     },
-    .{ .name = "lambdas with capture: x+y+z",
+    .{
+        .name = "lambdas with capture: x+y+z",
         .source =
-            \\{
-            \\    x = 20.I64
-            \\    y = 30.I64
-            \\    f = |z| x + y + z
-            \\    f(10.I64)
-            \\}
+        \\{
+        \\    x = 20.I64
+        \\    y = 30.I64
+        \\    f = |z| x + y + z
+        \\    f(10.I64)
+        \\}
         ,
         .expected = .{ .i64_val = 60 },
     },
 
     // --- from eval_test.zig: closure with many captures (struct_captures) ---
-    .{ .name = "closure with many captures (struct_captures)",
+    .{
+        .name = "closure with many captures (struct_captures)",
         .source =
-            \\{
-            \\    a = 100.I64
-            \\    b = 200.I64
-            \\    c = 300.I64
-            \\    d = 400.I64
-            \\    f = |n| a + b + c + d + n
-            \\    f(5.I64)
-            \\}
+        \\{
+        \\    a = 100.I64
+        \\    b = 200.I64
+        \\    c = 300.I64
+        \\    d = 400.I64
+        \\    f = |n| a + b + c + d + n
+        \\    f(5.I64)
+        \\}
         ,
         .expected = .{ .i64_val = 1005 },
     },
 
     // --- from eval_test.zig: lambdas nested closures ---
-    .{ .name = "lambdas nested closures",
+    .{
+        .name = "lambdas nested closures",
         .source =
-            \\(((|a| {
-            \\    a_loc = a * 2.I64
-            \\    |b| {
-            \\        b_loc = a_loc + b
-            \\        |c| b_loc + c
-            \\    }
-            \\})(100.I64))(20.I64))(3.I64)
+        \\(((|a| {
+        \\    a_loc = a * 2.I64
+        \\    |b| {
+        \\        b_loc = a_loc + b
+        \\        |c| b_loc + c
+        \\    }
+        \\})(100.I64))(20.I64))(3.I64)
         ,
         .expected = .{ .i64_val = 223 },
     },
@@ -358,58 +369,61 @@ pub const tests = [_]TestCase{
 
     // --- from eval_test.zig: string refcount tests ---
     .{ .name = "string refcount - basic literal", .source = "\"Hello, World!\"", .expected = .{ .str_val = "Hello, World!" } },
-    .{ .name = "polymorphic identity function",
+    .{
+        .name = "polymorphic identity function",
         .source =
-            \\{
-            \\    identity = |val| val
-            \\    num = identity(5)
-            \\    str = identity("Hello")
-            \\    if (num > 0) str else ""
-            \\}
+        \\{
+        \\    identity = |val| val
+        \\    num = identity(5)
+        \\    str = identity("Hello")
+        \\    if (num > 0) str else ""
+        \\}
         ,
         .expected = .{ .str_val = "Hello" },
     },
-    .{ .name = "direct polymorphic function usage",
+    .{
+        .name = "direct polymorphic function usage",
         .source =
-            \\{
-            \\    id = |x| x
-            \\
-            \\    # Direct calls to identity with different types
-            \\    num1 = id(10)
-            \\    str1 = id("Test")
-            \\    num2 = id(20)
-            \\
-            \\    # Verify all values are correct
-            \\    if (num1 == 10)
-            \\        if (num2 == 20)
-            \\            str1
-            \\        else
-            \\            "Failed2"
-            \\    else
-            \\        "Failed1"
-            \\}
+        \\{
+        \\    id = |x| x
+        \\
+        \\    # Direct calls to identity with different types
+        \\    num1 = id(10)
+        \\    str1 = id("Test")
+        \\    num2 = id(20)
+        \\
+        \\    # Verify all values are correct
+        \\    if (num1 == 10)
+        \\        if (num2 == 20)
+        \\            str1
+        \\        else
+        \\            "Failed2"
+        \\    else
+        \\        "Failed1"
+        \\}
         ,
         .expected = .{ .str_val = "Test" },
     },
-    .{ .name = "multiple polymorphic instantiations",
+    .{
+        .name = "multiple polymorphic instantiations",
         .source =
-            \\{
-            \\    id = |x| x
-            \\
-            \\    # Test polymorphic identity with different types
-            \\    num1 = id(42)
-            \\    str1 = id("Hello")
-            \\    num2 = id(100)
-            \\
-            \\    # Verify all results
-            \\    if (num1 == 42)
-            \\        if (num2 == 100)
-            \\            str1
-            \\        else
-            \\            "Failed2"
-            \\    else
-            \\        "Failed1"
-            \\}
+        \\{
+        \\    id = |x| x
+        \\
+        \\    # Test polymorphic identity with different types
+        \\    num1 = id(42)
+        \\    str1 = id("Hello")
+        \\    num2 = id(100)
+        \\
+        \\    # Verify all results
+        \\    if (num1 == 42)
+        \\        if (num2 == 100)
+        \\            str1
+        \\        else
+        \\            "Failed2"
+        \\    else
+        \\        "Failed1"
+        \\}
         ,
         .expected = .{ .str_val = "Hello" },
     },
@@ -430,16 +444,17 @@ pub const tests = [_]TestCase{
     .{ .name = "string refcount - simple string closure", .source = "(|s| s)(\"Test\")", .expected = .{ .str_val = "Test" } },
 
     // --- from eval_test.zig: recursive factorial function ---
-    .{ .name = "recursive factorial function",
+    .{
+        .name = "recursive factorial function",
         .source =
-            \\{
-            \\    factorial = |n|
-            \\        if n <= 1
-            \\            1
-            \\        else
-            \\            n * factorial(n - 1)
-            \\    factorial(5)
-            \\}
+        \\{
+        \\    factorial = |n|
+        \\        if n <= 1
+        \\            1
+        \\        else
+        \\            n * factorial(n - 1)
+        \\    factorial(5)
+        \\}
         ,
         .expected = .{ .dec_val = 120 * RocDec.one_point_zero_i128 },
     },
@@ -457,38 +472,41 @@ pub const tests = [_]TestCase{
     .{ .name = "empty record equality", .source = "{} == {}", .expected = .{ .bool_val = true } },
 
     // --- from eval_test.zig: mutable record equality ---
-    .{ .name = "mutable record equality",
+    .{
+        .name = "mutable record equality",
         .source =
-            \\{
-            \\    var $x = { sum: 6 }
-            \\    $x == { sum: 6 }
-            \\}
+        \\{
+        \\    var $x = { sum: 6 }
+        \\    $x == { sum: 6 }
+        \\}
         ,
         .expected = .{ .bool_val = true },
     },
 
     // --- from eval_test.zig: mutable record with rebind equality ---
-    .{ .name = "mutable record with rebind equality",
+    .{
+        .name = "mutable record with rebind equality",
         .source =
-            \\{
-            \\    var $x = { sum: 0 }
-            \\    $x = { sum: 6 }
-            \\    $x == { sum: 6 }
-            \\}
+        \\{
+        \\    var $x = { sum: 0 }
+        \\    $x = { sum: 6 }
+        \\    $x == { sum: 6 }
+        \\}
         ,
         .expected = .{ .bool_val = true },
     },
 
     // --- from eval_test.zig: mutable record loop accumulator equality ---
-    .{ .name = "mutable record loop accumulator equality",
+    .{
+        .name = "mutable record loop accumulator equality",
         .source =
-            \\{
-            \\    var $acc = { sum: 0 }
-            \\    for item in [1, 2, 3] {
-            \\        $acc = { sum: $acc.sum + item }
-            \\    }
-            \\    $acc == { sum: 6 }
-            \\}
+        \\{
+        \\    var $acc = { sum: 0 }
+        \\    for item in [1, 2, 3] {
+        \\        $acc = { sum: $acc.sum + item }
+        \\    }
+        \\    $acc == { sum: 6 }
+        \\}
         ,
         .expected = .{ .bool_val = true },
     },
@@ -548,13 +566,14 @@ pub const tests = [_]TestCase{
     .{ .name = "tag union eq: same payload same val", .source = "Ok(1) == Ok(1)", .expected = .{ .bool_val = true } },
     .{ .name = "tag union eq: same payload diff val", .source = "Ok(1) == Ok(2)", .expected = .{ .bool_val = false } },
     .{ .name = "tag union eq: Err same", .source = "Err(1) == Err(1)", .expected = .{ .bool_val = true } },
-    .{ .name = "tag union eq: different tags with payload",
+    .{
+        .name = "tag union eq: different tags with payload",
         .source =
-            \\{
-            \\    x = Ok(1)
-            \\    y = if Bool.False Ok(1) else Err(1)
-            \\    x == y
-            \\}
+        \\{
+        \\    x = Ok(1)
+        \\    y = if Bool.False Ok(1) else Err(1)
+        \\    x == y
+        \\}
         ,
         .expected = .{ .bool_val = false },
     },
@@ -568,33 +587,36 @@ pub const tests = [_]TestCase{
     .{ .name = "tag union eq: string diff", .source = "Ok(\"hello\") == Ok(\"world\")", .expected = .{ .bool_val = false } },
 
     // --- from eval_test.zig: tag union equality - three or more tags ---
-    .{ .name = "tag union eq: three tags same",
+    .{
+        .name = "tag union eq: three tags same",
         .source =
-            \\{
-            \\    x = Red
-            \\    y = Red
-            \\    x == y
-            \\}
+        \\{
+        \\    x = Red
+        \\    y = Red
+        \\    x == y
+        \\}
         ,
         .expected = .{ .bool_val = true },
     },
-    .{ .name = "tag union eq: three tags via if same",
+    .{
+        .name = "tag union eq: three tags via if same",
         .source =
-            \\{
-            \\    x = Red
-            \\    y = if Bool.True Red else if Bool.True Green else Blue
-            \\    x == y
-            \\}
+        \\{
+        \\    x = Red
+        \\    y = if Bool.True Red else if Bool.True Green else Blue
+        \\    x == y
+        \\}
         ,
         .expected = .{ .bool_val = true },
     },
-    .{ .name = "tag union eq: three tags diff",
+    .{
+        .name = "tag union eq: three tags diff",
         .source =
-            \\{
-            \\    x = Red
-            \\    y = if Bool.False Red else Green
-            \\    x == y
-            \\}
+        \\{
+        \\    x = Red
+        \\    y = if Bool.False Red else Green
+        \\    x == y
+        \\}
         ,
         .expected = .{ .bool_val = false },
     },
@@ -620,69 +642,78 @@ pub const tests = [_]TestCase{
     .{ .name = "record containing tuple eq: diff", .source = "{ pair: (1, 2) } == { pair: (1, 3) }", .expected = .{ .bool_val = false } },
     .{ .name = "tuple containing record eq: same", .source = "({ x: 1 }, 2) == ({ x: 1 }, 2)", .expected = .{ .bool_val = true } },
     .{ .name = "tuple containing record eq: diff", .source = "({ x: 1 }, 2) == ({ x: 9 }, 2)", .expected = .{ .bool_val = false } },
-    .{ .name = "record with multiple types: same",
+    .{
+        .name = "record with multiple types: same",
         .source =
-            \\{ name: "alice", age: 30 } == { name: "alice", age: 30 }
+        \\{ name: "alice", age: 30 } == { name: "alice", age: 30 }
         ,
         .expected = .{ .bool_val = true },
     },
-    .{ .name = "record with multiple types: diff name",
+    .{
+        .name = "record with multiple types: diff name",
         .source =
-            \\{ name: "alice", age: 30 } == { name: "bob", age: 30 }
+        \\{ name: "alice", age: 30 } == { name: "bob", age: 30 }
         ,
         .expected = .{ .bool_val = false },
     },
-    .{ .name = "record with multiple types: diff age",
+    .{
+        .name = "record with multiple types: diff age",
         .source =
-            \\{ name: "alice", age: 30 } == { name: "alice", age: 31 }
+        \\{ name: "alice", age: 30 } == { name: "alice", age: 31 }
         ,
         .expected = .{ .bool_val = false },
     },
-    .{ .name = "deeply nested mixed structures: same",
+    .{
+        .name = "deeply nested mixed structures: same",
         .source =
-            \\{ a: (1, { b: 2 }), c: 3 } == { a: (1, { b: 2 }), c: 3 }
+        \\{ a: (1, { b: 2 }), c: 3 } == { a: (1, { b: 2 }), c: 3 }
         ,
         .expected = .{ .bool_val = true },
     },
-    .{ .name = "deeply nested mixed structures: diff",
+    .{
+        .name = "deeply nested mixed structures: diff",
         .source =
-            \\{ a: (1, { b: 2 }), c: 3 } == { a: (1, { b: 9 }), c: 3 }
+        \\{ a: (1, { b: 2 }), c: 3 } == { a: (1, { b: 9 }), c: 3 }
         ,
         .expected = .{ .bool_val = false },
     },
     .{ .name = "tuple of tuples eq: same", .source = "((1, 2), (3, 4)) == ((1, 2), (3, 4))", .expected = .{ .bool_val = true } },
     .{ .name = "tuple of tuples eq: diff", .source = "((1, 2), (3, 4)) == ((1, 2), (3, 5))", .expected = .{ .bool_val = false } },
-    .{ .name = "record with string and bool: same",
+    .{
+        .name = "record with string and bool: same",
         .source =
-            \\{ name: "hello", active: Bool.True } == { name: "hello", active: Bool.True }
+        \\{ name: "hello", active: Bool.True } == { name: "hello", active: Bool.True }
         ,
         .expected = .{ .bool_val = true },
     },
-    .{ .name = "record with string and bool: diff",
+    .{
+        .name = "record with string and bool: diff",
         .source =
-            \\{ name: "hello", active: Bool.True } == { name: "hello", active: Bool.False }
+        \\{ name: "hello", active: Bool.True } == { name: "hello", active: Bool.False }
         ,
         .expected = .{ .bool_val = false },
     },
 
     // --- from eval_test.zig: tag union inside record/tuple equality ---
-    .{ .name = "tag union inside record: same",
+    .{
+        .name = "tag union inside record: same",
         .source =
-            \\{
-            \\    a = { status: Ok(42) }
-            \\    b = { status: Ok(42) }
-            \\    a == b
-            \\}
+        \\{
+        \\    a = { status: Ok(42) }
+        \\    b = { status: Ok(42) }
+        \\    a == b
+        \\}
         ,
         .expected = .{ .bool_val = true },
     },
-    .{ .name = "tag union inside record: diff",
+    .{
+        .name = "tag union inside record: diff",
         .source =
-            \\{
-            \\    a = { status: Ok(42) }
-            \\    b = { status: Ok(99) }
-            \\    a == b
-            \\}
+        \\{
+        \\    a = { status: Ok(42) }
+        \\    b = { status: Ok(99) }
+        \\    a == b
+        \\}
         ,
         .expected = .{ .bool_val = false },
     },
@@ -694,217 +725,247 @@ pub const tests = [_]TestCase{
     .{ .name = "tuple inside tag union eq: diff", .source = "Ok((1, 2)) == Ok((1, 9))", .expected = .{ .bool_val = false } },
 
     // --- from eval_test.zig: three-deep nested equality ---
-    .{ .name = "record inside tag union inside tuple eq: same",
+    .{
+        .name = "record inside tag union inside tuple eq: same",
         .source =
-            \\(Ok({ x: 1, y: 2 }), 42) == (Ok({ x: 1, y: 2 }), 42)
+        \\(Ok({ x: 1, y: 2 }), 42) == (Ok({ x: 1, y: 2 }), 42)
         ,
         .expected = .{ .bool_val = true },
     },
-    .{ .name = "record inside tag union inside tuple eq: diff",
+    .{
+        .name = "record inside tag union inside tuple eq: diff",
         .source =
-            \\(Ok({ x: 1, y: 2 }), 42) == (Ok({ x: 1, y: 9 }), 42)
+        \\(Ok({ x: 1, y: 2 }), 42) == (Ok({ x: 1, y: 9 }), 42)
         ,
         .expected = .{ .bool_val = false },
     },
-    .{ .name = "tuple inside record inside tag union eq: same",
+    .{
+        .name = "tuple inside record inside tag union eq: same",
         .source =
-            \\Ok({ pair: (1, 2), val: 99 }) == Ok({ pair: (1, 2), val: 99 })
+        \\Ok({ pair: (1, 2), val: 99 }) == Ok({ pair: (1, 2), val: 99 })
         ,
         .expected = .{ .bool_val = true },
     },
-    .{ .name = "tuple inside record inside tag union eq: diff",
+    .{
+        .name = "tuple inside record inside tag union eq: diff",
         .source =
-            \\Ok({ pair: (1, 2), val: 99 }) == Ok({ pair: (1, 9), val: 99 })
+        \\Ok({ pair: (1, 2), val: 99 }) == Ok({ pair: (1, 9), val: 99 })
         ,
         .expected = .{ .bool_val = false },
     },
-    .{ .name = "tag union inside record inside tuple eq: same",
+    .{
+        .name = "tag union inside record inside tuple eq: same",
         .source =
-            \\({ result: Ok(1) }, 99) == ({ result: Ok(1) }, 99)
+        \\({ result: Ok(1) }, 99) == ({ result: Ok(1) }, 99)
         ,
         .expected = .{ .bool_val = true },
     },
-    .{ .name = "tag union inside record inside tuple eq: diff",
+    .{
+        .name = "tag union inside record inside tuple eq: diff",
         .source =
-            \\({ result: Ok(1) }, 99) == ({ result: Ok(2) }, 99)
+        \\({ result: Ok(1) }, 99) == ({ result: Ok(2) }, 99)
         ,
         .expected = .{ .bool_val = false },
     },
 
     // --- from eval_test.zig: four-deep nested equality ---
-    .{ .name = "four-deep nested eq: same",
+    .{
+        .name = "four-deep nested eq: same",
         .source =
-            \\{ data: (Ok({ val: 42 }), 1) } == { data: (Ok({ val: 42 }), 1) }
+        \\{ data: (Ok({ val: 42 }), 1) } == { data: (Ok({ val: 42 }), 1) }
         ,
         .expected = .{ .bool_val = true },
     },
-    .{ .name = "four-deep nested eq: diff",
+    .{
+        .name = "four-deep nested eq: diff",
         .source =
-            \\{ data: (Ok({ val: 42 }), 1) } == { data: (Ok({ val: 99 }), 1) }
+        \\{ data: (Ok({ val: 42 }), 1) } == { data: (Ok({ val: 99 }), 1) }
         ,
         .expected = .{ .bool_val = false },
     },
 
     // --- from eval_test.zig: long string fields equality ---
-    .{ .name = "record long string eq: same",
+    .{
+        .name = "record long string eq: same",
         .source =
-            \\{ name: "this string is long enough to avoid SSO optimization" } == { name: "this string is long enough to avoid SSO optimization" }
+        \\{ name: "this string is long enough to avoid SSO optimization" } == { name: "this string is long enough to avoid SSO optimization" }
         ,
         .expected = .{ .bool_val = true },
     },
-    .{ .name = "record long string eq: diff",
+    .{
+        .name = "record long string eq: diff",
         .source =
-            \\{ name: "this string is long enough to avoid SSO optimization" } == { name: "different long string that also avoids SSO optimization" }
+        \\{ name: "this string is long enough to avoid SSO optimization" } == { name: "different long string that also avoids SSO optimization" }
         ,
         .expected = .{ .bool_val = false },
     },
-    .{ .name = "record long string neq: same",
+    .{
+        .name = "record long string neq: same",
         .source =
-            \\{ name: "this string is long enough to avoid SSO optimization" } != { name: "this string is long enough to avoid SSO optimization" }
+        \\{ name: "this string is long enough to avoid SSO optimization" } != { name: "this string is long enough to avoid SSO optimization" }
         ,
         .expected = .{ .bool_val = false },
     },
-    .{ .name = "record long string neq: diff",
+    .{
+        .name = "record long string neq: diff",
         .source =
-            \\{ name: "this string is long enough to avoid SSO optimization" } != { name: "different long string that also avoids SSO optimization" }
+        \\{ name: "this string is long enough to avoid SSO optimization" } != { name: "different long string that also avoids SSO optimization" }
         ,
         .expected = .{ .bool_val = true },
     },
-    .{ .name = "tuple long string eq: same",
+    .{
+        .name = "tuple long string eq: same",
         .source =
-            \\("this string is long enough to avoid SSO optimization", 42) == ("this string is long enough to avoid SSO optimization", 42)
+        \\("this string is long enough to avoid SSO optimization", 42) == ("this string is long enough to avoid SSO optimization", 42)
         ,
         .expected = .{ .bool_val = true },
     },
-    .{ .name = "tuple long string eq: diff",
+    .{
+        .name = "tuple long string eq: diff",
         .source =
-            \\("this string is long enough to avoid SSO optimization", 42) == ("different long string that also avoids SSO optimization", 42)
+        \\("this string is long enough to avoid SSO optimization", 42) == ("different long string that also avoids SSO optimization", 42)
         ,
         .expected = .{ .bool_val = false },
     },
-    .{ .name = "record multi long string eq: same",
+    .{
+        .name = "record multi long string eq: same",
         .source =
-            \\{ a: "first long string exceeding SSO limit!!", b: "second long string exceeding SSO limit!" } == { a: "first long string exceeding SSO limit!!", b: "second long string exceeding SSO limit!" }
+        \\{ a: "first long string exceeding SSO limit!!", b: "second long string exceeding SSO limit!" } == { a: "first long string exceeding SSO limit!!", b: "second long string exceeding SSO limit!" }
         ,
         .expected = .{ .bool_val = true },
     },
-    .{ .name = "record multi long string eq: diff",
+    .{
+        .name = "record multi long string eq: diff",
         .source =
-            \\{ a: "first long string exceeding SSO limit!!", b: "second long string exceeding SSO limit!" } == { a: "first long string exceeding SSO limit!!", b: "DIFFERENT long string exceeding SSO!!!!" }
+        \\{ a: "first long string exceeding SSO limit!!", b: "second long string exceeding SSO limit!" } == { a: "first long string exceeding SSO limit!!", b: "DIFFERENT long string exceeding SSO!!!!" }
         ,
         .expected = .{ .bool_val = false },
     },
-    .{ .name = "long string inside record inside tuple eq: same",
+    .{
+        .name = "long string inside record inside tuple eq: same",
         .source =
-            \\({ name: "this string is long enough to avoid SSO optimization" }, 1) == ({ name: "this string is long enough to avoid SSO optimization" }, 1)
+        \\({ name: "this string is long enough to avoid SSO optimization" }, 1) == ({ name: "this string is long enough to avoid SSO optimization" }, 1)
         ,
         .expected = .{ .bool_val = true },
     },
-    .{ .name = "long string inside record inside tuple eq: diff",
+    .{
+        .name = "long string inside record inside tuple eq: diff",
         .source =
-            \\({ name: "this string is long enough to avoid SSO optimization" }, 1) == ({ name: "different long string that also avoids SSO optimization" }, 1)
+        \\({ name: "this string is long enough to avoid SSO optimization" }, 1) == ({ name: "different long string that also avoids SSO optimization" }, 1)
         ,
         .expected = .{ .bool_val = false },
     },
-    .{ .name = "tag union long string payload eq: same",
+    .{
+        .name = "tag union long string payload eq: same",
         .source =
-            \\Ok("this string is long enough to avoid SSO optimization") == Ok("this string is long enough to avoid SSO optimization")
+        \\Ok("this string is long enough to avoid SSO optimization") == Ok("this string is long enough to avoid SSO optimization")
         ,
         .expected = .{ .bool_val = true },
     },
-    .{ .name = "tag union long string payload eq: diff",
+    .{
+        .name = "tag union long string payload eq: diff",
         .source =
-            \\Ok("this string is long enough to avoid SSO optimization") == Ok("different long string that also avoids SSO optimization")
+        \\Ok("this string is long enough to avoid SSO optimization") == Ok("different long string that also avoids SSO optimization")
         ,
         .expected = .{ .bool_val = false },
     },
-    .{ .name = "tag union long string payload neq: same",
+    .{
+        .name = "tag union long string payload neq: same",
         .source =
-            \\Ok("this string is long enough to avoid SSO optimization") != Ok("this string is long enough to avoid SSO optimization")
+        \\Ok("this string is long enough to avoid SSO optimization") != Ok("this string is long enough to avoid SSO optimization")
         ,
         .expected = .{ .bool_val = false },
     },
-    .{ .name = "tag union long string payload neq: diff",
+    .{
+        .name = "tag union long string payload neq: diff",
         .source =
-            \\Ok("this string is long enough to avoid SSO optimization") != Ok("different long string that also avoids SSO optimization")
+        \\Ok("this string is long enough to avoid SSO optimization") != Ok("different long string that also avoids SSO optimization")
         ,
         .expected = .{ .bool_val = true },
     },
 
     // --- from eval_test.zig: equality in control flow ---
-    .{ .name = "equality result in if: true",
+    .{
+        .name = "equality result in if: true",
         .source =
-            \\if { x: 1 } == { x: 1 } 42 else 0
+        \\if { x: 1 } == { x: 1 } 42 else 0
         ,
         .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "equality result in if: false",
+    .{
+        .name = "equality result in if: false",
         .source =
-            \\if { x: 1 } == { x: 2 } 42 else 0
+        \\if { x: 1 } == { x: 2 } 42 else 0
         ,
         .expected = .{ .dec_val = 0 * RocDec.one_point_zero_i128 },
     },
 
     // --- from eval_test.zig: equality with variable bindings ---
-    .{ .name = "equality var bindings: same",
+    .{
+        .name = "equality var bindings: same",
         .source =
-            \\{
-            \\    a = { x: 10, y: 20 }
-            \\    b = { x: 10, y: 20 }
-            \\    a == b
-            \\}
+        \\{
+        \\    a = { x: 10, y: 20 }
+        \\    b = { x: 10, y: 20 }
+        \\    a == b
+        \\}
         ,
         .expected = .{ .bool_val = true },
     },
-    .{ .name = "equality var bindings: diff",
+    .{
+        .name = "equality var bindings: diff",
         .source =
-            \\{
-            \\    a = { x: 10, y: 20 }
-            \\    b = { x: 10, y: 99 }
-            \\    a == b
-            \\}
+        \\{
+        \\    a = { x: 10, y: 20 }
+        \\    b = { x: 10, y: 99 }
+        \\    a == b
+        \\}
         ,
         .expected = .{ .bool_val = false },
     },
 
     // --- from eval_test.zig: inequality with variable bindings ---
-    .{ .name = "inequality var bindings tuples: same",
+    .{
+        .name = "inequality var bindings tuples: same",
         .source =
-            \\{
-            \\    a = (1, 2, 3)
-            \\    b = (1, 2, 3)
-            \\    a != b
-            \\}
+        \\{
+        \\    a = (1, 2, 3)
+        \\    b = (1, 2, 3)
+        \\    a != b
+        \\}
         ,
         .expected = .{ .bool_val = false },
     },
-    .{ .name = "inequality var bindings tuples: diff",
+    .{
+        .name = "inequality var bindings tuples: diff",
         .source =
-            \\{
-            \\    a = (1, 2, 3)
-            \\    b = (1, 2, 4)
-            \\    a != b
-            \\}
+        \\{
+        \\    a = (1, 2, 3)
+        \\    b = (1, 2, 4)
+        \\    a != b
+        \\}
         ,
         .expected = .{ .bool_val = true },
     },
-    .{ .name = "inequality var bindings records: same",
+    .{
+        .name = "inequality var bindings records: same",
         .source =
-            \\{
-            \\    a = { x: 10, y: 20 }
-            \\    b = { x: 10, y: 20 }
-            \\    a != b
-            \\}
+        \\{
+        \\    a = { x: 10, y: 20 }
+        \\    b = { x: 10, y: 20 }
+        \\    a != b
+        \\}
         ,
         .expected = .{ .bool_val = false },
     },
-    .{ .name = "inequality var bindings records: diff",
+    .{
+        .name = "inequality var bindings records: diff",
         .source =
-            \\{
-            \\    a = { x: 10, y: 20 }
-            \\    b = { x: 10, y: 99 }
-            \\    a != b
-            \\}
+        \\{
+        \\    a = { x: 10, y: 20 }
+        \\    b = { x: 10, y: 99 }
+        \\    a != b
+        \\}
         ,
         .expected = .{ .bool_val = true },
     },
@@ -921,37 +982,39 @@ pub const tests = [_]TestCase{
     .{ .name = "match pattern alternatives", .source = "match Err(42) { Ok(x) | Err(x) => x, _ => 0 }", .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 } },
 
     // --- from eval_test.zig: record update ---
-    .{ .name = "record update evaluates extension once",
+    .{
+        .name = "record update evaluates extension once",
         .source =
-            \\{
-            \\    var $calls = 0.I64
-            \\    rec = {
-            \\        ..({
-            \\            $calls = $calls + 1.I64
-            \\            { a: 1.I64, b: 2.I64, c: 3.I64 }
-            \\        }),
-            \\        a: 10.I64,
-            \\        b: 20.I64,
-            \\        c: 30.I64
-            \\    }
-            \\    rec.a + rec.b + rec.c + $calls * 100.I64
-            \\}
+        \\{
+        \\    var $calls = 0.I64
+        \\    rec = {
+        \\        ..({
+        \\            $calls = $calls + 1.I64
+        \\            { a: 1.I64, b: 2.I64, c: 3.I64 }
+        \\        }),
+        \\        a: 10.I64,
+        \\        b: 20.I64,
+        \\        c: 30.I64
+        \\    }
+        \\    rec.a + rec.b + rec.c + $calls * 100.I64
+        \\}
         ,
         .expected = .{ .i64_val = 160 },
     },
-    .{ .name = "record update synthesizes missing fields",
+    .{
+        .name = "record update synthesizes missing fields",
         .source =
-            \\{
-            \\    var $calls = 0.I64
-            \\    rec = {
-            \\        ..({
-            \\            $calls = $calls + 1.I64
-            \\            { a: $calls, b: $calls, c: $calls }
-            \\        }),
-            \\        c: 99.I64
-            \\    }
-            \\    rec.a * 1000.I64 + rec.b * 100.I64 + rec.c + $calls * 10.I64
-            \\}
+        \\{
+        \\    var $calls = 0.I64
+        \\    rec = {
+        \\        ..({
+        \\            $calls = $calls + 1.I64
+        \\            { a: $calls, b: $calls, c: $calls }
+        \\        }),
+        \\        c: 99.I64
+        \\    }
+        \\    rec.a * 1000.I64 + rec.b * 100.I64 + rec.c + $calls * 10.I64
+        \\}
         ,
         .expected = .{ .i64_val = 1209 },
     },
@@ -968,887 +1031,954 @@ pub const tests = [_]TestCase{
     .{ .name = "record with list neq: large stack offset", .source = "{ a: [1] } != { a: [1, 2] }", .expected = .{ .bool_val = true } },
     .{ .name = "record with list eq: same", .source = "{ a: [1] } == { a: [1] }", .expected = .{ .bool_val = true } },
     .{ .name = "record with list eq: empty same", .source = "{ a: [] } == { a: [] }", .expected = .{ .bool_val = true } },
-    .{ .name = "if block with local bindings",
+    .{
+        .name = "if block with local bindings",
         .source =
-            \\if True {
-            \\    x = 0
-            \\    _y = x
-            \\    x
-            \\}
-            \\else 99
+        \\if True {
+        \\    x = 0
+        \\    _y = x
+        \\    x
+        \\}
+        \\else 99
         ,
         .expected = .{ .dec_val = 0 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "List.len returns proper U64 nominal type: empty",
+    .{
+        .name = "List.len returns proper U64 nominal type: empty",
         .source =
-            \\{
-            \\    n = List.len([])
-            \\    n.to_str()
-            \\}
+        \\{
+        \\    n = List.len([])
+        \\    n.to_str()
+        \\}
         ,
         .expected = .{ .str_val = "0" },
     },
-    .{ .name = "List.len returns proper U64 nominal type: non-empty",
+    .{
+        .name = "List.len returns proper U64 nominal type: non-empty",
         .source =
-            \\{
-            \\    n = List.len([1, 2, 3])
-            \\    n.to_str()
-            \\}
+        \\{
+        \\    n = List.len([1, 2, 3])
+        \\    n.to_str()
+        \\}
         ,
         .expected = .{ .str_val = "3" },
     },
-    .{ .name = "type annotation on var declaration",
+    .{
+        .name = "type annotation on var declaration",
         .source =
-            \\{
-            \\    var $foo : U8
-            \\    var $foo = 42
-            \\    $foo
-            \\}
+        \\{
+        \\    var $foo : U8
+        \\    var $foo = 42
+        \\    $foo
+        \\}
         ,
         .expected = .{ .i64_val = 42 },
     },
-    .{ .name = "List.get with polymorphic numeric index",
+    .{
+        .name = "List.get with polymorphic numeric index",
         .source =
-            \\{
-            \\    list = [10, 20, 30]
-            \\    index = 0
-            \\    match List.get(list, index) { Ok(v) => v, _ => 0 }
-            \\}
+        \\{
+        \\    list = [10, 20, 30]
+        \\    index = 0
+        \\    match List.get(list, index) { Ok(v) => v, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 10 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "for loop element type from list runtime type",
+    .{
+        .name = "for loop element type from list runtime type",
         .source =
-            \\{
-            \\    calc = |list| {
-            \\        var $result = ""
-            \\        for elem in list {
-            \\            $result = elem.to_str()
-            \\        }
-            \\        $result
-            \\    }
-            \\    calc([1, 2, 3])
-            \\}
+        \\{
+        \\    calc = |list| {
+        \\        var $result = ""
+        \\        for elem in list {
+        \\            $result = elem.to_str()
+        \\        }
+        \\        $result
+        \\    }
+        \\    calc([1, 2, 3])
+        \\}
         ,
         .expected = .{ .str_val = "3.0" },
     },
-    .{ .name = "List.get method dispatch on Try type",
+    .{
+        .name = "List.get method dispatch on Try type",
         .source =
-            \\{
-            \\    list = ["hello"]
-            \\    List.get(list, 0).ok_or("fallback")
-            \\}
+        \\{
+        \\    list = ["hello"]
+        \\    List.get(list, 0).ok_or("fallback")
+        \\}
         ,
         .expected = .{ .str_val = "hello" },
     },
-    .{ .name = "List.get with list var and when destructure",
+    .{
+        .name = "List.get with list var and when destructure",
         .source =
-            \\{
-            \\    list = ["hello"]
-            \\    match List.get(list, 0) {
-            \\        Ok(val) => val
-            \\        Err(_) => "error"
-            \\    }
-            \\}
+        \\{
+        \\    list = ["hello"]
+        \\    match List.get(list, 0) {
+        \\        Ok(val) => val
+        \\        Err(_) => "error"
+        \\    }
+        \\}
         ,
         .expected = .{ .str_val = "hello" },
     },
-    .{ .name = "record destructuring with assignment",
+    .{
+        .name = "record destructuring with assignment",
         .source =
-            \\{
-            \\    rec = { x: 1, y: 2 }
-            \\    { x, y } = rec
-            \\    x + y
-            \\}
+        \\{
+        \\    rec = { x: 1, y: 2 }
+        \\    { x, y } = rec
+        \\    x + y
+        \\}
         ,
         .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "record field access - regression 8647",
+    .{
+        .name = "record field access - regression 8647",
         .source =
-            \\{
-            \\    rec = { name: "test" }
-            \\    rec.name
-            \\}
+        \\{
+        \\    rec = { name: "test" }
+        \\    rec.name
+        \\}
         ,
         .expected = .{ .str_val = "test" },
     },
-    .{ .name = "record field access with multiple string fields",
+    .{
+        .name = "record field access with multiple string fields",
         .source =
-            \\{
-            \\    record = { x: "a", y: "b" }
-            \\    record.x
-            \\}
+        \\{
+        \\    record = { x: "a", y: "b" }
+        \\    record.x
+        \\}
         ,
         .expected = .{ .str_val = "a" },
     },
-    .{ .name = "method calls on numeric variables: float",
+    .{
+        .name = "method calls on numeric variables: float",
         .source =
-            \\{
-            \\    x = 7.0
-            \\    x.to_str()
-            \\}
+        \\{
+        \\    x = 7.0
+        \\    x.to_str()
+        \\}
         ,
         .expected = .{ .str_val = "7.0" },
     },
-    .{ .name = "method calls on numeric variables: int",
+    .{
+        .name = "method calls on numeric variables: int",
         .source =
-            \\{
-            \\    x = 42
-            \\    x.to_str()
-            \\}
+        \\{
+        \\    x = 42
+        \\    x.to_str()
+        \\}
         ,
         .expected = .{ .str_val = "42.0" },
     },
     .{ .name = "issue 8710: list len", .source = "[1.I64, 2.I64, 3.I64].len()", .expected = .{ .i64_val = 3 } },
-    .{ .name = "issue 8727: make_adder",
+    .{
+        .name = "issue 8727: make_adder",
         .source =
-            \\{
-            \\    make_adder = |n| |x| n + x
-            \\    add_ten = make_adder(10)
-            \\    add_ten(5)
-            \\}
+        \\{
+        \\    make_adder = |n| |x| n + x
+        \\    add_ten = make_adder(10)
+        \\    add_ten(5)
+        \\}
         ,
         .expected = .{ .dec_val = 15 * RocDec.one_point_zero_i128 },
     },
     .{ .name = "issue 8727: curried mul", .source = "(|a| |b| a * b)(5)(10)", .expected = .{ .dec_val = 50 * RocDec.one_point_zero_i128 } },
     .{ .name = "issue 8727: triple currying", .source = "(((|a| |b| |c| a + b + c)(100))(20))(3)", .expected = .{ .dec_val = 123 * RocDec.one_point_zero_i128 } },
-    .{ .name = "issue 8737: tag union with tuple payload",
+    .{
+        .name = "issue 8737: tag union with tuple payload",
         .source =
-            \\{
-            \\    result = XYZ((QQQ(1.U8), 3.U64))
-            \\    match result {
-            \\        XYZ(_) => 42
-            \\        BBB => 0
-            \\    }
-            \\}
+        \\{
+        \\    result = XYZ((QQQ(1.U8), 3.U64))
+        \\    match result {
+        \\        XYZ(_) => 42
+        \\        BBB => 0
+        \\    }
+        \\}
         ,
         .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "issue 8737: nested tuple pattern destructure",
+    .{
+        .name = "issue 8737: nested tuple pattern destructure",
         .source =
-            \\{
-            \\    result = XYZ((QQQ(1.U8), 3.U64))
-            \\    match result {
-            \\        XYZ((QQQ(_), n)) => if n == 3.U64 1 else 0
-            \\        BBB => 0
-            \\    }
-            \\}
+        \\{
+        \\    result = XYZ((QQQ(1.U8), 3.U64))
+        \\    match result {
+        \\        XYZ((QQQ(_), n)) => if n == 3.U64 1 else 0
+        \\        BBB => 0
+        \\    }
+        \\}
         ,
         .expected = .{ .dec_val = 1 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "early return: ? with Ok",
+    .{
+        .name = "early return: ? with Ok",
         .source =
-            \\{
-            \\    compute = |x| Ok(x?)
-            \\    match compute(Ok(42.I64)) { Ok(v) => v, _ => 0 }
-            \\}
+        \\{
+        \\    compute = |x| Ok(x?)
+        \\    match compute(Ok(42.I64)) { Ok(v) => v, _ => 0 }
+        \\}
         ,
         .expected = .{ .i64_val = 42 },
     },
-    .{ .name = "early return: ? with Err",
+    .{
+        .name = "early return: ? with Err",
         .source =
-            \\{
-            \\    compute = |x| Ok(x?)
-            \\    match compute(Err({})) { Ok(_) => 1, Err(_) => 0 }
-            \\}
+        \\{
+        \\    compute = |x| Ok(x?)
+        \\    match compute(Err({})) { Ok(_) => 1, Err(_) => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 0 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "early return: ? in List.map closure",
+    .{
+        .name = "early return: ? in List.map closure",
         .source =
-            \\{
-            \\    result = [Ok(1), Err({})].map(|x| Ok(x?))
-            \\    List.len(result)
-            \\}
+        \\{
+        \\    result = [Ok(1), Err({})].map(|x| Ok(x?))
+        \\    List.len(result)
+        \\}
         ,
         .expected = .{ .i64_val = 2 },
     },
-    .{ .name = "early return: ? in second arg",
+    .{
+        .name = "early return: ? in second arg",
         .source =
-            \\{
-            \\    my_func = |_a, b| b
-            \\    compute = |x| Ok(x?)
-            \\    match my_func(42, compute(Err({}))) { Ok(_) => 1, Err(_) => 0 }
-            \\}
+        \\{
+        \\    my_func = |_a, b| b
+        \\    compute = |x| Ok(x?)
+        \\    match my_func(42, compute(Err({}))) { Ok(_) => 1, Err(_) => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 0 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "early return: ? in first arg",
+    .{
+        .name = "early return: ? in first arg",
         .source =
-            \\{
-            \\    my_func = |a, _b| a
-            \\    compute = |x| Ok(x?)
-            \\    match my_func(compute(Err({})), 42) { Ok(_) => 1, Err(_) => 0 }
-            \\}
+        \\{
+        \\    my_func = |a, _b| a
+        \\    compute = |x| Ok(x?)
+        \\    match my_func(compute(Err({})), 42) { Ok(_) => 1, Err(_) => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 0 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "issue 8979: while True with break",
+    .{
+        .name = "issue 8979: while True with break",
         .source =
-            \\{
-            \\    var $i = 0.I64
-            \\    while (True) {
-            \\        if $i >= 5 {
-            \\            break
-            \\        }
-            \\        $i = $i + 1
-            \\    }
-            \\    $i
-            \\}
+        \\{
+        \\    var $i = 0.I64
+        \\    while (True) {
+        \\        if $i >= 5 {
+        \\            break
+        \\        }
+        \\        $i = $i + 1
+        \\    }
+        \\    $i
+        \\}
         ,
         .expected = .{ .i64_val = 5 },
     },
     .{ .name = "list fold_rev i64 dev regression", .source = "List.fold_rev([1.I64, 2.I64, 3.I64], 0.I64, |x, acc| acc * 10 + x)", .expected = .{ .i64_val = 321 } },
 
     // --- from eval_test.zig: Decoder tests ---
-    .{ .name = "Decoder: create ok result - check is Ok",
+    .{
+        .name = "Decoder: create ok result - check is Ok",
         .source =
-            \\{
-            \\    result = { result: Ok(42.I64), rest: [] }
-            \\    match result.result {
-            \\        Ok(_) => Bool.True
-            \\        Err(_) => Bool.False
-            \\    }
-            \\}
+        \\{
+        \\    result = { result: Ok(42.I64), rest: [] }
+        \\    match result.result {
+        \\        Ok(_) => Bool.True
+        \\        Err(_) => Bool.False
+        \\    }
+        \\}
         ,
         .expected = .{ .bool_val = true },
     },
-    .{ .name = "Decoder: create ok result - extract value",
+    .{
+        .name = "Decoder: create ok result - extract value",
         .source =
-            \\{
-            \\    result = { result: Ok(42.I64), rest: [] }
-            \\    match result.result {
-            \\        Ok(n) => n
-            \\        Err(_) => 0.I64
-            \\    }
-            \\}
+        \\{
+        \\    result = { result: Ok(42.I64), rest: [] }
+        \\    match result.result {
+        \\        Ok(n) => n
+        \\        Err(_) => 0.I64
+        \\    }
+        \\}
         ,
         .expected = .{ .i64_val = 42 },
     },
-    .{ .name = "Decoder: create err result",
+    .{
+        .name = "Decoder: create err result",
         .source =
-            \\{
-            \\    result = { result: Err(TooShort), rest: [1.U8, 2.U8, 3.U8] }
-            \\    match result.result {
-            \\        Ok(_) => Bool.True
-            \\        Err(_) => Bool.False
-            \\    }
-            \\}
+        \\{
+        \\    result = { result: Err(TooShort), rest: [1.U8, 2.U8, 3.U8] }
+        \\    match result.result {
+        \\        Ok(_) => Bool.True
+        \\        Err(_) => Bool.False
+        \\    }
+        \\}
         ,
         .expected = .{ .bool_val = false },
     },
 
     // --- from eval_test.zig: decode type mismatch ---
-    .{ .name = "decode: I32.decode type mismatch crash",
+    .{
+        .name = "decode: I32.decode type mismatch crash",
         .source =
-            \\{
-            \\    fmt = {
-            \\        decode_i32: |_fmt, src| (Ok(42.I32), src),
-            \\    }
-            \\    (result, _rest) = I32.decode([], fmt)
-            \\    match result {
-            \\        Ok(n) => n.to_i64()
-            \\        Err(_) => 0.I64
-            \\    }
-            \\}
+        \\{
+        \\    fmt = {
+        \\        decode_i32: |_fmt, src| (Ok(42.I32), src),
+        \\    }
+        \\    (result, _rest) = I32.decode([], fmt)
+        \\    match result {
+        \\        Ok(n) => n.to_i64()
+        \\        Err(_) => 0.I64
+        \\    }
+        \\}
         ,
         .expected = .{ .type_mismatch_crash = {} },
     },
 
     // --- from eval_test.zig: debug 8783 series ---
-    .{ .name = "debug 8783a: lambda with tag match",
+    .{
+        .name = "debug 8783a: lambda with tag match",
         .source =
-            \\{
-            \\    f = |child|
-            \\        match child {
-            \\            Aaa(_, _) => 10.I64
-            \\            Bbb(_) => 1.I64
-            \\        }
-            \\    f(Bbb(42.I64))
-            \\}
+        \\{
+        \\    f = |child|
+        \\        match child {
+        \\            Aaa(_, _) => 10.I64
+        \\            Bbb(_) => 1.I64
+        \\        }
+        \\    f(Bbb(42.I64))
+        \\}
         ,
         .expected = .{ .i64_val = 1 },
     },
-    .{ .name = "debug 8783b: fold with simple addition",
+    .{
+        .name = "debug 8783b: fold with simple addition",
         .source =
-            \\{
-            \\    items = [1.I64, 2.I64, 3.I64]
-            \\    List.fold(items, 0.I64, |acc, x| acc + x)
-            \\}
+        \\{
+        \\    items = [1.I64, 2.I64, 3.I64]
+        \\    List.fold(items, 0.I64, |acc, x| acc + x)
+        \\}
         ,
         .expected = .{ .i64_val = 6 },
     },
-    .{ .name = "debug 8783g: match on payload tag without fold",
+    .{
+        .name = "debug 8783g: match on payload tag without fold",
         .source =
-            \\{
-            \\    item = A(1.I64)
-            \\    match item {
-            \\        A(x) => x + 100.I64
-            \\        B(x) => x + 200.I64
-            \\    }
-            \\}
+        \\{
+        \\    item = A(1.I64)
+        \\    match item {
+        \\        A(x) => x + 100.I64
+        \\        B(x) => x + 200.I64
+        \\    }
+        \\}
         ,
         .expected = .{ .i64_val = 101 },
     },
-    .{ .name = "match on zst-payload tag union",
+    .{
+        .name = "match on zst-payload tag union",
         .source =
-            \\{
-            \\    item = A({})
-            \\    match item {
-            \\        A(_) => 1.I64
-            \\        B(_) => 0.I64
-            \\    }
-            \\}
+        \\{
+        \\    item = A({})
+        \\    match item {
+        \\        A(_) => 1.I64
+        \\        B(_) => 0.I64
+        \\    }
+        \\}
         ,
         .expected = .{ .i64_val = 1 },
     },
-    .{ .name = "proc return of zst-payload tag union",
+    .{
+        .name = "proc return of zst-payload tag union",
         .source =
-            \\{
-            \\    make = || A({})
-            \\    match make() {
-            \\        A(_) => 1.I64
-            \\        _ => 0.I64
-            \\    }
-            \\}
+        \\{
+        \\    make = || A({})
+        \\    match make() {
+        \\        A(_) => 1.I64
+        \\        _ => 0.I64
+        \\    }
+        \\}
         ,
         .expected = .{ .i64_val = 1 },
     },
-    .{ .name = "debug 8783f: fold with tag match single payload",
+    .{
+        .name = "debug 8783f: fold with tag match single payload",
         .source =
-            \\{
-            \\    items = [A(1.I64), B(2.I64)]
-            \\    f = |acc, x|
-            \\        match x {
-            \\            A(_) => acc + 1.I64
-            \\            B(_) => acc + 10.I64
-            \\        }
-            \\    List.fold(items, 0.I64, f)
-            \\}
+        \\{
+        \\    items = [A(1.I64), B(2.I64)]
+        \\    f = |acc, x|
+        \\        match x {
+        \\            A(_) => acc + 1.I64
+        \\            B(_) => acc + 10.I64
+        \\        }
+        \\    List.fold(items, 0.I64, f)
+        \\}
         ,
         .expected = .{ .i64_val = 11 },
     },
-    .{ .name = "debug 8783c: fold with tag match",
+    .{
+        .name = "debug 8783c: fold with tag match",
         .source =
-            \\{
-            \\    children = [Text("hello")]
-            \\    count_child = |acc, child|
-            \\        match child {
-            \\            Text(_) => acc + 1.I64
-            \\            Element(_, _) => acc + 10.I64
-            \\        }
-            \\    List.fold(children, 0.I64, count_child)
-            \\}
+        \\{
+        \\    children = [Text("hello")]
+        \\    count_child = |acc, child|
+        \\        match child {
+        \\            Text(_) => acc + 1.I64
+        \\            Element(_, _) => acc + 10.I64
+        \\        }
+        \\    List.fold(children, 0.I64, count_child)
+        \\}
         ,
         .expected = .{ .i64_val = 1 },
     },
-    .{ .name = "issue 8783: fold match on tag union from pattern match",
+    .{
+        .name = "issue 8783: fold match on tag union from pattern match",
         .source =
-            \\{
-            \\    elem = Element("div", [Text("hello")])
-            \\    children = match elem {
-            \\        Element(_tag, c) => c
-            \\        Text(_) => []
-            \\    }
-            \\    count_child = |acc, child|
-            \\        match child {
-            \\            Text(_) => acc + 1.I64
-            \\            Element(_, _) => acc + 10.I64
-            \\        }
-            \\    List.fold(children, 0.I64, count_child)
-            \\}
+        \\{
+        \\    elem = Element("div", [Text("hello")])
+        \\    children = match elem {
+        \\        Element(_tag, c) => c
+        \\        Text(_) => []
+        \\    }
+        \\    count_child = |acc, child|
+        \\        match child {
+        \\            Text(_) => acc + 1.I64
+        \\            Element(_, _) => acc + 10.I64
+        \\        }
+        \\    List.fold(children, 0.I64, count_child)
+        \\}
         ,
         .expected = .{ .i64_val = 1 },
     },
 
     // --- from eval_test.zig: issue 8821 ---
-    .{ .name = "issue 8821: List.get with records and match",
+    .{
+        .name = "issue 8821: List.get with records and match",
         .source =
-            \\{
-            \\    clients : List({ id : U64, name : Str })
-            \\    clients = [{ id: 1, name: "Alice" }]
-            \\
-            \\    match List.get(clients, 0) {
-            \\        Ok(client) => client.name
-            \\        Err(_) => "missing"
-            \\    }
-            \\}
+        \\{
+        \\    clients : List({ id : U64, name : Str })
+        \\    clients = [{ id: 1, name: "Alice" }]
+        \\
+        \\    match List.get(clients, 0) {
+        \\        Ok(client) => client.name
+        \\        Err(_) => "missing"
+        \\    }
+        \\}
         ,
         .expected = .{ .str_val = "Alice" },
     },
-    .{ .name = "issue 8821 reduced: match ignores payload body",
+    .{
+        .name = "issue 8821 reduced: match ignores payload body",
         .source =
-            \\{
-            \\    clients : List({ id : U64, name : Str })
-            \\    clients = [{ id: 1, name: "Alice" }]
-            \\
-            \\    match List.get(clients, 0) {
-            \\        Ok(_client) => 1
-            \\        Err(_) => 0
-            \\    }
-            \\}
+        \\{
+        \\    clients : List({ id : U64, name : Str })
+        \\    clients = [{ id: 1, name: "Alice" }]
+        \\
+        \\    match List.get(clients, 0) {
+        \\        Ok(_client) => 1
+        \\        Err(_) => 0
+        \\    }
+        \\}
         ,
         .expected = .{ .dec_val = 1 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "issue 8821 reduced: without matching result",
+    .{
+        .name = "issue 8821 reduced: without matching result",
         .source =
-            \\{
-            \\    clients : List({ id : U64, name : Str })
-            \\    clients = [{ id: 1, name: "Alice" }]
-            \\
-            \\    _result = List.get(clients, 0)
-            \\    1
-            \\}
+        \\{
+        \\    clients : List({ id : U64, name : Str })
+        \\    clients = [{ id: 1, name: "Alice" }]
+        \\
+        \\    _result = List.get(clients, 0)
+        \\    1
+        \\}
         ,
         .expected = .{ .dec_val = 1 * RocDec.one_point_zero_i128 },
     },
 
     // --- from eval_test.zig: encode ---
-    .{ .name = "encode: string to utf8 and back",
+    .{
+        .name = "encode: string to utf8 and back",
         .source =
-            \\{
-            \\    bytes = Str.to_utf8("hello")
-            \\    Str.from_utf8_lossy(bytes)
-            \\}
+        \\{
+        \\    bytes = Str.to_utf8("hello")
+        \\    Str.from_utf8_lossy(bytes)
+        \\}
         ,
         .expected = .{ .str_val = "hello" },
     },
 
     // --- from eval_test.zig: static dispatch ---
-    .{ .name = "static dispatch: List.sum",
+    .{
+        .name = "static dispatch: List.sum",
         .source =
-            \\{
-            \\    list : List(I64)
-            \\    list = [1.I64, 2.I64, 3.I64, 4.I64, 5.I64]
-            \\    List.sum(list)
-            \\}
+        \\{
+        \\    list : List(I64)
+        \\    list = [1.I64, 2.I64, 3.I64, 4.I64, 5.I64]
+        \\    List.sum(list)
+        \\}
         ,
         .expected = .{ .i64_val = 15 },
     },
 
     // --- from eval_test.zig: issue 8814 ---
-    .{ .name = "issue 8814: List.get on function parameter",
+    .{
+        .name = "issue 8814: List.get on function parameter",
         .source =
-            \\{
-            \\    process = |args| {
-            \\        match args.get(0) {
-            \\            Ok(x) => x
-            \\            Err(_) => "error"
-            \\        }
-            \\    }
-            \\    process(["hello", "world"])
-            \\}
+        \\{
+        \\    process = |args| {
+        \\        match args.get(0) {
+        \\            Ok(x) => x
+        \\            Err(_) => "error"
+        \\        }
+        \\    }
+        \\    process(["hello", "world"])
+        \\}
         ,
         .expected = .{ .str_val = "hello" },
     },
 
     // --- from eval_test.zig: problems ---
-    .{ .name = "issue 8831: self-referential value definition",
+    .{
+        .name = "issue 8831: self-referential value definition",
         .source =
-            \\{
-            \\    a = a
-            \\    a
-            \\}
+        \\{
+        \\    a = a
+        \\    a
+        \\}
         ,
         .expected = .{ .problem = {} },
     },
-    .{ .name = "issue 8831: nested self-reference in list",
+    .{
+        .name = "issue 8831: nested self-reference in list",
         .source =
-            \\{
-            \\    a = [a]
-            \\    a
-            \\}
+        \\{
+        \\    a = [a]
+        \\    a
+        \\}
         ,
         .expected = .{ .problem = {} },
     },
-    .{ .name = "issue 9043: self-reference in tuple pattern",
+    .{
+        .name = "issue 9043: self-reference in tuple pattern",
         .source =
-            \\{
-            \\    next = |idx| (idx, idx + 1)
-            \\    (_, var $n) = next($n)
-            \\    $n
-            \\}
+        \\{
+        \\    next = |idx| (idx, idx + 1)
+        \\    (_, var $n) = next($n)
+        \\    $n
+        \\}
         ,
         .expected = .{ .problem = {} },
     },
 
     // --- from eval_test.zig: issue 9262 ---
-    .{ .name = "issue 9262: opaque function field returning tag union",
+    .{
+        .name = "issue 9262: opaque function field returning tag union",
         .source =
-            \\{
-            \\    W(a) := { f : {} -> [V(a)] }.{
-            \\        run = |w| (w.f)({})
-            \\
-            \\        mk = |val| { f: |{}| V(val) }
-            \\    }
-            \\
-            \\    W.run(W.mk("x")) == V("x")
-            \\}
+        \\{
+        \\    W(a) := { f : {} -> [V(a)] }.{
+        \\        run = |w| (w.f)({})
+        \\
+        \\        mk = |val| { f: |{}| V(val) }
+        \\    }
+        \\
+        \\    W.run(W.mk("x")) == V("x")
+        \\}
         ,
         .expected = .{ .bool_val = true },
     },
 
     // --- from eval_test.zig: recursive function with record ---
-    .{ .name = "recursive function with record - stack memory",
+    .{
+        .name = "recursive function with record - stack memory",
         .source =
-            \\{
-            \\    f = |n|
-            \\        if n <= 0
-            \\            0
-            \\        else
-            \\            { a: n, b: n * 2, c: n * 3, d: n * 4 }.a + f(n - 1)
-            \\    f(1000)
-            \\}
+        \\{
+        \\    f = |n|
+        \\        if n <= 0
+        \\            0
+        \\        else
+        \\            { a: n, b: n * 2, c: n * 3, d: n * 4 }.a + f(n - 1)
+        \\    f(1000)
+        \\}
         ,
         .expected = .{ .dec_val = 500500 * RocDec.one_point_zero_i128 },
     },
 
     // --- from eval_test.zig: polymorphic tag union payload layout ---
-    .{ .name = "issue 8872: polymorphic tag union payload layout",
+    .{
+        .name = "issue 8872: polymorphic tag union payload layout",
         .source =
-            \\{
-            \\    transform_err : [Ok({}), Err(a)], (a -> b) -> [Ok({}), Err(b)]
-            \\    transform_err = |try_val, transform| match try_val {
-            \\        Err(a) => Err(transform(a))
-            \\        Ok(ok) => Ok(ok)
-            \\    }
-            \\
-            \\    err : [Ok({}), Err(I32)]
-            \\    err = Err(42.I32)
-            \\
-            \\    result = transform_err(err, |_e| "hello")
-            \\    match result {
-            \\        Ok(_) => "got ok"
-            \\        Err(msg) => msg
-            \\    }
-            \\}
+        \\{
+        \\    transform_err : [Ok({}), Err(a)], (a -> b) -> [Ok({}), Err(b)]
+        \\    transform_err = |try_val, transform| match try_val {
+        \\        Err(a) => Err(transform(a))
+        \\        Ok(ok) => Ok(ok)
+        \\    }
+        \\
+        \\    err : [Ok({}), Err(I32)]
+        \\    err = Err(42.I32)
+        \\
+        \\    result = transform_err(err, |_e| "hello")
+        \\    match result {
+        \\        Ok(_) => "got ok"
+        \\        Err(msg) => msg
+        \\    }
+        \\}
         ,
         .expected = .{ .str_val = "hello" },
     },
-    .{ .name = "match on tag union with different sizes",
+    .{
+        .name = "match on tag union with different sizes",
         .source =
-            \\{
-            \\    transform : [Ok({}), Err(I32)] -> [Ok({}), Err(Str)]
-            \\    transform = |try_val| match try_val {
-            \\        Err(_) => Err("hello")
-            \\        Ok(ok) => Ok(ok)
-            \\    }
-            \\
-            \\    result = transform(Err(42.I32))
-            \\    match result {
-            \\        Ok(_) => "got ok"
-            \\        Err(msg) => msg
-            \\    }
-            \\}
+        \\{
+        \\    transform : [Ok({}), Err(I32)] -> [Ok({}), Err(Str)]
+        \\    transform = |try_val| match try_val {
+        \\        Err(_) => Err("hello")
+        \\        Ok(ok) => Ok(ok)
+        \\    }
+        \\
+        \\    result = transform(Err(42.I32))
+        \\    match result {
+        \\        Ok(_) => "got ok"
+        \\        Err(msg) => msg
+        \\    }
+        \\}
         ,
         .expected = .{ .str_val = "hello" },
     },
-    .{ .name = "polymorphic tag transform with match",
+    .{
+        .name = "polymorphic tag transform with match",
         .source =
-            \\{
-            \\    transform_err = |try_val| match try_val {
-            \\        Err(_) => Err("hello")
-            \\        Ok(ok) => Ok(ok)
-            \\    }
-            \\
-            \\    err : [Ok({}), Err(I32)]
-            \\    err = Err(42.I32)
-            \\
-            \\    result = transform_err(err)
-            \\    match result {
-            \\        Ok(_) => "got ok"
-            \\        Err(msg) => msg
-            \\    }
-            \\}
+        \\{
+        \\    transform_err = |try_val| match try_val {
+        \\        Err(_) => Err("hello")
+        \\        Ok(ok) => Ok(ok)
+        \\    }
+        \\
+        \\    err : [Ok({}), Err(I32)]
+        \\    err = Err(42.I32)
+        \\
+        \\    result = transform_err(err)
+        \\    match result {
+        \\        Ok(_) => "got ok"
+        \\        Err(msg) => msg
+        \\    }
+        \\}
         ,
         .expected = .{ .str_val = "hello" },
     },
-    .{ .name = "proc with tag match returning non-tag type",
+    .{
+        .name = "proc with tag match returning non-tag type",
         .source =
-            \\{
-            \\    check : [Ok({}), Err(I32)] -> Str
-            \\    check = |try_val| match try_val {
-            \\        Err(_) => "was err"
-            \\        Ok(_) => "was ok"
-            \\    }
-            \\
-            \\    check(Err(42.I32))
-            \\}
+        \\{
+        \\    check : [Ok({}), Err(I32)] -> Str
+        \\    check = |try_val| match try_val {
+        \\        Err(_) => "was err"
+        \\        Ok(_) => "was ok"
+        \\    }
+        \\
+        \\    check(Err(42.I32))
+        \\}
         ,
         .expected = .{ .str_val = "was err" },
     },
 
     // --- from eval_test.zig: lambda with list param tests ---
-    .{ .name = "lambda with list param: List.len",
+    .{
+        .name = "lambda with list param: List.len",
         .source =
-            \\{
-            \\    get_len = |l| List.len(l)
-            \\    get_len([1.I64, 2.I64, 3.I64])
-            \\}
+        \\{
+        \\    get_len = |l| List.len(l)
+        \\    get_len([1.I64, 2.I64, 3.I64])
+        \\}
         ,
         .expected = .{ .i64_val = 3 },
     },
-    .{ .name = "lambda with list param: List.append",
+    .{
+        .name = "lambda with list param: List.append",
         .source =
-            \\{
-            \\    add_one = |l| List.len(List.append(l, 99.I64))
-            \\    add_one([1.I64, 2.I64, 3.I64])
-            \\}
+        \\{
+        \\    add_one = |l| List.len(List.append(l, 99.I64))
+        \\    add_one([1.I64, 2.I64, 3.I64])
+        \\}
         ,
         .expected = .{ .i64_val = 4 },
     },
-    .{ .name = "lambda with list param and var",
+    .{
+        .name = "lambda with list param and var",
         .source =
-            \\{
-            \\    test_fn = |_l| {
-            \\        var $acc = [0.I64]
-            \\        List.len($acc)
-            \\    }
-            \\    test_fn([1.I64, 2.I64])
-            \\}
+        \\{
+        \\    test_fn = |_l| {
+        \\        var $acc = [0.I64]
+        \\        List.len($acc)
+        \\    }
+        \\    test_fn([1.I64, 2.I64])
+        \\}
         ,
         .expected = .{ .i64_val = 1 },
     },
-    .{ .name = "lambda with list param and list literal",
+    .{
+        .name = "lambda with list param and list literal",
         .source =
-            \\{
-            \\    test_fn = |_l| {
-            \\        var $acc = [0.I64]
-            \\        List.len($acc)
-            \\    }
-            \\    test_fn([10.I64, 20.I64])
-            \\}
+        \\{
+        \\    test_fn = |_l| {
+        \\        var $acc = [0.I64]
+        \\        List.len($acc)
+        \\    }
+        \\    test_fn([10.I64, 20.I64])
+        \\}
         ,
         .expected = .{ .i64_val = 1 },
     },
-    .{ .name = "lambda with list param var for loop",
+    .{
+        .name = "lambda with list param var for loop",
         .source =
-            \\{
-            \\    test_fn = |l| {
-            \\        var $total = 0.I64
-            \\        for e in l {
-            \\            $total = $total + e
-            \\        }
-            \\        $total
-            \\    }
-            \\    test_fn([10.I64, 20.I64, 30.I64])
-            \\}
+        \\{
+        \\    test_fn = |l| {
+        \\        var $total = 0.I64
+        \\        for e in l {
+        \\            $total = $total + e
+        \\        }
+        \\        $total
+        \\    }
+        \\    test_fn([10.I64, 20.I64, 30.I64])
+        \\}
         ,
         .expected = .{ .i64_val = 60 },
     },
-    .{ .name = "lambda with list param var List.append no loop",
+    .{
+        .name = "lambda with list param var List.append no loop",
         .source =
-            \\{
-            \\    test_fn = |_l| {
-            \\        var $acc = [0.I64]
-            \\        $acc = List.append($acc, 42.I64)
-            \\        List.len($acc)
-            \\    }
-            \\    test_fn([10.I64, 20.I64])
-            \\}
+        \\{
+        \\    test_fn = |_l| {
+        \\        var $acc = [0.I64]
+        \\        $acc = List.append($acc, 42.I64)
+        \\        List.len($acc)
+        \\    }
+        \\    test_fn([10.I64, 20.I64])
+        \\}
         ,
         .expected = .{ .i64_val = 2 },
     },
-    .{ .name = "minimal lambda with list param for loop",
+    .{
+        .name = "minimal lambda with list param for loop",
         .source =
-            \\{
-            \\    test_fn = |l| {
-            \\        var $total = 0.I64
-            \\        for e in l {
-            \\            $total = $total + e
-            \\        }
-            \\        $total
-            \\    }
-            \\    test_fn([1.I64, 2.I64])
-            \\}
+        \\{
+        \\    test_fn = |l| {
+        \\        var $total = 0.I64
+        \\        for e in l {
+        \\            $total = $total + e
+        \\        }
+        \\        $total
+        \\    }
+        \\    test_fn([1.I64, 2.I64])
+        \\}
         ,
         .expected = .{ .i64_val = 3 },
     },
-    .{ .name = "lambda with list param for loop alloc inside",
+    .{
+        .name = "lambda with list param for loop alloc inside",
         .source =
-            \\{
-            \\    test_fn = |l| {
-            \\        var $total = 0.I64
-            \\        for e in l {
-            \\            $total = match List.last([e]) { Ok(last) => $total + last, Err(_) => $total }
-            \\        }
-            \\        $total
-            \\    }
-            \\    test_fn([1.I64, 2.I64])
-            \\}
+        \\{
+        \\    test_fn = |l| {
+        \\        var $total = 0.I64
+        \\        for e in l {
+        \\            $total = match List.last([e]) { Ok(last) => $total + last, Err(_) => $total }
+        \\        }
+        \\        $total
+        \\    }
+        \\    test_fn([1.I64, 2.I64])
+        \\}
         ,
         .expected = .{ .i64_val = 3 },
     },
-    .{ .name = "lambda for loop over internal list scalar param",
+    .{
+        .name = "lambda for loop over internal list scalar param",
         .source =
-            \\{
-            \\    test_fn = |_x| {
-            \\        var $total = 0.I64
-            \\        for e in [1.I64, 2.I64, 3.I64] {
-            \\            $total = $total + e
-            \\        }
-            \\        $total
-            \\    }
-            \\    test_fn(42.I64)
-            \\}
+        \\{
+        \\    test_fn = |_x| {
+        \\        var $total = 0.I64
+        \\        for e in [1.I64, 2.I64, 3.I64] {
+        \\            $total = $total + e
+        \\        }
+        \\        $total
+        \\    }
+        \\    test_fn(42.I64)
+        \\}
         ,
         .expected = .{ .i64_val = 6 },
     },
-    .{ .name = "lambda list param for loop internal list alloc",
+    .{
+        .name = "lambda list param for loop internal list alloc",
         .source =
-            \\{
-            \\    test_fn = |_l| {
-            \\        var $total = 0.I64
-            \\        for e in [1.I64, 2.I64] {
-            \\            $total = match List.last([e]) { Ok(last) => $total + last, Err(_) => $total }
-            \\        }
-            \\        $total
-            \\    }
-            \\    test_fn([10.I64, 20.I64])
-            \\}
+        \\{
+        \\    test_fn = |_l| {
+        \\        var $total = 0.I64
+        \\        for e in [1.I64, 2.I64] {
+        \\            $total = match List.last([e]) { Ok(last) => $total + last, Err(_) => $total }
+        \\        }
+        \\        $total
+        \\    }
+        \\    test_fn([10.I64, 20.I64])
+        \\}
         ,
         .expected = .{ .i64_val = 3 },
     },
-    .{ .name = "lambda list param for loop empty iteration",
+    .{
+        .name = "lambda list param for loop empty iteration",
         .source =
-            \\{
-            \\    test_fn = |l| {
-            \\        var $acc = [0.I64]
-            \\        for e in l {
-            \\            $acc = List.append($acc, e)
-            \\        }
-            \\        List.len($acc)
-            \\    }
-            \\    test_fn([])
-            \\}
+        \\{
+        \\    test_fn = |l| {
+        \\        var $acc = [0.I64]
+        \\        for e in l {
+        \\            $acc = List.append($acc, e)
+        \\        }
+        \\        List.len($acc)
+        \\    }
+        \\    test_fn([])
+        \\}
         ,
         .expected = .{ .i64_val = 1 },
     },
-    .{ .name = "lambda list param for loop append single",
+    .{
+        .name = "lambda list param for loop append single",
         .source =
-            \\{
-            \\    test_fn = |l| {
-            \\        var $acc = [0.I64]
-            \\        for e in l {
-            \\            $acc = List.append($acc, e)
-            \\        }
-            \\        List.len($acc)
-            \\    }
-            \\    test_fn([10.I64])
-            \\}
+        \\{
+        \\    test_fn = |l| {
+        \\        var $acc = [0.I64]
+        \\        for e in l {
+        \\            $acc = List.append($acc, e)
+        \\        }
+        \\        List.len($acc)
+        \\    }
+        \\    test_fn([10.I64])
+        \\}
         ,
         .expected = .{ .i64_val = 2 },
     },
-    .{ .name = "lambda list param var for loop List.append",
+    .{
+        .name = "lambda list param var for loop List.append",
         .source =
-            \\{
-            \\    test_fn = |l| {
-            \\        var $acc = [0.I64]
-            \\        for e in l {
-            \\            $acc = List.append($acc, e)
-            \\        }
-            \\        List.len($acc)
-            \\    }
-            \\    test_fn([10.I64, 20.I64, 30.I64])
-            \\}
+        \\{
+        \\    test_fn = |l| {
+        \\        var $acc = [0.I64]
+        \\        for e in l {
+        \\            $acc = List.append($acc, e)
+        \\        }
+        \\        List.len($acc)
+        \\    }
+        \\    test_fn([10.I64, 20.I64, 30.I64])
+        \\}
         ,
         .expected = .{ .i64_val = 4 },
     },
 
     // --- from eval_test.zig: issue 8899 ---
-    .{ .name = "issue 8899: closure decref in for loop",
+    .{
+        .name = "issue 8899: closure decref in for loop",
         .source =
-            \\{
-            \\    sum_with_last = |l| {
-            \\        var $total = 0.I64
-            \\        var $acc = [0.I64]
-            \\        for e in l {
-            \\            $acc = List.append($acc, e)
-            \\            $total = match List.last($acc) { Ok(last) => $total + last, Err(_) => $total }
-            \\        }
-            \\        $total
-            \\    }
-            \\    sum_with_last([10.I64, 20.I64, 30.I64])
-            \\}
+        \\{
+        \\    sum_with_last = |l| {
+        \\        var $total = 0.I64
+        \\        var $acc = [0.I64]
+        \\        for e in l {
+        \\            $acc = List.append($acc, e)
+        \\            $total = match List.last($acc) { Ok(last) => $total + last, Err(_) => $total }
+        \\        }
+        \\        $total
+        \\    }
+        \\    sum_with_last([10.I64, 20.I64, 30.I64])
+        \\}
         ,
         .expected = .{ .i64_val = 60 },
     },
 
     // --- from eval_test.zig: issue 8927 ---
-    .{ .name = "issue 8927: early return in method argument",
+    .{
+        .name = "issue 8927: early return in method argument",
         .source =
-            \\{
-            \\    fold_try = |tries| {
-            \\        var $ok_list = [""]
-            \\        $ok_list = []
-            \\        for a_try in tries {
-            \\            $ok_list = $ok_list.append(a_try?)
-            \\        }
-            \\        Ok($ok_list)
-            \\    }
-            \\
-            \\    tries = [Ok("a"), Ok("b"), Err(Oops), Ok("d")]
-            \\
-            \\    match fold_try(tries) {
-            \\        Ok(list) => List.len(list)
-            \\        Err(_) => 0
-            \\    }
-            \\}
+        \\{
+        \\    fold_try = |tries| {
+        \\        var $ok_list = [""]
+        \\        $ok_list = []
+        \\        for a_try in tries {
+        \\            $ok_list = $ok_list.append(a_try?)
+        \\        }
+        \\        Ok($ok_list)
+        \\    }
+        \\
+        \\    tries = [Ok("a"), Ok("b"), Err(Oops), Ok("d")]
+        \\
+        \\    match fold_try(tries) {
+        \\        Ok(list) => List.len(list)
+        \\        Err(_) => 0
+        \\    }
+        \\}
         ,
         .expected = .{ .i64_val = 0 },
     },
 
     // --- from eval_test.zig: issue 8946 ---
-    .{ .name = "issue 8946: closure capturing for-loop element",
+    .{
+        .name = "issue 8946: closure capturing for-loop element",
         .source =
-            \\{
-            \\    my_any = |lst, pred| {
-            \\        for e in lst {
-            \\            if pred(e) { return True }
-            \\        }
-            \\        False
-            \\    }
-            \\    check = |list| {
-            \\        var $built = []
-            \\        for item in list {
-            \\            _x = my_any($built, |x| x == item)
-            \\            $built = $built.append(item)
-            \\        }
-            \\        $built.len()
-            \\    }
-            \\    check([1, 2])
-            \\}
+        \\{
+        \\    my_any = |lst, pred| {
+        \\        for e in lst {
+        \\            if pred(e) { return True }
+        \\        }
+        \\        False
+        \\    }
+        \\    check = |list| {
+        \\        var $built = []
+        \\        for item in list {
+        \\            _x = my_any($built, |x| x == item)
+        \\            $built = $built.append(item)
+        \\        }
+        \\        $built.len()
+        \\    }
+        \\    check([1, 2])
+        \\}
         ,
         .expected = .{ .i64_val = 2 },
     },
 
     // --- from eval_test.zig: issue 8978 ---
-    .{ .name = "issue 8978: incref alignment recursive tag unions",
+    .{
+        .name = "issue 8978: incref alignment recursive tag unions",
         .source =
-            \\{
-            \\    make_result = || {
-            \\        elem = Element("div", [Text("hello"), Element("span", [Text("world")])])
-            \\        children = match elem {
-            \\            Element(_tag, c) => c
-            \\            Text(_) => []
-            \\        }
-            \\        (children, 42.I64)
-            \\    }
-            \\    (_, n) = make_result()
-            \\    n
-            \\}
+        \\{
+        \\    make_result = || {
+        \\        elem = Element("div", [Text("hello"), Element("span", [Text("world")])])
+        \\        children = match elem {
+        \\            Element(_tag, c) => c
+        \\            Text(_) => []
+        \\        }
+        \\        (children, 42.I64)
+        \\    }
+        \\    (_, n) = make_result()
+        \\    n
+        \\}
         ,
         .expected = .{ .i64_val = 42 },
     },
 
     // --- from eval_test.zig: wildcard cleanup ---
-    .{ .name = "owned record wildcard field cleanup",
+    .{
+        .name = "owned record wildcard field cleanup",
         .source =
-            \\{
-            \\    make_record = || { ignored: [1.I64, 2.I64, 3.I64], kept: 7.I64 }
-            \\    { ignored: _, kept } = make_record()
-            \\    kept
-            \\}
+        \\{
+        \\    make_record = || { ignored: [1.I64, 2.I64, 3.I64], kept: 7.I64 }
+        \\    { ignored: _, kept } = make_record()
+        \\    kept
+        \\}
         ,
         .expected = .{ .i64_val = 7 },
     },
@@ -1866,31 +1996,34 @@ pub const tests = [_]TestCase{
     .{ .name = "str_inspekt - large integer", .source = "Str.inspect(1234567890)", .expected = .{ .str_val = "1234567890.0" } },
 
     // --- from eval_test.zig: higher-order functions ---
-    .{ .name = "higher-order function: simple apply",
+    .{
+        .name = "higher-order function: simple apply",
         .source =
-            \\{
-            \\    apply = |f, x| f(x)
-            \\    apply(|n| n + 1.I64, 5.I64)
-            \\}
+        \\{
+        \\    apply = |f, x| f(x)
+        \\    apply(|n| n + 1.I64, 5.I64)
+        \\}
         ,
         .expected = .{ .i64_val = 6 },
     },
-    .{ .name = "higher-order function: apply with closure",
+    .{
+        .name = "higher-order function: apply with closure",
         .source =
-            \\{
-            \\    offset = 10.I64
-            \\    apply = |f, x| f(x)
-            \\    apply(|n| n + offset, 5.I64)
-            \\}
+        \\{
+        \\    offset = 10.I64
+        \\    apply = |f, x| f(x)
+        \\    apply(|n| n + offset, 5.I64)
+        \\}
         ,
         .expected = .{ .i64_val = 15 },
     },
-    .{ .name = "higher-order function: twice",
+    .{
+        .name = "higher-order function: twice",
         .source =
-            \\{
-            \\    twice = |f, x| f(f(x))
-            \\    twice(|n| n * 2.I64, 3.I64)
-            \\}
+        \\{
+        \\    twice = |f, x| f(f(x))
+        \\    twice(|n| n * 2.I64, 3.I64)
+        \\}
         ,
         .expected = .{ .i64_val = 12 },
     },
@@ -1911,30 +2044,33 @@ pub const tests = [_]TestCase{
 
     // --- from eval_test.zig: diag tests ---
     .{ .name = "diag: match Ok extract payload", .source = "match Ok(42) { Ok(v) => v, _ => 0 }", .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 } },
-    .{ .name = "diag: lambda returning tag union",
+    .{
+        .name = "diag: lambda returning tag union",
         .source =
-            \\{
-            \\    f = |x| Ok(x)
-            \\    match f(42) { Ok(v) => v, _ => 0 }
-            \\}
+        \\{
+        \\    f = |x| Ok(x)
+        \\    match f(42) { Ok(v) => v, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "diag: identity lambda call",
+    .{
+        .name = "diag: identity lambda call",
         .source =
-            \\{
-            \\    f = |x| x
-            \\    f(42)
-            \\}
+        \\{
+        \\    f = |x| x
+        \\    f(42)
+        \\}
         ,
         .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "diag: lambda wrapping try suffix",
+    .{
+        .name = "diag: lambda wrapping try suffix",
         .source =
-            \\{
-            \\    compute = |x| Ok(x?)
-            \\    match compute(Ok(42.I64)) { Ok(v) => v, _ => 0 }
-            \\}
+        \\{
+        \\    compute = |x| Ok(x?)
+        \\    match compute(Ok(42.I64)) { Ok(v) => v, _ => 0 }
+        \\}
         ,
         .expected = .{ .i64_val = 42 },
     },
@@ -1946,97 +2082,103 @@ pub const tests = [_]TestCase{
     .{ .name = "Bool in record field: False", .source = "{ flag: Bool.False }.flag", .expected = .{ .bool_val = false } },
 
     // --- from eval_test.zig: polymorphic tag union payload substitution ---
-    .{ .name = "polymorphic tag union payload: extract",
+    .{
+        .name = "polymorphic tag union payload: extract",
         .source =
-            \\{
-            \\    second : [Left(a), Right(b)], b -> b
-            \\    second = |either, fallback| match either {
-            \\        Left(_) => fallback
-            \\        Right(val) => val
-            \\    }
-            \\
-            \\    input : [Left(I64), Right(I64)]
-            \\    input = Right(42.I64)
-            \\    second(input, 0.I64)
-            \\}
+        \\{
+        \\    second : [Left(a), Right(b)], b -> b
+        \\    second = |either, fallback| match either {
+        \\        Left(_) => fallback
+        \\        Right(val) => val
+        \\    }
+        \\
+        \\    input : [Left(I64), Right(I64)]
+        \\    input = Right(42.I64)
+        \\    second(input, 0.I64)
+        \\}
         ,
         .expected = .{ .i64_val = 42 },
     },
-    .{ .name = "polymorphic tag union payload: multiple type vars",
+    .{
+        .name = "polymorphic tag union payload: multiple type vars",
         .source =
-            \\{
-            \\    get_err : [Ok(a), Err(e)], e -> e
-            \\    get_err = |result, fallback| match result {
-            \\        Ok(_) => fallback
-            \\        Err(e) => e
-            \\    }
-            \\
-            \\    val : [Ok(I64), Err(Str)]
-            \\    val = Err("hello")
-            \\    get_err(val, "")
-            \\}
+        \\{
+        \\    get_err : [Ok(a), Err(e)], e -> e
+        \\    get_err = |result, fallback| match result {
+        \\        Ok(_) => fallback
+        \\        Err(e) => e
+        \\    }
+        \\
+        \\    val : [Ok(I64), Err(Str)]
+        \\    val = Err("hello")
+        \\    get_err(val, "")
+        \\}
         ,
         .expected = .{ .str_val = "hello" },
     },
 
     // --- from eval_test.zig: type mismatch crash tests ---
-    .{ .name = "polymorphic tag union: erroneous match branch crashes",
+    .{
+        .name = "polymorphic tag union: erroneous match branch crashes",
         .source =
-            \\{
-            \\    get_err : [Ok(a), Err(e)] -> e
-            \\    get_err = |result| match result {
-            \\        Ok(_) => ""
-            \\        Err(e) => e
-            \\    }
-            \\
-            \\    val : [Ok(I64), Err(Str)]
-            \\    val = Ok(42)
-            \\    get_err(val)
-            \\}
+        \\{
+        \\    get_err : [Ok(a), Err(e)] -> e
+        \\    get_err = |result| match result {
+        \\        Ok(_) => ""
+        \\        Err(e) => e
+        \\    }
+        \\
+        \\    val : [Ok(I64), Err(Str)]
+        \\    val = Ok(42)
+        \\    get_err(val)
+        \\}
         ,
         .expected = .{ .type_mismatch_crash = {} },
     },
-    .{ .name = "polymorphic: erroneous if-else branch crashes",
+    .{
+        .name = "polymorphic: erroneous if-else branch crashes",
         .source =
-            \\{
-            \\    get_val : Bool, e -> e
-            \\    get_val = |flag, val| if (flag) "" else val
-            \\
-            \\    get_val(Bool.true, 42)
-            \\}
+        \\{
+        \\    get_val : Bool, e -> e
+        \\    get_val = |flag, val| if (flag) "" else val
+        \\
+        \\    get_val(Bool.true, 42)
+        \\}
         ,
         .expected = .{ .type_mismatch_crash = {} },
     },
-    .{ .name = "polymorphic tag union: erroneous match in block crashes",
+    .{
+        .name = "polymorphic tag union: erroneous match in block crashes",
         .source =
-            \\{
-            \\    get_err : [Ok(a), Err(e)] -> e
-            \\    get_err = |result| {
-            \\        unused = 0
-            \\        match result {
-            \\            Ok(_) => ""
-            \\            Err(e) => e
-            \\        }
-            \\    }
-            \\
-            \\    val : [Ok(I64), Err(Str)]
-            \\    val = Ok(42)
-            \\    get_err(val)
-            \\}
+        \\{
+        \\    get_err : [Ok(a), Err(e)] -> e
+        \\    get_err = |result| {
+        \\        unused = 0
+        \\        match result {
+        \\            Ok(_) => ""
+        \\            Err(e) => e
+        \\        }
+        \\    }
+        \\
+        \\    val : [Ok(I64), Err(Str)]
+        \\    val = Ok(42)
+        \\    get_err(val)
+        \\}
         ,
         .expected = .{ .type_mismatch_crash = {} },
     },
-    .{ .name = "polymorphic tag union payload: wrap and unwrap",
+    .{
+        .name = "polymorphic tag union payload: wrap and unwrap",
         .source =
-            \\{
-            \\    wrap : a -> [Val(a)]
-            \\    wrap = |x| Val(x)
-            \\
-            \\    result = wrap(42)
-            \\    match result {
-            \\        Val(n) => n
-            \\    }
-            \\}
+        \\{
+        \\    wrap : a -> [Val(a)]
+        \\    wrap = |x| Val(x)
+        \\
+        \\    result = wrap(42)
+        \\    match result {
+        \\        Val(n) => n
+        \\    }
+        \\}
         ,
         .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 },
     },
@@ -2067,33 +2209,35 @@ pub const tests = [_]TestCase{
     .{ .name = "dev only: U32 literal", .source = "15.U32", .expected = .{ .dev_only_str = "15" } },
     .{ .name = "dev only: U32 comparison", .source = "1.U32 <= 5.U32", .expected = .{ .dev_only_str = "True" } },
     .{ .name = "dev only: U32 addition", .source = "1.U32 + 2.U32", .expected = .{ .dev_only_str = "3" } },
-    .{ .name = "dev only: while loop increment U32",
+    .{
+        .name = "dev only: while loop increment U32",
         .source =
-            \\{
-            \\    var current = 1.U32
-            \\
-            \\    while current <= 5.U32 {
-            \\        current = current + 1.U32
-            \\    }
-            \\
-            \\    current
-            \\}
+        \\{
+        \\    var current = 1.U32
+        \\
+        \\    while current <= 5.U32 {
+        \\        current = current + 1.U32
+        \\    }
+        \\
+        \\    current
+        \\}
         ,
         .expected = .{ .dev_only_str = "6" },
     },
-    .{ .name = "dev only: while loop sum U32",
+    .{
+        .name = "dev only: while loop sum U32",
         .source =
-            \\{
-            \\    var current = 1.U32
-            \\    var sum = 0.U32
-            \\
-            \\    while current <= 5.U32 {
-            \\        sum = sum + current
-            \\        current = current + 1.U32
-            \\    }
-            \\
-            \\    sum
-            \\}
+        \\{
+        \\    var current = 1.U32
+        \\    var sum = 0.U32
+        \\
+        \\    while current <= 5.U32 {
+        \\        sum = sum + current
+        \\        current = current + 1.U32
+        \\    }
+        \\
+        \\    sum
+        \\}
         ,
         .expected = .{ .dev_only_str = "15" },
     },
@@ -2122,47 +2266,51 @@ pub const tests = [_]TestCase{
     .{ .name = "Str.with_prefix: empty prefix", .source = "Str.with_prefix(\"bar\", \"\")", .expected = .{ .str_val = "bar" } },
 
     // --- from eval_test.zig: polymorphic closure capture ---
-    .{ .name = "polymorphic closure capture: int",
+    .{
+        .name = "polymorphic closure capture: int",
         .source =
-            \\{
-            \\    make_getter = |n| |_x| n
-            \\    get_num = make_getter(42)
-            \\    get_num(0)
-            \\}
+        \\{
+        \\    make_getter = |n| |_x| n
+        \\    get_num = make_getter(42)
+        \\    get_num(0)
+        \\}
         ,
         .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "polymorphic closure capture: str",
+    .{
+        .name = "polymorphic closure capture: str",
         .source =
-            \\{
-            \\    make_getter = |n| |_x| n
-            \\    get_str = make_getter("hello")
-            \\    get_str(0)
-            \\}
+        \\{
+        \\    make_getter = |n| |_x| n
+        \\    get_str = make_getter("hello")
+        \\    get_str(0)
+        \\}
         ,
         .expected = .{ .str_val = "hello" },
     },
 
     // --- from eval_test.zig: large record chained HOF ---
-    .{ .name = "large record chained HOF: w",
+    .{
+        .name = "large record chained HOF: w",
         .source =
-            \\{
-            \\    apply2 = |a, b, f| f(a, b)
-            \\    step1 = apply2("x_val", "y_val", |x, y| { x, y })
-            \\    result = apply2("w_val", step1.y, |w, y| { w, y })
-            \\    result.w
-            \\}
+        \\{
+        \\    apply2 = |a, b, f| f(a, b)
+        \\    step1 = apply2("x_val", "y_val", |x, y| { x, y })
+        \\    result = apply2("w_val", step1.y, |w, y| { w, y })
+        \\    result.w
+        \\}
         ,
         .expected = .{ .str_val = "w_val" },
     },
-    .{ .name = "large record chained HOF: y",
+    .{
+        .name = "large record chained HOF: y",
         .source =
-            \\{
-            \\    apply2 = |a, b, f| f(a, b)
-            \\    step1 = apply2("x_val", "y_val", |x, y| { x, y })
-            \\    result = apply2("w_val", step1.y, |w, y| { w, y })
-            \\    result.y
-            \\}
+        \\{
+        \\    apply2 = |a, b, f| f(a, b)
+        \\    step1 = apply2("x_val", "y_val", |x, y| { x, y })
+        \\    result = apply2("w_val", step1.y, |w, y| { w, y })
+        \\    result.y
+        \\}
         ,
         .expected = .{ .str_val = "y_val" },
     },
@@ -2173,18 +2321,20 @@ pub const tests = [_]TestCase{
     .{ .name = "Str.drop_suffix: match", .source = "Str.drop_suffix(\"foobar\", \"bar\")", .expected = .{ .str_val = "foo" } },
     .{ .name = "Str.drop_suffix: no match", .source = "Str.drop_suffix(\"foobar\", \"baz\")", .expected = .{ .str_val = "foobar" } },
     .{ .name = "Str.release_excess_capacity", .source = "Str.release_excess_capacity(\"hello\")", .expected = .{ .str_val = "hello" } },
-    .{ .name = "Str.split_on and Str.join_with",
+    .{
+        .name = "Str.split_on and Str.join_with",
         .source =
-            \\{
-            \\    parts = Str.split_on("a,b,c", ",")
-            \\    Str.join_with(parts, "-")
-            \\}
+        \\{
+        \\    parts = Str.split_on("a,b,c", ",")
+        \\    Str.join_with(parts, "-")
+        \\}
         ,
         .expected = .{ .str_val = "a-b-c" },
     },
-    .{ .name = "Str.join_with",
+    .{
+        .name = "Str.join_with",
         .source =
-            \\Str.join_with(["hello", "world"], " ")
+        \\Str.join_with(["hello", "world"], " ")
         ,
         .expected = .{ .str_val = "hello world" },
     },
@@ -2194,12 +2344,13 @@ pub const tests = [_]TestCase{
     .{ .name = "dev: List.first returns Ok", .source = "List.first([10, 20, 30])", .expected = .{ .dev_only_str = "Ok(10.0)" } },
     .{ .name = "dev: List.first empty returns Err", .source = "List.first([])", .expected = .{ .dev_only_str = "Err(ListWasEmpty)" } },
     .{ .name = "dev: Str.from_utf8 Ok", .source = "Str.from_utf8([72, 105])", .expected = .{ .dev_only_str = "Ok(\"Hi\")" } },
-    .{ .name = "dev: polymorphic sum in block U64",
+    .{
+        .name = "dev: polymorphic sum in block U64",
         .source =
-            \\{
-            \\    sum = |a, b| a + b + 0
-            \\    U64.to_str(sum(240, 20))
-            \\}
+        \\{
+        \\    sum = |a, b| a + b + 0
+        \\    U64.to_str(sum(240, 20))
+        \\}
         ,
         .expected = .{ .dev_only_str = "\"260\"" },
     },
@@ -2208,259 +2359,281 @@ pub const tests = [_]TestCase{
     .{ .name = "dev: List.any inline false", .source = "List.any([1, 2, 3], |x| x == 5)", .expected = .{ .dev_only_str = "False" } },
     .{ .name = "dev: List.any always true", .source = "List.any([1, 2, 3], |_x| True)", .expected = .{ .dev_only_str = "True" } },
     .{ .name = "dev: List.any typed elements", .source = "List.any([1.I64, 2.I64, 3.I64], |_x| True)", .expected = .{ .dev_only_str = "True" } },
-    .{ .name = "dev: polymorphic predicate comparison",
+    .{
+        .name = "dev: polymorphic predicate comparison",
         .source =
-            \\{
-            \\    is_positive = |x| x > 0
-            \\    List.any([-1, 0, 1], is_positive)
-            \\}
+        \\{
+        \\    is_positive = |x| x > 0
+        \\    List.any([-1, 0, 1], is_positive)
+        \\}
         ,
         .expected = .{ .dev_only_str = "True" },
     },
-    .{ .name = "dev: polymorphic comparison lambda direct",
+    .{
+        .name = "dev: polymorphic comparison lambda direct",
         .source =
-            \\{
-            \\    is_positive = |x| x > 0
-            \\    is_positive(5)
-            \\}
+        \\{
+        \\    is_positive = |x| x > 0
+        \\    is_positive(5)
+        \\}
         ,
         .expected = .{ .dev_only_str = "True" },
     },
-    .{ .name = "dev: polymorphic comparison lambda List.any",
+    .{
+        .name = "dev: polymorphic comparison lambda List.any",
         .source =
-            \\{
-            \\    gt_zero = |x| x > 0
-            \\    List.any([1, 2, 3], gt_zero)
-            \\}
+        \\{
+        \\    gt_zero = |x| x > 0
+        \\    List.any([1, 2, 3], gt_zero)
+        \\}
         ,
         .expected = .{ .dev_only_str = "True" },
     },
     .{ .name = "dev: List.any inline lambda", .source = "List.any([1, 2, 3], |x| x > 0)", .expected = .{ .dev_only_str = "True" } },
-    .{ .name = "dev: for loop early return",
+    .{
+        .name = "dev: for loop early return",
         .source =
-            \\{
-            \\    f = |list| {
-            \\        for _item in list {
-            \\            if True { return True }
-            \\        }
-            \\        False
-            \\    }
-            \\    f([1, 2, 3])
-            \\}
+        \\{
+        \\    f = |list| {
+        \\        for _item in list {
+        \\            if True { return True }
+        \\        }
+        \\        False
+        \\    }
+        \\    f([1, 2, 3])
+        \\}
         ,
         .expected = .{ .dev_only_str = "True" },
     },
-    .{ .name = "dev: for loop closure early return",
+    .{
+        .name = "dev: for loop closure early return",
         .source =
-            \\{
-            \\    f = |list, pred| {
-            \\        for item in list {
-            \\            if pred(item) { return True }
-            \\        }
-            \\        False
-            \\    }
-            \\    f([1, 2, 3], |_x| True)
-            \\}
+        \\{
+        \\    f = |list, pred| {
+        \\        for item in list {
+        \\            if pred(item) { return True }
+        \\        }
+        \\        False
+        \\    }
+        \\    f([1, 2, 3], |_x| True)
+        \\}
         ,
         .expected = .{ .dev_only_str = "True" },
     },
-    .{ .name = "dev: local any-style HOF equality predicate",
+    .{
+        .name = "dev: local any-style HOF equality predicate",
         .source =
-            \\{
-            \\    f = |list, pred| {
-            \\        for item in list {
-            \\            if pred(item) { return True }
-            \\        }
-            \\        False
-            \\    }
-            \\    f([1, 2, 3], |x| x == 2)
-            \\}
+        \\{
+        \\    f = |list, pred| {
+        \\        for item in list {
+        \\            if pred(item) { return True }
+        \\        }
+        \\        False
+        \\    }
+        \\    f([1, 2, 3], |x| x == 2)
+        \\}
         ,
         .expected = .{ .dev_only_str = "True" },
     },
-    .{ .name = "dev: inline any-style HOF always true",
+    .{
+        .name = "dev: inline any-style HOF always true",
         .source =
-            \\(|list, pred| {
-            \\    for item in list {
-            \\        if pred(item) { return True }
-            \\    }
-            \\    False
-            \\})([1, 2, 3], |_x| True)
+        \\(|list, pred| {
+        \\    for item in list {
+        \\        if pred(item) { return True }
+        \\    }
+        \\    False
+        \\})([1, 2, 3], |_x| True)
         ,
         .expected = .{ .dev_only_str = "True" },
     },
 
     // --- from eval_test.zig: polymorphic function tests ---
-    .{ .name = "polymorphic function: two list types",
+    .{
+        .name = "polymorphic function: two list types",
         .source =
-            \\{
-            \\    my_len = |list| list.len()
-            \\    a : List(I64)
-            \\    a = [1, 2, 3]
-            \\    b : List(Str)
-            \\    b = ["x", "y"]
-            \\    my_len(a) + my_len(b)
-            \\}
+        \\{
+        \\    my_len = |list| list.len()
+        \\    a : List(I64)
+        \\    a = [1, 2, 3]
+        \\    b : List(Str)
+        \\    b = ["x", "y"]
+        \\    my_len(a) + my_len(b)
+        \\}
         ,
         .expected = .{ .i64_val = 5 },
     },
-    .{ .name = "direct List.contains I64",
+    .{
+        .name = "direct List.contains I64",
         .source =
-            \\{
-            \\    a : List(I64)
-            \\    a = [1, 2, 3]
-            \\    if a.contains(2) { 1 } else { 0 }
-            \\}
+        \\{
+        \\    a : List(I64)
+        \\    a = [1, 2, 3]
+        \\    if a.contains(2) { 1 } else { 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 1 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "polymorphic function single call I64",
+    .{
+        .name = "polymorphic function single call I64",
         .source =
-            \\{
-            \\    contains = |list, item| list.contains(item)
-            \\    a : List(I64)
-            \\    a = [1, 2, 3]
-            \\    r = contains(a, 2)
-            \\    if r { 1 } else { 0 }
-            \\}
+        \\{
+        \\    contains = |list, item| list.contains(item)
+        \\    a : List(I64)
+        \\    a = [1, 2, 3]
+        \\    r = contains(a, 2)
+        \\    if r { 1 } else { 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 1 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "polymorphic function single call Str",
+    .{
+        .name = "polymorphic function single call Str",
         .source =
-            \\{
-            \\    contains = |list, item| list.contains(item)
-            \\    b : List(Str)
-            \\    b = ["x", "y"]
-            \\    r = contains(b, "x")
-            \\    if r { 1 } else { 0 }
-            \\}
+        \\{
+        \\    contains = |list, item| list.contains(item)
+        \\    b : List(Str)
+        \\    b = ["x", "y"]
+        \\    r = contains(b, "x")
+        \\    if r { 1 } else { 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 1 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "polymorphic function List.contains two types",
+    .{
+        .name = "polymorphic function List.contains two types",
         .source =
-            \\{
-            \\    contains = |list, item| list.contains(item)
-            \\    a : List(I64)
-            \\    a = [1, 2, 3]
-            \\    b : List(Str)
-            \\    b = ["x", "y"]
-            \\    r1 = contains(a, 2)
-            \\    r2 = contains(b, "x")
-            \\    if r1 and r2 { 1 } else { 0 }
-            \\}
+        \\{
+        \\    contains = |list, item| list.contains(item)
+        \\    a : List(I64)
+        \\    a = [1, 2, 3]
+        \\    b : List(Str)
+        \\    b = ["x", "y"]
+        \\    r1 = contains(a, 2)
+        \\    r2 = contains(b, "x")
+        \\    if r1 and r2 { 1 } else { 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 1 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "polymorphic function List.contains multiple types",
+    .{
+        .name = "polymorphic function List.contains multiple types",
         .source =
-            \\{
-            \\    dedup = |list| {
-            \\        var $out = []
-            \\        for item in list {
-            \\            if !$out.contains(item) {
-            \\                $out = $out.append(item)
-            \\            }
-            \\        }
-            \\        $out
-            \\    }
-            \\    nums : List(I64)
-            \\    nums = [1, 2, 3, 2, 1]
-            \\    u1 = dedup(nums)
-            \\    strs : List(Str)
-            \\    strs = ["a", "b", "a"]
-            \\    u2 = dedup(strs)
-            \\    u1.len() + u2.len()
-            \\}
+        \\{
+        \\    dedup = |list| {
+        \\        var $out = []
+        \\        for item in list {
+        \\            if !$out.contains(item) {
+        \\                $out = $out.append(item)
+        \\            }
+        \\        }
+        \\        $out
+        \\    }
+        \\    nums : List(I64)
+        \\    nums = [1, 2, 3, 2, 1]
+        \\    u1 = dedup(nums)
+        \\    strs : List(Str)
+        \\    strs = ["a", "b", "a"]
+        \\    u2 = dedup(strs)
+        \\    u1.len() + u2.len()
+        \\}
         ,
         .expected = .{ .i64_val = 5 },
     },
 
     // --- from eval_test.zig: nested List.any / List.contains ---
-    .{ .name = "nested List.any true path captured Str",
+    .{
+        .name = "nested List.any true path captured Str",
         .source =
-            \\{
-            \\    out = ["a"]
-            \\    List.any(["a"], |item| out.contains(item))
-            \\}
+        \\{
+        \\    out = ["a"]
+        \\    List.any(["a"], |item| out.contains(item))
+        \\}
         ,
         .expected = .{ .bool_val = true },
     },
-    .{ .name = "nested List.any false path captured Str",
+    .{
+        .name = "nested List.any false path captured Str",
         .source =
-            \\{
-            \\    out = ["a"]
-            \\    List.any(["b"], |item| out.contains(item))
-            \\}
+        \\{
+        \\    out = ["a"]
+        \\    List.any(["b"], |item| out.contains(item))
+        \\}
         ,
         .expected = .{ .bool_val = false },
     },
-    .{ .name = "direct List.contains captured Str",
+    .{
+        .name = "direct List.contains captured Str",
         .source =
-            \\{
-            \\    out = ["a"]
-            \\    out.contains("a")
-            \\}
+        \\{
+        \\    out = ["a"]
+        \\    out.contains("a")
+        \\}
         ,
         .expected = .{ .bool_val = true },
     },
-    .{ .name = "forwarding tag union Str payload no leak",
+    .{
+        .name = "forwarding tag union Str payload no leak",
         .source =
-            \\{
-            \\    consume = |value| value == Ok({ x: "x" })
-            \\    forward = |value| consume(value)
-            \\    value = Ok({ x: "x" })
-            \\    forward(value)
-            \\}
+        \\{
+        \\    consume = |value| value == Ok({ x: "x" })
+        \\    forward = |value| consume(value)
+        \\    value = Ok({ x: "x" })
+        \\    forward(value)
+        \\}
         ,
         .expected = .{ .bool_val = true },
     },
 
     // --- from eval_test.zig: focused fold tests (non-record) ---
     .{ .name = "focused: fold multi-field record equality", .source = "List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1}) == {sum: 6, count: 3}", .expected = .{ .bool_val = true } },
-    .{ .name = "focused: fold multi-field record field checks",
+    .{
+        .name = "focused: fold multi-field record field checks",
         .source =
-            \\{
-            \\    rec = List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1})
-            \\    rec.sum == 6 and rec.count == 3
-            \\}
+        \\{
+        \\    rec = List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1})
+        \\    rec.sum == 6 and rec.count == 3
+        \\}
         ,
         .expected = .{ .bool_val = true },
     },
-    .{ .name = "focused: fold multi-field record sum check",
+    .{
+        .name = "focused: fold multi-field record sum check",
         .source =
-            \\{
-            \\    rec = List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1})
-            \\    rec.sum == 6
-            \\}
+        \\{
+        \\    rec = List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1})
+        \\    rec.sum == 6
+        \\}
         ,
         .expected = .{ .bool_val = true },
     },
-    .{ .name = "focused: fold multi-field record count check",
+    .{
+        .name = "focused: fold multi-field record count check",
         .source =
-            \\{
-            \\    rec = List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1})
-            \\    rec.count == 3
-            \\}
+        \\{
+        \\    rec = List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1})
+        \\    rec.count == 3
+        \\}
         ,
         .expected = .{ .bool_val = true },
     },
-    .{ .name = "focused: fold multi-field record sum value",
+    .{
+        .name = "focused: fold multi-field record sum value",
         .source =
-            \\{
-            \\    rec = List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1})
-            \\    rec.sum
-            \\}
+        \\{
+        \\    rec = List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1})
+        \\    rec.sum
+        \\}
         ,
         .expected = .{ .dec_val = 6_000_000_000_000_000_000 },
     },
-    .{ .name = "focused: fold multi-field record count value",
+    .{
+        .name = "focused: fold multi-field record count value",
         .source =
-            \\{
-            \\    rec = List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1})
-            \\    rec.count
-            \\}
+        \\{
+        \\    rec = List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1})
+        \\    rec.count
+        \\}
         ,
         .expected = .{ .dec_val = 3_000_000_000_000_000_000 },
     },
@@ -2472,14 +2645,15 @@ pub const tests = [_]TestCase{
     .{ .name = "focused: nested list equality multiple diff", .source = "[[1, 2], [3, 4]] == [[1, 2], [4, 3]]", .expected = .{ .bool_val = false } },
     .{ .name = "focused: nested list equality single diff", .source = "[[3, 4]] == [[4, 3]]", .expected = .{ .bool_val = false } },
     .{ .name = "focused: list equality order-sensitive", .source = "[3, 4] == [4, 3]", .expected = .{ .bool_val = false } },
-    .{ .name = "focused: polymorphic additional specialization via List.append",
+    .{
+        .name = "focused: polymorphic additional specialization via List.append",
         .source =
-            \\{
-            \\    append_one = |acc, x| List.append(acc, x)
-            \\    clone_via_fold = |xs| xs.fold(List.with_capacity(1), append_one)
-            \\    _first_len = clone_via_fold([1.I64, 2.I64]).len()
-            \\    clone_via_fold([[1.I64, 2.I64], [3.I64, 4.I64]]).len()
-            \\}
+        \\{
+        \\    append_one = |acc, x| List.append(acc, x)
+        \\    clone_via_fold = |xs| xs.fold(List.with_capacity(1), append_one)
+        \\    _first_len = clone_via_fold([1.I64, 2.I64]).len()
+        \\    clone_via_fold([[1.I64, 2.I64], [3.I64, 4.I64]]).len()
+        \\}
         ,
         .expected = .{ .i64_val = 2 },
     },
@@ -2487,629 +2661,682 @@ pub const tests = [_]TestCase{
     // --- from closure_test.zig ---
 
     // TIER 1: Basic closure with captures
-    .{ .name = "closure: lambda capturing one local variable",
+    .{
+        .name = "closure: lambda capturing one local variable",
         .source =
-            \\{
-            \\    y = 10
-            \\    f = |x| x + y
-            \\    f(5)
-            \\}
+        \\{
+        \\    y = 10
+        \\    f = |x| x + y
+        \\    f(5)
+        \\}
         ,
         .expected = .{ .dec_val = 15 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "closure: lambda capturing two local variables",
+    .{
+        .name = "closure: lambda capturing two local variables",
         .source =
-            \\{
-            \\    a = 3
-            \\    b = 7
-            \\    f = |x| x + a + b
-            \\    f(10)
-            \\}
+        \\{
+        \\    a = 3
+        \\    b = 7
+        \\    f = |x| x + a + b
+        \\    f(10)
+        \\}
         ,
         .expected = .{ .dec_val = 20 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "closure: lambda capturing a string",
+    .{
+        .name = "closure: lambda capturing a string",
         .source =
-            \\{
-            \\    greeting = "Hello"
-            \\    f = |name| Str.concat(greeting, name)
-            \\    f(" World")
-            \\}
+        \\{
+        \\    greeting = "Hello"
+        \\    f = |name| Str.concat(greeting, name)
+        \\    f(" World")
+        \\}
         ,
         .expected = .{ .str_val = "Hello World" },
     },
-    .{ .name = "closure: lambda capturing multiple strings",
+    .{
+        .name = "closure: lambda capturing multiple strings",
         .source =
-            \\{
-            \\    prefix = "Hello"
-            \\    suffix = "!"
-            \\    f = |name| Str.concat(Str.concat(prefix, name), suffix)
-            \\    f(" World")
-            \\}
+        \\{
+        \\    prefix = "Hello"
+        \\    suffix = "!"
+        \\    f = |name| Str.concat(Str.concat(prefix, name), suffix)
+        \\    f(" World")
+        \\}
         ,
         .expected = .{ .str_val = "Hello World!" },
     },
 
     // TIER 2: Functions returning functions (closure escaping defining scope)
-    .{ .name = "closure: function returning a closure (make_adder)",
+    .{
+        .name = "closure: function returning a closure (make_adder)",
         .source =
-            \\{
-            \\    make_adder = |n| |x| x + n
-            \\    add5 = make_adder(5)
-            \\    add5(10)
-            \\}
+        \\{
+        \\    make_adder = |n| |x| x + n
+        \\    add5 = make_adder(5)
+        \\    add5(10)
+        \\}
         ,
         .expected = .{ .dec_val = 15 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "closure: function returning a closure, called twice",
+    .{
+        .name = "closure: function returning a closure, called twice",
         .source =
-            \\{
-            \\    make_adder = |n| |x| x + n
-            \\    add5 = make_adder(5)
-            \\    a = add5(10)
-            \\    b = add5(20)
-            \\    a + b
-            \\}
+        \\{
+        \\    make_adder = |n| |x| x + n
+        \\    add5 = make_adder(5)
+        \\    a = add5(10)
+        \\    b = add5(20)
+        \\    a + b
+        \\}
         ,
         .expected = .{ .dec_val = 40 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "closure: two different closures from same factory",
+    .{
+        .name = "closure: two different closures from same factory",
         .source =
-            \\{
-            \\    make_adder = |n| |x| x + n
-            \\    add3 = make_adder(3)
-            \\    add7 = make_adder(7)
-            \\    add3(10) + add7(10)
-            \\}
+        \\{
+        \\    make_adder = |n| |x| x + n
+        \\    add3 = make_adder(3)
+        \\    add7 = make_adder(7)
+        \\    add3(10) + add7(10)
+        \\}
         ,
         .expected = .{ .dec_val = 30 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "closure: function returning a closure over string",
+    .{
+        .name = "closure: function returning a closure over string",
         .source =
-            \\{
-            \\    make_greeter = |greeting| |name| Str.concat(greeting, name)
-            \\    greet = make_greeter("Hi ")
-            \\    greet("Alice")
-            \\}
+        \\{
+        \\    make_greeter = |greeting| |name| Str.concat(greeting, name)
+        \\    greet = make_greeter("Hi ")
+        \\    greet("Alice")
+        \\}
         ,
         .expected = .{ .str_val = "Hi Alice" },
     },
-    .{ .name = "closure: two-level deep closure (function returning function returning function)",
+    .{
+        .name = "closure: two-level deep closure (function returning function returning function)",
         .source =
-            \\{
-            \\    make_op = |a| |b| |x| x + a + b
-            \\    add_3_and_4 = make_op(3)(4)
-            \\    add_3_and_4(10)
-            \\}
+        \\{
+        \\    make_op = |a| |b| |x| x + a + b
+        \\    add_3_and_4 = make_op(3)(4)
+        \\    add_3_and_4(10)
+        \\}
         ,
         .expected = .{ .dec_val = 17 * RocDec.one_point_zero_i128 },
     },
 
     // TIER 3: Higher-order functions with closure arguments
-    .{ .name = "closure: passing closure to higher-order function",
+    .{
+        .name = "closure: passing closure to higher-order function",
         .source =
-            \\{
-            \\    apply = |f, x| f(x)
-            \\    y = 10
-            \\    apply(|x| x + y, 5)
-            \\}
+        \\{
+        \\    apply = |f, x| f(x)
+        \\    y = 10
+        \\    apply(|x| x + y, 5)
+        \\}
         ,
         .expected = .{ .dec_val = 15 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "closure: passing two different closures to same HOF",
+    .{
+        .name = "closure: passing two different closures to same HOF",
         .source =
-            \\{
-            \\    apply = |f, x| f(x)
-            \\    a = 10
-            \\    b = 20
-            \\    r1 = apply(|x| x + a, 5)
-            \\    r2 = apply(|x| x + b, 5)
-            \\    r1 + r2
-            \\}
+        \\{
+        \\    apply = |f, x| f(x)
+        \\    a = 10
+        \\    b = 20
+        \\    r1 = apply(|x| x + a, 5)
+        \\    r2 = apply(|x| x + b, 5)
+        \\    r1 + r2
+        \\}
         ,
         .expected = .{ .dec_val = 40 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "closure: passing two different closures to same HOF returns first result",
+    .{
+        .name = "closure: passing two different closures to same HOF returns first result",
         .source =
-            \\{
-            \\    apply = |f, x| f(x)
-            \\    a = 10
-            \\    b = 20
-            \\    r1 = apply(|x| x + a, 5)
-            \\    _r2 = apply(|x| x + b, 5)
-            \\    r1
-            \\}
+        \\{
+        \\    apply = |f, x| f(x)
+        \\    a = 10
+        \\    b = 20
+        \\    r1 = apply(|x| x + a, 5)
+        \\    _r2 = apply(|x| x + b, 5)
+        \\    r1
+        \\}
         ,
         .expected = .{ .dec_val = 15 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "closure: passing two different closures to same HOF returns second result",
+    .{
+        .name = "closure: passing two different closures to same HOF returns second result",
         .source =
-            \\{
-            \\    apply = |f, x| f(x)
-            \\    a = 10
-            \\    b = 20
-            \\    _r1 = apply(|x| x + a, 5)
-            \\    r2 = apply(|x| x + b, 5)
-            \\    r2
-            \\}
+        \\{
+        \\    apply = |f, x| f(x)
+        \\    a = 10
+        \\    b = 20
+        \\    _r1 = apply(|x| x + a, 5)
+        \\    r2 = apply(|x| x + b, 5)
+        \\    r2
+        \\}
         ,
         .expected = .{ .dec_val = 25 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "closure: HOF calling closure argument twice",
+    .{
+        .name = "closure: HOF calling closure argument twice",
         .source =
-            \\{
-            \\    apply_twice = |f, x| f(f(x))
-            \\    y = 3
-            \\    apply_twice(|x| x + y, 10)
-            \\}
+        \\{
+        \\    apply_twice = |f, x| f(f(x))
+        \\    y = 3
+        \\    apply_twice(|x| x + y, 10)
+        \\}
         ,
         .expected = .{ .dec_val = 16 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "closure: HOF with closure returning string",
+    .{
+        .name = "closure: HOF with closure returning string",
         .source =
-            \\{
-            \\    apply = |f, x| f(x)
-            \\    prefix = "Hello "
-            \\    apply(|name| Str.concat(prefix, name), "World")
-            \\}
+        \\{
+        \\    apply = |f, x| f(x)
+        \\    prefix = "Hello "
+        \\    apply(|name| Str.concat(prefix, name), "World")
+        \\}
         ,
         .expected = .{ .str_val = "Hello World" },
     },
 
     // TIER 4: Polymorphic functions with closures
-    .{ .name = "closure: polymorphic identity applied to closure result",
+    .{
+        .name = "closure: polymorphic identity applied to closure result",
         .source =
-            \\{
-            \\    id = |x| x
-            \\    y = 10
-            \\    f = |x| x + y
-            \\    id(f(5))
-            \\}
+        \\{
+        \\    id = |x| x
+        \\    y = 10
+        \\    f = |x| x + y
+        \\    id(f(5))
+        \\}
         ,
         .expected = .{ .dec_val = 15 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "closure: polymorphic function used with both int and string closures",
+    .{
+        .name = "closure: polymorphic function used with both int and string closures",
         .source =
-            \\{
-            \\    apply = |f, x| f(x)
-            \\    n = 10
-            \\    prefix = "Hi "
-            \\    num_result = apply(|x| x + n, 5)
-            \\    str_result = apply(|s| Str.concat(prefix, s), "Bob")
-            \\    if (num_result > 0) str_result else ""
-            \\}
+        \\{
+        \\    apply = |f, x| f(x)
+        \\    n = 10
+        \\    prefix = "Hi "
+        \\    num_result = apply(|x| x + n, 5)
+        \\    str_result = apply(|s| Str.concat(prefix, s), "Bob")
+        \\    if (num_result > 0) str_result else ""
+        \\}
         ,
         .expected = .{ .str_val = "Hi Bob" },
     },
 
     // TIER 5: Closure over closure (nested captures)
-    .{ .name = "closure: closure forwarding to captured closure (no multiply)",
+    .{
+        .name = "closure: closure forwarding to captured closure (no multiply)",
         .source =
-            \\{
-            \\    y = 5
-            \\    inner = |x| x + y
-            \\    outer = |x| inner(x)
-            \\    outer(10)
-            \\}
+        \\{
+        \\    y = 5
+        \\    inner = |x| x + y
+        \\    outer = |x| inner(x)
+        \\    outer(10)
+        \\}
         ,
         .expected = .{ .dec_val = 15 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "closure: closure capturing another closure",
+    .{
+        .name = "closure: closure capturing another closure",
         .source =
-            \\{
-            \\    y = 5
-            \\    inner = |x| x + y
-            \\    outer = |x| inner(x) * 2
-            \\    outer(10)
-            \\}
+        \\{
+        \\    y = 5
+        \\    inner = |x| x + y
+        \\    outer = |x| inner(x) * 2
+        \\    outer(10)
+        \\}
         ,
         .expected = .{ .dec_val = 30 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "closure: closure capturing a factory-produced closure",
+    .{
+        .name = "closure: closure capturing a factory-produced closure",
         .source =
-            \\{
-            \\    make_adder = |n| |x| x + n
-            \\    add5 = make_adder(5)
-            \\    double_add5 = |x| add5(x) * 2
-            \\    double_add5(10)
-            \\}
+        \\{
+        \\    make_adder = |n| |x| x + n
+        \\    add5 = make_adder(5)
+        \\    double_add5 = |x| add5(x) * 2
+        \\    double_add5(10)
+        \\}
         ,
         .expected = .{ .dec_val = 30 * RocDec.one_point_zero_i128 },
     },
 
     // TIER 6: Multiple closures with different captures at same call site (lambda set dispatch)
-    .{ .name = "closure: if-else choosing between two closures with different captures",
+    .{
+        .name = "closure: if-else choosing between two closures with different captures",
         .source =
-            \\{
-            \\    a = 10
-            \\    b = 20
-            \\    f = if (True) |x| x + a else |x| x + b
-            \\    f(5)
-            \\}
+        \\{
+        \\    a = 10
+        \\    b = 20
+        \\    f = if (True) |x| x + a else |x| x + b
+        \\    f(5)
+        \\}
         ,
         .expected = .{ .dec_val = 15 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "closure: if-else choosing between two closures, false branch",
+    .{
+        .name = "closure: if-else choosing between two closures, false branch",
         .source =
-            \\{
-            \\    a = 10
-            \\    b = 20
-            \\    f = if (False) |x| x + a else |x| x + b
-            \\    f(5)
-            \\}
+        \\{
+        \\    a = 10
+        \\    b = 20
+        \\    f = if (False) |x| x + a else |x| x + b
+        \\    f(5)
+        \\}
         ,
         .expected = .{ .dec_val = 25 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "closure: if-else choosing between closures with different capture counts",
+    .{
+        .name = "closure: if-else choosing between closures with different capture counts",
         .source =
-            \\{
-            \\    a = 10
-            \\    b = 20
-            \\    c = 30
-            \\    f = if (True) |x| x + a else |x| x + b + c
-            \\    f(5)
-            \\}
+        \\{
+        \\    a = 10
+        \\    b = 20
+        \\    c = 30
+        \\    f = if (True) |x| x + a else |x| x + b + c
+        \\    f(5)
+        \\}
         ,
         .expected = .{ .dec_val = 15 * RocDec.one_point_zero_i128 },
     },
 
     // TIER 7: Closure used in data structures
-    .{ .name = "closure: closure stored in record field then called",
+    .{
+        .name = "closure: closure stored in record field then called",
         .source =
-            \\{
-            \\    y = 10
-            \\    rec = { f: |x| x + y }
-            \\    f = rec.f
-            \\    f(5)
-            \\}
+        \\{
+        \\    y = 10
+        \\    rec = { f: |x| x + y }
+        \\    f = rec.f
+        \\    f(5)
+        \\}
         ,
         .expected = .{ .dec_val = 15 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "closure: two closures in record, each with own captures",
+    .{
+        .name = "closure: two closures in record, each with own captures",
         .source =
-            \\{
-            \\    a = 10
-            \\    b = 20
-            \\    rec = { add_a: |x| x + a, add_b: |x| x + b }
-            \\    add_a = rec.add_a
-            \\    add_b = rec.add_b
-            \\    add_a(5) + add_b(5)
-            \\}
+        \\{
+        \\    a = 10
+        \\    b = 20
+        \\    rec = { add_a: |x| x + a, add_b: |x| x + b }
+        \\    add_a = rec.add_a
+        \\    add_b = rec.add_b
+        \\    add_a(5) + add_b(5)
+        \\}
         ,
         .expected = .{ .dec_val = 40 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "closure: record field closure add_a preserves its capture",
+    .{
+        .name = "closure: record field closure add_a preserves its capture",
         .source =
-            \\{
-            \\    a = 10
-            \\    b = 20
-            \\    rec = { add_a: |x| x + a, add_b: |x| x + b }
-            \\    add_a = rec.add_a
-            \\    add_a(5)
-            \\}
+        \\{
+        \\    a = 10
+        \\    b = 20
+        \\    rec = { add_a: |x| x + a, add_b: |x| x + b }
+        \\    add_a = rec.add_a
+        \\    add_a(5)
+        \\}
         ,
         .expected = .{ .dec_val = 15 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "closure: parenthesized record field closure add_b preserves its capture",
+    .{
+        .name = "closure: parenthesized record field closure add_b preserves its capture",
         .source =
-            \\{
-            \\    a = 10
-            \\    b = 20
-            \\    rec = { add_a: |x| x + a, add_b: |x| x + b }
-            \\    (rec.add_b)(5)
-            \\}
+        \\{
+        \\    a = 10
+        \\    b = 20
+        \\    rec = { add_a: |x| x + a, add_b: |x| x + b }
+        \\    (rec.add_b)(5)
+        \\}
         ,
         .expected = .{ .dec_val = 25 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "closure: record field closure add_b preserves its capture",
+    .{
+        .name = "closure: record field closure add_b preserves its capture",
         .source =
-            \\{
-            \\    a = 10
-            \\    b = 20
-            \\    rec = { add_a: |x| x + a, add_b: |x| x + b }
-            \\    add_b = rec.add_b
-            \\    add_b(5)
-            \\}
+        \\{
+        \\    a = 10
+        \\    b = 20
+        \\    rec = { add_a: |x| x + a, add_b: |x| x + b }
+        \\    add_b = rec.add_b
+        \\    add_b(5)
+        \\}
         ,
         .expected = .{ .dec_val = 25 * RocDec.one_point_zero_i128 },
     },
 
     // TIER 8: Composition and chaining
-    .{ .name = "closure: compose two functions",
+    .{
+        .name = "closure: compose two functions",
         .source =
-            \\{
-            \\    compose = |f, g| |x| f(g(x))
-            \\    double = |x| x * 2
-            \\    add1 = |x| x + 1
-            \\    double_then_add1 = compose(add1, double)
-            \\    double_then_add1(5)
-            \\}
+        \\{
+        \\    compose = |f, g| |x| f(g(x))
+        \\    double = |x| x * 2
+        \\    add1 = |x| x + 1
+        \\    double_then_add1 = compose(add1, double)
+        \\    double_then_add1(5)
+        \\}
         ,
         .expected = .{ .dec_val = 11 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "closure: compose with captures",
+    .{
+        .name = "closure: compose with captures",
         .source =
-            \\{
-            \\    compose = |f, g| |x| f(g(x))
-            \\    a = 3
-            \\    b = 7
-            \\    add_a = |x| x + a
-            \\    add_b = |x| x + b
-            \\    add_both = compose(add_a, add_b)
-            \\    add_both(10)
-            \\}
+        \\{
+        \\    compose = |f, g| |x| f(g(x))
+        \\    a = 3
+        \\    b = 7
+        \\    add_a = |x| x + a
+        \\    add_b = |x| x + b
+        \\    add_both = compose(add_a, add_b)
+        \\    add_both(10)
+        \\}
         ,
         .expected = .{ .dec_val = 20 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "closure: pipe (flip of compose)",
+    .{
+        .name = "closure: pipe (flip of compose)",
         .source =
-            \\{
-            \\    pipe = |x, f| f(x)
-            \\    y = 10
-            \\    pipe(5, |x| x + y)
-            \\}
+        \\{
+        \\    pipe = |x, f| f(x)
+        \\    y = 10
+        \\    pipe(5, |x| x + y)
+        \\}
         ,
         .expected = .{ .dec_val = 15 * RocDec.one_point_zero_i128 },
     },
 
     // TIER 9: Recursive closures and self-reference
-    .{ .name = "closure: recursive function in let binding",
+    .{
+        .name = "closure: recursive function in let binding",
         .source =
-            \\{
-            \\    factorial = |n| if (n <= 1) 1 else n * factorial(n - 1)
-            \\    factorial(5)
-            \\}
+        \\{
+        \\    factorial = |n| if (n <= 1) 1 else n * factorial(n - 1)
+        \\    factorial(5)
+        \\}
         ,
         .expected = .{ .dec_val = 120 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "closure: mutual recursion between two closures",
+    .{
+        .name = "closure: mutual recursion between two closures",
         .source =
-            \\{
-            \\    is_even = |n| if (n == 0) True else is_odd(n - 1)
-            \\    is_odd = |n| if (n == 0) False else is_even(n - 1)
-            \\    if (is_even(4)) 1 else 0
-            \\}
+        \\{
+        \\    is_even = |n| if (n == 0) True else is_odd(n - 1)
+        \\    is_odd = |n| if (n == 0) False else is_even(n - 1)
+        \\    if (is_even(4)) 1 else 0
+        \\}
         ,
         .expected = .{ .dec_val = 1 * RocDec.one_point_zero_i128 },
     },
 
     // TIER 10: Extremely complex / stress tests
-    .{ .name = "closure: triple-nested closure factory",
+    .{
+        .name = "closure: triple-nested closure factory",
         .source =
-            \\{
-            \\    level1 = |a| |b| |c| |x| x + a + b + c
-            \\    level2 = level1(1)
-            \\    level3 = level2(2)
-            \\    level4 = level3(3)
-            \\    level4(10)
-            \\}
+        \\{
+        \\    level1 = |a| |b| |c| |x| x + a + b + c
+        \\    level2 = level1(1)
+        \\    level3 = level2(2)
+        \\    level4 = level3(3)
+        \\    level4(10)
+        \\}
         ,
         .expected = .{ .dec_val = 16 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "closure: closure capturing another closure (2 levels)",
+    .{
+        .name = "closure: closure capturing another closure (2 levels)",
         .source =
-            \\{
-            \\    a = 1
-            \\    f = |x| x + a
-            \\    b = 2
-            \\    g = |x| f(x) + b
-            \\    g(10)
-            \\}
+        \\{
+        \\    a = 1
+        \\    f = |x| x + a
+        \\    b = 2
+        \\    g = |x| f(x) + b
+        \\    g(10)
+        \\}
         ,
         .expected = .{ .dec_val = 13 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "closure: closure capturing another closure that captures a third",
+    .{
+        .name = "closure: closure capturing another closure that captures a third",
         .source =
-            \\{
-            \\    a = 1
-            \\    f = |x| x + a
-            \\    b = 2
-            \\    g = |x| f(x) + b
-            \\    c = 3
-            \\    h = |x| g(x) + c
-            \\    h(10)
-            \\}
+        \\{
+        \\    a = 1
+        \\    f = |x| x + a
+        \\    b = 2
+        \\    g = |x| f(x) + b
+        \\    c = 3
+        \\    h = |x| g(x) + c
+        \\    h(10)
+        \\}
         ,
         .expected = .{ .dec_val = 16 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "closure: HOF receiving closure, returning closure that captures the argument closure",
+    .{
+        .name = "closure: HOF receiving closure, returning closure that captures the argument closure",
         .source =
-            \\{
-            \\    make_doubler = |f| |x| f(f(x))
-            \\    add3 = |x| x + 3
-            \\    double_add3 = make_doubler(add3)
-            \\    double_add3(10)
-            \\}
+        \\{
+        \\    make_doubler = |f| |x| f(f(x))
+        \\    add3 = |x| x + 3
+        \\    double_add3 = make_doubler(add3)
+        \\    double_add3(10)
+        \\}
         ,
         .expected = .{ .dec_val = 16 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "closure: HOF receiving closure with captures, returning closure that captures it",
+    .{
+        .name = "closure: HOF receiving closure with captures, returning closure that captures it",
         .source =
-            \\{
-            \\    n = 5
-            \\    add_n = |x| x + n
-            \\    make_doubler = |f| |x| f(f(x))
-            \\    double_add_n = make_doubler(add_n)
-            \\    double_add_n(10)
-            \\}
+        \\{
+        \\    n = 5
+        \\    add_n = |x| x + n
+        \\    make_doubler = |f| |x| f(f(x))
+        \\    double_add_n = make_doubler(add_n)
+        \\    double_add_n(10)
+        \\}
         ,
         .expected = .{ .dec_val = 20 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "closure: chained closure factories with accumulating captures",
+    .{
+        .name = "closure: chained closure factories with accumulating captures",
         .source =
-            \\{
-            \\    step1 = |a| |b| |c| a + b + c
-            \\    step2 = step1(100)
-            \\    step3 = step2(20)
-            \\    step3(3)
-            \\}
+        \\{
+        \\    step1 = |a| |b| |c| a + b + c
+        \\    step2 = step1(100)
+        \\    step3 = step2(20)
+        \\    step3(3)
+        \\}
         ,
         .expected = .{ .dec_val = 123 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "closure: polymorphic HOF with closures capturing different types",
+    .{
+        .name = "closure: polymorphic HOF with closures capturing different types",
         .source =
-            \\{
-            \\    apply = |f, x| f(x)
-            \\    offset = 100
-            \\    prefix = "Result: "
-            \\    num = apply(|x| x + offset, 23)
-            \\    if (num > 0) apply(|s| Str.concat(prefix, s), "yes") else "no"
-            \\}
+        \\{
+        \\    apply = |f, x| f(x)
+        \\    offset = 100
+        \\    prefix = "Result: "
+        \\    num = apply(|x| x + offset, 23)
+        \\    if (num > 0) apply(|s| Str.concat(prefix, s), "yes") else "no"
+        \\}
         ,
         .expected = .{ .str_val = "Result: yes" },
     },
-    .{ .name = "closure: closure over bool used in conditional",
+    .{
+        .name = "closure: closure over bool used in conditional",
         .source =
-            \\{
-            \\    flag = True
-            \\    choose = |a, b| if (flag) a else b
-            \\    choose(42, 0)
-            \\}
+        \\{
+        \\    flag = True
+        \\    choose = |a, b| if (flag) a else b
+        \\    choose(42, 0)
+        \\}
         ,
         .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "closure: deeply nested blocks each adding captures",
+    .{
+        .name = "closure: deeply nested blocks each adding captures",
         .source =
-            \\{
-            \\    a = 1
-            \\    r1 = {
-            \\        b = 2
-            \\        r2 = {
-            \\            c = 3
-            \\            f = |x| x + a + b + c
-            \\            f(10)
-            \\        }
-            \\        r2
-            \\    }
-            \\    r1
-            \\}
+        \\{
+        \\    a = 1
+        \\    r1 = {
+        \\        b = 2
+        \\        r2 = {
+        \\            c = 3
+        \\            f = |x| x + a + b + c
+        \\            f(10)
+        \\        }
+        \\        r2
+        \\    }
+        \\    r1
+        \\}
         ,
         .expected = .{ .dec_val = 16 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "closure: same variable captured by multiple independent closures",
+    .{
+        .name = "closure: same variable captured by multiple independent closures",
         .source =
-            \\{
-            \\    shared = 10
-            \\    f = |x| x + shared
-            \\    g = |x| x * shared
-            \\    f(5) + g(3)
-            \\}
+        \\{
+        \\    shared = 10
+        \\    f = |x| x + shared
+        \\    g = |x| x * shared
+        \\    f(5) + g(3)
+        \\}
         ,
         .expected = .{ .dec_val = 45 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "closure: closure returning a string that includes a captured string",
+    .{
+        .name = "closure: closure returning a string that includes a captured string",
         .source =
-            \\{
-            \\    make_greeter = |greeting|
-            \\        |name|
-            \\            Str.concat(Str.concat(greeting, ", "), name)
-            \\    hello = make_greeter("Hello")
-            \\    hi = make_greeter("Hi")
-            \\    r1 = hello("Alice")
-            \\    r2 = hi("Bob")
-            \\    Str.concat(Str.concat(r1, " and "), r2)
-            \\}
+        \\{
+        \\    make_greeter = |greeting|
+        \\        |name|
+        \\            Str.concat(Str.concat(greeting, ", "), name)
+        \\    hello = make_greeter("Hello")
+        \\    hi = make_greeter("Hi")
+        \\    r1 = hello("Alice")
+        \\    r2 = hi("Bob")
+        \\    Str.concat(Str.concat(r1, " and "), r2)
+        \\}
         ,
         .expected = .{ .str_val = "Hello, Alice and Hi, Bob" },
     },
-    .{ .name = "closure: applying the same closure to different arguments",
+    .{
+        .name = "closure: applying the same closure to different arguments",
         .source =
-            \\{
-            \\    base = 100
-            \\    f = |x| x + base
-            \\    a = f(1)
-            \\    b = f(2)
-            \\    c = f(3)
-            \\    a + b + c
-            \\}
+        \\{
+        \\    base = 100
+        \\    f = |x| x + base
+        \\    a = f(1)
+        \\    b = f(2)
+        \\    c = f(3)
+        \\    a + b + c
+        \\}
         ,
         .expected = .{ .dec_val = 306 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "closure: immediately invoked closure with capture",
+    .{
+        .name = "closure: immediately invoked closure with capture",
         .source =
-            \\{
-            \\    y = 42
-            \\    (|x| x + y)(8)
-            \\}
+        \\{
+        \\    y = 42
+        \\    (|x| x + y)(8)
+        \\}
         ,
         .expected = .{ .dec_val = 50 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "closure: closure that ignores its argument but uses capture",
+    .{
+        .name = "closure: closure that ignores its argument but uses capture",
         .source =
-            \\{
-            \\    val = 99
-            \\    f = |_| val
-            \\    f(0)
-            \\}
+        \\{
+        \\    val = 99
+        \\    f = |_| val
+        \\    f(0)
+        \\}
         ,
         .expected = .{ .dec_val = 99 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "closure: closure that ignores capture and uses argument",
+    .{
+        .name = "closure: closure that ignores capture and uses argument",
         .source =
-            \\{
-            \\    _unused = 999
-            \\    f = |x| x + 1
-            \\    f(41)
-            \\}
+        \\{
+        \\    _unused = 999
+        \\    f = |x| x + 1
+        \\    f(41)
+        \\}
         ,
         .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 },
     },
 
     // TIER 11: Monomorphic identity -- isolating polymorphic specialization
-    .{ .name = "closure: monomorphic Str identity (no polymorphism)",
+    .{
+        .name = "closure: monomorphic Str identity (no polymorphism)",
         .source =
-            \\{
-            \\    identity : Str -> Str
-            \\    identity = |val| val
-            \\    identity("Hello")
-            \\}
+        \\{
+        \\    identity : Str -> Str
+        \\    identity = |val| val
+        \\    identity("Hello")
+        \\}
         ,
         .expected = .{ .str_val = "Hello" },
     },
-    .{ .name = "closure: monomorphic Dec identity (no polymorphism)",
+    .{
+        .name = "closure: monomorphic Dec identity (no polymorphism)",
         .source =
-            \\{
-            \\    identity : Dec -> Dec
-            \\    identity = |val| val
-            \\    num = identity(5)
-            \\    num
-            \\}
+        \\{
+        \\    identity : Dec -> Dec
+        \\    identity = |val| val
+        \\    num = identity(5)
+        \\    num
+        \\}
         ,
         .expected = .{ .dec_val = 5 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "closure: monomorphic Str identity with if-else (exact failing scenario but monomorphic)",
+    .{
+        .name = "closure: monomorphic Str identity with if-else (exact failing scenario but monomorphic)",
         .source =
-            \\{
-            \\    str_id : Str -> Str
-            \\    str_id = |val| val
-            \\    num = 5
-            \\    str = str_id("Hello")
-            \\    if (num > 0) str else ""
-            \\}
+        \\{
+        \\    str_id : Str -> Str
+        \\    str_id = |val| val
+        \\    num = 5
+        \\    str = str_id("Hello")
+        \\    if (num > 0) str else ""
+        \\}
         ,
         .expected = .{ .str_val = "Hello" },
     },
 
     // Regression: refcounting closures with heap-allocated captures
-    .{ .name = "closure: multi-use closure with captured short string (SSO)",
+    .{
+        .name = "closure: multi-use closure with captured short string (SSO)",
         .source =
-            \\{
-            \\    s = "short"
-            \\    f = |_x| s
-            \\    _a = f(0)
-            \\    f(0)
-            \\}
+        \\{
+        \\    s = "short"
+        \\    f = |_x| s
+        \\    _a = f(0)
+        \\    f(0)
+        \\}
         ,
         .expected = .{ .str_val = "short" },
     },
-    .{ .name = "closure: multi-use closure with captured heap string needs incref",
+    .{
+        .name = "closure: multi-use closure with captured heap string needs incref",
         .source =
-            \\{
-            \\    s = "This string is definitely longer than twenty three bytes"
-            \\    f = |_x| s
-            \\    _a = f(0)
-            \\    f(0)
-            \\}
+        \\{
+        \\    s = "This string is definitely longer than twenty three bytes"
+        \\    f = |_x| s
+        \\    _a = f(0)
+        \\    f(0)
+        \\}
         ,
         .expected = .{ .str_val = "This string is definitely longer than twenty three bytes" },
     },
@@ -3117,2061 +3344,2226 @@ pub const tests = [_]TestCase{
     // --- from arithmetic_comprehensive_test.zig ---
 
     // U8: plus
-    .{ .name = "U8: plus: 200 + 50",
+    .{
+        .name = "U8: plus: 200 + 50",
         .source =
-            \\{
-            \\    a : U8
-            \\    a = 200
-            \\    b : U8
-            \\    b = 50
-            \\    a + b
-            \\}
+        \\{
+        \\    a : U8
+        \\    a = 200
+        \\    b : U8
+        \\    b = 50
+        \\    a + b
+        \\}
         ,
         .expected = .{ .u8_val = 250 },
     },
-    .{ .name = "U8: plus: 255 + 0",
+    .{
+        .name = "U8: plus: 255 + 0",
         .source =
-            \\{
-            \\    a : U8
-            \\    a = 255
-            \\    b : U8
-            \\    b = 0
-            \\    a + b
-            \\}
+        \\{
+        \\    a : U8
+        \\    a = 255
+        \\    b : U8
+        \\    b = 0
+        \\    a + b
+        \\}
         ,
         .expected = .{ .u8_val = 255 },
     },
-    .{ .name = "U8: plus: 128 + 127",
+    .{
+        .name = "U8: plus: 128 + 127",
         .source =
-            \\{
-            \\    a : U8
-            \\    a = 128
-            \\    b : U8
-            \\    b = 127
-            \\    a + b
-            \\}
+        \\{
+        \\    a : U8
+        \\    a = 128
+        \\    b : U8
+        \\    b = 127
+        \\    a + b
+        \\}
         ,
         .expected = .{ .u8_val = 255 },
     },
 
     // U8: minus
-    .{ .name = "U8: minus: 200 - 50",
+    .{
+        .name = "U8: minus: 200 - 50",
         .source =
-            \\{
-            \\    a : U8
-            \\    a = 200
-            \\    b : U8
-            \\    b = 50
-            \\    a - b
-            \\}
+        \\{
+        \\    a : U8
+        \\    a = 200
+        \\    b : U8
+        \\    b = 50
+        \\    a - b
+        \\}
         ,
         .expected = .{ .u8_val = 150 },
     },
-    .{ .name = "U8: minus: 255 - 100",
+    .{
+        .name = "U8: minus: 255 - 100",
         .source =
-            \\{
-            \\    a : U8
-            \\    a = 255
-            \\    b : U8
-            \\    b = 100
-            \\    a - b
-            \\}
+        \\{
+        \\    a : U8
+        \\    a = 255
+        \\    b : U8
+        \\    b = 100
+        \\    a - b
+        \\}
         ,
         .expected = .{ .u8_val = 155 },
     },
-    .{ .name = "U8: minus: 240 - 240",
+    .{
+        .name = "U8: minus: 240 - 240",
         .source =
-            \\{
-            \\    a : U8
-            \\    a = 240
-            \\    b : U8
-            \\    b = 240
-            \\    a - b
-            \\}
+        \\{
+        \\    a : U8
+        \\    a = 240
+        \\    b : U8
+        \\    b = 240
+        \\    a - b
+        \\}
         ,
         .expected = .{ .u8_val = 0 },
     },
 
     // U8: times
-    .{ .name = "U8: times: 15 * 17",
+    .{
+        .name = "U8: times: 15 * 17",
         .source =
-            \\{
-            \\    a : U8
-            \\    a = 15
-            \\    b : U8
-            \\    b = 17
-            \\    a * b
-            \\}
+        \\{
+        \\    a : U8
+        \\    a = 15
+        \\    b : U8
+        \\    b = 17
+        \\    a * b
+        \\}
         ,
         .expected = .{ .u8_val = 255 },
     },
-    .{ .name = "U8: times: 128 * 1",
+    .{
+        .name = "U8: times: 128 * 1",
         .source =
-            \\{
-            \\    a : U8
-            \\    a = 128
-            \\    b : U8
-            \\    b = 1
-            \\    a * b
-            \\}
+        \\{
+        \\    a : U8
+        \\    a = 128
+        \\    b : U8
+        \\    b = 1
+        \\    a * b
+        \\}
         ,
         .expected = .{ .u8_val = 128 },
     },
-    .{ .name = "U8: times: 16 * 15",
+    .{
+        .name = "U8: times: 16 * 15",
         .source =
-            \\{
-            \\    a : U8
-            \\    a = 16
-            \\    b : U8
-            \\    b = 15
-            \\    a * b
-            \\}
+        \\{
+        \\    a : U8
+        \\    a = 16
+        \\    b : U8
+        \\    b = 15
+        \\    a * b
+        \\}
         ,
         .expected = .{ .u8_val = 240 },
     },
 
     // U8: div_by
-    .{ .name = "U8: div_by: 240 // 2",
+    .{
+        .name = "U8: div_by: 240 // 2",
         .source =
-            \\{
-            \\    a : U8
-            \\    a = 240
-            \\    b : U8
-            \\    b = 2
-            \\    a // b
-            \\}
+        \\{
+        \\    a : U8
+        \\    a = 240
+        \\    b : U8
+        \\    b = 2
+        \\    a // b
+        \\}
         ,
         .expected = .{ .u8_val = 120 },
     },
-    .{ .name = "U8: div_by: 255 // 15",
+    .{
+        .name = "U8: div_by: 255 // 15",
         .source =
-            \\{
-            \\    a : U8
-            \\    a = 255
-            \\    b : U8
-            \\    b = 15
-            \\    a // b
-            \\}
+        \\{
+        \\    a : U8
+        \\    a = 255
+        \\    b : U8
+        \\    b = 15
+        \\    a // b
+        \\}
         ,
         .expected = .{ .u8_val = 17 },
     },
-    .{ .name = "U8: div_by: 200 // 10",
+    .{
+        .name = "U8: div_by: 200 // 10",
         .source =
-            \\{
-            \\    a : U8
-            \\    a = 200
-            \\    b : U8
-            \\    b = 10
-            \\    a // b
-            \\}
+        \\{
+        \\    a : U8
+        \\    a = 200
+        \\    b : U8
+        \\    b = 10
+        \\    a // b
+        \\}
         ,
         .expected = .{ .u8_val = 20 },
     },
 
     // U8: rem_by
-    .{ .name = "U8: rem_by: 200 % 13",
+    .{
+        .name = "U8: rem_by: 200 % 13",
         .source =
-            \\{
-            \\    a : U8
-            \\    a = 200
-            \\    b : U8
-            \\    b = 13
-            \\    a % b
-            \\}
+        \\{
+        \\    a : U8
+        \\    a = 200
+        \\    b : U8
+        \\    b = 13
+        \\    a % b
+        \\}
         ,
         .expected = .{ .u8_val = 5 },
     },
-    .{ .name = "U8: rem_by: 255 % 16",
+    .{
+        .name = "U8: rem_by: 255 % 16",
         .source =
-            \\{
-            \\    a : U8
-            \\    a = 255
-            \\    b : U8
-            \\    b = 16
-            \\    a % b
-            \\}
+        \\{
+        \\    a : U8
+        \\    a = 255
+        \\    b : U8
+        \\    b = 16
+        \\    a % b
+        \\}
         ,
         .expected = .{ .u8_val = 15 },
     },
-    .{ .name = "U8: rem_by: 128 % 7",
+    .{
+        .name = "U8: rem_by: 128 % 7",
         .source =
-            \\{
-            \\    a : U8
-            \\    a = 128
-            \\    b : U8
-            \\    b = 7
-            \\    a % b
-            \\}
+        \\{
+        \\    a : U8
+        \\    a = 128
+        \\    b : U8
+        \\    b = 7
+        \\    a % b
+        \\}
         ,
         .expected = .{ .u8_val = 2 },
     },
 
     // U16: plus
-    .{ .name = "U16: plus: 40000 + 20000",
+    .{
+        .name = "U16: plus: 40000 + 20000",
         .source =
-            \\{
-            \\    a : U16
-            \\    a = 40000
-            \\    b : U16
-            \\    b = 20000
-            \\    a + b
-            \\}
+        \\{
+        \\    a : U16
+        \\    a = 40000
+        \\    b : U16
+        \\    b = 20000
+        \\    a + b
+        \\}
         ,
         .expected = .{ .u16_val = 60000 },
     },
-    .{ .name = "U16: plus: 65535 + 0",
+    .{
+        .name = "U16: plus: 65535 + 0",
         .source =
-            \\{
-            \\    a : U16
-            \\    a = 65535
-            \\    b : U16
-            \\    b = 0
-            \\    a + b
-            \\}
+        \\{
+        \\    a : U16
+        \\    a = 65535
+        \\    b : U16
+        \\    b = 0
+        \\    a + b
+        \\}
         ,
         .expected = .{ .u16_val = 65535 },
     },
-    .{ .name = "U16: plus: 32768 + 32767",
+    .{
+        .name = "U16: plus: 32768 + 32767",
         .source =
-            \\{
-            \\    a : U16
-            \\    a = 32768
-            \\    b : U16
-            \\    b = 32767
-            \\    a + b
-            \\}
+        \\{
+        \\    a : U16
+        \\    a = 32768
+        \\    b : U16
+        \\    b = 32767
+        \\    a + b
+        \\}
         ,
         .expected = .{ .u16_val = 65535 },
     },
 
     // U16: minus
-    .{ .name = "U16: minus: 50000 - 10000",
+    .{
+        .name = "U16: minus: 50000 - 10000",
         .source =
-            \\{
-            \\    a : U16
-            \\    a = 50000
-            \\    b : U16
-            \\    b = 10000
-            \\    a - b
-            \\}
+        \\{
+        \\    a : U16
+        \\    a = 50000
+        \\    b : U16
+        \\    b = 10000
+        \\    a - b
+        \\}
         ,
         .expected = .{ .u16_val = 40000 },
     },
-    .{ .name = "U16: minus: 65535 - 30000",
+    .{
+        .name = "U16: minus: 65535 - 30000",
         .source =
-            \\{
-            \\    a : U16
-            \\    a = 65535
-            \\    b : U16
-            \\    b = 30000
-            \\    a - b
-            \\}
+        \\{
+        \\    a : U16
+        \\    a = 65535
+        \\    b : U16
+        \\    b = 30000
+        \\    a - b
+        \\}
         ,
         .expected = .{ .u16_val = 35535 },
     },
-    .{ .name = "U16: minus: 50000 - 50000",
+    .{
+        .name = "U16: minus: 50000 - 50000",
         .source =
-            \\{
-            \\    a : U16
-            \\    a = 50000
-            \\    b : U16
-            \\    b = 50000
-            \\    a - b
-            \\}
+        \\{
+        \\    a : U16
+        \\    a = 50000
+        \\    b : U16
+        \\    b = 50000
+        \\    a - b
+        \\}
         ,
         .expected = .{ .u16_val = 0 },
     },
 
     // U16: times
-    .{ .name = "U16: times: 256 * 255",
+    .{
+        .name = "U16: times: 256 * 255",
         .source =
-            \\{
-            \\    a : U16
-            \\    a = 256
-            \\    b : U16
-            \\    b = 255
-            \\    a * b
-            \\}
+        \\{
+        \\    a : U16
+        \\    a = 256
+        \\    b : U16
+        \\    b = 255
+        \\    a * b
+        \\}
         ,
         .expected = .{ .u16_val = 65280 },
     },
-    .{ .name = "U16: times: 32768 * 1",
+    .{
+        .name = "U16: times: 32768 * 1",
         .source =
-            \\{
-            \\    a : U16
-            \\    a = 32768
-            \\    b : U16
-            \\    b = 1
-            \\    a * b
-            \\}
+        \\{
+        \\    a : U16
+        \\    a = 32768
+        \\    b : U16
+        \\    b = 1
+        \\    a * b
+        \\}
         ,
         .expected = .{ .u16_val = 32768 },
     },
-    .{ .name = "U16: times: 255 * 256",
+    .{
+        .name = "U16: times: 255 * 256",
         .source =
-            \\{
-            \\    a : U16
-            \\    a = 255
-            \\    b : U16
-            \\    b = 256
-            \\    a * b
-            \\}
+        \\{
+        \\    a : U16
+        \\    a = 255
+        \\    b : U16
+        \\    b = 256
+        \\    a * b
+        \\}
         ,
         .expected = .{ .u16_val = 65280 },
     },
 
     // U16: div_by
-    .{ .name = "U16: div_by: 60000 // 3",
+    .{
+        .name = "U16: div_by: 60000 // 3",
         .source =
-            \\{
-            \\    a : U16
-            \\    a = 60000
-            \\    b : U16
-            \\    b = 3
-            \\    a // b
-            \\}
+        \\{
+        \\    a : U16
+        \\    a = 60000
+        \\    b : U16
+        \\    b = 3
+        \\    a // b
+        \\}
         ,
         .expected = .{ .u16_val = 20000 },
     },
-    .{ .name = "U16: div_by: 65535 // 257",
+    .{
+        .name = "U16: div_by: 65535 // 257",
         .source =
-            \\{
-            \\    a : U16
-            \\    a = 65535
-            \\    b : U16
-            \\    b = 257
-            \\    a // b
-            \\}
+        \\{
+        \\    a : U16
+        \\    a = 65535
+        \\    b : U16
+        \\    b = 257
+        \\    a // b
+        \\}
         ,
         .expected = .{ .u16_val = 255 },
     },
-    .{ .name = "U16: div_by: 40000 // 128",
+    .{
+        .name = "U16: div_by: 40000 // 128",
         .source =
-            \\{
-            \\    a : U16
-            \\    a = 40000
-            \\    b : U16
-            \\    b = 128
-            \\    a // b
-            \\}
+        \\{
+        \\    a : U16
+        \\    a = 40000
+        \\    b : U16
+        \\    b = 128
+        \\    a // b
+        \\}
         ,
         .expected = .{ .u16_val = 312 },
     },
 
     // U16: rem_by
-    .{ .name = "U16: rem_by: 50000 % 128",
+    .{
+        .name = "U16: rem_by: 50000 % 128",
         .source =
-            \\{
-            \\    a : U16
-            \\    a = 50000
-            \\    b : U16
-            \\    b = 128
-            \\    a % b
-            \\}
+        \\{
+        \\    a : U16
+        \\    a = 50000
+        \\    b : U16
+        \\    b = 128
+        \\    a % b
+        \\}
         ,
         .expected = .{ .u16_val = 80 },
     },
-    .{ .name = "U16: rem_by: 65535 % 256",
+    .{
+        .name = "U16: rem_by: 65535 % 256",
         .source =
-            \\{
-            \\    a : U16
-            \\    a = 65535
-            \\    b : U16
-            \\    b = 256
-            \\    a % b
-            \\}
+        \\{
+        \\    a : U16
+        \\    a = 65535
+        \\    b : U16
+        \\    b = 256
+        \\    a % b
+        \\}
         ,
         .expected = .{ .u16_val = 255 },
     },
-    .{ .name = "U16: rem_by: 40000 % 99",
+    .{
+        .name = "U16: rem_by: 40000 % 99",
         .source =
-            \\{
-            \\    a : U16
-            \\    a = 40000
-            \\    b : U16
-            \\    b = 99
-            \\    a % b
-            \\}
+        \\{
+        \\    a : U16
+        \\    a = 40000
+        \\    b : U16
+        \\    b = 99
+        \\    a % b
+        \\}
         ,
         .expected = .{ .u16_val = 4 },
     },
 
     // U32: plus
-    .{ .name = "U32: plus: 3000000000 + 1000000000",
+    .{
+        .name = "U32: plus: 3000000000 + 1000000000",
         .source =
-            \\{
-            \\    a : U32
-            \\    a = 3000000000
-            \\    b : U32
-            \\    b = 1000000000
-            \\    a + b
-            \\}
+        \\{
+        \\    a : U32
+        \\    a = 3000000000
+        \\    b : U32
+        \\    b = 1000000000
+        \\    a + b
+        \\}
         ,
         .expected = .{ .u32_val = 4000000000 },
     },
-    .{ .name = "U32: plus: 2147483648 + 2147483647",
+    .{
+        .name = "U32: plus: 2147483648 + 2147483647",
         .source =
-            \\{
-            \\    a : U32
-            \\    a = 2147483648
-            \\    b : U32
-            \\    b = 2147483647
-            \\    a + b
-            \\}
+        \\{
+        \\    a : U32
+        \\    a = 2147483648
+        \\    b : U32
+        \\    b = 2147483647
+        \\    a + b
+        \\}
         ,
         .expected = .{ .u32_val = 4294967295 },
     },
-    .{ .name = "U32: plus: 4294967295 + 0",
+    .{
+        .name = "U32: plus: 4294967295 + 0",
         .source =
-            \\{
-            \\    a : U32
-            \\    a = 4294967295
-            \\    b : U32
-            \\    b = 0
-            \\    a + b
-            \\}
+        \\{
+        \\    a : U32
+        \\    a = 4294967295
+        \\    b : U32
+        \\    b = 0
+        \\    a + b
+        \\}
         ,
         .expected = .{ .u32_val = 4294967295 },
     },
 
     // U32: minus
-    .{ .name = "U32: minus: 3000000000 - 1000000000",
+    .{
+        .name = "U32: minus: 3000000000 - 1000000000",
         .source =
-            \\{
-            \\    a : U32
-            \\    a = 3000000000
-            \\    b : U32
-            \\    b = 1000000000
-            \\    a - b
-            \\}
+        \\{
+        \\    a : U32
+        \\    a = 3000000000
+        \\    b : U32
+        \\    b = 1000000000
+        \\    a - b
+        \\}
         ,
         .expected = .{ .u32_val = 2000000000 },
     },
-    .{ .name = "U32: minus: 4294967295 - 2147483648",
+    .{
+        .name = "U32: minus: 4294967295 - 2147483648",
         .source =
-            \\{
-            \\    a : U32
-            \\    a = 4294967295
-            \\    b : U32
-            \\    b = 2147483648
-            \\    a - b
-            \\}
+        \\{
+        \\    a : U32
+        \\    a = 4294967295
+        \\    b : U32
+        \\    b = 2147483648
+        \\    a - b
+        \\}
         ,
         .expected = .{ .u32_val = 2147483647 },
     },
-    .{ .name = "U32: minus: 3000000000 - 3000000000",
+    .{
+        .name = "U32: minus: 3000000000 - 3000000000",
         .source =
-            \\{
-            \\    a : U32
-            \\    a = 3000000000
-            \\    b : U32
-            \\    b = 3000000000
-            \\    a - b
-            \\}
+        \\{
+        \\    a : U32
+        \\    a = 3000000000
+        \\    b : U32
+        \\    b = 3000000000
+        \\    a - b
+        \\}
         ,
         .expected = .{ .u32_val = 0 },
     },
 
     // U32: times
-    .{ .name = "U32: times: 65536 * 65535",
+    .{
+        .name = "U32: times: 65536 * 65535",
         .source =
-            \\{
-            \\    a : U32
-            \\    a = 65536
-            \\    b : U32
-            \\    b = 65535
-            \\    a * b
-            \\}
+        \\{
+        \\    a : U32
+        \\    a = 65536
+        \\    b : U32
+        \\    b = 65535
+        \\    a * b
+        \\}
         ,
         .expected = .{ .u32_val = 4294901760 },
     },
-    .{ .name = "U32: times: 2147483648 * 1",
+    .{
+        .name = "U32: times: 2147483648 * 1",
         .source =
-            \\{
-            \\    a : U32
-            \\    a = 2147483648
-            \\    b : U32
-            \\    b = 1
-            \\    a * b
-            \\}
+        \\{
+        \\    a : U32
+        \\    a = 2147483648
+        \\    b : U32
+        \\    b = 1
+        \\    a * b
+        \\}
         ,
         .expected = .{ .u32_val = 2147483648 },
     },
-    .{ .name = "U32: times: 1000000 * 4294",
+    .{
+        .name = "U32: times: 1000000 * 4294",
         .source =
-            \\{
-            \\    a : U32
-            \\    a = 1000000
-            \\    b : U32
-            \\    b = 4294
-            \\    a * b
-            \\}
+        \\{
+        \\    a : U32
+        \\    a = 1000000
+        \\    b : U32
+        \\    b = 4294
+        \\    a * b
+        \\}
         ,
         .expected = .{ .u32_val = 4294000000 },
     },
 
     // U32: div_by
-    .{ .name = "U32: div_by: 4000000000 // 1000",
+    .{
+        .name = "U32: div_by: 4000000000 // 1000",
         .source =
-            \\{
-            \\    a : U32
-            \\    a = 4000000000
-            \\    b : U32
-            \\    b = 1000
-            \\    a // b
-            \\}
+        \\{
+        \\    a : U32
+        \\    a = 4000000000
+        \\    b : U32
+        \\    b = 1000
+        \\    a // b
+        \\}
         ,
         .expected = .{ .u32_val = 4000000 },
     },
-    .{ .name = "U32: div_by: 4294967295 // 65536",
+    .{
+        .name = "U32: div_by: 4294967295 // 65536",
         .source =
-            \\{
-            \\    a : U32
-            \\    a = 4294967295
-            \\    b : U32
-            \\    b = 65536
-            \\    a // b
-            \\}
+        \\{
+        \\    a : U32
+        \\    a = 4294967295
+        \\    b : U32
+        \\    b = 65536
+        \\    a // b
+        \\}
         ,
         .expected = .{ .u32_val = 65535 },
     },
-    .{ .name = "U32: div_by: 3000000000 // 128",
+    .{
+        .name = "U32: div_by: 3000000000 // 128",
         .source =
-            \\{
-            \\    a : U32
-            \\    a = 3000000000
-            \\    b : U32
-            \\    b = 128
-            \\    a // b
-            \\}
+        \\{
+        \\    a : U32
+        \\    a = 3000000000
+        \\    b : U32
+        \\    b = 128
+        \\    a // b
+        \\}
         ,
         .expected = .{ .u32_val = 23437500 },
     },
 
     // U32: rem_by
-    .{ .name = "U32: rem_by: 3000000000 % 128",
+    .{
+        .name = "U32: rem_by: 3000000000 % 128",
         .source =
-            \\{
-            \\    a : U32
-            \\    a = 3000000000
-            \\    b : U32
-            \\    b = 128
-            \\    a % b
-            \\}
+        \\{
+        \\    a : U32
+        \\    a = 3000000000
+        \\    b : U32
+        \\    b = 128
+        \\    a % b
+        \\}
         ,
         .expected = .{ .u32_val = 0 },
     },
-    .{ .name = "U32: rem_by: 4294967295 % 65536",
+    .{
+        .name = "U32: rem_by: 4294967295 % 65536",
         .source =
-            \\{
-            \\    a : U32
-            \\    a = 4294967295
-            \\    b : U32
-            \\    b = 65536
-            \\    a % b
-            \\}
+        \\{
+        \\    a : U32
+        \\    a = 4294967295
+        \\    b : U32
+        \\    b = 65536
+        \\    a % b
+        \\}
         ,
         .expected = .{ .u32_val = 65535 },
     },
-    .{ .name = "U32: rem_by: 2147483648 % 99",
+    .{
+        .name = "U32: rem_by: 2147483648 % 99",
         .source =
-            \\{
-            \\    a : U32
-            \\    a = 2147483648
-            \\    b : U32
-            \\    b = 99
-            \\    a % b
-            \\}
+        \\{
+        \\    a : U32
+        \\    a = 2147483648
+        \\    b : U32
+        \\    b = 99
+        \\    a % b
+        \\}
         ,
         .expected = .{ .u32_val = 2 },
     },
 
     // U64: plus
-    .{ .name = "U64: plus: 10000000000000000000 + 5000000000000000000",
+    .{
+        .name = "U64: plus: 10000000000000000000 + 5000000000000000000",
         .source =
-            \\{
-            \\    a : U64
-            \\    a = 10000000000000000000
-            \\    b : U64
-            \\    b = 5000000000000000000
-            \\    a + b
-            \\}
+        \\{
+        \\    a : U64
+        \\    a = 10000000000000000000
+        \\    b : U64
+        \\    b = 5000000000000000000
+        \\    a + b
+        \\}
         ,
         .expected = .{ .u64_val = 15000000000000000000 },
     },
-    .{ .name = "U64: plus: 9223372036854775808 + 9223372036854775807",
+    .{
+        .name = "U64: plus: 9223372036854775808 + 9223372036854775807",
         .source =
-            \\{
-            \\    a : U64
-            \\    a = 9223372036854775808
-            \\    b : U64
-            \\    b = 9223372036854775807
-            \\    a + b
-            \\}
+        \\{
+        \\    a : U64
+        \\    a = 9223372036854775808
+        \\    b : U64
+        \\    b = 9223372036854775807
+        \\    a + b
+        \\}
         ,
         .expected = .{ .u64_val = 18446744073709551615 },
     },
-    .{ .name = "U64: plus: 18446744073709551615 + 0",
+    .{
+        .name = "U64: plus: 18446744073709551615 + 0",
         .source =
-            \\{
-            \\    a : U64
-            \\    a = 18446744073709551615
-            \\    b : U64
-            \\    b = 0
-            \\    a + b
-            \\}
+        \\{
+        \\    a : U64
+        \\    a = 18446744073709551615
+        \\    b : U64
+        \\    b = 0
+        \\    a + b
+        \\}
         ,
         .expected = .{ .u64_val = 18446744073709551615 },
     },
 
     // U64: minus
-    .{ .name = "U64: minus: 15000000000000000000 - 5000000000000000000",
+    .{
+        .name = "U64: minus: 15000000000000000000 - 5000000000000000000",
         .source =
-            \\{
-            \\    a : U64
-            \\    a = 15000000000000000000
-            \\    b : U64
-            \\    b = 5000000000000000000
-            \\    a - b
-            \\}
+        \\{
+        \\    a : U64
+        \\    a = 15000000000000000000
+        \\    b : U64
+        \\    b = 5000000000000000000
+        \\    a - b
+        \\}
         ,
         .expected = .{ .u64_val = 10000000000000000000 },
     },
-    .{ .name = "U64: minus: 18446744073709551615 - 9223372036854775808",
+    .{
+        .name = "U64: minus: 18446744073709551615 - 9223372036854775808",
         .source =
-            \\{
-            \\    a : U64
-            \\    a = 18446744073709551615
-            \\    b : U64
-            \\    b = 9223372036854775808
-            \\    a - b
-            \\}
+        \\{
+        \\    a : U64
+        \\    a = 18446744073709551615
+        \\    b : U64
+        \\    b = 9223372036854775808
+        \\    a - b
+        \\}
         ,
         .expected = .{ .u64_val = 9223372036854775807 },
     },
-    .{ .name = "U64: minus: 12000000000000000000 - 12000000000000000000",
+    .{
+        .name = "U64: minus: 12000000000000000000 - 12000000000000000000",
         .source =
-            \\{
-            \\    a : U64
-            \\    a = 12000000000000000000
-            \\    b : U64
-            \\    b = 12000000000000000000
-            \\    a - b
-            \\}
+        \\{
+        \\    a : U64
+        \\    a = 12000000000000000000
+        \\    b : U64
+        \\    b = 12000000000000000000
+        \\    a - b
+        \\}
         ,
         .expected = .{ .u64_val = 0 },
     },
 
     // U64: times
-    .{ .name = "U64: times: 4294967296 * 4294967295",
+    .{
+        .name = "U64: times: 4294967296 * 4294967295",
         .source =
-            \\{
-            \\    a : U64
-            \\    a = 4294967296
-            \\    b : U64
-            \\    b = 4294967295
-            \\    a * b
-            \\}
+        \\{
+        \\    a : U64
+        \\    a = 4294967296
+        \\    b : U64
+        \\    b = 4294967295
+        \\    a * b
+        \\}
         ,
         .expected = .{ .u64_val = 18446744069414584320 },
     },
-    .{ .name = "U64: times: 9223372036854775808 * 1",
+    .{
+        .name = "U64: times: 9223372036854775808 * 1",
         .source =
-            \\{
-            \\    a : U64
-            \\    a = 9223372036854775808
-            \\    b : U64
-            \\    b = 1
-            \\    a * b
-            \\}
+        \\{
+        \\    a : U64
+        \\    a = 9223372036854775808
+        \\    b : U64
+        \\    b = 1
+        \\    a * b
+        \\}
         ,
         .expected = .{ .u64_val = 9223372036854775808 },
     },
-    .{ .name = "U64: times: 1000000000 * 10000000000",
+    .{
+        .name = "U64: times: 1000000000 * 10000000000",
         .source =
-            \\{
-            \\    a : U64
-            \\    a = 1000000000
-            \\    b : U64
-            \\    b = 10000000000
-            \\    a * b
-            \\}
+        \\{
+        \\    a : U64
+        \\    a = 1000000000
+        \\    b : U64
+        \\    b = 10000000000
+        \\    a * b
+        \\}
         ,
         .expected = .{ .u64_val = 10000000000000000000 },
     },
 
     // U64: div_by
-    .{ .name = "U64: div_by: 15000000000000000000 // 1000000",
+    .{
+        .name = "U64: div_by: 15000000000000000000 // 1000000",
         .source =
-            \\{
-            \\    a : U64
-            \\    a = 15000000000000000000
-            \\    b : U64
-            \\    b = 1000000
-            \\    a // b
-            \\}
+        \\{
+        \\    a : U64
+        \\    a = 15000000000000000000
+        \\    b : U64
+        \\    b = 1000000
+        \\    a // b
+        \\}
         ,
         .expected = .{ .u64_val = 15000000000000 },
     },
-    .{ .name = "U64: div_by: 18446744073709551615 // 4294967296",
+    .{
+        .name = "U64: div_by: 18446744073709551615 // 4294967296",
         .source =
-            \\{
-            \\    a : U64
-            \\    a = 18446744073709551615
-            \\    b : U64
-            \\    b = 4294967296
-            \\    a // b
-            \\}
+        \\{
+        \\    a : U64
+        \\    a = 18446744073709551615
+        \\    b : U64
+        \\    b = 4294967296
+        \\    a // b
+        \\}
         ,
         .expected = .{ .u64_val = 4294967295 },
     },
-    .{ .name = "U64: div_by: 10000000000000000000 // 256",
+    .{
+        .name = "U64: div_by: 10000000000000000000 // 256",
         .source =
-            \\{
-            \\    a : U64
-            \\    a = 10000000000000000000
-            \\    b : U64
-            \\    b = 256
-            \\    a // b
-            \\}
+        \\{
+        \\    a : U64
+        \\    a = 10000000000000000000
+        \\    b : U64
+        \\    b = 256
+        \\    a // b
+        \\}
         ,
         .expected = .{ .u64_val = 39062500000000000 },
     },
 
     // U64: rem_by
-    .{ .name = "U64: rem_by: 10000000000000000000 % 256",
+    .{
+        .name = "U64: rem_by: 10000000000000000000 % 256",
         .source =
-            \\{
-            \\    a : U64
-            \\    a = 10000000000000000000
-            \\    b : U64
-            \\    b = 256
-            \\    a % b
-            \\}
+        \\{
+        \\    a : U64
+        \\    a = 10000000000000000000
+        \\    b : U64
+        \\    b = 256
+        \\    a % b
+        \\}
         ,
         .expected = .{ .u64_val = 0 },
     },
-    .{ .name = "U64: rem_by: 18446744073709551615 % 4294967296",
+    .{
+        .name = "U64: rem_by: 18446744073709551615 % 4294967296",
         .source =
-            \\{
-            \\    a : U64
-            \\    a = 18446744073709551615
-            \\    b : U64
-            \\    b = 4294967296
-            \\    a % b
-            \\}
+        \\{
+        \\    a : U64
+        \\    a = 18446744073709551615
+        \\    b : U64
+        \\    b = 4294967296
+        \\    a % b
+        \\}
         ,
         .expected = .{ .u64_val = 4294967295 },
     },
-    .{ .name = "U64: rem_by: 9223372036854775808 % 99",
+    .{
+        .name = "U64: rem_by: 9223372036854775808 % 99",
         .source =
-            \\{
-            \\    a : U64
-            \\    a = 9223372036854775808
-            \\    b : U64
-            \\    b = 99
-            \\    a % b
-            \\}
+        \\{
+        \\    a : U64
+        \\    a = 9223372036854775808
+        \\    b : U64
+        \\    b = 99
+        \\    a % b
+        \\}
         ,
         .expected = .{ .u64_val = 8 },
     },
 
     // U128: plus
-    .{ .name = "U128: plus: 100000000000000000000000000000 + 50000000000000000000000000000",
+    .{
+        .name = "U128: plus: 100000000000000000000000000000 + 50000000000000000000000000000",
         .source =
-            \\{
-            \\    a : U128
-            \\    a = 100000000000000000000000000000
-            \\    b : U128
-            \\    b = 50000000000000000000000000000
-            \\    a + b
-            \\}
+        \\{
+        \\    a : U128
+        \\    a = 100000000000000000000000000000
+        \\    b : U128
+        \\    b = 50000000000000000000000000000
+        \\    a + b
+        \\}
         ,
         .expected = .{ .u128_val = 150000000000000000000000000000 },
     },
-    .{ .name = "U128: plus: 18446744073709551616 + 18446744073709551615",
+    .{
+        .name = "U128: plus: 18446744073709551616 + 18446744073709551615",
         .source =
-            \\{
-            \\    a : U128
-            \\    a = 18446744073709551616
-            \\    b : U128
-            \\    b = 18446744073709551615
-            \\    a + b
-            \\}
+        \\{
+        \\    a : U128
+        \\    a = 18446744073709551616
+        \\    b : U128
+        \\    b = 18446744073709551615
+        \\    a + b
+        \\}
         ,
         .expected = .{ .u128_val = 36893488147419103231 },
     },
-    .{ .name = "U128: plus: max_i128 + 0",
+    .{
+        .name = "U128: plus: max_i128 + 0",
         .source =
-            \\{
-            \\    a : U128
-            \\    a = 170141183460469231731687303715884105727
-            \\    b : U128
-            \\    b = 0
-            \\    a + b
-            \\}
+        \\{
+        \\    a : U128
+        \\    a = 170141183460469231731687303715884105727
+        \\    b : U128
+        \\    b = 0
+        \\    a + b
+        \\}
         ,
         .expected = .{ .u128_val = 170141183460469231731687303715884105727 },
     },
 
     // U128: minus
-    .{ .name = "U128: minus: 150000000000000000000000000000 - 50000000000000000000000000000",
+    .{
+        .name = "U128: minus: 150000000000000000000000000000 - 50000000000000000000000000000",
         .source =
-            \\{
-            \\    a : U128
-            \\    a = 150000000000000000000000000000
-            \\    b : U128
-            \\    b = 50000000000000000000000000000
-            \\    a - b
-            \\}
+        \\{
+        \\    a : U128
+        \\    a = 150000000000000000000000000000
+        \\    b : U128
+        \\    b = 50000000000000000000000000000
+        \\    a - b
+        \\}
         ,
         .expected = .{ .u128_val = 100000000000000000000000000000 },
     },
-    .{ .name = "U128: minus: 36893488147419103231 - 18446744073709551616",
+    .{
+        .name = "U128: minus: 36893488147419103231 - 18446744073709551616",
         .source =
-            \\{
-            \\    a : U128
-            \\    a = 36893488147419103231
-            \\    b : U128
-            \\    b = 18446744073709551616
-            \\    a - b
-            \\}
+        \\{
+        \\    a : U128
+        \\    a = 36893488147419103231
+        \\    b : U128
+        \\    b = 18446744073709551616
+        \\    a - b
+        \\}
         ,
         .expected = .{ .u128_val = 18446744073709551615 },
     },
-    .{ .name = "U128: minus: 100000000000000000000000000000 - 100000000000000000000000000000",
+    .{
+        .name = "U128: minus: 100000000000000000000000000000 - 100000000000000000000000000000",
         .source =
-            \\{
-            \\    a : U128
-            \\    a = 100000000000000000000000000000
-            \\    b : U128
-            \\    b = 100000000000000000000000000000
-            \\    a - b
-            \\}
+        \\{
+        \\    a : U128
+        \\    a = 100000000000000000000000000000
+        \\    b : U128
+        \\    b = 100000000000000000000000000000
+        \\    a - b
+        \\}
         ,
         .expected = .{ .u128_val = 0 },
     },
 
     // U128: times
-    .{ .name = "U128: times: 13043817825332782212 * 13043817825332782212",
+    .{
+        .name = "U128: times: 13043817825332782212 * 13043817825332782212",
         .source =
-            \\{
-            \\    a : U128
-            \\    a = 13043817825332782212
-            \\    b : U128
-            \\    b = 13043817825332782212
-            \\    a * b
-            \\}
+        \\{
+        \\    a : U128
+        \\    a = 13043817825332782212
+        \\    b : U128
+        \\    b = 13043817825332782212
+        \\    a * b
+        \\}
         ,
         .expected = .{ .u128_val = 170141183460469231722567801800623612944 },
     },
-    .{ .name = "U128: times: 10000000000000000000 * 10000000000000000000",
+    .{
+        .name = "U128: times: 10000000000000000000 * 10000000000000000000",
         .source =
-            \\{
-            \\    a : U128
-            \\    a = 10000000000000000000
-            \\    b : U128
-            \\    b = 10000000000000000000
-            \\    a * b
-            \\}
+        \\{
+        \\    a : U128
+        \\    a = 10000000000000000000
+        \\    b : U128
+        \\    b = 10000000000000000000
+        \\    a * b
+        \\}
         ,
         .expected = .{ .u128_val = 100000000000000000000000000000000000000 },
     },
-    .{ .name = "U128: times: 1000000000000000000000 * 1000000",
+    .{
+        .name = "U128: times: 1000000000000000000000 * 1000000",
         .source =
-            \\{
-            \\    a : U128
-            \\    a = 1000000000000000000000
-            \\    b : U128
-            \\    b = 1000000
-            \\    a * b
-            \\}
+        \\{
+        \\    a : U128
+        \\    a = 1000000000000000000000
+        \\    b : U128
+        \\    b = 1000000
+        \\    a * b
+        \\}
         ,
         .expected = .{ .u128_val = 1000000000000000000000000000 },
     },
 
     // U128: div_by
-    .{ .name = "U128: div_by: 100000000000000000000000000000 // 10000000000000000",
+    .{
+        .name = "U128: div_by: 100000000000000000000000000000 // 10000000000000000",
         .source =
-            \\{
-            \\    a : U128
-            \\    a = 100000000000000000000000000000
-            \\    b : U128
-            \\    b = 10000000000000000
-            \\    a // b
-            \\}
+        \\{
+        \\    a : U128
+        \\    a = 100000000000000000000000000000
+        \\    b : U128
+        \\    b = 10000000000000000
+        \\    a // b
+        \\}
         ,
         .expected = .{ .u128_val = 10000000000000 },
     },
-    .{ .name = "U128: div_by: large square // factor",
+    .{
+        .name = "U128: div_by: large square // factor",
         .source =
-            \\{
-            \\    a : U128
-            \\    a = 170141183460469231722567801800623612944
-            \\    b : U128
-            \\    b = 13043817825332782212
-            \\    a // b
-            \\}
+        \\{
+        \\    a : U128
+        \\    a = 170141183460469231722567801800623612944
+        \\    b : U128
+        \\    b = 13043817825332782212
+        \\    a // b
+        \\}
         ,
         .expected = .{ .u128_val = 13043817825332782212 },
     },
-    .{ .name = "U128: div_by: 36893488147419103231 // 256",
+    .{
+        .name = "U128: div_by: 36893488147419103231 // 256",
         .source =
-            \\{
-            \\    a : U128
-            \\    a = 36893488147419103231
-            \\    b : U128
-            \\    b = 256
-            \\    a // b
-            \\}
+        \\{
+        \\    a : U128
+        \\    a = 36893488147419103231
+        \\    b : U128
+        \\    b = 256
+        \\    a // b
+        \\}
         ,
         .expected = .{ .u128_val = 144115188075855871 },
     },
 
     // U128: rem_by
-    .{ .name = "U128: rem_by: 100000000000000000000000000000 % 99",
+    .{
+        .name = "U128: rem_by: 100000000000000000000000000000 % 99",
         .source =
-            \\{
-            \\    a : U128
-            \\    a = 100000000000000000000000000000
-            \\    b : U128
-            \\    b = 99
-            \\    a % b
-            \\}
+        \\{
+        \\    a : U128
+        \\    a = 100000000000000000000000000000
+        \\    b : U128
+        \\    b = 99
+        \\    a % b
+        \\}
         ,
         .expected = .{ .u128_val = 10 },
     },
-    .{ .name = "U128: rem_by: large square % factor",
+    .{
+        .name = "U128: rem_by: large square % factor",
         .source =
-            \\{
-            \\    a : U128
-            \\    a = 170141183460469231722567801800623612944
-            \\    b : U128
-            \\    b = 13043817825332782212
-            \\    a % b
-            \\}
+        \\{
+        \\    a : U128
+        \\    a = 170141183460469231722567801800623612944
+        \\    b : U128
+        \\    b = 13043817825332782212
+        \\    a % b
+        \\}
         ,
         .expected = .{ .u128_val = 0 },
     },
-    .{ .name = "U128: rem_by: 36893488147419103231 % 256",
+    .{
+        .name = "U128: rem_by: 36893488147419103231 % 256",
         .source =
-            \\{
-            \\    a : U128
-            \\    a = 36893488147419103231
-            \\    b : U128
-            \\    b = 256
-            \\    a % b
-            \\}
+        \\{
+        \\    a : U128
+        \\    a = 36893488147419103231
+        \\    b : U128
+        \\    b = 256
+        \\    a % b
+        \\}
         ,
         .expected = .{ .u128_val = 255 },
     },
 
     // I8: negate
-    .{ .name = "I8: negate: -(-127)",
+    .{
+        .name = "I8: negate: -(-127)",
         .source =
-            \\{
-            \\    a : I8
-            \\    a = -127
-            \\    -a
-            \\}
+        \\{
+        \\    a : I8
+        \\    a = -127
+        \\    -a
+        \\}
         ,
         .expected = .{ .i8_val = 127 },
     },
-    .{ .name = "I8: negate: -(127)",
+    .{
+        .name = "I8: negate: -(127)",
         .source =
-            \\{
-            \\    a : I8
-            \\    a = 127
-            \\    -a
-            \\}
+        \\{
+        \\    a : I8
+        \\    a = 127
+        \\    -a
+        \\}
         ,
         .expected = .{ .i8_val = -127 },
     },
-    .{ .name = "I8: negate: -(-50)",
+    .{
+        .name = "I8: negate: -(-50)",
         .source =
-            \\{
-            \\    a : I8
-            \\    a = -50
-            \\    -a
-            \\}
+        \\{
+        \\    a : I8
+        \\    a = -50
+        \\    -a
+        \\}
         ,
         .expected = .{ .i8_val = 50 },
     },
 
     // I8: plus
-    .{ .name = "I8: plus: -100 + -20",
+    .{
+        .name = "I8: plus: -100 + -20",
         .source =
-            \\{
-            \\    a : I8
-            \\    a = -100
-            \\    b : I8
-            \\    b = -20
-            \\    a + b
-            \\}
+        \\{
+        \\    a : I8
+        \\    a = -100
+        \\    b : I8
+        \\    b = -20
+        \\    a + b
+        \\}
         ,
         .expected = .{ .i8_val = -120 },
     },
-    .{ .name = "I8: plus: -50 + 70",
+    .{
+        .name = "I8: plus: -50 + 70",
         .source =
-            \\{
-            \\    a : I8
-            \\    a = -50
-            \\    b : I8
-            \\    b = 70
-            \\    a + b
-            \\}
+        \\{
+        \\    a : I8
+        \\    a = -50
+        \\    b : I8
+        \\    b = 70
+        \\    a + b
+        \\}
         ,
         .expected = .{ .i8_val = 20 },
     },
-    .{ .name = "I8: plus: 127 + 0",
+    .{
+        .name = "I8: plus: 127 + 0",
         .source =
-            \\{
-            \\    a : I8
-            \\    a = 127
-            \\    b : I8
-            \\    b = 0
-            \\    a + b
-            \\}
+        \\{
+        \\    a : I8
+        \\    a = 127
+        \\    b : I8
+        \\    b = 0
+        \\    a + b
+        \\}
         ,
         .expected = .{ .i8_val = 127 },
     },
 
     // I8: minus
-    .{ .name = "I8: minus: -50 - 70",
+    .{
+        .name = "I8: minus: -50 - 70",
         .source =
-            \\{
-            \\    a : I8
-            \\    a = -50
-            \\    b : I8
-            \\    b = 70
-            \\    a - b
-            \\}
+        \\{
+        \\    a : I8
+        \\    a = -50
+        \\    b : I8
+        \\    b = 70
+        \\    a - b
+        \\}
         ,
         .expected = .{ .i8_val = -120 },
     },
-    .{ .name = "I8: minus: 100 - -27",
+    .{
+        .name = "I8: minus: 100 - -27",
         .source =
-            \\{
-            \\    a : I8
-            \\    a = 100
-            \\    b : I8
-            \\    b = -27
-            \\    a - b
-            \\}
+        \\{
+        \\    a : I8
+        \\    a = 100
+        \\    b : I8
+        \\    b = -27
+        \\    a - b
+        \\}
         ,
         .expected = .{ .i8_val = 127 },
     },
-    .{ .name = "I8: minus: -64 - -64",
+    .{
+        .name = "I8: minus: -64 - -64",
         .source =
-            \\{
-            \\    a : I8
-            \\    a = -64
-            \\    b : I8
-            \\    b = -64
-            \\    a - b
-            \\}
+        \\{
+        \\    a : I8
+        \\    a = -64
+        \\    b : I8
+        \\    b = -64
+        \\    a - b
+        \\}
         ,
         .expected = .{ .i8_val = 0 },
     },
 
     // I8: times
-    .{ .name = "I8: times: -16 * 8",
+    .{
+        .name = "I8: times: -16 * 8",
         .source =
-            \\{
-            \\    a : I8
-            \\    a = -16
-            \\    b : I8
-            \\    b = 8
-            \\    a * b
-            \\}
+        \\{
+        \\    a : I8
+        \\    a = -16
+        \\    b : I8
+        \\    b = 8
+        \\    a * b
+        \\}
         ,
         .expected = .{ .i8_val = -128 },
     },
-    .{ .name = "I8: times: -10 * -10",
+    .{
+        .name = "I8: times: -10 * -10",
         .source =
-            \\{
-            \\    a : I8
-            \\    a = -10
-            \\    b : I8
-            \\    b = -10
-            \\    a * b
-            \\}
+        \\{
+        \\    a : I8
+        \\    a = -10
+        \\    b : I8
+        \\    b = -10
+        \\    a * b
+        \\}
         ,
         .expected = .{ .i8_val = 100 },
     },
-    .{ .name = "I8: times: 127 * 1",
+    .{
+        .name = "I8: times: 127 * 1",
         .source =
-            \\{
-            \\    a : I8
-            \\    a = 127
-            \\    b : I8
-            \\    b = 1
-            \\    a * b
-            \\}
+        \\{
+        \\    a : I8
+        \\    a = 127
+        \\    b : I8
+        \\    b = 1
+        \\    a * b
+        \\}
         ,
         .expected = .{ .i8_val = 127 },
     },
 
     // I8: div_by
-    .{ .name = "I8: div_by: -128 // 2",
+    .{
+        .name = "I8: div_by: -128 // 2",
         .source =
-            \\{
-            \\    a : I8
-            \\    a = -128
-            \\    b : I8
-            \\    b = 2
-            \\    a // b
-            \\}
+        \\{
+        \\    a : I8
+        \\    a = -128
+        \\    b : I8
+        \\    b = 2
+        \\    a // b
+        \\}
         ,
         .expected = .{ .i8_val = -64 },
     },
-    .{ .name = "I8: div_by: 127 // -1",
+    .{
+        .name = "I8: div_by: 127 // -1",
         .source =
-            \\{
-            \\    a : I8
-            \\    a = 127
-            \\    b : I8
-            \\    b = -1
-            \\    a // b
-            \\}
+        \\{
+        \\    a : I8
+        \\    a = 127
+        \\    b : I8
+        \\    b = -1
+        \\    a // b
+        \\}
         ,
         .expected = .{ .i8_val = -127 },
     },
-    .{ .name = "I8: div_by: -100 // -10",
+    .{
+        .name = "I8: div_by: -100 // -10",
         .source =
-            \\{
-            \\    a : I8
-            \\    a = -100
-            \\    b : I8
-            \\    b = -10
-            \\    a // b
-            \\}
+        \\{
+        \\    a : I8
+        \\    a = -100
+        \\    b : I8
+        \\    b = -10
+        \\    a // b
+        \\}
         ,
         .expected = .{ .i8_val = 10 },
     },
 
     // I8: rem_by
-    .{ .name = "I8: rem_by: -128 % 7",
+    .{
+        .name = "I8: rem_by: -128 % 7",
         .source =
-            \\{
-            \\    a : I8
-            \\    a = -128
-            \\    b : I8
-            \\    b = 7
-            \\    a % b
-            \\}
+        \\{
+        \\    a : I8
+        \\    a = -128
+        \\    b : I8
+        \\    b = 7
+        \\    a % b
+        \\}
         ,
         .expected = .{ .i8_val = -2 },
     },
-    .{ .name = "I8: rem_by: 127 % -10",
+    .{
+        .name = "I8: rem_by: 127 % -10",
         .source =
-            \\{
-            \\    a : I8
-            \\    a = 127
-            \\    b : I8
-            \\    b = -10
-            \\    a % b
-            \\}
+        \\{
+        \\    a : I8
+        \\    a = 127
+        \\    b : I8
+        \\    b = -10
+        \\    a % b
+        \\}
         ,
         .expected = .{ .i8_val = 7 },
     },
-    .{ .name = "I8: rem_by: -100 % -7",
+    .{
+        .name = "I8: rem_by: -100 % -7",
         .source =
-            \\{
-            \\    a : I8
-            \\    a = -100
-            \\    b : I8
-            \\    b = -7
-            \\    a % b
-            \\}
+        \\{
+        \\    a : I8
+        \\    a = -100
+        \\    b : I8
+        \\    b = -7
+        \\    a % b
+        \\}
         ,
         .expected = .{ .i8_val = -2 },
     },
 
     // I16: negate
-    .{ .name = "I16: negate: -(-32767)",
+    .{
+        .name = "I16: negate: -(-32767)",
         .source =
-            \\{
-            \\    a : I16
-            \\    a = -32767
-            \\    -a
-            \\}
+        \\{
+        \\    a : I16
+        \\    a = -32767
+        \\    -a
+        \\}
         ,
         .expected = .{ .i16_val = 32767 },
     },
-    .{ .name = "I16: negate: -(32767)",
+    .{
+        .name = "I16: negate: -(32767)",
         .source =
-            \\{
-            \\    a : I16
-            \\    a = 32767
-            \\    -a
-            \\}
+        \\{
+        \\    a : I16
+        \\    a = 32767
+        \\    -a
+        \\}
         ,
         .expected = .{ .i16_val = -32767 },
     },
-    .{ .name = "I16: negate: -(-10000)",
+    .{
+        .name = "I16: negate: -(-10000)",
         .source =
-            \\{
-            \\    a : I16
-            \\    a = -10000
-            \\    -a
-            \\}
+        \\{
+        \\    a : I16
+        \\    a = -10000
+        \\    -a
+        \\}
         ,
         .expected = .{ .i16_val = 10000 },
     },
 
     // I16: plus
-    .{ .name = "I16: plus: -20000 + -10000",
+    .{
+        .name = "I16: plus: -20000 + -10000",
         .source =
-            \\{
-            \\    a : I16
-            \\    a = -20000
-            \\    b : I16
-            \\    b = -10000
-            \\    a + b
-            \\}
+        \\{
+        \\    a : I16
+        \\    a = -20000
+        \\    b : I16
+        \\    b = -10000
+        \\    a + b
+        \\}
         ,
         .expected = .{ .i16_val = -30000 },
     },
-    .{ .name = "I16: plus: -32768 + 32767",
+    .{
+        .name = "I16: plus: -32768 + 32767",
         .source =
-            \\{
-            \\    a : I16
-            \\    a = -32768
-            \\    b : I16
-            \\    b = 32767
-            \\    a + b
-            \\}
+        \\{
+        \\    a : I16
+        \\    a = -32768
+        \\    b : I16
+        \\    b = 32767
+        \\    a + b
+        \\}
         ,
         .expected = .{ .i16_val = -1 },
     },
-    .{ .name = "I16: plus: 32767 + 0",
+    .{
+        .name = "I16: plus: 32767 + 0",
         .source =
-            \\{
-            \\    a : I16
-            \\    a = 32767
-            \\    b : I16
-            \\    b = 0
-            \\    a + b
-            \\}
+        \\{
+        \\    a : I16
+        \\    a = 32767
+        \\    b : I16
+        \\    b = 0
+        \\    a + b
+        \\}
         ,
         .expected = .{ .i16_val = 32767 },
     },
 
     // I16: minus
-    .{ .name = "I16: minus: -10000 - 20000",
+    .{
+        .name = "I16: minus: -10000 - 20000",
         .source =
-            \\{
-            \\    a : I16
-            \\    a = -10000
-            \\    b : I16
-            \\    b = 20000
-            \\    a - b
-            \\}
+        \\{
+        \\    a : I16
+        \\    a = -10000
+        \\    b : I16
+        \\    b = 20000
+        \\    a - b
+        \\}
         ,
         .expected = .{ .i16_val = -30000 },
     },
-    .{ .name = "I16: minus: 30000 - -2767",
+    .{
+        .name = "I16: minus: 30000 - -2767",
         .source =
-            \\{
-            \\    a : I16
-            \\    a = 30000
-            \\    b : I16
-            \\    b = -2767
-            \\    a - b
-            \\}
+        \\{
+        \\    a : I16
+        \\    a = 30000
+        \\    b : I16
+        \\    b = -2767
+        \\    a - b
+        \\}
         ,
         .expected = .{ .i16_val = 32767 },
     },
-    .{ .name = "I16: minus: -16384 - -16384",
+    .{
+        .name = "I16: minus: -16384 - -16384",
         .source =
-            \\{
-            \\    a : I16
-            \\    a = -16384
-            \\    b : I16
-            \\    b = -16384
-            \\    a - b
-            \\}
+        \\{
+        \\    a : I16
+        \\    a = -16384
+        \\    b : I16
+        \\    b = -16384
+        \\    a - b
+        \\}
         ,
         .expected = .{ .i16_val = 0 },
     },
 
     // I16: times
-    .{ .name = "I16: times: -256 * 128",
+    .{
+        .name = "I16: times: -256 * 128",
         .source =
-            \\{
-            \\    a : I16
-            \\    a = -256
-            \\    b : I16
-            \\    b = 128
-            \\    a * b
-            \\}
+        \\{
+        \\    a : I16
+        \\    a = -256
+        \\    b : I16
+        \\    b = 128
+        \\    a * b
+        \\}
         ,
         .expected = .{ .i16_val = -32768 },
     },
-    .{ .name = "I16: times: -100 * -327",
+    .{
+        .name = "I16: times: -100 * -327",
         .source =
-            \\{
-            \\    a : I16
-            \\    a = -100
-            \\    b : I16
-            \\    b = -327
-            \\    a * b
-            \\}
+        \\{
+        \\    a : I16
+        \\    a = -100
+        \\    b : I16
+        \\    b = -327
+        \\    a * b
+        \\}
         ,
         .expected = .{ .i16_val = 32700 },
     },
-    .{ .name = "I16: times: 181 * 181",
+    .{
+        .name = "I16: times: 181 * 181",
         .source =
-            \\{
-            \\    a : I16
-            \\    a = 181
-            \\    b : I16
-            \\    b = 181
-            \\    a * b
-            \\}
+        \\{
+        \\    a : I16
+        \\    a = 181
+        \\    b : I16
+        \\    b = 181
+        \\    a * b
+        \\}
         ,
         .expected = .{ .i16_val = 32761 },
     },
 
     // I16: div_by
-    .{ .name = "I16: div_by: -32768 // 2",
+    .{
+        .name = "I16: div_by: -32768 // 2",
         .source =
-            \\{
-            \\    a : I16
-            \\    a = -32768
-            \\    b : I16
-            \\    b = 2
-            \\    a // b
-            \\}
+        \\{
+        \\    a : I16
+        \\    a = -32768
+        \\    b : I16
+        \\    b = 2
+        \\    a // b
+        \\}
         ,
         .expected = .{ .i16_val = -16384 },
     },
-    .{ .name = "I16: div_by: 32767 // -1",
+    .{
+        .name = "I16: div_by: 32767 // -1",
         .source =
-            \\{
-            \\    a : I16
-            \\    a = 32767
-            \\    b : I16
-            \\    b = -1
-            \\    a // b
-            \\}
+        \\{
+        \\    a : I16
+        \\    a = 32767
+        \\    b : I16
+        \\    b = -1
+        \\    a // b
+        \\}
         ,
         .expected = .{ .i16_val = -32767 },
     },
-    .{ .name = "I16: div_by: -30000 // -10",
+    .{
+        .name = "I16: div_by: -30000 // -10",
         .source =
-            \\{
-            \\    a : I16
-            \\    a = -30000
-            \\    b : I16
-            \\    b = -10
-            \\    a // b
-            \\}
+        \\{
+        \\    a : I16
+        \\    a = -30000
+        \\    b : I16
+        \\    b = -10
+        \\    a // b
+        \\}
         ,
         .expected = .{ .i16_val = 3000 },
     },
 
     // I16: rem_by
-    .{ .name = "I16: rem_by: -32768 % 99",
+    .{
+        .name = "I16: rem_by: -32768 % 99",
         .source =
-            \\{
-            \\    a : I16
-            \\    a = -32768
-            \\    b : I16
-            \\    b = 99
-            \\    a % b
-            \\}
+        \\{
+        \\    a : I16
+        \\    a = -32768
+        \\    b : I16
+        \\    b = 99
+        \\    a % b
+        \\}
         ,
         .expected = .{ .i16_val = -98 },
     },
-    .{ .name = "I16: rem_by: 32767 % -100",
+    .{
+        .name = "I16: rem_by: 32767 % -100",
         .source =
-            \\{
-            \\    a : I16
-            \\    a = 32767
-            \\    b : I16
-            \\    b = -100
-            \\    a % b
-            \\}
+        \\{
+        \\    a : I16
+        \\    a = 32767
+        \\    b : I16
+        \\    b = -100
+        \\    a % b
+        \\}
         ,
         .expected = .{ .i16_val = 67 },
     },
-    .{ .name = "I16: rem_by: -10000 % -128",
+    .{
+        .name = "I16: rem_by: -10000 % -128",
         .source =
-            \\{
-            \\    a : I16
-            \\    a = -10000
-            \\    b : I16
-            \\    b = -128
-            \\    a % b
-            \\}
+        \\{
+        \\    a : I16
+        \\    a = -10000
+        \\    b : I16
+        \\    b = -128
+        \\    a % b
+        \\}
         ,
         .expected = .{ .i16_val = -16 },
     },
 
     // I32: negate
-    .{ .name = "I32: negate: -(-2147483647)",
+    .{
+        .name = "I32: negate: -(-2147483647)",
         .source =
-            \\{
-            \\    a : I32
-            \\    a = -2147483647
-            \\    -a
-            \\}
+        \\{
+        \\    a : I32
+        \\    a = -2147483647
+        \\    -a
+        \\}
         ,
         .expected = .{ .i32_val = 2147483647 },
     },
-    .{ .name = "I32: negate: -(2147483647)",
+    .{
+        .name = "I32: negate: -(2147483647)",
         .source =
-            \\{
-            \\    a : I32
-            \\    a = 2147483647
-            \\    -a
-            \\}
+        \\{
+        \\    a : I32
+        \\    a = 2147483647
+        \\    -a
+        \\}
         ,
         .expected = .{ .i32_val = -2147483647 },
     },
-    .{ .name = "I32: negate: -(-1000000000)",
+    .{
+        .name = "I32: negate: -(-1000000000)",
         .source =
-            \\{
-            \\    a : I32
-            \\    a = -1000000000
-            \\    -a
-            \\}
+        \\{
+        \\    a : I32
+        \\    a = -1000000000
+        \\    -a
+        \\}
         ,
         .expected = .{ .i32_val = 1000000000 },
     },
 
     // I32: plus
-    .{ .name = "I32: plus: -1000000000 + -500000000",
+    .{
+        .name = "I32: plus: -1000000000 + -500000000",
         .source =
-            \\{
-            \\    a : I32
-            \\    a = -1000000000
-            \\    b : I32
-            \\    b = -500000000
-            \\    a + b
-            \\}
+        \\{
+        \\    a : I32
+        \\    a = -1000000000
+        \\    b : I32
+        \\    b = -500000000
+        \\    a + b
+        \\}
         ,
         .expected = .{ .i32_val = -1500000000 },
     },
-    .{ .name = "I32: plus: -2147483648 + 2147483647",
+    .{
+        .name = "I32: plus: -2147483648 + 2147483647",
         .source =
-            \\{
-            \\    a : I32
-            \\    a = -2147483648
-            \\    b : I32
-            \\    b = 2147483647
-            \\    a + b
-            \\}
+        \\{
+        \\    a : I32
+        \\    a = -2147483648
+        \\    b : I32
+        \\    b = 2147483647
+        \\    a + b
+        \\}
         ,
         .expected = .{ .i32_val = -1 },
     },
-    .{ .name = "I32: plus: 2147483647 + 0",
+    .{
+        .name = "I32: plus: 2147483647 + 0",
         .source =
-            \\{
-            \\    a : I32
-            \\    a = 2147483647
-            \\    b : I32
-            \\    b = 0
-            \\    a + b
-            \\}
+        \\{
+        \\    a : I32
+        \\    a = 2147483647
+        \\    b : I32
+        \\    b = 0
+        \\    a + b
+        \\}
         ,
         .expected = .{ .i32_val = 2147483647 },
     },
 
     // I32: minus
-    .{ .name = "I32: minus: -1000000000 - 500000000",
+    .{
+        .name = "I32: minus: -1000000000 - 500000000",
         .source =
-            \\{
-            \\    a : I32
-            \\    a = -1000000000
-            \\    b : I32
-            \\    b = 500000000
-            \\    a - b
-            \\}
+        \\{
+        \\    a : I32
+        \\    a = -1000000000
+        \\    b : I32
+        \\    b = 500000000
+        \\    a - b
+        \\}
         ,
         .expected = .{ .i32_val = -1500000000 },
     },
-    .{ .name = "I32: minus: 2000000000 - -147483647",
+    .{
+        .name = "I32: minus: 2000000000 - -147483647",
         .source =
-            \\{
-            \\    a : I32
-            \\    a = 2000000000
-            \\    b : I32
-            \\    b = -147483647
-            \\    a - b
-            \\}
+        \\{
+        \\    a : I32
+        \\    a = 2000000000
+        \\    b : I32
+        \\    b = -147483647
+        \\    a - b
+        \\}
         ,
         .expected = .{ .i32_val = 2147483647 },
     },
-    .{ .name = "I32: minus: -1073741824 - -1073741824",
+    .{
+        .name = "I32: minus: -1073741824 - -1073741824",
         .source =
-            \\{
-            \\    a : I32
-            \\    a = -1073741824
-            \\    b : I32
-            \\    b = -1073741824
-            \\    a - b
-            \\}
+        \\{
+        \\    a : I32
+        \\    a = -1073741824
+        \\    b : I32
+        \\    b = -1073741824
+        \\    a - b
+        \\}
         ,
         .expected = .{ .i32_val = 0 },
     },
 
     // I32: times
-    .{ .name = "I32: times: -65536 * 32768",
+    .{
+        .name = "I32: times: -65536 * 32768",
         .source =
-            \\{
-            \\    a : I32
-            \\    a = -65536
-            \\    b : I32
-            \\    b = 32768
-            \\    a * b
-            \\}
+        \\{
+        \\    a : I32
+        \\    a = -65536
+        \\    b : I32
+        \\    b = 32768
+        \\    a * b
+        \\}
         ,
         .expected = .{ .i32_val = -2147483648 },
     },
-    .{ .name = "I32: times: -10000 * -214748",
+    .{
+        .name = "I32: times: -10000 * -214748",
         .source =
-            \\{
-            \\    a : I32
-            \\    a = -10000
-            \\    b : I32
-            \\    b = -214748
-            \\    a * b
-            \\}
+        \\{
+        \\    a : I32
+        \\    a = -10000
+        \\    b : I32
+        \\    b = -214748
+        \\    a * b
+        \\}
         ,
         .expected = .{ .i32_val = 2147480000 },
     },
-    .{ .name = "I32: times: 46340 * 46340",
+    .{
+        .name = "I32: times: 46340 * 46340",
         .source =
-            \\{
-            \\    a : I32
-            \\    a = 46340
-            \\    b : I32
-            \\    b = 46340
-            \\    a * b
-            \\}
+        \\{
+        \\    a : I32
+        \\    a = 46340
+        \\    b : I32
+        \\    b = 46340
+        \\    a * b
+        \\}
         ,
         .expected = .{ .i32_val = 2147395600 },
     },
 
     // I32: div_by
-    .{ .name = "I32: div_by: -2147483648 // 2",
+    .{
+        .name = "I32: div_by: -2147483648 // 2",
         .source =
-            \\{
-            \\    a : I32
-            \\    a = -2147483648
-            \\    b : I32
-            \\    b = 2
-            \\    a // b
-            \\}
+        \\{
+        \\    a : I32
+        \\    a = -2147483648
+        \\    b : I32
+        \\    b = 2
+        \\    a // b
+        \\}
         ,
         .expected = .{ .i32_val = -1073741824 },
     },
-    .{ .name = "I32: div_by: 2147483647 // -1",
+    .{
+        .name = "I32: div_by: 2147483647 // -1",
         .source =
-            \\{
-            \\    a : I32
-            \\    a = 2147483647
-            \\    b : I32
-            \\    b = -1
-            \\    a // b
-            \\}
+        \\{
+        \\    a : I32
+        \\    a = 2147483647
+        \\    b : I32
+        \\    b = -1
+        \\    a // b
+        \\}
         ,
         .expected = .{ .i32_val = -2147483647 },
     },
-    .{ .name = "I32: div_by: -1500000000 // -1000",
+    .{
+        .name = "I32: div_by: -1500000000 // -1000",
         .source =
-            \\{
-            \\    a : I32
-            \\    a = -1500000000
-            \\    b : I32
-            \\    b = -1000
-            \\    a // b
-            \\}
+        \\{
+        \\    a : I32
+        \\    a = -1500000000
+        \\    b : I32
+        \\    b = -1000
+        \\    a // b
+        \\}
         ,
         .expected = .{ .i32_val = 1500000 },
     },
 
     // I32: rem_by
-    .{ .name = "I32: rem_by: -2147483648 % 99",
+    .{
+        .name = "I32: rem_by: -2147483648 % 99",
         .source =
-            \\{
-            \\    a : I32
-            \\    a = -2147483648
-            \\    b : I32
-            \\    b = 99
-            \\    a % b
-            \\}
+        \\{
+        \\    a : I32
+        \\    a = -2147483648
+        \\    b : I32
+        \\    b = 99
+        \\    a % b
+        \\}
         ,
         .expected = .{ .i32_val = -2 },
     },
-    .{ .name = "I32: rem_by: 2147483647 % -65536",
+    .{
+        .name = "I32: rem_by: 2147483647 % -65536",
         .source =
-            \\{
-            \\    a : I32
-            \\    a = 2147483647
-            \\    b : I32
-            \\    b = -65536
-            \\    a % b
-            \\}
+        \\{
+        \\    a : I32
+        \\    a = 2147483647
+        \\    b : I32
+        \\    b = -65536
+        \\    a % b
+        \\}
         ,
         .expected = .{ .i32_val = 65535 },
     },
-    .{ .name = "I32: rem_by: -1000000000 % -32768",
+    .{
+        .name = "I32: rem_by: -1000000000 % -32768",
         .source =
-            \\{
-            \\    a : I32
-            \\    a = -1000000000
-            \\    b : I32
-            \\    b = -32768
-            \\    a % b
-            \\}
+        \\{
+        \\    a : I32
+        \\    a = -1000000000
+        \\    b : I32
+        \\    b = -32768
+        \\    a % b
+        \\}
         ,
         .expected = .{ .i32_val = -18944 },
     },
 
     // I64: negate
-    .{ .name = "I64: negate: -(-9223372036854775807)",
+    .{
+        .name = "I64: negate: -(-9223372036854775807)",
         .source =
-            \\{
-            \\    a : I64
-            \\    a = -9223372036854775807
-            \\    -a
-            \\}
+        \\{
+        \\    a : I64
+        \\    a = -9223372036854775807
+        \\    -a
+        \\}
         ,
         .expected = .{ .i64_val = 9223372036854775807 },
     },
-    .{ .name = "I64: negate: -(9223372036854775807)",
+    .{
+        .name = "I64: negate: -(9223372036854775807)",
         .source =
-            \\{
-            \\    a : I64
-            \\    a = 9223372036854775807
-            \\    -a
-            \\}
+        \\{
+        \\    a : I64
+        \\    a = 9223372036854775807
+        \\    -a
+        \\}
         ,
         .expected = .{ .i64_val = -9223372036854775807 },
     },
-    .{ .name = "I64: negate: -(-5000000000000)",
+    .{
+        .name = "I64: negate: -(-5000000000000)",
         .source =
-            \\{
-            \\    a : I64
-            \\    a = -5000000000000
-            \\    -a
-            \\}
+        \\{
+        \\    a : I64
+        \\    a = -5000000000000
+        \\    -a
+        \\}
         ,
         .expected = .{ .i64_val = 5000000000000 },
     },
 
     // I64: plus
-    .{ .name = "I64: plus: -5000000000000 + -3000000000000",
+    .{
+        .name = "I64: plus: -5000000000000 + -3000000000000",
         .source =
-            \\{
-            \\    a : I64
-            \\    a = -5000000000000
-            \\    b : I64
-            \\    b = -3000000000000
-            \\    a + b
-            \\}
+        \\{
+        \\    a : I64
+        \\    a = -5000000000000
+        \\    b : I64
+        \\    b = -3000000000000
+        \\    a + b
+        \\}
         ,
         .expected = .{ .i64_val = -8000000000000 },
     },
-    .{ .name = "I64: plus: -9223372036854775808 + 9223372036854775807",
+    .{
+        .name = "I64: plus: -9223372036854775808 + 9223372036854775807",
         .source =
-            \\{
-            \\    a : I64
-            \\    a = -9223372036854775808
-            \\    b : I64
-            \\    b = 9223372036854775807
-            \\    a + b
-            \\}
+        \\{
+        \\    a : I64
+        \\    a = -9223372036854775808
+        \\    b : I64
+        \\    b = 9223372036854775807
+        \\    a + b
+        \\}
         ,
         .expected = .{ .i64_val = -1 },
     },
-    .{ .name = "I64: plus: 9223372036854775807 + 0",
+    .{
+        .name = "I64: plus: 9223372036854775807 + 0",
         .source =
-            \\{
-            \\    a : I64
-            \\    a = 9223372036854775807
-            \\    b : I64
-            \\    b = 0
-            \\    a + b
-            \\}
+        \\{
+        \\    a : I64
+        \\    a = 9223372036854775807
+        \\    b : I64
+        \\    b = 0
+        \\    a + b
+        \\}
         ,
         .expected = .{ .i64_val = 9223372036854775807 },
     },
 
     // I64: minus
-    .{ .name = "I64: minus: -5000000000000 - 3000000000000",
+    .{
+        .name = "I64: minus: -5000000000000 - 3000000000000",
         .source =
-            \\{
-            \\    a : I64
-            \\    a = -5000000000000
-            \\    b : I64
-            \\    b = 3000000000000
-            \\    a - b
-            \\}
+        \\{
+        \\    a : I64
+        \\    a = -5000000000000
+        \\    b : I64
+        \\    b = 3000000000000
+        \\    a - b
+        \\}
         ,
         .expected = .{ .i64_val = -8000000000000 },
     },
-    .{ .name = "I64: minus: 9000000000000000000 - -223372036854775807",
+    .{
+        .name = "I64: minus: 9000000000000000000 - -223372036854775807",
         .source =
-            \\{
-            \\    a : I64
-            \\    a = 9000000000000000000
-            \\    b : I64
-            \\    b = -223372036854775807
-            \\    a - b
-            \\}
+        \\{
+        \\    a : I64
+        \\    a = 9000000000000000000
+        \\    b : I64
+        \\    b = -223372036854775807
+        \\    a - b
+        \\}
         ,
         .expected = .{ .i64_val = 9223372036854775807 },
     },
-    .{ .name = "I64: minus: -4611686018427387904 - -4611686018427387904",
+    .{
+        .name = "I64: minus: -4611686018427387904 - -4611686018427387904",
         .source =
-            \\{
-            \\    a : I64
-            \\    a = -4611686018427387904
-            \\    b : I64
-            \\    b = -4611686018427387904
-            \\    a - b
-            \\}
+        \\{
+        \\    a : I64
+        \\    a = -4611686018427387904
+        \\    b : I64
+        \\    b = -4611686018427387904
+        \\    a - b
+        \\}
         ,
         .expected = .{ .i64_val = 0 },
     },
 
     // I64: times
-    .{ .name = "I64: times: -4294967296 * 2147483648",
+    .{
+        .name = "I64: times: -4294967296 * 2147483648",
         .source =
-            \\{
-            \\    a : I64
-            \\    a = -4294967296
-            \\    b : I64
-            \\    b = 2147483648
-            \\    a * b
-            \\}
+        \\{
+        \\    a : I64
+        \\    a = -4294967296
+        \\    b : I64
+        \\    b = 2147483648
+        \\    a * b
+        \\}
         ,
         .expected = .{ .i64_val = -9223372036854775808 },
     },
-    .{ .name = "I64: times: -1000000000 * -9223372",
+    .{
+        .name = "I64: times: -1000000000 * -9223372",
         .source =
-            \\{
-            \\    a : I64
-            \\    a = -1000000000
-            \\    b : I64
-            \\    b = -9223372
-            \\    a * b
-            \\}
+        \\{
+        \\    a : I64
+        \\    a = -1000000000
+        \\    b : I64
+        \\    b = -9223372
+        \\    a * b
+        \\}
         ,
         .expected = .{ .i64_val = 9223372000000000 },
     },
-    .{ .name = "I64: times: 3037000499 * 3037000499",
+    .{
+        .name = "I64: times: 3037000499 * 3037000499",
         .source =
-            \\{
-            \\    a : I64
-            \\    a = 3037000499
-            \\    b : I64
-            \\    b = 3037000499
-            \\    a * b
-            \\}
+        \\{
+        \\    a : I64
+        \\    a = 3037000499
+        \\    b : I64
+        \\    b = 3037000499
+        \\    a * b
+        \\}
         ,
         .expected = .{ .i64_val = 9223372030926249001 },
     },
 
     // I64: div_by
-    .{ .name = "I64: div_by: -9223372036854775808 // 2",
+    .{
+        .name = "I64: div_by: -9223372036854775808 // 2",
         .source =
-            \\{
-            \\    a : I64
-            \\    a = -9223372036854775808
-            \\    b : I64
-            \\    b = 2
-            \\    a // b
-            \\}
+        \\{
+        \\    a : I64
+        \\    a = -9223372036854775808
+        \\    b : I64
+        \\    b = 2
+        \\    a // b
+        \\}
         ,
         .expected = .{ .i64_val = -4611686018427387904 },
     },
-    .{ .name = "I64: div_by: 9223372036854775807 // -1",
+    .{
+        .name = "I64: div_by: 9223372036854775807 // -1",
         .source =
-            \\{
-            \\    a : I64
-            \\    a = 9223372036854775807
-            \\    b : I64
-            \\    b = -1
-            \\    a // b
-            \\}
+        \\{
+        \\    a : I64
+        \\    a = 9223372036854775807
+        \\    b : I64
+        \\    b = -1
+        \\    a // b
+        \\}
         ,
         .expected = .{ .i64_val = -9223372036854775807 },
     },
-    .{ .name = "I64: div_by: -8000000000000 // -1000000",
+    .{
+        .name = "I64: div_by: -8000000000000 // -1000000",
         .source =
-            \\{
-            \\    a : I64
-            \\    a = -8000000000000
-            \\    b : I64
-            \\    b = -1000000
-            \\    a // b
-            \\}
+        \\{
+        \\    a : I64
+        \\    a = -8000000000000
+        \\    b : I64
+        \\    b = -1000000
+        \\    a // b
+        \\}
         ,
         .expected = .{ .i64_val = 8000000 },
     },
 
     // I64: rem_by
-    .{ .name = "I64: rem_by: -9223372036854775808 % 99",
+    .{
+        .name = "I64: rem_by: -9223372036854775808 % 99",
         .source =
-            \\{
-            \\    a : I64
-            \\    a = -9223372036854775808
-            \\    b : I64
-            \\    b = 99
-            \\    a % b
-            \\}
+        \\{
+        \\    a : I64
+        \\    a = -9223372036854775808
+        \\    b : I64
+        \\    b = 99
+        \\    a % b
+        \\}
         ,
         .expected = .{ .i64_val = -8 },
     },
-    .{ .name = "I64: rem_by: 9223372036854775807 % -4294967296",
+    .{
+        .name = "I64: rem_by: 9223372036854775807 % -4294967296",
         .source =
-            \\{
-            \\    a : I64
-            \\    a = 9223372036854775807
-            \\    b : I64
-            \\    b = -4294967296
-            \\    a % b
-            \\}
+        \\{
+        \\    a : I64
+        \\    a = 9223372036854775807
+        \\    b : I64
+        \\    b = -4294967296
+        \\    a % b
+        \\}
         ,
         .expected = .{ .i64_val = 4294967295 },
     },
-    .{ .name = "I64: rem_by: -5000000000000 % -2147483648",
+    .{
+        .name = "I64: rem_by: -5000000000000 % -2147483648",
         .source =
-            \\{
-            \\    a : I64
-            \\    a = -5000000000000
-            \\    b : I64
-            \\    b = -2147483648
-            \\    a % b
-            \\}
+        \\{
+        \\    a : I64
+        \\    a = -5000000000000
+        \\    b : I64
+        \\    b = -2147483648
+        \\    a % b
+        \\}
         ,
         .expected = .{ .i64_val = -658067456 },
     },
 
     // I128: negate
-    .{ .name = "I128: negate: -(-85070591730234615865843651857942052864)",
+    .{
+        .name = "I128: negate: -(-85070591730234615865843651857942052864)",
         .source =
-            \\{
-            \\    a : I128
-            \\    a = -85070591730234615865843651857942052864
-            \\    -a
-            \\}
+        \\{
+        \\    a : I128
+        \\    a = -85070591730234615865843651857942052864
+        \\    -a
+        \\}
         ,
         .expected = .{ .i128_val = 85070591730234615865843651857942052864 },
     },
-    .{ .name = "I128: negate: -(170141183460469231731687303715884105727)",
+    .{
+        .name = "I128: negate: -(170141183460469231731687303715884105727)",
         .source =
-            \\{
-            \\    a : I128
-            \\    a = 170141183460469231731687303715884105727
-            \\    -a
-            \\}
+        \\{
+        \\    a : I128
+        \\    a = 170141183460469231731687303715884105727
+        \\    -a
+        \\}
         ,
         .expected = .{ .i128_val = -170141183460469231731687303715884105727 },
     },
-    .{ .name = "I128: negate: -(-100000000000000000000000)",
+    .{
+        .name = "I128: negate: -(-100000000000000000000000)",
         .source =
-            \\{
-            \\    a : I128
-            \\    a = -100000000000000000000000
-            \\    -a
-            \\}
+        \\{
+        \\    a : I128
+        \\    a = -100000000000000000000000
+        \\    -a
+        \\}
         ,
         .expected = .{ .i128_val = 100000000000000000000000 },
     },
 
     // I128: plus
-    .{ .name = "I128: plus: -100000000000000000000000 + -50000000000000000000000",
+    .{
+        .name = "I128: plus: -100000000000000000000000 + -50000000000000000000000",
         .source =
-            \\{
-            \\    a : I128
-            \\    a = -100000000000000000000000
-            \\    b : I128
-            \\    b = -50000000000000000000000
-            \\    a + b
-            \\}
+        \\{
+        \\    a : I128
+        \\    a = -100000000000000000000000
+        \\    b : I128
+        \\    b = -50000000000000000000000
+        \\    a + b
+        \\}
         ,
         .expected = .{ .i128_val = -150000000000000000000000 },
     },
-    .{ .name = "I128: plus: min + max",
+    .{
+        .name = "I128: plus: min + max",
         .source =
-            \\{
-            \\    a : I128
-            \\    a = -170141183460469231731687303715884105728
-            \\    b : I128
-            \\    b = 170141183460469231731687303715884105727
-            \\    a + b
-            \\}
+        \\{
+        \\    a : I128
+        \\    a = -170141183460469231731687303715884105728
+        \\    b : I128
+        \\    b = 170141183460469231731687303715884105727
+        \\    a + b
+        \\}
         ,
         .expected = .{ .i128_val = -1 },
     },
-    .{ .name = "I128: plus: max + 0",
+    .{
+        .name = "I128: plus: max + 0",
         .source =
-            \\{
-            \\    a : I128
-            \\    a = 170141183460469231731687303715884105727
-            \\    b : I128
-            \\    b = 0
-            \\    a + b
-            \\}
+        \\{
+        \\    a : I128
+        \\    a = 170141183460469231731687303715884105727
+        \\    b : I128
+        \\    b = 0
+        \\    a + b
+        \\}
         ,
         .expected = .{ .i128_val = 170141183460469231731687303715884105727 },
     },
 
     // I128: minus
-    .{ .name = "I128: minus: -100000000000000000000000 - 50000000000000000000000",
+    .{
+        .name = "I128: minus: -100000000000000000000000 - 50000000000000000000000",
         .source =
-            \\{
-            \\    a : I128
-            \\    a = -100000000000000000000000
-            \\    b : I128
-            \\    b = 50000000000000000000000
-            \\    a - b
-            \\}
+        \\{
+        \\    a : I128
+        \\    a = -100000000000000000000000
+        \\    b : I128
+        \\    b = 50000000000000000000000
+        \\    a - b
+        \\}
         ,
         .expected = .{ .i128_val = -150000000000000000000000 },
     },
-    .{ .name = "I128: minus: 85070591730234615865843651857942052863 - -1",
+    .{
+        .name = "I128: minus: 85070591730234615865843651857942052863 - -1",
         .source =
-            \\{
-            \\    a : I128
-            \\    a = 85070591730234615865843651857942052863
-            \\    b : I128
-            \\    b = -1
-            \\    a - b
-            \\}
+        \\{
+        \\    a : I128
+        \\    a = 85070591730234615865843651857942052863
+        \\    b : I128
+        \\    b = -1
+        \\    a - b
+        \\}
         ,
         .expected = .{ .i128_val = 85070591730234615865843651857942052864 },
     },
-    .{ .name = "I128: minus: -85070591730234615865843651857942052864 - -85070591730234615865843651857942052864",
+    .{
+        .name = "I128: minus: -85070591730234615865843651857942052864 - -85070591730234615865843651857942052864",
         .source =
-            \\{
-            \\    a : I128
-            \\    a = -85070591730234615865843651857942052864
-            \\    b : I128
-            \\    b = -85070591730234615865843651857942052864
-            \\    a - b
-            \\}
+        \\{
+        \\    a : I128
+        \\    a = -85070591730234615865843651857942052864
+        \\    b : I128
+        \\    b = -85070591730234615865843651857942052864
+        \\    a - b
+        \\}
         ,
         .expected = .{ .i128_val = 0 },
     },
 
     // I128: times
-    .{ .name = "I128: times: -18446744073709551616 * 9223372036854775808",
+    .{
+        .name = "I128: times: -18446744073709551616 * 9223372036854775808",
         .source =
-            \\{
-            \\    a : I128
-            \\    a = -18446744073709551616
-            \\    b : I128
-            \\    b = 9223372036854775808
-            \\    a * b
-            \\}
+        \\{
+        \\    a : I128
+        \\    a = -18446744073709551616
+        \\    b : I128
+        \\    b = 9223372036854775808
+        \\    a * b
+        \\}
         ,
         .expected = .{ .i128_val = -170141183460469231731687303715884105728 },
     },
-    .{ .name = "I128: times: -10000000000000000000 * -17014118346",
+    .{
+        .name = "I128: times: -10000000000000000000 * -17014118346",
         .source =
-            \\{
-            \\    a : I128
-            \\    a = -10000000000000000000
-            \\    b : I128
-            \\    b = -17014118346
-            \\    a * b
-            \\}
+        \\{
+        \\    a : I128
+        \\    a = -10000000000000000000
+        \\    b : I128
+        \\    b = -17014118346
+        \\    a * b
+        \\}
         ,
         .expected = .{ .i128_val = 170141183460000000000000000000 },
     },
-    .{ .name = "I128: times: 13043817825332782212 * 13043817825332782212",
+    .{
+        .name = "I128: times: 13043817825332782212 * 13043817825332782212",
         .source =
-            \\{
-            \\    a : I128
-            \\    a = 13043817825332782212
-            \\    b : I128
-            \\    b = 13043817825332782212
-            \\    a * b
-            \\}
+        \\{
+        \\    a : I128
+        \\    a = 13043817825332782212
+        \\    b : I128
+        \\    b = 13043817825332782212
+        \\    a * b
+        \\}
         ,
         .expected = .{ .i128_val = 170141183460469231722567801800623612944 },
     },
 
     // I128: div_by
-    .{ .name = "I128: div_by: min // 2",
+    .{
+        .name = "I128: div_by: min // 2",
         .source =
-            \\{
-            \\    a : I128
-            \\    a = -170141183460469231731687303715884105728
-            \\    b : I128
-            \\    b = 2
-            \\    a // b
-            \\}
+        \\{
+        \\    a : I128
+        \\    a = -170141183460469231731687303715884105728
+        \\    b : I128
+        \\    b = 2
+        \\    a // b
+        \\}
         ,
         .expected = .{ .i128_val = -85070591730234615865843651857942052864 },
     },
-    .{ .name = "I128: div_by: max // -1",
+    .{
+        .name = "I128: div_by: max // -1",
         .source =
-            \\{
-            \\    a : I128
-            \\    a = 170141183460469231731687303715884105727
-            \\    b : I128
-            \\    b = -1
-            \\    a // b
-            \\}
+        \\{
+        \\    a : I128
+        \\    a = 170141183460469231731687303715884105727
+        \\    b : I128
+        \\    b = -1
+        \\    a // b
+        \\}
         ,
         .expected = .{ .i128_val = -170141183460469231731687303715884105727 },
     },
-    .{ .name = "I128: div_by: -100000000000000000000000 // -10000000000",
+    .{
+        .name = "I128: div_by: -100000000000000000000000 // -10000000000",
         .source =
-            \\{
-            \\    a : I128
-            \\    a = -100000000000000000000000
-            \\    b : I128
-            \\    b = -10000000000
-            \\    a // b
-            \\}
+        \\{
+        \\    a : I128
+        \\    a = -100000000000000000000000
+        \\    b : I128
+        \\    b = -10000000000
+        \\    a // b
+        \\}
         ,
         .expected = .{ .i128_val = 10000000000000 },
     },
 
     // I128: rem_by
-    .{ .name = "I128: rem_by: min % 99",
+    .{
+        .name = "I128: rem_by: min % 99",
         .source =
-            \\{
-            \\    a : I128
-            \\    a = -170141183460469231731687303715884105728
-            \\    b : I128
-            \\    b = 99
-            \\    a % b
-            \\}
+        \\{
+        \\    a : I128
+        \\    a = -170141183460469231731687303715884105728
+        \\    b : I128
+        \\    b = 99
+        \\    a % b
+        \\}
         ,
         .expected = .{ .i128_val = -29 },
     },
-    .{ .name = "I128: rem_by: max % -18446744073709551616",
+    .{
+        .name = "I128: rem_by: max % -18446744073709551616",
         .source =
-            \\{
-            \\    a : I128
-            \\    a = 170141183460469231731687303715884105727
-            \\    b : I128
-            \\    b = -18446744073709551616
-            \\    a % b
-            \\}
+        \\{
+        \\    a : I128
+        \\    a = 170141183460469231731687303715884105727
+        \\    b : I128
+        \\    b = -18446744073709551616
+        \\    a % b
+        \\}
         ,
         .expected = .{ .i128_val = 18446744073709551615 },
     },
-    .{ .name = "I128: rem_by: -100000000000000000000000 % -9223372036854775808",
+    .{
+        .name = "I128: rem_by: -100000000000000000000000 % -9223372036854775808",
         .source =
-            \\{
-            \\    a : I128
-            \\    a = -100000000000000000000000
-            \\    b : I128
-            \\    b = -9223372036854775808
-            \\    a % b
-            \\}
+        \\{
+        \\    a : I128
+        \\    a = -100000000000000000000000
+        \\    b : I128
+        \\    b = -9223372036854775808
+        \\    a % b
+        \\}
         ,
         .expected = .{ .i128_val = -200376420520689664 },
     },
@@ -5180,627 +5572,679 @@ pub const tests = [_]TestCase{
     .{ .name = "F32: literal only", .source = "3.14.F32", .expected = .{ .f32_val = 3.14 } },
 
     // F32: variable assignment
-    .{ .name = "F32: variable assignment",
+    .{
+        .name = "F32: variable assignment",
         .source =
-            \\{
-            \\    a : F32
-            \\    a = 3.14.F32
-            \\    a
-            \\}
+        \\{
+        \\    a : F32
+        \\    a = 3.14.F32
+        \\    a
+        \\}
         ,
         .expected = .{ .f32_val = 3.14 },
     },
 
     // F32: negate
-    .{ .name = "F32: negate",
+    .{
+        .name = "F32: negate",
         .source =
-            \\{
-            \\    a : F32
-            \\    a = 3.14.F32
-            \\    -a
-            \\}
+        \\{
+        \\    a : F32
+        \\    a = 3.14.F32
+        \\    -a
+        \\}
         ,
         .expected = .{ .f32_val = -3.14 },
     },
 
     // F32: plus
-    .{ .name = "F32: plus: 1.5 + 2.5",
+    .{
+        .name = "F32: plus: 1.5 + 2.5",
         .source =
-            \\{
-            \\    a : F32
-            \\    a = 1.5.F32
-            \\    b : F32
-            \\    b = 2.5.F32
-            \\    a + b
-            \\}
+        \\{
+        \\    a : F32
+        \\    a = 1.5.F32
+        \\    b : F32
+        \\    b = 2.5.F32
+        \\    a + b
+        \\}
         ,
         .expected = .{ .f32_val = 4.0 },
     },
-    .{ .name = "F32: plus: 3.14159 + 2.71828",
+    .{
+        .name = "F32: plus: 3.14159 + 2.71828",
         .source =
-            \\{
-            \\    a : F32
-            \\    a = 3.14159.F32
-            \\    b : F32
-            \\    b = 2.71828.F32
-            \\    a + b
-            \\}
+        \\{
+        \\    a : F32
+        \\    a = 3.14159.F32
+        \\    b : F32
+        \\    b = 2.71828.F32
+        \\    a + b
+        \\}
         ,
         .expected = .{ .f32_val = 5.85987 },
     },
-    .{ .name = "F32: plus: -10.5 + 10.5",
+    .{
+        .name = "F32: plus: -10.5 + 10.5",
         .source =
-            \\{
-            \\    a : F32
-            \\    a = -10.5.F32
-            \\    b : F32
-            \\    b = 10.5.F32
-            \\    a + b
-            \\}
+        \\{
+        \\    a : F32
+        \\    a = -10.5.F32
+        \\    b : F32
+        \\    b = 10.5.F32
+        \\    a + b
+        \\}
         ,
         .expected = .{ .f32_val = 0.0 },
     },
 
     // F32: minus
-    .{ .name = "F32: minus: 10.0 - 3.5",
+    .{
+        .name = "F32: minus: 10.0 - 3.5",
         .source =
-            \\{
-            \\    a : F32
-            \\    a = 10.0.F32
-            \\    b : F32
-            \\    b = 3.5.F32
-            \\    a - b
-            \\}
+        \\{
+        \\    a : F32
+        \\    a = 10.0.F32
+        \\    b : F32
+        \\    b = 3.5.F32
+        \\    a - b
+        \\}
         ,
         .expected = .{ .f32_val = 6.5 },
     },
-    .{ .name = "F32: minus: 2.5 - 5.0",
+    .{
+        .name = "F32: minus: 2.5 - 5.0",
         .source =
-            \\{
-            \\    a : F32
-            \\    a = 2.5.F32
-            \\    b : F32
-            \\    b = 5.0.F32
-            \\    a - b
-            \\}
+        \\{
+        \\    a : F32
+        \\    a = 2.5.F32
+        \\    b : F32
+        \\    b = 5.0.F32
+        \\    a - b
+        \\}
         ,
         .expected = .{ .f32_val = -2.5 },
     },
-    .{ .name = "F32: minus: 100.0 - 100.0",
+    .{
+        .name = "F32: minus: 100.0 - 100.0",
         .source =
-            \\{
-            \\    a : F32
-            \\    a = 100.0.F32
-            \\    b : F32
-            \\    b = 100.0.F32
-            \\    a - b
-            \\}
+        \\{
+        \\    a : F32
+        \\    a = 100.0.F32
+        \\    b : F32
+        \\    b = 100.0.F32
+        \\    a - b
+        \\}
         ,
         .expected = .{ .f32_val = 0.0 },
     },
 
     // F32: times
-    .{ .name = "F32: times: 2.5 * 4.0",
+    .{
+        .name = "F32: times: 2.5 * 4.0",
         .source =
-            \\{
-            \\    a : F32
-            \\    a = 2.5.F32
-            \\    b : F32
-            \\    b = 4.0.F32
-            \\    a * b
-            \\}
+        \\{
+        \\    a : F32
+        \\    a = 2.5.F32
+        \\    b : F32
+        \\    b = 4.0.F32
+        \\    a * b
+        \\}
         ,
         .expected = .{ .f32_val = 10.0 },
     },
-    .{ .name = "F32: times: -3.0 * 2.5",
+    .{
+        .name = "F32: times: -3.0 * 2.5",
         .source =
-            \\{
-            \\    a : F32
-            \\    a = -3.0.F32
-            \\    b : F32
-            \\    b = 2.5.F32
-            \\    a * b
-            \\}
+        \\{
+        \\    a : F32
+        \\    a = -3.0.F32
+        \\    b : F32
+        \\    b = 2.5.F32
+        \\    a * b
+        \\}
         ,
         .expected = .{ .f32_val = -7.5 },
     },
-    .{ .name = "F32: times: 0.5 * 0.5",
+    .{
+        .name = "F32: times: 0.5 * 0.5",
         .source =
-            \\{
-            \\    a : F32
-            \\    a = 0.5.F32
-            \\    b : F32
-            \\    b = 0.5.F32
-            \\    a * b
-            \\}
+        \\{
+        \\    a : F32
+        \\    a = 0.5.F32
+        \\    b : F32
+        \\    b = 0.5.F32
+        \\    a * b
+        \\}
         ,
         .expected = .{ .f32_val = 0.25 },
     },
 
     // F32: div_by
-    .{ .name = "F32: div_by: 10.0 / 2.0",
+    .{
+        .name = "F32: div_by: 10.0 / 2.0",
         .source =
-            \\{
-            \\    a : F32
-            \\    a = 10.0.F32
-            \\    b : F32
-            \\    b = 2.0.F32
-            \\    a / b
-            \\}
+        \\{
+        \\    a : F32
+        \\    a = 10.0.F32
+        \\    b : F32
+        \\    b = 2.0.F32
+        \\    a / b
+        \\}
         ,
         .expected = .{ .f32_val = 5.0 },
     },
-    .{ .name = "F32: div_by: 7.5 / 2.5",
+    .{
+        .name = "F32: div_by: 7.5 / 2.5",
         .source =
-            \\{
-            \\    a : F32
-            \\    a = 7.5.F32
-            \\    b : F32
-            \\    b = 2.5.F32
-            \\    a / b
-            \\}
+        \\{
+        \\    a : F32
+        \\    a = 7.5.F32
+        \\    b : F32
+        \\    b = 2.5.F32
+        \\    a / b
+        \\}
         ,
         .expected = .{ .f32_val = 3.0 },
     },
-    .{ .name = "F32: div_by: 1.0 / 3.0",
+    .{
+        .name = "F32: div_by: 1.0 / 3.0",
         .source =
-            \\{
-            \\    a : F32
-            \\    a = 1.0.F32
-            \\    b : F32
-            \\    b = 3.0.F32
-            \\    a / b
-            \\}
+        \\{
+        \\    a : F32
+        \\    a = 1.0.F32
+        \\    b : F32
+        \\    b = 3.0.F32
+        \\    a / b
+        \\}
         ,
         .expected = .{ .f32_val = 0.3333333 },
     },
 
     // F64: negate
-    .{ .name = "F64: negate: -(3.141592653589793)",
+    .{
+        .name = "F64: negate: -(3.141592653589793)",
         .source =
-            \\{
-            \\    a : F64
-            \\    a = 3.141592653589793.F64
-            \\    -a
-            \\}
+        \\{
+        \\    a : F64
+        \\    a = 3.141592653589793.F64
+        \\    -a
+        \\}
         ,
         .expected = .{ .f64_val = -3.141592653589793 },
     },
-    .{ .name = "F64: negate: -(-2.718281828459045)",
+    .{
+        .name = "F64: negate: -(-2.718281828459045)",
         .source =
-            \\{
-            \\    a : F64
-            \\    a = -2.718281828459045.F64
-            \\    -a
-            \\}
+        \\{
+        \\    a : F64
+        \\    a = -2.718281828459045.F64
+        \\    -a
+        \\}
         ,
         .expected = .{ .f64_val = 2.718281828459045 },
     },
-    .{ .name = "F64: negate: -(0.0)",
+    .{
+        .name = "F64: negate: -(0.0)",
         .source =
-            \\{
-            \\    a : F64
-            \\    a = 0.0.F64
-            \\    -a
-            \\}
+        \\{
+        \\    a : F64
+        \\    a = 0.0.F64
+        \\    -a
+        \\}
         ,
         .expected = .{ .f64_val = 0.0 },
     },
 
     // F64: plus
-    .{ .name = "F64: plus: 1.5 + 2.5",
+    .{
+        .name = "F64: plus: 1.5 + 2.5",
         .source =
-            \\{
-            \\    a : F64
-            \\    a = 1.5.F64
-            \\    b : F64
-            \\    b = 2.5.F64
-            \\    a + b
-            \\}
+        \\{
+        \\    a : F64
+        \\    a = 1.5.F64
+        \\    b : F64
+        \\    b = 2.5.F64
+        \\    a + b
+        \\}
         ,
         .expected = .{ .f64_val = 4.0 },
     },
-    .{ .name = "F64: plus: pi + e",
+    .{
+        .name = "F64: plus: pi + e",
         .source =
-            \\{
-            \\    a : F64
-            \\    a = 3.141592653589793.F64
-            \\    b : F64
-            \\    b = 2.718281828459045.F64
-            \\    a + b
-            \\}
+        \\{
+        \\    a : F64
+        \\    a = 3.141592653589793.F64
+        \\    b : F64
+        \\    b = 2.718281828459045.F64
+        \\    a + b
+        \\}
         ,
         .expected = .{ .f64_val = 5.859874482048838 },
     },
-    .{ .name = "F64: plus: -100.123456789 + 100.123456789",
+    .{
+        .name = "F64: plus: -100.123456789 + 100.123456789",
         .source =
-            \\{
-            \\    a : F64
-            \\    a = -100.123456789.F64
-            \\    b : F64
-            \\    b = 100.123456789.F64
-            \\    a + b
-            \\}
+        \\{
+        \\    a : F64
+        \\    a = -100.123456789.F64
+        \\    b : F64
+        \\    b = 100.123456789.F64
+        \\    a + b
+        \\}
         ,
         .expected = .{ .f64_val = 0.0 },
     },
 
     // F64: minus
-    .{ .name = "F64: minus: 10.5 - 3.25",
+    .{
+        .name = "F64: minus: 10.5 - 3.25",
         .source =
-            \\{
-            \\    a : F64
-            \\    a = 10.5.F64
-            \\    b : F64
-            \\    b = 3.25.F64
-            \\    a - b
-            \\}
+        \\{
+        \\    a : F64
+        \\    a = 10.5.F64
+        \\    b : F64
+        \\    b = 3.25.F64
+        \\    a - b
+        \\}
         ,
         .expected = .{ .f64_val = 7.25 },
     },
-    .{ .name = "F64: minus: 2.5 - 5.75",
+    .{
+        .name = "F64: minus: 2.5 - 5.75",
         .source =
-            \\{
-            \\    a : F64
-            \\    a = 2.5.F64
-            \\    b : F64
-            \\    b = 5.75.F64
-            \\    a - b
-            \\}
+        \\{
+        \\    a : F64
+        \\    a = 2.5.F64
+        \\    b : F64
+        \\    b = 5.75.F64
+        \\    a - b
+        \\}
         ,
         .expected = .{ .f64_val = -3.25 },
     },
-    .{ .name = "F64: minus: 1000.0 - 1000.0",
+    .{
+        .name = "F64: minus: 1000.0 - 1000.0",
         .source =
-            \\{
-            \\    a : F64
-            \\    a = 1000.0.F64
-            \\    b : F64
-            \\    b = 1000.0.F64
-            \\    a - b
-            \\}
+        \\{
+        \\    a : F64
+        \\    a = 1000.0.F64
+        \\    b : F64
+        \\    b = 1000.0.F64
+        \\    a - b
+        \\}
         ,
         .expected = .{ .f64_val = 0.0 },
     },
 
     // F64: times
-    .{ .name = "F64: times: 2.5 * 4.0",
+    .{
+        .name = "F64: times: 2.5 * 4.0",
         .source =
-            \\{
-            \\    a : F64
-            \\    a = 2.5.F64
-            \\    b : F64
-            \\    b = 4.0.F64
-            \\    a * b
-            \\}
+        \\{
+        \\    a : F64
+        \\    a = 2.5.F64
+        \\    b : F64
+        \\    b = 4.0.F64
+        \\    a * b
+        \\}
         ,
         .expected = .{ .f64_val = 10.0 },
     },
-    .{ .name = "F64: times: -3.5 * 2.0",
+    .{
+        .name = "F64: times: -3.5 * 2.0",
         .source =
-            \\{
-            \\    a : F64
-            \\    a = -3.5.F64
-            \\    b : F64
-            \\    b = 2.0.F64
-            \\    a * b
-            \\}
+        \\{
+        \\    a : F64
+        \\    a = -3.5.F64
+        \\    b : F64
+        \\    b = 2.0.F64
+        \\    a * b
+        \\}
         ,
         .expected = .{ .f64_val = -7.0 },
     },
-    .{ .name = "F64: times: sqrt2 * sqrt2",
+    .{
+        .name = "F64: times: sqrt2 * sqrt2",
         .source =
-            \\{
-            \\    a : F64
-            \\    a = 1.414213562373095.F64
-            \\    b : F64
-            \\    b = 1.414213562373095.F64
-            \\    a * b
-            \\}
+        \\{
+        \\    a : F64
+        \\    a = 1.414213562373095.F64
+        \\    b : F64
+        \\    b = 1.414213562373095.F64
+        \\    a * b
+        \\}
         ,
         .expected = .{ .f64_val = 2.0 },
     },
 
     // F64: div_by
-    .{ .name = "F64: div_by: 10.0 / 2.0",
+    .{
+        .name = "F64: div_by: 10.0 / 2.0",
         .source =
-            \\{
-            \\    a : F64
-            \\    a = 10.0.F64
-            \\    b : F64
-            \\    b = 2.0.F64
-            \\    a / b
-            \\}
+        \\{
+        \\    a : F64
+        \\    a = 10.0.F64
+        \\    b : F64
+        \\    b = 2.0.F64
+        \\    a / b
+        \\}
         ,
         .expected = .{ .f64_val = 5.0 },
     },
-    .{ .name = "F64: div_by: 22.0 / 7.0",
+    .{
+        .name = "F64: div_by: 22.0 / 7.0",
         .source =
-            \\{
-            \\    a : F64
-            \\    a = 22.0.F64
-            \\    b : F64
-            \\    b = 7.0.F64
-            \\    a / b
-            \\}
+        \\{
+        \\    a : F64
+        \\    a = 22.0.F64
+        \\    b : F64
+        \\    b = 7.0.F64
+        \\    a / b
+        \\}
         ,
         .expected = .{ .f64_val = 3.142857142857143 },
     },
-    .{ .name = "F64: div_by: 1.0 / 3.0",
+    .{
+        .name = "F64: div_by: 1.0 / 3.0",
         .source =
-            \\{
-            \\    a : F64
-            \\    a = 1.0.F64
-            \\    b : F64
-            \\    b = 3.0.F64
-            \\    a / b
-            \\}
+        \\{
+        \\    a : F64
+        \\    a = 1.0.F64
+        \\    b : F64
+        \\    b = 3.0.F64
+        \\    a / b
+        \\}
         ,
         .expected = .{ .f64_val = 0.3333333333333333 },
     },
 
     // Dec: negate
-    .{ .name = "Dec: negate: -(3.14)",
+    .{
+        .name = "Dec: negate: -(3.14)",
         .source =
-            \\{
-            \\    a : Dec
-            \\    a = 3.14.Dec
-            \\    -a
-            \\}
+        \\{
+        \\    a : Dec
+        \\    a = 3.14.Dec
+        \\    -a
+        \\}
         ,
         .expected = .{ .dec_val = -3140000000000000000 },
     },
-    .{ .name = "Dec: negate: -(-2.5)",
+    .{
+        .name = "Dec: negate: -(-2.5)",
         .source =
-            \\{
-            \\    a : Dec
-            \\    a = -2.5.Dec
-            \\    -a
-            \\}
+        \\{
+        \\    a : Dec
+        \\    a = -2.5.Dec
+        \\    -a
+        \\}
         ,
         .expected = .{ .dec_val = 2500000000000000000 },
     },
-    .{ .name = "Dec: negate: -(0.0)",
+    .{
+        .name = "Dec: negate: -(0.0)",
         .source =
-            \\{
-            \\    a : Dec
-            \\    a = 0.0.Dec
-            \\    -a
-            \\}
+        \\{
+        \\    a : Dec
+        \\    a = 0.0.Dec
+        \\    -a
+        \\}
         ,
         .expected = .{ .dec_val = 0 },
     },
 
     // Dec: plus
-    .{ .name = "Dec: plus: 1.5 + 2.5",
+    .{
+        .name = "Dec: plus: 1.5 + 2.5",
         .source =
-            \\{
-            \\    a : Dec
-            \\    a = 1.5.Dec
-            \\    b : Dec
-            \\    b = 2.5.Dec
-            \\    a + b
-            \\}
+        \\{
+        \\    a : Dec
+        \\    a = 1.5.Dec
+        \\    b : Dec
+        \\    b = 2.5.Dec
+        \\    a + b
+        \\}
         ,
         .expected = .{ .dec_val = 4000000000000000000 },
     },
-    .{ .name = "Dec: plus: 3.14159 + 2.71828",
+    .{
+        .name = "Dec: plus: 3.14159 + 2.71828",
         .source =
-            \\{
-            \\    a : Dec
-            \\    a = 3.14159.Dec
-            \\    b : Dec
-            \\    b = 2.71828.Dec
-            \\    a + b
-            \\}
+        \\{
+        \\    a : Dec
+        \\    a = 3.14159.Dec
+        \\    b : Dec
+        \\    b = 2.71828.Dec
+        \\    a + b
+        \\}
         ,
         .expected = .{ .dec_val = 5859870000000000000 },
     },
-    .{ .name = "Dec: plus: -10.5 + 10.5",
+    .{
+        .name = "Dec: plus: -10.5 + 10.5",
         .source =
-            \\{
-            \\    a : Dec
-            \\    a = -10.5.Dec
-            \\    b : Dec
-            \\    b = 10.5.Dec
-            \\    a + b
-            \\}
+        \\{
+        \\    a : Dec
+        \\    a = -10.5.Dec
+        \\    b : Dec
+        \\    b = 10.5.Dec
+        \\    a + b
+        \\}
         ,
         .expected = .{ .dec_val = 0 },
     },
 
     // Dec: minus
-    .{ .name = "Dec: minus: 10.0 - 3.5",
+    .{
+        .name = "Dec: minus: 10.0 - 3.5",
         .source =
-            \\{
-            \\    a : Dec
-            \\    a = 10.0.Dec
-            \\    b : Dec
-            \\    b = 3.5.Dec
-            \\    a - b
-            \\}
+        \\{
+        \\    a : Dec
+        \\    a = 10.0.Dec
+        \\    b : Dec
+        \\    b = 3.5.Dec
+        \\    a - b
+        \\}
         ,
         .expected = .{ .dec_val = 6500000000000000000 },
     },
-    .{ .name = "Dec: minus: 2.5 - 5.0",
+    .{
+        .name = "Dec: minus: 2.5 - 5.0",
         .source =
-            \\{
-            \\    a : Dec
-            \\    a = 2.5.Dec
-            \\    b : Dec
-            \\    b = 5.0.Dec
-            \\    a - b
-            \\}
+        \\{
+        \\    a : Dec
+        \\    a = 2.5.Dec
+        \\    b : Dec
+        \\    b = 5.0.Dec
+        \\    a - b
+        \\}
         ,
         .expected = .{ .dec_val = -2500000000000000000 },
     },
-    .{ .name = "Dec: minus: 100.0 - 100.0",
+    .{
+        .name = "Dec: minus: 100.0 - 100.0",
         .source =
-            \\{
-            \\    a : Dec
-            \\    a = 100.0.Dec
-            \\    b : Dec
-            \\    b = 100.0.Dec
-            \\    a - b
-            \\}
+        \\{
+        \\    a : Dec
+        \\    a = 100.0.Dec
+        \\    b : Dec
+        \\    b = 100.0.Dec
+        \\    a - b
+        \\}
         ,
         .expected = .{ .dec_val = 0 },
     },
 
     // Dec: times
-    .{ .name = "Dec: times: 2.5 * 4.0",
+    .{
+        .name = "Dec: times: 2.5 * 4.0",
         .source =
-            \\{
-            \\    a : Dec
-            \\    a = 2.5.Dec
-            \\    b : Dec
-            \\    b = 4.0.Dec
-            \\    a * b
-            \\}
+        \\{
+        \\    a : Dec
+        \\    a = 2.5.Dec
+        \\    b : Dec
+        \\    b = 4.0.Dec
+        \\    a * b
+        \\}
         ,
         .expected = .{ .dec_val = 10000000000000000000 },
     },
-    .{ .name = "Dec: times: -3.0 * 2.5",
+    .{
+        .name = "Dec: times: -3.0 * 2.5",
         .source =
-            \\{
-            \\    a : Dec
-            \\    a = -3.0.Dec
-            \\    b : Dec
-            \\    b = 2.5.Dec
-            \\    a * b
-            \\}
+        \\{
+        \\    a : Dec
+        \\    a = -3.0.Dec
+        \\    b : Dec
+        \\    b = 2.5.Dec
+        \\    a * b
+        \\}
         ,
         .expected = .{ .dec_val = -7500000000000000000 },
     },
-    .{ .name = "Dec: times: 0.5 * 0.5",
+    .{
+        .name = "Dec: times: 0.5 * 0.5",
         .source =
-            \\{
-            \\    a : Dec
-            \\    a = 0.5.Dec
-            \\    b : Dec
-            \\    b = 0.5.Dec
-            \\    a * b
-            \\}
+        \\{
+        \\    a : Dec
+        \\    a = 0.5.Dec
+        \\    b : Dec
+        \\    b = 0.5.Dec
+        \\    a * b
+        \\}
         ,
         .expected = .{ .dec_val = 250000000000000000 },
     },
 
     // Dec: div_by
-    .{ .name = "Dec: div_by: 10.0 / 2.0",
+    .{
+        .name = "Dec: div_by: 10.0 / 2.0",
         .source =
-            \\{
-            \\    a : Dec
-            \\    a = 10.0.Dec
-            \\    b : Dec
-            \\    b = 2.0.Dec
-            \\    a / b
-            \\}
+        \\{
+        \\    a : Dec
+        \\    a = 10.0.Dec
+        \\    b : Dec
+        \\    b = 2.0.Dec
+        \\    a / b
+        \\}
         ,
         .expected = .{ .dec_val = 5000000000000000000 },
     },
-    .{ .name = "Dec: div_by: 7.5 / 2.5",
+    .{
+        .name = "Dec: div_by: 7.5 / 2.5",
         .source =
-            \\{
-            \\    a : Dec
-            \\    a = 7.5.Dec
-            \\    b : Dec
-            \\    b = 2.5.Dec
-            \\    a / b
-            \\}
+        \\{
+        \\    a : Dec
+        \\    a = 7.5.Dec
+        \\    b : Dec
+        \\    b = 2.5.Dec
+        \\    a / b
+        \\}
         ,
         .expected = .{ .dec_val = 3000000000000000000 },
     },
-    .{ .name = "Dec: div_by: 1.0 / 3.0",
+    .{
+        .name = "Dec: div_by: 1.0 / 3.0",
         .source =
-            \\{
-            \\    a : Dec
-            \\    a = 1.0.Dec
-            \\    b : Dec
-            \\    b = 3.0.Dec
-            \\    a / b
-            \\}
+        \\{
+        \\    a : Dec
+        \\    a = 1.0.Dec
+        \\    b : Dec
+        \\    b = 3.0.Dec
+        \\    a / b
+        \\}
         ,
         .expected = .{ .dec_val = 333333333333333333 },
     },
 
     // Dec: to_str
-    .{ .name = "Dec: to_str: 100.0",
+    .{
+        .name = "Dec: to_str: 100.0",
         .source =
-            \\{
-            \\    a : Dec
-            \\    a = 100.0.Dec
-            \\    Dec.to_str(a)
-            \\}
+        \\{
+        \\    a : Dec
+        \\    a = 100.0.Dec
+        \\    Dec.to_str(a)
+        \\}
         ,
         .expected = .{ .str_val = "100.0" },
     },
-    .{ .name = "Dec: to_str: 123.45",
+    .{
+        .name = "Dec: to_str: 123.45",
         .source =
-            \\{
-            \\    a : Dec
-            \\    a = 123.45.Dec
-            \\    Dec.to_str(a)
-            \\}
+        \\{
+        \\    a : Dec
+        \\    a = 123.45.Dec
+        \\    Dec.to_str(a)
+        \\}
         ,
         .expected = .{ .str_val = "123.45" },
     },
-    .{ .name = "Dec: to_str: -123.45",
+    .{
+        .name = "Dec: to_str: -123.45",
         .source =
-            \\{
-            \\    a : Dec
-            \\    a = -123.45.Dec
-            \\    Dec.to_str(a)
-            \\}
+        \\{
+        \\    a : Dec
+        \\    a = -123.45.Dec
+        \\    Dec.to_str(a)
+        \\}
         ,
         .expected = .{ .str_val = "-123.45" },
     },
-    .{ .name = "Dec: to_str: 123.0",
+    .{
+        .name = "Dec: to_str: 123.0",
         .source =
-            \\{
-            \\    a : Dec
-            \\    a = 123.0.Dec
-            \\    Dec.to_str(a)
-            \\}
+        \\{
+        \\    a : Dec
+        \\    a = 123.0.Dec
+        \\    Dec.to_str(a)
+        \\}
         ,
         .expected = .{ .str_val = "123.0" },
     },
-    .{ .name = "Dec: to_str: -123.0",
+    .{
+        .name = "Dec: to_str: -123.0",
         .source =
-            \\{
-            \\    a : Dec
-            \\    a = -123.0.Dec
-            \\    Dec.to_str(a)
-            \\}
+        \\{
+        \\    a : Dec
+        \\    a = -123.0.Dec
+        \\    Dec.to_str(a)
+        \\}
         ,
         .expected = .{ .str_val = "-123.0" },
     },
-    .{ .name = "Dec: to_str: 0.45",
+    .{
+        .name = "Dec: to_str: 0.45",
         .source =
-            \\{
-            \\    a : Dec
-            \\    a = 0.45.Dec
-            \\    Dec.to_str(a)
-            \\}
+        \\{
+        \\    a : Dec
+        \\    a = 0.45.Dec
+        \\    Dec.to_str(a)
+        \\}
         ,
         .expected = .{ .str_val = "0.45" },
     },
-    .{ .name = "Dec: to_str: -0.45",
+    .{
+        .name = "Dec: to_str: -0.45",
         .source =
-            \\{
-            \\    a : Dec
-            \\    a = -0.45.Dec
-            \\    Dec.to_str(a)
-            \\}
+        \\{
+        \\    a : Dec
+        \\    a = -0.45.Dec
+        \\    Dec.to_str(a)
+        \\}
         ,
         .expected = .{ .str_val = "-0.45" },
     },
-    .{ .name = "Dec: to_str: 0.0",
+    .{
+        .name = "Dec: to_str: 0.0",
         .source =
-            \\{
-            \\    a : Dec
-            \\    a = 0.0.Dec
-            \\    Dec.to_str(a)
-            \\}
+        \\{
+        \\    a : Dec
+        \\    a = 0.0.Dec
+        \\    Dec.to_str(a)
+        \\}
         ,
         .expected = .{ .str_val = "0.0" },
     },
@@ -5818,1013 +6262,1140 @@ pub const tests = [_]TestCase{
     .{ .name = "Int + Dec: div_by - type mismatch", .source = "1.I64 / 2.0.Dec", .expected = .{ .type_mismatch_crash = {} } },
 
     // --- from list_refcount_simple.zig ---
-    .{ .name = "list_refcount_simple: empty list pattern match",
-        .source = \\match [] { [] => 42, _ => 0 }
+    .{
+        .name = "list_refcount_simple: empty list pattern match",
+        .source =
+        \\match [] { [] => 42, _ => 0 }
         ,
         .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_simple: single element list pattern match",
-        .source = \\match [1] { [x] => x, _ => 0 }
+    .{
+        .name = "list_refcount_simple: single element list pattern match",
+        .source =
+        \\match [1] { [x] => x, _ => 0 }
         ,
         .expected = .{ .dec_val = 1 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_simple: multi-element list pattern match",
-        .source = \\match [1, 2, 3] { [a, b, c] => a + b + c, _ => 0 }
+    .{
+        .name = "list_refcount_simple: multi-element list pattern match",
+        .source =
+        \\match [1, 2, 3] { [a, b, c] => a + b + c, _ => 0 }
         ,
         .expected = .{ .dec_val = 6 * RocDec.one_point_zero_i128 },
     },
 
     // --- from list_refcount_alias.zig ---
-    .{ .name = "list_refcount_alias: variable aliasing",
+    .{
+        .name = "list_refcount_alias: variable aliasing",
         .source =
-            \\{
-            \\    x = [1, 2, 3]
-            \\    y = x
-            \\    match y { [a, b, c] => a + b + c, _ => 0 }
-            \\}
+        \\{
+        \\    x = [1, 2, 3]
+        \\    y = x
+        \\    match y { [a, b, c] => a + b + c, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 6 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_alias: return original after aliasing",
+    .{
+        .name = "list_refcount_alias: return original after aliasing",
         .source =
-            \\{
-            \\    x = [1, 2, 3]
-            \\    _y = x
-            \\    match x { [a, b, c] => a + b + c, _ => 0 }
-            \\}
+        \\{
+        \\    x = [1, 2, 3]
+        \\    _y = x
+        \\    match x { [a, b, c] => a + b + c, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 6 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_alias: triple aliasing",
+    .{
+        .name = "list_refcount_alias: triple aliasing",
         .source =
-            \\{
-            \\    x = [1, 2]
-            \\    y = x
-            \\    z = y
-            \\    match z { [a, b] => a + b, _ => 0 }
-            \\}
+        \\{
+        \\    x = [1, 2]
+        \\    y = x
+        \\    z = y
+        \\    match z { [a, b] => a + b, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_alias: mutable reassignment decrefs old list",
+    .{
+        .name = "list_refcount_alias: mutable reassignment decrefs old list",
         .source =
-            \\{
-            \\    var $x = [1, 2]
-            \\    $x = [3, 4]
-            \\    match $x { [a, b] => a + b, _ => 0 }
-            \\}
+        \\{
+        \\    var $x = [1, 2]
+        \\    $x = [3, 4]
+        \\    match $x { [a, b] => a + b, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 7 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_alias: multiple independent lists",
+    .{
+        .name = "list_refcount_alias: multiple independent lists",
         .source =
-            \\{
-            \\    x = [1, 2]
-            \\    _y = [3, 4]
-            \\    match x { [a, b] => a + b, _ => 0 }
-            \\}
+        \\{
+        \\    x = [1, 2]
+        \\    _y = [3, 4]
+        \\    match x { [a, b] => a + b, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_alias: empty list aliasing",
+    .{
+        .name = "list_refcount_alias: empty list aliasing",
         .source =
-            \\{
-            \\    x = []
-            \\    y = x
-            \\    match y { [] => 42, _ => 0 }
-            \\}
+        \\{
+        \\    x = []
+        \\    y = x
+        \\    match y { [] => 42, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_alias: alias then shadow",
+    .{
+        .name = "list_refcount_alias: alias then shadow",
         .source =
-            \\{
-            \\    var $x = [1, 2]
-            \\    y = $x
-            \\    $x = [3, 4]
-            \\    match y { [a, b] => a + b, _ => 0 }
-            \\}
+        \\{
+        \\    var $x = [1, 2]
+        \\    y = $x
+        \\    $x = [3, 4]
+        \\    match y { [a, b] => a + b, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_alias: both references used",
+    .{
+        .name = "list_refcount_alias: both references used",
         .source =
-            \\{
-            \\    x = [1, 2]
-            \\    y = x
-            \\    a = match x { [first, ..] => first, _ => 0 }
-            \\    b = match y { [first, ..] => first, _ => 0 }
-            \\    a + b
-            \\}
+        \\{
+        \\    x = [1, 2]
+        \\    y = x
+        \\    a = match x { [first, ..] => first, _ => 0 }
+        \\    b = match y { [first, ..] => first, _ => 0 }
+        \\    a + b
+        \\}
         ,
         .expected = .{ .dec_val = 2 * RocDec.one_point_zero_i128 },
     },
 
     // --- from list_refcount_basic.zig ---
-    .{ .name = "list_refcount_basic: various small list sizes: single element",
-        .source = \\match [5] { [x] => x, _ => 0 }
+    .{
+        .name = "list_refcount_basic: various small list sizes: single element",
+        .source =
+        \\match [5] { [x] => x, _ => 0 }
         ,
         .expected = .{ .dec_val = 5 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_basic: two elements",
-        .source = \\match [10, 20] { [a, b] => a + b, _ => 0 }
+    .{
+        .name = "list_refcount_basic: two elements",
+        .source =
+        \\match [10, 20] { [a, b] => a + b, _ => 0 }
         ,
         .expected = .{ .dec_val = 30 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_basic: five elements",
-        .source = \\match [1, 2, 3, 4, 5] { [a, b, c, d, e] => a + b + c + d + e, _ => 0 }
+    .{
+        .name = "list_refcount_basic: five elements",
+        .source =
+        \\match [1, 2, 3, 4, 5] { [a, b, c, d, e] => a + b + c + d + e, _ => 0 }
         ,
         .expected = .{ .dec_val = 15 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_basic: larger list with pattern",
-        .source = \\match [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] { [first, second, ..] => first + second, _ => 0 }
+    .{
+        .name = "list_refcount_basic: larger list with pattern",
+        .source =
+        \\match [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] { [first, second, ..] => first + second, _ => 0 }
         ,
         .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_basic: sequential independent lists",
+    .{
+        .name = "list_refcount_basic: sequential independent lists",
         .source =
-            \\{
-            \\    a = [1]
-            \\    _b = [2, 3]
-            \\    _c = [4, 5, 6]
-            \\    match a { [x] => x, _ => 0 }
-            \\}
+        \\{
+        \\    a = [1]
+        \\    _b = [2, 3]
+        \\    _c = [4, 5, 6]
+        \\    match a { [x] => x, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 1 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_basic: return middle list",
+    .{
+        .name = "list_refcount_basic: return middle list",
         .source =
-            \\{
-            \\    _a = [1]
-            \\    b = [2, 3]
-            \\    _c = [4, 5, 6]
-            \\    match b { [x, y] => x + y, _ => 0 }
-            \\}
+        \\{
+        \\    _a = [1]
+        \\    b = [2, 3]
+        \\    _c = [4, 5, 6]
+        \\    match b { [x, y] => x + y, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 5 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_basic: return last list",
+    .{
+        .name = "list_refcount_basic: return last list",
         .source =
-            \\{
-            \\    _a = [1]
-            \\    _b = [2, 3]
-            \\    c = [4, 5, 6]
-            \\    match c { [x, y, z] => x + y + z, _ => 0 }
-            \\}
+        \\{
+        \\    _a = [1]
+        \\    _b = [2, 3]
+        \\    c = [4, 5, 6]
+        \\    match c { [x, y, z] => x + y + z, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 15 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_basic: mix of empty and non-empty",
+    .{
+        .name = "list_refcount_basic: mix of empty and non-empty",
         .source =
-            \\{
-            \\    _x = []
-            \\    y = [1, 2]
-            \\    _z = []
-            \\    match y { [a, b] => a + b, _ => 0 }
-            \\}
+        \\{
+        \\    _x = []
+        \\    y = [1, 2]
+        \\    _z = []
+        \\    match y { [a, b] => a + b, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_basic: return empty from mix",
+    .{
+        .name = "list_refcount_basic: return empty from mix",
         .source =
-            \\{
-            \\    x = []
-            \\    _y = [1, 2]
-            \\    _z = []
-            \\    match x { [] => 42, _ => 0 }
-            \\}
+        \\{
+        \\    x = []
+        \\    _y = [1, 2]
+        \\    _z = []
+        \\    match x { [] => 42, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_basic: nested blocks with lists",
+    .{
+        .name = "list_refcount_basic: nested blocks with lists",
         .source =
-            \\{
-            \\    outer = [1, 2, 3]
-            \\    result = {
-            \\        inner = outer
-            \\        match inner { [a, b, c] => a + b + c, _ => 0 }
-            \\    }
-            \\    result
-            \\}
+        \\{
+        \\    outer = [1, 2, 3]
+        \\    result = {
+        \\        inner = outer
+        \\        match inner { [a, b, c] => a + b + c, _ => 0 }
+        \\    }
+        \\    result
+        \\}
         ,
         .expected = .{ .dec_val = 6 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_basic: list created and used in inner block",
+    .{
+        .name = "list_refcount_basic: list created and used in inner block",
         .source =
-            \\{
-            \\    result = {
-            \\        lst = [10, 20, 30]
-            \\        match lst { [a, b, c] => a + b + c, _ => 0 }
-            \\    }
-            \\    result
-            \\}
+        \\{
+        \\    result = {
+        \\        lst = [10, 20, 30]
+        \\        match lst { [a, b, c] => a + b + c, _ => 0 }
+        \\    }
+        \\    result
+        \\}
         ,
         .expected = .{ .dec_val = 60 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_basic: multiple lists chained",
+    .{
+        .name = "list_refcount_basic: multiple lists chained",
         .source =
-            \\{
-            \\    a = [1]
-            \\    b = a
-            \\    c = [2, 3]
-            \\    d = c
-            \\    x = match b { [v] => v, _ => 0 }
-            \\    y = match d { [v1, v2] => v1 + v2, _ => 0 }
-            \\    x + y
-            \\}
+        \\{
+        \\    a = [1]
+        \\    b = a
+        \\    c = [2, 3]
+        \\    d = c
+        \\    x = match b { [v] => v, _ => 0 }
+        \\    y = match d { [v1, v2] => v1 + v2, _ => 0 }
+        \\    x + y
+        \\}
         ,
         .expected = .{ .dec_val = 6 * RocDec.one_point_zero_i128 },
     },
 
     // --- from list_refcount_strings.zig ---
-    .{ .name = "list_refcount_strings: single string in list",
+    .{
+        .name = "list_refcount_strings: single string in list",
         .source =
-            \\{
-            \\    x = "hi"
-            \\    lst = [x]
-            \\    match lst { [s] => s, _ => "" }
-            \\}
+        \\{
+        \\    x = "hi"
+        \\    lst = [x]
+        \\    match lst { [s] => s, _ => "" }
+        \\}
         ,
         .expected = .{ .str_val = "hi" },
     },
-    .{ .name = "list_refcount_strings: multiple strings in list",
+    .{
+        .name = "list_refcount_strings: multiple strings in list",
         .source =
-            \\{
-            \\    x = "a"
-            \\    y = "b"
-            \\    lst = [x, y]
-            \\    match lst { [first, ..] => first, _ => "" }
-            \\}
+        \\{
+        \\    x = "a"
+        \\    y = "b"
+        \\    lst = [x, y]
+        \\    match lst { [first, ..] => first, _ => "" }
+        \\}
         ,
         .expected = .{ .str_val = "a" },
     },
-    .{ .name = "list_refcount_strings: return second string",
+    .{
+        .name = "list_refcount_strings: return second string",
         .source =
-            \\{
-            \\    x = "a"
-            \\    y = "b"
-            \\    lst = [x, y]
-            \\    match lst { [_, second] => second, _ => "" }
-            \\}
+        \\{
+        \\    x = "a"
+        \\    y = "b"
+        \\    lst = [x, y]
+        \\    match lst { [_, second] => second, _ => "" }
+        \\}
         ,
         .expected = .{ .str_val = "b" },
     },
-    .{ .name = "list_refcount_strings: same string multiple times",
+    .{
+        .name = "list_refcount_strings: same string multiple times",
         .source =
-            \\{
-            \\    x = "hi"
-            \\    lst = [x, x, x]
-            \\    match lst { [first, ..] => first, _ => "" }
-            \\}
+        \\{
+        \\    x = "hi"
+        \\    lst = [x, x, x]
+        \\    match lst { [first, ..] => first, _ => "" }
+        \\}
         ,
         .expected = .{ .str_val = "hi" },
     },
-    .{ .name = "list_refcount_strings: empty string in list",
+    .{
+        .name = "list_refcount_strings: empty string in list",
         .source =
-            \\{
-            \\    x = ""
-            \\    lst = [x]
-            \\    match lst { [s] => s, _ => "fallback" }
-            \\}
+        \\{
+        \\    x = ""
+        \\    lst = [x]
+        \\    match lst { [s] => s, _ => "fallback" }
+        \\}
         ,
         .expected = .{ .str_val = "" },
     },
-    .{ .name = "list_refcount_strings: small vs large strings in list",
+    .{
+        .name = "list_refcount_strings: small vs large strings in list",
         .source =
-            \\{
-            \\    small = "hi"
-            \\    large = "This is a very long string that will be heap allocated for sure"
-            \\    lst = [small, large]
-            \\    match lst { [first, ..] => first, _ => "" }
-            \\}
+        \\{
+        \\    small = "hi"
+        \\    large = "This is a very long string that will be heap allocated for sure"
+        \\    lst = [small, large]
+        \\    match lst { [first, ..] => first, _ => "" }
+        \\}
         ,
         .expected = .{ .str_val = "hi" },
     },
-    .{ .name = "list_refcount_strings: return large string",
+    .{
+        .name = "list_refcount_strings: return large string",
         .source =
-            \\{
-            \\    small = "hi"
-            \\    large = "This is a very long string that will be heap allocated for sure"
-            \\    lst = [small, large]
-            \\    match lst { [_, second] => second, _ => "" }
-            \\}
+        \\{
+        \\    small = "hi"
+        \\    large = "This is a very long string that will be heap allocated for sure"
+        \\    lst = [small, large]
+        \\    match lst { [_, second] => second, _ => "" }
+        \\}
         ,
         .expected = .{ .str_val = "This is a very long string that will be heap allocated for sure" },
     },
-    .{ .name = "list_refcount_strings: list of string literals",
-        .source = \\match ["a", "b", "c"] { [first, ..] => first, _ => "" }
+    .{
+        .name = "list_refcount_strings: list of string literals",
+        .source =
+        \\match ["a", "b", "c"] { [first, ..] => first, _ => "" }
         ,
         .expected = .{ .str_val = "a" },
     },
-    .{ .name = "list_refcount_strings: list of string literals return second",
-        .source = \\match ["a", "b", "c"] { [_, second, ..] => second, _ => "" }
+    .{
+        .name = "list_refcount_strings: list of string literals return second",
+        .source =
+        \\match ["a", "b", "c"] { [_, second, ..] => second, _ => "" }
         ,
         .expected = .{ .str_val = "b" },
     },
-    .{ .name = "list_refcount_strings: empty list then string list",
+    .{
+        .name = "list_refcount_strings: empty list then string list",
         .source =
-            \\{
-            \\    _empty = []
-            \\    strings = ["x", "y"]
-            \\    match strings { [first, ..] => first, _ => "" }
-            \\}
+        \\{
+        \\    _empty = []
+        \\    strings = ["x", "y"]
+        \\    match strings { [first, ..] => first, _ => "" }
+        \\}
         ,
         .expected = .{ .str_val = "x" },
     },
-    .{ .name = "list_refcount_strings: string list aliased",
+    .{
+        .name = "list_refcount_strings: string list aliased",
         .source =
-            \\{
-            \\    lst1 = ["a", "b"]
-            \\    lst2 = lst1
-            \\    match lst2 { [first, ..] => first, _ => "" }
-            \\}
+        \\{
+        \\    lst1 = ["a", "b"]
+        \\    lst2 = lst1
+        \\    match lst2 { [first, ..] => first, _ => "" }
+        \\}
         ,
         .expected = .{ .str_val = "a" },
     },
-    .{ .name = "list_refcount_strings: string list aliased return from original",
+    .{
+        .name = "list_refcount_strings: string list aliased return from original",
         .source =
-            \\{
-            \\    lst1 = ["a", "b"]
-            \\    _lst2 = lst1
-            \\    match lst1 { [first, ..] => first, _ => "" }
-            \\}
+        \\{
+        \\    lst1 = ["a", "b"]
+        \\    _lst2 = lst1
+        \\    match lst1 { [first, ..] => first, _ => "" }
+        \\}
         ,
         .expected = .{ .str_val = "a" },
     },
-    .{ .name = "list_refcount_strings: string list reassigned",
+    .{
+        .name = "list_refcount_strings: string list reassigned",
         .source =
-            \\{
-            \\    var $lst = ["old1", "old2"]
-            \\    $lst = ["new1", "new2"]
-            \\    match $lst { [first, ..] => first, _ => "" }
-            \\}
+        \\{
+        \\    var $lst = ["old1", "old2"]
+        \\    $lst = ["new1", "new2"]
+        \\    match $lst { [first, ..] => first, _ => "" }
+        \\}
         ,
         .expected = .{ .str_val = "new1" },
     },
-    .{ .name = "list_refcount_strings: three string lists",
+    .{
+        .name = "list_refcount_strings: three string lists",
         .source =
-            \\{
-            \\    _a = ["a1", "a2"]
-            \\    b = ["b1", "b2"]
-            \\    _c = ["c1", "c2"]
-            \\    match b { [first, ..] => first, _ => "" }
-            \\}
+        \\{
+        \\    _a = ["a1", "a2"]
+        \\    b = ["b1", "b2"]
+        \\    _c = ["c1", "c2"]
+        \\    match b { [first, ..] => first, _ => "" }
+        \\}
         ,
         .expected = .{ .str_val = "b1" },
     },
-    .{ .name = "list_refcount_strings: extract string from nested match",
+    .{
+        .name = "list_refcount_strings: extract string from nested match",
         .source =
-            \\{
-            \\    lst = ["x", "y", "z"]
-            \\    match lst {
-            \\        [_first, .. as rest] => match rest {
-            \\            [second, ..] => second,
-            \\            _ => ""
-            \\        },
-            \\        _ => ""
-            \\    }
-            \\}
+        \\{
+        \\    lst = ["x", "y", "z"]
+        \\    match lst {
+        \\        [_first, .. as rest] => match rest {
+        \\            [second, ..] => second,
+        \\            _ => ""
+        \\        },
+        \\        _ => ""
+        \\    }
+        \\}
         ,
         .expected = .{ .str_val = "y" },
     },
 
     // --- from list_refcount_containers.zig ---
-    .{ .name = "list_refcount_containers: single list in tuple",
+    .{
+        .name = "list_refcount_containers: single list in tuple",
         .source =
-            \\{
-            \\    x = [1, 2]
-            \\    match x { [a, b] => a + b, _ => 0 }
-            \\}
+        \\{
+        \\    x = [1, 2]
+        \\    match x { [a, b] => a + b, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_containers: multiple lists in tuple",
+    .{
+        .name = "list_refcount_containers: multiple lists in tuple",
         .source =
-            \\{
-            \\    x = [1, 2]
-            \\    y = [3, 4]
-            \\    t = (x, y)
-            \\    match t { (first, _) => match first { [a, b] => a + b, _ => 0 } }
-            \\}
+        \\{
+        \\    x = [1, 2]
+        \\    y = [3, 4]
+        \\    t = (x, y)
+        \\    match t { (first, _) => match first { [a, b] => a + b, _ => 0 } }
+        \\}
         ,
         .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_containers: same list twice in tuple",
+    .{
+        .name = "list_refcount_containers: same list twice in tuple",
         .source =
-            \\{
-            \\    x = [1, 2]
-            \\    t = (x, x)
-            \\    match t { (first, _) => match first { [a, b] => a + b, _ => 0 } }
-            \\}
+        \\{
+        \\    x = [1, 2]
+        \\    t = (x, x)
+        \\    match t { (first, _) => match first { [a, b] => a + b, _ => 0 } }
+        \\}
         ,
         .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_containers: tuple with string list",
+    .{
+        .name = "list_refcount_containers: tuple with string list",
         .source =
-            \\{
-            \\    x = ["a", "b"]
-            \\    t = (x, 42)
-            \\    match t { (lst, _) => match lst { [first, ..] => first, _ => "" } }
-            \\}
+        \\{
+        \\    x = ["a", "b"]
+        \\    t = (x, 42)
+        \\    match t { (lst, _) => match lst { [first, ..] => first, _ => "" } }
+        \\}
         ,
         .expected = .{ .str_val = "a" },
     },
-    .{ .name = "list_refcount_containers: single field record with list",
+    .{
+        .name = "list_refcount_containers: single field record with list",
         .source =
-            \\{
-            \\    lst = [1, 2, 3]
-            \\    r = {items: lst}
-            \\    match r.items { [a, b, c] => a + b + c, _ => 0 }
-            \\}
+        \\{
+        \\    lst = [1, 2, 3]
+        \\    r = {items: lst}
+        \\    match r.items { [a, b, c] => a + b + c, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 6 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_containers: multiple fields with lists",
+    .{
+        .name = "list_refcount_containers: multiple fields with lists",
         .source =
-            \\{
-            \\    x = [1, 2]
-            \\    y = [3, 4]
-            \\    r = {first: x, second: y}
-            \\    match r.first { [a, b] => a + b, _ => 0 }
-            \\}
+        \\{
+        \\    x = [1, 2]
+        \\    y = [3, 4]
+        \\    r = {first: x, second: y}
+        \\    match r.first { [a, b] => a + b, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_containers: same list in multiple fields",
+    .{
+        .name = "list_refcount_containers: same list in multiple fields",
         .source =
-            \\{
-            \\    lst = [10, 20]
-            \\    r = {a: lst, b: lst}
-            \\    match r.a { [x, y] => x + y, _ => 0 }
-            \\}
+        \\{
+        \\    lst = [10, 20]
+        \\    r = {a: lst, b: lst}
+        \\    match r.a { [x, y] => x + y, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 30 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_containers: nested record with list",
+    .{
+        .name = "list_refcount_containers: nested record with list",
         .source =
-            \\{
-            \\    lst = [5, 6]
-            \\    inner = {data: lst}
-            \\    outer = {nested: inner}
-            \\    match outer.nested.data { [a, b] => a + b, _ => 0 }
-            \\}
+        \\{
+        \\    lst = [5, 6]
+        \\    inner = {data: lst}
+        \\    outer = {nested: inner}
+        \\    match outer.nested.data { [a, b] => a + b, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 11 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_containers: record with string list",
+    .{
+        .name = "list_refcount_containers: record with string list",
         .source =
-            \\{
-            \\    lst = ["hello", "world"]
-            \\    r = {items: lst}
-            \\    match r.items { [first, ..] => first, _ => "" }
-            \\}
+        \\{
+        \\    lst = ["hello", "world"]
+        \\    r = {items: lst}
+        \\    match r.items { [first, ..] => first, _ => "" }
+        \\}
         ,
         .expected = .{ .str_val = "hello" },
     },
-    .{ .name = "list_refcount_containers: record with mixed types",
+    .{
+        .name = "list_refcount_containers: record with mixed types",
         .source =
-            \\{
-            \\    lst = [1, 2, 3]
-            \\    r = {count: 42, items: lst}
-            \\    r.count
-            \\}
+        \\{
+        \\    lst = [1, 2, 3]
+        \\    r = {count: 42, items: lst}
+        \\    r.count
+        \\}
         ,
         .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_containers: tag with list payload",
-        .source = \\match Some([1, 2]) { Some(lst) => match lst { [a, b] => a + b, _ => 0 }, None => 0 }
-        ,
-        .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
-    },
-    .{ .name = "list_refcount_containers: tag with multiple list payloads",
+    .{
+        .name = "list_refcount_containers: tag with list payload",
         .source =
-            \\{
-            \\    x = [1, 2]
-            \\    y = [3, 4]
-            \\    tag = Pair(x, y)
-            \\    match tag { Pair(first, _) => match first { [a, b] => a + b, _ => 0 }, _ => 0 }
-            \\}
+        \\match Some([1, 2]) { Some(lst) => match lst { [a, b] => a + b, _ => 0 }, None => 0 }
         ,
         .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_containers: tag with string list payload",
-        .source = \\match Some(["tag", "value"]) { Some(lst) => match lst { [first, ..] => first, _ => "" }, None => "" }
+    .{
+        .name = "list_refcount_containers: tag with multiple list payloads",
+        .source =
+        \\{
+        \\    x = [1, 2]
+        \\    y = [3, 4]
+        \\    tag = Pair(x, y)
+        \\    match tag { Pair(first, _) => match first { [a, b] => a + b, _ => 0 }, _ => 0 }
+        \\}
+        ,
+        .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
+    },
+    .{
+        .name = "list_refcount_containers: tag with string list payload",
+        .source =
+        \\match Some(["tag", "value"]) { Some(lst) => match lst { [first, ..] => first, _ => "" }, None => "" }
         ,
         .expected = .{ .str_val = "tag" },
     },
-    .{ .name = "list_refcount_containers: Ok/Err with lists",
-        .source = \\match Ok([1, 2, 3]) { Ok(lst) => match lst { [a, b, c] => a + b + c, _ => 0 }, Err(_) => 0 }
+    .{
+        .name = "list_refcount_containers: Ok/Err with lists",
+        .source =
+        \\match Ok([1, 2, 3]) { Ok(lst) => match lst { [a, b, c] => a + b + c, _ => 0 }, Err(_) => 0 }
         ,
         .expected = .{ .dec_val = 6 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_containers: tuple of records with lists",
+    .{
+        .name = "list_refcount_containers: tuple of records with lists",
         .source =
-            \\{
-            \\    lst1 = [1, 2]
-            \\    lst2 = [3, 4]
-            \\    r1 = {items: lst1}
-            \\    r2 = {items: lst2}
-            \\    t = (r1, r2)
-            \\    match t { (first, _) => match first.items { [a, b] => a + b, _ => 0 } }
-            \\}
+        \\{
+        \\    lst1 = [1, 2]
+        \\    lst2 = [3, 4]
+        \\    r1 = {items: lst1}
+        \\    r2 = {items: lst2}
+        \\    t = (r1, r2)
+        \\    match t { (first, _) => match first.items { [a, b] => a + b, _ => 0 } }
+        \\}
         ,
         .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_containers: record of tuples with lists",
+    .{
+        .name = "list_refcount_containers: record of tuples with lists",
         .source =
-            \\{
-            \\    lst = [5, 6]
-            \\    t = (lst, 99)
-            \\    r = {data: t}
-            \\    match r.data { (items, _) => match items { [a, b] => a + b, _ => 0 } }
-            \\}
+        \\{
+        \\    lst = [5, 6]
+        \\    t = (lst, 99)
+        \\    r = {data: t}
+        \\    match r.data { (items, _) => match items { [a, b] => a + b, _ => 0 } }
+        \\}
         ,
         .expected = .{ .dec_val = 11 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_containers: tag with record containing list",
+    .{
+        .name = "list_refcount_containers: tag with record containing list",
         .source =
-            \\{
-            \\    lst = [7, 8]
-            \\    r = {items: lst}
-            \\    tag = Some(r)
-            \\    match tag { Some(rec) => match rec.items { [a, b] => a + b, _ => 0 }, None => 0 }
-            \\}
+        \\{
+        \\    lst = [7, 8]
+        \\    r = {items: lst}
+        \\    tag = Some(r)
+        \\    match tag { Some(rec) => match rec.items { [a, b] => a + b, _ => 0 }, None => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 15 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_containers: empty list in record",
+    .{
+        .name = "list_refcount_containers: empty list in record",
         .source =
-            \\{
-            \\    empty = []
-            \\    r = {lst: empty}
-            \\    match r.lst { [] => 42, _ => 0 }
-            \\}
+        \\{
+        \\    empty = []
+        \\    r = {lst: empty}
+        \\    match r.lst { [] => 42, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 },
     },
 
     // --- from list_refcount_conditional.zig ---
-    .{ .name = "list_refcount_conditional: simple if-else with lists",
+    .{
+        .name = "list_refcount_conditional: simple if-else with lists",
         .source =
-            \\{
-            \\    x = [1, 2]
-            \\    result = if True {x} else {[3, 4]}
-            \\    match result { [a, b] => a + b, _ => 0 }
-            \\}
+        \\{
+        \\    x = [1, 2]
+        \\    result = if True {x} else {[3, 4]}
+        \\    match result { [a, b] => a + b, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_conditional: return else branch",
+    .{
+        .name = "list_refcount_conditional: return else branch",
         .source =
-            \\{
-            \\    x = [1, 2]
-            \\    result = if False {x} else {[3, 4]}
-            \\    match result { [a, b] => a + b, _ => 0 }
-            \\}
+        \\{
+        \\    x = [1, 2]
+        \\    result = if False {x} else {[3, 4]}
+        \\    match result { [a, b] => a + b, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 7 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_conditional: same list in both branches",
+    .{
+        .name = "list_refcount_conditional: same list in both branches",
         .source =
-            \\{
-            \\    x = [1, 2]
-            \\    result = if True {x} else {x}
-            \\    match result { [a, b] => a + b, _ => 0 }
-            \\}
+        \\{
+        \\    x = [1, 2]
+        \\    result = if True {x} else {x}
+        \\    match result { [a, b] => a + b, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_conditional: unused branch decreffed",
+    .{
+        .name = "list_refcount_conditional: unused branch decreffed",
         .source =
-            \\{
-            \\    x = [1, 2]
-            \\    y = [3, 4]
-            \\    result = if True {x} else {y}
-            \\    match result { [a, b] => a + b, _ => 0 }
-            \\}
+        \\{
+        \\    x = [1, 2]
+        \\    y = [3, 4]
+        \\    result = if True {x} else {y}
+        \\    match result { [a, b] => a + b, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_conditional: nested conditionals",
+    .{
+        .name = "list_refcount_conditional: nested conditionals",
         .source =
-            \\{
-            \\    x = [1]
-            \\    result = if True {if False {x} else {[2]}} else {[3]}
-            \\    match result { [a] => a, _ => 0 }
-            \\}
+        \\{
+        \\    x = [1]
+        \\    result = if True {if False {x} else {[2]}} else {[3]}
+        \\    match result { [a] => a, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 2 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_conditional: string lists in conditionals",
+    .{
+        .name = "list_refcount_conditional: string lists in conditionals",
         .source =
-            \\{
-            \\    x = ["a", "b"]
-            \\    result = if True {x} else {["c"]}
-            \\    match result { [first, ..] => first, _ => "" }
-            \\}
+        \\{
+        \\    x = ["a", "b"]
+        \\    result = if True {x} else {["c"]}
+        \\    match result { [first, ..] => first, _ => "" }
+        \\}
         ,
         .expected = .{ .str_val = "a" },
     },
-    .{ .name = "list_refcount_conditional: inline list literals",
+    .{
+        .name = "list_refcount_conditional: inline list literals",
         .source =
-            \\{
-            \\    result = if True {[10, 20]} else {[30, 40]}
-            \\    match result { [a, b] => a + b, _ => 0 }
-            \\}
+        \\{
+        \\    result = if True {[10, 20]} else {[30, 40]}
+        \\    match result { [a, b] => a + b, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 30 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_conditional: empty list in branch",
+    .{
+        .name = "list_refcount_conditional: empty list in branch",
         .source =
-            \\{
-            \\    result = if True {[]} else {[1, 2]}
-            \\    match result { [] => 42, _ => 0 }
-            \\}
+        \\{
+        \\    result = if True {[]} else {[1, 2]}
+        \\    match result { [] => 42, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 },
     },
 
     // --- from list_refcount_function.zig ---
-    .{ .name = "list_refcount_function: pass list to identity function",
+    .{
+        .name = "list_refcount_function: pass list to identity function",
         .source =
-            \\{
-            \\    id = |lst| lst
-            \\    x = [1, 2]
-            \\    result = id(x)
-            \\    match result { [a, b] => a + b, _ => 0 }
-            \\}
+        \\{
+        \\    id = |lst| lst
+        \\    x = [1, 2]
+        \\    result = id(x)
+        \\    match result { [a, b] => a + b, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_function: list returned from function",
+    .{
+        .name = "list_refcount_function: list returned from function",
         .source =
-            \\{
-            \\    f = |_| [1, 2]
-            \\    result = f(0)
-            \\    match result { [a, b] => a + b, _ => 0 }
-            \\}
+        \\{
+        \\    f = |_| [1, 2]
+        \\    result = f(0)
+        \\    match result { [a, b] => a + b, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_function: closure captures list",
+    .{
+        .name = "list_refcount_function: closure captures list",
         .source =
-            \\{
-            \\    x = [1, 2]
-            \\    f = |_| x
-            \\    result = f(0)
-            \\    match result { [a, b] => a + b, _ => 0 }
-            \\}
+        \\{
+        \\    x = [1, 2]
+        \\    f = |_| x
+        \\    result = f(0)
+        \\    match result { [a, b] => a + b, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_function: function called multiple times",
+    .{
+        .name = "list_refcount_function: function called multiple times",
         .source =
-            \\{
-            \\    f = |lst| lst
-            \\    x = [1, 2]
-            \\    a = f(x)
-            \\    _b = f(x)
-            \\    match a { [first, ..] => first, _ => 0 }
-            \\}
+        \\{
+        \\    f = |lst| lst
+        \\    x = [1, 2]
+        \\    a = f(x)
+        \\    _b = f(x)
+        \\    match a { [first, ..] => first, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 1 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_function: string list through function",
+    .{
+        .name = "list_refcount_function: string list through function",
         .source =
-            \\{
-            \\    f = |lst| lst
-            \\    x = ["a", "b"]
-            \\    result = f(x)
-            \\    match result { [first, ..] => first, _ => "" }
-            \\}
+        \\{
+        \\    f = |lst| lst
+        \\    x = ["a", "b"]
+        \\    result = f(x)
+        \\    match result { [first, ..] => first, _ => "" }
+        \\}
         ,
         .expected = .{ .str_val = "a" },
     },
-    .{ .name = "list_refcount_function: function extracts from list",
+    .{
+        .name = "list_refcount_function: function extracts from list",
         .source =
-            \\{
-            \\    x = [10, 20, 30]
-            \\    match x { [first, ..] => first, _ => 0 }
-            \\}
+        \\{
+        \\    x = [10, 20, 30]
+        \\    match x { [first, ..] => first, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 10 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_function: closure captures string list",
+    .{
+        .name = "list_refcount_function: closure captures string list",
         .source =
-            \\{
-            \\    x = ["captured", "list"]
-            \\    f = |_| x
-            \\    result = f(0)
-            \\    match result { [first, ..] => first, _ => "" }
-            \\}
+        \\{
+        \\    x = ["captured", "list"]
+        \\    f = |_| x
+        \\    result = f(0)
+        \\    match result { [first, ..] => first, _ => "" }
+        \\}
         ,
         .expected = .{ .str_val = "captured" },
     },
-    .{ .name = "list_refcount_function: nested function calls with lists",
+    .{
+        .name = "list_refcount_function: nested function calls with lists",
         .source =
-            \\{
-            \\    x = [5, 10]
-            \\    match x { [first, ..] => first + first, _ => 0 }
-            \\}
+        \\{
+        \\    x = [5, 10]
+        \\    match x { [first, ..] => first + first, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 10 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_function: same list twice in tuple returned from function",
+    .{
+        .name = "list_refcount_function: same list twice in tuple returned from function",
         .source =
-            \\{
-            \\    make_pair = |lst| (lst, lst)
-            \\    x = [1, 2]
-            \\    t = make_pair(x)
-            \\    match t { (first, _) => match first { [a, b] => a + b, _ => 0 } }
-            \\}
+        \\{
+        \\    make_pair = |lst| (lst, lst)
+        \\    x = [1, 2]
+        \\    t = make_pair(x)
+        \\    match t { (first, _) => match first { [a, b] => a + b, _ => 0 } }
+        \\}
         ,
         .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_function: same list twice passed to function",
+    .{
+        .name = "list_refcount_function: same list twice passed to function",
         .source =
-            \\{
-            \\    add_lens = |a, b|
-            \\        match a {
-            \\            [first, ..] => match b { [second, ..] => first + second, _ => 0 },
-            \\            _ => 0
-            \\        }
-            \\    x = [1, 2]
-            \\    add_lens(x, x)
-            \\}
+        \\{
+        \\    add_lens = |a, b|
+        \\        match a {
+        \\            [first, ..] => match b { [second, ..] => first + second, _ => 0 },
+        \\            _ => 0
+        \\        }
+        \\    x = [1, 2]
+        \\    add_lens(x, x)
+        \\}
         ,
         .expected = .{ .dec_val = 2 * RocDec.one_point_zero_i128 },
     },
 
     // --- from list_refcount_pattern.zig ---
-    .{ .name = "list_refcount_pattern: destructure list from record",
+    .{
+        .name = "list_refcount_pattern: destructure list from record",
         .source =
-            \\{
-            \\    r = {lst: [1, 2]}
-            \\    match r { {lst} => match lst { [a, b] => a + b, _ => 0 } }
-            \\}
+        \\{
+        \\    r = {lst: [1, 2]}
+        \\    match r { {lst} => match lst { [a, b] => a + b, _ => 0 } }
+        \\}
         ,
         .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_pattern: wildcard discards list",
+    .{
+        .name = "list_refcount_pattern: wildcard discards list",
         .source =
-            \\{
-            \\    pair = {a: [1, 2], b: [3, 4]}
-            \\    match pair { {a, b: _} => match a { [x, y] => x + y, _ => 0 } }
-            \\}
+        \\{
+        \\    pair = {a: [1, 2], b: [3, 4]}
+        \\    match pair { {a, b: _} => match a { [x, y] => x + y, _ => 0 } }
+        \\}
         ,
         .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_pattern: list rest pattern",
-        .source = \\match [1, 2, 3, 4] { [first, .. as rest] => match rest { [second, ..] => first + second, _ => 0 }, _ => 0 }
+    .{
+        .name = "list_refcount_pattern: list rest pattern",
+        .source =
+        \\match [1, 2, 3, 4] { [first, .. as rest] => match rest { [second, ..] => first + second, _ => 0 }, _ => 0 }
         ,
         .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_pattern: string list rest pattern",
-        .source = \\match ["a", "b", "c"] { [_first, .. as rest] => match rest { [second, ..] => second, _ => "" }, _ => "" }
+    .{
+        .name = "list_refcount_pattern: string list rest pattern",
+        .source =
+        \\match ["a", "b", "c"] { [_first, .. as rest] => match rest { [second, ..] => second, _ => "" }, _ => "" }
         ,
         .expected = .{ .str_val = "b" },
     },
-    .{ .name = "list_refcount_pattern: nested list patterns",
+    .{
+        .name = "list_refcount_pattern: nested list patterns",
         .source =
-            \\{
-            \\    data = {values: [10, 20, 30]}
-            \\    match data { {values} => match values { [a, b, c] => a + b + c, _ => 0 } }
-            \\}
+        \\{
+        \\    data = {values: [10, 20, 30]}
+        \\    match data { {values} => match values { [a, b, c] => a + b + c, _ => 0 } }
+        \\}
         ,
         .expected = .{ .dec_val = 60 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_pattern: tag with list extracted",
-        .source = \\match Some([5, 10]) { Some(lst) => match lst { [a, b] => a + b, _ => 0 }, None => 0 }
+    .{
+        .name = "list_refcount_pattern: tag with list extracted",
+        .source =
+        \\match Some([5, 10]) { Some(lst) => match lst { [a, b] => a + b, _ => 0 }, None => 0 }
         ,
         .expected = .{ .dec_val = 15 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_pattern: empty list pattern",
-        .source = \\match {lst: []} { {lst} => match lst { [] => 42, _ => 0 } }
+    .{
+        .name = "list_refcount_pattern: empty list pattern",
+        .source =
+        \\match {lst: []} { {lst} => match lst { [] => 42, _ => 0 } }
         ,
         .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 },
     },
 
     // --- from list_refcount_nested.zig ---
-    .{ .name = "list_refcount_nested: simple nested list",
+    .{
+        .name = "list_refcount_nested: simple nested list",
         .source =
-            \\{
-            \\    inner = [1, 2]
-            \\    outer = [inner]
-            \\    match outer { [lst] => match lst { [a, b] => a + b, _ => 0 }, _ => 0 }
-            \\}
+        \\{
+        \\    inner = [1, 2]
+        \\    outer = [inner]
+        \\    match outer { [lst] => match lst { [a, b] => a + b, _ => 0 }, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_nested: multiple inner lists",
+    .{
+        .name = "list_refcount_nested: multiple inner lists",
         .source =
-            \\{
-            \\    a = [1, 2]
-            \\    b = [3, 4]
-            \\    outer = [a, b]
-            \\    match outer { [first, ..] => match first { [x, y] => x + y, _ => 0 }, _ => 0 }
-            \\}
+        \\{
+        \\    a = [1, 2]
+        \\    b = [3, 4]
+        \\    outer = [a, b]
+        \\    match outer { [first, ..] => match first { [x, y] => x + y, _ => 0 }, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_nested: same inner list multiple times",
+    .{
+        .name = "list_refcount_nested: same inner list multiple times",
         .source =
-            \\{
-            \\    inner = [1, 2]
-            \\    outer = [inner, inner, inner]
-            \\    match outer { [first, ..] => match first { [a, b] => a + b, _ => 0 }, _ => 0 }
-            \\}
+        \\{
+        \\    inner = [1, 2]
+        \\    outer = [inner, inner, inner]
+        \\    match outer { [first, ..] => match first { [a, b] => a + b, _ => 0 }, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_nested: two levels inline",
-        .source = \\match [[1, 2], [3, 4]] { [first, ..] => match first { [a, b] => a + b, _ => 0 }, _ => 0 }
+    .{
+        .name = "list_refcount_nested: two levels inline",
+        .source =
+        \\match [[1, 2], [3, 4]] { [first, ..] => match first { [a, b] => a + b, _ => 0 }, _ => 0 }
         ,
         .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_nested: three levels",
+    .{
+        .name = "list_refcount_nested: three levels",
         .source =
-            \\{
-            \\    a = [1]
-            \\    b = [a]
-            \\    c = [b]
-            \\    match c { [lst] => match lst { [lst2] => match lst2 { [x] => x, _ => 0 }, _ => 0 }, _ => 0 }
-            \\}
+        \\{
+        \\    a = [1]
+        \\    b = [a]
+        \\    c = [b]
+        \\    match c { [lst] => match lst { [lst2] => match lst2 { [x] => x, _ => 0 }, _ => 0 }, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 1 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_nested: empty inner list",
+    .{
+        .name = "list_refcount_nested: empty inner list",
         .source =
-            \\{
-            \\    inner = []
-            \\    outer = [inner]
-            \\    match outer { [lst] => match lst { [] => 42, _ => 0 }, _ => 0 }
-            \\}
+        \\{
+        \\    inner = []
+        \\    outer = [inner]
+        \\    match outer { [lst] => match lst { [] => 42, _ => 0 }, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_nested: list of string lists",
+    .{
+        .name = "list_refcount_nested: list of string lists",
         .source =
-            \\{
-            \\    a = ["x", "y"]
-            \\    b = ["z"]
-            \\    outer = [a, b]
-            \\    match outer { [first, ..] => match first { [s, ..] => s, _ => "" }, _ => "" }
-            \\}
+        \\{
+        \\    a = ["x", "y"]
+        \\    b = ["z"]
+        \\    outer = [a, b]
+        \\    match outer { [first, ..] => match first { [s, ..] => s, _ => "" }, _ => "" }
+        \\}
         ,
         .expected = .{ .str_val = "x" },
     },
-    .{ .name = "list_refcount_nested: inline string lists",
-        .source = \\match [["a", "b"], ["c"]] { [first, ..] => match first { [s, ..] => s, _ => "" }, _ => "" }
+    .{
+        .name = "list_refcount_nested: inline string lists",
+        .source =
+        \\match [["a", "b"], ["c"]] { [first, ..] => match first { [s, ..] => s, _ => "" }, _ => "" }
         ,
         .expected = .{ .str_val = "a" },
     },
-    .{ .name = "list_refcount_nested: nested then aliased",
+    .{
+        .name = "list_refcount_nested: nested then aliased",
         .source =
-            \\{
-            \\    inner = [1, 2]
-            \\    outer = [inner]
-            \\    outer2 = outer
-            \\    match outer2 { [lst] => match lst { [a, b] => a + b, _ => 0 }, _ => 0 }
-            \\}
+        \\{
+        \\    inner = [1, 2]
+        \\    outer = [inner]
+        \\    outer2 = outer
+        \\    match outer2 { [lst] => match lst { [a, b] => a + b, _ => 0 }, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_nested: access second inner list",
+    .{
+        .name = "list_refcount_nested: access second inner list",
         .source =
-            \\{
-            \\    a = [1, 2]
-            \\    b = [3, 4]
-            \\    outer = [a, b]
-            \\    match outer { [_, second] => match second { [x, y] => x + y, _ => 0 }, _ => 0 }
-            \\}
+        \\{
+        \\    a = [1, 2]
+        \\    b = [3, 4]
+        \\    outer = [a, b]
+        \\    match outer { [_, second] => match second { [x, y] => x + y, _ => 0 }, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 7 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_nested: deeply nested inline",
-        .source = \\match [[[1]]] { [lst] => match lst { [lst2] => match lst2 { [x] => x, _ => 0 }, _ => 0 }, _ => 0 }
+    .{
+        .name = "list_refcount_nested: deeply nested inline",
+        .source =
+        \\match [[[1]]] { [lst] => match lst { [lst2] => match lst2 { [x] => x, _ => 0 }, _ => 0 }, _ => 0 }
         ,
         .expected = .{ .dec_val = 1 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_nested: mixed nested and flat",
+    .{
+        .name = "list_refcount_nested: mixed nested and flat",
         .source =
-            \\match [[1, 2], [3]] { [first, second] => {
-            \\    a = match first { [x, ..] => x, _ => 0 }
-            \\    b = match second { [y] => y, _ => 0 }
-            \\    a + b
-            \\}, _ => 0 }
+        \\match [[1, 2], [3]] { [first, second] => {
+        \\    a = match first { [x, ..] => x, _ => 0 }
+        \\    b = match second { [y] => y, _ => 0 }
+        \\    a + b
+        \\}, _ => 0 }
         ,
         .expected = .{ .dec_val = 4 * RocDec.one_point_zero_i128 },
     },
 
     // --- from list_refcount_complex.zig ---
-    .{ .name = "list_refcount_complex: list of records with strings",
+    .{
+        .name = "list_refcount_complex: list of records with strings",
         .source =
-            \\{
-            \\    r1 = {s: "a"}
-            \\    r2 = {s: "b"}
-            \\    lst = [r1, r2]
-            \\    match lst { [first, ..] => first.s, _ => "" }
-            \\}
+        \\{
+        \\    r1 = {s: "a"}
+        \\    r2 = {s: "b"}
+        \\    lst = [r1, r2]
+        \\    match lst { [first, ..] => first.s, _ => "" }
+        \\}
         ,
         .expected = .{ .str_val = "a" },
     },
-    .{ .name = "list_refcount_complex: list of records with integers",
+    .{
+        .name = "list_refcount_complex: list of records with integers",
         .source =
-            \\{
-            \\    r1 = {val: 10}
-            \\    r2 = {val: 20}
-            \\    lst = [r1, r2]
-            \\    match lst { [first, ..] => first.val, _ => 0 }
-            \\}
+        \\{
+        \\    r1 = {val: 10}
+        \\    r2 = {val: 20}
+        \\    lst = [r1, r2]
+        \\    match lst { [first, ..] => first.val, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 10 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_complex: same record multiple times in list",
+    .{
+        .name = "list_refcount_complex: same record multiple times in list",
         .source =
-            \\{
-            \\    r = {val: 42}
-            \\    lst = [r, r, r]
-            \\    match lst { [first, ..] => first.val, _ => 0 }
-            \\}
+        \\{
+        \\    r = {val: 42}
+        \\    lst = [r, r, r]
+        \\    match lst { [first, ..] => first.val, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_complex: list of records with nested data",
+    .{
+        .name = "list_refcount_complex: list of records with nested data",
         .source =
-            \\{
-            \\    r1 = {inner: {val: 10}}
-            \\    r2 = {inner: {val: 20}}
-            \\    lst = [r1, r2]
-            \\    match lst { [first, ..] => first.inner.val, _ => 0 }
-            \\}
+        \\{
+        \\    r1 = {inner: {val: 10}}
+        \\    r2 = {inner: {val: 20}}
+        \\    lst = [r1, r2]
+        \\    match lst { [first, ..] => first.inner.val, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 10 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_complex: list of tuples with integers",
+    .{
+        .name = "list_refcount_complex: list of tuples with integers",
         .source =
-            \\{
-            \\    t1 = (1, 2)
-            \\    t2 = (3, 4)
-            \\    lst = [t1, t2]
-            \\    match lst { [first, ..] => match first { (a, b) => a + b }, _ => 0 }
-            \\}
+        \\{
+        \\    t1 = (1, 2)
+        \\    t2 = (3, 4)
+        \\    lst = [t1, t2]
+        \\    match lst { [first, ..] => match first { (a, b) => a + b }, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_complex: list of tuples with strings",
+    .{
+        .name = "list_refcount_complex: list of tuples with strings",
         .source =
-            \\{
-            \\    t1 = ("a", "b")
-            \\    t2 = ("c", "d")
-            \\    lst = [t1, t2]
-            \\    match lst { [first, ..] => match first { (s, _) => s }, _ => "" }
-            \\}
+        \\{
+        \\    t1 = ("a", "b")
+        \\    t2 = ("c", "d")
+        \\    lst = [t1, t2]
+        \\    match lst { [first, ..] => match first { (s, _) => s }, _ => "" }
+        \\}
         ,
         .expected = .{ .str_val = "a" },
     },
-    .{ .name = "list_refcount_complex: list of tags with integers",
-        .source = \\match Some([10, 20]) { Some(lst) => match lst { [x, ..] => x, _ => 0 }, None => 0 }
+    .{
+        .name = "list_refcount_complex: list of tags with integers",
+        .source =
+        \\match Some([10, 20]) { Some(lst) => match lst { [x, ..] => x, _ => 0 }, None => 0 }
         ,
         .expected = .{ .dec_val = 10 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_complex: list of tags with strings",
-        .source = \\match Some(["hello", "world"]) { Some(lst) => match lst { [s, ..] => s, _ => "" }, None => "" }
+    .{
+        .name = "list_refcount_complex: list of tags with strings",
+        .source =
+        \\match Some(["hello", "world"]) { Some(lst) => match lst { [s, ..] => s, _ => "" }, None => "" }
         ,
         .expected = .{ .str_val = "hello" },
     },
-    .{ .name = "list_refcount_complex: list of records of lists of strings",
+    .{
+        .name = "list_refcount_complex: list of records of lists of strings",
         .source =
-            \\{
-            \\    r1 = {items: ["a", "b"]}
-            \\    r2 = {items: ["c", "d"]}
-            \\    lst = [r1, r2]
-            \\    match lst { [first, ..] => match first.items { [s, ..] => s, _ => "" }, _ => "" }
-            \\}
+        \\{
+        \\    r1 = {items: ["a", "b"]}
+        \\    r2 = {items: ["c", "d"]}
+        \\    lst = [r1, r2]
+        \\    match lst { [first, ..] => match first.items { [s, ..] => s, _ => "" }, _ => "" }
+        \\}
         ,
         .expected = .{ .str_val = "a" },
     },
-    .{ .name = "list_refcount_complex: inline complex structure",
+    .{
+        .name = "list_refcount_complex: inline complex structure",
         .source =
-            \\{
-            \\    data = [{val: 1}, {val: 2}]
-            \\    match data { [first, ..] => first.val, _ => 0 }
-            \\}
+        \\{
+        \\    data = [{val: 1}, {val: 2}]
+        \\    match data { [first, ..] => first.val, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 1 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_complex: deeply nested mixed structures",
+    .{
+        .name = "list_refcount_complex: deeply nested mixed structures",
         .source =
-            \\{
-            \\    inner = {x: 42}
-            \\    outer = {nested: inner}
-            \\    lst = [outer]
-            \\    match lst { [first, ..] => first.nested.x, _ => 0 }
-            \\}
+        \\{
+        \\    inner = {x: 42}
+        \\    outer = {nested: inner}
+        \\    lst = [outer]
+        \\    match lst { [first, ..] => first.nested.x, _ => 0 }
+        \\}
         ,
         .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 },
     },
-    .{ .name = "list_refcount_complex: list of Ok/Err tags",
-        .source = \\match Ok([1, 2]) { Ok(lst) => match lst { [x, ..] => x, _ => 0 }, Err(_) => 0 }
+    .{
+        .name = "list_refcount_complex: list of Ok/Err tags",
+        .source =
+        \\match Ok([1, 2]) { Ok(lst) => match lst { [x, ..] => x, _ => 0 }, Err(_) => 0 }
         ,
         .expected = .{ .dec_val = 1 * RocDec.one_point_zero_i128 },
     },
@@ -6833,147 +7404,175 @@ pub const tests = [_]TestCase{
     .{ .name = "tuple: (10, 20)", .source = "(10, 20)", .expected = .{ .inspect_str = "(10.0, 20.0)" } },
     .{ .name = "tuple: (5 + 1, 5 * 3)", .source = "(5 + 1, 5 * 3)", .expected = .{ .inspect_str = "(6.0, 15.0)" } },
     // Records - fold with record accumulator
-    .{ .name = "record: fold sum and count",
+    .{
+        .name = "record: fold sum and count",
         .source = "List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1})",
         .expected = .{ .inspect_str = "{ count: 3.0, sum: 6.0 }" },
     },
-    .{ .name = "record: fold empty list",
+    .{
+        .name = "record: fold empty list",
         .source = "List.fold([], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1})",
         .expected = .{ .inspect_str = "{ count: 0.0, sum: 0.0 }" },
     },
-    .{ .name = "record: fold single field",
+    .{
+        .name = "record: fold single field",
         .source = "List.fold([1, 2, 3, 4], {total: 0}, |acc, item| {total: acc.total + item})",
         .expected = .{ .inspect_str = "{ total: 10.0 }" },
     },
-    .{ .name = "record: fold record update syntax",
+    .{
+        .name = "record: fold record update syntax",
         .source = "List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {..acc, sum: acc.sum + item, count: acc.count + 1})",
         .expected = .{ .inspect_str = "{ count: 3.0, sum: 6.0 }" },
     },
-    .{ .name = "record: fold partial update",
+    .{
+        .name = "record: fold partial update",
         .source = "List.fold([1, 2, 3, 4], {sum: 0, multiplier: 2}, |acc, item| {..acc, sum: acc.sum + item})",
         .expected = .{ .inspect_str = "{ multiplier: 2.0, sum: 10.0 }" },
     },
-    .{ .name = "record: fold nested field access",
+    .{
+        .name = "record: fold nested field access",
         .source = "List.fold([1, 2, 3], {value: 0}, |acc, item| {value: acc.value + item})",
         .expected = .{ .inspect_str = "{ value: 6.0 }" },
     },
-    .{ .name = "record: fold three fields",
+    .{
+        .name = "record: fold three fields",
         .source = "List.fold([1, 2, 3, 4], {sum: 0, count: 0, product: 1}, |acc, item| {sum: acc.sum + item, count: acc.count + 1, product: acc.product * item})",
         .expected = .{ .inspect_str = "{ count: 4.0, product: 24.0, sum: 10.0 }" },
     },
-    .{ .name = "record: fold conditional update",
+    .{
+        .name = "record: fold conditional update",
         .source = "List.fold([1, 2, 3, 4], {evens: 0, odds: 0}, |acc, item| if item % 2 == 0 {evens: acc.evens + item, odds: acc.odds} else {evens: acc.evens, odds: acc.odds + item})",
         .expected = .{ .inspect_str = "{ evens: 6.0, odds: 4.0 }" },
     },
-    .{ .name = "record: fold string list count",
+    .{
+        .name = "record: fold string list count",
         .source = "List.fold([\"a\", \"bb\", \"ccc\"], {count: 0}, |acc, _| {count: acc.count + 1})",
         .expected = .{ .inspect_str = "{ count: 3.0 }" },
     },
-    .{ .name = "record: fold record destructuring",
+    .{
+        .name = "record: fold record destructuring",
         .source = "List.fold([{x: 1, y: 2}, {x: 2, y: 5}, {x: 3, y: 8}], {total_x: 0, total_y: 0}, |acc, {x, y}| {total_x: acc.total_x + x, total_y: acc.total_y + y})",
         .expected = .{ .inspect_str = "{ total_x: 6.0, total_y: 15.0 }" },
     },
-    .{ .name = "record: fold partial record destructuring",
+    .{
+        .name = "record: fold partial record destructuring",
         .source = "List.fold([{a: 1, b: 100}, {a: 2, b: 200}, {a: 3, b: 300}], {sum: 0}, |acc, {a}| {sum: acc.sum + a})",
         .expected = .{ .inspect_str = "{ sum: 6.0 }" },
     },
-    .{ .name = "record: fold single-field record destructuring",
+    .{
+        .name = "record: fold single-field record destructuring",
         .source = "List.fold([{val: 1}, {val: 2}, {val: 3}, {val: 4}], {total: 0}, |acc, {val}| {total: acc.total + val})",
         .expected = .{ .inspect_str = "{ total: 10.0 }" },
     },
-    .{ .name = "record: fold list destructuring",
+    .{
+        .name = "record: fold list destructuring",
         .source = "List.fold([[1, 2], [3, 4], [5, 6]], {first_sum: 0, count: 0}, |acc, [first, ..]| {first_sum: acc.first_sum + first, count: acc.count + 1})",
         .expected = .{ .inspect_str = "{ count: 3.0, first_sum: 9.0 }" },
     },
-    .{ .name = "record: fold destructure two elements",
+    .{
+        .name = "record: fold destructure two elements",
         .source = "List.fold([[1, 2, 100], [3, 4, 200], [5, 6, 300]], {sum_firsts: 0, sum_seconds: 0}, |acc, [a, b, ..]| {sum_firsts: acc.sum_firsts + a, sum_seconds: acc.sum_seconds + b})",
         .expected = .{ .inspect_str = "{ sum_firsts: 9.0, sum_seconds: 12.0 }" },
     },
-    .{ .name = "record: fold exact list pattern",
+    .{
+        .name = "record: fold exact list pattern",
         .source = "List.fold([[1, 2], [3, 4], [5, 6]], {total: 0}, |acc, [a, b]| {total: acc.total + a + b})",
         .expected = .{ .inspect_str = "{ total: 21.0 }" },
     },
-    .{ .name = "record: fold nested list and record",
+    .{
+        .name = "record: fold nested list and record",
         .source = "List.fold([[1, 10, 20], [2, 30, 40], [3, 50, 60]], {head_sum: 0, tail_count: 0}, |acc, [head, .. as tail]| {head_sum: acc.head_sum + head, tail_count: acc.tail_count + List.len(tail)})",
         .expected = .{ .inspect_str = "{ head_sum: 6.0, tail_count: 6 }" },
     },
     // Focused record fold tests
-    .{ .name = "focused: fold single-field record",
+    .{
+        .name = "focused: fold single-field record",
         .source = "List.fold([1, 2, 3, 4], {total: 0}, |acc, item| {total: acc.total + item})",
         .expected = .{ .inspect_str = "{ total: 10.0 }" },
     },
-    .{ .name = "focused: fold record partial update",
+    .{
+        .name = "focused: fold record partial update",
         .source = "List.fold([1, 2, 3, 4], {sum: 0, multiplier: 2}, |acc, item| {..acc, sum: acc.sum + item})",
         .expected = .{ .inspect_str = "{ multiplier: 2.0, sum: 10.0 }" },
     },
-    .{ .name = "focused: fold record nested field access",
+    .{
+        .name = "focused: fold record nested field access",
         .source = "List.fold([1, 2, 3], {value: 0}, |acc, item| {value: acc.value + item})",
         .expected = .{ .inspect_str = "{ value: 6.0 }" },
     },
-    .{ .name = "focused: fold record over string list",
+    .{
+        .name = "focused: fold record over string list",
         .source = "List.fold([\"a\", \"bb\", \"ccc\"], {count: 0}, |acc, _| {count: acc.count + 1})",
         .expected = .{ .inspect_str = "{ count: 3.0 }" },
     },
-    .{ .name = "focused: fold multi-field record binding identity",
+    .{
+        .name = "focused: fold multi-field record binding identity",
         .source =
-            \\{
-            \\    rec = List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1})
-            \\    rec
-            \\}
+        \\{
+        \\    rec = List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1})
+        \\    rec
+        \\}
         ,
         .expected = .{ .inspect_str = "{ count: 3.0, sum: 6.0 }" },
     },
-    .{ .name = "focused: fold multi-field record binding survives extra alloc",
+    .{
+        .name = "focused: fold multi-field record binding survives extra alloc",
         .source =
-            \\{
-            \\    rec = List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1})
-            \\    _tmp = 999
-            \\    rec
-            \\}
+        \\{
+        \\    rec = List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1})
+        \\    _tmp = 999
+        \\    rec
+        \\}
         ,
         .expected = .{ .inspect_str = "{ count: 3.0, sum: 6.0 }" },
     },
-    .{ .name = "focused: fold partial record destructuring",
+    .{
+        .name = "focused: fold partial record destructuring",
         .source = "List.fold([{a: 1, b: 100}, {a: 2, b: 200}, {a: 3, b: 300}], {sum: 0}, |acc, {a}| {sum: acc.sum + a})",
         .expected = .{ .inspect_str = "{ sum: 6.0 }" },
     },
-    .{ .name = "focused: fold single-field record destructuring",
+    .{
+        .name = "focused: fold single-field record destructuring",
         .source = "List.fold([{val: 1}, {val: 2}, {val: 3}, {val: 4}], {total: 0}, |acc, {val}| {total: acc.total + val})",
         .expected = .{ .inspect_str = "{ total: 10.0 }" },
     },
-    .{ .name = "focused: fold exact list pattern",
+    .{
+        .name = "focused: fold exact list pattern",
         .source = "List.fold([[1, 2], [3, 4], [5, 6]], {total: 0}, |acc, [a, b]| {total: acc.total + a + b})",
         .expected = .{ .inspect_str = "{ total: 21.0 }" },
     },
-    .{ .name = "focused: list append zst",
+    .{
+        .name = "focused: list append zst",
         .source = "List.append([{}], {})",
         .expected = .{ .inspect_str = "[{}, {}]" },
     },
     // List I64 tests
-    .{ .name = "list: for loop mutable append",
+    .{
+        .name = "list: for loop mutable append",
         .source =
-            \\{
-            \\    list = [1.I64, 2.I64, 3.I64]
-            \\    var $result = List.with_capacity(List.len(list))
-            \\    for item in list {
-            \\        $result = List.append($result, item)
-            \\    }
-            \\    $result
-            \\}
+        \\{
+        \\    list = [1.I64, 2.I64, 3.I64]
+        \\    var $result = List.with_capacity(List.len(list))
+        \\    for item in list {
+        \\        $result = List.append($result, item)
+        \\    }
+        \\    $result
+        \\}
         ,
         .expected = .{ .inspect_str = "[1, 2, 3]" },
     },
-    .{ .name = "list: for loop with closure transform",
+    .{
+        .name = "list: for loop with closure transform",
         .source =
-            \\{
-            \\    list = [1.I64, 2.I64, 3.I64]
-            \\    identity = |x| x
-            \\    var $result = List.with_capacity(List.len(list))
-            \\    for item in list {
-            \\        $result = List.append($result, identity(item))
-            \\    }
-            \\    $result
-            \\}
+        \\{
+        \\    list = [1.I64, 2.I64, 3.I64]
+        \\    identity = |x| x
+        \\    var $result = List.with_capacity(List.len(list))
+        \\    for item in list {
+        \\        $result = List.append($result, identity(item))
+        \\    }
+        \\    $result
+        \\}
         ,
         .expected = .{ .inspect_str = "[1, 2, 3]" },
     },
@@ -6994,7 +7593,8 @@ pub const tests = [_]TestCase{
     .{ .name = "list: repeat empty", .source = "List.repeat(7.I64, 0)", .expected = .{ .inspect_str = "[]" } },
     .{ .name = "list: with_capacity append", .source = "List.with_capacity(5).append(10.I64)", .expected = .{ .inspect_str = "[10]" } },
     // Dec fold/sum tests
-    .{ .name = "dec: simple fold sum",
+    .{
+        .name = "dec: simple fold sum",
         .source = "List.fold([1, 2, 3], 0, |acc, item| acc + item)",
         .expected = .{ .dec_val = 6 * RocDec.one_point_zero_i128 },
     },
@@ -7019,39 +7619,91 @@ pub const tests = [_]TestCase{
     .{ .name = "str: Hello World", .source = "\"Hello, World!\"", .expected = .{ .str_val = "Hello, World!" } },
     .{ .name = "str: empty", .source = "\"\"", .expected = .{ .str_val = "" } },
     .{ .name = "str: Roc", .source = "\"Roc\"", .expected = .{ .str_val = "Roc" } },
-    .{ .name = "str: interpolation",
+    .{
+        .name = "str: interpolation",
         .source =
-            \\{
-            \\    hello = "Hello"
-            \\    world = "World"
-            \\    "${hello} ${world}"
-            \\}
+        \\{
+        \\    hello = "Hello"
+        \\    world = "World"
+        \\    "${hello} ${world}"
+        \\}
         ,
         .expected = .{ .str_val = "Hello World" },
     },
     // Issue 8667: List.with_capacity type inference
-    .{ .name = "issue 8667: with_capacity append",
+    .{
+        .name = "issue 8667: with_capacity append",
         .source = "List.append(List.with_capacity(1), 1.I64)",
         .expected = .{ .inspect_str = "[1]" },
     },
-    .{ .name = "issue 8667: fold with inline append",
+    .{
+        .name = "issue 8667: fold with inline append",
         .source = "[1.I64].fold(List.with_capacity(1), |acc, item| acc.append(item))",
         .expected = .{ .inspect_str = "[1]" },
     },
-    .{ .name = "issue 8667: fold with List.append",
+    .{
+        .name = "issue 8667: fold with List.append",
         .source = "[1.I64].fold(List.with_capacity(1), List.append)",
         .expected = .{ .inspect_str = "[1]" },
     },
     // Issue 8710: tag union with heap payload in tuple
     .{ .name = "issue 8710: list len", .source = "[1.I64, 2.I64, 3.I64].len()", .expected = .{ .i64_val = 3 } },
-    .{ .name = "issue 8710: tag union in tuple",
+    .{
+        .name = "issue 8710: tag union in tuple",
         .source =
-            \\{
-            \\    list = [1.I64, 2.I64, 3.I64]
-            \\    _tuple = (Ok(list), 42.I64)
-            \\    list
-            \\}
+        \\{
+        \\    list = [1.I64, 2.I64, 3.I64]
+        \\    _tuple = (Ok(list), 42.I64)
+        \\    list
+        \\}
         ,
         .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    // --- from eval_test.zig: tag union regression tests ---
+    // These produce tag union results. The interpreter can evaluate them but
+    // RocValue.format() can't render tag unions yet (returns TagUnionNotSupported),
+    // so inspect_str falls back to compiled-backend-only comparison.
+    .{
+        .name = "match with tag containing pattern-bound variable - regression",
+        .source =
+        \\match Some("x") {
+        \\    Some(a) => Tagged(a)
+        \\    None => Tagged("")
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Tagged(\"x\")" },
+        .skip = .{ .wasm = true, .llvm = true },
+    },
+    .{
+        .name = "nested match with Result type - regression",
+        .source =
+        \\match ["x"] {
+        \\    [a] => {
+        \\        match Ok(a) {
+        \\            Ok(val) => Ok(val),
+        \\            _ => Err(Oops)
+        \\        }
+        \\    }
+        \\    _ => Err(Oops)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Ok(\"x\")" },
+        .skip = .{ .wasm = true, .llvm = true },
+    },
+    .{
+        .name = "issue 8892: nominal type wrapping tag union with match expression",
+        .source =
+        \\{
+        \\    parse_value = || {
+        \\        combination_method = match ModuloToken {
+        \\            ModuloToken => Modulo
+        \\        }
+        \\        combination_method
+        \\    }
+        \\    parse_value()
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Modulo" },
+        .skip = .{ .wasm = true, .llvm = true },
     },
 };

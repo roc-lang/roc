@@ -1,5 +1,5 @@
 //! Tests for the expression evaluator that require custom infrastructure
-//! (serialization round-trips, tag union results, skipped crash repros).
+//! (serialization round-trips, skipped crash repros).
 //! Most eval tests live in eval_tests.zig and run via the parallel runner.
 const std = @import("std");
 const parse = @import("parse");
@@ -29,31 +29,6 @@ const test_allocator = helpers.interpreter_allocator;
 
 const runExpectI64 = helpers.runExpectI64;
 const runExpectStr = helpers.runExpectStr;
-
-fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !void {
-    var test_env_instance = TestEnv.init(helpers.interpreter_allocator);
-    defer test_env_instance.deinit();
-
-    const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, src);
-    defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
-
-    var interpreter = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
-    defer interpreter.deinit();
-
-    const enable_trace = should_trace == .trace;
-    if (enable_trace) {
-        interpreter.startTrace();
-    }
-    defer if (enable_trace) interpreter.endTrace();
-
-    const ops = test_env_instance.get_ops();
-    const result = try interpreter.eval(resources.expr_idx, ops);
-    const layout_cache = &interpreter.runtime_layout_store;
-    defer result.decref(layout_cache, ops);
-
-    // Minimal smoke check: the helper only succeeds if evaluation produced a value without crashing.
-    try std.testing.expect(test_env_instance.crashState() == .did_not_crash);
-}
 
 test "crash message storage and retrieval - host-managed context" {
     // Verify the crash callback stores the message in the host CrashContext
@@ -282,52 +257,6 @@ test "ModuleEnv serialization and interpreter evaluation" {
             try testing.expectEqual(@as(i128, 13), int_value);
         }
     }
-}
-
-test "match with tag containing pattern-bound variable - regression" {
-    // Regression test for GitHub issue: interpreter crash when creating a tag
-    // with a payload that contains a variable bound by a match pattern.
-    // Tag union result — can't use inspect_str (RocValue.format hits unreachable for tag_union).
-    try runExpectSuccess(
-        \\match Some("x") {
-        \\    Some(a) => Tagged(a)
-        \\    None => Tagged("")
-        \\}
-    , .no_trace);
-}
-
-test "nested match with Result type - regression" {
-    // Regression test for interpreter crash when using nested match expressions
-    // with Result types (Ok/Err).
-    // Tag union result — can't use inspect_str.
-    try runExpectSuccess(
-        \\match ["x"] {
-        \\    [a] => {
-        \\        match Ok(a) {
-        \\            Ok(val) => Ok(val),
-        \\            _ => Err(Oops)
-        \\        }
-        \\    }
-        \\    _ => Err(Oops)
-        \\}
-    , .no_trace);
-}
-
-test "issue 8892: nominal type wrapping tag union with match expression" {
-    // Regression test for GitHub issue #8892: tag expression inside a function
-    // where the expected type is a nominal type wrapping a tag union.
-    // Tag union result — can't use inspect_str.
-    try runExpectSuccess(
-        \\{
-        \\    parse_value = || {
-        \\        combination_method = match ModuloToken {
-        \\            ModuloToken => Modulo
-        \\        }
-        \\        combination_method
-        \\    }
-        \\    parse_value()
-        \\}
-    , .no_trace);
 }
 
 test "early return: ? in closure passed to List.fold" {

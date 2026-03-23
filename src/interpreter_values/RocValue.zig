@@ -129,7 +129,7 @@ pub const FormatContext = struct {
 };
 
 /// Errors that can occur during value formatting.
-pub const FormatError = error{OutOfMemory};
+pub const FormatError = error{ OutOfMemory, TagUnionNotSupported };
 
 /// Format this value into a newly-allocated string using canonical Roc syntax.
 pub fn format(self: RocValue, allocator: std.mem.Allocator, ctx: FormatContext) FormatError![]u8 {
@@ -336,7 +336,13 @@ pub fn format(self: RocValue, allocator: std.mem.Allocator, ctx: FormatContext) 
 
     // --- Tag union ---
     if (self.lay.tag == .tag_union) {
-        unreachable; // tag unions must be formatted via formatTagUnion with type info
+        // TODO: Implement tag union formatting in the interpreter's RocValue.format().
+        // This requires plumbing type info (types.TagUnion) into FormatContext so we
+        // can resolve tag names and payload layouts. The REPL already has this logic
+        // in src/repl/eval.zig (formatTagUnion) — it just needs to be ported here.
+        // Until then, callers that need tag union output (e.g. inspect_str tests)
+        // should fall back to compiled-backend-only comparison.
+        return error.TagUnionNotSupported;
     }
 
     // --- ZST ---

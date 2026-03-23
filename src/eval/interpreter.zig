@@ -336,6 +336,7 @@ pub const Interpreter = struct {
         StringOrderingNotSupported,
         StackOverflow,
         TupleIndexOutOfBounds,
+        TagUnionNotSupported,
         TypeMismatch,
         ZeroSizedType,
     } || std.mem.Allocator.Error;
