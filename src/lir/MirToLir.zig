@@ -5014,12 +5014,12 @@ fn lowerLowLevel(self: *Self, ll: anytype, mir_expr_id: MIR.ExprId, region: Regi
         else => LirProcSpecId.none,
     };
 
-    // str_inspekt should have been fully expanded during CIR->MIR lowering.
+    // str_inspect should have been fully expanded during CIR->MIR lowering.
     // MIR uses an explicit `str_escape_and_quote` expression for string quoting.
-    if (ll.op == .str_inspekt) {
+    if (ll.op == .str_inspect) {
         if (builtin.mode == .Debug) {
             std.debug.panic(
-                "MIR->LIR invariant violated: run_low_level(str_inspekt) should never appear after CIR->MIR lowering",
+                "MIR->LIR invariant violated: run_low_level(str_inspect) should never appear after CIR->MIR lowering",
                 .{},
             );
         }

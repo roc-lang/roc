@@ -2269,7 +2269,7 @@ test "cross-module runExpr: REPL-style List.keep_if function lookups retain lamb
     try env.module_env.store.addScratchExpr(main_def.expr);
     const inspect_args = try env.module_env.store.exprSpanFrom(scratch_top);
     const inspect_expr = try env.module_env.addExpr(.{ .e_run_low_level = .{
-        .op = .str_inspekt,
+        .op = .str_inspect,
         .args = inspect_args,
     } }, region);
 
@@ -2330,7 +2330,7 @@ test "cross-module runExpr: REPL-style List.contains lowers without unbound capt
     try env.module_env.store.addScratchExpr(main_def.expr);
     const inspect_args = try env.module_env.store.exprSpanFrom(scratch_top);
     const inspect_expr = try env.module_env.addExpr(.{ .e_run_low_level = .{
-        .op = .str_inspekt,
+        .op = .str_inspect,
         .args = inspect_args,
     } }, region);
 

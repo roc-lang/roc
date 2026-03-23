@@ -1291,11 +1291,11 @@ fn toStrLowLevelForPrim(prim: Monotype.Prim) ?CIR.Expr.LowLevel {
     };
 }
 
-fn lowerStrInspekt(self: *Self, module_env: *const ModuleEnv, run_ll: anytype, region: Region) Allocator.Error!MIR.ExprId {
+fn lowerStrInspect(self: *Self, module_env: *const ModuleEnv, run_ll: anytype, region: Region) Allocator.Error!MIR.ExprId {
     const args = module_env.store.sliceExpr(run_ll.args);
     if (args.len != 1) {
         if (builtin.mode == .Debug) {
-            std.debug.panic("str_inspekt expected 1 arg in CIR->MIR lowering, got {d}", .{args.len});
+            std.debug.panic("str_inspect expected 1 arg in CIR->MIR lowering, got {d}", .{args.len});
         }
         unreachable;
     }
@@ -1308,7 +1308,7 @@ fn lowerStrInspekt(self: *Self, module_env: *const ModuleEnv, run_ll: anytype, r
     // Evaluate the argument once, then inspect the bound lookup.
     const arg_bind = try self.makeSyntheticBind(arg_mono, false);
     const arg_lookup = try self.emitMirLookup(arg_bind.symbol, arg_mono, region);
-    const inspected = try self.lowerStrInspektExpr(module_env, arg_lookup, arg_type_var, region);
+    const inspected = try self.lowerStrInspectExpr(module_env, arg_lookup, arg_type_var, region);
     try self.registerBoundSymbolDefIfNeeded(arg_bind.pattern, lowered_arg);
 
     const stmts = try self.store.addStmts(self.allocator, &.{MIR.Stmt{
@@ -1326,7 +1326,7 @@ fn lowerStrInspekt(self: *Self, module_env: *const ModuleEnv, run_ll: anytype, r
     );
 }
 
-fn lowerStrInspektExpr(
+fn lowerStrInspectExpr(
     self: *Self,
     type_env: *const ModuleEnv,
     value_expr: MIR.ExprId,
@@ -1335,20 +1335,20 @@ fn lowerStrInspektExpr(
 ) Allocator.Error!MIR.ExprId {
     const resolved = type_env.types.resolveVar(type_var);
     return switch (resolved.desc.content) {
-        .alias => |alias| self.lowerStrInspektExpr(type_env, value_expr, type_env.types.getAliasBackingVar(alias), region),
+        .alias => |alias| self.lowerStrInspectExpr(type_env, value_expr, type_env.types.getAliasBackingVar(alias), region),
         .structure => |flat_type| switch (flat_type) {
-            .nominal_type => |nominal| self.lowerStrInspektNominal(type_env, value_expr, type_var, nominal, region),
-            .record => |record| self.lowerStrInspektRecord(type_env, value_expr, record, region),
-            .record_unbound => |fields_range| self.lowerStrInspektRecordUnbound(type_env, value_expr, fields_range, region),
-            .tuple => |tup| self.lowerStrInspektTuple(type_env, value_expr, tup, region),
-            .tag_union => |tu| self.lowerStrInspektTagUnion(type_env, value_expr, type_var, tu, region),
+            .nominal_type => |nominal| self.lowerStrInspectNominal(type_env, value_expr, type_var, nominal, region),
+            .record => |record| self.lowerStrInspectRecord(type_env, value_expr, record, region),
+            .record_unbound => |fields_range| self.lowerStrInspectRecordUnbound(type_env, value_expr, fields_range, region),
+            .tuple => |tup| self.lowerStrInspectTuple(type_env, value_expr, tup, region),
+            .tag_union => |tu| self.lowerStrInspectTagUnion(type_env, value_expr, type_var, tu, region),
             .empty_record => self.emitMirStrLiteral("{}", region),
             .empty_tag_union => self.emitMirStrLiteral("<empty_tag_union>", region),
             .fn_pure, .fn_effectful, .fn_unbound => self.emitMirStrLiteral("<function>", region),
         },
         .flex, .rigid => {
             const mono_idx = try self.monotypeFromTypeVarInEnv(type_env, type_var);
-            return self.lowerStrInspektExprByMonotype(type_env, value_expr, mono_idx, region);
+            return self.lowerStrInspectExprByMonotype(type_env, value_expr, mono_idx, region);
         },
         .err => try self.store.addExpr(
             self.allocator,
@@ -1904,7 +1904,7 @@ fn bindFlatTypeMonotypesInStore(
     }
 }
 
-fn lowerStrInspektNominal(
+fn lowerStrInspectNominal(
     self: *Self,
     type_env: *const ModuleEnv,
     value_expr: MIR.ExprId,
@@ -1917,7 +1917,7 @@ fn lowerStrInspektNominal(
 
     if (nominal.origin_module.eql(common.builtin_module)) {
         if (builtinPrimForNominal(ident, common)) |prim| {
-            return self.lowerStrInspektExprByMonotype(
+            return self.lowerStrInspectExprByMonotype(
                 type_env,
                 value_expr,
                 self.store.monotype_store.primIdx(prim),
@@ -1925,19 +1925,19 @@ fn lowerStrInspektNominal(
             );
         }
         if (ident.eql(common.bool)) {
-            return self.lowerStrInspektExpr(type_env, value_expr, type_env.types.getNominalBackingVar(nominal), region);
+            return self.lowerStrInspectExpr(type_env, value_expr, type_env.types.getNominalBackingVar(nominal), region);
         }
         if (ident.eql(common.list)) {
             const type_args = type_env.types.sliceNominalArgs(nominal);
             if (type_args.len != 1) {
-                typeBindingInvariant("lowerStrInspektNominal(List): expected 1 arg, found {d}", .{type_args.len});
+                typeBindingInvariant("lowerStrInspectNominal(List): expected 1 arg, found {d}", .{type_args.len});
             }
-            return self.lowerStrInspektList(type_env, value_expr, type_args[0], region);
+            return self.lowerStrInspectList(type_env, value_expr, type_args[0], region);
         }
         if (ident.eql(common.box)) {
             const type_args = type_env.types.sliceNominalArgs(nominal);
             if (type_args.len != 1) {
-                typeBindingInvariant("lowerStrInspektNominal(Box): expected 1 arg, found {d}", .{type_args.len});
+                typeBindingInvariant("lowerStrInspectNominal(Box): expected 1 arg, found {d}", .{type_args.len});
             }
 
             const outer_mono = try self.monotypeFromTypeVarInEnv(type_env, type_var);
@@ -1945,7 +1945,7 @@ fn lowerStrInspektNominal(
             const box_data = switch (box_mono) {
                 .box => |box| box,
                 else => typeBindingInvariant(
-                    "lowerStrInspektNominal(Box): expected box monotype, found '{s}'",
+                    "lowerStrInspectNominal(Box): expected box monotype, found '{s}'",
                     .{@tagName(box_mono)},
                 ),
             };
@@ -1958,7 +1958,7 @@ fn lowerStrInspektNominal(
                 region,
             );
 
-            const inner_str = try self.lowerStrInspektExpr(type_env, unboxed, type_args[0], region);
+            const inner_str = try self.lowerStrInspectExpr(type_env, unboxed, type_args[0], region);
             const open = try self.emitMirStrLiteral("Box(", region);
             const close = try self.emitMirStrLiteral(")", region);
             return self.foldMirStrConcat(&.{ open, inner_str, close }, region);
@@ -1967,14 +1967,14 @@ fn lowerStrInspektNominal(
 
     if (try self.lookupAssociatedMethodExternalDef(type_env, nominal, type_env.idents.to_inspect)) |method_info| {
         const resolved_func = resolveFuncTypeInStore(&method_info.target_env.types, method_info.type_var) orelse
-            return self.lowerStrInspektExpr(type_env, value_expr, type_env.types.getNominalBackingVar(nominal), region);
+            return self.lowerStrInspectExpr(type_env, value_expr, type_env.types.getNominalBackingVar(nominal), region);
         if (resolved_func.effectful) {
-            return self.lowerStrInspektExpr(type_env, value_expr, type_env.types.getNominalBackingVar(nominal), region);
+            return self.lowerStrInspectExpr(type_env, value_expr, type_env.types.getNominalBackingVar(nominal), region);
         }
 
         const param_vars = method_info.target_env.types.sliceVars(resolved_func.func.args);
         if (param_vars.len != 1) {
-            return self.lowerStrInspektExpr(type_env, value_expr, type_env.types.getNominalBackingVar(nominal), region);
+            return self.lowerStrInspectExpr(type_env, value_expr, type_env.types.getNominalBackingVar(nominal), region);
         }
 
         var type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
@@ -1996,13 +1996,13 @@ fn lowerStrInspektNominal(
             &type_var_seen,
         );
         if (method_func_mono.isNone()) {
-            return self.lowerStrInspektExpr(type_env, value_expr, type_env.types.getNominalBackingVar(nominal), region);
+            return self.lowerStrInspectExpr(type_env, value_expr, type_env.types.getNominalBackingVar(nominal), region);
         }
 
         const method_func = switch (self.store.monotype_store.getMonotype(method_func_mono)) {
             .func => |func| func,
             else => typeBindingInvariant(
-                "lowerStrInspektNominal: expected function monotype for to_inspect, found '{s}'",
+                "lowerStrInspectNominal: expected function monotype for to_inspect, found '{s}'",
                 .{@tagName(self.store.monotype_store.getMonotype(method_func_mono))},
             ),
         };
@@ -2026,13 +2026,13 @@ fn lowerStrInspektNominal(
             return call_expr;
         }
 
-        return self.lowerStrInspektExpr(method_info.target_env, call_expr, resolved_func.func.ret, region);
+        return self.lowerStrInspectExpr(method_info.target_env, call_expr, resolved_func.func.ret, region);
     }
 
-    return self.lowerStrInspektExpr(type_env, value_expr, type_env.types.getNominalBackingVar(nominal), region);
+    return self.lowerStrInspectExpr(type_env, value_expr, type_env.types.getNominalBackingVar(nominal), region);
 }
 
-fn lowerStrInspektRecord(
+fn lowerStrInspectRecord(
     self: *Self,
     type_env: *const ModuleEnv,
     value_expr: MIR.ExprId,
@@ -2094,7 +2094,7 @@ fn lowerStrInspektRecord(
                     },
                     .empty_record => break :rows,
                     else => typeBindingInvariant(
-                        "lowerStrInspektRecord: unexpected row extension '{s}'",
+                        "lowerStrInspectRecord: unexpected row extension '{s}'",
                         .{@tagName(ext_flat)},
                     ),
                 },
@@ -2123,13 +2123,13 @@ fn lowerStrInspektRecord(
 
         const field_mono = try self.monotypeFromTypeVarInEnv(type_env, field.var_);
         const field_expr = try self.emitMirStructAccess(value_expr, @intCast(i), field_mono, region);
-        try self.scratch_expr_ids.append(try self.lowerStrInspektExpr(type_env, field_expr, field.var_, region));
+        try self.scratch_expr_ids.append(try self.lowerStrInspectExpr(type_env, field_expr, field.var_, region));
     }
     try self.scratch_expr_ids.append(try self.emitMirStrLiteral(" }", region));
     return self.foldMirStrConcat(self.scratch_expr_ids.sliceFromStart(save_exprs), region);
 }
 
-fn lowerStrInspektRecordUnbound(
+fn lowerStrInspectRecordUnbound(
     self: *Self,
     type_env: *const ModuleEnv,
     value_expr: MIR.ExprId,
@@ -2166,13 +2166,13 @@ fn lowerStrInspektRecordUnbound(
 
         const field_mono = try self.monotypeFromTypeVarInEnv(type_env, field.var_);
         const field_expr = try self.emitMirStructAccess(value_expr, @intCast(i), field_mono, region);
-        try self.scratch_expr_ids.append(try self.lowerStrInspektExpr(type_env, field_expr, field.var_, region));
+        try self.scratch_expr_ids.append(try self.lowerStrInspectExpr(type_env, field_expr, field.var_, region));
     }
     try self.scratch_expr_ids.append(try self.emitMirStrLiteral(" }", region));
     return self.foldMirStrConcat(self.scratch_expr_ids.sliceFromStart(save_exprs), region);
 }
 
-fn lowerStrInspektTuple(
+fn lowerStrInspectTuple(
     self: *Self,
     type_env: *const ModuleEnv,
     value_expr: MIR.ExprId,
@@ -2192,14 +2192,14 @@ fn lowerStrInspektTuple(
         }
         const elem_mono = try self.monotypeFromTypeVarInEnv(type_env, elem_var);
         const elem_expr = try self.emitMirStructAccess(value_expr, @intCast(i), elem_mono, region);
-        try self.scratch_expr_ids.append(try self.lowerStrInspektExpr(type_env, elem_expr, elem_var, region));
+        try self.scratch_expr_ids.append(try self.lowerStrInspectExpr(type_env, elem_expr, elem_var, region));
     }
     try self.scratch_expr_ids.append(try self.emitMirStrLiteral(")", region));
 
     return self.foldMirStrConcat(self.scratch_expr_ids.sliceFromStart(save_exprs), region);
 }
 
-fn lowerStrInspektTagUnion(
+fn lowerStrInspectTagUnion(
     self: *Self,
     type_env: *const ModuleEnv,
     value_expr: MIR.ExprId,
@@ -2237,7 +2237,7 @@ fn lowerStrInspektTagUnion(
                     },
                     .empty_tag_union => break :rows,
                     else => typeBindingInvariant(
-                        "lowerStrInspektTagUnion: unexpected row extension '{s}'",
+                        "lowerStrInspectTagUnion: unexpected row extension '{s}'",
                         .{@tagName(ext_flat)},
                     ),
                 },
@@ -2251,7 +2251,7 @@ fn lowerStrInspektTagUnion(
     const mono_tags = switch (self.store.monotype_store.getMonotype(union_mono)) {
         .tag_union => |mono_union| self.store.monotype_store.getTags(mono_union.tags),
         else => typeBindingInvariant(
-            "lowerStrInspektTagUnion: expected tag_union monotype, found '{s}'",
+            "lowerStrInspectTagUnion: expected tag_union monotype, found '{s}'",
             .{@tagName(self.store.monotype_store.getMonotype(union_mono))},
         ),
     };
@@ -2315,11 +2315,11 @@ fn lowerStrInspektTagUnion(
                     try self.scratch_expr_ids.append(try self.emitMirStrLiteral(", ", region));
                 }
                 const payload_lookup = try self.emitMirLookup(payload_symbols[i].symbol, payload_mono, region);
-                const payload_inspekt = if (i < payload_vars.len)
-                    try self.lowerStrInspektExpr(type_env, payload_lookup, payload_vars[i], region)
+                const payload_inspect = if (i < payload_vars.len)
+                    try self.lowerStrInspectExpr(type_env, payload_lookup, payload_vars[i], region)
                 else
-                    try self.lowerStrInspektExprByMonotype(type_env, payload_lookup, payload_mono, region);
-                try self.scratch_expr_ids.append(payload_inspekt);
+                    try self.lowerStrInspectExprByMonotype(type_env, payload_lookup, payload_mono, region);
+                try self.scratch_expr_ids.append(payload_inspect);
             }
             try self.scratch_expr_ids.append(try self.emitMirStrLiteral(")", region));
             break :blk try self.foldMirStrConcat(self.scratch_expr_ids.sliceFromStart(save_parts), region);
@@ -2344,7 +2344,7 @@ fn lowerStrInspektTagUnion(
     );
 }
 
-fn lowerStrInspektList(
+fn lowerStrInspectList(
     self: *Self,
     type_env: *const ModuleEnv,
     value_expr: MIR.ExprId,
@@ -2375,7 +2375,7 @@ fn lowerStrInspektList(
     const first_lookup = try self.emitMirLookup(first_bind.symbol, bool_mono, region);
     const prefix = try self.createBoolMatch(current_env, first_lookup, empty, comma, str_mono, region);
     const elem_lookup = try self.emitMirLookup(elem_bind.symbol, elem_mono, region);
-    const elem_inspected = try self.lowerStrInspektExpr(type_env, elem_lookup, elem_var, region);
+    const elem_inspected = try self.lowerStrInspectExpr(type_env, elem_lookup, elem_var, region);
     const prefixed_elem = try self.emitMirStrConcat(prefix, elem_inspected, region);
     const acc_lookup = try self.emitMirLookup(acc_bind.symbol, str_mono, region);
     const new_acc = try self.emitMirStrConcat(acc_lookup, prefixed_elem, region);
@@ -2427,7 +2427,7 @@ fn lowerStrInspektList(
     );
 }
 
-fn lowerStrInspektExprByMonotype(
+fn lowerStrInspectExprByMonotype(
     self: *Self,
     module_env: *const ModuleEnv,
     value_expr: MIR.ExprId,
@@ -2456,10 +2456,10 @@ fn lowerStrInspektExprByMonotype(
                 );
             },
         },
-        .record => |record| self.lowerStrInspektRecordByMonotype(module_env, value_expr, record, region),
-        .tuple => |tup| self.lowerStrInspektTupleByMonotype(module_env, value_expr, tup, region),
-        .tag_union => |tu| self.lowerStrInspektTagUnionByMonotype(module_env, value_expr, tu, mono_idx, region),
-        .list => |list_data| self.lowerStrInspektListByMonotype(module_env, value_expr, list_data, region),
+        .record => |record| self.lowerStrInspectRecordByMonotype(module_env, value_expr, record, region),
+        .tuple => |tup| self.lowerStrInspectTupleByMonotype(module_env, value_expr, tup, region),
+        .tag_union => |tu| self.lowerStrInspectTagUnionByMonotype(module_env, value_expr, tu, mono_idx, region),
+        .list => |list_data| self.lowerStrInspectListByMonotype(module_env, value_expr, list_data, region),
         .unit => self.emitMirStrLiteral("{}", region),
         .box => |box_data| blk: {
             const unbox_args = try self.store.addExprSpan(self.allocator, &.{value_expr});
@@ -2470,7 +2470,7 @@ fn lowerStrInspektExprByMonotype(
                 region,
             );
 
-            const inner_str = try self.lowerStrInspektExprByMonotype(module_env, unboxed, box_data.inner, region);
+            const inner_str = try self.lowerStrInspectExprByMonotype(module_env, unboxed, box_data.inner, region);
             const open = try self.emitMirStrLiteral("Box(", region);
             const close = try self.emitMirStrLiteral(")", region);
             break :blk self.foldMirStrConcat(&.{ open, inner_str, close }, region);
@@ -2485,7 +2485,7 @@ fn lowerStrInspektExprByMonotype(
     };
 }
 
-fn lowerStrInspektRecordByMonotype(
+fn lowerStrInspectRecordByMonotype(
     self: *Self,
     module_env: *const ModuleEnv,
     value_expr: MIR.ExprId,
@@ -2512,13 +2512,13 @@ fn lowerStrInspektRecordByMonotype(
         try self.scratch_expr_ids.append(try self.emitMirStrLiteral(label, region));
 
         const field_expr = try self.emitMirStructAccess(value_expr, @intCast(i), field.type_idx, region);
-        try self.scratch_expr_ids.append(try self.lowerStrInspektExprByMonotype(module_env, field_expr, field.type_idx, region));
+        try self.scratch_expr_ids.append(try self.lowerStrInspectExprByMonotype(module_env, field_expr, field.type_idx, region));
     }
     try self.scratch_expr_ids.append(try self.emitMirStrLiteral(" }", region));
     return self.foldMirStrConcat(self.scratch_expr_ids.sliceFromStart(save_exprs), region);
 }
 
-fn lowerStrInspektTupleByMonotype(
+fn lowerStrInspectTupleByMonotype(
     self: *Self,
     module_env: *const ModuleEnv,
     value_expr: MIR.ExprId,
@@ -2540,14 +2540,14 @@ fn lowerStrInspektTupleByMonotype(
             try self.scratch_expr_ids.append(try self.emitMirStrLiteral(", ", region));
         }
         const elem_expr = try self.emitMirStructAccess(value_expr, @intCast(i), elem_mono, region);
-        try self.scratch_expr_ids.append(try self.lowerStrInspektExprByMonotype(module_env, elem_expr, elem_mono, region));
+        try self.scratch_expr_ids.append(try self.lowerStrInspectExprByMonotype(module_env, elem_expr, elem_mono, region));
     }
     try self.scratch_expr_ids.append(try self.emitMirStrLiteral(")", region));
 
     return self.foldMirStrConcat(self.scratch_expr_ids.sliceFromStart(save_exprs), region);
 }
 
-fn lowerStrInspektTagUnionByMonotype(
+fn lowerStrInspectTagUnionByMonotype(
     self: *Self,
     module_env: *const ModuleEnv,
     value_expr: MIR.ExprId,
@@ -2609,7 +2609,7 @@ fn lowerStrInspektTagUnionByMonotype(
                     try self.scratch_expr_ids.append(try self.emitMirStrLiteral(", ", region));
                 }
                 const payload_lookup = try self.emitMirLookup(payload_capture.symbol, payload_mono, region);
-                try self.scratch_expr_ids.append(try self.lowerStrInspektExprByMonotype(module_env, payload_lookup, payload_mono, region));
+                try self.scratch_expr_ids.append(try self.lowerStrInspectExprByMonotype(module_env, payload_lookup, payload_mono, region));
             }
             try self.scratch_expr_ids.append(try self.emitMirStrLiteral(")", region));
             break :blk try self.foldMirStrConcat(self.scratch_expr_ids.sliceFromStart(save_parts), region);
@@ -2634,7 +2634,7 @@ fn lowerStrInspektTagUnionByMonotype(
     );
 }
 
-fn lowerStrInspektListByMonotype(
+fn lowerStrInspectListByMonotype(
     self: *Self,
     module_env: *const ModuleEnv,
     value_expr: MIR.ExprId,
@@ -2667,7 +2667,7 @@ fn lowerStrInspektListByMonotype(
     const first_lookup = try self.emitMirLookup(first_bind.symbol, bool_mono, region);
     const prefix = try self.createBoolMatch(module_env, first_lookup, empty, comma, str_mono, region);
     const elem_lookup = try self.emitMirLookup(elem_bind.symbol, list_data.elem, region);
-    const elem_inspected = try self.lowerStrInspektExprByMonotype(module_env, elem_lookup, list_data.elem, region);
+    const elem_inspected = try self.lowerStrInspectExprByMonotype(module_env, elem_lookup, list_data.elem, region);
     const prefixed_elem = try self.emitMirStrConcat(prefix, elem_inspected, region);
     const acc_lookup = try self.emitMirLookup(acc_bind.symbol, str_mono, region);
     const new_acc = try self.emitMirStrConcat(acc_lookup, prefixed_elem, region);
@@ -3183,8 +3183,8 @@ fn lowerExprWithMonotypeOverride(
         // --- Special ---
         .e_hosted_lambda => try self.lowerExprProcInst(expr_idx, monotype),
         .e_run_low_level => |run_ll| {
-            if (run_ll.op == .str_inspekt) {
-                return try self.lowerStrInspekt(module_env, run_ll, region);
+            if (run_ll.op == .str_inspect) {
+                return try self.lowerStrInspect(module_env, run_ll, region);
             }
             const args = try self.lowerExprSpan(module_env, run_ll.args);
             return try self.store.addExpr(self.allocator, .{ .run_low_level = .{
@@ -5895,8 +5895,8 @@ fn lowerCall(
                 } }, call_result_monotype, region);
             }
         }
-        if (ll_op == .str_inspekt) {
-            return try self.lowerStrInspekt(module_env, .{
+        if (ll_op == .str_inspect) {
+            return try self.lowerStrInspect(module_env, .{
                 .op = ll_op,
                 .args = call.args,
             }, region);
