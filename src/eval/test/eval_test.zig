@@ -2635,20 +2635,18 @@ test "issue 9262: opaque function field returning tag union" {
     , true, .no_trace);
 }
 
-// TODO: LIR interpreter max_call_depth (512) is too low for 1000 recursive calls.
-// The old CIR interpreter had no such limit. Increase limit or add tail-call optimization.
-// test "recursive function with record - stack memory restoration (issue #8813)" {
-//     try runExpectI64(
-//         \\{
-//         \\    f = |n|
-//         \\        if n <= 0
-//         \\            0
-//         \\        else
-//         \\            { a: n, b: n * 2, c: n * 3, d: n * 4 }.a + f(n - 1)
-//         \\    f(1000)
-//         \\}
-//     , 500500, .no_trace);
-// }
+test "recursive function with record - stack memory restoration (issue #8813)" {
+    try runExpectI64(
+        \\{
+        \\    f = |n|
+        \\        if n <= 0
+        \\            0
+        \\        else
+        \\            { a: n, b: n * 2, c: n * 3, d: n * 4 }.a + f(n - 1)
+        \\    f(1000)
+        \\}
+    , 500500, .no_trace);
+}
 
 test "issue 8872: polymorphic tag union payload layout in match expressions" {
     // Regression test for GitHub issue #8872: when using a polymorphic function

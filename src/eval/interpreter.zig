@@ -222,7 +222,7 @@ const InterpreterRocEnv = struct {
 
 /// Interprets LIR expressions by walking the expression tree and evaluating directly.
 pub const LirInterpreter = struct {
-    const max_call_depth: usize = 512;
+    const max_call_depth: usize = 1024;
     const stack_overflow_message =
         "This Roc program overflowed its stack memory. This usually means there is very deep or infinite recursion somewhere in the code.";
     const infinite_while_loop_message =
