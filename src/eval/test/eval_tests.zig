@@ -1,6 +1,6 @@
 //! Data-driven eval test definitions for the parallel test runner.
 //! Each entry corresponds to one `runExpect*` call from the original test files.
-//! The parallel runner exercises every backend (interpreter, dev, wasm, llvm)
+//! The parallel runner exercises every backend (interpreter, dev, wasm)
 //! on each test and compares results.
 
 const TestCase = @import("parallel_runner.zig").TestCase;
@@ -6827,5 +6827,231 @@ pub const tests = [_]TestCase{
         .source = \\match Ok([1, 2]) { Ok(lst) => match lst { [x, ..] => x, _ => 0 }, Err(_) => 0 }
         ,
         .expected = .{ .dec_val = 1 * RocDec.one_point_zero_i128 },
+    },
+    // --- inspect_str tests: records, tuples, lists ---
+    // Tuples
+    .{ .name = "tuple: (10, 20)", .source = "(10, 20)", .expected = .{ .inspect_str = "(10.0, 20.0)" } },
+    .{ .name = "tuple: (5 + 1, 5 * 3)", .source = "(5 + 1, 5 * 3)", .expected = .{ .inspect_str = "(6.0, 15.0)" } },
+    // Records - fold with record accumulator
+    .{ .name = "record: fold sum and count",
+        .source = "List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1})",
+        .expected = .{ .inspect_str = "{ count: 3.0, sum: 6.0 }" },
+    },
+    .{ .name = "record: fold empty list",
+        .source = "List.fold([], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1})",
+        .expected = .{ .inspect_str = "{ count: 0.0, sum: 0.0 }" },
+    },
+    .{ .name = "record: fold single field",
+        .source = "List.fold([1, 2, 3, 4], {total: 0}, |acc, item| {total: acc.total + item})",
+        .expected = .{ .inspect_str = "{ total: 10.0 }" },
+    },
+    .{ .name = "record: fold record update syntax",
+        .source = "List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {..acc, sum: acc.sum + item, count: acc.count + 1})",
+        .expected = .{ .inspect_str = "{ count: 3.0, sum: 6.0 }" },
+    },
+    .{ .name = "record: fold partial update",
+        .source = "List.fold([1, 2, 3, 4], {sum: 0, multiplier: 2}, |acc, item| {..acc, sum: acc.sum + item})",
+        .expected = .{ .inspect_str = "{ multiplier: 2.0, sum: 10.0 }" },
+    },
+    .{ .name = "record: fold nested field access",
+        .source = "List.fold([1, 2, 3], {value: 0}, |acc, item| {value: acc.value + item})",
+        .expected = .{ .inspect_str = "{ value: 6.0 }" },
+    },
+    .{ .name = "record: fold three fields",
+        .source = "List.fold([1, 2, 3, 4], {sum: 0, count: 0, product: 1}, |acc, item| {sum: acc.sum + item, count: acc.count + 1, product: acc.product * item})",
+        .expected = .{ .inspect_str = "{ count: 4.0, product: 24.0, sum: 10.0 }" },
+    },
+    .{ .name = "record: fold conditional update",
+        .source = "List.fold([1, 2, 3, 4], {evens: 0, odds: 0}, |acc, item| if item % 2 == 0 {evens: acc.evens + item, odds: acc.odds} else {evens: acc.evens, odds: acc.odds + item})",
+        .expected = .{ .inspect_str = "{ evens: 6.0, odds: 4.0 }" },
+    },
+    .{ .name = "record: fold string list count",
+        .source = "List.fold([\"a\", \"bb\", \"ccc\"], {count: 0}, |acc, _| {count: acc.count + 1})",
+        .expected = .{ .inspect_str = "{ count: 3.0 }" },
+    },
+    .{ .name = "record: fold record destructuring",
+        .source = "List.fold([{x: 1, y: 2}, {x: 2, y: 5}, {x: 3, y: 8}], {total_x: 0, total_y: 0}, |acc, {x, y}| {total_x: acc.total_x + x, total_y: acc.total_y + y})",
+        .expected = .{ .inspect_str = "{ total_x: 6.0, total_y: 15.0 }" },
+    },
+    .{ .name = "record: fold partial record destructuring",
+        .source = "List.fold([{a: 1, b: 100}, {a: 2, b: 200}, {a: 3, b: 300}], {sum: 0}, |acc, {a}| {sum: acc.sum + a})",
+        .expected = .{ .inspect_str = "{ sum: 6.0 }" },
+    },
+    .{ .name = "record: fold single-field record destructuring",
+        .source = "List.fold([{val: 1}, {val: 2}, {val: 3}, {val: 4}], {total: 0}, |acc, {val}| {total: acc.total + val})",
+        .expected = .{ .inspect_str = "{ total: 10.0 }" },
+    },
+    .{ .name = "record: fold list destructuring",
+        .source = "List.fold([[1, 2], [3, 4], [5, 6]], {first_sum: 0, count: 0}, |acc, [first, ..]| {first_sum: acc.first_sum + first, count: acc.count + 1})",
+        .expected = .{ .inspect_str = "{ count: 3.0, first_sum: 9.0 }" },
+    },
+    .{ .name = "record: fold destructure two elements",
+        .source = "List.fold([[1, 2, 100], [3, 4, 200], [5, 6, 300]], {sum_firsts: 0, sum_seconds: 0}, |acc, [a, b, ..]| {sum_firsts: acc.sum_firsts + a, sum_seconds: acc.sum_seconds + b})",
+        .expected = .{ .inspect_str = "{ sum_firsts: 9.0, sum_seconds: 12.0 }" },
+    },
+    .{ .name = "record: fold exact list pattern",
+        .source = "List.fold([[1, 2], [3, 4], [5, 6]], {total: 0}, |acc, [a, b]| {total: acc.total + a + b})",
+        .expected = .{ .inspect_str = "{ total: 21.0 }" },
+    },
+    .{ .name = "record: fold nested list and record",
+        .source = "List.fold([[1, 10, 20], [2, 30, 40], [3, 50, 60]], {head_sum: 0, tail_count: 0}, |acc, [head, .. as tail]| {head_sum: acc.head_sum + head, tail_count: acc.tail_count + List.len(tail)})",
+        .expected = .{ .inspect_str = "{ head_sum: 6.0, tail_count: 6 }" },
+    },
+    // Focused record fold tests
+    .{ .name = "focused: fold single-field record",
+        .source = "List.fold([1, 2, 3, 4], {total: 0}, |acc, item| {total: acc.total + item})",
+        .expected = .{ .inspect_str = "{ total: 10.0 }" },
+    },
+    .{ .name = "focused: fold record partial update",
+        .source = "List.fold([1, 2, 3, 4], {sum: 0, multiplier: 2}, |acc, item| {..acc, sum: acc.sum + item})",
+        .expected = .{ .inspect_str = "{ multiplier: 2.0, sum: 10.0 }" },
+    },
+    .{ .name = "focused: fold record nested field access",
+        .source = "List.fold([1, 2, 3], {value: 0}, |acc, item| {value: acc.value + item})",
+        .expected = .{ .inspect_str = "{ value: 6.0 }" },
+    },
+    .{ .name = "focused: fold record over string list",
+        .source = "List.fold([\"a\", \"bb\", \"ccc\"], {count: 0}, |acc, _| {count: acc.count + 1})",
+        .expected = .{ .inspect_str = "{ count: 3.0 }" },
+    },
+    .{ .name = "focused: fold multi-field record binding identity",
+        .source =
+            \\{
+            \\    rec = List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1})
+            \\    rec
+            \\}
+        ,
+        .expected = .{ .inspect_str = "{ count: 3.0, sum: 6.0 }" },
+    },
+    .{ .name = "focused: fold multi-field record binding survives extra alloc",
+        .source =
+            \\{
+            \\    rec = List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1})
+            \\    _tmp = 999
+            \\    rec
+            \\}
+        ,
+        .expected = .{ .inspect_str = "{ count: 3.0, sum: 6.0 }" },
+    },
+    .{ .name = "focused: fold partial record destructuring",
+        .source = "List.fold([{a: 1, b: 100}, {a: 2, b: 200}, {a: 3, b: 300}], {sum: 0}, |acc, {a}| {sum: acc.sum + a})",
+        .expected = .{ .inspect_str = "{ sum: 6.0 }" },
+    },
+    .{ .name = "focused: fold single-field record destructuring",
+        .source = "List.fold([{val: 1}, {val: 2}, {val: 3}, {val: 4}], {total: 0}, |acc, {val}| {total: acc.total + val})",
+        .expected = .{ .inspect_str = "{ total: 10.0 }" },
+    },
+    .{ .name = "focused: fold exact list pattern",
+        .source = "List.fold([[1, 2], [3, 4], [5, 6]], {total: 0}, |acc, [a, b]| {total: acc.total + a + b})",
+        .expected = .{ .inspect_str = "{ total: 21.0 }" },
+    },
+    .{ .name = "focused: list append zst",
+        .source = "List.append([{}], {})",
+        .expected = .{ .inspect_str = "[{}, {}]" },
+    },
+    // List I64 tests
+    .{ .name = "list: for loop mutable append",
+        .source =
+            \\{
+            \\    list = [1.I64, 2.I64, 3.I64]
+            \\    var $result = List.with_capacity(List.len(list))
+            \\    for item in list {
+            \\        $result = List.append($result, item)
+            \\    }
+            \\    $result
+            \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{ .name = "list: for loop with closure transform",
+        .source =
+            \\{
+            \\    list = [1.I64, 2.I64, 3.I64]
+            \\    identity = |x| x
+            \\    var $result = List.with_capacity(List.len(list))
+            \\    for item in list {
+            \\        $result = List.append($result, identity(item))
+            \\    }
+            \\    $result
+            \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{ .name = "list: map identity", .source = "List.map([1.I64, 2.I64, 3.I64], |x| x)", .expected = .{ .inspect_str = "[1, 2, 3]" } },
+    .{ .name = "list: map single element", .source = "List.map([42.I64], |x| x)", .expected = .{ .inspect_str = "[42]" } },
+    .{ .name = "list: map squaring", .source = "List.map([1.I64, 2.I64, 3.I64, 4.I64, 5.I64], |x| x * x)", .expected = .{ .inspect_str = "[1, 4, 9, 16, 25]" } },
+    .{ .name = "list: map doubling", .source = "List.map([1.I64, 2.I64, 3.I64], |x| x * 2.I64)", .expected = .{ .inspect_str = "[2, 4, 6]" } },
+    .{ .name = "list: map adding", .source = "List.map([10.I64, 20.I64], |x| x + 5.I64)", .expected = .{ .inspect_str = "[15, 25]" } },
+    // List ZST / empty list tests
+    .{ .name = "list: map empty", .source = "List.map([], |x| x)", .expected = .{ .inspect_str = "[]" } },
+    .{ .name = "list: empty non-numeric constraint", .source = "[]", .expected = .{ .inspect_str = "[]" } },
+    .{ .name = "list: append zst", .source = "List.append([{}], {})", .expected = .{ .inspect_str = "[{}, {}]" } },
+    .{ .name = "list: with_capacity unknown", .source = "List.with_capacity(5)", .expected = .{ .inspect_str = "[]" } },
+    // List append / repeat
+    .{ .name = "list: append basic", .source = "List.append([1.I64, 2.I64], 3.I64)", .expected = .{ .inspect_str = "[1, 2, 3]" } },
+    .{ .name = "list: append empty", .source = "List.append([], 42.I64)", .expected = .{ .inspect_str = "[42]" } },
+    .{ .name = "list: repeat basic", .source = "List.repeat(7.I64, 4)", .expected = .{ .inspect_str = "[7, 7, 7, 7]" } },
+    .{ .name = "list: repeat empty", .source = "List.repeat(7.I64, 0)", .expected = .{ .inspect_str = "[]" } },
+    .{ .name = "list: with_capacity append", .source = "List.with_capacity(5).append(10.I64)", .expected = .{ .inspect_str = "[10]" } },
+    // Dec fold/sum tests
+    .{ .name = "dec: simple fold sum",
+        .source = "List.fold([1, 2, 3], 0, |acc, item| acc + item)",
+        .expected = .{ .dec_val = 6 * RocDec.one_point_zero_i128 },
+    },
+    .{ .name = "dec: List.sum basic", .source = "List.sum([1, 2, 3, 4])", .expected = .{ .dec_val = 10 * RocDec.one_point_zero_i128 } },
+    .{ .name = "dec: List.sum single", .source = "List.sum([42])", .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 } },
+    .{ .name = "dec: List.sum negative", .source = "List.sum([-1, -2, 3, 4])", .expected = .{ .dec_val = 4 * RocDec.one_point_zero_i128 } },
+    .{ .name = "dec: List.sum larger", .source = "List.sum([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])", .expected = .{ .dec_val = 55 * RocDec.one_point_zero_i128 } },
+    // Decimal literal evaluation (upgrade from runExpectSuccess)
+    .{ .name = "dec: literal 0.0", .source = "0.0.Dec", .expected = .{ .dec_val = 0 } },
+    .{ .name = "dec: literal 123.456", .source = "123.456.Dec", .expected = .{ .dec_val = 123_456_000_000_000_000_000 } },
+    // Float literal evaluation (upgrade from runExpectSuccess)
+    .{ .name = "f64: literal 3.14", .source = "3.14.F64", .expected = .{ .f64_val = 3.14 } },
+    .{ .name = "f32: literal 2.5", .source = "2.5.F32", .expected = .{ .f32_val = 2.5 } },
+    .{ .name = "f64: literal -3.14", .source = "-3.14.F64", .expected = .{ .f64_val = -3.14 } },
+    .{ .name = "f32: literal 0.0", .source = "0.0.F32", .expected = .{ .f32_val = 0.0 } },
+    // Scientific notation (upgrade from runExpectSuccess — use inspect_str since the i128 values are hard to compute)
+    .{ .name = "dec: scientific 1e5", .source = "1e5", .expected = .{ .inspect_str = "99999.999999999991611392" } },
+    .{ .name = "dec: scientific 2.5e10", .source = "2.5e10", .expected = .{ .inspect_str = "24999999999.999997858287714304" } },
+    .{ .name = "dec: scientific 1.5e-5", .source = "1.5e-5", .expected = .{ .inspect_str = "0.000015" } },
+    .{ .name = "dec: scientific -1.5e-5", .source = "-1.5e-5", .expected = .{ .inspect_str = "-0.000015" } },
+    // String literal evaluation (upgrade from runExpectSuccess)
+    .{ .name = "str: Hello World", .source = "\"Hello, World!\"", .expected = .{ .str_val = "Hello, World!" } },
+    .{ .name = "str: empty", .source = "\"\"", .expected = .{ .str_val = "" } },
+    .{ .name = "str: Roc", .source = "\"Roc\"", .expected = .{ .str_val = "Roc" } },
+    .{ .name = "str: interpolation",
+        .source =
+            \\{
+            \\    hello = "Hello"
+            \\    world = "World"
+            \\    "${hello} ${world}"
+            \\}
+        ,
+        .expected = .{ .str_val = "Hello World" },
+    },
+    // Issue 8667: List.with_capacity type inference
+    .{ .name = "issue 8667: with_capacity append",
+        .source = "List.append(List.with_capacity(1), 1.I64)",
+        .expected = .{ .inspect_str = "[1]" },
+    },
+    .{ .name = "issue 8667: fold with inline append",
+        .source = "[1.I64].fold(List.with_capacity(1), |acc, item| acc.append(item))",
+        .expected = .{ .inspect_str = "[1]" },
+    },
+    .{ .name = "issue 8667: fold with List.append",
+        .source = "[1.I64].fold(List.with_capacity(1), List.append)",
+        .expected = .{ .inspect_str = "[1]" },
+    },
+    // Issue 8710: tag union with heap payload in tuple
+    .{ .name = "issue 8710: list len", .source = "[1.I64, 2.I64, 3.I64].len()", .expected = .{ .i64_val = 3 } },
+    .{ .name = "issue 8710: tag union in tuple",
+        .source =
+            \\{
+            \\    list = [1.I64, 2.I64, 3.I64]
+            \\    _tuple = (Ok(list), 42.I64)
+            \\    list
+            \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
     },
 };

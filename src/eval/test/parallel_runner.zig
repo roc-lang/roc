@@ -2,8 +2,9 @@
 //!
 //! A standalone binary that runs eval tests across multiple threads using a
 //! work-stealing job queue. Each test runs the interpreter, dev backend,
-//! wasm backend, and llvm backend, then compares all results via Str.inspect
-//! string comparison.
+//! and wasm backend, then compares all results via Str.inspect string
+//! comparison. (LLVM backend is temporarily disabled — it currently aliases
+//! the dev backend. Infrastructure is kept so it can be re-enabled easily.)
 //!
 //! Crash protection (setjmp/longjmp + signal handlers) allows the runner to
 //! recover from segfaults and continue.
@@ -79,6 +80,7 @@ pub const TestCase = struct {
         problem: void,
         type_mismatch_crash: void,
         dev_only_str: []const u8,
+        inspect_str: []const u8,
 
         /// Returns the expected value as i128 for integer variant comparison.
         pub fn intExpected(self: Expected) i128 {
@@ -450,7 +452,8 @@ fn runSingleTest(allocator: std.mem.Allocator, tc: TestCase) TestOutcome {
 }
 
 fn hasAnySkip(skip: TestCase.Skip) bool {
-    return skip.interpreter or skip.dev or skip.wasm or skip.llvm;
+    // NOTE: llvm is excluded — it currently aliases dev, so skip.llvm is ignored.
+    return skip.interpreter or skip.dev or skip.wasm;
 }
 
 fn runSingleTestInner(allocator: std.mem.Allocator, tc: TestCase) !TestOutcome {
@@ -462,6 +465,7 @@ fn runSingleTestInner(allocator: std.mem.Allocator, tc: TestCase) !TestOutcome {
         .problem => runTestProblem(allocator, tc.source),
         .type_mismatch_crash => runTestTypeMismatchCrash(allocator, tc.source),
         .dev_only_str => |expected_str| runTestDevOnlyStr(allocator, tc.source, expected_str, tc.skip),
+        .inspect_str => |expected_str| runTestInspectStr(allocator, tc.source, expected_str, tc.skip),
     };
 }
 
@@ -702,6 +706,58 @@ fn runTestDevOnlyStr(allocator: std.mem.Allocator, src: []const u8, expected_str
     return .{ .status = .pass, .timings = timings };
 }
 
+/// Run a test that compares the interpreter's RocValue.format() output and all
+/// compiled backends' Str.inspect output against an expected string.
+/// Used for records, tuples, lists, and other composite types.
+fn runTestInspectStr(allocator: std.mem.Allocator, src: []const u8, expected_str: []const u8, skip: TestCase.Skip) !TestOutcome {
+    const resources = try parseAndCanonicalizeExpr(allocator, src);
+    defer cleanupResources(allocator, resources);
+
+    var test_env_instance = TestEnv.init(allocator);
+    defer test_env_instance.deinit();
+
+    const imported_envs = [_]*const ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
+    defer interpreter.deinit();
+
+    var interp_timer = Timer.start() catch unreachable;
+    const ops = test_env_instance.get_ops();
+    const result = try interpreter.eval(resources.expr_idx, ops);
+    const interp_ns = interp_timer.read();
+    const layout_cache = &interpreter.runtime_layout_store;
+    defer result.decref(layout_cache, ops);
+    defer interpreter.bindings.items.len = 0;
+
+    const fe_timings = EvalTimings{
+        .parse_ns = resources.parse_ns,
+        .canonicalize_ns = resources.canonicalize_ns,
+        .typecheck_ns = resources.typecheck_ns,
+        .interpreter_ns = interp_ns,
+    };
+
+    // Format interpreter result via RocValue.format()
+    const roc_val = stackValueToRocValue(result, null);
+    const fmt_ctx = interpreterFormatCtx(layout_cache);
+    const interp_str = roc_val.format(allocator, fmt_ctx) catch {
+        return .{ .status = .fail, .message = "failed to format interpreter result", .timings = fe_timings };
+    };
+    defer allocator.free(interp_str);
+
+    // Check interpreter output matches expected
+    if (!std.mem.eql(u8, expected_str, interp_str)) {
+        const msg = std.fmt.allocPrint(allocator, "inspect_str mismatch: expected '{s}', got '{s}'", .{ expected_str, interp_str }) catch "inspect_str mismatch";
+        return .{ .status = .fail, .message = msg, .timings = fe_timings };
+    }
+
+    // Compare all compiled backends via Str.inspect
+    var outcome = compareAllBackends(allocator, interp_str, resources, skip);
+    outcome.timings.parse_ns = resources.parse_ns;
+    outcome.timings.canonicalize_ns = resources.canonicalize_ns;
+    outcome.timings.typecheck_ns = resources.typecheck_ns;
+    outcome.timings.interpreter_ns = interp_ns;
+    return outcome;
+}
+
 // ---------------------------------------------------------------------------
 // Cross-backend comparison — the core of this runner
 // ---------------------------------------------------------------------------
@@ -728,9 +784,11 @@ fn runBackend(
     return result;
 }
 
-/// Run dev, wasm, and llvm backends on the same expression, compare Str.inspect
+/// Run dev and wasm backends on the same expression, compare Str.inspect
 /// output with the interpreter's formatted result.
 /// Returns .pass if all backends agree, .fail with mismatch details otherwise.
+/// NOTE: LLVM backend is temporarily disabled — it currently aliases the dev
+/// backend (see helpers.llvmEvaluatorStr). Re-enable here when LLVM is fixed.
 fn compareAllBackends(allocator: std.mem.Allocator, interp_str: []const u8, resources: ParsedResources, skip: TestCase.Skip) TestOutcome {
     var timings = EvalTimings{};
 
@@ -756,18 +814,19 @@ fn compareAllBackends(allocator: std.mem.Allocator, interp_str: []const u8, reso
         runBackend(allocator, "wasm", helpers.wasmEvaluatorStr, resources.module_env, inspect_expr, resources.builtin_module.env, &timings, .wasm_ns);
     defer if (wasm_result.value == .ok) allocator.free(wasm_result.value.ok);
 
-    const llvm_result: BackendResult = if (skip.llvm)
-        BackendResult{ .name = "llvm", .value = .{ .err = "skipped" } }
-    else
-        runBackend(allocator, "llvm", helpers.llvmEvaluatorStr, resources.module_env, inspect_expr, resources.builtin_module.env, &timings, .llvm_ns);
-    defer if (llvm_result.value == .ok) allocator.free(llvm_result.value.ok);
+    // LLVM backend disabled — currently just aliases dev. See helpers.llvmEvaluatorStr.
+    // When re-enabling, uncomment this and add llvm_result to all_backends below.
+    // const llvm_result: BackendResult = if (skip.llvm)
+    //     BackendResult{ .name = "llvm", .value = .{ .err = "skipped" } }
+    // else
+    //     runBackend(allocator, "llvm", helpers.llvmEvaluatorStr, resources.module_env, inspect_expr, resources.builtin_module.env, &timings, .llvm_ns);
+    // defer if (llvm_result.value == .ok) allocator.free(llvm_result.value.ok);
 
     // Compare all backends including interpreter
     const all_backends = [_]BackendResult{
         .{ .name = "interpreter", .value = .{ .ok = interp_str } },
         dev_result,
         wasm_result,
-        llvm_result,
     };
 
     if (compareBackendResults(allocator, &all_backends)) |msg| {
@@ -881,9 +940,10 @@ fn printHelp() void {
     const help =
         \\Roc Eval Test Runner
         \\
-        \\Runs eval tests across all backends (interpreter, dev, wasm, llvm) in
-        \\parallel and compares results via Str.inspect. Crash protection via
-        \\setjmp/longjmp allows the runner to recover from segfaults and continue.
+        \\Runs eval tests across backends (interpreter, dev, wasm) in parallel
+        \\and compares results via Str.inspect. Crash protection via setjmp/longjmp
+        \\allows the runner to recover from segfaults and continue.
+        \\(LLVM backend temporarily disabled — currently aliases dev backend.)
         \\
         \\USAGE:
         \\  zig build test-eval               Run with defaults.
@@ -907,7 +967,6 @@ fn printHelp() void {
         \\    interp   - interpreter evaluation
         \\    dev      - dev backend codegen + native execution
         \\    wasm     - wasm backend codegen + bytebox execution
-        \\    llvm     - llvm backend codegen + execution
         \\
         \\  A performance summary table is printed after all tests with min, max,
         \\  mean, median, standard deviation, P95, and total for each phase, plus
@@ -944,7 +1003,6 @@ fn writeTimingBreakdown(t: EvalTimings) void {
         .{ .name = "interp", .ns = t.interpreter_ns },
         .{ .name = "dev", .ns = t.dev_ns },
         .{ .name = "wasm", .ns = t.wasm_ns },
-        .{ .name = "llvm", .ns = t.llvm_ns },
     };
     var has_any = false;
     for (fields) |f| {
@@ -1057,8 +1115,6 @@ fn printPerformanceSummary(gpa: std.mem.Allocator, tests: []const TestCase, resu
     defer dev_times.deinit(gpa);
     var wasm_times: std.ArrayListUnmanaged(u64) = .empty;
     defer wasm_times.deinit(gpa);
-    var llvm_times: std.ArrayListUnmanaged(u64) = .empty;
-    defer llvm_times.deinit(gpa);
 
     for (results) |r| {
         const t = r.timings;
@@ -1068,7 +1124,6 @@ fn printPerformanceSummary(gpa: std.mem.Allocator, tests: []const TestCase, resu
         if (t.interpreter_ns > 0) try interp_times.append(gpa, t.interpreter_ns);
         if (t.dev_ns > 0) try dev_times.append(gpa, t.dev_ns);
         if (t.wasm_ns > 0) try wasm_times.append(gpa, t.wasm_ns);
-        if (t.llvm_ns > 0) try llvm_times.append(gpa, t.llvm_ns);
     }
 
     std.debug.print("\n=== Performance Summary (ms) ===\n", .{});
@@ -1084,7 +1139,6 @@ fn printPerformanceSummary(gpa: std.mem.Allocator, tests: []const TestCase, resu
     printStatsRow("interp", computeTimingStats(interp_times.items));
     printStatsRow("dev", computeTimingStats(dev_times.items));
     printStatsRow("wasm", computeTimingStats(wasm_times.items));
-    printStatsRow("llvm", computeTimingStats(llvm_times.items));
 
     // Slowest 5 tests by total duration
     const TopEntry = struct {

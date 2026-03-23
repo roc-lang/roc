@@ -1,4 +1,6 @@
-//! Tests for the expression evaluator
+//! Tests for the expression evaluator that require custom infrastructure
+//! (serialization round-trips, tag union results, skipped crash repros).
+//! Most eval tests live in eval_tests.zig and run via the parallel runner.
 const std = @import("std");
 const parse = @import("parse");
 const types = @import("types");
@@ -26,68 +28,7 @@ const testing = std.testing;
 const test_allocator = helpers.interpreter_allocator;
 
 const runExpectI64 = helpers.runExpectI64;
-const runExpectIntDec = helpers.runExpectIntDec;
-const runExpectBool = helpers.runExpectBool;
-const runExpectError = helpers.runExpectError;
 const runExpectStr = helpers.runExpectStr;
-const runExpectRecord = helpers.runExpectRecord;
-const runExpectListI64 = helpers.runExpectListI64;
-const runExpectListZst = helpers.runExpectListZst;
-const runExpectDec = helpers.runExpectDec;
-const runExpectTypeMismatchAndCrash = helpers.runExpectTypeMismatchAndCrash;
-const runExpectProblem = helpers.runExpectProblem;
-const ExpectedField = helpers.ExpectedField;
-const runDevOnlyExpectStr = helpers.runDevOnlyExpectStr;
-
-const TraceWriterState = struct {
-    buffer: [256]u8 = undefined,
-    writer: std.fs.File.Writer = undefined,
-
-    fn init() TraceWriterState {
-        var state = TraceWriterState{};
-        state.writer = std.fs.File.stderr().writer(&state.buffer);
-        return state;
-    }
-};
-
-test "crash message storage and retrieval - host-managed context" {
-    // Verify the crash callback stores the message in the host CrashContext
-    const test_message = "Direct API test message";
-
-    var test_env_instance = TestEnv.init(helpers.interpreter_allocator);
-    defer test_env_instance.deinit();
-
-    try testing.expect(test_env_instance.crashState() == .did_not_crash);
-
-    const crash_args = builtins.host_abi.RocCrashed{
-        .utf8_bytes = @constCast(test_message.ptr),
-        .len = test_message.len,
-    };
-
-    const ops = test_env_instance.get_ops();
-    ops.roc_crashed(&crash_args, ops.env);
-
-    switch (test_env_instance.crashState()) {
-        .did_not_crash => return error.TestUnexpectedResult,
-        .crashed => |msg| try testing.expectEqualStrings(test_message, msg),
-    }
-}
-
-test "tuples" {
-    // 2-tuple
-    const expected_elements1 = &[_]helpers.ExpectedElement{
-        .{ .index = 0, .value = 10 },
-        .{ .index = 1, .value = 20 },
-    };
-    try helpers.runExpectTuple("(10, 20)", expected_elements1, .no_trace);
-
-    // Tuple with elements from arithmetic expressions
-    const expected_elements3 = &[_]helpers.ExpectedElement{
-        .{ .index = 0, .value = 6 },
-        .{ .index = 1, .value = 15 },
-    };
-    try helpers.runExpectTuple("(5 + 1, 5 * 3)", expected_elements3, .no_trace);
-}
 
 fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !void {
     var test_env_instance = TestEnv.init(helpers.interpreter_allocator);
@@ -114,44 +55,27 @@ fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !vo
     try std.testing.expect(test_env_instance.crashState() == .did_not_crash);
 }
 
-test "decimal literal evaluation" {
-    // Test basic decimal literals - these should be parsed and evaluated correctly
-    try runExpectSuccess("1.5.Dec", .no_trace);
-    try runExpectSuccess("0.0.Dec", .no_trace);
-    try runExpectSuccess("123.456.Dec", .no_trace);
-    try runExpectSuccess("-1.5.Dec", .no_trace);
-}
+test "crash message storage and retrieval - host-managed context" {
+    // Verify the crash callback stores the message in the host CrashContext
+    const test_message = "Direct API test message";
 
-test "float literal evaluation" {
-    // Test float literals - these should work correctly
-    try runExpectSuccess("3.14.F64", .no_trace);
-    try runExpectSuccess("2.5.F32", .no_trace);
-    try runExpectSuccess("-3.14.F64", .no_trace);
-    try runExpectSuccess("0.0.F32", .no_trace);
-}
+    var test_env_instance = TestEnv.init(helpers.interpreter_allocator);
+    defer test_env_instance.deinit();
 
-test "scientific notation literals" {
-    // Test scientific notation - these get parsed as decimals or floats
-    try runExpectSuccess("1e5", .no_trace);
-    try runExpectSuccess("2.5e10", .no_trace);
-    try runExpectSuccess("1.5e-5", .no_trace);
-    try runExpectSuccess("-1.5e-5", .no_trace);
-}
+    try testing.expect(test_env_instance.crashState() == .did_not_crash);
 
-test "string literals and interpolation" {
-    // Test basic string literals
-    try runExpectSuccess("\"Hello, World!\"", .no_trace);
-    try runExpectSuccess("\"\"", .no_trace);
-    try runExpectSuccess("\"Roc\"", .no_trace);
+    const crash_args = builtins.host_abi.RocCrashed{
+        .utf8_bytes = @constCast(test_message.ptr),
+        .len = test_message.len,
+    };
 
-    // Test string interpolation
-    try runExpectSuccess(
-        \\{
-        \\    hello = "Hello"
-        \\    world = "World"
-        \\    "${hello} ${world}"
-        \\}
-    , .no_trace);
+    const ops = test_env_instance.get_ops();
+    ops.roc_crashed(&crash_args, ops.env);
+
+    switch (test_env_instance.crashState()) {
+        .did_not_crash => return error.TestUnexpectedResult,
+        .crashed => |msg| try testing.expectEqualStrings(test_message, msg),
+    }
 }
 
 test "ModuleEnv serialization and interpreter evaluation" {
@@ -360,405 +284,10 @@ test "ModuleEnv serialization and interpreter evaluation" {
     }
 }
 
-test "List.fold with record accumulator - sum and count" {
-    // Test folding a list while accumulating sum and count in a record
-    const expected_fields = [_]ExpectedField{
-        .{ .name = "sum", .value = 6 },
-        .{ .name = "count", .value = 3 },
-    };
-    try runExpectRecord(
-        "List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1})",
-        &expected_fields,
-        .no_trace,
-    );
-}
-
-test "List.fold with record accumulator - empty list" {
-    // Folding an empty list should return the initial record unchanged
-    const expected_fields = [_]ExpectedField{
-        .{ .name = "sum", .value = 0 },
-        .{ .name = "count", .value = 0 },
-    };
-    try runExpectRecord(
-        "List.fold([], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1})",
-        &expected_fields,
-        .no_trace,
-    );
-}
-
-test "List.fold with record accumulator - single field" {
-    // Test with a single-field record accumulator
-    const expected_fields = [_]ExpectedField{
-        .{ .name = "total", .value = 10 },
-    };
-    try runExpectRecord(
-        "List.fold([1, 2, 3, 4], {total: 0}, |acc, item| {total: acc.total + item})",
-        &expected_fields,
-        .no_trace,
-    );
-}
-
-test "List.fold with record accumulator - record update syntax" {
-    // Test using record update syntax { ..acc, field: newValue }
-    const expected_fields = [_]ExpectedField{
-        .{ .name = "sum", .value = 6 },
-        .{ .name = "count", .value = 3 },
-    };
-    try runExpectRecord(
-        "List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {..acc, sum: acc.sum + item, count: acc.count + 1})",
-        &expected_fields,
-        .no_trace,
-    );
-}
-
-test "List.fold with record accumulator - partial update" {
-    // Test updating only one field while keeping others
-    const expected_fields = [_]ExpectedField{
-        .{ .name = "sum", .value = 10 },
-        .{ .name = "multiplier", .value = 2 },
-    };
-    try runExpectRecord(
-        "List.fold([1, 2, 3, 4], {sum: 0, multiplier: 2}, |acc, item| {..acc, sum: acc.sum + item})",
-        &expected_fields,
-        .no_trace,
-    );
-}
-
-test "List.fold with record accumulator - nested field access" {
-    // Test accessing nested record fields in accumulator
-    const expected_fields = [_]ExpectedField{
-        .{ .name = "value", .value = 6 },
-    };
-    try runExpectRecord(
-        "List.fold([1, 2, 3], {value: 0}, |acc, item| {value: acc.value + item})",
-        &expected_fields,
-        .no_trace,
-    );
-}
-
-test "List.fold with record accumulator - three fields" {
-    // Test with more fields to exercise record layout handling
-    const expected_fields = [_]ExpectedField{
-        .{ .name = "sum", .value = 10 },
-        .{ .name = "count", .value = 4 },
-        .{ .name = "product", .value = 24 },
-    };
-    try runExpectRecord(
-        "List.fold([1, 2, 3, 4], {sum: 0, count: 0, product: 1}, |acc, item| {sum: acc.sum + item, count: acc.count + 1, product: acc.product * item})",
-        &expected_fields,
-        .no_trace,
-    );
-}
-
-test "List.fold with record accumulator - conditional update" {
-    // Test conditional logic inside the fold with record accumulator
-    const expected_fields = [_]ExpectedField{
-        .{ .name = "evens", .value = 6 },
-        .{ .name = "odds", .value = 4 },
-    };
-    try runExpectRecord(
-        "List.fold([1, 2, 3, 4], {evens: 0, odds: 0}, |acc, item| if item % 2 == 0 {evens: acc.evens + item, odds: acc.odds} else {evens: acc.evens, odds: acc.odds + item})",
-        &expected_fields,
-        .no_trace,
-    );
-}
-
-test "List.fold with record accumulator - string list" {
-    // Test folding over strings with a record accumulator (count only)
-    const expected_fields = [_]ExpectedField{
-        .{ .name = "count", .value = 3 },
-    };
-    try runExpectRecord(
-        "List.fold([\"a\", \"bb\", \"ccc\"], {count: 0}, |acc, _| {count: acc.count + 1})",
-        &expected_fields,
-        .no_trace,
-    );
-}
-
-test "simple fold without records - Dec result" {
-    try runExpectIntDec(
-        "List.fold([1, 2, 3], 0, |acc, item| acc + item)",
-        6,
-        .no_trace,
-    );
-}
-
-test "List.fold with record accumulator - record destructuring in lambda" {
-    // Test folding over a list of records, destructuring each record in the lambda
-    const expected_fields = [_]ExpectedField{
-        .{ .name = "total_x", .value = 6 },
-        .{ .name = "total_y", .value = 15 },
-    };
-    try runExpectRecord(
-        "List.fold([{x: 1, y: 2}, {x: 2, y: 5}, {x: 3, y: 8}], {total_x: 0, total_y: 0}, |acc, {x, y}| {total_x: acc.total_x + x, total_y: acc.total_y + y})",
-        &expected_fields,
-        .no_trace,
-    );
-}
-
-test "List.fold with record accumulator - partial record destructuring" {
-    // Test destructuring only some fields from records
-    const expected_fields = [_]ExpectedField{
-        .{ .name = "sum", .value = 6 },
-    };
-    try runExpectRecord(
-        "List.fold([{a: 1, b: 100}, {a: 2, b: 200}, {a: 3, b: 300}], {sum: 0}, |acc, {a}| {sum: acc.sum + a})",
-        &expected_fields,
-        .no_trace,
-    );
-}
-
-test "List.fold with record accumulator - single field record destructuring" {
-    // Test destructuring single-field records
-    const expected_fields = [_]ExpectedField{
-        .{ .name = "total", .value = 10 },
-    };
-    try runExpectRecord(
-        "List.fold([{val: 1}, {val: 2}, {val: 3}, {val: 4}], {total: 0}, |acc, {val}| {total: acc.total + val})",
-        &expected_fields,
-        .no_trace,
-    );
-}
-
-test "List.fold with record accumulator - list destructuring in lambda" {
-    // Test folding over a list of lists, destructuring each inner list
-    // [1, 2], [3, 4], [5, 6] -> first elements are 1, 3, 5 -> sum is 9
-    const expected_fields = [_]ExpectedField{
-        .{ .name = "first_sum", .value = 9 },
-        .{ .name = "count", .value = 3 },
-    };
-    try runExpectRecord(
-        "List.fold([[1, 2], [3, 4], [5, 6]], {first_sum: 0, count: 0}, |acc, [first, ..]| {first_sum: acc.first_sum + first, count: acc.count + 1})",
-        &expected_fields,
-        .no_trace,
-    );
-}
-
-test "List.fold with record accumulator - destructure two elements" {
-    // Test destructuring first two elements from each inner list
-    const expected_fields = [_]ExpectedField{
-        .{ .name = "sum_firsts", .value = 9 },
-        .{ .name = "sum_seconds", .value = 12 },
-    };
-    try runExpectRecord(
-        "List.fold([[1, 2, 100], [3, 4, 200], [5, 6, 300]], {sum_firsts: 0, sum_seconds: 0}, |acc, [a, b, ..]| {sum_firsts: acc.sum_firsts + a, sum_seconds: acc.sum_seconds + b})",
-        &expected_fields,
-        .no_trace,
-    );
-}
-
-test "List.fold with record accumulator - exact list pattern" {
-    // Test exact list pattern matching (no rest pattern)
-    const expected_fields = [_]ExpectedField{
-        .{ .name = "total", .value = 21 },
-    };
-    try runExpectRecord(
-        "List.fold([[1, 2], [3, 4], [5, 6]], {total: 0}, |acc, [a, b]| {total: acc.total + a + b})",
-        &expected_fields,
-        .no_trace,
-    );
-}
-
-test "List.fold with record accumulator - nested list and record" {
-    // Test combining list destructuring with record accumulator updates
-    // Using ".. as tail" syntax for the rest pattern
-    const expected_fields = [_]ExpectedField{
-        .{ .name = "head_sum", .value = 6 },
-        .{ .name = "tail_count", .value = 6 },
-    };
-    try runExpectRecord(
-        "List.fold([[1, 10, 20], [2, 30, 40], [3, 50, 60]], {head_sum: 0, tail_count: 0}, |acc, [head, .. as tail]| {head_sum: acc.head_sum + head, tail_count: acc.tail_count + List.len(tail)})",
-        &expected_fields,
-        .no_trace,
-    );
-}
-
-// For loop with mutable list append
-test "for loop - mutable list append" {
-    try runExpectListI64(
-        \\{
-        \\    list = [1.I64, 2.I64, 3.I64]
-        \\    var $result = List.with_capacity(List.len(list))
-        \\    for item in list {
-        \\        $result = List.append($result, item)
-        \\    }
-        \\    $result
-        \\}
-    ,
-        &[_]i64{ 1, 2, 3 },
-        .no_trace,
-    );
-}
-
-// For loop with closure call (like List.map does)
-test "for loop - with closure transform" {
-    try runExpectListI64(
-        \\{
-        \\    list = [1.I64, 2.I64, 3.I64]
-        \\    identity = |x| x
-        \\    var $result = List.with_capacity(List.len(list))
-        \\    for item in list {
-        \\        $result = List.append($result, identity(item))
-        \\    }
-        \\    $result
-        \\}
-    ,
-        &[_]i64{ 1, 2, 3 },
-        .no_trace,
-    );
-}
-
-test "List.map - basic identity" {
-    // Map with identity function
-    try runExpectListI64(
-        "List.map([1.I64, 2.I64, 3.I64], |x| x)",
-        &[_]i64{ 1, 2, 3 },
-        .no_trace,
-    );
-}
-
-test "List.map - single element" {
-    // Map on single element list
-    try runExpectListI64(
-        "List.map([42.I64], |x| x)",
-        &[_]i64{42},
-        .no_trace,
-    );
-}
-
-test "List.map - longer list with squaring" {
-    // Check that map on a longer list with squaring works
-    try runExpectListI64(
-        "List.map([1.I64, 2.I64, 3.I64, 4.I64, 5.I64], |x| x * x)",
-        &[_]i64{ 1, 4, 9, 16, 25 },
-        .no_trace,
-    );
-}
-
-test "List.map - doubling" {
-    // Map with doubling function
-    try runExpectListI64(
-        "List.map([1.I64, 2.I64, 3.I64], |x| x * 2.I64)",
-        &[_]i64{ 2, 4, 6 },
-        .no_trace,
-    );
-}
-
-test "List.map - adding" {
-    // Map with adding function
-    try runExpectListI64(
-        "List.map([10.I64, 20.I64], |x| x + 5.I64)",
-        &[_]i64{ 15, 25 },
-        .no_trace,
-    );
-}
-
-test "List.map - empty list" {
-    // Map with adding function
-    try runExpectListZst(
-        "List.map([], |x| x)",
-        0,
-        .no_trace,
-    );
-}
-
-test "empty list with non-numeric type constraint should be list of zst" {
-    // An empty list whose element type has a method_call constraint but no
-    // from_numeral constraint should be List(ZST), not List(Dec).
-    // e.g. `x : List(a) where [a.blah : Str -> Str]` then `x = []`
-    try runExpectListZst(
-        "[]",
-        0,
-        .no_trace,
-    );
-}
-
-test "List.append - basic case" {
-    // Append two non-empty lists
-    try runExpectListI64(
-        "List.append([1.I64, 2.I64], 3.I64)",
-        &[_]i64{ 1, 2, 3 },
-        .no_trace,
-    );
-}
-
-test "List.append - empty case" {
-    // Append to empty list
-    try runExpectListI64(
-        "List.append([], 42.I64)",
-        &[_]i64{42},
-        .no_trace,
-    );
-}
-
-test "List.append - zst case" {
-    // Append to empty list
-    try runExpectListZst(
-        "List.append([{}], {})",
-        2,
-        .no_trace,
-    );
-}
-
-test "List.repeat - basic case" {
-    // Repeat a value multiple times
-    try runExpectListI64(
-        "List.repeat(7.I64, 4)",
-        &[_]i64{ 7, 7, 7, 7 },
-        .no_trace,
-    );
-}
-
-test "List.repeat - empty case" {
-    // Repeat a value zero times returns empty list
-    try helpers.runExpectEmptyListI64("List.repeat(7.I64, 0)", .no_trace);
-}
-
-test "List.with_capacity - unknown case" {
-    // Create a list with specified capacity
-    try runExpectListZst(
-        "List.with_capacity(5)",
-        0,
-        .no_trace,
-    );
-}
-
-test "List.with_capacity - append case" {
-    // Create a list with specified capacity
-    try runExpectListI64(
-        "List.with_capacity(5).append(10.I64)",
-        &[_]i64{10},
-        .trace,
-    );
-}
-
-test "List.sum - basic case" {
-    // Sum of a list of integers (untyped literals default to Dec)
-    try runExpectIntDec("List.sum([1, 2, 3, 4])", 10, .no_trace);
-}
-
-test "List.sum - single element" {
-    try runExpectIntDec("List.sum([42])", 42, .no_trace);
-}
-
-test "List.sum - negative numbers" {
-    try runExpectIntDec("List.sum([-1, -2, 3, 4])", 4, .no_trace);
-}
-
-test "List.sum - larger list" {
-    try runExpectIntDec("List.sum([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])", 55, .no_trace);
-}
-
 test "match with tag containing pattern-bound variable - regression" {
     // Regression test for GitHub issue: interpreter crash when creating a tag
     // with a payload that contains a variable bound by a match pattern.
-    //
-    // In isolated eval tests this works, but when running as a full app with
-    // platform integration it crashes with "e_closure: failed to resolve capture value".
-    // The issue is specific to module management in full app execution.
-    //
-    // This test ensures the basic case works in the eval context.
-    // Full reproduction requires running as: `roc run <app-with-platform.roc>`
+    // Tag union result — can't use inspect_str (RocValue.format hits unreachable for tag_union).
     try runExpectSuccess(
         \\match Some("x") {
         \\    Some(a) => Tagged(a)
@@ -770,18 +299,7 @@ test "match with tag containing pattern-bound variable - regression" {
 test "nested match with Result type - regression" {
     // Regression test for interpreter crash when using nested match expressions
     // with Result types (Ok/Err).
-    //
-    // Original bug report:
-    //   match ["x"] {
-    //       [a] => {
-    //           match Ok(a) {
-    //               Ok(val) => Ok(val),
-    //               _ => Err(Oops)
-    //           }
-    //       }
-    //   }
-    //
-    // Like the above test, this works in isolation but crashes in full app execution.
+    // Tag union result — can't use inspect_str.
     try runExpectSuccess(
         \\match ["x"] {
         \\    [a] => {
@@ -795,36 +313,21 @@ test "nested match with Result type - regression" {
     , .no_trace);
 }
 
-test "issue 8667: List.with_capacity should be inferred as List(I64)" {
-    // When List.with_capacity is used with List.append(_, 1.I64), the type checker should
-    // unify the list element type to I64. This means the layout should be .list (not .list_of_zst).
-    // If it's .list_of_zst, that indicates a type inference bug.
-    try runExpectListI64("List.append(List.with_capacity(1), 1.I64)", &[_]i64{1}, .no_trace);
-
-    // Test fold with inline lambda that calls append
-    try runExpectListI64("[1.I64].fold(List.with_capacity(1), |acc, item| acc.append(item))", &[_]i64{1}, .no_trace);
-
-    // Also test the fold case which is where the bug was originally reported
-    try runExpectListI64("[1.I64].fold(List.with_capacity(1), List.append)", &[_]i64{1}, .no_trace);
-}
-
-test "issue 8710: tag union with heap payload in tuple should not leak" {
-    // Regression test for GitHub issue #8710
-    // When a tag union (like Ok) containing a heap-allocated payload (like a List)
-    // is stored in a tuple, the decref logic must properly free the payload.
-    // The bug was that decrefLayoutPtr was missing handling for .tag_union layouts,
-    // so the payload was never decremented and would leak.
-    // We create a list, wrap in Ok, and return just the list length to verify the
-    // tuple is properly cleaned up (the test allocator catches any leaks).
-    try runExpectI64("[1.I64, 2.I64, 3.I64].len()", 3, .no_trace);
-    // Also test the actual bug scenario: tag union in a tuple
-    try runExpectListI64(
+test "issue 8892: nominal type wrapping tag union with match expression" {
+    // Regression test for GitHub issue #8892: tag expression inside a function
+    // where the expected type is a nominal type wrapping a tag union.
+    // Tag union result — can't use inspect_str.
+    try runExpectSuccess(
         \\{
-        \\    list = [1.I64, 2.I64, 3.I64]
-        \\    _tuple = (Ok(list), 42.I64)
-        \\    list
+        \\    parse_value = || {
+        \\        combination_method = match ModuloToken {
+        \\            ModuloToken => Modulo
+        \\        }
+        \\        combination_method
+        \\    }
+        \\    parse_value()
         \\}
-    , &[_]i64{ 1, 2, 3 }, .no_trace);
+    , .no_trace);
 }
 
 test "early return: ? in closure passed to List.fold" {
@@ -837,29 +340,6 @@ test "early return: ? in closure passed to List.fold" {
         \\    List.len(result)
         \\}
     , 2, .no_trace);
-}
-
-test "issue 8892: nominal type wrapping tag union with match expression" {
-    // Regression test for GitHub issue #8892: when evaluating a tag expression
-    // inside a function where the expected type is a nominal type wrapping a tag union,
-    // the interpreter would crash with "e_tag: unexpected layout type: box".
-    //
-    // The bug was in e_tag evaluation: it was using getRuntimeLayout(rt_var) where
-    // rt_var was the nominal type (which has a box layout), instead of using the
-    // unwrapped backing type's layout (which is the actual tag union layout).
-    //
-    // The fix: use getRuntimeLayout(resolved.var_) to get the backing type's layout.
-    try runExpectSuccess(
-        \\{
-        \\    parse_value = || {
-        \\        combination_method = match ModuloToken {
-        \\            ModuloToken => Modulo
-        \\        }
-        \\        combination_method
-        \\    }
-        \\    parse_value()
-        \\}
-    , .no_trace);
 }
 
 test "TODO RE-ENABLE: known compiler crash repro - polymorphic tag union payload substitution extract payload" {
@@ -902,101 +382,4 @@ test "TODO RE-ENABLE: known compiler crash repro - polymorphic tag union payload
         \\    get_err(val)
         \\}
     , "hello", .no_trace);
-}
-
-test "focused: fold single-field record" {
-    const expected = [_]ExpectedField{.{ .name = "total", .value = 10 }};
-    try runExpectRecord(
-        "List.fold([1, 2, 3, 4], {total: 0}, |acc, item| {total: acc.total + item})",
-        &expected,
-        .no_trace,
-    );
-}
-
-test "focused: fold record partial update" {
-    const expected = [_]ExpectedField{
-        .{ .name = "sum", .value = 10 },
-        .{ .name = "multiplier", .value = 2 },
-    };
-    try runExpectRecord(
-        "List.fold([1, 2, 3, 4], {sum: 0, multiplier: 2}, |acc, item| {..acc, sum: acc.sum + item})",
-        &expected,
-        .no_trace,
-    );
-}
-
-test "focused: fold record nested field access" {
-    const expected = [_]ExpectedField{.{ .name = "value", .value = 6 }};
-    try runExpectRecord(
-        "List.fold([1, 2, 3], {value: 0}, |acc, item| {value: acc.value + item})",
-        &expected,
-        .no_trace,
-    );
-}
-
-test "focused: fold record over string list" {
-    const expected = [_]ExpectedField{.{ .name = "count", .value = 3 }};
-    try runExpectRecord(
-        "List.fold([\"a\", \"bb\", \"ccc\"], {count: 0}, |acc, _| {count: acc.count + 1})",
-        &expected,
-        .no_trace,
-    );
-}
-
-test "focused: fold multi-field record binding identity" {
-    const expected = [_]ExpectedField{
-        .{ .name = "sum", .value = 6 },
-        .{ .name = "count", .value = 3 },
-    };
-    try runExpectRecord(
-        \\{
-        \\    rec = List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1})
-        \\    rec
-        \\}
-    , &expected, .no_trace);
-}
-
-test "focused: fold multi-field record binding survives extra alloc" {
-    const expected = [_]ExpectedField{
-        .{ .name = "sum", .value = 6 },
-        .{ .name = "count", .value = 3 },
-    };
-    try runExpectRecord(
-        \\{
-        \\    rec = List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1})
-        \\    _tmp = 999
-        \\    rec
-        \\}
-    , &expected, .no_trace);
-}
-
-test "focused: fold partial record destructuring" {
-    const expected = [_]ExpectedField{.{ .name = "sum", .value = 6 }};
-    try runExpectRecord(
-        "List.fold([{a: 1, b: 100}, {a: 2, b: 200}, {a: 3, b: 300}], {sum: 0}, |acc, {a}| {sum: acc.sum + a})",
-        &expected,
-        .no_trace,
-    );
-}
-
-test "focused: fold single-field record destructuring" {
-    const expected = [_]ExpectedField{.{ .name = "total", .value = 10 }};
-    try runExpectRecord(
-        "List.fold([{val: 1}, {val: 2}, {val: 3}, {val: 4}], {total: 0}, |acc, {val}| {total: acc.total + val})",
-        &expected,
-        .no_trace,
-    );
-}
-
-test "focused: fold exact list pattern" {
-    const expected = [_]ExpectedField{.{ .name = "total", .value = 21 }};
-    try runExpectRecord(
-        "List.fold([[1, 2], [3, 4], [5, 6]], {total: 0}, |acc, [a, b]| {total: acc.total + a + b})",
-        &expected,
-        .no_trace,
-    );
-}
-
-test "focused: list append zst" {
-    try runExpectListZst("List.append([{}], {})", 2, .no_trace);
 }
