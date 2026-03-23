@@ -132,24 +132,56 @@ pub const Resolver = struct {
                 break :blk GraphRef{ .canonical = try self.layout_store.insertLayout(layout.Layout.closure(empty_captures)) };
             },
             .box => |b| blk: {
-                const node_id = try graph.reserveNode(self.allocator);
-                const local_ref = GraphRef{ .local = node_id };
-                try refs_by_mono.put(mono_key, local_ref);
+                const local_ref = try self.reserveMonotypeNodeRef(mono_key, graph, refs_by_mono);
                 const child_ref = try self.buildRefForMonotype(b.inner, overrides, graph, refs_by_mono);
-                graph.setNode(node_id, .{ .box = child_ref });
+                graph.setNode(local_ref.local, .{ .box = child_ref });
                 break :blk local_ref;
             },
             .list => |l| blk: {
-                const node_id = try graph.reserveNode(self.allocator);
-                const local_ref = GraphRef{ .local = node_id };
-                try refs_by_mono.put(mono_key, local_ref);
+                const local_ref = try self.reserveMonotypeNodeRef(mono_key, graph, refs_by_mono);
                 const child_ref = try self.buildRefForMonotype(l.elem, overrides, graph, refs_by_mono);
-                graph.setNode(node_id, .{ .list = child_ref });
+                graph.setNode(local_ref.local, .{ .list = child_ref });
                 break :blk local_ref;
             },
-            .record => |r| try self.buildStructFromFields(self.monotype_store.getFields(r.fields), overrides, graph, refs_by_mono),
-            .tuple => |t| try self.buildStructFromElems(self.monotype_store.getIdxSpan(t.elems), overrides, graph, refs_by_mono),
-            .tag_union => |tu| try self.buildTagUnionRef(self.monotype_store.getTags(tu.tags), overrides, graph, refs_by_mono),
+            .record => |r| blk: {
+                const fields = self.monotype_store.getFields(r.fields);
+                if (fields.len == 0) break :blk .{ .canonical = .zst };
+                const local_ref = try self.reserveMonotypeNodeRef(mono_key, graph, refs_by_mono);
+                try self.fillStructNodeFromFields(
+                    local_ref.local,
+                    fields,
+                    overrides,
+                    graph,
+                    refs_by_mono,
+                );
+                break :blk local_ref;
+            },
+            .tuple => |t| blk: {
+                const elems = self.monotype_store.getIdxSpan(t.elems);
+                if (elems.len == 0) break :blk .{ .canonical = .zst };
+                const local_ref = try self.reserveMonotypeNodeRef(mono_key, graph, refs_by_mono);
+                try self.fillStructNodeFromElems(
+                    local_ref.local,
+                    elems,
+                    overrides,
+                    graph,
+                    refs_by_mono,
+                );
+                break :blk local_ref;
+            },
+            .tag_union => |tu| blk: {
+                const tags = self.monotype_store.getTags(tu.tags);
+                if (tags.len == 0) break :blk .{ .canonical = .zst };
+                const local_ref = try self.reserveMonotypeNodeRef(mono_key, graph, refs_by_mono);
+                try self.fillTagUnionNode(
+                    local_ref.local,
+                    tags,
+                    overrides,
+                    graph,
+                    refs_by_mono,
+                );
+                break :blk local_ref;
+            },
         };
 
         if (findEquivalentMonotypeRef(self.monotype_store, mono_idx, refs_by_mono, mono_key)) |equivalent| {
@@ -161,6 +193,18 @@ pub const Resolver = struct {
         return resolved_ref;
     }
 
+    fn reserveMonotypeNodeRef(
+        self: *Resolver,
+        mono_key: u32,
+        graph: *LayoutGraph,
+        refs_by_mono: *std.AutoHashMap(u32, GraphRef),
+    ) Allocator.Error!GraphRef {
+        const node_id = try graph.reserveNode(self.allocator);
+        const local_ref = GraphRef{ .local = node_id };
+        try refs_by_mono.put(mono_key, local_ref);
+        return local_ref;
+    }
+
     fn buildStructFromElems(
         self: *Resolver,
         elems: []const Monotype.Idx,
@@ -169,6 +213,21 @@ pub const Resolver = struct {
         refs_by_mono: *std.AutoHashMap(u32, GraphRef),
     ) Allocator.Error!GraphRef {
         if (elems.len == 0) return .{ .canonical = .zst };
+
+        const node_id = try graph.reserveNode(self.allocator);
+        try self.fillStructNodeFromElems(node_id, elems, overrides, graph, refs_by_mono);
+        return .{ .local = node_id };
+    }
+
+    fn fillStructNodeFromElems(
+        self: *Resolver,
+        node_id: graph_mod.NodeId,
+        elems: []const Monotype.Idx,
+        overrides: ?*const std.AutoHashMap(u32, layout.Idx),
+        graph: *LayoutGraph,
+        refs_by_mono: *std.AutoHashMap(u32, GraphRef),
+    ) Allocator.Error!void {
+        std.debug.assert(elems.len > 0);
 
         var fields = std.ArrayList(GraphField).empty;
         defer fields.deinit(self.allocator);
@@ -179,7 +238,7 @@ pub const Resolver = struct {
                 .child = try self.buildRefForMonotype(elem_idx, overrides, graph, refs_by_mono),
             });
         }
-        return self.buildStructNode(fields.items, graph);
+        try self.setStructNode(node_id, fields.items, graph);
     }
 
     fn buildStructFromFields(
@@ -191,6 +250,21 @@ pub const Resolver = struct {
     ) Allocator.Error!GraphRef {
         if (fields_slice.len == 0) return .{ .canonical = .zst };
 
+        const node_id = try graph.reserveNode(self.allocator);
+        try self.fillStructNodeFromFields(node_id, fields_slice, overrides, graph, refs_by_mono);
+        return .{ .local = node_id };
+    }
+
+    fn fillStructNodeFromFields(
+        self: *Resolver,
+        node_id: graph_mod.NodeId,
+        fields_slice: []const Monotype.Field,
+        overrides: ?*const std.AutoHashMap(u32, layout.Idx),
+        graph: *LayoutGraph,
+        refs_by_mono: *std.AutoHashMap(u32, GraphRef),
+    ) Allocator.Error!void {
+        std.debug.assert(fields_slice.len > 0);
+
         var fields = std.ArrayList(GraphField).empty;
         defer fields.deinit(self.allocator);
         try fields.ensureTotalCapacity(self.allocator, fields_slice.len);
@@ -200,7 +274,7 @@ pub const Resolver = struct {
                 .child = try self.buildRefForMonotype(field.type_idx, overrides, graph, refs_by_mono),
             });
         }
-        return self.buildStructNode(fields.items, graph);
+        try self.setStructNode(node_id, fields.items, graph);
     }
 
     fn buildStructNode(
@@ -211,19 +285,29 @@ pub const Resolver = struct {
         if (fields.len == 0) return .{ .canonical = .zst };
 
         const node_id = try graph.reserveNode(self.allocator);
-        const span = try graph.appendFields(self.allocator, fields);
-        graph.setNode(node_id, .{ .struct_ = span });
+        try self.setStructNode(node_id, fields, graph);
         return .{ .local = node_id };
     }
 
-    fn buildTagUnionRef(
+    fn setStructNode(
         self: *Resolver,
+        node_id: graph_mod.NodeId,
+        fields: []const GraphField,
+        graph: *LayoutGraph,
+    ) Allocator.Error!void {
+        const span = try graph.appendFields(self.allocator, fields);
+        graph.setNode(node_id, .{ .struct_ = span });
+    }
+
+    fn fillTagUnionNode(
+        self: *Resolver,
+        node_id: graph_mod.NodeId,
         tags: []const Monotype.Tag,
         overrides: ?*const std.AutoHashMap(u32, layout.Idx),
         graph: *LayoutGraph,
         refs_by_mono: *std.AutoHashMap(u32, GraphRef),
-    ) Allocator.Error!GraphRef {
-        if (tags.len == 0) return .{ .canonical = .zst };
+    ) Allocator.Error!void {
+        std.debug.assert(tags.len > 0);
 
         var variants = std.ArrayList(GraphRef).empty;
         defer variants.deinit(self.allocator);
@@ -237,10 +321,8 @@ pub const Resolver = struct {
             ));
         }
 
-        const node_id = try graph.reserveNode(self.allocator);
         const span = try graph.appendRefs(self.allocator, variants.items);
         graph.setNode(node_id, .{ .tag_union = span });
-        return .{ .local = node_id };
     }
 
     fn buildPayloadRef(
