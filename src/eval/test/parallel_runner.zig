@@ -246,7 +246,6 @@ const WorkerState = struct {
     timed_out: AtomicBool = AtomicBool.init(false),
 };
 
-
 const RunnerContext = struct {
     tests: []const TestCase,
     index: AtomicUsize,
