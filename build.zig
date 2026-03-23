@@ -1029,10 +1029,9 @@ const CoverageSummaryStep = struct {
     step: Step,
     coverage_dir: []const u8,
     exe_name: []const u8,
+    label: []const u8,
+    min_coverage: f64,
 
-    /// Minimum required coverage percentage. Build fails if coverage drops below this.
-    /// This threshold should be gradually increased as more tests are added.
-    ///
     /// Coverage is supported on:
     /// - macOS (ARM64 and x86_64): Uses libdwarf for DWARF parsing
     /// - Linux ARM64: Uses libdw (elfutils) for DWARF parsing
@@ -1043,9 +1042,12 @@ const CoverageSummaryStep = struct {
     /// CUs parse successfully. This causes kcov to find only stdlib files, not user
     /// source files. ARM64 Zig generates valid DWARF, so coverage works there.
     /// See: https://github.com/roc-lang/roc/pull/8864 for investigation details.
-    const MIN_COVERAGE_PERCENT: f64 = 28.0;
 
     fn create(b: *std.Build, coverage_dir: []const u8, exe_name: []const u8) *CoverageSummaryStep {
+        return createWithOptions(b, coverage_dir, exe_name, "PARSER", 28.0);
+    }
+
+    fn createWithOptions(b: *std.Build, coverage_dir: []const u8, exe_name: []const u8, label: []const u8, min_coverage: f64) *CoverageSummaryStep {
         const self = b.allocator.create(CoverageSummaryStep) catch @panic("OOM");
         self.* = .{
             .step = Step.init(.{
@@ -1056,6 +1058,8 @@ const CoverageSummaryStep = struct {
             }),
             .coverage_dir = coverage_dir,
             .exe_name = exe_name,
+            .label = label,
+            .min_coverage = min_coverage,
         };
         return self;
     }
@@ -1089,7 +1093,7 @@ const CoverageSummaryStep = struct {
         defer allocator.free(json_content);
 
         // Parse and summarize coverage
-        const result = try parseCoverageJson(allocator, json_content);
+        const result = try parseCoverageJson(allocator, json_content, self.label, self.coverage_dir);
 
         // Fail if kcov didn't capture any data - this indicates a problem with kcov
         if (result.total_lines == 0) {
@@ -1104,15 +1108,15 @@ const CoverageSummaryStep = struct {
         }
 
         // Enforce minimum coverage threshold
-        if (result.percent < MIN_COVERAGE_PERCENT) {
+        if (result.percent < self.min_coverage) {
             std.debug.print("\n", .{});
             std.debug.print("=" ** 60 ++ "\n", .{});
             std.debug.print("COVERAGE CHECK FAILED\n", .{});
             std.debug.print("=" ** 60 ++ "\n\n", .{});
-            std.debug.print("Parser coverage is {d:.2}%, minimum required is {d:.2}%\n", .{ result.percent, MIN_COVERAGE_PERCENT });
+            std.debug.print("{s} coverage is {d:.2}%, minimum required is {d:.2}%\n", .{ self.label, result.percent, self.min_coverage });
             std.debug.print("Add more tests to improve coverage before merging.\n\n", .{});
             std.debug.print("=" ** 60 ++ "\n", .{});
-            return step.fail("Parser coverage {d:.2}% is below minimum {d:.2}%", .{ result.percent, MIN_COVERAGE_PERCENT });
+            return step.fail("{s} coverage {d:.2}% is below minimum {d:.2}%", .{ self.label, result.percent, self.min_coverage });
         }
     }
 
@@ -1121,7 +1125,7 @@ const CoverageSummaryStep = struct {
         total_lines: u64,
     };
 
-    fn parseCoverageJson(allocator: std.mem.Allocator, json_content: []const u8) !CoverageResult {
+    fn parseCoverageJson(allocator: std.mem.Allocator, json_content: []const u8, label: []const u8, coverage_dir: []const u8) !CoverageResult {
         const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_content, .{});
         defer parsed.deinit();
 
@@ -1197,7 +1201,7 @@ const CoverageSummaryStep = struct {
 
         std.debug.print("\n", .{});
         std.debug.print("=" ** 60 ++ "\n", .{});
-        std.debug.print("PARSER CODE COVERAGE SUMMARY\n", .{});
+        std.debug.print("{s} CODE COVERAGE SUMMARY\n", .{label});
         std.debug.print("=" ** 60 ++ "\n\n", .{});
 
         std.debug.print("Total lines:     {d}\n", .{total_lines});
@@ -1228,7 +1232,7 @@ const CoverageSummaryStep = struct {
         }
 
         std.debug.print("\n" ++ "=" ** 60 ++ "\n", .{});
-        std.debug.print("Full HTML report: kcov-output/parser/index.html\n", .{});
+        std.debug.print("Full HTML report: {s}/index.html\n", .{coverage_dir});
         std.debug.print("=" ** 60 ++ "\n", .{});
 
         return .{ .percent = percent, .total_lines = total_lines };
@@ -3058,8 +3062,14 @@ pub fn build(b: *std.Build) void {
                 mkdir_eval.step.dependOn(&install_kcov.step);
 
                 if (target.result.os.tag == .macos) {
-                    // kcov needs codesigning on macOS (already done above for parser coverage)
-                    mkdir_eval.step.dependOn(&mkdir_step.step);
+                    // kcov needs codesigning on macOS to use task_for_pid
+                    const eval_codesign = b.addSystemCommand(&.{"codesign"});
+                    eval_codesign.setCwd(b.path("."));
+                    eval_codesign.addArgs(&.{ "-s", "-", "--entitlements" });
+                    eval_codesign.addFileArg(kcov_dep.path("osx-entitlements.xml"));
+                    eval_codesign.addArgs(&.{ "-f", "zig-out/bin/kcov" });
+                    eval_codesign.step.dependOn(&install_kcov.step);
+                    mkdir_eval.step.dependOn(&eval_codesign.step);
                 }
 
                 const run_eval_coverage = b.addSystemCommand(&.{"zig-out/bin/kcov"});
@@ -3074,7 +3084,7 @@ pub fn build(b: *std.Build) void {
                 run_eval_coverage.step.dependOn(&install_eval_runner.step);
                 run_eval_coverage.step.dependOn(&install_kcov.step);
 
-                const eval_summary_step = CoverageSummaryStep.create(b, "kcov-output/eval", "eval-test-runner");
+                const eval_summary_step = CoverageSummaryStep.createWithOptions(b, "kcov-output/eval", "eval-test-runner", "EVAL", 0.0);
                 eval_summary_step.step.dependOn(&run_eval_coverage.step);
 
                 coverage_eval_step.dependOn(&eval_summary_step.step);
