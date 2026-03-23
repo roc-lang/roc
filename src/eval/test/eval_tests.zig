@@ -6,6 +6,9 @@
 const TestCase = @import("parallel_runner.zig").TestCase;
 const RocDec = @import("builtins").dec.RocDec;
 
+/// Skip all backends — used for tests that document bugs (crash/fail).
+const SKIP_ALL: TestCase.Skip = .{ .interpreter = true, .dev = true, .wasm = true, .llvm = true };
+
 /// All eval test cases, consumed by the parallel runner.
 pub const tests = [_]TestCase{
     // --- proof of concept tests ---
@@ -7705,5 +7708,55 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "Modulo" },
         .skip = .{ .wasm = true, .llvm = true },
+    },
+
+    // --- known bugs (skipped on all backends) ---
+    .{
+        .name = "early return: ? in closure passed to List.fold",
+        .source =
+        \\{
+        \\    compute = |x| Ok(x?)
+        \\    result = List.fold([Ok(1), Err({})], [], |acc, x| List.append(acc, compute(x)))
+        \\    List.len(result)
+        \\}
+        ,
+        .expected = .{ .u64_val = 2 },
+        .skip = .{ .interpreter = true, .dev = true, .wasm = true, .llvm = true },
+    },
+    .{
+        .name = "known crash repro: polymorphic tag union payload substitution - extract payload",
+        .source =
+        \\{
+        \\    second : [Left(a), Right(b)] -> b
+        \\    second = |either| match either {
+        \\        Left(_) => 0.I64
+        \\        Right(val) => val
+        \\    }
+        \\
+        \\    input : [Left(I64), Right(I64)]
+        \\    input = Right(42.I64)
+        \\    second(input)
+        \\}
+        ,
+        .expected = .{ .i64_val = 42 },
+        .skip = .{ .interpreter = true, .dev = true, .wasm = true, .llvm = true },
+    },
+    .{
+        .name = "known crash repro: polymorphic tag union payload substitution - multiple type vars",
+        .source =
+        \\{
+        \\    get_err : [Ok(a), Err(e)] -> e
+        \\    get_err = |result| match result {
+        \\        Ok(_) => ""
+        \\        Err(e) => e
+        \\    }
+        \\
+        \\    val : [Ok(I64), Err(Str)]
+        \\    val = Err("hello")
+        \\    get_err(val)
+        \\}
+        ,
+        .expected = .{ .str_val = "hello" },
+        .skip = .{ .interpreter = true, .dev = true, .wasm = true, .llvm = true },
     },
 };
