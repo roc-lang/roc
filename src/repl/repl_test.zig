@@ -1,11 +1,14 @@
 //! Tests for the REPL
+const builtin = @import("builtin");
 const std = @import("std");
 const Repl = @import("eval.zig").Repl;
 const TestEnv = @import("repl_test_env.zig").TestEnv;
 
 const testing = std.testing;
+const posix = std.posix;
 
 const alloc = std.testing.allocator;
+const Backend = enum { interpreter, dev, wasm, llvm };
 
 /// Run expression on interpreter only (for tests with known dev backend bugs).
 fn expectInterpreter(expr: []const u8, expected: []const u8) !void {
@@ -21,7 +24,7 @@ fn expectInterpreter(expr: []const u8, expected: []const u8) !void {
     };
 }
 
-fn expectBackend(backend: enum { interpreter, dev, wasm, llvm }, expr: []const u8, expected: []const u8) !void {
+fn expectBackend(backend: Backend, expr: []const u8, expected: []const u8) !void {
     var test_env = TestEnv.init(alloc);
     defer test_env.deinit();
     var repl = switch (backend) {
@@ -244,7 +247,7 @@ test "Repl - list fold with concat" {
 // Stateful tests (assignments, variable redefinition) - these use multi-step REPL
 // sessions so we test each backend separately but with the same expectations.
 
-fn expectStateful(backend: enum { interpreter, dev, wasm, llvm }, steps: []const [2][]const u8) !void {
+fn expectStateful(backend: Backend, steps: []const [2][]const u8) !void {
     var test_env = TestEnv.init(alloc);
     defer test_env.deinit();
     var repl = switch (backend) {
@@ -271,6 +274,63 @@ fn expectStateful(backend: enum { interpreter, dev, wasm, llvm }, steps: []const
     }
 }
 
+fn expectStepsFinal(backend: Backend, steps: []const []const u8, expected: []const u8) !void {
+    var test_env = TestEnv.init(alloc);
+    defer test_env.deinit();
+    var repl = switch (backend) {
+        .interpreter => try Repl.init(alloc, test_env.get_ops(), null),
+        .dev => try Repl.initWithBackend(alloc, test_env.get_ops(), null, .dev),
+        .wasm => try Repl.initWithWasmBackend(alloc, test_env.get_ops(), null),
+        .llvm => try Repl.initWithBackend(alloc, test_env.get_ops(), null, .llvm),
+    };
+    defer repl.deinit();
+
+    for (steps, 0..) |step, i| {
+        const result = try repl.step(step);
+        defer alloc.free(result);
+
+        if (i + 1 == steps.len) {
+            testing.expectEqualStrings(expected, result) catch |err| {
+                const backend_name = switch (backend) {
+                    .interpreter => "INTERPRETER",
+                    .dev => "DEV BACKEND",
+                    .wasm => "WASM BACKEND",
+                    .llvm => "LLVM BACKEND",
+                };
+                std.debug.print("{s} FAILED for: {s}\n", .{ backend_name, step });
+                return err;
+            };
+        }
+    }
+}
+
+fn expectStepsFinalInChild(backend: Backend, steps: []const []const u8, expected: []const u8) !void {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const pid = try posix.fork();
+
+    if (pid == 0) {
+        expectStepsFinal(backend, steps, expected) catch |err| {
+            std.debug.print("child expectStepsFinal error: {}\n", .{err});
+            std.c._exit(1);
+        };
+
+        std.c._exit(0);
+    }
+
+    const wait_result = posix.waitpid(pid, 0);
+    const status = wait_result.status;
+    const termination_signal: u8 = @truncate(status & 0x7f);
+
+    if (termination_signal != 0) {
+        std.debug.print("child terminated with signal {d}\n", .{termination_signal});
+        return error.TestUnexpectedResult;
+    }
+
+    const exit_code: u8 = @truncate((status >> 8) & 0xff);
+    try testing.expectEqual(@as(u8, 0), exit_code);
+}
+
 test "Repl - silent assignments" {
     const steps = &[_][2][]const u8{
         .{ "x = 5", "assigned `x`" },
@@ -280,6 +340,18 @@ test "Repl - silent assignments" {
     try expectStateful(.dev, steps);
     try expectStateful(.wasm, steps);
     try expectStateful(.llvm, steps);
+}
+
+test "Repl - issue 9258 opaque type param field access" {
+    const steps = &[_][]const u8{
+        "Wrapper(a) := { inner : a }",
+        "unwrap : Wrapper(a) -> a",
+        "unwrap = |w| w.inner",
+        "unwrap({ inner: \"hello\" })",
+    };
+
+    try expectStepsFinal(.interpreter, steps, "\"hello\"");
+    try expectStepsFinalInChild(.dev, steps, "\"hello\"");
 }
 
 test "Repl - polymorphic numeric in comparison snapshot sequence" {
