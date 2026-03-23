@@ -241,20 +241,6 @@ pub const Resolver = struct {
         try self.setStructNode(node_id, fields.items, graph);
     }
 
-    fn buildStructFromFields(
-        self: *Resolver,
-        fields_slice: []const Monotype.Field,
-        overrides: ?*const std.AutoHashMap(u32, layout.Idx),
-        graph: *LayoutGraph,
-        refs_by_mono: *std.AutoHashMap(u32, GraphRef),
-    ) Allocator.Error!GraphRef {
-        if (fields_slice.len == 0) return .{ .canonical = .zst };
-
-        const node_id = try graph.reserveNode(self.allocator);
-        try self.fillStructNodeFromFields(node_id, fields_slice, overrides, graph, refs_by_mono);
-        return .{ .local = node_id };
-    }
-
     fn fillStructNodeFromFields(
         self: *Resolver,
         node_id: graph_mod.NodeId,
@@ -275,18 +261,6 @@ pub const Resolver = struct {
             });
         }
         try self.setStructNode(node_id, fields.items, graph);
-    }
-
-    fn buildStructNode(
-        self: *Resolver,
-        fields: []const GraphField,
-        graph: *LayoutGraph,
-    ) Allocator.Error!GraphRef {
-        if (fields.len == 0) return .{ .canonical = .zst };
-
-        const node_id = try graph.reserveNode(self.allocator);
-        try self.setStructNode(node_id, fields, graph);
-        return .{ .local = node_id };
     }
 
     fn setStructNode(

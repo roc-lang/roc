@@ -1341,7 +1341,7 @@ fn lowerStrInspectExpr(
             .record => |record| self.lowerStrInspectRecord(type_env, value_expr, record, region),
             .record_unbound => |fields_range| self.lowerStrInspectRecordUnbound(type_env, value_expr, fields_range, region),
             .tuple => |tup| self.lowerStrInspectTuple(type_env, value_expr, tup, region),
-            .tag_union => |tu| self.lowerStrInspectTagUnion(type_env, value_expr, type_var, tu, region),
+            .tag_union => |tu| self.lowerStrInspectTagUnion(type_env, value_expr, tu, region),
             .empty_record => self.emitMirStrLiteral("{}", region),
             .empty_tag_union => self.emitMirStrLiteral("<empty_tag_union>", region),
             .fn_pure, .fn_effectful, .fn_unbound => self.emitMirStrLiteral("<function>", region),
@@ -2203,13 +2203,11 @@ fn lowerStrInspectTagUnion(
     self: *Self,
     type_env: *const ModuleEnv,
     value_expr: MIR.ExprId,
-    type_var: types.Var,
     tu: types.TagUnion,
     region: Region,
 ) Allocator.Error!MIR.ExprId {
     var collected = std.ArrayList(types.Tag).empty;
     defer collected.deinit(self.allocator);
-    _ = type_var;
 
     var current_row = tu;
     rows: while (true) {
