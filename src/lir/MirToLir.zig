@@ -2635,9 +2635,14 @@ fn lowerExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirExprId {
             break :blk try acc.finish(result, .str, region);
         },
         .run_low_level => |ll| self.lowerLowLevel(ll, mir_expr_id, region),
-        .runtime_err_can, .runtime_err_type, .runtime_err_ellipsis, .runtime_err_anno_only => {
+        .runtime_err_can, .runtime_err_type, .runtime_err_ellipsis => {
             const ret_layout = try self.layoutFromMonotype(mono_idx);
             return self.lir_store.addExpr(.{ .runtime_error = .{ .ret_layout = ret_layout } }, region);
+        },
+        .runtime_err_anno_only => {
+            const ret_layout = try self.layoutFromMonotype(mono_idx);
+            const msg = try self.lir_store.strings.insert(self.allocator, "Accessed a value that has no implementation");
+            return self.lir_store.addExpr(.{ .crash = .{ .msg = msg, .ret_layout = ret_layout } }, region);
         },
         .crash => |s| blk: {
             const lir_str_idx = try self.copyStringToLir(s);
@@ -3681,15 +3686,14 @@ fn lowerCall(self: *Self, call_data: anytype, mir_expr_id: MIR.ExprId, region: R
     const ret_layout = try self.runtimeValueLayoutFromMirExpr(mir_expr_id);
 
     // Some annotation-only methods are compiler intrinsics. Lower those directly.
+    // Non-intrinsic annotation-only calls crash at runtime (function has no implementation).
     const func_mir_expr = self.mir_store.getExpr(call_data.func);
     if (func_mir_expr == .runtime_err_anno_only) {
         if (try self.lowerAnnotationOnlyIntrinsicCall(call_data, mono_idx, region)) |lowered| {
             return lowered;
         }
-        if (std.debug.runtime_safety) {
-            std.debug.panic("MirToLir unsupported: direct call to annotation-only intrinsic", .{});
-        }
-        unreachable;
+        const msg = try self.lir_store.strings.insert(self.allocator, "Called a function that has no implementation");
+        return self.lir_store.addExpr(.{ .crash = .{ .msg = msg, .ret_layout = ret_layout } }, region);
     }
     if (func_mir_expr == .lookup) {
         const sym = func_mir_expr.lookup;
@@ -3698,13 +3702,8 @@ fn lowerCall(self: *Self, call_data: anytype, mir_expr_id: MIR.ExprId, region: R
                 if (try self.lowerAnnotationOnlyIntrinsicCall(call_data, mono_idx, region)) |lowered| {
                     return lowered;
                 }
-                if (std.debug.runtime_safety) {
-                    std.debug.panic(
-                        "MirToLir unsupported: call to annotation-only symbol key={d}",
-                        .{sym.raw()},
-                    );
-                }
-                unreachable;
+                const msg = try self.lir_store.strings.insert(self.allocator, "Called a function that has no implementation");
+                return self.lir_store.addExpr(.{ .crash = .{ .msg = msg, .ret_layout = ret_layout } }, region);
             }
         }
     }

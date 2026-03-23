@@ -7878,6 +7878,16 @@ pub const Pass = struct {
     ) Allocator.Error!bool {
         const module_env = self.all_module_envs[module_idx];
         return switch (module_env.store.getExpr(callee_expr_idx)) {
+            .e_lookup_local => |lookup| blk: {
+                const defs = module_env.store.sliceDefs(module_env.all_defs);
+                for (defs) |def_idx| {
+                    const def = module_env.store.getDef(def_idx);
+                    if (def.pattern == lookup.pattern_idx) {
+                        break :blk module_env.store.getExpr(def.expr) == .e_anno_only;
+                    }
+                }
+                break :blk false;
+            },
             .e_lookup_external => |lookup| blk: {
                 const target_module_idx = self.resolveImportedModuleIdx(module_env, lookup.module_idx) orelse break :blk false;
                 const target_env = self.all_module_envs[target_module_idx];

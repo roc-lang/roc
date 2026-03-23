@@ -2359,21 +2359,20 @@ test "Decoder: create err result" {
     , false, .no_trace);
 }
 
-// TODO: Monomorphize panics on 'to_i64' dispatch for type-mismatched code instead of returning an error.
-// test "decode: I32.decode with record field format mismatches and crashes" {
-//     try runExpectTypeMismatchAndCrash(
-//         \\{
-//         \\    fmt = {
-//         \\        decode_i32: |_fmt, src| (Ok(42.I32), src),
-//         \\    }
-//         \\    (result, _rest) = I32.decode([], fmt)
-//         \\    match result {
-//         \\        Ok(n) => n.to_i64()
-//         \\        Err(_) => 0.I64
-//         \\    }
-//         \\}
-//     );
-// }
+test "decode: I32.decode with record field format mismatches and crashes" {
+    try runExpectTypeMismatchAndCrash(
+        \\{
+        \\    fmt = {
+        \\        decode_i32: |_fmt, src| (Ok(42.I32), src),
+        \\    }
+        \\    (result, _rest) = I32.decode([], fmt)
+        \\    match result {
+        \\        Ok(n) => n.to_i64()
+        \\        Err(_) => 0.I64
+        \\    }
+        \\}
+    );
+}
 
 // TODO: Test with multiple decode methods in same format has issues
 // test "decode: chained format with different types" { ... }

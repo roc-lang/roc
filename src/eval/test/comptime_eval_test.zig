@@ -2972,8 +2972,23 @@ test "issue 8979: while (True) {} should crash instead of hanging" {
     try testing.expectEqual(@as(u32, 1), summary.crashed);
 }
 
-// TODO: Monomorphize panics (signal 6) when lowering while(True) with non-trivial body.
-// test "issue 8979: while (True) with body but no exit should crash" { ... }
+test "issue 8979: while (True) with body but no exit should crash" {
+    const src =
+        \\e = {
+        \\    while (True) {
+        \\        Str.concat("a", "b")
+        \\    }
+        \\}
+    ;
+
+    var res = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&res);
+
+    const summary = try res.evaluator.evalAll();
+
+    // Should crash because condition is True and body has no exit
+    try testing.expectEqual(@as(u32, 1), summary.crashed);
+}
 
 test "issue 8979: while with expression evaluating to True and no exit should crash" {
     const src =
@@ -3247,5 +3262,20 @@ test "issue 9262: dev evaluator handles opaque function field lookup" {
     try testing.expect(code_result.entry_offset < code_result.code.len);
 }
 
-// TODO: Monomorphize panics (signal 6) on closure capture lowering.
-// test "comptime eval - closure with single capture" { ... }
+test "comptime eval - closure with single capture" {
+    const src =
+        \\e = {
+        \\    x = 42
+        \\    f = |y| x + y
+        \\    f(1)
+        \\}
+    ;
+
+    var res = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&res);
+
+    const summary = try res.evaluator.evalAll();
+
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}

@@ -134,31 +134,102 @@ fn cleanupEvalModule(result: anytype) void {
     builtin_module_mut.deinit();
 }
 
-// TODO: Monomorphize panics (signal 6) on annotation-only function calls instead of returning an error.
-// test "e_anno_only - function crashes when called directly" {
-//     const src =
-//         \\foo : Str -> Str
-//         \\x = foo("test")
-//     ;
-//
-//     var result = try parseCheckAndEvalModule(src);
-//     defer cleanupEvalModule(&result);
-//
-//     const summary = try result.evaluator.evalAll();
-//
-//     // Should evaluate 2 declarations with 1 crash (the call to foo should crash)
-//     try testing.expectEqual(@as(u32, 2), summary.evaluated);
-//     try testing.expectEqual(@as(u32, 1), summary.crashed);
-// }
+test "e_anno_only - function crashes when called directly" {
+    const src =
+        \\foo : Str -> Str
+        \\x = foo("test")
+    ;
 
-// TODO: Monomorphize panics (signal 6) on annotation-only functions instead of returning an error.
-// Skipping all e_anno_only tests until monomorphize returns errors for missing definitions.
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
 
-// test "e_anno_only - non-function crashes when accessed"
-// test "e_anno_only - function only crashes when called (True branch)"
-// test "e_anno_only - function only crashes when called (False branch)"
-// test "e_anno_only - value only crashes when accessed (True branch)"
-// test "e_anno_only - value only crashes when accessed (False branch)"
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate 2 declarations with 1 crash (the call to foo should crash)
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    try testing.expectEqual(@as(u32, 1), summary.crashed);
+}
+
+test "e_anno_only - non-function crashes when accessed" {
+    const src =
+        \\foo : Str
+        \\x = foo
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // foo has no body, so accessing it should crash
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    try testing.expectEqual(@as(u32, 1), summary.crashed);
+}
+
+test "e_anno_only - function only crashes when called (True branch)" {
+    const src =
+        \\foo : Str -> Str
+        \\x = if (True) foo("test") else "safe"
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // The True branch calls foo, which should crash
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    try testing.expectEqual(@as(u32, 1), summary.crashed);
+}
+
+test "e_anno_only - function only crashes when called (False branch)" {
+    const src =
+        \\foo : Str -> Str
+        \\x = if (False) foo("test") else "safe"
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // The False branch avoids calling foo, so no crash
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "e_anno_only - value only crashes when accessed (True branch)" {
+    const src =
+        \\foo : Str
+        \\x = if (True) foo else "safe"
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // The True branch accesses foo, which should crash
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    try testing.expectEqual(@as(u32, 1), summary.crashed);
+}
+
+test "e_anno_only - value in if-else always crashes regardless of branch taken" {
+    const src =
+        \\foo : Str
+        \\x = if (False) foo else "safe"
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Even though the False branch avoids executing foo at runtime,
+    // the annotation-only value in the True branch still gets compiled to a crash.
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    try testing.expectEqual(@as(u32, 1), summary.crashed);
+}
 
 test "List.first on nonempty list" {
     const src =
