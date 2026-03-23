@@ -947,7 +947,7 @@ The `me` function expects 2 arguments, but it got 1 instead:
 
 The `me` function has the type:
 
-    [Blue, ..], [Tb, ..] -> Error
+    [Blue, ..], [Tb] -> Error
 
 Are there any missing commas?
 
@@ -2163,7 +2163,7 @@ expect {
 		(patt (type "Bool -> Dec"))
 		(patt (type "Error"))
 		(patt (type "Bool -> Error"))
-		(patt (type "[Blue, ..], [Tb, ..] -> Error"))
+		(patt (type "[Blue, ..], [Tb] -> Error"))
 		(patt (type "Error"))
 		(patt (type "_arg -> Error"))
 		(patt (type "{}"))
@@ -2200,7 +2200,7 @@ expect {
 		(expr (type "Bool -> Dec"))
 		(expr (type "Error"))
 		(expr (type "Bool -> Error"))
-		(expr (type "[Blue, ..], [Tb, ..] -> Error"))
+		(expr (type "[Blue, ..], [Tb] -> Error"))
 		(expr (type "Error"))
 		(expr (type "_arg -> Error"))
 		(expr (type "{}"))

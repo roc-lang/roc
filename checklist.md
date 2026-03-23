@@ -32,7 +32,7 @@ Problematic state: Call path falls back to linear scan over procedures (`src/bac
 Should look like: Call resolution is deterministic via direct index/map, and missing entries fail fast via invariant assertion (no silent slow-path recovery).
 How to verify: No O(N) scan fallback remains in normal call emission path.
 
-7. [ ] `str_inspekt` naming must not degrade to `"?"` placeholders.
+7. [ ] `str_inspect` naming must not degrade to `"?"` placeholders.
 Problematic state: Multiple MIR->LIR locations hardcode unknown names as `"?"` (`src/lir/MirToLir.zig` around lines 2013, 2077, 2250, 2296-2297, 2314).
 Should look like: Either stable identifier-free formatting is used by design, or real names are propagated from allowed data sources; no placeholder fallback strings.
 How to verify: No production path hardcodes `"?"` for inspect-name recovery.

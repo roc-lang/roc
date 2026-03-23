@@ -918,7 +918,7 @@ const Formatter = struct {
     }
 
     /// Format a record type annotation with an extension (e.g., { name: Str, ..ext } or { name: Str, .. })
-    fn formatRecordWithExtension(fmt: *Formatter, fields_span: AST.AnnoRecordField.Span, ext: AST.TypeAnno.Idx, record_region: AST.TokenizedRegion) anyerror!void {
+    fn formatRecordWithExtension(fmt: *Formatter, fields_span: AST.AnnoRecordField.Span, ext: AST.TypeAnno.RecordExt, record_region: AST.TokenizedRegion) anyerror!void {
         const fields = fmt.ast.store.annoRecordFieldSlice(fields_span);
         const record_multiline = fmt.ast.regionIsMultiline(record_region);
         const record_indent = fmt.curr_indent;
@@ -954,18 +954,25 @@ const Formatter = struct {
             }
         }
         // Handle the record extension (..ext or ..)
-        const ext_region = fmt.nodeRegion(@intFromEnum(ext));
-        if (record_multiline) {
-            _ = try fmt.flushCommentsBefore(ext_region.start);
-            try fmt.ensureNewline();
-            try fmt.pushIndent();
-        }
-        const ext_anno = fmt.ast.store.getTypeAnno(ext);
-        try fmt.pushAll("..");
-        // Only output the extension type if it's not an anonymous underscore
-        switch (ext_anno) {
-            .underscore => {}, // Anonymous extension - just output ".."
-            else => _ = try @as(fn (*Formatter, AST.TypeAnno.Idx) anyerror!AST.TokenizedRegion, Formatter.formatTypeAnno)(fmt, ext),
+        switch (ext) {
+            .named => |named| {
+                if (record_multiline) {
+                    _ = try fmt.flushCommentsBefore(named.region.start);
+                    try fmt.ensureNewline();
+                    try fmt.pushIndent();
+                }
+                try fmt.pushAll("..");
+                _ = try @as(fn (*Formatter, AST.TypeAnno.Idx) anyerror!AST.TokenizedRegion, Formatter.formatTypeAnno)(fmt, named.anno);
+            },
+            .open => |tok| {
+                if (record_multiline) {
+                    _ = try fmt.flushCommentsBefore(tok);
+                    try fmt.ensureNewline();
+                    try fmt.pushIndent();
+                }
+                try fmt.pushAll("..");
+            },
+            .closed => unreachable,
         }
         if (record_multiline) {
             try fmt.push(',');
@@ -2388,12 +2395,15 @@ const Formatter = struct {
             },
             .record => |r| {
                 region = r.region;
-                if (r.ext) |ext| {
-                    // Record with extension - handle specially
-                    try fmt.formatRecordWithExtension(r.fields, ext, region);
-                } else {
-                    // Regular record without extension - use formatCollection
-                    try fmt.formatCollection(region, .curly, AST.AnnoRecordField.Idx, fmt.ast.store.annoRecordFieldSlice(r.fields), Formatter.formatAnnoRecordField);
+                switch (r.ext) {
+                    .closed => {
+                        // Regular record without extension - use formatCollection
+                        try fmt.formatCollection(region, .curly, AST.AnnoRecordField.Idx, fmt.ast.store.annoRecordFieldSlice(r.fields), Formatter.formatAnnoRecordField);
+                    },
+                    .open, .named => {
+                        // Record with extension - handle specially
+                        try fmt.formatRecordWithExtension(r.fields, r.ext, region);
+                    },
                 }
             },
             .tag_union => |t| {
@@ -2430,7 +2440,7 @@ const Formatter = struct {
                     if (is_open) {
                         // Get the token position for flushing comments before the ..
                         const double_dot_token: Token.Idx = switch (t.ext) {
-                            .named => |named_idx| fmt.nodeRegion(@intFromEnum(named_idx)).start,
+                            .named => |named| named.region.start,
                             .open => |tok| tok,
                             .closed => unreachable, // is_open is true
                         };

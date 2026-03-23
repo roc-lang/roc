@@ -18,6 +18,7 @@ const builtin = @import("builtin");
 const base = @import("base");
 const Io = @import("io").Io;
 const can = @import("can");
+const types = @import("types");
 const layout = @import("layout");
 const backend = @import("backend");
 const mir = @import("mir");
@@ -164,6 +165,61 @@ fn isBuiltinModuleEnv(env: *const ModuleEnv) bool {
     return env.display_module_name_idx.eql(env.idents.builtin_module);
 }
 
+/// Build a TypeScope mapping platform for-clause aliases to app concrete types.
+/// Returns null if the module has no for-clause aliases (non-platform modules or
+/// platforms without type parameters like `model`).
+fn buildPlatformTypeScope(
+    allocator: Allocator,
+    module_env: *const ModuleEnv,
+    app_module_env: *ModuleEnv,
+) ?types.TypeScope {
+    const all_aliases = module_env.for_clause_aliases.items.items;
+    if (all_aliases.len == 0) return null;
+
+    var type_scope = types.TypeScope.init(allocator);
+    type_scope.scopes.append(types.VarMap.init(allocator)) catch {
+        type_scope.deinit();
+        return null;
+    };
+    const rigid_scope = &type_scope.scopes.items[0];
+
+    for (module_env.requires_types.items.items) |required_type| {
+        const type_aliases_slice = all_aliases[@intFromEnum(required_type.type_aliases.start)..][0..required_type.type_aliases.count];
+        for (type_aliases_slice) |alias| {
+            const alias_stmt = module_env.store.getStatement(alias.alias_stmt_idx);
+            std.debug.assert(alias_stmt == .s_alias_decl);
+            const alias_body_var = can.ModuleEnv.varFrom(alias_stmt.s_alias_decl.anno);
+            const alias_stmt_var = can.ModuleEnv.varFrom(alias.alias_stmt_idx);
+            // Cross-module ident lookup: translate platform alias name to app ident store
+            // via insertIdent (get-or-create) since ident indices are module-local.
+            const alias_name_str = module_env.getIdent(alias.alias_name);
+            const app_alias_name = app_module_env.common.insertIdent(allocator, base.Ident.for_text(alias_name_str)) catch continue;
+            const app_var = findTypeAliasBodyVar(app_module_env, app_alias_name) orelse continue;
+            rigid_scope.put(alias_body_var, app_var) catch continue;
+            rigid_scope.put(alias_stmt_var, app_var) catch continue;
+        }
+    }
+
+    return type_scope;
+}
+
+fn findTypeAliasBodyVar(module_env: *const ModuleEnv, name: base.Ident.Idx) ?types.Var {
+    const stmts_slice = module_env.store.sliceStatements(module_env.all_statements);
+    for (stmts_slice) |stmt_idx| {
+        const stmt = module_env.store.getStatement(stmt_idx);
+        switch (stmt) {
+            .s_alias_decl => |alias_decl| {
+                const header = module_env.store.getTypeHeader(alias_decl.header);
+                if (header.relative_name.eql(name)) {
+                    return can.ModuleEnv.varFrom(alias_decl.anno);
+                }
+            },
+            else => {},
+        }
+    }
+    return null;
+}
+
 // Host ABI types for RocOps
 const RocOps = builtins.host_abi.RocOps;
 const RocAlloc = builtins.host_abi.RocAlloc;
@@ -188,7 +244,7 @@ fn lirExprResultLayout(store: *const LirExprStore, expr_id: lir.LirExprId) layou
         .match_expr => |w| w.result_layout,
         .dbg => |d| d.result_layout,
         .expect => |e| e.result_layout,
-        .call => |c| c.ret_layout,
+        .proc_call => |c| c.ret_layout,
         .low_level => |ll| ll.ret_layout,
         .early_return => |er| er.ret_layout,
         .lookup => |l| l.layout_idx,
@@ -210,7 +266,6 @@ fn lirExprResultLayout(store: *const LirExprStore, expr_id: lir.LirExprId) layou
         .empty_list => |l| l.list_layout,
         .hosted_call => |hc| hc.ret_layout,
         .tag_payload_access => |tpa| tpa.payload_layout,
-        .lambda => |l| l.fn_layout,
         .for_loop, .while_loop, .incref, .decref, .free => .zst,
         .crash => |c| c.ret_layout,
         .runtime_error => |re| re.ret_layout,
@@ -737,19 +792,54 @@ pub const DevEvaluator = struct {
         // but the shared type-layout resolver persists. Clear stale type-side caches.
         type_layout_resolver_ptr.resetModuleCache(all_module_envs);
 
+        // Build platform type scope for cross-module type resolution (e.g., Model → { value: I64 })
+        var platform_type_scope = if (app_module_env) |app_env|
+            buildPlatformTypeScope(self.allocator, module_env, app_env)
+        else
+            null;
+        defer if (platform_type_scope) |*ts| ts.deinit();
+
         // Lower CIR to MIR
         var mir_store = MIR.Store.init(self.allocator) catch return error.OutOfMemory;
         defer mir_store.deinit(self.allocator);
 
+        var monomorphization = if (platform_type_scope) |*ts|
+            mir.Monomorphize.runExprWithTypeScope(
+                self.allocator,
+                all_module_envs,
+                &module_env.types,
+                module_idx,
+                app_module_idx,
+                expr_idx,
+                module_idx,
+                ts,
+                app_module_idx.?,
+            ) catch return error.OutOfMemory
+        else
+            mir.Monomorphize.runExpr(
+                self.allocator,
+                all_module_envs,
+                &module_env.types,
+                module_idx,
+                app_module_idx,
+                expr_idx,
+            ) catch return error.OutOfMemory;
+        defer monomorphization.deinit(self.allocator);
+
         var mir_lower = mir.Lower.init(
             self.allocator,
             &mir_store,
+            &monomorphization,
             all_module_envs,
             &module_env.types,
             module_idx,
             app_module_idx,
         ) catch return error.OutOfMemory;
         defer mir_lower.deinit();
+
+        if (platform_type_scope) |*ts| {
+            mir_lower.setTypeScope(module_idx, ts, app_module_idx.?) catch return error.OutOfMemory;
+        }
 
         const mir_expr_id = mir_lower.lowerExpr(expr_idx) catch {
             return error.RuntimeError;
@@ -770,8 +860,6 @@ pub const DevEvaluator = struct {
         const lir_expr_id = mir_to_lir.lower(mir_expr_id) catch {
             return error.RuntimeError;
         };
-        try lir.CallCanonicalize.canonicalizeDirectCalls(self.allocator, &lir_store, &.{lir_expr_id});
-
         // Run RC insertion pass on the LIR
         var rc_pass = lir.RcInsert.RcInsertPass.init(self.allocator, &lir_store, layout_store_ptr) catch return error.OutOfMemory;
         defer rc_pass.deinit();
@@ -780,7 +868,6 @@ pub const DevEvaluator = struct {
         // Run RC insertion pass on all function definitions (symbol_defs)
         // so that lambda bodies get proper incref/decref annotations.
         lir.RcInsert.insertRcOpsIntoSymbolDefsBestEffort(self.allocator, &lir_store, layout_store_ptr);
-        try lir.CallCanonicalize.canonicalizeDirectCalls(self.allocator, &lir_store, &.{final_expr_id});
 
         // Determine the result layout from the lowered LIR expression.
         const cir_expr = module_env.store.getExpr(expr_idx);
@@ -805,9 +892,9 @@ pub const DevEvaluator = struct {
         // Compile all procedures first (for recursive functions)
         // This ensures recursive closures are compiled as complete procedures
         // before we generate calls to them.
-        const procs = lir_store.getProcs();
+        const procs = lir_store.getProcSpecs();
         if (procs.len > 0) {
-            codegen.compileAllProcs(procs) catch {
+            codegen.compileAllProcSpecs(procs) catch {
                 return error.RuntimeError;
             };
         }
@@ -829,8 +916,8 @@ pub const DevEvaluator = struct {
 
     /// Generate code for an entrypoint using the RocCall ABI: fn(roc_ops, ret_ptr, args_ptr).
     ///
-    /// Uses `generateEntrypointWrapper` which handles argument unpacking from args_ptr,
-    /// lambda/lookup/nominal resolution, and proper ABI slot sizing.
+    /// Uses `generateEntrypointWrapper` which handles argument unpacking from args_ptr
+    /// and invokes a synthetic entrypoint proc using the RocCall ABI.
     /// This is for `roc run` where the host passes its own RocOps.
     pub fn generateEntrypointCode(
         self: *DevEvaluator,
@@ -871,13 +958,44 @@ pub const DevEvaluator = struct {
         // but the shared type-layout resolver persists. Clear stale type-side caches.
         type_layout_resolver_ptr.resetModuleCache(all_module_envs);
 
+        // Build platform type scope for cross-module type resolution (e.g., Model → { value: I64 })
+        var platform_type_scope = if (app_module_env) |app_env|
+            buildPlatformTypeScope(self.allocator, module_env, app_env)
+        else
+            null;
+        defer if (platform_type_scope) |*ts| ts.deinit();
+
         // Lower CIR → MIR
         var mir_store = MIR.Store.init(self.allocator) catch return error.OutOfMemory;
         defer mir_store.deinit(self.allocator);
 
+        var monomorphization = if (platform_type_scope) |*ts|
+            mir.Monomorphize.runExprWithTypeScope(
+                self.allocator,
+                all_module_envs,
+                &module_env.types,
+                module_idx,
+                app_module_idx,
+                expr_idx,
+                module_idx,
+                ts,
+                app_module_idx.?,
+            ) catch return error.OutOfMemory
+        else
+            mir.Monomorphize.runExpr(
+                self.allocator,
+                all_module_envs,
+                &module_env.types,
+                module_idx,
+                app_module_idx,
+                expr_idx,
+            ) catch return error.OutOfMemory;
+        defer monomorphization.deinit(self.allocator);
+
         var mir_lower = mir.Lower.init(
             self.allocator,
             &mir_store,
+            &monomorphization,
             all_module_envs,
             &module_env.types,
             module_idx,
@@ -885,22 +1003,13 @@ pub const DevEvaluator = struct {
         ) catch return error.OutOfMemory;
         defer mir_lower.deinit();
 
-        var mir_expr_id = mir_lower.lowerExpr(expr_idx) catch {
+        if (platform_type_scope) |*ts| {
+            mir_lower.setTypeScope(module_idx, ts, app_module_idx.?) catch return error.OutOfMemory;
+        }
+
+        const mir_expr_id = mir_lower.lowerExpr(expr_idx) catch {
             return error.RuntimeError;
         };
-
-        // Zero-arg function entrypoints like `main! : () => {}` must be lowered
-        // as calls, not as first-class function values.
-        if (arg_layouts.len == 0) {
-            const func_mono_idx = mir_store.typeOf(mir_expr_id);
-            const func_mono = mir_store.monotype_store.getMonotype(func_mono_idx);
-            if (func_mono == .func) {
-                mir_expr_id = mir_store.addExpr(self.allocator, .{ .call = .{
-                    .func = mir_expr_id,
-                    .args = MIR.ExprSpan.empty(),
-                } }, func_mono.func.ret, base.Region.zero()) catch return error.OutOfMemory;
-            }
-        }
 
         // Run lambda set inference
         const mir_mod = @import("mir");
@@ -914,18 +1023,11 @@ pub const DevEvaluator = struct {
         var mir_to_lir = lir.MirToLir.init(self.allocator, &mir_store, &lir_store, layout_store_ptr, &lambda_set_store, module_env.idents.true_tag);
         defer mir_to_lir.deinit();
 
-        const lir_expr_id = mir_to_lir.lower(mir_expr_id) catch {
+        const entry_proc = mir_to_lir.lowerEntrypointProc(mir_expr_id, arg_layouts, ret_layout) catch {
             return error.RuntimeError;
         };
-        try lir.CallCanonicalize.canonicalizeDirectCalls(self.allocator, &lir_store, &.{lir_expr_id});
-
-        // Run RC insertion pass
-        var rc_pass = lir.RcInsert.RcInsertPass.init(self.allocator, &lir_store, layout_store_ptr) catch return error.OutOfMemory;
-        defer rc_pass.deinit();
-        const final_expr_id = rc_pass.insertRcOps(lir_expr_id) catch lir_expr_id;
 
         lir.RcInsert.insertRcOpsIntoSymbolDefsBestEffort(self.allocator, &lir_store, layout_store_ptr);
-        try lir.CallCanonicalize.canonicalizeDirectCalls(self.allocator, &lir_store, &.{final_expr_id});
 
         // Create codegen
         var codegen = backend.HostLirCodeGen.init(
@@ -937,15 +1039,15 @@ pub const DevEvaluator = struct {
         defer codegen.deinit();
 
         // Compile all procedures first
-        const procs = lir_store.getProcs();
+        const procs = lir_store.getProcSpecs();
         if (procs.len > 0) {
-            codegen.compileAllProcs(procs) catch {
+            codegen.compileAllProcSpecs(procs) catch {
                 return error.RuntimeError;
             };
         }
 
         // Generate entrypoint wrapper using RocCall ABI
-        const exported = codegen.generateEntrypointWrapper("", final_expr_id, arg_layouts, ret_layout) catch {
+        const exported = codegen.generateEntrypointWrapper("", entry_proc, arg_layouts, ret_layout) catch {
             return error.RuntimeError;
         };
 

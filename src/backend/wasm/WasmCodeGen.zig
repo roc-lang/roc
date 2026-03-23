@@ -23,7 +23,7 @@ const Op = WasmModule.Op;
 const ValType = WasmModule.ValType;
 const BlockType = WasmModule.BlockType;
 
-const LirProc = LIR.LirProc;
+const LirProcSpec = LIR.LirProcSpec;
 const CFStmtId = LIR.CFStmtId;
 const RcOpKind = enum { incref, decref, free };
 
@@ -43,11 +43,7 @@ stack_frame_size: u32 = 0,
 uses_stack_memory: bool = false,
 /// Local index of the frame pointer ($fp) - only valid when uses_stack_memory is true.
 fp_local: u32 = 0,
-/// Map from lambda expression ID → compiled wasm function index.
-compiled_lambdas: std.AutoHashMap(u32, u32),
-/// Map from `(comparator_expr_id, elem_layout)` pairs to compiled comparator thunk function indices.
-compiled_sort_comparators: std.AutoHashMap(u64, u32),
-/// Map from proc symbol key → compiled wasm function index (for LirProc compilation).
+/// Map from proc symbol key → compiled wasm function index (for LirProcSpec compilation).
 registered_procs: std.AutoHashMap(u64, u32),
 /// Type index for the RocOps function signature: (i32, i32) -> void.
 roc_ops_type_idx: u32 = 0,
@@ -155,8 +151,6 @@ pub fn init(allocator: Allocator, store: *const LirExprStore, layout_store: *con
         .stack_frame_size = 0,
         .uses_stack_memory = false,
         .fp_local = 0,
-        .compiled_lambdas = std.AutoHashMap(u32, u32).init(allocator),
-        .compiled_sort_comparators = std.AutoHashMap(u64, u32).init(allocator),
         .registered_procs = std.AutoHashMap(u64, u32).init(allocator),
         .join_point_depths = std.AutoHashMap(u32, u32).init(allocator),
         .join_point_param_locals = std.AutoHashMap(u32, []u32).init(allocator),
@@ -168,8 +162,6 @@ pub fn deinit(self: *Self) void {
     self.module.deinit();
     self.body.deinit(self.allocator);
     self.storage.deinit();
-    self.compiled_lambdas.deinit();
-    self.compiled_sort_comparators.deinit();
     self.registered_procs.deinit();
     self.join_point_depths.deinit();
     // Free allocated param local arrays
@@ -370,9 +362,9 @@ pub fn generateModule(self: *Self, expr_id: LirExprId, result_layout: layout.Idx
     self.registerHostImports() catch return error.OutOfMemory;
 
     // Compile any procedures (recursive functions) before the main expression
-    const procs = self.store.getProcs();
-    if (procs.len > 0) {
-        self.compileAllProcs(procs) catch return error.OutOfMemory;
+    const proc_specs = self.store.getProcSpecs();
+    if (proc_specs.len > 0) {
+        self.compileAllProcSpecs(proc_specs) catch return error.OutOfMemory;
     }
 
     // Determine return type from the expression's actual wasm type.
@@ -947,16 +939,7 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
             try self.generateExpr(er.expr);
             self.body.append(self.allocator, Op.@"return") catch return error.OutOfMemory;
         },
-        .lambda => |lambda| {
-            // Compile lambda as a separate wasm function.
-            // In the new pipeline, lambdas as first-class values produce their function index.
-            _ = try self.compileLambda(expr_id, lambda);
-            // Push a placeholder value — in the new pipeline, lambda values are dispatched
-            // at call sites via MIR→LIR generated code, not stored as runtime values.
-            try self.body.append(self.allocator, Op.i32_const);
-            try WasmModule.leb128WriteI32(self.allocator, &self.body, 0);
-        },
-        .call => |c| {
+        .proc_call => |c| {
             try self.generateCall(c);
         },
         .zero_arg_tag => |z| {
@@ -2226,7 +2209,7 @@ fn exprLayoutIdx(self: *Self, expr_id: LirExprId) layout.Idx {
         .if_then_else => |ite| ite.result_layout,
         .match_expr => |w| w.result_layout,
         .nominal => |nom| self.exprLayoutIdx(nom.backing_expr),
-        .call => |c| c.ret_layout,
+        .proc_call => |c| c.ret_layout,
         .struct_ => |s| s.struct_layout,
         .struct_access => |sa| sa.field_layout,
         .zero_arg_tag => |z| z.union_layout,
@@ -2252,7 +2235,6 @@ fn exprLayoutIdx(self: *Self, expr_id: LirExprId) layout.Idx {
         .discriminant_switch => |ds| ds.result_layout,
         .early_return => |er| er.ret_layout,
         .cell_load => |l| l.layout_idx,
-        .lambda => |l| l.fn_layout,
         .for_loop, .while_loop => layout.Idx.zst,
         .break_expr, .crash, .runtime_error => {
             if (builtin.mode == .Debug) {
@@ -2284,8 +2266,7 @@ fn exprValType(self: *Self, expr_id: LirExprId) ValType {
         .match_expr => |w| self.resolveValType(w.result_layout),
         .nominal => |nom| self.exprValType(nom.backing_expr),
         .empty_list => .i32, // pointer to 12-byte RocList
-        .call => |c| self.resolveValType(c.ret_layout),
-        .lambda => .i32, // function reference (index)
+        .proc_call => |c| self.resolveValType(c.ret_layout),
         .struct_ => .i32, // pointer to stack memory
         .struct_access => |sa| self.resolveValType(sa.field_layout),
         .zero_arg_tag => .i32, // discriminant or pointer
@@ -2346,7 +2327,7 @@ fn isCompositeExpr(self: *const Self, expr_id: LirExprId) bool {
         .match_expr => |w| self.isCompositeLayout(w.result_layout),
         .lookup => |l| self.isCompositeLayout(l.layout_idx),
         .cell_load => |l| self.isCompositeLayout(l.layout_idx),
-        .call => |c| self.isCompositeLayout(c.ret_layout),
+        .proc_call => |c| self.isCompositeLayout(c.ret_layout),
         .struct_access => |sa| self.isCompositeLayout(sa.field_layout),
         .low_level => |ll| self.isCompositeLayout(ll.ret_layout),
         .dbg => |d| self.isCompositeLayout(d.result_layout),
@@ -2359,7 +2340,6 @@ fn isCompositeExpr(self: *const Self, expr_id: LirExprId) bool {
         .hosted_call => |hc| self.isCompositeLayout(hc.ret_layout),
         .early_return => |er| self.isCompositeLayout(er.ret_layout),
         .i64_literal, .f64_literal, .f32_literal, .bool_literal => false, // scalars
-        .lambda => false, // function value, not composite data
         .for_loop, .while_loop, .break_expr, .crash, .runtime_error => false, // unit/noreturn
     };
 }
@@ -2369,7 +2349,7 @@ fn isCompositeExpr(self: *const Self, expr_id: LirExprId) bool {
 fn exprNeedsCompositeCallStabilization(self: *const Self, expr_id: LirExprId) bool {
     const expr = self.store.getExpr(expr_id);
     return switch (expr) {
-        .call => true,
+        .proc_call => true,
         .nominal => |nom| self.exprNeedsCompositeCallStabilization(nom.backing_expr),
         .block => |b| self.exprNeedsCompositeCallStabilization(b.final_expr),
         .incref => |inc| self.exprNeedsCompositeCallStabilization(inc.value),
@@ -4756,13 +4736,6 @@ fn emitI128TryToI128(self: *Self) Allocator.Error!void {
 /// This is the safe way to map layout indices that might be dynamically allocated
 /// (not one of the well-known sentinel values like .bool, .i32, etc.).
 /// If a lambda's body returns an unwrapped_capture closure, get the capture's layout.
-/// The runtime return value is the capture itself, not a closure pointer.
-/// In the new pipeline, closures are lambda-lifted and represented as generic LIR
-/// constructs. There are no unwrapped capture closures in LIR anymore.
-fn getUnwrappedCaptureLayout(_: *const Self, _: LirExprId) ?layout.Idx {
-    return null;
-}
-
 fn resolveValType(self: *const Self, layout_idx: layout.Idx) ValType {
     return WasmLayout.resultValTypeWithStore(layout_idx, self.getLayoutStore());
 }
@@ -4936,301 +4909,25 @@ fn emitConversion(self: *Self, source: ValType, target: ValType) Allocator.Error
     }
 }
 
-/// Compile a lambda expression as a separate wasm function.
-/// Returns the wasm function index.
-fn compileLambda(self: *Self, expr_id: LirExprId, lambda: anytype) Allocator.Error!u32 {
-    // Check if already compiled
-    const expr_key: u32 = @intFromEnum(expr_id);
-    if (self.compiled_lambdas.get(expr_key)) |existing| {
-        return existing;
-    }
-
-    // Build parameter types: roc_ops_ptr first, then regular params
-    const params = self.store.getPatternSpan(lambda.params);
-    var param_types: std.ArrayList(ValType) = .empty;
-    defer param_types.deinit(self.allocator);
-
-    // First parameter: roc_ops_ptr (i32)
-    param_types.append(self.allocator, .i32) catch return error.OutOfMemory;
-
-    for (params) |param_id| {
-        const pat = self.store.getPattern(param_id);
-        switch (pat) {
-            .bind => |bind| {
-                param_types.append(self.allocator, self.resolveValType(bind.layout_idx)) catch return error.OutOfMemory;
-            },
-            .wildcard => |wc| {
-                param_types.append(self.allocator, self.resolveValType(wc.layout_idx)) catch return error.OutOfMemory;
-            },
-            .struct_, .list => {
-                // Struct/list destructuring param — passed as i32 pointer
-                param_types.append(self.allocator, .i32) catch return error.OutOfMemory;
-            },
-            else => unreachable,
-        }
-    }
-
-    // Determine return type. For unwrapped_capture closures, the runtime return
-    // value is the capture itself, not a closure pointer.
-    const ret_vt = if (self.getUnwrappedCaptureLayout(lambda.body)) |cap_layout|
-        self.resolveValType(cap_layout)
-    else
-        self.resolveValType(lambda.ret_layout);
-
-    // Add function type and function to the module
-    const type_idx = self.module.addFuncType(param_types.items, &.{ret_vt}) catch return error.OutOfMemory;
-    const func_idx = self.module.addFunction(type_idx) catch return error.OutOfMemory;
-
-    // Cache the compiled function EARLY (before body compilation) to support
-    // mutual recursion: if this lambda's body calls another lambda that calls
-    // back to this one, the recursive lookup will find this func_idx.
-    self.compiled_lambdas.put(expr_key, func_idx) catch return error.OutOfMemory;
-
-    // Save current codegen state
-    const saved = self.saveState() catch return error.OutOfMemory;
-
-    // Initialize fresh state for the lambda body
-    self.body = .empty;
-    self.storage.locals = std.AutoHashMap(u64, Storage.LocalInfo).init(self.allocator);
-    self.storage.next_local_idx = 0;
-    self.storage.local_types = .empty;
-    self.stack_frame_size = 0;
-    self.uses_stack_memory = false;
-    self.fp_local = 0;
-    self.in_proc = true;
-
-    // Local 0 = roc_ops_ptr parameter
-    self.roc_ops_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-
-    // Bind parameters
-    for (params) |param_id| {
-        const pat = self.store.getPattern(param_id);
-        switch (pat) {
-            .bind => |bind| {
-                const vt = self.resolveValType(bind.layout_idx);
-                _ = self.storage.allocLocal(bind.symbol, vt) catch return error.OutOfMemory;
-            },
-            .wildcard => |wc| {
-                _ = self.storage.allocAnonymousLocal(self.resolveValType(wc.layout_idx)) catch return error.OutOfMemory;
-            },
-            .struct_ => |s| {
-                const ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-                try self.bindStructPattern(ptr, s);
-            },
-            .list => |list_pat| {
-                const ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-                try self.bindListPattern(ptr, list_pat);
-            },
-            else => unreachable,
-        }
-    }
-
-    // Pre-allocate frame pointer local (after params, so it doesn't conflict)
-    self.fp_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-
-    // Generate the body expression
-    self.generateExpr(lambda.body) catch |err| {
-        self.restoreState(saved);
-        return err;
-    };
-
-    // Build function body: locals declaration + prologue + instructions + epilogue + end
-    var func_body: std.ArrayList(u8) = .empty;
-    defer func_body.deinit(self.allocator);
-
-    // Pre-allocate result_tmp BEFORE encoding locals (so it's included in the declaration)
-    const result_tmp = if (self.uses_stack_memory)
-        self.storage.allocAnonymousLocal(ret_vt) catch return error.OutOfMemory
-    else
-        0;
-
-    // Locals declaration — only for locals beyond the parameters (1 roc_ops_ptr + forwarded captures + params)
-    try self.encodeLocalsDecl(&func_body, @intCast(1 + params.len));
-
-    if (self.uses_stack_memory) {
-        // Prologue: allocate stack frame
-        // global.get $__stack_pointer
-        func_body.append(self.allocator, Op.global_get) catch return error.OutOfMemory;
-        WasmModule.leb128WriteU32(self.allocator, &func_body, 0) catch return error.OutOfMemory;
-        // i32.const frame_size
-        func_body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-        WasmModule.leb128WriteI32(self.allocator, &func_body, @intCast(self.stack_frame_size)) catch return error.OutOfMemory;
-        // i32.sub
-        func_body.append(self.allocator, Op.i32_sub) catch return error.OutOfMemory;
-        // local.tee $fp
-        func_body.append(self.allocator, Op.local_tee) catch return error.OutOfMemory;
-        WasmModule.leb128WriteU32(self.allocator, &func_body, self.fp_local) catch return error.OutOfMemory;
-        // global.set $__stack_pointer
-        func_body.append(self.allocator, Op.global_set) catch return error.OutOfMemory;
-        WasmModule.leb128WriteU32(self.allocator, &func_body, 0) catch return error.OutOfMemory;
-    }
-
-    // Body instructions
-    func_body.appendSlice(self.allocator, self.body.items) catch return error.OutOfMemory;
-
-    if (self.uses_stack_memory) {
-        // Epilogue: restore stack pointer
-        // Save result to temp local
-        func_body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
-        WasmModule.leb128WriteU32(self.allocator, &func_body, result_tmp) catch return error.OutOfMemory;
-        // local.get $fp
-        func_body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-        WasmModule.leb128WriteU32(self.allocator, &func_body, self.fp_local) catch return error.OutOfMemory;
-        // i32.const frame_size
-        func_body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-        WasmModule.leb128WriteI32(self.allocator, &func_body, @intCast(self.stack_frame_size)) catch return error.OutOfMemory;
-        // i32.add
-        func_body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-        // global.set $__stack_pointer
-        func_body.append(self.allocator, Op.global_set) catch return error.OutOfMemory;
-        WasmModule.leb128WriteU32(self.allocator, &func_body, 0) catch return error.OutOfMemory;
-        // Push result back
-        func_body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-        WasmModule.leb128WriteU32(self.allocator, &func_body, result_tmp) catch return error.OutOfMemory;
-    }
-
-    // End opcode
-    func_body.append(self.allocator, Op.end) catch return error.OutOfMemory;
-
-    self.module.setFunctionBody(func_idx, func_body.items) catch return error.OutOfMemory;
-
-    // Propagate stack memory usage to outer scope (so module enables memory/globals)
-    const lambda_used_stack_memory = self.uses_stack_memory;
-
-    // Restore previous codegen state
-    self.restoreState(saved);
-
-    // If the lambda used stack memory, the outer scope needs to know
-    if (lambda_used_stack_memory) self.uses_stack_memory = true;
-
-    return func_idx;
-}
-
-fn resolveCallableFuncIdx(self: *Self, fn_expr_id: LirExprId) Allocator.Error!u32 {
-    const fn_expr = self.store.getExpr(fn_expr_id);
-
-    return switch (fn_expr) {
-        .lambda => |lambda| try self.compileLambda(fn_expr_id, lambda),
-        .lookup => |lookup| blk: {
-            const sym_key: u64 = @bitCast(lookup.symbol);
-            if (self.registered_procs.get(sym_key)) |func_idx| {
-                break :blk func_idx;
-            }
-            if (self.store.getSymbolDef(lookup.symbol)) |def_expr_id| {
-                const def_expr = self.store.getExpr(def_expr_id);
-                break :blk switch (def_expr) {
-                    .lambda => |lambda| try self.compileLambda(def_expr_id, lambda),
-                    .nominal => |nom| blk2: {
-                        const inner = self.store.getExpr(nom.backing_expr);
-                        if (inner == .lambda) break :blk2 try self.compileLambda(nom.backing_expr, inner.lambda);
-                        if (std.debug.runtime_safety) std.debug.panic(
-                            "resolveCallableFuncIdx: nominal wrapping unexpected expr '{s}'",
-                            .{@tagName(inner)},
-                        );
-                        unreachable;
-                    },
-                    else => {
-                        if (std.debug.runtime_safety) std.debug.panic(
-                            "resolveCallableFuncIdx: unexpected def expr type '{s}' for lookup call",
-                            .{@tagName(def_expr)},
-                        );
-                        unreachable;
-                    },
-                };
-            }
-            if (std.debug.runtime_safety) std.debug.panic("resolveCallableFuncIdx: unresolved lookup symbol", .{});
-            unreachable;
-        },
-        .nominal => |nom| blk: {
-            const inner = self.store.getExpr(nom.backing_expr);
-            if (inner == .lambda) break :blk try self.compileLambda(nom.backing_expr, inner.lambda);
-            if (std.debug.runtime_safety) std.debug.panic(
-                "resolveCallableFuncIdx: nominal wrapping unexpected expr '{s}'",
-                .{@tagName(inner)},
-            );
-            unreachable;
-        },
-        else => {
-            if (std.debug.runtime_safety) std.debug.panic(
-                "resolveCallableFuncIdx: unexpected fn_expr type '{s}'",
-                .{@tagName(fn_expr)},
-            );
-            unreachable;
-        },
-    };
-}
-
-fn compileSortComparatorThunk(self: *Self, cmp_expr_id: LirExprId, elem_layout: layout.Idx) Allocator.Error!u32 {
-    const cache_key: u64 = (@as(u64, @intFromEnum(cmp_expr_id)) << 32) | @as(u64, @intFromEnum(elem_layout));
-    if (self.compiled_sort_comparators.get(cache_key)) |existing| {
-        return existing;
-    }
-
-    const type_idx = self.module.addFuncType(&.{ .i32, .i32, .i32 }, &.{.i32}) catch return error.OutOfMemory;
-    const func_idx = self.module.addFunction(type_idx) catch return error.OutOfMemory;
-    self.compiled_sort_comparators.put(cache_key, func_idx) catch return error.OutOfMemory;
-
-    const saved = self.saveState() catch return error.OutOfMemory;
-
-    self.body = .empty;
-    self.storage.locals = std.AutoHashMap(u64, Storage.LocalInfo).init(self.allocator);
-    self.storage.next_local_idx = 0;
-    self.storage.local_types = .empty;
-    self.stack_frame_size = 0;
-    self.uses_stack_memory = false;
-    self.fp_local = 0;
-    self.in_proc = true;
-
-    self.roc_ops_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const lhs_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const rhs_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    self.fp_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-
-    const elem_is_composite = self.isCompositeLayout(elem_layout);
-    const cmp_func_idx = try self.resolveCallableFuncIdx(cmp_expr_id);
-
-    try self.emitLocalGet(self.roc_ops_local);
-    if (elem_is_composite) {
-        try self.emitLocalGet(lhs_ptr_local);
-        try self.emitLocalGet(rhs_ptr_local);
-    } else {
-        try self.emitLocalGet(lhs_ptr_local);
-        try self.emitLoadOpForLayout(elem_layout, 0);
-        try self.emitLocalGet(rhs_ptr_local);
-        try self.emitLoadOpForLayout(elem_layout, 0);
-    }
-    try self.emitCall(cmp_func_idx);
-
-    var func_body: std.ArrayList(u8) = .empty;
-    defer func_body.deinit(self.allocator);
-    try self.encodeLocalsDecl(&func_body, 3);
-    func_body.appendSlice(self.allocator, self.body.items) catch return error.OutOfMemory;
-    func_body.append(self.allocator, Op.end) catch return error.OutOfMemory;
-    self.module.setFunctionBody(func_idx, func_body.items) catch return error.OutOfMemory;
-
-    self.restoreState(saved);
-    return func_idx;
-}
-
 /// Compile all LirProcs as separate wasm functions.
-/// Must be called before generateExpr so that call sites can find compiled procs.
-pub fn compileAllProcs(self: *Self, procs: []const LirProc) Allocator.Error!void {
+/// Must be called before generateExpr so that call sites can find compiled proc_specs.
+pub fn compileAllProcSpecs(self: *Self, proc_specs: []const LirProcSpec) Allocator.Error!void {
     // Two-pass compilation to support mutual recursion.
-    // Pass 1: Register ALL procs (create function types, get func_idx).
-    // This ensures that when compiling any proc body, all sibling procs
+    // Pass 1: Register ALL proc_specs (create function types, get func_idx).
+    // This ensures that when compiling any proc body, all sibling proc_specs
     // are already known and can be called without triggering recursive compilation.
-    for (procs) |proc| {
-        try self.registerProc(proc);
+    for (proc_specs) |proc| {
+        try self.registerProcSpec(proc);
     }
     // Pass 2: Compile proc bodies.
-    for (procs) |proc| {
-        try self.compileProcBody(proc);
+    for (proc_specs) |proc| {
+        try self.compileProcSpecBody(proc);
     }
 }
 
-/// Compile a single LirProc as a wasm function.
-/// Does NOT compile the body — that's done by compileProcBody.
-fn registerProc(self: *Self, proc: LirProc) Allocator.Error!void {
+/// Compile a single LirProcSpec as a wasm function.
+/// Does NOT compile the body — that's done by compileProcSpecBody.
+fn registerProcSpec(self: *Self, proc: LirProcSpec) Allocator.Error!void {
     const key: u64 = @bitCast(proc.name);
 
     // Build parameter types: roc_ops_ptr first, then arg_layouts
@@ -5251,11 +4948,11 @@ fn registerProc(self: *Self, proc: LirProc) Allocator.Error!void {
     self.registered_procs.put(key, func_idx) catch return error.OutOfMemory;
 }
 
-/// Compile a proc body. The proc must already be registered via registerProc.
-fn compileProcBody(self: *Self, proc: LirProc) Allocator.Error!void {
+/// Compile a proc body. The proc must already be registered via registerProcSpec.
+fn compileProcSpecBody(self: *Self, proc: LirProcSpec) Allocator.Error!void {
     const key: u64 = @bitCast(proc.name);
 
-    // Get the pre-registered func_idx (must exist — registerProc runs in pass 1)
+    // Get the pre-registered func_idx (must exist — registerProcSpec runs in pass 1)
     const func_idx = self.registered_procs.get(key) orelse unreachable;
 
     const arg_layouts = self.store.getLayoutIdxSpan(proc.arg_layouts);
@@ -5264,12 +4961,12 @@ fn compileProcBody(self: *Self, proc: LirProc) Allocator.Error!void {
     // Save current codegen state
     const saved = self.saveState() catch return error.OutOfMemory;
 
-    // Initialize fresh state with ALL registered procs (for mutual recursion)
+    // Initialize fresh state with ALL registered proc_specs (for mutual recursion)
     self.body = .empty;
     self.storage.locals = std.AutoHashMap(u64, Storage.LocalInfo).init(self.allocator);
     self.storage.next_local_idx = 0;
     self.storage.local_types = .empty;
-    // Note: registered_procs is NOT cleared — all pre-registered procs remain
+    // Note: registered_procs is NOT cleared — all pre-registered proc_specs remain
     // visible. This is critical for mutual recursion: when compiling is_even's
     // body, calls to is_odd must find its func_idx without re-compilation.
     self.stack_frame_size = 0;
@@ -5445,7 +5142,7 @@ fn restoreState(self: *Self, saved: SavedState) void {
     self.in_proc = saved.in_proc;
 }
 
-/// Generate code for a control flow statement (used in LirProc bodies).
+/// Generate code for a control flow statement (used in LirProcSpec bodies).
 fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
     if (stmt_id.isNone()) return;
     const stmt = self.store.getCFStmt(stmt_id);
@@ -5863,48 +5560,13 @@ fn bindCFLetPattern(self: *Self, pat: LirPattern, value_expr: LirExprId) Allocat
 /// just handles explicit direct-call symbols plus the residual runtime
 /// function-value expression path. No closure-specific dispatch.
 fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
-    const func_idx = switch (c.callee) {
-        .direct => |symbol| blk: {
-            const sym_key: u64 = @bitCast(symbol);
-            if (self.registered_procs.get(sym_key)) |registered| break :blk registered;
-
-            const def_expr_id = self.store.getCallableDef(symbol) orelse {
-                if (std.debug.runtime_safety) {
-                    std.debug.panic("generateCall: unresolved direct callee symbol", .{});
-                }
-                unreachable;
-            };
-            const def_expr = self.store.getExpr(def_expr_id);
-            break :blk switch (def_expr) {
-                .lambda => |lambda| try self.compileLambda(def_expr_id, lambda),
-                .runtime_error => {
-                    try self.generateExpr(def_expr_id);
-                    return;
-                },
-                else => {
-                    if (std.debug.runtime_safety) std.debug.panic(
-                        "generateCall: unexpected callable def expr type '{s}' for direct call. " ++
-                            "Direct-call symbols must resolve through callable_defs to lambda/runtime_error leaves.",
-                        .{@tagName(def_expr)},
-                    );
-                    unreachable;
-                },
-            };
-        },
-        .expr => |callee_expr_id| blk: {
-            const callee_expr = self.store.getExpr(callee_expr_id);
-            switch (callee_expr) {
-                .lambda => |lambda| break :blk try self.compileLambda(callee_expr_id, lambda),
-                else => {
-                    if (std.debug.runtime_safety) std.debug.panic(
-                        "generateCall: unexpected callee expr type '{s}'. " ++
-                            "Direct calls must use explicit callee symbols or direct lambda exprs.",
-                        .{@tagName(callee_expr)},
-                    );
-                    unreachable;
-                },
-            }
-        },
+    const proc = self.store.getProcSpec(c.proc);
+    const proc_key: u64 = @bitCast(proc.name);
+    const func_idx = self.registered_procs.get(proc_key) orelse {
+        if (std.debug.runtime_safety) {
+            std.debug.panic("generateCall: unresolved proc call target {d}", .{@intFromEnum(c.proc)});
+        }
+        unreachable;
     };
 
     try self.emitLocalGet(self.roc_ops_local);
@@ -7607,7 +7269,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
 
         .list_sort_with => {
-            try self.generateLLListSortWith(args, ll.ret_layout);
+            try self.generateLLListSortWith(ll, args, ll.ret_layout);
         },
 
         .list_drop_at => {
@@ -7930,20 +7592,71 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             WasmModule.leb128WriteU32(self.allocator, &self.body, result_local) catch return error.OutOfMemory;
         },
 
-        .list_contains => {
+        .list_contains => blk: {
             // list_contains(list, needle) -> Bool
-            // Linear scan through list elements
+            // Linear scan through list elements using layout-aware equality.
             try self.generateExpr(args[0]);
             const list_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, list_local) catch return error.OutOfMemory;
 
-            // Generate needle
-            try self.generateExpr(args[1]);
-            const needle_vt = self.exprValType(args[1]);
-            const needle_local = self.storage.allocAnonymousLocal(needle_vt) catch return error.OutOfMemory;
-            self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, &self.body, needle_local) catch return error.OutOfMemory;
+            const ls = self.getLayoutStore();
+            const list_layout_idx = self.exprLayoutIdx(args[0]);
+            const list_layout = ls.getLayout(list_layout_idx);
+            const list_info = switch (list_layout.tag) {
+                .list => ls.getListInfo(list_layout),
+                .list_of_zst => {
+                    // contains for ZST elements is true iff the list is non-empty
+                    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, list_local) catch return error.OutOfMemory;
+                    try self.emitLoadOp(.i32, 4);
+                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i32_ne) catch return error.OutOfMemory;
+                    break :blk;
+                },
+                else => unreachable,
+            };
+            const elem_layout_idx = list_info.elem_layout_idx;
+            const elem_byte_size = list_info.elem_size;
+            const elem_is_composite = self.isCompositeLayout(elem_layout_idx);
+
+            const needle_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            if (elem_is_composite) {
+                try self.generateExpr(args[1]);
+
+                if (self.exprNeedsCompositeCallStabilization(args[1])) {
+                    const src_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                    try self.emitLocalSet(src_local);
+                    const dst_offset = try self.allocStackMemory(elem_byte_size, 4);
+                    const dst_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                    try self.emitFpOffset(dst_offset);
+                    try self.emitLocalSet(dst_local);
+                    try self.emitMemCopy(dst_local, 0, src_local, elem_byte_size);
+                    try self.emitLocalGet(dst_local);
+                }
+
+                self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+                WasmModule.leb128WriteU32(self.allocator, &self.body, needle_ptr_local) catch return error.OutOfMemory;
+            } else {
+                try self.generateExpr(args[1]);
+                const needle_vt = self.exprValType(args[1]);
+                const needle_tmp = self.storage.allocAnonymousLocal(needle_vt) catch return error.OutOfMemory;
+                self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+                WasmModule.leb128WriteU32(self.allocator, &self.body, needle_tmp) catch return error.OutOfMemory;
+
+                const alignment: u32 = if (elem_byte_size >= 8) 8 else if (elem_byte_size >= 4) 4 else if (elem_byte_size >= 2) 2 else 1;
+                const needle_offset = try self.allocStackMemory(elem_byte_size, alignment);
+                try self.emitFpOffset(needle_offset);
+                const needle_addr_tmp = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                try self.emitLocalSet(needle_addr_tmp);
+                try self.emitLocalGet(needle_addr_tmp);
+                try self.emitLocalGet(needle_tmp);
+                try self.emitStoreOpSized(needle_vt, elem_byte_size, 0);
+                try self.emitLocalGet(needle_addr_tmp);
+                self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+                WasmModule.leb128WriteU32(self.allocator, &self.body, needle_ptr_local) catch return error.OutOfMemory;
+            }
 
             // Load list ptr and len
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
@@ -7959,19 +7672,6 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const len_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, len_local) catch return error.OutOfMemory;
-
-            // Determine element size
-            const elem_byte_size: u32 = blk: {
-                const ls = self.getLayoutStore();
-                const list_layout_idx = self.exprLayoutIdx(args[0]);
-                const list_layout = ls.getLayout(list_layout_idx);
-                const elem_layout_idx = switch (list_layout.tag) {
-                    .list => list_layout.data.list,
-                    .list_of_zst => layout.Idx.zst,
-                    else => unreachable,
-                };
-                break :blk self.layoutStorageByteSize(elem_layout_idx);
-            };
 
             // result = 0 (not found)
             const result_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -8011,18 +7711,12 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(elem_byte_size)) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-            try self.emitLoadOpSized(needle_vt, elem_byte_size, 0);
+            const elem_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, elem_ptr_local) catch return error.OutOfMemory;
 
-            // Compare with needle
-            self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, &self.body, needle_local) catch return error.OutOfMemory;
-            const eq_op: u8 = switch (needle_vt) {
-                .i32 => Op.i32_eq,
-                .i64 => Op.i64_eq,
-                .f32 => Op.f32_eq,
-                .f64 => Op.f64_eq,
-            };
-            self.body.append(self.allocator, eq_op) catch return error.OutOfMemory;
+            // Compare with needle using layout-aware equality
+            try self.compareFieldByLayout(elem_ptr_local, needle_ptr_local, 0, elem_byte_size, elem_layout_idx);
 
             // if equal: set result = 1, br 1 (exit)
             self.body.append(self.allocator, Op.@"if") catch return error.OutOfMemory;
@@ -8603,7 +8297,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitFpOffset(result_offset);
         },
 
-        .str_inspekt,
+        .str_inspect,
         .u8_to_str,
         .i8_to_str,
         .u16_to_str,
@@ -12181,7 +11875,7 @@ fn buildRocListWithCap(self: *Self, data_local: u32, len_local: u32, cap_local: 
     try self.emitLocalGet(list_base);
 }
 
-fn generateLLListSortWith(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
+fn generateLLListSortWith(self: *Self, ll: anytype, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
     const elem_size = self.getListElemSize(ret_layout);
     if (elem_size == 0) {
         try self.generateExpr(args[0]);
@@ -12189,12 +11883,26 @@ fn generateLLListSortWith(self: *Self, args: anytype, ret_layout: layout.Idx) Al
     }
 
     const elem_align = self.getListElemAlign(ret_layout);
-    const elem_layout = switch (self.getLayoutStore().getLayout(ret_layout).tag) {
-        .list => self.getLayoutStore().getLayout(ret_layout).data.list,
-        .list_of_zst => layout.Idx.zst,
-        else => unreachable,
+    if (ll.callable_proc.isNone()) {
+        if (std.debug.runtime_safety) {
+            std.debug.panic(
+                "WasmCodeGen invariant violated: list_sort_with is missing callable_proc metadata",
+                .{},
+            );
+        }
+        unreachable;
+    }
+    const cmp_proc = self.store.getProcSpec(ll.callable_proc);
+    const cmp_proc_key: u64 = @bitCast(cmp_proc.name);
+    const cmp_func_idx = self.registered_procs.get(cmp_proc_key) orelse {
+        if (std.debug.runtime_safety) {
+            std.debug.panic(
+                "WasmCodeGen invariant violated: list_sort_with comparator proc {d} was not compiled before codegen",
+                .{@intFromEnum(ll.callable_proc)},
+            );
+        }
+        unreachable;
     };
-    const cmp_func_idx = try self.compileSortComparatorThunk(args[1], elem_layout);
 
     try self.generateExpr(args[0]);
     const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;

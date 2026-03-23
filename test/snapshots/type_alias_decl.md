@@ -25,6 +25,9 @@ ApiResponse(data) : Try(data, Str)
 # Type declaration with tag union
 Color : [Red, Green, Blue, Custom(U8, U8, U8)]
 
+# Using .. is not allowed
+Letters : [A, B, ..]
+
 # Type declaration with records and generics
 Container(item) : {
     contents : List(item),
@@ -47,8 +50,9 @@ main! = |_| {
 ~~~
 # EXPECTED
 TYPE REDECLARED - type_alias_decl.md:7:1:7:34
-UNUSED VARIABLE - type_alias_decl.md:33:5:33:11
-UNUSED VARIABLE - type_alias_decl.md:36:5:36:10
+OPEN EXT NOT ALLOWED IN TYPE DECLARATION - type_alias_decl.md:22:18:22:20
+UNUSED VARIABLE - type_alias_decl.md:36:5:36:11
+UNUSED VARIABLE - type_alias_decl.md:39:5:39:10
 # PROBLEMS
 **TYPE REDECLARED**
 The type _Try_ is being redeclared.
@@ -68,12 +72,24 @@ app [main!] { pf: platform "../basic-cli/main.roc" }
 ^
 
 
+**OPEN EXT NOT ALLOWED IN TYPE DECLARATION**
+You cannot use a `..` inside a type declaration:
+
+**type_alias_decl.md:22:18:22:20:**
+```roc
+Letters : [A, B, ..]
+```
+                 ^^
+
+
+**Hint:** You need a named variable, like `..others`, to use this here.
+
 **UNUSED VARIABLE**
 Variable `person` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_person` to suppress this warning.
 The unused variable is declared here:
-**type_alias_decl.md:33:5:33:11:**
+**type_alias_decl.md:36:5:36:11:**
 ```roc
     person = { name: "Alice", age: 30 }
 ```
@@ -85,7 +101,7 @@ Variable `color` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_color` to suppress this warning.
 The unused variable is declared here:
-**type_alias_decl.md:36:5:36:10:**
+**type_alias_decl.md:39:5:39:10:**
 ```roc
     color = Red
 ```
@@ -101,6 +117,7 @@ UpperIdent,OpColon,OpenCurly,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpCo
 UpperIdent,NoSpaceOpenRound,LowerIdent,Comma,LowerIdent,CloseRound,OpColon,LowerIdent,OpArrow,LowerIdent,
 UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpColon,UpperIdent,NoSpaceOpenRound,LowerIdent,Comma,UpperIdent,CloseRound,
 UpperIdent,OpColon,OpenSquare,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,NoSpaceOpenRound,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,CloseRound,CloseSquare,
+UpperIdent,OpColon,OpenSquare,UpperIdent,Comma,UpperIdent,Comma,DoubleDot,CloseSquare,
 UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpColon,OpenCurly,
 LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,Comma,
 LowerIdent,OpColon,OpenCurly,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,CloseCurly,
@@ -186,6 +203,14 @@ EndOfFile,
 						(ty (name "U8"))
 						(ty (name "U8"))))))
 		(s-type-decl
+			(header (name "Letters")
+				(args))
+			(ty-tag-union
+				(tags
+					(ty (name "A"))
+					(ty (name "B")))
+				..))
+		(s-type-decl
 			(header (name "Container")
 				(args
 					(ty-var (raw "item"))))
@@ -250,6 +275,9 @@ ApiResponse(data) : Try(data, Str)
 
 # Type declaration with tag union
 Color : [Red, Green, Blue, Custom(U8, U8, U8)]
+
+# Using .. is not allowed
+Letters : [A, B, ..]
 
 # Type declaration with records and generics
 Container(item) : {
@@ -343,6 +371,9 @@ main! = |_| {
 				(ty-lookup (name "U8") (builtin))
 				(ty-lookup (name "U8") (builtin)))))
 	(s-alias-decl
+		(ty-header (name "Letters"))
+		(ty-malformed))
+	(s-alias-decl
 		(ty-header (name "Container")
 			(ty-args
 				(ty-rigid-var (name "item"))))
@@ -383,6 +414,8 @@ main! = |_| {
 					(ty-rigid-var (name "data")))))
 		(alias (type "Color")
 			(ty-header (name "Color")))
+		(alias (type "Letters")
+			(ty-header (name "Letters")))
 		(alias (type "Container(item)")
 			(ty-header (name "Container")
 				(ty-args

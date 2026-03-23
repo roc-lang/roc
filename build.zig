@@ -2325,11 +2325,13 @@ pub fn build(b: *std.Build) void {
     // Store glue test step reference so we can add glue host dependency later
     var run_glue_test_step: ?*std.Build.Step = null;
 
-    // CLI integration tests - run actual roc programs like CI does
-    // These tests can run in parallel since each build uses content-hashed shim files
+    // CLI integration tests - run actual roc programs like CI does.
+    // These exercise subprocess-heavy build/link paths that are not safe to fan out
+    // as parallel siblings under one `zig build test-cli` invocation.
     if (!no_bin) {
         const install = b.addInstallArtifact(roc_exe, .{});
         const install_runner = b.addInstallArtifact(test_runner_exe, .{});
+        var previous_cli_integration_step: ?*std.Build.Step = null;
 
         // Test int platform (native mode only for now)
         const run_int_tests = b.addRunArtifact(test_runner_exe);
@@ -2339,6 +2341,7 @@ pub fn build(b: *std.Build) void {
         run_int_tests.step.dependOn(&install.step);
         run_int_tests.step.dependOn(&install_runner.step);
         run_int_tests.step.dependOn(test_platforms_step);
+        previous_cli_integration_step = &run_int_tests.step;
         test_cli_step.dependOn(&run_int_tests.step);
 
         // Test str platform (native mode only for now)
@@ -2349,6 +2352,8 @@ pub fn build(b: *std.Build) void {
         run_str_tests.step.dependOn(&install.step);
         run_str_tests.step.dependOn(&install_runner.step);
         run_str_tests.step.dependOn(test_platforms_step);
+        run_str_tests.step.dependOn(previous_cli_integration_step.?);
+        previous_cli_integration_step = &run_str_tests.step;
         test_cli_step.dependOn(&run_str_tests.step);
 
         // Test int platform with dev backend
@@ -2360,6 +2365,8 @@ pub fn build(b: *std.Build) void {
         run_int_dev_tests.step.dependOn(&install.step);
         run_int_dev_tests.step.dependOn(&install_runner.step);
         run_int_dev_tests.step.dependOn(test_platforms_step);
+        run_int_dev_tests.step.dependOn(previous_cli_integration_step.?);
+        previous_cli_integration_step = &run_int_dev_tests.step;
         test_cli_step.dependOn(&run_int_dev_tests.step);
 
         // Test str platform with dev backend
@@ -2371,6 +2378,8 @@ pub fn build(b: *std.Build) void {
         run_str_dev_tests.step.dependOn(&install.step);
         run_str_dev_tests.step.dependOn(&install_runner.step);
         run_str_dev_tests.step.dependOn(test_platforms_step);
+        run_str_dev_tests.step.dependOn(previous_cli_integration_step.?);
+        previous_cli_integration_step = &run_str_dev_tests.step;
         test_cli_step.dependOn(&run_str_dev_tests.step);
 
         // Test fx platform with dev backend
@@ -2382,6 +2391,8 @@ pub fn build(b: *std.Build) void {
         run_fx_dev_tests.step.dependOn(&install.step);
         run_fx_dev_tests.step.dependOn(&install_runner.step);
         run_fx_dev_tests.step.dependOn(test_platforms_step);
+        run_fx_dev_tests.step.dependOn(previous_cli_integration_step.?);
+        previous_cli_integration_step = &run_fx_dev_tests.step;
         test_cli_step.dependOn(&run_fx_dev_tests.step);
 
         // Roc subcommands integration test
@@ -2401,6 +2412,8 @@ pub fn build(b: *std.Build) void {
         }
         run_roc_subcommands_test.step.dependOn(&install.step);
         run_roc_subcommands_test.step.dependOn(test_platforms_step);
+        run_roc_subcommands_test.step.dependOn(previous_cli_integration_step.?);
+        previous_cli_integration_step = &run_roc_subcommands_test.step;
         test_cli_step.dependOn(&run_roc_subcommands_test.step);
 
         // Glue command integration test
@@ -2419,6 +2432,7 @@ pub fn build(b: *std.Build) void {
             run_glue_test.addArgs(run_args);
         }
         run_glue_test.step.dependOn(&install.step);
+        run_glue_test.step.dependOn(previous_cli_integration_step.?);
         run_glue_test_step = &run_glue_test.step;
         test_cli_step.dependOn(&run_glue_test.step);
     }
@@ -2749,6 +2763,26 @@ pub fn build(b: *std.Build) void {
         // Add bytebox to eval tests for wasm backend testing
         if (std.mem.eql(u8, module_test.test_step.name, "eval")) {
             module_test.test_step.root_module.addImport("bytebox", bytebox.module("bytebox"));
+            const compile_build_module = b.createModule(.{
+                .root_source_file = b.path("src/compile/compile_build.zig"),
+            });
+            compile_build_module.addImport("tracy", roc_modules.tracy);
+            compile_build_module.addImport("build_options", roc_modules.build_options);
+            compile_build_module.addImport("io", roc_modules.io);
+            compile_build_module.addImport("builtins", roc_modules.builtins);
+            compile_build_module.addImport("collections", roc_modules.collections);
+            compile_build_module.addImport("base", roc_modules.base);
+            compile_build_module.addImport("types", roc_modules.types);
+            compile_build_module.addImport("parse", roc_modules.parse);
+            compile_build_module.addImport("can", roc_modules.can);
+            compile_build_module.addImport("check", roc_modules.check);
+            compile_build_module.addImport("reporting", roc_modules.reporting);
+            compile_build_module.addImport("layout", roc_modules.layout);
+            compile_build_module.addImport("eval", module_test.test_step.root_module);
+            compile_build_module.addImport("unbundle", roc_modules.unbundle);
+            compile_build_module.addImport("roc_target", roc_modules.roc_target);
+            compile_build_module.addImport("compiled_builtins", compiled_builtins_module);
+            module_test.test_step.root_module.addImport("compile_build", compile_build_module);
             try addLlvmSupportToStep(
                 b,
                 module_test.test_step,

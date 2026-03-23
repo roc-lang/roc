@@ -342,7 +342,7 @@ test "fx platform all_syntax_test.roc prints expected output (interpreter)" {
 }
 
 test "fx platform all_syntax_test.roc prints expected output (dev backend)" {
-    // TODO: dev backend fails with bindFlatTypeMonotypes panic in Lower.zig
+    // TODO: dev backend runtime panic "integer does not fit in destination type"
     return error.SkipZigTest;
 }
 
@@ -396,8 +396,28 @@ test "fx platform wildcard match on open union (interpreter)" {
 }
 
 test "fx platform wildcard match on open union (dev backend)" {
-    // TODO: dev backend fails with bindFlatTypeMonotypes panic in Lower.zig
-    return error.SkipZigTest;
+    const allocator = testing.allocator;
+
+    const run_result = try util.runRoc(allocator, &.{"--opt=dev"}, "test/fx/wildcard_match_open_union_bug.roc");
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    try util.checkSuccess(run_result);
+
+    // Verify that the wildcard match worked correctly
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "PASS: Wildcard match worked correctly") != null);
+}
+
+test "fx platform nested tag match in statement position (dev backend)" {
+    const allocator = testing.allocator;
+
+    const run_result = try util.runRoc(allocator, &.{"--opt=dev"}, "test/fx/nested_tag_match_stmt.roc");
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    try util.checkSuccess(run_result);
+
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "PASS: statement-position nested tag match works") != null);
 }
 
 test "fx platform dbg missing return value (interpreter)" {
@@ -643,6 +663,8 @@ test "fx platform run from different cwd" {
     // Get absolute path to roc binary since we'll change cwd
     const roc_abs_path = try std.fs.cwd().realpathAlloc(allocator, util.roc_binary_path);
     defer allocator.free(roc_abs_path);
+    var env_map = try util.buildIsolatedTestEnvMap(allocator, null);
+    defer env_map.deinit();
 
     // Run roc from the test/fx directory with a relative path to app.roc
     const run_result = try std.process.Child.run(.{
@@ -652,6 +674,7 @@ test "fx platform run from different cwd" {
             "app.roc",
         },
         .cwd = "test/fx",
+        .env_map = &env_map,
     });
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
@@ -1015,8 +1038,21 @@ test "fx platform var with string interpolation segfault (interpreter)" {
 }
 
 test "fx platform var with string interpolation segfault (dev backend)" {
-    // TODO: dev backend fails with unresolved symbol panic in LirCodeGen.zig
-    return error.SkipZigTest;
+    // Regression test: same as the interpreter variant but using the dev backend.
+    // Previously crashed with unresolved symbol panic in LirCodeGen.zig because
+    // Stdout.line! (a hosted function) was passed directly to for_each!.
+    const allocator = testing.allocator;
+
+    const run_result = try util.runRoc(allocator, &.{}, "test/fx/var_interp_segfault.roc");
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    try util.checkSuccess(run_result);
+
+    // Verify the expected output
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "A1: 1") != null);
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "A2: 1") != null);
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "A3: 1") != null);
 }
 
 test "fx platform sublist method on inferred type" {
@@ -1045,6 +1081,22 @@ test "fx platform repeating pattern segfault (interpreter)" {
     defer allocator.free(run_result.stderr);
 
     try util.checkSuccess(run_result);
+}
+
+test "fx platform hosted function passed as argument to higher-order function" {
+    // Regression test for https://github.com/roc-lang/roc/issues/9264
+    // The dev backend panics with "unresolved symbol" when a hosted effectful
+    // function (e.g. Stdout.line!) is passed directly as an argument to a
+    // higher-order function (e.g. for_each!), instead of being wrapped in a lambda.
+    const allocator = testing.allocator;
+
+    const run_result = try util.runRoc(allocator, &.{}, "test/fx/hosted_fn_as_arg.roc");
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    try util.checkSuccess(run_result);
+
+    try testing.expectEqualStrings("hello\n", run_result.stdout);
 }
 
 test "fx platform runtime stack overflow" {
@@ -1171,8 +1223,19 @@ test "fx platform index out of bounds in instantiate regression" {
 }
 
 test "fx platform index out of bounds in instantiate regression (dev backend)" {
-    // TODO: dev backend crashes with SIGABRT (exit code 134)
-    return error.SkipZigTest;
+    // Regression test: same scenario as the interpreter variant above, but using
+    // the dev (native) backend. Previously panicked with:
+    //   generateCall: unexpected lookup callee after backend peeling deletion
+    // because hosted functions (e.g. Stdout.line!) were not tracked in lambda
+    // sets, so passing them as callbacks to higher-order functions like
+    // for_each! produced unresolvable lookup callees in the code generator.
+    const allocator = testing.allocator;
+
+    const run_result = try util.runRoc(allocator, &.{}, "test/fx/index_oob_instantiate.roc");
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    try util.checkSuccess(run_result);
 }
 
 test "fx platform fold_rev static dispatch regression" {

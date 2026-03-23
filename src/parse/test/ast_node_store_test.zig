@@ -400,6 +400,12 @@ test "NodeStore round trip - TypeAnno" {
         },
     });
     try ty_annos.append(gpa, AST.TypeAnno{
+        .underscore_type_var = .{
+            .tok = rand_token_idx(),
+            .region = rand_region(),
+        },
+    });
+    try ty_annos.append(gpa, AST.TypeAnno{
         .ty = .{
             .qualifiers = AST.Token.Span{ .span = rand_span() },
             .region = rand_region(),
@@ -408,7 +414,21 @@ test "NodeStore round trip - TypeAnno" {
     });
     try ty_annos.append(gpa, AST.TypeAnno{
         .tag_union = .{
-            .ext = .{ .named = rand_idx(AST.TypeAnno.Idx) },
+            .ext = .closed,
+            .tags = AST.TypeAnno.Span{ .span = rand_span() },
+            .region = rand_region(),
+        },
+    });
+    try ty_annos.append(gpa, AST.TypeAnno{
+        .tag_union = .{
+            .ext = .{ .named = .{ .anno = rand_idx(AST.TypeAnno.Idx), .region = rand_region() } },
+            .tags = AST.TypeAnno.Span{ .span = rand_span() },
+            .region = rand_region(),
+        },
+    });
+    try ty_annos.append(gpa, AST.TypeAnno{
+        .tag_union = .{
+            .ext = .{ .open = rand_token_idx() },
             .tags = AST.TypeAnno.Span{ .span = rand_span() },
             .region = rand_region(),
         },
@@ -422,14 +442,21 @@ test "NodeStore round trip - TypeAnno" {
     try ty_annos.append(gpa, AST.TypeAnno{
         .record = .{
             .fields = AST.AnnoRecordField.Span{ .span = rand_span() },
-            .ext = null,
+            .ext = .closed,
             .region = rand_region(),
         },
     });
     try ty_annos.append(gpa, AST.TypeAnno{
         .record = .{
             .fields = AST.AnnoRecordField.Span{ .span = rand_span() },
-            .ext = rand_idx(AST.TypeAnno.Idx), // Test record with extension
+            .ext = .{ .named = .{ .anno = rand_idx(AST.TypeAnno.Idx), .region = rand_region() } },
+            .region = rand_region(),
+        },
+    });
+    try ty_annos.append(gpa, AST.TypeAnno{
+        .record = .{
+            .fields = AST.AnnoRecordField.Span{ .span = rand_span() },
+            .ext = .{ .open = rand_token_idx() },
             .region = rand_region(),
         },
     });
@@ -448,10 +475,10 @@ test "NodeStore round trip - TypeAnno" {
         },
     });
 
-    // We don't include .malformed variant, but we do include an extra test case
-    // for record with extension (so record is tested both with and without ext)
+    // We don't include .malformed variant, but we do include extra test cases
+    // for record and tag unions extensions (so they are tested with all variants)
     expected_test_count -= 1;
-    expected_test_count += 1; // record with ext
+    expected_test_count += 4; // record & tag union ext variants
 
     for (ty_annos.items) |anno| {
         const idx = try store.addTypeAnno(anno);

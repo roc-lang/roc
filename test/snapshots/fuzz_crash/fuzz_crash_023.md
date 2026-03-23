@@ -1027,7 +1027,7 @@ This fourth branch is trying to match:
 
 But the expression between the `match` parenthesis has the type:
 
-    [Red, ..[Blue, Green, ..]]
+    [Blue, Green, Red, ..]
 
 These can never match! Either the pattern or expression has a problem.
 
@@ -1042,7 +1042,7 @@ The `match_time` function expects 2 arguments, but it got 1 instead:
 
 The `match_time` function has the type:
 
-    [Red, ..[Blue, Green, ..]], _arg -> Error
+    [Blue, Green, Red, ..], _arg -> Error
 
 Are there any missing commas?
 
@@ -2862,7 +2862,7 @@ expect {
 	(defs
 		(patt (type "Bool -> Dec"))
 		(patt (type "Error -> U64"))
-		(patt (type "[Red, ..[Blue, Green, ..]], _arg -> Error"))
+		(patt (type "[Blue, Green, Red, ..], _arg -> Error"))
 		(patt (type "Error"))
 		(patt (type "List(Error) -> Try({}, _d)"))
 		(patt (type "{}"))
@@ -2909,7 +2909,7 @@ expect {
 	(expressions
 		(expr (type "Bool -> Dec"))
 		(expr (type "Error -> U64"))
-		(expr (type "[Red, ..[Blue, Green, ..]], _arg -> Error"))
+		(expr (type "[Blue, Green, Red, ..], _arg -> Error"))
 		(expr (type "Error"))
 		(expr (type "List(Error) -> Try({}, _d)"))
 		(expr (type "{}"))

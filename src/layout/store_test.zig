@@ -32,6 +32,7 @@ const LayoutTest = struct {
         var result: LayoutTest = undefined;
         result.gpa = gpa;
         result.module_env = try ModuleEnv.init(gpa, "");
+        try result.module_env.initModuleEnvFields("LayoutTest");
         result.type_store = try types_store.Store.init(gpa);
         result.type_scope = TypeScope.init(gpa);
         // Note: module_env_ptr must be set AFTER the struct is in its final location
@@ -44,6 +45,7 @@ const LayoutTest = struct {
         var result: LayoutTest = undefined;
         result.gpa = gpa;
         result.module_env = try ModuleEnv.init(gpa, "");
+        try result.module_env.initModuleEnvFields("LayoutTest");
         result.type_store = try types_store.Store.init(gpa);
         result.type_scope = TypeScope.init(gpa);
         // Note: layout_store and module_env_ptr should be initialized AFTER
@@ -96,6 +98,9 @@ fn expectTypeAndMonotypeResolversAgree(
     var scratches = try mir.Monotype.Store.Scratches.init(allocator);
     defer scratches.deinit();
     scratches.ident_store = lt.module_env.getIdentStoreConst();
+    scratches.module_env = &lt.module_env;
+    scratches.module_idx = 0;
+    scratches.all_module_envs = &lt.module_env_ptr;
 
     var specializations = std.AutoHashMap(types.Var, mir.Monotype.Idx).init(allocator);
     defer specializations.deinit();
@@ -1053,7 +1058,7 @@ test "fromTypeVar - recursive nominal type with nested Box at depth 2+ (issue #8
         .{ .ident_idx = rich_doc_ident_idx },
         tag_union_var,
         &[_]types.Var{},
-        builtin_module_idx,
+        lt.module_env.qualified_module_ident,
         false,
     );
 
@@ -1166,7 +1171,7 @@ test "layoutSizeAlign - recursive nominal type with record containing List (issu
         .{ .ident_idx = statement_ident_idx },
         tag_union_var,
         &[_]types.Var{},
-        builtin_module_idx,
+        lt.module_env.qualified_module_ident,
         false,
     );
 
@@ -1254,7 +1259,7 @@ test "fromTypeVar - recursive nominal with Box has no double-boxing (issue #8916
         .{ .ident_idx = nat_ident_idx },
         tag_union_var,
         &[_]types.Var{},
-        builtin_module_idx,
+        lt.module_env.qualified_module_ident,
         false,
     );
 
@@ -1721,12 +1726,70 @@ test "type and monotype layout resolvers agree for recursive nominal layouts" {
         .{ .ident_idx = nat_ident },
         tag_union_var,
         &[_]types.Var{},
-        builtin_module_idx,
+        lt.module_env.qualified_module_ident,
         false,
     );
     try lt.type_store.setVarContent(recursive_var, nat_content);
     const nat_var = try lt.type_store.freshFromContent(nat_content);
     try expectTypeAndMonotypeResolversAgree(testing.allocator, &lt, nat_var);
+}
+
+test "type and monotype layout resolvers agree for directly recursive tag union layouts" {
+    var lt = try LayoutTest.initWithIdents(testing.allocator);
+    defer lt.deinit();
+
+    const builtin_module_idx = try lt.module_env.insertIdent(base.Ident.for_text("Builtin"));
+    lt.module_env.idents.builtin_module = builtin_module_idx;
+    try lt.initLayoutStore();
+
+    const inner_ident = try lt.module_env.insertIdent(Ident.for_text("Inner"));
+    const recursive_var = try lt.type_store.freshFromContent(.{ .flex = types.Flex.init() });
+    const unit_var = try lt.type_store.freshFromContent(.{ .structure = .empty_record });
+    const u64_var = try lt.type_store.freshFromContent(try lt.type_store.mkNominal(
+        .{ .ident_idx = lt.module_env.idents.u64_type },
+        unit_var,
+        &[_]types.Var{},
+        builtin_module_idx,
+        false,
+    ));
+
+    const branch_tag = types.Tag{
+        .name = try lt.module_env.insertIdent(Ident.for_text("Branch")),
+        .args = try lt.type_store.appendVars(&[_]types.Var{recursive_var}),
+    };
+    const leaf_tag = types.Tag{
+        .name = try lt.module_env.insertIdent(Ident.for_text("Leaf")),
+        .args = try lt.type_store.appendVars(&[_]types.Var{u64_var}),
+    };
+    const tags_range = try lt.type_store.appendTags(&[_]types.Tag{ branch_tag, leaf_tag });
+    const tag_union = types.TagUnion{
+        .tags = tags_range,
+        .ext = try lt.type_store.freshFromContent(.{ .structure = .empty_tag_union }),
+    };
+    const tag_union_var = try lt.type_store.freshFromContent(.{ .structure = .{ .tag_union = tag_union } });
+
+    const inner_content = try lt.type_store.mkNominal(
+        .{ .ident_idx = inner_ident },
+        tag_union_var,
+        &[_]types.Var{},
+        lt.module_env.qualified_module_ident,
+        false,
+    );
+    try lt.type_store.setVarContent(recursive_var, inner_content);
+    const inner_var = try lt.type_store.freshFromContent(inner_content);
+
+    try expectTypeAndMonotypeResolversAgree(testing.allocator, &lt, inner_var);
+
+    const inner_layout_idx = try resolveTypeVar(&lt, inner_var);
+    const inner_layout = lt.layout_store.getLayout(inner_layout_idx);
+    try testing.expect(inner_layout.tag == .tag_union);
+
+    const size = lt.layout_store.layoutSize(inner_layout);
+    try testing.expect(size > 0);
+
+    const disc_offset = lt.layout_store.getTagUnionDiscriminantOffset(inner_layout.data.tag_union.idx);
+    try testing.expect(disc_offset < size);
+    try testing.expect(lt.layout_store.layoutContainsRefcounted(inner_layout));
 }
 
 test "fromTypeVar - no-payload nominal tag union gets canonical tag_union layout, not box" {
@@ -1762,7 +1825,7 @@ test "fromTypeVar - no-payload nominal tag union gets canonical tag_union layout
         .{ .ident_idx = my_enum_ident_idx },
         enum_backing_var,
         &[_]types.Var{},
-        builtin_module_idx,
+        lt.module_env.qualified_module_ident,
         false,
     );
     const my_enum_var = try lt.type_store.freshFromContent(my_enum_content);

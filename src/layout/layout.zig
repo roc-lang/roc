@@ -536,8 +536,9 @@ pub const ScalarInfo = struct {
 /// sizes on 32-bit and 64-bit targets. No other target information is needed.
 ///
 /// When a Roc type gets converted to a Layout, zero-sized types (ZSTs)
-/// like empty records, empty tag unions, and phantom type parameters are
-/// represented with a first-class ZST layout (`.zst` tag). ZST fields in
+/// like empty records and empty tag unions are represented with a first-class
+/// ZST layout (`.zst` tag). Abstract type parameters must already have been
+/// eliminated or collapsed to ZST before reaching this layer. ZST fields in
 /// records and tuples are kept (not dropped) since they're a normal part
 /// of the type structure, they just happen to have size 0.
 /// (Exception: List({}) and Box({}) get special layouts `.list_of_zst` and
