@@ -2081,8 +2081,8 @@ pub const LirInterpreter = struct {
                 const result = builtins.str.strReleaseExcessCapacity(&self.roc_ops, valueToRocStr(args[0]));
                 break :blk self.rocStrToValue(result, ll.ret_layout);
             },
-            .str_inspekt => blk: {
-                // str_inspekt is identity on strings (already formatted)
+            .str_inspect => blk: {
+                // str_inspect is identity on strings (already formatted)
                 break :blk args[0];
             },
 

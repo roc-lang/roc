@@ -840,7 +840,7 @@ pub const Repl = struct {
         return .{ .expression = output };
     }
 
-    /// Evaluate a str_inspekt-wrapped expression using the LIR interpreter.
+    /// Evaluate a str_inspect-wrapped expression using the LIR interpreter.
     /// The expression should already be wrapped in Str.inspect, so the result is a Str.
     fn evaluateWithInterpreter(self: *Repl, module_env: *ModuleEnv, inspect_expr: can.CIR.Expr.Idx, imported_modules: []const *const ModuleEnv) !StepResult {
 
@@ -1023,16 +1023,16 @@ const layout_mod = @import("layout");
 const Layout = layout_mod.Layout;
 const RocValue = @import("values").RocValue;
 
-/// Wrap a CIR expression in `Str.inspect(expr)` by creating an `e_run_low_level(.str_inspekt, [expr])` node.
+/// Wrap a CIR expression in `Str.inspect(expr)` by creating an `e_run_low_level(.str_inspect, [expr])` node.
 /// The result type is Str but the CIR type variable is left unresolved; the MIR lowerer
-/// overrides the monotype to Str for str_inspekt ops.
+/// overrides the monotype to Str for str_inspect ops.
 fn wrapInStrInspect(module_env: *ModuleEnv, inner_expr: can.CIR.Expr.Idx) !can.CIR.Expr.Idx {
     const top = module_env.store.scratchExprTop();
     try module_env.store.addScratchExpr(inner_expr);
     const args_span = try module_env.store.exprSpanFrom(top);
     const region = module_env.store.getExprRegion(inner_expr);
     return module_env.addExpr(.{ .e_run_low_level = .{
-        .op = .str_inspekt,
+        .op = .str_inspect,
         .args = args_span,
     } }, region);
 }

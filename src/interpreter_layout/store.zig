@@ -714,14 +714,12 @@ pub const Store = struct {
         };
     }
 
-    /// Return the stored discriminant offset for a tag union.
-    /// Recursive layouts are finalized with their physical payload shapes already
-    /// accounted for, so recomputing from child layouts can re-enter cycles.
+    /// Get the canonical discriminant offset for a tag union.
     pub fn getTagUnionDiscriminantOffset(self: *const Self, tu_idx: TagUnionIdx) u16 {
         return self.getTagUnionData(tu_idx).discriminant_offset;
     }
 
-    /// Return the stored total size of a tag union.
+    /// Get the canonical size of a tag union.
     pub fn getTagUnionSize(self: *const Self, tu_idx: TagUnionIdx, _: std.mem.Alignment) u32 {
         return self.getTagUnionData(tu_idx).size;
     }
@@ -782,7 +780,7 @@ pub const Store = struct {
         return Layout.tagUnion(tag_union_alignment, .{ .int_idx = @intCast(tag_union_data_idx) });
     }
 
-    /// Return the stored total size of a struct.
+    /// Get the canonical size of a struct.
     pub fn getStructSize(self: *const Self, struct_idx: StructIdx, _: std.mem.Alignment) u32 {
         return self.getStructData(struct_idx).size;
     }

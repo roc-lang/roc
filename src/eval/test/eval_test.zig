@@ -3040,46 +3040,46 @@ test "owned tag wildcard payload is cleaned up before codegen" {
     try runExpectI64("match Ok([1.I64, 2.I64, 3.I64]) { Ok(_) => 9.I64, Err(_) => 0.I64 }", 9);
 }
 
-// ============ str_inspekt (Str.inspect) tests ============
+// ============ str_inspect (Str.inspect) tests ============
 
-test "str_inspekt - integer" {
+test "str_inspect - integer" {
     // Str.inspect on an integer should return its string representation
     // Note: untyped numeric literals default to Dec, so 42 becomes "42.0"
     try runExpectStr("Str.inspect(42)", "42.0");
 }
 
-test "str_inspekt - negative integer" {
+test "str_inspect - negative integer" {
     try runExpectStr("Str.inspect(-123)", "-123.0");
 }
 
-test "str_inspekt - zero" {
+test "str_inspect - zero" {
     try runExpectStr("Str.inspect(0)", "0.0");
 }
 
-test "str_inspekt - boolean true" {
+test "str_inspect - boolean true" {
     // Str.inspect on Bool.True renders without the nominal prefix
     try runExpectStr("Str.inspect(Bool.True)", "True");
 }
 
-test "str_inspekt - boolean false" {
+test "str_inspect - boolean false" {
     try runExpectStr("Str.inspect(Bool.False)", "False");
 }
 
-test "str_inspekt - simple string" {
+test "str_inspect - simple string" {
     // Str.inspect on a string should return it quoted and escaped
     try runExpectStr("Str.inspect(\"hello\")", "\"hello\"");
 }
 
-test "str_inspekt - string with quotes" {
+test "str_inspect - string with quotes" {
     // Quotes inside strings should be escaped
     try runExpectStr("Str.inspect(\"say \\\"hi\\\"\")", "\"say \\\"hi\\\"\"");
 }
 
-test "str_inspekt - empty string" {
+test "str_inspect - empty string" {
     try runExpectStr("Str.inspect(\"\")", "\"\"");
 }
 
-test "str_inspekt - large integer" {
+test "str_inspect - large integer" {
     try runExpectStr("Str.inspect(1234567890)", "1234567890.0");
 }
 

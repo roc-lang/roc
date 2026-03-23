@@ -2087,8 +2087,8 @@ pub const Pass = struct {
             .e_call => |call_expr| {
                 if (self.getCallLowLevelOp(module_env, call_expr.func)) |low_level_op| {
                     const arg_exprs = module_env.store.sliceExpr(call_expr.args);
-                    if (low_level_op == .str_inspekt and arg_exprs.len != 0) {
-                        try self.resolveStrInspektHelperProcInstsForTypeVar(
+                    if (low_level_op == .str_inspect and arg_exprs.len != 0) {
+                        try self.resolveStrInspectHelperProcInstsForTypeVar(
                             result,
                             module_idx,
                             ModuleEnv.varFrom(arg_exprs[0]),
@@ -2213,8 +2213,8 @@ pub const Pass = struct {
             .e_run_low_level => |run_low_level| {
                 const args = module_env.store.sliceExpr(run_low_level.args);
                 try self.scanExprSpan(result, module_idx, args);
-                if (run_low_level.op == .str_inspekt and args.len != 0) {
-                    try self.resolveStrInspektHelperProcInstsForTypeVar(
+                if (run_low_level.op == .str_inspect and args.len != 0) {
+                    try self.resolveStrInspectHelperProcInstsForTypeVar(
                         result,
                         module_idx,
                         ModuleEnv.varFrom(args[0]),
@@ -2567,8 +2567,8 @@ pub const Pass = struct {
         }
         if (self.getCallLowLevelOp(module_env, call_expr.func)) |low_level_op| {
             const arg_exprs = module_env.store.sliceExpr(call_expr.args);
-            if (low_level_op == .str_inspekt and arg_exprs.len != 0) {
-                try self.resolveStrInspektHelperProcInstsForTypeVar(
+            if (low_level_op == .str_inspect and arg_exprs.len != 0) {
+                try self.resolveStrInspectHelperProcInstsForTypeVar(
                     result,
                     module_idx,
                     ModuleEnv.varFrom(arg_exprs[0]),
@@ -7378,7 +7378,7 @@ pub const Pass = struct {
         }
     }
 
-    fn resolveStrInspektHelperProcInstsForTypeVar(
+    fn resolveStrInspectHelperProcInstsForTypeVar(
         self: *Pass,
         result: *Result,
         module_idx: u32,
@@ -7386,10 +7386,10 @@ pub const Pass = struct {
     ) Allocator.Error!void {
         var visiting: std.AutoHashMapUnmanaged(types.Var, void) = .empty;
         defer visiting.deinit(self.allocator);
-        try self.resolveStrInspektHelperProcInstsForTypeVarWithSeen(result, module_idx, type_var, &visiting);
+        try self.resolveStrInspectHelperProcInstsForTypeVarWithSeen(result, module_idx, type_var, &visiting);
     }
 
-    fn resolveStrInspektHelperProcInstsForTypeVarWithSeen(
+    fn resolveStrInspectHelperProcInstsForTypeVarWithSeen(
         self: *Pass,
         result: *Result,
         module_idx: u32,
@@ -7419,7 +7419,7 @@ pub const Pass = struct {
                         if (ident.eql(common.list)) {
                             const type_args = module_env.types.sliceNominalArgs(nominal);
                             if (type_args.len == 1) {
-                                try self.resolveStrInspektHelperProcInstsForTypeVarWithSeen(result, module_idx, type_args[0], visiting);
+                                try self.resolveStrInspectHelperProcInstsForTypeVarWithSeen(result, module_idx, type_args[0], visiting);
                             }
                             return;
                         }
@@ -7429,7 +7429,7 @@ pub const Pass = struct {
                             const outer_box = result.monotype_store.getMonotype(outer_mono).box;
                             try self.ensureBuiltinBoxUnboxProcInst(result, module_idx, outer_mono, outer_box.inner);
                             if (type_args.len == 1) {
-                                try self.resolveStrInspektHelperProcInstsForTypeVarWithSeen(result, module_idx, type_args[0], visiting);
+                                try self.resolveStrInspectHelperProcInstsForTypeVarWithSeen(result, module_idx, type_args[0], visiting);
                             }
                             return;
                         }
@@ -7478,7 +7478,7 @@ pub const Pass = struct {
                                         };
                                         const ret_mono = result.monotype_store.getMonotype(method_func.ret);
                                         if (!(ret_mono == .prim and ret_mono.prim == .str)) {
-                                            try self.resolveStrInspektHelperProcInstsForMonotype(
+                                            try self.resolveStrInspectHelperProcInstsForMonotype(
                                                 result,
                                                 method_info.module_idx,
                                                 method_func.ret,
@@ -7491,7 +7491,7 @@ pub const Pass = struct {
                         }
                     }
 
-                    try self.resolveStrInspektHelperProcInstsForMonotype(
+                    try self.resolveStrInspectHelperProcInstsForMonotype(
                         result,
                         module_idx,
                         try self.resolveTypeVarMonotype(result, module_idx, resolved.var_),
@@ -7499,24 +7499,24 @@ pub const Pass = struct {
                     return;
                 },
                 .record => |record| {
-                    try self.resolveStrInspektHelperProcInstsForRecordType(result, module_idx, &module_env.types, record, visiting);
+                    try self.resolveStrInspectHelperProcInstsForRecordType(result, module_idx, &module_env.types, record, visiting);
                     return;
                 },
                 .record_unbound => |fields_range| {
                     const fields = module_env.types.getRecordFieldsSlice(fields_range);
                     for (fields.items(.var_)) |field_var| {
-                        try self.resolveStrInspektHelperProcInstsForTypeVarWithSeen(result, module_idx, field_var, visiting);
+                        try self.resolveStrInspectHelperProcInstsForTypeVarWithSeen(result, module_idx, field_var, visiting);
                     }
                     return;
                 },
                 .tuple => |tuple| {
                     for (module_env.types.sliceVars(tuple.elems)) |elem_var| {
-                        try self.resolveStrInspektHelperProcInstsForTypeVarWithSeen(result, module_idx, elem_var, visiting);
+                        try self.resolveStrInspectHelperProcInstsForTypeVarWithSeen(result, module_idx, elem_var, visiting);
                     }
                     return;
                 },
                 .tag_union => |tag_union| {
-                    try self.resolveStrInspektHelperProcInstsForTagUnionType(result, module_idx, &module_env.types, tag_union, visiting);
+                    try self.resolveStrInspectHelperProcInstsForTagUnionType(result, module_idx, &module_env.types, tag_union, visiting);
                     return;
                 },
                 .empty_record, .empty_tag_union => return,
@@ -7524,14 +7524,14 @@ pub const Pass = struct {
             }
         }
 
-        try self.resolveStrInspektHelperProcInstsForMonotype(
+        try self.resolveStrInspectHelperProcInstsForMonotype(
             result,
             module_idx,
             try self.resolveTypeVarMonotype(result, module_idx, resolved.var_),
         );
     }
 
-    fn resolveStrInspektHelperProcInstsForRecordType(
+    fn resolveStrInspectHelperProcInstsForRecordType(
         self: *Pass,
         result: *Result,
         module_idx: u32,
@@ -7544,7 +7544,7 @@ pub const Pass = struct {
         rows: while (true) {
             const fields = store_types.getRecordFieldsSlice(current_row.fields);
             for (fields.items(.var_)) |field_var| {
-                try self.resolveStrInspektHelperProcInstsForTypeVarWithSeen(result, module_idx, field_var, visiting);
+                try self.resolveStrInspectHelperProcInstsForTypeVarWithSeen(result, module_idx, field_var, visiting);
             }
 
             var ext_var = current_row.ext;
@@ -7563,7 +7563,7 @@ pub const Pass = struct {
                         .record_unbound => |fields_range| {
                             const ext_fields = store_types.getRecordFieldsSlice(fields_range);
                             for (ext_fields.items(.var_)) |field_var| {
-                                try self.resolveStrInspektHelperProcInstsForTypeVarWithSeen(result, module_idx, field_var, visiting);
+                                try self.resolveStrInspectHelperProcInstsForTypeVarWithSeen(result, module_idx, field_var, visiting);
                             }
                             break :rows;
                         },
@@ -7576,7 +7576,7 @@ pub const Pass = struct {
         }
     }
 
-    fn resolveStrInspektHelperProcInstsForTagUnionType(
+    fn resolveStrInspectHelperProcInstsForTagUnionType(
         self: *Pass,
         result: *Result,
         module_idx: u32,
@@ -7590,7 +7590,7 @@ pub const Pass = struct {
             const tags = store_types.getTagsSlice(current_row.tags);
             for (tags.items(.args)) |args_range| {
                 for (store_types.sliceVars(args_range)) |payload_var| {
-                    try self.resolveStrInspektHelperProcInstsForTypeVarWithSeen(result, module_idx, payload_var, visiting);
+                    try self.resolveStrInspectHelperProcInstsForTypeVarWithSeen(result, module_idx, payload_var, visiting);
                 }
             }
 
@@ -7616,7 +7616,7 @@ pub const Pass = struct {
         }
     }
 
-    fn resolveStrInspektHelperProcInstsForMonotype(
+    fn resolveStrInspectHelperProcInstsForMonotype(
         self: *Pass,
         result: *Result,
         module_idx: u32,
@@ -7626,16 +7626,16 @@ pub const Pass = struct {
 
         switch (result.monotype_store.getMonotype(monotype)) {
             .unit, .prim => {},
-            .list => |list_mono| try self.resolveStrInspektHelperProcInstsForMonotype(result, module_idx, list_mono.elem),
+            .list => |list_mono| try self.resolveStrInspectHelperProcInstsForMonotype(result, module_idx, list_mono.elem),
             .box => |box_mono| {
                 try self.ensureBuiltinBoxUnboxProcInst(result, module_idx, monotype, box_mono.inner);
-                try self.resolveStrInspektHelperProcInstsForMonotype(result, module_idx, box_mono.inner);
+                try self.resolveStrInspectHelperProcInstsForMonotype(result, module_idx, box_mono.inner);
             },
             .tuple => |tuple_mono| {
                 var elem_i: usize = 0;
                 while (elem_i < tuple_mono.elems.len) : (elem_i += 1) {
                     const elem_mono = result.monotype_store.getIdxSpanItem(tuple_mono.elems, elem_i);
-                    try self.resolveStrInspektHelperProcInstsForMonotype(result, module_idx, elem_mono);
+                    try self.resolveStrInspectHelperProcInstsForMonotype(result, module_idx, elem_mono);
                 }
             },
             .func => {},
@@ -7643,7 +7643,7 @@ pub const Pass = struct {
                 var field_i: usize = 0;
                 while (field_i < record_mono.fields.len) : (field_i += 1) {
                     const field = result.monotype_store.getFieldItem(record_mono.fields, field_i);
-                    try self.resolveStrInspektHelperProcInstsForMonotype(result, module_idx, field.type_idx);
+                    try self.resolveStrInspectHelperProcInstsForMonotype(result, module_idx, field.type_idx);
                 }
             },
             .tag_union => |tag_union_mono| {
@@ -7653,7 +7653,7 @@ pub const Pass = struct {
                     var payload_i: usize = 0;
                     while (payload_i < tag.payloads.len) : (payload_i += 1) {
                         const payload_mono = result.monotype_store.getIdxSpanItem(tag.payloads, payload_i);
-                        try self.resolveStrInspektHelperProcInstsForMonotype(result, module_idx, payload_mono);
+                        try self.resolveStrInspectHelperProcInstsForMonotype(result, module_idx, payload_mono);
                     }
                 }
             },

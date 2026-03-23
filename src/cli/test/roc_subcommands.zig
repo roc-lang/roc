@@ -1372,15 +1372,19 @@ test "echo platform: exit code (dev backend)" {
     try runEchoExpectExitCode(&.{"--opt=dev"}, "test/echo/exit_code.roc", 255);
 }
 
-// TODO: These tests expose pre-existing bugs and should be re-enabled once fixed:
-// - Interpreter: "unreachable; tag unions must be formatted via formatTagUnion with type info"
-//   in src/interpreter_values/RocValue.zig:339
-// - Dev backend: "LIR/codegen invariant violated: match tag payload field bind layout mismatch"
-//   in src/backend/dev/LirCodeGen.zig:7402
-// Same issues likely affect exit_custom_inspect.roc and exit_error_payload.roc.
-//
-// test "echo platform: custom error (interpreter)" { try runEchoExpectExitCode(&.{}, "test/echo/exit_custom_error.roc", 1); }
-// test "echo platform: custom error (dev backend)" { try runEchoExpectExitCode(&.{"--opt=dev"}, "test/echo/exit_custom_error.roc", 1); }
+test "echo platform: custom error issue 9255 repro (dev backend)" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{"--opt=dev"}, "test/echo/exit_custom_error.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Expected behavior for issue #9255: the echo platform should preserve the
+    // app's custom error tag when matching the open union catch-all.
+    try testing.expect(result.term == .Exited and result.term.Exited == 1);
+    try testing.expectEqualStrings("Program exited with error: SomeCustomError(41.0)\n", result.stdout);
+}
 
 fn runEchoExpectFailure(opt_args: []const []const u8, roc_file: []const u8) !void {
     const gpa = std.testing.allocator;

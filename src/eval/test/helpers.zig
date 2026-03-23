@@ -68,7 +68,7 @@ const MIR = mir.MIR;
 const LambdaSet = mir.LambdaSet;
 const LirExprStore = lir.LirExprStore;
 
-/// Wrap a CIR expression in `Str.inspect(expr)` by creating an `e_run_low_level(.str_inspekt, [expr])` node.
+/// Wrap a CIR expression in `Str.inspect(expr)` by creating an `e_run_low_level(.str_inspect, [expr])` node.
 fn wrapInStrInspect(module_env: *ModuleEnv, inner_expr: CIR.Expr.Idx) !CIR.Expr.Idx {
     try module_env.store.ensureScratch();
     const top = module_env.store.scratchExprTop();
@@ -76,7 +76,7 @@ fn wrapInStrInspect(module_env: *ModuleEnv, inner_expr: CIR.Expr.Idx) !CIR.Expr.
     const args_span = try module_env.store.exprSpanFrom(top);
     const region = module_env.store.getExprRegion(inner_expr);
     return module_env.addExpr(.{ .e_run_low_level = .{
-        .op = .str_inspekt,
+        .op = .str_inspect,
         .args = args_span,
     } }, region);
 }
