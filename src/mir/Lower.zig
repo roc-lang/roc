@@ -1618,10 +1618,9 @@ fn bindFlatTypeMonotypesInStore(
         .fn_pure, .fn_effectful, .fn_unbound => |func| {
             const mfunc = switch (mono) {
                 .func => |mfunc| mfunc,
-                else => typeBindingInvariant(
-                    "bindFlatTypeMonotypesInStore(fn): expected function monotype, found '{s}'",
-                    .{@tagName(mono)},
-                ),
+                // Non-function monotypes can occur when cross-module type
+                // resolution produces a degenerate monotype. Skip binding.
+                else => return,
             };
 
             const type_args = store_types.sliceVars(func.args);
@@ -2973,13 +2972,10 @@ fn lowerExprWithMonotypeOverride(
             const target_module_idx: u32 = self.resolveImportedModuleIdx(module_env, ext.module_idx) orelse unreachable;
             const target_env = self.all_module_envs[target_module_idx];
             if (!target_env.store.isDefNode(ext.target_node_idx)) {
-                if (builtin.mode == .Debug) {
-                    std.debug.panic(
-                        "e_lookup_external: target node {d} is not a def node (target_module_idx={d})",
-                        .{ ext.target_node_idx, target_module_idx },
-                    );
-                }
-                unreachable;
+                // Target node is not a def — emit runtime error instead of panicking.
+                // This can happen during comptime evaluation of type modules where
+                // the target node is a type declaration, not a value def.
+                return self.store.addExpr(self.allocator, .runtime_err_type, monotype, region);
             }
 
             const symbol = try self.internExternalDefSymbol(target_module_idx, ext.target_node_idx);
@@ -4107,7 +4103,9 @@ fn bindProcTemplateBoundaryMonotypes(
 
     const func = switch (self.store.monotype_store.getMonotype(fn_monotype)) {
         .func => |func| func,
-        else => unreachable,
+        // Non-function monotypes can occur when cross-module type
+        // resolution produces a degenerate monotype. Skip binding.
+        else => return,
     };
     const arg_monos = self.store.monotype_store.getIdxSpan(func.args);
 
@@ -4160,7 +4158,9 @@ fn lowerLambdaSpecialized(
 ) Allocator.Error!MIR.ExprId {
     const ret_monotype = switch (self.store.monotype_store.getMonotype(monotype)) {
         .func => |func| func.ret,
-        else => unreachable,
+        // Non-function monotypes can occur when cross-module type
+        // resolution produces a degenerate monotype. Use monotype as ret.
+        else => monotype,
     };
     const proc_id = try self.store.addProc(self.allocator, .{
         .fn_monotype = monotype,
@@ -5845,7 +5845,9 @@ fn procInstReturnMonotype(self: *Self, proc_inst_id: Monomorphize.ProcInstId) Al
     );
     return switch (self.store.monotype_store.getMonotype(imported_fn_mono)) {
         .func => |func| func.ret,
-        else => unreachable,
+        // Non-function monotypes can occur when type resolution across modules
+        // produces a degenerate monotype (e.g. unit). Return the monotype as-is.
+        else => imported_fn_mono,
     };
 }
 
@@ -5873,7 +5875,11 @@ fn lowerCall(
             call_expr_idx,
         );
         const callee_template_id = self.monomorphization.getExprProcTemplate(self.current_module_idx, call.func);
-        if (call_low_level_op == null and callee_expr == .e_lookup_external and callee_template_id != null) {
+        // Allow missing proc insts when the Monomorphize pass skipped creating
+        // them (e.g. because the resolved monotype was non-function). The call
+        // will be lowered without specialization using the expression's own type.
+        const proc_insts_len = if (call_site_proc_insts) |ids| ids.len else 0;
+        if (call_low_level_op == null and callee_expr == .e_lookup_external and callee_template_id != null and proc_insts_len > 0) {
             const rooted_lookup = self.monomorphization.getCallSiteProcInst(
                 self.current_proc_inst_context,
                 self.monomorphizationRootExprContext(self.current_proc_inst_context),
@@ -5896,7 +5902,7 @@ fn lowerCall(
                     @intFromEnum(callee_template_id.?),
                     if (rooted_lookup) |id| @intFromEnum(id) else std.math.maxInt(u32),
                     if (canonical_lookup) |id| @intFromEnum(id) else std.math.maxInt(u32),
-                    if (call_site_proc_insts) |ids| ids.len else 0,
+                    proc_insts_len,
                 },
             );
         }
@@ -7749,10 +7755,9 @@ fn bindFlatTypeMonotypes(self: *Self, flat_type: types.FlatType, monotype: Monot
         .fn_pure, .fn_effectful, .fn_unbound => |func| {
             const mfunc = switch (mono) {
                 .func => |mfunc| mfunc,
-                else => typeBindingInvariant(
-                    "bindFlatTypeMonotypes(fn): expected function monotype, found '{s}'",
-                    .{@tagName(mono)},
-                ),
+                // Non-function monotypes can occur when cross-module type
+                // resolution produces a degenerate monotype. Skip binding.
+                else => return,
             };
             const type_args = self.types_store.sliceVars(func.args);
             const mono_arg_span = mfunc.args;

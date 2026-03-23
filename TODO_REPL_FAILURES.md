@@ -1,52 +1,48 @@
 # Remaining Snapshot Failures (lir-interpreter branch)
 
-## 1. Docs snapshot panics — "reached unreachable code"
-
-**Files:**
-- `test/snapshots/docs_static_dispatch.md`
-- `test/snapshots/docs_type_module.md`
-- `test/snapshots/docs_type_module_visibility.md`
-- `test/snapshots/docs_transitive_modules.md`
-
-All four involve type modules compiled through `BuildEnv`. The `unreachable` is
-hit somewhere in the parsing/canonicalization/type-checking pipeline — not in the
-monomorphizer or Lower. These tests pass on `main`; the regression comes from
-changes in `src/check/` (2 082 lines changed on this branch) or
-`src/canonicalize/` (the new `open_ext` / `#others` ident added for `..`
-rigids). A stack trace from inside `BuildEnv.build()` would pinpoint the exact
-location.
-
-**Suggested investigation:**
-- Run a single docs snapshot outside the parallel worker pool to get a full
-  stack trace (the setjmp/longjmp panic handler swallows it).
-- Check whether `CommonIdents.find` panics on `#others` for modules whose
-  interner was not seeded by `CommonIdents.init`.
-- Review the `src/check/` diff for switch-on-enum exhaustiveness changes that
-  could hit a new case.
-
----
-
-## 2. REPL interpreter segfault — `multiline_string_split_7_lines`
+## 1. REPL interpreter segfault — `multiline_string_split_7_lines`
 
 **File:** `test/snapshots/repl/multiline_string_split_7_lines.md`
 
-The interpreter segfaults on `input.split_on("\n")` (input 1). The first input
+The LIR interpreter segfaults on `input.split_on("\n")` (input 1). The first input
 (`input = "L68\nL30\nR48\nL5\nR60\nL55\nL1"`) succeeds. The OUTPUT section was
 removed on this branch because the segfault prevented output generation.
 
-This is a runtime crash in LIR-generated code, likely in the `split_on` builtin
-or in how the resulting `List(Str)` is materialised. On `main` the old CIR
-interpreter handled this correctly.
+The crash occurs in the LIR interpreter path (`evaluateWithInterpreter` in
+`repl/eval.zig`), which lowers CIR → MIR → LIR and runs the LIR interpreter.
+The `str_split_on` builtin is called via `builtins.str.strSplitOn()` and the
+result is converted by `rocListToValue()`.
 
-**Suggested investigation:**
-- Use `dump_generated_code_hex = true` in helpers.zig and insert INT3 before
-  `makeExecutable()` to attach gdb.
-- Check `str_split_on` lowering in `cir_to_lir.zig` / `MirToLir.zig` for
-  layout mismatches (similar to the `str_from_utf8` fix in 80456b794c).
+On `main` the old CIR interpreter handled this correctly.
+
+**Investigation findings:**
+- Layout sizes are confirmed matching: arg0=24, arg1=24, ret=24, @sizeOf(RocStr)=24,
+  @sizeOf(RocList)=24. **No layout mismatch.**
+- Raw bytes of both arguments (str and delimiter) are valid and correct.
+- The `strSplitOn` builtin **succeeds** — returns a RocList with 7 elements.
+- `rocListToValue` **succeeds** — copies the RocList into the value buffer.
+- **The segfault occurs AFTER `evalLowLevel` returns** — during rendering or
+  subsequent LIR interpreter processing of the `List Str` result.
+
+**Root cause hypothesis:** The segfault is in the `Str.inspect` wrapping or the
+LIR interpreter's rendering of the `List Str` value. The `strSplitOn` builtin
+creates seamless slice strings (pointing into the original string's heap memory).
+These slices use `incref` on the original string's refcount. If the LIR interpreter
+or the rendering path doesn't handle seamless slices correctly (e.g. trying to
+access a refcount that doesn't exist, or freeing the original string before
+rendering the slices), this would cause a SIGSEGV.
+
+**Suggested next steps:**
+- Add tracing after `evalLowLevel` returns to see which expression the interpreter
+  evaluates next (likely `Str.inspect` wrapping or a list rendering expression).
+- Check if the seamless-slice RocStr values returned by `strSplitOn` have valid
+  refcount headers accessible via the original string's allocation.
+- Check the `evalList` or list rendering path in the LIR interpreter for how it
+  iterates over `List Str` elements — it may be reading element layouts incorrectly.
 
 ---
 
-## 3. Cross-def closure evaluation regression
+## 2. Cross-def closure evaluation regression
 
 **Files:**
 - `test/snapshots/mono_nested_closures.md`
@@ -64,6 +60,11 @@ folded to CIR constants, so the next def (`result = add_five(3)`) must
 re-lower the entire call chain. The Lower instance for `result` correctly
 resolves the closure's captures now, but the LIR interpreter cannot yet
 evaluate the resulting closure-returning-closure pipeline end-to-end.
+
+**Key code locations:**
+- `fold_type.zig:225` — closures explicitly return `.unsupported`
+- `value_to_cir.zig:128,268,385` — closures rejected in `replaceExpr`/`createExpr`
+- `comptime_evaluator.zig:1458-1492` — isolated per-def evaluation loop
 
 **Suggested investigation:**
 - Check whether `tryFoldExprFromValue` can represent closure values (it

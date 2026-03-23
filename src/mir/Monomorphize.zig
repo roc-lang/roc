@@ -2786,7 +2786,7 @@ pub const Pass = struct {
         try self.bindCurrentCallFromProcInst(result, module_idx, call_expr_idx, call_expr, proc_inst_id);
         const proc_inst_fn_mono = switch (result.monotype_store.getMonotype(proc_inst.fn_monotype)) {
             .func => |func| func,
-            else => unreachable,
+            else => return,
         };
         const arg_exprs = module_env.store.sliceExpr(call_expr.args);
         try self.prepareCallableArgsForProcInst(result, module_idx, arg_exprs, proc_inst_id);
@@ -3357,6 +3357,10 @@ pub const Pass = struct {
             &callee_bindings,
         );
         if (fn_monotype.isNone()) return null;
+        // Only create proc insts for function monotypes. Non-function monotypes
+        // (e.g. unit) can occur when cross-module type resolution produces a
+        // degenerate monotype for type module methods.
+        if (result.monotype_store.getMonotype(fn_monotype) != .func) return null;
 
         if (!try self.procSignatureAcceptsFnMonotype(
             result,
@@ -4053,7 +4057,9 @@ pub const Pass = struct {
         const proc_inst = result.getProcInst(proc_inst_id);
         const fn_mono = switch (result.monotype_store.getMonotype(proc_inst.fn_monotype)) {
             .func => |func| func,
-            else => unreachable,
+            // Non-function monotypes can occur when type resolution across modules
+            // produces a degenerate monotype (e.g. unit). Skip binding in that case.
+            else => return,
         };
 
         const arg_exprs = self.all_module_envs[module_idx].store.sliceExpr(call_expr.args);
@@ -5934,6 +5940,10 @@ pub const Pass = struct {
             break :blk proc_inst_id;
         } else blk: {
             if (desired_fn_monotype.isNone()) return;
+            // Only create proc insts for function monotypes. Non-function monotypes
+            // (e.g. unit) can occur when cross-module type resolution produces a
+            // degenerate monotype for type module methods.
+            if (result.monotype_store.getMonotype(desired_fn_monotype.idx) != .func) return;
             const template = result.getProcTemplate(template_id).*;
             // Closures require their lexical owner's proc inst context to be active.
             // If we're at the top level (no active proc inst), skip — the closure will

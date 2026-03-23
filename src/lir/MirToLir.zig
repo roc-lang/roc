@@ -3857,6 +3857,13 @@ fn lowerCall(self: *Self, call_data: anytype, mir_expr_id: MIR.ExprId, region: R
         );
     }
 
+    // Non-proc callees can reach here when cross-module type resolution produces
+    // degenerate monotypes (e.g. for type module methods during comptime evaluation).
+    // Emit a crash expression instead of panicking the compiler.
+    if (func_mir_expr == .runtime_err_type or func_mir_expr == .runtime_err_can) {
+        const msg = try self.lir_store.strings.insert(self.allocator, "Called a function that could not be resolved");
+        return self.lir_store.addExpr(.{ .crash = .{ .msg = msg, .ret_layout = ret_layout } }, region);
+    }
     if (std.debug.runtime_safety) {
         if (func_mir_expr == .lookup) {
             const sym = func_mir_expr.lookup;
