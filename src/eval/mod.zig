@@ -50,7 +50,9 @@ const wasm_evaluator_mod = @import("wasm_evaluator.zig");
 pub const WasmEvaluator = wasm_evaluator_mod.WasmEvaluator;
 /// Interpreter values module (re-exported for formatting)
 pub const interpreter_values = @import("interpreter_values");
-/// Test helpers with backend evaluator functions (devEvaluatorStr, wasmEvaluatorStr, etc.)
+/// Test helpers with backend evaluator functions (re-exported for the parallel test runner,
+/// which cannot import helpers.zig directly since Zig requires each file to belong to
+/// exactly one module).
 pub const test_helpers = @import("test/helpers.zig");
 
 test "eval tests" {

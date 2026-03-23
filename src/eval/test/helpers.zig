@@ -28,6 +28,7 @@ const loadCompiledModule = builtin_loading_mod.loadCompiledModule;
 const backend = @import("backend");
 const bytebox = @import("bytebox");
 const WasmEvaluator = eval_mod.WasmEvaluator;
+// const LlvmEvaluator = eval_mod.LlvmEvaluator; // TODO: use once LLVM_EVAL_ISSUE.md is resolved
 const i128h = builtins.compiler_rt_128;
 
 const posix = std.posix;
@@ -496,6 +497,9 @@ pub fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []
     }
 }
 
+// TODO: llvmEvaluatorStr currently aliases devEvaluatorStr because the
+// LlvmEvaluator/MonoLlvmCodeGen have bitrotted. See LLVM_EVAL_ISSUE.md
+// for details. Once fixed, this should use the real LLVM pipeline.
 pub fn llvmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) ![]const u8 {
     return devEvaluatorStr(allocator, module_env, expr_idx, builtin_module_env);
 }

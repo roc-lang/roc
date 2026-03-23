@@ -7,9 +7,9 @@ const TestCase = @import("parallel_runner.zig").TestCase;
 const RocDec = @import("builtins").dec.RocDec;
 
 pub const tests = [_]TestCase{
-    .{ .name = "i64: simple number", .source = "1", .expected = .{ .i64_val = 1 } },
-    .{ .name = "i64: if-else true branch", .source = "if (1 == 1) 42 else 99", .expected = .{ .i64_val = 42 } },
-    .{ .name = "i64: arithmetic", .source = "2 + 3 * 4", .expected = .{ .i64_val = 14 } },
+    .{ .name = "dec: simple number", .source = "1", .expected = .{ .dec_val = 1 * RocDec.one_point_zero_i128 } },
+    .{ .name = "dec: if-else true branch", .source = "if (1 == 1) 42 else 99", .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 } },
+    .{ .name = "dec: arithmetic", .source = "2 + 3 * 4", .expected = .{ .dec_val = 14 * RocDec.one_point_zero_i128 } },
     .{ .name = "bool: true literal", .source = "True", .expected = .{ .bool_val = true } },
     .{ .name = "bool: comparison", .source = "5 > 3", .expected = .{ .bool_val = true } },
     .{ .name = "str: hello", .source = "\"hello\"", .expected = .{ .str_val = "hello" } },
