@@ -225,6 +225,22 @@ pub const Resolver = struct {
     ) Allocator.Error!GraphRef {
         if (elems.len == 0) return .{ .canonical = .zst };
 
+        const node_id = try graph.reserveNode(self.allocator);
+        try self.fillStructNodeFromElems(node_id, elems, overrides, graph, refs_by_mono, active_tag_unions);
+        return .{ .local = node_id };
+    }
+
+    fn fillStructNodeFromElems(
+        self: *Resolver,
+        node_id: graph_mod.NodeId,
+        elems: []const Monotype.Idx,
+        overrides: ?*const std.AutoHashMap(u32, layout.Idx),
+        graph: *LayoutGraph,
+        refs_by_mono: *std.AutoHashMap(u32, GraphRef),
+        active_tag_unions: *std.AutoHashMap(u32, void),
+    ) Allocator.Error!void {
+        std.debug.assert(elems.len > 0);
+
         var fields = std.ArrayList(GraphField).empty;
         defer fields.deinit(self.allocator);
         try fields.ensureTotalCapacity(self.allocator, elems.len);
@@ -234,7 +250,7 @@ pub const Resolver = struct {
                 .child = try self.buildRefForMonotype(elem_idx, overrides, graph, refs_by_mono, active_tag_unions, false),
             });
         }
-        return self.buildStructNode(fields.items, graph);
+        try self.setStructNode(node_id, fields.items, graph);
     }
 
     fn buildStructFromFields(
@@ -247,6 +263,22 @@ pub const Resolver = struct {
     ) Allocator.Error!GraphRef {
         if (fields_slice.len == 0) return .{ .canonical = .zst };
 
+        const node_id = try graph.reserveNode(self.allocator);
+        try self.fillStructNodeFromFields(node_id, fields_slice, overrides, graph, refs_by_mono, active_tag_unions);
+        return .{ .local = node_id };
+    }
+
+    fn fillStructNodeFromFields(
+        self: *Resolver,
+        node_id: graph_mod.NodeId,
+        fields_slice: []const Monotype.Field,
+        overrides: ?*const std.AutoHashMap(u32, layout.Idx),
+        graph: *LayoutGraph,
+        refs_by_mono: *std.AutoHashMap(u32, GraphRef),
+        active_tag_unions: *std.AutoHashMap(u32, void),
+    ) Allocator.Error!void {
+        std.debug.assert(fields_slice.len > 0);
+
         var fields = std.ArrayList(GraphField).empty;
         defer fields.deinit(self.allocator);
         try fields.ensureTotalCapacity(self.allocator, fields_slice.len);
@@ -256,20 +288,17 @@ pub const Resolver = struct {
                 .child = try self.buildRefForMonotype(field.type_idx, overrides, graph, refs_by_mono, active_tag_unions, false),
             });
         }
-        return self.buildStructNode(fields.items, graph);
+        try self.setStructNode(node_id, fields.items, graph);
     }
 
-    fn buildStructNode(
+    fn setStructNode(
         self: *Resolver,
+        node_id: graph_mod.NodeId,
         fields: []const GraphField,
         graph: *LayoutGraph,
-    ) Allocator.Error!GraphRef {
-        if (fields.len == 0) return .{ .canonical = .zst };
-
-        const node_id = try graph.reserveNode(self.allocator);
+    ) Allocator.Error!void {
         const span = try graph.appendFields(self.allocator, fields);
         graph.setNode(node_id, .{ .struct_ = span });
-        return .{ .local = node_id };
     }
 
     fn buildPayloadRef(

@@ -41,6 +41,7 @@ const StructInfo = layout_mod.StructInfo;
 const TagUnionInfo = layout_mod.TagUnionInfo;
 const ScalarInfo = layout_mod.ScalarInfo;
 const Work = work.Work;
+const RefcountedVisitState = enum(u2) { active, no, yes };
 
 /// Errors that can occur during layout computation
 /// Stores Layout instances by Idx.
@@ -721,8 +722,7 @@ pub const Store = struct {
     }
 
     /// Return the stored total size of a tag union.
-    pub fn getTagUnionSize(self: *const Self, tu_idx: TagUnionIdx, alignment: std.mem.Alignment) u32 {
-        _ = alignment;
+    pub fn getTagUnionSize(self: *const Self, tu_idx: TagUnionIdx, _: std.mem.Alignment) u32 {
         return self.getTagUnionData(tu_idx).size;
     }
 
@@ -783,8 +783,7 @@ pub const Store = struct {
     }
 
     /// Return the stored total size of a struct.
-    pub fn getStructSize(self: *const Self, struct_idx: StructIdx, struct_alignment: std.mem.Alignment) u32 {
-        _ = struct_alignment;
+    pub fn getStructSize(self: *const Self, struct_idx: StructIdx, _: std.mem.Alignment) u32 {
         return self.getStructData(struct_idx).size;
     }
 
@@ -1104,42 +1103,68 @@ pub const Store = struct {
     /// the layout itself is heap-allocated. This function also returns true for
     /// tuples/records that contain strings, lists, or boxes.
     pub fn layoutContainsRefcounted(self: *const Self, l: Layout) bool {
-        return switch (l.tag) {
-            .scalar => switch (l.data.scalar.tag) {
-                .str => true,
-                else => false,
-            },
-            .list, .list_of_zst => true,
-            .box, .box_of_zst => true,
-            .struct_ => {
+        var visit_states = std.AutoHashMap(u32, RefcountedVisitState).init(self.allocator);
+        defer visit_states.deinit();
+
+        return self.layoutContainsRefcountedInner(l, &visit_states) catch
+            @panic("layoutContainsRefcounted ran out of memory");
+    }
+
+    fn layoutContainsRefcountedInner(
+        self: *const Self,
+        l: Layout,
+        visit_states: *std.AutoHashMap(u32, RefcountedVisitState),
+    ) std.mem.Allocator.Error!bool {
+        const key: u32 = @bitCast(l);
+        if (visit_states.get(key)) |state| {
+            return switch (state) {
+                .active, .yes => true,
+                .no => false,
+            };
+        }
+
+        switch (l.tag) {
+            .scalar => return l.data.scalar.tag == .str,
+            .list, .list_of_zst => return true,
+            .box, .box_of_zst => return true,
+            .zst => return false,
+            .struct_, .tag_union, .closure => {},
+        }
+
+        try visit_states.put(key, .active);
+
+        const contains_refcounted = switch (l.tag) {
+            .struct_ => blk: {
                 const sd = self.getStructData(l.data.struct_.idx);
                 const fields = self.struct_fields.sliceRange(sd.getFields());
                 for (0..fields.len) |i| {
                     const field_layout = self.getLayout(fields.get(i).layout);
-                    if (self.layoutContainsRefcounted(field_layout)) {
-                        return true;
+                    if (try self.layoutContainsRefcountedInner(field_layout, visit_states)) {
+                        break :blk true;
                     }
                 }
-                return false;
+                break :blk false;
             },
-            .tag_union => {
+            .tag_union => blk: {
                 const tu_data = self.getTagUnionData(l.data.tag_union.idx);
                 const variants = self.getTagUnionVariants(tu_data);
                 for (0..variants.len) |i| {
                     const variant_layout = self.getLayout(variants.get(i).payload_layout);
-                    if (self.layoutContainsRefcounted(variant_layout)) {
-                        return true;
+                    if (try self.layoutContainsRefcountedInner(variant_layout, visit_states)) {
+                        break :blk true;
                     }
                 }
-                return false;
+                break :blk false;
             },
-            .closure => {
-                // Check if the captured variables contain refcounted data
+            .closure => blk: {
                 const captures_layout = self.getLayout(l.data.closure.captures_layout_idx);
-                return self.layoutContainsRefcounted(captures_layout);
+                break :blk try self.layoutContainsRefcountedInner(captures_layout, visit_states);
             },
-            .zst => false,
+            .scalar, .list, .list_of_zst, .box, .box_of_zst, .zst => unreachable,
         };
+
+        try visit_states.put(key, if (contains_refcounted) .yes else .no);
+        return contains_refcounted;
     }
 
     /// Add the tag union's tags to self.pending_tags,
