@@ -2209,6 +2209,7 @@ fn lowerStrInspektTagUnion(
 ) Allocator.Error!MIR.ExprId {
     var collected = std.ArrayList(types.Tag).empty;
     defer collected.deinit(self.allocator);
+    _ = type_var;
 
     var current_row = tu;
     rows: while (true) {
@@ -2246,24 +2247,38 @@ fn lowerStrInspektTagUnion(
         }
     }
 
-    if (collected.items.len == 0) return self.emitMirStrLiteral("<empty_tag_union>", region);
+    const union_mono = self.store.typeOf(value_expr);
+    const mono_tags = switch (self.store.monotype_store.getMonotype(union_mono)) {
+        .tag_union => |mono_union| self.store.monotype_store.getTags(mono_union.tags),
+        else => typeBindingInvariant(
+            "lowerStrInspektTagUnion: expected tag_union monotype, found '{s}'",
+            .{@tagName(self.store.monotype_store.getMonotype(union_mono))},
+        ),
+    };
+    if (mono_tags.len == 0) return self.emitMirStrLiteral("<empty_tag_union>", region);
 
-    std.mem.sort(types.Tag, collected.items, type_env.getIdentStoreConst(), types.Tag.sortByNameAsc);
-
-    const union_mono = try self.monotypeFromTypeVarInEnv(type_env, type_var);
     const save_branches = self.scratch_branches.top();
     defer self.scratch_branches.clearFrom(save_branches);
 
-    for (collected.items) |tag| {
-        const payload_vars = type_env.types.sliceVars(tag.args);
+    for (mono_tags) |mono_tag| {
+        const payloads = self.store.monotype_store.getIdxSpan(mono_tag.payloads);
+        const maybe_source_tag = blk: {
+            for (collected.items) |tag| {
+                if (tag.name.eql(mono_tag.name.ident)) break :blk tag;
+            }
+            break :blk null;
+        };
+        const payload_vars = if (maybe_source_tag) |tag|
+            type_env.types.sliceVars(tag.args)
+        else
+            &.{};
 
         const save_payload_patterns = self.scratch_pattern_ids.top();
         defer self.scratch_pattern_ids.clearFrom(save_payload_patterns);
         const save_payload_symbols = self.scratch_captures.top();
         defer self.scratch_captures.clearFrom(save_payload_symbols);
 
-        for (payload_vars) |payload_var| {
-            const payload_mono = try self.monotypeFromTypeVarInEnv(type_env, payload_var);
+        for (payloads) |payload_mono| {
             const bind = try self.makeSyntheticBind(payload_mono, false);
             try self.scratch_pattern_ids.append(bind.pattern);
             try self.scratch_captures.append(.{ .symbol = bind.symbol });
@@ -2273,10 +2288,10 @@ fn lowerStrInspektTagUnion(
             self.allocator,
             self.scratch_pattern_ids.sliceFromStart(save_payload_patterns),
         );
-        const tag_args = try self.wrapMultiPayloadTagPatterns(tag.name, union_mono, payload_pattern_span);
+        const tag_args = try self.wrapMultiPayloadTagPatterns(mono_tag.name.ident, union_mono, payload_pattern_span);
         const tag_pattern = try self.store.addPattern(
             self.allocator,
-            .{ .tag = .{ .name = tag.name, .args = tag_args } },
+            .{ .tag = .{ .name = mono_tag.name.ident, .args = tag_args } },
             union_mono,
         );
         const branch_patterns = try self.store.addBranchPatterns(self.allocator, &.{MIR.BranchPattern{
@@ -2284,24 +2299,27 @@ fn lowerStrInspektTagUnion(
             .degenerate = false,
         }});
 
-        const body = if (payload_vars.len == 0) blk: {
-            break :blk try self.emitMirStrLiteral(type_env.getIdent(tag.name), region);
+        const body = if (payloads.len == 0) blk: {
+            break :blk try self.emitMirStrLiteral(mono_tag.name.text(self.all_module_envs), region);
         } else blk: {
             const save_parts = self.scratch_expr_ids.top();
             defer self.scratch_expr_ids.clearFrom(save_parts);
 
-            const tag_open = try std.fmt.allocPrint(self.allocator, "{s}(", .{type_env.getIdent(tag.name)});
+            const tag_open = try std.fmt.allocPrint(self.allocator, "{s}(", .{mono_tag.name.text(self.all_module_envs)});
             defer self.allocator.free(tag_open);
             try self.scratch_expr_ids.append(try self.emitMirStrLiteral(tag_open, region));
 
             const payload_symbols = self.scratch_captures.sliceFromStart(save_payload_symbols);
-            for (payload_vars, 0..) |payload_var, i| {
+            for (payloads, 0..) |payload_mono, i| {
                 if (i > 0) {
                     try self.scratch_expr_ids.append(try self.emitMirStrLiteral(", ", region));
                 }
-                const payload_mono = try self.monotypeFromTypeVarInEnv(type_env, payload_var);
                 const payload_lookup = try self.emitMirLookup(payload_symbols[i].symbol, payload_mono, region);
-                try self.scratch_expr_ids.append(try self.lowerStrInspektExpr(type_env, payload_lookup, payload_var, region));
+                const payload_inspekt = if (i < payload_vars.len)
+                    try self.lowerStrInspektExpr(type_env, payload_lookup, payload_vars[i], region)
+                else
+                    try self.lowerStrInspektExprByMonotype(type_env, payload_lookup, payload_mono, region);
+                try self.scratch_expr_ids.append(payload_inspekt);
             }
             try self.scratch_expr_ids.append(try self.emitMirStrLiteral(")", region));
             break :blk try self.foldMirStrConcat(self.scratch_expr_ids.sliceFromStart(save_parts), region);
@@ -3977,6 +3995,7 @@ fn lowerIf(self: *Self, module_env: *const ModuleEnv, if_expr: anytype, monotype
 /// Lower `e_match` to MIR match.
 fn lowerMatch(self: *Self, module_env: *const ModuleEnv, match_expr: CIR.Expr.Match, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
     const cond = try self.lowerExpr(match_expr.cond);
+    const cond_mono = self.store.typeOf(cond);
     const cir_branch_indices = module_env.store.sliceMatchBranches(match_expr.branches);
 
     const branches_top = self.scratch_branches.top();
@@ -4000,6 +4019,7 @@ fn lowerMatch(self: *Self, module_env: *const ModuleEnv, match_expr: CIR.Expr.Ma
                     try self.alignAlternativePatternSymbols(module_env, rep_pattern_idx, cir_bp.pattern);
                 }
             }
+            try self.bindPatternMonotypes(module_env, cir_bp.pattern, cond_mono);
             const pat = try self.lowerPattern(module_env, cir_bp.pattern);
             try self.scratch_branch_patterns.append(.{ .pattern = pat, .degenerate = cir_bp.degenerate });
         }
