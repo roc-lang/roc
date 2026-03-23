@@ -37,9 +37,10 @@ const LoadedModule = eval_mod.builtin_loading.LoadedModule;
 const deserializeBuiltinIndices = eval_mod.builtin_loading.deserializeBuiltinIndices;
 const loadCompiledModule = eval_mod.builtin_loading.loadCompiledModule;
 
-// Import backend evaluator functions through eval module (Zig requires each file
-// to belong to exactly one module, so we can't import helpers.zig directly).
+// Import backend evaluator functions and TestEnv through eval module (Zig requires
+// each file to belong to exactly one module, so we can't import helpers.zig directly).
 const helpers = eval_mod.test_helpers;
+const TestEnv = eval_mod.TestEnv;
 
 const posix = std.posix;
 
@@ -81,6 +82,12 @@ pub const TestCase = struct {
 
 // ---------------------------------------------------------------------------
 // Crash protection
+//
+// TODO: The signal handler uses _setjmp/_longjmp which is technically
+// undefined behavior in POSIX (only sigsetjmp/siglongjmp are defined for
+// use in signal handlers). In practice this works on Linux/macOS/BSDs and
+// is used by many projects (libsigsegv, GHC), but the sljmp module should
+// be extended to support sigsetjmp/siglongjmp for correctness.
 // ---------------------------------------------------------------------------
 
 pub const panic = std.debug.FullPanic(panicHandler);
@@ -190,8 +197,6 @@ const RunnerContext = struct {
     msg_allocator: std.mem.Allocator,
 };
 
-const MAX_THREADS = 64;
-
 // ---------------------------------------------------------------------------
 // Parse and canonicalize (shared by all backends)
 // ---------------------------------------------------------------------------
@@ -299,87 +304,9 @@ fn cleanupResources(allocator: std.mem.Allocator, resources: ParsedResources) vo
     allocator.destroy(resources.module_env);
 }
 
-// ---------------------------------------------------------------------------
-// ParTestEnv — Roc host ops for the interpreter
-// ---------------------------------------------------------------------------
-
-const ParTestEnv = struct {
-    allocator: std.mem.Allocator,
-    crash: eval_mod.CrashContext,
-
-    fn init(allocator: std.mem.Allocator) ParTestEnv {
-        return .{
-            .allocator = allocator,
-            .crash = eval_mod.CrashContext.init(allocator),
-        };
-    }
-
-    fn deinit(self: *ParTestEnv) void {
-        self.crash.deinit();
-    }
-
-    fn get_ops(self: *ParTestEnv) roc_builtins.host_abi.RocOps {
-        self.crash.reset();
-        return .{
-            .env = @ptrCast(self),
-            .roc_alloc = testRocAlloc,
-            .roc_dealloc = testRocDealloc,
-            .roc_realloc = testRocRealloc,
-            .roc_dbg = testRocDbg,
-            .roc_expect_failed = testRocExpectFailed,
-            .roc_crashed = testRocCrashed,
-            .hosted_fns = .{ .count = 0, .fns = undefined },
-        };
-    }
-
-    fn testRocAlloc(alloc_args: *roc_builtins.host_abi.RocAlloc, env: *anyopaque) callconv(.c) void {
-        const self: *ParTestEnv = @ptrCast(@alignCast(env));
-        const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(alloc_args.alignment)));
-        const size_storage_bytes = @max(alloc_args.alignment, @alignOf(usize));
-        const total_size = alloc_args.length + size_storage_bytes;
-        const result = self.allocator.rawAlloc(total_size, align_enum, @returnAddress());
-        const base_ptr = result orelse @panic("OOM in testRocAlloc");
-        const size_ptr: *usize = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes - @sizeOf(usize));
-        size_ptr.* = total_size;
-        alloc_args.answer = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
-    }
-
-    fn testRocDealloc(dealloc_args: *roc_builtins.host_abi.RocDealloc, env: *anyopaque) callconv(.c) void {
-        const self: *ParTestEnv = @ptrCast(@alignCast(env));
-        const size_storage_bytes = @max(dealloc_args.alignment, @alignOf(usize));
-        const size_ptr: *const usize = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - @sizeOf(usize));
-        const total_size = size_ptr.*;
-        const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - size_storage_bytes);
-        const log2_align = std.math.log2_int(u32, @intCast(dealloc_args.alignment));
-        const align_enum: std.mem.Alignment = @enumFromInt(log2_align);
-        const slice = @as([*]u8, @ptrCast(base_ptr))[0..total_size];
-        self.allocator.rawFree(slice, align_enum, @returnAddress());
-    }
-
-    fn testRocRealloc(realloc_args: *roc_builtins.host_abi.RocRealloc, env: *anyopaque) callconv(.c) void {
-        const self: *ParTestEnv = @ptrCast(@alignCast(env));
-        const size_storage_bytes = @max(realloc_args.alignment, @alignOf(usize));
-        const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(realloc_args.answer) - @sizeOf(usize));
-        const old_total_size = old_size_ptr.*;
-        const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(realloc_args.answer) - size_storage_bytes);
-        const new_total_size = realloc_args.new_length + size_storage_bytes;
-        const old_slice = @as([*]u8, @ptrCast(old_base_ptr))[0..old_total_size];
-        const new_slice = self.allocator.realloc(old_slice, new_total_size) catch @panic("OOM in testRocRealloc");
-        const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes - @sizeOf(usize));
-        new_size_ptr.* = new_total_size;
-        realloc_args.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
-    }
-
-    fn testRocDbg(_: *const roc_builtins.host_abi.RocDbg, _: *anyopaque) callconv(.c) void {}
-
-    fn testRocExpectFailed(_: *const roc_builtins.host_abi.RocExpectFailed, _: *anyopaque) callconv(.c) void {}
-
-    fn testRocCrashed(crashed_args: *const roc_builtins.host_abi.RocCrashed, env: *anyopaque) callconv(.c) void {
-        const self: *ParTestEnv = @ptrCast(@alignCast(env));
-        const msg_slice = crashed_args.utf8_bytes[0..crashed_args.len];
-        self.crash.recordCrash(msg_slice) catch {};
-    }
-};
+// Uses TestEnv from src/eval/test/TestEnv.zig which provides RocOps with
+// allocation tracking (leak detection, double-free detection, alignment-safe
+// realloc via rawAlloc+memcpy).
 
 // ---------------------------------------------------------------------------
 // Str.inspect wrapping — converts CIR expression to Str.inspect(expr)
@@ -417,21 +344,6 @@ fn interpreterFormatCtx(layout_cache: *const interpreter_layout.Store) interpret
 // Backend comparison helpers
 // ---------------------------------------------------------------------------
 
-fn numericStringsEqual(a: []const u8, b: []const u8) bool {
-    if (std.mem.eql(u8, a, b)) return true;
-    // "42" == "42.0" and vice versa
-    if (a.len + 2 == b.len and std.mem.endsWith(u8, b, ".0") and std.mem.startsWith(u8, b, a)) return true;
-    if (b.len + 2 == a.len and std.mem.endsWith(u8, a, ".0") and std.mem.startsWith(u8, a, b)) return true;
-    return false;
-}
-
-fn boolStringsEquivalent(a: []const u8, b: []const u8) bool {
-    return (std.mem.eql(u8, a, "True") and std.mem.eql(u8, b, "1")) or
-        (std.mem.eql(u8, a, "False") and std.mem.eql(u8, b, "0")) or
-        (std.mem.eql(u8, a, "1") and std.mem.eql(u8, b, "True")) or
-        (std.mem.eql(u8, a, "0") and std.mem.eql(u8, b, "False"));
-}
-
 /// Per-backend result for comparison reporting.
 const BackendResult = struct {
     name: []const u8,
@@ -441,7 +353,7 @@ const BackendResult = struct {
     },
 };
 
-/// Compare all backend results. Returns null if they all agree, or an error message.
+/// Compare all backend Str.inspect results. Returns null if they all agree, or an error message.
 fn compareBackendResults(
     allocator: std.mem.Allocator,
     backends: []const BackendResult,
@@ -458,11 +370,11 @@ fn compareBackendResults(
 
     if (ok_count < 2) return null; // can't compare with fewer than 2 successes
 
-    // Check all successful results agree
+    // All backends produce Str.inspect output — direct byte comparison is correct.
     var mismatch = false;
     for (backends) |br| {
         if (br.value == .ok) {
-            if (!numericStringsEqual(first_ok.?, br.value.ok) and !boolStringsEquivalent(first_ok.?, br.value.ok)) {
+            if (!std.mem.eql(u8, first_ok.?, br.value.ok)) {
                 mismatch = true;
                 break;
             }
@@ -485,7 +397,7 @@ fn compareBackendResults(
             },
         }
     }
-    return msg_buf.toOwnedSlice(allocator) catch null;
+    return msg_buf.toOwnedSlice(allocator) catch "Backend mismatch (OOM building details)";
 }
 
 // ---------------------------------------------------------------------------
@@ -526,7 +438,7 @@ fn runNormalTest(allocator: std.mem.Allocator, src: []const u8, expected: TestCa
     const resources = try parseAndCanonicalizeExpr(allocator, src);
     defer cleanupResources(allocator, resources);
 
-    var test_env_instance = ParTestEnv.init(allocator);
+    var test_env_instance = TestEnv.init(allocator);
     defer test_env_instance.deinit();
 
     const imported_envs = [_]*const ModuleEnv{ resources.module_env, resources.builtin_module.env };
@@ -534,11 +446,11 @@ fn runNormalTest(allocator: std.mem.Allocator, src: []const u8, expected: TestCa
     defer interpreter.deinit();
 
     var interp_timer = Timer.start() catch unreachable;
-    var ops = test_env_instance.get_ops();
-    const result = try interpreter.eval(resources.expr_idx, &ops);
+    const ops = test_env_instance.get_ops();
+    const result = try interpreter.eval(resources.expr_idx, ops);
     const interp_ns = interp_timer.read();
     const layout_cache = &interpreter.runtime_layout_store;
-    defer result.decref(layout_cache, &ops);
+    defer result.decref(layout_cache, ops);
     defer interpreter.bindings.items.len = 0;
 
     const fe_timings = EvalTimings{
@@ -603,7 +515,7 @@ fn runNormalTest(allocator: std.mem.Allocator, src: []const u8, expected: TestCa
             {
                 return .{ .status = .fail, .message = "expected Dec layout", .timings = fe_timings };
             }
-            const dec_value = result.asDec(&ops);
+            const dec_value = result.asDec(ops);
             if (dec_value.num != exp) {
                 return .{ .status = .fail, .message = "Dec value mismatch", .timings = fe_timings };
             }
@@ -629,7 +541,7 @@ fn runTestError(allocator: std.mem.Allocator, src: []const u8, expected_err: any
     const resources = try parseAndCanonicalizeExpr(allocator, src);
     defer cleanupResources(allocator, resources);
 
-    var test_env_instance = ParTestEnv.init(allocator);
+    var test_env_instance = TestEnv.init(allocator);
     defer test_env_instance.deinit();
 
     const imported_envs = [_]*const ModuleEnv{ resources.module_env, resources.builtin_module.env };
@@ -637,8 +549,8 @@ fn runTestError(allocator: std.mem.Allocator, src: []const u8, expected_err: any
     defer interpreter.deinit();
 
     var interp_timer = Timer.start() catch unreachable;
-    var ops = test_env_instance.get_ops();
-    _ = interpreter.eval(resources.expr_idx, &ops) catch |err| {
+    const ops = test_env_instance.get_ops();
+    _ = interpreter.eval(resources.expr_idx, ops) catch |err| {
         const interp_ns = interp_timer.read();
         const timings = EvalTimings{
             .parse_ns = resources.parse_ns,
@@ -692,7 +604,7 @@ fn runTestTypeMismatchCrash(allocator: std.mem.Allocator, src: []const u8) !Test
     };
     defer cleanupResources(allocator, resources);
 
-    var test_env_instance = ParTestEnv.init(allocator);
+    var test_env_instance = TestEnv.init(allocator);
     defer test_env_instance.deinit();
 
     const imported_envs = [_]*const ModuleEnv{ resources.module_env, resources.builtin_module.env };
@@ -700,8 +612,8 @@ fn runTestTypeMismatchCrash(allocator: std.mem.Allocator, src: []const u8) !Test
     defer interpreter.deinit();
 
     var interp_timer = Timer.start() catch unreachable;
-    var ops = test_env_instance.get_ops();
-    _ = interpreter.eval(resources.expr_idx, &ops) catch {
+    const ops = test_env_instance.get_ops();
+    _ = interpreter.eval(resources.expr_idx, ops) catch {
         const interp_ns = interp_timer.read();
         return .{ .status = .pass, .timings = .{
             .parse_ns = resources.parse_ns,
@@ -795,7 +707,10 @@ fn compareAllBackends(allocator: std.mem.Allocator, interp_str: []const u8, reso
         return .{ .status = .pass };
     };
 
-    // Run each backend (or skip)
+    // Run each backend (or skip).
+    // Thread safety: each backend evaluator creates fresh instances per call.
+    // The wasm evaluator's host-side heap pointer (wasm_heap_ptr) is threadlocal,
+    // and bytebox ModuleInstances are per-call, so no cross-thread state is shared.
     const dev_result: BackendResult = if (skip.dev)
         BackendResult{ .name = "dev", .value = .{ .err = "skipped" } }
     else
@@ -938,7 +853,10 @@ fn printHelp() void {
         \\setjmp/longjmp allows the runner to recover from segfaults and continue.
         \\
         \\USAGE:
-        \\  zig build test-eval [-- <OPTIONS>]
+        \\  zig build test-eval               Run with defaults.
+        \\  zig build test-eval -- <OPTIONS>   Pass options (the -- is required
+        \\                                     because zig build consumes flags
+        \\                                     before the separator).
         \\  ./zig-out/bin/eval-test-runner [<OPTIONS>]
         \\
         \\OPTIONS:
@@ -1210,12 +1128,12 @@ pub fn main() !void {
     }
 
     const cpu_count = std.Thread.getCpuCount() catch 1;
-    const thread_count = if (cli.coverage)
+    const thread_count: usize = if (cli.coverage)
         1
     else if (cli.threads > 0)
-        @min(cli.threads, MAX_THREADS)
+        @min(cli.threads, cpu_count)
     else
-        @min(cpu_count, @min(tests.len, MAX_THREADS));
+        @min(cpu_count, tests.len);
 
     const results = try gpa.alloc(TestResult, tests.len);
     defer gpa.free(results);
@@ -1234,11 +1152,12 @@ pub fn main() !void {
     if (thread_count <= 1) {
         threadMain(&context);
     } else {
-        var threads: [MAX_THREADS]std.Thread = undefined;
-        for (0..thread_count) |i| {
-            threads[i] = try std.Thread.spawn(.{}, threadMain, .{&context});
+        const threads = try gpa.alloc(std.Thread, thread_count);
+        defer gpa.free(threads);
+        for (threads) |*t| {
+            t.* = try std.Thread.spawn(.{}, threadMain, .{&context});
         }
-        for (threads[0..thread_count]) |t| {
+        for (threads) |t| {
             t.join();
         }
     }

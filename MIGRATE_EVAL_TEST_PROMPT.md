@@ -107,7 +107,6 @@ Available skip flags: `.interpreter`, `.dev`, `.wasm`, `.llvm`.
 | Variant | Old helper | Notes |
 |---------|-----------|-------|
 | `.i64_val` | `runExpectI64` | i128 value. Handles both true ints and Dec-as-int. |
-| `.int_dec` | `runExpectIntDec` | i128 value checked as integer-typed Dec. |
 | `.bool_val` | `runExpectBool` | `true` or `false`. |
 | `.str_val` | `runExpectStr` | Expected string content. |
 | `.dec_val` | `runExpectDec` | Raw i128 Dec representation (scaled by 10^18). |
@@ -154,11 +153,6 @@ try runExpectF64("2.5.F64", 2.5, .no_trace);
 try runExpectDec("1.5", 1500000000000000000, .no_trace);
 // NEW:
 .{ .name = "...", .source = "1.5", .expected = .{ .dec_val = 1500000000000000000 } },
-
-// OLD:
-try runExpectIntDec("1 + 2", 3, .no_trace);
-// NEW:
-.{ .name = "...", .source = "1 + 2", .expected = .{ .int_dec = 3 } },
 
 // OLD:
 try runExpectError("{ crash \"boom\" 0 }", error.Crash, .no_trace);
@@ -255,7 +249,7 @@ comment in your commit message noting the count skipped and why.
 
 Migrate these files. Each contains tests that use `runExpectI64`,
 `runExpectBool`, `runExpectStr`, `runExpectF32`, `runExpectF64`,
-`runExpectDec`, `runExpectIntDec`, `runExpectError`, `runExpectProblem`,
+`runExpectDec`, `runExpectError`, `runExpectProblem`,
 `runExpectTypeMismatchAndCrash`, or `runDevOnlyExpectStr`.
 
 ### Batch 1: eval_test.zig (the big one — do in sub-batches)

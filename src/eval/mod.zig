@@ -54,6 +54,9 @@ pub const interpreter_values = @import("interpreter_values");
 /// which cannot import helpers.zig directly since Zig requires each file to belong to
 /// exactly one module).
 pub const test_helpers = @import("test/helpers.zig");
+/// Test environment providing RocOps with allocation tracking (re-exported for the
+/// parallel test runner).
+pub const TestEnv = @import("test/TestEnv.zig");
 
 test "eval tests" {
     std.testing.refAllDecls(@This());
