@@ -144,10 +144,12 @@ pub const Resolver = struct {
                 break :blk local_ref;
             },
             .record => |r| blk: {
+                const fields = self.monotype_store.getFields(r.fields);
+                if (fields.len == 0) break :blk .{ .canonical = .zst };
                 const local_ref = try self.reserveMonotypeNodeRef(mono_key, graph, refs_by_mono);
                 try self.fillStructNodeFromFields(
                     local_ref.local,
-                    self.monotype_store.getFields(r.fields),
+                    fields,
                     overrides,
                     graph,
                     refs_by_mono,
@@ -155,10 +157,12 @@ pub const Resolver = struct {
                 break :blk local_ref;
             },
             .tuple => |t| blk: {
+                const elems = self.monotype_store.getIdxSpan(t.elems);
+                if (elems.len == 0) break :blk .{ .canonical = .zst };
                 const local_ref = try self.reserveMonotypeNodeRef(mono_key, graph, refs_by_mono);
                 try self.fillStructNodeFromElems(
                     local_ref.local,
-                    self.monotype_store.getIdxSpan(t.elems),
+                    elems,
                     overrides,
                     graph,
                     refs_by_mono,
@@ -166,10 +170,12 @@ pub const Resolver = struct {
                 break :blk local_ref;
             },
             .tag_union => |tu| blk: {
+                const tags = self.monotype_store.getTags(tu.tags);
+                if (tags.len == 0) break :blk .{ .canonical = .zst };
                 const local_ref = try self.reserveMonotypeNodeRef(mono_key, graph, refs_by_mono);
                 try self.fillTagUnionNode(
                     local_ref.local,
-                    self.monotype_store.getTags(tu.tags),
+                    tags,
                     overrides,
                     graph,
                     refs_by_mono,

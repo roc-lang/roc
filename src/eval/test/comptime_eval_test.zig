@@ -3360,8 +3360,7 @@ test "issue 9281: dev evaluator stack overflow with nested recursive opaque type
         ,
     });
 
-    const app_source = try std.fmt.allocPrint(
-        test_allocator,
+    const app_source = try std.fmt.allocPrint(test_allocator,
         \\app [main!] {{
         \\    pf: platform "{s}",
         \\    pkg: "./pkg/main.roc",
