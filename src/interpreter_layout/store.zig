@@ -720,8 +720,7 @@ pub const Store = struct {
     }
 
     /// Get the canonical size of a tag union.
-    pub fn getTagUnionSize(self: *const Self, tu_idx: TagUnionIdx, alignment: std.mem.Alignment) u32 {
-        _ = alignment;
+    pub fn getTagUnionSize(self: *const Self, tu_idx: TagUnionIdx, _: std.mem.Alignment) u32 {
         return self.getTagUnionData(tu_idx).size;
     }
 
@@ -782,8 +781,7 @@ pub const Store = struct {
     }
 
     /// Get the canonical size of a struct.
-    pub fn getStructSize(self: *const Self, struct_idx: StructIdx, struct_alignment: std.mem.Alignment) u32 {
-        _ = struct_alignment;
+    pub fn getStructSize(self: *const Self, struct_idx: StructIdx, _: std.mem.Alignment) u32 {
         return self.getStructData(struct_idx).size;
     }
 
