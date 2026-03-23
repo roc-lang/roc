@@ -33,6 +33,8 @@ const i128h = builtins.compiler_rt_128;
 const posix = std.posix;
 
 const has_fork = builtin.os.tag != .windows;
+/// Set to true to skip fork-based isolation (needed for kcov coverage).
+pub var force_no_fork: bool = false;
 const enable_dev_eval_leak_checks = true;
 
 const Check = check.Check;
@@ -299,7 +301,7 @@ pub fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, exp
     };
     defer executable.deinit();
 
-    if (has_fork) {
+    if (has_fork and !force_no_fork) {
         return forkAndExecute(allocator, &dev_eval, &executable);
     } else {
         return executeAndFormat(allocator, &dev_eval, &executable);

@@ -125,15 +125,48 @@ fn installCrashSignalHandlers() void {
 const TestOutcome = struct {
     status: Status,
     message: ?[]const u8 = null,
+    timings: EvalTimings = .{},
 
     const Status = enum { pass, fail, crash };
+};
+
+const EvalTimings = struct {
+    parse_ns: u64 = 0,
+    canonicalize_ns: u64 = 0,
+    typecheck_ns: u64 = 0,
+    interpreter_ns: u64 = 0,
+    dev_ns: u64 = 0,
+    wasm_ns: u64 = 0,
+    llvm_ns: u64 = 0,
 };
 
 const TestResult = struct {
     status: TestOutcome.Status,
     message: ?[]const u8,
     duration_ns: u64,
+    timings: EvalTimings,
 };
+
+const Timer = std.time.Timer;
+
+/// Build EvalTimings with frontend phases + interpreter from ParsedResources.
+fn frontendTimingsFrom(resources: ParsedResources, interp_ns: u64) EvalTimings {
+    return .{
+        .parse_ns = resources.parse_ns,
+        .canonicalize_ns = resources.canonicalize_ns,
+        .typecheck_ns = resources.typecheck_ns,
+        .interpreter_ns = interp_ns,
+    };
+}
+
+/// Build EvalTimings with only frontend phases (no interpreter).
+fn frontendOnlyTimings(resources: ParsedResources) EvalTimings {
+    return .{
+        .parse_ns = resources.parse_ns,
+        .canonicalize_ns = resources.canonicalize_ns,
+        .typecheck_ns = resources.typecheck_ns,
+    };
+}
 
 // ---------------------------------------------------------------------------
 // Runner context
@@ -161,9 +194,15 @@ const ParsedResources = struct {
     builtin_module: LoadedModule,
     builtin_indices: CIR.BuiltinIndices,
     builtin_types: BuiltinTypes,
+    // Frontend phase timings
+    parse_ns: u64 = 0,
+    canonicalize_ns: u64 = 0,
+    typecheck_ns: u64 = 0,
 };
 
 fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) !ParsedResources {
+    // Phase 1: Parse (includes builtin loading + source parsing)
+    var parse_timer = try Timer.start();
     const builtin_indices = try deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
     var builtin_module = try loadCompiledModule(allocator, compiled_builtins.builtin_bin, "Builtin", compiled_builtins.builtin_source);
     errdefer builtin_module.deinit();
@@ -180,7 +219,10 @@ fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) !P
     if (parse_ast.tokenize_diagnostics.items.len > 0 or parse_ast.parse_diagnostics.items.len > 0) {
         return error.ParseError;
     }
+    const parse_elapsed = parse_timer.read();
 
+    // Phase 2: Canonicalize
+    var can_timer = try Timer.start();
     parse_ast.store.emptyScratch();
     try module_env.initCIRFields("test");
     _ = try module_env.imports.getOrPut(allocator, &module_env.common.strings, "Builtin");
@@ -205,7 +247,10 @@ fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) !P
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
     const canonical_expr = try czer.canonicalizeExpr(expr_idx) orelse return error.CanonicalizationFailed;
     const canonical_expr_idx = canonical_expr.get_idx();
+    const can_elapsed = can_timer.read();
 
+    // Phase 3: Type check
+    var check_timer = try Timer.start();
     module_env.all_defs = try module_env.store.defSpanFrom(0);
     const imported_envs = [_]*const ModuleEnv{ builtin_module.env, module_env };
     module_env.imports.resolveImports(module_env, &imported_envs);
@@ -213,6 +258,7 @@ fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) !P
     const checker = try allocator.create(Check);
     checker.* = try Check.init(allocator, &module_env.types, module_env, &imported_envs, null, &module_env.store.regions, builtin_ctx);
     _ = try checker.checkExprReplWithDefs(canonical_expr_idx);
+    const check_elapsed = check_timer.read();
 
     const bts = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
     return .{
@@ -224,6 +270,9 @@ fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) !P
         .builtin_module = builtin_module,
         .builtin_indices = builtin_indices,
         .builtin_types = bts,
+        .parse_ns = parse_elapsed,
+        .canonicalize_ns = can_elapsed,
+        .typecheck_ns = check_elapsed,
     };
 }
 
@@ -462,11 +511,15 @@ fn runTestI64(allocator: std.mem.Allocator, src: []const u8, expected_int: i128)
     var interpreter = try Interpreter.init(allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interpreter.deinit();
 
+    var interp_timer = try Timer.start();
     var ops = test_env_instance.get_ops();
     const result = try interpreter.eval(resources.expr_idx, &ops);
+    const interp_ns = interp_timer.read();
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, &ops);
     defer interpreter.bindings.items.len = 0;
+
+    const fe_timings = frontendTimingsFrom(resources, interp_ns);
 
     const int_value = if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) blk: {
         break :blk result.asI128();
@@ -477,16 +530,21 @@ fn runTestI64(allocator: std.mem.Allocator, src: []const u8, expected_int: i128)
     };
 
     if (int_value != expected_int) {
-        return .{ .status = .fail, .message = "integer value mismatch" };
+        return .{ .status = .fail, .message = "integer value mismatch", .timings = fe_timings };
     }
 
     // Format interpreter result for cross-backend comparison
     const roc_val = stackValueToRocValue(result, null);
     const fmt_ctx = interpreterFormatCtx(layout_cache);
-    const interp_str = roc_val.format(allocator, fmt_ctx) catch return .{ .status = .pass };
+    const interp_str = roc_val.format(allocator, fmt_ctx) catch return .{ .status = .pass, .timings = fe_timings };
     defer allocator.free(interp_str);
 
-    return compareAllBackends(allocator, interp_str, resources);
+    var outcome = compareAllBackends(allocator, interp_str, resources);
+    outcome.timings.parse_ns = resources.parse_ns;
+    outcome.timings.canonicalize_ns = resources.canonicalize_ns;
+    outcome.timings.typecheck_ns = resources.typecheck_ns;
+    outcome.timings.interpreter_ns = interp_ns;
+    return outcome;
 }
 
 fn runTestBool(allocator: std.mem.Allocator, src: []const u8, expected_bool: bool) !TestOutcome {
@@ -500,11 +558,15 @@ fn runTestBool(allocator: std.mem.Allocator, src: []const u8, expected_bool: boo
     var interpreter = try Interpreter.init(allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interpreter.deinit();
 
+    var interp_timer = try Timer.start();
     var ops = test_env_instance.get_ops();
     const result = try interpreter.eval(resources.expr_idx, &ops);
+    const interp_ns = interp_timer.read();
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, &ops);
     defer interpreter.bindings.items.len = 0;
+
+    const fe_timings = frontendTimingsFrom(resources, interp_ns);
 
     const int_val: i64 = if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) blk: {
         break :blk @intCast(result.asI128());
@@ -516,15 +578,20 @@ fn runTestBool(allocator: std.mem.Allocator, src: []const u8, expected_bool: boo
 
     const bool_val = int_val != 0;
     if (bool_val != expected_bool) {
-        return .{ .status = .fail, .message = "boolean value mismatch" };
+        return .{ .status = .fail, .message = "boolean value mismatch", .timings = fe_timings };
     }
 
     const roc_val = stackValueToRocValue(result, interpreter_layout.Idx.bool);
     const fmt_ctx = interpreterFormatCtx(layout_cache);
-    const interp_str = roc_val.format(allocator, fmt_ctx) catch return .{ .status = .pass };
+    const interp_str = roc_val.format(allocator, fmt_ctx) catch return .{ .status = .pass, .timings = fe_timings };
     defer allocator.free(interp_str);
 
-    return compareAllBackends(allocator, interp_str, resources);
+    var outcome = compareAllBackends(allocator, interp_str, resources);
+    outcome.timings.parse_ns = resources.parse_ns;
+    outcome.timings.canonicalize_ns = resources.canonicalize_ns;
+    outcome.timings.typecheck_ns = resources.typecheck_ns;
+    outcome.timings.interpreter_ns = interp_ns;
+    return outcome;
 }
 
 fn runTestStr(allocator: std.mem.Allocator, src: []const u8, expected_str: []const u8) !TestOutcome {
@@ -538,13 +605,17 @@ fn runTestStr(allocator: std.mem.Allocator, src: []const u8, expected_str: []con
     var interpreter = try Interpreter.init(allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interpreter.deinit();
 
+    var interp_timer = try Timer.start();
     var ops = test_env_instance.get_ops();
     const result = try interpreter.eval(resources.expr_idx, &ops);
+    const interp_ns = interp_timer.read();
     const layout_cache = &interpreter.runtime_layout_store;
+
+    const fe_timings = frontendTimingsFrom(resources, interp_ns);
 
     if (result.layout.tag != .scalar or result.layout.data.scalar.tag != .str) {
         result.decref(layout_cache, &ops);
-        return .{ .status = .fail, .message = "expected string layout" };
+        return .{ .status = .fail, .message = "expected string layout", .timings = fe_timings };
     }
 
     const roc_str: *const roc_builtins.str.RocStr = @ptrCast(@alignCast(result.ptr.?));
@@ -560,8 +631,8 @@ fn runTestStr(allocator: std.mem.Allocator, src: []const u8, expected_str: []con
         } else {
             result.decref(layout_cache, &ops);
         }
-        if (!matches) return .{ .status = .fail, .message = "string value mismatch" };
-        return .{ .status = .pass };
+        if (!matches) return .{ .status = .fail, .message = "string value mismatch", .timings = fe_timings };
+        return .{ .status = .pass, .timings = fe_timings };
     };
     defer allocator.free(interp_str);
 
@@ -572,10 +643,15 @@ fn runTestStr(allocator: std.mem.Allocator, src: []const u8, expected_str: []con
     }
 
     if (!matches) {
-        return .{ .status = .fail, .message = "string value mismatch" };
+        return .{ .status = .fail, .message = "string value mismatch", .timings = fe_timings };
     }
 
-    return compareAllBackends(allocator, interp_str, resources);
+    var outcome = compareAllBackends(allocator, interp_str, resources);
+    outcome.timings.parse_ns = resources.parse_ns;
+    outcome.timings.canonicalize_ns = resources.canonicalize_ns;
+    outcome.timings.typecheck_ns = resources.typecheck_ns;
+    outcome.timings.interpreter_ns = interp_ns;
+    return outcome;
 }
 
 fn runTestError(allocator: std.mem.Allocator, src: []const u8, expected_err: anyerror) !TestOutcome {
@@ -589,18 +665,23 @@ fn runTestError(allocator: std.mem.Allocator, src: []const u8, expected_err: any
     var interpreter = try Interpreter.init(allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interpreter.deinit();
 
+    var interp_timer = try Timer.start();
     var ops = test_env_instance.get_ops();
     _ = interpreter.eval(resources.expr_idx, &ops) catch |err| {
+        const interp_ns = interp_timer.read();
         if (err == expected_err) {
-            return .{ .status = .pass };
+            return .{ .status = .pass, .timings = frontendTimingsFrom(resources, interp_ns) };
         }
-        return .{ .status = .fail, .message = "wrong error returned" };
+        return .{ .status = .fail, .message = "wrong error returned", .timings = frontendTimingsFrom(resources, interp_ns) };
     };
+    const interp_ns = interp_timer.read();
 
-    return .{ .status = .fail, .message = "expected error but evaluation succeeded" };
+    return .{ .status = .fail, .message = "expected error but evaluation succeeded", .timings = frontendTimingsFrom(resources, interp_ns) };
 }
 
 fn runTestProblem(allocator: std.mem.Allocator, src: []const u8) !TestOutcome {
+    // Phase 1: Parse
+    var parse_timer = try Timer.start();
     const builtin_indices = try deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
     const builtin_module = try loadCompiledModule(allocator, compiled_builtins.builtin_bin, "Builtin", compiled_builtins.builtin_source);
     defer {
@@ -618,12 +699,16 @@ fn runTestProblem(allocator: std.mem.Allocator, src: []const u8) !TestOutcome {
     const parse_ast = try parse.parseExpr(&allocators_inst, &module_env.common);
 
     if (parse_ast.tokenize_diagnostics.items.len > 0 or parse_ast.parse_diagnostics.items.len > 0) {
+        const parse_ns = parse_timer.read();
         parse_ast.deinit();
         module_env.deinit();
         allocator.destroy(module_env);
-        return .{ .status = .pass };
+        return .{ .status = .pass, .timings = .{ .parse_ns = parse_ns } };
     }
+    const parse_ns = parse_timer.read();
 
+    // Phase 2: Canonicalize
+    var can_timer = try Timer.start();
     parse_ast.store.emptyScratch();
     try module_env.initCIRFields("test");
     _ = try module_env.imports.getOrPut(allocator, &module_env.common.strings, "Builtin");
@@ -647,17 +732,21 @@ fn runTestProblem(allocator: std.mem.Allocator, src: []const u8) !TestOutcome {
 
     const expr_idx_raw: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
     _ = czer.canonicalizeExpr(expr_idx_raw) catch {
+        const can_ns = can_timer.read();
         czer.deinit();
         parse_ast.deinit();
         module_env.deinit();
         allocator.destroy(czer);
         allocator.destroy(module_env);
-        return .{ .status = .pass };
+        return .{ .status = .pass, .timings = .{ .parse_ns = parse_ns, .canonicalize_ns = can_ns } };
     };
+    const can_ns = can_timer.read();
 
     const can_diags = try module_env.getDiagnostics();
     defer allocator.free(can_diags);
 
+    // Phase 3: Type check
+    var check_timer = try Timer.start();
     module_env.all_defs = try module_env.store.defSpanFrom(0);
     const imported_envs = [_]*const ModuleEnv{ builtin_module.env, module_env };
     module_env.imports.resolveImports(module_env, &imported_envs);
@@ -667,6 +756,7 @@ fn runTestProblem(allocator: std.mem.Allocator, src: []const u8) !TestOutcome {
 
     const type_problems = checker.problems.problems.items.len;
     const has_problems = can_diags.len + type_problems > 0;
+    const check_ns = check_timer.read();
 
     checker.deinit();
     czer.deinit();
@@ -676,10 +766,11 @@ fn runTestProblem(allocator: std.mem.Allocator, src: []const u8) !TestOutcome {
     allocator.destroy(czer);
     allocator.destroy(module_env);
 
+    const timings = EvalTimings{ .parse_ns = parse_ns, .canonicalize_ns = can_ns, .typecheck_ns = check_ns };
     if (has_problems) {
-        return .{ .status = .pass };
+        return .{ .status = .pass, .timings = timings };
     }
-    return .{ .status = .fail, .message = "expected problems but none found" };
+    return .{ .status = .fail, .message = "expected problems but none found", .timings = timings };
 }
 
 fn runTestF32(allocator: std.mem.Allocator, src: []const u8, expected_f32: f32) !TestOutcome {
@@ -693,24 +784,33 @@ fn runTestF32(allocator: std.mem.Allocator, src: []const u8, expected_f32: f32) 
     var interpreter = try Interpreter.init(allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interpreter.deinit();
 
+    var interp_timer = try Timer.start();
     var ops = test_env_instance.get_ops();
     const result = try interpreter.eval(resources.expr_idx, &ops);
+    const interp_ns = interp_timer.read();
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, &ops);
+
+    const fe_timings = frontendTimingsFrom(resources, interp_ns);
 
     const actual = result.asF32();
     const epsilon: f32 = 0.0001;
     const diff = @abs(actual - expected_f32);
     if (diff > epsilon) {
-        return .{ .status = .fail, .message = "f32 value mismatch" };
+        return .{ .status = .fail, .message = "f32 value mismatch", .timings = fe_timings };
     }
 
     const roc_val = stackValueToRocValue(result, null);
     const fmt_ctx = interpreterFormatCtx(layout_cache);
-    const interp_str = roc_val.format(allocator, fmt_ctx) catch return .{ .status = .pass };
+    const interp_str = roc_val.format(allocator, fmt_ctx) catch return .{ .status = .pass, .timings = fe_timings };
     defer allocator.free(interp_str);
 
-    return compareAllBackends(allocator, interp_str, resources);
+    var outcome = compareAllBackends(allocator, interp_str, resources);
+    outcome.timings.parse_ns = resources.parse_ns;
+    outcome.timings.canonicalize_ns = resources.canonicalize_ns;
+    outcome.timings.typecheck_ns = resources.typecheck_ns;
+    outcome.timings.interpreter_ns = interp_ns;
+    return outcome;
 }
 
 fn runTestF64(allocator: std.mem.Allocator, src: []const u8, expected_f64: f64) !TestOutcome {
@@ -724,24 +824,33 @@ fn runTestF64(allocator: std.mem.Allocator, src: []const u8, expected_f64: f64) 
     var interpreter = try Interpreter.init(allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interpreter.deinit();
 
+    var interp_timer = try Timer.start();
     var ops = test_env_instance.get_ops();
     const result = try interpreter.eval(resources.expr_idx, &ops);
+    const interp_ns = interp_timer.read();
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, &ops);
+
+    const fe_timings = frontendTimingsFrom(resources, interp_ns);
 
     const actual = result.asF64();
     const epsilon: f64 = 0.000000001;
     const diff = @abs(actual - expected_f64);
     if (diff > epsilon) {
-        return .{ .status = .fail, .message = "f64 value mismatch" };
+        return .{ .status = .fail, .message = "f64 value mismatch", .timings = fe_timings };
     }
 
     const roc_val = stackValueToRocValue(result, null);
     const fmt_ctx = interpreterFormatCtx(layout_cache);
-    const interp_str = roc_val.format(allocator, fmt_ctx) catch return .{ .status = .pass };
+    const interp_str = roc_val.format(allocator, fmt_ctx) catch return .{ .status = .pass, .timings = fe_timings };
     defer allocator.free(interp_str);
 
-    return compareAllBackends(allocator, interp_str, resources);
+    var outcome = compareAllBackends(allocator, interp_str, resources);
+    outcome.timings.parse_ns = resources.parse_ns;
+    outcome.timings.canonicalize_ns = resources.canonicalize_ns;
+    outcome.timings.typecheck_ns = resources.typecheck_ns;
+    outcome.timings.interpreter_ns = interp_ns;
+    return outcome;
 }
 
 fn runTestDec(allocator: std.mem.Allocator, src: []const u8, expected_dec: i128) !TestOutcome {
@@ -755,22 +864,31 @@ fn runTestDec(allocator: std.mem.Allocator, src: []const u8, expected_dec: i128)
     var interpreter = try Interpreter.init(allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interpreter.deinit();
 
+    var interp_timer = try Timer.start();
     var ops = test_env_instance.get_ops();
     const result = try interpreter.eval(resources.expr_idx, &ops);
+    const interp_ns = interp_timer.read();
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, &ops);
 
+    const fe_timings = frontendTimingsFrom(resources, interp_ns);
+
     const dec_value = result.asDec(&ops);
     if (dec_value.num != expected_dec) {
-        return .{ .status = .fail, .message = "Dec value mismatch" };
+        return .{ .status = .fail, .message = "Dec value mismatch", .timings = fe_timings };
     }
 
     const roc_val = stackValueToRocValue(result, null);
     const fmt_ctx = interpreterFormatCtx(layout_cache);
-    const interp_str = roc_val.format(allocator, fmt_ctx) catch return .{ .status = .pass };
+    const interp_str = roc_val.format(allocator, fmt_ctx) catch return .{ .status = .pass, .timings = fe_timings };
     defer allocator.free(interp_str);
 
-    return compareAllBackends(allocator, interp_str, resources);
+    var outcome = compareAllBackends(allocator, interp_str, resources);
+    outcome.timings.parse_ns = resources.parse_ns;
+    outcome.timings.canonicalize_ns = resources.canonicalize_ns;
+    outcome.timings.typecheck_ns = resources.typecheck_ns;
+    outcome.timings.interpreter_ns = interp_ns;
+    return outcome;
 }
 
 fn runTestTypeMismatchCrash(allocator: std.mem.Allocator, src: []const u8) !TestOutcome {
@@ -786,12 +904,15 @@ fn runTestTypeMismatchCrash(allocator: std.mem.Allocator, src: []const u8) !Test
     var interpreter = try Interpreter.init(allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interpreter.deinit();
 
+    var interp_timer = try Timer.start();
     var ops = test_env_instance.get_ops();
     _ = interpreter.eval(resources.expr_idx, &ops) catch {
-        return .{ .status = .pass };
+        const interp_ns = interp_timer.read();
+        return .{ .status = .pass, .timings = frontendTimingsFrom(resources, interp_ns) };
     };
+    const interp_ns = interp_timer.read();
 
-    return .{ .status = .fail, .message = "expected crash but evaluation succeeded" };
+    return .{ .status = .fail, .message = "expected crash but evaluation succeeded", .timings = frontendTimingsFrom(resources, interp_ns) };
 }
 
 /// Run a test that only checks the dev backend output (no interpreter comparison).
@@ -800,18 +921,25 @@ fn runTestDevOnlyStr(allocator: std.mem.Allocator, src: []const u8, expected_str
     defer cleanupResources(allocator, resources);
 
     const inspect_expr = wrapInStrInspect(resources.module_env, resources.expr_idx) catch {
-        return .{ .status = .fail, .message = "failed to wrap in Str.inspect" };
+        return .{ .status = .fail, .message = "failed to wrap in Str.inspect", .timings = frontendOnlyTimings(resources) };
     };
 
+    var dev_timer = Timer.start() catch unreachable;
     const dev_str = helpers.devEvaluatorStr(allocator, resources.module_env, inspect_expr, resources.builtin_module.env) catch |err| {
-        return .{ .status = .fail, .message = @errorName(err) };
+        const dev_ns = dev_timer.read();
+        var timings = frontendOnlyTimings(resources);
+        timings.dev_ns = dev_ns;
+        return .{ .status = .fail, .message = @errorName(err), .timings = timings };
     };
+    const dev_ns = dev_timer.read();
     defer allocator.free(dev_str);
 
+    var timings = frontendOnlyTimings(resources);
+    timings.dev_ns = dev_ns;
     if (!std.mem.eql(u8, expected_str, dev_str)) {
-        return .{ .status = .fail, .message = "dev_only_str value mismatch" };
+        return .{ .status = .fail, .message = "dev_only_str value mismatch", .timings = timings };
     }
-    return .{ .status = .pass };
+    return .{ .status = .pass, .timings = timings };
 }
 
 // ---------------------------------------------------------------------------
@@ -822,6 +950,8 @@ fn runTestDevOnlyStr(allocator: std.mem.Allocator, src: []const u8, expected_str
 /// output with the interpreter's formatted result.
 /// Returns .pass if all backends agree, .fail with mismatch details otherwise.
 fn compareAllBackends(allocator: std.mem.Allocator, interp_str: []const u8, resources: ParsedResources) TestOutcome {
+    var timings = EvalTimings{};
+
     // Wrap the expression in Str.inspect for compiled backends
     const inspect_expr = wrapInStrInspect(resources.module_env, resources.expr_idx) catch {
         // If wrapping fails, skip comparison (interpreter value was already checked)
@@ -829,30 +959,36 @@ fn compareAllBackends(allocator: std.mem.Allocator, interp_str: []const u8, reso
     };
 
     // Run dev backend
+    var dev_timer = Timer.start() catch unreachable;
     const dev_result: BackendResult = blk: {
         const str = helpers.devEvaluatorStr(allocator, resources.module_env, inspect_expr, resources.builtin_module.env) catch |err| {
             break :blk BackendResult{ .name = "dev", .value = .{ .err = @errorName(err) } };
         };
         break :blk BackendResult{ .name = "dev", .value = .{ .ok = str } };
     };
+    timings.dev_ns = dev_timer.read();
     defer if (dev_result.value == .ok) allocator.free(dev_result.value.ok);
 
     // Run wasm backend
+    var wasm_timer = Timer.start() catch unreachable;
     const wasm_result: BackendResult = blk: {
         const str = helpers.wasmEvaluatorStr(allocator, resources.module_env, inspect_expr, resources.builtin_module.env) catch |err| {
             break :blk BackendResult{ .name = "wasm", .value = .{ .err = @errorName(err) } };
         };
         break :blk BackendResult{ .name = "wasm", .value = .{ .ok = str } };
     };
+    timings.wasm_ns = wasm_timer.read();
     defer if (wasm_result.value == .ok) allocator.free(wasm_result.value.ok);
 
     // Run "llvm" backend (currently aliases dev)
+    var llvm_timer = Timer.start() catch unreachable;
     const llvm_result: BackendResult = blk: {
         const str = helpers.llvmEvaluatorStr(allocator, resources.module_env, inspect_expr, resources.builtin_module.env) catch |err| {
             break :blk BackendResult{ .name = "llvm", .value = .{ .err = @errorName(err) } };
         };
         break :blk BackendResult{ .name = "llvm", .value = .{ .ok = str } };
     };
+    timings.llvm_ns = llvm_timer.read();
     defer if (llvm_result.value == .ok) allocator.free(llvm_result.value.ok);
 
     // Compare all backends including interpreter
@@ -864,10 +1000,10 @@ fn compareAllBackends(allocator: std.mem.Allocator, interp_str: []const u8, reso
     };
 
     if (compareBackendResults(allocator, &all_backends)) |msg| {
-        return .{ .status = .fail, .message = msg };
+        return .{ .status = .fail, .message = msg, .timings = timings };
     }
 
-    return .{ .status = .pass };
+    return .{ .status = .pass, .timings = timings };
 }
 
 // ---------------------------------------------------------------------------
@@ -886,7 +1022,7 @@ fn threadMain(ctx: *RunnerContext) void {
         const allocator = arena.allocator();
 
         const tc = ctx.tests[i];
-        const start = std.time.nanoTimestamp();
+        var wall_timer = Timer.start() catch unreachable;
 
         // Set up crash protection
         var jmp_buf: sljmp.JmpBuf = undefined;
@@ -896,11 +1032,12 @@ fn threadMain(ctx: *RunnerContext) void {
         const jmp_result = sljmp.setjmp(&jmp_buf);
         if (jmp_result != 0) {
             panic_jmp = null;
-            const elapsed: u64 = @intCast(@max(0, std.time.nanoTimestamp() - start));
+            const elapsed = wall_timer.read();
             ctx.results[i] = .{
                 .status = .crash,
                 .message = panic_msg orelse "unknown crash",
                 .duration_ns = elapsed,
+                .timings = .{},
             };
             continue;
         }
@@ -908,11 +1045,12 @@ fn threadMain(ctx: *RunnerContext) void {
         const outcome = runSingleTest(allocator, tc);
 
         panic_jmp = null;
-        const elapsed: u64 = @intCast(@max(0, std.time.nanoTimestamp() - start));
+        const elapsed = wall_timer.read();
         ctx.results[i] = .{
             .status = outcome.status,
             .message = outcome.message,
             .duration_ns = elapsed,
+            .timings = outcome.timings,
         };
     }
 }
@@ -933,6 +1071,7 @@ const CliArgs = struct {
     filter: ?[]const u8 = null,
     threads: usize = 0,
     verbose: bool = false,
+    coverage: bool = false,
 };
 
 fn parseCliArgs(args: []const []const u8) CliArgs {
@@ -947,9 +1086,194 @@ fn parseCliArgs(args: []const []const u8) CliArgs {
             result.threads = std.fmt.parseInt(usize, args[i], 10) catch 0;
         } else if (std.mem.eql(u8, args[i], "--verbose")) {
             result.verbose = true;
+        } else if (std.mem.eql(u8, args[i], "--coverage")) {
+            result.coverage = true;
         }
     }
     return result;
+}
+
+// ---------------------------------------------------------------------------
+// Timing display helpers
+// ---------------------------------------------------------------------------
+
+fn writeTimingBreakdown(t: EvalTimings) void {
+    const fields = [_]struct { name: []const u8, ns: u64 }{
+        .{ .name = "parse", .ns = t.parse_ns },
+        .{ .name = "can", .ns = t.canonicalize_ns },
+        .{ .name = "check", .ns = t.typecheck_ns },
+        .{ .name = "interp", .ns = t.interpreter_ns },
+        .{ .name = "dev", .ns = t.dev_ns },
+        .{ .name = "wasm", .ns = t.wasm_ns },
+        .{ .name = "llvm", .ns = t.llvm_ns },
+    };
+    var has_any = false;
+    for (fields) |f| {
+        if (f.ns > 0) {
+            has_any = true;
+            break;
+        }
+    }
+    if (!has_any) {
+        std.debug.print("\n", .{});
+        return;
+    }
+    std.debug.print("  [", .{});
+    var first = true;
+    for (fields) |f| {
+        if (f.ns > 0) {
+            if (!first) std.debug.print(" ", .{});
+            first = false;
+            const fms = @as(f64, @floatFromInt(f.ns)) / 1_000_000.0;
+            std.debug.print("{s}:{d:.1}", .{ f.name, fms });
+        }
+    }
+    std.debug.print("]\n", .{});
+}
+
+// ---------------------------------------------------------------------------
+// Statistics
+// ---------------------------------------------------------------------------
+
+const TimingStats = struct {
+    min: u64,
+    max: u64,
+    mean: u64,
+    median: u64,
+    std_dev: u64,
+    p95: u64,
+    total: u64,
+    count: usize,
+};
+
+fn computeTimingStats(values: []u64) ?TimingStats {
+    if (values.len == 0) return null;
+
+    std.mem.sort(u64, values, {}, struct {
+        fn lessThan(_: void, a: u64, b: u64) bool {
+            return a < b;
+        }
+    }.lessThan);
+
+    var total: u128 = 0;
+    for (values) |v| total += v;
+
+    const mean: u64 = @intCast(total / values.len);
+    const median = values[values.len / 2];
+    const p95_idx = @min(values.len - 1, (values.len * 95 + 99) / 100);
+    const p95 = values[p95_idx];
+
+    // Standard deviation
+    var sum_sq_diff: f64 = 0;
+    for (values) |v| {
+        const diff = @as(f64, @floatFromInt(v)) - @as(f64, @floatFromInt(mean));
+        sum_sq_diff += diff * diff;
+    }
+    const variance = sum_sq_diff / @as(f64, @floatFromInt(values.len));
+    const std_dev: u64 = @intFromFloat(@sqrt(variance));
+
+    return .{
+        .min = values[0],
+        .max = values[values.len - 1],
+        .mean = mean,
+        .median = median,
+        .std_dev = std_dev,
+        .p95 = p95,
+        .total = @intCast(@min(total, std.math.maxInt(u64))),
+        .count = values.len,
+    };
+}
+
+fn nsToMs(ns: u64) f64 {
+    return @as(f64, @floatFromInt(ns)) / 1_000_000.0;
+}
+
+fn printStatsRow(label: []const u8, stats: ?TimingStats) void {
+    if (stats) |s| {
+        std.debug.print("  {s:<8} {d:>8.1} {d:>8.1} {d:>8.1} {d:>8.1} {d:>8.1} {d:>8.1} {d:>8.1}   {d:>3}\n", .{
+            label,
+            nsToMs(s.min),
+            nsToMs(s.max),
+            nsToMs(s.mean),
+            nsToMs(s.median),
+            nsToMs(s.std_dev),
+            nsToMs(s.p95),
+            nsToMs(s.total),
+            s.count,
+        });
+    }
+}
+
+fn printPerformanceSummary(gpa: std.mem.Allocator, tests: []const TestCase, results: []const TestResult) !void {
+    // Collect per-phase timing arrays (only include tests that ran that phase, i.e. ns > 0)
+    var parse_times: std.ArrayListUnmanaged(u64) = .empty;
+    defer parse_times.deinit(gpa);
+    var can_times: std.ArrayListUnmanaged(u64) = .empty;
+    defer can_times.deinit(gpa);
+    var check_times: std.ArrayListUnmanaged(u64) = .empty;
+    defer check_times.deinit(gpa);
+    var interp_times: std.ArrayListUnmanaged(u64) = .empty;
+    defer interp_times.deinit(gpa);
+    var dev_times: std.ArrayListUnmanaged(u64) = .empty;
+    defer dev_times.deinit(gpa);
+    var wasm_times: std.ArrayListUnmanaged(u64) = .empty;
+    defer wasm_times.deinit(gpa);
+    var llvm_times: std.ArrayListUnmanaged(u64) = .empty;
+    defer llvm_times.deinit(gpa);
+
+    for (results) |r| {
+        const t = r.timings;
+        if (t.parse_ns > 0) try parse_times.append(gpa, t.parse_ns);
+        if (t.canonicalize_ns > 0) try can_times.append(gpa, t.canonicalize_ns);
+        if (t.typecheck_ns > 0) try check_times.append(gpa, t.typecheck_ns);
+        if (t.interpreter_ns > 0) try interp_times.append(gpa, t.interpreter_ns);
+        if (t.dev_ns > 0) try dev_times.append(gpa, t.dev_ns);
+        if (t.wasm_ns > 0) try wasm_times.append(gpa, t.wasm_ns);
+        if (t.llvm_ns > 0) try llvm_times.append(gpa, t.llvm_ns);
+    }
+
+    std.debug.print("\n=== Performance Summary (ms) ===\n", .{});
+    std.debug.print("  {s:<8} {s:>8} {s:>8} {s:>8} {s:>8} {s:>8} {s:>8} {s:>8}   {s:>3}\n", .{
+        "Phase", "Min", "Max", "Mean", "Median", "StdDev", "P95", "Total", "N",
+    });
+    std.debug.print("  {s:-<8} {s:->8} {s:->8} {s:->8} {s:->8} {s:->8} {s:->8} {s:->8}   {s:->3}\n", .{
+        "", "", "", "", "", "", "", "", "",
+    });
+    printStatsRow("parse", computeTimingStats(parse_times.items));
+    printStatsRow("can", computeTimingStats(can_times.items));
+    printStatsRow("check", computeTimingStats(check_times.items));
+    printStatsRow("interp", computeTimingStats(interp_times.items));
+    printStatsRow("dev", computeTimingStats(dev_times.items));
+    printStatsRow("wasm", computeTimingStats(wasm_times.items));
+    printStatsRow("llvm", computeTimingStats(llvm_times.items));
+
+    // Slowest 5 tests by total duration
+    const TopEntry = struct {
+        idx: usize,
+        duration_ns: u64,
+    };
+    var top_buf: std.ArrayListUnmanaged(TopEntry) = .empty;
+    defer top_buf.deinit(gpa);
+    for (results, 0..) |r, i| {
+        try top_buf.append(gpa, .{ .idx = i, .duration_ns = r.duration_ns });
+    }
+    std.mem.sort(TopEntry, top_buf.items, {}, struct {
+        fn lessThan(_: void, a: TopEntry, b: TopEntry) bool {
+            return a.duration_ns > b.duration_ns; // descending
+        }
+    }.lessThan);
+
+    const show_count = @min(5, top_buf.items.len);
+    if (show_count > 0) {
+        std.debug.print("\n  Slowest {d} tests:\n", .{show_count});
+        for (top_buf.items[0..show_count], 1..) |entry, rank| {
+            const r = results[entry.idx];
+            const tc = tests[entry.idx];
+            const ms = nsToMs(r.duration_ns);
+            std.debug.print("    {d}. {s}  ({d:.1}ms)", .{ rank, tc.name, ms });
+            writeTimingBreakdown(r.timings);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -964,6 +1288,12 @@ pub fn main() !void {
     const argv = try std.process.argsAlloc(gpa);
     defer std.process.argsFree(gpa, argv);
     const cli = parseCliArgs(argv);
+
+    // Coverage mode: disable fork (kcov can't trace forked children) and
+    // force single-threaded so kcov sees deterministic execution.
+    if (cli.coverage) {
+        helpers.force_no_fork = true;
+    }
 
     installCrashSignalHandlers();
 
@@ -992,16 +1322,18 @@ pub fn main() !void {
     }
 
     const cpu_count = std.Thread.getCpuCount() catch 1;
-    const thread_count = if (cli.threads > 0)
+    const thread_count = if (cli.coverage)
+        1
+    else if (cli.threads > 0)
         @min(cli.threads, MAX_THREADS)
     else
         @min(cpu_count, @min(tests.len, MAX_THREADS));
 
     const results = try gpa.alloc(TestResult, tests.len);
     defer gpa.free(results);
-    @memset(results, .{ .status = .crash, .message = "not started", .duration_ns = 0 });
+    @memset(results, .{ .status = .crash, .message = "not started", .duration_ns = 0, .timings = .{} });
 
-    const wall_start = std.time.nanoTimestamp();
+    var wall_timer = try Timer.start();
 
     var context = RunnerContext{
         .tests = tests,
@@ -1022,7 +1354,7 @@ pub fn main() !void {
         }
     }
 
-    const wall_elapsed: u64 = @intCast(@max(0, std.time.nanoTimestamp() - wall_start));
+    const wall_elapsed = wall_timer.read();
 
     var passed: usize = 0;
     var failed: usize = 0;
@@ -1033,29 +1365,38 @@ pub fn main() !void {
     for (tests, 0..) |tc, i| {
         const r = results[i];
         const ms = @as(f64, @floatFromInt(r.duration_ns)) / 1_000_000.0;
+        const t = r.timings;
 
         switch (r.status) {
             .pass => {
                 passed += 1;
                 if (cli.verbose) {
-                    std.debug.print("  PASS  {s}  ({d:.1}ms)\n", .{ tc.name, ms });
+                    std.debug.print("  PASS  {s}  ({d:.1}ms)", .{ tc.name, ms });
+                    writeTimingBreakdown(t);
                 }
             },
             .fail => {
                 failed += 1;
-                std.debug.print("  FAIL  {s}  ({d:.1}ms)\n", .{ tc.name, ms });
+                std.debug.print("  FAIL  {s}  ({d:.1}ms)", .{ tc.name, ms });
+                writeTimingBreakdown(t);
                 if (r.message) |msg| {
                     std.debug.print("        {s}\n", .{msg});
                 }
             },
             .crash => {
                 crashed += 1;
-                std.debug.print("  CRASH {s}  ({d:.1}ms)\n", .{ tc.name, ms });
+                std.debug.print("  CRASH {s}  ({d:.1}ms)", .{ tc.name, ms });
+                writeTimingBreakdown(t);
                 if (r.message) |msg| {
                     std.debug.print("        {s}\n", .{msg});
                 }
             },
         }
+    }
+
+    // Performance summary
+    if (tests.len > 0) {
+        printPerformanceSummary(gpa, tests, results) catch {};
     }
 
     const wall_ms = @as(f64, @floatFromInt(wall_elapsed)) / 1_000_000.0;
