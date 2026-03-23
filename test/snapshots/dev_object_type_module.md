@@ -58,9 +58,9 @@ main_for_host = main
 main = to_str(red)
 
 # Color
-red = 2
-green = True
-blue = False
+red = Red
+green = Green
+blue = Blue
 to_str = |color| match color {
 	Red => "red"
 	Green => "green"

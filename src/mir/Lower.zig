@@ -4058,6 +4058,45 @@ fn lowerExprProcInst(
     return self.lowerProcInst(proc_inst_id);
 }
 
+/// Ensure the defining context function's parameter symbols are bound in
+/// pattern_symbols at the current scope. When a closure is lowered directly
+/// (not through the outer function's body), the outer function's
+/// lowerLambdaSpecialized hasn't run, so captured parameter patterns would
+/// be missing. This binds them lazily so capture resolution can find them.
+fn ensureDefiningContextParamsBound(
+    self: *Self,
+    defining_context_proc_inst: Monomorphize.ProcInstId,
+) Allocator.Error!void {
+    const proc_inst = self.monomorphization.getProcInst(defining_context_proc_inst);
+    const template = self.monomorphization.getProcTemplate(proc_inst.template);
+    const module_env = self.all_module_envs[template.module_idx];
+    const proc_expr = module_env.store.getExpr(template.cir_expr);
+
+    const arg_patterns: []const CIR.Pattern.Idx = switch (proc_expr) {
+        .e_lambda => |lambda| module_env.store.slicePatterns(lambda.args),
+        .e_closure => |closure_expr| blk: {
+            const inner = module_env.store.getExpr(closure_expr.lambda_idx);
+            break :blk if (inner == .e_lambda) module_env.store.slicePatterns(inner.e_lambda.args) else &.{};
+        },
+        .e_hosted_lambda => |hosted| module_env.store.slicePatterns(hosted.args),
+        else => &.{},
+    };
+
+    for (arg_patterns) |arg_pattern_idx| {
+        if (self.lookupExistingPatternSymbolInScope(
+            template.module_idx,
+            self.current_pattern_scope,
+            arg_pattern_idx,
+        ) == null) {
+            // Bind the pattern in the defining context's scope
+            const saved_module = self.current_module_idx;
+            defer self.current_module_idx = saved_module;
+            self.current_module_idx = template.module_idx;
+            _ = try self.patternToSymbol(arg_pattern_idx);
+        }
+    }
+}
+
 fn bindProcTemplateBoundaryMonotypes(
     self: *Self,
     module_env: *const ModuleEnv,
@@ -4700,6 +4739,10 @@ fn buildSpecializedClosureValue(
     self.current_proc_inst_context = defining_context_proc_inst;
     self.current_pattern_scope = patternScopeForProcInst(defining_context_proc_inst);
 
+    if (!defining_context_proc_inst.isNone()) {
+        try self.ensureDefiningContextParamsBound(defining_context_proc_inst);
+    }
+
     var plan = try self.planClosureLowering(module_env, expr_idx, closure, closure_proc_inst_id);
     defer plan.deinit(self.allocator);
 
@@ -5216,6 +5259,15 @@ fn lowerClosureSpecialized(
         defer self.current_pattern_scope = saved_pattern_scope;
         self.current_proc_inst_context = defining_context_proc_inst;
         self.current_pattern_scope = patternScopeForProcInst(defining_context_proc_inst);
+
+        // The closure resolves captures from the defining context's scope.
+        // If the defining function hasn't been lowered yet in this Lower pass
+        // (e.g. when the closure is called directly without going through the
+        // outer function's body), its parameter symbols won't be in
+        // pattern_symbols. Eagerly bind them so capture resolution can find them.
+        if (!defining_context_proc_inst.isNone()) {
+            try self.ensureDefiningContextParamsBound(defining_context_proc_inst);
+        }
 
         break :blk try self.buildClosureValueFromCaptureRequests(
             monotype,

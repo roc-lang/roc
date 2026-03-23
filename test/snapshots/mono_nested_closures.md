@@ -22,16 +22,27 @@ add_five : Dec -> Dec
 add_five = make_adder(5)
 
 result : Dec
-result = 18
+result = add_five(3)
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
 # EXPECTED
-NIL
+COMPTIME EVAL ERROR - mono_nested_closures.md:4:10:4:21
 # PROBLEMS
-NIL
+**COMPTIME EVAL ERROR**
+This definition could not be evaluated at compile time:
+**mono_nested_closures.md:4:10:4:21:**
+```roc
+result = add_five(3)
+```
+         ^^^^^^^^^^^
+
+The evaluation failed with error:
+
+    RuntimeError
+
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,Int,
@@ -105,7 +116,10 @@ EndOfFile,
 			(e-num (value "5"))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-num (value "18"))))
+		(e-call
+			(e-lookup-local
+				(p-assign (ident "add_five")))
+			(e-num (value "3")))))
 ~~~
 # TYPES
 ~~~clojure

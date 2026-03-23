@@ -1628,7 +1628,10 @@ pub const LirInterpreter = struct {
 
     // Crash / dbg / expect
 
-    fn evalCrash(_: *LirInterpreter, _: anytype) Error!EvalResult {
+    fn evalCrash(self: *LirInterpreter, e: anytype) Error!EvalResult {
+        const msg = self.store.getString(e.msg);
+        if (self.roc_env.crash_message) |old| self.allocator.free(old);
+        self.roc_env.crash_message = self.allocator.dupe(u8, msg) catch null;
         return error.Crash;
     }
 

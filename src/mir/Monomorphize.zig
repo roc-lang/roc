@@ -3239,6 +3239,12 @@ pub const Pass = struct {
         }
 
         const template = result.getProcTemplate(template_id).*;
+        // Closures without an active owning proc inst cannot be inferred here.
+        if (templateRequiresConcreteOwnerProcInst(result, template_id) and
+            self.active_proc_inst_context.isNone())
+        {
+            return null;
+        }
         const template_env = self.all_module_envs[template.module_idx];
         const template_types = &template_env.types;
         const desired_fn_monotype = resolvedMonotype(
@@ -5929,6 +5935,14 @@ pub const Pass = struct {
         } else blk: {
             if (desired_fn_monotype.isNone()) return;
             const template = result.getProcTemplate(template_id).*;
+            // Closures require their lexical owner's proc inst context to be active.
+            // If we're at the top level (no active proc inst), skip — the closure will
+            // be materialized when its owner function is instantiated.
+            if (templateRequiresConcreteOwnerProcInst(result, template_id) and
+                self.active_proc_inst_context.isNone())
+            {
+                return;
+            }
             const defining_context_proc_inst = self.resolveTemplateDefiningContextProcInst(result, template);
             if (!try self.procSignatureAcceptsFnMonotype(
                 result,

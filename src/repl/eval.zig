@@ -760,10 +760,8 @@ pub const Repl = struct {
             => {},
         }
 
-        if (self.backend == .dev or self.backend == .llvm or self.backend == .wasm) {
-            if (try self.getDeferredCompileCrash(module_env, final_expr_idx)) |crash_msg| {
-                return .{ .eval_error = crash_msg };
-            }
+        if (try self.getDeferredCompileCrash(module_env, final_expr_idx)) |crash_msg| {
+            return .{ .eval_error = crash_msg };
         }
 
         // Wrap expression in Str.inspect so both backends produce a string
