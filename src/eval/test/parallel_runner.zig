@@ -46,6 +46,10 @@ const TestEnv = eval_mod.TestEnv;
 const posix = std.posix;
 
 const AtomicUsize = std.atomic.Value(usize);
+const AtomicI64 = std.atomic.Value(i64);
+const AtomicBool = std.atomic.Value(bool);
+
+extern "c" fn pthread_kill(thread: std.c.pthread_t, sig: c_int) c_int;
 
 // Test definition modules
 const eval_tests = @import("eval_tests.zig");
@@ -141,12 +145,16 @@ fn panicHandler(msg: []const u8, _: ?usize) noreturn {
     std.debug.defaultPanic(msg, @returnAddress());
 }
 
-fn crashSignalHandler(_: i32) callconv(.c) void {
+fn crashSignalHandler(sig: i32) callconv(.c) void {
     if (panic_jmp) |jmp| {
-        panic_msg = "signal: segfault or illegal instruction in generated code";
+        panic_msg = if (sig == posix.SIG.USR1)
+            "timed out (possible infinite loop)"
+        else
+            "signal: segfault or illegal instruction in generated code";
         panic_jmp = null;
-        sljmp.longjmp(jmp, 2);
+        sljmp.longjmp(jmp, if (sig == posix.SIG.USR1) 3 else 2);
     }
+    // No jmp_buf — restore defaults and re-raise so the process terminates.
     const dfl = posix.Sigaction{
         .handler = .{ .handler = posix.SIG.DFL },
         .mask = posix.sigemptyset(),
@@ -166,6 +174,7 @@ fn installCrashSignalHandlers() void {
     posix.sigaddset(&handler_mask, posix.SIG.SEGV);
     posix.sigaddset(&handler_mask, posix.SIG.BUS);
     posix.sigaddset(&handler_mask, posix.SIG.ILL);
+    posix.sigaddset(&handler_mask, posix.SIG.USR1);
 
     const sa = posix.Sigaction{
         .handler = .{ .handler = &crashSignalHandler },
@@ -175,6 +184,7 @@ fn installCrashSignalHandlers() void {
     posix.sigaction(posix.SIG.SEGV, &sa, null);
     posix.sigaction(posix.SIG.BUS, &sa, null);
     posix.sigaction(posix.SIG.ILL, &sa, null);
+    posix.sigaction(posix.SIG.USR1, &sa, null);
 }
 
 /// After longjmp from a signal handler, the caught signal remains blocked
@@ -187,6 +197,7 @@ fn unblockCrashSignals() void {
     posix.sigaddset(&unblock, posix.SIG.SEGV);
     posix.sigaddset(&unblock, posix.SIG.BUS);
     posix.sigaddset(&unblock, posix.SIG.ILL);
+    posix.sigaddset(&unblock, posix.SIG.USR1);
     _ = posix.system.sigprocmask(posix.SIG.UNBLOCK, &unblock, null);
 }
 
@@ -199,7 +210,7 @@ const TestOutcome = struct {
     message: ?[]const u8 = null,
     timings: EvalTimings = .{},
 
-    const Status = enum { pass, fail, crash, skip };
+    const Status = enum { pass, fail, crash, skip, timeout };
 };
 
 const EvalTimings = struct {
@@ -225,6 +236,17 @@ const Timer = std.time.Timer;
 // Runner context
 //
 
+/// Per-worker tracking state for the hang watchdog.
+const WorkerState = struct {
+    /// Nanosecond timestamp when the worker started its current test (0 = idle).
+    start_time_ns: AtomicI64 = AtomicI64.init(0),
+    /// Index of the test currently being run (max = done).
+    current_test: AtomicUsize = AtomicUsize.init(std.math.maxInt(usize)),
+    /// Set by the watchdog before sending SIGUSR1; checked by crash recovery.
+    timed_out: AtomicBool = AtomicBool.init(false),
+};
+
+
 const RunnerContext = struct {
     tests: []const TestCase,
     index: AtomicUsize,
@@ -232,6 +254,12 @@ const RunnerContext = struct {
     verbose: bool,
     /// Stable allocator for result messages that must outlive the per-test arena.
     msg_allocator: std.mem.Allocator,
+    /// Per-worker state for hang detection. Null in single-threaded mode.
+    worker_states: ?[]WorkerState = null,
+    /// Counter for workers to claim their worker ID.
+    worker_id_counter: AtomicUsize = AtomicUsize.init(0),
+    /// Per-test timeout in nanoseconds (0 = no timeout).
+    hang_timeout_ns: u64 = 0,
 };
 
 //
@@ -442,6 +470,20 @@ fn compareBackendResults(
 //
 
 fn runSingleTest(allocator: std.mem.Allocator, tc: TestCase) TestOutcome {
+    // If every backend is skipped, still validate the front-end so we catch
+    // syntax errors in skipped tests rather than silently ignoring them.
+    if (tc.skip.interpreter and tc.skip.dev and tc.skip.wasm) {
+        const resources = parseAndCanonicalizeExpr(allocator, tc.source) catch {
+            return .{ .status = .fail, .message = "INVALID_SYNTAX — skipped test has parse/check errors" };
+        };
+        cleanupResources(allocator, resources);
+        return .{ .status = .skip, .timings = .{
+            .parse_ns = resources.parse_ns,
+            .canonicalize_ns = resources.canonicalize_ns,
+            .typecheck_ns = resources.typecheck_ns,
+        } };
+    }
+
     const outcome = runSingleTestInner(allocator, tc) catch |err| {
         return .{ .status = .fail, .message = @errorName(err) };
     };
@@ -880,18 +922,40 @@ fn compareAllBackends(allocator: std.mem.Allocator, interp_str: ?[]const u8, res
 //
 
 fn threadMain(ctx: *RunnerContext) void {
+    // Claim a worker ID for hang-detection state tracking.
+    const my_id = ctx.worker_id_counter.fetchAdd(1, .monotonic);
+    const my_state: ?*WorkerState = if (ctx.worker_states) |ws|
+        &ws[my_id]
+    else
+        null;
+    helpers.my_worker_id = my_id;
+
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
 
     while (true) {
         const i = ctx.index.fetchAdd(1, .monotonic);
-        if (i >= ctx.tests.len) break;
+        if (i >= ctx.tests.len) {
+            // Mark worker as done.
+            if (my_state) |ws| {
+                ws.current_test.store(std.math.maxInt(usize), .release);
+                ws.start_time_ns.store(0, .release);
+            }
+            break;
+        }
 
         _ = arena.reset(.retain_capacity);
         const allocator = arena.allocator();
 
         const tc = ctx.tests[i];
         var wall_timer = Timer.start() catch unreachable;
+
+        // Update watchdog tracking.
+        if (my_state) |ws| {
+            ws.current_test.store(i, .release);
+            ws.timed_out.store(false, .release);
+            ws.start_time_ns.store(@as(i64, @truncate(std.time.nanoTimestamp())), .release);
+        }
 
         // Set up crash protection
         var jmp_buf: sljmp.JmpBuf = undefined;
@@ -903,19 +967,23 @@ fn threadMain(ctx: *RunnerContext) void {
             panic_jmp = null;
             // Signal was blocked during the handler; unblock for future crashes.
             unblockCrashSignals();
+            // Check if this was a watchdog timeout (jmp_result == 3) or a real crash.
+            const was_timeout = if (my_state) |ws| ws.timed_out.swap(false, .acquire) else false;
             const elapsed = wall_timer.read();
             ctx.results[i] = .{
-                .status = .crash,
+                .status = if (was_timeout or jmp_result == 3) .timeout else .crash,
                 .message = panic_msg orelse "unknown crash",
                 .duration_ns = elapsed,
                 .timings = .{},
             };
+            if (my_state) |ws| ws.start_time_ns.store(0, .release);
             continue;
         }
 
         const outcome = runSingleTest(allocator, tc);
 
         panic_jmp = null;
+        if (my_state) |ws| ws.start_time_ns.store(0, .release);
         const elapsed = wall_timer.read();
 
         // Dup the message to the stable GPA so it survives arena reset.
@@ -951,6 +1019,8 @@ const CliArgs = struct {
     threads: usize = 0,
     verbose: bool = false,
     coverage: bool = false,
+    /// Per-test hang timeout in milliseconds (0 = use default of 10s, only in multi-threaded mode).
+    timeout_ms: u64 = 0,
 };
 
 fn parseCliArgs(args: []const []const u8) CliArgs {
@@ -970,6 +1040,9 @@ fn parseCliArgs(args: []const []const u8) CliArgs {
             result.verbose = true;
         } else if (std.mem.eql(u8, args[i], "--coverage")) {
             result.coverage = true;
+        } else if (std.mem.eql(u8, args[i], "--timeout") and i + 1 < args.len) {
+            i += 1;
+            result.timeout_ms = std.fmt.parseInt(u64, args[i], 10) catch 0;
         }
     }
     return result;
@@ -997,6 +1070,7 @@ fn printHelp() void {
         \\  --threads <N>         Max worker threads (default: number of CPU cores).
         \\  --verbose             Print PASS and SKIP results (default: only FAIL/CRASH).
         \\  --coverage            Coverage mode: single-threaded, no fork. Use with kcov.
+        \\  --timeout <MS>        Per-test hang timeout in ms (default: 10000). Multi-thread only.
         \\
         \\TIMING:
         \\  Every test is instrumented with per-phase monotonic timing (std.time.Timer):
@@ -1021,6 +1095,7 @@ fn printHelp() void {
         \\    PASS  - all backends ran and agreed
         \\    FAIL  - value mismatch or backend disagreement
         \\    CRASH - segfault or panic in generated code (recovered via signal handler)
+        \\    HANG  - test exceeded the per-test timeout (killed by watchdog)
         \\    SKIP  - one or more backends were skipped
         \\
         \\EXIT CODE:
@@ -1236,6 +1311,82 @@ fn printPerformanceSummary(gpa: std.mem.Allocator, tests: []const TestCase, resu
 // Main
 //
 
+/// Count results that workers have actually written (duration_ns > 0 means
+/// the worker finished and stored a result; the default is 0 / "not started").
+fn countCompletedResults(results: []const TestResult) usize {
+    var n: usize = 0;
+    for (results) |r| {
+        if (r.duration_ns > 0) n += 1;
+    }
+    return n;
+}
+
+/// Watchdog that polls worker threads, prints progress, and kills hangs.
+/// Runs on the main thread while workers are executing.
+fn hangWatchdog(ctx: *RunnerContext, threads: []std.Thread, timeout_ns: u64) void {
+    const ws = ctx.worker_states orelse return;
+    var progress_timer = Timer.start() catch unreachable;
+    var last_progress_ns: u64 = 0;
+
+    while (true) {
+        // Sleep 500ms between polls.
+        std.Thread.sleep(500_000_000);
+
+        const now = @as(i64, @truncate(std.time.nanoTimestamp()));
+        var all_done = true;
+
+        for (ws, 0..) |*worker, idx| {
+            const test_idx = worker.current_test.load(.acquire);
+            if (test_idx == std.math.maxInt(usize)) continue; // worker finished
+
+            all_done = false;
+            const start = worker.start_time_ns.load(.acquire);
+            if (start <= 0) continue; // not actively running a test
+
+            const elapsed: u64 = @intCast(@max(0, now - start));
+            if (elapsed > timeout_ns) {
+                // This worker is hung. Mark it timed-out and kill it.
+                worker.timed_out.store(true, .release);
+                const test_name = if (test_idx < ctx.tests.len) ctx.tests[test_idx].name else "?";
+                const elapsed_ms = elapsed / 1_000_000;
+                std.debug.print("\n  HANG  {s}  ({d}ms) — killing", .{ test_name, elapsed_ms });
+                if (comptime builtin.os.tag != .windows) {
+                    // Kill any forked child process first (unblocks waitpid).
+                    if (idx < helpers.worker_child_pids.len) {
+                        const cpid = helpers.worker_child_pids[idx].swap(0, .acq_rel);
+                        if (cpid > 0) {
+                            std.debug.print(" child(pid={d})", .{cpid});
+                            posix.kill(@intCast(cpid), posix.SIG.KILL) catch {};
+                        }
+                    }
+                    // Then signal the worker thread to longjmp out.
+                    const handle = threads[idx].getHandle();
+                    _ = pthread_kill(handle, posix.SIG.USR1);
+                }
+                std.debug.print("\n", .{});
+                // Give the worker time to recover before re-checking.
+                std.Thread.sleep(200_000_000); // 200ms
+            }
+        }
+
+        if (all_done) break;
+
+        // Print progress every ~1s.
+        const progress_elapsed = progress_timer.read();
+        if (progress_elapsed - last_progress_ns >= 1_000_000_000) {
+            last_progress_ns = progress_elapsed;
+            const completed = countCompletedResults(ctx.results);
+            const wall_s = @as(f64, @floatFromInt(progress_elapsed)) / 1_000_000_000.0;
+            std.debug.print("\r  running: {d}/{d} results, {d:.1}s elapsed", .{
+                completed, ctx.tests.len, wall_s,
+            });
+        }
+    }
+
+    // Clear the progress line.
+    std.debug.print("\r{s}\r", .{" " ** 72});
+}
+
 /// Entry point for the parallel eval test runner.
 pub fn main() !void {
     var gpa_impl: std.heap.GeneralPurposeAllocator(.{}) = .init;
@@ -1292,12 +1443,36 @@ pub fn main() !void {
 
     var wall_timer = Timer.start() catch unreachable;
 
+    // Default timeout: 10s in multi-threaded mode, disabled in single-threaded/coverage.
+    const hang_timeout_ns: u64 = if (thread_count <= 1)
+        0
+    else if (cli.timeout_ms > 0)
+        cli.timeout_ms * 1_000_000
+    else
+        5_000_000_000; // 5 seconds
+
+    // Allocate per-worker state for hang detection (multi-threaded only).
+    const worker_states: ?[]WorkerState = if (thread_count > 1) blk: {
+        const ws = try gpa.alloc(WorkerState, thread_count);
+        for (ws) |*w| w.* = .{};
+        break :blk ws;
+    } else null;
+    defer if (worker_states) |ws| gpa.free(ws);
+
+    // Allocate per-worker child PID tracking for fork-based isolation.
+    const child_pids = try gpa.alloc(std.atomic.Value(i32), thread_count);
+    defer gpa.free(child_pids);
+    for (child_pids) |*p| p.* = std.atomic.Value(i32).init(0);
+    helpers.worker_child_pids = child_pids;
+
     var context = RunnerContext{
         .tests = tests,
         .index = AtomicUsize.init(0),
         .results = results,
         .verbose = cli.verbose,
         .msg_allocator = gpa,
+        .worker_states = worker_states,
+        .hang_timeout_ns = hang_timeout_ns,
     };
 
     if (thread_count <= 1) {
@@ -1308,6 +1483,12 @@ pub fn main() !void {
         for (threads) |*t| {
             t.* = try std.Thread.spawn(.{}, threadMain, .{&context});
         }
+
+        // Watchdog loop: poll workers for hangs until all are done.
+        if (hang_timeout_ns > 0) {
+            hangWatchdog(&context, threads, hang_timeout_ns);
+        }
+
         for (threads) |t| {
             t.join();
         }
@@ -1319,6 +1500,7 @@ pub fn main() !void {
     var failed: usize = 0;
     var crashed: usize = 0;
     var skipped: usize = 0;
+    var timed_out: usize = 0;
 
     std.debug.print("\n=== Eval Test Results ===\n", .{});
 
@@ -1353,6 +1535,13 @@ pub fn main() !void {
                 }
                 writeBackendSummary(t, tc.skip);
             },
+            .timeout => {
+                timed_out += 1;
+                std.debug.print("  HANG  {s}  ({d:.1}ms)\n", .{ tc.name, ms });
+                if (r.message) |msg| {
+                    std.debug.print("        {s}\n", .{msg});
+                }
+            },
             .skip => {
                 skipped += 1;
                 if (cli.verbose) {
@@ -1380,11 +1569,17 @@ pub fn main() !void {
     }
 
     const wall_ms = @as(f64, @floatFromInt(wall_elapsed)) / 1_000_000.0;
-    std.debug.print("\n{d} passed, {d} failed, {d} crashed, {d} skipped ({d} total) in {d:.0}ms using {d} thread(s)\n", .{
-        passed, failed, crashed, skipped, tests.len, wall_ms, thread_count,
-    });
+    if (timed_out > 0) {
+        std.debug.print("\n{d} passed, {d} failed, {d} crashed, {d} hung, {d} skipped ({d} total) in {d:.0}ms using {d} thread(s)\n", .{
+            passed, failed, crashed, timed_out, skipped, tests.len, wall_ms, thread_count,
+        });
+    } else {
+        std.debug.print("\n{d} passed, {d} failed, {d} crashed, {d} skipped ({d} total) in {d:.0}ms using {d} thread(s)\n", .{
+            passed, failed, crashed, skipped, tests.len, wall_ms, thread_count,
+        });
+    }
 
-    if (failed > 0 or crashed > 0) {
+    if (failed > 0 or crashed > 0 or timed_out > 0) {
         std.process.exit(1);
     }
 }

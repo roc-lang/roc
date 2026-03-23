@@ -8264,4 +8264,197 @@ pub const tests = [_]TestCase{
     .{ .name = "Str.trim leading and trailing", .source = "Str.trim(\"  hello  \")", .expected = .{ .str_val = "hello" } },
     .{ .name = "Str.trim_start", .source = "Str.trim_start(\"  hello\")", .expected = .{ .str_val = "hello" } },
     .{ .name = "Str.trim_end", .source = "Str.trim_end(\"hello  \")", .expected = .{ .str_val = "hello" } },
+
+    // --- num from_str (Gap #7, #12, #13, #20) ---
+    .{
+        .name = "I64.from_str ok",
+        .source =
+            \\match I64.from_str("42") {
+            \\    Ok(n) => n
+            \\    Err(_) => 0.I64
+            \\}
+        ,
+        .expected = .{ .i64_val = 42 },
+    },
+    .{
+        .name = "I32.from_str ok",
+        .source =
+            \\match I32.from_str("100") {
+            \\    Ok(n) => n
+            \\    Err(_) => 0.I32
+            \\}
+        ,
+        .expected = .{ .i32_val = 100 },
+    },
+    .{
+        .name = "U64.from_str ok",
+        .source =
+            \\match U64.from_str("255") {
+            \\    Ok(n) => n
+            \\    Err(_) => 0.U64
+            \\}
+        ,
+        .expected = .{ .u64_val = 255 },
+    },
+    .{
+        .name = "I64.from_str bad input",
+        .source =
+            \\match I64.from_str("abc") {
+            \\    Ok(_) => 1.I64
+            \\    Err(_) => 0.I64
+            \\}
+        ,
+        .expected = .{ .i64_val = 0 },
+    },
+    .{
+        .name = "U8.from_str ok",
+        .source =
+            \\match U8.from_str("200") {
+            \\    Ok(n) => n
+            \\    Err(_) => 0.U8
+            \\}
+        ,
+        .expected = .{ .u8_val = 200 },
+    },
+    .{
+        .name = "I8.from_str negative",
+        .source =
+            \\match I8.from_str("-42") {
+            \\    Ok(n) => n
+            \\    Err(_) => 0.I8
+            \\}
+        ,
+        .expected = .{ .i8_val = -42 },
+    },
+    .{
+        .name = "F64.from_str ok",
+        .source =
+            \\match F64.from_str("3.14") {
+            \\    Ok(n) => n
+            \\    Err(_) => 0.0.F64
+            \\}
+        ,
+        .expected = .{ .f64_val = 3.14 },
+    },
+
+    // --- more tag union patterns ---
+    .{
+        .name = "match with three tags",
+        .source =
+            \\match Red {
+            \\    Red => "red"
+            \\    Green => "green"
+            \\    Blue => "blue"
+            \\}
+        ,
+        .expected = .{ .str_val = "red" },
+    },
+    .{
+        .name = "match enum green",
+        .source =
+            \\match Green {
+            \\    Red => "red"
+            \\    Green => "green"
+            \\    Blue => "blue"
+            \\}
+        ,
+        .expected = .{ .str_val = "green" },
+    },
+    .{
+        .name = "match enum blue",
+        .source =
+            \\match Blue {
+            \\    Red => "red"
+            \\    Green => "green"
+            \\    Blue => "blue"
+            \\}
+        ,
+        .expected = .{ .str_val = "blue" },
+    },
+
+    // --- I8/I16 to_str for render_helpers coverage ---
+    .{ .name = "I128 to_str", .source = "42.I128.to_str()", .expected = .{ .str_val = "42" } },
+    .{ .name = "U128 to_str", .source = "42.U128.to_str()", .expected = .{ .str_val = "42" } },
+    .{ .name = "U16 to_str", .source = "1000.U16.to_str()", .expected = .{ .str_val = "1000" } },
+    .{ .name = "U32 to_str", .source = "1000.U32.to_str()", .expected = .{ .str_val = "1000" } },
+    .{ .name = "I64 to_str", .source = "42.I64.to_str()", .expected = .{ .str_val = "42" } },
+
+    // --- Num.abs on typed ints ---
+    // TODO: dev backend returns wrong sign for abs
+    .{ .name = "I8 abs positive", .source = "{ (-42.I8).abs() }", .expected = .{ .i8_val = 42 }, .skip = .{ .dev = true } },
+    .{ .name = "I32 abs negative", .source = "{ (-100.I32).abs() }", .expected = .{ .i32_val = 100 }, .skip = .{ .dev = true } },
+    .{ .name = "I64 abs negative", .source = "{ (-50.I64).abs() }", .expected = .{ .i64_val = 50 } },
+
+    // --- Num.is_zero / is_positive / is_negative ---
+    .{ .name = "I64 is_zero true", .source = "0.I64.is_zero()", .expected = .{ .bool_val = true } },
+    .{ .name = "I64 is_zero false", .source = "5.I64.is_zero()", .expected = .{ .bool_val = false } },
+    .{ .name = "I8 is_negative", .source = "(-1.I8).is_negative()", .expected = .{ .bool_val = true } },
+    .{ .name = "I8 is_positive", .source = "5.I8.is_positive()", .expected = .{ .bool_val = true } },
+
+    // --- record field access ---
+    .{
+        .name = "record field access",
+        .source =
+            \\{
+            \\    rec = { x: 10, y: 20 }
+            \\    rec.x + rec.y
+            \\}
+        ,
+        .expected = .{ .dec_val = 30 * RocDec.one_point_zero_i128 },
+    },
+    .{
+        .name = "record update syntax",
+        .source =
+            \\{
+            \\    rec = { x: 10, y: 20 }
+            \\    updated = { ..rec, x: 100 }
+            \\    updated.x + updated.y
+            \\}
+        ,
+        .expected = .{ .dec_val = 120 * RocDec.one_point_zero_i128 },
+    },
+
+    // --- tuple destructuring ---
+    .{
+        .name = "tuple access",
+        .source =
+            \\{
+            \\    t = (10, 20)
+            \\    t.0 + t.1
+            \\}
+        ,
+        .expected = .{ .dec_val = 30 * RocDec.one_point_zero_i128 },
+    },
+    .{
+        .name = "match tuple destructure",
+        .source =
+            \\match (3, 7) {
+            \\    (a, b) => a + b
+            \\}
+        ,
+        .expected = .{ .dec_val = 10 * RocDec.one_point_zero_i128 },
+    },
+
+    // --- for loop ---
+    .{
+        .name = "for loop summing I64",
+        .source =
+            \\{
+            \\    var $sum = 0.I64
+            \\    for item in [10.I64, 20.I64, 30.I64] {
+            \\        $sum = $sum + item
+            \\    }
+            \\    $sum
+            \\}
+        ,
+        .expected = .{ .i64_val = 60 },
+    },
+
+    // --- Str operations ---
+    .{ .name = "Str.concat", .source = "Str.concat(\"hello \", \"world\")", .expected = .{ .str_val = "hello world" } },
+    .{ .name = "Str.repeat", .source = "Str.repeat(\"ab\", 3)", .expected = .{ .str_val = "ababab" } },
+    // TODO: Str.contains causes infinite loop in interpreter
+    .{ .name = "Str.contains", .source = "Str.contains(\"hello world\", \"world\")", .expected = .{ .bool_val = true }, .skip = SKIP_ALL },
+    .{ .name = "Str.contains false", .source = "Str.contains(\"hello world\", \"xyz\")", .expected = .{ .bool_val = false }, .skip = SKIP_ALL },
+    .{ .name = "Str.to_utf8 len", .source = "Str.to_utf8(\"hi\").len()", .expected = .{ .u64_val = 2 } },
 };

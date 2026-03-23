@@ -36,6 +36,12 @@ const posix = std.posix;
 const has_fork = builtin.os.tag != .windows;
 /// Set to true to skip fork-based isolation (needed for kcov coverage).
 pub var force_no_fork: bool = false;
+/// Per-worker child PIDs for fork-based test execution.
+/// The hang watchdog in the parallel runner kills these PIDs on timeout.
+/// Set by the parallel runner before tests start; workers index by their worker ID.
+pub var worker_child_pids: []std.atomic.Value(i32) = &.{};
+/// Thread-local worker ID, set by the parallel runner.
+pub threadlocal var my_worker_id: usize = 0;
 const enable_dev_eval_leak_checks = true;
 
 const Check = check.Check;
@@ -412,8 +418,16 @@ fn forkAndExecute(
         // Parent process
         posix.close(pipe_write);
 
+        // Store child PID so the hang watchdog can kill it on timeout.
+        if (my_worker_id < worker_child_pids.len) {
+            worker_child_pids[my_worker_id].store(@intCast(fork_result), .release);
+        }
+
         // Wait for child to exit
         const wait_result = posix.waitpid(fork_result, 0);
+        if (my_worker_id < worker_child_pids.len) {
+            worker_child_pids[my_worker_id].store(0, .release);
+        }
         const status = wait_result.status;
 
         // Parse the wait status (Unix encoding)
