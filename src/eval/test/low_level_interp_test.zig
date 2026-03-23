@@ -2991,3 +2991,26 @@ test "issue 8555: method call syntax list.first() with match on Result" {
     const val = try evalModuleAndGetInt(src, 1);
     try testing.expectEqual(@as(i128, 8), val);
 }
+
+test "cross-def closure: make_adder pattern" {
+    const src =
+        \\make_adder = |x| |y| x + y
+        \\add_five = make_adder(5.I64)
+        \\result = add_five(10.I64)
+    ;
+
+    const val = try evalModuleAndGetInt(src, 2);
+    try testing.expectEqual(@as(i128, 15), val);
+}
+
+test "cross-def closure: nested closures with captures" {
+    const src =
+        \\x = 10.I64
+        \\make_adder = |y| |z| x + y + z
+        \\add_five = make_adder(5.I64)
+        \\result = add_five(3.I64)
+    ;
+
+    const val = try evalModuleAndGetInt(src, 3);
+    try testing.expectEqual(@as(i128, 18), val);
+}

@@ -172,6 +172,31 @@ pub const LirProgram = struct {
         }
     };
 
+    /// Result of batch-lowering multiple module defs to post-RC LIR in a single shared pipeline.
+    /// The consumer takes ownership of `lir_store` and must call `deinit()`.
+    pub const BatchLowerResult = struct {
+        lir_store: LirExprStore,
+        layout_store: *layout.Store,
+        def_lir_exprs: []DefLirExpr,
+        /// The single LIR block expression that chains all def evaluations.
+        block_expr_id: lir.LirExprId,
+        allocator: Allocator,
+
+        pub const DefLirExpr = struct {
+            def_idx: CIR.Def.Idx,
+            expr_idx: CIR.Expr.Idx,
+            lir_expr_id: lir.LirExprId,
+            result_layout: layout.Idx,
+            /// MIR/LIR symbol for this def's binding (for extracting values from interpreter).
+            symbol: MIR.Symbol,
+        };
+
+        pub fn deinit(self: *BatchLowerResult) void {
+            self.allocator.free(self.def_lir_exprs);
+            self.lir_store.deinit();
+        }
+    };
+
     pub fn init(allocator: Allocator, target_usize: base.target.TargetUsize) LirProgram {
         return .{
             .allocator = allocator,
@@ -471,6 +496,158 @@ pub const LirProgram = struct {
             .result_layout = result_layout,
             .layout_store = layout_store_ptr,
             .tuple_len = tuple_len,
+        };
+    }
+
+    /// Batch-lower multiple module defs through a single shared pipeline.
+    ///
+    /// All defs share ONE Monomorphize pass and ONE MIR Lower. After lowering
+    /// each def expression to MIR, a synthetic MIR block is constructed with
+    /// `decl_const` statements that bind each def's value to its symbol. This
+    /// block is then converted to LIR via a single `lowerFromMir` call.
+    ///
+    /// The interpreter evaluates the block, executing declarations in order.
+    /// Cross-def lookups resolve through the interpreter's local bindings —
+    /// closures stay as live interpreter values without CIR round-tripping.
+    pub fn lowerModuleDefs(
+        self: *LirProgram,
+        module_env: *ModuleEnv,
+        def_indices: []const CIR.Def.Idx,
+        all_module_envs: []const *ModuleEnv,
+    ) Error!BatchLowerResult {
+        // Pre-lowering setup (same as lowerExpr)
+        for (all_module_envs) |env| {
+            env.common.idents.interner.enableRuntimeInserts(env.gpa) catch return error.OutOfMemory;
+        }
+        module_env.imports.resolveImports(module_env, all_module_envs);
+
+        const module_idx = findModuleEnvIdx(all_module_envs, module_env) orelse return error.ModuleEnvNotFound;
+        const layout_store_ptr = try self.prepareLayoutStores(all_module_envs);
+
+        // Collect all def expressions for monomorphization
+        const def_exprs = self.allocator.alloc(CIR.Expr.Idx, def_indices.len) catch return error.OutOfMemory;
+        defer self.allocator.free(def_exprs);
+        for (def_indices, 0..) |def_idx, i| {
+            def_exprs[i] = module_env.store.getDef(def_idx).expr;
+        }
+
+        // CIR → MIR: shared stores
+        var mir_store = MIR.Store.init(self.allocator) catch return error.OutOfMemory;
+        defer mir_store.deinit(self.allocator);
+
+        // Monomorphize all def expressions together
+        var mono_result = Monomorphize.runRoots(
+            self.allocator,
+            all_module_envs,
+            &module_env.types,
+            module_idx,
+            null,
+            def_exprs,
+        ) catch return error.OutOfMemory;
+        defer mono_result.deinit(self.allocator);
+
+        // Create ONE MIR Lower for all defs
+        var mir_lower = mir.Lower.init(
+            self.allocator,
+            &mir_store,
+            &mono_result,
+            all_module_envs,
+            &module_env.types,
+            module_idx,
+            null,
+        ) catch return error.OutOfMemory;
+        defer mir_lower.deinit();
+
+        // Lower each def expression and build MIR block statements.
+        // Each def becomes a `decl_const pattern = expr` statement so the
+        // interpreter creates proper local bindings for cross-def lookups.
+        var stmts: std.ArrayList(MIR.Stmt) = .empty;
+        defer stmts.deinit(self.allocator);
+        var def_symbols: std.ArrayList(MIR.Symbol) = .empty;
+        defer def_symbols.deinit(self.allocator);
+        var def_mir_exprs: std.ArrayList(MIR.ExprId) = .empty;
+        defer def_mir_exprs.deinit(self.allocator);
+        var succeeded_indices: std.ArrayList(usize) = .empty;
+        defer succeeded_indices.deinit(self.allocator);
+
+        var last_mir_expr: ?MIR.ExprId = null;
+
+        for (0..def_indices.len) |i| {
+            const mir_expr_id = mir_lower.lowerExpr(def_exprs[i]) catch continue;
+
+            // Get the MIR symbol for this def's pattern
+            const def = module_env.store.getDef(def_indices[i]);
+            const symbol = mir_lower.patternToSymbol(def.pattern) catch continue;
+            const monotype = mir_store.typeOf(mir_expr_id);
+
+            // Create a MIR bind pattern for this symbol
+            const pattern_id = mir_store.addPattern(self.allocator, .{ .bind = symbol }, monotype) catch return error.OutOfMemory;
+
+            // Register the symbol as lowered in both the Lower's cache and the
+            // MIR store's value_defs. This prevents lowerExternalDefWithType from
+            // re-lowering when a subsequent def references this symbol.
+            mir_lower.registerLoweredSymbol(symbol, mir_expr_id) catch return error.OutOfMemory;
+            if (mir_store.getValueDef(symbol) == null) {
+                mir_store.registerValueDef(self.allocator, symbol, mir_expr_id) catch return error.OutOfMemory;
+            }
+
+            stmts.append(self.allocator, .{ .decl_const = .{
+                .pattern = pattern_id,
+                .expr = mir_expr_id,
+            } }) catch return error.OutOfMemory;
+
+            def_symbols.append(self.allocator, symbol) catch return error.OutOfMemory;
+            def_mir_exprs.append(self.allocator, mir_expr_id) catch return error.OutOfMemory;
+            succeeded_indices.append(self.allocator, i) catch return error.OutOfMemory;
+            last_mir_expr = mir_expr_id;
+        }
+
+        if (last_mir_expr == null) return error.RuntimeError;
+
+        // Construct a synthetic MIR block: { decl sym1 = expr1; ...; final_expr }
+        const stmt_span = mir_store.addStmts(self.allocator, stmts.items) catch return error.OutOfMemory;
+        const block_monotype = mir_store.typeOf(last_mir_expr.?);
+        const block_expr = mir_store.addExpr(self.allocator, .{ .block = .{
+            .stmts = stmt_span,
+            .final_expr = last_mir_expr.?,
+        } }, block_monotype, base.Region.zero()) catch return error.OutOfMemory;
+
+        // Lower the synthetic block through MIR → LIR → RC
+        const lower_result = try self.lowerFromMir(
+            module_env,
+            def_exprs[succeeded_indices.items[succeeded_indices.items.len - 1]],
+            all_module_envs,
+            &mir_store,
+            block_expr,
+            layout_store_ptr,
+        );
+
+        // Build per-def metadata for the caller.
+        // Each def gets its own result_layout from CIR types (not the block's layout).
+        const types_mod = @import("types");
+        var empty_type_scope = types_mod.TypeScope.init(self.allocator);
+        defer empty_type_scope.deinit();
+
+        const def_lir_exprs = self.allocator.alloc(BatchLowerResult.DefLirExpr, succeeded_indices.items.len) catch return error.OutOfMemory;
+        for (succeeded_indices.items, 0..) |orig_idx, j| {
+            // Resolve this def's layout from its CIR type var
+            const type_var = ModuleEnv.varFrom(def_exprs[orig_idx]);
+            const def_layout = layout_store_ptr.fromTypeVar(module_idx, type_var, &empty_type_scope, null) catch lower_result.result_layout;
+            def_lir_exprs[j] = .{
+                .def_idx = def_indices[orig_idx],
+                .expr_idx = def_exprs[orig_idx],
+                .lir_expr_id = lower_result.final_expr_id,
+                .result_layout = def_layout,
+                .symbol = def_symbols.items[j],
+            };
+        }
+
+        return BatchLowerResult{
+            .lir_store = lower_result.lir_store,
+            .layout_store = layout_store_ptr,
+            .def_lir_exprs = def_lir_exprs,
+            .block_expr_id = lower_result.final_expr_id,
+            .allocator = self.allocator,
         };
     }
 };

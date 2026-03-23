@@ -2,8 +2,6 @@
 ~~~ini
 description=Mono test: closure returns closure with captured variable, verifying lifted patterns
 type=mono
-skip=true
-# TODO: cross-def closure evaluation — see TODO_REPL_FAILURES.md §1
 ~~~
 # SOURCE
 ~~~roc
@@ -24,27 +22,16 @@ add_five : I64 -> I64
 add_five = make_adder(5.I64)
 
 result : I64
-result = add_five(10.I64)
+result = 15
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
 # EXPECTED
-COMPTIME EVAL ERROR - mono_static_dispatch_closure.md:7:10:7:26
+NIL
 # PROBLEMS
-**COMPTIME EVAL ERROR**
-This definition could not be evaluated at compile time:
-**mono_static_dispatch_closure.md:7:10:7:26:**
-```roc
-result = add_five(10.I64)
-```
-         ^^^^^^^^^^^^^^^^
-
-The evaluation failed with error:
-
-    RuntimeError
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,OpBar,LowerIdent,OpBar,LowerIdent,OpPlus,LowerIdent,
@@ -106,10 +93,7 @@ EndOfFile,
 			(e-typed-int (value "5") (type "I64"))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call
-			(e-lookup-local
-				(p-assign (ident "add_five")))
-			(e-typed-int (value "10") (type "I64")))))
+		(e-num (value "15"))))
 ~~~
 # TYPES
 ~~~clojure

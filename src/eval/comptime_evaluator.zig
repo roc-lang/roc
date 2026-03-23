@@ -1444,9 +1444,11 @@ pub const ComptimeEvaluator = struct {
     }
 
     /// Evaluates all top-level declarations in the module
+    /// Evaluates all top-level declarations in the module
     pub fn evalAll(self: *ComptimeEvaluator) !EvalSummary {
         var evaluated: u32 = 0;
         var crashed: u32 = 0;
+        var had_error_eval = false;
 
         // Validate all deferred numeric literals first
         try self.validateDeferredNumericLiterals();
@@ -1454,13 +1456,18 @@ pub const ComptimeEvaluator = struct {
         // evaluation_order must be set after successful canonicalization
         const eval_order = self.env.evaluation_order.?;
 
-        // Evaluate SCCs in topological order (dependencies before dependents)
+        // Collect deferred error_eval problems — these might be resolved by
+        // the batch retry (cross-def closure evaluation). Only report them
+        // if the batch retry doesn't fix the underlying expression.
+        const DeferredError = struct { expr_idx: CIR.Expr.Idx, message: []const u8, region: base.Region };
+        var deferred_errors: std.ArrayList(DeferredError) = .empty;
+        defer deferred_errors.deinit(self.allocator);
+
+        // Phase 1: Per-def evaluation (preserves per-def error/expect reporting)
         for (eval_order.sccs) |scc| {
             for (scc.defs) |def_idx| {
-                // Skip declarations whose expression failed numeric literal validation
                 const def = self.env.store.getDef(def_idx);
                 if (self.failed_literal_exprs.contains(def.expr)) {
-                    // Skip evaluation but count it as evaluated (error already reported)
                     evaluated += 1;
                     continue;
                 }
@@ -1468,16 +1475,11 @@ pub const ComptimeEvaluator = struct {
                 evaluated += 1;
 
                 const eval_result = self.evalDecl(def_idx) catch |err| {
-                    // If we get an allocation error, propagate it
                     return err;
                 };
 
                 switch (eval_result) {
-                    .success => {
-                        // Declaration evaluated and folded successfully.
-                        // No bindings needed — the LIR pipeline re-lowers each def
-                        // from CIR, seeing any previously-folded constants.
-                    },
+                    .success => {},
                     .crash => |crash_info| {
                         crashed += 1;
                         try self.reportProblem(crash_info.message, crash_info.region, .crash);
@@ -1486,16 +1488,103 @@ pub const ComptimeEvaluator = struct {
                         try self.reportProblem(expect_info.message, expect_info.region, .expect_failed);
                     },
                     .error_eval => |error_info| {
-                        try self.reportProblem(error_info.message, error_info.region, .error_eval);
+                        had_error_eval = true;
+                        // Defer reporting — batch retry might fix this
+                        try deferred_errors.append(self.allocator, .{
+                            .expr_idx = def.expr,
+                            .message = error_info.message,
+                            .region = error_info.region,
+                        });
                     },
                 }
             }
+        }
+
+        // Phase 2: If any defs had error_eval (often cross-def closure failures),
+        // retry ALL evaluable defs through batch lowering.
+        if (had_error_eval) {
+            self.retryWithBatchEval() catch {};
+        }
+
+        // Report any error_eval problems that weren't resolved by batch retry.
+        // A def is "resolved" if its CIR expression was folded to a constant.
+        for (deferred_errors.items) |err_info| {
+            const expr = self.env.store.getExpr(err_info.expr_idx);
+            // If the batch retry folded this expression, don't report the error
+            if (expr == .e_num or expr == .e_zero_argument_tag) continue;
+            try self.reportProblem(err_info.message, err_info.region, .error_eval);
         }
 
         return EvalSummary{
             .evaluated = evaluated,
             .crashed = crashed,
         };
+    }
+
+    /// Retry failed defs via batch evaluation. Lowers all evaluable defs
+    /// through a single shared pipeline and re-folds any that succeed.
+    /// Already-folded defs are skipped by tryFoldExprFromValue.
+    fn retryWithBatchEval(self: *ComptimeEvaluator) !void {
+        const eval_order = self.env.evaluation_order orelse return;
+
+        // Collect evaluable defs
+        var evaluable_defs: std.ArrayList(CIR.Def.Idx) = .empty;
+        defer evaluable_defs.deinit(self.allocator);
+
+        for (eval_order.sccs) |scc| {
+            for (scc.defs) |def_idx| {
+                const def = self.env.store.getDef(def_idx);
+                if (self.failed_literal_exprs.contains(def.expr)) continue;
+
+                const expr = self.env.store.getExpr(def.expr);
+                switch (expr) {
+                    .e_lambda, .e_closure, .e_hosted_lambda => continue,
+                    .e_runtime_error, .e_anno_only, .e_lookup_required => continue,
+                    else => {},
+                }
+
+                const type_var = ModuleEnv.varFrom(def.expr);
+                if (shouldSkipComptimeEvalForType(self.allocator, &self.env.types, type_var)) continue;
+
+                try evaluable_defs.append(self.allocator, def_idx);
+            }
+        }
+
+        if (evaluable_defs.items.len < 2) return;
+
+        // Batch-lower all defs through one shared pipeline
+        var batch_result = self.lir_program.lowerModuleDefs(
+            self.env,
+            evaluable_defs.items,
+            self.all_module_envs,
+        ) catch return;
+        defer batch_result.deinit();
+
+        // Evaluate the synthetic block (all defs chained with decl_const statements)
+        var interp = try LirInterpreter.init(
+            self.allocator,
+            &batch_result.lir_store,
+            batch_result.layout_store,
+            self.io,
+        );
+        interp.detect_infinite_while_loops = true;
+        defer interp.deinit();
+
+        _ = interp.eval(batch_result.block_expr_id) catch return;
+
+        // Extract per-def values from bindings and fold to CIR.
+        // Already-folded defs (from per-def pass) are skipped by tryFoldExprFromValue.
+        for (batch_result.def_lir_exprs) |def_entry| {
+            const binding = interp.bindings.get(def_entry.symbol.raw()) orelse
+                (interp.top_level_cache.get(def_entry.symbol.raw()) orelse continue);
+
+            self.tryFoldExprFromValue(
+                def_entry.expr_idx,
+                binding.val,
+                def_entry.result_layout,
+                batch_result.layout_store,
+            ) catch {};
+        }
     }
 
     /// Evaluate and fold a standalone expression (not part of a def).

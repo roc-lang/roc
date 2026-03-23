@@ -2,8 +2,6 @@
 ~~~ini
 description=Mono test: nested closures with captures at top-level
 type=mono
-skip=true
-# TODO: cross-def closure evaluation — see TODO_REPL_FAILURES.md §1
 ~~~
 # SOURCE
 ~~~roc
@@ -24,27 +22,16 @@ add_five : Dec -> Dec
 add_five = make_adder(5)
 
 result : Dec
-result = add_five(3)
+result = 18
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
 # EXPECTED
-COMPTIME EVAL ERROR - mono_nested_closures.md:4:10:4:21
+NIL
 # PROBLEMS
-**COMPTIME EVAL ERROR**
-This definition could not be evaluated at compile time:
-**mono_nested_closures.md:4:10:4:21:**
-```roc
-result = add_five(3)
-```
-         ^^^^^^^^^^^
-
-The evaluation failed with error:
-
-    RuntimeError
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,Int,
@@ -118,10 +105,7 @@ EndOfFile,
 			(e-num (value "5"))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call
-			(e-lookup-local
-				(p-assign (ident "add_five")))
-			(e-num (value "3")))))
+		(e-num (value "18"))))
 ~~~
 # TYPES
 ~~~clojure

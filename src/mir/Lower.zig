@@ -2708,6 +2708,13 @@ pub fn makeSymbol(self: *Self, module_idx: u32, ident_idx: Ident.Idx) Allocator.
     return self.internSymbol(module_idx, ident_idx);
 }
 
+/// Register a symbol as already lowered. This prevents `lowerExternalDefWithType`
+/// from re-lowering the expression when a subsequent def references this symbol.
+/// Used by batch lowering in `cir_to_lir.lowerModuleDefs`.
+pub fn registerLoweredSymbol(self: *Self, symbol: MIR.Symbol, expr_id: MIR.ExprId) Allocator.Error!void {
+    try self.lowered_symbols.put(@bitCast(symbol), expr_id);
+}
+
 /// Lower a CIR expression to MIR.
 pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId {
     const saved_root_expr_context = self.current_root_expr_context;
@@ -3414,7 +3421,8 @@ fn alignAlternativePatternSymbols(
 }
 
 /// Resolve a CIR pattern to a global MIR symbol.
-fn patternToSymbol(self: *Self, pattern_idx: CIR.Pattern.Idx) Allocator.Error!MIR.Symbol {
+/// Public for batch lowering in cir_to_lir.lowerModuleDefs.
+pub fn patternToSymbol(self: *Self, pattern_idx: CIR.Pattern.Idx) Allocator.Error!MIR.Symbol {
     const base_key: u64 = (@as(u64, self.current_module_idx) << 32) | @intFromEnum(pattern_idx);
     const key: u128 = (@as(u128, self.current_pattern_scope) << 64) | @as(u128, base_key);
 
