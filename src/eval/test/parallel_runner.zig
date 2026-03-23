@@ -55,6 +55,7 @@ pub const TestCase = struct {
     name: []const u8,
     source: []const u8,
     expected: Expected,
+    skip: Skip = .{},
 
     pub const Expected = union(enum) {
         i64_val: i128,
@@ -68,6 +69,13 @@ pub const TestCase = struct {
         problem: void,
         type_mismatch_crash: void,
         dev_only_str: []const u8,
+    };
+
+    pub const Skip = packed struct {
+        interpreter: bool = false,
+        dev: bool = false,
+        wasm: bool = false,
+        llvm: bool = false,
     };
 };
 
@@ -127,7 +135,7 @@ const TestOutcome = struct {
     message: ?[]const u8 = null,
     timings: EvalTimings = .{},
 
-    const Status = enum { pass, fail, crash };
+    const Status = enum { pass, fail, crash, skip };
 };
 
 const EvalTimings = struct {
@@ -460,14 +468,18 @@ fn compareBackendResults(
 
     if (!mismatch) return null;
 
-    // Build mismatch message
+    // Build mismatch message (exclude skipped backends)
     var msg_buf: std.ArrayListUnmanaged(u8) = .empty;
     const writer = msg_buf.writer(allocator);
     writer.print("Backend mismatch:", .{}) catch {};
     for (backends) |br| {
         switch (br.value) {
             .ok => |s| writer.print(" {s}='{s}'", .{ br.name, s }) catch {},
-            .err => |e| writer.print(" {s}=err({s})", .{ br.name, e }) catch {},
+            .err => |e| {
+                if (!std.mem.eql(u8, e, "skipped")) {
+                    writer.print(" {s}=err({s})", .{ br.name, e }) catch {};
+                }
+            },
         }
     }
     return msg_buf.toOwnedSlice(allocator) catch null;
@@ -485,22 +497,22 @@ fn runSingleTest(allocator: std.mem.Allocator, tc: TestCase) TestOutcome {
 
 fn runSingleTestInner(allocator: std.mem.Allocator, tc: TestCase) !TestOutcome {
     switch (tc.expected) {
-        .i64_val => |expected_int| return runTestI64(allocator, tc.source, expected_int),
-        .bool_val => |expected_bool| return runTestBool(allocator, tc.source, expected_bool),
-        .str_val => |expected_str| return runTestStr(allocator, tc.source, expected_str),
+        .i64_val => |expected_int| return runTestI64(allocator, tc.source, expected_int, tc.skip),
+        .bool_val => |expected_bool| return runTestBool(allocator, tc.source, expected_bool, tc.skip),
+        .str_val => |expected_str| return runTestStr(allocator, tc.source, expected_str, tc.skip),
         .err_val => |expected_err| return runTestError(allocator, tc.source, expected_err),
         .problem => return runTestProblem(allocator, tc.source),
-        .f32_val => |expected_f32| return runTestF32(allocator, tc.source, expected_f32),
-        .f64_val => |expected_f64| return runTestF64(allocator, tc.source, expected_f64),
-        .dec_val => |expected_dec| return runTestDec(allocator, tc.source, expected_dec),
-        .int_dec => |expected_int| return runTestI64(allocator, tc.source, expected_int),
+        .f32_val => |expected_f32| return runTestF32(allocator, tc.source, expected_f32, tc.skip),
+        .f64_val => |expected_f64| return runTestF64(allocator, tc.source, expected_f64, tc.skip),
+        .dec_val => |expected_dec| return runTestDec(allocator, tc.source, expected_dec, tc.skip),
+        .int_dec => |expected_int| return runTestI64(allocator, tc.source, expected_int, tc.skip),
         .type_mismatch_crash => return runTestTypeMismatchCrash(allocator, tc.source),
-        .dev_only_str => |expected_str| return runTestDevOnlyStr(allocator, tc.source, expected_str),
+        .dev_only_str => |expected_str| return runTestDevOnlyStr(allocator, tc.source, expected_str, tc.skip),
     }
 }
 
 /// Run interpreter, check the value, then compare all backends via Str.inspect.
-fn runTestI64(allocator: std.mem.Allocator, src: []const u8, expected_int: i128) !TestOutcome {
+fn runTestI64(allocator: std.mem.Allocator, src: []const u8, expected_int: i128, skip: TestCase.Skip) !TestOutcome {
     const resources = try parseAndCanonicalizeExpr(allocator, src);
     defer cleanupResources(allocator, resources);
 
@@ -539,7 +551,7 @@ fn runTestI64(allocator: std.mem.Allocator, src: []const u8, expected_int: i128)
     const interp_str = roc_val.format(allocator, fmt_ctx) catch return .{ .status = .pass, .timings = fe_timings };
     defer allocator.free(interp_str);
 
-    var outcome = compareAllBackends(allocator, interp_str, resources);
+    var outcome = compareAllBackends(allocator, interp_str, resources, skip);
     outcome.timings.parse_ns = resources.parse_ns;
     outcome.timings.canonicalize_ns = resources.canonicalize_ns;
     outcome.timings.typecheck_ns = resources.typecheck_ns;
@@ -547,7 +559,7 @@ fn runTestI64(allocator: std.mem.Allocator, src: []const u8, expected_int: i128)
     return outcome;
 }
 
-fn runTestBool(allocator: std.mem.Allocator, src: []const u8, expected_bool: bool) !TestOutcome {
+fn runTestBool(allocator: std.mem.Allocator, src: []const u8, expected_bool: bool, skip: TestCase.Skip) !TestOutcome {
     const resources = try parseAndCanonicalizeExpr(allocator, src);
     defer cleanupResources(allocator, resources);
 
@@ -586,7 +598,7 @@ fn runTestBool(allocator: std.mem.Allocator, src: []const u8, expected_bool: boo
     const interp_str = roc_val.format(allocator, fmt_ctx) catch return .{ .status = .pass, .timings = fe_timings };
     defer allocator.free(interp_str);
 
-    var outcome = compareAllBackends(allocator, interp_str, resources);
+    var outcome = compareAllBackends(allocator, interp_str, resources, skip);
     outcome.timings.parse_ns = resources.parse_ns;
     outcome.timings.canonicalize_ns = resources.canonicalize_ns;
     outcome.timings.typecheck_ns = resources.typecheck_ns;
@@ -594,7 +606,7 @@ fn runTestBool(allocator: std.mem.Allocator, src: []const u8, expected_bool: boo
     return outcome;
 }
 
-fn runTestStr(allocator: std.mem.Allocator, src: []const u8, expected_str: []const u8) !TestOutcome {
+fn runTestStr(allocator: std.mem.Allocator, src: []const u8, expected_str: []const u8, skip: TestCase.Skip) !TestOutcome {
     const resources = try parseAndCanonicalizeExpr(allocator, src);
     defer cleanupResources(allocator, resources);
 
@@ -646,7 +658,7 @@ fn runTestStr(allocator: std.mem.Allocator, src: []const u8, expected_str: []con
         return .{ .status = .fail, .message = "string value mismatch", .timings = fe_timings };
     }
 
-    var outcome = compareAllBackends(allocator, interp_str, resources);
+    var outcome = compareAllBackends(allocator, interp_str, resources, skip);
     outcome.timings.parse_ns = resources.parse_ns;
     outcome.timings.canonicalize_ns = resources.canonicalize_ns;
     outcome.timings.typecheck_ns = resources.typecheck_ns;
@@ -773,7 +785,7 @@ fn runTestProblem(allocator: std.mem.Allocator, src: []const u8) !TestOutcome {
     return .{ .status = .fail, .message = "expected problems but none found", .timings = timings };
 }
 
-fn runTestF32(allocator: std.mem.Allocator, src: []const u8, expected_f32: f32) !TestOutcome {
+fn runTestF32(allocator: std.mem.Allocator, src: []const u8, expected_f32: f32, skip: TestCase.Skip) !TestOutcome {
     const resources = try parseAndCanonicalizeExpr(allocator, src);
     defer cleanupResources(allocator, resources);
 
@@ -805,7 +817,7 @@ fn runTestF32(allocator: std.mem.Allocator, src: []const u8, expected_f32: f32) 
     const interp_str = roc_val.format(allocator, fmt_ctx) catch return .{ .status = .pass, .timings = fe_timings };
     defer allocator.free(interp_str);
 
-    var outcome = compareAllBackends(allocator, interp_str, resources);
+    var outcome = compareAllBackends(allocator, interp_str, resources, skip);
     outcome.timings.parse_ns = resources.parse_ns;
     outcome.timings.canonicalize_ns = resources.canonicalize_ns;
     outcome.timings.typecheck_ns = resources.typecheck_ns;
@@ -813,7 +825,7 @@ fn runTestF32(allocator: std.mem.Allocator, src: []const u8, expected_f32: f32) 
     return outcome;
 }
 
-fn runTestF64(allocator: std.mem.Allocator, src: []const u8, expected_f64: f64) !TestOutcome {
+fn runTestF64(allocator: std.mem.Allocator, src: []const u8, expected_f64: f64, skip: TestCase.Skip) !TestOutcome {
     const resources = try parseAndCanonicalizeExpr(allocator, src);
     defer cleanupResources(allocator, resources);
 
@@ -845,7 +857,7 @@ fn runTestF64(allocator: std.mem.Allocator, src: []const u8, expected_f64: f64) 
     const interp_str = roc_val.format(allocator, fmt_ctx) catch return .{ .status = .pass, .timings = fe_timings };
     defer allocator.free(interp_str);
 
-    var outcome = compareAllBackends(allocator, interp_str, resources);
+    var outcome = compareAllBackends(allocator, interp_str, resources, skip);
     outcome.timings.parse_ns = resources.parse_ns;
     outcome.timings.canonicalize_ns = resources.canonicalize_ns;
     outcome.timings.typecheck_ns = resources.typecheck_ns;
@@ -853,7 +865,7 @@ fn runTestF64(allocator: std.mem.Allocator, src: []const u8, expected_f64: f64) 
     return outcome;
 }
 
-fn runTestDec(allocator: std.mem.Allocator, src: []const u8, expected_dec: i128) !TestOutcome {
+fn runTestDec(allocator: std.mem.Allocator, src: []const u8, expected_dec: i128, skip: TestCase.Skip) !TestOutcome {
     const resources = try parseAndCanonicalizeExpr(allocator, src);
     defer cleanupResources(allocator, resources);
 
@@ -883,7 +895,7 @@ fn runTestDec(allocator: std.mem.Allocator, src: []const u8, expected_dec: i128)
     const interp_str = roc_val.format(allocator, fmt_ctx) catch return .{ .status = .pass, .timings = fe_timings };
     defer allocator.free(interp_str);
 
-    var outcome = compareAllBackends(allocator, interp_str, resources);
+    var outcome = compareAllBackends(allocator, interp_str, resources, skip);
     outcome.timings.parse_ns = resources.parse_ns;
     outcome.timings.canonicalize_ns = resources.canonicalize_ns;
     outcome.timings.typecheck_ns = resources.typecheck_ns;
@@ -916,7 +928,11 @@ fn runTestTypeMismatchCrash(allocator: std.mem.Allocator, src: []const u8) !Test
 }
 
 /// Run a test that only checks the dev backend output (no interpreter comparison).
-fn runTestDevOnlyStr(allocator: std.mem.Allocator, src: []const u8, expected_str: []const u8) !TestOutcome {
+fn runTestDevOnlyStr(allocator: std.mem.Allocator, src: []const u8, expected_str: []const u8, skip: TestCase.Skip) !TestOutcome {
+    if (skip.dev) {
+        return .{ .status = .skip };
+    }
+
     const resources = try parseAndCanonicalizeExpr(allocator, src);
     defer cleanupResources(allocator, resources);
 
@@ -949,7 +965,7 @@ fn runTestDevOnlyStr(allocator: std.mem.Allocator, src: []const u8, expected_str
 /// Run dev, wasm, and llvm backends on the same expression, compare Str.inspect
 /// output with the interpreter's formatted result.
 /// Returns .pass if all backends agree, .fail with mismatch details otherwise.
-fn compareAllBackends(allocator: std.mem.Allocator, interp_str: []const u8, resources: ParsedResources) TestOutcome {
+fn compareAllBackends(allocator: std.mem.Allocator, interp_str: []const u8, resources: ParsedResources, skip: TestCase.Skip) TestOutcome {
     var timings = EvalTimings{};
 
     // Wrap the expression in Str.inspect for compiled backends
@@ -959,36 +975,45 @@ fn compareAllBackends(allocator: std.mem.Allocator, interp_str: []const u8, reso
     };
 
     // Run dev backend
-    var dev_timer = Timer.start() catch unreachable;
-    const dev_result: BackendResult = blk: {
-        const str = helpers.devEvaluatorStr(allocator, resources.module_env, inspect_expr, resources.builtin_module.env) catch |err| {
-            break :blk BackendResult{ .name = "dev", .value = .{ .err = @errorName(err) } };
+    const dev_result: BackendResult = if (skip.dev) BackendResult{ .name = "dev", .value = .{ .err = "skipped" } } else blk: {
+        var dev_timer = Timer.start() catch unreachable;
+        const result: BackendResult = inner: {
+            const str = helpers.devEvaluatorStr(allocator, resources.module_env, inspect_expr, resources.builtin_module.env) catch |err| {
+                break :inner BackendResult{ .name = "dev", .value = .{ .err = @errorName(err) } };
+            };
+            break :inner BackendResult{ .name = "dev", .value = .{ .ok = str } };
         };
-        break :blk BackendResult{ .name = "dev", .value = .{ .ok = str } };
+        timings.dev_ns = dev_timer.read();
+        break :blk result;
     };
-    timings.dev_ns = dev_timer.read();
     defer if (dev_result.value == .ok) allocator.free(dev_result.value.ok);
 
     // Run wasm backend
-    var wasm_timer = Timer.start() catch unreachable;
-    const wasm_result: BackendResult = blk: {
-        const str = helpers.wasmEvaluatorStr(allocator, resources.module_env, inspect_expr, resources.builtin_module.env) catch |err| {
-            break :blk BackendResult{ .name = "wasm", .value = .{ .err = @errorName(err) } };
+    const wasm_result: BackendResult = if (skip.wasm) BackendResult{ .name = "wasm", .value = .{ .err = "skipped" } } else blk: {
+        var wasm_timer = Timer.start() catch unreachable;
+        const result: BackendResult = inner: {
+            const str = helpers.wasmEvaluatorStr(allocator, resources.module_env, inspect_expr, resources.builtin_module.env) catch |err| {
+                break :inner BackendResult{ .name = "wasm", .value = .{ .err = @errorName(err) } };
+            };
+            break :inner BackendResult{ .name = "wasm", .value = .{ .ok = str } };
         };
-        break :blk BackendResult{ .name = "wasm", .value = .{ .ok = str } };
+        timings.wasm_ns = wasm_timer.read();
+        break :blk result;
     };
-    timings.wasm_ns = wasm_timer.read();
     defer if (wasm_result.value == .ok) allocator.free(wasm_result.value.ok);
 
     // Run "llvm" backend (currently aliases dev)
-    var llvm_timer = Timer.start() catch unreachable;
-    const llvm_result: BackendResult = blk: {
-        const str = helpers.llvmEvaluatorStr(allocator, resources.module_env, inspect_expr, resources.builtin_module.env) catch |err| {
-            break :blk BackendResult{ .name = "llvm", .value = .{ .err = @errorName(err) } };
+    const llvm_result: BackendResult = if (skip.llvm) BackendResult{ .name = "llvm", .value = .{ .err = "skipped" } } else blk: {
+        var llvm_timer = Timer.start() catch unreachable;
+        const result: BackendResult = inner: {
+            const str = helpers.llvmEvaluatorStr(allocator, resources.module_env, inspect_expr, resources.builtin_module.env) catch |err| {
+                break :inner BackendResult{ .name = "llvm", .value = .{ .err = @errorName(err) } };
+            };
+            break :inner BackendResult{ .name = "llvm", .value = .{ .ok = str } };
         };
-        break :blk BackendResult{ .name = "llvm", .value = .{ .ok = str } };
+        timings.llvm_ns = llvm_timer.read();
+        break :blk result;
     };
-    timings.llvm_ns = llvm_timer.read();
     defer if (llvm_result.value == .ok) allocator.free(llvm_result.value.ok);
 
     // Compare all backends including interpreter
@@ -1359,6 +1384,7 @@ pub fn main() !void {
     var passed: usize = 0;
     var failed: usize = 0;
     var crashed: usize = 0;
+    var skipped: usize = 0;
 
     std.debug.print("\n=== Eval Test Results ===\n", .{});
 
@@ -1391,17 +1417,25 @@ pub fn main() !void {
                     std.debug.print("        {s}\n", .{msg});
                 }
             },
+            .skip => {
+                skipped += 1;
+                if (cli.verbose) {
+                    std.debug.print("  SKIP  {s}\n", .{tc.name});
+                }
+            },
         }
     }
 
-    // Performance summary
-    if (tests.len > 0) {
+    // Performance summary (skip in coverage mode — kcov instrumentation skews timings)
+    if (cli.coverage) {
+        std.debug.print("\n  (timings omitted — coverage mode; kcov instrumentation affects measurements)\n", .{});
+    } else if (tests.len > 0) {
         printPerformanceSummary(gpa, tests, results) catch {};
     }
 
     const wall_ms = @as(f64, @floatFromInt(wall_elapsed)) / 1_000_000.0;
-    std.debug.print("\n{d} passed, {d} failed, {d} crashed ({d} total) in {d:.0}ms using {d} thread(s)\n", .{
-        passed, failed, crashed, tests.len, wall_ms, thread_count,
+    std.debug.print("\n{d} passed, {d} failed, {d} crashed, {d} skipped ({d} total) in {d:.0}ms using {d} thread(s)\n", .{
+        passed, failed, crashed, skipped, tests.len, wall_ms, thread_count,
     });
 
     if (failed > 0 or crashed > 0) {
