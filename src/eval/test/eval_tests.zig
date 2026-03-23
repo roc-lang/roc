@@ -9,9 +9,6 @@ const RocDec = @import("builtins").dec.RocDec;
 /// Skip all backends — used for tests that document bugs (crash/fail).
 const SKIP_ALL: TestCase.Skip = .{ .interpreter = true, .dev = true, .wasm = true, .llvm = true };
 
-/// Skip only the interpreter — test passes on dev/wasm but interpreter has a bug.
-const SKIP_INTERP: TestCase.Skip = .{ .interpreter = true };
-
 /// All eval test cases, consumed by the parallel runner.
 pub const tests = [_]TestCase{
     // --- proof of concept tests ---
@@ -8093,10 +8090,10 @@ pub const tests = [_]TestCase{
     .{
         .name = "list of I32 len",
         .source =
-            \\{
-            \\    xs = [1.I32, 2.I32, 3.I32]
-            \\    xs.len().to_i64()
-            \\}
+        \\{
+        \\    xs = [1.I32, 2.I32, 3.I32]
+        \\    xs.len().to_i64()
+        \\}
         ,
         .expected = .{ .i64_val = 3 },
         .skip = SKIP_ALL,
@@ -8104,10 +8101,10 @@ pub const tests = [_]TestCase{
     .{
         .name = "list of U8 len",
         .source =
-            \\{
-            \\    xs = [10.U8, 20.U8, 30.U8]
-            \\    xs.len().to_i64()
-            \\}
+        \\{
+        \\    xs = [10.U8, 20.U8, 30.U8]
+        \\    xs.len().to_i64()
+        \\}
         ,
         .expected = .{ .i64_val = 3 },
         .skip = SKIP_ALL,
@@ -8117,30 +8114,30 @@ pub const tests = [_]TestCase{
     .{
         .name = "match Ok tag with int payload",
         .source =
-            \\match Ok(42) {
-            \\    Ok(n) => n
-            \\    Err(_) => 0
-            \\}
+        \\match Ok(42) {
+        \\    Ok(n) => n
+        \\    Err(_) => 0
+        \\}
         ,
         .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 },
     },
     .{
         .name = "match Err tag",
         .source =
-            \\match Err("bad") {
-            \\    Ok(_) => "good"
-            \\    Err(msg) => msg
-            \\}
+        \\match Err("bad") {
+        \\    Ok(_) => "good"
+        \\    Err(msg) => msg
+        \\}
         ,
         .expected = .{ .str_val = "bad" },
     },
     .{
         .name = "tag union with two-element payload",
         .source =
-            \\match Pair(1, 2) {
-            \\    Pair(a, b) => a + b
-            \\    _ => 0
-            \\}
+        \\match Pair(1, 2) {
+        \\    Pair(a, b) => a + b
+        \\    _ => 0
+        \\}
         ,
         .expected = .{ .dec_val = 3 * RocDec.one_point_zero_i128 },
     },
@@ -8163,46 +8160,46 @@ pub const tests = [_]TestCase{
     .{
         .name = "closure returning I32 add",
         .source =
-            \\{
-            \\    id = |x| x
-            \\    a = id(3.I32)
-            \\    b = id(5.I32)
-            \\    a + b
-            \\}
+        \\{
+        \\    id = |x| x
+        \\    a = id(3.I32)
+        \\    b = id(5.I32)
+        \\    a + b
+        \\}
         ,
         .expected = .{ .i32_val = 8 },
     },
     .{
         .name = "closure returning I64 comparison",
         .source =
-            \\{
-            \\    id = |x| x
-            \\    a = id(10.I64)
-            \\    b = id(5.I64)
-            \\    a > b
-            \\}
+        \\{
+        \\    id = |x| x
+        \\    a = id(10.I64)
+        \\    b = id(5.I64)
+        \\    a > b
+        \\}
         ,
         .expected = .{ .bool_val = true },
     },
     .{
         .name = "I32 arithmetic through let binding chain",
         .source =
-            \\{
-            \\    x = 1.I32 + 2.I32
-            \\    y = x * 3.I32
-            \\    y + 1.I32
-            \\}
+        \\{
+        \\    x = 1.I32 + 2.I32
+        \\    y = x * 3.I32
+        \\    y + 1.I32
+        \\}
         ,
         .expected = .{ .i32_val = 10 },
     },
     .{
         .name = "nested closure I64 subtraction",
         .source =
-            \\{
-            \\    apply = |f, x| f(x)
-            \\    sub5 = |n| n - 5.I64
-            \\    apply(sub5, 20.I64)
-            \\}
+        \\{
+        \\    apply = |f, x| f(x)
+        \\    sub5 = |n| n - 5.I64
+        \\    apply(sub5, 20.I64)
+        \\}
         ,
         .expected = .{ .i64_val = 15 },
     },
@@ -8224,11 +8221,11 @@ pub const tests = [_]TestCase{
     .{
         .name = "F64 arithmetic chain",
         .source =
-            \\{
-            \\    x = 10.0.F64 + 5.0.F64
-            \\    y = x * 2.0.F64
-            \\    y - 1.0.F64
-            \\}
+        \\{
+        \\    x = 10.0.F64 + 5.0.F64
+        \\    y = x * 2.0.F64
+        \\    y - 1.0.F64
+        \\}
         ,
         .expected = .{ .f64_val = 29.0 },
     },
@@ -8237,20 +8234,20 @@ pub const tests = [_]TestCase{
     .{
         .name = "match custom tag returning I64",
         .source =
-            \\match Val(42.I64) {
-            \\    Val(n) => n
-            \\    _ => 0.I64
-            \\}
+        \\match Val(42.I64) {
+        \\    Val(n) => n
+        \\    _ => 0.I64
+        \\}
         ,
         .expected = .{ .i64_val = 42 },
     },
     .{
         .name = "match nested tags",
         .source =
-            \\match Some(Ok(10)) {
-            \\    Some(Ok(n)) => n
-            \\    _ => 0
-            \\}
+        \\match Some(Ok(10)) {
+        \\    Some(Ok(n)) => n
+        \\    _ => 0
+        \\}
         ,
         .expected = .{ .dec_val = 10 * RocDec.one_point_zero_i128 },
     },
@@ -8269,70 +8266,70 @@ pub const tests = [_]TestCase{
     .{
         .name = "I64.from_str ok",
         .source =
-            \\match I64.from_str("42") {
-            \\    Ok(n) => n
-            \\    Err(_) => 0.I64
-            \\}
+        \\match I64.from_str("42") {
+        \\    Ok(n) => n
+        \\    Err(_) => 0.I64
+        \\}
         ,
         .expected = .{ .i64_val = 42 },
     },
     .{
         .name = "I32.from_str ok",
         .source =
-            \\match I32.from_str("100") {
-            \\    Ok(n) => n
-            \\    Err(_) => 0.I32
-            \\}
+        \\match I32.from_str("100") {
+        \\    Ok(n) => n
+        \\    Err(_) => 0.I32
+        \\}
         ,
         .expected = .{ .i32_val = 100 },
     },
     .{
         .name = "U64.from_str ok",
         .source =
-            \\match U64.from_str("255") {
-            \\    Ok(n) => n
-            \\    Err(_) => 0.U64
-            \\}
+        \\match U64.from_str("255") {
+        \\    Ok(n) => n
+        \\    Err(_) => 0.U64
+        \\}
         ,
         .expected = .{ .u64_val = 255 },
     },
     .{
         .name = "I64.from_str bad input",
         .source =
-            \\match I64.from_str("abc") {
-            \\    Ok(_) => 1.I64
-            \\    Err(_) => 0.I64
-            \\}
+        \\match I64.from_str("abc") {
+        \\    Ok(_) => 1.I64
+        \\    Err(_) => 0.I64
+        \\}
         ,
         .expected = .{ .i64_val = 0 },
     },
     .{
         .name = "U8.from_str ok",
         .source =
-            \\match U8.from_str("200") {
-            \\    Ok(n) => n
-            \\    Err(_) => 0.U8
-            \\}
+        \\match U8.from_str("200") {
+        \\    Ok(n) => n
+        \\    Err(_) => 0.U8
+        \\}
         ,
         .expected = .{ .u8_val = 200 },
     },
     .{
         .name = "I8.from_str negative",
         .source =
-            \\match I8.from_str("-42") {
-            \\    Ok(n) => n
-            \\    Err(_) => 0.I8
-            \\}
+        \\match I8.from_str("-42") {
+        \\    Ok(n) => n
+        \\    Err(_) => 0.I8
+        \\}
         ,
         .expected = .{ .i8_val = -42 },
     },
     .{
         .name = "F64.from_str ok",
         .source =
-            \\match F64.from_str("3.14") {
-            \\    Ok(n) => n
-            \\    Err(_) => 0.0.F64
-            \\}
+        \\match F64.from_str("3.14") {
+        \\    Ok(n) => n
+        \\    Err(_) => 0.0.F64
+        \\}
         ,
         .expected = .{ .f64_val = 3.14 },
     },
@@ -8341,33 +8338,33 @@ pub const tests = [_]TestCase{
     .{
         .name = "match with three tags",
         .source =
-            \\match Red {
-            \\    Red => "red"
-            \\    Green => "green"
-            \\    Blue => "blue"
-            \\}
+        \\match Red {
+        \\    Red => "red"
+        \\    Green => "green"
+        \\    Blue => "blue"
+        \\}
         ,
         .expected = .{ .str_val = "red" },
     },
     .{
         .name = "match enum green",
         .source =
-            \\match Green {
-            \\    Red => "red"
-            \\    Green => "green"
-            \\    Blue => "blue"
-            \\}
+        \\match Green {
+        \\    Red => "red"
+        \\    Green => "green"
+        \\    Blue => "blue"
+        \\}
         ,
         .expected = .{ .str_val = "green" },
     },
     .{
         .name = "match enum blue",
         .source =
-            \\match Blue {
-            \\    Red => "red"
-            \\    Green => "green"
-            \\    Blue => "blue"
-            \\}
+        \\match Blue {
+        \\    Red => "red"
+        \\    Green => "green"
+        \\    Blue => "blue"
+        \\}
         ,
         .expected = .{ .str_val = "blue" },
     },
@@ -8395,21 +8392,21 @@ pub const tests = [_]TestCase{
     .{
         .name = "record field access",
         .source =
-            \\{
-            \\    rec = { x: 10, y: 20 }
-            \\    rec.x + rec.y
-            \\}
+        \\{
+        \\    rec = { x: 10, y: 20 }
+        \\    rec.x + rec.y
+        \\}
         ,
         .expected = .{ .dec_val = 30 * RocDec.one_point_zero_i128 },
     },
     .{
         .name = "record update syntax",
         .source =
-            \\{
-            \\    rec = { x: 10, y: 20 }
-            \\    updated = { ..rec, x: 100 }
-            \\    updated.x + updated.y
-            \\}
+        \\{
+        \\    rec = { x: 10, y: 20 }
+        \\    updated = { ..rec, x: 100 }
+        \\    updated.x + updated.y
+        \\}
         ,
         .expected = .{ .dec_val = 120 * RocDec.one_point_zero_i128 },
     },
@@ -8418,19 +8415,19 @@ pub const tests = [_]TestCase{
     .{
         .name = "tuple access",
         .source =
-            \\{
-            \\    t = (10, 20)
-            \\    t.0 + t.1
-            \\}
+        \\{
+        \\    t = (10, 20)
+        \\    t.0 + t.1
+        \\}
         ,
         .expected = .{ .dec_val = 30 * RocDec.one_point_zero_i128 },
     },
     .{
         .name = "match tuple destructure",
         .source =
-            \\match (3, 7) {
-            \\    (a, b) => a + b
-            \\}
+        \\match (3, 7) {
+        \\    (a, b) => a + b
+        \\}
         ,
         .expected = .{ .dec_val = 10 * RocDec.one_point_zero_i128 },
     },
@@ -8439,13 +8436,13 @@ pub const tests = [_]TestCase{
     .{
         .name = "for loop summing I64",
         .source =
-            \\{
-            \\    var $sum = 0.I64
-            \\    for item in [10.I64, 20.I64, 30.I64] {
-            \\        $sum = $sum + item
-            \\    }
-            \\    $sum
-            \\}
+        \\{
+        \\    var $sum = 0.I64
+        \\    for item in [10.I64, 20.I64, 30.I64] {
+        \\        $sum = $sum + item
+        \\    }
+        \\    $sum
+        \\}
         ,
         .expected = .{ .i64_val = 60 },
     },
