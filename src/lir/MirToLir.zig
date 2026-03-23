@@ -2934,9 +2934,16 @@ fn lowerTuple(self: *Self, fields: MIR.ExprSpan, _: Monotype.Idx, mir_expr_id: M
 fn lowerTag(self: *Self, tag_data: anytype, mono_idx: Monotype.Idx, mir_expr_id: MIR.ExprId, region: Region) Allocator.Error!LirExprId {
     const mir_args = self.tagPayloadExprs(mono_idx, tag_data.name, tag_data.args);
 
-    const union_layout = try self.runtimeValueLayoutFromMirExpr(mir_expr_id);
+    const outer_layout = try self.runtimeValueLayoutFromMirExpr(mir_expr_id);
     const discriminant = self.tagDiscriminant(tag_data.name, mono_idx);
+    const outer_layout_val = self.layout_store.getLayout(outer_layout);
+
+    // For boxed recursive tag unions, unwrap the box to get the inner tag_union layout.
+    // The tag expression itself operates on the inner layout; we box the result afterward.
+    const is_boxed = outer_layout_val.tag == .box;
+    const union_layout = if (is_boxed) outer_layout_val.data.box else outer_layout;
     const union_layout_val = self.layout_store.getLayout(union_layout);
+
     if (union_layout_val.tag == .scalar or union_layout_val.tag == .zst) {
         var acc = self.startLetAccumulator();
         for (mir_args) |mir_arg| {
@@ -2948,7 +2955,11 @@ fn lowerTag(self: *Self, tag_data: anytype, mono_idx: Monotype.Idx, mir_expr_id:
             .discriminant = discriminant,
             .union_layout = union_layout,
         } }, region);
-        return acc.finish(zero_arg_tag, union_layout, region);
+        const tag_result = try acc.finish(zero_arg_tag, union_layout, region);
+        if (is_boxed) {
+            return self.boxValue(tag_result, union_layout, outer_layout, region);
+        }
+        return tag_result;
     }
 
     const variant_payload_layout: ?layout.Idx = if (union_layout_val.tag == .tag_union) blk: {
@@ -2958,10 +2969,14 @@ fn lowerTag(self: *Self, tag_data: anytype, mono_idx: Monotype.Idx, mir_expr_id:
     } else null;
 
     if (mir_args.len == 0) {
-        return self.lir_store.addExpr(.{ .zero_arg_tag = .{
+        const zero_arg_tag = try self.lir_store.addExpr(.{ .zero_arg_tag = .{
             .discriminant = discriminant,
             .union_layout = union_layout,
         } }, region);
+        if (is_boxed) {
+            return self.boxValue(zero_arg_tag, union_layout, outer_layout, region);
+        }
+        return zero_arg_tag;
     }
 
     var acc = self.startLetAccumulator();
@@ -2998,7 +3013,24 @@ fn lowerTag(self: *Self, tag_data: anytype, mono_idx: Monotype.Idx, mir_expr_id:
         .union_layout = union_layout,
         .args = lir_args,
     } }, region);
-    return acc.finish(tag_expr, union_layout, region);
+    const tag_result = try acc.finish(tag_expr, union_layout, region);
+    if (is_boxed) {
+        return self.boxValue(tag_result, union_layout, outer_layout, region);
+    }
+    return tag_result;
+}
+
+/// Wrap a value in a box using the box_box low-level operation.
+fn boxValue(self: *Self, value_expr: LirExprId, source_layout: layout.Idx, target_layout: layout.Idx, region: Region) Allocator.Error!LirExprId {
+    var acc = self.startLetAccumulator();
+    const source_value = try acc.ensureSymbol(value_expr, source_layout, region);
+    const args = try self.lir_store.addExprSpan(&[_]LirExprId{source_value});
+    const low_level = try self.lir_store.addExpr(.{ .low_level = .{
+        .op = .box_box,
+        .args = args,
+        .ret_layout = target_layout,
+    } }, region);
+    return acc.finish(low_level, target_layout, region);
 }
 
 fn lowerLookup(self: *Self, sym: Symbol, mono_idx: Monotype.Idx, mir_expr_id: MIR.ExprId, region: Region) Allocator.Error!LirExprId {

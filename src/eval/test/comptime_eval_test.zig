@@ -2825,8 +2825,27 @@ test "encode - custom format type with infallible encoding (empty error type)" {
     try testing.expectEqual(@as(u32, 0), summary.crashed);
 }
 
-// TODO: SIGSEGV in comptime evaluator on recursive tag union pattern matching.
-// test "issue 8754: pattern matching on recursive tag union variant payload" { ... }
+test "issue 8754: pattern matching on recursive tag union variant payload" {
+    // Regression test for issue #8754: direct recursive reference in tag union variant
+    // payload (without explicit Box) should not crash the comptime evaluator.
+    const src =
+        \\Tree := [Node(Str, List(Tree)), Text(Str), Wrapper(Tree)]
+        \\
+        \\inner : Tree
+        \\inner = Text("hello")
+        \\
+        \\wrapped : Tree
+        \\wrapped = Wrapper(inner)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    // All declarations should evaluate without crashing
+    try testing.expect(summary.evaluated >= 2);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
 
 test "comptime eval - attached methods on tag union type aliases (issue #8637)" {
     // Regression test for GitHub issue #8637
