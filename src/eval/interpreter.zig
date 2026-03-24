@@ -546,6 +546,16 @@ pub const LirInterpreter = struct {
                 @memcpy(@as([*]u8, @ptrCast(ret_ptr))[0..ret_size], val.readBytes(ret_size));
             }
         }
+
+        // After successful evaluation, check for failed expect assertions.
+        // evalExpect stores the message but does not error — we surface it here
+        // so the host crash handler can report it and exit non-zero.
+        if (self.roc_env.expect_message) |expect_msg| {
+            const crash_msg = std.fmt.allocPrint(self.allocator, "Roc crashed: expect failed: {s}", .{expect_msg}) catch "Roc crashed: expect failed";
+            if (self.roc_env.crash_message) |old| self.allocator.free(old);
+            self.roc_env.crash_message = crash_msg;
+            return error.Crash;
+        }
     }
 
     // Expression evaluation
@@ -658,10 +668,11 @@ pub const LirInterpreter = struct {
                     }
                     return error.RuntimeError;
                 },
-                // Tail-call optimized: dbg (evaluate and return the inner expr)
                 .dbg => |d| {
-                    expr_id = d.expr;
-                    continue :outer;
+                    const dbg_val = try self.evalValue(d.expr);
+                    const dbg_msg = try self.renderExpectValue(dbg_val, d.result_layout);
+                    self.roc_ops.dbg(dbg_msg);
+                    return .{ .value = dbg_val };
                 },
                 // Non-tail cases return directly
                 .i64_literal => |lit| return .{ .value = try self.evalI64Literal(lit.value, lit.layout_idx) },
@@ -692,17 +703,21 @@ pub const LirInterpreter = struct {
                     }
                     return error.RuntimeError;
                 },
-                // RC ops — evaluate the value and discard (no-op RC).
+                // RC ops — perform actual refcounting so native builtins
+                // don't trigger use-after-free.
                 .incref => |ir| {
-                    _ = try self.eval(ir.value);
+                    const val = try self.evalValue(ir.value);
+                    self.performRc(.incref, val, ir.layout_idx, ir.count);
                     return .{ .value = Value.zst };
                 },
                 .decref => |dr| {
-                    _ = try self.eval(dr.value);
+                    const val = try self.evalValue(dr.value);
+                    self.performRc(.decref, val, dr.layout_idx, 0);
                     return .{ .value = Value.zst };
                 },
                 .free => |f| {
-                    _ = try self.eval(f.value);
+                    const val = try self.evalValue(f.value);
+                    self.performRc(.free, val, f.layout_idx, 0);
                     return .{ .value = Value.zst };
                 },
                 .expect => |e| return try self.evalExpect(e),
@@ -1544,6 +1559,97 @@ pub const LirInterpreter = struct {
                     }
                 },
             }
+        }
+    }
+
+    // Reference counting
+
+    const RcOp = layout_mod.RcOp;
+
+    /// Perform a reference count operation on a value using the layout-driven
+    /// RC helper plan.  This walks structs, tag unions, boxes, etc. recursively
+    /// so the interpreter's refcounting matches what the dev backend emits.
+    fn performRc(self: *LirInterpreter, op: RcOp, val: Value, layout_idx: layout_mod.Idx, count: u16) void {
+        const resolver = layout_mod.RcHelperResolver.init(self.layout_store);
+        const key = resolver.makeKey(op, layout_idx);
+        self.performRcPlan(resolver.plan(key), &resolver, val, count);
+    }
+
+    fn performRcPlan(self: *LirInterpreter, rc_plan: layout_mod.RcHelperPlan, resolver: *const layout_mod.RcHelperResolver, val: Value, count: u16) void {
+        const utils = builtins.utils;
+        switch (rc_plan) {
+            .noop => {},
+            .str_incref => {
+                const rs = valueToRocStr(val);
+                rs.incref(count, &self.roc_ops);
+            },
+            .str_decref => {
+                const rs = valueToRocStr(val);
+                rs.decref(&self.roc_ops);
+            },
+            .str_free => {
+                const rs = valueToRocStr(val);
+                rs.decref(&self.roc_ops);
+            },
+            .list_incref => {
+                const rl = valueToRocList(val);
+                const has_child = false; // incref doesn't recurse into elements
+                rl.incref(@intCast(count), has_child, &self.roc_ops);
+            },
+            .list_decref => |list_plan| {
+                const rl = valueToRocList(val);
+                // For simple lists (no refcounted elements), use utils.decref directly
+                // to avoid needing an element-decref callback function.
+                const has_child = list_plan.child != null;
+                builtins.utils.decref(
+                    rl.getAllocationDataPtr(&self.roc_ops),
+                    rl.capacity_or_alloc_ptr,
+                    @intCast(list_plan.elem_alignment),
+                    has_child,
+                    &self.roc_ops,
+                );
+            },
+            .list_free => |list_plan| {
+                const rl = valueToRocList(val);
+                const has_child = list_plan.child != null;
+                builtins.utils.decref(
+                    rl.getAllocationDataPtr(&self.roc_ops),
+                    rl.capacity_or_alloc_ptr,
+                    @intCast(list_plan.elem_alignment),
+                    has_child,
+                    &self.roc_ops,
+                );
+            },
+            .box_incref => {
+                const alloc_ptr = val.read(?[*]u8);
+                utils.increfDataPtrC(alloc_ptr, @intCast(count), &self.roc_ops);
+            },
+            .box_decref => |box_plan| {
+                const alloc_ptr = val.read(?[*]u8);
+                const has_child = box_plan.child != null;
+                utils.decrefDataPtrC(alloc_ptr, @intCast(box_plan.elem_alignment), has_child, &self.roc_ops);
+            },
+            .box_free => |box_plan| {
+                const alloc_ptr = val.read(?[*]u8);
+                const has_child = box_plan.child != null;
+                utils.freeDataPtrC(alloc_ptr, @intCast(box_plan.elem_alignment), has_child, &self.roc_ops);
+            },
+            .struct_ => |struct_plan| {
+                const field_count = resolver.structFieldCount(struct_plan);
+                var i: u32 = 0;
+                while (i < field_count) : (i += 1) {
+                    const field_plan = resolver.structFieldPlan(struct_plan, i) orelse continue;
+                    const field_val = Value{ .ptr = val.ptr + field_plan.offset };
+                    self.performRcPlan(resolver.plan(field_plan.child), resolver, field_val, count);
+                }
+            },
+            .tag_union => {
+                // Tag unions with heap-allocated payloads need discriminant-based dispatch.
+                // TODO: implement full tag union RC walking
+            },
+            .closure => |child_key| {
+                self.performRcPlan(resolver.plan(child_key), resolver, val, count);
+            },
         }
     }
 
