@@ -532,6 +532,12 @@ pub const LirInterpreter = struct {
             self.recover_runtime_placeholders = prev_recover_runtime_placeholders;
         }
 
+        // Ensure eval state is initialized (matches the guard in self.eval()).
+        if (!self.eval_active) {
+            self.roc_env.resetForEval();
+            self.eval_active = true;
+        }
+
         // Check if the expression is a proc_call that needs argument extraction from host.
         const final_expr = self.store.getExpr(final_expr_id);
         const is_proc_call = (final_expr == .proc_call);
@@ -590,7 +596,7 @@ pub const LirInterpreter = struct {
                 }
             }
 
-            const call_result = try self.callProcSpec(proc_spec, args_buf[0..arg_count]);
+            const call_result = try self.evalProcStackSafe(proc_spec, args_buf[0..arg_count]);
             const ret_val = switch (call_result) {
                 .value => |v| v,
                 .early_return => |v| v,
@@ -1120,130 +1126,7 @@ pub const LirInterpreter = struct {
         return self.alloc(l.list_layout);
     }
 
-    // Function calls
-
-    fn callProcSpec(self: *LirInterpreter, proc_spec: LirProcSpec, args: []const Value) Error!EvalResult {
-        if (self.call_depth >= max_call_depth) {
-            return self.triggerCrash(stack_overflow_message);
-        }
-
-        const params = self.store.getPatternSpan(proc_spec.args);
-        self.call_depth += 1;
-        defer self.call_depth -= 1;
-
-        // Save current bindings length and lambda context; trim on return
-        const saved_bindings_len = self.bindings.items.len;
-        const saved_lambda_params = self.current_lambda_params;
-        self.current_lambda_params = proc_spec.args;
-        defer {
-            self.bindings.shrinkRetainingCapacity(saved_bindings_len);
-            self.current_lambda_params = saved_lambda_params;
-        }
-
-        // Bind parameters
-        const param_count = @min(params.len, args.len);
-        for (0..param_count) |i| {
-            try self.bindPattern(params[i], args[i]);
-        }
-
-        // Evaluate the CF statement body
-        const result = try self.evalCFStmt(proc_spec.body);
-        return switch (result) {
-            .early_return => |v| .{ .value = v },
-            else => result,
-        };
-    }
-
-    /// Evaluate a control-flow statement chain (used for proc spec bodies).
-    fn evalCFStmt(self: *LirInterpreter, initial_stmt_id: CFStmtId) Error!EvalResult {
-        var stmt_id = initial_stmt_id;
-        while (true) {
-            if (stmt_id.isNone()) return .{ .value = Value.zst };
-            const stmt = self.store.getCFStmt(stmt_id);
-            switch (stmt) {
-                .let_stmt => |ls| {
-                    const result = try self.eval(ls.value);
-                    switch (result) {
-                        .value => |val| try self.bindPattern(ls.pattern, val),
-                        .early_return => return result,
-                        .break_expr => return result,
-                    }
-                    stmt_id = ls.next;
-                },
-                .ret => |r| {
-                    const result = try self.eval(r.value);
-                    return switch (result) {
-                        .value => |v| .{ .value = v },
-                        .early_return => |v| .{ .value = v },
-                        .break_expr => result,
-                    };
-                },
-                .join => |j| {
-                    // Register the join point body, then execute the remainder.
-                    // When a Jump is encountered, we re-bind params and re-execute the body.
-                    self.join_points.put(self.allocator, @intFromEnum(j.id), .{
-                        .params = j.params,
-                        .param_layouts = j.param_layouts,
-                        .body = j.body,
-                    }) catch return error.OutOfMemory;
-                    stmt_id = j.remainder;
-                },
-                .jump => |j| {
-                    // Look up the join point and re-execute it with new args.
-                    const jp = self.join_points.get(@intFromEnum(j.target)) orelse return error.RuntimeError;
-                    const jump_args = self.store.getExprSpan(j.args);
-                    const jp_params = self.store.getPatternSpan(jp.params);
-                    const count = @min(jp_params.len, jump_args.len);
-                    for (0..count) |i| {
-                        const val = try self.evalValue(jump_args[i]);
-                        try self.bindPattern(jp_params[i], val);
-                    }
-                    stmt_id = jp.body;
-                },
-                .expr_stmt => |es| {
-                    const result = try self.eval(es.value);
-                    switch (result) {
-                        .value => {},
-                        .early_return => return result,
-                        .break_expr => return result,
-                    }
-                    stmt_id = es.next;
-                },
-                .switch_stmt => |ss| {
-                    const cond_val = try self.evalValue(ss.cond);
-                    const disc = self.helper.readTagDiscriminant(cond_val, ss.cond_layout);
-                    const branches = self.store.getCFSwitchBranches(ss.branches);
-                    var found = false;
-                    for (branches) |branch| {
-                        if (branch.value == disc) {
-                            stmt_id = branch.body;
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (!found) {
-                        stmt_id = ss.default_branch;
-                    }
-                },
-                .match_stmt => |ms| {
-                    const match_val = try self.evalValue(ms.value);
-                    const match_branches = self.store.getCFMatchBranches(ms.branches);
-                    var matched = false;
-                    for (match_branches) |branch| {
-                        if (try self.matchPattern(branch.pattern, match_val)) {
-                            try self.bindPattern(branch.pattern, match_val);
-                            stmt_id = branch.body;
-                            matched = true;
-                            break;
-                        }
-                    }
-                    if (!matched) {
-                        return error.RuntimeError;
-                    }
-                },
-            }
-        }
-    }
+    // Function calls — all go through the stack-safe engine via enterFunction/evalProcStackSafe.
 
     // Reference counting
 
@@ -3216,7 +3099,7 @@ pub const LirInterpreter = struct {
 
                 // Call comparator(temp, elem[j-1])
                 const call_args = [2]Value{ temp_val, elem_prev };
-                const result = try self.callProcSpec(comparator, &call_args);
+                const result = try self.evalProcStackSafe(comparator, &call_args);
                 const cmp_val = switch (result) {
                     .value => |v| v,
                     else => return error.RuntimeError,
@@ -3741,6 +3624,14 @@ pub const LirInterpreter = struct {
         try self.pushWork(.{ .apply_continuation = .return_result });
         try self.pushWork(.{ .eval_expr = initial_expr_id });
 
+        return self.runWorkLoop(outer_work_len, saved_unwinding);
+    }
+
+    /// Core work loop: pops and dispatches work items until the stack returns
+    /// to `outer_work_len` (i.e. the `return_result` sentinel fires).
+    /// Shared by `evalStackSafe` (expression entry) and `evalProcStackSafe`
+    /// (function-call entry).
+    fn runWorkLoop(self: *LirInterpreter, outer_work_len: usize, saved_unwinding: Unwinding) Error!EvalResult {
         while (self.work_stack.items.len > outer_work_len) {
             const item = self.work_stack.pop().?;
 
@@ -4806,6 +4697,19 @@ pub const LirInterpreter = struct {
 
         // Schedule the CF statement body
         try self.pushWork(.{ .eval_cf_stmt = proc_spec.body });
+    }
+
+    /// Call a proc through the stack-safe engine. Drop-in replacement for the
+    /// legacy callProcSpec — used by evalEntrypoint and evalListSortWith.
+    fn evalProcStackSafe(self: *LirInterpreter, proc_spec: lir.LirProcSpec, args: []const Value) Error!EvalResult {
+        const outer_work_len = self.work_stack.items.len;
+        const saved_unwinding = self.unwinding;
+        self.unwinding = .none;
+
+        try self.pushWork(.{ .apply_continuation = .return_result });
+        try self.enterFunction(proc_spec, args);
+
+        return self.runWorkLoop(outer_work_len, saved_unwinding);
     }
 
     /// Find the index of the first non-cell_drop statement at or after `start`.
