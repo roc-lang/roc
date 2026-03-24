@@ -119,6 +119,7 @@ pub fn buildPlatformTypeScope(
     allocator: Allocator,
     platform_env: *const ModuleEnv,
     app_env: *const ModuleEnv,
+    platform_to_app_idents: *const std.AutoHashMap(base.Ident.Idx, base.Ident.Idx),
 ) !types.TypeScope {
     var type_scope = types.TypeScope.init(allocator);
     errdefer type_scope.deinit();
@@ -134,7 +135,7 @@ pub fn buildPlatformTypeScope(
             std.debug.assert(alias_stmt == .s_alias_decl);
             const alias_body_var = ModuleEnv.varFrom(alias_stmt.s_alias_decl.anno);
             const alias_stmt_var = ModuleEnv.varFrom(alias.alias_stmt_idx);
-            const app_alias_name = app_env.common.findIdent(platform_env.getIdentText(alias.alias_name)) orelse continue;
+            const app_alias_name = platform_to_app_idents.get(alias.alias_name) orelse continue;
             const app_var = findTypeAliasBodyVar(app_env, app_alias_name) orelse continue;
             try rigid_scope.put(alias_body_var, app_var);
             try rigid_scope.put(alias_stmt_var, app_var);

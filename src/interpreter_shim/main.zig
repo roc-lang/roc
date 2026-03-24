@@ -563,9 +563,19 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
 
     const arg_layouts: []const layout.Idx = arg_layouts_buf[0..arg_layouts_len];
 
+    // Build cross-module ident map for platform-to-app type resolution
+    var platform_to_app_idents = if (app_env) |ae|
+        env_ptr.buildPlatformToAppIdentMap(allocator, ae) catch {
+            roc_ops.crash("INTERPRETER SHIM: Failed to build platform-to-app ident map");
+            return error.InterpreterSetupFailed;
+        }
+    else
+        std.AutoHashMap(base.Ident.Idx, base.Ident.Idx).init(allocator);
+    defer platform_to_app_idents.deinit();
+
     // Build TypeScope for platform requires types (maps flex vars to app types)
     var platform_type_scope: ?types.TypeScope = if (app_env) |ae|
-        eval.cir_to_lir.buildPlatformTypeScope(allocator, env_ptr, ae) catch {
+        eval.cir_to_lir.buildPlatformTypeScope(allocator, env_ptr, ae, &platform_to_app_idents) catch {
             roc_ops.crash("INTERPRETER SHIM: Failed to build platform TypeScope");
             return error.InterpreterSetupFailed;
         }

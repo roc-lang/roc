@@ -170,7 +170,8 @@ const findModuleEnvIdx = lir_program_mod.findModuleEnvIdx;
 fn buildPlatformTypeScope(
     allocator: Allocator,
     module_env: *const ModuleEnv,
-    app_module_env: *ModuleEnv,
+    app_module_env: *const ModuleEnv,
+    platform_to_app_idents: *const std.AutoHashMap(base.Ident.Idx, base.Ident.Idx),
 ) ?types.TypeScope {
     const all_aliases = module_env.for_clause_aliases.items.items;
     if (all_aliases.len == 0) return null;
@@ -189,10 +190,7 @@ fn buildPlatformTypeScope(
             std.debug.assert(alias_stmt == .s_alias_decl);
             const alias_body_var = can.ModuleEnv.varFrom(alias_stmt.s_alias_decl.anno);
             const alias_stmt_var = can.ModuleEnv.varFrom(alias.alias_stmt_idx);
-            // Cross-module ident lookup: translate platform alias name to app ident store
-            // via insertIdent (get-or-create) since ident indices are module-local.
-            const alias_name_str = module_env.getIdent(alias.alias_name);
-            const app_alias_name = app_module_env.common.insertIdent(allocator, base.Ident.for_text(alias_name_str)) catch continue;
+            const app_alias_name = platform_to_app_idents.get(alias.alias_name) orelse continue;
             const app_var = findTypeAliasBodyVar(app_module_env, app_alias_name) orelse continue;
             rigid_scope.put(alias_body_var, app_var) catch continue;
             rigid_scope.put(alias_stmt_var, app_var) catch continue;
@@ -715,6 +713,7 @@ pub const DevEvaluator = struct {
         app_module_env: ?*ModuleEnv,
         arg_layouts: []const layout.Idx,
         ret_layout: layout.Idx,
+        platform_to_app_idents: *const std.AutoHashMap(base.Ident.Idx, base.Ident.Idx),
     ) Error!CodeResult {
         if (comptime backend.HostLirCodeGen == void) return error.RuntimeError;
 
@@ -738,7 +737,7 @@ pub const DevEvaluator = struct {
         // CIR → MIR (manual, because we need to wrap zero-arg functions)
         // Build platform type scope for cross-module type resolution (e.g., Model → { value: I64 })
         var platform_type_scope = if (app_module_env) |app_env|
-            buildPlatformTypeScope(self.allocator, module_env, app_env)
+            buildPlatformTypeScope(self.allocator, module_env, app_env, platform_to_app_idents)
         else
             null;
         defer if (platform_type_scope) |*ts| ts.deinit();
