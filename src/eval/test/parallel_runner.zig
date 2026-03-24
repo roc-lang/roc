@@ -791,6 +791,23 @@ fn threadMain(ctx: *RunnerContext) void {
             panic_jmp = null;
             // Signal was blocked during the handler; unblock for future crashes.
             unblockCrashSignals();
+
+            // Clean up resources that longjmp skipped over (pipe FDs, zombie children).
+            if (comptime builtin.os.tag != .windows) {
+                const wid = helpers.my_worker_id;
+                if (wid < helpers.worker_pipe_fds.len) {
+                    const leaked_fd = helpers.worker_pipe_fds[wid].swap(-1, .acq_rel);
+                    if (leaked_fd >= 0) posix.close(@intCast(leaked_fd));
+                }
+                if (wid < helpers.worker_child_pids.len) {
+                    const zombie_pid = helpers.worker_child_pids[wid].swap(0, .acq_rel);
+                    if (zombie_pid > 0) {
+                        // Reap the killed child so it doesn't linger as a zombie.
+                        _ = std.c.waitpid(zombie_pid, null, std.c.W.NOHANG);
+                    }
+                }
+            }
+
             // Check if this was a watchdog timeout (jmp_result == 3) or a real crash.
             const was_timeout = if (my_state) |ws| ws.timed_out.swap(false, .acquire) else false;
             const elapsed = wall_timer.read();
@@ -1217,6 +1234,11 @@ fn hangWatchdog(ctx: *RunnerContext, threads: []std.Thread, timeout_ms: u64) voi
                             posix.kill(@intCast(cpid), posix.SIG.KILL) catch {};
                         }
                     }
+                    // Close the worker's pipe read FD so any blocked read() returns.
+                    if (idx < helpers.worker_pipe_fds.len) {
+                        const pfd = helpers.worker_pipe_fds[idx].swap(-1, .acq_rel);
+                        if (pfd >= 0) posix.close(@intCast(pfd));
+                    }
                     // Then signal the worker thread to longjmp out.
                     const handle = threads[idx].getHandle();
                     _ = pthread_kill(handle, posix.SIG.USR1);
@@ -1303,13 +1325,15 @@ pub fn main() !void {
 
     var wall_timer = Timer.start() catch unreachable;
 
-    // Default timeout: 5s in multi-threaded mode, disabled in single-threaded/coverage.
+    // Default timeout: disabled in single-threaded/coverage, 30s in multi-threaded mode.
+    // The slowest tests take ~5s in isolation; under full parallel load (16+ threads)
+    // CPU contention can slow individual tests by 2-3x, so 30s avoids false positives.
     const hang_timeout_ms: u64 = if (thread_count <= 1)
         0
     else if (cli.timeout_ms > 0)
         cli.timeout_ms
     else
-        10_000; // 10 seconds
+        30_000;
 
     // Allocate per-worker state for hang detection (multi-threaded only).
     const worker_states: ?[]WorkerState = if (thread_count > 1) blk: {
@@ -1319,11 +1343,16 @@ pub fn main() !void {
     } else null;
     defer if (worker_states) |ws| gpa.free(ws);
 
-    // Allocate per-worker child PID tracking for fork-based isolation.
+    // Allocate per-worker child PID and pipe FD tracking for fork-based isolation.
     const child_pids = try gpa.alloc(std.atomic.Value(i32), thread_count);
     defer gpa.free(child_pids);
     for (child_pids) |*p| p.* = std.atomic.Value(i32).init(0);
     helpers.worker_child_pids = child_pids;
+
+    const pipe_fds = try gpa.alloc(std.atomic.Value(i32), thread_count);
+    defer gpa.free(pipe_fds);
+    for (pipe_fds) |*p| p.* = std.atomic.Value(i32).init(-1);
+    helpers.worker_pipe_fds = pipe_fds;
 
     var context = RunnerContext{
         .tests = tests,

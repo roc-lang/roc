@@ -34,6 +34,8 @@ pub var force_no_fork: bool = false;
 /// The hang watchdog in the parallel runner kills these PIDs on timeout.
 /// Set by the parallel runner before tests start; workers index by their worker ID.
 pub var worker_child_pids: []std.atomic.Value(i32) = &.{};
+/// Per-worker pipe read FDs, so longjmp cleanup can close leaked pipes.
+pub var worker_pipe_fds: []std.atomic.Value(i32) = &.{};
 /// Thread-local worker ID, set by the parallel runner.
 pub threadlocal var my_worker_id: usize = 0;
 const enable_dev_eval_leak_checks = true;
@@ -396,15 +398,22 @@ fn forkAndExecute(
         // Parent process
         posix.close(pipe_write);
 
-        // Store child PID so the hang watchdog can kill it on timeout.
+        // Store child PID and pipe FD so the hang watchdog / longjmp cleanup
+        // can kill the child and close the pipe on timeout.
         if (my_worker_id < worker_child_pids.len) {
             worker_child_pids[my_worker_id].store(@intCast(fork_result), .release);
+        }
+        if (my_worker_id < worker_pipe_fds.len) {
+            worker_pipe_fds[my_worker_id].store(@intCast(pipe_read), .release);
         }
 
         // Wait for child to exit
         const wait_result = posix.waitpid(fork_result, 0);
         if (my_worker_id < worker_child_pids.len) {
             worker_child_pids[my_worker_id].store(0, .release);
+        }
+        if (my_worker_id < worker_pipe_fds.len) {
+            worker_pipe_fds[my_worker_id].store(-1, .release);
         }
         const status = wait_result.status;
 
