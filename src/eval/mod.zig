@@ -15,8 +15,6 @@ const backend = @import("backend");
 pub const ExecutableMemory = backend.ExecutableMemory;
 /// Layout module (re-exported for result type information)
 pub const layout = @import("layout");
-/// Interpreter-specific layout module (still needed by comptime_evaluator)
-pub const interpreter_layout = @import("interpreter_layout");
 /// Utilities for loading compiled builtin modules
 pub const builtin_loading = @import("builtin_loading.zig");
 /// Centralized loading and management of builtin modules
@@ -78,8 +76,6 @@ test "eval tests" {
     std.testing.refAllDecls(@import("builtins.zig"));
     std.testing.refAllDecls(@import("crash_context.zig"));
     std.testing.refAllDecls(@import("comptime_evaluator.zig"));
-    std.testing.refAllDecls(@import("StackValue.zig"));
-    std.testing.refAllDecls(@import("render_helpers.zig"));
     std.testing.refAllDecls(@import("llvm_evaluator.zig"));
     std.testing.refAllDecls(@import("cir_to_lir.zig"));
     std.testing.refAllDecls(@import("value.zig"));
