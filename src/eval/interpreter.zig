@@ -1173,9 +1173,8 @@ pub const LirInterpreter = struct {
                 const has_child = list_plan.child != null;
                 const alloc_ptr = rl.getAllocationDataPtr(&self.roc_ops);
                 trace_rc.log("list_decref: bytes=0x{x} len={d} cap={d} alloc_ptr=0x{x} has_child={any} elem_align={d}", .{
-                    @intFromPtr(rl.bytes), rl.len(), rl.capacity_or_alloc_ptr,
-                    @intFromPtr(alloc_ptr),
-                    has_child, list_plan.elem_alignment,
+                    @intFromPtr(rl.bytes),  rl.len(),  rl.capacity_or_alloc_ptr,
+                    @intFromPtr(alloc_ptr), has_child, list_plan.elem_alignment,
                 });
                 builtins.utils.decref(
                     alloc_ptr,
@@ -1190,7 +1189,7 @@ pub const LirInterpreter = struct {
                 const has_child = list_plan.child != null;
                 const alloc_ptr = rl.getAllocationDataPtr(&self.roc_ops);
                 trace_rc.log("list_free: bytes=0x{x} len={d} cap={d} alloc_ptr=0x{x} has_child={any}", .{
-                    @intFromPtr(rl.bytes), rl.len(), rl.capacity_or_alloc_ptr,
+                    @intFromPtr(rl.bytes),  rl.len(),  rl.capacity_or_alloc_ptr,
                     @intFromPtr(alloc_ptr), has_child,
                 });
                 builtins.utils.decref(
