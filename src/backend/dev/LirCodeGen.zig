@@ -512,11 +512,11 @@ fn wrapStrEscapeAndQuote(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, str_ca
     }
 }
 
-/// Wrapper: listConcat(RocList, RocList, alignment, element_width, ..., *RocOps) -> RocList
-fn wrapListConcat(out: *RocList, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, alignment: u32, element_width: usize, roc_ops: *RocOps) callconv(.c) void {
+/// Wrapper: listConcat(RocList, RocList, alignment, element_width, elements_refcounted, ..., *RocOps) -> RocList
+fn wrapListConcat(out: *RocList, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, alignment: u32, element_width: usize, elements_refcounted: bool, roc_ops: *RocOps) callconv(.c) void {
     const a = RocList{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
     const b = RocList{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
-    out.* = listConcat(a, b, alignment, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), roc_ops);
+    out.* = listConcat(a, b, alignment, element_width, elements_refcounted, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), roc_ops);
 }
 
 /// Wrapper: listPrepend(RocList, alignment, element, element_width, ..., *RocOps) -> RocList
@@ -1890,13 +1890,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const ls = self.layout_store;
                     const roc_ops_reg = self.roc_ops_reg orelse unreachable;
 
-                    const elem_size_align: layout.SizeAlign = blk: {
-                        const ret_layout = ls.getLayout(ll.ret_layout);
-                        break :blk switch (ret_layout.tag) {
-                            .list => ls.layoutSizeAlign(ls.getLayout(ret_layout.data.list)),
-                            .list_of_zst => .{ .size = 0, .alignment = .@"1" },
-                            else => unreachable,
-                        };
+                    const ret_layout = ls.getLayout(ll.ret_layout);
+                    const elem_size_align: layout.SizeAlign = switch (ret_layout.tag) {
+                        .list => ls.layoutSizeAlign(ls.getLayout(ret_layout.data.list)),
+                        .list_of_zst => .{ .size = 0, .alignment = .@"1" },
+                        else => unreachable,
+                    };
+
+                    // Determine if elements contain refcounted data
+                    const elements_refcounted: bool = switch (ret_layout.tag) {
+                        .list => ls.layoutContainsRefcounted(ls.getLayout(ret_layout.data.list)),
+                        else => false,
                     };
 
                     const list_a_off = try self.ensureOnStack(list_a_loc, roc_list_size);
@@ -1906,7 +1910,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const fn_addr: usize = @intFromPtr(&wrapListConcat);
 
                     {
-                        // wrapListConcat(out, a_bytes, a_len, a_cap, b_bytes, b_len, b_cap, alignment, element_width, roc_ops)
+                        // wrapListConcat(out, a_bytes, a_len, a_cap, b_bytes, b_len, b_cap, alignment, element_width, elements_refcounted, roc_ops)
                         const base_reg = frame_ptr;
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
 
@@ -1919,6 +1923,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addMemArg(base_reg, list_b_off + 16);
                         try builder.addImmArg(@intCast(alignment_bytes));
                         try builder.addImmArg(@intCast(elem_size_align.size));
+                        try builder.addImmArg(if (elements_refcounted) 1 else 0);
                         try builder.addRegArg(roc_ops_reg);
 
                         try self.callBuiltin(&builder, fn_addr, .list_concat);
