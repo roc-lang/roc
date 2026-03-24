@@ -160,6 +160,8 @@ pub const CallCleanup = struct {
     saved_bindings_len: u32,
     /// Restore `current_lambda_params` to this value.
     saved_lambda_params: ?lir.LirPatternSpan,
+    /// Trim value stack to this depth during unwind (early_return/break).
+    saved_value_stack_len: u32,
 };
 
 // Aggregate construction
@@ -250,6 +252,7 @@ pub const ForLoopBodyDone = struct {
     body: LirExprId,
     current_idx: u32,
     count: u32,
+    saved_value_stack_len: u32,
 };
 
 /// After evaluating the `while` condition.
@@ -264,6 +267,7 @@ pub const WhileLoopBodyDone = struct {
     cond: LirExprId,
     body: LirExprId,
     infinite_loop_check: bool,
+    saved_value_stack_len: u32,
 };
 
 // Unary operations

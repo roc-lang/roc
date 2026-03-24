@@ -286,6 +286,26 @@ pub const LirInterpreter = struct {
     /// Join point registry for tail-recursive CF statement evaluation.
     join_points: JoinPointMap = .{},
 
+    // ── Stack-safe eval engine fields ──
+
+    /// Work stack for the stack-safe eval engine (LIFO queue of pending work).
+    work_stack: WorkStack = .empty,
+
+    /// Value stack for the stack-safe eval engine (LIFO results from evaluated expressions).
+    value_stack: ValueStack = .empty,
+
+    /// Non-local control flow state for the stack-safe eval engine.
+    unwinding: Unwinding = .none,
+
+    const Unwinding = union(enum) {
+        none,
+        early_return: Value,
+        break_expr,
+    };
+
+    const WorkStack = std.ArrayListUnmanaged(work_stack.WorkItem);
+    const ValueStack = std.ArrayListUnmanaged(Value);
+
     const JoinPointMap = std.AutoHashMapUnmanaged(u32, JoinPointInfo);
 
     const JoinPointInfo = struct {
@@ -376,6 +396,8 @@ pub const LirInterpreter = struct {
         self.cells.deinit();
         self.bindings.deinit();
         self.join_points.deinit(self.allocator);
+        self.work_stack.deinit(self.allocator);
+        self.value_stack.deinit(self.allocator);
     }
 
     /// Get the crash message from the last evaluation (if any).
@@ -4125,5 +4147,1938 @@ pub const LirInterpreter = struct {
             result.copyFrom(.{ .ptr = data_ptr }, size);
         }
         return result;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Stack-safe eval engine (Phase 3)
+    //
+    //  Uses explicit work_stack + value_stack instead of Zig recursion.
+    //  Lives alongside the existing recursive eval() — not a replacement yet.
+    // ═══════════════════════════════════════════════════════════════════
+
+    const Continuation = work_stack.Continuation;
+    const WorkItem = work_stack.WorkItem;
+
+    // ── Stack helpers ──
+
+    fn pushWork(self: *LirInterpreter, item: WorkItem) Error!void {
+        self.work_stack.append(self.allocator, item) catch return error.OutOfMemory;
+    }
+
+    fn pushValue(self: *LirInterpreter, val: Value) Error!void {
+        self.value_stack.append(self.allocator, val) catch return error.OutOfMemory;
+    }
+
+    fn popValue(self: *LirInterpreter) Value {
+        return self.value_stack.pop();
+    }
+
+    fn popValues(self: *LirInterpreter, count: usize) Error![]Value {
+        if (count == 0) return &[_]Value{};
+        const buf = self.arena.allocator().alloc(Value, count) catch return error.OutOfMemory;
+        var i: usize = count;
+        while (i > 0) {
+            i -= 1;
+            buf[i] = self.value_stack.pop();
+        }
+        return buf;
+    }
+
+    /// Schedule: push continuation first (bottom), then eval_expr (top).
+    /// eval_expr fires first, pushes result to value_stack,
+    /// then continuation fires and reads the result.
+    fn scheduleEvalThen(self: *LirInterpreter, cont: Continuation, expr_id: LirExprId) Error!void {
+        try self.pushWork(.{ .apply_continuation = cont });
+        try self.pushWork(.{ .eval_expr = expr_id });
+    }
+
+    // ── Main loop ──
+
+    /// Stack-safe expression evaluator.
+    /// Pushes work items onto an explicit stack instead of recursing.
+    pub fn evalStackSafe(self: *LirInterpreter, initial_expr_id: LirExprId) Error!EvalResult {
+        // Reset static buffer on first eval call only
+        if (!self.eval_active) {
+            self.roc_env.resetForEval();
+            self.eval_active = true;
+        }
+
+        // Clear stacks from any previous run (retain capacity)
+        self.work_stack.clearRetainingCapacity();
+        self.value_stack.clearRetainingCapacity();
+        self.unwinding = .none;
+
+        // Seed: return_result continuation (bottom), then the initial expression (top)
+        try self.pushWork(.{ .apply_continuation = .return_result });
+        try self.pushWork(.{ .eval_expr = initial_expr_id });
+
+        while (self.work_stack.items.len > 0) {
+            const item = self.work_stack.pop();
+
+            // Unwinding mode: skip non-boundary items until we hit a frame boundary
+            switch (self.unwinding) {
+                .none => {},
+                .early_return => |ret_val| {
+                    switch (item) {
+                        .apply_continuation => |cont| switch (cont) {
+                            .call_cleanup => |cleanup| {
+                                // Hit a function call boundary: restore state and propagate result
+                                self.bindings.shrinkRetainingCapacity(cleanup.saved_bindings_len);
+                                self.current_lambda_params = cleanup.saved_lambda_params;
+                                self.value_stack.shrinkRetainingCapacity(cleanup.saved_value_stack_len);
+                                self.call_depth -= 1;
+                                try self.pushValue(ret_val);
+                                self.unwinding = .none;
+                            },
+                            .return_result => {
+                                // Hit the outermost boundary
+                                return .{ .early_return = ret_val };
+                            },
+                            else => continue,
+                        },
+                        else => continue,
+                    }
+                },
+                .break_expr => {
+                    switch (item) {
+                        .apply_continuation => |cont| switch (cont) {
+                            .for_loop_body_done => |fl| {
+                                // Hit a for-loop boundary: stop iteration, push ZST
+                                self.value_stack.shrinkRetainingCapacity(fl.saved_value_stack_len);
+                                try self.pushValue(Value.zst);
+                                self.unwinding = .none;
+                            },
+                            .while_loop_body_done => |wl| {
+                                // Hit a while-loop boundary: stop iteration, push ZST
+                                self.value_stack.shrinkRetainingCapacity(wl.saved_value_stack_len);
+                                try self.pushValue(Value.zst);
+                                self.unwinding = .none;
+                            },
+                            .call_cleanup => |cleanup| {
+                                // Break inside a function call: propagate as early_return of ZST
+                                self.bindings.shrinkRetainingCapacity(cleanup.saved_bindings_len);
+                                self.current_lambda_params = cleanup.saved_lambda_params;
+                                self.value_stack.shrinkRetainingCapacity(cleanup.saved_value_stack_len);
+                                self.call_depth -= 1;
+                                try self.pushValue(Value.zst);
+                                self.unwinding = .none;
+                            },
+                            .return_result => {
+                                return .{ .break_expr = {} };
+                            },
+                            else => continue,
+                        },
+                        else => continue,
+                    }
+                },
+            }
+
+            // Normal dispatch
+            switch (item) {
+                .eval_expr => |expr_id| try self.scheduleExprEval(expr_id),
+                .eval_cf_stmt => |stmt_id| try self.scheduleCFStmtEval(stmt_id),
+                .apply_continuation => |cont| {
+                    if (try self.applyContinuation(cont)) |result| {
+                        return result;
+                    }
+                },
+            }
+        }
+
+        // Should not reach here — return_result should have fired
+        return error.RuntimeError;
+    }
+
+    // ── Expression scheduling ──
+
+    /// Schedule evaluation of a LIR expression.
+    /// Pushes work items to evaluate the expression and its sub-expressions.
+    fn scheduleExprEval(self: *LirInterpreter, expr_id: LirExprId) Error!void {
+        const expr = self.store.getExpr(expr_id);
+        switch (expr) {
+            // ── Immediate (push value directly) ──
+
+            .i64_literal => |lit| try self.pushValue(try self.evalI64Literal(lit.value, lit.layout_idx)),
+            .i128_literal => |lit| try self.pushValue(try self.evalI128Literal(lit.value, lit.layout_idx)),
+            .f64_literal => |v| try self.pushValue(try self.evalF64Literal(v)),
+            .f32_literal => |v| try self.pushValue(try self.evalF32Literal(v)),
+            .dec_literal => |v| try self.pushValue(try self.evalDecLiteral(v)),
+            .str_literal => |idx| try self.pushValue(try self.evalStrLiteral(idx)),
+            .bool_literal => |b| try self.pushValue(try self.evalBoolLiteral(b)),
+            .lookup => |l| try self.pushValue(try self.evalLookup(l.symbol, l.layout_idx)),
+            .cell_load => |l| try self.pushValue(try self.evalCellLoad(l.cell, l.layout_idx)),
+            .zero_arg_tag => |z| try self.pushValue(try self.evalZeroArgTag(z)),
+            .empty_list => |l| try self.pushValue(try self.evalEmptyList(l)),
+
+            // ── Nominal (tail-unwrap) ──
+            .nominal => |n| try self.pushWork(.{ .eval_expr = n.backing_expr }),
+
+            // ── Unary sub-expression (push unary_then + eval_expr) ──
+
+            .struct_access => |sa| {
+                try self.scheduleEvalThen(.{ .unary_then = .{ .struct_access = .{
+                    .struct_layout = sa.struct_layout,
+                    .field_layout = sa.field_layout,
+                    .field_idx = sa.field_idx,
+                } } }, sa.struct_expr);
+            },
+            .tag_payload_access => |tpa| {
+                try self.scheduleEvalThen(.{ .unary_then = .{ .tag_payload_access = .{
+                    .union_layout = tpa.union_layout,
+                    .payload_layout = tpa.payload_layout,
+                } } }, tpa.value);
+            },
+            .dbg => |d| {
+                try self.scheduleEvalThen(.{ .unary_then = .{ .dbg_stmt = .{
+                    .result_layout = d.result_layout,
+                } } }, d.expr);
+            },
+            .expect => |e| {
+                try self.scheduleEvalThen(.{ .unary_then = .{ .expect_cond = .{
+                    .cond_expr_id = e.cond,
+                    .result_layout = e.result_layout,
+                } } }, e.cond);
+            },
+            .incref => |ir| {
+                try self.scheduleEvalThen(.{ .unary_then = .{ .incref = .{
+                    .layout_idx = ir.layout_idx,
+                    .count = ir.count,
+                } } }, ir.value);
+            },
+            .decref => |dr| {
+                try self.scheduleEvalThen(.{ .unary_then = .{ .decref = .{
+                    .layout_idx = dr.layout_idx,
+                } } }, dr.value);
+            },
+            .free => |f| {
+                try self.scheduleEvalThen(.{ .unary_then = .{ .free = .{
+                    .layout_idx = f.layout_idx,
+                } } }, f.value);
+            },
+            .int_to_str => |its| {
+                try self.scheduleEvalThen(.{ .unary_then = .{ .int_to_str = .{
+                    .int_precision = its.int_precision,
+                } } }, its.value);
+            },
+            .float_to_str => |fts| {
+                try self.scheduleEvalThen(.{ .unary_then = .{ .float_to_str = .{
+                    .float_precision = fts.float_precision,
+                } } }, fts.value);
+            },
+            .dec_to_str => |dts| {
+                try self.scheduleEvalThen(.{ .unary_then = .dec_to_str }, dts);
+            },
+            .str_escape_and_quote => |seq| {
+                try self.scheduleEvalThen(.{ .unary_then = .str_escape_and_quote }, seq);
+            },
+
+            // ── Multi-arg collect ──
+
+            .proc_call => |pc| {
+                const arg_exprs = self.store.getExprSpan(pc.args);
+                if (arg_exprs.len == 0) {
+                    // Zero-arg call: enter function directly
+                    const proc_spec = self.store.getProcSpec(pc.proc);
+                    try self.enterFunction(proc_spec, &[_]Value{});
+                } else {
+                    try self.scheduleEvalThen(.{ .call_collect_args = .{
+                        .proc = pc.proc,
+                        .args = pc.args,
+                        .next_arg_idx = 0,
+                    } }, arg_exprs[0]);
+                }
+            },
+            .struct_ => |s| {
+                const field_exprs = self.store.getExprSpan(s.fields);
+                if (field_exprs.len == 0) {
+                    try self.pushValue(try self.alloc(s.struct_layout));
+                } else {
+                    try self.scheduleEvalThen(.{ .struct_collect = .{
+                        .struct_layout = s.struct_layout,
+                        .fields = s.fields,
+                        .next_field_idx = 0,
+                    } }, field_exprs[0]);
+                }
+            },
+            .tag => |t| {
+                const arg_exprs = self.store.getExprSpan(t.args);
+                if (arg_exprs.len == 0) {
+                    try self.pushValue(try self.evalZeroArgTag(.{
+                        .discriminant = t.discriminant,
+                        .union_layout = t.union_layout,
+                    }));
+                } else {
+                    try self.scheduleEvalThen(.{ .tag_collect = .{
+                        .discriminant = t.discriminant,
+                        .union_layout = t.union_layout,
+                        .args = t.args,
+                        .next_arg_idx = 0,
+                    } }, arg_exprs[0]);
+                }
+            },
+            .list => |l| {
+                const elem_exprs = self.store.getExprSpan(l.elems);
+                if (elem_exprs.len == 0) {
+                    try self.pushValue(try self.evalEmptyList(.{
+                        .list_layout = l.list_layout,
+                        .elem_layout = l.elem_layout,
+                    }));
+                } else {
+                    try self.scheduleEvalThen(.{ .list_collect = .{
+                        .list_layout = l.list_layout,
+                        .elem_layout = l.elem_layout,
+                        .elems = l.elems,
+                        .next_elem_idx = 0,
+                    } }, elem_exprs[0]);
+                }
+            },
+            .str_concat => |sc| {
+                const parts = self.store.getExprSpan(sc);
+                if (parts.len == 0) {
+                    try self.pushValue(try self.makeRocStr(""));
+                } else {
+                    try self.scheduleEvalThen(.{ .str_concat_collect = .{
+                        .parts = sc,
+                        .next_part_idx = 0,
+                    } }, parts[0]);
+                }
+            },
+            .low_level => |ll| {
+                const arg_exprs = self.store.getExprSpan(ll.args);
+                if (arg_exprs.len == 0) {
+                    // 0-arg low-level: call directly using old eval path
+                    const value = self.evalLowLevel(ll) catch |err| switch (err) {
+                        error.RuntimeError => {
+                            if (self.getRuntimeErrorMessage() == null) {
+                                const msg = std.fmt.allocPrint(
+                                    self.arena.allocator(),
+                                    "RuntimeError in low-level op {s}",
+                                    .{@tagName(ll.op)},
+                                ) catch return error.OutOfMemory;
+                                return self.runtimeError(msg);
+                            }
+                            return error.RuntimeError;
+                        },
+                        else => return err,
+                    };
+                    try self.pushValue(value);
+                } else {
+                    try self.scheduleEvalThen(.{ .low_level_collect_args = .{
+                        .op = ll.op,
+                        .args = ll.args,
+                        .next_arg_idx = 0,
+                        .ret_layout = ll.ret_layout,
+                        .callable_proc = ll.callable_proc,
+                    } }, arg_exprs[0]);
+                }
+            },
+            .hosted_call => |hc| {
+                // Hosted calls use complex arg marshaling — call existing helper directly.
+                // The helper only calls self.eval() for arg sub-expressions which are simple
+                // lookups/literals, so recursion depth is bounded.
+                const value = try self.evalHostedCall(hc);
+                try self.pushValue(value);
+            },
+
+            // ── Control flow ──
+
+            .if_then_else => |ite| {
+                const branches = self.store.getIfBranches(ite.branches);
+                if (branches.len == 0) {
+                    try self.pushWork(.{ .eval_expr = ite.final_else });
+                } else {
+                    try self.scheduleEvalThen(.{ .if_branch = .{
+                        .branches = ite.branches,
+                        .current_branch_idx = 0,
+                        .final_else = ite.final_else,
+                        .result_layout = ite.result_layout,
+                    } }, branches[0].cond);
+                }
+            },
+            .match_expr => |m| {
+                try self.scheduleEvalThen(.{ .match_dispatch = .{
+                    .branches = m.branches,
+                    .result_layout = m.result_layout,
+                } }, m.value);
+            },
+            .discriminant_switch => |ds| {
+                try self.scheduleEvalThen(.{ .discriminant_switch_dispatch = .{
+                    .union_layout = ds.union_layout,
+                    .branches = ds.branches,
+                    .result_layout = ds.result_layout,
+                } }, ds.value);
+            },
+            .block => |b| {
+                const stmts = self.store.getStmts(b.stmts);
+                // Find first non-cell_drop statement to schedule
+                const first_real_idx = self.findFirstRealStmt(stmts, 0);
+                if (first_real_idx) |idx| {
+                    const stmt_expr_id = self.stmtExprId(stmts[idx]);
+                    try self.scheduleEvalThen(.{ .block_stmt = .{
+                        .stmts = b.stmts,
+                        .current_stmt_idx = @intCast(idx),
+                        .final_expr = b.final_expr,
+                    } }, stmt_expr_id);
+                } else {
+                    // No real statements, just evaluate the final expression
+                    try self.pushWork(.{ .eval_expr = b.final_expr });
+                }
+            },
+            .for_loop => |fl| {
+                try self.scheduleEvalThen(.{ .for_loop_eval_list = .{
+                    .elem_layout = fl.elem_layout,
+                    .elem_pattern = fl.elem_pattern,
+                    .body = fl.body,
+                } }, fl.list_expr);
+            },
+            .while_loop => |wl| {
+                const check_infinite = self.detect_infinite_while_loops and
+                    !self.exprInvolvesMutableCell(wl.cond) and
+                    !self.exprHasLoopExit(wl.body);
+                try self.scheduleEvalThen(.{ .while_loop_check = .{
+                    .cond = wl.cond,
+                    .body = wl.body,
+                    .infinite_loop_check = check_infinite,
+                } }, wl.cond);
+            },
+
+            // ── Inline ──
+
+            .early_return => |er| {
+                try self.scheduleEvalThen(.early_return_wrap, er.expr);
+            },
+            .break_expr => {
+                self.unwinding = .break_expr;
+                try self.pushValue(Value.zst);
+            },
+            .crash => |c| {
+                const msg = self.store.getString(c.msg);
+                if (self.roc_env.crash_message) |old| self.allocator.free(old);
+                self.roc_env.crash_message = self.allocator.dupe(u8, msg) catch null;
+                return error.Crash;
+            },
+            .runtime_error => |runtime_error_expr| {
+                if (self.recover_runtime_placeholders) {
+                    try self.pushValue(try self.placeholderValueForLayout(runtime_error_expr.ret_layout));
+                } else {
+                    return error.RuntimeError;
+                }
+            },
+        }
+    }
+
+    // ── CF statement scheduling ──
+
+    /// Schedule evaluation of a CF statement chain.
+    fn scheduleCFStmtEval(self: *LirInterpreter, stmt_id: CFStmtId) Error!void {
+        if (stmt_id.isNone()) {
+            try self.pushValue(Value.zst);
+            return;
+        }
+        const stmt = self.store.getCFStmt(stmt_id);
+        switch (stmt) {
+            .let_stmt => |ls| {
+                try self.scheduleEvalThen(.{ .cf_let_bind = .{
+                    .pattern = ls.pattern,
+                    .next = ls.next,
+                } }, ls.value);
+            },
+            .ret => |r| {
+                // Result stays on value_stack for call_cleanup to pick up
+                try self.pushWork(.{ .eval_expr = r.value });
+            },
+            .join => |j| {
+                // Register the join point body, then schedule the remainder
+                self.join_points.put(self.allocator, @intFromEnum(j.id), .{
+                    .params = j.params,
+                    .param_layouts = j.param_layouts,
+                    .body = j.body,
+                }) catch return error.OutOfMemory;
+                try self.scheduleCFStmtEval(j.remainder);
+            },
+            .jump => |j| {
+                const jump_args = self.store.getExprSpan(j.args);
+                if (jump_args.len == 0) {
+                    // No args: just schedule the join point body
+                    const jp = self.join_points.get(@intFromEnum(j.target)) orelse return error.RuntimeError;
+                    try self.pushWork(.{ .eval_cf_stmt = jp.body });
+                } else {
+                    try self.scheduleEvalThen(.{ .cf_jump_collect_args = .{
+                        .target = j.target,
+                        .args = j.args,
+                        .next_arg_idx = 0,
+                    } }, jump_args[0]);
+                }
+            },
+            .expr_stmt => |es| {
+                try self.scheduleEvalThen(.{ .cf_expr_stmt_next = .{
+                    .next = es.next,
+                } }, es.value);
+            },
+            .switch_stmt => |ss| {
+                try self.scheduleEvalThen(.{ .cf_switch_dispatch = .{
+                    .cond_layout = ss.cond_layout,
+                    .branches = ss.branches,
+                    .default_branch = ss.default_branch,
+                    .ret_layout = ss.ret_layout,
+                } }, ss.cond);
+            },
+            .match_stmt => |ms| {
+                try self.scheduleEvalThen(.{ .cf_match_dispatch = .{
+                    .value_layout = ms.value_layout,
+                    .branches = ms.branches,
+                    .ret_layout = ms.ret_layout,
+                } }, ms.value);
+            },
+        }
+    }
+
+    // ── Continuation application ──
+
+    /// Apply a continuation. Returns non-null to stop the main loop.
+    fn applyContinuation(self: *LirInterpreter, cont: Continuation) Error!?EvalResult {
+        switch (cont) {
+            .return_result => {
+                const val = self.popValue();
+                return .{ .value = val };
+            },
+
+            // ── Function calls ──
+
+            .call_collect_args => |cca| {
+                const arg_exprs = self.store.getExprSpan(cca.args);
+                const next_idx = cca.next_arg_idx + 1;
+                if (next_idx < arg_exprs.len) {
+                    // More args to evaluate
+                    try self.scheduleEvalThen(.{ .call_collect_args = .{
+                        .proc = cca.proc,
+                        .args = cca.args,
+                        .next_arg_idx = next_idx,
+                    } }, arg_exprs[next_idx]);
+                } else {
+                    // All args collected — pop them and enter function
+                    const args = try self.popValues(arg_exprs.len);
+                    const proc_spec = self.store.getProcSpec(cca.proc);
+                    try self.enterFunction(proc_spec, args);
+                }
+                return null;
+            },
+            .call_cleanup => |cleanup| {
+                // Pop result value
+                const result = self.popValue();
+                // Restore bindings and lambda params
+                self.bindings.shrinkRetainingCapacity(cleanup.saved_bindings_len);
+                self.current_lambda_params = cleanup.saved_lambda_params;
+                self.call_depth -= 1;
+                // Push result back
+                try self.pushValue(result);
+                return null;
+            },
+
+            // ── Aggregate construction ──
+
+            .struct_collect => |sc| {
+                const field_exprs = self.store.getExprSpan(sc.fields);
+                const next_idx = sc.next_field_idx + 1;
+                if (next_idx < field_exprs.len) {
+                    // More fields to evaluate
+                    try self.scheduleEvalThen(.{ .struct_collect = .{
+                        .struct_layout = sc.struct_layout,
+                        .fields = sc.fields,
+                        .next_field_idx = next_idx,
+                    } }, field_exprs[next_idx]);
+                } else {
+                    // All fields collected — build struct
+                    const vals = try self.popValues(field_exprs.len);
+                    const struct_val = try self.alloc(sc.struct_layout);
+                    for (vals, 0..) |field_val, i| {
+                        const field_offset = self.helper.structFieldOffset(sc.struct_layout, @intCast(i));
+                        const field_layout = self.fieldLayoutOf(sc.struct_layout, @intCast(i));
+                        const field_size = self.helper.sizeOf(field_layout);
+                        if (field_size > 0) {
+                            struct_val.offset(field_offset).copyFrom(field_val, field_size);
+                        }
+                    }
+                    try self.pushValue(struct_val);
+                }
+                return null;
+            },
+            .tag_collect => |tc| {
+                const arg_exprs = self.store.getExprSpan(tc.args);
+                const next_idx = tc.next_arg_idx + 1;
+                if (next_idx < arg_exprs.len) {
+                    // More args to evaluate
+                    try self.scheduleEvalThen(.{ .tag_collect = .{
+                        .discriminant = tc.discriminant,
+                        .union_layout = tc.union_layout,
+                        .args = tc.args,
+                        .next_arg_idx = next_idx,
+                    } }, arg_exprs[next_idx]);
+                } else {
+                    // All args collected — build tag
+                    const vals = try self.popValues(arg_exprs.len);
+                    const tag_val = try self.alloc(tc.union_layout);
+                    self.helper.writeTagDiscriminant(tag_val, tc.union_layout, tc.discriminant);
+
+                    const payload_layout = self.tagPayloadLayout(tc.union_layout, tc.discriminant);
+                    const payload_layout_val = self.layout_store.getLayout(payload_layout);
+
+                    if (payload_layout_val.tag != .struct_) {
+                        // Single-field payload
+                        if (vals.len == 1) {
+                            const payload_size = self.helper.sizeOf(payload_layout);
+                            if (payload_size > 0) {
+                                tag_val.copyFrom(vals[0], payload_size);
+                            }
+                        }
+                    } else {
+                        // Multi-field struct payload
+                        for (vals, 0..) |arg_val, i| {
+                            const field_layout_idx = self.layout_store.getStructFieldLayoutByOriginalIndex(
+                                payload_layout_val.data.struct_.idx,
+                                @intCast(i),
+                            );
+                            const field_size = self.helper.sizeOf(field_layout_idx);
+                            const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(
+                                payload_layout_val.data.struct_.idx,
+                                @intCast(i),
+                            );
+                            if (field_size > 0) {
+                                tag_val.offset(field_offset).copyFrom(arg_val, field_size);
+                            }
+                        }
+                    }
+                    try self.pushValue(tag_val);
+                }
+                return null;
+            },
+            .list_collect => |lc| {
+                const elem_exprs = self.store.getExprSpan(lc.elems);
+                const next_idx = lc.next_elem_idx + 1;
+                if (next_idx < elem_exprs.len) {
+                    // More elements to evaluate
+                    try self.scheduleEvalThen(.{ .list_collect = .{
+                        .list_layout = lc.list_layout,
+                        .elem_layout = lc.elem_layout,
+                        .elems = lc.elems,
+                        .next_elem_idx = next_idx,
+                    } }, elem_exprs[next_idx]);
+                } else {
+                    // All elements collected — build list
+                    const vals = try self.popValues(elem_exprs.len);
+                    const elem_size = self.helper.sizeOf(lc.elem_layout);
+                    const count = elem_exprs.len;
+
+                    if (elem_size == 0) {
+                        // ZST list
+                        try self.pushValue(try self.rocListToValue(.{
+                            .bytes = null,
+                            .length = count,
+                            .capacity_or_alloc_ptr = count,
+                        }, lc.list_layout));
+                    } else {
+                        // Allocate element storage through roc_ops
+                        const total_elem_bytes = elem_size * count;
+                        const sa = self.helper.sizeAlignOf(lc.elem_layout);
+                        const elem_alignment: u32 = @intCast(sa.alignment.toByteUnits());
+                        const elems_rc = self.helper.containsRefcounted(lc.elem_layout);
+                        const elem_data = try self.allocRocDataWithRc(total_elem_bytes, elem_alignment, elems_rc);
+                        const elem_mem = elem_data[0..total_elem_bytes];
+                        @memset(elem_mem, 0);
+
+                        for (vals, 0..) |elem_val, i| {
+                            const dest_offset = i * elem_size;
+                            @memcpy(elem_mem[dest_offset..][0..elem_size], elem_val.ptr[0..elem_size]);
+                        }
+
+                        try self.pushValue(try self.rocListToValue(.{
+                            .bytes = elem_mem.ptr,
+                            .length = count,
+                            .capacity_or_alloc_ptr = count,
+                        }, lc.list_layout));
+                    }
+                }
+                return null;
+            },
+            .str_concat_collect => |scc| {
+                const parts = self.store.getExprSpan(scc.parts);
+                const next_idx = scc.next_part_idx + 1;
+                if (next_idx < parts.len) {
+                    // More parts to evaluate
+                    try self.scheduleEvalThen(.{ .str_concat_collect = .{
+                        .parts = scc.parts,
+                        .next_part_idx = next_idx,
+                    } }, parts[next_idx]);
+                } else {
+                    // All parts collected — concatenate
+                    const vals = try self.popValues(parts.len);
+                    var total_len: usize = 0;
+                    for (vals) |part_val| {
+                        total_len += self.readRocStr(part_val).len;
+                    }
+                    const buf = self.arena.allocator().alloc(u8, total_len) catch return error.OutOfMemory;
+                    var offset: usize = 0;
+                    for (vals) |part_val| {
+                        const s = self.readRocStr(part_val);
+                        @memcpy(buf[offset..][0..s.len], s);
+                        offset += s.len;
+                    }
+                    try self.pushValue(try self.makeRocStr(buf));
+                }
+                return null;
+            },
+
+            // ── Expression-level control flow ──
+
+            .if_branch => |ib| {
+                const branches = self.store.getIfBranches(ib.branches);
+                const cond_val = self.popValue();
+                if (cond_val.read(u8) != 0) {
+                    // Condition is true: evaluate the branch body
+                    try self.pushWork(.{ .eval_expr = branches[ib.current_branch_idx].body });
+                } else {
+                    // Condition is false: try next branch or final else
+                    const next_branch = ib.current_branch_idx + 1;
+                    if (next_branch < branches.len) {
+                        try self.scheduleEvalThen(.{ .if_branch = .{
+                            .branches = ib.branches,
+                            .current_branch_idx = next_branch,
+                            .final_else = ib.final_else,
+                            .result_layout = ib.result_layout,
+                        } }, branches[next_branch].cond);
+                    } else {
+                        try self.pushWork(.{ .eval_expr = ib.final_else });
+                    }
+                }
+                return null;
+            },
+            .match_dispatch => |md| {
+                const match_val = self.popValue();
+                const match_branches = self.store.getMatchBranches(md.branches);
+                for (match_branches, 0..) |branch, idx| {
+                    const matched = try self.matchPattern(branch.pattern, match_val);
+                    if (matched) {
+                        try self.bindPattern(branch.pattern, match_val);
+                        if (!branch.guard.isNone()) {
+                            // Has a guard: evaluate it
+                            try self.scheduleEvalThen(.{ .match_guard_check = .{
+                                .match_val = match_val,
+                                .branches = md.branches,
+                                .current_branch_idx = @intCast(idx),
+                                .result_layout = md.result_layout,
+                            } }, branch.guard);
+                            return null;
+                        }
+                        try self.pushWork(.{ .eval_expr = branch.body });
+                        return null;
+                    }
+                }
+                return error.RuntimeError;
+            },
+            .match_guard_check => |mgc| {
+                const guard_val = self.popValue();
+                if (guard_val.read(u8) != 0) {
+                    // Guard passed: evaluate branch body
+                    const match_branches = self.store.getMatchBranches(mgc.branches);
+                    try self.pushWork(.{ .eval_expr = match_branches[mgc.current_branch_idx].body });
+                } else {
+                    // Guard failed: try remaining branches
+                    const match_branches = self.store.getMatchBranches(mgc.branches);
+                    const start = mgc.current_branch_idx + 1;
+                    var i: u16 = start;
+                    while (i < match_branches.len) : (i += 1) {
+                        const branch = match_branches[i];
+                        const matched = try self.matchPattern(branch.pattern, mgc.match_val);
+                        if (matched) {
+                            try self.bindPattern(branch.pattern, mgc.match_val);
+                            if (!branch.guard.isNone()) {
+                                try self.scheduleEvalThen(.{ .match_guard_check = .{
+                                    .match_val = mgc.match_val,
+                                    .branches = mgc.branches,
+                                    .current_branch_idx = i,
+                                    .result_layout = mgc.result_layout,
+                                } }, branch.guard);
+                                return null;
+                            }
+                            try self.pushWork(.{ .eval_expr = branch.body });
+                            return null;
+                        }
+                    }
+                    return error.RuntimeError;
+                }
+                return null;
+            },
+            .discriminant_switch_dispatch => |dsd| {
+                const switch_val = self.popValue();
+                const disc = self.helper.readTagDiscriminant(switch_val, dsd.union_layout);
+                const disc_branches = self.store.getExprSpan(dsd.branches);
+                if (disc < disc_branches.len) {
+                    try self.pushWork(.{ .eval_expr = disc_branches[disc] });
+                } else {
+                    return error.RuntimeError;
+                }
+                return null;
+            },
+            .block_stmt => |bs| {
+                const stmts = self.store.getStmts(bs.stmts);
+                const stmt = stmts[bs.current_stmt_idx];
+                const stmt_val = self.popValue();
+
+                // Apply the statement's binding effect
+                switch (stmt) {
+                    .decl, .mutate => |binding| try self.bindPattern(binding.pattern, stmt_val),
+                    .cell_init => |cb| {
+                        const size = self.helper.sizeOf(cb.layout_idx);
+                        self.cells.put(cb.cell.raw(), .{ .val = stmt_val, .size = size }) catch return error.OutOfMemory;
+                    },
+                    .cell_store => |cb| {
+                        const size = self.helper.sizeOf(cb.layout_idx);
+                        if (self.cells.getPtr(cb.cell.raw())) |entry| {
+                            entry.val = stmt_val;
+                            entry.size = size;
+                        } else {
+                            self.cells.put(cb.cell.raw(), .{ .val = stmt_val, .size = size }) catch return error.OutOfMemory;
+                        }
+                    },
+                    .cell_drop => {},
+                }
+
+                // Find the next real statement to schedule
+                const next_real_idx = self.findFirstRealStmt(stmts, bs.current_stmt_idx + 1);
+                if (next_real_idx) |next_idx| {
+                    const next_expr_id = self.stmtExprId(stmts[next_idx]);
+                    try self.scheduleEvalThen(.{ .block_stmt = .{
+                        .stmts = bs.stmts,
+                        .current_stmt_idx = @intCast(next_idx),
+                        .final_expr = bs.final_expr,
+                    } }, next_expr_id);
+                } else {
+                    // No more statements: evaluate the final expression
+                    try self.pushWork(.{ .eval_expr = bs.final_expr });
+                }
+                return null;
+            },
+            .early_return_wrap => {
+                const val = self.popValue();
+                self.unwinding = .{ .early_return = val };
+                return null;
+            },
+
+            // ── Loops ──
+
+            .for_loop_eval_list => |fl| {
+                const list_val = self.popValue();
+                const elem_size = self.helper.sizeOf(fl.elem_layout);
+                const rl = valueToRocList(list_val);
+                const count = rl.len();
+
+                if (count == 0) {
+                    try self.pushValue(Value.zst);
+                } else {
+                    const data: [*]u8 = @ptrCast(rl.bytes orelse {
+                        try self.pushValue(Value.zst);
+                        return null;
+                    });
+                    // Bind first element
+                    const elem_val = if (elem_size > 0)
+                        Value{ .ptr = data }
+                    else
+                        Value.zst;
+                    try self.bindPattern(fl.elem_pattern, elem_val);
+                    // Schedule body + continuation
+                    try self.scheduleEvalThen(.{ .for_loop_body_done = .{
+                        .list_val = list_val,
+                        .elem_layout = fl.elem_layout,
+                        .elem_pattern = fl.elem_pattern,
+                        .body = fl.body,
+                        .current_idx = 0,
+                        .count = @intCast(count),
+                        .saved_value_stack_len = @intCast(self.value_stack.items.len),
+                    } }, fl.body);
+                }
+                return null;
+            },
+            .for_loop_body_done => |fl| {
+                // Discard body result
+                _ = self.popValue();
+                const next_idx = fl.current_idx + 1;
+                if (next_idx < fl.count) {
+                    // More iterations
+                    const elem_size = self.helper.sizeOf(fl.elem_layout);
+                    const rl = valueToRocList(fl.list_val);
+                    const data: [*]u8 = @ptrCast(rl.bytes orelse {
+                        try self.pushValue(Value.zst);
+                        return null;
+                    });
+                    const elem_val = if (elem_size > 0)
+                        Value{ .ptr = data + next_idx * elem_size }
+                    else
+                        Value.zst;
+                    try self.bindPattern(fl.elem_pattern, elem_val);
+                    try self.scheduleEvalThen(.{ .for_loop_body_done = .{
+                        .list_val = fl.list_val,
+                        .elem_layout = fl.elem_layout,
+                        .elem_pattern = fl.elem_pattern,
+                        .body = fl.body,
+                        .current_idx = next_idx,
+                        .count = fl.count,
+                        .saved_value_stack_len = fl.saved_value_stack_len,
+                    } }, fl.body);
+                } else {
+                    // Done iterating
+                    try self.pushValue(Value.zst);
+                }
+                return null;
+            },
+            .while_loop_check => |wlc| {
+                const cond_val = self.popValue();
+                const cond_is_true = cond_val.read(u8) != 0;
+                if (wlc.infinite_loop_check and cond_is_true) {
+                    return self.triggerCrash(infinite_while_loop_message);
+                }
+                if (!cond_is_true) {
+                    try self.pushValue(Value.zst);
+                } else {
+                    try self.scheduleEvalThen(.{ .while_loop_body_done = .{
+                        .cond = wlc.cond,
+                        .body = wlc.body,
+                        .infinite_loop_check = wlc.infinite_loop_check,
+                        .saved_value_stack_len = @intCast(self.value_stack.items.len),
+                    } }, wlc.body);
+                }
+                return null;
+            },
+            .while_loop_body_done => |wlbd| {
+                // Discard body result, re-check condition
+                _ = self.popValue();
+                try self.scheduleEvalThen(.{ .while_loop_check = .{
+                    .cond = wlbd.cond,
+                    .body = wlbd.body,
+                    .infinite_loop_check = wlbd.infinite_loop_check,
+                } }, wlbd.cond);
+                return null;
+            },
+
+            // ── Unary ──
+
+            .unary_then => |ut| {
+                const val = self.popValue();
+                switch (ut) {
+                    .struct_access => |sa| {
+                        const field_offset = self.helper.structFieldOffset(sa.struct_layout, sa.field_idx);
+                        try self.pushValue(val.offset(field_offset));
+                    },
+                    .tag_payload_access => |tpa| {
+                        const tag_base = self.resolveTagUnionBaseValue(val, tpa.union_layout);
+                        const disc = self.helper.readTagDiscriminant(tag_base.value, tag_base.layout);
+                        const actual_payload_layout = self.tagPayloadLayout(tpa.union_layout, disc);
+                        try self.pushValue(self.normalizeValueToLayout(tag_base.value, actual_payload_layout, tpa.payload_layout));
+                    },
+                    .dbg_stmt => |ds| {
+                        const dbg_msg = try self.renderExpectValue(val, ds.result_layout);
+                        self.roc_ops.dbg(dbg_msg);
+                        try self.pushValue(val);
+                    },
+                    .expect_cond => |ec| {
+                        if (val.read(u8) == 0) {
+                            if (self.roc_env.expect_message == null) {
+                                const msg = try self.renderExpectExpr(ec.cond_expr_id);
+                                self.roc_env.expect_message = self.allocator.dupe(u8, msg) catch return error.OutOfMemory;
+                            }
+                        }
+                        try self.pushValue(Value.zst);
+                    },
+                    .incref => |ir| {
+                        self.performRc(.incref, val, ir.layout_idx, ir.count);
+                        try self.pushValue(Value.zst);
+                    },
+                    .decref => |dr| {
+                        self.performRc(.decref, val, dr.layout_idx, 0);
+                        try self.pushValue(Value.zst);
+                    },
+                    .free => |f| {
+                        self.performRc(.free, val, f.layout_idx, 0);
+                        try self.pushValue(Value.zst);
+                    },
+                    .int_to_str => |its| {
+                        const arena = self.arena.allocator();
+                        const formatted: []const u8 = switch (its.int_precision) {
+                            .u8 => std.fmt.allocPrint(arena, "{d}", .{val.read(u8)}) catch return error.OutOfMemory,
+                            .i8 => std.fmt.allocPrint(arena, "{d}", .{val.read(i8)}) catch return error.OutOfMemory,
+                            .u16 => std.fmt.allocPrint(arena, "{d}", .{val.read(u16)}) catch return error.OutOfMemory,
+                            .i16 => std.fmt.allocPrint(arena, "{d}", .{val.read(i16)}) catch return error.OutOfMemory,
+                            .u32 => std.fmt.allocPrint(arena, "{d}", .{val.read(u32)}) catch return error.OutOfMemory,
+                            .i32 => std.fmt.allocPrint(arena, "{d}", .{val.read(i32)}) catch return error.OutOfMemory,
+                            .u64 => std.fmt.allocPrint(arena, "{d}", .{val.read(u64)}) catch return error.OutOfMemory,
+                            .i64 => std.fmt.allocPrint(arena, "{d}", .{val.read(i64)}) catch return error.OutOfMemory,
+                            .u128 => std.fmt.allocPrint(arena, "{d}", .{val.read(u128)}) catch return error.OutOfMemory,
+                            .i128 => std.fmt.allocPrint(arena, "{d}", .{val.read(i128)}) catch return error.OutOfMemory,
+                        };
+                        try self.pushValue(try self.makeRocStr(formatted));
+                    },
+                    .float_to_str => |fts| {
+                        var buf: [400]u8 = undefined;
+                        const slice: []const u8 = switch (fts.float_precision) {
+                            .f32 => i128h.f64_to_str(&buf, @as(f64, val.read(f32))),
+                            .f64 => i128h.f64_to_str(&buf, val.read(f64)),
+                            .dec => blk: {
+                                const dec = RocDec{ .num = val.read(i128) };
+                                var dec_buf: [RocDec.max_str_length]u8 = undefined;
+                                break :blk dec.format_to_buf(&dec_buf);
+                            },
+                        };
+                        try self.pushValue(try self.makeRocStr(slice));
+                    },
+                    .dec_to_str => {
+                        const dec = RocDec{ .num = val.read(i128) };
+                        var buf: [RocDec.max_str_length]u8 = undefined;
+                        const slice = dec.format_to_buf(&buf);
+                        try self.pushValue(try self.makeRocStr(slice));
+                    },
+                    .str_escape_and_quote => {
+                        const s = self.readRocStr(val);
+                        var escaped = std.ArrayListUnmanaged(u8){};
+                        escaped.append(self.allocator, '"') catch return error.OutOfMemory;
+                        for (s) |ch| {
+                            switch (ch) {
+                                '\\' => escaped.appendSlice(self.allocator, "\\\\") catch return error.OutOfMemory,
+                                '"' => escaped.appendSlice(self.allocator, "\\\"") catch return error.OutOfMemory,
+                                else => escaped.append(self.allocator, ch) catch return error.OutOfMemory,
+                            }
+                        }
+                        escaped.append(self.allocator, '"') catch return error.OutOfMemory;
+                        const result = try self.makeRocStr(escaped.items);
+                        escaped.deinit(self.allocator);
+                        try self.pushValue(result);
+                    },
+                }
+                return null;
+            },
+
+            // ── Multi-arg builtins ──
+
+            .low_level_collect_args => |llca| {
+                const arg_exprs = self.store.getExprSpan(llca.args);
+                const next_idx = llca.next_arg_idx + 1;
+                if (next_idx < arg_exprs.len) {
+                    // More args to evaluate
+                    try self.scheduleEvalThen(.{ .low_level_collect_args = .{
+                        .op = llca.op,
+                        .args = llca.args,
+                        .next_arg_idx = next_idx,
+                        .ret_layout = llca.ret_layout,
+                        .callable_proc = llca.callable_proc,
+                    } }, arg_exprs[next_idx]);
+                } else {
+                    // All args collected — call evalLowLevelWithArgs
+                    const vals = try self.popValues(arg_exprs.len);
+                    const arg_layout: layout_mod.Idx = if (arg_exprs.len > 0)
+                        self.exprLayout(arg_exprs[0])
+                    else
+                        llca.ret_layout;
+                    const result = try self.evalLowLevelWithArgs(llca.op, vals, arg_layout, llca.ret_layout, llca.callable_proc);
+                    try self.pushValue(result);
+                }
+                return null;
+            },
+            .hosted_call_collect_args => |hcca| {
+                const arg_exprs = self.store.getExprSpan(hcca.args);
+                const next_idx = hcca.next_arg_idx + 1;
+                if (next_idx < arg_exprs.len) {
+                    try self.scheduleEvalThen(.{ .hosted_call_collect_args = .{
+                        .index = hcca.index,
+                        .args = hcca.args,
+                        .next_arg_idx = next_idx,
+                        .ret_layout = hcca.ret_layout,
+                    } }, arg_exprs[next_idx]);
+                } else {
+                    // All args collected — marshal and call
+                    const vals = try self.popValues(arg_exprs.len);
+                    const result = try self.evalHostedCallWithArgs(hcca.index, arg_exprs, vals, hcca.ret_layout);
+                    try self.pushValue(result);
+                }
+                return null;
+            },
+
+            // ── CF statement continuations ──
+
+            .cf_let_bind => |clb| {
+                const val = self.popValue();
+                try self.bindPattern(clb.pattern, val);
+                try self.scheduleCFStmtEval(clb.next);
+                return null;
+            },
+            .cf_expr_stmt_next => |cesn| {
+                // Discard the expression value
+                _ = self.popValue();
+                try self.scheduleCFStmtEval(cesn.next);
+                return null;
+            },
+            .cf_switch_dispatch => |csd| {
+                const cond_val = self.popValue();
+                const disc = self.helper.readTagDiscriminant(cond_val, csd.cond_layout);
+                const branches = self.store.getCFSwitchBranches(csd.branches);
+                var found = false;
+                for (branches) |branch| {
+                    if (branch.value == disc) {
+                        try self.scheduleCFStmtEval(branch.body);
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    try self.scheduleCFStmtEval(csd.default_branch);
+                }
+                return null;
+            },
+            .cf_match_dispatch => |cmd| {
+                const match_val = self.popValue();
+                const match_branches = self.store.getCFMatchBranches(cmd.branches);
+                var matched = false;
+                for (match_branches) |branch| {
+                    if (try self.matchPattern(branch.pattern, match_val)) {
+                        try self.bindPattern(branch.pattern, match_val);
+                        try self.scheduleCFStmtEval(branch.body);
+                        matched = true;
+                        break;
+                    }
+                }
+                if (!matched) {
+                    return error.RuntimeError;
+                }
+                return null;
+            },
+            .cf_jump_collect_args => |cjca| {
+                const jump_args = self.store.getExprSpan(cjca.args);
+                const next_idx = cjca.next_arg_idx + 1;
+                if (next_idx < jump_args.len) {
+                    try self.scheduleEvalThen(.{ .cf_jump_collect_args = .{
+                        .target = cjca.target,
+                        .args = cjca.args,
+                        .next_arg_idx = next_idx,
+                    } }, jump_args[next_idx]);
+                } else {
+                    // All args collected — bind to join point params and schedule body
+                    const vals = try self.popValues(jump_args.len);
+                    const jp = self.join_points.get(@intFromEnum(cjca.target)) orelse return error.RuntimeError;
+                    const jp_params = self.store.getPatternSpan(jp.params);
+                    const count = @min(jp_params.len, vals.len);
+                    for (0..count) |i| {
+                        try self.bindPattern(jp_params[i], vals[i]);
+                    }
+                    try self.pushWork(.{ .eval_cf_stmt = jp.body });
+                }
+                return null;
+            },
+
+            // ── Sort (placeholder) ──
+
+            .sort_compare_step => {
+                // TODO: wire up sort in a later phase
+                return error.RuntimeError;
+            },
+        }
+    }
+
+    // ── Internal helpers for the stack-safe engine ──
+
+    /// Enter a function call: save state, bind params, schedule body.
+    fn enterFunction(self: *LirInterpreter, proc_spec: lir.LirProcSpec, args: []const Value) Error!void {
+        if (self.call_depth >= max_call_depth) {
+            return self.triggerCrash(stack_overflow_message);
+        }
+
+        const params = self.store.getPatternSpan(proc_spec.args);
+        self.call_depth += 1;
+
+        // Save state
+        const saved_bindings_len: u32 = @intCast(self.bindings.items.len);
+        const saved_lambda_params = self.current_lambda_params;
+        self.current_lambda_params = proc_spec.args;
+
+        // Push call_cleanup continuation (will fire after the body completes)
+        try self.pushWork(.{ .apply_continuation = .{ .call_cleanup = .{
+            .saved_bindings_len = saved_bindings_len,
+            .saved_lambda_params = saved_lambda_params,
+            .saved_value_stack_len = @intCast(self.value_stack.items.len),
+        } } });
+
+        // Bind parameters
+        const param_count = @min(params.len, args.len);
+        for (0..param_count) |i| {
+            try self.bindPattern(params[i], args[i]);
+        }
+
+        // Schedule the CF statement body
+        try self.pushWork(.{ .eval_cf_stmt = proc_spec.body });
+    }
+
+    /// Evaluate a low-level op with pre-evaluated argument values.
+    /// Reuses the existing evalLowLevel switch body but with args already resolved.
+    fn evalLowLevelWithArgs(
+        self: *LirInterpreter,
+        op: base.LowLevel,
+        args: []const Value,
+        arg_layout: layout_mod.Idx,
+        ret_layout: layout_mod.Idx,
+        callable_proc: lir.LirProcSpecId,
+    ) Error!Value {
+        return self.dispatchLowLevelWithArgs(op, args, arg_layout, ret_layout, callable_proc);
+    }
+
+    /// Direct dispatch of a low-level op with pre-evaluated args.
+    /// This mirrors the existing evalLowLevel switch but operates on
+    /// pre-collected Value slices instead of LirExprSpan + eval().
+    fn dispatchLowLevelWithArgs(
+        self: *LirInterpreter,
+        op: base.LowLevel,
+        args: []const Value,
+        arg_layout: layout_mod.Idx,
+        ret_layout: layout_mod.Idx,
+        callable_proc: lir.LirProcSpecId,
+    ) Error!Value {
+        _ = callable_proc;
+
+        var a: [8]Value = undefined;
+        const n = @min(args.len, 8);
+        for (0..n) |i| a[i] = args[i];
+
+        return switch (op) {
+            // String ops
+            .str_is_eq => blk: {
+                const result = builtins.str.strEqual(valueToRocStr(a[0]), valueToRocStr(a[1]));
+                const val = try self.alloc(ret_layout);
+                val.write(u8, if (result) 1 else 0);
+                break :blk val;
+            },
+            .str_concat => self.callBuiltinStr2(builtins.str.strConcatC, valueToRocStr(a[0]), valueToRocStr(a[1]), ret_layout),
+            .str_contains => blk: {
+                const result = builtins.str.strContains(valueToRocStr(a[0]), valueToRocStr(a[1]));
+                const val = try self.alloc(ret_layout);
+                val.write(u8, if (result) 1 else 0);
+                break :blk val;
+            },
+            .str_starts_with => blk: {
+                const result = builtins.str.startsWith(valueToRocStr(a[0]), valueToRocStr(a[1]));
+                const val = try self.alloc(ret_layout);
+                val.write(u8, if (result) 1 else 0);
+                break :blk val;
+            },
+            .str_ends_with => blk: {
+                const result = builtins.str.endsWith(valueToRocStr(a[0]), valueToRocStr(a[1]));
+                const val = try self.alloc(ret_layout);
+                val.write(u8, if (result) 1 else 0);
+                break :blk val;
+            },
+            .str_trim => self.callBuiltinStr1(builtins.str.strTrim, valueToRocStr(a[0]), ret_layout),
+            .str_trim_start => self.callBuiltinStr1(builtins.str.strTrimStart, valueToRocStr(a[0]), ret_layout),
+            .str_trim_end => self.callBuiltinStr1(builtins.str.strTrimEnd, valueToRocStr(a[0]), ret_layout),
+            .str_with_ascii_lowercased => self.callBuiltinStr1(builtins.str.strWithAsciiLowercased, valueToRocStr(a[0]), ret_layout),
+            .str_with_ascii_uppercased => self.callBuiltinStr1(builtins.str.strWithAsciiUppercased, valueToRocStr(a[0]), ret_layout),
+            .str_caseless_ascii_equals => blk: {
+                const result = builtins.str.strCaselessAsciiEquals(valueToRocStr(a[0]), valueToRocStr(a[1]));
+                const val = try self.alloc(ret_layout);
+                val.write(u8, if (result) 1 else 0);
+                break :blk val;
+            },
+            .str_repeat => blk: {
+                self.roc_env.resetCrash();
+                const sj = setjmp(&self.roc_env.jmp_buf);
+                if (sj != 0) return error.Crash;
+                const result = builtins.str.repeatC(valueToRocStr(a[0]), a[1].read(u64), &self.roc_ops);
+                break :blk self.rocStrToValue(result, ret_layout);
+            },
+            .str_drop_prefix => self.callBuiltinStr2(builtins.str.strDropPrefix, valueToRocStr(a[0]), valueToRocStr(a[1]), ret_layout),
+            .str_drop_suffix => self.callBuiltinStr2(builtins.str.strDropSuffix, valueToRocStr(a[0]), valueToRocStr(a[1]), ret_layout),
+            .str_count_utf8_bytes => blk: {
+                const result = builtins.str.countUtf8Bytes(valueToRocStr(a[0]));
+                const val = try self.alloc(ret_layout);
+                val.write(u64, result);
+                break :blk val;
+            },
+            .str_to_utf8 => blk: {
+                self.roc_env.resetCrash();
+                const sj = setjmp(&self.roc_env.jmp_buf);
+                if (sj != 0) return error.Crash;
+                const result = builtins.str.strToUtf8C(valueToRocStr(a[0]), &self.roc_ops);
+                break :blk self.rocListToValue(result, ret_layout);
+            },
+            .str_inspect => a[0],
+
+            // Numeric comparisons
+            .num_is_eq => self.numCmpOp(a[0], a[1], arg_layout, .eq),
+            .num_is_neq => blk: {
+                const eq_val = try self.numCmpOp(a[0], a[1], arg_layout, .eq);
+                const val = try self.alloc(.bool);
+                val.write(u8, if (eq_val.read(u8) == 0) @as(u8, 1) else @as(u8, 0));
+                break :blk val;
+            },
+            .num_is_lt => self.numCmpOp(a[0], a[1], arg_layout, .lt),
+            .num_is_lte => self.numCmpOp(a[0], a[1], arg_layout, .lte),
+            .num_is_gt => self.numCmpOp(a[0], a[1], arg_layout, .gt),
+            .num_is_gte => self.numCmpOp(a[0], a[1], arg_layout, .gte),
+            .num_compare => self.evalCompare(a[0], a[1], arg_layout, ret_layout),
+
+            // Numeric arithmetic
+            .num_plus => self.numBinOp(a[0], a[1], ret_layout, arg_layout, .add),
+            .num_plus_wrapping => self.numBinOp(a[0], a[1], ret_layout, arg_layout, .add),
+            .num_minus => self.numBinOp(a[0], a[1], ret_layout, arg_layout, .sub),
+            .num_minus_wrapping => self.numBinOp(a[0], a[1], ret_layout, arg_layout, .sub),
+            .num_times => self.numBinOp(a[0], a[1], ret_layout, arg_layout, .mul),
+            .num_times_wrapping => self.numBinOp(a[0], a[1], ret_layout, arg_layout, .mul),
+            .num_div_float => self.numBinOp(a[0], a[1], ret_layout, arg_layout, .div),
+            .num_div_trunc_unchecked => self.numBinOp(a[0], a[1], ret_layout, arg_layout, .div_trunc),
+            .num_div_ceil_unchecked => blk: {
+                // ceil(a/b) = trunc(a/b) + (if a%b != 0 then 1 else 0)
+                const trunc_val = try self.numBinOp(a[0], a[1], ret_layout, arg_layout, .div_trunc);
+                const rem_val = try self.numBinOp(a[0], a[1], ret_layout, arg_layout, .rem);
+                const size = self.helper.sizeOf(arg_layout);
+                const has_remainder: bool = switch (size) {
+                    1 => rem_val.read(u8) != 0,
+                    2 => rem_val.read(u16) != 0,
+                    4 => rem_val.read(u32) != 0,
+                    8 => rem_val.read(u64) != 0,
+                    16 => rem_val.read(u128) != 0,
+                    else => false,
+                };
+                if (has_remainder) {
+                    const one = try self.alloc(arg_layout);
+                    switch (size) {
+                        1 => one.write(u8, 1),
+                        2 => one.write(u16, 1),
+                        4 => one.write(u32, 1),
+                        8 => one.write(u64, 1),
+                        16 => one.write(u128, 1),
+                        else => {},
+                    }
+                    break :blk self.numBinOp(trunc_val, one, ret_layout, arg_layout, .add);
+                }
+                break :blk trunc_val;
+            },
+            .num_rem_unchecked => self.numBinOp(a[0], a[1], ret_layout, arg_layout, .rem),
+            .num_mod_unchecked => self.numBinOp(a[0], a[1], ret_layout, arg_layout, .mod),
+            .num_negate => self.numUnaryOp(a[0], ret_layout, arg_layout, .negate),
+            .num_abs => self.numUnaryOp(a[0], ret_layout, arg_layout, .abs),
+            .num_abs_diff => self.numBinOp(a[0], a[1], ret_layout, arg_layout, .abs_diff),
+            .num_pow => self.evalNumPow(a[0], a[1], ret_layout, arg_layout),
+            .num_sqrt_unchecked => self.evalNumSqrt(a[0], ret_layout, arg_layout),
+            .num_log_unchecked => self.evalNumLog(a[0], ret_layout, arg_layout),
+            .num_round => self.evalNumRound(a[0], ret_layout, arg_layout),
+            .num_floor => self.evalNumFloor(a[0], ret_layout, arg_layout),
+            .num_ceiling => self.evalNumCeiling(a[0], ret_layout, arg_layout),
+
+            // Bitwise
+            .num_and => blk: {
+                const val = try self.alloc(ret_layout);
+                const size = self.helper.sizeOf(arg_layout);
+                switch (size) {
+                    1 => val.write(u8, a[0].read(u8) & a[1].read(u8)),
+                    2 => val.write(u16, a[0].read(u16) & a[1].read(u16)),
+                    4 => val.write(u32, a[0].read(u32) & a[1].read(u32)),
+                    8 => val.write(u64, a[0].read(u64) & a[1].read(u64)),
+                    16 => val.write(u128, a[0].read(u128) & a[1].read(u128)),
+                    else => {},
+                }
+                break :blk val;
+            },
+            .num_or => blk: {
+                const val = try self.alloc(ret_layout);
+                const size = self.helper.sizeOf(arg_layout);
+                switch (size) {
+                    1 => val.write(u8, a[0].read(u8) | a[1].read(u8)),
+                    2 => val.write(u16, a[0].read(u16) | a[1].read(u16)),
+                    4 => val.write(u32, a[0].read(u32) | a[1].read(u32)),
+                    8 => val.write(u64, a[0].read(u64) | a[1].read(u64)),
+                    16 => val.write(u128, a[0].read(u128) | a[1].read(u128)),
+                    else => {},
+                }
+                break :blk val;
+            },
+            .num_xor => blk: {
+                const val = try self.alloc(ret_layout);
+                const size = self.helper.sizeOf(arg_layout);
+                switch (size) {
+                    1 => val.write(u8, a[0].read(u8) ^ a[1].read(u8)),
+                    2 => val.write(u16, a[0].read(u16) ^ a[1].read(u16)),
+                    4 => val.write(u32, a[0].read(u32) ^ a[1].read(u32)),
+                    8 => val.write(u64, a[0].read(u64) ^ a[1].read(u64)),
+                    16 => val.write(u128, a[0].read(u128) ^ a[1].read(u128)),
+                    else => {},
+                }
+                break :blk val;
+            },
+            .num_shl => self.numShiftOp(a[0], a[1], ret_layout, arg_layout, .shl),
+            .num_shr => self.numShiftOp(a[0], a[1], ret_layout, arg_layout, .shr),
+            .num_shr_zero_fill => self.numShiftOp(a[0], a[1], ret_layout, arg_layout, .shr_zf),
+            .num_count_leading_zero_bits => blk: {
+                const val = try self.alloc(ret_layout);
+                const size = self.helper.sizeOf(arg_layout);
+                switch (size) {
+                    1 => val.write(u8, @clz(a[0].read(u8))),
+                    2 => val.write(u16, @clz(a[0].read(u16))),
+                    4 => val.write(u32, @clz(a[0].read(u32))),
+                    8 => val.write(u64, @clz(a[0].read(u64))),
+                    16 => val.write(u128, @clz(a[0].read(u128))),
+                    else => {},
+                }
+                break :blk val;
+            },
+            .num_count_trailing_zero_bits => blk: {
+                const val = try self.alloc(ret_layout);
+                const size = self.helper.sizeOf(arg_layout);
+                switch (size) {
+                    1 => val.write(u8, @ctz(a[0].read(u8))),
+                    2 => val.write(u16, @ctz(a[0].read(u16))),
+                    4 => val.write(u32, @ctz(a[0].read(u32))),
+                    8 => val.write(u64, @ctz(a[0].read(u64))),
+                    16 => val.write(u128, @ctz(a[0].read(u128))),
+                    else => {},
+                }
+                break :blk val;
+            },
+            .num_count_one_bits => blk: {
+                const val = try self.alloc(ret_layout);
+                const size = self.helper.sizeOf(arg_layout);
+                switch (size) {
+                    1 => val.write(u8, @popCount(a[0].read(u8))),
+                    2 => val.write(u16, @popCount(a[0].read(u16))),
+                    4 => val.write(u32, @popCount(a[0].read(u32))),
+                    8 => val.write(u64, @popCount(a[0].read(u64))),
+                    16 => val.write(u128, @popCount(a[0].read(u128))),
+                    else => {},
+                }
+                break :blk val;
+            },
+
+            // Boolean
+            .bool_and => blk: {
+                const val = try self.alloc(ret_layout);
+                val.write(u8, if (a[0].read(u8) != 0 and a[1].read(u8) != 0) @as(u8, 1) else @as(u8, 0));
+                break :blk val;
+            },
+            .bool_or => blk: {
+                const val = try self.alloc(ret_layout);
+                val.write(u8, if (a[0].read(u8) != 0 or a[1].read(u8) != 0) @as(u8, 1) else @as(u8, 0));
+                break :blk val;
+            },
+            .bool_not => blk: {
+                const val = try self.alloc(ret_layout);
+                val.write(u8, if (a[0].read(u8) == 0) @as(u8, 1) else @as(u8, 0));
+                break :blk val;
+            },
+            .and_ => blk: {
+                const val = try self.alloc(ret_layout);
+                val.write(u8, if (a[0].read(u8) != 0 and a[1].read(u8) != 0) @as(u8, 1) else @as(u8, 0));
+                break :blk val;
+            },
+            .or_ => blk: {
+                const val = try self.alloc(ret_layout);
+                val.write(u8, if (a[0].read(u8) != 0 or a[1].read(u8) != 0) @as(u8, 1) else @as(u8, 0));
+                break :blk val;
+            },
+            .not_ => blk: {
+                const val = try self.alloc(ret_layout);
+                val.write(u8, if (a[0].read(u8) == 0) @as(u8, 1) else @as(u8, 0));
+                break :blk val;
+            },
+
+            // List ops
+            .list_len => blk: {
+                const rl = valueToRocList(a[0]);
+                const val = try self.alloc(ret_layout);
+                val.write(u64, @intCast(rl.len()));
+                break :blk val;
+            },
+            .list_is_empty => blk: {
+                const rl = valueToRocList(a[0]);
+                const val = try self.alloc(ret_layout);
+                val.write(u8, if (rl.len() == 0) @as(u8, 1) else @as(u8, 0));
+                break :blk val;
+            },
+            .list_get_unsafe => blk: {
+                const rl = valueToRocList(a[0]);
+                const idx = a[1].read(u64);
+                const info = self.listElemInfo(arg_layout);
+                if (info.width == 0 or rl.bytes == null) break :blk try self.alloc(ret_layout);
+                const elem_ptr = rl.bytes.? + @as(usize, @intCast(idx)) * info.width;
+                const val = try self.allocBytes(info.width);
+                @memcpy(val.ptr[0..info.width], elem_ptr[0..info.width]);
+                break :blk val;
+            },
+            .list_with_capacity => blk: {
+                self.roc_env.resetCrash();
+                const sj = setjmp(&self.roc_env.jmp_buf);
+                if (sj != 0) return error.Crash;
+                const info = self.listElemInfo(ret_layout);
+                const result = builtins.list.listWithCapacity(a[0].read(u64), info.alignment, info.width, &self.roc_ops);
+                break :blk self.rocListToValue(result, ret_layout);
+            },
+            .list_reserve => blk: {
+                self.roc_env.resetCrash();
+                const sj = setjmp(&self.roc_env.jmp_buf);
+                if (sj != 0) return error.Crash;
+                const info = self.listElemInfo(arg_layout);
+                const result = builtins.list.listReserve(valueToRocList(a[0]), info.alignment, a[1].read(u64), info.width, UpdateMode.Immutable, &self.roc_ops);
+                break :blk self.rocListToValue(result, ret_layout);
+            },
+            .list_release_excess_capacity => blk: {
+                self.roc_env.resetCrash();
+                const sj = setjmp(&self.roc_env.jmp_buf);
+                if (sj != 0) return error.Crash;
+                const info = self.listElemInfo(arg_layout);
+                const result = builtins.list.listReleaseExcessCapacity(valueToRocList(a[0]), info.alignment, info.width, false, null, &builtins.utils.rcNone, &self.roc_ops);
+                break :blk self.rocListToValue(result, ret_layout);
+            },
+            .list_swap => blk: {
+                self.roc_env.resetCrash();
+                const sj = setjmp(&self.roc_env.jmp_buf);
+                if (sj != 0) return error.Crash;
+                const info = self.listElemInfo(arg_layout);
+                const result = builtins.list.listSwap(valueToRocList(a[0]), info.alignment, info.width, a[1].read(u64), a[2].read(u64), UpdateMode.Immutable, &self.roc_ops);
+                break :blk self.rocListToValue(result, ret_layout);
+            },
+
+            // Numeric to_str
+            .u8_to_str => self.numToStr(u8, a[0], ret_layout),
+            .i8_to_str => self.numToStr(i8, a[0], ret_layout),
+            .u16_to_str => self.numToStr(u16, a[0], ret_layout),
+            .i16_to_str => self.numToStr(i16, a[0], ret_layout),
+            .u32_to_str => self.numToStr(u32, a[0], ret_layout),
+            .i32_to_str => self.numToStr(i32, a[0], ret_layout),
+            .u64_to_str => self.numToStr(u64, a[0], ret_layout),
+            .i64_to_str => self.numToStr(i64, a[0], ret_layout),
+            .u128_to_str => self.numToStr(u128, a[0], ret_layout),
+            .i128_to_str => self.numToStr(i128, a[0], ret_layout),
+            .dec_to_str => blk: {
+                const dec = RocDec{ .num = a[0].read(i128) };
+                self.roc_env.resetCrash();
+                const sj = setjmp(&self.roc_env.jmp_buf);
+                if (sj != 0) return error.Crash;
+                const result = builtins.dec.to_str(dec, &self.roc_ops);
+                break :blk self.rocStrToValue(result, ret_layout);
+            },
+            .f32_to_str => blk: {
+                var buf: [400]u8 = undefined;
+                const slice = i128h.f64_to_str(&buf, @as(f64, a[0].read(f32)));
+                break :blk self.makeRocStr(slice);
+            },
+            .f64_to_str => blk: {
+                var buf: [400]u8 = undefined;
+                const slice = i128h.f64_to_str(&buf, a[0].read(f64));
+                break :blk self.makeRocStr(slice);
+            },
+            .num_to_str => blk: {
+                const size = self.helper.sizeOf(arg_layout);
+                const l = self.layout_store.getLayout(arg_layout);
+                const is_float = l.tag == .scalar and l.data.scalar.tag == .frac;
+                if (isDec(arg_layout)) {
+                    const dec = RocDec{ .num = a[0].read(i128) };
+                    self.roc_env.resetCrash();
+                    const sj = setjmp(&self.roc_env.jmp_buf);
+                    if (sj != 0) return error.Crash;
+                    const result = builtins.dec.to_str(dec, &self.roc_ops);
+                    break :blk self.rocStrToValue(result, ret_layout);
+                } else if (is_float) {
+                    var buf: [400]u8 = undefined;
+                    const slice = switch (size) {
+                        4 => i128h.f64_to_str(&buf, @as(f64, a[0].read(f32))),
+                        else => i128h.f64_to_str(&buf, a[0].read(f64)),
+                    };
+                    break :blk self.makeRocStr(slice);
+                } else {
+                    break :blk self.numToStrByLayout(a[0], arg_layout, ret_layout);
+                }
+            },
+
+            // Numeric widen/truncate/conversion
+            .num_i8_to_i16 => self.numWiden(i8, a[0], ret_layout),
+            .num_i8_to_i32 => self.numWiden(i8, a[0], ret_layout),
+            .num_i8_to_i64 => self.numWiden(i8, a[0], ret_layout),
+            .num_i8_to_i128 => self.numWiden(i8, a[0], ret_layout),
+            .num_i16_to_i32 => self.numWiden(i16, a[0], ret_layout),
+            .num_i16_to_i64 => self.numWiden(i16, a[0], ret_layout),
+            .num_i16_to_i128 => self.numWiden(i16, a[0], ret_layout),
+            .num_i32_to_i64 => self.numWiden(i32, a[0], ret_layout),
+            .num_i32_to_i128 => self.numWiden(i32, a[0], ret_layout),
+            .num_i64_to_i128 => self.numWiden(i64, a[0], ret_layout),
+            .num_u8_to_u16 => self.numWiden(u8, a[0], ret_layout),
+            .num_u8_to_u32 => self.numWiden(u8, a[0], ret_layout),
+            .num_u8_to_u64 => self.numWiden(u8, a[0], ret_layout),
+            .num_u8_to_u128 => self.numWiden(u8, a[0], ret_layout),
+            .num_u8_to_i16 => self.numWiden(u8, a[0], ret_layout),
+            .num_u8_to_i32 => self.numWiden(u8, a[0], ret_layout),
+            .num_u8_to_i64 => self.numWiden(u8, a[0], ret_layout),
+            .num_u8_to_i128 => self.numWiden(u8, a[0], ret_layout),
+            .num_u16_to_u32 => self.numWiden(u16, a[0], ret_layout),
+            .num_u16_to_u64 => self.numWiden(u16, a[0], ret_layout),
+            .num_u16_to_u128 => self.numWiden(u16, a[0], ret_layout),
+            .num_u16_to_i32 => self.numWiden(u16, a[0], ret_layout),
+            .num_u16_to_i64 => self.numWiden(u16, a[0], ret_layout),
+            .num_u16_to_i128 => self.numWiden(u16, a[0], ret_layout),
+            .num_u32_to_u64 => self.numWiden(u32, a[0], ret_layout),
+            .num_u32_to_u128 => self.numWiden(u32, a[0], ret_layout),
+            .num_u32_to_i64 => self.numWiden(u32, a[0], ret_layout),
+            .num_u32_to_i128 => self.numWiden(u32, a[0], ret_layout),
+            .num_u64_to_u128 => self.numWiden(u64, a[0], ret_layout),
+            .num_u64_to_i128 => self.numWiden(u64, a[0], ret_layout),
+
+            // Truncation
+            .num_i128_to_i64_trunc => self.numTruncate(i128, i64, a[0], ret_layout),
+            .num_i128_to_i32_trunc => self.numTruncate(i128, i32, a[0], ret_layout),
+            .num_i128_to_i16_trunc => self.numTruncate(i128, i16, a[0], ret_layout),
+            .num_i128_to_i8_trunc => self.numTruncate(i128, i8, a[0], ret_layout),
+            .num_i64_to_i32_trunc => self.numTruncate(i64, i32, a[0], ret_layout),
+            .num_i64_to_i16_trunc => self.numTruncate(i64, i16, a[0], ret_layout),
+            .num_i64_to_i8_trunc => self.numTruncate(i64, i8, a[0], ret_layout),
+            .num_i32_to_i16_trunc => self.numTruncate(i32, i16, a[0], ret_layout),
+            .num_i32_to_i8_trunc => self.numTruncate(i32, i8, a[0], ret_layout),
+            .num_i16_to_i8_trunc => self.numTruncate(i16, i8, a[0], ret_layout),
+            .num_u128_to_u64_trunc => self.numTruncate(u128, u64, a[0], ret_layout),
+            .num_u128_to_u32_trunc => self.numTruncate(u128, u32, a[0], ret_layout),
+            .num_u128_to_u16_trunc => self.numTruncate(u128, u16, a[0], ret_layout),
+            .num_u128_to_u8_trunc => self.numTruncate(u128, u8, a[0], ret_layout),
+            .num_u64_to_u32_trunc => self.numTruncate(u64, u32, a[0], ret_layout),
+            .num_u64_to_u16_trunc => self.numTruncate(u64, u16, a[0], ret_layout),
+            .num_u64_to_u8_trunc => self.numTruncate(u64, u8, a[0], ret_layout),
+            .num_u32_to_u16_trunc => self.numTruncate(u32, u16, a[0], ret_layout),
+            .num_u32_to_u8_trunc => self.numTruncate(u32, u8, a[0], ret_layout),
+            .num_u16_to_u8_trunc => self.numTruncate(u16, u8, a[0], ret_layout),
+            // Signed-to-unsigned truncation (reinterpret)
+            .num_i128_to_u128_trunc => self.numTruncate(i128, u128, a[0], ret_layout),
+            .num_i64_to_u64_trunc => self.numTruncate(i64, u64, a[0], ret_layout),
+            .num_i32_to_u32_trunc => self.numTruncate(i32, u32, a[0], ret_layout),
+            .num_i16_to_u16_trunc => self.numTruncate(i16, u16, a[0], ret_layout),
+            .num_i8_to_u8_trunc => self.numTruncate(i8, u8, a[0], ret_layout),
+            // Unsigned-to-signed wrap
+            .num_u128_to_i128_trunc => self.numTruncate(u128, i128, a[0], ret_layout),
+            .num_u64_to_i64_trunc => self.numTruncate(u64, i64, a[0], ret_layout),
+            .num_u32_to_i32_trunc => self.numTruncate(u32, i32, a[0], ret_layout),
+            .num_u16_to_i16_trunc => self.numTruncate(u16, i16, a[0], ret_layout),
+            .num_u8_to_i8_trunc => self.numTruncate(u8, i8, a[0], ret_layout),
+
+            // Float-to-int
+            .num_f32_to_i8_try_unsafe, .num_f32_to_i16_try_unsafe, .num_f32_to_i32_try_unsafe, .num_f32_to_i64_try_unsafe, .num_f32_to_i128_try_unsafe, .num_f32_to_u8_try_unsafe, .num_f32_to_u16_try_unsafe, .num_f32_to_u32_try_unsafe, .num_f32_to_u64_try_unsafe, .num_f32_to_u128_try_unsafe, .num_f64_to_i8_try_unsafe, .num_f64_to_i16_try_unsafe, .num_f64_to_i32_try_unsafe, .num_f64_to_i64_try_unsafe, .num_f64_to_i128_try_unsafe, .num_f64_to_u8_try_unsafe, .num_f64_to_u16_try_unsafe, .num_f64_to_u32_try_unsafe, .num_f64_to_u64_try_unsafe, .num_f64_to_u128_try_unsafe => blk: {
+                // These "try_unsafe" ops assume the conversion is in range.
+                // Return the truncated value directly.
+                const val = try self.alloc(ret_layout);
+                const size = self.helper.sizeOf(arg_layout);
+                const float_val: f64 = if (size == 4) @as(f64, a[0].read(f32)) else a[0].read(f64);
+                const ret_size = self.helper.sizeOf(ret_layout);
+                switch (ret_size) {
+                    1 => if (isUnsigned(ret_layout)) val.write(u8, @intFromFloat(float_val)) else val.write(i8, @intFromFloat(float_val)),
+                    2 => if (isUnsigned(ret_layout)) val.write(u16, @intFromFloat(float_val)) else val.write(i16, @intFromFloat(float_val)),
+                    4 => if (isUnsigned(ret_layout)) val.write(u32, @intFromFloat(float_val)) else val.write(i32, @intFromFloat(float_val)),
+                    8 => if (isUnsigned(ret_layout)) val.write(u64, @intFromFloat(float_val)) else val.write(i64, @intFromFloat(float_val)),
+                    16 => if (isUnsigned(ret_layout)) val.write(u128, @intFromFloat(float_val)) else val.write(i128, @intFromFloat(float_val)),
+                    else => {},
+                }
+                break :blk val;
+            },
+
+            // Int-to-float
+            .num_i8_to_f32 => blk: {
+                const val = try self.alloc(ret_layout);
+                val.write(f32, @floatFromInt(a[0].read(i8)));
+                break :blk val;
+            },
+            .num_i16_to_f32 => blk: {
+                const val = try self.alloc(ret_layout);
+                val.write(f32, @floatFromInt(a[0].read(i16)));
+                break :blk val;
+            },
+            .num_i32_to_f32 => blk: {
+                const val = try self.alloc(ret_layout);
+                val.write(f32, @floatFromInt(a[0].read(i32)));
+                break :blk val;
+            },
+            .num_i64_to_f32 => blk: {
+                const val = try self.alloc(ret_layout);
+                val.write(f32, @floatFromInt(a[0].read(i64)));
+                break :blk val;
+            },
+            .num_i128_to_f32 => blk: {
+                const val = try self.alloc(ret_layout);
+                val.write(f32, @floatFromInt(a[0].read(i128)));
+                break :blk val;
+            },
+            .num_u8_to_f32 => blk: {
+                const val = try self.alloc(ret_layout);
+                val.write(f32, @floatFromInt(a[0].read(u8)));
+                break :blk val;
+            },
+            .num_u16_to_f32 => blk: {
+                const val = try self.alloc(ret_layout);
+                val.write(f32, @floatFromInt(a[0].read(u16)));
+                break :blk val;
+            },
+            .num_u32_to_f32 => blk: {
+                const val = try self.alloc(ret_layout);
+                val.write(f32, @floatFromInt(a[0].read(u32)));
+                break :blk val;
+            },
+            .num_u64_to_f32 => blk: {
+                const val = try self.alloc(ret_layout);
+                val.write(f32, @floatFromInt(a[0].read(u64)));
+                break :blk val;
+            },
+            .num_u128_to_f32 => blk: {
+                const val = try self.alloc(ret_layout);
+                val.write(f32, @floatFromInt(a[0].read(u128)));
+                break :blk val;
+            },
+            .num_i8_to_f64 => blk: {
+                const val = try self.alloc(ret_layout);
+                val.write(f64, @floatFromInt(a[0].read(i8)));
+                break :blk val;
+            },
+            .num_i16_to_f64 => blk: {
+                const val = try self.alloc(ret_layout);
+                val.write(f64, @floatFromInt(a[0].read(i16)));
+                break :blk val;
+            },
+            .num_i32_to_f64 => blk: {
+                const val = try self.alloc(ret_layout);
+                val.write(f64, @floatFromInt(a[0].read(i32)));
+                break :blk val;
+            },
+            .num_i64_to_f64 => blk: {
+                const val = try self.alloc(ret_layout);
+                val.write(f64, @floatFromInt(a[0].read(i64)));
+                break :blk val;
+            },
+            .num_i128_to_f64 => blk: {
+                const val = try self.alloc(ret_layout);
+                val.write(f64, @floatFromInt(a[0].read(i128)));
+                break :blk val;
+            },
+            .num_u8_to_f64 => blk: {
+                const val = try self.alloc(ret_layout);
+                val.write(f64, @floatFromInt(a[0].read(u8)));
+                break :blk val;
+            },
+            .num_u16_to_f64 => blk: {
+                const val = try self.alloc(ret_layout);
+                val.write(f64, @floatFromInt(a[0].read(u16)));
+                break :blk val;
+            },
+            .num_u32_to_f64 => blk: {
+                const val = try self.alloc(ret_layout);
+                val.write(f64, @floatFromInt(a[0].read(u32)));
+                break :blk val;
+            },
+            .num_u64_to_f64 => blk: {
+                const val = try self.alloc(ret_layout);
+                val.write(f64, @floatFromInt(a[0].read(u64)));
+                break :blk val;
+            },
+            .num_u128_to_f64 => blk: {
+                const val = try self.alloc(ret_layout);
+                val.write(f64, @floatFromInt(a[0].read(u128)));
+                break :blk val;
+            },
+
+            // Float-to-float
+            .num_f32_to_f64 => blk: {
+                const val = try self.alloc(ret_layout);
+                val.write(f64, @as(f64, a[0].read(f32)));
+                break :blk val;
+            },
+            .num_f64_to_f32_trunc => blk: {
+                const val = try self.alloc(ret_layout);
+                val.write(f32, @floatCast(a[0].read(f64)));
+                break :blk val;
+            },
+
+            // Dec
+            .dec_to_i8_trunc => self.decToInt(i8, a[0], ret_layout),
+            .dec_to_i16_trunc => self.decToInt(i16, a[0], ret_layout),
+            .dec_to_i32_trunc => self.decToInt(i32, a[0], ret_layout),
+            .dec_to_i64_trunc => self.decToInt(i64, a[0], ret_layout),
+            .dec_to_i128_trunc => self.decToInt(i128, a[0], ret_layout),
+            .dec_to_u8_trunc => self.decToInt(u8, a[0], ret_layout),
+            .dec_to_u16_trunc => self.decToInt(u16, a[0], ret_layout),
+            .dec_to_u32_trunc => self.decToInt(u32, a[0], ret_layout),
+            .dec_to_u64_trunc => self.decToInt(u64, a[0], ret_layout),
+            .dec_to_u128_trunc => self.decToInt(u128, a[0], ret_layout),
+            .dec_to_i8_try_unsafe => self.decToIntTry(i8, a[0], ret_layout),
+            .dec_to_i16_try_unsafe => self.decToIntTry(i16, a[0], ret_layout),
+            .dec_to_i32_try_unsafe => self.decToIntTry(i32, a[0], ret_layout),
+            .dec_to_i64_try_unsafe => self.decToIntTry(i64, a[0], ret_layout),
+            .dec_to_i128_try_unsafe => self.decToIntTry(i128, a[0], ret_layout),
+            .dec_to_u8_try_unsafe => self.decToIntTry(u8, a[0], ret_layout),
+            .dec_to_u16_try_unsafe => self.decToIntTry(u16, a[0], ret_layout),
+            .dec_to_u32_try_unsafe => self.decToIntTry(u32, a[0], ret_layout),
+            .dec_to_u64_try_unsafe => self.decToIntTry(u64, a[0], ret_layout),
+            .dec_to_u128_try_unsafe => self.decToIntTry(u128, a[0], ret_layout),
+            .dec_to_f32_wrap => blk: {
+                const dec = RocDec{ .num = a[0].read(i128) };
+                const val = try self.alloc(ret_layout);
+                val.write(f32, @floatCast(dec.toF64()));
+                break :blk val;
+            },
+            .dec_to_f32_try_unsafe => blk: {
+                const dec = RocDec{ .num = a[0].read(i128) };
+                const val = try self.alloc(ret_layout);
+                if (builtins.dec.toF32Try(dec)) |f| {
+                    val.write(f32, f);
+                    val.offset(4).write(u8, 1);
+                } else {
+                    val.write(f32, 0);
+                    val.offset(4).write(u8, 0);
+                }
+                break :blk val;
+            },
+            .dec_to_f64 => blk: {
+                const dec = RocDec{ .num = a[0].read(i128) };
+                const val = try self.alloc(ret_layout);
+                val.write(f64, dec.toF64());
+                break :blk val;
+            },
+
+            // Int-to-dec
+            .num_i8_to_dec => blk: {
+                const val = try self.alloc(ret_layout);
+                val.write(i128, @as(i128, a[0].read(i8)) * RocDec.one_point_zero_i128);
+                break :blk val;
+            },
+            .num_i16_to_dec => blk: {
+                const val = try self.alloc(ret_layout);
+                val.write(i128, @as(i128, a[0].read(i16)) * RocDec.one_point_zero_i128);
+                break :blk val;
+            },
+            .num_i32_to_dec => blk: {
+                const val = try self.alloc(ret_layout);
+                val.write(i128, @as(i128, a[0].read(i32)) * RocDec.one_point_zero_i128);
+                break :blk val;
+            },
+            .num_i64_to_dec => blk: {
+                const val = try self.alloc(ret_layout);
+                val.write(i128, @as(i128, a[0].read(i64)) * RocDec.one_point_zero_i128);
+                break :blk val;
+            },
+            .num_u8_to_dec => blk: {
+                const val = try self.alloc(ret_layout);
+                val.write(i128, @as(i128, a[0].read(u8)) * RocDec.one_point_zero_i128);
+                break :blk val;
+            },
+            .num_u16_to_dec => blk: {
+                const val = try self.alloc(ret_layout);
+                val.write(i128, @as(i128, a[0].read(u16)) * RocDec.one_point_zero_i128);
+                break :blk val;
+            },
+            .num_u32_to_dec => blk: {
+                const val = try self.alloc(ret_layout);
+                val.write(i128, @as(i128, a[0].read(u32)) * RocDec.one_point_zero_i128);
+                break :blk val;
+            },
+            .num_u64_to_dec => blk: {
+                const val = try self.alloc(ret_layout);
+                val.write(i128, @as(i128, a[0].read(u64)) * RocDec.one_point_zero_i128);
+                break :blk val;
+            },
+            .num_f32_to_dec => blk: {
+                const val = try self.alloc(ret_layout);
+                val.write(i128, builtins.dec.fromF64C(@as(f64, a[0].read(f32)), &self.roc_ops));
+                break :blk val;
+            },
+            .num_f64_to_dec => blk: {
+                const val = try self.alloc(ret_layout);
+                val.write(i128, builtins.dec.fromF64C(a[0].read(f64), &self.roc_ops));
+                break :blk val;
+            },
+
+            // Box
+            .box_box => try self.evalBoxBox(a[0], ret_layout),
+            .box_unbox => try self.evalBoxUnbox(a[0], ret_layout),
+
+            // Crash
+            .crash => return error.Crash,
+
+            // For any remaining ops, fall back to a runtime error.
+            // Complex ops like str_from_utf8, str_split_on, list_append_unsafe,
+            // list_concat, list_prepend, list_sublist, list_drop_at, list_set, etc.
+            // are handled by the scheduleExprEval path which calls the existing
+            // evalLowLevel helper directly (which re-evaluates simple lookup args).
+            else => return self.runtimeError("unsupported low-level op in stack-safe engine"),
+        };
+    }
+
+    /// Evaluate a hosted call with pre-evaluated argument values.
+    fn evalHostedCallWithArgs(
+        self: *LirInterpreter,
+        hc_index: u32,
+        arg_expr_ids: []const LirExprId,
+        arg_vals: []const Value,
+        ret_layout_idx: layout_mod.Idx,
+    ) Error!Value {
+        // Collect layouts for each arg
+        const ArgInfo = struct { val: Value, layout: layout_mod.Idx };
+        var collected_args = std.ArrayList(ArgInfo).empty;
+        defer collected_args.deinit(self.allocator);
+
+        for (arg_vals, arg_expr_ids) |val, expr_id| {
+            const arg_layout = lir_program_mod.lirExprResultLayout(self.store, expr_id);
+            collected_args.append(self.allocator, .{ .val = val, .layout = arg_layout }) catch return error.OutOfMemory;
+        }
+
+        // Marshal arguments into a contiguous buffer (same as evalHostedCall)
+        var total_args_size: usize = 0;
+        for (collected_args.items) |arg| {
+            const sa = self.helper.sizeAlignOf(arg.layout);
+            total_args_size = std.mem.alignForward(usize, total_args_size, sa.alignment.toByteUnits());
+            total_args_size += sa.size;
+        }
+
+        const args_buf_size = @max(total_args_size, 8);
+        const args_buf = self.arena.allocator().alloc(u8, args_buf_size) catch return error.OutOfMemory;
+        @memset(args_buf, 0);
+
+        var offset: usize = 0;
+        for (collected_args.items) |arg| {
+            const sa = self.helper.sizeAlignOf(arg.layout);
+            offset = std.mem.alignForward(usize, offset, sa.alignment.toByteUnits());
+            if (sa.size > 0 and !arg.val.isZst()) {
+                @memcpy(args_buf[offset .. offset + sa.size], arg.val.readBytes(sa.size));
+            }
+            offset += sa.size;
+        }
+
+        // Allocate return buffer and call
+        const ret_size = self.helper.sizeOf(ret_layout_idx);
+        var ret_buf: [64]u8 align(16) = undefined;
+        @memset(ret_buf[0..@max(ret_size, 1)], 0);
+
+        const hosted_fn = self.roc_ops.hosted_fns.fns[hc_index];
+        self.roc_env.resetCrash();
+        const ops_for_host: *RocOps = self.caller_roc_ops orelse &self.roc_ops;
+        hosted_fn(@ptrCast(ops_for_host), @ptrCast(&ret_buf), @ptrCast(args_buf.ptr));
+
+        if (self.roc_env.crashed) return error.Crash;
+
+        if (ret_size == 0) return Value.zst;
+        const result = try self.alloc(ret_layout_idx);
+        @memcpy(result.ptr[0..ret_size], ret_buf[0..ret_size]);
+        return result;
+    }
+
+    /// Find the index of the first non-cell_drop statement at or after `start`.
+    fn findFirstRealStmt(_: *const LirInterpreter, stmts: []const lir.LirStmt, start: usize) ?usize {
+        var i = start;
+        while (i < stmts.len) : (i += 1) {
+            switch (stmts[i]) {
+                .cell_drop => continue,
+                else => return i,
+            }
+        }
+        return null;
+    }
+
+    /// Get the expression ID from a statement (for scheduling).
+    fn stmtExprId(_: *const LirInterpreter, stmt: lir.LirStmt) LirExprId {
+        return switch (stmt) {
+            .decl, .mutate => |binding| binding.expr,
+            .cell_init, .cell_store => |cb| cb.expr,
+            .cell_drop => unreachable, // findFirstRealStmt skips these
+        };
     }
 };
