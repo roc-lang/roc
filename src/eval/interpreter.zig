@@ -1080,26 +1080,6 @@ pub const LirInterpreter = struct {
 
     // Aggregates
 
-    fn evalStruct(self: *LirInterpreter, s: anytype) Error!EvalResult {
-        const val = try self.alloc(s.struct_layout);
-        const field_exprs = self.store.getExprSpan(s.fields);
-        for (field_exprs, 0..) |field_expr_id, i| {
-            const field_offset = self.helper.structFieldOffset(s.struct_layout, @intCast(i));
-            const field_result = try self.eval(field_expr_id);
-            const field_val = switch (field_result) {
-                .value => |v| v,
-                .early_return => return field_result,
-                .break_expr => return error.RuntimeError,
-            };
-            const field_layout = self.fieldLayoutOf(s.struct_layout, @intCast(i));
-            const field_size = self.helper.sizeOf(field_layout);
-            if (field_size > 0) {
-                val.offset(field_offset).copyFrom(field_val, field_size);
-            }
-        }
-        return .{ .value = val };
-    }
-
     fn evalStructAccess(self: *LirInterpreter, sa: anytype) Error!Value {
         const struct_val = try self.evalValue(sa.struct_expr);
         const field_offset = self.helper.structFieldOffset(sa.struct_layout, sa.field_idx);
@@ -1112,110 +1092,9 @@ pub const LirInterpreter = struct {
         return val;
     }
 
-    fn evalTag(self: *LirInterpreter, t: anytype) Error!EvalResult {
-        const val = try self.alloc(t.union_layout);
-        self.helper.writeTagDiscriminant(val, t.union_layout, t.discriminant);
-
-        // Write payload at offset 0
-        const arg_exprs = self.store.getExprSpan(t.args);
-        if (arg_exprs.len > 0) {
-            const payload_layout = self.tagPayloadLayout(t.union_layout, t.discriminant);
-            const payload_layout_val = self.layout_store.getLayout(payload_layout);
-
-            if (payload_layout_val.tag != .struct_) {
-                if (std.debug.runtime_safety and arg_exprs.len != 1) {
-                    return self.triggerCrash("LIR interpreter invariant violated: non-struct tag payload can only have one arg");
-                }
-
-                const arg_result = try self.eval(arg_exprs[0]);
-                const arg_val = switch (arg_result) {
-                    .value => |v| v,
-                    .early_return => return arg_result,
-                    .break_expr => return error.RuntimeError,
-                };
-                const payload_size = self.helper.sizeOf(payload_layout);
-                if (payload_size > 0) {
-                    val.copyFrom(arg_val, payload_size);
-                }
-                return .{ .value = val };
-            }
-
-            for (arg_exprs, 0..) |arg_expr_id, i| {
-                const arg_result = try self.eval(arg_expr_id);
-                const arg_val = switch (arg_result) {
-                    .value => |v| v,
-                    .early_return => return arg_result,
-                    .break_expr => return error.RuntimeError,
-                };
-                const field_layout_idx = self.layout_store.getStructFieldLayoutByOriginalIndex(
-                    payload_layout_val.data.struct_.idx,
-                    @intCast(i),
-                );
-                const field_size = self.helper.sizeOf(field_layout_idx);
-                const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(
-                    payload_layout_val.data.struct_.idx,
-                    @intCast(i),
-                );
-                if (field_size > 0) {
-                    val.offset(field_offset).copyFrom(arg_val, field_size);
-                }
-            }
-        }
-        return .{ .value = val };
-    }
-
     fn evalEmptyList(self: *LirInterpreter, l: anytype) Error!Value {
         // RocList with all zeros = empty list
         return self.alloc(l.list_layout);
-    }
-
-    fn evalList(self: *LirInterpreter, l: anytype) Error!EvalResult {
-        const elem_exprs = self.store.getExprSpan(l.elems);
-        const elem_size = self.helper.sizeOf(l.elem_layout);
-        const count = elem_exprs.len;
-
-        if (count == 0) {
-            return .{ .value = try self.rocListToValue(RocList.empty(), l.list_layout) };
-        }
-
-        // ZST lists need no element storage, but must record the length.
-        if (elem_size == 0) {
-            return .{ .value = try self.rocListToValue(.{
-                .bytes = null,
-                .length = count,
-                .capacity_or_alloc_ptr = count,
-            }, l.list_layout) };
-        }
-
-        // Allocate element storage through roc_ops so builtins can safely
-        // call isUnique()/decref() on the data pointer.
-        // Pass elements_refcounted so allocateWithRefcount reserves space for
-        // the heap element count (needed by incref/decref when elements are RC'd).
-        const total_elem_bytes = elem_size * count;
-        const sa = self.helper.sizeAlignOf(l.elem_layout);
-        const elem_alignment: u32 = @intCast(sa.alignment.toByteUnits());
-        const elems_rc = self.helper.containsRefcounted(l.elem_layout);
-        const elem_data = try self.allocRocDataWithRc(total_elem_bytes, elem_alignment, elems_rc);
-        const elem_mem = elem_data[0..total_elem_bytes];
-        @memset(elem_mem, 0);
-
-        // Evaluate each element
-        for (elem_exprs, 0..) |elem_expr_id, i| {
-            const elem_result = try self.eval(elem_expr_id);
-            const elem_val = switch (elem_result) {
-                .value => |v| v,
-                .early_return => return elem_result,
-                .break_expr => return error.RuntimeError,
-            };
-            const dest_offset = i * elem_size;
-            @memcpy(elem_mem[dest_offset..][0..elem_size], elem_val.ptr[0..elem_size]);
-        }
-
-        return .{ .value = try self.rocListToValue(.{
-            .bytes = elem_mem.ptr,
-            .length = count,
-            .capacity_or_alloc_ptr = count,
-        }, l.list_layout) };
     }
 
     fn evalTagPayloadAccess(self: *LirInterpreter, tpa: anytype) Error!Value {
@@ -1226,80 +1105,7 @@ pub const LirInterpreter = struct {
         return self.normalizeValueToLayout(tag_base.value, actual_payload_layout, tpa.payload_layout);
     }
 
-    fn evalEarlyReturn(self: *LirInterpreter, er: anytype) Error!EvalResult {
-        const val = try self.evalValue(er.expr);
-        return .{ .early_return = val };
-    }
-
-    fn evalForLoop(self: *LirInterpreter, fl: anytype) Error!EvalResult {
-        const list_val = try self.evalValue(fl.list_expr);
-        const elem_size = self.helper.sizeOf(fl.elem_layout);
-
-        const rl = valueToRocList(list_val);
-        const count = rl.len();
-
-        if (count == 0) return .{ .value = Value.zst };
-
-        const data: [*]u8 = @ptrCast(rl.bytes orelse return .{ .value = Value.zst });
-        var i: usize = 0;
-        while (i < count) : (i += 1) {
-            const elem_val = if (elem_size > 0)
-                Value{ .ptr = data + i * elem_size }
-            else
-                Value.zst;
-            try self.bindPattern(fl.elem_pattern, elem_val);
-            const body_result = try self.eval(fl.body);
-            switch (body_result) {
-                .value => {},
-                .break_expr => break,
-                .early_return => return body_result,
-            }
-        }
-        return .{ .value = Value.zst };
-    }
-
-    fn evalWhileLoop(self: *LirInterpreter, wl: anytype) Error!EvalResult {
-        const check_infinite_loop = self.detect_infinite_while_loops and
-            !self.exprInvolvesMutableCell(wl.cond) and
-            !self.exprHasLoopExit(wl.body);
-
-        while (true) {
-            const cond_val = try self.evalValue(wl.cond);
-            const cond_is_true = cond_val.read(u8) != 0;
-            if (check_infinite_loop and cond_is_true) {
-                return self.triggerCrash(infinite_while_loop_message);
-            }
-            if (!cond_is_true) break;
-            const body_result = try self.eval(wl.body);
-            switch (body_result) {
-                .value => {},
-                .break_expr => break,
-                .early_return => return body_result,
-            }
-        }
-        return .{ .value = Value.zst };
-    }
-
     // Function calls
-
-    fn evalProcCall(self: *LirInterpreter, pc: anytype) Error!EvalResult {
-        // Evaluate arguments
-        const arg_exprs = self.store.getExprSpan(pc.args);
-        var args = std.array_list.AlignedManaged(Value, null).init(self.allocator);
-        defer args.deinit();
-        for (arg_exprs) |arg_expr_id| {
-            const arg_result = try self.eval(arg_expr_id);
-            const arg_val = switch (arg_result) {
-                .value => |v| v,
-                else => return arg_result,
-            };
-            args.append(arg_val) catch return error.OutOfMemory;
-        }
-
-        // Look up the proc spec and call it
-        const proc_spec = self.store.getProcSpec(pc.proc);
-        return self.callProcSpec(proc_spec, args.items);
-    }
 
     fn callProcSpec(self: *LirInterpreter, proc_spec: LirProcSpec, args: []const Value) Error!EvalResult {
         if (self.call_depth >= max_call_depth) {
@@ -1522,17 +1328,6 @@ pub const LirInterpreter = struct {
         if (self.roc_env.crash_message) |old| self.allocator.free(old);
         self.roc_env.crash_message = self.allocator.dupe(u8, msg) catch null;
         return error.Crash;
-    }
-
-    fn evalExpect(self: *LirInterpreter, e: anytype) Error!EvalResult {
-        const cond_val = try self.evalValue(e.cond);
-        if (cond_val.read(u8) == 0) {
-            if (self.roc_env.expect_message == null) {
-                const msg = try self.renderExpectExpr(e.cond);
-                self.roc_env.expect_message = self.allocator.dupe(u8, msg) catch return error.OutOfMemory;
-            }
-        }
-        return .{ .value = Value.zst };
     }
 
     fn renderExpectExpr(self: *LirInterpreter, expr_id: LirExprId) Error![]const u8 {
@@ -3666,116 +3461,6 @@ pub const LirInterpreter = struct {
         );
     }
 
-    fn evalStrConcat(self: *LirInterpreter, sc: lir.LirExprSpan) Error!EvalResult {
-        const parts = self.store.getExprSpan(sc);
-        if (parts.len == 0) return .{ .value = try self.makeRocStr("") };
-
-        var total_len: usize = 0;
-        var part_strs = std.array_list.AlignedManaged([]const u8, null).init(self.allocator);
-        defer part_strs.deinit();
-
-        for (parts) |part_id| {
-            if (self.isRecoverableStringPlaceholder(part_id)) continue;
-
-            const part_result = try self.eval(part_id);
-            const part_val = switch (part_result) {
-                .value => |v| v,
-                .early_return => return part_result,
-                .break_expr => return error.RuntimeError,
-            };
-            const s = self.readRocStr(part_val);
-            total_len += s.len;
-            part_strs.append(s) catch return error.OutOfMemory;
-        }
-
-        const buf = self.arena.allocator().alloc(u8, total_len) catch return error.OutOfMemory;
-        var offset: usize = 0;
-        for (part_strs.items) |s| {
-            @memcpy(buf[offset..][0..s.len], s);
-            offset += s.len;
-        }
-        return .{ .value = try self.makeRocStr(buf) };
-    }
-
-    fn evalIntToStr(self: *LirInterpreter, its: anytype) Error!EvalResult {
-        const int_result = try self.eval(its.value);
-        const int_val = switch (int_result) {
-            .value => |v| v,
-            .early_return => return int_result,
-            .break_expr => return error.RuntimeError,
-        };
-        const arena = self.arena.allocator();
-        const formatted: []const u8 = switch (its.int_precision) {
-            .u8 => std.fmt.allocPrint(arena, "{d}", .{int_val.read(u8)}) catch return error.OutOfMemory,
-            .i8 => std.fmt.allocPrint(arena, "{d}", .{int_val.read(i8)}) catch return error.OutOfMemory,
-            .u16 => std.fmt.allocPrint(arena, "{d}", .{int_val.read(u16)}) catch return error.OutOfMemory,
-            .i16 => std.fmt.allocPrint(arena, "{d}", .{int_val.read(i16)}) catch return error.OutOfMemory,
-            .u32 => std.fmt.allocPrint(arena, "{d}", .{int_val.read(u32)}) catch return error.OutOfMemory,
-            .i32 => std.fmt.allocPrint(arena, "{d}", .{int_val.read(i32)}) catch return error.OutOfMemory,
-            .u64 => std.fmt.allocPrint(arena, "{d}", .{int_val.read(u64)}) catch return error.OutOfMemory,
-            .i64 => std.fmt.allocPrint(arena, "{d}", .{int_val.read(i64)}) catch return error.OutOfMemory,
-            .u128 => std.fmt.allocPrint(arena, "{d}", .{int_val.read(u128)}) catch return error.OutOfMemory,
-            .i128 => std.fmt.allocPrint(arena, "{d}", .{int_val.read(i128)}) catch return error.OutOfMemory,
-        };
-        return .{ .value = try self.makeRocStr(formatted) };
-    }
-
-    fn evalFloatToStr(self: *LirInterpreter, fts: anytype) Error!EvalResult {
-        const float_result = try self.eval(fts.value);
-        const float_val = switch (float_result) {
-            .value => |v| v,
-            .early_return => return float_result,
-            .break_expr => return error.RuntimeError,
-        };
-        var buf: [400]u8 = undefined;
-        const slice: []const u8 = switch (fts.float_precision) {
-            .f32 => i128h.f64_to_str(&buf, @as(f64, float_val.read(f32))),
-            .f64 => i128h.f64_to_str(&buf, float_val.read(f64)),
-            .dec => blk: {
-                const dec = RocDec{ .num = float_val.read(i128) };
-                var dec_buf: [RocDec.max_str_length]u8 = undefined;
-                break :blk dec.format_to_buf(&dec_buf);
-            },
-        };
-        return .{ .value = try self.makeRocStr(slice) };
-    }
-
-    fn evalDecToStr(self: *LirInterpreter, dts: LirExprId) Error!EvalResult {
-        const dec_result = try self.eval(dts);
-        const dec_val = switch (dec_result) {
-            .value => |v| v,
-            .early_return => return dec_result,
-            .break_expr => return error.RuntimeError,
-        };
-        const dec = RocDec{ .num = dec_val.read(i128) };
-        var buf: [RocDec.max_str_length]u8 = undefined;
-        const slice = dec.format_to_buf(&buf);
-        return .{ .value = try self.makeRocStr(slice) };
-    }
-
-    fn evalStrEscapeAndQuote(self: *LirInterpreter, seq: LirExprId) Error!EvalResult {
-        const str_result = try self.eval(seq);
-        const str_val = switch (str_result) {
-            .value => |v| v,
-            .early_return => return str_result,
-            .break_expr => return error.RuntimeError,
-        };
-        const s = self.readRocStr(str_val);
-        // Escape backslashes and quotes, then wrap in quotes
-        var escaped = std.array_list.AlignedManaged(u8, null).init(self.allocator);
-        defer escaped.deinit();
-        escaped.append('"') catch return error.OutOfMemory;
-        for (s) |ch| {
-            switch (ch) {
-                '\\' => escaped.appendSlice("\\\\") catch return error.OutOfMemory,
-                '"' => escaped.appendSlice("\\\"") catch return error.OutOfMemory,
-                else => escaped.append(ch) catch return error.OutOfMemory,
-            }
-        }
-        escaped.append('"') catch return error.OutOfMemory;
-        return .{ .value = try self.makeRocStr(escaped.items) };
-    }
-
     // Layout helpers
 
     /// Get the layout of the i-th field in a struct layout.
@@ -5085,27 +4770,6 @@ pub const LirInterpreter = struct {
 
         // Schedule the CF statement body
         try self.pushWork(.{ .eval_cf_stmt = proc_spec.body });
-    }
-
-    fn _removed_dispatchLowLevelWithArgs(
-        _: *LirInterpreter,
-        _: base.LowLevel,
-        _: []const Value,
-        _: layout_mod.Idx,
-        _: layout_mod.Idx,
-        _: lir.LirProcSpecId,
-    ) Error!Value {
-        unreachable; // Dead code — low-level ops use evalLowLevel directly
-    }
-
-    fn _removed_evalHostedCallWithArgs(
-        _: *LirInterpreter,
-        _: u32,
-        _: []const LirExprId,
-        _: []const Value,
-        _: layout_mod.Idx,
-    ) Error!Value {
-        unreachable;
     }
 
     /// Find the index of the first non-cell_drop statement at or after `start`.
