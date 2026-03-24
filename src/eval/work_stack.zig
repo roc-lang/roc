@@ -10,7 +10,6 @@
 //! This file has **no** dependency on `interpreter.zig` — it is pure type
 //! definitions consumed by the interpreter's stack-safe eval engine.
 
-const std = @import("std");
 const base = @import("base");
 const lir = @import("lir");
 const layout_mod = @import("layout");
@@ -391,4 +390,3 @@ pub const FlatBinding = struct {
     val: Value,
     size: u32,
 };
-
