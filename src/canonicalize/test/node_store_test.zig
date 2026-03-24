@@ -658,6 +658,12 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(gpa, CIR.Diagnostic{
+        .open_ext_not_allowed_in_type_decl = .{
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
         .type_module_missing_matching_type = .{
             .module_name = rand_ident_idx(),
             .region = rand_region(),

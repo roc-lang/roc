@@ -46,6 +46,7 @@ const LayoutGraph = graph_mod.Graph;
 const GraphNodeId = graph_mod.NodeId;
 const GraphRef = graph_mod.Ref;
 const Work = work.Work;
+const RefcountedVisitState = enum(u2) { active, no, yes };
 
 /// Errors that can occur during layout computation
 /// Stores Layout instances by Idx.
@@ -131,6 +132,21 @@ pub const Store = struct {
     // The target's usize type (32-bit or 64-bit) - used for layout calculations
     // This is critical for cross-compilation (e.g., compiling for wasm32 on a 64-bit host)
     target_usize: target.TargetUsize,
+
+    fn debugAssertPendingTupleFieldsSane(self: *const Self, site: []const u8) void {
+        if (@import("builtin").mode != .Debug) return;
+
+        if (self.work.pending_tuple_fields.len > self.work.pending_tuple_fields.capacity) {
+            std.debug.panic(
+                "layout.Store invariant violated at {s}: pending_tuple_fields len {d} exceeds capacity {d}",
+                .{
+                    site,
+                    self.work.pending_tuple_fields.len,
+                    self.work.pending_tuple_fields.capacity,
+                },
+            );
+        }
+    }
 
     // Number of sentinel layouts that are pre-populated in the layout store.
     // Must be kept in sync with the sentinel values in layout.zig Idx enum.
@@ -1199,37 +1215,14 @@ pub const Store = struct {
         };
     }
 
-    /// Dynamically compute the discriminant offset for a tag union.
-    /// This computes the offset based on current variant payload sizes,
-    /// which is necessary for recursive types where placeholder layouts
-    /// may have been updated after the tag union was initially created.
+    /// Get the canonical discriminant offset for a tag union.
     pub fn getTagUnionDiscriminantOffset(self: *const Self, tu_idx: TagUnionIdx) u16 {
-        const tu_data = self.getTagUnionData(tu_idx);
-        const variants = self.getTagUnionVariants(tu_data);
-
-        // Find the maximum payload size across all variants
-        var max_payload_size: u32 = 0;
-        for (0..variants.len) |i| {
-            const variant = variants.get(i);
-            const variant_layout = self.getLayout(variant.payload_layout);
-            const variant_size = self.layoutSize(variant_layout);
-            if (variant_size > max_payload_size) {
-                max_payload_size = variant_size;
-            }
-        }
-
-        // Align the discriminant offset to the discriminant's alignment
-        const disc_align = tu_data.discriminantAlignment();
-        return @intCast(std.mem.alignForward(u32, max_payload_size, @intCast(disc_align.toByteUnits())));
+        return self.getTagUnionData(tu_idx).discriminant_offset;
     }
 
-    /// Dynamically compute the total size of a tag union.
-    /// This computes the size based on current variant payload sizes.
-    pub fn getTagUnionSize(self: *const Self, tu_idx: TagUnionIdx, alignment: std.mem.Alignment) u32 {
-        const tu_data = self.getTagUnionData(tu_idx);
-        const disc_offset = self.getTagUnionDiscriminantOffset(tu_idx);
-        const total_unaligned = disc_offset + tu_data.discriminant_size;
-        return std.mem.alignForward(u32, total_unaligned, @intCast(alignment.toByteUnits()));
+    /// Get the canonical size of a tag union.
+    pub fn getTagUnionSize(self: *const Self, tu_idx: TagUnionIdx, _: std.mem.Alignment) u32 {
+        return self.getTagUnionData(tu_idx).size;
     }
 
     /// Create a new tag_union layout with a specific variant's payload layout replaced.
@@ -1281,22 +1274,9 @@ pub const Store = struct {
         ));
     }
 
-    /// Dynamically compute the total size of a struct.
-    /// This computes the size based on current field layout sizes.
-    pub fn getStructSize(self: *const Self, struct_idx: StructIdx, struct_alignment: std.mem.Alignment) u32 {
-        const sd = self.getStructData(struct_idx);
-        const fields = self.struct_fields.sliceRange(sd.getFields());
-
-        var current_offset: u32 = 0;
-        for (0..fields.len) |i| {
-            const field = fields.get(i);
-            const field_layout = self.getLayout(field.layout);
-            const field_size_align = self.layoutSizeAlign(field_layout);
-            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_size_align.alignment.toByteUnits()))));
-            current_offset += field_size_align.size;
-        }
-
-        return std.mem.alignForward(u32, current_offset, @intCast(struct_alignment.toByteUnits()));
+    /// Get the canonical size of a struct.
+    pub fn getStructSize(self: *const Self, struct_idx: StructIdx, _: std.mem.Alignment) u32 {
+        return self.getStructData(struct_idx).size;
     }
 
     /// Backwards-compat aliases
@@ -1517,42 +1497,70 @@ pub const Store = struct {
     /// the layout itself is heap-allocated. This function also returns true for
     /// tuples/records that contain strings, lists, or boxes.
     pub fn layoutContainsRefcounted(self: *const Self, l: Layout) bool {
-        return switch (l.tag) {
-            .scalar => switch (l.data.scalar.tag) {
-                .str => true,
-                else => false,
-            },
-            .list, .list_of_zst => true,
-            .box, .box_of_zst => true,
-            .struct_ => {
+        var visit_states = std.AutoHashMap(u32, RefcountedVisitState).init(self.allocator);
+        defer visit_states.deinit();
+
+        return self.layoutContainsRefcountedInner(l, &visit_states) catch
+            @panic("layoutContainsRefcounted ran out of memory");
+    }
+
+    fn layoutContainsRefcountedInner(
+        self: *const Self,
+        l: Layout,
+        visit_states: *std.AutoHashMap(u32, RefcountedVisitState),
+    ) std.mem.Allocator.Error!bool {
+        const key: u32 = @bitCast(l);
+        if (visit_states.get(key)) |state| {
+            return switch (state) {
+                // Recursive layout back-edges are materialized through placeholder
+                // indirections, so re-entering an active node implies refcounted data.
+                .active, .yes => true,
+                .no => false,
+            };
+        }
+
+        switch (l.tag) {
+            .scalar => return l.data.scalar.tag == .str,
+            .list, .list_of_zst => return true,
+            .box, .box_of_zst => return true,
+            .zst => return false,
+            .struct_, .tag_union, .closure => {},
+        }
+
+        try visit_states.put(key, .active);
+
+        const contains_refcounted = switch (l.tag) {
+            .struct_ => blk: {
                 const sd = self.getStructData(l.data.struct_.idx);
                 const fields = self.struct_fields.sliceRange(sd.getFields());
                 for (0..fields.len) |i| {
                     const field_layout = self.getLayout(fields.get(i).layout);
-                    if (self.layoutContainsRefcounted(field_layout)) {
-                        return true;
+                    if (try self.layoutContainsRefcountedInner(field_layout, visit_states)) {
+                        break :blk true;
                     }
                 }
-                return false;
+                break :blk false;
             },
-            .tag_union => {
+            .tag_union => blk: {
                 const tu_data = self.getTagUnionData(l.data.tag_union.idx);
                 const variants = self.getTagUnionVariants(tu_data);
                 for (0..variants.len) |i| {
                     const variant_layout = self.getLayout(variants.get(i).payload_layout);
-                    if (self.layoutContainsRefcounted(variant_layout)) {
-                        return true;
+                    if (try self.layoutContainsRefcountedInner(variant_layout, visit_states)) {
+                        break :blk true;
                     }
                 }
-                return false;
+                break :blk false;
             },
-            .closure => {
-                // Check if the captured variables contain refcounted data
+            .closure => blk: {
                 const captures_layout = self.getLayout(l.data.closure.captures_layout_idx);
-                return self.layoutContainsRefcounted(captures_layout);
+                break :blk try self.layoutContainsRefcountedInner(captures_layout, visit_states);
             },
-            .zst => false,
+            .scalar, .list, .list_of_zst, .box, .box_of_zst, .zst => unreachable,
         };
+
+        try visit_states.put(key, if (contains_refcounted) .yes else .no);
+        return contains_refcounted;
     }
 
     /// Add the tag union's tags to self.pending_tags,
@@ -1707,6 +1715,7 @@ pub const Store = struct {
         const num_fields = elem_slice.len;
 
         for (elem_slice, 0..) |var_, index| {
+            self.debugAssertPendingTupleFieldsSane("gatherTupleFields:before-append");
             try self.work.pending_tuple_fields.append(self.allocator, .{ .index = @intCast(index), .var_ = var_ });
         }
 
@@ -2363,32 +2372,6 @@ pub const Store = struct {
                                                 };
                                             }
                                         }
-                                        // No mapping found for this rigid type parameter.
-                                        // Try to find ANY rigid mapping as a heuristic - in a monomorphized
-                                        // function, all unmapped rigids should map to the same concrete type.
-                                        if (caller_module_idx) |caller_mod| {
-                                            if (type_scope.scopes.items.len > 0) {
-                                                var iter = type_scope.scopes.items[0].iterator();
-                                                while (iter.next()) |entry| {
-                                                    // Check if this mapping is from a rigid (not a specific structure)
-                                                    const ext_env = self.all_module_envs[self.current_module_idx];
-                                                    const key_resolved = ext_env.types.resolveVar(entry.key_ptr.*);
-                                                    if (key_resolved.desc.content == .rigid) {
-                                                        // Found a rigid mapping - use it
-                                                        const caller_env = self.all_module_envs[caller_mod];
-                                                        const mapped_resolved = caller_env.types.resolveVar(entry.value_ptr.*);
-                                                        break :blk switch (mapped_resolved.desc.content) {
-                                                            .structure => |ft| switch (ft) {
-                                                                .empty_record, .empty_tag_union => true,
-                                                                else => false,
-                                                            },
-                                                            .flex, .rigid => false,
-                                                            else => false,
-                                                        };
-                                                    }
-                                                }
-                                            }
-                                        }
                                         // Mark this computation as depending on unresolved params
                                         // so the result won't be cached.
                                         depends_on_unresolved_type_params = true;
@@ -2675,6 +2658,7 @@ pub const Store = struct {
                             } else {
                                 // Multi-arg variant - set up tuple processing
                                 for (args_slice, 0..) |var_, index| {
+                                    self.debugAssertPendingTupleFieldsSane("tag-union:init-variant:before-append");
                                     try self.work.pending_tuple_fields.append(self.allocator, .{
                                         .index = @intCast(index),
                                         .var_ = var_,
@@ -2794,7 +2778,9 @@ pub const Store = struct {
                                 // Pass target_module as caller so chained type scope lookups
                                 // work (e.g., rigid → flex → concrete via two scope entries).
                                 // Cycle detection prevents infinite loops.
+                                const saved_module_idx = self.current_module_idx;
                                 layout_idx = try self.fromTypeVar(target_module, mapped_var, type_scope, target_module);
+                                self.current_module_idx = saved_module_idx;
                                 skip_layout_computation = true;
                                 break :blk self.getLayout(layout_idx);
                             }
@@ -2812,20 +2798,20 @@ pub const Store = struct {
                             break :blk Layout.default_num();
                         }
 
-                        // For unconstrained flex vars inside containers (list, box),
-                        // treat them as zero-sized until type scope resolves them.
-                        if (self.work.pending_containers.len > 0) {
-                            const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
-                            if (pending_item.container == .box or pending_item.container == .list) {
-                                if (!flex.constraints.isEmpty()) {
-                                    break :blk Layout.default_num();
-                                }
-                                break :blk Layout.zst();
-                            }
-                        }
-
-                        // Unconstrained flex vars (like the element type of an empty list)
-                        // have no concrete type, so they're zero-sized.
+                        // By the time we ask the layout store for a non-numeric unresolved type
+                        // variable, the only legitimate survivors are zero-sized cases whose
+                        // runtime representation is fully determined without ever materializing
+                        // the abstract type variable itself. Examples include empty-list element
+                        // vars, phantom-only values, and aggregates whose remaining unresolved
+                        // pieces are all representationless. Those must collapse to ZST here so
+                        // layout never grows its own shadow "abstract layout param" notion.
+                        //
+                        // If an earlier compiler bug lets a representationful unresolved type
+                        // variable reach this point, collapsing it to ZST is still not ideal.
+                        // However, keeping a polymorphic placeholder in the runtime-layout layer
+                        // is worse: layout is supposed to describe concrete representation, and
+                        // inventing a first-class abstract layout variant only obscures the real
+                        // invariant violation upstream.
                         break :blk Layout.zst();
                     },
                     .rigid => |rigid| blk: {
@@ -2860,7 +2846,9 @@ pub const Store = struct {
                                 // Pass target_module as caller so chained type scope lookups
                                 // work (e.g., rigid → flex → concrete via two scope entries).
                                 // Cycle detection prevents infinite loops.
+                                const saved_module_idx = self.current_module_idx;
                                 layout_idx = try self.fromTypeVar(target_module, mapped_var, type_scope, target_module);
+                                self.current_module_idx = saved_module_idx;
                                 skip_layout_computation = true;
                                 break :blk self.getLayout(layout_idx);
                             }
@@ -2877,27 +2865,10 @@ pub const Store = struct {
                             break :blk Layout.default_num();
                         }
 
-                        // For rigid vars inside containers (list, box), we need to determine
-                        // the element layout. If the rigid var has constraints, default to Dec.
-                        if (self.work.pending_containers.len > 0) {
-                            const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
-                            if (pending_item.container == .box or pending_item.container == .list) {
-                                // If the rigid var has any constraints, assume it's numeric and default to Dec.
-                                if (!rigid.constraints.isEmpty()) {
-                                    break :blk Layout.default_num();
-                                }
-                                break :blk Layout.zst();
-                            }
-                        }
-                        // Unconstrained rigid vars (like from empty list element types) can be ZST.
-                        // This is safe because the code using them either runs with concrete
-                        // types or doesn't run at all (like for empty list iterations).
-                        if (rigid.constraints.isEmpty()) {
-                            break :blk Layout.zst();
-                        }
-
-                        // Rigid vars with constraints must be resolvable.
-                        unreachable;
+                        // Same rationale as the unresolved flex-var case above: by the time a
+                        // non-numeric rigid reaches the layout layer, the only valid survivors
+                        // are representationless/ZST cases.
+                        break :blk Layout.zst();
                     },
                     .alias => |alias| {
                         // Follow the alias by updating the work item
@@ -3047,6 +3018,7 @@ pub const Store = struct {
                         pending_tuple.pending_fields -= 1;
 
                         // Pop the field we just processed
+                        self.debugAssertPendingTupleFieldsSane("tuple:before-pop");
                         const pending_field = self.work.pending_tuple_fields.pop() orelse unreachable;
 
                         // Add to resolved fields
@@ -3095,6 +3067,7 @@ pub const Store = struct {
                             } else {
                                 // Multi-arg variant - set up tuple processing
                                 for (next_args_slice, 0..) |var_, index| {
+                                    self.debugAssertPendingTupleFieldsSane("tag-union:next-variant:before-append");
                                     try self.work.pending_tuple_fields.append(self.allocator, .{
                                         .index = @intCast(index),
                                         .var_ = var_,

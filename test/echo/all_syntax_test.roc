@@ -1,7 +1,3 @@
-app [main!] { pf: platform "./platform/main.roc" }
-
-import pf.Stdout
-import pf.Stdout as StdoutAlias
 # TODO implement: import "../../README.md" as readme : Str
 
 # Note 1: I tried to demonstrate all Roc syntax (possible in a single app file),
@@ -97,7 +93,7 @@ multiline_str = |number|
 # `=>` shows effectfulness in the type signature
 effect_demo! : Str => {}
 effect_demo! = |msg|
-	Stdout.line!(msg)
+	echo!(msg)
 
 question_postfix : List(Str) -> Try(I64, _)
 question_postfix = |strings| {
@@ -149,7 +145,7 @@ while_loop = |limit| {
 }
 
 print! = |something| {
-	Stdout.line!(Str.inspect(something))
+	echo!(Str.inspect(something))
 }
 
 dbg_keyword = || {
@@ -309,7 +305,7 @@ color_to_str = |color| match color {
 # str_to_color : Str -> [Red, Green, Blue, Other, ..[]]
 
 # Type alias for an extensible tag union. You can use a type var (`others`) like so:
-Letters(others) : [A, B, ..]
+Letters(others) : [A, B, ..others]
 
 # Use the type alias in a function signature. Pass `[C]` as `others`.
 letter_to_str : Letters([C]) -> Str
@@ -323,11 +319,11 @@ letter_to_str = |letter| match letter {
 stringify : a -> Str where [a.to_str : a -> Str]
 stringify = |value| value.to_str()
 
-main! = || {
-	Stdout.line!("Hello, world!")
-	StdoutAlias.line!("Hello, world! (using alias)")
+main! = |_args| {
+	echo!("Hello, world!")
+	echo!("Hello, world! (using alias)")
 
-	Stdout.line!(Str.inspect(number_operators(10, 5)))
+	echo!(Str.inspect(number_operators(10, 5)))
 	print!(boolean_operators(Bool.True, Bool.False))
 
 	# pizza operator (|>) is gone, we now have static dispatch instead.
@@ -337,12 +333,12 @@ main! = || {
 	# If you want a very similar style for a function that is not defined on the type but is in scope, you can use `->`:
 	print!("Three"->my_concat(" Four"))
 
-	Stdout.line!(simple_match(Red))
+	echo!(simple_match(Red))
 	print!(match_list_patterns([1, 10]))
-	Stdout.line!(match_tag_union_advanced(Ok({})))
+	echo!(match_tag_union_advanced(Ok({})))
 
-	Stdout.line!(multiline_str(3))
-	Stdout.line!("Unicode escape sequence: \u(00A0)")
+	echo!(multiline_str(3))
+	echo!("Unicode escape sequence: \u(00A0)")
 
 	effect_demo!("This is an effectful function!")
 
@@ -361,7 +357,7 @@ main! = || {
 
 	print!(dbg_keyword())
 
-	Stdout.line!(if_demo(2))
+	echo!(if_demo(2))
 
 	print!(tuple_demo)
 
@@ -406,10 +402,12 @@ main! = || {
 	print!(letter_to_str(A))
 	print!(letter_to_str(C)) # C is not in [A, B] but we passed it in the signature of letter_to_str
 
-	# TODO Stdout.line!(readme);
+	# TODO echo!(readme);
 
 	# Commented out so CI tests can pass
 	# crash "Avoid using crash in production software!"
+
+	Ok({})
 }
 
 # Top level expects only run when using `roc test file.roc`

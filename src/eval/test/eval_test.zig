@@ -3153,46 +3153,46 @@ test "owned tag wildcard payload is cleaned up before codegen" {
     try runExpectI64("match Ok([1.I64, 2.I64, 3.I64]) { Ok(_) => 9.I64, Err(_) => 0.I64 }", 9, .no_trace);
 }
 
-// ============ str_inspekt (Str.inspect) tests ============
+// ============ str_inspect (Str.inspect) tests ============
 
-test "str_inspekt - integer" {
+test "str_inspect - integer" {
     // Str.inspect on an integer should return its string representation
     // Note: untyped numeric literals default to Dec, so 42 becomes "42.0"
     try runExpectStr("Str.inspect(42)", "42.0", .no_trace);
 }
 
-test "str_inspekt - negative integer" {
+test "str_inspect - negative integer" {
     try runExpectStr("Str.inspect(-123)", "-123.0", .no_trace);
 }
 
-test "str_inspekt - zero" {
+test "str_inspect - zero" {
     try runExpectStr("Str.inspect(0)", "0.0", .no_trace);
 }
 
-test "str_inspekt - boolean true" {
+test "str_inspect - boolean true" {
     // Str.inspect on Bool.True renders without the nominal prefix
     try runExpectStr("Str.inspect(Bool.True)", "True", .no_trace);
 }
 
-test "str_inspekt - boolean false" {
+test "str_inspect - boolean false" {
     try runExpectStr("Str.inspect(Bool.False)", "False", .no_trace);
 }
 
-test "str_inspekt - simple string" {
+test "str_inspect - simple string" {
     // Str.inspect on a string should return it quoted and escaped
     try runExpectStr("Str.inspect(\"hello\")", "\"hello\"", .no_trace);
 }
 
-test "str_inspekt - string with quotes" {
+test "str_inspect - string with quotes" {
     // Quotes inside strings should be escaped
     try runExpectStr("Str.inspect(\"say \\\"hi\\\"\")", "\"say \\\"hi\\\"\"", .no_trace);
 }
 
-test "str_inspekt - empty string" {
+test "str_inspect - empty string" {
     try runExpectStr("Str.inspect(\"\")", "\"\"", .no_trace);
 }
 
-test "str_inspekt - large integer" {
+test "str_inspect - large integer" {
     try runExpectStr("Str.inspect(1234567890)", "1234567890.0", .no_trace);
 }
 
@@ -3561,6 +3561,52 @@ test "dev only: !Bool.True formats as False" {
 
 test "dev only: !Bool.False formats as True" {
     try runDevOnlyExpectStr("!Bool.False", "True");
+}
+
+test "dev only: nested List.append on U32 formats as [1, 2]" {
+    try runDevOnlyExpectStr("List.append(List.append([], 1.U32), 2.U32)", "[1, 2]");
+}
+
+test "dev only: U32 literal formats as 15" {
+    try runDevOnlyExpectStr("15.U32", "15");
+}
+
+test "dev only: U32 comparison formats as True" {
+    try runDevOnlyExpectStr("1.U32 <= 5.U32", "True");
+}
+
+test "dev only: U32 addition formats as 3" {
+    try runDevOnlyExpectStr("1.U32 + 2.U32", "3");
+}
+
+test "dev only: while loop increment over U32 formats as 6" {
+    try runDevOnlyExpectStr(
+        \\{
+        \\    var current = 1.U32
+        \\
+        \\    while current <= 5.U32 {
+        \\        current = current + 1.U32
+        \\    }
+        \\
+        \\    current
+        \\}
+    , "6");
+}
+
+test "dev only: while loop sum over U32 formats as 15" {
+    try runDevOnlyExpectStr(
+        \\{
+        \\    var current = 1.U32
+        \\    var sum = 0.U32
+        \\
+        \\    while current <= 5.U32 {
+        \\        sum = sum + current
+        \\        current = current + 1.U32
+        \\    }
+        \\
+        \\    sum
+        \\}
+    , "15");
 }
 
 test "Str.trim" {
@@ -3947,6 +3993,20 @@ test "direct List.contains captured Str control" {
         \\{
         \\    out = ["a"]
         \\    out.contains("a")
+        \\}
+    ,
+        true,
+        .no_trace,
+    );
+}
+
+test "forwarding tag union with Str payload through proc call does not leak" {
+    try runExpectBool(
+        \\{
+        \\    consume = |value| value == Ok({ x: "x" })
+        \\    forward = |value| consume(value)
+        \\    value = Ok({ x: "x" })
+        \\    forward(value)
         \\}
     ,
         true,

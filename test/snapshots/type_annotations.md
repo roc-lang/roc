@@ -124,7 +124,7 @@ EndOfFile,
 				(anno-record-field (name "a")
 					(ty (name "U8")))
 				(ty-record-ext
-					(_))))))
+					..)))))
 ~~~
 # FORMATTED
 ~~~roc

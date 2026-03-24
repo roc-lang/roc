@@ -9,6 +9,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
+var next_cache_dir_id: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 
 /// Result of a test execution
 pub const TestResult = enum {
@@ -36,21 +37,35 @@ pub const TestStats = struct {
     }
 };
 
+fn createIsolatedTestCacheDir(allocator: Allocator) ![]u8 {
+    const cache_dir_id = next_cache_dir_id.fetchAdd(1, .monotonic);
+    const cache_leaf = try std.fmt.allocPrint(allocator, "{d}-{d}", .{
+        @as(u64, @intCast(std.time.nanoTimestamp())),
+        cache_dir_id,
+    });
+    defer allocator.free(cache_leaf);
+
+    const cwd_path = try std.fs.cwd().realpathAlloc(allocator, ".");
+    defer allocator.free(cwd_path);
+
+    const cache_rel = try std.fs.path.join(allocator, &.{ ".zig-cache", "roc-test-cache", cache_leaf });
+    defer allocator.free(cache_rel);
+
+    std.fs.cwd().makePath(cache_rel) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+
+    return std.fs.path.join(allocator, &.{ cwd_path, cache_rel });
+}
+
 fn runRocChild(allocator: Allocator, argv: []const []const u8) !std.process.Child.RunResult {
     var env_map = try std.process.getEnvMap(allocator);
     defer env_map.deinit();
 
-    // Test runs may execute inside a sandbox where the default cache dir is not writable.
-    // ROC_CACHE_DIR overrides Roc's cache location on all platforms (Linux, macOS, Windows).
-    const temp_base = switch (builtin.target.os.tag) {
-        .windows => std.process.getEnvVarOwned(allocator, "TEMP") catch
-            std.process.getEnvVarOwned(allocator, "TMP") catch
-            try allocator.dupe(u8, "C:\\Windows\\Temp"),
-        else => std.process.getEnvVarOwned(allocator, "TMPDIR") catch
-            try allocator.dupe(u8, "/tmp"),
-    };
-    defer allocator.free(temp_base);
-    const cache_dir = try std.fs.path.join(allocator, &.{ temp_base, "roc" });
+    // Give every child build/run its own persistent cache root so test runner processes
+    // cannot share module/build artifacts or observe one another's cache state.
+    const cache_dir = try createIsolatedTestCacheDir(allocator);
     defer allocator.free(cache_dir);
     try env_map.put("ROC_CACHE_DIR", cache_dir);
 
