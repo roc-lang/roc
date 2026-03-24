@@ -22,7 +22,6 @@ const LirExprId = lir.LirExprId;
 const LirPatternId = lir.LirPatternId;
 const LirProcSpecId = lir.LirProcSpecId;
 const CFStmtId = lir.CFStmtId;
-const Symbol = lir.Symbol;
 const Value = lir_value.Value;
 
 /// Item in the work stack. The main eval loop pops one item at a time

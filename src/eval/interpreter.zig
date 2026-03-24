@@ -1079,12 +1079,6 @@ pub const LirInterpreter = struct {
 
     // Aggregates
 
-    fn evalStructAccess(self: *LirInterpreter, sa: anytype) Error!Value {
-        const struct_val = try self.evalValue(sa.struct_expr);
-        const field_offset = self.helper.structFieldOffset(sa.struct_layout, sa.field_idx);
-        return struct_val.offset(field_offset);
-    }
-
     fn evalZeroArgTag(self: *LirInterpreter, z: anytype) Error!Value {
         const val = try self.alloc(z.union_layout);
         self.helper.writeTagDiscriminant(val, z.union_layout, z.discriminant);
@@ -1094,14 +1088,6 @@ pub const LirInterpreter = struct {
     fn evalEmptyList(self: *LirInterpreter, l: anytype) Error!Value {
         // RocList with all zeros = empty list
         return self.alloc(l.list_layout);
-    }
-
-    fn evalTagPayloadAccess(self: *LirInterpreter, tpa: anytype) Error!Value {
-        const val = try self.evalValue(tpa.value);
-        const tag_base = self.resolveTagUnionBaseValue(val, tpa.union_layout);
-        const disc = self.helper.readTagDiscriminant(tag_base.value, tag_base.layout);
-        const actual_payload_layout = self.tagPayloadLayout(tpa.union_layout, disc);
-        return self.normalizeValueToLayout(tag_base.value, actual_payload_layout, tpa.payload_layout);
     }
 
     // Function calls
@@ -1321,13 +1307,6 @@ pub const LirInterpreter = struct {
     }
 
     // Crash / dbg / expect
-
-    fn evalCrash(self: *LirInterpreter, e: anytype) Error!EvalResult {
-        const msg = self.store.getString(e.msg);
-        if (self.roc_env.crash_message) |old| self.allocator.free(old);
-        self.roc_env.crash_message = self.allocator.dupe(u8, msg) catch null;
-        return error.Crash;
-    }
 
     fn renderExpectExpr(self: *LirInterpreter, expr_id: LirExprId) Error![]const u8 {
         const arena = self.arena.allocator();
