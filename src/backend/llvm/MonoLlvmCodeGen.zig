@@ -5242,15 +5242,46 @@ pub const MonoLlvmCodeGen = struct {
         if (expr_ids.len == 1) {
             return self.generateExpr(expr_ids[0]);
         }
-        // Multi-element: fold-left using roc_builtins_str_concat
+
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const roc_ops = self.roc_ops_arg orelse return error.CompilationFailed;
+        const dest_ptr = self.out_ptr orelse return error.CompilationFailed;
+        const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+        const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+        const off8 = builder.intValue(.i32, 8) catch return error.OutOfMemory;
+        const off16 = builder.intValue(.i32, 16) catch return error.OutOfMemory;
+
         // First pair writes directly to out_ptr
         const saved_out = self.out_ptr;
         _ = try self.callStrStr2Str(expr_ids[0], expr_ids[1], "roc_builtins_str_concat");
-        // Subsequent pairs concat accumulated result with next element
+
+        // Subsequent elements: concat accumulated result (at dest_ptr) with next element
         for (expr_ids[2..]) |next_id| {
             self.out_ptr = saved_out;
-            _ = try self.callStrStr2Str(next_id, next_id, "roc_builtins_str_concat");
+
+            // Load accumulator fields directly from dest_ptr
+            const a_bytes = wip.load(.normal, ptr_type, dest_ptr, alignment, "") catch return error.CompilationFailed;
+            const a_len_ptr = wip.gep(.inbounds, .i8, dest_ptr, &.{off8}, "") catch return error.CompilationFailed;
+            const a_len = wip.load(.normal, .i64, a_len_ptr, alignment, "") catch return error.CompilationFailed;
+            const a_cap_ptr = wip.gep(.inbounds, .i8, dest_ptr, &.{off16}, "") catch return error.CompilationFailed;
+            const a_cap = wip.load(.normal, .i64, a_cap_ptr, alignment, "") catch return error.CompilationFailed;
+
+            // Materialize the next string element
+            const b_ptr = try self.materializeAsPtr(next_id, 24);
+            const b_bytes = wip.load(.normal, ptr_type, b_ptr, alignment, "") catch return error.CompilationFailed;
+            const b_len_ptr = wip.gep(.inbounds, .i8, b_ptr, &.{off8}, "") catch return error.CompilationFailed;
+            const b_len = wip.load(.normal, .i64, b_len_ptr, alignment, "") catch return error.CompilationFailed;
+            const b_cap_ptr = wip.gep(.inbounds, .i8, b_ptr, &.{off16}, "") catch return error.CompilationFailed;
+            const b_cap = wip.load(.normal, .i64, b_cap_ptr, alignment, "") catch return error.CompilationFailed;
+
+            _ = try self.callBuiltin("roc_builtins_str_concat", .void, &.{
+                ptr_type, ptr_type, .i64, .i64, ptr_type, .i64, .i64, ptr_type,
+            }, &.{
+                dest_ptr, a_bytes, a_len, a_cap, b_bytes, b_len, b_cap, roc_ops,
+            });
         }
+
         self.out_ptr = saved_out;
         return .none;
     }
