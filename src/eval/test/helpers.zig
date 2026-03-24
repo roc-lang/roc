@@ -398,7 +398,7 @@ noinline fn llvmCompileAndRun(
     expr_idx: CIR.Expr.Idx,
     builtin_module_env: *const ModuleEnv,
 ) LlvmEvalError![]const u8 {
-    var llvm_eval = LlvmEvaluator.init(alloc) catch return error.LlvmEvaluatorInitFailed;
+    var llvm_eval = LlvmEvaluator.init(alloc, null) catch return error.LlvmEvaluatorInitFailed;
     defer llvm_eval.deinit();
 
     const all_module_envs = [_]*ModuleEnv{ @constCast(builtin_module_env), module_env };

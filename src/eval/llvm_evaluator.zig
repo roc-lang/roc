@@ -29,6 +29,7 @@ const builtin_loading = @import("builtin_loading.zig");
 const compiled_builtins = @import("compiled_builtins");
 const builtins = @import("builtins");
 
+const Io = @import("io").Io;
 const RocEnv = @import("roc_env.zig").RocEnv;
 const createRocOps = @import("roc_env.zig").createRocOps;
 
@@ -151,7 +152,7 @@ pub const LlvmEvaluator = struct {
     };
 
     /// Initialize the evaluator with builtin modules
-    pub fn init(allocator: Allocator) Error!LlvmEvaluator {
+    pub fn init(allocator: Allocator, io: ?Io) Error!LlvmEvaluator {
         const builtin_indices = builtin_loading.deserializeBuiltinIndices(
             allocator,
             compiled_builtins.builtin_indices_bin,
@@ -166,7 +167,7 @@ pub const LlvmEvaluator = struct {
 
         // Heap-allocate the RocOps environment so the pointer remains stable
         const roc_env = allocator.create(RocEnv) catch return error.OutOfMemory;
-        roc_env.* = RocEnv.init(allocator);
+        roc_env.* = RocEnv.init(allocator, io);
         const roc_ops = createRocOps(roc_env);
 
         return LlvmEvaluator{
@@ -398,7 +399,7 @@ pub const LlvmEvaluator = struct {
 // Tests
 
 test "llvm evaluator initialization" {
-    var evaluator = LlvmEvaluator.init(std.testing.allocator) catch |err| {
+    var evaluator = LlvmEvaluator.init(std.testing.allocator, null) catch |err| {
         return switch (err) {
             error.OutOfMemory => error.SkipZigTest,
             else => err,
