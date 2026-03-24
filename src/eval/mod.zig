@@ -62,6 +62,12 @@ pub const LlvmEvaluator = @import("llvm_evaluator.zig").LlvmEvaluator;
 /// WebAssembly-based evaluator for wasm code generation
 const wasm_evaluator_mod = @import("wasm_evaluator.zig");
 pub const WasmEvaluator = wasm_evaluator_mod.WasmEvaluator;
+/// Test helpers with backend evaluator functions (re-exported for the parallel test runner,
+/// which cannot import helpers.zig directly since Zig requires each file to belong to
+/// exactly one module).
+pub const test_helpers = @import("test/helpers.zig");
+/// Test environment providing RocOps with allocation tracking.
+pub const TestEnv = @import("test/TestEnv.zig");
 
 test "eval tests" {
     std.testing.refAllDecls(@This());
@@ -87,23 +93,10 @@ test "eval tests" {
 
     // Test files that compare interpreter output with dev backend
     std.testing.refAllDecls(@import("test/helpers.zig"));
-    std.testing.refAllDecls(@import("test/eval_test.zig"));
-    std.testing.refAllDecls(@import("test/list_refcount_basic.zig"));
-    std.testing.refAllDecls(@import("test/list_refcount_simple.zig"));
-    std.testing.refAllDecls(@import("test/list_refcount_nested.zig"));
-    std.testing.refAllDecls(@import("test/list_refcount_pattern.zig"));
-    std.testing.refAllDecls(@import("test/list_refcount_alias.zig"));
-    std.testing.refAllDecls(@import("test/list_refcount_complex.zig"));
-    std.testing.refAllDecls(@import("test/list_refcount_conditional.zig"));
-    std.testing.refAllDecls(@import("test/list_refcount_containers.zig"));
-    std.testing.refAllDecls(@import("test/list_refcount_function.zig"));
-    std.testing.refAllDecls(@import("test/list_refcount_builtins.zig"));
-    std.testing.refAllDecls(@import("test/list_refcount_strings.zig"));
-    std.testing.refAllDecls(@import("test/arithmetic_comprehensive_test.zig"));
     std.testing.refAllDecls(@import("test/anno_only_interp_test.zig"));
     std.testing.refAllDecls(@import("test/comptime_eval_test.zig"));
     std.testing.refAllDecls(@import("test/low_level_interp_test.zig"));
     std.testing.refAllDecls(@import("test/mono_emit_test.zig"));
-    std.testing.refAllDecls(@import("test/closure_test.zig"));
+
     std.testing.refAllDecls(@import("test/stack_test.zig"));
 }

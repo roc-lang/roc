@@ -1026,10 +1026,10 @@ const CheckCliGlobalStdioStep = struct {
 const CoverageSummaryStep = struct {
     step: Step,
     coverage_dir: []const u8,
+    exe_name: []const u8,
+    label: []const u8,
+    min_coverage: f64,
 
-    /// Minimum required coverage percentage. Build fails if coverage drops below this.
-    /// This threshold should be gradually increased as more tests are added.
-    ///
     /// Coverage is supported on:
     /// - macOS (ARM64 and x86_64): Uses libdwarf for DWARF parsing
     /// - Linux ARM64: Uses libdw (elfutils) for DWARF parsing
@@ -1040,9 +1040,11 @@ const CoverageSummaryStep = struct {
     /// CUs parse successfully. This causes kcov to find only stdlib files, not user
     /// source files. ARM64 Zig generates valid DWARF, so coverage works there.
     /// See: https://github.com/roc-lang/roc/pull/8864 for investigation details.
-    const MIN_COVERAGE_PERCENT: f64 = 28.0;
+    fn create(b: *std.Build, coverage_dir: []const u8, exe_name: []const u8) *CoverageSummaryStep {
+        return createWithOptions(b, coverage_dir, exe_name, "PARSER", 28.0);
+    }
 
-    fn create(b: *std.Build, coverage_dir: []const u8) *CoverageSummaryStep {
+    fn createWithOptions(b: *std.Build, coverage_dir: []const u8, exe_name: []const u8, label: []const u8, min_coverage: f64) *CoverageSummaryStep {
         const self = b.allocator.create(CoverageSummaryStep) catch @panic("OOM");
         self.* = .{
             .step = Step.init(.{
@@ -1052,6 +1054,9 @@ const CoverageSummaryStep = struct {
                 .makeFn = make,
             }),
             .coverage_dir = coverage_dir,
+            .exe_name = exe_name,
+            .label = label,
+            .min_coverage = min_coverage,
         };
         return self;
     }
@@ -1064,7 +1069,7 @@ const CoverageSummaryStep = struct {
         // Read kcov JSON output
         // kcov creates a subdirectory named after the executable (e.g., parse_unit_coverage/)
         // which contains the coverage.json file
-        const json_path = try std.fmt.allocPrint(allocator, "{s}/parse_unit_coverage/coverage.json", .{self.coverage_dir});
+        const json_path = try std.fmt.allocPrint(allocator, "{s}/{s}/coverage.json", .{ self.coverage_dir, self.exe_name });
         defer allocator.free(json_path);
 
         const json_file = std.fs.cwd().openFile(json_path, .{}) catch |err| {
@@ -1085,7 +1090,7 @@ const CoverageSummaryStep = struct {
         defer allocator.free(json_content);
 
         // Parse and summarize coverage
-        const result = try parseCoverageJson(allocator, json_content);
+        const result = try parseCoverageJson(allocator, json_content, self.label, self.coverage_dir);
 
         // Fail if kcov didn't capture any data - this indicates a problem with kcov
         if (result.total_lines == 0) {
@@ -1100,15 +1105,15 @@ const CoverageSummaryStep = struct {
         }
 
         // Enforce minimum coverage threshold
-        if (result.percent < MIN_COVERAGE_PERCENT) {
+        if (result.percent < self.min_coverage) {
             std.debug.print("\n", .{});
             std.debug.print("=" ** 60 ++ "\n", .{});
             std.debug.print("COVERAGE CHECK FAILED\n", .{});
             std.debug.print("=" ** 60 ++ "\n\n", .{});
-            std.debug.print("Parser coverage is {d:.2}%, minimum required is {d:.2}%\n", .{ result.percent, MIN_COVERAGE_PERCENT });
+            std.debug.print("{s} coverage is {d:.2}%, minimum required is {d:.2}%\n", .{ self.label, result.percent, self.min_coverage });
             std.debug.print("Add more tests to improve coverage before merging.\n\n", .{});
             std.debug.print("=" ** 60 ++ "\n", .{});
-            return step.fail("Parser coverage {d:.2}% is below minimum {d:.2}%", .{ result.percent, MIN_COVERAGE_PERCENT });
+            return step.fail("{s} coverage {d:.2}% is below minimum {d:.2}%", .{ self.label, result.percent, self.min_coverage });
         }
     }
 
@@ -1117,7 +1122,7 @@ const CoverageSummaryStep = struct {
         total_lines: u64,
     };
 
-    fn parseCoverageJson(allocator: std.mem.Allocator, json_content: []const u8) !CoverageResult {
+    fn parseCoverageJson(allocator: std.mem.Allocator, json_content: []const u8, label: []const u8, coverage_dir: []const u8) !CoverageResult {
         const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_content, .{});
         defer parsed.deinit();
 
@@ -1193,7 +1198,7 @@ const CoverageSummaryStep = struct {
 
         std.debug.print("\n", .{});
         std.debug.print("=" ** 60 ++ "\n", .{});
-        std.debug.print("PARSER CODE COVERAGE SUMMARY\n", .{});
+        std.debug.print("{s} CODE COVERAGE SUMMARY\n", .{label});
         std.debug.print("=" ** 60 ++ "\n\n", .{});
 
         std.debug.print("Total lines:     {d}\n", .{total_lines});
@@ -1224,7 +1229,7 @@ const CoverageSummaryStep = struct {
         }
 
         std.debug.print("\n" ++ "=" ** 60 ++ "\n", .{});
-        std.debug.print("Full HTML report: kcov-output/parser/index.html\n", .{});
+        std.debug.print("Full HTML report: {s}/index.html\n", .{coverage_dir});
         std.debug.print("=" ** 60 ++ "\n", .{});
 
         return .{ .percent = percent, .total_lines = total_lines };
@@ -2085,6 +2090,7 @@ pub fn build(b: *std.Build) void {
     const fmt_step = b.step("fmt", "Format all zig code");
     const check_fmt_step = b.step("check-fmt", "Check formatting of all zig code");
     const snapshot_step = b.step("snapshot", "Run the snapshot tool to update snapshot files");
+    const eval_test_step = b.step("test-eval", "Run eval tests in parallel across all backends");
     const playground_step = b.step("playground", "Build the WASM playground");
     const playground_test_step = b.step("test-playground", "Build the integration test suite for the WASM playground");
     const serialization_size_step = b.step("test-serialization-sizes", "Verify Serialized types have platform-independent sizes");
@@ -2561,6 +2567,40 @@ pub fn build(b: *std.Build) void {
     add_tracy(b, roc_modules.build_options, snapshot_exe, target, true, flag_enable_tracy);
     install_and_run(b, no_bin, snapshot_exe, snapshot_step, snapshot_step, run_args);
 
+    // Add parallel eval test runner
+    const eval_test_exe = b.addExecutable(.{
+        .name = "eval-test-runner",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/eval/test/parallel_runner.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true, // needed for sljmp/setjmp
+        }),
+    });
+    configureBackend(eval_test_exe, target);
+    roc_modules.addAll(eval_test_exe);
+    eval_test_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
+    eval_test_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
+    eval_test_exe.step.dependOn(&write_compiled_builtins.step);
+    eval_test_exe.step.dependOn(&copy_builtins_bc.step);
+    try addLlvmSupportToStep(
+        b,
+        eval_test_exe,
+        target,
+        use_system_llvm,
+        user_llvm_path,
+        roc_modules,
+        llvm_codegen_module,
+        &copy_builtins_bc.step,
+        zstd,
+    );
+    if (eval_test_exe.root_module.resolved_target.?.result.os.tag != .windows or
+        eval_test_exe.root_module.resolved_target.?.result.abi != .msvc)
+    {
+        eval_test_exe.root_module.link_libcpp = true;
+    }
+    install_and_run(b, no_bin, eval_test_exe, eval_test_step, eval_test_step, run_args);
+
     const playground_exe = b.addExecutable(.{
         .name = "playground",
         .root_module = b.createModule(.{
@@ -2758,42 +2798,6 @@ pub fn build(b: *std.Build) void {
             module_test.test_step.root_module.addImport("bytebox", bytebox.module("bytebox"));
         }
 
-        // Add bytebox to eval tests for wasm backend testing
-        if (std.mem.eql(u8, module_test.test_step.name, "eval")) {
-            module_test.test_step.root_module.addImport("bytebox", bytebox.module("bytebox"));
-            const compile_build_module = b.createModule(.{
-                .root_source_file = b.path("src/compile/compile_build.zig"),
-            });
-            compile_build_module.addImport("tracy", roc_modules.tracy);
-            compile_build_module.addImport("build_options", roc_modules.build_options);
-            compile_build_module.addImport("io", roc_modules.io);
-            compile_build_module.addImport("builtins", roc_modules.builtins);
-            compile_build_module.addImport("collections", roc_modules.collections);
-            compile_build_module.addImport("base", roc_modules.base);
-            compile_build_module.addImport("types", roc_modules.types);
-            compile_build_module.addImport("parse", roc_modules.parse);
-            compile_build_module.addImport("can", roc_modules.can);
-            compile_build_module.addImport("check", roc_modules.check);
-            compile_build_module.addImport("reporting", roc_modules.reporting);
-            compile_build_module.addImport("layout", roc_modules.layout);
-            compile_build_module.addImport("eval", module_test.test_step.root_module);
-            compile_build_module.addImport("unbundle", roc_modules.unbundle);
-            compile_build_module.addImport("roc_target", roc_modules.roc_target);
-            compile_build_module.addImport("compiled_builtins", compiled_builtins_module);
-            module_test.test_step.root_module.addImport("compile_build", compile_build_module);
-            try addLlvmSupportToStep(
-                b,
-                module_test.test_step,
-                target,
-                use_system_llvm,
-                user_llvm_path,
-                roc_modules,
-                llvm_codegen_module,
-                &copy_builtins_bc.step,
-                zstd,
-            );
-        }
-
         if (std.mem.eql(u8, module_test.test_step.name, "repl")) {
             try addLlvmSupportToStep(
                 b,
@@ -2949,6 +2953,9 @@ pub fn build(b: *std.Build) void {
 
     test_step.dependOn(&tests_summary.step);
 
+    // Run the parallel eval test runner as part of `zig build test`
+    test_step.dependOn(eval_test_step);
+
     b.default_step.dependOn(playground_step);
     {
         const install = playground_test_install;
@@ -3035,8 +3042,50 @@ pub fn build(b: *std.Build) void {
             run_parse_coverage.step.dependOn(&install_parse_test.step);
 
             // Add coverage summary step that parses kcov JSON output
-            const summary_step = CoverageSummaryStep.create(b, "kcov-output/parser");
+            const summary_step = CoverageSummaryStep.create(b, "kcov-output/parser", "parse_unit_coverage");
             summary_step.step.dependOn(&run_parse_coverage.step);
+
+            // Eval coverage uses the main eval-test-runner with --coverage flag
+            // (disables fork + forces single-threaded so kcov can trace it).
+            // Run separately via: zig build coverage-eval
+            {
+                const coverage_eval_step = b.step("coverage-eval", "Run eval tests with kcov code coverage");
+
+                const install_eval_runner = b.addInstallArtifact(eval_test_exe, .{});
+
+                const mkdir_eval = b.addSystemCommand(&.{ "mkdir", "-p", "kcov-output/eval" });
+                mkdir_eval.setCwd(b.path("."));
+                mkdir_eval.step.dependOn(&install_eval_runner.step);
+                mkdir_eval.step.dependOn(&install_kcov.step);
+
+                if (target.result.os.tag == .macos) {
+                    // kcov needs codesigning on macOS to use task_for_pid
+                    const eval_codesign = b.addSystemCommand(&.{"codesign"});
+                    eval_codesign.setCwd(b.path("."));
+                    eval_codesign.addArgs(&.{ "-s", "-", "--entitlements" });
+                    eval_codesign.addFileArg(kcov_dep.path("osx-entitlements.xml"));
+                    eval_codesign.addArgs(&.{ "-f", "zig-out/bin/kcov" });
+                    eval_codesign.step.dependOn(&install_kcov.step);
+                    mkdir_eval.step.dependOn(&eval_codesign.step);
+                }
+
+                const run_eval_coverage = b.addSystemCommand(&.{"zig-out/bin/kcov"});
+                run_eval_coverage.addArg("--include-pattern=/src/eval/");
+                run_eval_coverage.addArgs(&.{
+                    "kcov-output/eval",
+                    "zig-out/bin/eval-test-runner",
+                    "--coverage",
+                });
+                run_eval_coverage.setCwd(b.path("."));
+                run_eval_coverage.step.dependOn(&mkdir_eval.step);
+                run_eval_coverage.step.dependOn(&install_eval_runner.step);
+                run_eval_coverage.step.dependOn(&install_kcov.step);
+
+                const eval_summary_step = CoverageSummaryStep.createWithOptions(b, "kcov-output/eval", "eval-test-runner", "EVAL", 0.0);
+                eval_summary_step.step.dependOn(&run_eval_coverage.step);
+
+                coverage_eval_step.dependOn(&eval_summary_step.step);
+            }
 
             // Cross-compile for Windows to verify comptime branches compile
             // NOTE: This must be inside the lazy block due to Zig 0.15.2 bug where

@@ -28,6 +28,14 @@ const i128h = builtins.compiler_rt_128;
 const posix = std.posix;
 
 const has_fork = builtin.os.tag != .windows;
+/// Set to true to skip fork-based isolation (needed for kcov coverage).
+pub var force_no_fork: bool = false;
+/// Per-worker child PIDs for fork-based test execution.
+/// The hang watchdog in the parallel runner kills these PIDs on timeout.
+/// Set by the parallel runner before tests start; workers index by their worker ID.
+pub var worker_child_pids: []std.atomic.Value(i32) = &.{};
+/// Thread-local worker ID, set by the parallel runner.
+pub threadlocal var my_worker_id: usize = 0;
 const enable_dev_eval_leak_checks = true;
 
 const Check = check.Check;
@@ -227,7 +235,7 @@ fn dumpHex(data: []const u8) void {
 }
 
 /// Errors that can occur during DevEvaluator string generation
-const DevEvalError = error{
+pub const DevEvalError = error{
     DevEvaluatorInitFailed,
     GenerateCodeFailed,
     ExecInitFailed,
@@ -245,7 +253,7 @@ const DevEvalError = error{
 /// Unwraps aliases and nominal types, then returns the tag name for single-tag unions
 /// or "{}" for empty records.
 /// Evaluate an expression using the DevEvaluator and return the result as a string.
-fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) DevEvalError![]const u8 {
+pub fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) DevEvalError![]const u8 {
     // Initialize DevEvaluator
     var dev_eval = DevEvaluator.init(allocator, null) catch {
         return error.DevEvaluatorInitFailed;
@@ -278,7 +286,7 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
     };
     defer executable.deinit();
 
-    if (has_fork) {
+    if (has_fork and !force_no_fork) {
         return forkAndExecute(allocator, &dev_eval, &executable);
     } else {
         return executeAndFormat(allocator, &dev_eval, &executable);
@@ -388,8 +396,16 @@ fn forkAndExecute(
         // Parent process
         posix.close(pipe_write);
 
+        // Store child PID so the hang watchdog can kill it on timeout.
+        if (my_worker_id < worker_child_pids.len) {
+            worker_child_pids[my_worker_id].store(@intCast(fork_result), .release);
+        }
+
         // Wait for child to exit
         const wait_result = posix.waitpid(fork_result, 0);
+        if (my_worker_id < worker_child_pids.len) {
+            worker_child_pids[my_worker_id].store(0, .release);
+        }
         const status = wait_result.status;
 
         // Parse the wait status (Unix encoding)
@@ -473,7 +489,11 @@ pub fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []
     }
 }
 
-fn llvmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) ![]const u8 {
+// TODO: llvmEvaluatorStr currently aliases devEvaluatorStr because the
+// LlvmEvaluator/MonoLlvmCodeGen have bitrotted. See LLVM_EVAL_ISSUE.md
+// for details. Once fixed, this should use the real LLVM pipeline.
+/// Evaluate via the LLVM backend (currently aliases dev — see comment above).
+pub fn llvmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) ![]const u8 {
     return devEvaluatorStr(allocator, module_env, expr_idx, builtin_module_env);
 }
 
@@ -671,7 +691,12 @@ pub fn lirInterpreterStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, e
     // Wrap in Str.inspect — same approach as devEvaluatorStr/wasmEvaluatorStr.
     // This lets Roc's own inspect implementation handle field names, tag names, etc.
     const inspect_expr = try wrapInStrInspect(module_env, expr_idx);
+    return lirInterpreterInspectedStr(allocator, module_env, inspect_expr, builtin_module_env);
+}
 
+/// Evaluate an already-Str.inspect-wrapped expression using the LIR interpreter.
+/// Same signature as devEvaluatorStr — used by the parallel test runner's runBackend.
+pub fn lirInterpreterInspectedStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, inspect_expr: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) ![]const u8 {
     var lir_prog = LirProgram.init(allocator, base.target.TargetUsize.native);
     defer lir_prog.deinit();
 
@@ -722,7 +747,7 @@ fn numericStringsEqual(a: []const u8, b: []const u8) bool {
 }
 
 /// Errors that can occur during WasmEvaluator string generation
-const WasmEvalError = error{
+pub const WasmEvalError = error{
     WasmEvaluatorInitFailed,
     WasmGenerateCodeFailed,
     WasmExecFailed,
@@ -1842,7 +1867,7 @@ fn hostListListEq(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
 }
 
 /// Host-side heap pointer for wasm bump allocation (starts after stack at 65536).
-var wasm_heap_ptr: u32 = 65536;
+threadlocal var wasm_heap_ptr: u32 = 65536;
 
 fn allocExtraBytes(alignment: u32) u32 {
     const ptr_width: u32 = 8;

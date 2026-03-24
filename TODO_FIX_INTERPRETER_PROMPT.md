@@ -22,27 +22,90 @@ There are also **two legacy recursive paths** that bypass the stack-safe engine:
 - These manage `call_depth` via `defer` and call `eval()` for sub-expressions,
   which re-enters `evalStackSafe`
 
-### CIR Interpreter Reference (main branch)
+### Test Infrastructure
 
-The CIR interpreter on `main` (`src/eval/interpreter.zig` on main, ~20k lines)
-uses a similar WorkStack+ValueStack design but differs in key ways:
+There are two test paths that exercise the interpreter:
 
-1. **No `call_depth` counter** — overflow is detected by checking
-   `work_stack.items.len > 10_000` after every iteration.
-2. **Unwinding is a tight inner drain loop** — when `early_return` or
-   `break_from_loop` fires, it runs a `while` loop that pops and cleans up
-   work items until hitting the boundary sentinel (`call_cleanup` or
-   `for_body_done`/`while_loop_body_done`), then pushes the sentinel back.
-   Normal dispatch then picks it up on the next iteration.
-3. **No flag-based unwinding** — the CIR interpreter does NOT use a
-   `self.unwinding` state flag checked at the top of each iteration.
-   Instead, the drain happens entirely inside the continuation handler.
+1. **Parallel eval test runner** (`zig build test-eval`):
+   - Binary at `src/eval/test/parallel_runner.zig`
+   - Test cases defined in `src/eval/test/eval_tests.zig` (~1177 tests)
+   - Runs all backends (interpreter via LIR pipeline, dev, wasm) and compares
+     results via `Str.inspect` string comparison
+   - Crash protection via `setjmp`/`longjmp` + signal handlers
+   - The interpreter backend uses `helpers.lirInterpreterInspectedStr` which
+     does CIR → MIR → LIR → RC lowering, then `LirInterpreter.eval()`
+   - For typed value tests, also uses `helpers.lirInterpreterEval` to check
+     raw values (int, float, str, bool, dec) against expected
+   - Current status: **1088 passed, 0 failed, 9 crashed, 80 skipped**
+   - The 9 crashes are all "type mismatch" tests that crash during CIR→LIR
+     lowering (before any backend runs)
+   
+```
+$ ./zig-out/bin/eval-test-runner
 
-The LIR interpreter's flag-based unwinding (`self.unwinding` checked at loop
-top) is architecturally different and was the source of a recent
-double-dispatch bug (fixed: missing `continue` after clearing unwinding state).
-Consider whether the LIR interpreter should adopt the CIR's inner-drain-loop
-pattern for robustness.
+=== Eval Test Results ===
+  CRASH decode: I32.decode type mismatch crash  (17.2ms)
+        bindPatternMonotypes(tuple): expected tuple monotype, found 'unit'
+        backends: interp=not_reached dev=not_reached wasm=not_reached
+  CRASH Dec + Int: plus - type mismatch  (13.8ms)
+        reached unreachable code
+        backends: interp=not_reached dev=not_reached wasm=not_reached
+  CRASH Dec + Int: minus - type mismatch  (12.0ms)
+        reached unreachable code
+        backends: interp=not_reached dev=not_reached wasm=not_reached
+  CRASH Dec + Int: times - type mismatch  (9.3ms)
+        reached unreachable code
+        backends: interp=not_reached dev=not_reached wasm=not_reached
+  CRASH Dec + Int: div_by - type mismatch  (16.4ms)
+        reached unreachable code
+        backends: interp=not_reached dev=not_reached wasm=not_reached
+  CRASH Int + Dec: plus - type mismatch  (15.6ms)
+        reached unreachable code
+        backends: interp=not_reached dev=not_reached wasm=not_reached
+  CRASH Int + Dec: minus - type mismatch  (14.9ms)
+        reached unreachable code
+        backends: interp=not_reached dev=not_reached wasm=not_reached
+  CRASH Int + Dec: times - type mismatch  (17.0ms)
+        reached unreachable code
+        backends: interp=not_reached dev=not_reached wasm=not_reached
+  CRASH Int + Dec: div_by - type mismatch  (11.0ms)
+        reached unreachable code
+        backends: interp=not_reached dev=not_reached wasm=not_reached
+
+=== Performance Summary (ms) ===
+  Phase         Min      Max     Mean   Median   StdDev      P95    Total     N
+  -------- -------- -------- -------- -------- -------- -------- --------   ---
+  parse         0.1     18.0      0.9      0.3      1.8      4.9   1013.6   1168
+  can           0.1     10.6      0.5      0.3      1.1      0.8    574.7   1168
+  check         0.3     24.5      1.6      0.9      2.5      6.4   1899.6   1168
+  interp        4.1   1271.1     26.1     14.5     53.3     82.5  27615.6   1058
+  dev          10.2   1385.8     47.4     37.9     60.7     99.3  51040.2   1077
+  wasm          8.7   1823.3     50.0     36.2     84.7    106.3  52215.7   1045
+
+  Slowest 5 tests:
+    1. focused: polymorphic additional specialization via List.append  (5623.1ms)  [parse:0.4 can:0.7 check:2.1 interp:1271.1 dev:1385.8 wasm:1706.8]
+    2. recursive function with record - stack memory  (4663.8ms)  [parse:0.3 can:0.4 check:2.7 interp:677.0 dev:1056.1 wasm:1823.3]
+    3. list fold_rev i64 dev regression  (1228.2ms)  [parse:2.6 can:0.5 check:3.3 interp:280.6 dev:309.3 wasm:351.3]
+    4. closure: recursive function in let binding  (1062.0ms)  [parse:0.3 can:0.3 check:4.7 interp:223.6 dev:281.0 wasm:305.7]
+    5. recursive factorial function  (1031.2ms)  [parse:0.3 can:0.4 check:1.6 interp:214.7 dev:268.1 wasm:289.8]
+
+1088 passed, 0 failed, 9 crashed, 80 skipped (1177 total) in 10541ms using 16 thread(s)
+```
+
+2. **Unit tests** (`zig build test`):
+   - Sequential tests in `src/eval/test/helpers.zig` (low_level_interp_test,
+     anno_only_interp_test, comptime_eval_test, etc.)
+   - fx platform tests in `src/cli/test/fx_platform_test.zig`
+
+### Key Files
+
+- `src/eval/interpreter.zig` — LIR interpreter implementation
+- `src/eval/cir_to_lir.zig` — CIR → MIR → LIR → RC lowering (`LirProgram`)
+- `src/eval/value.zig` — `Value` type (raw bytes pointer) and `LayoutHelper`
+- `src/eval/work_stack.zig` — WorkStack, ValueStack, continuation types
+- `src/eval/test/helpers.zig` — `lirInterpreterEval`, `lirInterpreterInspectedStr`
+- `src/eval/test/parallel_runner.zig` — parallel test runner binary
+- `src/eval/test/eval_tests.zig` — consolidated eval test definitions
 
 ---
 
@@ -51,8 +114,11 @@ pattern for robustness.
 ### Reproduce
 
 ```sh
-zig build test-eval --summary all -- --test-filter "List.concat with strings"
+zig build test --summary all -- --test-filter "List.concat with strings"
 ```
+
+This runs the `low_level_interp_test` in the sequential test suite (not the
+parallel runner — this test is not yet in `eval_tests.zig`).
 
 ### Symptoms
 
@@ -73,15 +139,11 @@ operation.
 
 ### Debugging recommendations
 
-1. Run with the test filter and check where the segfault occurs:
-   ```sh
-   zig build test-eval --summary all -- --test-filter "List.concat with strings"
-   ```
+1. Run with the test filter and check where the segfault occurs.
 2. Look at `evalListConcat` in `interpreter.zig` — search for `list_concat`.
 3. Check whether the shallow clone + memcpy of refcounted elements properly
    increfs the copied string pointers.
-4. Compare with `List.concat` handling in the CIR interpreter on `main`.
-5. The non-string version (`List.concat with nested lists`) may also fail —
+4. The non-string version (`List.concat with nested lists`) may also fail —
    test it too.
 
 ---
@@ -232,9 +294,7 @@ Since the LIR interpreter uses `call_depth` with a max of 1024, this either:
 
 1. Read the test file `test/fx/repeating_pattern_segfault.roc` (or similar
    name — glob for it) to understand what it does.
-2. Check if the CIR interpreter on main passes this test — it may require
-   a higher call depth limit.
-3. If the program is tail-recursive, check whether the LIR lowering produces
+2. If the program is tail-recursive, check whether the LIR lowering produces
    join points that the interpreter handles correctly (jump → body re-execution).
 
 ---
@@ -266,213 +326,13 @@ doesn't produce the expected string.
 
 ---
 
-## Bug 7 (flaky): Segfault in `matchPattern` during `cf_match_dispatch`
-
-### Reproduce
-
-```sh
-zig build test-eval --summary all -- --test-filter "string list aliased return from original"
-```
-
-This is **flaky** — sometimes passes, sometimes segfaults.
-
-### Symptoms
-
-Segfault at address `0x10` (null-ish pointer) in `allocRocDataWithRc`,
-called from `matchPattern` in the `cf_match_dispatch` continuation.
-
-The test:
-```roc
-{
-    lst1 = ["a", "b"]
-    _lst2 = lst1
-    match lst1 { [first, ..] => first, _ => "" }
-}
-```
-
-### Analysis
-
-The flakiness + address 0x10 strongly suggests a **use-after-free**. The
-list `lst1` is aliased to `_lst2`. If `_lst2` is immediately decreffed
-(unused binding with `_` prefix), the list's refcount drops to 0 and its
-memory is freed. Then `match lst1` tries to access the freed memory.
-
-This is a **refcount insertion bug**, not an interpreter eval bug. The RC
-insertion pass (`src/lir/rc_insert.zig`) needs to keep the list alive
-through the match expression.
-
-### Debugging recommendations
-
-1. Check `rc_insert.zig` — specifically `emitBlockIncrefsForPattern` and
-   `emitBlockDecrefsForPattern`.
-2. When a symbol is both consumed (by `_lst2 = lst1`) AND borrowed later
-   (by `match lst1`), the incref count formula `consumed_uses - 1` may
-   not account for the borrow.
-3. Compare with how the CIR interpreter on `main` handles this — the CIR
-   pass uses `patternMatchesBind` with a temp bindings list, but the
-   refcounting decision happens earlier in the pipeline.
-
----
-
 ## General Debugging Tips
 
+- **Parallel runner filters**: `zig build test-eval --summary all -- --filter "pattern" --verbose`
+- **Sequential test filters**: `zig build test --summary all -- --test-filter "pattern"`
 - **Hex dumps**: Set `dump_generated_code_hex = true` in `helpers.zig`
 - **INT3 breakpoints**: Insert `0xCC` in `ExecutableMemory.zig` before
   `makeExecutable()` for gdb breakpoints
 - **Bypass fork**: Modify `helpers.zig` to skip fork for direct gdb debugging
-- **Test filters**: `zig build test-eval --summary all -- --test-filter "pattern"`
 - **Invoke the debug-interpreter skill** (`/debug-interpreter`) for additional
   interpreter-specific debugging guidance
-
-### Last results from `zig build minici`
-
-```
-$ zig build minici
----- minici: running `zig build fmt` ----
----- minici: running zig lints ----
-Checking for separator comments...
-Checking for pub declarations without doc comments...
-Checking for top level comments in new Zig files...
-[OK] All lints passed!
----- minici: running tidy checks ----
-[OK] All tidy checks passed!
----- minici: checking test wiring ----
-Checking test wiring in src/ directory...
-└─ minici-inner
-Step 1: Finding all potential test files...
-Found 190 potential test files
-
-Step 2: Extracting test references from mod.zig files...
-Found 322 file references in mod.zig files and build.zig test roots
-
-Step 3: Checking if all test files are properly wired...
-
-[OK] All tests are properly wired!
-
----- minici: running `zig build` ----
-Roc cache not found (nothing to clear)
-Roc cache not found (nothing to clear)
----- minici: checking Builtin.roc formatting ----
-All formatting valid.
-Took 18.7 ms.
----- minici: running `zig build snapshot` ----
-Build succeeded!
----- minici: checking for snapshot changes ----
----- checking fx platform test coverage ----
-All 102 .roc files in test/fx/ have tests.
----- minici: running `zig build test` ----
-Roc cache not found (nothing to clear)
-Build succeeded!
-test
-└─ tests_summary
-   └─ run test lsp stderr
-===== DOC COMMENTS TEST=====
-=== HOVER TEXT ===
-Multiplies two numbers.
-
-```roc
-I64, I64 -> I64
-```
-=== END ===
-test
-└─ tests_summary
-   └─ run test eval failure
-Segmentation fault at address 0x7fffa0fc65c0
-???:?:?: 0x7fffa0fc65c0 in ??? (???)
-Unwind information for `???:0x7fffa0fc65c0` was not available, trace may be incomplete
-
-
-error: while executing test 'test.low_level_interp_test.test.low_level - List.concat with strings (refcounted elements)', the following command terminated with signal 6 (expected exited with code 0):
-./.zig-cache/o/6ac14057e490ecc6302c2b8aa4ea317f/eval --cache-dir=./.zig-cache --seed=0x23f8f2d2 --listen=-
-test
-└─ tests_summary
-   └─ run test fx_platform_test 50/60 passed, 4 failed, 6 skipped
-error: 'fx_platform_test.test.fx platform IO spec tests (interpreter)' failed: Test failed with exit code 134
-STDERR:
-=== PANIC (no stack trace) ===
-integer overflow at address 0x337b85
-
-
-[FAIL] test/fx/list_append_stdin_uaf.roc (--opt=interpreter): error.TestFailed
-       Description: Regression test: List.append with effectful call on big string (24+ chars)
-Test failed with exit code 134
-STDERR:
-This Roc application overflowed its stack memory and crashed.
-
-
-
-[FAIL] test/fx/issue8866.roc (--opt=interpreter): error.TestFailed
-       Description: Regression test: List.append with opaque type containing Str (issue #8866)
-
-65/67 IO spec tests passed (2 failed) [opt=--opt=interpreter]
-/home/lbw/Documents/Github/roc/src/cli/test/fx_platform_test.zig:256:9: 0x11271b1 in runIoSpecTests__anon_18436 (fx_platform_test.zig)
-        return error.SomeTestsFailed;
-        ^
-/home/lbw/Documents/Github/roc/src/cli/test/fx_platform_test.zig:261:5: 0x1127596 in test.fx platform IO spec tests (interpreter) (fx_platform_test.zig)
-    try runIoSpecTests("--opt=interpreter");
-    ^
-error: 'fx_platform_test.test.fx platform all_syntax_test.roc prints expected output (interpreter)' failed: Run failed with exit code 1
-STDOUT: Hello, world!
-Hello, world! (using alias)
-{ diff: 5, div: 2, div_trunc: 2, eq: False, gt: True, gteq: True, lt: False, lteq: False, neg: -10, neq: True, prod: 50, rem: 0, sum: 15 }
-{}
-{}
-{}
-The color is red.
-{}
-Success
-Line 1
-Line 2
-Line 3
-Unicode escape sequence:  
-This is an effectful function!
-
-STDERR:
-Roc crashed: Called a function that could not be resolved
-
-/home/lbw/Documents/Github/roc/src/cli/test/util.zig:172:17: 0x1170007 in checkSuccess (fx_platform_test.zig)
-                return error.RunFailed;
-                ^
-/home/lbw/Documents/Github/roc/src/cli/test/fx_platform_test.zig:300:5: 0x1175eb3 in test.fx platform all_syntax_test.roc prints expected output (interpreter) (fx_platform_test.zig)
-    try util.checkSuccess(run_result);
-    ^
-error: 'fx_platform_test.test.fx platform string interpolation type mismatch (interpreter)' failed: /home/lbw/bin/zig-x86_64-linux-0.15.2/lib/std/testing.zig:607:14: 0x1177599 in expect (std.zig)
-    if (!ok) return error.TestUnexpectedResult;
-             ^
-/home/lbw/Documents/Github/roc/src/cli/test/fx_platform_test.zig:648:5: 0x117faf4 in test.fx platform string interpolation type mismatch (interpreter) (fx_platform_test.zig)
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "two:") != null);
-    ^
-error: 'fx_platform_test.test.fx platform repeating pattern segfault (interpreter)' failed: Run failed with exit code 1
-STDOUT: 11-22
-
-STDERR:
-Roc crashed: This Roc program overflowed its stack memory. This usually means there is very deep or infinite recursion somewhere in the code.
-
-/home/lbw/Documents/Github/roc/src/cli/test/util.zig:172:17: 0x1170007 in checkSuccess (fx_platform_test.zig)
-                return error.RunFailed;
-                ^
-/home/lbw/Documents/Github/roc/src/cli/test/fx_platform_test.zig:1083:5: 0x118d643 in test.fx platform repeating pattern segfault (interpreter) (fx_platform_test.zig)
-    try util.checkSuccess(run_result);
-    ^
-error: while executing test 'fx_test_specs.test.find by path works', the following test command failed:
-./.zig-cache/o/556d3fdbf9408d62bc090783b84c8337/fx_platform_test --cache-dir=./.zig-cache --seed=0x23f8f2d2 --listen=-
-
-Build Summary: 108/112 steps succeeded; 2 failed; 3356/3370 tests passed; 10 skipped; 4 failed
-test transitive failure
-└─ tests_summary transitive failure
-   ├─ run test eval failure
-   └─ run test fx_platform_test 50/60 passed, 4 failed, 6 skipped
-
-error: the following build command failed with exit code 1:
-.zig-cache/o/f209260fd558ab083c7e83299cd7cdbf/build /home/lbw/bin/zig-x86_64-linux-0.15.2/zig /home/lbw/bin/zig-x86_64-linux-0.15.2/lib /home/lbw/Documents/Github/roc .zig-cache /home/lbw/.cache/zig --seed 0x23f8f2d2 -Z97f39e5ba03ee647 test
-minici
-└─ minici-inner failure
-error: `zig build test` failed with exit code 1
-
-Build Summary: 0/2 steps succeeded; 1 failed
-minici transitive failure
-└─ minici-inner failure
-
-error: the following build command failed with exit code 1:
-.zig-cache/o/f209260fd558ab083c7e83299cd7cdbf/build /home/lbw/bin/zig-x86_64-linux-0.15.2/zig /home/lbw/bin/zig-x86_64-linux-0.15.2/lib /home/lbw/Documents/Github/roc .zig-cache /home/lbw/.cache/zig --seed 0xd2b5aa5b -Zc9c1e73b6e06bdb7 minici
-```
