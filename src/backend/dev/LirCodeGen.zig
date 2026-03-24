@@ -9881,11 +9881,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
 
                 // Store pointer to stack-resident message bytes at RocCrashed offset 0
+                try self.emitLeaStack(tmp, msg_slot);
                 if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.addRegRegImm12(.w64, tmp, base_reg, @intCast(msg_slot));
                     try self.codegen.emit.strRegMemSoff(.w64, tmp, base_reg, crashed_slot);
                 } else {
-                    try self.codegen.emit.leaRegMem(tmp, base_reg, msg_slot);
                     try self.codegen.emit.movMemReg(.w64, base_reg, crashed_slot, tmp);
                 }
 

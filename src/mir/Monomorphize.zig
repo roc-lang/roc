@@ -3895,8 +3895,18 @@ pub const Pass = struct {
                 exact_arg_mono
             else if (self.exprUsesContextSensitiveNumericDefault(actual_module_idx, arg_expr_idx))
                 resolvedMonotype(.none, actual_module_idx)
-            else
-                try self.resolveExprMonotypeResolved(result, actual_module_idx, arg_expr_idx);
+            else blk: {
+                const resolved = try self.resolveExprMonotypeResolved(result, actual_module_idx, arg_expr_idx);
+                if (!resolved.isNone()) break :blk resolved;
+                // When exact resolution fails (e.g., tag unions with flex extension
+                // variables like [Red, ..]), fall back to monomorphizable resolution
+                // which closes flex extensions to produce a concrete monotype.
+                break :blk try self.resolveTypeVarMonotypeIfMonomorphizableResolved(
+                    result,
+                    actual_module_idx,
+                    ModuleEnv.varFrom(arg_expr_idx),
+                );
+            };
 
             if (arg_mono.isNone()) continue;
             try self.bindTemplateParamActualMonotype(
