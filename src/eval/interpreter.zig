@@ -601,191 +601,14 @@ pub const LirInterpreter = struct {
     // Expression evaluation
 
     /// Evaluate a LIR expression, returning its value.
+    /// Delegates to the stack-safe evaluation engine.
     pub fn eval(self: *LirInterpreter, initial_expr_id: LirExprId) Error!EvalResult {
         // Reset static buffer on first eval call only (avoid resetting during recursion)
         if (!self.eval_active) {
             self.roc_env.resetForEval();
             self.eval_active = true;
         }
-        var expr_id = initial_expr_id;
-        // Iterative loop — tail-call positions set expr_id and continue
-        // instead of recursing into eval(), avoiding stack overflow.
-        outer: while (true) {
-            const expr = self.store.getExpr(expr_id);
-            switch (expr) {
-                // Tail-call optimized: block (inlined evalBlock)
-                .block => |b| {
-                    const stmts = self.store.getStmts(b.stmts);
-                    for (stmts) |stmt| {
-                        switch (stmt) {
-                            .decl, .mutate => |binding| {
-                                const result = try self.eval(binding.expr);
-                                switch (result) {
-                                    .value => |val| try self.bindPattern(binding.pattern, val),
-                                    .early_return => return result,
-                                    .break_expr => return result,
-                                }
-                            },
-                            .cell_init => |cb| {
-                                const result = try self.eval(cb.expr);
-                                const val = switch (result) {
-                                    .value => |v| v,
-                                    .early_return => return result,
-                                    .break_expr => return result,
-                                };
-                                const size = self.helper.sizeOf(cb.layout_idx);
-                                self.cells.put(cb.cell.raw(), .{ .val = val, .size = size }) catch return error.OutOfMemory;
-                            },
-                            .cell_store => |cb| {
-                                const result = try self.eval(cb.expr);
-                                const val = switch (result) {
-                                    .value => |v| v,
-                                    .early_return => return result,
-                                    .break_expr => return result,
-                                };
-                                const size = self.helper.sizeOf(cb.layout_idx);
-                                if (self.cells.getPtr(cb.cell.raw())) |entry| {
-                                    entry.val = val;
-                                    entry.size = size;
-                                } else {
-                                    self.cells.put(cb.cell.raw(), .{ .val = val, .size = size }) catch return error.OutOfMemory;
-                                }
-                            },
-                            .cell_drop => {},
-                        }
-                    }
-                    expr_id = b.final_expr;
-                    continue :outer;
-                },
-                // Tail-call optimized: nominal unwrap
-                .nominal => |n| {
-                    expr_id = n.backing_expr;
-                    continue :outer;
-                },
-                // Tail-call optimized: if-then-else
-                .if_then_else => |ite| {
-                    const branches = self.store.getIfBranches(ite.branches);
-                    for (branches) |branch| {
-                        const cond_result = try self.eval(branch.cond);
-                        const cond_val = switch (cond_result) {
-                            .value => |v| v,
-                            else => return cond_result,
-                        };
-                        if (cond_val.read(u8) != 0) {
-                            expr_id = branch.body;
-                            continue :outer;
-                        }
-                    }
-                    expr_id = ite.final_else;
-                    continue :outer;
-                },
-                // Tail-call optimized: match
-                .match_expr => |m| {
-                    const match_val = try self.evalValue(m.value);
-                    const match_branches = self.store.getMatchBranches(m.branches);
-                    for (match_branches) |branch| {
-                        const matched = try self.matchPattern(branch.pattern, match_val);
-                        if (matched) {
-                            try self.bindPattern(branch.pattern, match_val);
-                            if (!branch.guard.isNone()) {
-                                const guard_val = try self.evalValue(branch.guard);
-                                if (guard_val.read(u8) == 0) continue;
-                            }
-                            expr_id = branch.body;
-                            continue :outer;
-                        }
-                    }
-                    return error.RuntimeError;
-                },
-                // Tail-call optimized: discriminant switch
-                .discriminant_switch => |ds| {
-                    const switch_val = try self.evalValue(ds.value);
-                    const disc = self.helper.readTagDiscriminant(switch_val, ds.union_layout);
-                    const disc_branches = self.store.getExprSpan(ds.branches);
-                    if (disc < disc_branches.len) {
-                        expr_id = disc_branches[disc];
-                        continue :outer;
-                    }
-                    return error.RuntimeError;
-                },
-                .dbg => |d| {
-                    const dbg_val = try self.evalValue(d.expr);
-                    const dbg_msg = try self.renderExpectValue(dbg_val, d.result_layout);
-                    self.roc_ops.dbg(dbg_msg);
-                    return .{ .value = dbg_val };
-                },
-                // Non-tail cases return directly
-                .i64_literal => |lit| return .{ .value = try self.evalI64Literal(lit.value, lit.layout_idx) },
-                .i128_literal => |lit| return .{ .value = try self.evalI128Literal(lit.value, lit.layout_idx) },
-                .f64_literal => |v| return .{ .value = try self.evalF64Literal(v) },
-                .f32_literal => |v| return .{ .value = try self.evalF32Literal(v) },
-                .dec_literal => |v| return .{ .value = try self.evalDecLiteral(v) },
-                .str_literal => |idx| return .{ .value = try self.evalStrLiteral(idx) },
-                .bool_literal => |b| return .{ .value = try self.evalBoolLiteral(b) },
-                .lookup => |l| return .{ .value = try self.evalLookup(l.symbol, l.layout_idx) },
-                .cell_load => |l| return .{ .value = try self.evalCellLoad(l.cell, l.layout_idx) },
-                .struct_ => |s| return try self.evalStruct(s),
-                .struct_access => |sa| return .{ .value = try self.evalStructAccess(sa) },
-                .zero_arg_tag => |z| return .{ .value = try self.evalZeroArgTag(z) },
-                .tag => |t| return try self.evalTag(t),
-                .tag_payload_access => |tpa| return .{ .value = try self.evalTagPayloadAccess(tpa) },
-                .proc_call => |pc| return try self.evalProcCall(pc),
-                .empty_list => |l| return .{ .value = try self.evalEmptyList(l) },
-                .list => |l| return try self.evalList(l),
-                .early_return => |er| return try self.evalEarlyReturn(er),
-                .break_expr => return .{ .break_expr = {} },
-                .for_loop => |fl| return try self.evalForLoop(fl),
-                .while_loop => |wl| return try self.evalWhileLoop(wl),
-                .crash => |c| return try self.evalCrash(c),
-                .runtime_error => |runtime_error_expr| {
-                    if (self.recover_runtime_placeholders) {
-                        return .{ .value = try self.placeholderValueForLayout(runtime_error_expr.ret_layout) };
-                    }
-                    return error.RuntimeError;
-                },
-                // RC ops — perform actual refcounting so native builtins
-                // don't trigger use-after-free.
-                .incref => |ir| {
-                    const val = try self.evalValue(ir.value);
-                    self.performRc(.incref, val, ir.layout_idx, ir.count);
-                    return .{ .value = Value.zst };
-                },
-                .decref => |dr| {
-                    const val = try self.evalValue(dr.value);
-                    self.performRc(.decref, val, dr.layout_idx, 0);
-                    return .{ .value = Value.zst };
-                },
-                .free => |f| {
-                    const val = try self.evalValue(f.value);
-                    self.performRc(.free, val, f.layout_idx, 0);
-                    return .{ .value = Value.zst };
-                },
-                .expect => |e| return try self.evalExpect(e),
-                .hosted_call => |hc| return .{ .value = try self.evalHostedCall(hc) },
-                .low_level => |ll| {
-                    const value = self.evalLowLevel(ll) catch |err| switch (err) {
-                        error.RuntimeError => {
-                            if (self.getRuntimeErrorMessage() == null) {
-                                const msg = std.fmt.allocPrint(
-                                    self.arena.allocator(),
-                                    "RuntimeError in low-level op {s}",
-                                    .{@tagName(ll.op)},
-                                ) catch return error.OutOfMemory;
-                                return self.runtimeError(msg);
-                            }
-                            return error.RuntimeError;
-                        },
-                        else => return err,
-                    };
-                    return .{ .value = value };
-                },
-                .str_concat => |sc| return try self.evalStrConcat(sc),
-                .int_to_str => |its| return try self.evalIntToStr(its),
-                .float_to_str => |fts| return try self.evalFloatToStr(fts),
-                .dec_to_str => |dts| return try self.evalDecToStr(dts),
-                .str_escape_and_quote => |seq| return try self.evalStrEscapeAndQuote(seq),
-            }
-        }
+        return self.evalStackSafe(initial_expr_id);
     }
 
     /// Evaluate an expression, expecting a normal value (not control flow).
@@ -4170,7 +3993,7 @@ pub const LirInterpreter = struct {
     }
 
     fn popValue(self: *LirInterpreter) Value {
-        return self.value_stack.pop();
+        return self.value_stack.pop().?;
     }
 
     fn popValues(self: *LirInterpreter, count: usize) Error![]Value {
@@ -4179,7 +4002,7 @@ pub const LirInterpreter = struct {
         var i: usize = count;
         while (i > 0) {
             i -= 1;
-            buf[i] = self.value_stack.pop();
+            buf[i] = self.value_stack.pop().?;
         }
         return buf;
     }
@@ -4197,23 +4020,19 @@ pub const LirInterpreter = struct {
     /// Stack-safe expression evaluator.
     /// Pushes work items onto an explicit stack instead of recursing.
     pub fn evalStackSafe(self: *LirInterpreter, initial_expr_id: LirExprId) Error!EvalResult {
-        // Reset static buffer on first eval call only
-        if (!self.eval_active) {
-            self.roc_env.resetForEval();
-            self.eval_active = true;
-        }
-
-        // Clear stacks from any previous run (retain capacity)
-        self.work_stack.clearRetainingCapacity();
-        self.value_stack.clearRetainingCapacity();
+        // Save outer stack depths to support re-entrancy (e.g., evalLowLevel calling
+        // self.eval() for simple args while the stack-safe engine is active).
+        const outer_work_len = self.work_stack.items.len;
+        _ = self.value_stack.items.len; // outer_value_len reserved for future assertions
+        const saved_unwinding = self.unwinding;
         self.unwinding = .none;
 
         // Seed: return_result continuation (bottom), then the initial expression (top)
         try self.pushWork(.{ .apply_continuation = .return_result });
         try self.pushWork(.{ .eval_expr = initial_expr_id });
 
-        while (self.work_stack.items.len > 0) {
-            const item = self.work_stack.pop();
+        while (self.work_stack.items.len > outer_work_len) {
+            const item = self.work_stack.pop().?;
 
             // Unwinding mode: skip non-boundary items until we hit a frame boundary
             switch (self.unwinding) {
@@ -4222,7 +4041,6 @@ pub const LirInterpreter = struct {
                     switch (item) {
                         .apply_continuation => |cont| switch (cont) {
                             .call_cleanup => |cleanup| {
-                                // Hit a function call boundary: restore state and propagate result
                                 self.bindings.shrinkRetainingCapacity(cleanup.saved_bindings_len);
                                 self.current_lambda_params = cleanup.saved_lambda_params;
                                 self.value_stack.shrinkRetainingCapacity(cleanup.saved_value_stack_len);
@@ -4231,7 +4049,7 @@ pub const LirInterpreter = struct {
                                 self.unwinding = .none;
                             },
                             .return_result => {
-                                // Hit the outermost boundary
+                                self.unwinding = saved_unwinding;
                                 return .{ .early_return = ret_val };
                             },
                             else => continue,
@@ -4243,19 +4061,16 @@ pub const LirInterpreter = struct {
                     switch (item) {
                         .apply_continuation => |cont| switch (cont) {
                             .for_loop_body_done => |fl| {
-                                // Hit a for-loop boundary: stop iteration, push ZST
                                 self.value_stack.shrinkRetainingCapacity(fl.saved_value_stack_len);
                                 try self.pushValue(Value.zst);
                                 self.unwinding = .none;
                             },
                             .while_loop_body_done => |wl| {
-                                // Hit a while-loop boundary: stop iteration, push ZST
                                 self.value_stack.shrinkRetainingCapacity(wl.saved_value_stack_len);
                                 try self.pushValue(Value.zst);
                                 self.unwinding = .none;
                             },
                             .call_cleanup => |cleanup| {
-                                // Break inside a function call: propagate as early_return of ZST
                                 self.bindings.shrinkRetainingCapacity(cleanup.saved_bindings_len);
                                 self.current_lambda_params = cleanup.saved_lambda_params;
                                 self.value_stack.shrinkRetainingCapacity(cleanup.saved_value_stack_len);
@@ -4264,6 +4079,7 @@ pub const LirInterpreter = struct {
                                 self.unwinding = .none;
                             },
                             .return_result => {
+                                self.unwinding = saved_unwinding;
                                 return .{ .break_expr = {} };
                             },
                             else => continue,
@@ -4279,6 +4095,7 @@ pub const LirInterpreter = struct {
                 .eval_cf_stmt => |stmt_id| try self.scheduleCFStmtEval(stmt_id),
                 .apply_continuation => |cont| {
                     if (try self.applyContinuation(cont)) |result| {
+                        self.unwinding = saved_unwinding;
                         return result;
                     }
                 },
@@ -4286,6 +4103,7 @@ pub const LirInterpreter = struct {
         }
 
         // Should not reach here — return_result should have fired
+        self.unwinding = saved_unwinding;
         return error.RuntimeError;
     }
 
@@ -4444,33 +4262,23 @@ pub const LirInterpreter = struct {
                 }
             },
             .low_level => |ll| {
-                const arg_exprs = self.store.getExprSpan(ll.args);
-                if (arg_exprs.len == 0) {
-                    // 0-arg low-level: call directly using old eval path
-                    const value = self.evalLowLevel(ll) catch |err| switch (err) {
-                        error.RuntimeError => {
-                            if (self.getRuntimeErrorMessage() == null) {
-                                const msg = std.fmt.allocPrint(
-                                    self.arena.allocator(),
-                                    "RuntimeError in low-level op {s}",
-                                    .{@tagName(ll.op)},
-                                ) catch return error.OutOfMemory;
-                                return self.runtimeError(msg);
-                            }
-                            return error.RuntimeError;
-                        },
-                        else => return err,
-                    };
-                    try self.pushValue(value);
-                } else {
-                    try self.scheduleEvalThen(.{ .low_level_collect_args = .{
-                        .op = ll.op,
-                        .args = ll.args,
-                        .next_arg_idx = 0,
-                        .ret_layout = ll.ret_layout,
-                        .callable_proc = ll.callable_proc,
-                    } }, arg_exprs[0]);
-                }
+                // Low-level ops evaluate their own args (always simple lookups/literals,
+                // bounded depth). Call existing helper directly.
+                const value = self.evalLowLevel(ll) catch |err| switch (err) {
+                    error.RuntimeError => {
+                        if (self.getRuntimeErrorMessage() == null) {
+                            const msg = std.fmt.allocPrint(
+                                self.arena.allocator(),
+                                "RuntimeError in low-level op {s}",
+                                .{@tagName(ll.op)},
+                            ) catch return error.OutOfMemory;
+                            return self.runtimeError(msg);
+                        }
+                        return error.RuntimeError;
+                    },
+                    else => return err,
+                };
+                try self.pushValue(value);
             },
             .hosted_call => |hc| {
                 // Hosted calls use complex arg marshaling — call existing helper directly.
@@ -5157,47 +4965,13 @@ pub const LirInterpreter = struct {
 
             // ── Multi-arg builtins ──
 
-            .low_level_collect_args => |llca| {
-                const arg_exprs = self.store.getExprSpan(llca.args);
-                const next_idx = llca.next_arg_idx + 1;
-                if (next_idx < arg_exprs.len) {
-                    // More args to evaluate
-                    try self.scheduleEvalThen(.{ .low_level_collect_args = .{
-                        .op = llca.op,
-                        .args = llca.args,
-                        .next_arg_idx = next_idx,
-                        .ret_layout = llca.ret_layout,
-                        .callable_proc = llca.callable_proc,
-                    } }, arg_exprs[next_idx]);
-                } else {
-                    // All args collected — call evalLowLevelWithArgs
-                    const vals = try self.popValues(arg_exprs.len);
-                    const arg_layout: layout_mod.Idx = if (arg_exprs.len > 0)
-                        self.exprLayout(arg_exprs[0])
-                    else
-                        llca.ret_layout;
-                    const result = try self.evalLowLevelWithArgs(llca.op, vals, arg_layout, llca.ret_layout, llca.callable_proc);
-                    try self.pushValue(result);
-                }
-                return null;
+            .low_level_collect_args => {
+                // Low-level ops are evaluated inline in scheduleExprEval
+                unreachable;
             },
-            .hosted_call_collect_args => |hcca| {
-                const arg_exprs = self.store.getExprSpan(hcca.args);
-                const next_idx = hcca.next_arg_idx + 1;
-                if (next_idx < arg_exprs.len) {
-                    try self.scheduleEvalThen(.{ .hosted_call_collect_args = .{
-                        .index = hcca.index,
-                        .args = hcca.args,
-                        .next_arg_idx = next_idx,
-                        .ret_layout = hcca.ret_layout,
-                    } }, arg_exprs[next_idx]);
-                } else {
-                    // All args collected — marshal and call
-                    const vals = try self.popValues(arg_exprs.len);
-                    const result = try self.evalHostedCallWithArgs(hcca.index, arg_exprs, vals, hcca.ret_layout);
-                    try self.pushValue(result);
-                }
-                return null;
+            .hosted_call_collect_args => {
+                // Hosted calls are evaluated inline in scheduleExprEval
+                unreachable;
             },
 
             // ── CF statement continuations ──
@@ -5313,756 +5087,29 @@ pub const LirInterpreter = struct {
         try self.pushWork(.{ .eval_cf_stmt = proc_spec.body });
     }
 
-    /// Evaluate a low-level op with pre-evaluated argument values.
-    /// Reuses the existing evalLowLevel switch body but with args already resolved.
-    fn evalLowLevelWithArgs(
-        self: *LirInterpreter,
-        op: base.LowLevel,
-        args: []const Value,
-        arg_layout: layout_mod.Idx,
-        ret_layout: layout_mod.Idx,
-        callable_proc: lir.LirProcSpecId,
+    fn _removed_dispatchLowLevelWithArgs(
+        _: *LirInterpreter,
+        _: base.LowLevel,
+        _: []const Value,
+        _: layout_mod.Idx,
+        _: layout_mod.Idx,
+        _: lir.LirProcSpecId,
     ) Error!Value {
-        return self.dispatchLowLevelWithArgs(op, args, arg_layout, ret_layout, callable_proc);
+        unreachable; // Dead code — low-level ops use evalLowLevel directly
     }
 
-    /// Direct dispatch of a low-level op with pre-evaluated args.
-    /// This mirrors the existing evalLowLevel switch but operates on
-    /// pre-collected Value slices instead of LirExprSpan + eval().
-    fn dispatchLowLevelWithArgs(
-        self: *LirInterpreter,
-        op: base.LowLevel,
-        args: []const Value,
-        arg_layout: layout_mod.Idx,
-        ret_layout: layout_mod.Idx,
-        callable_proc: lir.LirProcSpecId,
+    fn _removed_evalHostedCallWithArgs(
+        _: *LirInterpreter,
+        _: u32,
+        _: []const LirExprId,
+        _: []const Value,
+        _: layout_mod.Idx,
     ) Error!Value {
-        _ = callable_proc;
-
-        var a: [8]Value = undefined;
-        const n = @min(args.len, 8);
-        for (0..n) |i| a[i] = args[i];
-
-        return switch (op) {
-            // String ops
-            .str_is_eq => blk: {
-                const result = builtins.str.strEqual(valueToRocStr(a[0]), valueToRocStr(a[1]));
-                const val = try self.alloc(ret_layout);
-                val.write(u8, if (result) 1 else 0);
-                break :blk val;
-            },
-            .str_concat => self.callBuiltinStr2(builtins.str.strConcatC, valueToRocStr(a[0]), valueToRocStr(a[1]), ret_layout),
-            .str_contains => blk: {
-                const result = builtins.str.strContains(valueToRocStr(a[0]), valueToRocStr(a[1]));
-                const val = try self.alloc(ret_layout);
-                val.write(u8, if (result) 1 else 0);
-                break :blk val;
-            },
-            .str_starts_with => blk: {
-                const result = builtins.str.startsWith(valueToRocStr(a[0]), valueToRocStr(a[1]));
-                const val = try self.alloc(ret_layout);
-                val.write(u8, if (result) 1 else 0);
-                break :blk val;
-            },
-            .str_ends_with => blk: {
-                const result = builtins.str.endsWith(valueToRocStr(a[0]), valueToRocStr(a[1]));
-                const val = try self.alloc(ret_layout);
-                val.write(u8, if (result) 1 else 0);
-                break :blk val;
-            },
-            .str_trim => self.callBuiltinStr1(builtins.str.strTrim, valueToRocStr(a[0]), ret_layout),
-            .str_trim_start => self.callBuiltinStr1(builtins.str.strTrimStart, valueToRocStr(a[0]), ret_layout),
-            .str_trim_end => self.callBuiltinStr1(builtins.str.strTrimEnd, valueToRocStr(a[0]), ret_layout),
-            .str_with_ascii_lowercased => self.callBuiltinStr1(builtins.str.strWithAsciiLowercased, valueToRocStr(a[0]), ret_layout),
-            .str_with_ascii_uppercased => self.callBuiltinStr1(builtins.str.strWithAsciiUppercased, valueToRocStr(a[0]), ret_layout),
-            .str_caseless_ascii_equals => blk: {
-                const result = builtins.str.strCaselessAsciiEquals(valueToRocStr(a[0]), valueToRocStr(a[1]));
-                const val = try self.alloc(ret_layout);
-                val.write(u8, if (result) 1 else 0);
-                break :blk val;
-            },
-            .str_repeat => blk: {
-                self.roc_env.resetCrash();
-                const sj = setjmp(&self.roc_env.jmp_buf);
-                if (sj != 0) return error.Crash;
-                const result = builtins.str.repeatC(valueToRocStr(a[0]), a[1].read(u64), &self.roc_ops);
-                break :blk self.rocStrToValue(result, ret_layout);
-            },
-            .str_drop_prefix => self.callBuiltinStr2(builtins.str.strDropPrefix, valueToRocStr(a[0]), valueToRocStr(a[1]), ret_layout),
-            .str_drop_suffix => self.callBuiltinStr2(builtins.str.strDropSuffix, valueToRocStr(a[0]), valueToRocStr(a[1]), ret_layout),
-            .str_count_utf8_bytes => blk: {
-                const result = builtins.str.countUtf8Bytes(valueToRocStr(a[0]));
-                const val = try self.alloc(ret_layout);
-                val.write(u64, result);
-                break :blk val;
-            },
-            .str_to_utf8 => blk: {
-                self.roc_env.resetCrash();
-                const sj = setjmp(&self.roc_env.jmp_buf);
-                if (sj != 0) return error.Crash;
-                const result = builtins.str.strToUtf8C(valueToRocStr(a[0]), &self.roc_ops);
-                break :blk self.rocListToValue(result, ret_layout);
-            },
-            .str_inspect => a[0],
-
-            // Numeric comparisons
-            .num_is_eq => self.numCmpOp(a[0], a[1], arg_layout, .eq),
-            .num_is_neq => blk: {
-                const eq_val = try self.numCmpOp(a[0], a[1], arg_layout, .eq);
-                const val = try self.alloc(.bool);
-                val.write(u8, if (eq_val.read(u8) == 0) @as(u8, 1) else @as(u8, 0));
-                break :blk val;
-            },
-            .num_is_lt => self.numCmpOp(a[0], a[1], arg_layout, .lt),
-            .num_is_lte => self.numCmpOp(a[0], a[1], arg_layout, .lte),
-            .num_is_gt => self.numCmpOp(a[0], a[1], arg_layout, .gt),
-            .num_is_gte => self.numCmpOp(a[0], a[1], arg_layout, .gte),
-            .num_compare => self.evalCompare(a[0], a[1], arg_layout, ret_layout),
-
-            // Numeric arithmetic
-            .num_plus => self.numBinOp(a[0], a[1], ret_layout, arg_layout, .add),
-            .num_plus_wrapping => self.numBinOp(a[0], a[1], ret_layout, arg_layout, .add),
-            .num_minus => self.numBinOp(a[0], a[1], ret_layout, arg_layout, .sub),
-            .num_minus_wrapping => self.numBinOp(a[0], a[1], ret_layout, arg_layout, .sub),
-            .num_times => self.numBinOp(a[0], a[1], ret_layout, arg_layout, .mul),
-            .num_times_wrapping => self.numBinOp(a[0], a[1], ret_layout, arg_layout, .mul),
-            .num_div_float => self.numBinOp(a[0], a[1], ret_layout, arg_layout, .div),
-            .num_div_trunc_unchecked => self.numBinOp(a[0], a[1], ret_layout, arg_layout, .div_trunc),
-            .num_div_ceil_unchecked => blk: {
-                // ceil(a/b) = trunc(a/b) + (if a%b != 0 then 1 else 0)
-                const trunc_val = try self.numBinOp(a[0], a[1], ret_layout, arg_layout, .div_trunc);
-                const rem_val = try self.numBinOp(a[0], a[1], ret_layout, arg_layout, .rem);
-                const size = self.helper.sizeOf(arg_layout);
-                const has_remainder: bool = switch (size) {
-                    1 => rem_val.read(u8) != 0,
-                    2 => rem_val.read(u16) != 0,
-                    4 => rem_val.read(u32) != 0,
-                    8 => rem_val.read(u64) != 0,
-                    16 => rem_val.read(u128) != 0,
-                    else => false,
-                };
-                if (has_remainder) {
-                    const one = try self.alloc(arg_layout);
-                    switch (size) {
-                        1 => one.write(u8, 1),
-                        2 => one.write(u16, 1),
-                        4 => one.write(u32, 1),
-                        8 => one.write(u64, 1),
-                        16 => one.write(u128, 1),
-                        else => {},
-                    }
-                    break :blk self.numBinOp(trunc_val, one, ret_layout, arg_layout, .add);
-                }
-                break :blk trunc_val;
-            },
-            .num_rem_unchecked => self.numBinOp(a[0], a[1], ret_layout, arg_layout, .rem),
-            .num_mod_unchecked => self.numBinOp(a[0], a[1], ret_layout, arg_layout, .mod),
-            .num_negate => self.numUnaryOp(a[0], ret_layout, arg_layout, .negate),
-            .num_abs => self.numUnaryOp(a[0], ret_layout, arg_layout, .abs),
-            .num_abs_diff => self.numBinOp(a[0], a[1], ret_layout, arg_layout, .abs_diff),
-            .num_pow => self.evalNumPow(a[0], a[1], ret_layout, arg_layout),
-            .num_sqrt_unchecked => self.evalNumSqrt(a[0], ret_layout, arg_layout),
-            .num_log_unchecked => self.evalNumLog(a[0], ret_layout, arg_layout),
-            .num_round => self.evalNumRound(a[0], ret_layout, arg_layout),
-            .num_floor => self.evalNumFloor(a[0], ret_layout, arg_layout),
-            .num_ceiling => self.evalNumCeiling(a[0], ret_layout, arg_layout),
-
-            // Bitwise
-            .num_and => blk: {
-                const val = try self.alloc(ret_layout);
-                const size = self.helper.sizeOf(arg_layout);
-                switch (size) {
-                    1 => val.write(u8, a[0].read(u8) & a[1].read(u8)),
-                    2 => val.write(u16, a[0].read(u16) & a[1].read(u16)),
-                    4 => val.write(u32, a[0].read(u32) & a[1].read(u32)),
-                    8 => val.write(u64, a[0].read(u64) & a[1].read(u64)),
-                    16 => val.write(u128, a[0].read(u128) & a[1].read(u128)),
-                    else => {},
-                }
-                break :blk val;
-            },
-            .num_or => blk: {
-                const val = try self.alloc(ret_layout);
-                const size = self.helper.sizeOf(arg_layout);
-                switch (size) {
-                    1 => val.write(u8, a[0].read(u8) | a[1].read(u8)),
-                    2 => val.write(u16, a[0].read(u16) | a[1].read(u16)),
-                    4 => val.write(u32, a[0].read(u32) | a[1].read(u32)),
-                    8 => val.write(u64, a[0].read(u64) | a[1].read(u64)),
-                    16 => val.write(u128, a[0].read(u128) | a[1].read(u128)),
-                    else => {},
-                }
-                break :blk val;
-            },
-            .num_xor => blk: {
-                const val = try self.alloc(ret_layout);
-                const size = self.helper.sizeOf(arg_layout);
-                switch (size) {
-                    1 => val.write(u8, a[0].read(u8) ^ a[1].read(u8)),
-                    2 => val.write(u16, a[0].read(u16) ^ a[1].read(u16)),
-                    4 => val.write(u32, a[0].read(u32) ^ a[1].read(u32)),
-                    8 => val.write(u64, a[0].read(u64) ^ a[1].read(u64)),
-                    16 => val.write(u128, a[0].read(u128) ^ a[1].read(u128)),
-                    else => {},
-                }
-                break :blk val;
-            },
-            .num_shl => self.numShiftOp(a[0], a[1], ret_layout, arg_layout, .shl),
-            .num_shr => self.numShiftOp(a[0], a[1], ret_layout, arg_layout, .shr),
-            .num_shr_zero_fill => self.numShiftOp(a[0], a[1], ret_layout, arg_layout, .shr_zf),
-            .num_count_leading_zero_bits => blk: {
-                const val = try self.alloc(ret_layout);
-                const size = self.helper.sizeOf(arg_layout);
-                switch (size) {
-                    1 => val.write(u8, @clz(a[0].read(u8))),
-                    2 => val.write(u16, @clz(a[0].read(u16))),
-                    4 => val.write(u32, @clz(a[0].read(u32))),
-                    8 => val.write(u64, @clz(a[0].read(u64))),
-                    16 => val.write(u128, @clz(a[0].read(u128))),
-                    else => {},
-                }
-                break :blk val;
-            },
-            .num_count_trailing_zero_bits => blk: {
-                const val = try self.alloc(ret_layout);
-                const size = self.helper.sizeOf(arg_layout);
-                switch (size) {
-                    1 => val.write(u8, @ctz(a[0].read(u8))),
-                    2 => val.write(u16, @ctz(a[0].read(u16))),
-                    4 => val.write(u32, @ctz(a[0].read(u32))),
-                    8 => val.write(u64, @ctz(a[0].read(u64))),
-                    16 => val.write(u128, @ctz(a[0].read(u128))),
-                    else => {},
-                }
-                break :blk val;
-            },
-            .num_count_one_bits => blk: {
-                const val = try self.alloc(ret_layout);
-                const size = self.helper.sizeOf(arg_layout);
-                switch (size) {
-                    1 => val.write(u8, @popCount(a[0].read(u8))),
-                    2 => val.write(u16, @popCount(a[0].read(u16))),
-                    4 => val.write(u32, @popCount(a[0].read(u32))),
-                    8 => val.write(u64, @popCount(a[0].read(u64))),
-                    16 => val.write(u128, @popCount(a[0].read(u128))),
-                    else => {},
-                }
-                break :blk val;
-            },
-
-            // Boolean
-            .bool_and => blk: {
-                const val = try self.alloc(ret_layout);
-                val.write(u8, if (a[0].read(u8) != 0 and a[1].read(u8) != 0) @as(u8, 1) else @as(u8, 0));
-                break :blk val;
-            },
-            .bool_or => blk: {
-                const val = try self.alloc(ret_layout);
-                val.write(u8, if (a[0].read(u8) != 0 or a[1].read(u8) != 0) @as(u8, 1) else @as(u8, 0));
-                break :blk val;
-            },
-            .bool_not => blk: {
-                const val = try self.alloc(ret_layout);
-                val.write(u8, if (a[0].read(u8) == 0) @as(u8, 1) else @as(u8, 0));
-                break :blk val;
-            },
-            .and_ => blk: {
-                const val = try self.alloc(ret_layout);
-                val.write(u8, if (a[0].read(u8) != 0 and a[1].read(u8) != 0) @as(u8, 1) else @as(u8, 0));
-                break :blk val;
-            },
-            .or_ => blk: {
-                const val = try self.alloc(ret_layout);
-                val.write(u8, if (a[0].read(u8) != 0 or a[1].read(u8) != 0) @as(u8, 1) else @as(u8, 0));
-                break :blk val;
-            },
-            .not_ => blk: {
-                const val = try self.alloc(ret_layout);
-                val.write(u8, if (a[0].read(u8) == 0) @as(u8, 1) else @as(u8, 0));
-                break :blk val;
-            },
-
-            // List ops
-            .list_len => blk: {
-                const rl = valueToRocList(a[0]);
-                const val = try self.alloc(ret_layout);
-                val.write(u64, @intCast(rl.len()));
-                break :blk val;
-            },
-            .list_is_empty => blk: {
-                const rl = valueToRocList(a[0]);
-                const val = try self.alloc(ret_layout);
-                val.write(u8, if (rl.len() == 0) @as(u8, 1) else @as(u8, 0));
-                break :blk val;
-            },
-            .list_get_unsafe => blk: {
-                const rl = valueToRocList(a[0]);
-                const idx = a[1].read(u64);
-                const info = self.listElemInfo(arg_layout);
-                if (info.width == 0 or rl.bytes == null) break :blk try self.alloc(ret_layout);
-                const elem_ptr = rl.bytes.? + @as(usize, @intCast(idx)) * info.width;
-                const val = try self.allocBytes(info.width);
-                @memcpy(val.ptr[0..info.width], elem_ptr[0..info.width]);
-                break :blk val;
-            },
-            .list_with_capacity => blk: {
-                self.roc_env.resetCrash();
-                const sj = setjmp(&self.roc_env.jmp_buf);
-                if (sj != 0) return error.Crash;
-                const info = self.listElemInfo(ret_layout);
-                const result = builtins.list.listWithCapacity(a[0].read(u64), info.alignment, info.width, &self.roc_ops);
-                break :blk self.rocListToValue(result, ret_layout);
-            },
-            .list_reserve => blk: {
-                self.roc_env.resetCrash();
-                const sj = setjmp(&self.roc_env.jmp_buf);
-                if (sj != 0) return error.Crash;
-                const info = self.listElemInfo(arg_layout);
-                const result = builtins.list.listReserve(valueToRocList(a[0]), info.alignment, a[1].read(u64), info.width, UpdateMode.Immutable, &self.roc_ops);
-                break :blk self.rocListToValue(result, ret_layout);
-            },
-            .list_release_excess_capacity => blk: {
-                self.roc_env.resetCrash();
-                const sj = setjmp(&self.roc_env.jmp_buf);
-                if (sj != 0) return error.Crash;
-                const info = self.listElemInfo(arg_layout);
-                const result = builtins.list.listReleaseExcessCapacity(valueToRocList(a[0]), info.alignment, info.width, false, null, &builtins.utils.rcNone, &self.roc_ops);
-                break :blk self.rocListToValue(result, ret_layout);
-            },
-            .list_swap => blk: {
-                self.roc_env.resetCrash();
-                const sj = setjmp(&self.roc_env.jmp_buf);
-                if (sj != 0) return error.Crash;
-                const info = self.listElemInfo(arg_layout);
-                const result = builtins.list.listSwap(valueToRocList(a[0]), info.alignment, info.width, a[1].read(u64), a[2].read(u64), UpdateMode.Immutable, &self.roc_ops);
-                break :blk self.rocListToValue(result, ret_layout);
-            },
-
-            // Numeric to_str
-            .u8_to_str => self.numToStr(u8, a[0], ret_layout),
-            .i8_to_str => self.numToStr(i8, a[0], ret_layout),
-            .u16_to_str => self.numToStr(u16, a[0], ret_layout),
-            .i16_to_str => self.numToStr(i16, a[0], ret_layout),
-            .u32_to_str => self.numToStr(u32, a[0], ret_layout),
-            .i32_to_str => self.numToStr(i32, a[0], ret_layout),
-            .u64_to_str => self.numToStr(u64, a[0], ret_layout),
-            .i64_to_str => self.numToStr(i64, a[0], ret_layout),
-            .u128_to_str => self.numToStr(u128, a[0], ret_layout),
-            .i128_to_str => self.numToStr(i128, a[0], ret_layout),
-            .dec_to_str => blk: {
-                const dec = RocDec{ .num = a[0].read(i128) };
-                self.roc_env.resetCrash();
-                const sj = setjmp(&self.roc_env.jmp_buf);
-                if (sj != 0) return error.Crash;
-                const result = builtins.dec.to_str(dec, &self.roc_ops);
-                break :blk self.rocStrToValue(result, ret_layout);
-            },
-            .f32_to_str => blk: {
-                var buf: [400]u8 = undefined;
-                const slice = i128h.f64_to_str(&buf, @as(f64, a[0].read(f32)));
-                break :blk self.makeRocStr(slice);
-            },
-            .f64_to_str => blk: {
-                var buf: [400]u8 = undefined;
-                const slice = i128h.f64_to_str(&buf, a[0].read(f64));
-                break :blk self.makeRocStr(slice);
-            },
-            .num_to_str => blk: {
-                const size = self.helper.sizeOf(arg_layout);
-                const l = self.layout_store.getLayout(arg_layout);
-                const is_float = l.tag == .scalar and l.data.scalar.tag == .frac;
-                if (isDec(arg_layout)) {
-                    const dec = RocDec{ .num = a[0].read(i128) };
-                    self.roc_env.resetCrash();
-                    const sj = setjmp(&self.roc_env.jmp_buf);
-                    if (sj != 0) return error.Crash;
-                    const result = builtins.dec.to_str(dec, &self.roc_ops);
-                    break :blk self.rocStrToValue(result, ret_layout);
-                } else if (is_float) {
-                    var buf: [400]u8 = undefined;
-                    const slice = switch (size) {
-                        4 => i128h.f64_to_str(&buf, @as(f64, a[0].read(f32))),
-                        else => i128h.f64_to_str(&buf, a[0].read(f64)),
-                    };
-                    break :blk self.makeRocStr(slice);
-                } else {
-                    break :blk self.numToStrByLayout(a[0], arg_layout, ret_layout);
-                }
-            },
-
-            // Numeric widen/truncate/conversion
-            .num_i8_to_i16 => self.numWiden(i8, a[0], ret_layout),
-            .num_i8_to_i32 => self.numWiden(i8, a[0], ret_layout),
-            .num_i8_to_i64 => self.numWiden(i8, a[0], ret_layout),
-            .num_i8_to_i128 => self.numWiden(i8, a[0], ret_layout),
-            .num_i16_to_i32 => self.numWiden(i16, a[0], ret_layout),
-            .num_i16_to_i64 => self.numWiden(i16, a[0], ret_layout),
-            .num_i16_to_i128 => self.numWiden(i16, a[0], ret_layout),
-            .num_i32_to_i64 => self.numWiden(i32, a[0], ret_layout),
-            .num_i32_to_i128 => self.numWiden(i32, a[0], ret_layout),
-            .num_i64_to_i128 => self.numWiden(i64, a[0], ret_layout),
-            .num_u8_to_u16 => self.numWiden(u8, a[0], ret_layout),
-            .num_u8_to_u32 => self.numWiden(u8, a[0], ret_layout),
-            .num_u8_to_u64 => self.numWiden(u8, a[0], ret_layout),
-            .num_u8_to_u128 => self.numWiden(u8, a[0], ret_layout),
-            .num_u8_to_i16 => self.numWiden(u8, a[0], ret_layout),
-            .num_u8_to_i32 => self.numWiden(u8, a[0], ret_layout),
-            .num_u8_to_i64 => self.numWiden(u8, a[0], ret_layout),
-            .num_u8_to_i128 => self.numWiden(u8, a[0], ret_layout),
-            .num_u16_to_u32 => self.numWiden(u16, a[0], ret_layout),
-            .num_u16_to_u64 => self.numWiden(u16, a[0], ret_layout),
-            .num_u16_to_u128 => self.numWiden(u16, a[0], ret_layout),
-            .num_u16_to_i32 => self.numWiden(u16, a[0], ret_layout),
-            .num_u16_to_i64 => self.numWiden(u16, a[0], ret_layout),
-            .num_u16_to_i128 => self.numWiden(u16, a[0], ret_layout),
-            .num_u32_to_u64 => self.numWiden(u32, a[0], ret_layout),
-            .num_u32_to_u128 => self.numWiden(u32, a[0], ret_layout),
-            .num_u32_to_i64 => self.numWiden(u32, a[0], ret_layout),
-            .num_u32_to_i128 => self.numWiden(u32, a[0], ret_layout),
-            .num_u64_to_u128 => self.numWiden(u64, a[0], ret_layout),
-            .num_u64_to_i128 => self.numWiden(u64, a[0], ret_layout),
-
-            // Truncation
-            .num_i128_to_i64_trunc => self.numTruncate(i128, i64, a[0], ret_layout),
-            .num_i128_to_i32_trunc => self.numTruncate(i128, i32, a[0], ret_layout),
-            .num_i128_to_i16_trunc => self.numTruncate(i128, i16, a[0], ret_layout),
-            .num_i128_to_i8_trunc => self.numTruncate(i128, i8, a[0], ret_layout),
-            .num_i64_to_i32_trunc => self.numTruncate(i64, i32, a[0], ret_layout),
-            .num_i64_to_i16_trunc => self.numTruncate(i64, i16, a[0], ret_layout),
-            .num_i64_to_i8_trunc => self.numTruncate(i64, i8, a[0], ret_layout),
-            .num_i32_to_i16_trunc => self.numTruncate(i32, i16, a[0], ret_layout),
-            .num_i32_to_i8_trunc => self.numTruncate(i32, i8, a[0], ret_layout),
-            .num_i16_to_i8_trunc => self.numTruncate(i16, i8, a[0], ret_layout),
-            .num_u128_to_u64_trunc => self.numTruncate(u128, u64, a[0], ret_layout),
-            .num_u128_to_u32_trunc => self.numTruncate(u128, u32, a[0], ret_layout),
-            .num_u128_to_u16_trunc => self.numTruncate(u128, u16, a[0], ret_layout),
-            .num_u128_to_u8_trunc => self.numTruncate(u128, u8, a[0], ret_layout),
-            .num_u64_to_u32_trunc => self.numTruncate(u64, u32, a[0], ret_layout),
-            .num_u64_to_u16_trunc => self.numTruncate(u64, u16, a[0], ret_layout),
-            .num_u64_to_u8_trunc => self.numTruncate(u64, u8, a[0], ret_layout),
-            .num_u32_to_u16_trunc => self.numTruncate(u32, u16, a[0], ret_layout),
-            .num_u32_to_u8_trunc => self.numTruncate(u32, u8, a[0], ret_layout),
-            .num_u16_to_u8_trunc => self.numTruncate(u16, u8, a[0], ret_layout),
-            // Signed-to-unsigned truncation (reinterpret)
-            .num_i128_to_u128_trunc => self.numTruncate(i128, u128, a[0], ret_layout),
-            .num_i64_to_u64_trunc => self.numTruncate(i64, u64, a[0], ret_layout),
-            .num_i32_to_u32_trunc => self.numTruncate(i32, u32, a[0], ret_layout),
-            .num_i16_to_u16_trunc => self.numTruncate(i16, u16, a[0], ret_layout),
-            .num_i8_to_u8_trunc => self.numTruncate(i8, u8, a[0], ret_layout),
-            // Unsigned-to-signed wrap
-            .num_u128_to_i128_trunc => self.numTruncate(u128, i128, a[0], ret_layout),
-            .num_u64_to_i64_trunc => self.numTruncate(u64, i64, a[0], ret_layout),
-            .num_u32_to_i32_trunc => self.numTruncate(u32, i32, a[0], ret_layout),
-            .num_u16_to_i16_trunc => self.numTruncate(u16, i16, a[0], ret_layout),
-            .num_u8_to_i8_trunc => self.numTruncate(u8, i8, a[0], ret_layout),
-
-            // Float-to-int
-            .num_f32_to_i8_try_unsafe, .num_f32_to_i16_try_unsafe, .num_f32_to_i32_try_unsafe, .num_f32_to_i64_try_unsafe, .num_f32_to_i128_try_unsafe, .num_f32_to_u8_try_unsafe, .num_f32_to_u16_try_unsafe, .num_f32_to_u32_try_unsafe, .num_f32_to_u64_try_unsafe, .num_f32_to_u128_try_unsafe, .num_f64_to_i8_try_unsafe, .num_f64_to_i16_try_unsafe, .num_f64_to_i32_try_unsafe, .num_f64_to_i64_try_unsafe, .num_f64_to_i128_try_unsafe, .num_f64_to_u8_try_unsafe, .num_f64_to_u16_try_unsafe, .num_f64_to_u32_try_unsafe, .num_f64_to_u64_try_unsafe, .num_f64_to_u128_try_unsafe => blk: {
-                // These "try_unsafe" ops assume the conversion is in range.
-                // Return the truncated value directly.
-                const val = try self.alloc(ret_layout);
-                const size = self.helper.sizeOf(arg_layout);
-                const float_val: f64 = if (size == 4) @as(f64, a[0].read(f32)) else a[0].read(f64);
-                const ret_size = self.helper.sizeOf(ret_layout);
-                switch (ret_size) {
-                    1 => if (isUnsigned(ret_layout)) val.write(u8, @intFromFloat(float_val)) else val.write(i8, @intFromFloat(float_val)),
-                    2 => if (isUnsigned(ret_layout)) val.write(u16, @intFromFloat(float_val)) else val.write(i16, @intFromFloat(float_val)),
-                    4 => if (isUnsigned(ret_layout)) val.write(u32, @intFromFloat(float_val)) else val.write(i32, @intFromFloat(float_val)),
-                    8 => if (isUnsigned(ret_layout)) val.write(u64, @intFromFloat(float_val)) else val.write(i64, @intFromFloat(float_val)),
-                    16 => if (isUnsigned(ret_layout)) val.write(u128, @intFromFloat(float_val)) else val.write(i128, @intFromFloat(float_val)),
-                    else => {},
-                }
-                break :blk val;
-            },
-
-            // Int-to-float
-            .num_i8_to_f32 => blk: {
-                const val = try self.alloc(ret_layout);
-                val.write(f32, @floatFromInt(a[0].read(i8)));
-                break :blk val;
-            },
-            .num_i16_to_f32 => blk: {
-                const val = try self.alloc(ret_layout);
-                val.write(f32, @floatFromInt(a[0].read(i16)));
-                break :blk val;
-            },
-            .num_i32_to_f32 => blk: {
-                const val = try self.alloc(ret_layout);
-                val.write(f32, @floatFromInt(a[0].read(i32)));
-                break :blk val;
-            },
-            .num_i64_to_f32 => blk: {
-                const val = try self.alloc(ret_layout);
-                val.write(f32, @floatFromInt(a[0].read(i64)));
-                break :blk val;
-            },
-            .num_i128_to_f32 => blk: {
-                const val = try self.alloc(ret_layout);
-                val.write(f32, @floatFromInt(a[0].read(i128)));
-                break :blk val;
-            },
-            .num_u8_to_f32 => blk: {
-                const val = try self.alloc(ret_layout);
-                val.write(f32, @floatFromInt(a[0].read(u8)));
-                break :blk val;
-            },
-            .num_u16_to_f32 => blk: {
-                const val = try self.alloc(ret_layout);
-                val.write(f32, @floatFromInt(a[0].read(u16)));
-                break :blk val;
-            },
-            .num_u32_to_f32 => blk: {
-                const val = try self.alloc(ret_layout);
-                val.write(f32, @floatFromInt(a[0].read(u32)));
-                break :blk val;
-            },
-            .num_u64_to_f32 => blk: {
-                const val = try self.alloc(ret_layout);
-                val.write(f32, @floatFromInt(a[0].read(u64)));
-                break :blk val;
-            },
-            .num_u128_to_f32 => blk: {
-                const val = try self.alloc(ret_layout);
-                val.write(f32, @floatFromInt(a[0].read(u128)));
-                break :blk val;
-            },
-            .num_i8_to_f64 => blk: {
-                const val = try self.alloc(ret_layout);
-                val.write(f64, @floatFromInt(a[0].read(i8)));
-                break :blk val;
-            },
-            .num_i16_to_f64 => blk: {
-                const val = try self.alloc(ret_layout);
-                val.write(f64, @floatFromInt(a[0].read(i16)));
-                break :blk val;
-            },
-            .num_i32_to_f64 => blk: {
-                const val = try self.alloc(ret_layout);
-                val.write(f64, @floatFromInt(a[0].read(i32)));
-                break :blk val;
-            },
-            .num_i64_to_f64 => blk: {
-                const val = try self.alloc(ret_layout);
-                val.write(f64, @floatFromInt(a[0].read(i64)));
-                break :blk val;
-            },
-            .num_i128_to_f64 => blk: {
-                const val = try self.alloc(ret_layout);
-                val.write(f64, @floatFromInt(a[0].read(i128)));
-                break :blk val;
-            },
-            .num_u8_to_f64 => blk: {
-                const val = try self.alloc(ret_layout);
-                val.write(f64, @floatFromInt(a[0].read(u8)));
-                break :blk val;
-            },
-            .num_u16_to_f64 => blk: {
-                const val = try self.alloc(ret_layout);
-                val.write(f64, @floatFromInt(a[0].read(u16)));
-                break :blk val;
-            },
-            .num_u32_to_f64 => blk: {
-                const val = try self.alloc(ret_layout);
-                val.write(f64, @floatFromInt(a[0].read(u32)));
-                break :blk val;
-            },
-            .num_u64_to_f64 => blk: {
-                const val = try self.alloc(ret_layout);
-                val.write(f64, @floatFromInt(a[0].read(u64)));
-                break :blk val;
-            },
-            .num_u128_to_f64 => blk: {
-                const val = try self.alloc(ret_layout);
-                val.write(f64, @floatFromInt(a[0].read(u128)));
-                break :blk val;
-            },
-
-            // Float-to-float
-            .num_f32_to_f64 => blk: {
-                const val = try self.alloc(ret_layout);
-                val.write(f64, @as(f64, a[0].read(f32)));
-                break :blk val;
-            },
-            .num_f64_to_f32_trunc => blk: {
-                const val = try self.alloc(ret_layout);
-                val.write(f32, @floatCast(a[0].read(f64)));
-                break :blk val;
-            },
-
-            // Dec
-            .dec_to_i8_trunc => self.decToInt(i8, a[0], ret_layout),
-            .dec_to_i16_trunc => self.decToInt(i16, a[0], ret_layout),
-            .dec_to_i32_trunc => self.decToInt(i32, a[0], ret_layout),
-            .dec_to_i64_trunc => self.decToInt(i64, a[0], ret_layout),
-            .dec_to_i128_trunc => self.decToInt(i128, a[0], ret_layout),
-            .dec_to_u8_trunc => self.decToInt(u8, a[0], ret_layout),
-            .dec_to_u16_trunc => self.decToInt(u16, a[0], ret_layout),
-            .dec_to_u32_trunc => self.decToInt(u32, a[0], ret_layout),
-            .dec_to_u64_trunc => self.decToInt(u64, a[0], ret_layout),
-            .dec_to_u128_trunc => self.decToInt(u128, a[0], ret_layout),
-            .dec_to_i8_try_unsafe => self.decToIntTry(i8, a[0], ret_layout),
-            .dec_to_i16_try_unsafe => self.decToIntTry(i16, a[0], ret_layout),
-            .dec_to_i32_try_unsafe => self.decToIntTry(i32, a[0], ret_layout),
-            .dec_to_i64_try_unsafe => self.decToIntTry(i64, a[0], ret_layout),
-            .dec_to_i128_try_unsafe => self.decToIntTry(i128, a[0], ret_layout),
-            .dec_to_u8_try_unsafe => self.decToIntTry(u8, a[0], ret_layout),
-            .dec_to_u16_try_unsafe => self.decToIntTry(u16, a[0], ret_layout),
-            .dec_to_u32_try_unsafe => self.decToIntTry(u32, a[0], ret_layout),
-            .dec_to_u64_try_unsafe => self.decToIntTry(u64, a[0], ret_layout),
-            .dec_to_u128_try_unsafe => self.decToIntTry(u128, a[0], ret_layout),
-            .dec_to_f32_wrap => blk: {
-                const dec = RocDec{ .num = a[0].read(i128) };
-                const val = try self.alloc(ret_layout);
-                val.write(f32, @floatCast(dec.toF64()));
-                break :blk val;
-            },
-            .dec_to_f32_try_unsafe => blk: {
-                const dec = RocDec{ .num = a[0].read(i128) };
-                const val = try self.alloc(ret_layout);
-                if (builtins.dec.toF32Try(dec)) |f| {
-                    val.write(f32, f);
-                    val.offset(4).write(u8, 1);
-                } else {
-                    val.write(f32, 0);
-                    val.offset(4).write(u8, 0);
-                }
-                break :blk val;
-            },
-            .dec_to_f64 => blk: {
-                const dec = RocDec{ .num = a[0].read(i128) };
-                const val = try self.alloc(ret_layout);
-                val.write(f64, dec.toF64());
-                break :blk val;
-            },
-
-            // Int-to-dec
-            .num_i8_to_dec => blk: {
-                const val = try self.alloc(ret_layout);
-                val.write(i128, @as(i128, a[0].read(i8)) * RocDec.one_point_zero_i128);
-                break :blk val;
-            },
-            .num_i16_to_dec => blk: {
-                const val = try self.alloc(ret_layout);
-                val.write(i128, @as(i128, a[0].read(i16)) * RocDec.one_point_zero_i128);
-                break :blk val;
-            },
-            .num_i32_to_dec => blk: {
-                const val = try self.alloc(ret_layout);
-                val.write(i128, @as(i128, a[0].read(i32)) * RocDec.one_point_zero_i128);
-                break :blk val;
-            },
-            .num_i64_to_dec => blk: {
-                const val = try self.alloc(ret_layout);
-                val.write(i128, @as(i128, a[0].read(i64)) * RocDec.one_point_zero_i128);
-                break :blk val;
-            },
-            .num_u8_to_dec => blk: {
-                const val = try self.alloc(ret_layout);
-                val.write(i128, @as(i128, a[0].read(u8)) * RocDec.one_point_zero_i128);
-                break :blk val;
-            },
-            .num_u16_to_dec => blk: {
-                const val = try self.alloc(ret_layout);
-                val.write(i128, @as(i128, a[0].read(u16)) * RocDec.one_point_zero_i128);
-                break :blk val;
-            },
-            .num_u32_to_dec => blk: {
-                const val = try self.alloc(ret_layout);
-                val.write(i128, @as(i128, a[0].read(u32)) * RocDec.one_point_zero_i128);
-                break :blk val;
-            },
-            .num_u64_to_dec => blk: {
-                const val = try self.alloc(ret_layout);
-                val.write(i128, @as(i128, a[0].read(u64)) * RocDec.one_point_zero_i128);
-                break :blk val;
-            },
-            .num_f32_to_dec => blk: {
-                const val = try self.alloc(ret_layout);
-                val.write(i128, builtins.dec.fromF64C(@as(f64, a[0].read(f32)), &self.roc_ops));
-                break :blk val;
-            },
-            .num_f64_to_dec => blk: {
-                const val = try self.alloc(ret_layout);
-                val.write(i128, builtins.dec.fromF64C(a[0].read(f64), &self.roc_ops));
-                break :blk val;
-            },
-
-            // Box
-            .box_box => try self.evalBoxBox(a[0], ret_layout),
-            .box_unbox => try self.evalBoxUnbox(a[0], ret_layout),
-
-            // Crash
-            .crash => return error.Crash,
-
-            // For any remaining ops, fall back to a runtime error.
-            // Complex ops like str_from_utf8, str_split_on, list_append_unsafe,
-            // list_concat, list_prepend, list_sublist, list_drop_at, list_set, etc.
-            // are handled by the scheduleExprEval path which calls the existing
-            // evalLowLevel helper directly (which re-evaluates simple lookup args).
-            else => return self.runtimeError("unsupported low-level op in stack-safe engine"),
-        };
-    }
-
-    /// Evaluate a hosted call with pre-evaluated argument values.
-    fn evalHostedCallWithArgs(
-        self: *LirInterpreter,
-        hc_index: u32,
-        arg_expr_ids: []const LirExprId,
-        arg_vals: []const Value,
-        ret_layout_idx: layout_mod.Idx,
-    ) Error!Value {
-        // Collect layouts for each arg
-        const ArgInfo = struct { val: Value, layout: layout_mod.Idx };
-        var collected_args = std.ArrayList(ArgInfo).empty;
-        defer collected_args.deinit(self.allocator);
-
-        for (arg_vals, arg_expr_ids) |val, expr_id| {
-            const arg_layout = lir_program_mod.lirExprResultLayout(self.store, expr_id);
-            collected_args.append(self.allocator, .{ .val = val, .layout = arg_layout }) catch return error.OutOfMemory;
-        }
-
-        // Marshal arguments into a contiguous buffer (same as evalHostedCall)
-        var total_args_size: usize = 0;
-        for (collected_args.items) |arg| {
-            const sa = self.helper.sizeAlignOf(arg.layout);
-            total_args_size = std.mem.alignForward(usize, total_args_size, sa.alignment.toByteUnits());
-            total_args_size += sa.size;
-        }
-
-        const args_buf_size = @max(total_args_size, 8);
-        const args_buf = self.arena.allocator().alloc(u8, args_buf_size) catch return error.OutOfMemory;
-        @memset(args_buf, 0);
-
-        var offset: usize = 0;
-        for (collected_args.items) |arg| {
-            const sa = self.helper.sizeAlignOf(arg.layout);
-            offset = std.mem.alignForward(usize, offset, sa.alignment.toByteUnits());
-            if (sa.size > 0 and !arg.val.isZst()) {
-                @memcpy(args_buf[offset .. offset + sa.size], arg.val.readBytes(sa.size));
-            }
-            offset += sa.size;
-        }
-
-        // Allocate return buffer and call
-        const ret_size = self.helper.sizeOf(ret_layout_idx);
-        var ret_buf: [64]u8 align(16) = undefined;
-        @memset(ret_buf[0..@max(ret_size, 1)], 0);
-
-        const hosted_fn = self.roc_ops.hosted_fns.fns[hc_index];
-        self.roc_env.resetCrash();
-        const ops_for_host: *RocOps = self.caller_roc_ops orelse &self.roc_ops;
-        hosted_fn(@ptrCast(ops_for_host), @ptrCast(&ret_buf), @ptrCast(args_buf.ptr));
-
-        if (self.roc_env.crashed) return error.Crash;
-
-        if (ret_size == 0) return Value.zst;
-        const result = try self.alloc(ret_layout_idx);
-        @memcpy(result.ptr[0..ret_size], ret_buf[0..ret_size]);
-        return result;
+        unreachable;
     }
 
     /// Find the index of the first non-cell_drop statement at or after `start`.
-    fn findFirstRealStmt(_: *const LirInterpreter, stmts: []const lir.LirStmt, start: usize) ?usize {
+    fn findFirstRealStmt(_: *const LirInterpreter, stmts: []const lir.LIR.LirStmt, start: usize) ?usize {
         var i = start;
         while (i < stmts.len) : (i += 1) {
             switch (stmts[i]) {
@@ -6074,7 +5121,7 @@ pub const LirInterpreter = struct {
     }
 
     /// Get the expression ID from a statement (for scheduling).
-    fn stmtExprId(_: *const LirInterpreter, stmt: lir.LirStmt) LirExprId {
+    fn stmtExprId(_: *const LirInterpreter, stmt: lir.LIR.LirStmt) LirExprId {
         return switch (stmt) {
             .decl, .mutate => |binding| binding.expr,
             .cell_init, .cell_store => |cb| cb.expr,
