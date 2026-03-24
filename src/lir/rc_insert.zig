@@ -4883,12 +4883,13 @@ pub const RcInsertPass = struct {
         rc_stmts: *std.ArrayList(LirStmt),
         _: []const LirStmt,
         _: usize,
-        _: LirExprId,
+        final_expr: LirExprId,
     ) Allocator.Error!void {
         const Ctx = struct {
             pass: *RcInsertPass,
             region: Region,
             rc_stmts: *std.ArrayList(LirStmt),
+            final_expr_id: LirExprId,
             fn onBind(ctx: @This(), bind_pat_id: LirPatternId, symbol: Symbol, layout_idx: LayoutIdx, reassignable: bool) Allocator.Error!void {
                 const key = ctx.pass.patternKey(bind_pat_id, symbol);
                 const resolved_layout = ctx.pass.keyLayout(key, layout_idx);
@@ -4897,8 +4898,22 @@ pub const RcInsertPass = struct {
                 if (ctx.pass.layoutNeedsRc(resolved_layout)) {
                     if (resolved_reassignable) return;
                     const use_count = ctx.pass.effectiveGlobalOwnerUseCount(key);
-                    if (use_count > 1) {
-                        try ctx.pass.emitIncrefInto(ctx.pass.keySymbol(key, symbol), resolved_layout, @intCast(use_count - 1), ctx.region, ctx.rc_stmts);
+                    // When a symbol has consumed uses AND is also borrowed by the
+                    // final expression, we need an extra incref to keep the data
+                    // alive for the borrow. Without this, a dead consumer (e.g.
+                    // `_unused = lst`) would decref the shared allocation before
+                    // the borrow site accesses it.
+                    var extra: u32 = 0;
+                    if (use_count >= 1) {
+                        const final_uses = try ctx.pass.exprUsesKey(ctx.final_expr_id, key);
+                        const final_consumes = try ctx.pass.exprConsumesKey(ctx.final_expr_id, key);
+                        if (final_uses and !final_consumes) {
+                            extra = 1;
+                        }
+                    }
+                    const total = use_count -| 1 + extra;
+                    if (total > 0) {
+                        try ctx.pass.emitIncrefInto(ctx.pass.keySymbol(key, symbol), resolved_layout, @intCast(total), ctx.region, ctx.rc_stmts);
                     }
                 }
             }
@@ -4907,6 +4922,7 @@ pub const RcInsertPass = struct {
             .pass = self,
             .region = region,
             .rc_stmts = rc_stmts,
+            .final_expr_id = final_expr,
         });
     }
 
@@ -4991,7 +5007,15 @@ pub const RcInsertPass = struct {
                     return;
                 }
                 const use_count = ctx.pass.effectiveGlobalOwnerUseCount(key);
-                if (use_count != 0) return;
+                if (use_count != 0) {
+                    // Mirror the extra incref from emitBlockIncrefsForPattern:
+                    // when consumed uses > 0 and the final expression borrows
+                    // (but does not consume) this symbol, the extra incref needs
+                    // a matching tail decref.
+                    const final_uses = try ctx.pass.exprUsesKey(ctx.final_expr, key);
+                    const final_consumes = try ctx.pass.exprConsumesKey(ctx.final_expr, key);
+                    if (!(final_uses and !final_consumes)) return;
+                }
                 try ctx.pass.emitDecrefInto(ctx.pass.keySymbol(key, symbol), resolved_layout, ctx.region, ctx.stmts);
             }
         };
