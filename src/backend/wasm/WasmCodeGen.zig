@@ -10195,6 +10195,9 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LirExprId, re
         .num_shift_left_by => {
             try self.generateExpr(args[0]);
             try self.generateExpr(args[1]);
+            // WASM shift instructions require both operands to have the same type.
+            // The shift amount (args[1]) is always U8 (i32), so extend it for i64 shifts.
+            if (vt == .i64) self.body.append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
             const wasm_op: u8 = switch (vt) {
                 .i32 => Op.i32_shl,
                 .i64 => Op.i64_shl,
@@ -10205,6 +10208,7 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LirExprId, re
         .num_shift_right_by => {
             try self.generateExpr(args[0]);
             try self.generateExpr(args[1]);
+            if (vt == .i64) self.body.append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
             const wasm_op: u8 = switch (vt) {
                 .i32 => Op.i32_shr_s,
                 .i64 => Op.i64_shr_s,
@@ -10215,6 +10219,7 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LirExprId, re
         .num_shift_right_zf_by => {
             try self.generateExpr(args[0]);
             try self.generateExpr(args[1]);
+            if (vt == .i64) self.body.append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
             const wasm_op: u8 = switch (vt) {
                 .i32 => Op.i32_shr_u,
                 .i64 => Op.i64_shr_u,
