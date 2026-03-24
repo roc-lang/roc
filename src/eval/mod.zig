@@ -40,6 +40,8 @@ pub const Value = value.Value;
 /// LIR expression interpreter
 pub const interpreter = @import("interpreter.zig");
 pub const LirInterpreter = interpreter.LirInterpreter;
+/// Stack-safe eval engine types (WorkItem, Continuation, FlatBinding)
+pub const work_stack = @import("work_stack.zig");
 /// Layout-based value formatter for the LIR interpreter
 pub const value_format = @import("value_format.zig");
 
@@ -85,6 +87,7 @@ test "eval tests" {
     std.testing.refAllDecls(@import("fold_type.zig"));
     std.testing.refAllDecls(@import("value_to_cir.zig"));
     std.testing.refAllDecls(@import("value_format.zig"));
+    std.testing.refAllDecls(@import("work_stack.zig"));
     std.testing.refAllDecls(@import("wasm_evaluator.zig"));
     std.testing.refAllDecls(@import("stack.zig"));
     std.testing.refAllDecls(@import("test/TestEnv.zig"));
