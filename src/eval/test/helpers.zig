@@ -15,6 +15,8 @@ const lir = @import("lir");
 const eval_mod = @import("../mod.zig");
 const builtin_loading_mod = eval_mod.builtin_loading;
 const DevEvaluator = eval_mod.DevEvaluator;
+const LlvmEvaluator = eval_mod.LlvmEvaluator;
+const StackValue = eval_mod.StackValue;
 const BuiltinTypes = eval_mod.BuiltinTypes;
 const LoadedModule = builtin_loading_mod.LoadedModule;
 const deserializeBuiltinIndices = builtin_loading_mod.deserializeBuiltinIndices;
@@ -25,6 +27,17 @@ const WasmEvaluator = eval_mod.WasmEvaluator;
 const LirProgram = eval_mod.LirProgram;
 const LirInterpreter = eval_mod.LirInterpreter;
 const i128h = builtins.compiler_rt_128;
+const posix = std.posix;
+
+/// Per-worker child PIDs for fork-based test execution.
+/// The hang watchdog in the parallel runner kills these PIDs on timeout.
+/// Set by the parallel runner before tests start; workers index by their worker ID.
+pub var worker_child_pids: []std.atomic.Value(i32) = &.{};
+/// Per-worker pipe read FDs, so the watchdog can close leaked pipes on timeout.
+pub var worker_pipe_fds: []std.atomic.Value(i32) = &.{};
+/// Thread-local worker ID, set by the parallel runner.
+pub threadlocal var my_worker_id: usize = 0;
+const has_fork = builtin.os.tag != .windows;
 const enable_dev_eval_leak_checks = true;
 
 const Check = check.Check;
@@ -238,6 +251,17 @@ pub const DevEvalError = error{
     PipeCreationFailed,
 };
 
+/// Errors that can occur during LlvmEvaluator string generation
+const LlvmEvalError = error{
+    LlvmEvaluatorInitFailed,
+    GenerateCodeFailed,
+    OutOfMemory,
+    ChildSegfaulted,
+    ChildExecFailed,
+    ForkFailed,
+    PipeCreationFailed,
+};
+
 /// Resolve a ZST type variable to its display string.
 /// Unwraps aliases and nominal types, then returns the tag name for single-tag unions
 /// or "{}" for empty records.
@@ -357,12 +381,123 @@ pub fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []
     }
 }
 
-// TODO: llvmEvaluatorStr currently aliases devEvaluatorStr because the
-// LlvmEvaluator/MonoLlvmCodeGen have bitrotted. See LLVM_EVAL_ISSUE.md
-// for details. Once fixed, this should use the real LLVM pipeline.
-/// Evaluate via the LLVM backend (currently aliases dev — see comment above).
-pub fn llvmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) ![]const u8 {
-    return devEvaluatorStr(allocator, module_env, expr_idx, builtin_module_env);
+/// Evaluate an expression using the LlvmEvaluator and return the result as a string.
+/// On platforms with fork, the entire LLVM pipeline (compile + execute) runs in
+/// a child process so that LLVM assertion failures don't crash the test runner.
+fn llvmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) LlvmEvalError![]const u8 {
+    if (has_fork) {
+        return llvmForkAndRun(allocator, module_env, expr_idx, builtin_module_env);
+    }
+    return llvmCompileAndRun(allocator, module_env, expr_idx, builtin_module_env);
+}
+
+/// Compile and execute via LLVM in the current process.
+noinline fn llvmCompileAndRun(
+    alloc: std.mem.Allocator,
+    module_env: *ModuleEnv,
+    expr_idx: CIR.Expr.Idx,
+    builtin_module_env: *const ModuleEnv,
+) LlvmEvalError![]const u8 {
+    var llvm_eval = LlvmEvaluator.init(alloc) catch return error.LlvmEvaluatorInitFailed;
+    defer llvm_eval.deinit();
+
+    const all_module_envs = [_]*ModuleEnv{ @constCast(builtin_module_env), module_env };
+
+    var code_result = llvm_eval.generateCode(module_env, expr_idx, &all_module_envs, null) catch {
+        return error.GenerateCodeFailed;
+    };
+    defer code_result.deinit();
+
+    std.debug.print("", .{});
+
+    var result_buf: [512]u8 align(16) = undefined;
+    code_result.callWithResultPtrAndRocOps(@ptrCast(&result_buf), @ptrCast(&llvm_eval.roc_ops));
+
+    const roc_str: *const builtins.str.RocStr = @ptrCast(@alignCast(&result_buf));
+    const result = alloc.dupe(u8, roc_str.asSlice()) catch return error.OutOfMemory;
+
+    if (!roc_str.isSmallStr()) {
+        @constCast(roc_str).decref(&llvm_eval.roc_ops);
+    }
+
+    return result;
+}
+
+/// Fork a child process to run the full LLVM pipeline (compile + execute),
+/// isolating LLVM assertion failures and segfaults from the test runner.
+fn llvmForkAndRun(
+    allocator: std.mem.Allocator,
+    module_env: *ModuleEnv,
+    expr_idx: CIR.Expr.Idx,
+    builtin_module_env: *const ModuleEnv,
+) LlvmEvalError![]const u8 {
+    const pipe_fds = posix.pipe() catch return error.PipeCreationFailed;
+    const pipe_read = pipe_fds[0];
+    const pipe_write = pipe_fds[1];
+
+    const fork_result = posix.fork() catch {
+        posix.close(pipe_read);
+        posix.close(pipe_write);
+        return error.ForkFailed;
+    };
+
+    if (fork_result == 0) {
+        // Child: run entire LLVM compile+execute pipeline
+        posix.close(pipe_read);
+        const child_alloc = std.heap.page_allocator;
+
+        const result_str = llvmCompileAndRun(child_alloc, module_env, expr_idx, builtin_module_env) catch {
+            posix.close(pipe_write);
+            std.c._exit(1);
+        };
+
+        var written: usize = 0;
+        while (written < result_str.len) {
+            written += posix.write(pipe_write, result_str[written..]) catch {
+                posix.close(pipe_write);
+                std.c._exit(1);
+            };
+        }
+        posix.close(pipe_write);
+        std.c._exit(0);
+    } else {
+        // Parent: read result from pipe
+        posix.close(pipe_write);
+
+        const wait_result = posix.waitpid(fork_result, 0);
+        const status = wait_result.status;
+        const termination_signal: u8 = @truncate(status & 0x7f);
+
+        if (termination_signal != 0) {
+            posix.close(pipe_read);
+            return error.ChildSegfaulted;
+        }
+
+        const exit_code: u8 = @truncate((status >> 8) & 0xff);
+        if (exit_code != 0) {
+            posix.close(pipe_read);
+            return error.ChildExecFailed;
+        }
+
+        var result_buf: std.ArrayList(u8) = .empty;
+        errdefer result_buf.deinit(allocator);
+
+        var read_buf: [4096]u8 = undefined;
+        while (true) {
+            const bytes_read = posix.read(pipe_read, &read_buf) catch {
+                posix.close(pipe_read);
+                return error.ChildExecFailed;
+            };
+            if (bytes_read == 0) break;
+            result_buf.appendSlice(allocator, read_buf[0..bytes_read]) catch {
+                posix.close(pipe_read);
+                return error.OutOfMemory;
+            };
+        }
+
+        posix.close(pipe_read);
+        return result_buf.toOwnedSlice(allocator) catch return error.OutOfMemory;
+    }
 }
 
 /// Compare interpreter output against the llvm backend output.

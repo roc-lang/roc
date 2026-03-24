@@ -63,7 +63,7 @@ fn lirExprResultLayout(store: *const LirExprStore, expr_id: lir.LirExprId) layou
         .match_expr => |w| w.result_layout,
         .dbg => |d| d.result_layout,
         .expect => |e| e.result_layout,
-        .call => |c| c.ret_layout,
+        .proc_call => |c| c.ret_layout,
         .low_level => |ll| ll.ret_layout,
         .early_return => |er| er.ret_layout,
         .lookup => |l| l.layout_idx,
@@ -85,7 +85,6 @@ fn lirExprResultLayout(store: *const LirExprStore, expr_id: lir.LirExprId) layou
         .empty_list => |l| l.list_layout,
         .hosted_call => |hc| hc.ret_layout,
         .tag_payload_access => |tpa| tpa.payload_layout,
-        .lambda => |l| l.fn_layout,
         .for_loop, .while_loop, .incref, .decref, .free => .zst,
         .crash => |c| c.ret_layout,
         .runtime_error => |re| re.ret_layout,
@@ -284,8 +283,6 @@ pub const LlvmEvaluator = struct {
         var mir_store = MIR.Store.init(self.allocator) catch return error.OutOfMemory;
         defer mir_store.deinit(self.allocator);
 
-        // TODO: LlvmEvaluator has bitrotted — see LLVM_EVAL_ISSUE.md.
-        // The monomorphization step and several LIR/codegen APIs need updating.
         var monomorphization = mir.Monomorphize.runExpr(
             self.allocator,
             all_module_envs,
@@ -295,7 +292,6 @@ pub const LlvmEvaluator = struct {
             expr_idx,
         ) catch return error.OutOfMemory;
         defer monomorphization.deinit(self.allocator);
-
         var mir_lower = mir.Lower.init(
             self.allocator,
             &mir_store,
@@ -349,7 +345,7 @@ pub const LlvmEvaluator = struct {
 
         var gen_result = codegen.generateCode(final_expr_id, result_layout) catch |e| switch (e) {
             error.OutOfMemory => return error.OutOfMemory,
-            error.CompilationFailed => unreachable,
+            error.CompilationFailed => return error.CompilationFailed,
         };
         defer gen_result.deinit();
 
