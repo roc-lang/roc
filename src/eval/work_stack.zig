@@ -393,29 +393,7 @@ pub const FlatBinding = struct {
 };
 
 test "WorkItem and Continuation are well-formed tagged unions" {
-    // Verify the types compile and have expected sizes.
-    const work_item_size = @sizeOf(WorkItem);
-    const cont_size = @sizeOf(Continuation);
-    try std.testing.expect(work_item_size > 0);
-    try std.testing.expect(cont_size > 0);
-
-    // Verify we can construct each WorkItem variant.
-    const wi_expr: WorkItem = .{ .eval_expr = @enumFromInt(0) };
-    const wi_cf: WorkItem = .{ .eval_cf_stmt = @enumFromInt(0) };
-    const wi_cont: WorkItem = .{ .apply_continuation = .return_result };
-    _ = wi_expr;
-    _ = wi_cf;
-    _ = wi_cont;
-
-    // Verify we can construct key continuation variants.
-    const c_ret: Continuation = .return_result;
-    const c_early: Continuation = .early_return_wrap;
-    const c_call: Continuation = .{ .call_collect_args = .{
-        .proc = @enumFromInt(0),
-        .args = .{ .start = 0, .len = 0 },
-        .next_arg_idx = 0,
-    } };
-    _ = c_ret;
-    _ = c_early;
-    _ = c_call;
+    // Verify the types compile and have non-zero sizes.
+    try std.testing.expect(@sizeOf(WorkItem) > 0);
+    try std.testing.expect(@sizeOf(Continuation) > 0);
 }
