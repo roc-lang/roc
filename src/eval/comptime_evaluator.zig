@@ -1570,7 +1570,7 @@ pub const ComptimeEvaluator = struct {
         // Extract per-def values from bindings and fold to CIR.
         // Already-folded defs (from per-def pass) are skipped by tryFoldExprFromValue.
         for (batch_result.def_lir_exprs) |def_entry| {
-            const binding = interp.bindings.get(def_entry.symbol.raw()) orelse
+            const binding = interp.lookupBinding(def_entry.symbol.raw()) orelse
                 (interp.top_level_cache.get(def_entry.symbol.raw()) orelse continue);
 
             self.tryFoldExprFromValue(

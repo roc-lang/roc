@@ -20,6 +20,8 @@ const lir_program_mod = @import("cir_to_lir.zig");
 const builtins = @import("builtins");
 const sljmp = @import("sljmp");
 const Io = @import("io").Io;
+const work_stack = @import("work_stack.zig");
+const FlatBinding = work_stack.FlatBinding;
 
 const Allocator = std.mem.Allocator;
 const LirExprStore = lir.LirExprStore;
@@ -238,7 +240,8 @@ pub const LirInterpreter = struct {
     helper: LayoutHelper,
 
     /// Symbol → (value pointer, size) bindings.
-    bindings: std.AutoHashMap(u64, Binding),
+    /// Flat list scanned from end; save-length/trim replaces HashMap clone on calls.
+    bindings: FlatBindingList,
 
     /// Mutable cells: symbol → pointer to current value.
     cells: std.AutoHashMap(u64, Binding),
@@ -291,6 +294,8 @@ pub const LirInterpreter = struct {
         body: CFStmtId,
     };
 
+    const FlatBindingList = std.array_list.AlignedManaged(FlatBinding, null);
+
     pub const Error = error{
         OutOfMemory,
         RuntimeError,
@@ -302,6 +307,19 @@ pub const LirInterpreter = struct {
         val: Value,
         size: u32,
     };
+
+    /// Look up a binding by symbol, scanning from the end of the flat list.
+    /// Most-recent binding (closest to end) wins, providing correct scoping.
+    pub fn lookupBinding(self: *const LirInterpreter, symbol: u64) ?Binding {
+        var i = self.bindings.items.len;
+        while (i > 0) {
+            i -= 1;
+            if (self.bindings.items[i].symbol == symbol) {
+                return .{ .val = self.bindings.items[i].val, .size = self.bindings.items[i].size };
+            }
+        }
+        return null;
+    }
 
     /// Result of evaluating an expression.
     /// Normal evaluation produces a value. Control flow is signaled as variants.
@@ -330,7 +348,7 @@ pub const LirInterpreter = struct {
             .store = store,
             .layout_store = layout_store,
             .helper = LayoutHelper.init(layout_store),
-            .bindings = std.AutoHashMap(u64, Binding).init(allocator),
+            .bindings = FlatBindingList.init(allocator),
             .cells = std.AutoHashMap(u64, Binding).init(allocator),
             .top_level_cache = std.AutoHashMap(u64, Binding).init(allocator),
             .evaluating = std.AutoHashMap(u64, void).init(allocator),
@@ -1019,7 +1037,7 @@ pub const LirInterpreter = struct {
 
     fn evalLookup(self: *LirInterpreter, symbol: Symbol, layout_idx: layout_mod.Idx) Error!Value {
         // Check local bindings first
-        if (self.bindings.get(symbol.raw())) |binding| {
+        if (self.lookupBinding(symbol.raw())) |binding| {
             return binding.val;
         }
 
@@ -1068,7 +1086,7 @@ pub const LirInterpreter = struct {
         switch (pat) {
             .bind => |b| {
                 const size = self.helper.sizeOf(b.layout_idx);
-                self.bindings.put(b.symbol.raw(), .{ .val = val, .size = size }) catch return error.OutOfMemory;
+                self.bindings.append(.{ .symbol = b.symbol.raw(), .val = val, .size = size }) catch return error.OutOfMemory;
             },
             .wildcard => {}, // Nothing to bind
             .struct_ => |s| {
@@ -1095,7 +1113,7 @@ pub const LirInterpreter = struct {
             .as_pattern => |ap| {
                 // Bind the name
                 const size = self.helper.sizeOf(ap.layout_idx);
-                self.bindings.put(ap.symbol.raw(), .{ .val = val, .size = size }) catch return error.OutOfMemory;
+                self.bindings.append(.{ .symbol = ap.symbol.raw(), .val = val, .size = size }) catch return error.OutOfMemory;
                 // Also bind the inner pattern
                 try self.bindPattern(ap.inner, val);
             },
@@ -1447,13 +1465,12 @@ pub const LirInterpreter = struct {
         self.call_depth += 1;
         defer self.call_depth -= 1;
 
-        // Save current bindings and lambda context
-        const saved_bindings = self.bindings.clone() catch return error.OutOfMemory;
+        // Save current bindings length and lambda context; trim on return
+        const saved_bindings_len = self.bindings.items.len;
         const saved_lambda_params = self.current_lambda_params;
         self.current_lambda_params = proc_spec.args;
         defer {
-            self.bindings.deinit();
-            self.bindings = saved_bindings;
+            self.bindings.shrinkRetainingCapacity(saved_bindings_len);
             self.current_lambda_params = saved_lambda_params;
         }
 
@@ -1694,7 +1711,7 @@ pub const LirInterpreter = struct {
             .bool_literal => |lit| if (lit) "True" else "False",
             .str_literal => |idx| std.fmt.allocPrint(arena, "\"{s}\"", .{self.store.getString(idx)}) catch return error.OutOfMemory,
             .lookup => |lookup| blk: {
-                if (self.bindings.get(lookup.symbol.raw())) |binding| {
+                if (self.lookupBinding(lookup.symbol.raw())) |binding| {
                     break :blk try self.renderExpectValue(binding.val, lookup.layout_idx);
                 }
                 if (self.top_level_cache.get(lookup.symbol.raw())) |binding| {
@@ -1807,7 +1824,7 @@ pub const LirInterpreter = struct {
                 const pat = self.store.getPattern(pat_id);
                 switch (pat) {
                     .bind => |bind| {
-                        if (self.bindings.get(bind.symbol.raw())) |binding| {
+                        if (self.lookupBinding(bind.symbol.raw())) |binding| {
                             collected_args.append(self.allocator, .{
                                 .val = binding.val,
                                 .layout = bind.layout_idx,
