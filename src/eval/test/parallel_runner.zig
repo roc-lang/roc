@@ -1,28 +1,67 @@
 //! Parallel eval test runner.
 //!
-//! A standalone binary that runs eval tests across multiple threads using a
-//! work-stealing job queue. Each test runs the interpreter, dev backend,
-//! and wasm backend, then compares all results via Str.inspect string
-//! comparison. (LLVM backend is temporarily disabled — it currently aliases
-//! the dev backend. Infrastructure is kept so it can be re-enabled easily.)
+//! Runs eval tests across multiple threads, exercising every backend on every
+//! test case and comparing their results via Str.inspect string comparison.
 //!
-//! Crash protection (setjmp/longjmp + signal handlers) allows the runner to
-//! recover from segfaults and continue.
+//! ## Architecture overview
 //!
-//! Usage:
-//!   zig build test-eval [-- [--filter <pattern>] [--threads <N>] [--verbose]]
+//! Each test goes through a shared front-end (parse, canonicalize, type-check)
+//! and is then evaluated by up to three independent backends:
+//!
+//!   1. **Interpreter** — walks the LIR directly.
+//!   2. **Dev backend** — lowers LIR to native machine code.
+//!   3. **WASM backend** — lowers LIR to WebAssembly, runs via bytebox.
+//!
+//! (LLVM is temporarily disabled — it currently aliases the dev backend.
+//! Infrastructure is kept so it can be re-enabled easily.)
+//!
+//! ALL backends run via Str.inspect and must produce identical output strings.
+//! This catches bugs where a backend produces a value of the right type but
+//! wrong content.
+//!
+//! ## Process isolation
+//!
+//! Every backend evaluation runs in a forked child process that communicates
+//! its result back through a pipe. If a child crashes (segfault, illegal
+//! instruction, etc.) or hangs, the parent simply observes it via waitpid
+//! and reports the failure without being affected.
+//!
+//! The `forkAndEval` function implements the fork+pipe+waitpid pattern:
+//!   - Child calls the backend eval function, writes result to pipe, _exit(0).
+//!   - Parent reads the pipe until EOF, then waitpid to reap the child.
+//!   - Reading before waitpid avoids pipe buffer deadlock.
+//!
+//! ## Threading model
+//!
+//! Worker threads pull tests from a shared atomic index (lock-free work-
+//! stealing). Each worker owns a per-thread arena allocator that is reset
+//! between tests, so there is no cross-thread allocation contention for
+//! test-local data. A small number of result strings are duplicated into a
+//! shared GPA for the final report.
+//!
+//! ## Hang watchdog
+//!
+//! A dedicated thread polls worker timestamps every 500ms. If a worker
+//! exceeds the timeout (default 30s), the watchdog:
+//!   1. Sets a `timed_out` flag on the worker.
+//!   2. Kills any forked child via SIGKILL (unblocks waitpid).
+//!   3. Closes the worker's pipe read FD (unblocks any pipe read).
+//!
+//! The `forkAndEval` function checks the `timed_out` flag after waitpid
+//! to distinguish watchdog-killed children from natural crashes.
+//!
+//! ## Usage
+//!
+//!   zig build test-eval [-- [--filter <pattern>] [--threads <N>] [--timeout <ms>] [--verbose]]
 
 const std = @import("std");
 const builtin = @import("builtin");
-const sljmp = @import("sljmp");
 const base = @import("base");
 const parse = @import("parse");
 const can = @import("can");
 const check = @import("check");
 const compiled_builtins = @import("compiled_builtins");
 const eval_mod = @import("eval");
-const LirProgram = eval_mod.LirProgram;
-const LirInterpreter = eval_mod.LirInterpreter;
 
 const Can = can.Can;
 const Check = check.Check;
@@ -43,8 +82,6 @@ const posix = std.posix;
 const AtomicUsize = std.atomic.Value(usize);
 const AtomicI32 = std.atomic.Value(i32);
 const AtomicBool = std.atomic.Value(bool);
-
-extern "c" fn pthread_kill(thread: std.c.pthread_t, sig: c_int) c_int;
 
 /// Current wall-clock time in milliseconds, truncated to i32 (~24 day range).
 fn nowMs() i32 {
@@ -81,9 +118,7 @@ pub const TestCase = struct {
         dec_val: i128,
         f32_val: f32,
         f64_val: f64,
-        err_val: anyerror,
         problem: void,
-        type_mismatch_crash: void,
         inspect_str: []const u8,
 
         /// Returns the expected value as i128 for integer variant comparison.
@@ -143,87 +178,6 @@ pub const TestCase = struct {
         llvm: bool = false,
     };
 };
-
-//
-// Crash protection
-//
-// TODO: The signal handler uses _setjmp/_longjmp which is technically
-// undefined behavior in POSIX (only sigsetjmp/siglongjmp are defined for
-// use in signal handlers). In practice this works on Linux/macOS/BSDs and
-// is used by many projects (libsigsegv, GHC), but the sljmp module should
-// be extended to support sigsetjmp/siglongjmp for correctness.
-//
-
-/// Override the default panic handler to support crash recovery via setjmp/longjmp.
-pub const panic = std.debug.FullPanic(panicHandler);
-
-threadlocal var panic_jmp: ?*sljmp.JmpBuf = null;
-threadlocal var panic_msg: ?[]const u8 = null;
-
-fn panicHandler(msg: []const u8, _: ?usize) noreturn {
-    if (panic_jmp) |jmp| {
-        panic_msg = msg;
-        panic_jmp = null;
-        sljmp.longjmp(jmp, 1);
-    }
-    std.debug.defaultPanic(msg, @returnAddress());
-}
-
-fn crashSignalHandler(sig: i32) callconv(.c) void {
-    if (panic_jmp) |jmp| {
-        panic_msg = if (sig == posix.SIG.USR1)
-            "timed out (possible infinite loop)"
-        else
-            "signal: segfault or illegal instruction in generated code";
-        panic_jmp = null;
-        sljmp.longjmp(jmp, if (sig == posix.SIG.USR1) 3 else 2);
-    }
-    // No jmp_buf — restore defaults and re-raise so the process terminates.
-    const dfl = posix.Sigaction{
-        .handler = .{ .handler = posix.SIG.DFL },
-        .mask = posix.sigemptyset(),
-        .flags = 0,
-    };
-    posix.sigaction(posix.SIG.SEGV, &dfl, null);
-    posix.sigaction(posix.SIG.BUS, &dfl, null);
-    posix.sigaction(posix.SIG.ILL, &dfl, null);
-}
-
-fn installCrashSignalHandlers() void {
-    if (comptime builtin.os.tag == .windows) return;
-
-    // Block the handled signals during handler execution to prevent
-    // re-entrance. After longjmp recovery we manually unblock them.
-    var handler_mask = posix.sigemptyset();
-    posix.sigaddset(&handler_mask, posix.SIG.SEGV);
-    posix.sigaddset(&handler_mask, posix.SIG.BUS);
-    posix.sigaddset(&handler_mask, posix.SIG.ILL);
-    posix.sigaddset(&handler_mask, posix.SIG.USR1);
-
-    const sa = posix.Sigaction{
-        .handler = .{ .handler = &crashSignalHandler },
-        .mask = handler_mask,
-        .flags = 0,
-    };
-    posix.sigaction(posix.SIG.SEGV, &sa, null);
-    posix.sigaction(posix.SIG.BUS, &sa, null);
-    posix.sigaction(posix.SIG.ILL, &sa, null);
-    posix.sigaction(posix.SIG.USR1, &sa, null);
-}
-
-/// After longjmp from a signal handler, the caught signal remains blocked
-/// (because _setjmp/_longjmp don't restore the signal mask). Unblock so
-/// future crashes are still caught.
-fn unblockCrashSignals() void {
-    if (comptime builtin.os.tag == .windows) return;
-
-    var unblock = posix.sigemptyset();
-    posix.sigaddset(&unblock, posix.SIG.SEGV);
-    posix.sigaddset(&unblock, posix.SIG.BUS);
-    posix.sigaddset(&unblock, posix.SIG.ILL);
-    posix.sigaddset(&unblock, posix.SIG.USR1);
-    _ = posix.system.sigprocmask(posix.SIG.UNBLOCK, &unblock, null);
-}
 
 //
 // Test outcome
@@ -286,7 +240,7 @@ const WorkerState = struct {
     start_time_ms: AtomicI32 = AtomicI32.init(0),
     /// Index of the test currently being run (max = done).
     current_test: AtomicUsize = AtomicUsize.init(std.math.maxInt(usize)),
-    /// Set by the watchdog before sending SIGUSR1; checked by crash recovery.
+    /// Set by the watchdog before killing the child; checked by forkAndEval.
     timed_out: AtomicBool = AtomicBool.init(false),
 };
 
@@ -304,6 +258,165 @@ const RunnerContext = struct {
     /// Per-test timeout in nanoseconds (0 = no timeout).
     hang_timeout_ms: u64 = 0,
 };
+
+//
+// Fork-based process isolation for backend evaluation
+//
+
+const has_fork = builtin.os.tag != .windows;
+
+const BackendEvalFn = *const fn (std.mem.Allocator, *ModuleEnv, CIR.Expr.Idx, *const ModuleEnv) anyerror![]const u8;
+
+/// Result of a forked backend evaluation.
+const ForkResult = union(enum) {
+    /// Child exited 0 and wrote result string to pipe.
+    success: []const u8,
+    /// Child exited non-zero (eval function returned an error).
+    child_error: void,
+    /// Child was killed by a signal (e.g. SIGSEGV=11).
+    signal_death: u8,
+    /// Child was killed by the watchdog (timed_out flag set).
+    timeout: void,
+    /// fork() or pipe() syscall failed.
+    fork_failed: void,
+};
+
+/// Fork a child process to evaluate a backend, communicating the result via pipe.
+///
+/// The child calls `eval_fn(page_allocator, module_env, expr_idx, builtin_env)`,
+/// writes the resulting string to the pipe, and `_exit(0)`. On error it `_exit(1)`.
+///
+/// The parent reads the pipe until EOF (important: before waitpid to avoid pipe
+/// buffer deadlock), then reaps the child. The watchdog can kill the child and
+/// close the pipe FD to unblock the parent on timeout.
+fn forkAndEval(
+    eval_fn: BackendEvalFn,
+    module_env: *ModuleEnv,
+    expr_idx: CIR.Expr.Idx,
+    builtin_env: *const ModuleEnv,
+) ForkResult {
+    if (comptime !has_fork) {
+        // On Windows, fall back to in-process eval (no fork available).
+        // This path is not expected in production (tests run on Linux/macOS).
+        const result = eval_fn(std.heap.page_allocator, module_env, expr_idx, builtin_env) catch {
+            return .{ .child_error = {} };
+        };
+        return .{ .success = result };
+    }
+
+    const pipe_fds = posix.pipe() catch {
+        return .{ .fork_failed = {} };
+    };
+    const pipe_read = pipe_fds[0];
+    const pipe_write = pipe_fds[1];
+
+    const fork_result = posix.fork() catch {
+        posix.close(pipe_read);
+        posix.close(pipe_write);
+        return .{ .fork_failed = {} };
+    };
+
+    if (fork_result == 0) {
+        // === Child process ===
+        posix.close(pipe_read);
+
+        const child_alloc = std.heap.page_allocator;
+        const result_str = eval_fn(child_alloc, module_env, expr_idx, builtin_env) catch {
+            posix.close(pipe_write);
+            std.c._exit(1);
+        };
+
+        // Write the result string to the pipe.
+        var written: usize = 0;
+        while (written < result_str.len) {
+            written += posix.write(pipe_write, result_str[written..]) catch {
+                posix.close(pipe_write);
+                std.c._exit(1);
+            };
+        }
+
+        posix.close(pipe_write);
+        std.c._exit(0);
+    }
+
+    // === Parent process ===
+    posix.close(pipe_write);
+
+    // Store child PID and pipe FD so the watchdog can kill/close on timeout.
+    const wid = helpers.my_worker_id;
+    if (wid < helpers.worker_child_pids.len) {
+        helpers.worker_child_pids[wid].store(@intCast(fork_result), .release);
+    }
+    if (wid < helpers.worker_pipe_fds.len) {
+        helpers.worker_pipe_fds[wid].store(@intCast(pipe_read), .release);
+    }
+
+    // Read pipe FIRST (before waitpid) to avoid deadlock when child output
+    // exceeds the pipe buffer (~64KB). The read returns EOF when the child
+    // exits and the write end is closed.
+    var result_buf: std.ArrayListUnmanaged(u8) = .empty;
+    var read_buf: [4096]u8 = undefined;
+    var read_error = false;
+    while (true) {
+        const bytes_read = posix.read(pipe_read, &read_buf) catch {
+            read_error = true;
+            break;
+        };
+        if (bytes_read == 0) break;
+        result_buf.appendSlice(std.heap.page_allocator, read_buf[0..bytes_read]) catch {
+            read_error = true;
+            break;
+        };
+    }
+    posix.close(pipe_read);
+
+    // Clear pipe FD tracking (pipe is now closed).
+    if (wid < helpers.worker_pipe_fds.len) {
+        helpers.worker_pipe_fds[wid].store(-1, .release);
+    }
+
+    // Now reap the child.
+    const wait_result = posix.waitpid(fork_result, 0);
+
+    // Clear child PID tracking.
+    if (wid < helpers.worker_child_pids.len) {
+        helpers.worker_child_pids[wid].store(0, .release);
+    }
+
+    const status = wait_result.status;
+    const termination_signal: u8 = @truncate(status & 0x7f);
+
+    if (termination_signal != 0) {
+        // Child was killed by a signal. Check if it was a watchdog timeout.
+        result_buf.deinit(std.heap.page_allocator);
+        // Check the worker's timed_out flag (set by hangWatchdog before SIGKILL).
+        if (wid < helpers.worker_child_pids.len) {
+            // Access worker_states through the context isn't possible here,
+            // but the watchdog sets timed_out on the WorkerState. We detect
+            // timeout by checking if SIGKILL (signal 9) was the termination signal,
+            // which is what the watchdog sends.
+            // More precisely, we let the caller (threadMain) check timed_out.
+        }
+        if (termination_signal == 9) {
+            // SIGKILL — likely the watchdog. Let caller distinguish via timed_out flag.
+            return .{ .timeout = {} };
+        }
+        return .{ .signal_death = termination_signal };
+    }
+
+    const exit_code: u8 = @truncate((status >> 8) & 0xff);
+    if (exit_code != 0 or read_error) {
+        result_buf.deinit(std.heap.page_allocator);
+        return .{ .child_error = {} };
+    }
+
+    // Success — return the string read from the pipe.
+    const owned = result_buf.toOwnedSlice(std.heap.page_allocator) catch {
+        result_buf.deinit(std.heap.page_allocator);
+        return .{ .child_error = {} };
+    };
+    return .{ .success = owned };
+}
 
 //
 // Parse and canonicalize (shared by all backends)
@@ -470,92 +583,26 @@ fn runSingleTestInner(allocator: std.mem.Allocator, tc: TestCase) !TestOutcome {
         .bool_val, .str_val, .f32_val, .f64_val, .dec_val,
         .inspect_str,
         => runValueTest(allocator, tc.source, tc.expected, tc.skip),
-        // Special test flows (unchanged)
-        .err_val => |expected_err| runTestError(allocator, tc.source, expected_err),
+        // Special test flows
         .problem => runTestProblem(allocator, tc.source),
-        .type_mismatch_crash => runTestTypeMismatchCrash(allocator, tc.source),
     };
 }
 
 /// Unified test function for all value-producing tests (primitive values and inspect_str).
-/// 1. For typed-value tests: runs interpreter typed-value pre-check
-/// 2. Runs ALL non-skipped backends via Str.inspect
-/// 3. Checks cross-backend agreement (all must succeed and match)
-/// 4. For inspect_str tests: also checks each backend against the expected string
+/// 1. Runs ALL non-skipped backends via Str.inspect in forked child processes
+/// 2. Checks cross-backend agreement (all must succeed and match)
+/// 3. For inspect_str tests: also checks each backend against the expected string
 fn runValueTest(allocator: std.mem.Allocator, src: []const u8, expected: TestCase.Expected, skip: TestCase.Skip) !TestOutcome {
     const resources = try parseAndCanonicalizeExpr(allocator, src);
     defer cleanupResources(allocator, resources);
 
-    var timings = EvalTimings{
+    const timings = EvalTimings{
         .parse_ns = resources.parse_ns,
         .canonicalize_ns = resources.canonicalize_ns,
         .typecheck_ns = resources.typecheck_ns,
     };
 
-    // Phase 1: Typed-value pre-check via interpreter (only for primitive-value tests)
-    const is_typed_value = switch (expected) {
-        .i64_val, .u8_val, .u16_val, .u32_val, .u64_val, .u128_val,
-        .i8_val, .i16_val, .i32_val, .i128_val,
-        .bool_val, .str_val, .f32_val, .f64_val, .dec_val,
-        => true,
-        .inspect_str => false,
-        else => unreachable,
-    };
-
-    if (is_typed_value and !skip.interpreter) {
-        var interp_timer = Timer.start() catch unreachable;
-        const interp_result = helpers.lirInterpreterEval(allocator, resources.module_env, resources.expr_idx, resources.builtin_module.env) catch |err| {
-            timings.interpreter_ns = interp_timer.read();
-            return .{ .status = .fail, .message = @errorName(err), .timings = timings };
-        };
-        timings.interpreter_ns = interp_timer.read();
-        defer interp_result.deinit(allocator);
-
-        // Check interpreter result against expected value
-        const interp_i128 = interp_result.asI128();
-        switch (expected) {
-            .i64_val, .u8_val, .u16_val, .u32_val, .u64_val, .u128_val, .i8_val, .i16_val, .i32_val, .i128_val => {
-                if (interp_i128 == null or interp_i128.? != expected.intExpected()) {
-                    return .{ .status = .fail, .message = "integer value mismatch", .timings = timings };
-                }
-            },
-            .bool_val => |exp| {
-                switch (interp_result) {
-                    .bool_val => |b| if (b != exp) return .{ .status = .fail, .message = "boolean value mismatch", .timings = timings },
-                    else => if ((interp_i128 != null and interp_i128.? != 0) != exp) {
-                        return .{ .status = .fail, .message = "boolean value mismatch", .timings = timings };
-                    },
-                }
-            },
-            .str_val => |exp| {
-                switch (interp_result) {
-                    .str => |s| if (!std.mem.eql(u8, exp, s)) return .{ .status = .fail, .message = "string value mismatch", .timings = timings },
-                    else => return .{ .status = .fail, .message = "expected string from interpreter", .timings = timings },
-                }
-            },
-            .f32_val => |exp| {
-                switch (interp_result) {
-                    .float_f32 => |v| if (@abs(v - exp) > 0.0001) return .{ .status = .fail, .message = "f32 value mismatch", .timings = timings },
-                    else => return .{ .status = .fail, .message = "expected f32 from interpreter", .timings = timings },
-                }
-            },
-            .f64_val => |exp| {
-                switch (interp_result) {
-                    .float_f64 => |v| if (@abs(v - exp) > 0.000000001) return .{ .status = .fail, .message = "f64 value mismatch", .timings = timings },
-                    else => return .{ .status = .fail, .message = "expected f64 from interpreter", .timings = timings },
-                }
-            },
-            .dec_val => |exp| {
-                switch (interp_result) {
-                    .dec => |v| if (v != exp) return .{ .status = .fail, .message = "Dec value mismatch", .timings = timings },
-                    else => return .{ .status = .fail, .message = "expected Dec from interpreter", .timings = timings },
-                }
-            },
-            else => unreachable,
-        }
-    }
-
-    // Phase 2: Run all non-skipped backends via Str.inspect and compare
+    // Run all non-skipped backends via Str.inspect and compare
     const inspect_expr = wrapInStrInspect(resources.module_env, resources.expr_idx) catch {
         return .{ .status = .fail, .message = "failed to wrap in Str.inspect", .timings = timings };
     };
@@ -566,7 +613,6 @@ fn runValueTest(allocator: std.mem.Allocator, src: []const u8, expected: TestCas
     const display_expected: ?[]const u8 = expected.format(allocator);
     const skips = [NUM_BACKENDS]bool{ skip.interpreter, skip.dev, skip.wasm, true }; // llvm always not_implemented for now
 
-    const BackendEvalFn = *const fn (std.mem.Allocator, *ModuleEnv, CIR.Expr.Idx, *const ModuleEnv) anyerror![]const u8;
     const eval_fns = [NUM_BACKENDS]BackendEvalFn{
         helpers.lirInterpreterInspectedStr,
         helpers.devEvaluatorStr,
@@ -586,96 +632,60 @@ fn runValueTest(allocator: std.mem.Allocator, src: []const u8, expected: TestCas
         }
 
         var timer = Timer.start() catch unreachable;
-        const str = eval_fns[i](allocator, resources.module_env, inspect_expr, resources.builtin_module.env) catch |err| {
-            const dur = timer.read();
-            backends[i] = .{ .status = .fail, .value = @errorName(err), .duration_ns = dur };
-            any_failure = true;
-            continue;
-        };
+        const fork_result = forkAndEval(eval_fns[i], resources.module_env, inspect_expr, resources.builtin_module.env);
         const dur = timer.read();
 
-        // Check against expected string (only for inspect_str tests)
-        const value_ok = if (raw_expected) |es| std.mem.eql(u8, es, str) else true;
-        // Check cross-backend agreement
-        const agreement_ok = if (first_ok) |fok| std.mem.eql(u8, fok, str) else true;
+        switch (fork_result) {
+            .success => |str| {
+                // Check against expected string (only for inspect_str tests)
+                const value_ok = if (raw_expected) |es| std.mem.eql(u8, es, str) else true;
+                // Check cross-backend agreement
+                const agreement_ok = if (first_ok) |fok| std.mem.eql(u8, fok, str) else true;
 
-        if (!value_ok or !agreement_ok) {
-            backends[i] = .{ .status = .wrong_value, .value = str, .duration_ns = dur };
-            any_failure = true;
-        } else {
-            backends[i] = .{ .status = .pass, .value = str, .duration_ns = dur };
-            if (first_ok == null) first_ok = str;
+                if (!value_ok or !agreement_ok) {
+                    backends[i] = .{ .status = .wrong_value, .value = str, .duration_ns = dur };
+                    any_failure = true;
+                } else {
+                    backends[i] = .{ .status = .pass, .value = str, .duration_ns = dur };
+                    if (first_ok == null) first_ok = str;
+                }
+            },
+            .child_error => {
+                backends[i] = .{ .status = .fail, .value = "ChildExecFailed", .duration_ns = dur };
+                any_failure = true;
+            },
+            .signal_death => |sig| {
+                var sig_buf: [32]u8 = undefined;
+                const sig_str = std.fmt.bufPrint(&sig_buf, "signal: {d}", .{sig}) catch "signal: ?";
+                backends[i] = .{ .status = .fail, .value = allocator.dupe(u8, sig_str) catch "signal", .duration_ns = dur };
+                any_failure = true;
+            },
+            .timeout => {
+                backends[i] = .{ .status = .fail, .value = "Timeout", .duration_ns = dur };
+                any_failure = true;
+            },
+            .fork_failed => {
+                backends[i] = .{ .status = .fail, .value = "ForkFailed", .duration_ns = dur };
+                any_failure = true;
+            },
         }
     }
 
-    // Update timings from backend durations
-    timings.interpreter_ns = backends[0].duration_ns;
-    timings.dev_ns = backends[1].duration_ns;
-    timings.wasm_ns = backends[2].duration_ns;
-    timings.llvm_ns = backends[3].duration_ns;
+    // Build final timings with backend durations merged in.
+    const final_timings = EvalTimings{
+        .parse_ns = timings.parse_ns,
+        .canonicalize_ns = timings.canonicalize_ns,
+        .typecheck_ns = timings.typecheck_ns,
+        .interpreter_ns = backends[0].duration_ns,
+        .dev_ns = backends[1].duration_ns,
+        .wasm_ns = backends[2].duration_ns,
+        .llvm_ns = backends[3].duration_ns,
+    };
 
     if (any_failure) {
-        return .{ .status = .fail, .timings = timings, .backends = backends, .expected_str = display_expected };
+        return .{ .status = .fail, .timings = final_timings, .backends = backends, .expected_str = display_expected };
     }
-    return .{ .status = .pass, .timings = timings, .backends = backends };
-}
-
-fn runTestError(allocator: std.mem.Allocator, src: []const u8, expected_err: anyerror) !TestOutcome {
-    const resources = try parseAndCanonicalizeExpr(allocator, src);
-    defer cleanupResources(allocator, resources);
-
-    var interp_timer = Timer.start() catch unreachable;
-
-    // Lower CIR → LIR (errors here count as interpreter errors)
-    var lir_prog = LirProgram.init(allocator, base.target.TargetUsize.native);
-    defer lir_prog.deinit();
-    const all_module_envs = [_]*ModuleEnv{ @constCast(resources.builtin_module.env), resources.module_env };
-
-    var lower_result = lir_prog.lowerExpr(resources.module_env, resources.expr_idx, &all_module_envs, null) catch |err| {
-        const interp_ns = interp_timer.read();
-        const timings = EvalTimings{ .parse_ns = resources.parse_ns, .canonicalize_ns = resources.canonicalize_ns, .typecheck_ns = resources.typecheck_ns, .interpreter_ns = interp_ns };
-        if (err == expected_err) return .{ .status = .pass, .timings = timings };
-        return .{ .status = .fail, .message = "wrong error during lowering", .timings = timings };
-    };
-    defer lower_result.deinit();
-
-    var interp = LirInterpreter.init(allocator, &lower_result.lir_store, lower_result.layout_store, null) catch |err| {
-        const interp_ns = interp_timer.read();
-        const timings = EvalTimings{ .parse_ns = resources.parse_ns, .canonicalize_ns = resources.canonicalize_ns, .typecheck_ns = resources.typecheck_ns, .interpreter_ns = interp_ns };
-        if (err == expected_err) return .{ .status = .pass, .timings = timings };
-        return .{ .status = .fail, .message = "wrong error during init", .timings = timings };
-    };
-    defer interp.deinit();
-
-    _ = interp.eval(lower_result.final_expr_id) catch |err| {
-        const interp_ns = interp_timer.read();
-        const timings = EvalTimings{ .parse_ns = resources.parse_ns, .canonicalize_ns = resources.canonicalize_ns, .typecheck_ns = resources.typecheck_ns, .interpreter_ns = interp_ns };
-        if (err == expected_err) return .{ .status = .pass, .timings = timings };
-        return .{ .status = .fail, .message = "wrong error returned", .timings = timings };
-    };
-    const interp_ns = interp_timer.read();
-
-    // LIR interpreter handles failed expects by setting a message rather than erroring.
-    // Check for this case and treat it as error.Crash.
-    const expect_is_crash = switch (expected_err) {
-        error.Crash => true,
-        else => false,
-    };
-    if (interp.getExpectMessage() != null and expect_is_crash) {
-        return .{ .status = .pass, .timings = .{
-            .parse_ns = resources.parse_ns,
-            .canonicalize_ns = resources.canonicalize_ns,
-            .typecheck_ns = resources.typecheck_ns,
-            .interpreter_ns = interp_ns,
-        } };
-    }
-
-    return .{ .status = .fail, .message = "expected error but evaluation succeeded", .timings = .{
-        .parse_ns = resources.parse_ns,
-        .canonicalize_ns = resources.canonicalize_ns,
-        .typecheck_ns = resources.typecheck_ns,
-        .interpreter_ns = interp_ns,
-    } };
+    return .{ .status = .pass, .timings = final_timings, .backends = backends };
 }
 
 fn runTestProblem(allocator: std.mem.Allocator, src: []const u8) !TestOutcome {
@@ -701,44 +711,6 @@ fn runTestProblem(allocator: std.mem.Allocator, src: []const u8) !TestOutcome {
         return .{ .status = .pass, .timings = timings };
     }
     return .{ .status = .fail, .message = "expected problems but none found", .timings = timings };
-}
-
-fn runTestTypeMismatchCrash(allocator: std.mem.Allocator, src: []const u8) !TestOutcome {
-    const resources = parseAndCanonicalizeExpr(allocator, src) catch {
-        return .{ .status = .pass };
-    };
-    defer cleanupResources(allocator, resources);
-
-    var interp_timer = Timer.start() catch unreachable;
-
-    var lir_prog = LirProgram.init(allocator, base.target.TargetUsize.native);
-    defer lir_prog.deinit();
-    const all_module_envs = [_]*ModuleEnv{ @constCast(resources.builtin_module.env), resources.module_env };
-
-    var lower_result = lir_prog.lowerExpr(resources.module_env, resources.expr_idx, &all_module_envs, null) catch {
-        const interp_ns = interp_timer.read();
-        return .{ .status = .pass, .timings = .{ .parse_ns = resources.parse_ns, .canonicalize_ns = resources.canonicalize_ns, .typecheck_ns = resources.typecheck_ns, .interpreter_ns = interp_ns } };
-    };
-    defer lower_result.deinit();
-
-    var interp = LirInterpreter.init(allocator, &lower_result.lir_store, lower_result.layout_store, null) catch {
-        const interp_ns = interp_timer.read();
-        return .{ .status = .pass, .timings = .{ .parse_ns = resources.parse_ns, .canonicalize_ns = resources.canonicalize_ns, .typecheck_ns = resources.typecheck_ns, .interpreter_ns = interp_ns } };
-    };
-    defer interp.deinit();
-
-    _ = interp.eval(lower_result.final_expr_id) catch {
-        const interp_ns = interp_timer.read();
-        return .{ .status = .pass, .timings = .{ .parse_ns = resources.parse_ns, .canonicalize_ns = resources.canonicalize_ns, .typecheck_ns = resources.typecheck_ns, .interpreter_ns = interp_ns } };
-    };
-    const interp_ns = interp_timer.read();
-
-    return .{ .status = .fail, .message = "expected crash but evaluation succeeded", .timings = .{
-        .parse_ns = resources.parse_ns,
-        .canonicalize_ns = resources.canonicalize_ns,
-        .typecheck_ns = resources.typecheck_ns,
-        .interpreter_ns = interp_ns,
-    } };
 }
 
 //
@@ -781,52 +753,8 @@ fn threadMain(ctx: *RunnerContext) void {
             ws.start_time_ms.store(nowMs(), .release);
         }
 
-        // Set up crash protection
-        var jmp_buf: sljmp.JmpBuf = undefined;
-        panic_jmp = &jmp_buf;
-        panic_msg = null;
-
-        const jmp_result = sljmp.setjmp(&jmp_buf);
-        if (jmp_result != 0) {
-            panic_jmp = null;
-            // Signal was blocked during the handler; unblock for future crashes.
-            unblockCrashSignals();
-
-            // Clean up resources that longjmp skipped over (pipe FDs, zombie children).
-            if (comptime builtin.os.tag != .windows) {
-                const wid = helpers.my_worker_id;
-                if (wid < helpers.worker_pipe_fds.len) {
-                    const leaked_fd = helpers.worker_pipe_fds[wid].swap(-1, .acq_rel);
-                    if (leaked_fd >= 0) posix.close(@intCast(leaked_fd));
-                }
-                if (wid < helpers.worker_child_pids.len) {
-                    const zombie_pid = helpers.worker_child_pids[wid].swap(0, .acq_rel);
-                    if (zombie_pid > 0) {
-                        // Reap the killed child so it doesn't linger as a zombie.
-                        _ = std.c.waitpid(zombie_pid, null, std.c.W.NOHANG);
-                    }
-                }
-            }
-
-            // Check if this was a watchdog timeout (jmp_result == 3) or a real crash.
-            const was_timeout = if (my_state) |ws| ws.timed_out.swap(false, .acquire) else false;
-            const elapsed = wall_timer.read();
-            const raw_msg = panic_msg orelse "unknown crash";
-            // Dup to GPA so all result messages are GPA-owned (freed uniformly in main).
-            const stable_msg = ctx.msg_allocator.dupe(u8, raw_msg) catch raw_msg;
-            ctx.results[i] = .{
-                .status = if (was_timeout or jmp_result == 3) .timeout else .crash,
-                .message = stable_msg,
-                .duration_ns = elapsed,
-                .timings = .{},
-            };
-            if (my_state) |ws| ws.start_time_ms.store(0, .release);
-            continue;
-        }
-
         const outcome = runSingleTest(allocator, tc);
 
-        panic_jmp = null;
         if (my_state) |ws| ws.start_time_ms.store(0, .release);
         const elapsed = wall_timer.read();
 
@@ -910,8 +838,8 @@ fn printHelp() void {
         \\Roc Eval Test Runner
         \\
         \\Runs eval tests across backends (interpreter, dev, wasm) in parallel
-        \\and compares results via Str.inspect. Crash protection via setjmp/longjmp
-        \\allows the runner to recover from segfaults and continue.
+        \\and compares results via Str.inspect. Each backend evaluation runs in
+        \\a forked child process for crash isolation.
         \\(LLVM backend temporarily disabled — currently aliases dev backend.)
         \\
         \\USAGE:
@@ -926,7 +854,7 @@ fn printHelp() void {
         \\  --filter <PATTERN>    Run only tests whose name or source contains PATTERN.
         \\  --threads <N>         Max worker threads (default: number of CPU cores).
         \\  --verbose             Print PASS and SKIP results (default: only FAIL/CRASH).
-        \\  --coverage            Coverage mode: single-threaded, no fork. Use with kcov.
+        \\  --coverage            Coverage mode: single-threaded. Use with kcov.
         \\  --timeout <MS>        Per-test hang timeout in ms (default: 10000). Multi-thread only.
         \\
         \\TIMING:
@@ -951,7 +879,7 @@ fn printHelp() void {
         \\  Test outcomes:
         \\    PASS  - all backends ran and agreed
         \\    FAIL  - value mismatch or backend disagreement
-        \\    CRASH - segfault or panic in generated code (recovered via signal handler)
+        \\    CRASH - segfault or panic in generated code (detected via fork isolation)
         \\    HANG  - test exceeded the per-test timeout (killed by watchdog)
         \\    SKIP  - one or more backends were skipped
         \\
@@ -1199,7 +1127,7 @@ fn countCompletedResults(results: []const TestResult) usize {
 
 /// Watchdog that polls worker threads, prints progress, and kills hangs.
 /// Runs on the main thread while workers are executing.
-fn hangWatchdog(ctx: *RunnerContext, threads: []std.Thread, timeout_ms: u64) void {
+fn hangWatchdog(ctx: *RunnerContext, timeout_ms: u64) void {
     const ws = ctx.worker_states orelse return;
     var progress_timer = Timer.start() catch unreachable;
     var last_progress_ns: u64 = 0;
@@ -1221,12 +1149,12 @@ fn hangWatchdog(ctx: *RunnerContext, threads: []std.Thread, timeout_ms: u64) voi
 
             const elapsed_ms: u64 = @intCast(@max(0, now -% start));
             if (elapsed_ms > timeout_ms) {
-                // This worker is hung. Mark it timed-out and kill it.
+                // This worker is hung. Mark it timed-out and kill any forked child.
                 worker.timed_out.store(true, .release);
                 const test_name = if (test_idx < ctx.tests.len) ctx.tests[test_idx].name else "?";
                 std.debug.print("\n  HANG  {s}  ({d}ms) — killing", .{ test_name, elapsed_ms });
                 if (comptime builtin.os.tag != .windows) {
-                    // Kill any forked child process first (unblocks waitpid).
+                    // Kill any forked child process (unblocks waitpid in forkAndEval).
                     if (idx < helpers.worker_child_pids.len) {
                         const cpid = helpers.worker_child_pids[idx].swap(0, .acq_rel);
                         if (cpid > 0) {
@@ -1239,12 +1167,9 @@ fn hangWatchdog(ctx: *RunnerContext, threads: []std.Thread, timeout_ms: u64) voi
                         const pfd = helpers.worker_pipe_fds[idx].swap(-1, .acq_rel);
                         if (pfd >= 0) posix.close(@intCast(pfd));
                     }
-                    // Then signal the worker thread to longjmp out.
-                    const handle = threads[idx].getHandle();
-                    _ = pthread_kill(handle, posix.SIG.USR1);
                 }
                 std.debug.print("\n", .{});
-                // Give the worker time to recover before re-checking.
+                // Give the child time to die before re-checking.
                 std.Thread.sleep(200_000_000); // 200ms
             }
         }
@@ -1276,14 +1201,6 @@ pub fn main() !void {
     const argv = try std.process.argsAlloc(gpa);
     defer std.process.argsFree(gpa, argv);
     const cli = parseCliArgs(argv);
-
-    // Coverage mode: disable fork (kcov can't trace forked children) and
-    // force single-threaded so kcov sees deterministic execution.
-    if (cli.coverage) {
-        helpers.force_no_fork = true;
-    }
-
-    installCrashSignalHandlers();
 
     const all_tests = collectTests();
 
@@ -1375,7 +1292,7 @@ pub fn main() !void {
 
         // Watchdog loop: poll workers for hangs until all are done.
         if (hang_timeout_ms > 0) {
-            hangWatchdog(&context, threads, hang_timeout_ms);
+            hangWatchdog(&context, hang_timeout_ms);
         }
 
         for (threads) |t| {

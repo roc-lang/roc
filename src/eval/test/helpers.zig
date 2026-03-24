@@ -25,16 +25,11 @@ const WasmEvaluator = eval_mod.WasmEvaluator;
 const LirProgram = eval_mod.LirProgram;
 const LirInterpreter = eval_mod.LirInterpreter;
 const i128h = builtins.compiler_rt_128;
-const posix = std.posix;
-
-const has_fork = builtin.os.tag != .windows;
-/// Set to true to skip fork-based isolation (needed for kcov coverage).
-pub var force_no_fork: bool = false;
 /// Per-worker child PIDs for fork-based test execution.
 /// The hang watchdog in the parallel runner kills these PIDs on timeout.
 /// Set by the parallel runner before tests start; workers index by their worker ID.
 pub var worker_child_pids: []std.atomic.Value(i32) = &.{};
-/// Per-worker pipe read FDs, so longjmp cleanup can close leaked pipes.
+/// Per-worker pipe read FDs, so the watchdog can close leaked pipes on timeout.
 pub var worker_pipe_fds: []std.atomic.Value(i32) = &.{};
 /// Thread-local worker ID, set by the parallel runner.
 pub threadlocal var my_worker_id: usize = 0;
@@ -288,11 +283,7 @@ pub fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, exp
     };
     defer executable.deinit();
 
-    if (has_fork and !force_no_fork) {
-        return forkAndExecute(allocator, &dev_eval, &executable);
-    } else {
-        return executeAndFormat(allocator, &dev_eval, &executable);
-    }
+    return executeAndFormat(allocator, &dev_eval, &executable);
 }
 
 /// Execute compiled code and format the result as a string.
@@ -338,130 +329,6 @@ noinline fn executeAndFormat(
     }
 
     return result;
-}
-
-/// Fork a child process to execute compiled code, isolating segfaults from the test process.
-/// The child executes the code and writes the formatted result string back through a pipe.
-/// If the child segfaults, the parent reports it as a failed test instead of crashing.
-fn forkAndExecute(
-    allocator: std.mem.Allocator,
-    dev_eval: *DevEvaluator,
-    executable: *backend.ExecutableMemory,
-) DevEvalError![]const u8 {
-    const pipe_fds = posix.pipe() catch {
-        return error.PipeCreationFailed;
-    };
-    const pipe_read = pipe_fds[0];
-    const pipe_write = pipe_fds[1];
-
-    const fork_result = posix.fork() catch {
-        posix.close(pipe_read);
-        posix.close(pipe_write);
-        return error.ForkFailed;
-    };
-
-    if (fork_result == 0) {
-        // Child process
-        posix.close(pipe_read);
-
-        // Use page_allocator in child — testing.allocator's leak tracking is
-        // meaningless since we exit via _exit and no defers run.
-        const child_alloc = std.heap.page_allocator;
-
-        const result_str = executeAndFormat(child_alloc, dev_eval, executable) catch |err| {
-            std.debug.print("child executeAndFormat error: {}", .{err});
-            switch (err) {
-                error.RocCrashed => {
-                    if (dev_eval.getCrashMessage()) |msg| {
-                        std.debug.print(" msg={s}", .{msg});
-                    }
-                },
-                else => {},
-            }
-            std.debug.print("\n", .{});
-            posix.close(pipe_write);
-            std.c._exit(1);
-        };
-
-        // Write the result string to the pipe
-        var written: usize = 0;
-        while (written < result_str.len) {
-            written += posix.write(pipe_write, result_str[written..]) catch {
-                posix.close(pipe_write);
-                std.c._exit(1);
-            };
-        }
-
-        posix.close(pipe_write);
-        std.c._exit(0);
-    } else {
-        // Parent process
-        posix.close(pipe_write);
-
-        // Store child PID and pipe FD so the hang watchdog / longjmp cleanup
-        // can kill the child and close the pipe on timeout.
-        if (my_worker_id < worker_child_pids.len) {
-            worker_child_pids[my_worker_id].store(@intCast(fork_result), .release);
-        }
-        if (my_worker_id < worker_pipe_fds.len) {
-            worker_pipe_fds[my_worker_id].store(@intCast(pipe_read), .release);
-        }
-
-        // Wait for child to exit
-        const wait_result = posix.waitpid(fork_result, 0);
-        if (my_worker_id < worker_child_pids.len) {
-            worker_child_pids[my_worker_id].store(0, .release);
-        }
-        if (my_worker_id < worker_pipe_fds.len) {
-            worker_pipe_fds[my_worker_id].store(-1, .release);
-        }
-        const status = wait_result.status;
-
-        // Parse the wait status (Unix encoding)
-        const termination_signal: u8 = @truncate(status & 0x7f);
-
-        if (termination_signal != 0) {
-            // Child was killed by a signal (e.g. SIGSEGV)
-            posix.close(pipe_read);
-            std.debug.print("\nChild process killed by signal {d} (", .{termination_signal});
-            switch (termination_signal) {
-                11 => std.debug.print("SIGSEGV", .{}),
-                6 => std.debug.print("SIGABRT", .{}),
-                8 => std.debug.print("SIGFPE", .{}),
-                4 => std.debug.print("SIGILL", .{}),
-                7 => std.debug.print("SIGBUS", .{}),
-                else => std.debug.print("unknown", .{}),
-            }
-            std.debug.print(") during dev backend execution\n", .{});
-            return error.ChildSegfaulted;
-        }
-
-        const exit_code: u8 = @truncate((status >> 8) & 0xff);
-        if (exit_code != 0) {
-            posix.close(pipe_read);
-            return error.ChildExecFailed;
-        }
-
-        // Read result string from pipe
-        var result_buf: std.ArrayList(u8) = .empty;
-        errdefer result_buf.deinit(allocator);
-
-        var read_buf: [4096]u8 = undefined;
-        while (true) {
-            const bytes_read = posix.read(pipe_read, &read_buf) catch {
-                posix.close(pipe_read);
-                return error.ChildExecFailed;
-            };
-            if (bytes_read == 0) break;
-            result_buf.appendSlice(allocator, read_buf[0..bytes_read]) catch {
-                posix.close(pipe_read);
-                return error.OutOfMemory;
-            };
-        }
-
-        posix.close(pipe_read);
-        return result_buf.toOwnedSlice(allocator) catch return error.OutOfMemory;
-    }
 }
 
 /// Compare interpreter output against the dev, wasm, and llvm backend outputs.

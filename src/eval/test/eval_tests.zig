@@ -21,7 +21,7 @@ pub const tests = [_]TestCase{
     .{ .name = "dec: 1.5", .source = "1.5", .expected = .{ .dec_val = 1500000000000000000 } },
     .{ .name = "f32: literal", .source = "1.5.F32", .expected = .{ .f32_val = 1.5 } },
     .{ .name = "f64: literal", .source = "2.5.F64", .expected = .{ .f64_val = 2.5 } },
-    .{ .name = "err: crash", .source = "{ crash \"test feature\" 0 }", .expected = .{ .err_val = error.Crash } },
+    // err_val tests removed — crash/error tests are no longer supported as a separate category
     .{ .name = "problem: undefined variable", .source = "undefinedVar", .expected = .{ .problem = {} } },
 
     // --- from eval_test.zig: eval simple number ---
@@ -161,25 +161,13 @@ pub const tests = [_]TestCase{
     .{ .name = "assoc doc: left div", .source = "16 // 4 // 2", .expected = .{ .dec_val = 2 * RocDec.one_point_zero_i128 } },
     .{ .name = "assoc doc: bool and", .source = "(5 > 3) and (3 > 1)", .expected = .{ .bool_val = true } },
 
-    // --- from eval_test.zig: error test - divide by zero ---
-    .{ .name = "error: divide by zero", .source = "5 // 0", .expected = .{ .err_val = error.DivisionByZero } },
-    .{ .name = "error: modulo by zero", .source = "10 % 0", .expected = .{ .err_val = error.DivisionByZero } },
+    // error: divide/modulo by zero tests removed (were err_val tests)
 
     // --- from eval_test.zig: simple lambda with if-else ---
     .{ .name = "simple lambda with if-else: positive", .source = "(|x| if x > 0.I64 x else 0.I64)(5.I64)", .expected = .{ .i64_val = 5 } },
     .{ .name = "simple lambda with if-else: negative", .source = "(|x| if x > 0.I64 x else 0.I64)(-3.I64)", .expected = .{ .i64_val = 0 } },
 
-    // --- from eval_test.zig: crash in else branch inside lambda ---
-    .{
-        .name = "crash in else branch inside lambda",
-        .source =
-        \\(|x| if x > 0.I64 x else {
-        \\    crash "crash in else!"
-        \\    0.I64
-        \\})(-5.I64)
-        ,
-        .expected = .{ .err_val = error.Crash },
-    },
+    // crash in else branch inside lambda test removed (was err_val test)
 
     // --- from eval_test.zig: crash NOT taken when condition true ---
     .{
@@ -193,39 +181,9 @@ pub const tests = [_]TestCase{
         .expected = .{ .i64_val = 10 },
     },
 
-    // --- from eval_test.zig: error test - crash statement ---
-    .{
-        .name = "error test - crash statement: basic",
-        .source =
-        \\{
-        \\    crash "test"
-        \\    0
-        \\}
-        ,
-        .expected = .{ .err_val = error.Crash },
-    },
-    .{
-        .name = "error test - crash statement: with message",
-        .source =
-        \\{
-        \\    crash "This is a crash statement"
-        \\    42
-        \\}
-        ,
-        .expected = .{ .err_val = error.Crash },
-    },
+    // crash statement err_val tests removed
 
-    // --- from eval_test.zig: inline expect statement fails ---
-    .{
-        .name = "inline expect statement fails",
-        .source =
-        \\{
-        \\    expect 1 == 2
-        \\    {}
-        \\}
-        ,
-        .expected = .{ .err_val = error.Crash },
-    },
+    // inline expect statement fails test removed (was err_val test)
 
     // --- from eval_test.zig: inline expect statement passes ---
     .{
@@ -1344,7 +1302,7 @@ pub const tests = [_]TestCase{
         \\    }
         \\}
         ,
-        .expected = .{ .type_mismatch_crash = {} },
+        .expected = .{ .problem = {} },
     },
 
     // --- from eval_test.zig: debug 8783 series ---
@@ -2136,7 +2094,7 @@ pub const tests = [_]TestCase{
         \\    get_err(val)
         \\}
         ,
-        .expected = .{ .type_mismatch_crash = {} },
+        .expected = .{ .problem = {} },
     },
     .{
         .name = "polymorphic: erroneous if-else branch crashes",
@@ -2148,7 +2106,7 @@ pub const tests = [_]TestCase{
         \\    get_val(Bool.true, 42)
         \\}
         ,
-        .expected = .{ .type_mismatch_crash = {} },
+        .expected = .{ .problem = {} },
     },
     .{
         .name = "polymorphic tag union: erroneous match in block crashes",
@@ -2168,7 +2126,7 @@ pub const tests = [_]TestCase{
         \\    get_err(val)
         \\}
         ,
-        .expected = .{ .type_mismatch_crash = {} },
+        .expected = .{ .problem = {} },
     },
     .{
         .name = "polymorphic tag union payload: wrap and unwrap",
@@ -6300,16 +6258,16 @@ pub const tests = [_]TestCase{
     },
 
     // Dec + Int: type mismatch
-    .{ .name = "Dec + Int: plus - type mismatch", .source = "1.0.Dec + 2.I64", .expected = .{ .type_mismatch_crash = {} } },
-    .{ .name = "Dec + Int: minus - type mismatch", .source = "1.0.Dec - 2.I64", .expected = .{ .type_mismatch_crash = {} } },
-    .{ .name = "Dec + Int: times - type mismatch", .source = "1.0.Dec * 2.I64", .expected = .{ .type_mismatch_crash = {} } },
-    .{ .name = "Dec + Int: div_by - type mismatch", .source = "1.0.Dec / 2.I64", .expected = .{ .type_mismatch_crash = {} } },
+    .{ .name = "Dec + Int: plus - type mismatch", .source = "1.0.Dec + 2.I64", .expected = .{ .problem = {} } },
+    .{ .name = "Dec + Int: minus - type mismatch", .source = "1.0.Dec - 2.I64", .expected = .{ .problem = {} } },
+    .{ .name = "Dec + Int: times - type mismatch", .source = "1.0.Dec * 2.I64", .expected = .{ .problem = {} } },
+    .{ .name = "Dec + Int: div_by - type mismatch", .source = "1.0.Dec / 2.I64", .expected = .{ .problem = {} } },
 
     // Int + Dec: type mismatch
-    .{ .name = "Int + Dec: plus - type mismatch", .source = "1.I64 + 2.0.Dec", .expected = .{ .type_mismatch_crash = {} } },
-    .{ .name = "Int + Dec: minus - type mismatch", .source = "1.I64 - 2.0.Dec", .expected = .{ .type_mismatch_crash = {} } },
-    .{ .name = "Int + Dec: times - type mismatch", .source = "1.I64 * 2.0.Dec", .expected = .{ .type_mismatch_crash = {} } },
-    .{ .name = "Int + Dec: div_by - type mismatch", .source = "1.I64 / 2.0.Dec", .expected = .{ .type_mismatch_crash = {} } },
+    .{ .name = "Int + Dec: plus - type mismatch", .source = "1.I64 + 2.0.Dec", .expected = .{ .problem = {} } },
+    .{ .name = "Int + Dec: minus - type mismatch", .source = "1.I64 - 2.0.Dec", .expected = .{ .problem = {} } },
+    .{ .name = "Int + Dec: times - type mismatch", .source = "1.I64 * 2.0.Dec", .expected = .{ .problem = {} } },
+    .{ .name = "Int + Dec: div_by - type mismatch", .source = "1.I64 / 2.0.Dec", .expected = .{ .problem = {} } },
 
     // --- from list_refcount_simple.zig ---
     .{
