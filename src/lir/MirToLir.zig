@@ -5412,6 +5412,9 @@ fn registerBindingPatternSymbols(
                         }
                     }
                 },
+                // Unit can appear here when upstream type errors produce
+                // a runtime_err_type with unit monotype. Skip registration.
+                .unit => {},
                 else => unreachable,
             }
         },
@@ -5674,6 +5677,9 @@ fn lowerPatternInternal(
 
                     break :blk self.lowerWildcardBindingPattern(struct_layout, ownership_mode, region);
                 },
+                // Unit can appear here from upstream type errors producing
+                // runtime_err_type with unit monotype. Treat as empty binding.
+                .unit => break :blk self.lowerWildcardBindingPattern(struct_layout, ownership_mode, region),
                 else => unreachable,
             }
         },

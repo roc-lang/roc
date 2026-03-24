@@ -3827,6 +3827,9 @@ fn bindPatternMonotypes(
         .tuple => |tuple_pat| {
             const mono_elems = switch (self.store.monotype_store.getMonotype(monotype)) {
                 .tuple => |tuple_mono| self.store.monotype_store.getIdxSpan(tuple_mono.elems),
+                // Unit can appear here when upstream type errors or unresolved dispatch
+                // produce a runtime_err_type with unit monotype. Skip binding.
+                .unit => return,
                 else => typeBindingInvariant(
                     "bindPatternMonotypes(tuple): expected tuple monotype, found '{s}'",
                     .{@tagName(self.store.monotype_store.getMonotype(monotype))},
@@ -6946,13 +6949,9 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
         const expected_arg_monotypes = switch (self.store.monotype_store.getMonotype(func_mono)) {
             .func => |func| self.store.monotype_store.getIdxSpan(func.args),
             else => {
-                if (builtin.mode == .Debug) {
-                    std.debug.panic(
-                        "MIR Lower invariant: dispatch proc for dot access '{s}' did not lower to function monotype",
-                        .{module_env.getIdent(da.field_name)},
-                    );
-                }
-                unreachable;
+                // Upstream type error or unresolved dispatch — emit a runtime error
+                // instead of panicking the compiler.
+                return try self.store.addExpr(self.allocator, .{ .runtime_err_type = {} }, monotype, region);
             },
         };
 

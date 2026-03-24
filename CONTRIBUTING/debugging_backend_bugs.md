@@ -19,6 +19,18 @@ When a backend crashes or produces the wrong answer, the workflow is:
 4. Fix the bug
 5. Run the full suite to check for regressions
 
+## Two test systems
+
+There are **two separate test systems** — don't mix them up:
+
+| System | Build command | How to filter | What it tests |
+|--------|--------------|---------------|---------------|
+| **Eval test runner** | `zig build test-eval` | `--filter "pattern"` | Cross-backend comparison (interp, dev, wasm) via `Str.inspect` |
+| **Unit tests** | `zig build test` | `--test-filter "pattern"` | Sequential Zig tests (`helpers.zig`, `fx_platform_test.zig`, etc.) |
+
+The eval test runner is a standalone binary. You build it once, then run it
+directly — there's no need to rebuild between runs unless you change source.
+
 ## 1. Add a reproducing test case
 
 Test cases live in `src/eval/test/eval_tests.zig`. Add a new entry to the
@@ -45,17 +57,25 @@ zig build test-eval
 
 ## 2. Run the failing test
 
-Use `--filter` to run only your test:
+**Build once, then run the binary directly** — this is much faster than
+rebuilding via `zig build test-eval` each time:
 
 ```sh
+# Build (only needed once, or after source changes):
+zig build test-eval
+
+# Run a single test by name:
 ./zig-out/bin/eval-test-runner --filter "List.concat with strings" --verbose
+
+# Or combine build + run in one command (passes options after --):
+zig build test-eval -- --filter "List.concat with strings" --verbose
 ```
 
 The output tells you the outcome and which backends were reached:
 
 ```
 CRASH List.concat with strings  (21.5ms)
-      attempt to use null value
+      attempt to use null values
       backends: interp=not_reached dev=not_reached wasm=not_reached
 ```
 
@@ -66,10 +86,28 @@ CRASH List.concat with strings  (21.5ms)
 
 Use `--threads 1` for deterministic single-threaded output when debugging.
 
+### Unit tests (fx platform tests, etc.)
+
+For tests in the Zig unit test system (not the eval runner), use `--test-filter`:
+
+```sh
+# Run a specific fx platform test:
+zig build test -- --test-filter "list_append_stdin_uaf"
+
+# Run all fx interpreter tests:
+zig build test -- --test-filter "fx platform IO spec tests (interpreter)"
+```
+
+Note the different flag: `--test-filter` (not `--filter`).
+
 ## 3. Build with trace flags
 
 There are two independent comptime trace flags. They are compiled out when
 disabled, so normal builds have zero overhead.
+
+**Important**: Trace flags require a rebuild — they are comptime options passed
+to `zig build`, not runtime flags. After rebuilding with trace flags, you run
+the binary as normal.
 
 ### `-Dtrace-eval=true` — Lowering + interpreter eval tracing
 
@@ -79,8 +117,11 @@ Traces the full pipeline:
 - RC plan execution in the interpreter
 
 ```sh
+# Build with tracing enabled:
 zig build test-eval -Dtrace-eval=true
-./zig-out/bin/eval-test-runner --filter "my test" --verbose
+
+# Then run your specific test:
+./zig-out/bin/eval-test-runner --filter "my test" --verbose --threads 1
 ```
 
 Example output:
@@ -99,7 +140,7 @@ Traces every allocation, deallocation, reallocation, and refcount operation:
 
 ```sh
 zig build test-eval -Dtrace-refcount=true
-./zig-out/bin/eval-test-runner --filter "my test" --verbose
+./zig-out/bin/eval-test-runner --filter "my test" --verbose --threads 1
 ```
 
 Example output:

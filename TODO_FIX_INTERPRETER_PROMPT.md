@@ -36,61 +36,7 @@ There are two test paths that exercise the interpreter:
      does CIR → MIR → LIR → RC lowering, then `LirInterpreter.eval()`
    - For typed value tests, also uses `helpers.lirInterpreterEval` to check
      raw values (int, float, str, bool, dec) against expected
-   - Current status: **1092 passed, 0 failed, 9 crashed, 80 skipped**
-   - The 9 crashes are all "type mismatch" tests that crash during CIR→LIR
-     lowering (before any backend runs)
-   
-```
-$ ./zig-out/bin/eval-test-runner
-
-=== Eval Test Results ===
-  CRASH decode: I32.decode type mismatch crash  (17.2ms)
-        bindPatternMonotypes(tuple): expected tuple monotype, found 'unit'
-        backends: interp=not_reached dev=not_reached wasm=not_reached
-  CRASH Dec + Int: plus - type mismatch  (13.8ms)
-        reached unreachable code
-        backends: interp=not_reached dev=not_reached wasm=not_reached
-  CRASH Dec + Int: minus - type mismatch  (12.0ms)
-        reached unreachable code
-        backends: interp=not_reached dev=not_reached wasm=not_reached
-  CRASH Dec + Int: times - type mismatch  (9.3ms)
-        reached unreachable code
-        backends: interp=not_reached dev=not_reached wasm=not_reached
-  CRASH Dec + Int: div_by - type mismatch  (16.4ms)
-        reached unreachable code
-        backends: interp=not_reached dev=not_reached wasm=not_reached
-  CRASH Int + Dec: plus - type mismatch  (15.6ms)
-        reached unreachable code
-        backends: interp=not_reached dev=not_reached wasm=not_reached
-  CRASH Int + Dec: minus - type mismatch  (14.9ms)
-        reached unreachable code
-        backends: interp=not_reached dev=not_reached wasm=not_reached
-  CRASH Int + Dec: times - type mismatch  (17.0ms)
-        reached unreachable code
-        backends: interp=not_reached dev=not_reached wasm=not_reached
-  CRASH Int + Dec: div_by - type mismatch  (11.0ms)
-        reached unreachable code
-        backends: interp=not_reached dev=not_reached wasm=not_reached
-
-=== Performance Summary (ms) ===
-  Phase         Min      Max     Mean   Median   StdDev      P95    Total     N
-  -------- -------- -------- -------- -------- -------- -------- --------   ---
-  parse         0.1     18.0      0.9      0.3      1.8      4.9   1013.6   1168
-  can           0.1     10.6      0.5      0.3      1.1      0.8    574.7   1168
-  check         0.3     24.5      1.6      0.9      2.5      6.4   1899.6   1168
-  interp        4.1   1271.1     26.1     14.5     53.3     82.5  27615.6   1058
-  dev          10.2   1385.8     47.4     37.9     60.7     99.3  51040.2   1077
-  wasm          8.7   1823.3     50.0     36.2     84.7    106.3  52215.7   1045
-
-  Slowest 5 tests:
-    1. focused: polymorphic additional specialization via List.append  (5623.1ms)  [parse:0.4 can:0.7 check:2.1 interp:1271.1 dev:1385.8 wasm:1706.8]
-    2. recursive function with record - stack memory  (4663.8ms)  [parse:0.3 can:0.4 check:2.7 interp:677.0 dev:1056.1 wasm:1823.3]
-    3. list fold_rev i64 dev regression  (1228.2ms)  [parse:2.6 can:0.5 check:3.3 interp:280.6 dev:309.3 wasm:351.3]
-    4. closure: recursive function in let binding  (1062.0ms)  [parse:0.3 can:0.3 check:4.7 interp:223.6 dev:281.0 wasm:305.7]
-    5. recursive factorial function  (1031.2ms)  [parse:0.3 can:0.4 check:1.6 interp:214.7 dev:268.1 wasm:289.8]
-
-1088 passed, 0 failed, 9 crashed, 80 skipped (1177 total) in 10541ms using 16 thread(s)
-```
+   - Current status: **1101 passed, 0 failed, 0 crashed, 80 skipped**
 
 2. **Unit tests** (`zig build test`):
    - Sequential tests in `src/eval/test/helpers.zig` (low_level_interp_test,
@@ -114,10 +60,10 @@ $ ./zig-out/bin/eval-test-runner
 ### Reproduce
 
 ```sh
-zig build test --summary all -- --test-filter "fx platform IO spec tests (interpreter)"
+# This test runs inside the IO spec test suite (a single Zig test that loops
+# over all .roc files). Run the suite and look for the file in output:
+zig build test -- --test-filter "fx platform IO spec tests (interpreter)"
 ```
-
-Look for `list_append_stdin_uaf.roc` in the output.
 
 ### Symptoms
 
@@ -159,7 +105,10 @@ The test involves:
 
 ### Reproduce
 
-Same as Bug 2 (runs in the IO spec test suite). Look for `issue8866.roc`.
+```sh
+# Runs inside the IO spec test suite — look for issue8866.roc in output:
+zig build test -- --test-filter "fx platform IO spec tests (interpreter)"
+```
 
 ### Symptoms
 
@@ -203,7 +152,7 @@ because:
 ### Reproduce
 
 ```sh
-zig build test --summary all -- --test-filter "all_syntax_test.roc prints expected output (interpreter)"
+zig build test -- --test-filter "all_syntax_test.roc prints expected output (interpreter)"
 ```
 
 ### Symptoms
@@ -234,7 +183,7 @@ value that the interpreter doesn't resolve correctly.
 ### Reproduce
 
 ```sh
-zig build test --summary all -- --test-filter "repeating pattern segfault (interpreter)"
+zig build test -- --test-filter "repeating pattern segfault (interpreter)"
 ```
 
 ### Symptoms
@@ -265,7 +214,7 @@ Since the LIR interpreter uses `call_depth` with a max of 1024, this either:
 ### Reproduce
 
 ```sh
-zig build test --summary all -- --test-filter "string interpolation type mismatch (interpreter)"
+zig build test -- --test-filter "string interpolation type mismatch (interpreter)"
 ```
 
 ### Symptoms
@@ -289,8 +238,47 @@ doesn't produce the expected string.
 
 ## General Debugging Tips
 
-- **Parallel runner filters**: `zig build test-eval --summary all -- --filter "pattern" --verbose`
-- **Sequential test filters**: `zig build test --summary all -- --test-filter "pattern"`
+### Running tests
+
+There are **two separate test systems** — use the right one:
+
+**Eval test runner** (cross-backend comparison, 1000+ tests):
+```sh
+# Build once (or after source changes):
+zig build test-eval
+
+# Run a single test by name:
+./zig-out/bin/eval-test-runner --filter "pattern" --verbose
+
+# Or build + run combined (options go after --):
+zig build test-eval -- --filter "pattern" --verbose
+```
+
+**Unit tests** (fx platform tests, sequential Zig tests):
+```sh
+zig build test -- --test-filter "list_append_stdin_uaf"
+zig build test -- --test-filter "fx platform IO spec tests (interpreter)"
+```
+
+Note: eval runner uses `--filter`, unit tests use `--test-filter`.
+
+### Trace flags
+
+Trace flags are **comptime build options** — they require a rebuild, then you
+run the binary as normal:
+
+```sh
+# Build with tracing:
+zig build test-eval -Dtrace-eval=true -Dtrace-refcount=true
+
+# Run single test with tracing output:
+./zig-out/bin/eval-test-runner --filter "my test" --verbose --threads 1
+```
+
+See `CONTRIBUTING/debugging_backend_bugs.md` for full details on trace output.
+
+### Other tools
+
 - **Hex dumps**: Set `dump_generated_code_hex = true` in `helpers.zig`
 - **INT3 breakpoints**: Insert `0xCC` in `ExecutableMemory.zig` before
   `makeExecutable()` for gdb breakpoints

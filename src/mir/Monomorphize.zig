@@ -2965,7 +2965,9 @@ pub const Pass = struct {
         const proc_inst = result.getProcInst(proc_inst_id);
         const proc_inst_fn_mono = switch (result.monotype_store.getMonotype(proc_inst.fn_monotype)) {
             .func => |func| func,
-            else => unreachable,
+            // Upstream type error or unresolved dispatch can produce a non-func monotype
+            // (e.g. unit). Skip arg preparation — the lowering will emit a runtime error.
+            else => return,
         };
 
         try self.assignCallableArgProcInstsFromParams(
@@ -4685,7 +4687,9 @@ pub const Pass = struct {
         const proc_inst = result.getProcInst(proc_inst_id);
         const fn_mono = switch (result.monotype_store.getMonotype(proc_inst.fn_monotype)) {
             .func => |func| func,
-            else => unreachable,
+            // Upstream type error or unresolved dispatch can produce a non-func monotype
+            // (e.g. unit). Skip binding — the lowering will emit a runtime error.
+            else => return,
         };
 
         var actual_args = std.ArrayList(CIR.Expr.Idx).empty;
