@@ -2881,6 +2881,45 @@ pub fn runDevOnlyExpectStr(src: []const u8, expected_str: []const u8) !void {
     };
 }
 
+/// Run both dev and LLVM backends on the given source, compare their Str.inspect output.
+/// Skips the interpreter — focused on backend-to-backend comparison.
+pub fn runDevAndLlvmExpectStr(src: []const u8, expected_str: []const u8) !void {
+    const resources = try parseAndCanonicalizeExpr(test_allocator, src);
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    const inspect_expr = wrapInStrInspect(resources.module_env, resources.expr_idx) catch return error.EvaluatorMismatch;
+
+    const dev_str = devEvaluatorStr(test_allocator, resources.module_env, inspect_expr, resources.builtin_module.env) catch |err| {
+        std.debug.print("\nDev evaluator failed for '{s}': {}\n", .{ src, err });
+        return err;
+    };
+    defer test_allocator.free(dev_str);
+
+    const llvm_str = llvmEvaluatorStr(test_allocator, resources.module_env, inspect_expr, resources.builtin_module.env) catch |err| {
+        std.debug.print("\nLLVM evaluator failed for '{s}': {}\n", .{ src, err });
+        return err;
+    };
+    defer test_allocator.free(llvm_str);
+
+    // Compare dev output against expected
+    std.testing.expectEqualStrings(expected_str, dev_str) catch |err| {
+        std.debug.print(
+            "\nDev output mismatch for '{s}':\n  expected: {s}\n  got:      {s}\n",
+            .{ src, expected_str, dev_str },
+        );
+        return err;
+    };
+
+    // Compare LLVM output against expected
+    std.testing.expectEqualStrings(expected_str, llvm_str) catch |err| {
+        std.debug.print(
+            "\nLLVM output mismatch for '{s}':\n  expected: {s}\n  dev:      {s}\n  llvm:     {s}\n",
+            .{ src, expected_str, dev_str, llvm_str },
+        );
+        return err;
+    };
+}
+
 /// Parse and canonicalize an expression.
 /// Rewrite deferred numeric literals to match their inferred types
 /// This is similar to what ComptimeEvaluator does but for test expressions

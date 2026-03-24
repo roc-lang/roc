@@ -5,7 +5,6 @@
 //! memory correctly under leak-checking test allocators.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const builtins = @import("builtins");
 const Io = @import("io").Io;
 

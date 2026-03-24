@@ -12,6 +12,18 @@
 //! - Consumes the same LIR as the dev backend
 //! - Generates LLVM IR via Zig's llvm.Builder
 //! - Produces bitcode that can be compiled to native code via LLVM
+//!
+//! TODO: CLI integration
+//! The LLVM backend is currently only used via the evaluator (LlvmEvaluator)
+//! for the REPL and eval tests. It is NOT yet wired into the full CLI build
+//! pipeline. To complete this:
+//!   1. Wire cli_args.zig OptLevel.toBackend() to return .llvm for size/speed
+//!      (currently all three map to .dev)
+//!   2. Integrate into rocBuild()/rocRunDevShim() in src/cli/main.zig so that
+//!      --opt=size and --opt=speed use MonoLlvmCodeGen instead of the dev backend
+//!   3. Add test-cli coverage with --opt=speed/--opt=size flags
+//! See also: src/cli/cli_args.zig (OptLevel), src/cli/main.zig (rocBuild),
+//!           src/eval/test/llvm_backend_test.zig (focused LLVM backend tests)
 
 const std = @import("std");
 const builtin = @import("builtin");

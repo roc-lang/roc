@@ -97,6 +97,6 @@ test "eval tests" {
     std.testing.refAllDecls(@import("test/comptime_eval_test.zig"));
     std.testing.refAllDecls(@import("test/low_level_interp_test.zig"));
     std.testing.refAllDecls(@import("test/mono_emit_test.zig"));
-
+    std.testing.refAllDecls(@import("test/llvm_backend_test.zig"));
     std.testing.refAllDecls(@import("test/stack_test.zig"));
 }
