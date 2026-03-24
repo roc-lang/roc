@@ -132,7 +132,7 @@ fn writePackageIndex(ctx: *const RenderContext, gpa: Allocator, dir: std.fs.Dir)
     try renderSidebar(w, ctx, gpa, "");
 
     // Main content
-    try writeMainOpen(w);
+    try writeMainOpen(w, ctx, "");
     try w.writeAll("        <h1 class=\"module-name\">");
     try writeHtmlEscaped(w, ctx.package_docs.name);
     try w.writeAll("</h1>\n");
@@ -175,7 +175,7 @@ fn writeModulePage(ctx: *const RenderContext, gpa: Allocator, dir: std.fs.Dir, m
     try renderSidebar(w, ctx, gpa, "../");
 
     // Main content
-    try writeMainOpen(w);
+    try writeMainOpen(w, ctx, "../");
     try w.writeAll("        <h1 class=\"module-name\">");
     try writeHtmlEscaped(w, mod.name);
     if (mod.kind == .type_module) {
@@ -231,11 +231,17 @@ const menu_toggle_svg =
     \\</svg>
 ;
 
-fn writeMainOpen(w: Writer) !void {
+fn writeMainOpen(w: Writer, ctx: *const RenderContext, base: []const u8) !void {
     try w.writeAll("    <main>\n");
     try w.writeAll("        <button class=\"menu-toggle\" aria-label=\"Toggle sidebar\">");
     try w.writeAll(menu_toggle_svg);
     try w.writeAll("</button>\n");
+    try w.writeAll("        <form id=\"module-search-form\">\n");
+    try w.writeAll("            <input type=\"search\" id=\"module-search\" placeholder=\"Search Documentation\" autocomplete=\"off\" />\n");
+    try w.writeAll("            <ul id=\"search-type-ahead\" class=\"hidden\">\n");
+    try renderSearchEntries(w, ctx, base);
+    try w.writeAll("            </ul>\n");
+    try w.writeAll("        </form>\n");
 }
 
 fn writeFooter(w: Writer) !void {
@@ -588,13 +594,6 @@ fn renderSidebar(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []c
     try writeHtmlEscaped(w, ctx.package_docs.name);
     try w.writeAll("</a></h1>\n");
     try w.writeAll("        </div>\n");
-
-    try w.writeAll("        <form id=\"module-search-form\">\n");
-    try w.writeAll("            <input type=\"search\" id=\"module-search\" placeholder=\"Search...\" autocomplete=\"off\" />\n");
-    try w.writeAll("            <ul id=\"search-type-ahead\" class=\"hidden\">\n");
-    try renderSearchEntries(w, ctx, base);
-    try w.writeAll("            </ul>\n");
-    try w.writeAll("        </form>\n");
 
     try w.writeAll("        <div class=\"module-links-container\">\n");
     try w.writeAll("            <div class=\"module-links\">\n");
