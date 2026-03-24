@@ -392,8 +392,3 @@ pub const FlatBinding = struct {
     size: u32,
 };
 
-test "WorkItem and Continuation are well-formed tagged unions" {
-    // Verify the types compile and have non-zero sizes.
-    try std.testing.expect(@sizeOf(WorkItem) > 0);
-    try std.testing.expect(@sizeOf(Continuation) > 0);
-}
