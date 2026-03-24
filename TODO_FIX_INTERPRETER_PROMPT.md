@@ -4,6 +4,10 @@ You are debugging the Roc LIR interpreter at `src/eval/interpreter.zig`.
 This document lists all known outstanding bugs, how to reproduce them,
 and recommendations for fixing each one.
 
+**Important**: Fix root causes, not symptoms. Do not paper over bugs with
+fallbacks or workarounds in later pipeline phases (e.g. MIR→LIR or interpreter).
+If a bug originates in monomorphization, fix it there.
+
 ## Architecture Context
 
 The LIR interpreter uses a **WorkStack + ValueStack** continuation-passing
@@ -52,98 +56,168 @@ There are two test paths that exercise the interpreter:
 - `src/eval/test/helpers.zig` — `lirInterpreterEval`, `lirInterpreterInspectedStr`
 - `src/eval/test/parallel_runner.zig` — parallel test runner binary
 - `src/eval/test/eval_tests.zig` — consolidated eval test definitions
+- `src/mir/Monomorphize.zig` — monomorphization pass (type specialization)
+- `src/mir/Lower.zig` — CIR → MIR lowering
+- `src/mir/Monotype.zig` — monotype resolution from type variables
+- `src/lir/MirToLir.zig` — MIR → LIR lowering (literal creation, low-level ops)
+- `src/lir/TailRecursion.zig` — tail-call optimization pass
+
+### Resolved bugs (removed from this doc)
+
+- `list_append_stdin_uaf.roc` — now passes
+- `issue8866.roc` — now passes
 
 ---
 
-## fx `list_append_stdin_uaf.roc` — integer overflow
+## Monomorphization: wrong monotype for numeric literals in specialized functions
+
+This is the **root cause** of the `repeating pattern segfault` fx test failure,
+the U8/U16 large-value arithmetic hangs (30 skipped eval tests), and likely
+several other skipped eval tests involving non-Dec numeric types.
 
 ### Reproduce
 
+Minimal reproducer (`test/fx/test_recurse_u64.roc`):
+```roc
+app [main!] { pf: platform "./platform/main.roc" }
+import pf.Stdout
+
+count_down = |n| match n {
+    0 => "done"
+    _ => count_down(n - 1)
+}
+
+main! = || {
+    n : U64
+    n = 3
+    result = count_down(n)
+    Stdout.line!(result)
+}
+```
+
 ```sh
-# This test runs inside the IO spec test suite (a single Zig test that loops
-# over all .roc files). Run the suite and look for the file in output:
-zig build test -- --test-filter "fx platform IO spec tests (interpreter)"
+zig build roc && ./zig-out/bin/roc --opt=interpreter test/fx/test_recurse_u64.roc
+# Roc crashed: This Roc program overflowed its stack memory.
+```
+
+The same code with Dec (default numeric type) works correctly:
+```roc
+# This works — outputs "done"
+result = count_down(3)
 ```
 
 ### Symptoms
 
-Integer overflow panic (signal 6, exit code 134). The test:
-```roc
-main! = || {
-    lines = [].append(Stdin.line!())
-    List.for_each!(lines, |line| Stdout.line!(str(line)))
+Infinite recursion → stack overflow. The match `0 => ...` never matches because
+`n - 1` subtracts 10^18 (the Dec representation of 1) instead of 1.
+
+### Root cause: verified
+
+The monomorphization pass (`Monomorphize.zig`) assigns the wrong monotype to
+numeric literals inside polymorphic functions that are specialized for non-Dec
+types.
+
+**Verified execution trace** (from debug instrumentation):
+
+1. `count_down` is specialized for U64. Parameter `n` correctly gets monotype U64.
+
+2. The literal `1` in `n - 1` gets monotype **Dec** instead of U64.
+   - Confirmed via debug in `lowerInt` (MirToLir.zig):
+     ```
+     lowerInt: mono_idx=8, target_layout=u64, value=3   ← n=3, correct
+     lowerInt: mono_idx=14, target_layout=dec, value=1   ← literal 1, WRONG
+     ```
+
+3. `lowerInt` sees `target_layout=dec` for the literal `1`, so it correctly
+   (from its perspective) creates a `dec_literal` with value `1 * 10^18`.
+
+4. At runtime, `num_minus` reads both operands as U64 (8 bytes, from the first
+   arg's layout). The dec_literal's 16-byte value is truncated to 8 bytes,
+   yielding `1_000_000_000_000_000_000` instead of `1`.
+   - Confirmed: `numBinOp sub: a_u64=3, b_u64=1000000000000000000`
+
+5. Result: `3 - 10^18` wraps to a huge U64. The pattern `0` never matches.
+   Recursion continues until `call_depth` hits 1024 → stack overflow.
+
+### Where the wrong monotype originates
+
+The monotype does NOT come from the `type_var_seen` path in `resolveMonotype`
+(Lower.zig:3682). It comes from `lookupMonomorphizedExprMonotype` — the
+**monomorphization result itself** stores Dec for this expression.
+
+Confirmed via debug in `resolveMonotype`:
+```
+resolveMonotype via monomorphized: expr=10182, mono_tag=prim, prim=dec
+```
+
+The monomorphization stores expr monotypes via `recordCurrentExprMonotype`
+(Monomorphize.zig:4763). For function call arguments, this happens at line 4704:
+```zig
+// Monomorphize.zig ~line 4701-4704
+for (actual_args.items, 0..) |arg_expr_idx, i| {
+    const param_mono = result.monotype_store.getIdxSpanItem(fn_mono.args, i);
+    try self.bindCurrentExprTypeRoot(result, module_idx, arg_expr_idx, param_mono, proc_inst.fn_monotype_module_idx);
+    try self.recordCurrentExprMonotype(result, module_idx, arg_expr_idx, param_mono, proc_inst.fn_monotype_module_idx);
 }
 ```
 
-### Analysis
+The `param_mono` comes from the resolved function's (`minus`) monotype. If the
+`minus` dispatch resolves to `Dec, Dec -> Dec` instead of `U64, U64 -> U64`,
+then ALL arguments (including the literal `1`) get Dec monotype.
 
-The integer overflow is at an address in generated/interpreter code, not at
-`call_depth -= 1` (that bug was fixed). This suggests an arithmetic overflow
-in a different part of the interpreter — possibly in list capacity/length
-calculations or in the effectful function dispatch path.
+### Key code paths in the monomorphization
 
-The test involves:
-1. An effectful call (`Stdin.line!()`) producing a string
-2. `List.append` on an empty list with that string
-3. Iterating with `for_each!` and a closure
+1. **`scanExprChildren`** (Monomorphize.zig:1920): `.e_num` is in the no-op
+   case — numeric literals don't trigger any type binding during the scan phase.
 
-### Debugging recommendations
+2. **`exprUsesContextSensitiveNumericDefault`** (Monomorphize.zig:1772):
+   Returns `true` for `.e_num`, `.e_dec`, `.e_dec_small`. This causes
+   `resolveExprMonotypeIfExactResolved` to return `.none` (unresolved) for
+   numeric literals, deferring their type to the call-site binding.
 
-1. The `[].append(value)` pattern creates a list of capacity 1. Check if
-   `evalListAppend` or the underlying `roc_builtins.list.append` handles
-   the empty-list-to-singleton case correctly.
-2. Check whether the effectful call result (from `Stdin.line!()`) returns
-   a properly-sized value — size mismatch could cause overflow in memcpy
-   length calculations.
-3. The comment in the test says `[Stdin.line!()]` works but
-   `[].append(Stdin.line!())` doesn't — this points to a difference in how
-   list-literal vs append paths handle refcounted elements.
+3. **`inferDispatchProcInst`** (Monomorphize.zig:4554): This is where binop
+   dispatch (like `minus`) is resolved. It creates bindings from the actual
+   argument types to the template's parameter types. If the dispatch resolves
+   the wrong specialization (Dec instead of U64), all downstream monotypes
+   will be wrong.
 
----
+4. **`fromTypeVar`** (Monotype.zig:432): When a flex type variable with a
+   numeral constraint has no binding, it defaults to Dec (line 455-456):
+   ```zig
+   if (hasNumeralConstraint(types_store, flex.constraints))
+       return self.primIdx(.dec);
+   ```
 
-## fx `issue8866.roc` — crash with opaque type containing Str
+### What needs to be fixed
 
-### Reproduce
+The monomorphization's dispatch resolution for `n - 1` inside `count_down<U64>`
+must resolve `minus` as `U64, U64 -> U64`, not `Dec, Dec -> Dec`. The parameter
+`n` is known to be U64 at this point, and that should propagate to the operator
+dispatch and hence to the literal argument.
 
-```sh
-# Runs inside the IO spec test suite — look for issue8866.roc in output:
-zig build test -- --test-filter "fx platform IO spec tests (interpreter)"
-```
+The fix should be in `Monomorphize.zig`, likely in how `inferDispatchProcInst`
+or its callers determine the function monotype for binary operators when one
+operand has a known concrete type and the other is a numeral literal.
 
-### Symptoms
+### What NOT to do
 
-Exit code 134 (crash). The test:
-```roc
-MyRecord := { name : Str }.{}
+- Do NOT fix this in `lowerInt` / `lowerDec` (MirToLir.zig) by checking the
+  surrounding operation's layout. That masks the root cause.
+- Do NOT fix this in the interpreter's `numBinOp` by detecting mismatched
+  layouts at runtime. Same reason.
+- There is currently a `lowerDec` function in MirToLir.zig (line 2736) that
+  was added during investigation as defense-in-depth. It converts Dec literals
+  to integers when the monotype says integer. This should be removed once
+  the root cause is fixed in Monomorphize.zig, since it should never be needed.
 
-main! = || {
-    result_init : List(MyRecord)
-    result_init = []
-    var $result = result_init
-    $result = List.append($result, { name: "first" })
-    $result = List.append($result, { name: "second" })
-    Stdout.line!("Done: ${List.len($result).to_str()}")
-}
-```
+### Tests this will fix
 
-### Analysis
-
-This involves `List.append` on a list of opaque types that contain strings.
-The opaque type `MyRecord` wraps `{ name : Str }`. The crash likely occurs
-because:
-1. The opaque type's layout size/alignment is miscalculated, OR
-2. The `List.append` path doesn't properly handle the indirection of opaque
-   types when copying/increfing elements, OR
-3. The mutable variable `$result` reassignment doesn't properly decref the
-   old list before replacing it.
-
-### Debugging recommendations
-
-1. Check layout resolution for opaque types wrapping structs with strings.
-2. Look at how `cell_store` (mutable variable update) handles the old value —
-   does it decref before overwriting?
-3. Try a simpler reproduction: `List.append([], { name: "hello" })` in the
-   eval test suite to isolate whether it's the opaque wrapper or the mutation.
+- **fx test**: `repeating pattern segfault (interpreter)`
+- **Skipped eval tests**: U8/U16 large-value arithmetic (30 tests) — same root
+  cause: numeric literals in arithmetic expressions get Dec monotype when the
+  operation is specialized for U8/U16, causing 10^18 values that infinite-loop.
+- Likely also: `List of typed ints` (2 tests), `U128 subtraction` (1 test),
+  and potentially others involving non-Dec numeric operations.
 
 ---
 
@@ -157,55 +231,67 @@ zig build test -- --test-filter "all_syntax_test.roc prints expected output (int
 
 ### Symptoms
 
-Most output is correct, then: `Roc crashed: Called a function that could not be resolved`
+Actual output vs expected:
+```
+Hello, world!                                    ← correct
+Hello, world! (using alias)                      ← correct
+{ diff: 5, div: 2, ... }                         ← correct (number_operators)
+{}                                                ← WRONG: should be { bool_and_keyword: False, ... }
+{}                                                ← WRONG: should be "One Two"
+{}                                                ← WRONG: should be "Three Four"
+The color is red.                                 ← correct
+{}                                                ← WRONG: should be 78
+Success                                           ← correct
+Line 1 / Line 2 / Line 3                         ← correct
+Unicode escape sequence: [NBSP]                   ← correct
+This is an effectful function!                    ← correct
+Roc crashed: Called a function that could not be resolved  ← CRASH
+```
 
-### Analysis
+Two issues:
+1. **`Str.inspect` returns `{}` for many types** (Bool records, Str, U64)
+2. **Crash after "This is an effectful function!"** — the next call is
+   `question_postfix(["1", "not a number", "100"])` which uses the `?` operator.
 
-The interpreter can evaluate most of the syntax test but fails on a specific
-function call. This typically means a `proc_call` references a `ProcSpec`
-that the interpreter can't find — either the proc wasn't lowered, the
-specialization ID is wrong, or it's a higher-order function passed as a
-value that the interpreter doesn't resolve correctly.
+### Analysis — crash
+
+The crash message is generated in `MirToLir.zig:3806`. When a `lookup` callee
+has no lambda-set resolution, a `crash` LIR expression is emitted:
+```zig
+if (func_mir_expr == .lookup) {
+    const msg = try self.lir_store.strings.insert(self.allocator, "Called a function that could not be resolved");
+    return self.lir_store.addExpr(.{ .crash = ... }, region);
+}
+```
+
+This is a **MIR→LIR lowering issue**, not an interpreter bug. The function call
+in `question_postfix` (which uses `.first()` and `I64.from_str()` with the `?`
+try operator) doesn't get its lambda set resolved during lowering.
+
+The `question_postfix` function:
+```roc
+question_postfix = |strings| {
+    first_str = strings.first()?
+    first_num = I64.from_str(first_str)?
+    Ok(first_num)
+}
+```
+
+### Analysis — Str.inspect returning `{}`
+
+`Str.inspect` works for some record types (like `number_operators` result) but
+returns `{}` for others (Bool records, bare Str values, U64). This is likely a
+separate issue in how `str_inspect` is expanded during CIR→MIR lowering for
+certain types.
 
 ### Debugging recommendations
 
-1. Run the test and check which line of output is last before the crash to
-   narrow down which expression fails.
-2. Search for "could not be resolved" in `interpreter.zig` to find where
-   this error message is generated.
-3. Check whether the failing function is a closure, a module function, or
-   a platform-provided function.
-
----
-
-## fx `repeating pattern segfault` — stack overflow
-
-### Reproduce
-
-```sh
-zig build test -- --test-filter "repeating pattern segfault (interpreter)"
-```
-
-### Symptoms
-
-```
-Roc crashed: This Roc program overflowed its stack memory.
-```
-Output before crash: `11-22` (partial expected output).
-
-### Analysis
-
-This is a recursion or pattern-matching test that triggers stack overflow.
-Since the LIR interpreter uses `call_depth` with a max of 1024, this either:
-1. Legitimately exceeds the recursion limit (may need higher limit), OR
-2. Has infinite recursion due to incorrect pattern matching or join point handling.
-
-### Debugging recommendations
-
-1. Read the test file `test/fx/repeating_pattern_segfault.roc` (or similar
-   name — glob for it) to understand what it does.
-2. If the program is tail-recursive, check whether the LIR lowering produces
-   join points that the interpreter handles correctly (jump → body re-execution).
+1. For the crash: check why `question_postfix`'s internal function calls
+   (`.first()`, `I64.from_str()`) don't get lambda set resolution. The `?`
+   operator desugars to pattern matching on `[Ok, Err]`, so the issue may be
+   in how the try operator's function calls are lowered.
+2. For `Str.inspect` `{}`: compare the MIR output for `number_operators` (works)
+   vs `boolean_operators` (broken) to find why inspection fails for Bool fields.
 
 ---
 
@@ -219,20 +305,164 @@ zig build test -- --test-filter "string interpolation type mismatch (interpreter
 
 ### Symptoms
 
-Test expects output containing `"two:"` but it's missing from stdout.
+Test runs `test/fx/num_method_call.roc` with `--allow-errors`:
+```roc
+main! = || {
+    one : U8
+    one = 1
+    two : U8
+    two = one.plus(one)
+    Stdout.line!("two: ${two}")
+}
+```
+
+The test expects:
+- Exit code 0
+- stderr contains TYPE MISMATCH and COMPTIME EVAL ERROR
+- stdout contains `"two:"`
+
+Actual: exit code 0, stderr errors are correct, but **stdout is empty**.
 
 ### Analysis
 
-String interpolation compiles to `str_concat` with parts that include
-`int_to_str`, `float_to_str`, etc. The "type mismatch" aspect suggests
-the interpolation of a non-string value (like a number or custom type)
-doesn't produce the expected string.
+The program produces no stdout because the COMPTIME EVAL ERROR prevents the
+program from running:
+```
+COMPTIME EVAL ERROR: Numeric literal cannot be used as this type
+  (type doesn't support from_numeral)
+```
 
-### Debugging recommendations
+This is the same root cause as the monomorphization bug above: `U8` numeric
+literals don't resolve correctly. The `one = 1` definition fails comptime
+evaluation because the literal `1` can't be evaluated as `U8`.
 
-1. Read the test's `.roc` file to see what interpolation expression is used.
-2. Check `evalStrConcat` and the `str_concat_collect` continuation.
-3. Check `int_to_str` / `float_to_str` / `dec_to_str` handlers.
+### Fix
+
+This should be fixed by the same monomorphization fix as the `repeating pattern
+segfault` bug. Once numeric literals correctly resolve to the target type (U8
+in this case), the comptime evaluator should be able to evaluate `one = 1`.
+
+---
+
+## Skipped Eval Tests (SKIP_ALL — all backends)
+
+These are tests in `src/eval/test/eval_tests.zig` that are skipped across **all**
+backends (interpreter, dev, wasm, llvm). Total: **80 tests** in 10 categories.
+
+**Workflow**: Fix one category at a time. After fixing, unskip the tests, run them
+to verify, commit, then **remove the resolved section from this document**.
+
+---
+
+### U8/U16 large-value arithmetic (30 tests, lines 3354–3792)
+
+Some of these hang on x86_64-linux CI (infinite loop in interpreter).
+
+| Category | Tests |
+|----------|-------|
+| U8 plus  | `200+50`, `255+0`, `128+127` |
+| U8 minus | `200-50`, `255-100`, `240-240` |
+| U8 times | `15*17`, `128*1`, `16*15` |
+| U8 div_by | `240//2`, `255//15`, `200//10` |
+| U8 rem_by | `200%13`, `255%16`, `128%7` |
+| U16 plus | `40000+20000`, `65535+0`, `32768+32767` |
+| U16 minus | `50000-10000`, `65535-30000`, `50000-50000` |
+| U16 times | `256*255`, `32768*1`, `255*256` |
+| U16 div_by | `60000//3`, `65535//257`, `40000//128` |
+| U16 rem_by | `50000%128`, `65535%256`, `40000%99` |
+
+**Root cause**: Same monomorphization bug as `repeating pattern segfault`.
+Numeric literals in arithmetic expressions get Dec monotype when the operation
+is specialized for U8/U16. The Dec-scaled values (10^18 × n) cause arithmetic
+to produce wrong results, which can infinite-loop in comparison-based operations.
+
+---
+
+### U128 subtraction (1 test, line 4285)
+
+- `U128: minus: 1e29 - 1e29` → expected 0
+
+---
+
+### Narrowing/wrapping numeric conversions (8 tests, lines 7959–7979)
+
+Crash across all backends:
+- `U64 to U8 wrapping` (300→44), `U64 to I8 wrapping` (200→-56)
+- `I64 to U8 wrapping` (256→0), `I64 to I8 wrapping` (300→44)
+- `U32 to U8 wrapping` (300→44)
+- `I128 to I8 wrapping` (300→44), `U128 to U8 wrapping` (300→44)
+- Signed-to-unsigned: `I64 to U64`, `I64 to U32`, `I64 to U16`
+
+---
+
+### Float-to-int / float narrowing conversions (13 tests, lines 8045–8057)
+
+Crash across all backends:
+- F64 → I64, I32, I16, I8, U64, U32, U16, U8
+- F64 → F32
+- F32 → I64, I32, U64, U32
+
+---
+
+### Dec-to-int / Dec-to-F32 conversions (11 tests, lines 8066–8076)
+
+Crash across all backends:
+- Dec → I64, I32, I16, I8, U64, U32, U16, U8, I128, U128, F32
+
+---
+
+### List of typed ints (2 tests, lines 8127–8148)
+
+- `list of I32 len` — `[1.I32, 2.I32, 3.I32].len()`
+- `list of U8 len` — `[10.U8, 20.U8, 30.U8].len()`
+
+**Root cause**: Likely same monomorphization bug — typed integer literals in
+list context get wrong monotype.
+
+---
+
+### F64 equality (1 test, line 8193)
+
+- `1.0.F64 == 1.0.F64` → reaches unreachable code
+
+---
+
+### I128/U128 shift operations (2 tests, lines 8250–8251)
+
+- `shift left I128` — `1.I128.shift_left_by(10.U8)` → 1024
+- `shift left U128` — `1.U128.shift_left_by(16.U8)` → 65536
+
+---
+
+### Str.contains (2 tests, lines 8497–8498)
+
+Causes infinite loop in interpreter:
+- `Str.contains("hello world", "world")` → true
+- `Str.contains("hello world", "xyz")` → false
+
+---
+
+### Known compiler bugs (3 tests, lines 7752–7797)
+
+These are upstream compiler/specialization bugs, not interpreter-specific:
+- `early return: ? in closure passed to List.fold`
+- `polymorphic tag union payload substitution - extract payload`
+- `polymorphic tag union payload substitution - multiple type vars`
+
+---
+
+## WIP: `lowerDec` in MirToLir.zig
+
+During investigation of the monomorphization bug, a `lowerDec` function was
+added at `MirToLir.zig:2736`. It converts Dec literals to the correct integer
+type when the monotype says integer. The `.dec` case at line 2578 now calls
+`self.lowerDec(v, mono_idx, region)` instead of directly emitting `dec_literal`.
+
+**This is a workaround, not a fix.** Once the monomorphization root cause is
+fixed, `lowerDec` should be unnecessary because the monotype will already be
+correct. At that point, either:
+- Remove `lowerDec` and revert to the original `self.lir_store.addExpr(.{ .dec_literal = v.num }, region)`
+- Or keep it as defense-in-depth (but document it as such)
 
 ---
 
