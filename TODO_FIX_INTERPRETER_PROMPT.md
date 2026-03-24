@@ -11,20 +11,21 @@ If a bug originates in monomorphization, fix it there.
 ## Architecture Context
 
 The LIR interpreter uses a **WorkStack + ValueStack** continuation-passing
-architecture. The main eval loop is `evalStackSafe` (~line 3685). Each
-iteration pops a work item and either:
+architecture. All evaluation goes through a single stack-safe engine:
+
+- `eval` / `evalStackSafe` — evaluate an expression
+- `evalProcStackSafe` — call a proc (used by `evalEntrypoint`, sort comparator)
+- Both seed the work stack then delegate to `runWorkLoop`
+
+The main loop (`runWorkLoop`) pops work items and dispatches:
 
 - `eval_expr` → calls `scheduleExprEval` to push sub-work
 - `eval_cf_stmt` → calls `scheduleCFStmtEval` for control-flow statements
 - `apply_continuation` → calls `applyContinuation` to consume values
 
-Function calls go through `enterFunction` which increments `call_depth`,
-pushes a `call_cleanup` continuation, binds params, and schedules the body.
-
-There are also **two legacy recursive paths** that bypass the stack-safe engine:
-- `callProcSpec` → `evalCFStmt`: used by `evalEntrypoint` and sort comparators
-- These manage `call_depth` via `defer` and call `eval()` for sub-expressions,
-  which re-enters `evalStackSafe`
+Function calls go through `enterFunction` which pushes a `call_cleanup`
+continuation, binds params, and schedules the body. The caller's work loop
+processes the scheduled items — no Zig recursion.
 
 ### Test Infrastructure
 

@@ -636,9 +636,9 @@ pub const LirInterpreter = struct {
     // Expression evaluation
 
     /// Evaluate a LIR expression, returning its value.
-    /// Delegates to the stack-safe evaluation engine.
+    /// Thin wrapper around evalStackSafe that initializes eval state on the first call.
     pub fn eval(self: *LirInterpreter, initial_expr_id: LirExprId) Error!EvalResult {
-        // Reset static buffer on first eval call only (avoid resetting during recursion)
+        // Initialize eval state on first call (not on re-entrant calls from evalLowLevel etc.)
         if (!self.eval_active) {
             self.roc_env.resetForEval();
             self.eval_active = true;
@@ -3566,10 +3566,13 @@ pub const LirInterpreter = struct {
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    //  Stack-safe eval engine (Phase 3)
+    //  Stack-safe eval engine
     //
-    //  Uses explicit work_stack + value_stack instead of Zig recursion.
-    //  Lives alongside the existing recursive eval() — not a replacement yet.
+    //  All evaluation goes through an explicit work_stack + value_stack.
+    //  Entry points:
+    //    evalStackSafe     — evaluate an expression
+    //    evalProcStackSafe — call a proc (used by evalEntrypoint, sort)
+    //  Both seed the work stack then delegate to runWorkLoop.
     // ═══════════════════════════════════════════════════════════════════
 
     const Continuation = work_stack.Continuation;
@@ -4668,7 +4671,8 @@ pub const LirInterpreter = struct {
 
     // ── Internal helpers for the stack-safe engine ──
 
-    /// Enter a function call: save state, bind params, schedule body.
+    /// Enter a function call: push call_cleanup, bind params, schedule body.
+    /// Does not run the body — the caller's work loop processes the scheduled items.
     fn enterFunction(self: *LirInterpreter, proc_spec: lir.LirProcSpec, args: []const Value) Error!void {
         if (self.call_depth >= max_call_depth) {
             return self.triggerCrash(stack_overflow_message);
@@ -4699,8 +4703,8 @@ pub const LirInterpreter = struct {
         try self.pushWork(.{ .eval_cf_stmt = proc_spec.body });
     }
 
-    /// Call a proc through the stack-safe engine. Drop-in replacement for the
-    /// legacy callProcSpec — used by evalEntrypoint and evalListSortWith.
+    /// Call a proc and run to completion, returning the result.
+    /// Used by evalEntrypoint (host entry) and evalListSortWith (sort comparator).
     fn evalProcStackSafe(self: *LirInterpreter, proc_spec: lir.LirProcSpec, args: []const Value) Error!EvalResult {
         const outer_work_len = self.work_stack.items.len;
         const saved_unwinding = self.unwinding;
