@@ -2201,17 +2201,17 @@ pub const tests = [_]TestCase{
     .{ .name = "!Bool.False returns True", .source = "!Bool.False", .expected = .{ .bool_val = true } },
 
     // --- from eval_test.zig: dev only tests ---
-    .{ .name = "dev only: Bool.True formats as True", .source = "Bool.True", .expected = .{ .dev_only_str = "True" } },
-    .{ .name = "dev only: Bool.False formats as False", .source = "Bool.False", .expected = .{ .dev_only_str = "False" } },
-    .{ .name = "dev only: Bool.not(Bool.True) formats as False", .source = "Bool.not(Bool.True)", .expected = .{ .dev_only_str = "False" } },
-    .{ .name = "dev only: Bool.not(Bool.False) formats as True", .source = "Bool.not(Bool.False)", .expected = .{ .dev_only_str = "True" } },
-    .{ .name = "dev only: Bool.not(False) formats as True", .source = "Bool.not(False)", .expected = .{ .dev_only_str = "True" } },
-    .{ .name = "dev only: !Bool.True formats as False", .source = "!Bool.True", .expected = .{ .dev_only_str = "False" } },
-    .{ .name = "dev only: !Bool.False formats as True", .source = "!Bool.False", .expected = .{ .dev_only_str = "True" } },
-    .{ .name = "dev only: nested List.append U32", .source = "List.append(List.append([], 1.U32), 2.U32)", .expected = .{ .dev_only_str = "[1, 2]" } },
-    .{ .name = "dev only: U32 literal", .source = "15.U32", .expected = .{ .dev_only_str = "15" } },
-    .{ .name = "dev only: U32 comparison", .source = "1.U32 <= 5.U32", .expected = .{ .dev_only_str = "True" } },
-    .{ .name = "dev only: U32 addition", .source = "1.U32 + 2.U32", .expected = .{ .dev_only_str = "3" } },
+    .{ .name = "dev only: Bool.True formats as True", .source = "Bool.True", .expected = .{ .inspect_str = "True" }, .skip = .{ .interpreter = true, .wasm = true } },
+    .{ .name = "dev only: Bool.False formats as False", .source = "Bool.False", .expected = .{ .inspect_str = "False" }, .skip = .{ .interpreter = true, .wasm = true } },
+    .{ .name = "dev only: Bool.not(Bool.True) formats as False", .source = "Bool.not(Bool.True)", .expected = .{ .inspect_str = "False" }, .skip = .{ .interpreter = true, .wasm = true } },
+    .{ .name = "dev only: Bool.not(Bool.False) formats as True", .source = "Bool.not(Bool.False)", .expected = .{ .inspect_str = "True" }, .skip = .{ .interpreter = true, .wasm = true } },
+    .{ .name = "dev only: Bool.not(False) formats as True", .source = "Bool.not(False)", .expected = .{ .inspect_str = "True" }, .skip = .{ .interpreter = true, .wasm = true } },
+    .{ .name = "dev only: !Bool.True formats as False", .source = "!Bool.True", .expected = .{ .inspect_str = "False" }, .skip = .{ .interpreter = true, .wasm = true } },
+    .{ .name = "dev only: !Bool.False formats as True", .source = "!Bool.False", .expected = .{ .inspect_str = "True" }, .skip = .{ .interpreter = true, .wasm = true } },
+    .{ .name = "dev only: nested List.append U32", .source = "List.append(List.append([], 1.U32), 2.U32)", .expected = .{ .inspect_str = "[1, 2]" }, .skip = .{ .interpreter = true, .wasm = true } },
+    .{ .name = "dev only: U32 literal", .source = "15.U32", .expected = .{ .inspect_str = "15" }, .skip = .{ .interpreter = true, .wasm = true } },
+    .{ .name = "dev only: U32 comparison", .source = "1.U32 <= 5.U32", .expected = .{ .inspect_str = "True" }, .skip = .{ .interpreter = true, .wasm = true } },
+    .{ .name = "dev only: U32 addition", .source = "1.U32 + 2.U32", .expected = .{ .inspect_str = "3" }, .skip = .{ .interpreter = true, .wasm = true } },
     .{
         .name = "dev only: while loop increment U32",
         .source =
@@ -2225,7 +2225,8 @@ pub const tests = [_]TestCase{
         \\    current
         \\}
         ,
-        .expected = .{ .dev_only_str = "6" },
+        .expected = .{ .inspect_str = "6" },
+        .skip = .{ .interpreter = true, .wasm = true },
     },
     .{
         .name = "dev only: while loop sum U32",
@@ -2242,7 +2243,8 @@ pub const tests = [_]TestCase{
         \\    sum
         \\}
         ,
-        .expected = .{ .dev_only_str = "15" },
+        .expected = .{ .inspect_str = "15" },
+        .skip = .{ .interpreter = true, .wasm = true },
     },
 
     // --- from eval_test.zig: Str operations ---
@@ -2343,10 +2345,10 @@ pub const tests = [_]TestCase{
     },
 
     // --- from eval_test.zig: dev only List/Str tests ---
-    .{ .name = "dev: List.last returns Ok", .source = "List.last([1, 2, 3])", .expected = .{ .dev_only_str = "Ok(3.0)" } },
-    .{ .name = "dev: List.first returns Ok", .source = "List.first([10, 20, 30])", .expected = .{ .dev_only_str = "Ok(10.0)" } },
-    .{ .name = "dev: List.first empty returns Err", .source = "List.first([])", .expected = .{ .dev_only_str = "Err(ListWasEmpty)" } },
-    .{ .name = "dev: Str.from_utf8 Ok", .source = "Str.from_utf8([72, 105])", .expected = .{ .dev_only_str = "Ok(\"Hi\")" } },
+    .{ .name = "dev: List.last returns Ok", .source = "List.last([1, 2, 3])", .expected = .{ .inspect_str = "Ok(3.0)" }, .skip = .{ .interpreter = true, .wasm = true } },
+    .{ .name = "dev: List.first returns Ok", .source = "List.first([10, 20, 30])", .expected = .{ .inspect_str = "Ok(10.0)" }, .skip = .{ .interpreter = true, .wasm = true } },
+    .{ .name = "dev: List.first empty returns Err", .source = "List.first([])", .expected = .{ .inspect_str = "Err(ListWasEmpty)" }, .skip = .{ .interpreter = true, .wasm = true } },
+    .{ .name = "dev: Str.from_utf8 Ok", .source = "Str.from_utf8([72, 105])", .expected = .{ .inspect_str = "Ok(\"Hi\")" }, .skip = .{ .interpreter = true, .wasm = true } },
     .{
         .name = "dev: polymorphic sum in block U64",
         .source =
@@ -2355,13 +2357,14 @@ pub const tests = [_]TestCase{
         \\    U64.to_str(sum(240, 20))
         \\}
         ,
-        .expected = .{ .dev_only_str = "\"260\"" },
+        .expected = .{ .inspect_str = "\"260\"" },
+        .skip = .{ .interpreter = true, .wasm = true },
     },
-    .{ .name = "dev: List.contains int", .source = "List.contains([1, 2, 3, 4, 5], 3)", .expected = .{ .dev_only_str = "True" } },
-    .{ .name = "dev: List.any inline true", .source = "List.any([1, 2, 3], |x| x == 2)", .expected = .{ .dev_only_str = "True" } },
-    .{ .name = "dev: List.any inline false", .source = "List.any([1, 2, 3], |x| x == 5)", .expected = .{ .dev_only_str = "False" } },
-    .{ .name = "dev: List.any always true", .source = "List.any([1, 2, 3], |_x| True)", .expected = .{ .dev_only_str = "True" } },
-    .{ .name = "dev: List.any typed elements", .source = "List.any([1.I64, 2.I64, 3.I64], |_x| True)", .expected = .{ .dev_only_str = "True" } },
+    .{ .name = "dev: List.contains int", .source = "List.contains([1, 2, 3, 4, 5], 3)", .expected = .{ .inspect_str = "True" }, .skip = .{ .interpreter = true, .wasm = true } },
+    .{ .name = "dev: List.any inline true", .source = "List.any([1, 2, 3], |x| x == 2)", .expected = .{ .inspect_str = "True" }, .skip = .{ .interpreter = true, .wasm = true } },
+    .{ .name = "dev: List.any inline false", .source = "List.any([1, 2, 3], |x| x == 5)", .expected = .{ .inspect_str = "False" }, .skip = .{ .interpreter = true, .wasm = true } },
+    .{ .name = "dev: List.any always true", .source = "List.any([1, 2, 3], |_x| True)", .expected = .{ .inspect_str = "True" }, .skip = .{ .interpreter = true, .wasm = true } },
+    .{ .name = "dev: List.any typed elements", .source = "List.any([1.I64, 2.I64, 3.I64], |_x| True)", .expected = .{ .inspect_str = "True" }, .skip = .{ .interpreter = true, .wasm = true } },
     .{
         .name = "dev: polymorphic predicate comparison",
         .source =
@@ -2370,7 +2373,8 @@ pub const tests = [_]TestCase{
         \\    List.any([-1, 0, 1], is_positive)
         \\}
         ,
-        .expected = .{ .dev_only_str = "True" },
+        .expected = .{ .inspect_str = "True" },
+        .skip = .{ .interpreter = true, .wasm = true },
     },
     .{
         .name = "dev: polymorphic comparison lambda direct",
@@ -2380,7 +2384,8 @@ pub const tests = [_]TestCase{
         \\    is_positive(5)
         \\}
         ,
-        .expected = .{ .dev_only_str = "True" },
+        .expected = .{ .inspect_str = "True" },
+        .skip = .{ .interpreter = true, .wasm = true },
     },
     .{
         .name = "dev: polymorphic comparison lambda List.any",
@@ -2390,9 +2395,10 @@ pub const tests = [_]TestCase{
         \\    List.any([1, 2, 3], gt_zero)
         \\}
         ,
-        .expected = .{ .dev_only_str = "True" },
+        .expected = .{ .inspect_str = "True" },
+        .skip = .{ .interpreter = true, .wasm = true },
     },
-    .{ .name = "dev: List.any inline lambda", .source = "List.any([1, 2, 3], |x| x > 0)", .expected = .{ .dev_only_str = "True" } },
+    .{ .name = "dev: List.any inline lambda", .source = "List.any([1, 2, 3], |x| x > 0)", .expected = .{ .inspect_str = "True" }, .skip = .{ .interpreter = true, .wasm = true } },
     .{
         .name = "dev: for loop early return",
         .source =
@@ -2406,7 +2412,8 @@ pub const tests = [_]TestCase{
         \\    f([1, 2, 3])
         \\}
         ,
-        .expected = .{ .dev_only_str = "True" },
+        .expected = .{ .inspect_str = "True" },
+        .skip = .{ .interpreter = true, .wasm = true },
     },
     .{
         .name = "dev: for loop closure early return",
@@ -2421,7 +2428,8 @@ pub const tests = [_]TestCase{
         \\    f([1, 2, 3], |_x| True)
         \\}
         ,
-        .expected = .{ .dev_only_str = "True" },
+        .expected = .{ .inspect_str = "True" },
+        .skip = .{ .interpreter = true, .wasm = true },
     },
     .{
         .name = "dev: local any-style HOF equality predicate",
@@ -2436,7 +2444,8 @@ pub const tests = [_]TestCase{
         \\    f([1, 2, 3], |x| x == 2)
         \\}
         ,
-        .expected = .{ .dev_only_str = "True" },
+        .expected = .{ .inspect_str = "True" },
+        .skip = .{ .interpreter = true, .wasm = true },
     },
     .{
         .name = "dev: inline any-style HOF always true",
@@ -2448,7 +2457,8 @@ pub const tests = [_]TestCase{
         \\    False
         \\})([1, 2, 3], |_x| True)
         ,
-        .expected = .{ .dev_only_str = "True" },
+        .expected = .{ .inspect_str = "True" },
+        .skip = .{ .interpreter = true, .wasm = true },
     },
 
     // --- from eval_test.zig: polymorphic function tests ---

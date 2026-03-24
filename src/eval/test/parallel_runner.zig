@@ -84,7 +84,6 @@ pub const TestCase = struct {
         err_val: anyerror,
         problem: void,
         type_mismatch_crash: void,
-        dev_only_str: []const u8,
         inspect_str: []const u8,
 
         /// Returns the expected value as i128 for integer variant comparison.
@@ -397,40 +396,46 @@ const BackendResult = struct {
     },
 };
 
-/// Compare all backend Str.inspect results. Returns null if they all agree, or an error message.
+/// Compare all backend Str.inspect results. Returns null if all non-skipped backends
+/// ran successfully and agree, or an error message describing any failures or mismatches.
 fn compareBackendResults(
     allocator: std.mem.Allocator,
     backends: []const BackendResult,
 ) ?[]const u8 {
-    // Collect all successful results
-    var ok_count: usize = 0;
-    var first_ok: ?[]const u8 = null;
+    // Any non-skipped backend error is a failure.
+    var has_error = false;
     for (backends) |br| {
-        if (br.value == .ok) {
-            ok_count += 1;
-            if (first_ok == null) first_ok = br.value.ok;
+        if (br.value == .err and !std.mem.eql(u8, br.value.err, "skipped")) {
+            has_error = true;
+            break;
         }
     }
 
-    if (ok_count < 2) return null; // can't compare with fewer than 2 successes
-
-    // All backends produce Str.inspect output — direct byte comparison is correct.
+    // Collect all successful results
+    var first_ok: ?[]const u8 = null;
     var mismatch = false;
     for (backends) |br| {
         if (br.value == .ok) {
-            if (!std.mem.eql(u8, first_ok.?, br.value.ok)) {
+            if (first_ok == null) {
+                first_ok = br.value.ok;
+            } else if (!std.mem.eql(u8, first_ok.?, br.value.ok)) {
                 mismatch = true;
-                break;
             }
         }
     }
 
-    if (!mismatch) return null;
+    if (!has_error and !mismatch) return null;
 
-    // Build mismatch message (exclude skipped backends)
+    // Build failure message (exclude skipped backends)
     var msg_buf: std.ArrayListUnmanaged(u8) = .empty;
     const writer = msg_buf.writer(allocator);
-    writer.print("Backend mismatch:", .{}) catch {};
+    if (has_error and mismatch) {
+        writer.print("Backend error + mismatch:", .{}) catch {};
+    } else if (has_error) {
+        writer.print("Backend error:", .{}) catch {};
+    } else {
+        writer.print("Backend mismatch:", .{}) catch {};
+    }
     for (backends) |br| {
         switch (br.value) {
             .ok => |s| writer.print(" {s}='{s}'", .{ br.name, s }) catch {},
@@ -441,7 +446,7 @@ fn compareBackendResults(
             },
         }
     }
-    return msg_buf.toOwnedSlice(allocator) catch "Backend mismatch (OOM building details)";
+    return msg_buf.toOwnedSlice(allocator) catch "Backend failure (OOM building details)";
 }
 
 //
@@ -481,38 +486,51 @@ fn hasAnySkip(skip: TestCase.Skip) bool {
 
 fn runSingleTestInner(allocator: std.mem.Allocator, tc: TestCase) !TestOutcome {
     return switch (tc.expected) {
-        // Normal value tests: interpret, check value, compare all backends
-        .i64_val, .u8_val, .u16_val, .u32_val, .u64_val, .u128_val, .i8_val, .i16_val, .i32_val, .i128_val, .bool_val, .str_val, .f32_val, .f64_val, .dec_val => runNormalTest(allocator, tc.source, tc.expected, tc.skip),
-        // Special tests with unique flows
+        // All value-producing tests go through one unified path.
+        .i64_val, .u8_val, .u16_val, .u32_val, .u64_val, .u128_val,
+        .i8_val, .i16_val, .i32_val, .i128_val,
+        .bool_val, .str_val, .f32_val, .f64_val, .dec_val,
+        .inspect_str,
+        => runValueTest(allocator, tc.source, tc.expected, tc.skip),
+        // Special test flows (unchanged)
         .err_val => |expected_err| runTestError(allocator, tc.source, expected_err),
         .problem => runTestProblem(allocator, tc.source),
         .type_mismatch_crash => runTestTypeMismatchCrash(allocator, tc.source),
-        .dev_only_str => |expected_str| runTestDevOnlyStr(allocator, tc.source, expected_str, tc.skip),
-        .inspect_str => |expected_str| runTestInspectStr(allocator, tc.source, expected_str, tc.skip),
     };
 }
 
-/// Unified test function for all value-producing tests.
-/// Parses, interprets (via LIR pipeline), checks the value against expected,
-/// then compares all backends via Str.inspect.
-fn runNormalTest(allocator: std.mem.Allocator, src: []const u8, expected: TestCase.Expected, skip: TestCase.Skip) !TestOutcome {
+/// Unified test function for all value-producing tests (primitive values and inspect_str).
+/// 1. For typed-value tests: runs interpreter typed-value pre-check
+/// 2. Runs ALL non-skipped backends via Str.inspect
+/// 3. Checks cross-backend agreement (all must succeed and match)
+/// 4. For inspect_str tests: also checks each backend against the expected string
+fn runValueTest(allocator: std.mem.Allocator, src: []const u8, expected: TestCase.Expected, skip: TestCase.Skip) !TestOutcome {
     const resources = try parseAndCanonicalizeExpr(allocator, src);
     defer cleanupResources(allocator, resources);
 
-    var fe_timings = EvalTimings{
+    var timings = EvalTimings{
         .parse_ns = resources.parse_ns,
         .canonicalize_ns = resources.canonicalize_ns,
         .typecheck_ns = resources.typecheck_ns,
     };
 
-    // If interpreter is not skipped, do typed value checking via LIR pipeline
-    if (!skip.interpreter) {
+    // Phase 1: Typed-value pre-check via interpreter (only for primitive-value tests)
+    const is_typed_value = switch (expected) {
+        .i64_val, .u8_val, .u16_val, .u32_val, .u64_val, .u128_val,
+        .i8_val, .i16_val, .i32_val, .i128_val,
+        .bool_val, .str_val, .f32_val, .f64_val, .dec_val,
+        => true,
+        .inspect_str => false,
+        else => unreachable,
+    };
+
+    if (is_typed_value and !skip.interpreter) {
         var interp_timer = Timer.start() catch unreachable;
         const interp_result = helpers.lirInterpreterEval(allocator, resources.module_env, resources.expr_idx, resources.builtin_module.env) catch |err| {
-            fe_timings.interpreter_ns = interp_timer.read();
-            return .{ .status = .fail, .message = @errorName(err), .timings = fe_timings };
+            timings.interpreter_ns = interp_timer.read();
+            return .{ .status = .fail, .message = @errorName(err), .timings = timings };
         };
-        fe_timings.interpreter_ns = interp_timer.read();
+        timings.interpreter_ns = interp_timer.read();
         defer interp_result.deinit(allocator);
 
         // Check interpreter result against expected value
@@ -520,52 +538,91 @@ fn runNormalTest(allocator: std.mem.Allocator, src: []const u8, expected: TestCa
         switch (expected) {
             .i64_val, .u8_val, .u16_val, .u32_val, .u64_val, .u128_val, .i8_val, .i16_val, .i32_val, .i128_val => {
                 if (interp_i128 == null or interp_i128.? != expected.intExpected()) {
-                    return .{ .status = .fail, .message = "integer value mismatch", .timings = fe_timings };
+                    return .{ .status = .fail, .message = "integer value mismatch", .timings = timings };
                 }
             },
             .bool_val => |exp| {
                 switch (interp_result) {
-                    .bool_val => |b| if (b != exp) return .{ .status = .fail, .message = "boolean value mismatch", .timings = fe_timings },
+                    .bool_val => |b| if (b != exp) return .{ .status = .fail, .message = "boolean value mismatch", .timings = timings },
                     else => if ((interp_i128 != null and interp_i128.? != 0) != exp) {
-                        return .{ .status = .fail, .message = "boolean value mismatch", .timings = fe_timings };
+                        return .{ .status = .fail, .message = "boolean value mismatch", .timings = timings };
                     },
                 }
             },
             .str_val => |exp| {
                 switch (interp_result) {
-                    .str => |s| if (!std.mem.eql(u8, exp, s)) return .{ .status = .fail, .message = "string value mismatch", .timings = fe_timings },
-                    else => return .{ .status = .fail, .message = "expected string from interpreter", .timings = fe_timings },
+                    .str => |s| if (!std.mem.eql(u8, exp, s)) return .{ .status = .fail, .message = "string value mismatch", .timings = timings },
+                    else => return .{ .status = .fail, .message = "expected string from interpreter", .timings = timings },
                 }
             },
             .f32_val => |exp| {
                 switch (interp_result) {
-                    .float_f32 => |v| if (@abs(v - exp) > 0.0001) return .{ .status = .fail, .message = "f32 value mismatch", .timings = fe_timings },
-                    else => return .{ .status = .fail, .message = "expected f32 from interpreter", .timings = fe_timings },
+                    .float_f32 => |v| if (@abs(v - exp) > 0.0001) return .{ .status = .fail, .message = "f32 value mismatch", .timings = timings },
+                    else => return .{ .status = .fail, .message = "expected f32 from interpreter", .timings = timings },
                 }
             },
             .f64_val => |exp| {
                 switch (interp_result) {
-                    .float_f64 => |v| if (@abs(v - exp) > 0.000000001) return .{ .status = .fail, .message = "f64 value mismatch", .timings = fe_timings },
-                    else => return .{ .status = .fail, .message = "expected f64 from interpreter", .timings = fe_timings },
+                    .float_f64 => |v| if (@abs(v - exp) > 0.000000001) return .{ .status = .fail, .message = "f64 value mismatch", .timings = timings },
+                    else => return .{ .status = .fail, .message = "expected f64 from interpreter", .timings = timings },
                 }
             },
             .dec_val => |exp| {
                 switch (interp_result) {
-                    .dec => |v| if (v != exp) return .{ .status = .fail, .message = "Dec value mismatch", .timings = fe_timings },
-                    else => return .{ .status = .fail, .message = "expected Dec from interpreter", .timings = fe_timings },
+                    .dec => |v| if (v != exp) return .{ .status = .fail, .message = "Dec value mismatch", .timings = timings },
+                    else => return .{ .status = .fail, .message = "expected Dec from interpreter", .timings = timings },
                 }
             },
             else => unreachable,
         }
     }
 
-    // Compare all backends via Str.inspect (interpreter included as a backend)
-    var outcome = compareAllBackends(allocator, resources, skip);
-    outcome.timings.parse_ns = resources.parse_ns;
-    outcome.timings.canonicalize_ns = resources.canonicalize_ns;
-    outcome.timings.typecheck_ns = resources.typecheck_ns;
-    if (fe_timings.interpreter_ns > 0) outcome.timings.interpreter_ns = fe_timings.interpreter_ns;
-    return outcome;
+    // Phase 2: Run all non-skipped backends via Str.inspect and compare
+    const inspect_expr = wrapInStrInspect(resources.module_env, resources.expr_idx) catch {
+        return .{ .status = .fail, .message = "failed to wrap in Str.inspect", .timings = timings };
+    };
+
+    const interp_result: BackendResult = if (skip.interpreter)
+        BackendResult{ .name = "interpreter", .value = .{ .err = "skipped" } }
+    else
+        runBackend(allocator, "interpreter", helpers.lirInterpreterInspectedStr, resources.module_env, inspect_expr, resources.builtin_module.env, &timings, .interpreter_ns);
+    defer if (interp_result.value == .ok) allocator.free(interp_result.value.ok);
+
+    const dev_result: BackendResult = if (skip.dev)
+        BackendResult{ .name = "dev", .value = .{ .err = "skipped" } }
+    else
+        runBackend(allocator, "dev", helpers.devEvaluatorStr, resources.module_env, inspect_expr, resources.builtin_module.env, &timings, .dev_ns);
+    defer if (dev_result.value == .ok) allocator.free(dev_result.value.ok);
+
+    const wasm_result: BackendResult = if (skip.wasm)
+        BackendResult{ .name = "wasm", .value = .{ .err = "skipped" } }
+    else
+        runBackend(allocator, "wasm", helpers.wasmEvaluatorStr, resources.module_env, inspect_expr, resources.builtin_module.env, &timings, .wasm_ns);
+    defer if (wasm_result.value == .ok) allocator.free(wasm_result.value.ok);
+
+    const all_backends = [_]BackendResult{ interp_result, dev_result, wasm_result };
+
+    // Check: all non-skipped backends must succeed and agree
+    if (compareBackendResults(allocator, &all_backends)) |msg| {
+        return .{ .status = .fail, .message = msg, .timings = timings };
+    }
+
+    // For inspect_str tests: also verify each backend matches the expected string
+    if (expected == .inspect_str) {
+        const expected_str = expected.inspect_str;
+        for (&all_backends) |*br| {
+            if (br.value == .ok) {
+                if (!std.mem.eql(u8, expected_str, br.value.ok)) {
+                    var msg_buf: std.ArrayListUnmanaged(u8) = .empty;
+                    const writer = msg_buf.writer(allocator);
+                    writer.print("{s} inspect_str mismatch: expected '{s}' got '{s}'", .{ br.name, expected_str, br.value.ok }) catch {};
+                    return .{ .status = .fail, .message = msg_buf.toOwnedSlice(allocator) catch "inspect_str mismatch", .timings = timings };
+                }
+            }
+        }
+    }
+
+    return .{ .status = .pass, .timings = timings };
 }
 
 fn runTestError(allocator: std.mem.Allocator, src: []const u8, expected_err: anyerror) !TestOutcome {
@@ -689,95 +746,6 @@ fn runTestTypeMismatchCrash(allocator: std.mem.Allocator, src: []const u8) !Test
     } };
 }
 
-/// Run a test that only checks the dev backend output (no interpreter comparison).
-fn runTestDevOnlyStr(allocator: std.mem.Allocator, src: []const u8, expected_str: []const u8, skip: TestCase.Skip) !TestOutcome {
-    if (skip.dev) {
-        return .{ .status = .skip };
-    }
-
-    const resources = try parseAndCanonicalizeExpr(allocator, src);
-    defer cleanupResources(allocator, resources);
-
-    const fe_timings = EvalTimings{
-        .parse_ns = resources.parse_ns,
-        .canonicalize_ns = resources.canonicalize_ns,
-        .typecheck_ns = resources.typecheck_ns,
-    };
-
-    const inspect_expr = wrapInStrInspect(resources.module_env, resources.expr_idx) catch {
-        return .{ .status = .fail, .message = "failed to wrap in Str.inspect", .timings = fe_timings };
-    };
-
-    var dev_timer = Timer.start() catch unreachable;
-    const dev_str = helpers.devEvaluatorStr(allocator, resources.module_env, inspect_expr, resources.builtin_module.env) catch |err| {
-        const dev_ns = dev_timer.read();
-        var timings = fe_timings;
-        timings.dev_ns = dev_ns;
-        return .{ .status = .fail, .message = @errorName(err), .timings = timings };
-    };
-    const dev_ns = dev_timer.read();
-    defer allocator.free(dev_str);
-
-    var timings = fe_timings;
-    timings.dev_ns = dev_ns;
-    if (!std.mem.eql(u8, expected_str, dev_str)) {
-        return .{ .status = .fail, .message = "dev_only_str value mismatch", .timings = timings };
-    }
-    return .{ .status = .pass, .timings = timings };
-}
-
-/// Run a test that checks each non-skipped backend's Str.inspect output against
-/// an expected string. Used for records, tuples, lists, and other composite types.
-/// All non-skipped backends must produce the expected result to pass.
-fn runTestInspectStr(allocator: std.mem.Allocator, src: []const u8, expected_str: []const u8, skip: TestCase.Skip) !TestOutcome {
-    const resources = try parseAndCanonicalizeExpr(allocator, src);
-    defer cleanupResources(allocator, resources);
-
-    var timings = EvalTimings{
-        .parse_ns = resources.parse_ns,
-        .canonicalize_ns = resources.canonicalize_ns,
-        .typecheck_ns = resources.typecheck_ns,
-    };
-
-    const inspect_expr = wrapInStrInspect(resources.module_env, resources.expr_idx) catch {
-        return .{ .status = .fail, .message = "failed to wrap in Str.inspect", .timings = timings };
-    };
-
-    // Check each non-skipped backend against expected_str
-    if (!skip.interpreter) {
-        const result = runBackend(allocator, "interpreter", helpers.lirInterpreterInspectedStr, resources.module_env, inspect_expr, resources.builtin_module.env, &timings, .interpreter_ns);
-        defer if (result.value == .ok) allocator.free(result.value.ok);
-        switch (result.value) {
-            .ok => |s| if (!std.mem.eql(u8, expected_str, s)) return .{ .status = .fail, .message = "interpreter inspect_str mismatch", .timings = timings },
-            .err => |e| return .{ .status = .fail, .message = e, .timings = timings },
-        }
-    }
-
-    if (!skip.dev) {
-        const result = runBackend(allocator, "dev", helpers.devEvaluatorStr, resources.module_env, inspect_expr, resources.builtin_module.env, &timings, .dev_ns);
-        defer if (result.value == .ok) allocator.free(result.value.ok);
-        switch (result.value) {
-            .ok => |s| if (!std.mem.eql(u8, expected_str, s)) return .{ .status = .fail, .message = "dev inspect_str mismatch", .timings = timings },
-            .err => |e| return .{ .status = .fail, .message = e, .timings = timings },
-        }
-    }
-
-    if (!skip.wasm) {
-        const result = runBackend(allocator, "wasm", helpers.wasmEvaluatorStr, resources.module_env, inspect_expr, resources.builtin_module.env, &timings, .wasm_ns);
-        defer if (result.value == .ok) allocator.free(result.value.ok);
-        switch (result.value) {
-            .ok => |s| if (!std.mem.eql(u8, expected_str, s)) return .{ .status = .fail, .message = "wasm inspect_str mismatch", .timings = timings },
-            .err => |e| return .{ .status = .fail, .message = e, .timings = timings },
-        }
-    }
-
-    return .{ .status = .pass, .timings = timings };
-}
-
-//
-// Cross-backend comparison — the core of this runner
-//
-
 /// Run a single compiled backend via Str.inspect and return a BackendResult.
 fn runBackend(
     allocator: std.mem.Allocator,
@@ -798,61 +766,6 @@ fn runBackend(
     };
     @field(timings, @tagName(timing_field)) = timer.read();
     return result;
-}
-
-/// Run all backends (interpreter, dev, wasm) on the same expression via Str.inspect,
-/// then compare results. Returns .pass if all backends agree, .fail with mismatch details.
-/// NOTE: LLVM backend is temporarily disabled — it currently aliases the dev
-/// backend (see helpers.llvmEvaluatorStr). Re-enable here when LLVM is fixed.
-fn compareAllBackends(allocator: std.mem.Allocator, resources: ParsedResources, skip: TestCase.Skip) TestOutcome {
-    var timings = EvalTimings{};
-
-    // Wrap the expression in Str.inspect for all backends
-    const inspect_expr = wrapInStrInspect(resources.module_env, resources.expr_idx) catch {
-        return .{ .status = .pass };
-    };
-
-    // Run each backend (or skip).
-    // Thread safety: each backend evaluator creates fresh instances per call.
-    // The wasm evaluator's host-side heap pointer (wasm_heap_ptr) is threadlocal,
-    // and bytebox ModuleInstances are per-call, so no cross-thread state is shared.
-    const interp_result: BackendResult = if (skip.interpreter)
-        BackendResult{ .name = "interpreter", .value = .{ .err = "skipped" } }
-    else
-        runBackend(allocator, "interpreter", helpers.lirInterpreterInspectedStr, resources.module_env, inspect_expr, resources.builtin_module.env, &timings, .interpreter_ns);
-    defer if (interp_result.value == .ok) allocator.free(interp_result.value.ok);
-
-    const dev_result: BackendResult = if (skip.dev)
-        BackendResult{ .name = "dev", .value = .{ .err = "skipped" } }
-    else
-        runBackend(allocator, "dev", helpers.devEvaluatorStr, resources.module_env, inspect_expr, resources.builtin_module.env, &timings, .dev_ns);
-    defer if (dev_result.value == .ok) allocator.free(dev_result.value.ok);
-
-    const wasm_result: BackendResult = if (skip.wasm)
-        BackendResult{ .name = "wasm", .value = .{ .err = "skipped" } }
-    else
-        runBackend(allocator, "wasm", helpers.wasmEvaluatorStr, resources.module_env, inspect_expr, resources.builtin_module.env, &timings, .wasm_ns);
-    defer if (wasm_result.value == .ok) allocator.free(wasm_result.value.ok);
-
-    // LLVM backend disabled — currently just aliases dev. See helpers.llvmEvaluatorStr.
-    // When re-enabling, uncomment this and add llvm_result to all_backends below.
-    // const llvm_result: BackendResult = if (skip.llvm)
-    //     BackendResult{ .name = "llvm", .value = .{ .err = "skipped" } }
-    // else
-    //     runBackend(allocator, "llvm", helpers.llvmEvaluatorStr, resources.module_env, inspect_expr, resources.builtin_module.env, &timings, .llvm_ns);
-    // defer if (llvm_result.value == .ok) allocator.free(llvm_result.value.ok);
-
-    const all_backends = [_]BackendResult{
-        interp_result,
-        dev_result,
-        wasm_result,
-    };
-
-    if (compareBackendResults(allocator, &all_backends)) |msg| {
-        return .{ .status = .fail, .message = msg, .timings = timings };
-    }
-
-    return .{ .status = .pass, .timings = timings };
 }
 
 //
