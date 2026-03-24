@@ -25,7 +25,6 @@ const CFStmtId = lir.CFStmtId;
 const Symbol = lir.Symbol;
 const Value = lir_value.Value;
 
-
 /// Item in the work stack. The main eval loop pops one item at a time
 /// and dispatches on its tag.
 pub const WorkItem = union(enum) {
@@ -38,7 +37,6 @@ pub const WorkItem = union(enum) {
     /// Apply a continuation whose sub-expression result is on the value stack.
     apply_continuation: Continuation,
 };
-
 
 /// What to do after a sub-expression completes.
 /// The sub-expression's result sits on top of the value stack.
@@ -139,7 +137,6 @@ pub const Continuation = union(enum) {
     sort_compare_step: SortCompareStep,
 };
 
-
 // Function calls
 
 /// Collecting proc_call arguments one by one via the value stack.
@@ -163,12 +160,14 @@ pub const CallCleanup = struct {
 
 // Aggregate construction
 
+/// Collecting struct fields one by one onto the value stack.
 pub const StructCollect = struct {
     struct_layout: layout_mod.Idx,
     fields: lir.LirExprSpan,
     next_field_idx: u16,
 };
 
+/// Collecting tag payload arguments onto the value stack.
 pub const TagCollect = struct {
     discriminant: u16,
     union_layout: layout_mod.Idx,
@@ -176,6 +175,7 @@ pub const TagCollect = struct {
     next_arg_idx: u16,
 };
 
+/// Collecting list elements onto the value stack.
 pub const ListCollect = struct {
     list_layout: layout_mod.Idx,
     elem_layout: layout_mod.Idx,
@@ -183,6 +183,7 @@ pub const ListCollect = struct {
     next_elem_idx: u16,
 };
 
+/// Collecting string concatenation parts onto the value stack.
 pub const StrConcatCollect = struct {
     parts: lir.LirExprSpan,
     next_part_idx: u16,
@@ -312,6 +313,7 @@ pub const UnaryThen = union(enum) {
 
 // Multi-arg builtins
 
+/// Collecting arguments for a low-level builtin operation.
 pub const LowLevelCollectArgs = struct {
     op: base.LowLevel,
     args: lir.LirExprSpan,
@@ -320,6 +322,7 @@ pub const LowLevelCollectArgs = struct {
     callable_proc: LirProcSpecId,
 };
 
+/// Collecting arguments for a hosted (platform) function call.
 pub const HostedCallCollectArgs = struct {
     index: u32,
     args: lir.LirExprSpan,
@@ -329,15 +332,18 @@ pub const HostedCallCollectArgs = struct {
 
 // CF statement continuations
 
+/// Bind a value to a pattern, then continue to the next CF statement.
 pub const CfLetBind = struct {
     pattern: LirPatternId,
     next: CFStmtId,
 };
 
+/// Discard an expression result and continue to the next CF statement.
 pub const CfExprStmtNext = struct {
     next: CFStmtId,
 };
 
+/// Dispatch a switch on an integer/bool condition value.
 pub const CfSwitchDispatch = struct {
     cond_layout: layout_mod.Idx,
     branches: lir.CFSwitchBranchSpan,
@@ -345,12 +351,14 @@ pub const CfSwitchDispatch = struct {
     ret_layout: layout_mod.Idx,
 };
 
+/// Dispatch a pattern match on a scrutinee value.
 pub const CfMatchDispatch = struct {
     value_layout: layout_mod.Idx,
     branches: lir.CFMatchBranchSpan,
     ret_layout: layout_mod.Idx,
 };
 
+/// Collecting arguments for a jump to a join point.
 pub const CfJumpCollectArgs = struct {
     target: lir.JoinPointId,
     args: lir.LirExprSpan,
@@ -376,7 +384,6 @@ pub const SortCompareStep = struct {
     ret_layout: layout_mod.Idx,
 };
 
-
 /// Linear binding entry for the flat-list bindings approach.
 /// Replaces the `AutoHashMap(u64, Binding)` with an `ArrayList(FlatBinding)`
 /// that supports O(1) save/trim per function call instead of O(n) clone.
@@ -385,7 +392,6 @@ pub const FlatBinding = struct {
     val: Value,
     size: u32,
 };
-
 
 test "WorkItem and Continuation are well-formed tagged unions" {
     // Verify the types compile and have expected sizes.
