@@ -1379,7 +1379,9 @@ pub fn main() !void {
 
     const tests = filtered_buf.items;
     if (tests.len == 0) {
-        std.debug.print("No tests matched filter.\n", .{});
+        if (cli.filter == null) {
+            std.debug.print("No eval tests found.\n", .{});
+        }
         return;
     }
 

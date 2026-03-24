@@ -2599,7 +2599,18 @@ pub fn build(b: *std.Build) void {
     {
         eval_test_exe.root_module.link_libcpp = true;
     }
-    install_and_run(b, no_bin, eval_test_exe, eval_test_step, eval_test_step, run_args);
+    // Build eval runner args: pass --test-filter values as --filter (the eval runner's flag name).
+    const eval_run_args = if (test_filters.len > 0) blk: {
+        var eval_args_list = std.ArrayList([]const u8).empty;
+        for (run_args) |arg| {
+            eval_args_list.append(b.allocator, arg) catch @panic("OOM");
+        }
+        // The eval runner supports a single --filter; use the first test filter.
+        eval_args_list.append(b.allocator, "--filter") catch @panic("OOM");
+        eval_args_list.append(b.allocator, test_filters[0]) catch @panic("OOM");
+        break :blk eval_args_list.toOwnedSlice(b.allocator) catch @panic("OOM");
+    } else run_args;
+    install_and_run(b, no_bin, eval_test_exe, eval_test_step, eval_test_step, eval_run_args);
 
     const playground_exe = b.addExecutable(.{
         .name = "playground",
