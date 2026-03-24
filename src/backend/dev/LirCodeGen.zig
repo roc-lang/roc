@@ -3328,7 +3328,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .num_floor,
                 .num_ceiling,
                 .num_to_str,
-                .str_inspekt,
+                .str_inspect,
                 .u8_to_str,
                 .i8_to_str,
                 .u16_to_str,

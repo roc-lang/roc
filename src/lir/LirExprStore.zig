@@ -91,7 +91,7 @@ proc_specs: std.ArrayList(LirProcSpec),
 /// Used for looking up top-level definitions
 symbol_defs: std.AutoHashMap(u64, LirExprId),
 
-/// String literal store for strings generated during lowering (e.g., by str_inspekt)
+/// String literal store for strings generated during lowering (e.g., by str_inspect)
 /// This allows us to add new string literals without needing mutable module envs.
 strings: base.StringLiteral.Store,
 

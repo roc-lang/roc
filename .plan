@@ -72,12 +72,12 @@ When the record monotype has 1 field, the destructure pattern becomes just the s
 }
 ```
 
-### 5. `inspektRecord()` — handle unwrapped 1-field records (MirToLir.zig ~line 1812)
+### 5. `inspectRecord()` — handle unwrapped 1-field records (MirToLir.zig ~line 1812)
 
 This is the critical part for preserving Str.inspect output. When there's 1 field, the layout is NOT a struct anymore, so we can't do `struct_access`. Instead, the value IS the field value directly:
 
 ```zig
-fn inspektRecord(self: *Self, value_expr: LirExprId, record: anytype, mono_idx: Monotype.Idx, region: Region) !LirExprId {
+fn inspectRecord(self: *Self, value_expr: LirExprId, record: anytype, mono_idx: Monotype.Idx, region: Region) !LirExprId {
     const fields = self.mir_store.monotype_store.getFields(record.fields);
     if (fields.len == 0) return self.emitStrLiteral("{}", region);
 
@@ -93,7 +93,7 @@ fn inspektRecord(self: *Self, value_expr: LirExprId, record: anytype, mono_idx: 
         defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save);
 
         try self.scratch_lir_expr_ids.append(self.allocator, try self.emitStrLiteral(label, region));
-        const inspected = try self.expandStrInspekt(value_expr, field.type_idx, region);
+        const inspected = try self.expandStrInspect(value_expr, field.type_idx, region);
         try self.scratch_lir_expr_ids.append(self.allocator, inspected);
         try self.scratch_lir_expr_ids.append(self.allocator, try self.emitStrLiteral(" }", region));
 

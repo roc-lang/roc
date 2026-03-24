@@ -2220,7 +2220,7 @@ pub const Interpreter = struct {
                 out.is_initialized = true;
                 return out;
             },
-            .str_inspekt => {
+            .str_inspect => {
                 // Str.inspect : _val -> Str
                 // Renders any value to its string representation
                 std.debug.assert(args.len == 1);
