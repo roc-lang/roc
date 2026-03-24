@@ -98,11 +98,11 @@ const docs = @import("docs");
 const Allocators = base.Allocators;
 const RocTarget = @import("target.zig").RocTarget;
 
-/// Embedded interpreter shim libraries for different targets.
-/// The native shim is used for roc run and native builds.
-/// Cross-compilation shims are used for roc build --target=<target>.
+/// Embedded interpreter shim library for the native host target.
+/// Used by `roc run` and native `roc build --opt=interpreter`.
+/// Cross-compilation with the interpreter backend is not supported;
+/// use `--opt=dev` for cross-compilation instead.
 const ShimLibraries = struct {
-    /// Native shim (for host platform builds and roc run)
     const native = if (builtin.is_test)
         &[_]u8{}
     else if (builtin.target.os.tag == .windows)
@@ -110,44 +110,16 @@ const ShimLibraries = struct {
     else
         @embedFile("libroc_interpreter_shim.a");
 
-    /// Cross-compilation target shims (Linux musl targets)
-    const x64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64musl/libroc_interpreter_shim.a");
-    const arm64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64musl/libroc_interpreter_shim.a");
-
-    /// Cross-compilation target shims (Linux glibc targets)
-    const x64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64glibc/libroc_interpreter_shim.a");
-    const arm64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64glibc/libroc_interpreter_shim.a");
-
-    /// WebAssembly target shim (wasm32-freestanding)
-    const wasm32 = if (builtin.is_test) &[_]u8{} else @embedFile("targets/wasm32/libroc_interpreter_shim.a");
-
-    /// Cross-compilation target shims (Windows targets)
-    const x64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64win/roc_interpreter_shim.lib");
-    const arm64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64win/roc_interpreter_shim.lib");
-
-    /// Get the appropriate shim library bytes for the given target
-    pub fn forTarget(target: RocTarget) []const u8 {
-        return switch (target) {
-            .x64musl => x64musl,
-            .arm64musl => arm64musl,
-            .x64glibc => x64glibc,
-            .arm64glibc => arm64glibc,
-            .wasm32 => wasm32,
-            .x64win => x64win,
-            .arm64win => arm64win,
-            // Native/host targets use the native shim
-            .x64mac, .arm64mac => native,
-            // Fallback for other targets (will use native, may not work for cross-compilation)
-            else => native,
-        };
+    pub fn forTarget(_: RocTarget) []const u8 {
+        return native;
     }
 };
 
-/// Embedded dev shim libraries for different targets.
-/// The dev shim JIT-compiles CIR to native code using DevEvaluator
-/// instead of interpreting. Only supports x86_64/aarch64 (no wasm32).
+/// Embedded dev shim library for the native host target.
+/// The dev shim JIT-compiles CIR to native code using DevEvaluator.
+/// Used by `roc run --opt=dev` and native `roc build --opt=dev`.
+/// Cross-compilation uses ObjectFileCompiler directly (no shim needed).
 const DevShimLibraries = struct {
-    /// Native shim (for host platform builds and roc run)
     const native = if (builtin.is_test)
         &[_]u8{}
     else if (builtin.target.os.tag == .windows)
@@ -155,38 +127,8 @@ const DevShimLibraries = struct {
     else
         @embedFile("libroc_dev_shim.a");
 
-    /// Cross-compilation target shims (Linux musl targets)
-    const x64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64musl/libroc_dev_shim.a");
-    const arm64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64musl/libroc_dev_shim.a");
-
-    /// Cross-compilation target shims (Linux glibc targets)
-    const x64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64glibc/libroc_dev_shim.a");
-    const arm64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64glibc/libroc_dev_shim.a");
-
-    /// Cross-compilation target shims (Windows targets)
-    const x64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64win/roc_dev_shim.lib");
-    const arm64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64win/roc_dev_shim.lib");
-
-    /// Cross-compilation target shims (macOS targets)
-    const x64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64mac/libroc_dev_shim.a");
-    const arm64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64mac/libroc_dev_shim.a");
-
-    /// Get the appropriate dev shim library bytes for the given target
-    pub fn forTarget(t: roc_target.RocTarget) []const u8 {
-        return switch (t) {
-            .x64musl => x64musl,
-            .arm64musl => arm64musl,
-            .x64glibc => x64glibc,
-            .arm64glibc => arm64glibc,
-            .x64win => x64win,
-            .arm64win => arm64win,
-            .x64mac => x64mac,
-            .arm64mac => arm64mac,
-            // wasm32 not supported by dev backend
-            .wasm32 => native,
-            // Fallback for other targets
-            else => native,
-        };
+    pub fn forTarget(_: roc_target.RocTarget) []const u8 {
+        return native;
     }
 };
 
@@ -4112,12 +4054,12 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     const target_arch = target.toCpuArch();
     const target_os = target.toOsTag();
     switch (target_arch) {
-        .x86_64, .aarch64 => {}, // Supported
+        .x86_64, .aarch64, .wasm32 => {}, // Supported
         else => {
-            const stdout = ctx.io.stdout();
-            try stdout.print("Note: Dev backend does not support {s} architecture.\n", .{@tagName(target_arch)});
-            try stdout.print("Falling back to interpreter mode.\n\n", .{});
-            return rocBuildEmbedded(ctx, args);
+            const stderr = ctx.io.stderr();
+            try stderr.print("Error: The dev backend does not support the '{s}' architecture.\n\n", .{@tagName(target_arch)});
+            try stderr.print("Supported architectures: x86_64, aarch64, wasm32\n", .{});
+            return error.UnsupportedTarget;
         },
     }
 
@@ -4731,6 +4673,17 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     };
 
     std.log.debug("Target: {s}, Link type: {s}", .{ @tagName(target), @tagName(link_type) });
+
+    // The interpreter backend only supports building for the native target.
+    // Cross-compilation requires the dev backend which generates native code directly.
+    const native_target = roc_target.RocTarget.detectNative();
+    if (target != native_target) {
+        const stderr = ctx.io.stderr();
+        try stderr.print("Error: The interpreter backend only supports building for the native target ({s}).\n\n", .{@tagName(native_target)});
+        try stderr.print("To cross-compile for {s}, use the dev backend:\n\n", .{@tagName(target)});
+        try stderr.print("    roc build --opt=dev --target={s} {s}\n\n", .{ @tagName(target), args.path });
+        return error.UnsupportedCrossCompilation;
+    }
 
     // Add appropriate file extension based on target and link type
     const final_output_path = if (args.output != null)

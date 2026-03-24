@@ -3544,9 +3544,11 @@ fn addMainExe(
     exe.step.dependOn(&copy_dev_shim.step);
     add_tracy(b, roc_modules.build_options, dev_shim_lib, b.graph.host, false, flag_enable_tracy);
 
-    // Cross-compile interpreter shim for all supported targets
-    // This allows `roc build --target=X` to work for cross-compilation
-    const cross_compile_shim_targets = [_]struct { name: []const u8, query: std.Target.Query }{
+    // Cross-compile builtins objects for all supported targets.
+    // These are needed by `roc build --opt=dev --target=X` to link the app object with builtins.
+    // Note: interpreter and dev shims are only built for the native host target (above).
+    // Cross-compilation uses ObjectFileCompiler directly without shims.
+    const cross_compile_builtins_targets = [_]struct { name: []const u8, query: std.Target.Query }{
         .{ .name = "x64musl", .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl } },
         .{ .name = "arm64musl", .query = .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl } },
         .{ .name = "x64glibc", .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu } },
@@ -3558,7 +3560,7 @@ fn addMainExe(
         .{ .name = "arm64mac", .query = .{ .cpu_arch = .aarch64, .os_tag = .macos, .abi = .none } },
     };
 
-    for (cross_compile_shim_targets) |cross_target| {
+    for (cross_compile_builtins_targets) |cross_target| {
         const cross_resolved_target = b.resolveTargetQuery(cross_target.query);
 
         // Build builtins object file for this target
@@ -3581,60 +3583,6 @@ fn addMainExe(
         cross_builtins_obj.bundle_compiler_rt = false;
         configureBackend(cross_builtins_obj, cross_resolved_target);
 
-        // Build interpreter shim library for this target
-        const cross_shim_lib = b.addLibrary(.{
-            .name = b.fmt("roc_interpreter_shim_{s}", .{cross_target.name}),
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("src/interpreter_shim/main.zig"),
-                .target = cross_resolved_target,
-                .optimize = optimize,
-                .strip = strip,
-                .omit_frame_pointer = omit_frame_pointer,
-                .pic = true,
-            }),
-            .linkage = .static,
-        });
-        configureBackend(cross_shim_lib, cross_resolved_target);
-
-        // For wasm32, only add the modules needed by the interpreter shim
-        // (watch, lsp, repl, ipc use threading/file I/O not available on freestanding)
-        if (cross_target.query.cpu_arch == .wasm32 and cross_target.query.os_tag == .freestanding) {
-            cross_shim_lib.root_module.addImport("base", roc_modules.base);
-            cross_shim_lib.root_module.addImport("collections", roc_modules.collections);
-            cross_shim_lib.root_module.addImport("types", roc_modules.types);
-            cross_shim_lib.root_module.addImport("builtins", roc_modules.builtins);
-            cross_shim_lib.root_module.addImport("can", roc_modules.can);
-            cross_shim_lib.root_module.addImport("check", roc_modules.check);
-            cross_shim_lib.root_module.addImport("parse", roc_modules.parse);
-            cross_shim_lib.root_module.addImport("layout", roc_modules.layout);
-            cross_shim_lib.root_module.addImport("eval", roc_modules.eval);
-            cross_shim_lib.root_module.addImport("reporting", roc_modules.reporting);
-            cross_shim_lib.root_module.addImport("tracy", roc_modules.tracy);
-            cross_shim_lib.root_module.addImport("build_options", roc_modules.build_options);
-            cross_shim_lib.root_module.addImport("roc_target", roc_modules.roc_target);
-            cross_shim_lib.root_module.addImport("compile", roc_modules.compile);
-            cross_shim_lib.root_module.addImport("unbundle", roc_modules.unbundle);
-            cross_shim_lib.root_module.addImport("io", roc_modules.io);
-            // Note: ipc module is NOT added for wasm32-freestanding as it uses POSIX calls
-            // The interpreter shim main.zig has a stub for wasm32
-        } else {
-            roc_modules.addAll(cross_shim_lib);
-        }
-        cross_shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
-        cross_shim_lib.step.dependOn(&write_compiled_builtins.step);
-        cross_shim_lib.addObjectFile(cross_builtins_obj.getEmittedBin());
-        cross_shim_lib.bundle_compiler_rt = true;
-
-        // Copy to target-specific directory for embedding
-        // Use .lib extension for Windows targets, .a for others
-        const shim_ext = if (cross_target.query.os_tag == .windows) "roc_interpreter_shim.lib" else "libroc_interpreter_shim.a";
-        const copy_cross_shim = b.addUpdateSourceFiles();
-        copy_cross_shim.addCopyFileToSource(
-            cross_shim_lib.getEmittedBin(),
-            b.pathJoin(&.{ "src/cli/targets", cross_target.name, shim_ext }),
-        );
-        exe.step.dependOn(&copy_cross_shim.step);
-
         // Copy builtins object for this target for embedding into CLI
         // Used by `roc build --opt=dev --target=X` to link the app object with builtins
         const builtins_ext = if (cross_target.query.os_tag == .windows) "roc_builtins.obj" else "roc_builtins.o";
@@ -3644,38 +3592,6 @@ fn addMainExe(
             b.pathJoin(&.{ "src/cli/targets", cross_target.name, builtins_ext }),
         );
         exe.step.dependOn(&copy_cross_builtins.step);
-
-        // Build dev shim for this cross target (skip wasm32 - dev backend is x86_64/aarch64 only)
-        if (cross_target.query.cpu_arch != .wasm32) {
-            const cross_dev_shim_lib = b.addLibrary(.{
-                .name = b.fmt("roc_dev_shim_{s}", .{cross_target.name}),
-                .root_module = b.createModule(.{
-                    .root_source_file = b.path("src/dev_shim/main.zig"),
-                    .target = cross_resolved_target,
-                    .optimize = optimize,
-                    .strip = strip,
-                    .omit_frame_pointer = omit_frame_pointer,
-                    .pic = true,
-                }),
-                .linkage = .static,
-            });
-            configureBackend(cross_dev_shim_lib, cross_resolved_target);
-            roc_modules.addAll(cross_dev_shim_lib);
-            cross_dev_shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
-            cross_dev_shim_lib.step.dependOn(&write_compiled_builtins.step);
-            cross_dev_shim_lib.addObjectFile(cross_builtins_obj.getEmittedBin());
-            cross_dev_shim_lib.bundle_compiler_rt = true;
-
-            const dev_shim_ext = if (cross_target.query.os_tag == .windows) "roc_dev_shim.lib" else "libroc_dev_shim.a";
-            const copy_cross_dev_shim = b.addUpdateSourceFiles();
-            copy_cross_dev_shim.addCopyFileToSource(
-                cross_dev_shim_lib.getEmittedBin(),
-                b.pathJoin(&.{ "src/cli/targets", cross_target.name, dev_shim_ext }),
-            );
-            exe.step.dependOn(&copy_cross_dev_shim.step);
-
-            add_tracy(b, roc_modules.build_options, cross_dev_shim_lib, b.graph.host, false, flag_enable_tracy);
-        }
     }
 
     const config = b.addOptions();
