@@ -3710,6 +3710,7 @@ pub const LirInterpreter = struct {
                                 self.call_depth -= 1;
                                 try self.pushValue(ret_val);
                                 self.unwinding = .none;
+                                continue; // skip normal dispatch
                             },
                             .return_result => {
                                 self.unwinding = saved_unwinding;
@@ -3727,11 +3728,13 @@ pub const LirInterpreter = struct {
                                 self.value_stack.shrinkRetainingCapacity(fl.saved_value_stack_len);
                                 try self.pushValue(Value.zst);
                                 self.unwinding = .none;
+                                continue; // skip normal dispatch
                             },
                             .while_loop_body_done => |wl| {
                                 self.value_stack.shrinkRetainingCapacity(wl.saved_value_stack_len);
                                 try self.pushValue(Value.zst);
                                 self.unwinding = .none;
+                                continue; // skip normal dispatch
                             },
                             .call_cleanup => |cleanup| {
                                 self.bindings.shrinkRetainingCapacity(cleanup.saved_bindings_len);
@@ -3740,6 +3743,7 @@ pub const LirInterpreter = struct {
                                 self.call_depth -= 1;
                                 try self.pushValue(Value.zst);
                                 self.unwinding = .none;
+                                continue; // skip normal dispatch
                             },
                             .return_result => {
                                 self.unwinding = saved_unwinding;
