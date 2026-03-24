@@ -109,6 +109,31 @@ pub const TestCase = struct {
                 else => false,
             };
         }
+
+        /// Format the expected value with its type for display, e.g. "16 : I64", "True : Bool".
+        pub fn format(self: Expected, allocator: std.mem.Allocator) ?[]const u8 {
+            var buf: [128]u8 = undefined;
+            const slice: []const u8 = switch (self) {
+                .i64_val => |v| std.fmt.bufPrint(&buf, "{d} : I64", .{v}) catch return null,
+                .u8_val => |v| std.fmt.bufPrint(&buf, "{d} : U8", .{v}) catch return null,
+                .u16_val => |v| std.fmt.bufPrint(&buf, "{d} : U16", .{v}) catch return null,
+                .u32_val => |v| std.fmt.bufPrint(&buf, "{d} : U32", .{v}) catch return null,
+                .u64_val => |v| std.fmt.bufPrint(&buf, "{d} : U64", .{v}) catch return null,
+                .u128_val => |v| std.fmt.bufPrint(&buf, "{d} : U128", .{v}) catch return null,
+                .i8_val => |v| std.fmt.bufPrint(&buf, "{d} : I8", .{v}) catch return null,
+                .i16_val => |v| std.fmt.bufPrint(&buf, "{d} : I16", .{v}) catch return null,
+                .i32_val => |v| std.fmt.bufPrint(&buf, "{d} : I32", .{v}) catch return null,
+                .i128_val => |v| std.fmt.bufPrint(&buf, "{d} : I128", .{v}) catch return null,
+                .bool_val => |v| if (v) "True : Bool" else "False : Bool",
+                .str_val => |v| return std.fmt.allocPrint(allocator, "\"{s}\" : Str", .{v}) catch null,
+                .f32_val => |v| std.fmt.bufPrint(&buf, "{d} : F32", .{v}) catch return null,
+                .f64_val => |v| std.fmt.bufPrint(&buf, "{d} : F64", .{v}) catch return null,
+                .dec_val => |v| std.fmt.bufPrint(&buf, "{d} : Dec", .{v}) catch return null,
+                .inspect_str => |v| return std.fmt.allocPrint(allocator, "'{s}'", .{v}) catch null,
+                else => return null,
+            };
+            return allocator.dupe(u8, slice) catch null;
+        }
     };
 
     pub const Skip = packed struct {
@@ -204,10 +229,27 @@ fn unblockCrashSignals() void {
 // Test outcome
 //
 
+/// Per-backend outcome detail, stored for reporting.
+const BackendDetail = struct {
+    status: Status,
+    /// Str.inspect output (owned by arena, only valid for .pass/.wrong_value)
+    value: ?[]const u8 = null,
+    duration_ns: u64 = 0,
+
+    const Status = enum { pass, fail, wrong_value, skip, not_implemented };
+};
+
+const NUM_BACKENDS = 4; // interpreter, dev, wasm, llvm
+const BACKEND_NAMES = [NUM_BACKENDS][]const u8{ "interpreter", "dev", "wasm", "llvm" };
+
 const TestOutcome = struct {
     status: Status,
     message: ?[]const u8 = null,
     timings: EvalTimings = .{},
+    /// Per-backend details (interpreter, dev, wasm, llvm). Populated by runValueTest.
+    backends: [NUM_BACKENDS]BackendDetail = [_]BackendDetail{.{ .status = .not_implemented }} ** NUM_BACKENDS,
+    /// The expected Str.inspect string (for inspect_str tests), or null.
+    expected_str: ?[]const u8 = null,
 
     const Status = enum { pass, fail, crash, skip, timeout };
 };
@@ -227,6 +269,8 @@ const TestResult = struct {
     message: ?[]const u8,
     duration_ns: u64,
     timings: EvalTimings,
+    backends: [NUM_BACKENDS]BackendDetail = [_]BackendDetail{.{ .status = .not_implemented }} ** NUM_BACKENDS,
+    expected_str: ?[]const u8 = null,
 };
 
 const Timer = std.time.Timer;
@@ -384,72 +428,6 @@ fn wrapInStrInspect(module_env: *ModuleEnv, inner_expr: CIR.Expr.Idx) !CIR.Expr.
 }
 
 //
-// Backend comparison helpers
-//
-
-/// Per-backend result for comparison reporting.
-const BackendResult = struct {
-    name: []const u8,
-    value: union(enum) {
-        ok: []const u8,
-        err: []const u8,
-    },
-};
-
-/// Compare all backend Str.inspect results. Returns null if all non-skipped backends
-/// ran successfully and agree, or an error message describing any failures or mismatches.
-fn compareBackendResults(
-    allocator: std.mem.Allocator,
-    backends: []const BackendResult,
-) ?[]const u8 {
-    // Any non-skipped backend error is a failure.
-    var has_error = false;
-    for (backends) |br| {
-        if (br.value == .err and !std.mem.eql(u8, br.value.err, "skipped")) {
-            has_error = true;
-            break;
-        }
-    }
-
-    // Collect all successful results
-    var first_ok: ?[]const u8 = null;
-    var mismatch = false;
-    for (backends) |br| {
-        if (br.value == .ok) {
-            if (first_ok == null) {
-                first_ok = br.value.ok;
-            } else if (!std.mem.eql(u8, first_ok.?, br.value.ok)) {
-                mismatch = true;
-            }
-        }
-    }
-
-    if (!has_error and !mismatch) return null;
-
-    // Build failure message (exclude skipped backends)
-    var msg_buf: std.ArrayListUnmanaged(u8) = .empty;
-    const writer = msg_buf.writer(allocator);
-    if (has_error and mismatch) {
-        writer.print("Backend error + mismatch:", .{}) catch {};
-    } else if (has_error) {
-        writer.print("Backend error:", .{}) catch {};
-    } else {
-        writer.print("Backend mismatch:", .{}) catch {};
-    }
-    for (backends) |br| {
-        switch (br.value) {
-            .ok => |s| writer.print(" {s}='{s}'", .{ br.name, s }) catch {},
-            .err => |e| {
-                if (!std.mem.eql(u8, e, "skipped")) {
-                    writer.print(" {s}=err({s})", .{ br.name, e }) catch {};
-                }
-            },
-        }
-    }
-    return msg_buf.toOwnedSlice(allocator) catch "Backend failure (OOM building details)";
-}
-
-//
 // Test execution — unified interpreter + backend comparison
 //
 
@@ -582,47 +560,64 @@ fn runValueTest(allocator: std.mem.Allocator, src: []const u8, expected: TestCas
         return .{ .status = .fail, .message = "failed to wrap in Str.inspect", .timings = timings };
     };
 
-    const interp_result: BackendResult = if (skip.interpreter)
-        BackendResult{ .name = "interpreter", .value = .{ .err = "skipped" } }
-    else
-        runBackend(allocator, "interpreter", helpers.lirInterpreterInspectedStr, resources.module_env, inspect_expr, resources.builtin_module.env, &timings, .interpreter_ns);
-    defer if (interp_result.value == .ok) allocator.free(interp_result.value.ok);
+    // For inspect_str tests, the raw string is used for value comparison.
+    // The formatted string (with type annotation) is used for display only.
+    const raw_expected: ?[]const u8 = if (expected == .inspect_str) expected.inspect_str else null;
+    const display_expected: ?[]const u8 = expected.format(allocator);
+    const skips = [NUM_BACKENDS]bool{ skip.interpreter, skip.dev, skip.wasm, true }; // llvm always not_implemented for now
 
-    const dev_result: BackendResult = if (skip.dev)
-        BackendResult{ .name = "dev", .value = .{ .err = "skipped" } }
-    else
-        runBackend(allocator, "dev", helpers.devEvaluatorStr, resources.module_env, inspect_expr, resources.builtin_module.env, &timings, .dev_ns);
-    defer if (dev_result.value == .ok) allocator.free(dev_result.value.ok);
+    const BackendEvalFn = *const fn (std.mem.Allocator, *ModuleEnv, CIR.Expr.Idx, *const ModuleEnv) anyerror![]const u8;
+    const eval_fns = [NUM_BACKENDS]BackendEvalFn{
+        helpers.lirInterpreterInspectedStr,
+        helpers.devEvaluatorStr,
+        helpers.wasmEvaluatorStr,
+        helpers.devEvaluatorStr, // llvm placeholder
+    };
 
-    const wasm_result: BackendResult = if (skip.wasm)
-        BackendResult{ .name = "wasm", .value = .{ .err = "skipped" } }
-    else
-        runBackend(allocator, "wasm", helpers.wasmEvaluatorStr, resources.module_env, inspect_expr, resources.builtin_module.env, &timings, .wasm_ns);
-    defer if (wasm_result.value == .ok) allocator.free(wasm_result.value.ok);
+    var backends: [NUM_BACKENDS]BackendDetail = [_]BackendDetail{.{ .status = .not_implemented }} ** NUM_BACKENDS;
+    var first_ok: ?[]const u8 = null;
+    var any_failure = false;
 
-    const all_backends = [_]BackendResult{ interp_result, dev_result, wasm_result };
+    for (0..NUM_BACKENDS) |i| {
+        if (i == 3) continue; // llvm: not_implemented
+        if (skips[i]) {
+            backends[i] = .{ .status = .skip };
+            continue;
+        }
 
-    // Check: all non-skipped backends must succeed and agree
-    if (compareBackendResults(allocator, &all_backends)) |msg| {
-        return .{ .status = .fail, .message = msg, .timings = timings };
-    }
+        var timer = Timer.start() catch unreachable;
+        const str = eval_fns[i](allocator, resources.module_env, inspect_expr, resources.builtin_module.env) catch |err| {
+            const dur = timer.read();
+            backends[i] = .{ .status = .fail, .value = @errorName(err), .duration_ns = dur };
+            any_failure = true;
+            continue;
+        };
+        const dur = timer.read();
 
-    // For inspect_str tests: also verify each backend matches the expected string
-    if (expected == .inspect_str) {
-        const expected_str = expected.inspect_str;
-        for (&all_backends) |*br| {
-            if (br.value == .ok) {
-                if (!std.mem.eql(u8, expected_str, br.value.ok)) {
-                    var msg_buf: std.ArrayListUnmanaged(u8) = .empty;
-                    const writer = msg_buf.writer(allocator);
-                    writer.print("{s} inspect_str mismatch: expected '{s}' got '{s}'", .{ br.name, expected_str, br.value.ok }) catch {};
-                    return .{ .status = .fail, .message = msg_buf.toOwnedSlice(allocator) catch "inspect_str mismatch", .timings = timings };
-                }
-            }
+        // Check against expected string (only for inspect_str tests)
+        const value_ok = if (raw_expected) |es| std.mem.eql(u8, es, str) else true;
+        // Check cross-backend agreement
+        const agreement_ok = if (first_ok) |fok| std.mem.eql(u8, fok, str) else true;
+
+        if (!value_ok or !agreement_ok) {
+            backends[i] = .{ .status = .wrong_value, .value = str, .duration_ns = dur };
+            any_failure = true;
+        } else {
+            backends[i] = .{ .status = .pass, .value = str, .duration_ns = dur };
+            if (first_ok == null) first_ok = str;
         }
     }
 
-    return .{ .status = .pass, .timings = timings };
+    // Update timings from backend durations
+    timings.interpreter_ns = backends[0].duration_ns;
+    timings.dev_ns = backends[1].duration_ns;
+    timings.wasm_ns = backends[2].duration_ns;
+    timings.llvm_ns = backends[3].duration_ns;
+
+    if (any_failure) {
+        return .{ .status = .fail, .timings = timings, .backends = backends, .expected_str = display_expected };
+    }
+    return .{ .status = .pass, .timings = timings, .backends = backends };
 }
 
 fn runTestError(allocator: std.mem.Allocator, src: []const u8, expected_err: anyerror) !TestOutcome {
@@ -746,28 +741,6 @@ fn runTestTypeMismatchCrash(allocator: std.mem.Allocator, src: []const u8) !Test
     } };
 }
 
-/// Run a single compiled backend via Str.inspect and return a BackendResult.
-fn runBackend(
-    allocator: std.mem.Allocator,
-    comptime name: []const u8,
-    comptime evalFn: fn (std.mem.Allocator, *ModuleEnv, CIR.Expr.Idx, *const ModuleEnv) anyerror![]const u8,
-    module_env: *ModuleEnv,
-    inspect_expr: CIR.Expr.Idx,
-    builtin_module_env: *const ModuleEnv,
-    timings: *EvalTimings,
-    comptime timing_field: enum { interpreter_ns, dev_ns, wasm_ns, llvm_ns },
-) BackendResult {
-    var timer = Timer.start() catch unreachable;
-    const result: BackendResult = blk: {
-        const str = evalFn(allocator, module_env, inspect_expr, builtin_module_env) catch |err| {
-            break :blk BackendResult{ .name = name, .value = .{ .err = @errorName(err) } };
-        };
-        break :blk BackendResult{ .name = name, .value = .{ .ok = str } };
-    };
-    @field(timings, @tagName(timing_field)) = timer.read();
-    return result;
-}
-
 //
 // Worker thread
 //
@@ -840,10 +813,21 @@ fn threadMain(ctx: *RunnerContext) void {
         if (my_state) |ws| ws.start_time_ms.store(0, .release);
         const elapsed = wall_timer.read();
 
-        // Dup the message to the stable GPA so it survives arena reset.
-        // All messages in results must be GPA-owned (freed uniformly in main).
+        // Dup the message and backend values to the stable GPA so they survive arena reset.
         const stable_msg: ?[]const u8 = if (outcome.message) |msg|
             (ctx.msg_allocator.dupe(u8, msg) catch null)
+        else
+            null;
+
+        var stable_backends = outcome.backends;
+        for (&stable_backends) |*bd| {
+            if (bd.value) |v| {
+                bd.value = ctx.msg_allocator.dupe(u8, v) catch null;
+            }
+        }
+
+        const stable_expected: ?[]const u8 = if (outcome.expected_str) |es|
+            (ctx.msg_allocator.dupe(u8, es) catch null)
         else
             null;
 
@@ -852,6 +836,8 @@ fn threadMain(ctx: *RunnerContext) void {
             .message = stable_msg,
             .duration_ns = elapsed,
             .timings = outcome.timings,
+            .backends = stable_backends,
+            .expected_str = stable_expected,
         };
     }
 }
@@ -973,11 +959,53 @@ fn printHelp() void {
     std.debug.print("{s}", .{help});
 }
 
-//
-// Timing display helpers
-//
+/// Write per-backend detail lines for failed/crashed tests.
+/// Format:
+///   FAIL  test name  (92.2ms total)
+///       expected:       16 : I64
+///       interpreter:    PASS (12.0ms)
+///       dev:            PASS (41.3ms)
+///       wasm:           FAIL 'WasmExecFailed' (25.2ms)
+///       llvm:           NOT_IMPLEMENTED
+fn writeFailureDetail(r: TestResult) void {
+    if (r.expected_str) |es| {
+        std.debug.print("        expected:       {s}\n", .{es});
+    }
+    for (r.backends, 0..) |bd, i| {
+        const name = BACKEND_NAMES[i];
+        const ms = @as(f64, @floatFromInt(bd.duration_ns)) / 1_000_000.0;
+        switch (bd.status) {
+            .pass => {
+                std.debug.print("        {s}:{s}PASS ({d:.1}ms)\n", .{ name, padding(name.len), ms });
+            },
+            .fail => {
+                std.debug.print("        {s}:{s}FAIL", .{ name, padding(name.len) });
+                if (bd.value) |v| std.debug.print(" '{s}'", .{v});
+                if (bd.duration_ns > 0) std.debug.print(" ({d:.1}ms)", .{ms});
+                std.debug.print("\n", .{});
+            },
+            .wrong_value => {
+                std.debug.print("        {s}:{s}WRONG", .{ name, padding(name.len) });
+                if (bd.value) |v| std.debug.print(" got '{s}'", .{v});
+                if (bd.duration_ns > 0) std.debug.print(" ({d:.1}ms)", .{ms});
+                std.debug.print("\n", .{});
+            },
+            .skip => std.debug.print("        {s}:{s}SKIP\n", .{ name, padding(name.len) }),
+            .not_implemented => std.debug.print("        {s}:{s}NOT_IMPLEMENTED\n", .{ name, padding(name.len) }),
+        }
+    }
+}
 
+/// Right-pad backend name to align status columns.
+fn padding(name_len: usize) []const u8 {
+    const pad = "                "; // 16 spaces
+    const target = 16; // "interpreter:" is 12 chars + 4 padding
+    return if (name_len + 1 < target) pad[0 .. target - name_len - 1] else " ";
+}
+
+/// Write compact timing breakdown for PASS output (verbose mode).
 fn writeTimingBreakdown(t: EvalTimings) void {
+    std.debug.print("  [", .{});
     const fields = [_]struct { name: []const u8, ns: u64 }{
         .{ .name = "parse", .ns = t.parse_ns },
         .{ .name = "can", .ns = t.canonicalize_ns },
@@ -986,52 +1014,15 @@ fn writeTimingBreakdown(t: EvalTimings) void {
         .{ .name = "dev", .ns = t.dev_ns },
         .{ .name = "wasm", .ns = t.wasm_ns },
     };
-    var has_any = false;
-    for (fields) |f| {
-        if (f.ns > 0) {
-            has_any = true;
-            break;
-        }
-    }
-    if (!has_any) {
-        std.debug.print("\n", .{});
-        return;
-    }
-    std.debug.print("  [", .{});
     var first = true;
     for (fields) |f| {
         if (f.ns > 0) {
             if (!first) std.debug.print(" ", .{});
             first = false;
-            const fms = @as(f64, @floatFromInt(f.ns)) / 1_000_000.0;
-            std.debug.print("{s}:{d:.1}", .{ f.name, fms });
+            std.debug.print("{s}:{d:.1}", .{ f.name, @as(f64, @floatFromInt(f.ns)) / 1_000_000.0 });
         }
     }
     std.debug.print("]\n", .{});
-}
-
-/// Print per-backend status summary for failed/crashed tests.
-/// Uses timing info and skip flags to infer what happened in each backend.
-fn writeBackendSummary(t: EvalTimings, skip: TestCase.Skip) void {
-    const Backend = struct { name: []const u8, skipped: bool, ran: bool };
-    const backends = [_]Backend{
-        .{ .name = "interp", .skipped = skip.interpreter, .ran = t.interpreter_ns > 0 },
-        .{ .name = "dev", .skipped = skip.dev, .ran = t.dev_ns > 0 },
-        .{ .name = "wasm", .skipped = skip.wasm, .ran = t.wasm_ns > 0 },
-    };
-    std.debug.print("        backends:", .{});
-    for (backends) |b| {
-        if (b.skipped) {
-            std.debug.print(" {s}=skip", .{b.name});
-        } else if (b.ran) {
-            std.debug.print(" {s}=ran({d:.1}ms)", .{ b.name, @as(f64, @floatFromInt(
-                if (std.mem.eql(u8, b.name, "interp")) t.interpreter_ns else if (std.mem.eql(u8, b.name, "dev")) t.dev_ns else t.wasm_ns,
-            )) / 1_000_000.0 });
-        } else {
-            std.debug.print(" {s}=not_reached", .{b.name});
-        }
-    }
-    std.debug.print("\n", .{});
 }
 
 //
@@ -1388,21 +1379,19 @@ pub fn main() !void {
             },
             .fail => {
                 failed += 1;
-                std.debug.print("  FAIL  {s}  ({d:.1}ms)", .{ tc.name, ms });
-                writeTimingBreakdown(t);
+                std.debug.print("  FAIL  {s}  ({d:.1}ms total)\n", .{ tc.name, ms });
                 if (r.message) |msg| {
                     std.debug.print("        {s}\n", .{msg});
                 }
-                writeBackendSummary(t, tc.skip);
+                writeFailureDetail(r);
             },
             .crash => {
                 crashed += 1;
-                std.debug.print("  CRASH {s}  ({d:.1}ms)", .{ tc.name, ms });
-                writeTimingBreakdown(t);
+                std.debug.print("  CRASH {s}  ({d:.1}ms total)\n", .{ tc.name, ms });
                 if (r.message) |msg| {
                     std.debug.print("        {s}\n", .{msg});
                 }
-                writeBackendSummary(t, tc.skip);
+                writeFailureDetail(r);
             },
             .timeout => {
                 timed_out += 1;
@@ -1423,11 +1412,12 @@ pub fn main() !void {
     // Free GPA-duped messages
     for (results) |r| {
         if (r.message) |msg| {
-            // Only free messages that were duped to the GPA (not static strings).
-            // We duped all messages conservatively, so free them all. Static string
-            // dups are harmless tiny allocations.
             gpa.free(msg);
         }
+        for (r.backends) |bd| {
+            if (bd.value) |v| gpa.free(v);
+        }
+        if (r.expected_str) |es| gpa.free(es);
     }
 
     // Performance summary (skip in coverage mode — kcov instrumentation skews timings)
