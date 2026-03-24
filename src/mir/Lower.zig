@@ -1347,7 +1347,10 @@ fn lowerStrInspectExpr(
             .fn_pure, .fn_effectful, .fn_unbound => self.emitMirStrLiteral("<function>", region),
         },
         .flex, .rigid => {
-            const mono_idx = try self.monotypeFromTypeVarInEnv(type_env, type_var);
+            // When the type variable is unresolved (e.g. polymorphic parameter),
+            // use the monotype of the already-lowered value expression which has
+            // the correct concrete type from monomorphization.
+            const mono_idx = self.store.typeOf(value_expr);
             return self.lowerStrInspectExprByMonotype(type_env, value_expr, mono_idx, region);
         },
         .err => try self.store.addExpr(
@@ -2027,6 +2030,12 @@ fn lowerStrInspectNominal(
         }
 
         return self.lowerStrInspectExpr(method_info.target_env, call_expr, resolved_func.func.ret, region);
+    }
+
+    // User-defined opaque types without a to_inspect method render as "<opaque>".
+    // Builtin primitives (handled above) are excluded from this check.
+    if (nominal.is_opaque) {
+        return self.emitMirStrLiteral("<opaque>", region);
     }
 
     return self.lowerStrInspectExpr(type_env, value_expr, type_env.types.getNominalBackingVar(nominal), region);
