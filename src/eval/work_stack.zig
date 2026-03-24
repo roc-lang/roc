@@ -25,7 +25,6 @@ const CFStmtId = lir.CFStmtId;
 const Symbol = lir.Symbol;
 const Value = lir_value.Value;
 
-// ─── WorkItem ──────────────────────────────────────────────────────────
 
 /// Item in the work stack. The main eval loop pops one item at a time
 /// and dispatches on its tag.
@@ -40,7 +39,6 @@ pub const WorkItem = union(enum) {
     apply_continuation: Continuation,
 };
 
-// ─── Continuation ──────────────────────────────────────────────────────
 
 /// What to do after a sub-expression completes.
 /// The sub-expression's result sits on top of the value stack.
@@ -141,7 +139,6 @@ pub const Continuation = union(enum) {
     sort_compare_step: SortCompareStep,
 };
 
-// ─── Payload structs ───────────────────────────────────────────────────
 
 // Function calls
 
@@ -379,7 +376,6 @@ pub const SortCompareStep = struct {
     ret_layout: layout_mod.Idx,
 };
 
-// ─── Flat binding (for Phase 2 bindings conversion) ────────────────────
 
 /// Linear binding entry for the flat-list bindings approach.
 /// Replaces the `AutoHashMap(u64, Binding)` with an `ArrayList(FlatBinding)`
@@ -390,7 +386,6 @@ pub const FlatBinding = struct {
     size: u32,
 };
 
-// ─── Tests ─────────────────────────────────────────────────────────────
 
 test "WorkItem and Continuation are well-formed tagged unions" {
     // Verify the types compile and have expected sizes.
