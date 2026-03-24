@@ -36,7 +36,7 @@ There are two test paths that exercise the interpreter:
      does CIR → MIR → LIR → RC lowering, then `LirInterpreter.eval()`
    - For typed value tests, also uses `helpers.lirInterpreterEval` to check
      raw values (int, float, str, bool, dec) against expected
-   - Current status: **1088 passed, 0 failed, 9 crashed, 80 skipped**
+   - Current status: **1092 passed, 0 failed, 9 crashed, 80 skipped**
    - The 9 crashes are all "type mismatch" tests that crash during CIR→LIR
      lowering (before any backend runs)
    
@@ -109,46 +109,7 @@ $ ./zig-out/bin/eval-test-runner
 
 ---
 
-## Bug 1: Segfault in `List.concat` with refcounted elements
-
-### Reproduce
-
-```sh
-zig build test --summary all -- --test-filter "List.concat with strings"
-```
-
-This runs the `low_level_interp_test` in the sequential test suite (not the
-parallel runner — this test is not yet in `eval_tests.zig`).
-
-### Symptoms
-
-Segfault at a stack address. The test:
-```roc
-x = List.concat(["hello", "world"], ["foo", "bar"])
-len = List.len(x)
-```
-Expected: `len == 4`.
-
-### Analysis
-
-The segfault occurs during `List.concat` evaluation with string (refcounted)
-elements. `List.concat` is a low-level builtin handled in `evalLowLevel`.
-The likely issue is in how the interpreter manages memory for the concatenated
-list — specifically, the refcounting of string elements during the concat
-operation.
-
-### Debugging recommendations
-
-1. Run with the test filter and check where the segfault occurs.
-2. Look at `evalListConcat` in `interpreter.zig` — search for `list_concat`.
-3. Check whether the shallow clone + memcpy of refcounted elements properly
-   increfs the copied string pointers.
-4. The non-string version (`List.concat with nested lists`) may also fail —
-   test it too.
-
----
-
-## Bug 2: fx `list_append_stdin_uaf.roc` — integer overflow
+## fx `list_append_stdin_uaf.roc` — integer overflow
 
 ### Reproduce
 
@@ -194,7 +155,7 @@ The test involves:
 
 ---
 
-## Bug 3: fx `issue8866.roc` — crash with opaque type containing Str
+## fx `issue8866.roc` — crash with opaque type containing Str
 
 ### Reproduce
 
@@ -237,7 +198,7 @@ because:
 
 ---
 
-## Bug 4: fx `all_syntax_test.roc` — "Called a function that could not be resolved"
+## fx `all_syntax_test.roc` — "Called a function that could not be resolved"
 
 ### Reproduce
 
@@ -268,7 +229,7 @@ value that the interpreter doesn't resolve correctly.
 
 ---
 
-## Bug 5: fx `repeating pattern segfault` — stack overflow
+## fx `repeating pattern segfault` — stack overflow
 
 ### Reproduce
 
@@ -299,7 +260,7 @@ Since the LIR interpreter uses `call_depth` with a max of 1024, this either:
 
 ---
 
-## Bug 6: fx `string interpolation type mismatch` — wrong output
+## fx `string interpolation type mismatch` — wrong output
 
 ### Reproduce
 

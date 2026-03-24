@@ -21,6 +21,31 @@ const sljmp = @import("sljmp");
 const Io = @import("io").Io;
 const work_stack = @import("work_stack.zig");
 const FlatBinding = work_stack.FlatBinding;
+const build_options = @import("build_options");
+
+/// Comptime-gated tracing for the interpreter eval loop.
+/// Enabled via `-Dtrace-eval=true`. Zero cost when disabled.
+const trace = struct {
+    const enabled = if (@hasDecl(build_options, "trace_eval")) build_options.trace_eval else false;
+
+    fn log(comptime fmt: []const u8, args: anytype) void {
+        if (comptime enabled) {
+            std.debug.print("[interp] " ++ fmt ++ "\n", args);
+        }
+    }
+};
+
+/// Comptime-gated tracing for refcount operations.
+/// Enabled via `-Dtrace-refcount=true`. Zero cost when disabled.
+const trace_rc = struct {
+    const enabled = if (@hasDecl(build_options, "trace_refcount")) build_options.trace_refcount else false;
+
+    fn log(comptime fmt: []const u8, args: anytype) void {
+        if (comptime enabled) {
+            std.debug.print("[rc] " ++ fmt ++ "\n", args);
+        }
+    }
+};
 
 const Allocator = std.mem.Allocator;
 const LirExprStore = lir.LirExprStore;
@@ -142,6 +167,7 @@ const InterpreterRocEnv = struct {
         const self: *InterpreterRocEnv = @ptrCast(@alignCast(env));
         if (self.forwarded_roc_alloc) |forwarded_roc_alloc| {
             forwarded_roc_alloc(roc_alloc, self.forwarded_memory_env);
+            trace_rc.log("alloc(fwd): ptr=0x{x} size={d} align={d}", .{ @intFromPtr(roc_alloc.answer), roc_alloc.length, roc_alloc.alignment });
             return;
         }
 
@@ -158,10 +184,12 @@ const InterpreterRocEnv = struct {
         StaticAlloc.offset = aligned_offset + roc_alloc.length;
         StaticAlloc.recordAlloc(@intFromPtr(ptr), roc_alloc.length);
         roc_alloc.answer = @ptrCast(ptr);
+        trace_rc.log("alloc: ptr=0x{x} size={d} align={d} buf_offset={d}", .{ @intFromPtr(ptr), roc_alloc.length, alignment, StaticAlloc.offset });
     }
 
     fn rocDeallocFn(roc_dealloc: *RocDealloc, env: *anyopaque) callconv(.c) void {
         const self: *InterpreterRocEnv = @ptrCast(@alignCast(env));
+        trace_rc.log("dealloc: ptr=0x{x} align={d}", .{ @intFromPtr(roc_dealloc.ptr), roc_dealloc.alignment });
         if (self.forwarded_roc_dealloc) |forwarded_roc_dealloc| {
             forwarded_roc_dealloc(roc_dealloc, self.forwarded_memory_env);
         }
@@ -171,6 +199,7 @@ const InterpreterRocEnv = struct {
         const self: *InterpreterRocEnv = @ptrCast(@alignCast(env));
         if (self.forwarded_roc_realloc) |forwarded_roc_realloc| {
             forwarded_roc_realloc(roc_realloc, self.forwarded_memory_env);
+            trace_rc.log("realloc(fwd): old=0x{x} new=0x{x} size={d}", .{ @intFromPtr(roc_realloc.answer), @intFromPtr(roc_realloc.answer), roc_realloc.new_length });
             return;
         }
 
@@ -193,6 +222,7 @@ const InterpreterRocEnv = struct {
             @memmove(new_ptr[0..copy_len], old_ptr[0..copy_len]);
         }
         roc_realloc.answer = @ptrCast(new_ptr);
+        trace_rc.log("realloc: old=0x{x} new=0x{x} old_size={d} new_size={d} align={d}", .{ @intFromPtr(old_ptr), @intFromPtr(new_ptr), old_size, roc_realloc.new_length, alignment });
     }
 
     fn rocDbgFn(roc_dbg: *const RocDbg, env: *anyopaque) callconv(.c) void {
@@ -1223,39 +1253,49 @@ pub const LirInterpreter = struct {
     /// RC helper plan.  This walks structs, tag unions, boxes, etc. recursively
     /// so the interpreter's refcounting matches what the dev backend emits.
     fn performRc(self: *LirInterpreter, op: RcOp, val: Value, layout_idx: layout_mod.Idx, count: u16) void {
+        trace.log("performRc: op={s} layout={any} val.ptr={*} count={d}", .{ @tagName(op), layout_idx, val.ptr, count });
         const resolver = layout_mod.RcHelperResolver.init(self.layout_store);
         const key = resolver.makeKey(op, layout_idx);
         self.performRcPlan(resolver.plan(key), &resolver, val, count);
     }
 
     fn performRcPlan(self: *LirInterpreter, rc_plan: layout_mod.RcHelperPlan, resolver: *const layout_mod.RcHelperResolver, val: Value, count: u16) void {
+        trace.log("performRcPlan: plan={s} val.ptr={*}", .{ @tagName(rc_plan), val.ptr });
         const utils = builtins.utils;
         switch (rc_plan) {
             .noop => {},
             .str_incref => {
                 const rs = valueToRocStr(val);
+                trace_rc.log("str_incref: bytes=0x{x} len={d} cap={d} count={d}", .{ @intFromPtr(rs.bytes), rs.length, rs.capacity_or_alloc_ptr, count });
                 rs.incref(count, &self.roc_ops);
             },
             .str_decref => {
                 const rs = valueToRocStr(val);
+                trace_rc.log("str_decref: bytes=0x{x} len={d} cap={d}", .{ @intFromPtr(rs.bytes), rs.length, rs.capacity_or_alloc_ptr });
                 rs.decref(&self.roc_ops);
             },
             .str_free => {
                 const rs = valueToRocStr(val);
+                trace_rc.log("str_free: bytes=0x{x} len={d} cap={d}", .{ @intFromPtr(rs.bytes), rs.length, rs.capacity_or_alloc_ptr });
                 rs.decref(&self.roc_ops);
             },
             .list_incref => {
                 const rl = valueToRocList(val);
                 const has_child = false; // incref doesn't recurse into elements
+                trace_rc.log("list_incref: bytes=0x{x} len={d} cap={d} count={d}", .{ @intFromPtr(rl.bytes), rl.len(), rl.capacity_or_alloc_ptr, count });
                 rl.incref(@intCast(count), has_child, &self.roc_ops);
             },
             .list_decref => |list_plan| {
                 const rl = valueToRocList(val);
-                // For simple lists (no refcounted elements), use utils.decref directly
-                // to avoid needing an element-decref callback function.
                 const has_child = list_plan.child != null;
+                const alloc_ptr = rl.getAllocationDataPtr(&self.roc_ops);
+                trace_rc.log("list_decref: bytes=0x{x} len={d} cap={d} alloc_ptr=0x{x} has_child={any} elem_align={d}", .{
+                    @intFromPtr(rl.bytes), rl.len(), rl.capacity_or_alloc_ptr,
+                    @intFromPtr(alloc_ptr),
+                    has_child, list_plan.elem_alignment,
+                });
                 builtins.utils.decref(
-                    rl.getAllocationDataPtr(&self.roc_ops),
+                    alloc_ptr,
                     rl.capacity_or_alloc_ptr,
                     @intCast(list_plan.elem_alignment),
                     has_child,
@@ -1265,8 +1305,13 @@ pub const LirInterpreter = struct {
             .list_free => |list_plan| {
                 const rl = valueToRocList(val);
                 const has_child = list_plan.child != null;
+                const alloc_ptr = rl.getAllocationDataPtr(&self.roc_ops);
+                trace_rc.log("list_free: bytes=0x{x} len={d} cap={d} alloc_ptr=0x{x} has_child={any}", .{
+                    @intFromPtr(rl.bytes), rl.len(), rl.capacity_or_alloc_ptr,
+                    @intFromPtr(alloc_ptr), has_child,
+                });
                 builtins.utils.decref(
-                    rl.getAllocationDataPtr(&self.roc_ops),
+                    alloc_ptr,
                     rl.capacity_or_alloc_ptr,
                     @intCast(list_plan.elem_alignment),
                     has_child,
@@ -1910,7 +1955,7 @@ pub const LirInterpreter = struct {
                     info.alignment,
                     @ptrCast(args[1].ptr),
                     info.width,
-                    false,
+                    info.rc,
                     null,
                     &builtins.utils.rcNone,
                     .InPlace,
@@ -1921,6 +1966,7 @@ pub const LirInterpreter = struct {
             },
             .list_concat => blk: {
                 const info = self.listElemInfo(arg_layout);
+                trace.log("list_concat: elem_width={d} align={d} rc={any}", .{ info.width, info.alignment, info.rc });
                 if (info.width == 0) {
                     const list_a = valueToRocList(args[0]);
                     const list_b = valueToRocList(args[1]);
@@ -1940,7 +1986,7 @@ pub const LirInterpreter = struct {
                     valueToRocList(args[1]),
                     info.alignment,
                     info.width,
-                    false, // no RC in interpreter
+                    info.rc,
                     null,
                     &builtins.utils.rcNone,
                     null,
@@ -1962,7 +2008,7 @@ pub const LirInterpreter = struct {
                     info.alignment,
                     @ptrCast(args[1].ptr),
                     info.width,
-                    false,
+                    info.rc,
                     null,
                     &builtins.utils.rcNone,
                     copy_fn,
@@ -1995,7 +2041,7 @@ pub const LirInterpreter = struct {
                     valueToRocList(args[0]),
                     info.alignment,
                     info.width,
-                    false,
+                    info.rc,
                     start,
                     len,
                     null,
@@ -2013,7 +2059,7 @@ pub const LirInterpreter = struct {
                     valueToRocList(args[0]),
                     info.alignment,
                     info.width,
-                    false,
+                    info.rc,
                     args[1].read(u64),
                     null,
                     &builtins.utils.rcNone,
@@ -2039,7 +2085,7 @@ pub const LirInterpreter = struct {
                     args[1].read(u64),
                     @ptrCast(args[2].ptr),
                     info.width,
-                    false,
+                    info.rc,
                     null,
                     &builtins.utils.rcNone,
                     null,
@@ -2057,6 +2103,7 @@ pub const LirInterpreter = struct {
             .list_with_capacity => blk: {
                 const elem_layout = self.listElemLayout(ll.ret_layout);
                 const sa = self.helper.sizeAlignOf(elem_layout);
+                const elems_rc = self.helper.containsRefcounted(elem_layout);
                 self.roc_env.resetCrash();
                 const sj = setjmp(&self.roc_env.jmp_buf);
                 if (sj != 0) return error.Crash;
@@ -2064,7 +2111,7 @@ pub const LirInterpreter = struct {
                     args[0].read(u64),
                     @intCast(sa.alignment.toByteUnits()),
                     sa.size,
-                    false,
+                    elems_rc,
                     null,
                     &builtins.utils.rcNone,
                     &self.roc_ops,
@@ -2081,7 +2128,7 @@ pub const LirInterpreter = struct {
                     info.alignment,
                     args[1].read(u64),
                     info.width,
-                    false,
+                    info.rc,
                     null,
                     &builtins.utils.rcNone,
                     UpdateMode.Immutable,
@@ -2098,7 +2145,7 @@ pub const LirInterpreter = struct {
                     valueToRocList(args[0]),
                     info.alignment,
                     info.width,
-                    false,
+                    info.rc,
                     null,
                     &builtins.utils.rcNone,
                     null,
@@ -3016,7 +3063,7 @@ pub const LirInterpreter = struct {
             valueToRocList(list_arg),
             info.alignment,
             info.width,
-            false,
+            info.rc,
             1,
             std.math.maxInt(u64),
             null,
@@ -3038,7 +3085,7 @@ pub const LirInterpreter = struct {
             rl,
             info.alignment,
             info.width,
-            false,
+            info.rc,
             0,
             len - 1,
             null,
@@ -3057,7 +3104,7 @@ pub const LirInterpreter = struct {
             valueToRocList(list_arg),
             info.alignment,
             info.width,
-            false,
+            info.rc,
             0,
             count_arg.read(u64),
             null,
@@ -3080,7 +3127,7 @@ pub const LirInterpreter = struct {
             rl,
             info.alignment,
             info.width,
-            false,
+            info.rc,
             @intCast(start),
             take,
             null,
@@ -3117,7 +3164,7 @@ pub const LirInterpreter = struct {
         self.roc_env.resetCrash();
         const sj = setjmp(&self.roc_env.jmp_buf);
         if (sj != 0) return error.Crash;
-        const new_list = builtins.list.shallowClone(rl, rl.len(), info.width, info.alignment, false, &self.roc_ops);
+        const new_list = builtins.list.shallowClone(rl, rl.len(), info.width, info.alignment, info.rc, &self.roc_ops);
         if (new_list.bytes) |bytes| {
             var lo: usize = 0;
             var hi: usize = new_list.len() - 1;
@@ -3150,7 +3197,7 @@ pub const LirInterpreter = struct {
         self.roc_env.resetCrash();
         const sj = setjmp(&self.roc_env.jmp_buf);
         if (sj != 0) return error.Crash;
-        const new_list = builtins.list.shallowClone(rl, rl.len(), info.width, info.alignment, false, &self.roc_ops);
+        const new_list = builtins.list.shallowClone(rl, rl.len(), info.width, info.alignment, info.rc, &self.roc_ops);
         const sorted_bytes = new_list.bytes orelse return self.rocListToValue(new_list, ret_layout);
 
         // Insertion sort using the comparator proc
@@ -3205,7 +3252,7 @@ pub const LirInterpreter = struct {
                 rl,
                 info.alignment,
                 info.width,
-                false,
+                info.rc,
                 1,
                 std.math.maxInt(u64),
                 null,
@@ -3237,7 +3284,7 @@ pub const LirInterpreter = struct {
                 rl,
                 info.alignment,
                 info.width,
-                false,
+                info.rc,
                 0,
                 rl.len() - 1,
                 null,
@@ -3758,9 +3805,16 @@ pub const LirInterpreter = struct {
 
             // Normal dispatch
             switch (item) {
-                .eval_expr => |expr_id| try self.scheduleExprEval(expr_id),
+                .eval_expr => |expr_id| {
+                    if (comptime trace.enabled) {
+                        const expr = self.store.getExpr(expr_id);
+                        trace.log("eval_expr {any}: {s}", .{ expr_id, @tagName(expr) });
+                    }
+                    try self.scheduleExprEval(expr_id);
+                },
                 .eval_cf_stmt => |stmt_id| try self.scheduleCFStmtEval(stmt_id),
                 .apply_continuation => |cont| {
+                    trace.log("apply_continuation: {s}", .{@tagName(cont)});
                     if (try self.applyContinuation(cont)) |result| {
                         self.unwinding = saved_unwinding;
                         return result;

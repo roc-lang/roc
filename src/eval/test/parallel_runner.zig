@@ -1039,6 +1039,20 @@ fn printHelp() void {
         \\    HANG  - test exceeded the per-test timeout (killed by watchdog)
         \\    SKIP  - one or more backends were skipped
         \\
+        \\DEBUGGING:
+        \\  Build with trace flags to get detailed per-operation output for filtered tests:
+        \\
+        \\    zig build test-eval -Dtrace-eval=true -- --filter "test name"
+        \\      Traces the lowering pipeline (CIR→MIR→LIR→RC) and interpreter eval loop.
+        \\      Shows each work item dispatched, low-level op executed, and continuation applied.
+        \\
+        \\    zig build test-eval -Dtrace-refcount=true -- --filter "test name"
+        \\      Traces all refcount operations: alloc, dealloc, realloc, incref, decref, free.
+        \\      Shows pointer addresses, sizes, and list/str metadata for each RC operation.
+        \\
+        \\  Both flags are comptime — they are compiled out when disabled (zero overhead).
+        \\  Combine with --filter and --threads 1 for readable single-test output.
+        \\
         \\EXIT CODE:
         \\  0 if all tests pass or skip, 1 if any test fails or crashes.
         \\

@@ -8484,6 +8484,12 @@ pub const tests = [_]TestCase{
         .expected = .{ .i64_val = 60 },
     },
 
+    // --- List.concat ---
+    .{ .name = "List.concat with strings", .source = "List.concat([\"hello\", \"world\"], [\"foo\", \"bar\"]).len()", .expected = .{ .i64_val = 4 } },
+    .{ .name = "List.concat with ints", .source = "List.concat([1, 2], [3, 4]).len()", .expected = .{ .i64_val = 4 } },
+    .{ .name = "string list literal len", .source = "[\"hello\", \"world\"].len()", .expected = .{ .i64_val = 2 } },
+    .{ .name = "string list concat simple", .source = "List.concat([\"a\"], [\"b\"]).len()", .expected = .{ .i64_val = 2 } },
+
     // --- Str operations ---
     .{ .name = "Str.concat", .source = "Str.concat(\"hello \", \"world\")", .expected = .{ .str_val = "hello world" } },
     .{ .name = "Str.repeat", .source = "Str.repeat(\"ab\", 3)", .expected = .{ .str_val = "ababab" } },

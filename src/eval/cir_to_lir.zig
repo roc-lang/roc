@@ -19,10 +19,35 @@ const lir = @import("lir");
 const LirExprStore = lir.LirExprStore;
 
 const types = @import("types");
+const build_options = @import("build_options");
 
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
+
+/// Comptime-gated tracing for the lowering pipeline.
+/// Enabled via `-Dtrace-eval=true`. Zero cost when disabled.
+const trace = struct {
+    const enabled = if (@hasDecl(build_options, "trace_eval")) build_options.trace_eval else false;
+
+    fn log(comptime fmt: []const u8, args: anytype) void {
+        if (comptime enabled) {
+            std.debug.print("[lower] " ++ fmt ++ "\n", args);
+        }
+    }
+
+    fn logStage(comptime stage: []const u8) void {
+        if (comptime enabled) {
+            std.debug.print("[lower] === {s} ===\n", .{stage});
+        }
+    }
+
+    fn logErr(comptime stage: []const u8, err: anytype) void {
+        if (comptime enabled) {
+            std.debug.print("[lower] !!! {s} FAILED: {any}\n", .{ stage, err });
+        }
+    }
+};
 
 /// Extract the result layout from a LIR expression.
 /// This is total for value-producing expressions and unit-valued RC/loop nodes.
@@ -413,11 +438,14 @@ pub const LirProgram = struct {
         app_module_idx: ?u32,
         layout_store_ptr: *layout.Store,
     ) Error!LowerResult {
+        trace.log("lowerExprInner: expr={any} module={d}/{d}", .{ expr_idx, module_idx, all_module_envs.len });
+
         // CIR → MIR
         var mir_store = MIR.Store.init(self.allocator) catch return error.OutOfMemory;
         defer mir_store.deinit(self.allocator);
 
         // Run monomorphization pass to discover all proc templates and instances
+        trace.logStage("Monomorphize");
         var mono_result2 = Monomorphize.runExpr(
             self.allocator,
             all_module_envs,
@@ -427,7 +455,9 @@ pub const LirProgram = struct {
             expr_idx,
         ) catch return error.OutOfMemory;
         defer mono_result2.deinit(self.allocator);
+        trace.log("monomorphize done: {d} proc instances", .{mono_result2.proc_insts.items.len});
 
+        trace.logStage("MIR Lower");
         var mir_lower = mir.Lower.init(
             self.allocator,
             &mir_store,
@@ -439,9 +469,11 @@ pub const LirProgram = struct {
         ) catch return error.OutOfMemory;
         defer mir_lower.deinit();
 
-        const mir_expr_id = mir_lower.lowerExpr(expr_idx) catch {
+        const mir_expr_id = mir_lower.lowerExpr(expr_idx) catch |err| {
+            trace.logErr("MIR Lower", err);
             return error.RuntimeError;
         };
+        trace.log("MIR lower done: mir_expr={any}", .{mir_expr_id});
 
         return self.lowerFromMir(module_env, expr_idx, all_module_envs, &mir_store, mir_expr_id, layout_store_ptr);
     }
@@ -461,24 +493,31 @@ pub const LirProgram = struct {
         layout_store_ptr: *layout.Store,
     ) Error!LowerResult {
         // Lambda set inference
+        trace.logStage("Lambda Set Inference");
         var lambda_set_store = mir.LambdaSet.infer(self.allocator, mir_store, all_module_envs) catch return error.OutOfMemory;
         defer lambda_set_store.deinit(self.allocator);
+        trace.log("lambda sets inferred", .{});
 
         // MIR → LIR
+        trace.logStage("MIR to LIR");
         var lir_store = LirExprStore.init(self.allocator);
         errdefer lir_store.deinit();
 
         var mir_to_lir = lir.MirToLir.init(self.allocator, mir_store, &lir_store, layout_store_ptr, &lambda_set_store, module_env.idents.true_tag);
         defer mir_to_lir.deinit();
 
-        const lir_expr_id = mir_to_lir.lower(mir_expr_id) catch {
+        const lir_expr_id = mir_to_lir.lower(mir_expr_id) catch |err| {
+            trace.logErr("MIR to LIR", err);
             return error.RuntimeError;
         };
+        trace.log("MIR→LIR done: lir_expr={any}", .{lir_expr_id});
 
         // RC insertion
+        trace.logStage("RC Insertion");
         var rc_pass = lir.RcInsert.RcInsertPass.init(self.allocator, &lir_store, layout_store_ptr) catch return error.OutOfMemory;
         defer rc_pass.deinit();
         const final_expr_id = rc_pass.insertRcOps(lir_expr_id) catch lir_expr_id;
+        trace.log("RC done: final_expr={any}", .{final_expr_id});
 
         lir.RcInsert.insertRcOpsIntoSymbolDefsBestEffort(self.allocator, &lir_store, layout_store_ptr);
 
