@@ -464,7 +464,7 @@ fn runExpectSuccess(src: []const u8) !void {
     const resources = try helpers.parseAndCanonicalizeExpr(test_allocator, src);
     defer helpers.cleanupParseAndCanonical(test_allocator, resources);
 
-    // Use LIR interpreter - if lowering + evaluation succeeds, the test passes
+    // Use interpreter - if lowering + evaluation succeeds, the test passes
     const interpreter_str = try helpers.lirInterpreterStr(test_allocator, resources.module_env, resources.expr_idx, resources.builtin_module.env);
     defer test_allocator.free(interpreter_str);
 
@@ -741,10 +741,10 @@ test "recursive factorial function" {
 
 test "ModuleEnv serialization and interpreter evaluation" {
     // This test demonstrates that a ModuleEnv can be successfully:
-    // 1. Created and used with the LIR interpreter to evaluate expressions
+    // 1. Created and used with the interpreter to evaluate expressions
     // 2. Serialized to bytes and written to disk
     // 3. Deserialized from those bytes read back from disk
-    // 4. Used with a new LIR interpreter to evaluate the same expressions with identical results
+    // 4. Used with a new interpreter to evaluate the same expressions with identical results
     //
     // This verifies the complete round-trip of compilation state preservation
     // through serialization, which is critical for incremental compilation
@@ -821,7 +821,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
 
     _ = try checker.checkExprRepl(canonicalized_expr_idx.get_idx());
 
-    // Test 1: Evaluate with the original ModuleEnv using LIR interpreter
+    // Test 1: Evaluate with the original ModuleEnv using interpreter
     {
         const interpreter_str = try helpers.lirInterpreterStr(gpa, &original_env, canonicalized_expr_idx.get_idx(), builtin_module.env);
         defer gpa.free(interpreter_str);

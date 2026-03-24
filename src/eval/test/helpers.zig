@@ -555,7 +555,7 @@ fn compareFloatWithBackends(
     }
 }
 
-/// Typed result from the LIR interpreter — no Str.inspect wrapping.
+/// Typed result from the interpreter — no Str.inspect wrapping.
 pub const LirEvalResult = union(enum) {
     int: i128,
     uint: u128,
@@ -594,7 +594,7 @@ pub const LirEvalResult = union(enum) {
     }
 };
 
-/// Evaluate an expression using the LIR interpreter and return a typed result.
+/// Evaluate an expression using the interpreter and return a typed result.
 /// Does NOT wrap in Str.inspect — reads the raw value using its layout.
 pub fn lirInterpreterEval(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) !LirEvalResult {
     var lir_prog = LirProgram.init(allocator, base.target.TargetUsize.native);
@@ -664,8 +664,8 @@ pub fn lirInterpreterEval(allocator: std.mem.Allocator, module_env: *ModuleEnv, 
     }
 }
 
-/// Evaluate an expression using the LIR interpreter and return the formatted result.
-/// The LIR interpreter lowers CIR → MIR → LIR → RC, then interprets the LIR directly.
+/// Evaluate an expression using the interpreter and return the formatted result.
+/// The interpreter lowers CIR → MIR → LIR → RC, then interprets the LIR directly.
 /// Returns an error if any stage fails (lowering, evaluation, or formatting).
 pub fn lirInterpreterStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) ![]const u8 {
     // Wrap in Str.inspect — same approach as devEvaluatorStr/wasmEvaluatorStr.
@@ -2547,7 +2547,7 @@ pub fn runExpectError(src: []const u8, expected_error: anyerror) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
-    // Use LIR interpreter: lowering or evaluation should produce an error
+    // Use interpreter: lowering or evaluation should produce an error
     _ = lirInterpreterStr(test_allocator, resources.module_env, resources.expr_idx, resources.builtin_module.env) catch |err| {
         try std.testing.expectEqual(expected_error, err);
         return;
@@ -2606,7 +2606,7 @@ pub fn runExpectI64(src: []const u8, expected_int: i128) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
-    // Use LIR interpreter as primary evaluator
+    // Use interpreter as primary evaluator
     const interpreter_str = try lirInterpreterStr(test_allocator, resources.module_env, resources.expr_idx, resources.builtin_module.env);
     defer test_allocator.free(interpreter_str);
 
@@ -2627,7 +2627,7 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
-    // Use LIR interpreter as primary evaluator
+    // Use interpreter as primary evaluator
     const interpreter_str = try lirInterpreterStr(test_allocator, resources.module_env, resources.expr_idx, resources.builtin_module.env);
     defer test_allocator.free(interpreter_str);
 
@@ -2647,14 +2647,14 @@ pub fn runExpectF32(src: []const u8, expected_f32: f32) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
-    // Use LIR interpreter as primary evaluator
+    // Use interpreter as primary evaluator
     const interpreter_str = try lirInterpreterStr(test_allocator, resources.module_env, resources.expr_idx, resources.builtin_module.env);
     defer test_allocator.free(interpreter_str);
 
     // Compare with other backends
     try compareFloatWithBackends(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env, f32);
 
-    // Verify expected f32 value by parsing the LIR interpreter output
+    // Verify expected f32 value by parsing the interpreter output
     const actual = std.fmt.parseFloat(f32, interpreter_str) catch {
         std.debug.print("Expected f32 {d}, got non-numeric '{s}'\n", .{ expected_f32, interpreter_str });
         return error.TestExpectedEqual;
@@ -2672,14 +2672,14 @@ pub fn runExpectF64(src: []const u8, expected_f64: f64) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
-    // Use LIR interpreter as primary evaluator
+    // Use interpreter as primary evaluator
     const interpreter_str = try lirInterpreterStr(test_allocator, resources.module_env, resources.expr_idx, resources.builtin_module.env);
     defer test_allocator.free(interpreter_str);
 
     // Compare with other backends
     try compareFloatWithBackends(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env, f64);
 
-    // Verify expected f64 value by parsing the LIR interpreter output
+    // Verify expected f64 value by parsing the interpreter output
     const actual = std.fmt.parseFloat(f64, interpreter_str) catch {
         std.debug.print("Expected f64 {d}, got non-numeric '{s}'\n", .{ expected_f64, interpreter_str });
         return error.TestExpectedEqual;
@@ -2698,7 +2698,7 @@ pub fn runExpectIntDec(src: []const u8, expected_int: i128) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
-    // Use LIR interpreter as primary evaluator
+    // Use interpreter as primary evaluator
     const interpreter_str = try lirInterpreterStr(test_allocator, resources.module_env, resources.expr_idx, resources.builtin_module.env);
     defer test_allocator.free(interpreter_str);
 
@@ -2721,7 +2721,7 @@ pub fn runExpectDec(src: []const u8, expected_dec_num: i128) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
-    // Use LIR interpreter as primary evaluator
+    // Use interpreter as primary evaluator
     const interpreter_str = try lirInterpreterStr(test_allocator, resources.module_env, resources.expr_idx, resources.builtin_module.env);
     defer test_allocator.free(interpreter_str);
 
@@ -2743,7 +2743,7 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
-    // Use LIR interpreter as primary evaluator
+    // Use interpreter as primary evaluator
     const interpreter_str = try lirInterpreterStr(test_allocator, resources.module_env, resources.expr_idx, resources.builtin_module.env);
     defer test_allocator.free(interpreter_str);
 
@@ -2796,7 +2796,7 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
-    // Use LIR interpreter as primary evaluator
+    // Use interpreter as primary evaluator
     const interpreter_str = try lirInterpreterStr(test_allocator, resources.module_env, resources.expr_idx, resources.builtin_module.env);
     defer test_allocator.free(interpreter_str);
 
@@ -2819,7 +2819,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField) 
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
-    // Use LIR interpreter as primary evaluator
+    // Use interpreter as primary evaluator
     const interpreter_str = try lirInterpreterStr(test_allocator, resources.module_env, resources.expr_idx, resources.builtin_module.env);
     defer test_allocator.free(interpreter_str);
 
@@ -2846,7 +2846,7 @@ pub fn runExpectListZst(src: []const u8, expected_element_count: usize) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
-    // Use LIR interpreter as primary evaluator
+    // Use interpreter as primary evaluator
     const interpreter_str = try lirInterpreterStr(test_allocator, resources.module_env, resources.expr_idx, resources.builtin_module.env);
     defer test_allocator.free(interpreter_str);
 
@@ -2873,7 +2873,7 @@ pub fn runExpectListI64(src: []const u8, expected_elements: []const i64) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
-    // Use LIR interpreter as primary evaluator
+    // Use interpreter as primary evaluator
     const interpreter_str = try lirInterpreterStr(test_allocator, resources.module_env, resources.expr_idx, resources.builtin_module.env);
     defer test_allocator.free(interpreter_str);
 
@@ -2897,7 +2897,7 @@ pub fn runExpectEmptyListI64(src: []const u8) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
-    // Use LIR interpreter as primary evaluator
+    // Use interpreter as primary evaluator
     const interpreter_str = try lirInterpreterStr(test_allocator, resources.module_env, resources.expr_idx, resources.builtin_module.env);
     defer test_allocator.free(interpreter_str);
 
@@ -2918,7 +2918,7 @@ pub fn runExpectUnit(src: []const u8) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
-    // Use LIR interpreter as primary evaluator
+    // Use interpreter as primary evaluator
     const interpreter_str = try lirInterpreterStr(test_allocator, resources.module_env, resources.expr_idx, resources.builtin_module.env);
     defer test_allocator.free(interpreter_str);
 
@@ -7119,7 +7119,7 @@ test "eval tag - already primitive" {
     const resources = try parseAndCanonicalizeExpr(test_allocator, "True");
     defer cleanupParseAndCanonical(test_allocator, resources);
 
-    // Use LIR interpreter to evaluate "True"
+    // Use interpreter to evaluate "True"
     const interpreter_str = try lirInterpreterStr(test_allocator, resources.module_env, resources.expr_idx, resources.builtin_module.env);
     defer test_allocator.free(interpreter_str);
 
@@ -7128,7 +7128,7 @@ test "eval tag - already primitive" {
         std.mem.eql(u8, interpreter_str, "1"));
 }
 
-test "LIR interpreter evaluates multiple expressions" {
+test "interpreter evaluates multiple expressions" {
     const cases = [_]struct {
         src: []const u8,
         expected: i128,
@@ -7142,7 +7142,7 @@ test "LIR interpreter evaluates multiple expressions" {
         const resources = try parseAndCanonicalizeExpr(test_allocator, case.src);
         defer cleanupParseAndCanonical(test_allocator, resources);
 
-        // Use LIR interpreter as primary evaluator
+        // Use interpreter as primary evaluator
         const interpreter_str = try lirInterpreterStr(test_allocator, resources.module_env, resources.expr_idx, resources.builtin_module.env);
         defer test_allocator.free(interpreter_str);
 

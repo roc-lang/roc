@@ -1,4 +1,4 @@
-//! Type definitions for the stack-safe LIR interpreter eval engine.
+//! Type definitions for the stack-safe interpreter eval engine.
 //!
 //! Two explicit stacks replace Zig recursion:
 //! - **WorkStack** `ArrayList(WorkItem)` — LIFO queue of "what to evaluate next"

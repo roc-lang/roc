@@ -1809,7 +1809,7 @@ test "I128: rem_by" {
 // runExpectF32() and runExpectF64() helper functions that have been added to
 // helpers.zig.
 //
-// The StackValue module already has asF32(), asF64(), and asDec() methods
+// The Value module already has asF32(), asF64(), and asDec() methods
 // available for reading floating-point values.
 //
 // Example test structure (currently commented out):

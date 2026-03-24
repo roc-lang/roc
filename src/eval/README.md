@@ -1,99 +1,97 @@
 # Interpreter Overview
 
-This directory contains Roc's interpreter. It is the implementation that powers
-the REPL, snapshot tooling, and the evaluation tests that exercise the
-type-carrying runtime. This document introduces the core pieces so a new
-contributor can navigate the code without prior context.
+This directory contains Roc's interpreter. It powers the REPL, the interpreter
+shim (for `roc run` and `roc build` in interpreter mode), and the evaluation
+tests. This document introduces the core pieces so a new contributor can
+navigate the code without prior context.
 
 ## High-Level Architecture
 
-- **`src/eval/interpreter.zig`** exports `Interpreter`. Each instance owns the
-  runtime state needed to evaluate expressions:
-  - A runtime `types.Store` where compile-time Vars are translated and unified.
-  - A runtime `layout.Store` plus an O(1) `var_to_layout_slot` cache that maps
-    runtime Vars to layouts.
-  - A translation cache from `(ModuleEnv pointer, compile-time Var)` to runtime
-    Var so we never duplicate work across expressions.
-  - A polymorphic instantiation cache keyed by function id + runtime arg Vars to
-    avoid repeatedly re-unifying hot polymorphic calls.
-  - A small `stack.Stack` used for temporary values, a binding list that models
-    lexical scopes, and helper state for closures and boolean tags.
+The interpreter works by lowering Canonical IR (CIR) through a multi-stage
+pipeline, then interpreting the resulting LIR directly:
 
-- **`src/eval/StackValue.zig`** describes how values live in memory during
-  evaluation. Each `StackValue` pairs a layout with a pointer (if any) and knows
-  how to copy, move, and decref itself using the runtime layout store.
+```
+CIR → MIR → LIR → RC → Interpret
+```
 
-- **`src/eval/render_helpers.zig`** renders values using the same type
-  information the interpreter carries. The interpreter delegates to these
-  helpers for REPL output and tests.
+### Core Modules
+
+- **`interpreter.zig`** exports `LirInterpreter`. Each instance evaluates LIR
+  expressions using a stack-safe iterative architecture with two explicit stacks:
+  - A `WorkStack` of items to evaluate (expressions, control-flow statements,
+    and continuations).
+  - A `ValueStack` of results from completed sub-expressions.
+  - A flat `ArrayList` of bindings modeling lexical scopes (push on entry, trim
+    on exit — no cloning).
+
+- **`work_stack.zig`** defines the `WorkItem` and `Continuation` types that
+  drive the stack-safe eval engine. `WorkItem` has three variants: `eval_expr`,
+  `eval_cf_stmt`, and `apply_continuation`. There are ~25 continuation variants
+  covering function calls, aggregate construction, control flow, loops, etc.
+
+- **`value.zig`** defines `Value` — a raw pointer to bytes in memory. Values
+  carry no runtime type information; the layout is always tracked separately
+  via `layout.Idx`.
+
+- **`cir_to_lir.zig`** centralizes the CIR → MIR → LIR → RC lowering pipeline.
+  `LirProgram` manages a global layout store (shared across evaluations) and
+  provides `lowerExpr` / `lowerEntrypointExpr` entry points.
+
+- **`runner.zig`** is the unified backend dispatcher. It selects between
+  interpreter, dev, LLVM, or WASM backends at comptime for dead-code
+  elimination.
 
 ## Evaluation Flow
 
-1. **Canonical inputs** – Consumers (REPL, tests, snapshot tool) parse and
-   canonicalize Roc source, then hand a `ModuleEnv` and canonical expression idx
-   to the interpreter.
-2. **Initialization** – `Interpreter.init` translates the initial module types
-   into the runtime store, ensures the slot cache is sized appropriately, and
-   sets up the auxiliary state (stack, binding list, poly cache).
-3. **Minimal evaluation** – `eval` drives evaluation by calling
-   `evalExprMinimal`. The interpreter pattern-matches on canonical expression
-   tags (records, tuples, pattern matches, binops, calls, etc.), evaluates
-   children recursively, and produces a `StackValue` annotated with layout.
-4. **Type translation on demand** – When an expression needs type information
-   (e.g. to render a value or create a layout), `translateTypeVar` copies the
-   compile-time Var into the runtime store and caches the result.
-5. **Layouts on demand** – `getRuntimeLayout` looks up or computes the layout
-   for a runtime Var using the slot cache. Layouts are stored in the runtime
-   layout store so subsequent lookups are cheap.
-6. **Polymorphic calls** – Before a function call, `prepareCall` consults the
-   poly cache. The interpreter only re-runs the runtime unifier if it has not
-   seen that combination of function id + argument Vars before.
-7. **Crash handling** – Crash/expect expressions delegate to the host via
+1. **Canonical inputs** — Consumers (REPL, tests, CLI) parse and canonicalize
+   Roc source, producing a `ModuleEnv` and canonical expression index.
+2. **Lowering** — `LirProgram.lowerExpr()` or `lowerEntrypointExpr()` runs the
+   CIR → MIR → LIR → RC pipeline, producing a `LirStore` and entry expression.
+3. **Interpretation** — `LirInterpreter.init()` creates the interpreter, then
+   `eval()` or `evalEntrypoint()` runs the stack-safe engine.
+4. **Stack-safe engine** — `evalStackSafe()` is the main loop. It pops work
+   items, dispatches expression evaluation, and pushes continuations + values.
+   Immediates (literals, lookups) push values directly; compound expressions
+   schedule continuations for post-evaluation assembly.
+5. **Crash handling** — Crash/expect expressions delegate to the host via
    `RocOps.crash`. Hosts supply a `CrashContext` (see `crash_context.zig`) to
-   record messages; the interpreter keeps no internal crash state.
+   record messages.
 
-All RocOps interactions (alloc, dealloc, crash, expect) happen through the
-`RocOps` pointer passed into `eval`. This keeps host integrations (REPL,
-snapshot tool, CLI) consistent.
-
-## Rendering
-
-`renderValueRoc` and `renderValueRocWithType` assemble human-readable strings
-using the same type information the interpreter evaluated with. Rendering only
-reads from `StackValue` and the runtime layout store, so callers should decref
-the evaluated value *after* rendering.
-
-## Extending the Interpreter
-
-- **New expression forms** – Add cases to `evalExprMinimal`. Most cases follow a
-  pattern: translate sub-expressions, obtain or build layouts, then use the
-  helpers in `StackValue` to initialize the result.
-- **New data shapes** – Extend layout translation in
-  `translateTypeVar`/`getRuntimeLayout` and teach `StackValue` how to copy or
-  decref the shape.
-- **Rendering** – Update `render_helpers.zig` and ensure the interpreter calls
-  the appropriate helper.
-
-When making changes, run `zig build test`. Interpreter-specific coverage lives
-in:
-
-- `src/eval/test/interpreter_style_test.zig` – End-to-end Roc-syntax tests that
-  parse, canonicalize, evaluate, and render.
-- `src/eval/test/interpreter_polymorphism_test.zig` – Scenarios that exercise
-  the polymorphism cache and runtime unifier.
-- `src/repl/repl_test.zig` – Integration-style tests that ensure the REPL uses
-  the interpreter correctly.
+All RocOps interactions (alloc, dealloc, crash, expect, dbg) happen through the
+`RocOps` pointer. This keeps host integrations consistent.
 
 ## Host Integrations
 
-- **REPL** (`src/repl/Repl.zig`) constructs a fresh interpreter per evaluation,
-  feeds it a canonical expression, then renders values through the interpreter’s
-  helpers.
-- **Snapshot tool** (`src/snapshot_tool/main.zig`) uses the same interpreter to
-  evaluate each snapshot input with optional tracing.
-- **Interpreter shim** (`src/interpreter_shim/main.zig`) provides a C-callable
-  entry point that deserializes a `ModuleEnv`, constructs an interpreter, and
-  returns rendered output.
+- **REPL** (`src/repl/eval.zig`) — `evaluateWithInterpreter()` lowers and
+  evaluates each expression, returning formatted output.
+- **Interpreter shim** (`src/interpreter_shim/main.zig`) — Provides a
+  C-callable entry point (`roc_entrypoint`) that receives a `ModuleEnv` via
+  shared memory or embedded data, lowers it, and evaluates via the interpreter.
+- **CLI run** (`src/cli/main.zig`) — `rocRun()` dispatches through
+  `eval.runner.runtimeRun()` which calls `runViaInterpreter()`.
+- **Test runner** (`test_runner.zig`) — Evaluates expect expressions using
+  the interpreter pipeline.
+
+## Tests
+
+Interpreter-specific coverage lives in `src/eval/test/`:
+
+- `eval_test.zig` — End-to-end tests that parse, canonicalize, lower, and
+  evaluate Roc expressions.
+- `helpers.zig` — Test harness with `lirInterpreterStr()` and
+  `lirInterpreterEval()` for running the interpreter in tests.
+  `compareWithDevEvaluator()` cross-checks interpreter output against the
+  dev backend.
+- `arithmetic_comprehensive_test.zig` — Comprehensive numeric operation tests.
+- `list_refcount_*.zig` — Reference counting tests for list operations.
+- `closure_test.zig`, `low_level_interp_test.zig`, `anno_only_interp_test.zig`
+  — Targeted test suites for specific interpreter features.
+
+Run tests with:
+
+```bash
+zig build test-eval --summary all -- --test-filter "pattern"
+```
 
 ## Debugging
 
@@ -105,17 +103,7 @@ zig build -Dtrace-eval=true
 ```
 
 This flag is automatically enabled in Debug builds (`-Doptimize=Debug`). When
-enabled, the interpreter outputs detailed information about evaluation steps,
-which is useful for debugging issues in the interpreter or understanding how
-expressions are evaluated.
-
-For snapshot testing with tracing, use the `--trace-eval` flag:
-
-```bash
-./zig-out/bin/snapshot --trace-eval path/to/snapshot.md
-```
-
-Note: `--trace-eval` only works with REPL-type snapshots (`type=repl`).
+enabled, the interpreter outputs detailed information about evaluation steps.
 
 ### Refcount Tracing
 
@@ -133,21 +121,5 @@ When enabled, this outputs detailed refcount operations to stderr:
 [REFCOUNT] INCREF str ptr=0x1234 len=5 cap=32
 ```
 
-This is useful for:
-- Debugging segfaults in list/string operations
-- Verifying correct refcounting in new builtins
-- Understanding memory lifecycle during evaluation
-
 Unlike `-Dtrace-eval`, this flag defaults to `false` even in Debug builds due to
 the volume of output it produces.
-
-## Tips for Contributors
-
-- Use the provided helpers (`StackValue.copyToPtr`, `StackValue.decref`, render
-  functions) instead of manipulating raw pointers—this keeps refcounting
-  correct.
-- The runtime stores (`runtime_types`, `runtime_layout_store`) are owned by the
-  interpreter instance. Reuse the same interpreter when evaluating multiple
-  expressions inside a single host context so caches pay off.
-- When debugging type translation, the `tests/interpreter_*` suites have targeted
-  examples that illustrate expected behaviour.

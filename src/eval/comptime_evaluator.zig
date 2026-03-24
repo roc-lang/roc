@@ -542,7 +542,7 @@ pub const ComptimeEvaluator = struct {
         return &(self.roc_ops.?);
     }
 
-    /// Evaluates a single declaration via LIR interpreter
+    /// Evaluates a single declaration via interpreter
     fn evalDecl(self: *ComptimeEvaluator, def_idx: CIR.Def.Idx) !EvalResult {
         const def = self.env.store.getDef(def_idx);
         const expr_idx = def.expr;
@@ -610,7 +610,7 @@ pub const ComptimeEvaluator = struct {
         };
         defer lower_result.deinit();
 
-        // Evaluate via LIR interpreter
+        // Evaluate via interpreter
         var interp = try LirInterpreter.init(self.allocator, &lower_result.lir_store, lower_result.layout_store, self.io);
         interp.detect_infinite_while_loops = true;
         defer interp.deinit();
@@ -1209,7 +1209,7 @@ pub const ComptimeEvaluator = struct {
             return false;
         };
 
-        // Evaluate via LIR interpreter
+        // Evaluate via interpreter
         var interp = try LirInterpreter.init(self.allocator, &lower_result.lir_store, lower_result.layout_store, self.io);
         interp.detect_infinite_while_loops = true;
         defer interp.deinit();
@@ -1595,7 +1595,7 @@ pub const ComptimeEvaluator = struct {
         ) catch return false;
         defer lower_result.deinit();
 
-        // Evaluate via LIR interpreter
+        // Evaluate via interpreter
         var interp = try LirInterpreter.init(self.allocator, &lower_result.lir_store, lower_result.layout_store, self.io);
         interp.detect_infinite_while_loops = true;
         defer interp.deinit();

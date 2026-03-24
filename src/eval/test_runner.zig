@@ -1,6 +1,6 @@
 //! Runs expect expressions
 //!
-//! This module evaluates expect expressions using the LIR interpreter pipeline.
+//! This module evaluates expect expressions using the interpreter pipeline.
 //! CIR expressions are lowered through CIR → MIR → LIR → RC, then evaluated directly.
 
 const std = @import("std");
@@ -142,7 +142,7 @@ pub const TestRunner = struct {
         };
         defer lower_result.deinit();
 
-        // Create LIR interpreter and evaluate
+        // Create interpreter and evaluate
         var interp = try LirInterpreter.init(
             self.allocator,
             &lower_result.lir_store,

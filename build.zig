@@ -242,11 +242,6 @@ const CheckTypeCheckerPatternsStep = struct {
         // because ident indices are module-local — same nominal from different modules
         // has different Ident.Idx values, so we must compare the underlying strings
         .{ .file = "store.zig", .start = 340, .end = 355 },
-        // Interpreter record field lookup by name in StackValue.zig requires string comparison
-        // because ident indices are module-local — the same field name from different
-        // modules has different Ident.Idx values, so we must compare the underlying strings.
-        // This exclusion can go away once the deprecated interpreter is finally removed.
-        .{ .file = "StackValue.zig", .start = 1150, .end = 1220 },
         // Cross-module ident matching in cir_to_lir.zig requires string comparison
         // because platform and app modules have separate ident stores — the same alias
         // name has different Ident.Idx values across modules, so we must compare via text.
@@ -685,7 +680,6 @@ const CheckPanicStep = struct {
     // Files to scan individually
     const scan_files = [_][]const u8{
         "src/eval/interpreter.zig",
-        "src/eval/StackValue.zig",
     };
 
     // Directories to scan (all .zig files within)
@@ -852,7 +846,7 @@ const CheckPanicStep = struct {
                 \\
                 \\    self.triggerCrash("Description of the error", false, roc_ops);
                 \\
-                \\  In StackValue.zig and builtins, use roc_ops.crash():
+                \\  In builtins, use roc_ops.crash():
                 \\
                 \\    roc_ops.crash("Description of the error");
                 \\

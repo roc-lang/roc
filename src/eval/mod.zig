@@ -28,11 +28,11 @@ pub const CrashState = crash_context.CrashState;
 /// Compile-time expression evaluator for constant folding
 pub const ComptimeEvaluator = @import("comptime_evaluator.zig").ComptimeEvaluator;
 
-// --- LIR interpreter (primary) ---
+// --- Interpreter (primary) ---
 /// Shared CIR → MIR → LIR → RC lowering pipeline
 pub const cir_to_lir = @import("cir_to_lir.zig");
 pub const LirProgram = cir_to_lir.LirProgram;
-/// Concrete runtime value for the LIR interpreter
+/// Concrete runtime value for the interpreter
 pub const value = @import("value.zig");
 pub const Value = value.Value;
 /// LIR expression interpreter
@@ -40,9 +40,6 @@ pub const interpreter = @import("interpreter.zig");
 pub const LirInterpreter = interpreter.LirInterpreter;
 /// Stack-safe eval engine types (WorkItem, Continuation, FlatBinding)
 pub const work_stack = @import("work_stack.zig");
-/// Layout-based value formatter for the LIR interpreter
-pub const value_format = @import("value_format.zig");
-
 /// Backend selection for expression evaluation
 pub const EvalBackend = enum {
     interpreter,
@@ -58,7 +55,7 @@ pub const EvalBackend = enum {
 /// Unified evaluation runner for all backends
 pub const runner = @import("runner.zig");
 
-/// Test runner for expect expressions (uses LIR interpreter)
+/// Test runner for expect expressions (uses interpreter)
 pub const TestRunner = @import("test_runner.zig").TestRunner;
 /// LLVM-based evaluator for optimized code generation
 pub const LlvmEvaluator = @import("llvm_evaluator.zig").LlvmEvaluator;
@@ -82,7 +79,7 @@ test "eval tests" {
     std.testing.refAllDecls(@import("interpreter.zig"));
     std.testing.refAllDecls(@import("fold_type.zig"));
     std.testing.refAllDecls(@import("value_to_cir.zig"));
-    std.testing.refAllDecls(@import("value_format.zig"));
+
     std.testing.refAllDecls(@import("work_stack.zig"));
     std.testing.refAllDecls(@import("wasm_evaluator.zig"));
     std.testing.refAllDecls(@import("stack.zig"));

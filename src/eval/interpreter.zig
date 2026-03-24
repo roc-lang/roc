@@ -1,14 +1,13 @@
-//! LIR Expression Interpreter
+//! Expression Interpreter
 //!
 //! Evaluates post-RC LIR expressions directly, producing concrete runtime values.
-//!
-//! This interpreter replaces the CIR-based interpreter by consuming the same
-//! lowered IR already used by the dev and wasm code generators.
+//! Consumes the same lowered IR used by the dev and wasm code generators.
 //!
 //! Design principles:
+//! - Stack-safe iterative evaluation via WorkStack + ValueStack
 //! - Values are raw (pointer, layout) pairs — no runtime type variables
 //! - RC ops (incref/decref/free) are executed literally from LIR
-//! - Symbol-based environment (no pattern-index lookup)
+//! - Symbol-based environment with flat ArrayList bindings
 //! - Follow the LIR control flow exactly
 
 const std = @import("std");
@@ -53,7 +52,7 @@ const JmpBuf = sljmp.JmpBuf;
 const setjmp = sljmp.setjmp;
 const longjmp = sljmp.longjmp;
 
-/// Environment for RocOps in the LIR interpreter.
+/// Environment for RocOps in the interpreter.
 /// Uses a thread-local static buffer for allocation (same pattern as DevRocEnv)
 /// to avoid Zig allocator vtable issues from C-calling-convention callbacks.
 const InterpreterRocEnv = struct {

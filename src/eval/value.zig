@@ -1,4 +1,4 @@
-//! Concrete runtime value representation for the LIR interpreter.
+//! Concrete runtime value representation for the interpreter.
 //!
 //! A `Value` is a raw pointer to bytes in memory. It carries no runtime type
 //! information — the layout is always tracked separately via `layout.Idx`.
@@ -80,7 +80,7 @@ pub const Value = struct {
 /// Helpers for computing layout sizes, offsets, and field access.
 ///
 /// This wraps a `layout.Store` pointer and provides the queries
-/// that the LIR interpreter needs during expression evaluation.
+/// that the interpreter needs during expression evaluation.
 pub const LayoutHelper = struct {
     store: *const layout_mod.Store,
 

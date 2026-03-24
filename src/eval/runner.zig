@@ -191,7 +191,7 @@ fn runViaDev(
     };
 }
 
-/// Run via the LIR interpreter.
+/// Run via the interpreter.
 fn runViaInterpreter(
     gpa: Allocator,
     platform_env: *ModuleEnv,
@@ -263,7 +263,7 @@ fn runViaInterpreter(
     ) catch return error.CompilationFailed;
     defer lower_result.deinit();
 
-    // Create LIR interpreter and evaluate
+    // Create interpreter and evaluate
     var interp = try eval_mod.LirInterpreter.init(gpa, &lower_result.lir_store, lower_result.layout_store, null);
     defer interp.deinit();
 
@@ -276,7 +276,7 @@ fn runViaInterpreter(
         result_ptr,
     ) catch |err| {
         if (comptime builtin.os.tag != .freestanding) {
-            std.debug.print("LIR interpreter error: {}\n", .{err});
+            std.debug.print("Interpreter error: {}\n", .{err});
         }
         return error.EvalFailed;
     };

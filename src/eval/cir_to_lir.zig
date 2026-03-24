@@ -1,7 +1,7 @@
 //! Shared LIR Lowering Pipeline
 //!
 //! Centralizes the CIR → MIR → LIR → RC lowering pipeline used by
-//! dev_evaluator, wasm_evaluator, and the LIR interpreter.
+//! dev_evaluator, wasm_evaluator, and the interpreter.
 //!
 //! Manages a global layout store (shared across evaluations) and provides
 //! a single `lowerExpr` entry point that produces post-RC LIR ready for
