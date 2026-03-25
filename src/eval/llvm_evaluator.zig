@@ -243,7 +243,8 @@ pub const LlvmEvaluator = struct {
 
         pub fn deinit(self: *CodeResult) void {
             self.library.close();
-            std.fs.cwd().deleteTree(std.mem.sliceTo(self.temp_dir_path, 0)) catch {};
+            const llvm_compile = @import("llvm_compile");
+            llvm_compile.deleteTempArtifactDir(self.temp_dir_path);
             self.allocator.free(self.temp_dir_path);
             self.allocator.free(self.library_path);
             // Note: layout_store is owned by LlvmEvaluator, not cleaned up here
@@ -263,7 +264,8 @@ pub const LlvmEvaluator = struct {
 
         pub fn deinit(self: *EntrypointCodeResult) void {
             self.library.close();
-            std.fs.cwd().deleteTree(std.mem.sliceTo(self.temp_dir_path, 0)) catch {};
+            const llvm_compile = @import("llvm_compile");
+            llvm_compile.deleteTempArtifactDir(self.temp_dir_path);
             self.allocator.free(self.temp_dir_path);
             self.allocator.free(self.library_path);
         }

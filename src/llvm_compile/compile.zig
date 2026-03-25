@@ -111,11 +111,15 @@ pub const SharedLibraryArtifact = struct {
     library_path: [:0]const u8,
 
     pub fn deinit(self: *SharedLibraryArtifact) void {
-        std.fs.cwd().deleteTree(std.mem.sliceTo(self.temp_dir_path, 0)) catch {};
+        deleteTempArtifactDir(self.temp_dir_path);
         self.allocator.free(self.library_path);
         self.allocator.free(self.temp_dir_path);
     }
 };
+
+pub fn deleteTempArtifactDir(temp_dir_path: [:0]const u8) void {
+    std.fs.cwd().deleteTree(std.mem.sliceTo(temp_dir_path, 0)) catch {};
+}
 
 const TempArtifactDir = struct {
     allocator: Allocator,
