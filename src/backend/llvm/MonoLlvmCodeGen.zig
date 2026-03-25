@@ -5736,6 +5736,49 @@ pub const MonoLlvmCodeGen = struct {
                 return try self.callListSublist(args[0], start_val, count_val, ll);
             },
 
+            .list_drop_at => {
+                // list_drop_at(list, index) -> list with the indexed element removed
+                std.debug.assert(args.len == 2);
+                const dest_ptr = self.out_ptr orelse return error.CompilationFailed;
+                const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+                const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+                const elem_info = try self.getListElementInfo(ll.ret_layout);
+
+                const list_ptr = try self.materializeAsPtr(args[0], 24);
+                const saved = self.out_ptr;
+                self.out_ptr = null;
+                const index_val = try self.generateExpr(args[1]);
+                self.out_ptr = saved;
+
+                const off8 = builder.intValue(.i32, 8) catch return error.OutOfMemory;
+                const off16 = builder.intValue(.i32, 16) catch return error.OutOfMemory;
+                const list_bytes = wip.load(.normal, ptr_type, list_ptr, alignment, "") catch return error.CompilationFailed;
+                const len_ptr = wip.gep(.inbounds, .i8, list_ptr, &.{off8}, "") catch return error.CompilationFailed;
+                const list_len = wip.load(.normal, .i64, len_ptr, alignment, "") catch return error.CompilationFailed;
+                const cap_ptr = wip.gep(.inbounds, .i8, list_ptr, &.{off16}, "") catch return error.CompilationFailed;
+                const list_cap = wip.load(.normal, .i64, cap_ptr, alignment, "") catch return error.CompilationFailed;
+
+                const roc_ops = self.roc_ops_arg orelse return error.CompilationFailed;
+                const align_val = builder.intValue(.i32, elem_info.elem_align) catch return error.OutOfMemory;
+                const width_val = builder.intValue(.i64, elem_info.elem_size) catch return error.OutOfMemory;
+                const elements_refcounted_val = builder.intValue(.i1, @intFromBool(elem_info.elements_refcounted)) catch return error.OutOfMemory;
+
+                _ = try self.callBuiltin("roc_builtins_list_drop_at", .void, &.{
+                    ptr_type, ptr_type, .i64, .i64, .i32, .i64, .i64, .i1, ptr_type,
+                }, &.{
+                    dest_ptr,
+                    list_bytes,
+                    list_len,
+                    list_cap,
+                    align_val,
+                    width_val,
+                    index_val,
+                    elements_refcounted_val,
+                    roc_ops,
+                });
+                return .none;
+            },
+
             .list_take_last => {
                 // list_take_last(list, n) -> sublist(list, start=max(0,len-n), count=n)
                 std.debug.assert(args.len >= 2);

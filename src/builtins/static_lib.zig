@@ -58,6 +58,7 @@ comptime {
     @export(&dw.roc_builtins_list_concat, .{ .name = "roc_builtins_list_concat" });
     @export(&dw.roc_builtins_list_prepend, .{ .name = "roc_builtins_list_prepend" });
     @export(&dw.roc_builtins_list_sublist, .{ .name = "roc_builtins_list_sublist" });
+    @export(&dw.roc_builtins_list_drop_at, .{ .name = "roc_builtins_list_drop_at" });
     @export(&dw.roc_builtins_list_replace, .{ .name = "roc_builtins_list_replace" });
     @export(&dw.roc_builtins_list_reserve, .{ .name = "roc_builtins_list_reserve" });
     @export(&dw.roc_builtins_list_release_excess_capacity, .{ .name = "roc_builtins_list_release_excess_capacity" });
