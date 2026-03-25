@@ -2344,8 +2344,7 @@ pub const MonoLlvmCodeGen = struct {
         payload_layout: layout.Idx,
     };
 
-    fn materializeTagValuePtr(self: *MonoLlvmCodeGen, value: LlvmBuilder.Value, union_layout_idx: layout.Idx, name: []const u8) Error!LlvmBuilder.Value {
-        _ = name;
+    fn materializeTagValuePtr(self: *MonoLlvmCodeGen, value: LlvmBuilder.Value, union_layout_idx: layout.Idx) Error!LlvmBuilder.Value {
         const builder = self.builder orelse return error.CompilationFailed;
         const stored_layout = (self.layout_store orelse return error.CompilationFailed).getLayout(union_layout_idx);
         const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
@@ -2407,7 +2406,7 @@ pub const MonoLlvmCodeGen = struct {
                     },
                     .transparent_payload => break :blk builder.intValue(.i8, 0) catch return error.OutOfMemory,
                     .indirect_pointer => {
-                        const root_ptr = try self.materializeTagValuePtr(value, union_layout_idx, "tag_value");
+                        const root_ptr = try self.materializeTagValuePtr(value, union_layout_idx);
                         const disc_type = discriminantIntType(tu_data.discriminant_size);
                         const disc_offset = builder.intValue(.i32, tu_data.discriminant_offset) catch return error.OutOfMemory;
                         const disc_ptr = wip.gep(.inbounds, .i8, root_ptr, &.{disc_offset}, "") catch return error.CompilationFailed;
@@ -2428,7 +2427,7 @@ pub const MonoLlvmCodeGen = struct {
                 switch (try self.tagUnionValueMode(stored_layout.data.box)) {
                     .scalar_discriminant, .transparent_payload => break :blk builder.intValue(.i8, 0) catch return error.OutOfMemory,
                     .indirect_pointer => {
-                        const root_ptr = try self.materializeTagValuePtr(value, union_layout_idx, "boxed_tag_value");
+                        const root_ptr = try self.materializeTagValuePtr(value, union_layout_idx);
                         const disc_type = discriminantIntType(tu_data.discriminant_size);
                         const disc_offset = builder.intValue(.i32, tu_data.discriminant_offset) catch return error.OutOfMemory;
                         const disc_ptr = wip.gep(.inbounds, .i8, root_ptr, &.{disc_offset}, "") catch return error.CompilationFailed;
@@ -2463,12 +2462,12 @@ pub const MonoLlvmCodeGen = struct {
                     .transparent_payload => {
                         if (discriminant != 0) return error.CompilationFailed;
                         break :blk .{
-                            .root_ptr = try self.materializeTagValuePtr(value, union_layout_idx, "tag_payload"),
+                            .root_ptr = try self.materializeTagValuePtr(value, union_layout_idx),
                             .payload_layout = variants.get(0).payload_layout,
                         };
                     },
                     .indirect_pointer => break :blk .{
-                        .root_ptr = try self.materializeTagValuePtr(value, union_layout_idx, "tag_payload"),
+                        .root_ptr = try self.materializeTagValuePtr(value, union_layout_idx),
                         .payload_layout = variants.get(@intCast(discriminant)).payload_layout,
                     },
                 }
@@ -2487,12 +2486,12 @@ pub const MonoLlvmCodeGen = struct {
                     .transparent_payload => {
                         if (discriminant != 0) return error.CompilationFailed;
                         break :blk .{
-                            .root_ptr = try self.materializeTagValuePtr(value, union_layout_idx, "boxed_tag_payload"),
+                            .root_ptr = try self.materializeTagValuePtr(value, union_layout_idx),
                             .payload_layout = variants.get(0).payload_layout,
                         };
                     },
                     .indirect_pointer => break :blk .{
-                        .root_ptr = try self.materializeTagValuePtr(value, union_layout_idx, "boxed_tag_payload"),
+                        .root_ptr = try self.materializeTagValuePtr(value, union_layout_idx),
                         .payload_layout = variants.get(@intCast(discriminant)).payload_layout,
                     },
                 }
@@ -2702,7 +2701,7 @@ pub const MonoLlvmCodeGen = struct {
                 return switch (try self.tagUnionValueMode(tpa.union_layout)) {
                     .scalar_discriminant => raw_value,
                     .transparent_payload => blk: {
-                        const payload_ptr = try self.materializeTagValuePtr(raw_value, tpa.union_layout, "tag_payload_access");
+                        const payload_ptr = try self.materializeTagValuePtr(raw_value, tpa.union_layout);
                         break :blk try self.loadFieldValueFromPtr(payload_ptr, tpa.payload_layout);
                     },
                     .indirect_pointer => self.loadFieldValueFromPtr(raw_value, tpa.payload_layout),
