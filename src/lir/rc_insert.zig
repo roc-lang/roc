@@ -1554,7 +1554,22 @@ pub const RcInsertPass = struct {
             },
             .for_loop => |fl| blk: {
                 const new_list_expr = try self.retainConsumedOperandsForLaterUse(fl.list_expr, later_uses, region);
-                const new_body = try self.retainConsumedOperandsForLaterUse(fl.body, later_uses, region);
+
+                const live_len = self.live_rc_symbols.items.len;
+                var loop_carried_keys = std.AutoHashMap(u64, void).init(self.allocator);
+                defer loop_carried_keys.deinit();
+                try self.collectLoopCarriedLiveOwnerKeys(live_len, fl.body, &loop_carried_keys);
+
+                var body_later_uses_storage: ?std.AutoHashMap(u64, u32) = null;
+                defer if (body_later_uses_storage) |*uses| uses.deinit();
+                const body_later_uses = if (loop_carried_keys.count() == 0)
+                    later_uses
+                else blk2: {
+                    body_later_uses_storage = try self.cloneUsesExcludingOwnerKeys(later_uses, &loop_carried_keys);
+                    break :blk2 &body_later_uses_storage.?;
+                };
+
+                const new_body = try self.retainConsumedOperandsForLaterUse(fl.body, body_later_uses, region);
                 if (new_list_expr == fl.list_expr and new_body == fl.body) break :blk expr_id;
                 break :blk try self.store.addExpr(.{ .for_loop = .{
                     .list_expr = new_list_expr,
@@ -1565,7 +1580,22 @@ pub const RcInsertPass = struct {
             },
             .while_loop => |wl| blk: {
                 const new_cond = try self.retainConsumedOperandsForLaterUse(wl.cond, later_uses, region);
-                const new_body = try self.retainConsumedOperandsForLaterUse(wl.body, later_uses, region);
+
+                const live_len = self.live_rc_symbols.items.len;
+                var loop_carried_keys = std.AutoHashMap(u64, void).init(self.allocator);
+                defer loop_carried_keys.deinit();
+                try self.collectLoopCarriedLiveOwnerKeys(live_len, wl.body, &loop_carried_keys);
+
+                var body_later_uses_storage: ?std.AutoHashMap(u64, u32) = null;
+                defer if (body_later_uses_storage) |*uses| uses.deinit();
+                const body_later_uses = if (loop_carried_keys.count() == 0)
+                    later_uses
+                else blk2: {
+                    body_later_uses_storage = try self.cloneUsesExcludingOwnerKeys(later_uses, &loop_carried_keys);
+                    break :blk2 &body_later_uses_storage.?;
+                };
+
+                const new_body = try self.retainConsumedOperandsForLaterUse(wl.body, body_later_uses, region);
                 if (new_cond == wl.cond and new_body == wl.body) break :blk expr_id;
                 break :blk try self.store.addExpr(.{ .while_loop = .{
                     .cond = new_cond,
@@ -3631,6 +3661,20 @@ pub const RcInsertPass = struct {
         return self.cloneUsesExcludingOwnerKeys(source, &excluded_owner_keys);
     }
 
+    fn collectLoopCarriedLiveOwnerKeys(
+        self: *RcInsertPass,
+        live_len: usize,
+        body_expr: LirExprId,
+        target: *std.AutoHashMap(u64, void),
+    ) Allocator.Error!void {
+        for (self.live_rc_symbols.items[0..live_len]) |live| {
+            if (!live.reassignable) continue;
+            if (try self.exprMutatesSymbol(body_expr, live.symbol)) {
+                try target.put(live.key, {});
+            }
+        }
+    }
+
     /// Register a pattern's bound symbol with its layout into a given target map.
     fn registerPatternSymbolInto(self: *RcInsertPass, pat_id: LirPatternId, target: *std.AutoHashMap(u64, u32)) Allocator.Error!void {
         const Ctx = struct {
@@ -4950,12 +4994,7 @@ pub const RcInsertPass = struct {
 
         var loop_carried_keys = std.AutoHashMap(u64, void).init(self.allocator);
         defer loop_carried_keys.deinit();
-        for (self.live_rc_symbols.items[0..live_len]) |live| {
-            if (!live.reassignable) continue;
-            if (try self.exprMutatesSymbol(wl.body, live.symbol)) {
-                try loop_carried_keys.put(live.key, {});
-            }
-        }
+        try self.collectLoopCarriedLiveOwnerKeys(live_len, wl.body, &loop_carried_keys);
 
         const processed_cond = try self.processExpr(wl.cond);
         const new_cond = try self.wrapExprWithLiveDemandRcOps(
