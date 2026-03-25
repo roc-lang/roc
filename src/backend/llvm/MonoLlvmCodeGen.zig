@@ -1029,11 +1029,14 @@ pub const MonoLlvmCodeGen = struct {
     // Control Flow Statement generation (mirrors dev backend's generateStmt)
 
     fn generateStmt(self: *MonoLlvmCodeGen, stmt_id: CFStmtId) Error!void {
+        if (self.currentBlockHasTerminator()) return;
+
         const stmt = self.store.getCFStmt(stmt_id);
 
         switch (stmt) {
             .let_stmt => |let_s| {
                 const val = try self.generateExpr(let_s.value);
+                if (self.currentBlockHasTerminator()) return;
                 try self.bindPattern(let_s.pattern, val);
                 try self.generateStmt(let_s.next);
             },
@@ -1143,6 +1146,7 @@ pub const MonoLlvmCodeGen = struct {
             },
             .expr_stmt => |e| {
                 _ = try self.generateExpr(e.value);
+                if (self.currentBlockHasTerminator()) return;
                 try self.generateStmt(e.next);
             },
             .match_stmt => |ms| {
@@ -1150,6 +1154,7 @@ pub const MonoLlvmCodeGen = struct {
                 // Similar to match_expr but each branch is a statement, not an expression.
                 const wip = self.wip orelse return error.CompilationFailed;
                 const scrutinee = try self.generateExpr(ms.value);
+                if (self.currentBlockHasTerminator()) return;
                 const branches = self.store.getCFMatchBranches(ms.branches);
                 std.debug.assert(branches.len != 0);
 
@@ -1196,8 +1201,6 @@ pub const MonoLlvmCodeGen = struct {
                             wip.cursor = .{ .block = else_block };
                             if (is_last) {
                                 _ = wip.@"unreachable"() catch return error.CompilationFailed;
-                                const dead_block = wip.block(0, "after_match_nomatch") catch return error.OutOfMemory;
-                                wip.cursor = .{ .block = dead_block };
                             }
                         },
                         .float_literal, .str_literal => unreachable,
@@ -1212,6 +1215,7 @@ pub const MonoLlvmCodeGen = struct {
         const builder = self.builder orelse return error.CompilationFailed;
 
         const cond_val = try self.generateExpr(sw.cond);
+        if (self.currentBlockHasTerminator()) return;
         const branches = self.store.getCFSwitchBranches(sw.branches);
 
         if (branches.len == 0) {
@@ -2216,6 +2220,9 @@ pub const MonoLlvmCodeGen = struct {
 
         // Generate the value to switch on
         const value = try self.generateExpr(ds.value);
+        if (self.currentBlockHasTerminator()) {
+            return builder.poisonValue(try self.layoutToLlvmTypeFull(ds.result_layout)) catch return error.OutOfMemory;
+        }
 
         // Get branch expressions
         const branch_exprs = self.store.getExprSpan(ds.branches);
@@ -2223,8 +2230,19 @@ pub const MonoLlvmCodeGen = struct {
 
         const discriminant = try self.loadTagDiscriminant(value, ds.union_layout);
 
-        // Create basic blocks for each branch and the merge block
-        const merge_block = wip.block(@intCast(branch_exprs.len), "ds_merge") catch return error.OutOfMemory;
+        var merge_incoming: u32 = 0;
+        var branch_returns: [64]bool = undefined;
+        for (branch_exprs, 0..) |branch_expr_id, i| {
+            const reaches_merge = !self.exprNeverReturns(branch_expr_id);
+            branch_returns[i] = reaches_merge;
+            if (reaches_merge) merge_incoming += 1;
+        }
+
+        const has_merge = merge_incoming != 0;
+        const merge_block = if (has_merge)
+            try wip.block(merge_incoming, "ds_merge")
+        else
+            LlvmBuilder.Function.Block.Index.entry;
 
         // Generate branches as a chain of compare-and-branch (like if-else-if)
         // For each discriminant value, check if it matches, and if so generate that branch.
@@ -2249,11 +2267,13 @@ pub const MonoLlvmCodeGen = struct {
                 var branch_scope = try self.beginScope();
                 defer branch_scope.deinit();
                 const branch_val = try self.generateControlFlowValue(branch_expr_id, ds.result_layout);
-                _ = wip.br(merge_block) catch return error.OutOfMemory;
-                result_vals[branch_count] = branch_val;
-                result_blocks[branch_count] = wip.cursor.block;
+                if (branch_returns[i]) {
+                    _ = wip.br(merge_block) catch return error.OutOfMemory;
+                    result_vals[branch_count] = branch_val;
+                    result_blocks[branch_count] = wip.cursor.block;
+                    branch_count += 1;
+                }
                 try self.endScope(&branch_scope);
-                branch_count += 1;
 
                 // Else block — continue to next comparison
                 wip.cursor = .{ .block = else_block };
@@ -2262,12 +2282,18 @@ pub const MonoLlvmCodeGen = struct {
                 var branch_scope = try self.beginScope();
                 defer branch_scope.deinit();
                 const branch_val = try self.generateControlFlowValue(branch_expr_id, ds.result_layout);
-                _ = wip.br(merge_block) catch return error.OutOfMemory;
-                result_vals[branch_count] = branch_val;
-                result_blocks[branch_count] = wip.cursor.block;
+                if (branch_returns[i]) {
+                    _ = wip.br(merge_block) catch return error.OutOfMemory;
+                    result_vals[branch_count] = branch_val;
+                    result_blocks[branch_count] = wip.cursor.block;
+                    branch_count += 1;
+                }
                 try self.endScope(&branch_scope);
-                branch_count += 1;
             }
+        }
+
+        if (!has_merge) {
+            return builder.poisonValue(try self.layoutToLlvmTypeFull(ds.result_layout)) catch return error.OutOfMemory;
         }
 
         // Merge block
@@ -2322,8 +2348,10 @@ pub const MonoLlvmCodeGen = struct {
             }
         }
 
-        // Create blocks: cond has 2 incoming (entry + back-edge), body/exit have 1 each
-        const cond_block = wip.block(2, "while_cond") catch return error.OutOfMemory;
+        const body_returns = !self.exprNeverReturns(wl.body);
+
+        // Create blocks: cond has entry plus an optional back-edge from the body.
+        const cond_block = wip.block(1 + @as(u32, @intFromBool(body_returns)), "while_cond") catch return error.OutOfMemory;
         const body_block = wip.block(1, "while_body") catch return error.OutOfMemory;
         const exit_incoming = 1 + self.countBreakEdges(wl.body);
         const exit_block = wip.block(exit_incoming, "while_exit") catch return error.OutOfMemory;
@@ -2372,7 +2400,9 @@ pub const MonoLlvmCodeGen = struct {
             }
         }
         _ = try self.generateExpr(wl.body);
-        _ = wip.br(cond_block) catch return error.CompilationFailed;
+        if (!self.currentBlockHasTerminator()) {
+            _ = wip.br(cond_block) catch return error.CompilationFailed;
+        }
 
         // Exit block: load final values from allocas
         wip.cursor = .{ .block = exit_block };
@@ -2449,8 +2479,10 @@ pub const MonoLlvmCodeGen = struct {
             }
         }
 
-        // Create blocks: header (phi for index), body, exit
-        const header_block = wip.block(2, "for_header") catch return error.OutOfMemory;
+        const body_returns = !self.exprNeverReturns(fl.body);
+
+        // Create blocks: header gets entry plus an optional back-edge from the body.
+        const header_block = wip.block(1 + @as(u32, @intFromBool(body_returns)), "for_header") catch return error.OutOfMemory;
         const body_block = wip.block(1, "for_body") catch return error.OutOfMemory;
         const exit_incoming = 1 + self.countBreakEdges(fl.body);
         const exit_block = wip.block(exit_incoming, "for_exit") catch return error.OutOfMemory;
@@ -2494,17 +2526,28 @@ pub const MonoLlvmCodeGen = struct {
         _ = try self.generateExpr(fl.body);
 
         // Increment index and loop back
-        const one = builder.intValue(.i64, 1) catch return error.OutOfMemory;
-        const next_idx = wip.bin(.add, idx_val, one, "") catch return error.CompilationFailed;
         const body_end_block = wip.cursor.block;
-        _ = wip.br(header_block) catch return error.CompilationFailed;
+        var next_idx: LlvmBuilder.Value = .none;
+        if (!self.currentBlockHasTerminator()) {
+            const one = builder.intValue(.i64, 1) catch return error.OutOfMemory;
+            next_idx = wip.bin(.add, idx_val, one, "") catch return error.CompilationFailed;
+            _ = wip.br(header_block) catch return error.CompilationFailed;
+        }
 
-        // Finish phi: entry→0, body_end→next_idx
-        idx_phi.finish(
-            &.{ zero, next_idx },
-            &.{ entry_block, body_end_block },
-            wip,
-        );
+        // Finish phi with the entry edge and an optional loop back-edge.
+        if (body_returns) {
+            idx_phi.finish(
+                &.{ zero, next_idx },
+                &.{ entry_block, body_end_block },
+                wip,
+            );
+        } else {
+            idx_phi.finish(
+                &.{zero},
+                &.{entry_block},
+                wip,
+            );
+        }
 
         // Exit block: load final values from allocas into symbol_values
         wip.cursor = .{ .block = exit_block };
@@ -2692,22 +2735,33 @@ pub const MonoLlvmCodeGen = struct {
 
         // Evaluate the scrutinee
         const scrutinee = try self.generateExpr(w.value);
+        if (self.currentBlockHasTerminator()) {
+            return builder.poisonValue(try self.layoutToLlvmTypeFull(w.result_layout)) catch return error.OutOfMemory;
+        }
 
         // Get branches
         const branches = self.store.getMatchBranches(w.branches);
         std.debug.assert(branches.len != 0);
 
         // Compute the incoming count for the merge block by scanning patterns.
-        // Each branch contributes one incoming edge. Unconditional patterns
-        // (wildcard/bind/struct_) stop further branches, so count up to
-        // and including the first unconditional one.
+        // Only branches that can actually continue to the merge contribute
+        // incoming edges. Unconditional patterns stop further branch generation.
         var merge_incoming: u32 = 0;
+        var branch_returns: [32]bool = undefined;
+        var reachable_branch_count: usize = 0;
         for (branches) |branch| {
-            merge_incoming += 1;
+            const reaches_merge = !self.exprNeverReturns(branch.body);
+            branch_returns[reachable_branch_count] = reaches_merge;
+            if (reaches_merge) merge_incoming += 1;
+            reachable_branch_count += 1;
             if (self.patternAlwaysMatches(branch.pattern)) break;
         }
 
-        const merge_block = wip.block(merge_incoming, "when_merge") catch return error.OutOfMemory;
+        const has_merge = merge_incoming != 0;
+        const merge_block = if (has_merge)
+            try wip.block(merge_incoming, "when_merge")
+        else
+            LlvmBuilder.Function.Block.Index.entry;
 
         // Buffers for phi node
         var result_vals: [32]LlvmBuilder.Value = undefined;
@@ -2724,11 +2778,13 @@ pub const MonoLlvmCodeGen = struct {
                     var branch_scope = try self.beginScope();
                     defer branch_scope.deinit();
                     const body_val = try self.generateControlFlowValue(branch.body, w.result_layout);
-                    _ = wip.br(merge_block) catch return error.OutOfMemory;
-                    result_vals[branch_count] = body_val;
-                    result_blocks[branch_count] = wip.cursor.block;
+                    if (branch_returns[i]) {
+                        _ = wip.br(merge_block) catch return error.OutOfMemory;
+                        result_vals[branch_count] = body_val;
+                        result_blocks[branch_count] = wip.cursor.block;
+                        branch_count += 1;
+                    }
                     try self.endScope(&branch_scope);
-                    branch_count += 1;
                     break; // No more branches after wildcard
                 },
 
@@ -2739,11 +2795,13 @@ pub const MonoLlvmCodeGen = struct {
                     defer branch_scope.deinit();
                     self.symbol_values.put(symbol_key, scrutinee) catch return error.OutOfMemory;
                     const body_val = try self.generateControlFlowValue(branch.body, w.result_layout);
-                    _ = wip.br(merge_block) catch return error.OutOfMemory;
-                    result_vals[branch_count] = body_val;
-                    result_blocks[branch_count] = wip.cursor.block;
+                    if (branch_returns[i]) {
+                        _ = wip.br(merge_block) catch return error.OutOfMemory;
+                        result_vals[branch_count] = body_val;
+                        result_blocks[branch_count] = wip.cursor.block;
+                        branch_count += 1;
+                    }
                     try self.endScope(&branch_scope);
-                    branch_count += 1;
                     break; // No more branches after bind
                 },
 
@@ -2763,22 +2821,26 @@ pub const MonoLlvmCodeGen = struct {
                     defer branch_scope.deinit();
                     try self.bindPattern(branch.pattern, scrutinee);
                     const body_val = try self.generateControlFlowValue(branch.body, w.result_layout);
-                    _ = wip.br(merge_block) catch return error.OutOfMemory;
-                    result_vals[branch_count] = body_val;
-                    result_blocks[branch_count] = wip.cursor.block;
+                    if (branch_returns[i]) {
+                        _ = wip.br(merge_block) catch return error.OutOfMemory;
+                        result_vals[branch_count] = body_val;
+                        result_blocks[branch_count] = wip.cursor.block;
+                        branch_count += 1;
+                    }
                     try self.endScope(&branch_scope);
-                    branch_count += 1;
 
                     wip.cursor = .{ .block = else_block };
                     if (is_last) {
                         _ = wip.@"unreachable"() catch return error.CompilationFailed;
-                        const dead_block = wip.block(0, "after_nomatch") catch return error.OutOfMemory;
-                        wip.cursor = .{ .block = dead_block };
                     }
                 },
 
                 .float_literal, .str_literal => unreachable,
             }
+        }
+
+        if (!has_merge) {
+            return builder.poisonValue(try self.layoutToLlvmTypeFull(w.result_layout)) catch return error.OutOfMemory;
         }
 
         std.debug.assert(branch_count != 0);
@@ -2888,8 +2950,6 @@ pub const MonoLlvmCodeGen = struct {
         const exit_block = self.loop_exit_blocks.getLastOrNull() orelse return error.CompilationFailed;
         _ = wip.br(exit_block) catch return error.CompilationFailed;
 
-        const dead_block = wip.block(0, "after_break") catch return error.OutOfMemory;
-        wip.cursor = .{ .block = dead_block };
         return builder.poisonValue(.i8) catch return error.OutOfMemory;
     }
 
@@ -2967,9 +3027,6 @@ pub const MonoLlvmCodeGen = struct {
             _ = wip.ret(return_value) catch return error.CompilationFailed;
         }
 
-        // Create a dead block for subsequent code after the return
-        const dead_block = wip.block(0, "") catch return error.OutOfMemory;
-        wip.cursor = .{ .block = dead_block };
         return builder.poisonValue(try self.layoutToLlvmTypeFull(er.ret_layout)) catch return error.OutOfMemory;
     }
 
@@ -3148,11 +3205,6 @@ pub const MonoLlvmCodeGen = struct {
         const wip = self.wip orelse return error.CompilationFailed;
         const builder = self.builder orelse return error.CompilationFailed;
         _ = wip.@"unreachable"() catch return error.CompilationFailed;
-        // We need to return a value for the switch expression even though
-        // this code is unreachable. Create a new block so subsequent code
-        // (like phi nodes) has somewhere to live.
-        const dead_block = wip.block(0, "unreachable") catch return error.OutOfMemory;
-        wip.cursor = .{ .block = dead_block };
         return builder.poisonValue(try self.layoutToLlvmTypeFull(ret_layout)) catch return error.OutOfMemory;
     }
 
@@ -4009,8 +4061,6 @@ pub const MonoLlvmCodeGen = struct {
             // --- Crash ---
             .crash => {
                 _ = wip.@"unreachable"() catch return error.CompilationFailed;
-                const dead_block = wip.block(0, "after_crash") catch return error.OutOfMemory;
-                wip.cursor = .{ .block = dead_block };
                 return builder.intValue(.i64, 0) catch return error.OutOfMemory;
             },
 
@@ -5996,9 +6046,59 @@ pub const MonoLlvmCodeGen = struct {
         const expr = self.store.getExpr(expr_id);
         return switch (expr) {
             .early_return, .runtime_error, .crash, .break_expr => true,
-            .block => |block| self.exprNeverReturns(block.final_expr),
+            .block => |block| blk: {
+                for (self.store.getStmts(block.stmts)) |stmt| {
+                    switch (stmt) {
+                        .decl, .mutate => |binding| {
+                            if (self.exprNeverReturns(binding.expr)) break :blk true;
+                        },
+                        .cell_init, .cell_store => |binding| {
+                            if (self.exprNeverReturns(binding.expr)) break :blk true;
+                        },
+                        .cell_drop => {},
+                    }
+                }
+
+                break :blk self.exprNeverReturns(block.final_expr);
+            },
+            .if_then_else => |ite| blk: {
+                if (!self.exprNeverReturns(ite.final_else)) break :blk false;
+                for (self.store.getIfBranches(ite.branches)) |branch| {
+                    if (!self.exprNeverReturns(branch.body)) break :blk false;
+                }
+                break :blk true;
+            },
+            .discriminant_switch => |ds| blk: {
+                for (self.store.getExprSpan(ds.branches)) |branch_expr_id| {
+                    if (!self.exprNeverReturns(branch_expr_id)) break :blk false;
+                }
+                break :blk true;
+            },
+            .match_expr => |m| blk: {
+                for (self.store.getMatchBranches(m.branches)) |branch| {
+                    if (!self.exprNeverReturns(branch.body)) break :blk false;
+                }
+                break :blk true;
+            },
+            .dbg => |d| self.exprNeverReturns(d.expr),
+            .expect => |e| self.exprNeverReturns(e.body),
+            .nominal => |nom| self.exprNeverReturns(nom.backing_expr),
             else => false,
         };
+    }
+
+    fn blockHasTerminator(self: *const MonoLlvmCodeGen, block_idx: LlvmBuilder.Function.Block.Index) bool {
+        const wip = self.wip orelse return false;
+        const block = block_idx.ptrConst(wip);
+        if (block.instructions.items.len == 0) return false;
+
+        const last_inst = block.instructions.items[block.instructions.items.len - 1];
+        return last_inst.isTerminatorWip(wip);
+    }
+
+    fn currentBlockHasTerminator(self: *const MonoLlvmCodeGen) bool {
+        const wip = self.wip orelse return false;
+        return self.blockHasTerminator(wip.cursor.block);
     }
 
     fn countBreakEdges(self: *const MonoLlvmCodeGen, expr_id: LirExprId) u32 {
@@ -6117,6 +6217,7 @@ pub const MonoLlvmCodeGen = struct {
         defer self.out_ptr = saved_out_ptr;
 
         const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
 
         // Get the branches
         const branches = self.store.getIfBranches(ite.branches);
@@ -6129,18 +6230,29 @@ pub const MonoLlvmCodeGen = struct {
         // For simplicity, handle single branch if-then-else
         const first_branch = branches[0];
         var cond_val = try self.generateExpr(first_branch.cond);
+        if (self.currentBlockHasTerminator()) {
+            return builder.poisonValue(try self.layoutToLlvmTypeFull(ite.result_layout)) catch return error.OutOfMemory;
+        }
 
         // Ensure condition is i1 for brCond (tag unions may produce i8 for Bool-like types)
         if (cond_val.typeOfWip(wip) != .i1) {
             cond_val = wip.cast(.trunc, cond_val, .i1, "") catch return error.CompilationFailed;
         }
 
+        const then_returns = !self.exprNeverReturns(first_branch.body);
+        const else_returns = !self.exprNeverReturns(ite.final_else);
+        const merge_incoming: u32 = @intFromBool(then_returns) + @intFromBool(else_returns);
+        const has_merge = merge_incoming != 0;
+
         // Create basic blocks
         // Each of then/else has 1 incoming edge (from the conditional branch),
         // merge has 2 incoming edges (one from then, one from else).
         const then_block = wip.block(1, "then") catch return error.CompilationFailed;
         const else_block = wip.block(1, "else") catch return error.CompilationFailed;
-        const merge_block = wip.block(2, "merge") catch return error.CompilationFailed;
+        const merge_block = if (has_merge)
+            try wip.block(merge_incoming, "merge")
+        else
+            LlvmBuilder.Function.Block.Index.entry;
 
         // Conditional branch
         _ = wip.brCond(cond_val, then_block, else_block, .none) catch return error.CompilationFailed;
@@ -6150,8 +6262,10 @@ pub const MonoLlvmCodeGen = struct {
         var then_scope = try self.beginScope();
         defer then_scope.deinit();
         const then_val = try self.generateControlFlowValue(first_branch.body, ite.result_layout);
-        _ = wip.br(merge_block) catch return error.CompilationFailed;
         const then_exit_block = wip.cursor.block;
+        if (then_returns) {
+            _ = wip.br(merge_block) catch return error.CompilationFailed;
+        }
         try self.endScope(&then_scope);
 
         // Else block
@@ -6159,22 +6273,47 @@ pub const MonoLlvmCodeGen = struct {
         var else_scope = try self.beginScope();
         defer else_scope.deinit();
         const else_val = try self.generateControlFlowValue(ite.final_else, ite.result_layout);
-        _ = wip.br(merge_block) catch return error.CompilationFailed;
         const else_exit_block = wip.cursor.block;
+        if (else_returns) {
+            _ = wip.br(merge_block) catch return error.CompilationFailed;
+        }
         try self.endScope(&else_scope);
+
+        if (!has_merge) {
+            return builder.poisonValue(try self.layoutToLlvmTypeFull(ite.result_layout)) catch return error.OutOfMemory;
+        }
 
         // Merge block with phi
         wip.cursor = .{ .block = merge_block };
 
-        // Check that both branch values have the same type for the phi node
-        const then_type = then_val.typeOfWip(wip);
-        const else_type = else_val.typeOfWip(wip);
-        std.debug.assert(then_type == else_type);
+        var merge_vals: [2]LlvmBuilder.Value = undefined;
+        var merge_blocks: [2]LlvmBuilder.Function.Block.Index = undefined;
+        var merge_val_count: usize = 0;
 
-        const phi_inst = wip.phi(then_type, "") catch return error.CompilationFailed;
+        if (then_returns) {
+            merge_vals[merge_val_count] = then_val;
+            merge_blocks[merge_val_count] = then_exit_block;
+            merge_val_count += 1;
+        }
+
+        if (else_returns) {
+            merge_vals[merge_val_count] = else_val;
+            merge_blocks[merge_val_count] = else_exit_block;
+            merge_val_count += 1;
+        }
+
+        std.debug.assert(merge_val_count == merge_incoming);
+
+        // Check that all branch values have the same type for the phi node
+        const phi_type = merge_vals[0].typeOfWip(wip);
+        for (merge_vals[1..merge_val_count]) |merge_val| {
+            std.debug.assert(phi_type == merge_val.typeOfWip(wip));
+        }
+
+        const phi_inst = wip.phi(phi_type, "") catch return error.CompilationFailed;
         phi_inst.finish(
-            &.{ then_val, else_val },
-            &.{ then_exit_block, else_exit_block },
+            merge_vals[0..merge_val_count],
+            merge_blocks[0..merge_val_count],
             wip,
         );
 
@@ -6182,6 +6321,7 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn generateBlock(self: *MonoLlvmCodeGen, block_data: anytype) Error!LlvmBuilder.Value {
+        const builder = self.builder orelse return error.CompilationFailed;
         var scope = try self.beginScope();
         defer scope.deinit();
 
@@ -6196,14 +6336,32 @@ pub const MonoLlvmCodeGen = struct {
             switch (stmt) {
                 .decl, .mutate => |b| {
                     const val = try self.generateExprAsValue(b.expr);
+                    if (self.currentBlockHasTerminator()) {
+                        self.out_ptr = saved_out_ptr;
+                        try self.endScope(&scope);
+                        const block_layout = self.getExprResultLayout(block_data.final_expr) orelse return error.CompilationFailed;
+                        return builder.poisonValue(try self.layoutToLlvmTypeFull(block_layout)) catch return error.OutOfMemory;
+                    }
                     try self.bindPattern(b.pattern, val.value);
                 },
                 .cell_init => |cell| {
                     const value = (try self.generateExprAsValue(cell.expr)).value;
+                    if (self.currentBlockHasTerminator()) {
+                        self.out_ptr = saved_out_ptr;
+                        try self.endScope(&scope);
+                        const block_layout = self.getExprResultLayout(block_data.final_expr) orelse return error.CompilationFailed;
+                        return builder.poisonValue(try self.layoutToLlvmTypeFull(block_layout)) catch return error.OutOfMemory;
+                    }
                     try self.initializeCell(cell.cell, cell.layout_idx, value);
                 },
                 .cell_store => |cell| {
                     const value = (try self.generateExprAsValue(cell.expr)).value;
+                    if (self.currentBlockHasTerminator()) {
+                        self.out_ptr = saved_out_ptr;
+                        try self.endScope(&scope);
+                        const block_layout = self.getExprResultLayout(block_data.final_expr) orelse return error.CompilationFailed;
+                        return builder.poisonValue(try self.layoutToLlvmTypeFull(block_layout)) catch return error.OutOfMemory;
+                    }
                     try self.storeCell(cell.cell, cell.layout_idx, value);
                 },
                 .cell_drop => |cell| try self.dropCell(cell.cell, cell.layout_idx),
