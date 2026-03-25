@@ -8631,4 +8631,390 @@ pub const tests = [_]TestCase{
     .{ .name = "U128 to_str", .source = "12345.U128.to_str()", .expected = .{ .str_val = "12345" } },
     .{ .name = "Dec to_str", .source = "3.14.to_str()", .expected = .{ .str_val = "3.14" } },
     .{ .name = "F32 to_str neg", .source = "(-2.5.F32).to_str()", .expected = .{ .str_val = "-2.5" } },
+
+    // ── Math operations: abs_diff, mod_by (method syntax) ──
+
+    .{ .name = "I64 abs_diff positive", .source = "10.I64.abs_diff(3.I64)", .expected = .{ .u64_val = 7 } },
+    .{ .name = "I64 abs_diff reversed", .source = "3.I64.abs_diff(10.I64)", .expected = .{ .u64_val = 7 } },
+    .{ .name = "I64 mod_by", .source = "10.I64.mod_by(3.I64)", .expected = .{ .i64_val = 1 } },
+    .{ .name = "U64 abs_diff", .source = "10.U64.abs_diff(3.U64)", .expected = .{ .u64_val = 7 } },
+    .{ .name = "U64 mod_by", .source = "10.U64.mod_by(3.U64)", .expected = .{ .u64_val = 1 } },
+
+    // ── List operations: drop_first, drop_last, sort_with, sublist ──
+    .{
+        .name = "List.drop_first basic",
+        .source =
+        \\{
+        \\    result = List.drop_first([10.I64, 20.I64, 30.I64], 1)
+        \\    result.len()
+        \\}
+        ,
+        .expected = .{ .u64_val = 2 },
+    },
+    .{
+        .name = "List.drop_first value",
+        .source =
+        \\{
+        \\    result = List.drop_first([10.I64, 20.I64, 30.I64], 1)
+        \\    match List.first(result) {
+        \\        Ok(v) => v
+        \\        Err(_) => 0.I64
+        \\    }
+        \\}
+        ,
+        .expected = .{ .i64_val = 20 },
+    },
+    .{
+        .name = "List.drop_last basic",
+        .source =
+        \\{
+        \\    result = List.drop_last([10.I64, 20.I64, 30.I64], 1)
+        \\    result.len()
+        \\}
+        ,
+        .expected = .{ .u64_val = 2 },
+    },
+    .{
+        .name = "List.drop_last value",
+        .source =
+        \\{
+        \\    result = List.drop_last([10.I64, 20.I64, 30.I64], 1)
+        \\    match List.last(result) {
+        \\        Ok(v) => v
+        \\        Err(_) => 0.I64
+        \\    }
+        \\}
+        ,
+        .expected = .{ .i64_val = 20 },
+    },
+    .{
+        .name = "List.first non-empty",
+        .source =
+        \\{
+        \\    match List.first([10.I64, 20.I64, 30.I64]) {
+        \\        Ok(v) => v
+        \\        Err(_) => 0.I64
+        \\    }
+        \\}
+        ,
+        .expected = .{ .i64_val = 10 },
+    },
+    .{
+        .name = "List.last non-empty",
+        .source =
+        \\{
+        \\    match List.last([10.I64, 20.I64, 30.I64]) {
+        \\        Ok(v) => v
+        \\        Err(_) => 0.I64
+        \\    }
+        \\}
+        ,
+        .expected = .{ .i64_val = 30 },
+    },
+    .{
+        .name = "List.reverse inspect",
+        .source = "List.rev([1.I64, 2.I64, 3.I64])",
+        .expected = .{ .inspect_str = "[3, 2, 1]" },
+    },
+    .{
+        .name = "List.sublist basic",
+        .source = "List.sublist([1.I64, 2.I64, 3.I64, 4.I64, 5.I64], { start: 1, len: 3 }).len()",
+        .expected = .{ .u64_val = 3 },
+    },
+    .{
+        .name = "List.contains true",
+        .source = "List.contains([1.I64, 2.I64, 3.I64], 2.I64)",
+        .expected = .{ .bool_val = true },
+    },
+    .{
+        .name = "List.contains false",
+        .source = "List.contains([1.I64, 2.I64, 3.I64], 5.I64)",
+        .expected = .{ .bool_val = false },
+    },
+    // ── Str.from_utf8 ──
+
+    .{
+        .name = "Str.from_utf8 ok",
+        .source =
+        \\{
+        \\    match Str.from_utf8([72.U8, 105.U8]) {
+        \\        Ok(s) => s
+        \\        Err(_) => "fail"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .str_val = "Hi" },
+    },
+    .{
+        .name = "Str.from_utf8_lossy basic",
+        .source = "Str.from_utf8_lossy([72.U8, 101.U8, 108.U8, 108.U8, 111.U8])",
+        .expected = .{ .str_val = "Hello" },
+    },
+
+    // ── Numeric conversions: int-to-dec, dec-to-float, float-to-int ──
+
+    .{ .name = "I64 to Dec", .source = "{ 42.I64.to_dec() }", .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 } },
+    .{ .name = "U8 to Dec", .source = "{ 10.U8.to_dec() }", .expected = .{ .dec_val = 10 * RocDec.one_point_zero_i128 } },
+    .{ .name = "I16 to Dec", .source = "{ 500.I16.to_dec() }", .expected = .{ .dec_val = 500 * RocDec.one_point_zero_i128 } },
+    .{ .name = "U32 to Dec", .source = "{ 1000.U32.to_dec() }", .expected = .{ .dec_val = 1000 * RocDec.one_point_zero_i128 } },
+    .{ .name = "Dec to F64", .source = "{ 3.14.to_f64() }", .expected = .{ .f64_val = 3.14 } },
+    .{ .name = "F32 to I64 wrap", .source = "{ 3.7.F32.to_i64_wrap() }", .expected = .{ .i64_val = 3 }, .skip = SKIP_ALL },
+    .{ .name = "F64 to I64 wrap", .source = "{ 9.9.F64.to_i64_wrap() }", .expected = .{ .i64_val = 9 }, .skip = SKIP_ALL },
+    .{ .name = "F32 to F64 widen", .source = "{ 1.5.F32.to_f64() }", .expected = .{ .f64_val = 1.5 } },
+    .{ .name = "I8 to U16", .source = "{ 42.I8.to_u16() }", .expected = .{ .u16_val = 42 }, .skip = SKIP_ALL },
+    .{ .name = "I16 to U32", .source = "{ 500.I16.to_u32() }", .expected = .{ .u32_val = 500 }, .skip = SKIP_ALL },
+    .{ .name = "I32 to U64", .source = "{ 1000.I32.to_u64() }", .expected = .{ .u64_val = 1000 }, .skip = SKIP_ALL },
+
+    // ── Numeric conversions: int-to-float for small types (hits u8_to_f32, i8_to_f64, etc.) ──
+    .{ .name = "U8 to F32", .source = "{ 10.U8.to_f32() }", .expected = .{ .f32_val = 10.0 } },
+    .{ .name = "U8 to F64", .source = "{ 10.U8.to_f64() }", .expected = .{ .f64_val = 10.0 } },
+    .{ .name = "I8 to F32", .source = "{ 42.I8.to_f32() }", .expected = .{ .f32_val = 42.0 } },
+    .{ .name = "I8 to F64", .source = "{ 42.I8.to_f64() }", .expected = .{ .f64_val = 42.0 } },
+    .{ .name = "I8 to Dec", .source = "{ 42.I8.to_dec() }", .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 } },
+    .{ .name = "U16 to F32", .source = "{ 1000.U16.to_f32() }", .expected = .{ .f32_val = 1000.0 } },
+    .{ .name = "I16 to F32", .source = "{ 500.I16.to_f32() }", .expected = .{ .f32_val = 500.0 } },
+    .{ .name = "I16 to Dec", .source = "{ 500.I16.to_dec() }", .expected = .{ .dec_val = 500 * RocDec.one_point_zero_i128 } },
+    .{ .name = "U32 to F32", .source = "{ 1000.U32.to_f32() }", .expected = .{ .f32_val = 1000.0 } },
+    .{ .name = "I32 to F32", .source = "{ 500.I32.to_f32() }", .expected = .{ .f32_val = 500.0 } },
+    .{ .name = "I32 to Dec", .source = "{ 42.I32.to_dec() }", .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 } },
+    .{ .name = "U64 to F32", .source = "{ 100.U64.to_f32() }", .expected = .{ .f32_val = 100.0 } },
+    .{ .name = "U64 to Dec", .source = "{ 100.U64.to_dec() }", .expected = .{ .dec_val = 100 * RocDec.one_point_zero_i128 } },
+
+    // ── Numeric conversions: Dec to int (wrap) - crashes across all backends ──
+    .{ .name = "Dec to I64 wrap", .source = "{ 3.7.to_i64_wrap() }", .expected = .{ .i64_val = 3 }, .skip = SKIP_ALL },
+    .{ .name = "Dec to U8 wrap", .source = "{ 100.5.to_u8_wrap() }", .expected = .{ .u8_val = 100 }, .skip = SKIP_ALL },
+    .{ .name = "Dec to F32 wrap", .source = "{ 1.5.to_f32_wrap() }", .expected = .{ .f32_val = 1.5 }, .skip = SKIP_ALL },
+
+    // ── Numeric conversions: _try variants returning Try - crash across all backends ──
+    .{
+        .name = "I64 to I8 try ok",
+        .source =
+        \\{
+        \\    match 42.I64.to_i8_try() {
+        \\        Ok(n) => n.to_i64()
+        \\        Err(_) => 0.I64
+        \\    }
+        \\}
+        ,
+        .expected = .{ .i64_val = 42 },
+        .skip = SKIP_ALL,
+    },
+
+    // ── sort_with (uses compare low-level) ──
+
+    .{
+        .name = "List.sort_with inline comparator",
+        .source =
+        \\{
+        \\    sorted = List.sort_with([3.I64, 1.I64, 2.I64], |a, b| if a < b { LT } else if a == b { EQ } else { GT })
+        \\    match List.first(sorted) {
+        \\        Ok(v) => v
+        \\        Err(_) => 0.I64
+        \\    }
+        \\}
+        ,
+        .expected = .{ .i64_val = 1 },
+        .skip = .{ .dev = true, .wasm = true },
+    },
+    .{
+        .name = "List.sort_with length preserved",
+        .source = "List.sort_with([3.I64, 1.I64, 2.I64], |a, b| if a < b { LT } else if a == b { EQ } else { GT }).len()",
+        .expected = .{ .u64_val = 3 },
+        .skip = .{ .dev = true, .wasm = true },
+    },
+
+    // ── While loop with mutable cell ──
+
+    .{
+        .name = "while loop sum with mutable cell",
+        .source =
+        \\{
+        \\    var $sum = 0.I64
+        \\    var $i = 0.I64
+        \\    while $i < 5 {
+        \\        $sum = $sum + $i
+        \\        $i = $i + 1
+        \\    }
+        \\    $sum
+        \\}
+        ,
+        .expected = .{ .i64_val = 10 },
+    },
+    .{
+        .name = "while loop with string concat in body",
+        .source =
+        \\{
+        \\    var $result = ""
+        \\    var $i = 0.I64
+        \\    while $i < 3 {
+        \\        $result = Str.concat($result, "a")
+        \\        $i = $i + 1
+        \\    }
+        \\    $result
+        \\}
+        ,
+        .expected = .{ .str_val = "aaa" },
+    },
+    .{
+        .name = "while loop with list append in body",
+        .source =
+        \\{
+        \\    var $list = [0.I64]
+        \\    var $i = 1.I64
+        \\    while $i < 4 {
+        \\        $list = List.append($list, $i)
+        \\        $i = $i + 1
+        \\    }
+        \\    $list.len()
+        \\}
+        ,
+        .expected = .{ .u64_val = 4 },
+    },
+    .{
+        .name = "while loop with early break",
+        .source =
+        \\{
+        \\    var $sum = 0.I64
+        \\    var $i = 0.I64
+        \\    while $i < 100 {
+        \\        if $i == 5 {
+        \\            break
+        \\        }
+        \\        $sum = $sum + $i
+        \\        $i = $i + 1
+        \\    }
+        \\    $sum
+        \\}
+        ,
+        .expected = .{ .i64_val = 10 },
+    },
+
+    // ── Pattern matching on literals ──
+
+    .{
+        .name = "match on int literal",
+        .source =
+        \\{
+        \\    x = 2.I64
+        \\    match x {
+        \\        1 => 10.I64
+        \\        2 => 20.I64
+        \\        3 => 30.I64
+        \\        _ => 0.I64
+        \\    }
+        \\}
+        ,
+        .expected = .{ .i64_val = 20 },
+    },
+    .{
+        .name = "match on string literal",
+        .source =
+        \\{
+        \\    x = "hello"
+        \\    match x {
+        \\        "hi" => 1.I64
+        \\        "hello" => 2.I64
+        \\        _ => 0.I64
+        \\    }
+        \\}
+        ,
+        .expected = .{ .i64_val = 2 },
+    },
+
+    // ── List pattern matching with suffix and rest ──
+
+    .{
+        .name = "list pattern match with rest binding",
+        .source =
+        \\{
+        \\    match [1, 2, 3, 4] {
+        \\        [first, .. as rest] => first + rest.len()
+        \\        _ => 0
+        \\    }
+        \\}
+        ,
+        .expected = .{ .dec_val = 4 * RocDec.one_point_zero_i128 },
+    },
+    .{
+        .name = "list pattern match prefix only",
+        .source =
+        \\{
+        \\    match [10.I64, 20.I64, 30.I64] {
+        \\        [a, b, ..] => a + b
+        \\        _ => 0.I64
+        \\    }
+        \\}
+        ,
+        .expected = .{ .i64_val = 30 },
+    },
+
+    // ── Top-level definitions ──
+
+    .{
+        .name = "top-level constant definition",
+        .source =
+        \\{
+        \\    magic_number = 42.I64
+        \\    double = |x| x * 2
+        \\    double(magic_number)
+        \\}
+        ,
+        .expected = .{ .i64_val = 84 },
+    },
+
+    // ── Bool.not low-level (direct call) ──
+
+    .{ .name = "Bool.not direct true", .source = "Bool.not(1 == 1)", .expected = .{ .bool_val = false } },
+    .{ .name = "Bool.not direct false", .source = "Bool.not(1 == 2)", .expected = .{ .bool_val = true } },
+
+    // ── Num.from_str ──
+
+    .{
+        .name = "I64.from_str ok",
+        .source =
+        \\{
+        \\    match I64.from_str("42") {
+        \\        Ok(n) => n
+        \\        Err(_) => 0.I64
+        \\    }
+        \\}
+        ,
+        .expected = .{ .i64_val = 42 },
+    },
+    .{
+        .name = "I64.from_str negative",
+        .source =
+        \\{
+        \\    match I64.from_str("-99") {
+        \\        Ok(n) => n
+        \\        Err(_) => 0.I64
+        \\    }
+        \\}
+        ,
+        .expected = .{ .i64_val = -99 },
+    },
+    .{
+        .name = "F64.from_str ok",
+        .source =
+        \\{
+        \\    match F64.from_str("3.14") {
+        \\        Ok(n) => n
+        \\        Err(_) => 0.0.F64
+        \\    }
+        \\}
+        ,
+        .expected = .{ .f64_val = 3.14 },
+    },
+    .{
+        .name = "U8.from_str ok",
+        .source =
+        \\{
+        \\    match U8.from_str("255") {
+        \\        Ok(n) => n
+        \\        Err(_) => 0.U8
+        \\    }
+        \\}
+        ,
+        .expected = .{ .u8_val = 255 },
+    },
 };
