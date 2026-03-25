@@ -3400,6 +3400,7 @@ pub const MonoLlvmCodeGen = struct {
                 const key = entry.key_ptr.*;
                 const val = entry.value_ptr.*;
                 if (self.loop_var_allocas.contains(key)) continue;
+                if (self.cell_allocas.contains(key)) continue;
                 const val_type = val.typeOfWip(wip);
                 const alloca_val = wip.alloca(.normal, val_type, .none, alignment, .default, "lv") catch return error.CompilationFailed;
                 _ = wip.store(.normal, val, alloca_val, alignment) catch return error.CompilationFailed;
@@ -3531,6 +3532,7 @@ pub const MonoLlvmCodeGen = struct {
                 const val = entry.value_ptr.*;
                 // Skip if already promoted (nested loops)
                 if (self.loop_var_allocas.contains(key)) continue;
+                if (self.cell_allocas.contains(key)) continue;
                 const val_type = val.typeOfWip(wip);
                 const alloca_val = wip.alloca(.normal, val_type, .none, alignment, .default, "lv") catch return error.CompilationFailed;
                 _ = wip.store(.normal, val, alloca_val, alignment) catch return error.CompilationFailed;
@@ -3570,6 +3572,14 @@ pub const MonoLlvmCodeGen = struct {
             if (self.loop_var_allocas.get(key)) |lva| {
                 const loaded = wip.load(.normal, lva.elem_type, lva.alloca_ptr, alignment, "") catch return error.CompilationFailed;
                 self.symbol_values.put(key, loaded) catch return error.OutOfMemory;
+            }
+        }
+        {
+            var cell_it = self.cell_allocas.iterator();
+            while (cell_it.next()) |entry| {
+                const cell_alignment = LlvmBuilder.Alignment.fromByteUnits(@intCast(@max(llvmTypeByteSize(entry.value_ptr.elem_type), 1)));
+                const loaded = wip.load(.normal, entry.value_ptr.elem_type, entry.value_ptr.alloca_ptr, cell_alignment, "") catch return error.CompilationFailed;
+                self.symbol_values.put(entry.key_ptr.*, loaded) catch return error.OutOfMemory;
             }
         }
 
@@ -3615,6 +3625,14 @@ pub const MonoLlvmCodeGen = struct {
             if (self.loop_var_allocas.get(key)) |lva| {
                 const final_val = wip.load(.normal, lva.elem_type, lva.alloca_ptr, alignment, "") catch return error.CompilationFailed;
                 self.symbol_values.put(key, final_val) catch return error.OutOfMemory;
+            }
+        }
+        {
+            var cell_it = self.cell_allocas.iterator();
+            while (cell_it.next()) |entry| {
+                const cell_alignment = LlvmBuilder.Alignment.fromByteUnits(@intCast(@max(llvmTypeByteSize(entry.value_ptr.elem_type), 1)));
+                const loaded = wip.load(.normal, entry.value_ptr.elem_type, entry.value_ptr.alloca_ptr, cell_alignment, "") catch return error.CompilationFailed;
+                self.symbol_values.put(entry.key_ptr.*, loaded) catch return error.OutOfMemory;
             }
         }
 

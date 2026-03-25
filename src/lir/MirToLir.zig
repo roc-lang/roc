@@ -2404,14 +2404,168 @@ fn appendArgLayoutsForSpan(self: *Self, span: LirExprSpan) Allocator.Error!void 
     }
 }
 
-fn exprResolvesToLookup(self: *const Self, expr_id: LirExprId) bool {
+fn symbolHasManagedBinding(self: *const Self, symbol: Symbol) bool {
+    return self.symbol_binding_modes.get(symbol.raw()) != null;
+}
+
+fn patternBindsSymbol(self: *const Self, pat_id: LirPatternId, symbol: Symbol) bool {
+    if (pat_id.isNone()) return false;
+
+    return switch (self.lir_store.getPattern(pat_id)) {
+        .bind => |bind| bind.symbol == symbol,
+        .wildcard => false,
+        .int_literal => false,
+        .float_literal => false,
+        .str_literal => false,
+        .tag => |tag_pat| blk: {
+            for (self.lir_store.getPatternSpan(tag_pat.args)) |arg_pat| {
+                if (self.patternBindsSymbol(arg_pat, symbol)) break :blk true;
+            }
+            break :blk false;
+        },
+        .struct_ => |struct_pat| blk: {
+            for (self.lir_store.getPatternSpan(struct_pat.fields)) |field_pat| {
+                if (self.patternBindsSymbol(field_pat, symbol)) break :blk true;
+            }
+            break :blk false;
+        },
+        .list => |list_pat| blk: {
+            for (self.lir_store.getPatternSpan(list_pat.prefix)) |elem_pat| {
+                if (self.patternBindsSymbol(elem_pat, symbol)) break :blk true;
+            }
+            if (self.patternBindsSymbol(list_pat.rest, symbol)) break :blk true;
+            for (self.lir_store.getPatternSpan(list_pat.suffix)) |elem_pat| {
+                if (self.patternBindsSymbol(elem_pat, symbol)) break :blk true;
+            }
+            break :blk false;
+        },
+        .as_pattern => |as_pat| as_pat.symbol == symbol or self.patternBindsSymbol(as_pat.inner, symbol),
+    };
+}
+
+fn lookupSymbolFromAliasExpr(self: *const Self, expr_id: LirExprId) ?Symbol {
     const expr = self.lir_store.getExpr(expr_id);
     return switch (expr) {
-        .lookup => true,
-        .block => |block| self.exprResolvesToLookup(block.final_expr),
-        .dbg => |dbg_expr| self.exprResolvesToLookup(dbg_expr.expr),
-        .nominal => |nominal| self.exprResolvesToLookup(nominal.backing_expr),
-        else => false,
+        .lookup => |lookup| lookup.symbol,
+        .dbg => |dbg_expr| self.lookupSymbolFromAliasExpr(dbg_expr.expr),
+        .nominal => |nominal| self.lookupSymbolFromAliasExpr(nominal.backing_expr),
+        .proc_call => null,
+        .cell_load => null,
+        .list => null,
+        .empty_list => null,
+        .struct_ => null,
+        .struct_access => null,
+        .zero_arg_tag => null,
+        .tag => null,
+        .if_then_else => null,
+        .match_expr => null,
+        .block => null,
+        .early_return => null,
+        .break_expr => null,
+        .expect => null,
+        .low_level => null,
+        .hosted_call => null,
+        .i64_literal => null,
+        .i128_literal => null,
+        .f64_literal => null,
+        .f32_literal => null,
+        .dec_literal => null,
+        .str_literal => null,
+        .bool_literal => null,
+        .incref => null,
+        .decref => null,
+        .free => null,
+        .crash => null,
+        .runtime_error => null,
+        .str_concat => null,
+        .int_to_str => null,
+        .float_to_str => null,
+        .dec_to_str => null,
+        .str_escape_and_quote => null,
+        .discriminant_switch => null,
+        .tag_payload_access => null,
+        .for_loop => null,
+        .while_loop => null,
+    };
+}
+
+fn blockBindingForSymbol(self: *const Self, stmts_span: LIR.LirStmtSpan, symbol: Symbol) ?LirStmt.Binding {
+    const stmts = self.lir_store.getStmts(stmts_span);
+    var idx = stmts.len;
+    while (idx > 0) {
+        idx -= 1;
+        switch (stmts[idx]) {
+            .decl => |binding| if (self.patternBindsSymbol(binding.pattern, symbol)) return binding,
+            .mutate => |binding| if (self.patternBindsSymbol(binding.pattern, symbol)) return binding,
+            .cell_init => {},
+            .cell_store => {},
+            .cell_drop => {},
+        }
+    }
+
+    return null;
+}
+
+fn exprReturnsManagedAlias(self: *const Self, expr_id: LirExprId, expr_layout: layout.Idx) bool {
+    if (!self.layout_store.layoutContainsRefcounted(self.layout_store.getLayout(expr_layout))) return false;
+
+    const expr = self.lir_store.getExpr(expr_id);
+    return switch (expr) {
+        .lookup => |lookup| self.symbolHasManagedBinding(lookup.symbol),
+        .low_level => self.lowLevelExprBorrowsFromLookup(expr_id),
+        .dbg => |dbg_expr| self.exprReturnsManagedAlias(dbg_expr.expr, expr_layout),
+        .nominal => |nominal| self.exprReturnsManagedAlias(nominal.backing_expr, expr_layout),
+        .block => |block| blk: {
+            if (self.lookupSymbolFromAliasExpr(block.final_expr)) |symbol| {
+                if (self.blockBindingForSymbol(block.stmts, symbol)) |binding| {
+                    break :blk switch (binding.semantics) {
+                        .borrow_alias => self.exprReturnsManagedAlias(binding.expr, self.lirExprResultLayout(binding.expr)),
+                        .owned => false,
+                        .retained => false,
+                        .scoped_borrow => false,
+                    };
+                }
+
+                break :blk self.symbolHasManagedBinding(symbol);
+            }
+
+            break :blk self.exprReturnsManagedAlias(block.final_expr, expr_layout);
+        },
+        .proc_call => false,
+        .cell_load => false,
+        .list => false,
+        .empty_list => false,
+        .struct_ => false,
+        .struct_access => false,
+        .zero_arg_tag => false,
+        .tag => false,
+        .if_then_else => false,
+        .match_expr => false,
+        .early_return => false,
+        .break_expr => false,
+        .expect => false,
+        .hosted_call => false,
+        .i64_literal => false,
+        .i128_literal => false,
+        .f64_literal => false,
+        .f32_literal => false,
+        .dec_literal => false,
+        .str_literal => false,
+        .bool_literal => false,
+        .incref => false,
+        .decref => false,
+        .free => false,
+        .crash => false,
+        .runtime_error => false,
+        .str_concat => false,
+        .int_to_str => false,
+        .float_to_str => false,
+        .dec_to_str => false,
+        .str_escape_and_quote => false,
+        .discriminant_switch => false,
+        .tag_payload_access => false,
+        .for_loop => false,
+        .while_loop => false,
     };
 }
 
@@ -2422,12 +2576,47 @@ fn lowLevelExprBorrowsFromLookup(self: *const Self, expr_id: LirExprId) bool {
             if (ll.op != .list_get_unsafe) break :blk false;
             const args = self.lir_store.getExprSpan(ll.args);
             if (args.len == 0) break :blk false;
-            break :blk self.exprResolvesToLookup(args[0]);
+            break :blk self.exprReturnsManagedAlias(args[0], self.lirExprResultLayout(args[0]));
         },
         .block => |block| self.lowLevelExprBorrowsFromLookup(block.final_expr),
         .dbg => |dbg_expr| self.lowLevelExprBorrowsFromLookup(dbg_expr.expr),
         .nominal => |nominal| self.lowLevelExprBorrowsFromLookup(nominal.backing_expr),
-        else => false,
+        .lookup => false,
+        .proc_call => false,
+        .cell_load => false,
+        .list => false,
+        .empty_list => false,
+        .struct_ => false,
+        .struct_access => false,
+        .zero_arg_tag => false,
+        .tag => false,
+        .if_then_else => false,
+        .match_expr => false,
+        .early_return => false,
+        .break_expr => false,
+        .expect => false,
+        .hosted_call => false,
+        .i64_literal => false,
+        .i128_literal => false,
+        .f64_literal => false,
+        .f32_literal => false,
+        .dec_literal => false,
+        .str_literal => false,
+        .bool_literal => false,
+        .incref => false,
+        .decref => false,
+        .free => false,
+        .crash => false,
+        .runtime_error => false,
+        .str_concat => false,
+        .int_to_str => false,
+        .float_to_str => false,
+        .dec_to_str => false,
+        .str_escape_and_quote => false,
+        .discriminant_switch => false,
+        .tag_payload_access => false,
+        .for_loop => false,
+        .while_loop => false,
     };
 }
 
@@ -2467,13 +2656,13 @@ fn bindingModeForSemantics(semantics: LirStmt.BindingSemantics) BindingOwnership
 fn bindingSemanticsForExpr(self: *const Self, expr_id: LirExprId, expr_layout: layout.Idx) LirStmt.BindingSemantics {
     if (!self.layout_store.layoutContainsRefcounted(self.layout_store.getLayout(expr_layout))) return .owned;
     if (self.exprSnapshotsMutableCell(expr_id)) return .retained;
-    if (self.exprAliasesManagedRef(expr_id, expr_layout)) return .borrow_alias;
+    if (self.exprReturnsManagedAlias(expr_id, expr_layout)) return .borrow_alias;
     return .owned;
 }
 
 fn borrowBindingSemanticsForExpr(self: *const Self, expr_id: LirExprId, expr_layout: layout.Idx) LirStmt.BindingSemantics {
     if (!self.layout_store.layoutContainsRefcounted(self.layout_store.getLayout(expr_layout))) return .owned;
-    if (self.exprAliasesManagedRef(expr_id, expr_layout)) return .borrow_alias;
+    if (self.exprReturnsManagedAlias(expr_id, expr_layout)) return .borrow_alias;
     return .scoped_borrow;
 }
 
@@ -2518,7 +2707,7 @@ fn materializeRetainedBinding(
 ) Allocator.Error!LirExprId {
     if (!self.layout_store.layoutContainsRefcounted(self.layout_store.getLayout(expr_layout))) return expr_id;
 
-    const source_expr = if (self.exprAliasesManagedRef(expr_id, expr_layout))
+    const source_expr = if (self.exprReturnsManagedAlias(expr_id, expr_layout))
         expr_id
     else
         try self.forceOwnedBinding(stmts, expr_id, expr_layout, region);
@@ -2569,7 +2758,7 @@ fn lowerAnfSpan(self: *Self, acc: *LetAccumulator, mir_expr_ids: []const MIR.Exp
         const lir_id = try self.adaptExprToRuntimeLayout(mir_id, lowered, region);
         const arg_layout = try self.runtimeValueLayoutFromMirExpr(mir_id);
         const ensured = try acc.ensureSymbol(lir_id, arg_layout, region);
-        const owned = if (self.exprAliasesManagedRef(ensured, arg_layout))
+        const owned = if (self.exprReturnsManagedAlias(ensured, arg_layout))
             try acc.bindRetained(ensured, arg_layout, region)
         else
             ensured;
@@ -2987,7 +3176,7 @@ fn lowerTag(self: *Self, tag_data: anytype, mono_idx: Monotype.Idx, mir_expr_id:
         const lowered_arg = try self.lowerExpr(mir_arg);
         const arg_layout = try self.runtimeValueLayoutFromMirExpr(mir_arg);
         const ensured_source = try acc.ensureSymbol(lowered_arg, arg_layout, region);
-        const owned_arg = if (self.exprAliasesManagedRef(ensured_source, arg_layout))
+        const owned_arg = if (self.exprReturnsManagedAlias(ensured_source, arg_layout))
             try acc.bindRetained(ensured_source, arg_layout, region)
         else
             ensured_source;
@@ -5001,7 +5190,7 @@ fn lowerLowLevel(self: *Self, ll: anytype, mir_expr_id: MIR.ExprId, region: Regi
             },
             .consume => blk: {
                 const source_arg = try acc.ensureSymbol(lowered_arg, arg_layout, region);
-                const owned_arg = if (self.exprAliasesManagedRef(source_arg, arg_layout))
+                const owned_arg = if (self.exprReturnsManagedAlias(source_arg, arg_layout))
                     try acc.bindRetained(source_arg, arg_layout, region)
                 else
                     source_arg;
@@ -7310,6 +7499,121 @@ test "mutable refcounted lookup bound immutably lowers as retained snapshot" {
     const final = env.lir_store.getExpr(lir_expr.block.final_expr);
     try testing.expect(final == .lookup);
     try testing.expectEqual(sym_y, final.lookup.symbol);
+}
+
+test "immutable refcounted lookup bound immutably lowers as borrow alias" {
+    const allocator = testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+    const list_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .list = .{ .elem = i64_mono } });
+
+    const ident_x = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 2 };
+    const sym_x = try testMirSymbol(&env.mir_store, allocator, ident_x);
+    const ident_y = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 3 };
+    const sym_y = try testMirSymbol(&env.mir_store, allocator, ident_y);
+
+    const elem = try env.mir_store.addExpr(allocator, .{ .int = .{
+        .value = .{ .bytes = @bitCast(@as(i128, 1)), .kind = .i128 },
+    } }, i64_mono, Region.zero());
+    const list_elems = try env.mir_store.addExprSpan(allocator, &.{elem});
+    const list_expr = try env.mir_store.addExpr(allocator, .{ .list = .{ .elems = list_elems } }, list_mono, Region.zero());
+
+    const lookup_x = try env.mir_store.addExpr(allocator, .{ .lookup = sym_x }, list_mono, Region.zero());
+    const lookup_y = try env.mir_store.addExpr(allocator, .{ .lookup = sym_y }, list_mono, Region.zero());
+
+    const pat_x = try env.mir_store.addPattern(allocator, .{ .bind = sym_x }, list_mono);
+    const pat_y = try env.mir_store.addPattern(allocator, .{ .bind = sym_y }, list_mono);
+    const stmts = try env.mir_store.addStmts(allocator, &.{
+        .{ .decl_const = .{ .pattern = pat_x, .expr = list_expr } },
+        .{ .decl_const = .{ .pattern = pat_y, .expr = lookup_x } },
+    });
+
+    const block_expr = try env.mir_store.addExpr(allocator, .{ .block = .{
+        .stmts = stmts,
+        .final_expr = lookup_y,
+    } }, list_mono, Region.zero());
+
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.lambda_set_store, env.module_env.idents.true_tag);
+    defer translator.deinit();
+
+    const lir_id = try translator.lower(block_expr);
+    const lir_expr = env.lir_store.getExpr(lir_id);
+    try testing.expect(lir_expr == .block);
+
+    const lir_stmts = env.lir_store.getStmts(lir_expr.block.stmts);
+    try testing.expectEqual(@as(usize, 2), lir_stmts.len);
+    try testing.expect(lir_stmts[0] == .decl);
+    try testing.expect(lir_stmts[1] == .decl);
+    try testing.expectEqual(LirStmt.BindingSemantics.borrow_alias, lir_stmts[1].decl.semantics);
+
+    const bound_expr = env.lir_store.getExpr(lir_stmts[1].decl.expr);
+    try testing.expect(bound_expr == .lookup);
+    try testing.expectEqual(sym_x, bound_expr.lookup.symbol);
+
+    const final = env.lir_store.getExpr(lir_expr.block.final_expr);
+    try testing.expect(final == .lookup);
+    try testing.expectEqual(sym_y, final.lookup.symbol);
+}
+
+test "block-wrapped owned list result lowers as owned binding" {
+    const allocator = testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+    const list_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .list = .{ .elem = i64_mono } });
+
+    const ident_tmp = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 2 };
+    const sym_tmp = try testMirSymbol(&env.mir_store, allocator, ident_tmp);
+    const ident_out = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 3 };
+    const sym_out = try testMirSymbol(&env.mir_store, allocator, ident_out);
+
+    const elem = try env.mir_store.addExpr(allocator, .{ .int = .{
+        .value = .{ .bytes = @bitCast(@as(i128, 1)), .kind = .i128 },
+    } }, i64_mono, Region.zero());
+    const list_elems = try env.mir_store.addExprSpan(allocator, &.{elem});
+    const list_expr = try env.mir_store.addExpr(allocator, .{ .list = .{ .elems = list_elems } }, list_mono, Region.zero());
+
+    const tmp_pat = try env.mir_store.addPattern(allocator, .{ .bind = sym_tmp }, list_mono);
+    const lookup_tmp = try env.mir_store.addExpr(allocator, .{ .lookup = sym_tmp }, list_mono, Region.zero());
+    const inner_stmts = try env.mir_store.addStmts(allocator, &.{
+        .{ .decl_const = .{ .pattern = tmp_pat, .expr = list_expr } },
+    });
+    const inner_block = try env.mir_store.addExpr(allocator, .{ .block = .{
+        .stmts = inner_stmts,
+        .final_expr = lookup_tmp,
+    } }, list_mono, Region.zero());
+
+    const out_pat = try env.mir_store.addPattern(allocator, .{ .bind = sym_out }, list_mono);
+    const lookup_out = try env.mir_store.addExpr(allocator, .{ .lookup = sym_out }, list_mono, Region.zero());
+    const outer_stmts = try env.mir_store.addStmts(allocator, &.{
+        .{ .decl_const = .{ .pattern = out_pat, .expr = inner_block } },
+    });
+    const outer_block = try env.mir_store.addExpr(allocator, .{ .block = .{
+        .stmts = outer_stmts,
+        .final_expr = lookup_out,
+    } }, list_mono, Region.zero());
+
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.lambda_set_store, env.module_env.idents.true_tag);
+    defer translator.deinit();
+
+    const lir_id = try translator.lower(outer_block);
+    const lir_expr = env.lir_store.getExpr(lir_id);
+    try testing.expect(lir_expr == .block);
+
+    const lir_stmts = env.lir_store.getStmts(lir_expr.block.stmts);
+    try testing.expectEqual(@as(usize, 1), lir_stmts.len);
+    try testing.expect(lir_stmts[0] == .decl);
+    try testing.expectEqual(LirStmt.BindingSemantics.owned, lir_stmts[0].decl.semantics);
+
+    const bound_expr = env.lir_store.getExpr(lir_stmts[0].decl.expr);
+    try testing.expect(bound_expr == .block);
 }
 
 test "mutable refcounted block result lowers as retained snapshot" {

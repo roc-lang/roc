@@ -4900,6 +4900,183 @@ test "dev lowering: mutable loop append decrefs mutable result binding once" {
                 else => 0,
             };
         }
+
+        fn exprAliasesSymbol(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, symbol: lir.LIR.Symbol) bool {
+            if (expr_id.isNone()) return false;
+
+            const expr = store.getExpr(expr_id);
+            switch (expr) {
+                .lookup => |lookup| return lookup.symbol == symbol,
+                .dbg => |dbg_expr| return exprAliasesSymbol(store, dbg_expr.expr, symbol),
+                .nominal => |nominal| return exprAliasesSymbol(store, nominal.backing_expr, symbol),
+                .proc_call,
+                .cell_load,
+                .list,
+                .empty_list,
+                .struct_,
+                .struct_access,
+                .zero_arg_tag,
+                .tag,
+                .if_then_else,
+                .match_expr,
+                .block,
+                .early_return,
+                .break_expr,
+                .low_level,
+                .expect,
+                .hosted_call,
+                .i64_literal,
+                .i128_literal,
+                .f64_literal,
+                .f32_literal,
+                .dec_literal,
+                .str_literal,
+                .bool_literal,
+                .incref,
+                .decref,
+                .free,
+                .crash,
+                .runtime_error,
+                .str_concat,
+                .int_to_str,
+                .float_to_str,
+                .dec_to_str,
+                .str_escape_and_quote,
+                .discriminant_switch,
+                .tag_payload_access,
+                .for_loop,
+                .while_loop,
+                => return false,
+            }
+        }
+
+        fn hasOwnedAliasBinding(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, source_symbol: lir.LIR.Symbol) bool {
+            if (expr_id.isNone()) return false;
+
+            const expr = store.getExpr(expr_id);
+            return switch (expr) {
+                .block => |block| blk: {
+                    for (store.getStmts(block.stmts)) |stmt| {
+                        switch (stmt) {
+                            .decl, .mutate => |binding| {
+                                if (binding.semantics == .owned and exprAliasesSymbol(store, binding.expr, source_symbol)) {
+                                    break :blk true;
+                                }
+                                if (hasOwnedAliasBinding(store, binding.expr, source_symbol)) break :blk true;
+                            },
+                            .cell_init, .cell_store => |binding| {
+                                if (hasOwnedAliasBinding(store, binding.expr, source_symbol)) break :blk true;
+                            },
+                            .cell_drop => {},
+                        }
+                    }
+                    break :blk hasOwnedAliasBinding(store, block.final_expr, source_symbol);
+                },
+                .if_then_else => |ite| blk: {
+                    for (store.getIfBranches(ite.branches)) |branch| {
+                        if (hasOwnedAliasBinding(store, branch.cond, source_symbol) or
+                            hasOwnedAliasBinding(store, branch.body, source_symbol))
+                        {
+                            break :blk true;
+                        }
+                    }
+                    break :blk hasOwnedAliasBinding(store, ite.final_else, source_symbol);
+                },
+                .match_expr => |match_expr| blk: {
+                    if (hasOwnedAliasBinding(store, match_expr.value, source_symbol)) break :blk true;
+                    for (store.getMatchBranches(match_expr.branches)) |branch| {
+                        if (hasOwnedAliasBinding(store, branch.guard, source_symbol) or
+                            hasOwnedAliasBinding(store, branch.body, source_symbol))
+                        {
+                            break :blk true;
+                        }
+                    }
+                    break :blk false;
+                },
+                .for_loop => |fl| hasOwnedAliasBinding(store, fl.list_expr, source_symbol) or hasOwnedAliasBinding(store, fl.body, source_symbol),
+                .while_loop => |wl| hasOwnedAliasBinding(store, wl.cond, source_symbol) or hasOwnedAliasBinding(store, wl.body, source_symbol),
+                .proc_call => |call| blk: {
+                    if (callCalleeExprId(call)) |callee_expr| {
+                        if (hasOwnedAliasBinding(store, callee_expr, source_symbol)) break :blk true;
+                    }
+                    for (store.getExprSpan(call.args)) |arg| {
+                        if (hasOwnedAliasBinding(store, arg, source_symbol)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .low_level => |ll| blk: {
+                    for (store.getExprSpan(ll.args)) |arg| {
+                        if (hasOwnedAliasBinding(store, arg, source_symbol)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .list => |list_expr| blk: {
+                    for (store.getExprSpan(list_expr.elems)) |elem| {
+                        if (hasOwnedAliasBinding(store, elem, source_symbol)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .struct_ => |struct_expr| blk: {
+                    for (store.getExprSpan(struct_expr.fields)) |field| {
+                        if (hasOwnedAliasBinding(store, field, source_symbol)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .tag => |tag_expr| blk: {
+                    for (store.getExprSpan(tag_expr.args)) |arg| {
+                        if (hasOwnedAliasBinding(store, arg, source_symbol)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .struct_access => |sa| hasOwnedAliasBinding(store, sa.struct_expr, source_symbol),
+                .tag_payload_access => |tpa| hasOwnedAliasBinding(store, tpa.value, source_symbol),
+                .nominal => |nominal| hasOwnedAliasBinding(store, nominal.backing_expr, source_symbol),
+                .early_return => |ret| hasOwnedAliasBinding(store, ret.expr, source_symbol),
+                .dbg => |dbg_expr| hasOwnedAliasBinding(store, dbg_expr.expr, source_symbol),
+                .expect => |expect_expr| hasOwnedAliasBinding(store, expect_expr.cond, source_symbol) or hasOwnedAliasBinding(store, expect_expr.body, source_symbol),
+                .str_concat => |parts| blk: {
+                    for (store.getExprSpan(parts)) |part| {
+                        if (hasOwnedAliasBinding(store, part, source_symbol)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .int_to_str => |its| hasOwnedAliasBinding(store, its.value, source_symbol),
+                .float_to_str => |fts| hasOwnedAliasBinding(store, fts.value, source_symbol),
+                .dec_to_str => |value| hasOwnedAliasBinding(store, value, source_symbol),
+                .str_escape_and_quote => |value| hasOwnedAliasBinding(store, value, source_symbol),
+                .discriminant_switch => |ds| blk: {
+                    if (hasOwnedAliasBinding(store, ds.value, source_symbol)) break :blk true;
+                    for (store.getExprSpan(ds.branches)) |branch| {
+                        if (hasOwnedAliasBinding(store, branch, source_symbol)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .hosted_call => |hc| blk: {
+                    for (store.getExprSpan(hc.args)) |arg| {
+                        if (hasOwnedAliasBinding(store, arg, source_symbol)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .lookup,
+                .cell_load,
+                .empty_list,
+                .zero_arg_tag,
+                .i64_literal,
+                .i128_literal,
+                .f64_literal,
+                .f32_literal,
+                .dec_literal,
+                .str_literal,
+                .bool_literal,
+                .incref,
+                .decref,
+                .free,
+                .crash,
+                .runtime_error,
+                .break_expr,
+                => false,
+            };
+        }
     };
 
     const resources = try parseAndCanonicalizeExpr(test_allocator,
@@ -4980,18 +5157,32 @@ test "dev lowering: mutable loop append decrefs mutable result binding once" {
     const stmts = lir_store.getStmts(root.block.stmts);
     var found_mutable_result = false;
     var found_cell_result = false;
+    var found_source_list = false;
     for (stmts) |stmt| {
         switch (stmt) {
             .decl, .mutate => |binding| {
                 const pat = lir_store.getPattern(binding.pattern);
                 if (pat != .bind) continue;
-                if (!pat.bind.reassignable) continue;
-
                 const layout_val = layout_store.getLayout(pat.bind.layout_idx);
                 if (layout_val.tag != .list and layout_val.tag != .list_of_zst) continue;
 
-                found_mutable_result = true;
-                try std.testing.expectEqual(@as(u32, 1), Search.countDecrefsForSymbol(&lir_store, with_rc, pat.bind.symbol));
+                if (pat.bind.reassignable) {
+                    found_mutable_result = true;
+                    try std.testing.expectEqual(@as(u32, 1), Search.countDecrefsForSymbol(&lir_store, with_rc, pat.bind.symbol));
+                    continue;
+                }
+
+                found_source_list = true;
+                try std.testing.expect(!Search.hasOwnedAliasBinding(&lir_store, with_rc, pat.bind.symbol));
+                for (stmts) |top_stmt| {
+                    const stmt_decrefs = switch (top_stmt) {
+                        .decl, .mutate => |top_binding| Search.countDecrefsForSymbol(&lir_store, top_binding.expr, pat.bind.symbol),
+                        .cell_init, .cell_store => |top_binding| Search.countDecrefsForSymbol(&lir_store, top_binding.expr, pat.bind.symbol),
+                        .cell_drop => 0,
+                    };
+                    try std.testing.expectEqual(@as(u32, 0), stmt_decrefs);
+                }
+                try std.testing.expectEqual(@as(u32, 1), Search.countDecrefsForSymbol(&lir_store, root.block.final_expr, pat.bind.symbol));
             },
             .cell_init => |cell| {
                 const layout_val = layout_store.getLayout(cell.layout_idx);
@@ -5005,6 +5196,7 @@ test "dev lowering: mutable loop append decrefs mutable result binding once" {
     }
 
     try std.testing.expect(found_mutable_result or found_cell_result);
+    try std.testing.expect(found_source_list);
 }
 
 test "dev lowering: mutable list reassignment keeps both decrefs on the reassigned symbol" {

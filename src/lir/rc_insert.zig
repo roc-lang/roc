@@ -630,19 +630,59 @@ pub const RcInsertPass = struct {
         return self.layoutNeedsRc(self.exprResultLayout(expr_id));
     }
 
-    fn hasReusableBorrowOwner(self: *const RcInsertPass, expr_id: LirExprId) bool {
+    fn exprHasReusableBorrowStorage(self: *const RcInsertPass, expr_id: LirExprId) bool {
         if (expr_id.isNone()) return false;
 
         const layout_idx = self.exprResultLayout(expr_id);
         if (!self.layoutNeedsRc(layout_idx)) return false;
 
         return switch (self.store.getExpr(expr_id)) {
-            .lookup => |lookup| !lookup.symbol.isNone() and self.store.getSymbolDef(lookup.symbol) == null,
-            .nominal => |nominal| self.hasReusableBorrowOwner(nominal.backing_expr),
-            .struct_access => |access| self.hasReusableBorrowOwner(access.struct_expr),
-            .tag_payload_access => |access| self.hasReusableBorrowOwner(access.value),
-            .dbg => |dbg_expr| self.hasReusableBorrowOwner(dbg_expr.expr),
-            else => false,
+            // This predicate runs during borrowed-use normalization, before
+            // ownership analysis has assigned stable ref ids. It must therefore
+            // be purely syntactic: a local lookup or cell load already has
+            // storage we can borrow through, while expressions that cross a
+            // block boundary still need explicit materialization.
+            .lookup => |lookup| !lookup.symbol.isNone(),
+            .cell_load => true,
+            .nominal => |nominal| self.exprHasReusableBorrowStorage(nominal.backing_expr),
+            .struct_access => |access| self.exprHasReusableBorrowStorage(access.struct_expr),
+            .tag_payload_access => |access| self.exprHasReusableBorrowStorage(access.value),
+            .dbg => |dbg_expr| self.exprHasReusableBorrowStorage(dbg_expr.expr),
+            .block,
+            .if_then_else,
+            .match_expr,
+            .for_loop,
+            .while_loop,
+            .proc_call,
+            .low_level,
+            .list,
+            .struct_,
+            .tag,
+            .i64_literal,
+            .i128_literal,
+            .f64_literal,
+            .f32_literal,
+            .dec_literal,
+            .str_literal,
+            .bool_literal,
+            .empty_list,
+            .zero_arg_tag,
+            .hosted_call,
+            .str_concat,
+            .int_to_str,
+            .float_to_str,
+            .dec_to_str,
+            .str_escape_and_quote,
+            .early_return,
+            .expect,
+            .discriminant_switch,
+            .incref,
+            .decref,
+            .free,
+            .crash,
+            .runtime_error,
+            .break_expr,
+            => false,
         };
     }
 
@@ -652,7 +692,7 @@ pub const RcInsertPass = struct {
         const layout_idx = self.exprResultLayout(expr_id);
         if (!self.layoutNeedsRc(layout_idx)) return false;
 
-        return !self.hasReusableBorrowOwner(expr_id);
+        return !self.exprHasReusableBorrowStorage(expr_id);
     }
 
     fn materializeBorrowedUse(
@@ -4736,6 +4776,59 @@ pub const RcInsertPass = struct {
         return (self.scratch_consumed_uses.get(key) orelse 0) > 0;
     }
 
+    fn exprTransfersOwnerKey(self: *RcInsertPass, expr_id: LirExprId, key: u64) Allocator.Error!bool {
+        if (expr_id.isNone()) return false;
+
+        const expr = self.store.getExpr(expr_id);
+        return switch (expr) {
+            .lookup => |lookup| blk: {
+                if (lookup.symbol.isNone()) break :blk false;
+                const lookup_key = self.lookupKey(expr_id, lookup.symbol);
+                const owner_key = self.consumedOwnerKey(lookup_key) orelse break :blk false;
+                break :blk owner_key == key and self.keyIntroducesOwner(key);
+            },
+            .dbg => |dbg_expr| self.exprTransfersOwnerKey(dbg_expr.expr, key),
+            .nominal => |nominal| self.exprTransfersOwnerKey(nominal.backing_expr, key),
+            .block => |block| self.exprTransfersOwnerKey(block.final_expr, key),
+            .proc_call => false,
+            .cell_load => false,
+            .list => false,
+            .empty_list => false,
+            .struct_ => false,
+            .struct_access => false,
+            .zero_arg_tag => false,
+            .tag => false,
+            .if_then_else => false,
+            .match_expr => false,
+            .early_return => false,
+            .break_expr => false,
+            .low_level => false,
+            .expect => false,
+            .hosted_call => false,
+            .i64_literal => false,
+            .i128_literal => false,
+            .f64_literal => false,
+            .f32_literal => false,
+            .dec_literal => false,
+            .str_literal => false,
+            .bool_literal => false,
+            .incref => false,
+            .decref => false,
+            .free => false,
+            .crash => false,
+            .runtime_error => false,
+            .str_concat => false,
+            .int_to_str => false,
+            .float_to_str => false,
+            .dec_to_str => false,
+            .str_escape_and_quote => false,
+            .discriminant_switch => false,
+            .tag_payload_access => false,
+            .for_loop => false,
+            .while_loop => false,
+        };
+    }
+
     /// Collect all symbols bound by patterns within an expression tree.
     /// Used to identify locally-defined symbols for branch-aware RC filtering.
     fn collectExprBoundSymbols(self: *const RcInsertPass, expr_id: LirExprId, set: *std.AutoHashMap(u64, void)) Allocator.Error!void {
@@ -5050,10 +5143,16 @@ pub const RcInsertPass = struct {
         var stmts = std.ArrayList(LirStmt).empty;
         defer stmts.deinit(self.allocator);
 
-        try stmts.append(self.allocator, .{ .decl = .{
+        const result_binding: LirStmt.Binding = .{
             .pattern = result_bind.pattern,
             .expr = expr,
-        } });
+            .semantics = if (self.layoutNeedsRc(result_layout) and self.ownerKeyForAliasedExpr(expr) != null)
+                .retained
+            else
+                .owned,
+        };
+        try stmts.append(self.allocator, .{ .decl = result_binding });
+        try self.emitBindingIntroductionRcOps(result_binding, region, &stmts);
         try stmts.appendSlice(self.allocator, tail_stmts);
 
         const final_lookup = try self.store.addExpr(.{ .lookup = .{
@@ -5362,7 +5461,11 @@ pub const RcInsertPass = struct {
                     try ctx.pass.exprConsumesKey(ctx.final_expr, key)
                 else
                     false;
-                const final_borrows_symbol = final_uses_symbol and !final_consumes_symbol;
+                const final_transfers_symbol = if (final_uses_symbol)
+                    try ctx.pass.exprTransfersOwnerKey(ctx.final_expr, key)
+                else
+                    false;
+                const final_borrows_symbol = final_uses_symbol and !final_consumes_symbol and !final_transfers_symbol;
                 const later_statement_uses = try ctx.pass.hasLaterStatementUseKey(ctx.block_stmts, ctx.stmt_index, key);
                 const use_count = ctx.pass.effectiveGlobalOwnerUseCount(key);
                 const needs_statement_tail_cleanup = later_statement_uses and use_count == 0;
