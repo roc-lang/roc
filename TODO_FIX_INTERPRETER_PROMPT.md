@@ -42,7 +42,7 @@ There are two test paths that exercise the interpreter:
      safely contained (the parent sees a non-zero exit or signal via waitpid).
    - The interpreter backend uses `helpers.lirInterpreterInspectedStr` which
      does CIR → MIR → LIR → RC lowering, then `LirInterpreter.eval()`
-   - Current status: **1235 passed, 0 failed, 0 crashed, 69 skipped**
+   - Current status: **1252 passed, 0 failed, 0 crashed, 51 skipped**
 
 2. **Unit tests** (`zig build test`):
    - Sequential tests in `src/eval/test/helpers.zig` (low_level_interp_test,
@@ -100,7 +100,7 @@ cause is now fixed.
 
 - **fx test**: `repeating pattern segfault (interpreter)` ✓
 - **Eval tests**: U8/U16 large-value arithmetic (30 tests unskipped) ✓
-- **Eval test total**: 1235 passed (up from 1102), 0 failed, 0 crashed
+- **Eval test total**: 1252 passed (up from 1102), 0 failed, 0 crashed
 
 ---
 
@@ -227,30 +227,31 @@ in this case), the comptime evaluator should be able to evaluate `one = 1`.
 
 ---
 
-## Skipped Eval Tests (SKIP_ALL — all backends)
+## Skipped Eval Tests — FIXED (all SKIP_ALL removed)
 
-These are tests in `src/eval/test/eval_tests.zig` that are skipped across **all**
-backends (interpreter, dev, wasm, llvm). Current: **69 skipped** (was 108).
+All `SKIP_ALL` tests have been fixed. The 18 previously-skipped tests were broken
+due to incorrect test sources (wrong method names, missing `.Dec` type suffixes),
+not actual compiler/backend bugs:
 
-**Workflow**: Fix one category at a time. After fixing, unskip the tests, run them
-to verify, commit, then **remove the resolved section from this document**.
+- **Signed→Unsigned conversions**: used `to_u16()` instead of `to_u16_wrap()` (3 tests)
+- **Float→Int wrap, Dec→Int wrap, Dec→F32 wrap**: were already working after the
+  monomorphization fix; just needed unskipping (12 tests)
+- **Dec literal tests**: needed `.Dec` type suffix (e.g. `3.7.Dec.to_i64_wrap()`) (6 tests)
+- **`_try` variant**: already working after monomorphization fix (1 test)
 
-### Known compiler bugs (3 tests)
+Current: **51 skipped** (all are backend-specific, not SKIP_ALL).
 
-These are upstream compiler/specialization bugs, not interpreter-specific:
-- `early return: ? in closure passed to List.fold`
-- `polymorphic tag union payload substitution - extract payload`
-- `polymorphic tag union payload substitution - multiple type vars`
-
----
-
-### Other skips (not SKIP_ALL)
+### Remaining skips (not SKIP_ALL)
 
 - 31 dev-only tests (skip interpreter/wasm by design)
 - 3 match regressions (skip wasm + llvm)
 - 2 Str.contains (skip wasm)
 - 2 abs (skip dev)
 - 1 U64→I8 wrapping (skip wasm — wasm returns unsigned 200 instead of signed -56)
+- 3 known compiler bugs (upstream specialization issues):
+  - `early return: ? in closure passed to List.fold`
+  - `polymorphic tag union payload substitution - extract payload`
+  - `polymorphic tag union payload substitution - multiple type vars`
 
 ---
 

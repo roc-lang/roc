@@ -6,9 +6,6 @@
 const TestCase = @import("parallel_runner.zig").TestCase;
 const RocDec = @import("builtins").dec.RocDec;
 
-/// Skip all backends — used for tests that document bugs (crash/fail).
-const SKIP_ALL: TestCase.Skip = .{ .interpreter = true, .dev = true, .wasm = true, .llvm = true };
-
 /// All eval test cases, consumed by the parallel runner.
 pub const tests = [_]TestCase{
     // --- proof of concept tests ---
@@ -8514,21 +8511,20 @@ pub const tests = [_]TestCase{
     .{ .name = "U64 to Dec", .source = "{ 100.U64.to_dec() }", .expected = .{ .dec_val = 100 * RocDec.one_point_zero_i128 } },
 
     // --- Numeric conversions: float to int (wrap = truncation) ---
-    // Float-to-int and Dec-to-int wrap methods crash on all backends; skip for now
-    .{ .name = "F64 to I64 wrap", .source = "{ 3.7.F64.to_i64_wrap() }", .expected = .{ .i64_val = 3 }, .skip = SKIP_ALL },
-    .{ .name = "F64 to I32 wrap", .source = "{ 99.9.F64.to_i32_wrap() }", .expected = .{ .i32_val = 99 }, .skip = SKIP_ALL },
-    .{ .name = "F64 to U64 wrap", .source = "{ 42.9.F64.to_u64_wrap() }", .expected = .{ .u64_val = 42 }, .skip = SKIP_ALL },
-    .{ .name = "F32 to I32 wrap", .source = "{ 7.8.F32.to_i32_wrap() }", .expected = .{ .i32_val = 7 }, .skip = SKIP_ALL },
-    .{ .name = "F32 to U32 wrap", .source = "{ 15.9.F32.to_u32_wrap() }", .expected = .{ .u32_val = 15 }, .skip = SKIP_ALL },
-    .{ .name = "F32 to I64 wrap", .source = "{ 100.1.F32.to_i64_wrap() }", .expected = .{ .i64_val = 100 }, .skip = SKIP_ALL },
+    .{ .name = "F64 to I64 wrap", .source = "{ 3.7.F64.to_i64_wrap() }", .expected = .{ .i64_val = 3 } },
+    .{ .name = "F64 to I32 wrap", .source = "{ 99.9.F64.to_i32_wrap() }", .expected = .{ .i32_val = 99 } },
+    .{ .name = "F64 to U64 wrap", .source = "{ 42.9.F64.to_u64_wrap() }", .expected = .{ .u64_val = 42 } },
+    .{ .name = "F32 to I32 wrap", .source = "{ 7.8.F32.to_i32_wrap() }", .expected = .{ .i32_val = 7 } },
+    .{ .name = "F32 to U32 wrap", .source = "{ 15.9.F32.to_u32_wrap() }", .expected = .{ .u32_val = 15 } },
+    .{ .name = "F32 to I64 wrap", .source = "{ 100.1.F32.to_i64_wrap() }", .expected = .{ .i64_val = 100 } },
 
     // --- Numeric conversions: F32 <-> F64 ---
     .{ .name = "F32 to F64", .source = "{ 1.5.F32.to_f64() }", .expected = .{ .f64_val = 1.5 } },
 
     // --- Numeric conversions: Dec to int ---
-    .{ .name = "Dec to I64 wrap", .source = "{ 3.7.to_i64_wrap() }", .expected = .{ .i64_val = 3 }, .skip = SKIP_ALL },
-    .{ .name = "Dec to I32 wrap", .source = "{ 99.9.to_i32_wrap() }", .expected = .{ .i32_val = 99 }, .skip = SKIP_ALL },
-    .{ .name = "Dec to U64 wrap", .source = "{ 42.8.to_u64_wrap() }", .expected = .{ .u64_val = 42 }, .skip = SKIP_ALL },
+    .{ .name = "Dec to I64 wrap", .source = "{ 3.7.Dec.to_i64_wrap() }", .expected = .{ .i64_val = 3 } },
+    .{ .name = "Dec to I32 wrap", .source = "{ 99.9.Dec.to_i32_wrap() }", .expected = .{ .i32_val = 99 } },
+    .{ .name = "Dec to U64 wrap", .source = "{ 42.8.Dec.to_u64_wrap() }", .expected = .{ .u64_val = 42 } },
 
     // --- List.drop_at ---
     .{ .name = "List.drop_at middle", .source = "List.drop_at([10.I64, 20.I64, 30.I64], 1).len()", .expected = .{ .u64_val = 2 }, .skip = .{ .dev = true, .wasm = true } },
@@ -8753,13 +8749,13 @@ pub const tests = [_]TestCase{
     .{ .name = "U8 to Dec", .source = "{ 10.U8.to_dec() }", .expected = .{ .dec_val = 10 * RocDec.one_point_zero_i128 } },
     .{ .name = "I16 to Dec", .source = "{ 500.I16.to_dec() }", .expected = .{ .dec_val = 500 * RocDec.one_point_zero_i128 } },
     .{ .name = "U32 to Dec", .source = "{ 1000.U32.to_dec() }", .expected = .{ .dec_val = 1000 * RocDec.one_point_zero_i128 } },
-    .{ .name = "Dec to F64", .source = "{ 3.14.to_f64() }", .expected = .{ .f64_val = 3.14 } },
-    .{ .name = "F32 to I64 wrap", .source = "{ 3.7.F32.to_i64_wrap() }", .expected = .{ .i64_val = 3 }, .skip = SKIP_ALL },
-    .{ .name = "F64 to I64 wrap", .source = "{ 9.9.F64.to_i64_wrap() }", .expected = .{ .i64_val = 9 }, .skip = SKIP_ALL },
+    .{ .name = "Dec to F64 (3.14)", .source = "{ 3.14.Dec.to_f64() }", .expected = .{ .f64_val = 3.14 } },
+    .{ .name = "F32 to I64 wrap (3.7)", .source = "{ 3.7.F32.to_i64_wrap() }", .expected = .{ .i64_val = 3 } },
+    .{ .name = "F64 to I64 wrap (9.9)", .source = "{ 9.9.F64.to_i64_wrap() }", .expected = .{ .i64_val = 9 } },
     .{ .name = "F32 to F64 widen", .source = "{ 1.5.F32.to_f64() }", .expected = .{ .f64_val = 1.5 } },
-    .{ .name = "I8 to U16", .source = "{ 42.I8.to_u16() }", .expected = .{ .u16_val = 42 }, .skip = SKIP_ALL },
-    .{ .name = "I16 to U32", .source = "{ 500.I16.to_u32() }", .expected = .{ .u32_val = 500 }, .skip = SKIP_ALL },
-    .{ .name = "I32 to U64", .source = "{ 1000.I32.to_u64() }", .expected = .{ .u64_val = 1000 }, .skip = SKIP_ALL },
+    .{ .name = "I8 to U16 wrap", .source = "{ 42.I8.to_u16_wrap() }", .expected = .{ .u16_val = 42 } },
+    .{ .name = "I16 to U32 wrap", .source = "{ 500.I16.to_u32_wrap() }", .expected = .{ .u32_val = 500 } },
+    .{ .name = "I32 to U64 wrap", .source = "{ 1000.I32.to_u64_wrap() }", .expected = .{ .u64_val = 1000 } },
 
     // ── Numeric conversions: int-to-float for small types (hits u8_to_f32, i8_to_f64, etc.) ──
     .{ .name = "U8 to F32", .source = "{ 10.U8.to_f32() }", .expected = .{ .f32_val = 10.0 } },
@@ -8776,12 +8772,11 @@ pub const tests = [_]TestCase{
     .{ .name = "U64 to F32", .source = "{ 100.U64.to_f32() }", .expected = .{ .f32_val = 100.0 } },
     .{ .name = "U64 to Dec", .source = "{ 100.U64.to_dec() }", .expected = .{ .dec_val = 100 * RocDec.one_point_zero_i128 } },
 
-    // ── Numeric conversions: Dec to int (wrap) - crashes across all backends ──
-    .{ .name = "Dec to I64 wrap", .source = "{ 3.7.to_i64_wrap() }", .expected = .{ .i64_val = 3 }, .skip = SKIP_ALL },
-    .{ .name = "Dec to U8 wrap", .source = "{ 100.5.to_u8_wrap() }", .expected = .{ .u8_val = 100 }, .skip = SKIP_ALL },
-    .{ .name = "Dec to F32 wrap", .source = "{ 1.5.to_f32_wrap() }", .expected = .{ .f32_val = 1.5 }, .skip = SKIP_ALL },
+    // ── Numeric conversions: Dec to U8/F32 (wrap) ──
+    .{ .name = "Dec to U8 wrap", .source = "{ 100.5.Dec.to_u8_wrap() }", .expected = .{ .u8_val = 100 } },
+    .{ .name = "Dec to F32 wrap", .source = "{ 1.5.Dec.to_f32_wrap() }", .expected = .{ .f32_val = 1.5 } },
 
-    // ── Numeric conversions: _try variants returning Try - crash across all backends ──
+    // ── Numeric conversions: _try variants returning Try ──
     .{
         .name = "I64 to I8 try ok",
         .source =
@@ -8793,7 +8788,6 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .i64_val = 42 },
-        .skip = SKIP_ALL,
     },
 
     // ── sort_with (uses compare low-level) ──
