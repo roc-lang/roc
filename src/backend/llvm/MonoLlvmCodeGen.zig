@@ -121,6 +121,9 @@ pub const MonoLlvmCodeGen = struct {
     /// functions and call them directly — no function pointers or inttoptr.
     builtin_functions: std.StringHashMap(LlvmBuilder.Function.Index),
 
+    /// Lazily generated RC helper functions keyed by canonical layout helper identity.
+    compiled_rc_helpers: std.AutoHashMap(u64, LlvmBuilder.Function.Index),
+
     /// Layout store for resolving composite type layouts (records, tuples).
     /// Set by the evaluator before calling generateCode.
     layout_store: ?*const layout.Store = null,
@@ -189,6 +192,65 @@ pub const MonoLlvmCodeGen = struct {
         fn deinit(self: *ScopeSnapshot) void {
             self.symbol_keys.deinit();
             self.cell_keys.deinit();
+        }
+    };
+
+    const LexicalEnvSnapshot = struct {
+        symbol_values: std.AutoHashMap(u64, LlvmBuilder.Value),
+        loop_var_allocas: std.AutoHashMap(u64, LoopVarAlloca),
+        cell_allocas: std.AutoHashMap(u64, LoopVarAlloca),
+
+        fn init(self: *const MonoLlvmCodeGen) Error!LexicalEnvSnapshot {
+            var snapshot = LexicalEnvSnapshot{
+                .symbol_values = std.AutoHashMap(u64, LlvmBuilder.Value).init(self.allocator),
+                .loop_var_allocas = std.AutoHashMap(u64, LoopVarAlloca).init(self.allocator),
+                .cell_allocas = std.AutoHashMap(u64, LoopVarAlloca).init(self.allocator),
+            };
+            errdefer snapshot.deinit();
+
+            var symbol_it = self.symbol_values.iterator();
+            while (symbol_it.next()) |entry| {
+                try snapshot.symbol_values.put(entry.key_ptr.*, entry.value_ptr.*);
+            }
+
+            var loop_it = self.loop_var_allocas.iterator();
+            while (loop_it.next()) |entry| {
+                try snapshot.loop_var_allocas.put(entry.key_ptr.*, entry.value_ptr.*);
+            }
+
+            var cell_it = self.cell_allocas.iterator();
+            while (cell_it.next()) |entry| {
+                try snapshot.cell_allocas.put(entry.key_ptr.*, entry.value_ptr.*);
+            }
+
+            return snapshot;
+        }
+
+        fn restore(self: *const LexicalEnvSnapshot, codegen: *MonoLlvmCodeGen) Error!void {
+            codegen.symbol_values.clearRetainingCapacity();
+            codegen.loop_var_allocas.clearRetainingCapacity();
+            codegen.cell_allocas.clearRetainingCapacity();
+
+            var symbol_it = self.symbol_values.iterator();
+            while (symbol_it.next()) |entry| {
+                try codegen.symbol_values.put(entry.key_ptr.*, entry.value_ptr.*);
+            }
+
+            var loop_it = self.loop_var_allocas.iterator();
+            while (loop_it.next()) |entry| {
+                try codegen.loop_var_allocas.put(entry.key_ptr.*, entry.value_ptr.*);
+            }
+
+            var cell_it = self.cell_allocas.iterator();
+            while (cell_it.next()) |entry| {
+                try codegen.cell_allocas.put(entry.key_ptr.*, entry.value_ptr.*);
+            }
+        }
+
+        fn deinit(self: *LexicalEnvSnapshot) void {
+            self.symbol_values.deinit();
+            self.loop_var_allocas.deinit();
+            self.cell_allocas.deinit();
         }
     };
 
@@ -335,6 +397,7 @@ pub const MonoLlvmCodeGen = struct {
             .loop_exit_blocks = .empty,
             .cell_allocas = std.AutoHashMap(u64, LoopVarAlloca).init(allocator),
             .builtin_functions = std.StringHashMap(LlvmBuilder.Function.Index).init(allocator),
+            .compiled_rc_helpers = std.AutoHashMap(u64, LlvmBuilder.Function.Index).init(allocator),
         };
     }
 
@@ -365,6 +428,7 @@ pub const MonoLlvmCodeGen = struct {
         self.loop_exit_blocks.deinit(self.allocator);
         self.cell_allocas.deinit();
         self.builtin_functions.deinit();
+        self.compiled_rc_helpers.deinit();
     }
 
     /// Reset the code generator for a new expression
@@ -392,6 +456,7 @@ pub const MonoLlvmCodeGen = struct {
         self.loop_exit_blocks.clearRetainingCapacity();
         self.cell_allocas.clearRetainingCapacity();
         self.builtin_functions.clearRetainingCapacity();
+        self.compiled_rc_helpers.clearRetainingCapacity();
     }
 
     /// Declare a builtin function from builtins.bc as an external LLVM function.
@@ -434,6 +499,393 @@ pub const MonoLlvmCodeGen = struct {
         const fn_type = func.typeOf(builder);
         const callee = func.toValue(builder);
         return wip.call(.normal, .ccc, .none, fn_type, callee, args, "") catch return error.CompilationFailed;
+    }
+
+    fn callFunctionIndex(
+        self: *MonoLlvmCodeGen,
+        func_idx: LlvmBuilder.Function.Index,
+        args: []const LlvmBuilder.Value,
+    ) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const fn_type = func_idx.typeOf(builder);
+        const callee = func_idx.toValue(builder);
+        return wip.call(.normal, .ccc, .none, fn_type, callee, args, "") catch return error.CompilationFailed;
+    }
+
+    fn ptrSizedIntType(self: *const MonoLlvmCodeGen) LlvmBuilder.Type {
+        return switch (self.target.ptrBitWidth()) {
+            16 => .i16,
+            32 => .i32,
+            64 => .i64,
+            else => .i64,
+        };
+    }
+
+    fn emitPtrSizedInt(self: *MonoLlvmCodeGen, value: u64) Error!LlvmBuilder.Value {
+        const builder = self.builder orelse return error.CompilationFailed;
+        return builder.intValue(self.ptrSizedIntType(), value) catch return error.OutOfMemory;
+    }
+
+    fn emitRcHelperCall(
+        self: *MonoLlvmCodeGen,
+        helper_key: layout.RcHelperKey,
+        value_ptr: LlvmBuilder.Value,
+        count: ?LlvmBuilder.Value,
+        roc_ops: LlvmBuilder.Value,
+    ) Error!void {
+        const resolver = layout.RcHelperResolver.init(self.layout_store orelse return error.CompilationFailed);
+        if (resolver.plan(helper_key) == .noop) return;
+
+        const func_idx = try self.compileRcHelper(helper_key);
+        switch (helper_key.op) {
+            .incref => _ = try self.callFunctionIndex(func_idx, &.{ value_ptr, count orelse return error.CompilationFailed, roc_ops }),
+            .decref, .free => _ = try self.callFunctionIndex(func_idx, &.{ value_ptr, roc_ops }),
+        }
+    }
+
+    fn emitRcWrapperCall(
+        self: *MonoLlvmCodeGen,
+        name: []const u8,
+        param_types: []const LlvmBuilder.Type,
+        args: []const LlvmBuilder.Value,
+    ) Error!void {
+        _ = try self.callBuiltin(name, .void, param_types, args);
+    }
+
+    fn compileRcHelper(self: *MonoLlvmCodeGen, helper_key: layout.RcHelperKey) Error!LlvmBuilder.Function.Index {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const resolver = layout.RcHelperResolver.init(self.layout_store orelse return error.CompilationFailed);
+        if (resolver.plan(helper_key) == .noop) return error.CompilationFailed;
+
+        const cache_key = helper_key.encode();
+        if (self.compiled_rc_helpers.get(cache_key)) |func_idx| {
+            return func_idx;
+        }
+
+        const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+        const count_type = self.ptrSizedIntType();
+        const fn_type = switch (helper_key.op) {
+            .incref => builder.fnType(.void, &.{ ptr_type, count_type, ptr_type }, .normal) catch return error.OutOfMemory,
+            .decref, .free => builder.fnType(.void, &.{ ptr_type, ptr_type }, .normal) catch return error.OutOfMemory,
+        };
+
+        var name_buf: [96]u8 = undefined;
+        const name_str = std.fmt.bufPrint(&name_buf, "roc_rc_{s}_{d}", .{
+            @tagName(helper_key.op),
+            @intFromEnum(helper_key.layout_idx),
+        }) catch return error.OutOfMemory;
+        const fn_name = builder.strtabString(name_str) catch return error.OutOfMemory;
+        const func_idx = builder.addFunction(fn_type, fn_name, .default) catch return error.OutOfMemory;
+        func_idx.setLinkage(.internal, builder);
+        self.compiled_rc_helpers.put(cache_key, func_idx) catch return error.OutOfMemory;
+
+        const outer_wip = self.wip;
+        defer self.wip = outer_wip;
+        const outer_roc_ops = self.roc_ops_arg;
+        defer self.roc_ops_arg = outer_roc_ops;
+        const outer_out_ptr = self.out_ptr;
+        defer self.out_ptr = outer_out_ptr;
+        const outer_fn_out_ptr = self.fn_out_ptr;
+        defer self.fn_out_ptr = outer_fn_out_ptr;
+        const outer_result_layout = self.result_layout;
+        defer self.result_layout = outer_result_layout;
+        self.out_ptr = null;
+        self.fn_out_ptr = null;
+        self.result_layout = null;
+
+        const outer_fn_state = self.swapInFreshFunctionState();
+        defer self.restoreFunctionState(outer_fn_state);
+
+        var helper_wip = LlvmBuilder.WipFunction.init(builder, .{
+            .function = func_idx,
+            .strip = true,
+        }) catch return error.OutOfMemory;
+        defer helper_wip.deinit();
+
+        self.wip = &helper_wip;
+
+        const entry_block = helper_wip.block(0, "entry") catch return error.OutOfMemory;
+        helper_wip.cursor = .{ .block = entry_block };
+
+        const value_ptr = helper_wip.arg(0);
+        const count_arg: ?LlvmBuilder.Value = switch (helper_key.op) {
+            .incref => helper_wip.arg(1),
+            .decref, .free => null,
+        };
+        self.roc_ops_arg = switch (helper_key.op) {
+            .incref => helper_wip.arg(2),
+            .decref, .free => helper_wip.arg(1),
+        };
+
+        try self.generateRcHelperBody(helper_key, value_ptr, count_arg);
+
+        if (!self.currentBlockHasTerminator()) {
+            _ = helper_wip.retVoid() catch return error.CompilationFailed;
+        }
+        helper_wip.finish() catch return error.CompilationFailed;
+
+        return func_idx;
+    }
+
+    fn generateRcHelperBody(
+        self: *MonoLlvmCodeGen,
+        helper_key: layout.RcHelperKey,
+        value_ptr: LlvmBuilder.Value,
+        count: ?LlvmBuilder.Value,
+    ) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const ls = self.layout_store orelse return error.CompilationFailed;
+        const roc_ops = self.roc_ops_arg orelse return error.CompilationFailed;
+        const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+        const count_type = self.ptrSizedIntType();
+        const resolver = layout.RcHelperResolver.init(ls);
+
+        switch (resolver.plan(helper_key)) {
+            .noop => {},
+            .str_incref => {
+                try self.emitRcWrapperCall(
+                    "roc_builtins_str_incref_value",
+                    &.{ ptr_type, count_type, ptr_type },
+                    &.{ value_ptr, count orelse return error.CompilationFailed, roc_ops },
+                );
+            },
+            .str_decref => {
+                try self.emitRcWrapperCall(
+                    "roc_builtins_str_decref_value",
+                    &.{ ptr_type, ptr_type },
+                    &.{ value_ptr, roc_ops },
+                );
+            },
+            .str_free => {
+                try self.emitRcWrapperCall(
+                    "roc_builtins_str_free_value",
+                    &.{ ptr_type, ptr_type },
+                    &.{ value_ptr, roc_ops },
+                );
+            },
+            .list_incref => {
+                const elem_info = try self.getListElementInfo(helper_key.layout_idx);
+                const elements_refcounted_val = builder.intValue(.i1, @intFromBool(elem_info.elements_refcounted)) catch return error.OutOfMemory;
+                try self.emitRcWrapperCall(
+                    "roc_builtins_list_incref_value",
+                    &.{ ptr_type, .i1, count_type, ptr_type },
+                    &.{ value_ptr, elements_refcounted_val, count orelse return error.CompilationFailed, roc_ops },
+                );
+            },
+            .list_decref => |list_plan| {
+                var callback_val = builder.nullValue(ptr_type) catch return error.OutOfMemory;
+                if (list_plan.child) |child_key| {
+                    var fn_ptr = (try self.compileRcHelper(child_key)).toValue(builder);
+                    if (fn_ptr.typeOfWip(wip) != ptr_type) {
+                        fn_ptr = wip.cast(.bitcast, fn_ptr, ptr_type, "") catch return error.CompilationFailed;
+                    }
+                    callback_val = fn_ptr;
+                }
+
+                try self.emitRcWrapperCall(
+                    "roc_builtins_list_decref_value",
+                    &.{ ptr_type, .i32, count_type, ptr_type, ptr_type },
+                    &.{
+                        value_ptr,
+                        builder.intValue(.i32, list_plan.elem_alignment) catch return error.OutOfMemory,
+                        try self.emitPtrSizedInt(list_plan.elem_width),
+                        callback_val,
+                        roc_ops,
+                    },
+                );
+            },
+            .list_free => |list_plan| {
+                var callback_val = builder.nullValue(ptr_type) catch return error.OutOfMemory;
+                if (list_plan.child) |child_key| {
+                    var fn_ptr = (try self.compileRcHelper(child_key)).toValue(builder);
+                    if (fn_ptr.typeOfWip(wip) != ptr_type) {
+                        fn_ptr = wip.cast(.bitcast, fn_ptr, ptr_type, "") catch return error.CompilationFailed;
+                    }
+                    callback_val = fn_ptr;
+                }
+
+                try self.emitRcWrapperCall(
+                    "roc_builtins_list_free_value",
+                    &.{ ptr_type, .i32, count_type, ptr_type, ptr_type },
+                    &.{
+                        value_ptr,
+                        builder.intValue(.i32, list_plan.elem_alignment) catch return error.OutOfMemory,
+                        try self.emitPtrSizedInt(list_plan.elem_width),
+                        callback_val,
+                        roc_ops,
+                    },
+                );
+            },
+            .box_incref => {
+                try self.emitRcWrapperCall(
+                    "roc_builtins_box_incref_value",
+                    &.{ ptr_type, count_type, ptr_type },
+                    &.{ value_ptr, count orelse return error.CompilationFailed, roc_ops },
+                );
+            },
+            .box_decref => |box_plan| {
+                var callback_val = builder.nullValue(ptr_type) catch return error.OutOfMemory;
+                if (box_plan.child) |child_key| {
+                    var fn_ptr = (try self.compileRcHelper(child_key)).toValue(builder);
+                    if (fn_ptr.typeOfWip(wip) != ptr_type) {
+                        fn_ptr = wip.cast(.bitcast, fn_ptr, ptr_type, "") catch return error.CompilationFailed;
+                    }
+                    callback_val = fn_ptr;
+                }
+
+                try self.emitRcWrapperCall(
+                    "roc_builtins_box_decref_value",
+                    &.{ ptr_type, .i32, ptr_type, ptr_type },
+                    &.{
+                        value_ptr,
+                        builder.intValue(.i32, box_plan.elem_alignment) catch return error.OutOfMemory,
+                        callback_val,
+                        roc_ops,
+                    },
+                );
+            },
+            .box_free => |box_plan| {
+                var callback_val = builder.nullValue(ptr_type) catch return error.OutOfMemory;
+                if (box_plan.child) |child_key| {
+                    var fn_ptr = (try self.compileRcHelper(child_key)).toValue(builder);
+                    if (fn_ptr.typeOfWip(wip) != ptr_type) {
+                        fn_ptr = wip.cast(.bitcast, fn_ptr, ptr_type, "") catch return error.CompilationFailed;
+                    }
+                    callback_val = fn_ptr;
+                }
+
+                try self.emitRcWrapperCall(
+                    "roc_builtins_box_free_value",
+                    &.{ ptr_type, .i32, ptr_type, ptr_type },
+                    &.{
+                        value_ptr,
+                        builder.intValue(.i32, box_plan.elem_alignment) catch return error.OutOfMemory,
+                        callback_val,
+                        roc_ops,
+                    },
+                );
+            },
+            .struct_ => |struct_plan| {
+                const field_count = resolver.structFieldCount(struct_plan);
+                var field_index: u32 = 0;
+                while (field_index < field_count) : (field_index += 1) {
+                    const field_plan = resolver.structFieldPlan(struct_plan, field_index) orelse continue;
+                    const field_ptr = if (field_plan.offset == 0)
+                        value_ptr
+                    else
+                        wip.gep(
+                            .inbounds,
+                            .i8,
+                            value_ptr,
+                            &.{builder.intValue(.i32, field_plan.offset) catch return error.OutOfMemory},
+                            "",
+                        ) catch return error.CompilationFailed;
+                    try self.emitRcHelperCall(field_plan.child, field_ptr, count, roc_ops);
+                }
+            },
+            .tag_union => |tag_plan| {
+                const variant_count = resolver.tagUnionVariantCount(tag_plan);
+                if (variant_count == 0) return;
+
+                switch (try self.tagUnionValueMode(helper_key.layout_idx)) {
+                    .scalar_discriminant => return,
+                    .transparent_payload => {
+                        if (resolver.tagUnionVariantPlan(tag_plan, 0)) |child_key| {
+                            try self.emitRcHelperCall(child_key, value_ptr, count, roc_ops);
+                        }
+                    },
+                    .indirect_pointer => {
+                        const root_ptr = wip.load(.normal, ptr_type, value_ptr, self.pointerAlignment(), "") catch return error.CompilationFailed;
+
+                        if (variant_count == 1) {
+                            if (resolver.tagUnionVariantPlan(tag_plan, 0)) |child_key| {
+                                try self.emitRcHelperCall(child_key, root_ptr, count, roc_ops);
+                            }
+                            return;
+                        }
+
+                        const tu_data = ls.getTagUnionData(tag_plan.tag_union_idx);
+                        const disc_type = discriminantIntType(tu_data.discriminant_size);
+                        const disc_ptr = wip.gep(
+                            .inbounds,
+                            .i8,
+                            root_ptr,
+                            &.{builder.intValue(.i32, tu_data.discriminant_offset) catch return error.OutOfMemory},
+                            "",
+                        ) catch return error.CompilationFailed;
+                        const discriminant = wip.load(
+                            .normal,
+                            disc_type,
+                            disc_ptr,
+                            LlvmBuilder.Alignment.fromByteUnits(@max(@as(u64, tu_data.discriminant_size), 1)),
+                            "",
+                        ) catch return error.CompilationFailed;
+
+                        const exit_block = wip.block(variant_count, "rc_done") catch return error.OutOfMemory;
+
+                        var variant_index: u32 = 0;
+                        while (variant_index < variant_count) : (variant_index += 1) {
+                            const is_last = variant_index == variant_count - 1;
+                            const child_key = resolver.tagUnionVariantPlan(tag_plan, variant_index);
+
+                            if (!is_last) {
+                                const then_block = wip.block(1, "rc_variant") catch return error.OutOfMemory;
+                                const else_block = wip.block(1, "rc_next") catch return error.OutOfMemory;
+                                const variant_val = builder.intValue(disc_type, variant_index) catch return error.OutOfMemory;
+                                const matches = wip.icmp(.eq, discriminant, variant_val, "") catch return error.OutOfMemory;
+                                _ = wip.brCond(matches, then_block, else_block, .none) catch return error.OutOfMemory;
+
+                                wip.cursor = .{ .block = then_block };
+                                if (child_key) |child| {
+                                    try self.emitRcHelperCall(child, root_ptr, count, roc_ops);
+                                }
+                                _ = wip.br(exit_block) catch return error.CompilationFailed;
+
+                                wip.cursor = .{ .block = else_block };
+                            } else {
+                                if (child_key) |child| {
+                                    try self.emitRcHelperCall(child, root_ptr, count, roc_ops);
+                                }
+                                _ = wip.br(exit_block) catch return error.CompilationFailed;
+                            }
+                        }
+
+                        wip.cursor = .{ .block = exit_block };
+                    },
+                }
+            },
+            .closure => |child_key| {
+                try self.emitRcHelperCall(child_key, value_ptr, count, roc_ops);
+            },
+        }
+    }
+
+    fn generateRcOp(
+        self: *MonoLlvmCodeGen,
+        op: layout.RcOp,
+        expr_id: LirExprId,
+        layout_idx: layout.Idx,
+        count: u16,
+    ) Error!void {
+        const resolver = layout.RcHelperResolver.init(self.layout_store orelse return error.CompilationFailed);
+        const helper_key = layout.RcHelperKey{
+            .op = op,
+            .layout_idx = layout_idx,
+        };
+        if (resolver.plan(helper_key) == .noop) {
+            _ = try self.generateExpr(expr_id);
+            return;
+        }
+
+        const value_ptr = try self.materializeAsPtr(expr_id, try self.materializedLayoutSize(layout_idx));
+        const roc_ops = self.roc_ops_arg orelse return error.CompilationFailed;
+        const count_val = switch (op) {
+            .incref => try self.emitPtrSizedInt(count),
+            .decref, .free => null,
+        };
+        try self.emitRcHelperCall(helper_key, value_ptr, count_val, roc_ops);
     }
 
     /// Generate LLVM bitcode for a Mono IR expression
@@ -1321,17 +1773,16 @@ pub const MonoLlvmCodeGen = struct {
             .runtime_error => |re| self.generateRuntimeError(re.ret_layout),
             .crash => |c| self.generateRuntimeError(c.ret_layout),
 
-            // Reference counting — no-ops in the evaluator (short-lived memory)
             .incref => |inc| {
-                _ = try self.generateExpr(inc.value);
+                try self.generateRcOp(.incref, inc.value, inc.layout_idx, inc.count);
                 return (self.builder orelse return error.CompilationFailed).intValue(.i8, 0) catch return error.OutOfMemory;
             },
             .decref => |dec_rc| {
-                _ = try self.generateExpr(dec_rc.value);
+                try self.generateRcOp(.decref, dec_rc.value, dec_rc.layout_idx, 1);
                 return (self.builder orelse return error.CompilationFailed).intValue(.i8, 0) catch return error.OutOfMemory;
             },
             .free => |f| {
-                _ = try self.generateExpr(f.value);
+                try self.generateRcOp(.free, f.value, f.layout_idx, 1);
                 return (self.builder orelse return error.CompilationFailed).intValue(.i8, 0) catch return error.OutOfMemory;
             },
 
@@ -2741,6 +3192,8 @@ pub const MonoLlvmCodeGen = struct {
         if (self.currentBlockHasTerminator()) {
             return builder.poisonValue(try self.layoutToLlvmTypeFull(ds.result_layout)) catch return error.OutOfMemory;
         }
+        var env_snapshot = try LexicalEnvSnapshot.init(self);
+        defer env_snapshot.deinit();
 
         // Get branch expressions
         const branch_exprs = self.store.getExprSpan(ds.branches);
@@ -2782,6 +3235,7 @@ pub const MonoLlvmCodeGen = struct {
 
                 // Then block — generate branch body
                 wip.cursor = .{ .block = then_block };
+                try env_snapshot.restore(self);
                 var branch_scope = try self.beginScope();
                 defer branch_scope.deinit();
                 const branch_val = try self.generateControlFlowValue(branch_expr_id, ds.result_layout);
@@ -2797,6 +3251,7 @@ pub const MonoLlvmCodeGen = struct {
                 wip.cursor = .{ .block = else_block };
             } else {
                 // Last branch — no comparison needed (default case)
+                try env_snapshot.restore(self);
                 var branch_scope = try self.beginScope();
                 defer branch_scope.deinit();
                 const branch_val = try self.generateControlFlowValue(branch_expr_id, ds.result_layout);
@@ -2815,6 +3270,7 @@ pub const MonoLlvmCodeGen = struct {
         }
 
         // Merge block
+        try env_snapshot.restore(self);
         wip.cursor = .{ .block = merge_block };
 
         const result_type = result_vals[0].typeOfWip(wip);
@@ -3269,6 +3725,8 @@ pub const MonoLlvmCodeGen = struct {
 
         const wip = self.wip orelse return error.CompilationFailed;
         const builder = self.builder orelse return error.CompilationFailed;
+        var env_snapshot = try LexicalEnvSnapshot.init(self);
+        defer env_snapshot.deinit();
 
         // Evaluate the scrutinee
         const scrutinee = try self.generateExpr(w.value);
@@ -3312,6 +3770,7 @@ pub const MonoLlvmCodeGen = struct {
             switch (pattern) {
                 .wildcard => {
                     // Always matches — generate body directly
+                    try env_snapshot.restore(self);
                     var branch_scope = try self.beginScope();
                     defer branch_scope.deinit();
                     const body_val = try self.generateControlFlowValue(branch.body, w.result_layout);
@@ -3328,6 +3787,7 @@ pub const MonoLlvmCodeGen = struct {
                 .bind => |bind| {
                     // Always matches, bind the scrutinee to the symbol
                     const symbol_key: u64 = @bitCast(bind.symbol);
+                    try env_snapshot.restore(self);
                     var branch_scope = try self.beginScope();
                     defer branch_scope.deinit();
                     self.symbol_values.put(symbol_key, scrutinee) catch return error.OutOfMemory;
@@ -3354,6 +3814,7 @@ pub const MonoLlvmCodeGen = struct {
                     _ = wip.brCond(cmp, then_block, else_block, .none) catch return error.OutOfMemory;
 
                     wip.cursor = .{ .block = then_block };
+                    try env_snapshot.restore(self);
                     var branch_scope = try self.beginScope();
                     defer branch_scope.deinit();
                     try self.bindPattern(branch.pattern, scrutinee);
@@ -3383,6 +3844,7 @@ pub const MonoLlvmCodeGen = struct {
         std.debug.assert(branch_count != 0);
 
         // Check if all branch values have the same type for the phi node
+        try env_snapshot.restore(self);
         wip.cursor = .{ .block = merge_block };
         const result_type = try self.layoutToLlvmTypeFull(w.result_layout);
         for (result_vals[0..branch_count], 0..) |val, i| {
@@ -6745,6 +7207,8 @@ pub const MonoLlvmCodeGen = struct {
 
         const wip = self.wip orelse return error.CompilationFailed;
         const builder = self.builder orelse return error.CompilationFailed;
+        var env_snapshot = try LexicalEnvSnapshot.init(self);
+        defer env_snapshot.deinit();
 
         // Get the branches
         const branches = self.store.getIfBranches(ite.branches);
@@ -6786,6 +7250,7 @@ pub const MonoLlvmCodeGen = struct {
 
         // Then block
         wip.cursor = .{ .block = then_block };
+        try env_snapshot.restore(self);
         var then_scope = try self.beginScope();
         defer then_scope.deinit();
         const then_val = try self.generateControlFlowValue(first_branch.body, ite.result_layout);
@@ -6797,6 +7262,7 @@ pub const MonoLlvmCodeGen = struct {
 
         // Else block
         wip.cursor = .{ .block = else_block };
+        try env_snapshot.restore(self);
         var else_scope = try self.beginScope();
         defer else_scope.deinit();
         const else_val = try self.generateControlFlowValue(ite.final_else, ite.result_layout);
@@ -6811,6 +7277,7 @@ pub const MonoLlvmCodeGen = struct {
         }
 
         // Merge block with phi
+        try env_snapshot.restore(self);
         wip.cursor = .{ .block = merge_block };
 
         var merge_vals: [2]LlvmBuilder.Value = undefined;
@@ -7189,11 +7656,51 @@ pub const MonoLlvmCodeGen = struct {
 
         const align_val = builder.intValue(.i32, elem_info.elem_align) catch return error.OutOfMemory;
         const width_val = builder.intValue(.i64, elem_info.elem_size) catch return error.OutOfMemory;
+        const elements_refcounted_val = builder.intValue(.i1, @intFromBool(elem_info.elements_refcounted)) catch return error.OutOfMemory;
 
-        _ = try self.callBuiltin("roc_builtins_list_sort_with", .void, &.{
-            ptr_type, ptr_type, .i64, .i64, ptr_type, ptr_type, .i32, .i64, ptr_type,
+        const resolver = layout.RcHelperResolver.init(self.layout_store orelse return error.CompilationFailed);
+        var element_incref_fn = builder.nullValue(ptr_type) catch return error.OutOfMemory;
+        var element_decref_fn = builder.nullValue(ptr_type) catch return error.OutOfMemory;
+        if (elem_info.elements_refcounted) {
+            const incref_key = layout.RcHelperKey{
+                .op = .incref,
+                .layout_idx = elem_info.elem_layout_idx,
+            };
+            const decref_key = layout.RcHelperKey{
+                .op = .decref,
+                .layout_idx = elem_info.elem_layout_idx,
+            };
+
+            if (resolver.plan(incref_key) == .noop or resolver.plan(decref_key) == .noop) {
+                return error.CompilationFailed;
+            }
+
+            element_incref_fn = (try self.compileRcHelper(incref_key)).toValue(builder);
+            if (element_incref_fn.typeOfWip(wip) != ptr_type) {
+                element_incref_fn = wip.cast(.bitcast, element_incref_fn, ptr_type, "") catch return error.CompilationFailed;
+            }
+
+            element_decref_fn = (try self.compileRcHelper(decref_key)).toValue(builder);
+            if (element_decref_fn.typeOfWip(wip) != ptr_type) {
+                element_decref_fn = wip.cast(.bitcast, element_decref_fn, ptr_type, "") catch return error.CompilationFailed;
+            }
+        }
+
+        _ = try self.callBuiltin("roc_builtins_list_sort_with_rc", .void, &.{
+            ptr_type, ptr_type, .i64, .i64, ptr_type, ptr_type, .i32, .i64, .i1, ptr_type, ptr_type, ptr_type,
         }, &.{
-            dest_ptr, list_bytes, list_len, list_cap, fn_ptr, roc_ops, align_val, width_val, roc_ops,
+            dest_ptr,
+            list_bytes,
+            list_len,
+            list_cap,
+            fn_ptr,
+            roc_ops,
+            align_val,
+            width_val,
+            elements_refcounted_val,
+            element_incref_fn,
+            element_decref_fn,
+            roc_ops,
         });
 
         return .none;
