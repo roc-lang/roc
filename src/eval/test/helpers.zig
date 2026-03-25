@@ -32,8 +32,6 @@ const posix = std.posix;
 /// The hang watchdog in the parallel runner kills these PIDs on timeout.
 /// Set by the parallel runner before tests start; workers index by their worker ID.
 pub var worker_child_pids: []std.atomic.Value(i32) = &.{};
-/// Per-worker pipe read FDs, so the watchdog can close leaked pipes on timeout.
-pub var worker_pipe_fds: []std.atomic.Value(i32) = &.{};
 /// Thread-local worker ID, set by the parallel runner.
 pub threadlocal var my_worker_id: usize = 0;
 const has_fork = builtin.os.tag != .windows;
@@ -387,6 +385,12 @@ pub fn llvmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, ex
     if (has_fork) {
         return llvmForkAndRun(allocator, module_env, expr_idx, builtin_module_env);
     }
+    return llvmCompileAndRun(allocator, module_env, expr_idx, builtin_module_env);
+}
+
+/// Compile and execute via LLVM in the current process.
+/// Use this when the caller already provides outer process isolation.
+pub fn llvmEvaluatorStrInProcess(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) LlvmEvalError![]const u8 {
     return llvmCompileAndRun(allocator, module_env, expr_idx, builtin_module_env);
 }
 
