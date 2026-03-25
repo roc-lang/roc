@@ -25,6 +25,7 @@ pub const MonoLlvmCodeGen = @import("llvm_codegen").MonoLlvmCodeGen;
 // Re-export object compilation function
 pub const compileToObject = compile.compileToObject;
 pub const compileToSharedLibrary = compile.compileToSharedLibrary;
+pub const deleteTempArtifactDir = compile.deleteTempArtifactDir;
 pub const CompileOptions = compile.CompileOptions;
 pub const Error = compile.Error;
 
