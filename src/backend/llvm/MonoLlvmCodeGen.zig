@@ -121,7 +121,8 @@ pub const MonoLlvmCodeGen = struct {
     /// functions and call them directly — no function pointers or inttoptr.
     builtin_functions: std.StringHashMap(LlvmBuilder.Function.Index),
 
-    /// Lazily generated RC helper functions keyed by canonical layout helper identity.
+    /// Lazily generated RC helper functions keyed by canonical layout helper identity
+    /// and the storage convention used by the helper input pointer.
     compiled_rc_helpers: std.AutoHashMap(u64, LlvmBuilder.Function.Index),
 
     /// Layout store for resolving composite type layouts (records, tuples).
@@ -527,17 +528,23 @@ pub const MonoLlvmCodeGen = struct {
         return builder.intValue(self.ptrSizedIntType(), value) catch return error.OutOfMemory;
     }
 
+    const PointerValueStorage = enum(u1) {
+        materialized_value,
+        field_slot,
+    };
+
     fn emitRcHelperCall(
         self: *MonoLlvmCodeGen,
         helper_key: layout.RcHelperKey,
         value_ptr: LlvmBuilder.Value,
         count: ?LlvmBuilder.Value,
         roc_ops: LlvmBuilder.Value,
+        storage: PointerValueStorage,
     ) Error!void {
         const resolver = layout.RcHelperResolver.init(self.layout_store orelse return error.CompilationFailed);
         if (resolver.plan(helper_key) == .noop) return;
 
-        const func_idx = try self.compileRcHelper(helper_key);
+        const func_idx = try self.compileRcHelper(helper_key, storage);
         switch (helper_key.op) {
             .incref => _ = try self.callFunctionIndex(func_idx, &.{ value_ptr, count orelse return error.CompilationFailed, roc_ops }),
             .decref, .free => _ = try self.callFunctionIndex(func_idx, &.{ value_ptr, roc_ops }),
@@ -553,12 +560,20 @@ pub const MonoLlvmCodeGen = struct {
         _ = try self.callBuiltin(name, .void, param_types, args);
     }
 
-    fn compileRcHelper(self: *MonoLlvmCodeGen, helper_key: layout.RcHelperKey) Error!LlvmBuilder.Function.Index {
+    fn rcHelperCacheKey(helper_key: layout.RcHelperKey, storage: PointerValueStorage) u64 {
+        return (helper_key.encode() << 1) | @intFromEnum(storage);
+    }
+
+    fn compileRcHelper(
+        self: *MonoLlvmCodeGen,
+        helper_key: layout.RcHelperKey,
+        storage: PointerValueStorage,
+    ) Error!LlvmBuilder.Function.Index {
         const builder = self.builder orelse return error.CompilationFailed;
         const resolver = layout.RcHelperResolver.init(self.layout_store orelse return error.CompilationFailed);
         if (resolver.plan(helper_key) == .noop) return error.CompilationFailed;
 
-        const cache_key = helper_key.encode();
+        const cache_key = rcHelperCacheKey(helper_key, storage);
         if (self.compiled_rc_helpers.get(cache_key)) |func_idx| {
             return func_idx;
         }
@@ -571,9 +586,10 @@ pub const MonoLlvmCodeGen = struct {
         };
 
         var name_buf: [96]u8 = undefined;
-        const name_str = std.fmt.bufPrint(&name_buf, "roc_rc_{s}_{d}", .{
+        const name_str = std.fmt.bufPrint(&name_buf, "roc_rc_{s}_{d}_{s}", .{
             @tagName(helper_key.op),
             @intFromEnum(helper_key.layout_idx),
+            @tagName(storage),
         }) catch return error.OutOfMemory;
         const fn_name = builder.strtabString(name_str) catch return error.OutOfMemory;
         const func_idx = builder.addFunction(fn_type, fn_name, .default) catch return error.OutOfMemory;
@@ -618,7 +634,7 @@ pub const MonoLlvmCodeGen = struct {
             .decref, .free => helper_wip.arg(1),
         };
 
-        try self.generateRcHelperBody(helper_key, value_ptr, count_arg);
+        try self.generateRcHelperBody(helper_key, value_ptr, count_arg, storage);
 
         if (!self.currentBlockHasTerminator()) {
             _ = helper_wip.retVoid() catch return error.CompilationFailed;
@@ -633,6 +649,7 @@ pub const MonoLlvmCodeGen = struct {
         helper_key: layout.RcHelperKey,
         value_ptr: LlvmBuilder.Value,
         count: ?LlvmBuilder.Value,
+        storage: PointerValueStorage,
     ) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
@@ -677,7 +694,7 @@ pub const MonoLlvmCodeGen = struct {
             .list_decref => |list_plan| {
                 var callback_val = builder.nullValue(ptr_type) catch return error.OutOfMemory;
                 if (list_plan.child) |child_key| {
-                    var fn_ptr = (try self.compileRcHelper(child_key)).toValue(builder);
+                    var fn_ptr = (try self.compileRcHelper(child_key, .materialized_value)).toValue(builder);
                     if (fn_ptr.typeOfWip(wip) != ptr_type) {
                         fn_ptr = wip.cast(.bitcast, fn_ptr, ptr_type, "") catch return error.CompilationFailed;
                     }
@@ -699,7 +716,7 @@ pub const MonoLlvmCodeGen = struct {
             .list_free => |list_plan| {
                 var callback_val = builder.nullValue(ptr_type) catch return error.OutOfMemory;
                 if (list_plan.child) |child_key| {
-                    var fn_ptr = (try self.compileRcHelper(child_key)).toValue(builder);
+                    var fn_ptr = (try self.compileRcHelper(child_key, .materialized_value)).toValue(builder);
                     if (fn_ptr.typeOfWip(wip) != ptr_type) {
                         fn_ptr = wip.cast(.bitcast, fn_ptr, ptr_type, "") catch return error.CompilationFailed;
                     }
@@ -728,7 +745,7 @@ pub const MonoLlvmCodeGen = struct {
             .box_decref => |box_plan| {
                 var callback_val = builder.nullValue(ptr_type) catch return error.OutOfMemory;
                 if (box_plan.child) |child_key| {
-                    var fn_ptr = (try self.compileRcHelper(child_key)).toValue(builder);
+                    var fn_ptr = (try self.compileRcHelper(child_key, .materialized_value)).toValue(builder);
                     if (fn_ptr.typeOfWip(wip) != ptr_type) {
                         fn_ptr = wip.cast(.bitcast, fn_ptr, ptr_type, "") catch return error.CompilationFailed;
                     }
@@ -749,7 +766,7 @@ pub const MonoLlvmCodeGen = struct {
             .box_free => |box_plan| {
                 var callback_val = builder.nullValue(ptr_type) catch return error.OutOfMemory;
                 if (box_plan.child) |child_key| {
-                    var fn_ptr = (try self.compileRcHelper(child_key)).toValue(builder);
+                    var fn_ptr = (try self.compileRcHelper(child_key, .materialized_value)).toValue(builder);
                     if (fn_ptr.typeOfWip(wip) != ptr_type) {
                         fn_ptr = wip.cast(.bitcast, fn_ptr, ptr_type, "") catch return error.CompilationFailed;
                     }
@@ -782,7 +799,13 @@ pub const MonoLlvmCodeGen = struct {
                             &.{builder.intValue(.i32, field_plan.offset) catch return error.OutOfMemory},
                             "",
                         ) catch return error.CompilationFailed;
-                    try self.emitRcHelperCall(field_plan.child, field_ptr, count, roc_ops);
+                    try self.emitRcHelperCall(
+                        field_plan.child,
+                        field_ptr,
+                        count,
+                        roc_ops,
+                        try self.abiSlotStorageForLayout(field_plan.child.layout_idx),
+                    );
                 }
             },
             .tag_union => |tag_plan| {
@@ -793,15 +816,30 @@ pub const MonoLlvmCodeGen = struct {
                     .scalar_discriminant => return,
                     .transparent_payload => {
                         if (resolver.tagUnionVariantPlan(tag_plan, 0)) |child_key| {
-                            try self.emitRcHelperCall(child_key, value_ptr, count, roc_ops);
+                            try self.emitRcHelperCall(
+                                child_key,
+                                value_ptr,
+                                count,
+                                roc_ops,
+                                try self.abiSlotStorageForLayout(child_key.layout_idx),
+                            );
                         }
                     },
                     .indirect_pointer => {
-                        const root_ptr = wip.load(.normal, ptr_type, value_ptr, self.pointerAlignment(), "") catch return error.CompilationFailed;
+                        const root_ptr = switch (storage) {
+                            .materialized_value => value_ptr,
+                            .field_slot => wip.load(.normal, ptr_type, value_ptr, self.pointerAlignment(), "") catch return error.CompilationFailed,
+                        };
 
                         if (variant_count == 1) {
                             if (resolver.tagUnionVariantPlan(tag_plan, 0)) |child_key| {
-                                try self.emitRcHelperCall(child_key, root_ptr, count, roc_ops);
+                                try self.emitRcHelperCall(
+                                    child_key,
+                                    root_ptr,
+                                    count,
+                                    roc_ops,
+                                    try self.abiSlotStorageForLayout(child_key.layout_idx),
+                                );
                             }
                             return;
                         }
@@ -839,14 +877,26 @@ pub const MonoLlvmCodeGen = struct {
 
                                 wip.cursor = .{ .block = then_block };
                                 if (child_key) |child| {
-                                    try self.emitRcHelperCall(child, root_ptr, count, roc_ops);
+                                    try self.emitRcHelperCall(
+                                        child,
+                                        root_ptr,
+                                        count,
+                                        roc_ops,
+                                        try self.abiSlotStorageForLayout(child.layout_idx),
+                                    );
                                 }
                                 _ = wip.br(exit_block) catch return error.CompilationFailed;
 
                                 wip.cursor = .{ .block = else_block };
                             } else {
                                 if (child_key) |child| {
-                                    try self.emitRcHelperCall(child, root_ptr, count, roc_ops);
+                                    try self.emitRcHelperCall(
+                                        child,
+                                        root_ptr,
+                                        count,
+                                        roc_ops,
+                                        try self.abiSlotStorageForLayout(child.layout_idx),
+                                    );
                                 }
                                 _ = wip.br(exit_block) catch return error.CompilationFailed;
                             }
@@ -857,9 +907,39 @@ pub const MonoLlvmCodeGen = struct {
                 }
             },
             .closure => |child_key| {
-                try self.emitRcHelperCall(child_key, value_ptr, count, roc_ops);
+                try self.emitRcHelperCall(
+                    child_key,
+                    value_ptr,
+                    count,
+                    roc_ops,
+                    try self.abiSlotStorageForLayout(child_key.layout_idx),
+                );
             },
         }
+    }
+
+    fn abiSlotStorageForLayout(
+        self: *const MonoLlvmCodeGen,
+        layout_idx: layout.Idx,
+    ) Error!PointerValueStorage {
+        const ls = self.layout_store orelse return error.CompilationFailed;
+        const stored_layout = ls.getLayout(layout_idx);
+
+        return switch (stored_layout.tag) {
+            .tag_union => switch (try self.tagUnionValueMode(layout_idx)) {
+                .scalar_discriminant, .transparent_payload => .materialized_value,
+                .indirect_pointer => .field_slot,
+            },
+            .scalar,
+            .zst,
+            .closure,
+            .struct_,
+            .list,
+            .list_of_zst,
+            .box,
+            .box_of_zst,
+            => .materialized_value,
+        };
     }
 
     fn generateRcOp(
@@ -885,7 +965,13 @@ pub const MonoLlvmCodeGen = struct {
             .incref => try self.emitPtrSizedInt(count),
             .decref, .free => null,
         };
-        try self.emitRcHelperCall(helper_key, value_ptr, count_val, roc_ops);
+        try self.emitRcHelperCall(
+            helper_key,
+            value_ptr,
+            count_val,
+            roc_ops,
+            try self.abiSlotStorageForLayout(layout_idx),
+        );
     }
 
     /// Generate LLVM bitcode for a Mono IR expression
@@ -7511,11 +7597,6 @@ pub const MonoLlvmCodeGen = struct {
 
     // Pattern binding helpers
 
-    const PointerValueStorage = enum {
-        materialized_value,
-        field_slot,
-    };
-
     /// Load a value from a pointer based on layout type.
     /// `materialized_value` pointers reference the layout's full in-memory bytes.
     /// `field_slot` pointers reference the ABI slot used for stored fields and call buffers.
@@ -7675,12 +7756,12 @@ pub const MonoLlvmCodeGen = struct {
                 return error.CompilationFailed;
             }
 
-            element_incref_fn = (try self.compileRcHelper(incref_key)).toValue(builder);
+            element_incref_fn = (try self.compileRcHelper(incref_key, .materialized_value)).toValue(builder);
             if (element_incref_fn.typeOfWip(wip) != ptr_type) {
                 element_incref_fn = wip.cast(.bitcast, element_incref_fn, ptr_type, "") catch return error.CompilationFailed;
             }
 
-            element_decref_fn = (try self.compileRcHelper(decref_key)).toValue(builder);
+            element_decref_fn = (try self.compileRcHelper(decref_key, .materialized_value)).toValue(builder);
             if (element_decref_fn.typeOfWip(wip) != ptr_type) {
                 element_decref_fn = wip.cast(.bitcast, element_decref_fn, ptr_type, "") catch return error.CompilationFailed;
             }
