@@ -42,7 +42,7 @@ There are two test paths that exercise the interpreter:
      safely contained (the parent sees a non-zero exit or signal via waitpid).
    - The interpreter backend uses `helpers.lirInterpreterInspectedStr` which
      does CIR → MIR → LIR → RC lowering, then `LirInterpreter.eval()`
-   - Current status: **1252 passed, 0 failed, 0 crashed, 51 skipped**
+   - Current status: **1287 passed, 0 failed, 0 crashed, 16 skipped**
 
 2. **Unit tests** (`zig build test`):
    - Sequential tests in `src/eval/test/helpers.zig` (low_level_interp_test,
@@ -100,7 +100,7 @@ cause is now fixed.
 
 - **fx test**: `repeating pattern segfault (interpreter)` ✓
 - **Eval tests**: U8/U16 large-value arithmetic (30 tests unskipped) ✓
-- **Eval test total**: 1252 passed (up from 1102), 0 failed, 0 crashed
+- **Eval test total**: 1287 passed (up from 1102), 0 failed, 0 crashed
 
 ---
 
@@ -239,17 +239,25 @@ not actual compiler/backend bugs:
 - **Dec literal tests**: needed `.Dec` type suffix (e.g. `3.7.Dec.to_i64_wrap()`) (6 tests)
 - **`_try` variant**: already working after monomorphization fix (1 test)
 
-Current: **51 skipped** (all are backend-specific, not SKIP_ALL).
+Current: **16 skipped** (all are backend-specific, not SKIP_ALL).
 
-### Remaining skips (not SKIP_ALL)
+### Tests unskipped in this round
 
-- 31 dev-only tests (skip interpreter/wasm by design)
-- 3 match regressions (skip wasm + llvm)
-- 2 Str.contains (skip wasm)
-- 2 abs (skip dev)
+- **31 "dev only" tests**: were skipping interpreter+wasm but now pass on all backends
+  (Bool formatting, U32 ops, while loops, List ops, Str ops, polymorphic HOFs)
+- **3 match regressions**: were skipping wasm+llvm, now pass on wasm too (skip llvm only)
+- **1 `early return: ? in closure passed to List.fold`**: was skipping all backends,
+  now passes on all backends (fixed by prior monomorphization fix)
+
+### Remaining skips (16 total)
+
+- 2 Str.contains (skip wasm — hangs)
+- 2 abs (skip dev — dev returns wrong sign)
+- 4 List.drop_at / List.sort_with (skip dev+wasm — crash on wasm, wrong result on dev)
 - 1 U64→I8 wrapping (skip wasm — wasm returns unsigned 200 instead of signed -56)
-- 3 known compiler bugs (upstream specialization issues):
-  - `early return: ? in closure passed to List.fold`
+- 4 I*/I32 numeric wrapping + I32→Dec conversion (skip wasm — wrong sign handling)
+- 1 I32→Dec conversion (skip wasm)
+- 2 known compiler bugs (type errors in test programs, skip all backends):
   - `polymorphic tag union payload substitution - extract payload`
   - `polymorphic tag union payload substitution - multiple type vars`
 
