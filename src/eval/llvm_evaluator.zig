@@ -233,6 +233,7 @@ pub const LlvmEvaluator = struct {
     /// Result of code generation
     pub const CodeResult = struct {
         library: std.DynLib,
+        temp_dir_path: [:0]const u8,
         library_path: [:0]const u8,
         entry_fn: LlvmEntryFn,
         allocator: Allocator,
@@ -242,7 +243,8 @@ pub const LlvmEvaluator = struct {
 
         pub fn deinit(self: *CodeResult) void {
             self.library.close();
-            std.fs.cwd().deleteFile(self.library_path) catch {};
+            std.fs.cwd().deleteTree(std.mem.sliceTo(self.temp_dir_path, 0)) catch {};
+            self.allocator.free(self.temp_dir_path);
             self.allocator.free(self.library_path);
             // Note: layout_store is owned by LlvmEvaluator, not cleaned up here
         }
@@ -254,13 +256,15 @@ pub const LlvmEvaluator = struct {
 
     pub const EntrypointCodeResult = struct {
         library: std.DynLib,
+        temp_dir_path: [:0]const u8,
         library_path: [:0]const u8,
         entry_fn: LlvmRocCallEntryFn,
         allocator: Allocator,
 
         pub fn deinit(self: *EntrypointCodeResult) void {
             self.library.close();
-            std.fs.cwd().deleteFile(self.library_path) catch {};
+            std.fs.cwd().deleteTree(std.mem.sliceTo(self.temp_dir_path, 0)) catch {};
+            self.allocator.free(self.temp_dir_path);
             self.allocator.free(self.library_path);
         }
 
@@ -375,17 +379,14 @@ pub const LlvmEvaluator = struct {
         // The evaluator is a parity/verification path, so prioritize fast compile
         // turnaround over optimized machine code.
         const opt_level: llvm_compile.bindings.CodeGenOptLevel = .None;
-        const library_path = llvm_compile.compileToSharedLibrary(
+        var artifact = llvm_compile.compileToSharedLibrary(
             self.allocator,
             gen_result.bitcode,
             .{ .function_sections = false, .opt_level = opt_level },
         ) catch return error.CompilationFailed;
-        errdefer {
-            std.fs.cwd().deleteFile(library_path) catch {};
-            self.allocator.free(library_path);
-        }
+        errdefer artifact.deinit();
 
-        var library = std.DynLib.open(library_path) catch return error.CompilationFailed;
+        var library = std.DynLib.open(artifact.library_path) catch return error.CompilationFailed;
         errdefer library.close();
 
         const entry_fn = library.lookup(LlvmEntryFn, "roc_eval") orelse
@@ -394,7 +395,8 @@ pub const LlvmEvaluator = struct {
 
         return CodeResult{
             .library = library,
-            .library_path = library_path,
+            .temp_dir_path = artifact.temp_dir_path,
+            .library_path = artifact.library_path,
             .entry_fn = entry_fn,
             .allocator = self.allocator,
             .result_layout = result_layout,
@@ -476,17 +478,14 @@ pub const LlvmEvaluator = struct {
         };
         defer bitcode_result.deinit();
 
-        const library_path = llvm_compile.compileToSharedLibrary(
+        var artifact = llvm_compile.compileToSharedLibrary(
             self.allocator,
             bitcode_result.bitcode,
             .{ .function_sections = false, .opt_level = .None },
         ) catch return error.CompilationFailed;
-        errdefer {
-            std.fs.cwd().deleteFile(library_path) catch {};
-            self.allocator.free(library_path);
-        }
+        errdefer artifact.deinit();
 
-        var library = std.DynLib.open(library_path) catch return error.CompilationFailed;
+        var library = std.DynLib.open(artifact.library_path) catch return error.CompilationFailed;
         errdefer library.close();
 
         const entry_fn = library.lookup(LlvmRocCallEntryFn, "roc_entrypoint") orelse
@@ -495,7 +494,8 @@ pub const LlvmEvaluator = struct {
 
         return EntrypointCodeResult{
             .library = library,
-            .library_path = library_path,
+            .temp_dir_path = artifact.temp_dir_path,
+            .library_path = artifact.library_path,
             .entry_fn = entry_fn,
             .allocator = self.allocator,
         };

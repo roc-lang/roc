@@ -105,6 +105,78 @@ pub const CompileOptions = struct {
     merge_builtin_bitcode: bool = true,
 };
 
+pub const SharedLibraryArtifact = struct {
+    allocator: Allocator,
+    temp_dir_path: [:0]const u8,
+    library_path: [:0]const u8,
+
+    pub fn deinit(self: *SharedLibraryArtifact) void {
+        std.fs.cwd().deleteTree(std.mem.sliceTo(self.temp_dir_path, 0)) catch {};
+        self.allocator.free(self.library_path);
+        self.allocator.free(self.temp_dir_path);
+    }
+};
+
+const TempArtifactDir = struct {
+    allocator: Allocator,
+    path: [:0]const u8,
+
+    fn create(allocator: Allocator) !TempArtifactDir {
+        const temp_root = try resolveTempRoot(allocator);
+        defer allocator.free(temp_root);
+
+        var attempt: usize = 0;
+        while (attempt < 64) : (attempt += 1) {
+            const dir_name = try std.fmt.allocPrint(
+                allocator,
+                "roc_llvm_{x}_{x}_{x}",
+                .{
+                    @as(u64, @truncate(@as(u128, @bitCast(std.time.nanoTimestamp())))),
+                    std.crypto.random.int(u32),
+                    attempt,
+                },
+            );
+            defer allocator.free(dir_name);
+
+            const joined_path = try std.fs.path.join(allocator, &.{ temp_root, dir_name });
+            defer allocator.free(joined_path);
+
+            const dir_path = try allocator.dupeZ(u8, joined_path);
+            errdefer allocator.free(dir_path);
+
+            std.fs.cwd().makeDir(std.mem.sliceTo(dir_path, 0)) catch |err| switch (err) {
+                error.PathAlreadyExists => {
+                    allocator.free(dir_path);
+                    continue;
+                },
+                else => return Error.TempFileError,
+            };
+
+            return .{
+                .allocator = allocator,
+                .path = dir_path,
+            };
+        }
+
+        return Error.TempFileError;
+    }
+
+    fn deinit(self: *TempArtifactDir) void {
+        std.fs.cwd().deleteTree(std.mem.sliceTo(self.path, 0)) catch {};
+        self.allocator.free(self.path);
+    }
+
+    fn createFilePath(self: *const TempArtifactDir, stem: []const u8, extension: []const u8) ![:0]const u8 {
+        const file_name = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ stem, extension });
+        defer self.allocator.free(file_name);
+
+        const joined_path = try std.fs.path.join(self.allocator, &.{ std.mem.sliceTo(self.path, 0), file_name });
+        defer self.allocator.free(joined_path);
+
+        return self.allocator.dupeZ(u8, joined_path);
+    }
+};
+
 fn emitMergedBitcodeToObjectFile(
     bitcode: []const u32,
     options: CompileOptions,
@@ -266,7 +338,10 @@ fn defaultCpuForTriple(triple: []const u8) [*:0]const u8 {
 
 /// Compile LLVM bitcode to a native object file.
 pub fn compileToObject(allocator: Allocator, bitcode: []const u32, options: CompileOptions) Error![]const u8 {
-    const temp_path = createTempPath(allocator, ".o") catch return Error.TempFileError;
+    var temp_dir = try TempArtifactDir.create(allocator);
+    defer temp_dir.deinit();
+
+    const temp_path = temp_dir.createFilePath("module", objectExtension()) catch return Error.TempFileError;
     defer allocator.free(temp_path);
 
     try emitMergedBitcodeToObjectFile(bitcode, options, temp_path);
@@ -286,26 +361,21 @@ pub fn compileToObject(allocator: Allocator, bitcode: []const u32, options: Comp
         }) catch {};
     } else |_| {}
 
-    // Clean up temp file
-    std.fs.cwd().deleteFile(std.mem.sliceTo(temp_path, 0)) catch {};
-
     return object_bytes;
 }
 
 /// Compile LLVM bitcode to a native shared library and return its path.
-/// Caller owns the returned path and is responsible for deleting the file.
-pub fn compileToSharedLibrary(allocator: Allocator, bitcode: []const u32, options: CompileOptions) Error![:0]const u8 {
-    const object_path = createTempPath(allocator, objectExtension()) catch return Error.TempFileError;
-    defer {
-        std.fs.cwd().deleteFile(std.mem.sliceTo(object_path, 0)) catch {};
-        allocator.free(object_path);
-    }
+/// Caller owns the returned artifact and must keep the temp directory alive
+/// for as long as the loaded shared library may be in use.
+pub fn compileToSharedLibrary(allocator: Allocator, bitcode: []const u32, options: CompileOptions) Error!SharedLibraryArtifact {
+    var temp_dir = try TempArtifactDir.create(allocator);
+    errdefer temp_dir.deinit();
 
-    const shared_lib_path = createTempPath(allocator, sharedLibraryExtension()) catch return Error.TempFileError;
-    errdefer {
-        std.fs.cwd().deleteFile(std.mem.sliceTo(shared_lib_path, 0)) catch {};
-        allocator.free(shared_lib_path);
-    }
+    const object_path = temp_dir.createFilePath("module", objectExtension()) catch return Error.TempFileError;
+    defer allocator.free(object_path);
+
+    const shared_lib_path = temp_dir.createFilePath("module", sharedLibraryExtension()) catch return Error.TempFileError;
+    errdefer allocator.free(shared_lib_path);
 
     var pic_options = options;
     pic_options.reloc_mode = .PIC;
@@ -335,7 +405,11 @@ pub fn compileToSharedLibrary(allocator: Allocator, bitcode: []const u32, option
         ) catch {};
     } else |_| {}
 
-    return shared_lib_path;
+    return .{
+        .allocator = allocator,
+        .temp_dir_path = temp_dir.path,
+        .library_path = shared_lib_path,
+    };
 }
 
 fn linkSharedLibrary(
@@ -432,26 +506,15 @@ fn linkSharedLibraryMacos(
     return Error.LinkFailed;
 }
 
-/// Create a unique temporary file path for an artifact output.
-fn createTempPath(allocator: Allocator, extension: []const u8) ![:0]const u8 {
-    // Generate a unique filename using timestamp
-    const timestamp = std.time.nanoTimestamp();
-    const timestamp_low: u64 = @truncate(@as(u128, @bitCast(timestamp)));
-    const random_suffix: u32 = @truncate(timestamp_low);
+fn resolveTempRoot(allocator: Allocator) ![]const u8 {
+    if (builtin.os.tag == .windows) {
+        if (std.process.getEnvVarOwned(allocator, "TEMP")) |temp_dir| return temp_dir else |_| {}
+        if (std.process.getEnvVarOwned(allocator, "TMP")) |temp_dir| return temp_dir else |_| {}
+        return allocator.dupe(u8, "C:\\Windows\\Temp");
+    }
 
-    // Use appropriate temp directory for each platform
-    const tmp_prefix = if (builtin.os.tag == .windows) "C:\\Windows\\Temp\\roc_llvm_" else "/tmp/roc_llvm_";
-
-    const str = try std.fmt.allocPrint(
-        allocator,
-        "{s}{x}_{x}{s}",
-        .{ tmp_prefix, timestamp_low, random_suffix, extension },
-    );
-    // Convert to null-terminated by reallocating with extra byte
-    const result = try allocator.allocSentinel(u8, str.len, 0);
-    @memcpy(result, str);
-    allocator.free(str);
-    return result;
+    if (std.process.getEnvVarOwned(allocator, "TMPDIR")) |temp_dir| return temp_dir else |_| {}
+    return allocator.dupe(u8, "/tmp");
 }
 
 fn objectExtension() []const u8 {
