@@ -998,14 +998,23 @@ pub const MonoLlvmCodeGen = struct {
                         }
                         break :blk builder.structType(.normal, field_types[0..fields.count]) catch return error.CompilationFailed;
                     },
-                    .tag_union => {
-                        if (self.tagUnionLoweredIndirect(result_layout)) {
-                            break :blk builder.ptrType(.default) catch return error.CompilationFailed;
-                        }
-                        break :blk .i64;
+                    .tag_union => switch (try self.tagUnionValueMode(result_layout)) {
+                        .scalar_discriminant => {
+                            const tu_data = ls.getTagUnionData(stored_layout.data.tag_union.idx);
+                            break :blk discriminantIntTypeOrZst(tu_data.discriminant_size);
+                        },
+                        .transparent_payload => {
+                            const payload_layout = try self.tagUnionTransparentPayloadLayout(result_layout);
+                            break :blk try self.layoutToLlvmTypeWithOptions(payload_layout, bool_in_memory);
+                        },
+                        .indirect_pointer => break :blk builder.ptrType(.default) catch return error.CompilationFailed,
                     },
                     .box => break :blk builder.ptrType(.default) catch return error.CompilationFailed,
-                    else => break :blk .i64,
+                    .scalar,
+                    .zst,
+                    .closure,
+                    .box_of_zst,
+                    => break :blk .i64,
                 }
             },
         };
@@ -1699,7 +1708,18 @@ pub const MonoLlvmCodeGen = struct {
             .struct_ => self.compareStructPtrs(lhs_ptr, rhs_ptr, layout_idx),
             .list => self.compareListPtrs(lhs_ptr, rhs_ptr, layout_idx),
             .list_of_zst => self.compareListPtrs(lhs_ptr, rhs_ptr, layout_idx),
-            .tag_union => self.compareTagUnionValues(lhs_ptr, rhs_ptr, layout_idx),
+            .tag_union => switch (try self.tagUnionValueMode(layout_idx)) {
+                .scalar_discriminant => blk: {
+                    const lhs = try self.loadValueFromPtr(lhs_ptr, layout_idx);
+                    const rhs = try self.loadValueFromPtr(rhs_ptr, layout_idx);
+                    break :blk try self.compareTagUnionValues(lhs, rhs, layout_idx);
+                },
+                .transparent_payload => blk: {
+                    const payload_layout = try self.tagUnionTransparentPayloadLayout(layout_idx);
+                    break :blk try self.comparePtrsByLayout(lhs_ptr, rhs_ptr, payload_layout);
+                },
+                .indirect_pointer => self.compareTagUnionValues(lhs_ptr, rhs_ptr, layout_idx),
+            },
             .box => self.compareBoxPtrs(lhs_ptr, rhs_ptr, layout_idx),
             .box_of_zst => builder.intValue(.i1, 1) catch return error.OutOfMemory,
         };
@@ -1747,13 +1767,21 @@ pub const MonoLlvmCodeGen = struct {
             .struct_ => self.compareStructPtrs(lhs_ptr, rhs_ptr, layout_idx),
             .list => self.compareListPtrs(lhs_ptr, rhs_ptr, layout_idx),
             .list_of_zst => self.compareListPtrs(lhs_ptr, rhs_ptr, layout_idx),
-            .tag_union => blk: {
-                if (self.tagUnionLoweredIndirect(layout_idx)) {
+            .tag_union => switch (try self.tagUnionValueMode(layout_idx)) {
+                .scalar_discriminant => blk: {
                     const lhs = try self.loadFieldValueFromPtr(lhs_ptr, layout_idx);
                     const rhs = try self.loadFieldValueFromPtr(rhs_ptr, layout_idx);
                     break :blk try self.compareTagUnionValues(lhs, rhs, layout_idx);
-                }
-                break :blk try self.compareTagUnionValues(lhs_ptr, rhs_ptr, layout_idx);
+                },
+                .transparent_payload => blk: {
+                    const payload_layout = try self.tagUnionTransparentPayloadLayout(layout_idx);
+                    break :blk try self.compareFieldPtrsByLayout(lhs_ptr, rhs_ptr, payload_layout);
+                },
+                .indirect_pointer => blk: {
+                    const lhs = try self.loadFieldValueFromPtr(lhs_ptr, layout_idx);
+                    const rhs = try self.loadFieldValueFromPtr(rhs_ptr, layout_idx);
+                    break :blk try self.compareTagUnionValues(lhs, rhs, layout_idx);
+                },
             },
             .box => self.compareBoxPtrs(lhs_ptr, rhs_ptr, layout_idx),
             .box_of_zst => builder.intValue(.i1, 1) catch return error.OutOfMemory,
@@ -1946,20 +1974,52 @@ pub const MonoLlvmCodeGen = struct {
         return l == .f32 or l == .f64;
     }
 
-    fn tagUnionLoweredIndirect(self: *const MonoLlvmCodeGen, union_layout_idx: layout.Idx) bool {
-        const ls = self.layout_store orelse return false;
+    const TagUnionValueMode = enum {
+        scalar_discriminant,
+        transparent_payload,
+        indirect_pointer,
+    };
+
+    fn tagUnionValueMode(self: *const MonoLlvmCodeGen, union_layout_idx: layout.Idx) Error!TagUnionValueMode {
+        const ls = self.layout_store orelse return error.CompilationFailed;
         const stored_layout = ls.getLayout(union_layout_idx);
-        if (stored_layout.tag != .tag_union) return false;
+        if (stored_layout.tag != .tag_union) return error.CompilationFailed;
 
         const tu_data = ls.getTagUnionData(stored_layout.data.tag_union.idx);
         const variants = ls.getTagUnionVariants(tu_data);
+
+        if (tu_data.discriminant_size == 0) {
+            if (variants.len != 1) return error.CompilationFailed;
+
+            return if (variants.get(0).payload_layout == .zst)
+                .scalar_discriminant
+            else
+                .transparent_payload;
+        }
+
         for (0..variants.len) |variant_idx| {
             if (variants.get(@intCast(variant_idx)).payload_layout != .zst) {
-                return true;
+                return .indirect_pointer;
             }
         }
 
-        return false;
+        return .scalar_discriminant;
+    }
+
+    fn tagUnionTransparentPayloadLayout(self: *const MonoLlvmCodeGen, union_layout_idx: layout.Idx) Error!layout.Idx {
+        const ls = self.layout_store orelse return error.CompilationFailed;
+        const stored_layout = ls.getLayout(union_layout_idx);
+        if (stored_layout.tag != .tag_union) return error.CompilationFailed;
+        if (try self.tagUnionValueMode(union_layout_idx) != .transparent_payload) return error.CompilationFailed;
+
+        const tu_data = ls.getTagUnionData(stored_layout.data.tag_union.idx);
+        const variants = ls.getTagUnionVariants(tu_data);
+        if (variants.len != 1) return error.CompilationFailed;
+
+        const payload_layout = variants.get(0).payload_layout;
+        if (payload_layout == .zst) return error.CompilationFailed;
+
+        return payload_layout;
     }
 
     /// Convert a layout.Idx to the LLVM type used for struct fields.
@@ -2268,34 +2328,40 @@ pub const MonoLlvmCodeGen = struct {
         };
     }
 
+    fn discriminantIntTypeOrZst(disc_size: u8) LlvmBuilder.Type {
+        return switch (disc_size) {
+            0 => .i8,
+            1 => .i8,
+            2 => .i16,
+            4 => .i32,
+            8 => .i64,
+            else => .i8,
+        };
+    }
+
     const TagPayloadInfo = struct {
         root_ptr: LlvmBuilder.Value,
         payload_layout: layout.Idx,
     };
 
     fn materializeTagValuePtr(self: *MonoLlvmCodeGen, value: LlvmBuilder.Value, union_layout_idx: layout.Idx, name: []const u8) Error!LlvmBuilder.Value {
-        const wip = self.wip orelse return error.CompilationFailed;
+        _ = name;
         const builder = self.builder orelse return error.CompilationFailed;
-        const ls = self.layout_store orelse return error.CompilationFailed;
-        const stored_layout = ls.getLayout(union_layout_idx);
+        const stored_layout = (self.layout_store orelse return error.CompilationFailed).getLayout(union_layout_idx);
         const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
 
         return switch (stored_layout.tag) {
-            .tag_union => blk: {
-                if (value.typeOfWip(wip) == ptr_type) {
+            .tag_union => switch (try self.tagUnionValueMode(union_layout_idx)) {
+                .scalar_discriminant, .transparent_payload => try self.materializeGeneratedValueToPtr(value, union_layout_idx),
+                .indirect_pointer => blk: {
+                    if (value.typeOfWip(self.wip orelse return error.CompilationFailed) != ptr_type) {
+                        return error.CompilationFailed;
+                    }
                     break :blk value;
-                }
-
-                const alignment = LlvmBuilder.Alignment.fromByteUnits(
-                    @intCast(@max(ls.layoutSizeAlign(stored_layout).alignment.toByteUnits(), 1)),
-                );
-                const value_type = value.typeOfWip(wip);
-                const alloca_ptr = wip.alloca(.normal, value_type, .none, alignment, .default, name) catch return error.CompilationFailed;
-                _ = wip.store(.normal, value, alloca_ptr, alignment) catch return error.CompilationFailed;
-                break :blk alloca_ptr;
+                },
             },
             .box => blk: {
-                if (value.typeOfWip(wip) != ptr_type) return error.CompilationFailed;
+                if (value.typeOfWip(self.wip orelse return error.CompilationFailed) != ptr_type) return error.CompilationFailed;
                 break :blk value;
             },
             .scalar, .zst => return error.CompilationFailed,
@@ -2318,33 +2384,63 @@ pub const MonoLlvmCodeGen = struct {
             .zst => builder.intValue(.i8, 0) catch return error.OutOfMemory,
             .tag_union => blk: {
                 const tu_data = ls.getTagUnionData(stored_layout.data.tag_union.idx);
-                const root_ptr = try self.materializeTagValuePtr(value, union_layout_idx, "tag_value");
-                const disc_type = discriminantIntType(tu_data.discriminant_size);
-                const disc_offset = builder.intValue(.i32, tu_data.discriminant_offset) catch return error.OutOfMemory;
-                const disc_ptr = wip.gep(.inbounds, .i8, root_ptr, &.{disc_offset}, "") catch return error.CompilationFailed;
-                break :blk wip.load(
-                    .normal,
-                    disc_type,
-                    disc_ptr,
-                    LlvmBuilder.Alignment.fromByteUnits(@as(u64, tu_data.discriminant_size)),
-                    "",
-                ) catch return error.CompilationFailed;
+                switch (try self.tagUnionValueMode(union_layout_idx)) {
+                    .scalar_discriminant => {
+                        if (tu_data.discriminant_size == 0) {
+                            break :blk builder.intValue(.i8, 0) catch return error.OutOfMemory;
+                        }
+
+                        const disc_type = discriminantIntType(tu_data.discriminant_size);
+                        if (value.typeOfWip(wip).isPointer(builder)) {
+                            const disc_offset = builder.intValue(.i32, tu_data.discriminant_offset) catch return error.OutOfMemory;
+                            const disc_ptr = wip.gep(.inbounds, .i8, value, &.{disc_offset}, "") catch return error.CompilationFailed;
+                            break :blk wip.load(
+                                .normal,
+                                disc_type,
+                                disc_ptr,
+                                LlvmBuilder.Alignment.fromByteUnits(@as(u64, tu_data.discriminant_size)),
+                                "",
+                            ) catch return error.CompilationFailed;
+                        }
+
+                        break :blk try self.coerceValueToType(value, disc_type, null);
+                    },
+                    .transparent_payload => break :blk builder.intValue(.i8, 0) catch return error.OutOfMemory,
+                    .indirect_pointer => {
+                        const root_ptr = try self.materializeTagValuePtr(value, union_layout_idx, "tag_value");
+                        const disc_type = discriminantIntType(tu_data.discriminant_size);
+                        const disc_offset = builder.intValue(.i32, tu_data.discriminant_offset) catch return error.OutOfMemory;
+                        const disc_ptr = wip.gep(.inbounds, .i8, root_ptr, &.{disc_offset}, "") catch return error.CompilationFailed;
+                        break :blk wip.load(
+                            .normal,
+                            disc_type,
+                            disc_ptr,
+                            LlvmBuilder.Alignment.fromByteUnits(@as(u64, tu_data.discriminant_size)),
+                            "",
+                        ) catch return error.CompilationFailed;
+                    },
+                }
             },
             .box => blk: {
                 const inner_layout = ls.getLayout(stored_layout.data.box);
                 if (inner_layout.tag != .tag_union) return error.CompilationFailed;
                 const tu_data = ls.getTagUnionData(inner_layout.data.tag_union.idx);
-                const root_ptr = try self.materializeTagValuePtr(value, union_layout_idx, "boxed_tag_value");
-                const disc_type = discriminantIntType(tu_data.discriminant_size);
-                const disc_offset = builder.intValue(.i32, tu_data.discriminant_offset) catch return error.OutOfMemory;
-                const disc_ptr = wip.gep(.inbounds, .i8, root_ptr, &.{disc_offset}, "") catch return error.CompilationFailed;
-                break :blk wip.load(
-                    .normal,
-                    disc_type,
-                    disc_ptr,
-                    LlvmBuilder.Alignment.fromByteUnits(@as(u64, tu_data.discriminant_size)),
-                    "",
-                ) catch return error.CompilationFailed;
+                switch (try self.tagUnionValueMode(stored_layout.data.box)) {
+                    .scalar_discriminant, .transparent_payload => break :blk builder.intValue(.i8, 0) catch return error.OutOfMemory,
+                    .indirect_pointer => {
+                        const root_ptr = try self.materializeTagValuePtr(value, union_layout_idx, "boxed_tag_value");
+                        const disc_type = discriminantIntType(tu_data.discriminant_size);
+                        const disc_offset = builder.intValue(.i32, tu_data.discriminant_offset) catch return error.OutOfMemory;
+                        const disc_ptr = wip.gep(.inbounds, .i8, root_ptr, &.{disc_offset}, "") catch return error.CompilationFailed;
+                        break :blk wip.load(
+                            .normal,
+                            disc_type,
+                            disc_ptr,
+                            LlvmBuilder.Alignment.fromByteUnits(@as(u64, tu_data.discriminant_size)),
+                            "",
+                        ) catch return error.CompilationFailed;
+                    },
+                }
             },
             .closure, .struct_, .list, .list_of_zst, .box_of_zst => return error.CompilationFailed,
         };
@@ -2359,10 +2455,23 @@ pub const MonoLlvmCodeGen = struct {
                 const tu_data = ls.getTagUnionData(stored_layout.data.tag_union.idx);
                 const variants = ls.getTagUnionVariants(tu_data);
                 if (discriminant >= variants.len) return error.CompilationFailed;
-                break :blk .{
-                    .root_ptr = try self.materializeTagValuePtr(value, union_layout_idx, "tag_payload"),
-                    .payload_layout = variants.get(@intCast(discriminant)).payload_layout,
-                };
+                switch (try self.tagUnionValueMode(union_layout_idx)) {
+                    .scalar_discriminant => break :blk .{
+                        .root_ptr = value,
+                        .payload_layout = variants.get(@intCast(discriminant)).payload_layout,
+                    },
+                    .transparent_payload => {
+                        if (discriminant != 0) return error.CompilationFailed;
+                        break :blk .{
+                            .root_ptr = try self.materializeTagValuePtr(value, union_layout_idx, "tag_payload"),
+                            .payload_layout = variants.get(0).payload_layout,
+                        };
+                    },
+                    .indirect_pointer => break :blk .{
+                        .root_ptr = try self.materializeTagValuePtr(value, union_layout_idx, "tag_payload"),
+                        .payload_layout = variants.get(@intCast(discriminant)).payload_layout,
+                    },
+                }
             },
             .box => blk: {
                 const inner_layout = ls.getLayout(stored_layout.data.box);
@@ -2370,10 +2479,23 @@ pub const MonoLlvmCodeGen = struct {
                 const tu_data = ls.getTagUnionData(inner_layout.data.tag_union.idx);
                 const variants = ls.getTagUnionVariants(tu_data);
                 if (discriminant >= variants.len) return error.CompilationFailed;
-                break :blk .{
-                    .root_ptr = try self.materializeTagValuePtr(value, union_layout_idx, "boxed_tag_payload"),
-                    .payload_layout = variants.get(@intCast(discriminant)).payload_layout,
-                };
+                switch (try self.tagUnionValueMode(stored_layout.data.box)) {
+                    .scalar_discriminant => break :blk .{
+                        .root_ptr = value,
+                        .payload_layout = variants.get(@intCast(discriminant)).payload_layout,
+                    },
+                    .transparent_payload => {
+                        if (discriminant != 0) return error.CompilationFailed;
+                        break :blk .{
+                            .root_ptr = try self.materializeTagValuePtr(value, union_layout_idx, "boxed_tag_payload"),
+                            .payload_layout = variants.get(0).payload_layout,
+                        };
+                    },
+                    .indirect_pointer => break :blk .{
+                        .root_ptr = try self.materializeTagValuePtr(value, union_layout_idx, "boxed_tag_payload"),
+                        .payload_layout = variants.get(@intCast(discriminant)).payload_layout,
+                    },
+                }
             },
             .scalar, .zst => .{
                 .root_ptr = value,
@@ -2403,51 +2525,99 @@ pub const MonoLlvmCodeGen = struct {
             },
             .tag_union => {
                 const tu_data = ls.getTagUnionData(stored_layout.data.tag_union.idx);
-                const variants = ls.getTagUnionVariants(tu_data);
-                var has_payloads = false;
-                for (0..variants.len) |variant_idx| {
-                    if (variants.get(@intCast(variant_idx)).payload_layout != .zst) {
-                        has_payloads = true;
-                        break;
-                    }
+                switch (try self.tagUnionValueMode(zat.union_layout)) {
+                    .scalar_discriminant => {
+                        const repr_type = discriminantIntTypeOrZst(tu_data.discriminant_size);
+                        return (builder.intConst(repr_type, @as(u64, zat.discriminant)) catch return error.OutOfMemory).toValue();
+                    },
+                    .transparent_payload => return error.CompilationFailed,
+                    .indirect_pointer => {
+                        const tu_size = tu_data.size;
+                        const tu_align_bytes: u64 = @intCast(stored_layout.data.tag_union.alignment.toByteUnits());
+                        const min_align: u64 = @max(tu_align_bytes, 8);
+                        const alignment = LlvmBuilder.Alignment.fromByteUnits(min_align);
+                        const roc_ops = self.roc_ops_arg orelse return error.CompilationFailed;
+                        const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+                        const size_val_i64 = builder.intValue(.i64, tu_size) catch return error.OutOfMemory;
+                        const align_val = builder.intValue(.i32, @as(u32, @intCast(min_align))) catch return error.OutOfMemory;
+                        const refcounted_val = builder.intValue(.i1, 0) catch return error.OutOfMemory;
+                        const heap_ptr = try self.callBuiltin(
+                            "roc_builtins_allocate_with_refcount",
+                            ptr_type,
+                            &.{ .i64, .i32, .i1, ptr_type },
+                            &.{ size_val_i64, align_val, refcounted_val, roc_ops },
+                        );
+
+                        const zero_val = builder.intValue(.i8, 0) catch return error.OutOfMemory;
+                        const size_val = builder.intValue(.i32, tu_size) catch return error.OutOfMemory;
+                        _ = wip.callMemSet(heap_ptr, alignment, zero_val, size_val, .normal, false) catch return error.OutOfMemory;
+
+                        const disc_offset = tu_data.discriminant_offset;
+                        const disc_type = discriminantIntType(tu_data.discriminant_size);
+                        const disc_val = builder.intValue(disc_type, @as(u64, zat.discriminant)) catch return error.OutOfMemory;
+                        const disc_ptr = wip.gep(.inbounds, .i8, heap_ptr, &.{builder.intValue(.i32, disc_offset) catch return error.OutOfMemory}, "") catch return error.OutOfMemory;
+                        _ = wip.store(.normal, disc_val, disc_ptr, LlvmBuilder.Alignment.fromByteUnits(@as(u64, tu_data.discriminant_size))) catch return error.CompilationFailed;
+
+                        return heap_ptr;
+                    },
                 }
-
-                if (!has_payloads) {
-                    return (builder.intConst(.i64, @as(u64, zat.discriminant)) catch return error.OutOfMemory).toValue();
-                }
-
-                const tu_size = tu_data.size;
-                const tu_align_bytes: u64 = @intCast(stored_layout.data.tag_union.alignment.toByteUnits());
-                const min_align: u64 = @max(tu_align_bytes, 8);
-                const alignment = LlvmBuilder.Alignment.fromByteUnits(min_align);
-                const roc_ops = self.roc_ops_arg orelse return error.CompilationFailed;
-                const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
-                const size_val_i64 = builder.intValue(.i64, tu_size) catch return error.OutOfMemory;
-                const align_val = builder.intValue(.i32, @as(u32, @intCast(min_align))) catch return error.OutOfMemory;
-                const refcounted_val = builder.intValue(.i1, 0) catch return error.OutOfMemory;
-                const heap_ptr = try self.callBuiltin(
-                    "roc_builtins_allocate_with_refcount",
-                    ptr_type,
-                    &.{ .i64, .i32, .i1, ptr_type },
-                    &.{ size_val_i64, align_val, refcounted_val, roc_ops },
-                );
-
-                // Zero the memory
-                const zero_val = builder.intValue(.i8, 0) catch return error.OutOfMemory;
-                const size_val = builder.intValue(.i32, tu_size) catch return error.OutOfMemory;
-                _ = wip.callMemSet(heap_ptr, alignment, zero_val, size_val, .normal, false) catch return error.OutOfMemory;
-
-                // Store discriminant at discriminant_offset
-                const disc_offset = tu_data.discriminant_offset;
-                const disc_type = discriminantIntType(tu_data.discriminant_size);
-                const disc_val = builder.intValue(disc_type, @as(u64, zat.discriminant)) catch return error.OutOfMemory;
-                const disc_ptr = wip.gep(.inbounds, .i8, heap_ptr, &.{builder.intValue(.i32, disc_offset) catch return error.OutOfMemory}, "") catch return error.OutOfMemory;
-                _ = wip.store(.normal, disc_val, disc_ptr, LlvmBuilder.Alignment.fromByteUnits(@as(u64, tu_data.discriminant_size))) catch return error.CompilationFailed;
-
-                return heap_ptr;
             },
             .closure, .struct_, .list, .list_of_zst, .box, .box_of_zst => unreachable,
         }
+    }
+
+    fn generateTagPayloadValue(
+        self: *MonoLlvmCodeGen,
+        payload_layout_idx: layout.Idx,
+        arg_exprs: []const LirExprId,
+    ) Error!LlvmBuilder.Value {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const ls = self.layout_store orelse return error.CompilationFailed;
+        const payload_layout = ls.getLayout(payload_layout_idx);
+
+        if (payload_layout_idx == .zst or payload_layout.tag == .zst) {
+            if (arg_exprs.len != 0) return error.CompilationFailed;
+            return builder.intValue(.i8, 0) catch return error.OutOfMemory;
+        }
+
+        return switch (payload_layout.tag) {
+            .struct_ => blk: {
+                const struct_data = ls.getStructData(payload_layout.data.struct_.idx);
+                const sorted_fields = ls.struct_fields.sliceRange(struct_data.getFields());
+                if (sorted_fields.len != arg_exprs.len) return error.CompilationFailed;
+
+                var field_values_buf: [32]LlvmBuilder.Value = undefined;
+                for (0..sorted_fields.len) |field_i| {
+                    const field = sorted_fields.get(@intCast(field_i));
+                    if (field.index >= arg_exprs.len) return error.CompilationFailed;
+
+                    const field_layout = ls.getStructFieldLayout(payload_layout.data.struct_.idx, @intCast(field_i));
+                    const arg = try self.generateExprAsValue(arg_exprs[field.index]);
+                    field_values_buf[field_i] = try self.convertToFieldType(arg.value, field_layout);
+                }
+
+                const wip = self.wip orelse return error.CompilationFailed;
+                const struct_type = try buildStructTypeFromValues(builder, wip, field_values_buf[0..sorted_fields.len]);
+                var struct_val = builder.poisonValue(struct_type) catch return error.OutOfMemory;
+                for (0..sorted_fields.len) |field_i| {
+                    struct_val = wip.insertValue(struct_val, field_values_buf[field_i], &.{@intCast(field_i)}, "") catch return error.CompilationFailed;
+                }
+                break :blk struct_val;
+            },
+            .scalar,
+            .tag_union,
+            .box,
+            .closure,
+            .list,
+            .list_of_zst,
+            .box_of_zst,
+            => blk: {
+                if (arg_exprs.len != 1) return error.CompilationFailed;
+                const arg = try self.generateExprAsValue(arg_exprs[0]);
+                break :blk try self.coerceValueToLayout(arg.value, payload_layout_idx);
+            },
+            .zst => unreachable,
+        };
     }
 
     /// Generate a tag with payload arguments.
@@ -2464,75 +2634,54 @@ pub const MonoLlvmCodeGen = struct {
         std.debug.assert(stored_layout.tag == .tag_union);
 
         const tu_data = ls.getTagUnionData(stored_layout.data.tag_union.idx);
-        const tu_size = tu_data.size;
-        const tu_align_bytes: u64 = @intCast(stored_layout.data.tag_union.alignment.toByteUnits());
-        // Heap-allocate the tag union so returned pointer values remain valid after
-        // the current function returns.
-        const min_align: u64 = @max(tu_align_bytes, 8);
-        const padded_size: u32 = @intCast((@as(u64, tu_size) + min_align - 1) / min_align * min_align);
-        const forced_alignment = LlvmBuilder.Alignment.fromByteUnits(min_align);
-        const roc_ops = self.roc_ops_arg orelse return error.CompilationFailed;
-        const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
-        const size_val_i64 = builder.intValue(.i64, padded_size) catch return error.OutOfMemory;
-        const align_val = builder.intValue(.i32, @as(u32, @intCast(min_align))) catch return error.OutOfMemory;
-        const refcounted_val = builder.intValue(.i1, 0) catch return error.OutOfMemory;
-        const heap_ptr = try self.callBuiltin(
-            "roc_builtins_allocate_with_refcount",
-            ptr_type,
-            &.{ .i64, .i32, .i1, ptr_type },
-            &.{ size_val_i64, align_val, refcounted_val, roc_ops },
-        );
-
-        // Zero the memory
-        const zero_val = builder.intValue(.i8, 0) catch return error.OutOfMemory;
-        const size_val = builder.intValue(.i32, padded_size) catch return error.OutOfMemory;
-        _ = wip.callMemSet(heap_ptr, forced_alignment, zero_val, size_val, .normal, false) catch return error.OutOfMemory;
-
-        // Store payload arguments
         const arg_exprs = self.store.getExprSpan(tag_expr.args);
         const variants = ls.getTagUnionVariants(tu_data);
         const variant = variants.get(tag_expr.discriminant);
 
-        if (arg_exprs.len == 1) {
-            // Single argument — store directly at offset 0
-            const arg = try self.generateExprAsValue(arg_exprs[0]);
-            const store_val = try self.convertToFieldType(arg.value, variant.payload_layout);
-            const payload_align = self.fieldAlignmentForLayout(variant.payload_layout);
-            _ = wip.store(.normal, store_val, heap_ptr, payload_align) catch return error.CompilationFailed;
-        } else if (arg_exprs.len > 1) {
-            // Multiple arguments — payload is a tuple
-            const payload_layout = ls.getLayout(variant.payload_layout);
-            if (payload_layout.tag == .struct_) {
-                const struct_data = ls.getStructData(payload_layout.data.struct_.idx);
-                const sorted_fields = ls.struct_fields.sliceRange(struct_data.getFields());
+        switch (try self.tagUnionValueMode(tag_expr.union_layout)) {
+            .scalar_discriminant => return error.CompilationFailed,
+            .transparent_payload => {
+                if (tag_expr.discriminant != 0) return error.CompilationFailed;
+                return try self.generateTagPayloadValue(variant.payload_layout, arg_exprs);
+            },
+            .indirect_pointer => {
+                const tu_size = tu_data.size;
+                const tu_align_bytes: u64 = @intCast(stored_layout.data.tag_union.alignment.toByteUnits());
+                const min_align: u64 = @max(tu_align_bytes, 8);
+                const padded_size: u32 = @intCast((@as(u64, tu_size) + min_align - 1) / min_align * min_align);
+                const forced_alignment = LlvmBuilder.Alignment.fromByteUnits(min_align);
+                const roc_ops = self.roc_ops_arg orelse return error.CompilationFailed;
+                const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+                const size_val_i64 = builder.intValue(.i64, padded_size) catch return error.OutOfMemory;
+                const align_val = builder.intValue(.i32, @as(u32, @intCast(min_align))) catch return error.OutOfMemory;
+                const refcounted_val = builder.intValue(.i1, 0) catch return error.OutOfMemory;
+                const heap_ptr = try self.callBuiltin(
+                    "roc_builtins_allocate_with_refcount",
+                    ptr_type,
+                    &.{ .i64, .i32, .i1, ptr_type },
+                    &.{ size_val_i64, align_val, refcounted_val, roc_ops },
+                );
 
-                for (arg_exprs, 0..) |arg_expr_id, i| {
-                    const field_layout = ls.getStructFieldLayout(payload_layout.data.struct_.idx, @intCast(i));
-                    const arg = try self.generateExprAsValue(arg_expr_id);
-                    const arg_val = try self.convertToFieldType(arg.value, field_layout);
-                    var offset: u32 = 0;
-                    for (0..sorted_fields.len) |si| {
-                        const field = sorted_fields.get(@intCast(si));
-                        if (field.index == i) {
-                            offset = ls.getStructFieldOffset(payload_layout.data.struct_.idx, @intCast(si));
-                            break;
-                        }
-                    }
-                    const field_ptr = wip.gep(.inbounds, .i8, heap_ptr, &.{builder.intValue(.i32, offset) catch return error.OutOfMemory}, "") catch return error.OutOfMemory;
-                    const field_align = self.fieldAlignmentForLayout(field_layout);
-                    _ = wip.store(.normal, arg_val, field_ptr, field_align) catch return error.CompilationFailed;
+                const zero_val = builder.intValue(.i8, 0) catch return error.OutOfMemory;
+                const size_val = builder.intValue(.i32, padded_size) catch return error.OutOfMemory;
+                _ = wip.callMemSet(heap_ptr, forced_alignment, zero_val, size_val, .normal, false) catch return error.OutOfMemory;
+
+                if (variant.payload_layout != .zst) {
+                    const payload_value = try self.generateTagPayloadValue(variant.payload_layout, arg_exprs);
+                    const store_val = try self.convertToFieldType(payload_value, variant.payload_layout);
+                    const payload_align = self.fieldAlignmentForLayout(variant.payload_layout);
+                    _ = wip.store(.normal, store_val, heap_ptr, payload_align) catch return error.CompilationFailed;
                 }
-            }
+
+                const disc_offset = tu_data.discriminant_offset;
+                const disc_type = discriminantIntType(tu_data.discriminant_size);
+                const disc_val = builder.intValue(disc_type, @as(u64, tag_expr.discriminant)) catch return error.OutOfMemory;
+                const disc_ptr = wip.gep(.inbounds, .i8, heap_ptr, &.{builder.intValue(.i32, disc_offset) catch return error.OutOfMemory}, "") catch return error.OutOfMemory;
+                _ = wip.store(.normal, disc_val, disc_ptr, LlvmBuilder.Alignment.fromByteUnits(@as(u64, tu_data.discriminant_size))) catch return error.CompilationFailed;
+
+                return heap_ptr;
+            },
         }
-
-        // Store discriminant at discriminant_offset
-        const disc_offset = tu_data.discriminant_offset;
-        const disc_type = discriminantIntType(tu_data.discriminant_size);
-        const disc_val = builder.intValue(disc_type, @as(u64, tag_expr.discriminant)) catch return error.OutOfMemory;
-        const disc_ptr = wip.gep(.inbounds, .i8, heap_ptr, &.{builder.intValue(.i32, disc_offset) catch return error.OutOfMemory}, "") catch return error.OutOfMemory;
-        _ = wip.store(.normal, disc_val, disc_ptr, LlvmBuilder.Alignment.fromByteUnits(@as(u64, tu_data.discriminant_size))) catch return error.CompilationFailed;
-
-        return heap_ptr;
     }
 
     /// Extract the payload from a tag union value.
@@ -2550,7 +2699,14 @@ pub const MonoLlvmCodeGen = struct {
 
         switch (union_layout.tag) {
             .tag_union => {
-                return self.loadFieldValueFromPtr(raw_value, tpa.payload_layout);
+                return switch (try self.tagUnionValueMode(tpa.union_layout)) {
+                    .scalar_discriminant => raw_value,
+                    .transparent_payload => blk: {
+                        const payload_ptr = try self.materializeTagValuePtr(raw_value, tpa.union_layout, "tag_payload_access");
+                        break :blk try self.loadFieldValueFromPtr(payload_ptr, tpa.payload_layout);
+                    },
+                    .indirect_pointer => self.loadFieldValueFromPtr(raw_value, tpa.payload_layout),
+                };
             },
             .box => {
                 const inner_layout = ls.getLayout(union_layout.data.box);
@@ -3615,7 +3771,13 @@ pub const MonoLlvmCodeGen = struct {
                 const ls = self.layout_store orelse return error.CompilationFailed;
                 const stored_layout = ls.getLayout(ll.ret_layout);
                 if (stored_layout.tag == .tag_union) {
-                    return temp_alloca;
+                    return switch (try self.tagUnionValueMode(ll.ret_layout)) {
+                        .scalar_discriminant, .transparent_payload => blk: {
+                            const load_type = try self.layoutToLlvmTypeFull(ll.ret_layout);
+                            break :blk wip.load(.normal, load_type, temp_alloca, self.alignmentForLayout(ll.ret_layout), "ll_val") catch return error.CompilationFailed;
+                        },
+                        .indirect_pointer => temp_alloca,
+                    };
                 }
 
                 const load_type = try self.layoutToLlvmTypeFull(ll.ret_layout);
@@ -6758,10 +6920,14 @@ pub const MonoLlvmCodeGen = struct {
         if (self.layout_store) |ls| {
             const stored_layout = ls.getLayout(layout_idx);
             return switch (stored_layout.tag) {
-                .tag_union => if (self.tagUnionLoweredIndirect(layout_idx))
-                    self.pointerAlignment()
-                else
-                    self.alignmentForLayout(layout_idx),
+                .tag_union => switch (self.tagUnionValueMode(layout_idx) catch unreachable) {
+                    .scalar_discriminant => self.alignmentForLayout(layout_idx),
+                    .transparent_payload => blk: {
+                        const payload_layout = self.tagUnionTransparentPayloadLayout(layout_idx) catch unreachable;
+                        break :blk self.fieldAlignmentForLayout(payload_layout);
+                    },
+                    .indirect_pointer => self.pointerAlignment(),
+                },
                 .box => self.pointerAlignment(),
                 .scalar,
                 .zst,
@@ -6912,8 +7078,16 @@ pub const MonoLlvmCodeGen = struct {
                     const alignment = LlvmBuilder.Alignment.fromByteUnits(@intCast(@max(sa.alignment.toByteUnits(), 1)));
                     return wip.load(.normal, llvm_type, ptr, alignment, "") catch return error.CompilationFailed;
                 },
-                .tag_union => {
-                    if (self.tagUnionLoweredIndirect(layout_idx)) {
+                .tag_union => switch (try self.tagUnionValueMode(layout_idx)) {
+                    .scalar_discriminant => {
+                        const llvm_type = try self.layoutToStructFieldType(layout_idx);
+                        return wip.load(.normal, llvm_type, ptr, self.alignmentForLayout(layout_idx), "") catch return error.CompilationFailed;
+                    },
+                    .transparent_payload => {
+                        const payload_layout = try self.tagUnionTransparentPayloadLayout(layout_idx);
+                        return self.loadValueFromStoragePtr(ptr, payload_layout, storage);
+                    },
+                    .indirect_pointer => {
                         return switch (storage) {
                             .materialized_value => ptr,
                             .field_slot => blk: {
@@ -6921,9 +7095,7 @@ pub const MonoLlvmCodeGen = struct {
                                 break :blk wip.load(.normal, ptr_type, ptr, self.pointerAlignment(), "") catch return error.CompilationFailed;
                             },
                         };
-                    }
-                    const llvm_type = try self.layoutToStructFieldType(layout_idx);
-                    return wip.load(.normal, llvm_type, ptr, self.alignmentForLayout(layout_idx), "") catch return error.CompilationFailed;
+                    },
                 },
                 .box => {
                     const llvm_type = try self.layoutToStructFieldType(layout_idx);
