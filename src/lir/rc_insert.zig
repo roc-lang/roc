@@ -381,6 +381,15 @@ pub const RcInsertPass = struct {
         return @as(u64, @bitCast(symbol));
     }
 
+    fn cellLoadKey(self: *const RcInsertPass, expr_id: LirExprId, cell: Symbol) u64 {
+        if (self.ownership) |ownership| {
+            if (ownership.getCellLoadRef(expr_id)) |ref_id| {
+                return @intFromEnum(ref_id);
+            }
+        }
+        return @as(u64, @bitCast(cell));
+    }
+
     fn patternKey(self: *const RcInsertPass, pat_id: LirPatternId, symbol: Symbol) u64 {
         if (self.ownership) |ownership| {
             if (ownership.getPatternRef(pat_id)) |ref_id| {
@@ -544,6 +553,21 @@ pub const RcInsertPass = struct {
         return .{ .symbol = temp.symbol, .lookup = lookup };
     }
 
+    fn debitRetainedOwnerUse(self: *RcInsertPass, owner_key: u64) Allocator.Error!void {
+        const gop = try self.retained_owner_use_debits.getOrPut(owner_key);
+        if (gop.found_existing) {
+            gop.value_ptr.* += 1;
+        } else {
+            gop.value_ptr.* = 1;
+        }
+    }
+
+    fn debitRetainedAliasBindingIfNeeded(self: *RcInsertPass, binding: LirStmt.Binding) Allocator.Error!void {
+        if (binding.semantics != .retained) return;
+        const owner_key = self.ownerKeyForAliasedExpr(binding.expr) orelse return;
+        try self.debitRetainedOwnerUse(owner_key);
+    }
+
     fn bindExprToFreshLookup(
         self: *RcInsertPass,
         stmts: *std.ArrayList(LirStmt),
@@ -575,6 +599,7 @@ pub const RcInsertPass = struct {
 
         return switch (self.store.getExpr(expr_id)) {
             .lookup => |lookup| !lookup.symbol.isNone(),
+            .cell_load => |load| !load.cell.isNone(),
             .block => |block| self.exprAliasesManagedRef(block.final_expr, layout_idx),
             .dbg => |dbg_expr| self.exprAliasesManagedRef(dbg_expr.expr, layout_idx),
             .nominal => |nominal| self.exprAliasesManagedRef(nominal.backing_expr, layout_idx),
@@ -760,6 +785,11 @@ pub const RcInsertPass = struct {
                 const key = self.lookupKey(expr_id, lookup.symbol);
                 break :blk self.consumedOwnerKey(key);
             },
+            .cell_load => |load| blk: {
+                if (load.cell.isNone()) break :blk null;
+                const key = self.cellLoadKey(expr_id, load.cell);
+                break :blk self.consumedOwnerKey(key);
+            },
             .block => |block| self.ownerKeyForAliasedExpr(block.final_expr),
             .dbg => |dbg_expr| self.ownerKeyForAliasedExpr(dbg_expr.expr),
             .nominal => |nominal| self.ownerKeyForAliasedExpr(nominal.backing_expr),
@@ -782,12 +812,7 @@ pub const RcInsertPass = struct {
 
         const temp = try self.bindExprToFreshLookupWithSemantics(prelude, operand_id, layout_idx, .retained, region);
         try self.emitIncrefInto(temp.symbol, layout_idx, 1, region, prelude);
-        const gop = try self.retained_owner_use_debits.getOrPut(owner_key);
-        if (gop.found_existing) {
-            gop.value_ptr.* += 1;
-        } else {
-            gop.value_ptr.* = 1;
-        }
+        try self.debitRetainedOwnerUse(owner_key);
         return temp.lookup;
     }
 
@@ -1275,7 +1300,11 @@ pub const RcInsertPass = struct {
                 for (stmts) |stmt| {
                     switch (stmt) {
                         .decl => |binding| {
-                            const new_expr = try self.materializeRcCellLoadOperands(binding.expr);
+                            const new_expr = if (binding.semantics == .retained and
+                                self.shouldMaterializeRcCellLoad(binding.expr))
+                                binding.expr
+                            else
+                                try self.materializeRcCellLoadOperands(binding.expr);
                             changed = changed or new_expr != binding.expr;
                             try new_stmts.append(self.allocator, .{ .decl = .{
                                 .pattern = binding.pattern,
@@ -1284,7 +1313,11 @@ pub const RcInsertPass = struct {
                             } });
                         },
                         .mutate => |binding| {
-                            const new_expr = try self.materializeRcCellLoadOperands(binding.expr);
+                            const new_expr = if (binding.semantics == .retained and
+                                self.shouldMaterializeRcCellLoad(binding.expr))
+                                binding.expr
+                            else
+                                try self.materializeRcCellLoadOperands(binding.expr);
                             changed = changed or new_expr != binding.expr;
                             try new_stmts.append(self.allocator, .{ .mutate = .{
                                 .pattern = binding.pattern,
@@ -2252,7 +2285,13 @@ pub const RcInsertPass = struct {
                     try self.symbol_layouts.put(key, self.keyLayout(key, lookup.layout_idx));
                 }
             },
-            .cell_load => {},
+            .cell_load => |load| {
+                if (!load.cell.isNone()) {
+                    const key = self.cellLoadKey(expr_id, load.cell);
+                    try bumpUseCount(target, key);
+                    try self.symbol_layouts.put(key, self.keyLayout(key, load.layout_idx));
+                }
+            },
             .block => |block| {
                 const stmts = self.store.getStmts(block.stmts);
                 // Pre-register all pattern symbols so lambdas in early
@@ -2901,6 +2940,13 @@ pub const RcInsertPass = struct {
                     try bumpUseCount(target, key);
                 }
             },
+            .cell_load => |load| {
+                if (!load.cell.isNone()) {
+                    const key = self.cellLoadKey(expr_id, load.cell);
+                    try self.symbol_layouts.put(key, self.keyLayout(key, load.layout_idx));
+                    try bumpUseCount(target, key);
+                }
+            },
             .nominal => |n| try self.countBorrowOwnerDemandValueInto(n.backing_expr, target),
             .block => |block| {
                 const stmts = self.store.getStmts(block.stmts);
@@ -3014,6 +3060,14 @@ pub const RcInsertPass = struct {
                 if (!lookup.symbol.isNone()) {
                     const key = self.lookupKey(expr_id, lookup.symbol);
                     try self.symbol_layouts.put(key, self.keyLayout(key, lookup.layout_idx));
+                    if (self.keyUseMode(key) == .borrow) return;
+                    try bumpUseCount(target, key);
+                }
+            },
+            .cell_load => |load| {
+                if (!load.cell.isNone()) {
+                    const key = self.cellLoadKey(expr_id, load.cell);
+                    try self.symbol_layouts.put(key, self.keyLayout(key, load.layout_idx));
                     if (self.keyUseMode(key) == .borrow) return;
                     try bumpUseCount(target, key);
                 }
@@ -3135,6 +3189,70 @@ pub const RcInsertPass = struct {
             },
             .wildcard, .int_literal, .float_literal, .str_literal => {},
         }
+    }
+
+    fn collectPatternOwnerKeys(
+        self: *RcInsertPass,
+        pat_id: LirPatternId,
+        target: *std.AutoHashMap(u64, void),
+    ) Allocator.Error!void {
+        const Ctx = struct {
+            pass: *RcInsertPass,
+            target: *std.AutoHashMap(u64, void),
+            fn onBind(ctx: @This(), bind_pat_id: LirPatternId, symbol: Symbol, _: LayoutIdx, _: bool) Allocator.Error!void {
+                const key = ctx.pass.patternKey(bind_pat_id, symbol);
+                const owner_key = ctx.pass.consumedOwnerKey(key) orelse return;
+                try ctx.target.put(owner_key, {});
+            }
+        };
+        try walkPatternBinds(self.store, pat_id, Ctx{ .pass = self, .target = target });
+    }
+
+    fn cloneUsesExcludingOwnerKeys(
+        self: *RcInsertPass,
+        source: *const std.AutoHashMap(u64, u32),
+        excluded_owner_keys: *const std.AutoHashMap(u64, void),
+    ) Allocator.Error!std.AutoHashMap(u64, u32) {
+        var cloned = std.AutoHashMap(u64, u32).init(self.allocator);
+        errdefer cloned.deinit();
+
+        var it = source.iterator();
+        while (it.next()) |entry| {
+            if (self.consumedOwnerKey(entry.key_ptr.*)) |owner_key| {
+                if (excluded_owner_keys.contains(owner_key)) continue;
+            }
+            try cloned.put(entry.key_ptr.*, entry.value_ptr.*);
+        }
+
+        return cloned;
+    }
+
+    fn cloneUsesExcludingPatternOwners(
+        self: *RcInsertPass,
+        source: *const std.AutoHashMap(u64, u32),
+        pat_id: LirPatternId,
+    ) Allocator.Error!std.AutoHashMap(u64, u32) {
+        var excluded_owner_keys = std.AutoHashMap(u64, void).init(self.allocator);
+        defer excluded_owner_keys.deinit();
+
+        try self.collectPatternOwnerKeys(pat_id, &excluded_owner_keys);
+        return self.cloneUsesExcludingOwnerKeys(source, &excluded_owner_keys);
+    }
+
+    fn cloneUsesExcludingCellOwner(
+        self: *RcInsertPass,
+        source: *const std.AutoHashMap(u64, u32),
+        cell: Symbol,
+    ) Allocator.Error!std.AutoHashMap(u64, u32) {
+        var excluded_owner_keys = std.AutoHashMap(u64, void).init(self.allocator);
+        defer excluded_owner_keys.deinit();
+
+        const cell_key = @as(u64, @bitCast(cell));
+        if (self.consumedOwnerKey(cell_key)) |owner_key| {
+            try excluded_owner_keys.put(owner_key, {});
+        }
+
+        return self.cloneUsesExcludingOwnerKeys(source, &excluded_owner_keys);
     }
 
     /// Register a pattern's bound symbol with its layout into a given target map.
@@ -3550,7 +3668,10 @@ pub const RcInsertPass = struct {
     ) Allocator.Error!void {
         switch (binding.semantics) {
             .owned, .borrow_alias, .scoped_borrow => {},
-            .retained => try self.emitRetainedIncrefsForPattern(binding.pattern, region, rc_stmts),
+            .retained => {
+                try self.emitRetainedIncrefsForPattern(binding.pattern, region, rc_stmts);
+                try self.debitRetainedAliasBindingIfNeeded(binding);
+            },
         }
     }
 
@@ -3711,9 +3832,22 @@ pub const RcInsertPass = struct {
             switch (stmt) {
                 .decl, .mutate => |b| {
                     const processed_expr = try self.processExpr(b.expr);
+                    var reassigned_owner_later_uses: ?std.AutoHashMap(u64, u32) = null;
+                    defer if (reassigned_owner_later_uses) |*uses| uses.deinit();
+                    const retain_later_uses = switch (stmt) {
+                        .decl => &later_uses.items[stmt_index],
+                        .mutate => blk: {
+                            reassigned_owner_later_uses = try self.cloneUsesExcludingPatternOwners(
+                                &later_uses.items[stmt_index],
+                                b.pattern,
+                            );
+                            break :blk &reassigned_owner_later_uses.?;
+                        },
+                        else => unreachable,
+                    };
                     const new_expr = try self.retainConsumedOperandsForLaterUse(
                         processed_expr,
-                        &later_uses.items[stmt_index],
+                        retain_later_uses,
                         region,
                     );
                     if (new_expr != b.expr) changed = true;
@@ -3818,9 +3952,14 @@ pub const RcInsertPass = struct {
                 },
                 .cell_store => |cell| {
                     const processed_expr = try self.processExpr(cell.expr);
+                    var reassigned_owner_later_uses = try self.cloneUsesExcludingCellOwner(
+                        &later_uses.items[stmt_index],
+                        cell.cell,
+                    );
+                    defer reassigned_owner_later_uses.deinit();
                     const new_expr = try self.retainConsumedOperandsForLaterUse(
                         processed_expr,
-                        &later_uses.items[stmt_index],
+                        &reassigned_owner_later_uses,
                         region,
                     );
                     if (new_expr != cell.expr) changed = true;
@@ -5130,6 +5269,31 @@ pub const RcInsertPass = struct {
         return self.wrapExprWithTailStmts(with_prelude, result_layout, tail_stmts.items, region);
     }
 
+    fn tailStmtsTouchOwnerKey(
+        self: *RcInsertPass,
+        tail_stmts: []const LirStmt,
+        owner_key: u64,
+    ) Allocator.Error!bool {
+        for (tail_stmts) |stmt| {
+            switch (stmt) {
+                .decl, .mutate => |binding| {
+                    if (try self.exprUsesKey(binding.expr, owner_key)) return true;
+                },
+                .cell_init, .cell_store => |binding| {
+                    if (try self.exprUsesKey(binding.expr, owner_key)) return true;
+                    const cell_owner_key = self.consumedOwnerKey(@as(u64, @bitCast(binding.cell))) orelse continue;
+                    if (cell_owner_key == owner_key) return true;
+                },
+                .cell_drop => |binding| {
+                    const cell_owner_key = self.consumedOwnerKey(@as(u64, @bitCast(binding.cell))) orelse continue;
+                    if (cell_owner_key == owner_key) return true;
+                },
+            }
+        }
+
+        return false;
+    }
+
     fn wrapExprWithTailStmts(
         self: *RcInsertPass,
         expr: LirExprId,
@@ -5143,13 +5307,18 @@ pub const RcInsertPass = struct {
         var stmts = std.ArrayList(LirStmt).empty;
         defer stmts.deinit(self.allocator);
 
+        const retain_result = if (self.layoutNeedsRc(result_layout))
+            if (self.ownerKeyForAliasedExpr(expr)) |owner_key|
+                try self.tailStmtsTouchOwnerKey(tail_stmts, owner_key)
+            else
+                false
+        else
+            false;
+
         const result_binding: LirStmt.Binding = .{
             .pattern = result_bind.pattern,
             .expr = expr,
-            .semantics = if (self.layoutNeedsRc(result_layout) and self.ownerKeyForAliasedExpr(expr) != null)
-                .retained
-            else
-                .owned,
+            .semantics = if (retain_result) .retained else .owned,
         };
         try stmts.append(self.allocator, .{ .decl = result_binding });
         try self.emitBindingIntroductionRcOps(result_binding, region, &stmts);
@@ -7274,6 +7443,46 @@ test "RC explicit retained list element keeps outer binding cleanup" {
     try std.testing.expectEqual(@as(u32, 1), rc.decrefs);
 }
 
+test "RC wrapped final alias does not retain owner twice for unrelated tail cleanup" {
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const str_layout: LayoutIdx = .str;
+    const sym_s = makeSymbol(1);
+    const sym_t = makeSymbol(2);
+
+    const str_hello = try env.lir_store.addExpr(.{ .str_literal = base.StringLiteral.Idx.none }, Region.zero());
+    const str_world = try env.lir_store.addExpr(.{ .str_literal = base.StringLiteral.Idx.none }, Region.zero());
+    const lookup_s = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+
+    const pat_s = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+    const pat_t = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_t, .layout_idx = str_layout } }, Region.zero());
+    const stmts = try env.lir_store.addStmts(&.{
+        .{ .decl = .{ .pattern = pat_s, .expr = str_hello } },
+        .{ .decl = .{ .pattern = pat_t, .expr = str_world } },
+    });
+    const block_expr = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = lookup_s,
+        .result_layout = str_layout,
+    } }, Region.zero());
+
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(block_expr);
+    const rc = countRcOps(&env.lir_store, result);
+
+    try std.testing.expectEqual(@as(u32, 0), rc.increfs);
+    try std.testing.expectEqual(@as(u32, 1), rc.decrefs);
+    try std.testing.expectEqual(@as(u32, 0), countIncrefsForSymbol(&env.lir_store, result, sym_s));
+    try std.testing.expectEqual(@as(u32, 0), countDecrefsForSymbol(&env.lir_store, result, sym_s));
+    try std.testing.expectEqual(@as(u32, 1), countDecrefsForSymbol(&env.lir_store, result, sym_t));
+}
+
 test "RC if result matched later tail-cleans matched binding" {
     const allocator = std.testing.allocator;
 
@@ -8274,6 +8483,72 @@ test "RC mutation: final use of reassignable refcounted var emits tail decref" {
     const rc = countRcOps(&env.lir_store, result);
 
     try std.testing.expectEqual(@as(u32, 2), rc.decrefs);
+}
+
+test "RC mutation: future uses of reassigned symbol do not retain pre-mutation owners" {
+    // { var s = "a"; s = s ++ "b"; s = s ++ "c"; s }
+    // Future uses after each mutation belong to the newly assigned value, not the
+    // consumed pre-mutation owner. RC insertion should therefore emit only the
+    // old-value decrefs for each mutation plus one tail decref for the final use.
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const str_layout: LayoutIdx = .str;
+    const sym_s = makeSymbol(1);
+
+    const lit_a = try env.lir_store.addExpr(.{ .str_literal = base.StringLiteral.Idx.none }, Region.zero());
+    const lit_b = try env.lir_store.addExpr(.{ .str_literal = base.StringLiteral.Idx.none }, Region.zero());
+    const lit_c = try env.lir_store.addExpr(.{ .str_literal = base.StringLiteral.Idx.none }, Region.zero());
+
+    const lookup_s_first = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+    const concat_first_args = try env.lir_store.addExprSpan(&.{ lookup_s_first, lit_b });
+    const concat_first = try env.lir_store.addExpr(.{ .str_concat = concat_first_args }, Region.zero());
+
+    const lookup_s_second = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+    const concat_second_args = try env.lir_store.addExprSpan(&.{ lookup_s_second, lit_c });
+    const concat_second = try env.lir_store.addExpr(.{ .str_concat = concat_second_args }, Region.zero());
+
+    const lookup_s_final = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+
+    const pat_s_decl = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_s,
+        .layout_idx = str_layout,
+        .reassignable = true,
+    } }, Region.zero());
+    const pat_s_mut_first = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_s,
+        .layout_idx = str_layout,
+        .reassignable = true,
+    } }, Region.zero());
+    const pat_s_mut_second = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_s,
+        .layout_idx = str_layout,
+        .reassignable = true,
+    } }, Region.zero());
+
+    const stmts = try env.lir_store.addStmts(&.{
+        .{ .decl = .{ .pattern = pat_s_decl, .expr = lit_a } },
+        .{ .mutate = .{ .pattern = pat_s_mut_first, .expr = concat_first } },
+        .{ .mutate = .{ .pattern = pat_s_mut_second, .expr = concat_second } },
+    });
+
+    const block_expr = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = lookup_s_final,
+        .result_layout = str_layout,
+    } }, Region.zero());
+
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(block_expr);
+    const rc = countRcOps(&env.lir_store, result);
+
+    try std.testing.expectEqual(@as(u32, 0), rc.increfs);
+    try std.testing.expectEqual(@as(u32, 3), rc.decrefs);
 }
 
 test "RC for_loop: unused refcounted elem does not decref borrowed element" {

@@ -2707,7 +2707,8 @@ fn materializeRetainedBinding(
 ) Allocator.Error!LirExprId {
     if (!self.layout_store.layoutContainsRefcounted(self.layout_store.getLayout(expr_layout))) return expr_id;
 
-    const source_expr = if (self.exprReturnsManagedAlias(expr_id, expr_layout))
+    const source_expr = if (self.exprReturnsManagedAlias(expr_id, expr_layout) or
+        self.exprSnapshotsMutableCell(expr_id))
         expr_id
     else
         try self.forceOwnedBinding(stmts, expr_id, expr_layout, region);
