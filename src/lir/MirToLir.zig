@@ -3424,9 +3424,6 @@ fn lowerClosureMake(
     region: Region,
 ) Allocator.Error!LirExprId {
     const closure_member_id = self.mir_store.getExprClosureMember(mir_expr_id);
-    if (closure_member_id == null) {
-        return self.lowerExpr(closure.captures);
-    }
     const captures_expr = self.mir_store.getExpr(closure.captures);
     if (captures_expr != .struct_) {
         return self.lowerExpr(closure.captures);
@@ -3446,8 +3443,10 @@ fn lowerClosureMake(
 
     const struct_data = self.layout_store.getStructData(tuple_layout_val.data.struct_.idx);
     const layout_fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
-    const closure_member = self.mir_store.getClosureMember(closure_member_id.?);
-    const capture_bindings = self.mir_store.getCaptureBindings(closure_member.capture_bindings);
+    const capture_bindings: []const MIR.CaptureBinding = if (closure_member_id) |member_id| blk: {
+        const closure_member = self.mir_store.getClosureMember(member_id);
+        break :blk self.mir_store.getCaptureBindings(closure_member.capture_bindings);
+    } else &.{};
 
     for (0..layout_fields.len) |li| {
         const original_index = layout_fields.get(li).index;

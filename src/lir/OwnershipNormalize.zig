@@ -289,6 +289,8 @@ const Analyzer = struct {
             .block => |block| self.sourceRefForAliasedExpr(block.final_expr),
             .dbg => |dbg_expr| self.sourceRefForAliasedExpr(dbg_expr.expr),
             .nominal => |nominal| self.sourceRefForAliasedExpr(nominal.backing_expr),
+            .struct_access => |access| self.sourceRefForAliasedExpr(access.struct_expr),
+            .tag_payload_access => |access| self.sourceRefForAliasedExpr(access.value),
             .incref => |inc| self.sourceRefForAliasedExpr(inc.value),
             .low_level => |ll| switch (ll.op) {
                 .list_get_unsafe => blk: {
@@ -532,4 +534,113 @@ test "ownership normalization distinguishes shadowed binds and resolves lookups"
     try std.testing.expect(first_ref != second_ref);
     try std.testing.expect(result.getLookupRef(lookup).? == second_ref);
     try std.testing.expect(result.getRefInfo(second_ref).shadowed_ref == first_ref);
+}
+
+test "ownership normalization keeps retained struct projection sourced from outer owner" {
+    const Region = base.Region;
+    var store = LirExprStore.init(std.testing.allocator);
+    defer store.deinit();
+
+    const ident_wrapper = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
+    const ident_retained = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 2 };
+    const symbol_wrapper = testSymbolFromIdent(ident_wrapper);
+    const symbol_retained = testSymbolFromIdent(ident_retained);
+
+    const pat_wrapper = try store.addPattern(.{ .bind = .{
+        .symbol = symbol_wrapper,
+        .layout_idx = .str,
+        .reassignable = false,
+    } }, Region.zero());
+    const pat_retained = try store.addPattern(.{ .bind = .{
+        .symbol = symbol_retained,
+        .layout_idx = .str,
+        .reassignable = false,
+    } }, Region.zero());
+
+    const str_lit = try store.addExpr(.{ .str_literal = try store.strings.insert(std.testing.allocator, "hi") }, Region.zero());
+    const lookup_wrapper = try store.addExpr(.{ .lookup = .{
+        .symbol = symbol_wrapper,
+        .layout_idx = .str,
+    } }, Region.zero());
+    const projected = try store.addExpr(.{ .struct_access = .{
+        .struct_expr = lookup_wrapper,
+        .struct_layout = .str,
+        .field_idx = 0,
+        .field_layout = .str,
+    } }, Region.zero());
+    const lookup_retained = try store.addExpr(.{ .lookup = .{
+        .symbol = symbol_retained,
+        .layout_idx = .str,
+    } }, Region.zero());
+
+    const stmts = try store.addStmts(&.{
+        .{ .decl = .{ .pattern = pat_wrapper, .expr = str_lit } },
+        .{ .decl = .{ .pattern = pat_retained, .expr = projected, .semantics = .retained } },
+    });
+    const block = try store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = lookup_retained,
+        .result_layout = .str,
+    } }, Region.zero());
+
+    var result = try analyze(std.testing.allocator, &store, block);
+    defer result.deinit();
+
+    const wrapper_ref = result.getPatternRef(pat_wrapper).?;
+    const retained_ref = result.getPatternRef(pat_retained).?;
+    try std.testing.expectEqual(OwnerKind{ .retained = wrapper_ref }, result.getRefInfo(retained_ref).owner_kind);
+}
+
+test "ownership normalization keeps retained payload projection sourced from outer owner" {
+    const Region = base.Region;
+    var store = LirExprStore.init(std.testing.allocator);
+    defer store.deinit();
+
+    const ident_union = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 3 };
+    const ident_retained = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 4 };
+    const symbol_union = testSymbolFromIdent(ident_union);
+    const symbol_retained = testSymbolFromIdent(ident_retained);
+
+    const pat_union = try store.addPattern(.{ .bind = .{
+        .symbol = symbol_union,
+        .layout_idx = .str,
+        .reassignable = false,
+    } }, Region.zero());
+    const pat_retained = try store.addPattern(.{ .bind = .{
+        .symbol = symbol_retained,
+        .layout_idx = .str,
+        .reassignable = false,
+    } }, Region.zero());
+
+    const str_lit = try store.addExpr(.{ .str_literal = try store.strings.insert(std.testing.allocator, "hi") }, Region.zero());
+    const lookup_union = try store.addExpr(.{ .lookup = .{
+        .symbol = symbol_union,
+        .layout_idx = .str,
+    } }, Region.zero());
+    const projected = try store.addExpr(.{ .tag_payload_access = .{
+        .value = lookup_union,
+        .union_layout = .str,
+        .payload_layout = .str,
+    } }, Region.zero());
+    const lookup_retained = try store.addExpr(.{ .lookup = .{
+        .symbol = symbol_retained,
+        .layout_idx = .str,
+    } }, Region.zero());
+
+    const stmts = try store.addStmts(&.{
+        .{ .decl = .{ .pattern = pat_union, .expr = str_lit } },
+        .{ .decl = .{ .pattern = pat_retained, .expr = projected, .semantics = .retained } },
+    });
+    const block = try store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = lookup_retained,
+        .result_layout = .str,
+    } }, Region.zero());
+
+    var result = try analyze(std.testing.allocator, &store, block);
+    defer result.deinit();
+
+    const union_ref = result.getPatternRef(pat_union).?;
+    const retained_ref = result.getPatternRef(pat_retained).?;
+    try std.testing.expectEqual(OwnerKind{ .retained = union_ref }, result.getRefInfo(retained_ref).owner_kind);
 }
