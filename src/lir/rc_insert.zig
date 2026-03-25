@@ -59,6 +59,12 @@ pub const RcInsertPass = struct {
     /// retained temporaries, so the original owner is not preserved twice.
     retained_owner_use_debits: std.AutoHashMap(u64, u32),
 
+    /// Tracks which owned references are transitively released when another
+    /// owner is decref'd. Composite owners record the owners of their
+    /// refcounted children so tail cleanup can retain escaping aliases before
+    /// releasing an enclosing tuple/tag/list.
+    owner_contained_owners: std.AutoHashMap(u64, std.ArrayListUnmanaged(u64)),
+
     /// Tracks layout for each symbol (for generating incref/decref with correct layout).
     symbol_layouts: std.AutoHashMap(u64, LayoutIdx),
 
@@ -140,6 +146,7 @@ pub const RcInsertPass = struct {
             .symbol_use_counts = std.AutoHashMap(u64, u32).init(allocator),
             .symbol_consumed_counts = std.AutoHashMap(u64, u32).init(allocator),
             .retained_owner_use_debits = std.AutoHashMap(u64, u32).init(allocator),
+            .owner_contained_owners = std.AutoHashMap(u64, std.ArrayListUnmanaged(u64)).init(allocator),
             .symbol_layouts = std.AutoHashMap(u64, LayoutIdx).init(allocator),
             .live_rc_symbols = std.ArrayList(LiveRcSymbol).empty,
             .live_cells = std.ArrayList(LiveCell).empty,
@@ -160,6 +167,8 @@ pub const RcInsertPass = struct {
         self.symbol_use_counts.deinit();
         self.symbol_consumed_counts.deinit();
         self.retained_owner_use_debits.deinit();
+        self.clearOwnerContainedOwners();
+        self.owner_contained_owners.deinit();
         self.symbol_layouts.deinit();
         self.live_rc_symbols.deinit(self.allocator);
         self.live_cells.deinit(self.allocator);
@@ -187,6 +196,7 @@ pub const RcInsertPass = struct {
         self.symbol_use_counts.clearRetainingCapacity();
         self.symbol_consumed_counts.clearRetainingCapacity();
         self.retained_owner_use_debits.clearRetainingCapacity();
+        self.clearOwnerContainedOwners();
         self.symbol_layouts.clearRetainingCapacity();
         self.live_rc_symbols.clearRetainingCapacity();
         self.live_cells.clearRetainingCapacity();
@@ -227,6 +237,7 @@ pub const RcInsertPass = struct {
         self.symbol_use_counts.clearRetainingCapacity();
         self.symbol_consumed_counts.clearRetainingCapacity();
         self.retained_owner_use_debits.clearRetainingCapacity();
+        self.clearOwnerContainedOwners();
         self.symbol_layouts.clearRetainingCapacity();
         self.live_rc_symbols.clearRetainingCapacity();
         self.live_cells.clearRetainingCapacity();
@@ -442,6 +453,14 @@ pub const RcInsertPass = struct {
     fn liveOwnedRefCountFromUseCount(use_count: u32, reassignable: bool) u32 {
         if (reassignable) return 1;
         return if (use_count == 0) 1 else use_count;
+    }
+
+    fn clearOwnerContainedOwners(self: *RcInsertPass) void {
+        var it = self.owner_contained_owners.iterator();
+        while (it.next()) |entry| {
+            entry.value_ptr.deinit(self.allocator);
+        }
+        self.owner_contained_owners.clearRetainingCapacity();
     }
 
     fn consumedOwnerKey(self: *const RcInsertPass, key: u64) ?u64 {
@@ -816,6 +835,169 @@ pub const RcInsertPass = struct {
         try self.emitIncrefInto(temp.symbol, layout_idx, 1, region, prelude);
         try self.debitRetainedOwnerUse(owner_key);
         return temp.lookup;
+    }
+
+    fn appendContainedOwner(self: *RcInsertPass, owner_key: u64, contained_owner_key: u64) Allocator.Error!void {
+        if (owner_key == contained_owner_key) return;
+
+        const gop = try self.owner_contained_owners.getOrPut(owner_key);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = .{};
+        } else {
+            for (gop.value_ptr.items) |existing_key| {
+                if (existing_key == contained_owner_key) return;
+            }
+        }
+
+        try gop.value_ptr.append(self.allocator, contained_owner_key);
+    }
+
+    fn replaceContainedOwnersForBinding(
+        self: *RcInsertPass,
+        binding: LirStmt.Binding,
+    ) Allocator.Error!void {
+        var touched_owner_keys = std.AutoHashMap(u64, void).init(self.allocator);
+        defer touched_owner_keys.deinit();
+        try self.collectExprDropTouchedOwnerKeys(binding.expr, &touched_owner_keys);
+
+        const Ctx = struct {
+            pass: *RcInsertPass,
+            binding: LirStmt.Binding,
+            touched_owner_keys: *const std.AutoHashMap(u64, void),
+
+            fn onBind(
+                ctx: @This(),
+                bind_pat_id: LirPatternId,
+                symbol: Symbol,
+                layout_idx: LayoutIdx,
+                _: bool,
+            ) Allocator.Error!void {
+                const key = ctx.pass.patternKey(bind_pat_id, symbol);
+                const resolved_layout = ctx.pass.keyLayout(key, layout_idx);
+                if (!ctx.pass.keyIntroducesOwner(key)) return;
+                if (!ctx.pass.layoutNeedsRc(resolved_layout)) return;
+
+                if (ctx.pass.owner_contained_owners.fetchRemove(key)) |removed| {
+                    var prior = removed.value;
+                    prior.deinit(ctx.pass.allocator);
+                }
+
+                var it = ctx.touched_owner_keys.keyIterator();
+                while (it.next()) |contained_owner_key| {
+                    try ctx.pass.appendContainedOwner(key, contained_owner_key.*);
+                }
+            }
+        };
+
+        try walkPatternBinds(self.store, binding.pattern, Ctx{
+            .pass = self,
+            .binding = binding,
+            .touched_owner_keys = &touched_owner_keys,
+        });
+    }
+
+    fn addOwnerAndContainedKeys(
+        self: *RcInsertPass,
+        owner_key: u64,
+        target: *std.AutoHashMap(u64, void),
+    ) Allocator.Error!void {
+        const gop = try target.getOrPut(owner_key);
+        if (gop.found_existing) return;
+
+        if (self.owner_contained_owners.get(owner_key)) |contained_owners| {
+            for (contained_owners.items) |contained_owner_key| {
+                try self.addOwnerAndContainedKeys(contained_owner_key, target);
+            }
+        }
+    }
+
+    fn collectExprDropTouchedOwnerKeys(
+        self: *RcInsertPass,
+        expr_id: LirExprId,
+        target: *std.AutoHashMap(u64, void),
+    ) Allocator.Error!void {
+        if (expr_id.isNone()) return;
+
+        if (self.ownerKeyForAliasedExpr(expr_id)) |owner_key| {
+            try self.addOwnerAndContainedKeys(owner_key, target);
+            return;
+        }
+
+        switch (self.store.getExpr(expr_id)) {
+            .block => |block| try self.collectExprDropTouchedOwnerKeys(block.final_expr, target),
+            .dbg => |dbg_expr| try self.collectExprDropTouchedOwnerKeys(dbg_expr.expr, target),
+            .nominal => |nominal| try self.collectExprDropTouchedOwnerKeys(nominal.backing_expr, target),
+            .list => |list_expr| {
+                for (self.store.getExprSpan(list_expr.elems)) |elem_id| {
+                    try self.collectExprDropTouchedOwnerKeys(elem_id, target);
+                }
+            },
+            .struct_ => |struct_expr| {
+                for (self.store.getExprSpan(struct_expr.fields)) |field_id| {
+                    try self.collectExprDropTouchedOwnerKeys(field_id, target);
+                }
+            },
+            .tag => |tag_expr| {
+                for (self.store.getExprSpan(tag_expr.args)) |arg_id| {
+                    try self.collectExprDropTouchedOwnerKeys(arg_id, target);
+                }
+            },
+            .if_then_else => |ite| {
+                for (self.store.getIfBranches(ite.branches)) |branch| {
+                    try self.collectExprDropTouchedOwnerKeys(branch.body, target);
+                }
+                try self.collectExprDropTouchedOwnerKeys(ite.final_else, target);
+            },
+            .match_expr => |match_expr| {
+                for (self.store.getMatchBranches(match_expr.branches)) |branch| {
+                    try self.collectExprDropTouchedOwnerKeys(branch.body, target);
+                }
+            },
+            .discriminant_switch => |switch_expr| {
+                for (self.store.getExprSpan(switch_expr.branches)) |branch_id| {
+                    try self.collectExprDropTouchedOwnerKeys(branch_id, target);
+                }
+            },
+            .expect => |expect_expr| try self.collectExprDropTouchedOwnerKeys(expect_expr.body, target),
+            .incref => |inc| try self.collectExprDropTouchedOwnerKeys(inc.value, target),
+            .decref => |dec| try self.collectExprDropTouchedOwnerKeys(dec.value, target),
+            .free => |free| try self.collectExprDropTouchedOwnerKeys(free.value, target),
+            .proc_call,
+            .low_level,
+            .hosted_call,
+            .str_concat,
+            .int_to_str,
+            .float_to_str,
+            .dec_to_str,
+            .str_escape_and_quote,
+            .early_return,
+            .for_loop,
+            .while_loop,
+            .lookup,
+            .cell_load,
+            .struct_access,
+            .tag_payload_access,
+            .i64_literal,
+            .i128_literal,
+            .f64_literal,
+            .f32_literal,
+            .dec_literal,
+            .str_literal,
+            .bool_literal,
+            .empty_list,
+            .zero_arg_tag,
+            .crash,
+            .runtime_error,
+            .break_expr,
+            => {},
+        }
+    }
+
+    fn exprDropTouchesOwnerKey(self: *RcInsertPass, expr_id: LirExprId, owner_key: u64) Allocator.Error!bool {
+        var touched_owner_keys = std.AutoHashMap(u64, void).init(self.allocator);
+        defer touched_owner_keys.deinit();
+        try self.collectExprDropTouchedOwnerKeys(expr_id, &touched_owner_keys);
+        return touched_owner_keys.contains(owner_key);
     }
 
     fn retainConsumedOperandsForLaterUse(
@@ -3899,6 +4081,7 @@ pub const RcInsertPass = struct {
                     try self.emitBindingIntroductionRcOps(new_binding, region, &stmt_buf);
                     if (stmt_buf.items.len > before_binding_intro) changed = true;
 
+                    try self.replaceContainedOwnersForBinding(new_binding);
                     try self.trackLiveRcSymbolsForPattern(b.pattern, null);
                     try pending_binding_increfs.append(self.allocator, .{
                         .pattern = b.pattern,
@@ -5279,10 +5462,10 @@ pub const RcInsertPass = struct {
         for (tail_stmts) |stmt| {
             switch (stmt) {
                 .decl, .mutate => |binding| {
-                    if (try self.exprUsesKey(binding.expr, owner_key)) return true;
+                    if (try self.exprDropTouchesOwnerKey(binding.expr, owner_key)) return true;
                 },
                 .cell_init, .cell_store => |binding| {
-                    if (try self.exprUsesKey(binding.expr, owner_key)) return true;
+                    if (try self.exprDropTouchesOwnerKey(binding.expr, owner_key)) return true;
                     const cell_owner_key = self.consumedOwnerKey(@as(u64, @bitCast(binding.cell))) orelse continue;
                     if (cell_owner_key == owner_key) return true;
                 },
@@ -5639,7 +5822,11 @@ pub const RcInsertPass = struct {
                 const final_borrows_symbol = final_uses_symbol and !final_consumes_symbol and !final_transfers_symbol;
                 const later_statement_uses = try ctx.pass.hasLaterStatementUseKey(ctx.block_stmts, ctx.stmt_index, key);
                 const use_count = ctx.pass.effectiveGlobalOwnerUseCount(key);
-                const needs_statement_tail_cleanup = later_statement_uses and use_count == 0;
+                const needs_statement_tail_cleanup =
+                    later_statement_uses and
+                    use_count == 0 and
+                    !final_consumes_symbol and
+                    !final_transfers_symbol;
                 if (!final_borrows_symbol and !needs_statement_tail_cleanup) return;
 
                 if (resolved_reassignable) {
@@ -7483,6 +7670,144 @@ test "RC wrapped final alias does not retain owner twice for unrelated tail clea
     try std.testing.expectEqual(@as(u32, 0), countIncrefsForSymbol(&env.lir_store, result, sym_s));
     try std.testing.expectEqual(@as(u32, 0), countDecrefsForSymbol(&env.lir_store, result, sym_s));
     try std.testing.expectEqual(@as(u32, 1), countDecrefsForSymbol(&env.lir_store, result, sym_t));
+}
+
+test "RC wrapped final alias retains owner when tail cleanup decrefs containing tuple" {
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_layout: LayoutIdx = .i64;
+    const list_layout = try env.layout_store.insertLayout(layout_mod.Layout.list(i64_layout));
+    const tag_union_layout = try env.layout_store.putTagUnion(&.{ list_layout, list_layout });
+    const tuple_layout = try env.layout_store.putTuple(&.{ tag_union_layout, i64_layout });
+
+    const sym_list = makeSymbol(1);
+    const sym_tuple = makeSymbol(2);
+
+    const one = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 1, .layout_idx = i64_layout } }, Region.zero());
+    const two = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 2, .layout_idx = i64_layout } }, Region.zero());
+    const three = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 3, .layout_idx = i64_layout } }, Region.zero());
+    const list_elems = try env.lir_store.addExprSpan(&.{ one, two, three });
+    const list_expr = try env.lir_store.addExpr(.{ .list = .{
+        .list_layout = list_layout,
+        .elem_layout = i64_layout,
+        .elems = list_elems,
+    } }, Region.zero());
+
+    const lookup_list_for_tag = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_list, .layout_idx = list_layout } }, Region.zero());
+    const tag_args = try env.lir_store.addExprSpan(&.{lookup_list_for_tag});
+    const ok_tag = try env.lir_store.addExpr(.{ .tag = .{
+        .discriminant = 0,
+        .union_layout = tag_union_layout,
+        .args = tag_args,
+    } }, Region.zero());
+
+    const forty_two = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 42, .layout_idx = i64_layout } }, Region.zero());
+    const tuple_fields = try env.lir_store.addExprSpan(&.{ ok_tag, forty_two });
+    const tuple_expr = try env.lir_store.addExpr(.{ .struct_ = .{
+        .struct_layout = tuple_layout,
+        .fields = tuple_fields,
+    } }, Region.zero());
+
+    const lookup_list_final = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_list, .layout_idx = list_layout } }, Region.zero());
+
+    const pat_list = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_list, .layout_idx = list_layout } }, Region.zero());
+    const pat_tuple = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_tuple, .layout_idx = tuple_layout } }, Region.zero());
+    const stmts = try env.lir_store.addStmts(&.{
+        .{ .decl = .{ .pattern = pat_list, .expr = list_expr } },
+        .{ .decl = .{ .pattern = pat_tuple, .expr = tuple_expr } },
+    });
+    const block_expr = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = lookup_list_final,
+        .result_layout = list_layout,
+    } }, Region.zero());
+
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(block_expr);
+    const rc = countRcOps(&env.lir_store, result);
+
+    try std.testing.expectEqual(@as(u32, 2), rc.increfs);
+    try std.testing.expectEqual(@as(u32, 1), rc.decrefs);
+    try std.testing.expectEqual(@as(u32, 1), countIncrefsForSymbol(&env.lir_store, result, sym_list));
+    try std.testing.expectEqual(@as(u32, 1), countDecrefsForSymbol(&env.lir_store, result, sym_tuple));
+}
+
+test "RC nested block final transfer does not also tail-decref transferred owner" {
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_layout: LayoutIdx = .i64;
+    const list_layout = try env.layout_store.insertLayout(layout_mod.Layout.list(i64_layout));
+    const tag_union_layout = try env.layout_store.putTagUnion(&.{ list_layout, list_layout });
+    const tuple_layout = try env.layout_store.putTuple(&.{ tag_union_layout, i64_layout });
+
+    const sym_list = makeSymbol(1);
+    const sym_tuple = makeSymbol(2);
+    const sym_result = makeSymbol(3);
+
+    const one = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 1, .layout_idx = i64_layout } }, Region.zero());
+    const two = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 2, .layout_idx = i64_layout } }, Region.zero());
+    const three = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 3, .layout_idx = i64_layout } }, Region.zero());
+    const list_elems = try env.lir_store.addExprSpan(&.{ one, two, three });
+    const list_expr = try env.lir_store.addExpr(.{ .list = .{
+        .list_layout = list_layout,
+        .elem_layout = i64_layout,
+        .elems = list_elems,
+    } }, Region.zero());
+
+    const lookup_list_for_tag = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_list, .layout_idx = list_layout } }, Region.zero());
+    const tag_args = try env.lir_store.addExprSpan(&.{lookup_list_for_tag});
+    const ok_tag = try env.lir_store.addExpr(.{ .tag = .{
+        .discriminant = 0,
+        .union_layout = tag_union_layout,
+        .args = tag_args,
+    } }, Region.zero());
+
+    const forty_two = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 42, .layout_idx = i64_layout } }, Region.zero());
+    const tuple_fields = try env.lir_store.addExprSpan(&.{ ok_tag, forty_two });
+    const tuple_expr = try env.lir_store.addExpr(.{ .struct_ = .{
+        .struct_layout = tuple_layout,
+        .fields = tuple_fields,
+    } }, Region.zero());
+
+    const lookup_list_inner = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_list, .layout_idx = list_layout } }, Region.zero());
+    const pat_list = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_list, .layout_idx = list_layout } }, Region.zero());
+    const pat_tuple = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_tuple, .layout_idx = tuple_layout } }, Region.zero());
+    const inner_stmts = try env.lir_store.addStmts(&.{
+        .{ .decl = .{ .pattern = pat_list, .expr = list_expr } },
+        .{ .decl = .{ .pattern = pat_tuple, .expr = tuple_expr } },
+    });
+    const inner_block = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = inner_stmts,
+        .final_expr = lookup_list_inner,
+        .result_layout = list_layout,
+    } }, Region.zero());
+
+    const pat_result = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_result, .layout_idx = list_layout } }, Region.zero());
+    const lookup_result = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_result, .layout_idx = list_layout } }, Region.zero());
+    const outer_stmts = try env.lir_store.addStmts(&.{.{ .decl = .{ .pattern = pat_result, .expr = inner_block } }});
+    const outer_block = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = outer_stmts,
+        .final_expr = lookup_result,
+        .result_layout = list_layout,
+    } }, Region.zero());
+
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(outer_block);
+
+    try std.testing.expectEqual(@as(u32, 0), countDecrefsForSymbol(&env.lir_store, result, sym_list));
+    try std.testing.expectEqual(@as(u32, 1), countDecrefsForSymbol(&env.lir_store, result, sym_tuple));
 }
 
 test "RC if result matched later tail-cleans matched binding" {
