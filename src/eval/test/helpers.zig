@@ -1071,8 +1071,7 @@ pub fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, ex
 /// and writes the 16-byte result to the output pointer.
 fn hostDecMul(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
     const RocDec = builtins.dec.RocDec;
-    const mem = module.store.getMemory(0);
-    const buffer = mem.buffer();
+    const buffer = module.store.getMemory(0).buffer();
 
     const lhs_ptr: usize = @intCast(params[0].I32);
     const rhs_ptr: usize = @intCast(params[1].I32);
@@ -1080,24 +1079,10 @@ fn hostDecMul(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const 
 
     if (lhs_ptr + 16 > buffer.len or rhs_ptr + 16 > buffer.len or result_ptr + 16 > buffer.len) return;
 
-    // Read i128 values from wasm memory (little-endian)
-    const lhs_low: u64 = std.mem.readInt(u64, buffer[lhs_ptr..][0..8], .little);
-    const lhs_high: u64 = std.mem.readInt(u64, buffer[lhs_ptr + 8 ..][0..8], .little);
-    const lhs_i128: i128 = @bitCast(@as(u128, lhs_high) << 64 | @as(u128, lhs_low));
-
-    const rhs_low: u64 = std.mem.readInt(u64, buffer[rhs_ptr..][0..8], .little);
-    const rhs_high: u64 = std.mem.readInt(u64, buffer[rhs_ptr + 8 ..][0..8], .little);
-    const rhs_i128: i128 = @bitCast(@as(u128, rhs_high) << 64 | @as(u128, rhs_low));
-
-    // Compute Dec multiply using the Roc builtin
-    const lhs_dec = RocDec{ .num = lhs_i128 };
-    const rhs_dec = RocDec{ .num = rhs_i128 };
+    const lhs_dec = RocDec{ .num = readI128FromMem(buffer, lhs_ptr) };
+    const rhs_dec = RocDec{ .num = readI128FromMem(buffer, rhs_ptr) };
     const result = lhs_dec.mulWithOverflow(rhs_dec);
-
-    // Write result to wasm memory
-    const result_u128: u128 = @bitCast(result.value.num);
-    std.mem.writeInt(u64, buffer[result_ptr..][0..8], @truncate(result_u128), .little);
-    std.mem.writeInt(u64, buffer[result_ptr + 8 ..][0..8], @truncate(result_u128 >> 64), .little);
+    writeI128ToMem(buffer, result_ptr, result.value.num);
 }
 
 /// Host function for roc_dec_to_str: formats a Dec value as a string.
@@ -1131,6 +1116,17 @@ fn hostDecToStr(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]cons
 
     results[0] = bytebox.Val{ .I32 = @intCast(len) };
 }
+
+// ── String and List host functions ──
+//
+// TODO: These reimplement logic from src/builtins/str.zig and src/builtins/list.zig
+// because the builtin functions operate on native-width RocStr/RocList (with 64-bit
+// pointers on x86_64) while wasm linear memory uses 32-bit offsets. We cannot construct
+// a native RocStr from wasm memory without pointer width mismatch.
+//
+// The proper fix is to link roc_builtins.o (compiled for wasm32) into the wasm module
+// via wasm-ld, so the builtins run inside wasm with matching pointer widths.
+// See TODO_RELOC_WASM_OBJ_BUILTIN.md for the full implementation plan.
 
 /// Host function for roc_str_eq: compares two RocStr structs for content equality.
 /// Signature: (i32 str_a_ptr, i32 str_b_ptr) -> i32 (0 or 1)
@@ -1450,8 +1446,8 @@ fn hostFloatToStr(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
 /// Host function for roc_u128_to_dec: convert u128 to Dec (i128 scaled by 10^18)
 /// Signature: (i32 val_ptr, i32 result_ptr) -> i32 (success)
 fn hostU128ToDec(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
-    const mem = module.store.getMemory(0);
-    const buffer = mem.buffer();
+    const RocDec = builtins.dec.RocDec;
+    const buffer = module.store.getMemory(0).buffer();
 
     const val_ptr: usize = @intCast(params[0].I32);
     const result_ptr: usize = @intCast(params[1].I32);
@@ -1462,27 +1458,24 @@ fn hostU128ToDec(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]con
     }
 
     const val = readU128FromMem(buffer, val_ptr);
-
-    // Multiply by 10^18 to get Dec representation
-    const one_point_zero: u128 = 1_000_000_000_000_000_000; // 10^18
-
-    // Check for overflow: val must be <= max_i128 / 10^18
-    const max_val: u128 = @as(u128, @bitCast(@as(i128, std.math.maxInt(i128)))) / one_point_zero;
-    if (val > max_val) {
-        results[0] = bytebox.Val{ .I32 = 0 }; // overflow
+    // u128 must fit in i128 range to be convertible to Dec
+    if (val > @as(u128, @intCast(std.math.maxInt(i128)))) {
+        results[0] = bytebox.Val{ .I32 = 0 };
         return;
     }
-
-    const dec_val: i128 = @intCast(val * one_point_zero);
-    writeI128ToMem(buffer, result_ptr, dec_val);
-    results[0] = bytebox.Val{ .I32 = 1 }; // success
+    if (RocDec.fromWholeInt(@as(i128, @intCast(val)))) |dec| {
+        writeI128ToMem(buffer, result_ptr, dec.num);
+        results[0] = bytebox.Val{ .I32 = 1 };
+    } else {
+        results[0] = bytebox.Val{ .I32 = 0 }; // overflow
+    }
 }
 
 /// Host function for roc_i128_to_dec: convert i128 to Dec (i128 scaled by 10^18)
 /// Signature: (i32 val_ptr, i32 result_ptr) -> i32 (success)
 fn hostI128ToDec(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
-    const mem = module.store.getMemory(0);
-    const buffer = mem.buffer();
+    const RocDec = builtins.dec.RocDec;
+    const buffer = module.store.getMemory(0).buffer();
 
     const val_ptr: usize = @intCast(params[0].I32);
     const result_ptr: usize = @intCast(params[1].I32);
@@ -1493,30 +1486,19 @@ fn hostI128ToDec(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]con
     }
 
     const val = readI128FromMem(buffer, val_ptr);
-
-    // Multiply by 10^18 to get Dec representation
-    const one_point_zero: i128 = 1_000_000_000_000_000_000; // 10^18
-
-    // Check for overflow using wider arithmetic
-    const wide_val: i256 = val;
-    const wide_result = wide_val * one_point_zero;
-
-    // Check if result fits in i128
-    if (wide_result > std.math.maxInt(i128) or wide_result < std.math.minInt(i128)) {
+    if (RocDec.fromWholeInt(val)) |dec| {
+        writeI128ToMem(buffer, result_ptr, dec.num);
+        results[0] = bytebox.Val{ .I32 = 1 };
+    } else {
         results[0] = bytebox.Val{ .I32 = 0 }; // overflow
-        return;
     }
-
-    const dec_val: i128 = @intCast(wide_result);
-    writeI128ToMem(buffer, result_ptr, dec_val);
-    results[0] = bytebox.Val{ .I32 = 1 }; // success
 }
 
 /// Host function for roc_dec_to_i128: convert Dec to i128 (divide by 10^18)
 /// Signature: (i32 val_ptr, i32 result_ptr) -> i32 (success)
 fn hostDecToI128(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
-    const mem = module.store.getMemory(0);
-    const buffer = mem.buffer();
+    const RocDec = builtins.dec.RocDec;
+    const buffer = module.store.getMemory(0).buffer();
 
     const val_ptr: usize = @intCast(params[0].I32);
     const result_ptr: usize = @intCast(params[1].I32);
@@ -1526,21 +1508,17 @@ fn hostDecToI128(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]con
         return;
     }
 
-    const dec_val = readI128FromMem(buffer, val_ptr);
-
-    // Divide by 10^18 to get i128 representation
-    const one_point_zero: i128 = 1_000_000_000_000_000_000; // 10^18
-    const result = @divTrunc(dec_val, one_point_zero);
-
+    const dec = RocDec{ .num = readI128FromMem(buffer, val_ptr) };
+    const result = builtins.dec.toIntWrap(i128, dec);
     writeI128ToMem(buffer, result_ptr, result);
-    results[0] = bytebox.Val{ .I32 = 1 }; // always succeeds for i128
+    results[0] = bytebox.Val{ .I32 = 1 };
 }
 
 /// Host function for roc_dec_to_u128: convert Dec to u128 (divide by 10^18)
 /// Signature: (i32 val_ptr, i32 result_ptr) -> i32 (success)
 fn hostDecToU128(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
-    const mem = module.store.getMemory(0);
-    const buffer = mem.buffer();
+    const RocDec = builtins.dec.RocDec;
+    const buffer = module.store.getMemory(0).buffer();
 
     const val_ptr: usize = @intCast(params[0].I32);
     const result_ptr: usize = @intCast(params[1].I32);
@@ -1550,27 +1528,21 @@ fn hostDecToU128(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]con
         return;
     }
 
-    const dec_val = readI128FromMem(buffer, val_ptr);
-
-    // Divide by 10^18 to get the integer part
-    const one_point_zero: i128 = 1_000_000_000_000_000_000; // 10^18
-    const result = @divTrunc(dec_val, one_point_zero);
-
-    // Fail if result is negative (can't convert to u128)
-    if (result < 0) {
+    const dec = RocDec{ .num = readI128FromMem(buffer, val_ptr) };
+    if (dec.num < 0) {
         results[0] = bytebox.Val{ .I32 = 0 };
         return;
     }
-
-    writeU128ToMem(buffer, result_ptr, @intCast(result));
+    const result = builtins.dec.toIntWrap(u128, dec);
+    writeU128ToMem(buffer, result_ptr, result);
     results[0] = bytebox.Val{ .I32 = 1 };
 }
 
 /// Host function for roc_dec_to_f32: convert Dec to f32
 /// Signature: (i32 val_ptr) -> f32
 fn hostDecToF32(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
-    const mem = module.store.getMemory(0);
-    const buffer = mem.buffer();
+    const RocDec = builtins.dec.RocDec;
+    const buffer = module.store.getMemory(0).buffer();
 
     const val_ptr: usize = @intCast(params[0].I32);
 
@@ -1579,14 +1551,8 @@ fn hostDecToF32(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]cons
         return;
     }
 
-    const dec_val = readI128FromMem(buffer, val_ptr);
-
-    // Convert to f64 first (more precision), then to f32
-    const one_point_zero: f64 = 1_000_000_000_000_000_000.0; // 10^18
-    const f64_val: f64 = @as(f64, @floatFromInt(dec_val)) / one_point_zero;
-    const f32_val: f32 = @floatCast(f64_val);
-
-    results[0] = bytebox.Val{ .F32 = f32_val };
+    const dec = RocDec{ .num = readI128FromMem(buffer, val_ptr) };
+    results[0] = bytebox.Val{ .F32 = builtins.dec.toF32(dec) };
 }
 
 /// Host function for roc_list_str_eq: compare two lists of strings for equality
