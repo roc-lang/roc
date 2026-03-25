@@ -42,7 +42,7 @@ There are two test paths that exercise the interpreter:
      safely contained (the parent sees a non-zero exit or signal via waitpid).
    - The interpreter backend uses `helpers.lirInterpreterInspectedStr` which
      does CIR → MIR → LIR → RC lowering, then `LirInterpreter.eval()`
-   - Current status: **1066 passed, 0 failed, 0 crashed, 108 skipped**
+   - Current status: **1102 passed, 0 failed, 0 crashed, 72 skipped**
 
 2. **Unit tests** (`zig build test`):
    - Sequential tests in `src/eval/test/helpers.zig` (low_level_interp_test,
@@ -346,14 +346,22 @@ in this case), the comptime evaluator should be able to evaluate `one = 1`.
 ## Skipped Eval Tests (SKIP_ALL — all backends)
 
 These are tests in `src/eval/test/eval_tests.zig` that are skipped across **all**
-backends (interpreter, dev, wasm, llvm). Total: **~80 tests** in 10 categories.
+backends (interpreter, dev, wasm, llvm). Current: **72 skipped** (was 108).
 
 **Workflow**: Fix one category at a time. After fixing, unskip the tests, run them
 to verify, commit, then **remove the resolved section from this document**.
 
----
+### RESOLVED (36 tests unskipped)
 
-### U8/U16 large-value arithmetic (30 tests)
+- [x] Narrowing/wrapping conversions (8 tests) — fixed: wrong method names (`to_u8` → `to_u8_wrap`)
+- [x] Signed-to-unsigned conversions (3 tests) — fixed: wrong method names (`to_u64` → `to_u64_wrap`)
+- [x] Float-to-int conversions (12 tests) — fixed: builtin_compiler ident mismatch (`_trunc` → `_wrap`)
+- [x] Dec-to-int conversions (10 tests) — fixed: same builtin_compiler mismatch + wasm i128 div bug
+- [x] F64→F32, Dec→F32 (2 tests) — fixed: method name + builtin_compiler mismatch
+- [x] U128 subtraction (1 test) — was already working, just needed unskipping
+- [x] List of typed ints (2 tests) — fixed: `.to_i64()` → `.to_i64_wrap()`
+
+### REMAINING: U8/U16 large-value arithmetic (30 tests)
 
 Some of these hang on x86_64-linux CI (infinite loop in interpreter).
 
@@ -377,57 +385,22 @@ to produce wrong results, which can infinite-loop in comparison-based operations
 
 ---
 
-### U128 subtraction (1 test)
-
-- `U128: minus: 1e29 - 1e29` → expected 0
-
----
-
-### Narrowing/wrapping numeric conversions (8 tests)
-
-Crash across all backends:
-- `U64 to U8 wrapping` (300→44), `U64 to I8 wrapping` (200→-56)
-- `I64 to U8 wrapping` (256→0), `I64 to I8 wrapping` (300→44)
-- `U32 to U8 wrapping` (300→44)
-- `I128 to I8 wrapping` (300→44), `U128 to U8 wrapping` (300→44)
-- Signed-to-unsigned: `I64 to U64`, `I64 to U32`, `I64 to U16`
-
----
-
-### Float-to-int / float narrowing conversions (13 tests)
-
-Crash across all backends:
-- F64 → I64, I32, I16, I8, U64, U32, U16, U8
-- F64 → F32
-- F32 → I64, I32, U64, U32
-
----
-
-### Dec-to-int / Dec-to-F32 conversions (11 tests)
-
-Crash across all backends:
-- Dec → I64, I32, I16, I8, U64, U32, U16, U8, I128, U128, F32
-
----
-
-### List of typed ints (2 tests)
-
-- `list of I32 len` — `[1.I32, 2.I32, 3.I32].len()`
-- `list of U8 len` — `[10.U8, 20.U8, 30.U8].len()`
-
-**Root cause**: Likely same monomorphization bug — typed integer literals in
-list context get wrong monotype.
-
----
-
----
-
-### Known compiler bugs (3 tests)
+### REMAINING: Known compiler bugs (3 tests)
 
 These are upstream compiler/specialization bugs, not interpreter-specific:
 - `early return: ? in closure passed to List.fold`
 - `polymorphic tag union payload substitution - extract payload`
 - `polymorphic tag union payload substitution - multiple type vars`
+
+---
+
+### REMAINING: Other skips (not SKIP_ALL)
+
+- 31 dev-only tests (skip interpreter/wasm by design)
+- 3 match regressions (skip wasm + llvm)
+- 2 Str.contains (skip wasm)
+- 2 abs (skip dev)
+- 1 U64→I8 wrapping (skip wasm — wasm returns unsigned 200 instead of signed -56)
 
 ---
 
@@ -512,3 +485,90 @@ See `CONTRIBUTING/debugging_backend_bugs.md` for full details on trace output.
   `makeExecutable()` for gdb breakpoints
 - **Invoke the debug-interpreter skill** (`/debug-interpreter`) for additional
   interpreter-specific debugging guidance
+
+---
+
+## Wasm Backend: Host Function Delegation Status
+
+The wasm eval tests use bytebox host function imports instead of linking
+`roc_builtins.o` via wasm-ld. This avoids expensive per-expression linker
+invocation. Each host function marshals between wasm32 and native memory
+layouts, then delegates to the shared builtin implementation.
+
+See `src/eval/test/helpers.zig` for the implementation and
+`TODO_RELOC_WASM_OBJ_BUILTIN.md` for the full wasm-ld linking plan.
+
+### Delegating to shared builtins (correct)
+
+These host functions call the same code as the dev/interpreter backends:
+
+**Dec/i128 operations:**
+- `hostDecMul` → `RocDec.mulWithOverflow()`
+- `hostDecToStr` → `RocDec.format_to_buf()`
+- `hostDecDiv` → `RocDec.div()` (via WasmRocEnv)
+- `hostDecDivTrunc` → `builtins.dec.divTruncC()` (via WasmRocEnv)
+- `hostDecToI128` → `builtins.dec.toIntWrap(i128, ...)`
+- `hostDecToU128` → `builtins.dec.toIntWrap(u128, ...)`
+- `hostDecToF32` → `builtins.dec.toF32()`
+- `hostI128ToDec` → `RocDec.fromWholeInt()`
+- `hostU128ToDec` → `RocDec.fromWholeInt()`
+- `hostI128DivS` → `i128h.divTrunc_i128()`
+- `hostI128ModS` → `i128h.rem_i128()`
+- `hostU128Div` → `i128h.divTrunc_u128()`
+- `hostU128Mod` → `i128h.rem_u128()`
+- `hostI128ToStr` → `i128h.i128_to_str()`
+- `hostU128ToStr` → `i128h.u128_to_str()`
+- `hostFloatToStr` → `i128h.f64_to_str()`
+
+**String operations (via nativeRocStr translation layer):**
+- `hostStrEq` → `builtins.str.strEqual()`
+- `hostStrTrim` → `builtins.str.strTrim()`
+- `hostStrTrimStart` → `builtins.str.strTrimStart()`
+- `hostStrTrimEnd` → `builtins.str.strTrimEnd()`
+- `hostStrWithAsciiLowercased` → `builtins.str.strWithAsciiLowercased()`
+- `hostStrWithAsciiUppercased` → `builtins.str.strWithAsciiUppercased()`
+- `hostStrReleaseExcessCapacity` → `builtins.str.strReleaseExcessCapacity()`
+- `hostStrDropPrefix` → `builtins.str.strDropPrefix()`
+- `hostStrDropSuffix` → `builtins.str.strDropSuffix()`
+- `hostStrConcat` → `builtins.str.strConcat()`
+- `hostStrRepeat` → `builtins.str.repeatC()`
+- `hostStrReserve` → `builtins.str.reserve()`
+- `hostStrWithCapacity` → `builtins.str.withCapacityC()`
+- `hostStrCaselessAsciiEquals` → `builtins.str.strCaselessAsciiEquals()`
+- `hostStrSplit` → `builtins.str.strSplitOn()`
+- `hostStrJoinWith` → `builtins.str.strJoinWith()`
+- `hostStrWithPrefix` → `builtins.str.strConcat()` (prefix, str)
+
+**Parsing (already delegating):**
+- `hostIntFromStr` → `builtins.num.parseIntFromStr()`
+- `hostDecFromStr` → `builtins.dec.fromStr()`
+- `hostFloatFromStr` → `builtins.num.parseFloatFromStr()`
+
+### TODO: Not yet delegating (potential divergence risk)
+
+These host functions implement logic directly instead of calling builtins.
+They may diverge from the dev/interpreter backends if the builtin logic changes.
+
+**List operations** — require CopyFallbackFn/CompareFn callbacks that bridge
+wasm↔native, and listSortWith calls back into wasm for comparisons:
+- `hostListEq` — byte-wise comparison (simple, low risk)
+- `hostListStrEq` — element-by-element string comparison
+- `hostListListEq` — nested list comparison
+- `hostListAppendUnsafe` — raw byte copy (simple, low risk)
+- `hostListSortWith` — insertion sort with wasm callback (complex)
+- `hostListReverse` — element reversal (no builtin exists)
+
+**String operations:**
+- `hostStrFromUtf8` — UTF-8 validation with error reporting. Already uses
+  `builtins.str.numberOfNextCodepointBytes()` for error detection. The main
+  validation path uses `std.unicode.utf8ValidateSlice()` which should match.
+
+**Primitive operations** (no builtin wrapper needed):
+- `hostI32ModBy` — `@mod(i32, i32)`
+- `hostI64ModBy` — `@mod(i64, i64)`
+
+### Host-specific (must stay as imports)
+
+These bridge to the host environment and cannot be replaced by builtins:
+- `hostRocAlloc`, `hostRocDealloc`, `hostRocRealloc`
+- `hostRocDbg`, `hostRocExpectFailed`, `hostRocCrashed`
