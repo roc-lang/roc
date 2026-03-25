@@ -68,7 +68,7 @@ There are two test paths that exercise the interpreter:
 
 ---
 
-## Monomorphization: wrong dispatch for numeric ops in specialized functions — FIXED (guarded)
+## Monomorphization: wrong dispatch for numeric ops in specialized functions — FIXED (root cause)
 
 ### Summary
 
@@ -77,35 +77,24 @@ U64, the binop dispatch for `minus` was selecting the **Dec-specific** template
 instead of the U64 one. This caused numeric literals to get Dec monotype
 (value × 10^18), producing infinite recursion / wrong results.
 
-### Fix applied (Monomorphize.zig)
+### Root cause fix applied (Check.zig)
 
-Added a guard in `resolveAssociatedMethodProcInstForTypeVar` and
-`resolveAssociatedMethodDispatchTargetForTypeVar`: when `active_bindings` are
-set and the receiver has a concrete monotype, verify the template's first param
-matches. If not, return null to fall through to the monotype-based dispatch path.
+The root cause was `finalizeNumericDefaults` in `src/check/Check.zig` permanently
+unifying generalized (polymorphic) `from_numeral` flex type variables with Dec.
+This corrupted the polymorphic template so the monomorphizer couldn't create
+non-Dec specializations.
 
-### Outstanding upstream issue: CIR type var premature defaulting
+**Fix**: Renamed `finalizeNumericDefaults` → `verifyNumericDefaults`. Instead of
+persistently unifying from_numeral flex vars with Dec, it now creates a **copy**
+of each flex var, unifies the copy with Dec (for constraint validation/error
+reporting), and leaves the original polymorphic. The actual defaulting to Dec
+happens during CIR → MIR lowering via `Monotype.zig:fromTypeVar` which already
+had a `hasNumeralConstraint()` fallback to Dec.
 
-The guard is necessary because the **CIR types store** has the parameter's type
-var already resolved to a `nominal_type` structure for Dec — before
-monomorphization even runs. Confirmed via debug:
-
-```
-CIR var 14 -> root 217 content=structure (nominal_type)
-template_param = dec, receiver_binding = u64
-```
-
-This means the type checker (or a post-type-checking pass) defaults the
-Num-constrained type var to Dec's nominal type in the types store, rather than
-leaving it as a flex var for monomorphization to specialize. The guard works
-around this, but ideally the CIR should preserve the polymorphic flex var so
-`resolveNominalTypeInStore` returns null for unspecialized type vars, and the
-monotype-based dispatch path handles it naturally.
-
-**Where to investigate**: Look at `src/check/Check.zig` for where numeral
-defaults are applied to CIR type vars — specifically whether Roc app module
-definitions are not generalized (kept monomorphic with Dec default) vs
-generalized (kept as flex vars).
+An earlier monomorphizer-side workaround (guards in
+`resolveAssociatedMethodProcInstForTypeVar` and
+`resolveAssociatedMethodDispatchTargetForTypeVar`) was removed since the root
+cause is now fixed.
 
 ### Tests fixed
 
@@ -246,21 +235,7 @@ backends (interpreter, dev, wasm, llvm). Current: **69 skipped** (was 108).
 **Workflow**: Fix one category at a time. After fixing, unskip the tests, run them
 to verify, commit, then **remove the resolved section from this document**.
 
-### RESOLVED (66 tests unskipped)
-
-- [x] Narrowing/wrapping conversions (8 tests) — fixed: wrong method names (`to_u8` → `to_u8_wrap`)
-- [x] Signed-to-unsigned conversions (3 tests) — fixed: wrong method names (`to_u64` → `to_u64_wrap`)
-- [x] Float-to-int conversions (12 tests) — fixed: builtin_compiler ident mismatch (`_trunc` → `_wrap`)
-- [x] Dec-to-int conversions (10 tests) — fixed: same builtin_compiler mismatch + wasm i128 div bug
-- [x] F64→F32, Dec→F32 (2 tests) — fixed: method name + builtin_compiler mismatch
-- [x] U128 subtraction (1 test) — was already working, just needed unskipping
-- [x] List of typed ints (2 tests) — fixed: `.to_i64()` → `.to_i64_wrap()`
-- [x] U8/U16 large-value arithmetic (30 tests) — fixed: monomorphization dispatch resolution
-  selecting Dec template instead of the specialization's concrete type template
-
----
-
-### REMAINING: Known compiler bugs (3 tests)
+### Known compiler bugs (3 tests)
 
 These are upstream compiler/specialization bugs, not interpreter-specific:
 - `early return: ? in closure passed to List.fold`
@@ -269,23 +244,13 @@ These are upstream compiler/specialization bugs, not interpreter-specific:
 
 ---
 
-### REMAINING: Other skips (not SKIP_ALL)
+### Other skips (not SKIP_ALL)
 
 - 31 dev-only tests (skip interpreter/wasm by design)
 - 3 match regressions (skip wasm + llvm)
 - 2 Str.contains (skip wasm)
 - 2 abs (skip dev)
 - 1 U64→I8 wrapping (skip wasm — wasm returns unsigned 200 instead of signed -56)
-
----
-
-## Defense-in-depth: `lowerDec` in MirToLir.zig
-
-The `lowerDec` function at `MirToLir.zig:2736` converts Dec literals to the
-correct integer/float type when the target monotype is non-Dec. With the
-monomorphization dispatch fix in place, this should rarely be needed — but it
-provides defense-in-depth against any remaining edge cases where a Dec literal
-reaches lowering with a non-Dec target layout.
 
 ---
 

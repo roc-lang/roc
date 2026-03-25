@@ -2575,7 +2575,7 @@ fn lowerExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirExprId {
         .int => |i| self.lowerInt(i, mono_idx, region),
         .frac_f32 => |v| self.lir_store.addExpr(.{ .f32_literal = v }, region),
         .frac_f64 => |v| self.lir_store.addExpr(.{ .f64_literal = v }, region),
-        .dec => |v| self.lowerDec(v, mono_idx, region),
+        .dec => |v| self.lir_store.addExpr(.{ .dec_literal = v.num }, region),
         .str => |s| blk: {
             const lir_str_idx = try self.copyStringToLir(s);
             break :blk self.lir_store.addExpr(.{ .str_literal = lir_str_idx }, region);
@@ -2728,46 +2728,6 @@ fn lowerInt(self: *Self, int_data: anytype, mono_idx: Monotype.Idx, region: Regi
             } }, region);
         },
     }
-}
-
-/// Lower a MIR Dec literal to LIR, consulting the monotype to determine the
-/// target representation. When the target type is an integer (e.g. U64), the
-/// Dec value (scaled by 10^18) is converted back to the integer value.
-fn lowerDec(self: *Self, v: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
-    const target_layout = try self.layoutFromMonotype(mono_idx);
-
-    // If the target is actually Dec, emit as-is.
-    if (target_layout == .dec) {
-        return self.lir_store.addExpr(.{ .dec_literal = v.num }, region);
-    }
-
-    // Dec stores values scaled by 10^18 (RocDec.one_point_zero_i128).
-    const one_point_zero: i128 = 1_000_000_000_000_000_000;
-
-    // If the target is a float type, convert Dec to float.
-    if (target_layout == .f64) {
-        const float_val: f64 = @as(f64, @floatFromInt(v.num)) / comptime @as(f64, @floatFromInt(one_point_zero));
-        return self.lir_store.addExpr(.{ .f64_literal = float_val }, region);
-    }
-    if (target_layout == .f32) {
-        const float_val: f32 = @as(f32, @floatFromInt(v.num)) / comptime @as(f32, @floatFromInt(one_point_zero));
-        return self.lir_store.addExpr(.{ .f32_literal = float_val }, region);
-    }
-
-    // For integer types, convert the Dec representation back to an integer value.
-    const int_val = @divTrunc(v.num, one_point_zero);
-
-    const needs_128 = target_layout == .i128 or target_layout == .u128;
-    if (!needs_128 and int_val >= std.math.minInt(i64) and int_val <= std.math.maxInt(i64)) {
-        return self.lir_store.addExpr(.{ .i64_literal = .{
-            .value = @intCast(int_val),
-            .layout_idx = target_layout,
-        } }, region);
-    }
-    return self.lir_store.addExpr(.{ .i128_literal = .{
-        .value = int_val,
-        .layout_idx = target_layout,
-    } }, region);
 }
 
 fn lowerList(self: *Self, list_data: anytype, mir_expr_id: MIR.ExprId, region: Region) Allocator.Error!LirExprId {

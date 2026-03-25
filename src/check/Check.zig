@@ -697,7 +697,7 @@ fn instantiateVarHelp(
             const fresh_resolved = self.types.resolveVar(fresh_var);
 
             // Track newly instantiated from_numeral flex vars so
-            // finalizeNumericDefaults knows about them.
+            // verifyNumericDefaults knows about them.
             if (fresh_resolved.desc.content == .flex) {
                 const flex = fresh_resolved.desc.content.flex;
                 if (flex.constraints.len() > 0) {
@@ -1306,14 +1306,14 @@ fn copyBuiltinTypes(self: *Self) !void {
 
 /// Check the types for all defs in a file.
 /// Set `skip_numeric_defaults` to true for app modules that have platform requirements -
-/// in that case, `finalizeNumericDefaults()` should be called AFTER `checkPlatformRequirements()`
+/// in that case, `verifyNumericDefaults()` should be called AFTER `checkPlatformRequirements()`
 /// so that numeric literals can be constrained by platform types first.
 pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     return self.checkFileInternal(false);
 }
 
 /// Check the types for all defs in a file, optionally skipping numeric defaults finalization.
-/// Use this for app modules with platform requirements, then call `finalizeNumericDefaults()`
+/// Use this for app modules with platform requirements, then call `verifyNumericDefaults()`
 /// after `checkPlatformRequirements()`.
 pub fn checkFileSkipNumericDefaults(self: *Self) std.mem.Allocator.Error!void {
     return self.checkFileInternal(true);
@@ -1438,7 +1438,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     // this should be called after checkPlatformRequirements() so platform types can
     // constrain numeric literals first)
     if (!skip_numeric_defaults) {
-        try self.finalizeNumericDefaultsInternal(&env);
+        try self.verifyNumericDefaultsInternal(&env);
 
         // After finalizing numeric defaults, resolve any remaining deferred
         // static dispatch constraints (e.g., Dec.plus, Dec.to_str).
@@ -1850,7 +1850,7 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     // Check any accumulated constraints
     try self.checkAllConstraints(&env);
     try self.resolveNumericLiteralsFromContext(&env);
-    try self.finalizeNumericDefaultsInternal(&env);
+    try self.verifyNumericDefaultsInternal(&env);
 
     // After finalizing numeric defaults, resolve any remaining deferred
     // static dispatch constraints (e.g., Dec.not for !3).
@@ -1918,13 +1918,13 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
     // Check any accumulated constraints
     try self.checkAllConstraints(&env);
     try self.resolveNumericLiteralsFromContext(&env);
-    try self.finalizeNumericDefaultsInternal(&env);
+    try self.verifyNumericDefaultsInternal(&env);
 
-    // After finalizing numeric defaults, resolve any remaining deferred
-    // static dispatch constraints. finalizeNumericDefaults unifies from_numeral
-    // flex vars with Dec, which may make deferred method_call constraints
-    // resolvable (e.g., Dec.to_str returns Str). Without this step, the
-    // return type of methods on defaulted numerics remains an unconstrained
+    // After verifying numeric defaults, resolve any remaining deferred
+    // static dispatch constraints. verifyNumericDefaults trial-unifies copies
+    // of from_numeral flex vars with Dec, which may generate deferred
+    // method_call constraints that need resolution (e.g., Dec.to_str returns
+    // Str). Without this step, the return type of methods on numerics remains an unconstrained
     // flex var, causing incorrect .zst layouts.
     if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
         try self.checkStaticDispatchConstraints(&env, true);
@@ -6313,23 +6313,28 @@ fn resolveNumericLiteralsFromContext(self: *Self, env: *Env) std.mem.Allocator.E
     try self.checkAllConstraints(env);
 }
 
-/// Default any remaining from_numeral flex vars to Dec.
+/// Verify that remaining from_numeral flex vars are compatible with Dec.
 ///
 /// By the time this runs, resolveNumericLiteralsFromContext has already
 /// unified from_numeral vars that had concrete peers in their binop
 /// constraints (e.g., U64 from List.len). The only vars still flex here
-/// are those with genuinely no numeric context, so Dec is correct.
+/// are those with genuinely no numeric context.
+///
+/// This function creates a COPY of each from_numeral flex var, unifies the
+/// copy with Dec (to validate constraints and report errors like `1.blah(2)`),
+/// but leaves the original flex var polymorphic. The actual defaulting to Dec
+/// happens later during CIR → MIR lowering (Monotype.zig `fromTypeVar`).
 ///
 /// For app modules with platform requirements, this should be called AFTER
 /// `checkPlatformRequirements()` so that platform types can constrain
 /// numeric literals first. Use `checkFileSkipNumericDefaults()` in that case.
-pub fn finalizeNumericDefaults(self: *Self) std.mem.Allocator.Error!void {
+pub fn verifyNumericDefaults(self: *Self) std.mem.Allocator.Error!void {
     var env = try self.env_pool.acquire();
     defer self.env_pool.release(env);
-    try self.finalizeNumericDefaultsInternal(&env);
+    try self.verifyNumericDefaultsInternal(&env);
 }
 
-fn finalizeNumericDefaultsInternal(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+fn verifyNumericDefaultsInternal(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     if (self.types.from_numeral_flex_count == 0) return;
 
     const num_vars: u32 = @intCast(self.types.len());
@@ -6350,8 +6355,13 @@ fn finalizeNumericDefaultsInternal(self: *Self, env: *Env) std.mem.Allocator.Err
         }
         if (!has_from_numeral) continue;
 
+        // Create a COPY of the flex var with the same constraints, then unify
+        // the copy with Dec. This validates that the constraints are compatible
+        // with Dec (for error reporting) without modifying the original var.
+        // The original stays polymorphic for monomorphization to specialize.
+        const copy_var = try self.freshFromContent(.{ .flex = flex }, env, Region.zero());
         const dec_var = try self.freshFromContent(try self.mkDecContent(env), env, Region.zero());
-        _ = try self.unify(resolved.var_, dec_var, env);
+        _ = try self.unify(copy_var, dec_var, env);
     }
 }
 

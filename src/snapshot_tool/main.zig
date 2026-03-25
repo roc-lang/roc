@@ -1234,7 +1234,7 @@ fn processSnapshotContent(
             // For app modules, numeric defaults were deferred by canonicalizeAndTypeCheckModule.
             // Since snapshot tests don't have platform requirements, finalize them here.
             if (can_ir.defer_numeric_defaults) {
-                try checker.finalizeNumericDefaults();
+                try checker.verifyNumericDefaults();
             }
             break :blk checker;
         },
@@ -1261,7 +1261,7 @@ fn processSnapshotContent(
             if (can_ir.defer_numeric_defaults) {
                 try checker.checkFileSkipNumericDefaults();
                 // Finalize numeric defaults now since there's no platform requirements check
-                try checker.finalizeNumericDefaults();
+                try checker.verifyNumericDefaults();
             } else {
                 try checker.checkFile();
             }
@@ -3040,7 +3040,7 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
             return false;
         };
         // Finalize numeric defaults now since there's no platform requirements check
-        checker.finalizeNumericDefaults() catch |err| {
+        checker.verifyNumericDefaults() catch |err| {
             std.log.err("MONO VALIDATION ERROR in {s}: Numeric defaults finalization failed: {}", .{ source_path, err });
             return false;
         };
