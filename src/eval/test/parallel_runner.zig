@@ -56,12 +56,19 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const coverage_options = @import("coverage_options");
 const base = @import("base");
 const parse = @import("parse");
 const can = @import("can");
 const check = @import("check");
 const compiled_builtins = @import("compiled_builtins");
 const eval_mod = @import("eval");
+
+/// When true (set via `zig build coverage-eval`), the runner:
+/// - Only builds/runs the interpreter backend (dev/wasm are DCE'd)
+/// - Runs eval in-process (no fork) so kcov can trace it
+/// - Forces single-threaded execution
+const coverage_mode: bool = coverage_options.coverage;
 
 const Can = can.Can;
 const Check = check.Check;
@@ -295,9 +302,9 @@ fn forkAndEval(
     expr_idx: CIR.Expr.Idx,
     builtin_env: *const ModuleEnv,
 ) ForkResult {
-    if (comptime !has_fork) {
-        // On Windows, fall back to in-process eval (no fork available).
-        // This path is not expected in production (tests run on Linux/macOS).
+    if (comptime !has_fork or coverage_mode) {
+        // In-process eval: used on Windows (no fork) and in coverage mode
+        // (kcov can't trace forked children, so we must run in the parent).
         const result = eval_fn(std.heap.page_allocator, module_env, expr_idx, builtin_env) catch {
             return .{ .child_error = {} };
         };
@@ -624,7 +631,12 @@ fn runValueTest(allocator: std.mem.Allocator, src: []const u8, expected: TestCas
     // The formatted string (with type annotation) is used for display only.
     const raw_expected: ?[]const u8 = if (expected == .inspect_str) expected.inspect_str else null;
     const display_expected: ?[]const u8 = expected.format(allocator);
-    const skips = [NUM_BACKENDS]bool{ skip.interpreter, skip.dev, skip.wasm, true }; // llvm always not_implemented for now
+    // In coverage mode, only run the interpreter — dev/wasm are DCE'd at comptime
+    // and never built, giving faster compilation and cleaner kcov output.
+    const skips = if (comptime coverage_mode)
+        [NUM_BACKENDS]bool{ skip.interpreter, true, true, true }
+    else
+        [NUM_BACKENDS]bool{ skip.interpreter, skip.dev, skip.wasm, true }; // llvm always not_implemented for now
 
     const eval_fns = [NUM_BACKENDS]BackendEvalFn{
         helpers.lirInterpreterInspectedStr,
@@ -816,7 +828,6 @@ const CliArgs = struct {
     filter: ?[]const u8 = null,
     threads: usize = 0,
     verbose: bool = false,
-    coverage: bool = false,
     /// Per-test hang timeout in milliseconds (0 = use default of 10s, only in multi-threaded mode).
     timeout_ms: u64 = 0,
 };
@@ -836,8 +847,6 @@ fn parseCliArgs(args: []const []const u8) CliArgs {
             result.threads = std.fmt.parseInt(usize, args[i], 10) catch 0;
         } else if (std.mem.eql(u8, args[i], "--verbose")) {
             result.verbose = true;
-        } else if (std.mem.eql(u8, args[i], "--coverage")) {
-            result.coverage = true;
         } else if (std.mem.eql(u8, args[i], "--timeout") and i + 1 < args.len) {
             i += 1;
             result.timeout_ms = std.fmt.parseInt(u64, args[i], 10) catch 0;
@@ -867,8 +876,13 @@ fn printHelp() void {
         \\  --filter <PATTERN>    Run only tests whose name or source contains PATTERN.
         \\  --threads <N>         Max worker threads (default: number of CPU cores).
         \\  --verbose             Print PASS and SKIP results (default: only FAIL/CRASH).
-        \\  --coverage            Coverage mode: single-threaded. Use with kcov.
         \\  --timeout <MS>        Per-test hang timeout in ms (default: 10000). Multi-thread only.
+        \\
+        \\COVERAGE:
+        \\  Use `zig build coverage-eval` to build with coverage instrumentation.
+        \\  This compiles with -Dcoverage=true, which at comptime: skips dev/wasm
+        \\  backends (DCE), disables fork isolation, and forces single-threaded.
+        \\  See CONTRIBUTING/eval_coverage.md for details.
         \\
         \\TIMING:
         \\  Every test is instrumented with per-phase monotonic timing (std.time.Timer):
@@ -1241,10 +1255,47 @@ pub fn main() !void {
         return;
     }
 
+    // Coverage mode: simple single-threaded loop, no fork, no watchdog, no threads.
+    // Just run each test with the interpreter and print progress to stdout.
+    if (comptime coverage_mode) {
+        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer arena.deinit();
+
+        var passed: usize = 0;
+        var failed: usize = 0;
+        var skipped: usize = 0;
+        var wall_timer = Timer.start() catch unreachable;
+
+        for (tests, 0..) |tc, i| {
+            _ = arena.reset(.retain_capacity);
+
+            const outcome = runSingleTest(arena.allocator(), tc);
+
+            switch (outcome.status) {
+                .pass => passed += 1,
+                .skip => skipped += 1,
+                else => {
+                    failed += 1;
+                    std.debug.print("  FAIL  {s}", .{tc.name});
+                    if (outcome.message) |msg| std.debug.print(": {s}", .{msg});
+                    std.debug.print("\n", .{});
+                },
+            }
+
+            // Overwrite progress line in-place.
+            std.debug.print("\r  [{d}/{d}]", .{ i + 1, tests.len });
+        }
+        std.debug.print("\n", .{});
+
+        const wall_ms = @as(f64, @floatFromInt(wall_timer.read())) / 1_000_000.0;
+        std.debug.print("\n{d} passed, {d} failed, {d} skipped ({d} total) in {d:.0}ms\n", .{
+            passed, failed, skipped, tests.len, wall_ms,
+        });
+        return;
+    }
+
     const cpu_count = std.Thread.getCpuCount() catch 1;
-    const thread_count: usize = if (cli.coverage)
-        1
-    else if (cli.threads > 0)
+    const thread_count: usize = if (cli.threads > 0)
         @min(cli.threads, cpu_count)
     else
         @min(cpu_count, tests.len);
@@ -1386,10 +1437,7 @@ pub fn main() !void {
         if (r.expected_str) |es| gpa.free(es);
     }
 
-    // Performance summary (skip in coverage mode — kcov instrumentation skews timings)
-    if (cli.coverage) {
-        std.debug.print("\n  (timings omitted — coverage mode; kcov instrumentation affects measurements)\n", .{});
-    } else if (tests.len > 0) {
+    if (tests.len > 0) {
         printPerformanceSummary(gpa, tests, results) catch {};
     }
 

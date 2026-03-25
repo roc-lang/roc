@@ -2579,6 +2579,11 @@ pub fn build(b: *std.Build) void {
     });
     configureBackend(eval_test_exe, target);
     roc_modules.addAll(eval_test_exe);
+    eval_test_exe.root_module.addOptions("coverage_options", blk: {
+        const opts = b.addOptions();
+        opts.addOption(bool, "coverage", false);
+        break :blk opts;
+    });
     eval_test_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
     eval_test_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
     eval_test_exe.step.dependOn(&write_compiled_builtins.step);
@@ -3059,17 +3064,56 @@ pub fn build(b: *std.Build) void {
             const summary_step = CoverageSummaryStep.create(b, "kcov-output/parser", "parse_unit_coverage");
             summary_step.step.dependOn(&run_parse_coverage.step);
 
-            // Eval coverage uses the main eval-test-runner with --coverage flag
-            // (disables fork + forces single-threaded so kcov can trace it).
+            // Eval coverage: builds a separate binary with coverage=true (comptime),
+            // which DCEs dev/wasm backends, disables fork isolation, and forces
+            // single-threaded — so kcov can trace the interpreter in-process.
             // Run separately via: zig build coverage-eval
             {
                 const coverage_eval_step = b.step("coverage-eval", "Run eval tests with kcov code coverage");
 
-                const install_eval_runner = b.addInstallArtifact(eval_test_exe, .{});
+                // Build a coverage-specific binary with the coverage build option.
+                const eval_coverage_exe = b.addExecutable(.{
+                    .name = "eval-coverage-runner",
+                    .root_module = b.createModule(.{
+                        .root_source_file = b.path("src/eval/test/parallel_runner.zig"),
+                        .target = target,
+                        .optimize = optimize,
+                        .link_libc = true,
+                    }),
+                });
+                configureBackend(eval_coverage_exe, target);
+                roc_modules.addAll(eval_coverage_exe);
+                eval_coverage_exe.root_module.addOptions("coverage_options", blk: {
+                    const opts = b.addOptions();
+                    opts.addOption(bool, "coverage", true);
+                    break :blk opts;
+                });
+                eval_coverage_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
+                eval_coverage_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
+                eval_coverage_exe.step.dependOn(&write_compiled_builtins.step);
+                eval_coverage_exe.step.dependOn(&copy_builtins_bc.step);
+                try addLlvmSupportToStep(
+                    b,
+                    eval_coverage_exe,
+                    target,
+                    use_system_llvm,
+                    user_llvm_path,
+                    roc_modules,
+                    llvm_codegen_module,
+                    &copy_builtins_bc.step,
+                    zstd,
+                );
+                if (eval_coverage_exe.root_module.resolved_target.?.result.os.tag != .windows or
+                    eval_coverage_exe.root_module.resolved_target.?.result.abi != .msvc)
+                {
+                    eval_coverage_exe.root_module.link_libcpp = true;
+                }
+
+                const install_coverage_runner = b.addInstallArtifact(eval_coverage_exe, .{});
 
                 const mkdir_eval = b.addSystemCommand(&.{ "mkdir", "-p", "kcov-output/eval" });
                 mkdir_eval.setCwd(b.path("."));
-                mkdir_eval.step.dependOn(&install_eval_runner.step);
+                mkdir_eval.step.dependOn(&install_coverage_runner.step);
                 mkdir_eval.step.dependOn(&install_kcov.step);
 
                 if (target.result.os.tag == .macos) {
@@ -3087,15 +3131,14 @@ pub fn build(b: *std.Build) void {
                 run_eval_coverage.addArg("--include-pattern=/src/eval/");
                 run_eval_coverage.addArgs(&.{
                     "kcov-output/eval",
-                    "zig-out/bin/eval-test-runner",
-                    "--coverage",
+                    "zig-out/bin/eval-coverage-runner",
                 });
                 run_eval_coverage.setCwd(b.path("."));
                 run_eval_coverage.step.dependOn(&mkdir_eval.step);
-                run_eval_coverage.step.dependOn(&install_eval_runner.step);
+                run_eval_coverage.step.dependOn(&install_coverage_runner.step);
                 run_eval_coverage.step.dependOn(&install_kcov.step);
 
-                const eval_summary_step = CoverageSummaryStep.createWithOptions(b, "kcov-output/eval", "eval-test-runner", "EVAL", 0.0);
+                const eval_summary_step = CoverageSummaryStep.createWithOptions(b, "kcov-output/eval", "eval-coverage-runner", "EVAL", 0.0);
                 eval_summary_step.step.dependOn(&run_eval_coverage.step);
 
                 coverage_eval_step.dependOn(&eval_summary_step.step);
