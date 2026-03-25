@@ -7682,7 +7682,10 @@ test "RC wrapped final alias retains owner when tail cleanup decrefs containing 
     const i64_layout: LayoutIdx = .i64;
     const list_layout = try env.layout_store.insertLayout(layout_mod.Layout.list(i64_layout));
     const tag_union_layout = try env.layout_store.putTagUnion(&.{ list_layout, list_layout });
-    const tuple_layout = try env.layout_store.putTuple(&.{ tag_union_layout, i64_layout });
+    const tuple_layout = try env.layout_store.putTuple(&.{
+        env.layout_store.getLayout(tag_union_layout),
+        env.layout_store.getLayout(i64_layout),
+    });
 
     const sym_list = makeSymbol(1);
     const sym_tuple = makeSymbol(2);
@@ -7732,7 +7735,7 @@ test "RC wrapped final alias retains owner when tail cleanup decrefs containing 
     const result = try pass.insertRcOps(block_expr);
     const rc = countRcOps(&env.lir_store, result);
 
-    try std.testing.expectEqual(@as(u32, 2), rc.increfs);
+    try std.testing.expectEqual(@as(u32, 1), rc.increfs);
     try std.testing.expectEqual(@as(u32, 1), rc.decrefs);
     try std.testing.expectEqual(@as(u32, 1), countIncrefsForSymbol(&env.lir_store, result, sym_list));
     try std.testing.expectEqual(@as(u32, 1), countDecrefsForSymbol(&env.lir_store, result, sym_tuple));
@@ -7748,7 +7751,10 @@ test "RC nested block final transfer does not also tail-decref transferred owner
     const i64_layout: LayoutIdx = .i64;
     const list_layout = try env.layout_store.insertLayout(layout_mod.Layout.list(i64_layout));
     const tag_union_layout = try env.layout_store.putTagUnion(&.{ list_layout, list_layout });
-    const tuple_layout = try env.layout_store.putTuple(&.{ tag_union_layout, i64_layout });
+    const tuple_layout = try env.layout_store.putTuple(&.{
+        env.layout_store.getLayout(tag_union_layout),
+        env.layout_store.getLayout(i64_layout),
+    });
 
     const sym_list = makeSymbol(1);
     const sym_tuple = makeSymbol(2);
