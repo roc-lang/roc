@@ -1047,6 +1047,7 @@ pub const MonoLlvmCodeGen = struct {
             .match_stmt => |ms| {
                 // Pattern match statement (when in tail position of a proc)
                 // Similar to match_expr but each branch is a statement, not an expression.
+                const wip = self.wip orelse return error.CompilationFailed;
                 const scrutinee = try self.generateExpr(ms.value);
                 const branches = self.store.getCFMatchBranches(ms.branches);
                 std.debug.assert(branches.len != 0);
@@ -1056,42 +1057,49 @@ pub const MonoLlvmCodeGen = struct {
                     const is_last = (i == branches.len - 1);
 
                     switch (pattern) {
-                        .wildcard, .bind => {
-                            if (pattern == .bind) {
-                                const bind = pattern.bind;
-                                const symbol_key: u64 = @bitCast(bind.symbol);
-                                self.symbol_values.put(symbol_key, scrutinee) catch return error.OutOfMemory;
-                            }
+                        .wildcard => {
+                            var branch_scope = try self.beginScope();
+                            defer branch_scope.deinit();
                             try self.generateStmt(branch.body);
+                            try self.endScope(&branch_scope);
                             break;
                         },
-                        .int_literal => |int_pat| {
-                            const wip = self.wip orelse return error.CompilationFailed;
-                            const builder = self.builder orelse return error.CompilationFailed;
-                            const pat_type = layoutToLlvmType(int_pat.layout_idx);
-                            const pat_val = builder.intValue(pat_type, @as(u64, @truncate(@as(u128, @bitCast(int_pat.value))))) catch return error.OutOfMemory;
-                            const cmp_scrutinee = if (scrutinee.typeOfWip(wip) == pat_type)
-                                scrutinee
-                            else
-                                wip.conv(.unsigned, scrutinee, pat_type, "") catch return error.CompilationFailed;
-                            const cmp = wip.icmp(.eq, cmp_scrutinee, pat_val, "") catch return error.OutOfMemory;
+                        .bind => {
+                            const bind = pattern.bind;
+                            const symbol_key: u64 = @bitCast(bind.symbol);
+                            var branch_scope = try self.beginScope();
+                            defer branch_scope.deinit();
+                            self.symbol_values.put(symbol_key, scrutinee) catch return error.OutOfMemory;
+                            try self.generateStmt(branch.body);
+                            try self.endScope(&branch_scope);
+                            break;
+                        },
+                        .int_literal,
+                        .tag,
+                        .struct_,
+                        .list,
+                        .as_pattern,
+                        => {
+                            const cmp = try self.emitPatternMatchCondition(branch.pattern, scrutinee);
+                            const then_block = wip.block(1, "match_then") catch return error.OutOfMemory;
+                            const else_block = wip.block(1, if (is_last) "match_nomatch" else "match_else") catch return error.OutOfMemory;
+                            _ = wip.brCond(cmp, then_block, else_block, .none) catch return error.CompilationFailed;
 
+                            wip.cursor = .{ .block = then_block };
+                            var branch_scope = try self.beginScope();
+                            defer branch_scope.deinit();
+                            try self.bindPattern(branch.pattern, scrutinee);
+                            try self.generateStmt(branch.body);
+                            try self.endScope(&branch_scope);
+
+                            wip.cursor = .{ .block = else_block };
                             if (is_last) {
-                                try self.generateStmt(branch.body);
-                            } else {
-                                const then_block = wip.block(1, "match_then") catch return error.OutOfMemory;
-                                const else_block = wip.block(1, "match_else") catch return error.OutOfMemory;
-                                _ = wip.brCond(cmp, then_block, else_block, .none) catch return error.CompilationFailed;
-                                wip.cursor = .{ .block = then_block };
-                                try self.generateStmt(branch.body);
-                                wip.cursor = .{ .block = else_block };
+                                _ = wip.@"unreachable"() catch return error.CompilationFailed;
+                                const dead_block = wip.block(0, "after_match_nomatch") catch return error.OutOfMemory;
+                                wip.cursor = .{ .block = dead_block };
                             }
                         },
-                        else => {
-                            // For other patterns, just generate the branch body (best effort)
-                            try self.generateStmt(branch.body);
-                            break;
-                        },
+                        .float_literal, .str_literal => unreachable,
                     }
                 }
             },
@@ -1783,6 +1791,121 @@ pub const MonoLlvmCodeGen = struct {
         };
     }
 
+    const TagPayloadInfo = struct {
+        root_ptr: LlvmBuilder.Value,
+        payload_layout: layout.Idx,
+    };
+
+    fn materializeTagValuePtr(self: *MonoLlvmCodeGen, value: LlvmBuilder.Value, union_layout_idx: layout.Idx, name: []const u8) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const ls = self.layout_store orelse return error.CompilationFailed;
+        const stored_layout = ls.getLayout(union_layout_idx);
+        const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+
+        return switch (stored_layout.tag) {
+            .tag_union => blk: {
+                if (value.typeOfWip(wip) == ptr_type) {
+                    break :blk value;
+                }
+
+                const alignment = LlvmBuilder.Alignment.fromByteUnits(
+                    @intCast(@max(ls.layoutSizeAlign(stored_layout).alignment.toByteUnits(), 1)),
+                );
+                const value_type = value.typeOfWip(wip);
+                const alloca_ptr = wip.alloca(.normal, value_type, .none, alignment, .default, name) catch return error.CompilationFailed;
+                _ = wip.store(.normal, value, alloca_ptr, alignment) catch return error.CompilationFailed;
+                break :blk alloca_ptr;
+            },
+            .box => blk: {
+                if (value.typeOfWip(wip) != ptr_type) return error.CompilationFailed;
+                break :blk value;
+            },
+            .scalar, .zst => return error.CompilationFailed,
+            .closure, .struct_, .list, .list_of_zst, .box_of_zst => return error.CompilationFailed,
+        };
+    }
+
+    fn loadTagDiscriminant(self: *MonoLlvmCodeGen, value: LlvmBuilder.Value, union_layout_idx: layout.Idx) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const ls = self.layout_store orelse return error.CompilationFailed;
+        const stored_layout = ls.getLayout(union_layout_idx);
+
+        return switch (stored_layout.tag) {
+            .scalar => blk: {
+                const val_type = value.typeOfWip(wip);
+                if (!isIntType(val_type)) return error.CompilationFailed;
+                break :blk value;
+            },
+            .zst => builder.intValue(.i8, 0) catch return error.OutOfMemory,
+            .tag_union => blk: {
+                const tu_data = ls.getTagUnionData(stored_layout.data.tag_union.idx);
+                const root_ptr = try self.materializeTagValuePtr(value, union_layout_idx, "tag_value");
+                const disc_type = discriminantIntType(tu_data.discriminant_size);
+                const disc_offset = builder.intValue(.i32, tu_data.discriminant_offset) catch return error.OutOfMemory;
+                const disc_ptr = wip.gep(.inbounds, .i8, root_ptr, &.{disc_offset}, "") catch return error.CompilationFailed;
+                break :blk wip.load(
+                    .normal,
+                    disc_type,
+                    disc_ptr,
+                    LlvmBuilder.Alignment.fromByteUnits(@as(u64, tu_data.discriminant_size)),
+                    "",
+                ) catch return error.CompilationFailed;
+            },
+            .box => blk: {
+                const inner_layout = ls.getLayout(stored_layout.data.box);
+                if (inner_layout.tag != .tag_union) return error.CompilationFailed;
+                const tu_data = ls.getTagUnionData(inner_layout.data.tag_union.idx);
+                const root_ptr = try self.materializeTagValuePtr(value, union_layout_idx, "boxed_tag_value");
+                const disc_type = discriminantIntType(tu_data.discriminant_size);
+                const disc_offset = builder.intValue(.i32, tu_data.discriminant_offset) catch return error.OutOfMemory;
+                const disc_ptr = wip.gep(.inbounds, .i8, root_ptr, &.{disc_offset}, "") catch return error.CompilationFailed;
+                break :blk wip.load(
+                    .normal,
+                    disc_type,
+                    disc_ptr,
+                    LlvmBuilder.Alignment.fromByteUnits(@as(u64, tu_data.discriminant_size)),
+                    "",
+                ) catch return error.CompilationFailed;
+            },
+            .closure, .struct_, .list, .list_of_zst, .box_of_zst => return error.CompilationFailed,
+        };
+    }
+
+    fn getTagPayloadInfo(self: *MonoLlvmCodeGen, value: LlvmBuilder.Value, union_layout_idx: layout.Idx, discriminant: usize) Error!TagPayloadInfo {
+        const ls = self.layout_store orelse return error.CompilationFailed;
+        const stored_layout = ls.getLayout(union_layout_idx);
+
+        return switch (stored_layout.tag) {
+            .tag_union => blk: {
+                const tu_data = ls.getTagUnionData(stored_layout.data.tag_union.idx);
+                const variants = ls.getTagUnionVariants(tu_data);
+                if (discriminant >= variants.len) return error.CompilationFailed;
+                break :blk .{
+                    .root_ptr = try self.materializeTagValuePtr(value, union_layout_idx, "tag_payload"),
+                    .payload_layout = variants.get(@intCast(discriminant)).payload_layout,
+                };
+            },
+            .box => blk: {
+                const inner_layout = ls.getLayout(stored_layout.data.box);
+                if (inner_layout.tag != .tag_union) return error.CompilationFailed;
+                const tu_data = ls.getTagUnionData(inner_layout.data.tag_union.idx);
+                const variants = ls.getTagUnionVariants(tu_data);
+                if (discriminant >= variants.len) return error.CompilationFailed;
+                break :blk .{
+                    .root_ptr = try self.materializeTagValuePtr(value, union_layout_idx, "boxed_tag_payload"),
+                    .payload_layout = variants.get(@intCast(discriminant)).payload_layout,
+                };
+            },
+            .scalar, .zst => .{
+                .root_ptr = value,
+                .payload_layout = .zst,
+            },
+            .closure, .struct_, .list, .list_of_zst, .box_of_zst => return error.CompilationFailed,
+        };
+    }
+
     /// Generate a zero-argument tag (just the discriminant value).
     fn generateZeroArgTag(self: *MonoLlvmCodeGen, zat: anytype) Error!LlvmBuilder.Value {
         const wip = self.wip orelse return error.CompilationFailed;
@@ -1989,7 +2112,6 @@ pub const MonoLlvmCodeGen = struct {
     fn generateDiscriminantSwitch(self: *MonoLlvmCodeGen, ds: anytype) Error!LlvmBuilder.Value {
         const wip = self.wip orelse return error.CompilationFailed;
         const builder = self.builder orelse return error.CompilationFailed;
-        const ls = self.layout_store orelse return error.CompilationFailed;
 
         // Generate the value to switch on
         const value = try self.generateExpr(ds.value);
@@ -1998,27 +2120,7 @@ pub const MonoLlvmCodeGen = struct {
         const branch_exprs = self.store.getExprSpan(ds.branches);
         std.debug.assert(branch_exprs.len != 0);
 
-        // Extract discriminant based on layout type
-        const stored_layout = ls.getLayout(ds.union_layout);
-        const discriminant: LlvmBuilder.Value = switch (stored_layout.tag) {
-            .scalar => blk: {
-                // Scalar tag union — value IS the discriminant (just an integer)
-                // May need truncation from i64 to the actual discriminant type
-                const val_type = value.typeOfWip(wip);
-                if (val_type == .i8 or val_type == .i1) break :blk value;
-                // Truncate to i8 for comparison
-                break :blk wip.cast(.trunc, value, .i8, "") catch return error.CompilationFailed;
-            },
-            .tag_union => blk: {
-                // Tag union — load discriminant from pointer
-                const tu_data = ls.getTagUnionData(stored_layout.data.tag_union.idx);
-                const disc_type = discriminantIntType(tu_data.discriminant_size);
-                const disc_offset = tu_data.discriminant_offset;
-                const disc_ptr = wip.gep(.inbounds, .i8, value, &.{builder.intValue(.i32, disc_offset) catch return error.OutOfMemory}, "") catch return error.OutOfMemory;
-                break :blk wip.load(.normal, disc_type, disc_ptr, LlvmBuilder.Alignment.fromByteUnits(@as(u64, tu_data.discriminant_size)), "") catch return error.OutOfMemory;
-            },
-            .closure, .struct_, .list, .list_of_zst, .box, .box_of_zst, .zst => unreachable,
-        };
+        const discriminant = try self.loadTagDiscriminant(value, ds.union_layout);
 
         // Create basic blocks for each branch and the merge block
         const merge_block = wip.block(@intCast(branch_exprs.len), "ds_merge") catch return error.OutOfMemory;
@@ -2322,6 +2424,163 @@ pub const MonoLlvmCodeGen = struct {
 
     // Pattern matching
 
+    fn patternAlwaysMatches(self: *MonoLlvmCodeGen, pattern_id: LirPatternId) bool {
+        const pattern = self.store.getPattern(pattern_id);
+        return switch (pattern) {
+            .wildcard, .bind => true,
+            .as_pattern => |as_pat| blk: {
+                if (as_pat.inner.isNone()) {
+                    break :blk true;
+                }
+                break :blk self.patternAlwaysMatches(as_pat.inner);
+            },
+            .int_literal,
+            .tag,
+            .struct_,
+            .list,
+            .float_literal,
+            .str_literal,
+            => false,
+        };
+    }
+
+    fn emitPatternMatchCondition(self: *MonoLlvmCodeGen, pattern_id: LirPatternId, value: LlvmBuilder.Value) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const ls = self.layout_store orelse return error.CompilationFailed;
+        const pattern = self.store.getPattern(pattern_id);
+
+        return switch (pattern) {
+            .wildcard, .bind => builder.intValue(.i1, 1) catch return error.OutOfMemory,
+            .as_pattern => |as_pat| blk: {
+                if (as_pat.inner.isNone()) {
+                    break :blk builder.intValue(.i1, 1) catch return error.OutOfMemory;
+                }
+                break :blk try self.emitPatternMatchCondition(as_pat.inner, value);
+            },
+            .int_literal => |int_pat| blk: {
+                const pat_type = layoutToLlvmType(int_pat.layout_idx);
+                const pat_val = builder.intValue(pat_type, @as(u64, @truncate(@as(u128, @bitCast(int_pat.value))))) catch return error.OutOfMemory;
+                const cmp_value = if (value.typeOfWip(wip) == pat_type)
+                    value
+                else
+                    wip.conv(.unsigned, value, pat_type, "") catch return error.CompilationFailed;
+                break :blk wip.icmp(.eq, cmp_value, pat_val, "") catch return error.OutOfMemory;
+            },
+            .struct_ => |struct_pat| blk: {
+                if (value == .none or !value.typeOfWip(wip).isStruct(builder)) return error.CompilationFailed;
+                var result = builder.intValue(.i1, 1) catch return error.OutOfMemory;
+                const fields = self.store.getPatternSpan(struct_pat.fields);
+                for (fields, 0..) |field_pat_id, idx| {
+                    const field_val = wip.extractValue(value, &.{@intCast(idx)}, "") catch return error.CompilationFailed;
+                    const field_match = try self.emitPatternMatchCondition(field_pat_id, field_val);
+                    result = wip.bin(.@"and", result, field_match, "") catch return error.CompilationFailed;
+                }
+                break :blk result;
+            },
+            .tag => |tag_pat| blk: {
+                const discriminant = try self.loadTagDiscriminant(value, tag_pat.union_layout);
+                const disc_type = discriminant.typeOfWip(wip);
+                const pat_disc = builder.intValue(disc_type, @as(u64, tag_pat.discriminant)) catch return error.OutOfMemory;
+                var result = wip.icmp(.eq, discriminant, pat_disc, "") catch return error.OutOfMemory;
+
+                const args = self.store.getPatternSpan(tag_pat.args);
+                if (args.len == 0) break :blk result;
+
+                const payload_info = try self.getTagPayloadInfo(value, tag_pat.union_layout, tag_pat.discriminant);
+                if (payload_info.payload_layout == .zst) break :blk result;
+
+                if (args.len == 1) {
+                    const pattern_layout = self.getPatternLayoutIdx(args[0]);
+                    var value_ptr = payload_info.root_ptr;
+                    var value_layout_idx = payload_info.payload_layout;
+
+                    while (pattern_layout != null and value_layout_idx != pattern_layout.?) {
+                        const current_layout = ls.getLayout(value_layout_idx);
+                        if (current_layout.tag != .struct_) break;
+
+                        const struct_data = ls.getStructData(current_layout.data.struct_.idx);
+                        if (struct_data.getFields().count != 1) break;
+
+                        const offset = ls.getStructFieldOffsetByOriginalIndex(current_layout.data.struct_.idx, 0);
+                        const offset_val = builder.intValue(.i32, offset) catch return error.OutOfMemory;
+                        value_ptr = wip.gep(.inbounds, .i8, value_ptr, &.{offset_val}, "") catch return error.CompilationFailed;
+                        value_layout_idx = ls.getStructFieldLayoutByOriginalIndex(current_layout.data.struct_.idx, 0);
+                    }
+
+                    const payload_value = try self.loadValueFromPtr(value_ptr, value_layout_idx);
+                    const payload_match = try self.emitPatternMatchCondition(args[0], payload_value);
+                    result = wip.bin(.@"and", result, payload_match, "") catch return error.CompilationFailed;
+                    break :blk result;
+                }
+
+                const payload_layout = ls.getLayout(payload_info.payload_layout);
+                if (payload_layout.tag != .struct_) return error.CompilationFailed;
+
+                for (args, 0..) |arg_id, arg_i| {
+                    const field_layout = ls.getStructFieldLayoutByOriginalIndex(payload_layout.data.struct_.idx, @intCast(arg_i));
+                    const offset = ls.getStructFieldOffsetByOriginalIndex(payload_layout.data.struct_.idx, @intCast(arg_i));
+                    const offset_val = builder.intValue(.i32, offset) catch return error.OutOfMemory;
+                    const field_ptr = wip.gep(.inbounds, .i8, payload_info.root_ptr, &.{offset_val}, "") catch return error.CompilationFailed;
+                    const field_value = try self.loadValueFromPtr(field_ptr, field_layout);
+                    const field_match = try self.emitPatternMatchCondition(arg_id, field_value);
+                    result = wip.bin(.@"and", result, field_match, "") catch return error.CompilationFailed;
+                }
+
+                break :blk result;
+            },
+            .list => |list_pat| blk: {
+                if (value == .none or !value.typeOfWip(wip).isStruct(builder)) return error.CompilationFailed;
+
+                const prefix_patterns = self.store.getPatternSpan(list_pat.prefix);
+                const suffix_patterns = self.store.getPatternSpan(list_pat.suffix);
+                const data_ptr = wip.extractValue(value, &.{0}, "") catch return error.CompilationFailed;
+                const list_len = wip.extractValue(value, &.{1}, "") catch return error.CompilationFailed;
+
+                const elem_layout_data = ls.getLayout(list_pat.elem_layout);
+                const elem_sa = ls.layoutSizeAlign(elem_layout_data);
+                const elem_size = builder.intValue(.i64, elem_sa.size) catch return error.OutOfMemory;
+
+                const min_len = builder.intValue(.i64, @as(u64, @intCast(prefix_patterns.len + suffix_patterns.len))) catch return error.OutOfMemory;
+                const len_pred: LlvmBuilder.IntegerCondition = if (list_pat.rest.isNone()) .eq else .uge;
+                var result = wip.icmp(len_pred, list_len, min_len, "") catch return error.OutOfMemory;
+
+                for (prefix_patterns, 0..) |sub_pat_id, idx| {
+                    const elem_index = builder.intValue(.i64, @as(u64, @intCast(idx))) catch return error.OutOfMemory;
+                    const byte_offset = wip.bin(.mul, elem_index, elem_size, "") catch return error.CompilationFailed;
+                    const elem_ptr = wip.gep(.inbounds, .i8, data_ptr, &.{byte_offset}, "") catch return error.CompilationFailed;
+                    const elem_val = try self.loadValueFromPtr(elem_ptr, list_pat.elem_layout);
+                    const elem_match = try self.emitPatternMatchCondition(sub_pat_id, elem_val);
+                    result = wip.bin(.@"and", result, elem_match, "") catch return error.CompilationFailed;
+                }
+
+                if (suffix_patterns.len > 0) {
+                    const suffix_count = builder.intValue(.i64, @as(u64, @intCast(suffix_patterns.len))) catch return error.OutOfMemory;
+                    const suffix_start = wip.bin(.sub, list_len, suffix_count, "") catch return error.CompilationFailed;
+                    for (suffix_patterns, 0..) |sub_pat_id, idx| {
+                        const suffix_idx = builder.intValue(.i64, @as(u64, @intCast(idx))) catch return error.OutOfMemory;
+                        const elem_index = wip.bin(.add, suffix_start, suffix_idx, "") catch return error.CompilationFailed;
+                        const byte_offset = wip.bin(.mul, elem_index, elem_size, "") catch return error.CompilationFailed;
+                        const elem_ptr = wip.gep(.inbounds, .i8, data_ptr, &.{byte_offset}, "") catch return error.CompilationFailed;
+                        const elem_val = try self.loadValueFromPtr(elem_ptr, list_pat.elem_layout);
+                        const elem_match = try self.emitPatternMatchCondition(sub_pat_id, elem_val);
+                        result = wip.bin(.@"and", result, elem_match, "") catch return error.CompilationFailed;
+                    }
+                }
+
+                if (!list_pat.rest.isNone()) {
+                    const prefix_len = builder.intValue(.i64, @as(u64, @intCast(prefix_patterns.len))) catch return error.OutOfMemory;
+                    const rest_val = try self.buildRestSublist(data_ptr, list_len, prefix_len, elem_sa.size);
+                    const rest_match = try self.emitPatternMatchCondition(list_pat.rest, rest_val);
+                    result = wip.bin(.@"and", result, rest_match, "") catch return error.CompilationFailed;
+                }
+
+                break :blk result;
+            },
+            .float_literal, .str_literal => unreachable,
+        };
+    }
+
     fn generateMatchExpr(self: *MonoLlvmCodeGen, w: anytype) Error!LlvmBuilder.Value {
         const saved_out_ptr = self.out_ptr;
         self.out_ptr = null;
@@ -2344,8 +2603,7 @@ pub const MonoLlvmCodeGen = struct {
         var merge_incoming: u32 = 0;
         for (branches) |branch| {
             merge_incoming += 1;
-            const pat = self.store.getPattern(branch.pattern);
-            if (pat == .wildcard or pat == .bind or pat == .struct_) break;
+            if (self.patternAlwaysMatches(branch.pattern)) break;
         }
 
         const merge_block = wip.block(merge_incoming, "when_merge") catch return error.OutOfMemory;
@@ -2388,159 +2646,18 @@ pub const MonoLlvmCodeGen = struct {
                     break; // No more branches after bind
                 },
 
-                .int_literal => |int_pat| {
-                    // Compare scrutinee with pattern value
-                    const pat_type = layoutToLlvmType(int_pat.layout_idx);
-                    const pat_val = builder.intValue(pat_type, @as(u64, @truncate(@as(u128, @bitCast(int_pat.value))))) catch return error.OutOfMemory;
-                    // Ensure scrutinee is the right type for comparison
-                    const cmp_scrutinee = if (scrutinee.typeOfWip(wip) == pat_type)
-                        scrutinee
-                    else
-                        wip.conv(.unsigned, scrutinee, pat_type, "") catch return error.CompilationFailed;
-                    const cmp = wip.icmp(.eq, cmp_scrutinee, pat_val, "") catch return error.OutOfMemory;
+                .int_literal,
+                .tag,
+                .list,
+                .struct_,
+                .as_pattern,
+                => {
+                    const cmp = try self.emitPatternMatchCondition(branch.pattern, scrutinee);
+                    const then_block = wip.block(1, "pat_match") catch return error.OutOfMemory;
+                    const else_block = wip.block(1, if (is_last) "pat_nomatch" else "pat_next") catch return error.OutOfMemory;
+                    _ = wip.brCond(cmp, then_block, else_block, .none) catch return error.OutOfMemory;
 
-                    if (is_last) {
-                        // Last branch — treat as default (skip comparison)
-                        var branch_scope = try self.beginScope();
-                        defer branch_scope.deinit();
-                        const body_val = try self.generateControlFlowValue(branch.body, w.result_layout);
-                        _ = wip.br(merge_block) catch return error.OutOfMemory;
-                        result_vals[branch_count] = body_val;
-                        result_blocks[branch_count] = wip.cursor.block;
-                        try self.endScope(&branch_scope);
-                        branch_count += 1;
-                    } else {
-                        const then_block = wip.block(1, "int_match") catch return error.OutOfMemory;
-                        const else_block = wip.block(1, "int_next") catch return error.OutOfMemory;
-                        _ = wip.brCond(cmp, then_block, else_block, .none) catch return error.OutOfMemory;
-
-                        // Then block — pattern matches
-                        wip.cursor = .{ .block = then_block };
-                        var branch_scope = try self.beginScope();
-                        defer branch_scope.deinit();
-                        const body_val = try self.generateControlFlowValue(branch.body, w.result_layout);
-                        _ = wip.br(merge_block) catch return error.OutOfMemory;
-                        result_vals[branch_count] = body_val;
-                        result_blocks[branch_count] = wip.cursor.block;
-                        try self.endScope(&branch_scope);
-                        branch_count += 1;
-
-                        // Else block — continue to next branch
-                        wip.cursor = .{ .block = else_block };
-                    }
-                },
-
-                .tag => |tag_pat| {
-                    // Extract discriminant and compare
-                    const ls = self.layout_store orelse return error.CompilationFailed;
-                    const stored_layout = ls.getLayout(tag_pat.union_layout);
-
-                    // For tag unions, GEP requires a pointer. If the scrutinee is a
-                    // struct value (not a pointer), materialize it to an alloca.
-                    const tag_scrutinee = if (stored_layout.tag == .tag_union) ts: {
-                        const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
-                        if (scrutinee.typeOfWip(wip) == ptr_type) {
-                            break :ts scrutinee;
-                        }
-                        const scrutinee_type = scrutinee.typeOfWip(wip);
-                        const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
-                        const alloca_ptr = wip.alloca(.normal, scrutinee_type, .none, alignment, .default, "tag_val") catch return error.CompilationFailed;
-                        _ = wip.store(.normal, scrutinee, alloca_ptr, alignment) catch return error.CompilationFailed;
-                        break :ts alloca_ptr;
-                    } else scrutinee;
-
-                    const discriminant = switch (stored_layout.tag) {
-                        .scalar => scrutinee, // Scalar tag — value IS the discriminant
-                        .tag_union => blk: {
-                            const tu_data = ls.getTagUnionData(stored_layout.data.tag_union.idx);
-                            const disc_type = discriminantIntType(tu_data.discriminant_size);
-                            const disc_offset_val = builder.intValue(.i32, tu_data.discriminant_offset) catch return error.OutOfMemory;
-                            const disc_ptr = wip.gep(.inbounds, .i8, tag_scrutinee, &.{disc_offset_val}, "") catch return error.CompilationFailed;
-                            break :blk wip.load(.normal, disc_type, disc_ptr, LlvmBuilder.Alignment.fromByteUnits(@as(u64, tu_data.discriminant_size)), "") catch return error.CompilationFailed;
-                        },
-                        .closure, .struct_, .list, .list_of_zst, .box, .box_of_zst, .zst => unreachable,
-                    };
-
-                    const disc_type = discriminant.typeOfWip(wip);
-                    const pat_disc = builder.intValue(disc_type, @as(u64, tag_pat.discriminant)) catch return error.OutOfMemory;
-                    const cmp = wip.icmp(.eq, discriminant, pat_disc, "") catch return error.OutOfMemory;
-
-                    if (is_last) {
-                        // Last branch — bind payload args if needed, generate body
-                        var branch_scope = try self.beginScope();
-                        defer branch_scope.deinit();
-                        try self.bindTagPayloadArgs(tag_pat, tag_scrutinee);
-                        const body_val = try self.generateControlFlowValue(branch.body, w.result_layout);
-                        _ = wip.br(merge_block) catch return error.OutOfMemory;
-                        result_vals[branch_count] = body_val;
-                        result_blocks[branch_count] = wip.cursor.block;
-                        try self.endScope(&branch_scope);
-                        branch_count += 1;
-                    } else {
-                        const then_block = wip.block(1, "tag_match") catch return error.OutOfMemory;
-                        const else_block = wip.block(1, "tag_next") catch return error.OutOfMemory;
-                        _ = wip.brCond(cmp, then_block, else_block, .none) catch return error.OutOfMemory;
-
-                        wip.cursor = .{ .block = then_block };
-                        var branch_scope = try self.beginScope();
-                        defer branch_scope.deinit();
-                        try self.bindTagPayloadArgs(tag_pat, tag_scrutinee);
-                        const body_val = try self.generateControlFlowValue(branch.body, w.result_layout);
-                        _ = wip.br(merge_block) catch return error.OutOfMemory;
-                        result_vals[branch_count] = body_val;
-                        result_blocks[branch_count] = wip.cursor.block;
-                        try self.endScope(&branch_scope);
-                        branch_count += 1;
-
-                        wip.cursor = .{ .block = else_block };
-                    }
-                },
-
-                .list => |list_pat| {
-                    // List pattern in when: check length matches, then bind elements
-                    // Guard: scrutinee must be a {ptr, i64, i64} struct
-                    std.debug.assert(scrutinee != .none and scrutinee.typeOfWip(wip).isStruct(builder));
-                    const prefix_patterns = self.store.getPatternSpan(list_pat.prefix);
-                    const expected_len_val = builder.intValue(.i64, @as(u64, @intCast(prefix_patterns.len))) catch return error.OutOfMemory;
-                    const actual_len = wip.extractValue(scrutinee, &.{1}, "") catch return error.CompilationFailed;
-                    // Use >= for list rest patterns (.. as rest), == for exact-length patterns
-                    const has_rest = !list_pat.rest.isNone();
-                    const cmp_pred: LlvmBuilder.IntegerCondition = if (has_rest) .uge else .eq;
-                    const cmp = wip.icmp(cmp_pred, actual_len, expected_len_val, "") catch return error.OutOfMemory;
-
-                    if (is_last) {
-                        // Last branch — bind elements, generate body
-                        var branch_scope = try self.beginScope();
-                        defer branch_scope.deinit();
-                        try self.bindPattern(branch.pattern, scrutinee);
-                        const body_val = try self.generateControlFlowValue(branch.body, w.result_layout);
-                        _ = wip.br(merge_block) catch return error.OutOfMemory;
-                        result_vals[branch_count] = body_val;
-                        result_blocks[branch_count] = wip.cursor.block;
-                        try self.endScope(&branch_scope);
-                        branch_count += 1;
-                    } else {
-                        const then_block = wip.block(1, "list_match") catch return error.OutOfMemory;
-                        const else_block = wip.block(1, "list_next") catch return error.OutOfMemory;
-                        _ = wip.brCond(cmp, then_block, else_block, .none) catch return error.OutOfMemory;
-
-                        wip.cursor = .{ .block = then_block };
-                        var branch_scope = try self.beginScope();
-                        defer branch_scope.deinit();
-                        try self.bindPattern(branch.pattern, scrutinee);
-                        const body_val = try self.generateControlFlowValue(branch.body, w.result_layout);
-                        _ = wip.br(merge_block) catch return error.OutOfMemory;
-                        result_vals[branch_count] = body_val;
-                        result_blocks[branch_count] = wip.cursor.block;
-                        try self.endScope(&branch_scope);
-                        branch_count += 1;
-
-                        wip.cursor = .{ .block = else_block };
-                    }
-                },
-
-                .struct_ => {
-                    // Struct pattern: always matches structurally, bind fields.
+                    wip.cursor = .{ .block = then_block };
                     var branch_scope = try self.beginScope();
                     defer branch_scope.deinit();
                     try self.bindPattern(branch.pattern, scrutinee);
@@ -2550,10 +2667,16 @@ pub const MonoLlvmCodeGen = struct {
                     result_blocks[branch_count] = wip.cursor.block;
                     try self.endScope(&branch_scope);
                     branch_count += 1;
-                    break;
+
+                    wip.cursor = .{ .block = else_block };
+                    if (is_last) {
+                        _ = wip.@"unreachable"() catch return error.CompilationFailed;
+                        const dead_block = wip.block(0, "after_nomatch") catch return error.OutOfMemory;
+                        wip.cursor = .{ .block = dead_block };
+                    }
                 },
 
-                .float_literal, .str_literal, .as_pattern => unreachable,
+                .float_literal, .str_literal => unreachable,
             }
         }
 
@@ -2619,22 +2742,13 @@ pub const MonoLlvmCodeGen = struct {
         const wip = self.wip orelse return error.CompilationFailed;
         const builder = self.builder orelse return error.CompilationFailed;
         const ls = self.layout_store orelse return error.CompilationFailed;
-
-        const stored_layout = ls.getLayout(tag_pat.union_layout);
-        if (stored_layout.tag != .tag_union) return;
-
-        const tu_data = ls.getTagUnionData(stored_layout.data.tag_union.idx);
-        const variants = ls.getTagUnionVariants(tu_data);
-        if (tag_pat.discriminant >= variants.len) return;
-        const variant = variants.get(tag_pat.discriminant);
-
-        // Get the payload layout to determine field offsets
-        const payload_layout = ls.getLayout(variant.payload_layout);
+        const payload_info = try self.getTagPayloadInfo(scrutinee, tag_pat.union_layout, tag_pat.discriminant);
+        const payload_layout = ls.getLayout(payload_info.payload_layout);
 
         if (args.len == 1) {
             const pattern_layout = self.getPatternLayoutIdx(args[0]);
-            var value_ptr = scrutinee;
-            var value_layout_idx = variant.payload_layout;
+            var value_ptr = payload_info.root_ptr;
+            var value_layout_idx = payload_info.payload_layout;
 
             while (pattern_layout != null and value_layout_idx != pattern_layout.?) {
                 const current_layout = ls.getLayout(value_layout_idx);
@@ -2660,7 +2774,7 @@ pub const MonoLlvmCodeGen = struct {
             const field_layout = ls.getStructFieldLayoutByOriginalIndex(payload_layout.data.struct_.idx, @intCast(arg_i));
             const offset = ls.getStructFieldOffsetByOriginalIndex(payload_layout.data.struct_.idx, @intCast(arg_i));
             const offset_val = builder.intValue(.i32, offset) catch return error.OutOfMemory;
-            const field_ptr = wip.gep(.inbounds, .i8, scrutinee, &.{offset_val}, "") catch return error.CompilationFailed;
+            const field_ptr = wip.gep(.inbounds, .i8, payload_info.root_ptr, &.{offset_val}, "") catch return error.CompilationFailed;
             const field_value = try self.loadValueFromPtr(field_ptr, field_layout);
             try self.bindPattern(arg_id, field_value);
         }
@@ -4657,8 +4771,10 @@ pub const MonoLlvmCodeGen = struct {
                 self.out_ptr = saved_out_ptr;
 
                 // If the value wasn't stored via out_ptr, store it now
-                const alignment = LlvmBuilder.Alignment.fromByteUnits(@max(elem_align, 1));
-                _ = wip.store(.normal, value, heap_ptr, alignment) catch return error.CompilationFailed;
+                if (value != .none) {
+                    const alignment = LlvmBuilder.Alignment.fromByteUnits(@max(elem_align, 1));
+                    _ = wip.store(.normal, value, heap_ptr, alignment) catch return error.CompilationFailed;
+                }
 
                 return heap_ptr;
             },
@@ -6097,7 +6213,7 @@ pub const MonoLlvmCodeGen = struct {
             .struct_ => |s| s.struct_layout,
             .list => |l| l.list_layout,
             .as_pattern => |a| a.layout_idx,
-            else => null,
+            .int_literal, .float_literal, .str_literal => null,
         };
     }
 
@@ -6137,17 +6253,20 @@ pub const MonoLlvmCodeGen = struct {
                     return wip.load(.normal, llvm_type, ptr, alignment, "") catch return error.CompilationFailed;
                 },
                 .tag_union => {
-                    // Tag unions are pointer-based in this backend — return
-                    // the raw pointer so the discriminant + payload are accessible.
-                    return ptr;
+                    const llvm_type = try self.layoutToStructFieldType(layout_idx);
+                    return wip.load(.normal, llvm_type, ptr, self.alignmentForLayout(layout_idx), "") catch return error.CompilationFailed;
                 },
-                else => {},
+                .box => {
+                    const llvm_type = try self.layoutToStructFieldType(layout_idx);
+                    return wip.load(.normal, llvm_type, ptr, self.alignmentForLayout(layout_idx), "") catch return error.CompilationFailed;
+                },
+                .scalar, .zst, .closure, .box_of_zst => {},
             }
         }
 
         // Scalar types
         const elem_type = layoutToLlvmType(layout_idx);
-        return wip.load(.normal, elem_type, ptr, .default, "") catch return error.CompilationFailed;
+        return wip.load(.normal, elem_type, ptr, self.alignmentForLayout(layout_idx), "") catch return error.CompilationFailed;
     }
 
     const ListElementInfo = struct {
@@ -6394,6 +6513,20 @@ pub const MonoLlvmCodeGen = struct {
                 }
             },
             .wildcard => {},
+            .as_pattern => |as_pat| {
+                const key: u64 = @bitCast(as_pat.symbol);
+                self.symbol_values.put(key, value) catch return error.OutOfMemory;
+
+                if (self.loop_var_allocas.get(key)) |lva| {
+                    const wip = self.wip orelse return error.CompilationFailed;
+                    const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+                    _ = wip.store(.normal, value, lva.alloca_ptr, alignment) catch return error.CompilationFailed;
+                }
+
+                if (!as_pat.inner.isNone()) {
+                    try self.bindPattern(as_pat.inner, value);
+                }
+            },
             .struct_ => |struct_pat| {
                 const wip = self.wip orelse return error.CompilationFailed;
                 const builder = self.builder orelse return error.CompilationFailed;
@@ -6439,7 +6572,10 @@ pub const MonoLlvmCodeGen = struct {
                     try self.bindPattern(list_pat.rest, rest_val);
                 }
             },
-            else => {},
+            .tag => |tag_pat| {
+                try self.bindTagPayloadArgs(tag_pat, value);
+            },
+            .int_literal, .float_literal, .str_literal => {},
         }
     }
 
@@ -6461,7 +6597,9 @@ pub const MonoLlvmCodeGen = struct {
                         try self.initializeCell(as_pat.symbol, as_pat.layout_idx, current_value);
                     }
                 }
-                try self.materializeMutablePatternCells(as_pat.inner);
+                if (!as_pat.inner.isNone()) {
+                    try self.materializeMutablePatternCells(as_pat.inner);
+                }
             },
             .struct_ => |struct_pat| {
                 for (self.store.getPatternSpan(struct_pat.fields)) |field_pat| {
@@ -6479,7 +6617,7 @@ pub const MonoLlvmCodeGen = struct {
                     try self.materializeMutablePatternCells(suffix_pat);
                 }
             },
-            else => {},
+            .wildcard, .int_literal, .float_literal, .str_literal, .tag => {},
         }
     }
 };
