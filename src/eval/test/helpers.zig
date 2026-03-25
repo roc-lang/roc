@@ -1119,14 +1119,21 @@ fn hostDecToStr(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]cons
 
 // ── String and List host functions ──
 //
-// TODO: These reimplement logic from src/builtins/str.zig and src/builtins/list.zig
-// because the builtin functions operate on native-width RocStr/RocList (with 64-bit
-// pointers on x86_64) while wasm linear memory uses 32-bit offsets. We cannot construct
-// a native RocStr from wasm memory without pointer width mismatch.
+// TODO: These reimplement logic from src/builtins/str.zig and src/builtins/list.zig.
+// We cannot delegate to the native (x86_64) builtins because:
+//
+// 1. RocStr/RocList use native-width pointers and usize fields. On x86_64 RocStr is
+//    24 bytes (8+8+8), but in wasm32 it's 12 bytes (4+4+4).
+//
+// 2. Small String Optimization (SSO) threshold depends on sizeof(RocStr):
+//    - Native x86_64: strings up to 23 chars are stored inline (in the 24-byte struct)
+//    - Wasm32: strings up to 11 chars are stored inline (in the 12-byte struct)
+//    Calling native builtins would produce SSO strings for 12-23 char strings that the
+//    wasm module expects as heap-allocated, corrupting memory layout.
 //
 // The proper fix is to link roc_builtins.o (compiled for wasm32) into the wasm module
-// via wasm-ld, so the builtins run inside wasm with matching pointer widths.
-// See TODO_RELOC_WASM_OBJ_BUILTIN.md for the full implementation plan.
+// via wasm-ld, so the builtins run inside wasm with matching pointer widths and SSO
+// thresholds. See TODO_RELOC_WASM_OBJ_BUILTIN.md for the full implementation plan.
 
 /// Host function for roc_str_eq: compares two RocStr structs for content equality.
 /// Signature: (i32 str_a_ptr, i32 str_b_ptr) -> i32 (0 or 1)
@@ -1330,48 +1337,39 @@ fn hostI64ModBy(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const byt
     results[0] = .{ .I64 = @mod(params[0].I64, params[1].I64) };
 }
 
-/// Host function for roc_dec_div: Dec (decimal) division
-/// Dec is i128 scaled by 10^18. Division: result = (lhs * 10^18) / rhs
+/// Host function for roc_dec_div: Dec (decimal) division via builtins.dec.RocDec.div
 /// Signature: (i32 lhs_ptr, i32 rhs_ptr, i32 result_ptr) -> void
 fn hostDecDiv(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
-    const mem = module.store.getMemory(0);
-    const buffer = mem.buffer();
+    const RocDec = builtins.dec.RocDec;
+    const buffer = module.store.getMemory(0).buffer();
 
     const lhs_ptr: usize = @intCast(params[0].I32);
     const rhs_ptr: usize = @intCast(params[1].I32);
     const result_ptr: usize = @intCast(params[2].I32);
 
-    const lhs = readI128FromMem(buffer, lhs_ptr);
-    const rhs = readI128FromMem(buffer, rhs_ptr);
-
-    // Dec division: multiply lhs by 10^18 first, then divide by rhs.
-    // Uses i256 intermediate to avoid overflow — matches RocDec.div logic.
-    const one_point_zero: i128 = builtins.dec.RocDec.one_point_zero_i128;
-    const lhs_scaled: i256 = @as(i256, lhs) * one_point_zero;
-    const result: i128 = @intCast(@divTrunc(lhs_scaled, rhs));
-
-    writeI128ToMem(buffer, result_ptr, result);
+    const lhs = RocDec{ .num = readI128FromMem(buffer, lhs_ptr) };
+    const rhs = RocDec{ .num = readI128FromMem(buffer, rhs_ptr) };
+    var wasm_env = WasmRocEnv{ .buffer = buffer };
+    var ops = wasm_env.getOps();
+    const result = lhs.div(rhs, &ops);
+    writeI128ToMem(buffer, result_ptr, result.num);
 }
 
-/// Host function for roc_dec_div_trunc: Dec (decimal) truncating division
-/// Result is the integer part of the quotient, scaled as Dec.
+/// Host function for roc_dec_div_trunc: Dec truncating division via builtins.dec
 /// Signature: (i32 lhs_ptr, i32 rhs_ptr, i32 result_ptr) -> void
 fn hostDecDivTrunc(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
-    const mem = module.store.getMemory(0);
-    const buffer = mem.buffer();
+    const RocDec = builtins.dec.RocDec;
+    const buffer = module.store.getMemory(0).buffer();
 
     const lhs_ptr: usize = @intCast(params[0].I32);
     const rhs_ptr: usize = @intCast(params[1].I32);
     const result_ptr: usize = @intCast(params[2].I32);
 
-    const lhs = readI128FromMem(buffer, lhs_ptr);
-    const rhs = readI128FromMem(buffer, rhs_ptr);
-
-    // Dec truncating division: divide first, then scale up by 10^18
-    const one_point_zero: i128 = builtins.dec.RocDec.one_point_zero_i128;
-    const quotient = i128h.divTrunc_i128(lhs, rhs);
-    const result = i128h.mul_i128(quotient, one_point_zero);
-
+    const lhs = RocDec{ .num = readI128FromMem(buffer, lhs_ptr) };
+    const rhs = RocDec{ .num = readI128FromMem(buffer, rhs_ptr) };
+    var wasm_env = WasmRocEnv{ .buffer = buffer };
+    var ops = wasm_env.getOps();
+    const result = builtins.dec.divTruncC(lhs, rhs, &ops);
     writeI128ToMem(buffer, result_ptr, result);
 }
 
@@ -1686,6 +1684,90 @@ fn hostListListEq(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
 
     results[0] = bytebox.Val{ .I32 = 1 };
 }
+
+// ── WasmRocOps: native RocOps that allocates in wasm linear memory ──
+//
+// This allows calling builtin functions (e.g. RocDec.div) that require a
+// RocOps for crash handling and memory allocation. Allocated memory goes
+// into the wasm buffer so results are visible to the wasm module.
+
+const RocOps = builtins.host_abi.RocOps;
+const RocAlloc = builtins.host_abi.RocAlloc;
+const RocDealloc = builtins.host_abi.RocDealloc;
+const RocRealloc = builtins.host_abi.RocRealloc;
+const RocDbg = builtins.host_abi.RocDbg;
+const RocExpectFailed = builtins.host_abi.RocExpectFailed;
+const RocCrashed = builtins.host_abi.RocCrashed;
+
+const WasmRocEnv = struct {
+    buffer: []u8,
+    allocation_count: usize = 0,
+    total_allocated: usize = 0,
+
+    fn getOps(self: *WasmRocEnv) RocOps {
+        return RocOps{
+            .env = @ptrCast(self),
+            .roc_alloc = &wasmRocAlloc,
+            .roc_dealloc = &wasmRocDealloc,
+            .roc_realloc = &wasmRocRealloc,
+            .roc_dbg = &wasmRocDbg,
+            .roc_expect_failed = &wasmRocExpectFailed,
+            .roc_crashed = &wasmRocCrashed,
+            .hosted_fns = .{ .count = 0, .fns = undefined },
+        };
+    }
+
+    fn wasmRocAlloc(roc_alloc: *RocAlloc, env_ptr: *anyopaque) callconv(.c) void {
+        const self: *WasmRocEnv = @ptrCast(@alignCast(env_ptr));
+        const alignment: u32 = @intCast(roc_alloc.alignment);
+        const length: u32 = @intCast(roc_alloc.length);
+        const wasm_ptr = allocWasmData(self.buffer, alignment, length);
+        self.allocation_count += 1;
+        self.total_allocated += roc_alloc.length;
+        roc_alloc.answer = @ptrCast(self.buffer.ptr + wasm_ptr);
+    }
+
+    fn wasmRocDealloc(_: *RocDealloc, _: *anyopaque) callconv(.c) void {
+        // Bump allocator — no-op for dealloc
+    }
+
+    fn wasmRocRealloc(roc_realloc: *RocRealloc, env_ptr: *anyopaque) callconv(.c) void {
+        const self: *WasmRocEnv = @ptrCast(@alignCast(env_ptr));
+        const alignment: u32 = @intCast(roc_realloc.alignment);
+        const new_length: u32 = @intCast(roc_realloc.new_length);
+        const old_ptr: [*]u8 = @ptrCast(@alignCast(roc_realloc.answer));
+
+        // Compute old wasm offset and old length from refcount header
+        const old_wasm_ptr: u32 = @intCast(@intFromPtr(old_ptr) - @intFromPtr(self.buffer.ptr));
+        const old_length: usize = if (old_wasm_ptr >= 8)
+            std.mem.readInt(u32, self.buffer[old_wasm_ptr - 8 ..][0..4], .little)
+        else
+            0;
+
+        // Allocate new block and copy old data
+        const new_wasm_ptr = allocWasmData(self.buffer, alignment, new_length);
+        const copy_len = @min(old_length, roc_realloc.new_length);
+        if (copy_len > 0) {
+            @memcpy(self.buffer[new_wasm_ptr..][0..copy_len], self.buffer[old_wasm_ptr..][0..copy_len]);
+        }
+
+        self.allocation_count += 1;
+        self.total_allocated += roc_realloc.new_length;
+        roc_realloc.answer = @ptrCast(self.buffer.ptr + new_wasm_ptr);
+    }
+
+    fn wasmRocDbg(roc_dbg: *const RocDbg, _: *anyopaque) callconv(.c) void {
+        std.debug.print("[wasm dbg] {s}\n", .{roc_dbg.utf8_bytes[0..roc_dbg.len]});
+    }
+
+    fn wasmRocExpectFailed(roc_expect: *const RocExpectFailed, _: *anyopaque) callconv(.c) void {
+        std.debug.print("[wasm expect failed] {s}\n", .{roc_expect.utf8_bytes[0..roc_expect.len]});
+    }
+
+    fn wasmRocCrashed(roc_crashed: *const RocCrashed, _: *anyopaque) callconv(.c) void {
+        std.debug.print("Roc crashed: {s}\n", .{roc_crashed.utf8_bytes[0..roc_crashed.len]});
+    }
+};
 
 /// Host-side heap pointer for wasm bump allocation (starts after stack at 65536).
 threadlocal var wasm_heap_ptr: u32 = 65536;
