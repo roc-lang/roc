@@ -137,12 +137,33 @@ The typical workflow:
    python3 CONTRIBUTING/eval_coverage.py --use-last-run --format lines --file interpreter --context 5
    ```
 
-3. **Write eval tests** that exercise the uncovered code paths. Eval tests live in snapshot files under `test/eval/`. Each test is a small Roc program that gets compiled and evaluated.
+3. **Write eval tests** that exercise the uncovered code paths. Eval tests are defined in `src/eval/test/eval_tests.zig` — each entry is a small Roc expression with an expected result:
+
+   ```zig
+   .{ .name = "str: hello", .source = "\"hello\"", .expected = .{ .str_val = "hello" } },
+   ```
+
+   Available expected types include `.dec_val`, `.bool_val`, `.str_val`, `.f32_val`, `.f64_val`, `.i64_val`, `.u8_val`, `.u64_val`, `.inspect_str` (Str.inspect output), and `.problem` (for compile errors).
 
 4. **Re-run coverage** to verify your new tests hit the target lines:
    ```bash
    python3 CONTRIBUTING/eval_coverage.py
    ```
+
+## Skipped Tests
+
+Tests can skip specific backends using the `skip` field:
+
+```zig
+// Skip interpreter and wasm — only runs on dev backend
+.{ .name = "dev only: U32 literal", .source = "15.U32",
+   .expected = .{ .inspect_str = "15" },
+   .skip = .{ .interpreter = true, .wasm = true } },
+```
+
+A test with *any* skip reports as **SKIP** rather than PASS, even if the non-skipped backends pass. This keeps partial backend coverage visible — the goal is every backend passing every test.
+
+In coverage mode, only the interpreter backend runs. Tests that skip the interpreter (e.g. `skip = .{ .interpreter = true }`) will always report as SKIP and won't contribute to interpreter coverage. The 110 skipped tests in a typical run are mostly dev-only tests that exercise features the interpreter doesn't support yet.
 
 ## How It Works
 
