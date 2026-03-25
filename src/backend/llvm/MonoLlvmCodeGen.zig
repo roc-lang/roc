@@ -2583,6 +2583,18 @@ pub const MonoLlvmCodeGen = struct {
             .struct_ => blk: {
                 const struct_data = ls.getStructData(payload_layout.data.struct_.idx);
                 const sorted_fields = ls.struct_fields.sliceRange(struct_data.getFields());
+
+                if (arg_exprs.len == 1) {
+                    const arg = try self.generateExprAsValue(arg_exprs[0]);
+                    if (arg.layout_idx != null and arg.layout_idx.? == payload_layout_idx) {
+                        break :blk try self.coerceValueToType(
+                            arg.value,
+                            try self.layoutToLlvmTypeFull(payload_layout_idx),
+                            arg.layout_idx,
+                        );
+                    }
+                }
+
                 if (sorted_fields.len != arg_exprs.len) return error.CompilationFailed;
 
                 var field_values_buf: [32]LlvmBuilder.Value = undefined;
@@ -5674,7 +5686,6 @@ pub const MonoLlvmCodeGen = struct {
 
     fn generateControlFlowValue(self: *MonoLlvmCodeGen, expr_id: LirExprId, result_layout: layout.Idx) Error!LlvmBuilder.Value {
         const builder = self.builder orelse return error.CompilationFailed;
-
         if (self.exprNeverReturns(expr_id)) {
             _ = try self.generateExpr(expr_id);
             return builder.poisonValue(try self.layoutToLlvmTypeFull(result_layout)) catch return error.OutOfMemory;
