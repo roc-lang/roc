@@ -4054,11 +4054,24 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     const target_arch = target.toCpuArch();
     const target_os = target.toOsTag();
     switch (target_arch) {
-        .x86_64, .aarch64, .wasm32 => {}, // Supported
+        .x86_64, .aarch64 => {}, // Supported
+        .wasm32 => {
+            // TODO: wasm32 builds require linking app code with roc_builtins.o via wasm-ld.
+            // The WasmCodeGen currently produces a final linked module with host function imports
+            // rather than a relocatable object with symbol references. To support `roc build`
+            // for wasm32, WasmCodeGen needs to emit relocatable .o files that wasm-ld can link
+            // with the builtins and platform host. See TODO_RELOC_WASM_OBJ_BUILTIN.md for the
+            // full implementation plan.
+            const stderr = ctx.io.stderr();
+            try stderr.print("Error: `roc build` for wasm32 is not yet supported.\n\n", .{});
+            try stderr.print("The wasm32 backend can currently only be used for evaluation (e.g. eval tests),\n", .{});
+            try stderr.print("not for producing standalone .wasm binaries.\n", .{});
+            return error.UnsupportedTarget;
+        },
         else => {
             const stderr = ctx.io.stderr();
             try stderr.print("Error: The dev backend does not support the '{s}' architecture.\n\n", .{@tagName(target_arch)});
-            try stderr.print("Supported architectures: x86_64, aarch64, wasm32\n", .{});
+            try stderr.print("Supported architectures: x86_64, aarch64\n", .{});
             return error.UnsupportedTarget;
         },
     }
