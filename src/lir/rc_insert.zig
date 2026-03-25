@@ -763,6 +763,205 @@ pub const RcInsertPass = struct {
         defer prelude.deinit(self.allocator);
 
         const rewritten = switch (self.store.getExpr(expr_id)) {
+            .i64_literal,
+            .i128_literal,
+            .f64_literal,
+            .f32_literal,
+            .dec_literal,
+            .str_literal,
+            .bool_literal,
+            .lookup,
+            .cell_load,
+            .empty_list,
+            .zero_arg_tag,
+            .break_expr,
+            .crash,
+            .runtime_error,
+            => expr_id,
+            .list => |list| blk: {
+                const elems = self.store.getExprSpan(list.elems);
+                var new_elems = std.ArrayList(LirExprId).empty;
+                defer new_elems.deinit(self.allocator);
+
+                var changed = false;
+                for (elems) |elem_id| {
+                    const new_elem = try self.retainConsumedOperandsForLaterUse(elem_id, later_uses, region);
+                    if (new_elem != elem_id) changed = true;
+                    try new_elems.append(self.allocator, new_elem);
+                }
+
+                if (!changed) break :blk expr_id;
+                break :blk try self.store.addExpr(.{ .list = .{
+                    .list_layout = list.list_layout,
+                    .elem_layout = list.elem_layout,
+                    .elems = try self.store.addExprSpan(new_elems.items),
+                } }, region);
+            },
+            .struct_ => |s| blk: {
+                const fields = self.store.getExprSpan(s.fields);
+                var new_fields = std.ArrayList(LirExprId).empty;
+                defer new_fields.deinit(self.allocator);
+
+                var changed = false;
+                for (fields) |field_id| {
+                    const new_field = try self.retainConsumedOperandsForLaterUse(field_id, later_uses, region);
+                    if (new_field != field_id) changed = true;
+                    try new_fields.append(self.allocator, new_field);
+                }
+
+                if (!changed) break :blk expr_id;
+                break :blk try self.store.addExpr(.{ .struct_ = .{
+                    .struct_layout = s.struct_layout,
+                    .fields = try self.store.addExprSpan(new_fields.items),
+                } }, region);
+            },
+            .struct_access => |sa| blk: {
+                const new_struct_expr = try self.retainConsumedOperandsForLaterUse(sa.struct_expr, later_uses, region);
+                if (new_struct_expr == sa.struct_expr) break :blk expr_id;
+                break :blk try self.store.addExpr(.{ .struct_access = .{
+                    .struct_expr = new_struct_expr,
+                    .struct_layout = sa.struct_layout,
+                    .field_layout = sa.field_layout,
+                    .field_idx = sa.field_idx,
+                } }, region);
+            },
+            .tag => |tag| blk: {
+                const args = self.store.getExprSpan(tag.args);
+                var new_args = std.ArrayList(LirExprId).empty;
+                defer new_args.deinit(self.allocator);
+
+                var changed = false;
+                for (args) |arg_id| {
+                    const new_arg = try self.retainConsumedOperandsForLaterUse(arg_id, later_uses, region);
+                    if (new_arg != arg_id) changed = true;
+                    try new_args.append(self.allocator, new_arg);
+                }
+
+                if (!changed) break :blk expr_id;
+                break :blk try self.store.addExpr(.{ .tag = .{
+                    .discriminant = tag.discriminant,
+                    .union_layout = tag.union_layout,
+                    .args = try self.store.addExprSpan(new_args.items),
+                } }, region);
+            },
+            .if_then_else => |ite| blk: {
+                const branches = self.store.getIfBranches(ite.branches);
+                var new_branches = std.ArrayList(LIR.LirIfBranch).empty;
+                defer new_branches.deinit(self.allocator);
+
+                var changed = false;
+                for (branches) |branch| {
+                    const new_cond = try self.retainConsumedOperandsForLaterUse(branch.cond, later_uses, region);
+                    const new_body = try self.retainConsumedOperandsForLaterUse(branch.body, later_uses, region);
+                    changed = changed or new_cond != branch.cond or new_body != branch.body;
+                    try new_branches.append(self.allocator, .{
+                        .cond = new_cond,
+                        .body = new_body,
+                    });
+                }
+
+                const new_else = try self.retainConsumedOperandsForLaterUse(ite.final_else, later_uses, region);
+                changed = changed or new_else != ite.final_else;
+
+                if (!changed) break :blk expr_id;
+                break :blk try self.store.addExpr(.{ .if_then_else = .{
+                    .branches = try self.store.addIfBranches(new_branches.items),
+                    .final_else = new_else,
+                    .result_layout = ite.result_layout,
+                } }, region);
+            },
+            .match_expr => |m| blk: {
+                const branches = self.store.getMatchBranches(m.branches);
+                var new_branches = std.ArrayList(LIR.LirMatchBranch).empty;
+                defer new_branches.deinit(self.allocator);
+
+                const new_value = try self.retainConsumedOperandsForLaterUse(m.value, later_uses, region);
+                var changed = new_value != m.value;
+                for (branches) |branch| {
+                    const new_guard = try self.retainConsumedOperandsForLaterUse(branch.guard, later_uses, region);
+                    const new_body = try self.retainConsumedOperandsForLaterUse(branch.body, later_uses, region);
+                    changed = changed or new_guard != branch.guard or new_body != branch.body;
+                    try new_branches.append(self.allocator, .{
+                        .pattern = branch.pattern,
+                        .guard = new_guard,
+                        .body = new_body,
+                    });
+                }
+
+                if (!changed) break :blk expr_id;
+                break :blk try self.store.addExpr(.{ .match_expr = .{
+                    .value = new_value,
+                    .value_layout = m.value_layout,
+                    .branches = try self.store.addMatchBranches(new_branches.items),
+                    .result_layout = m.result_layout,
+                } }, region);
+            },
+            .block => |block| blk: {
+                const stmts = self.store.getStmts(block.stmts);
+                var new_stmts = std.ArrayList(LirStmt).empty;
+                defer new_stmts.deinit(self.allocator);
+
+                var changed = false;
+                for (stmts) |stmt| {
+                    switch (stmt) {
+                        .decl => |binding| {
+                            const new_expr = try self.retainConsumedOperandsForLaterUse(binding.expr, later_uses, region);
+                            changed = changed or new_expr != binding.expr;
+                            try new_stmts.append(self.allocator, .{ .decl = .{
+                                .pattern = binding.pattern,
+                                .expr = new_expr,
+                                .semantics = binding.semantics,
+                            } });
+                        },
+                        .mutate => |binding| {
+                            const new_expr = try self.retainConsumedOperandsForLaterUse(binding.expr, later_uses, region);
+                            changed = changed or new_expr != binding.expr;
+                            try new_stmts.append(self.allocator, .{ .mutate = .{
+                                .pattern = binding.pattern,
+                                .expr = new_expr,
+                                .semantics = binding.semantics,
+                            } });
+                        },
+                        .cell_init => |binding| {
+                            const new_expr = try self.retainConsumedOperandsForLaterUse(binding.expr, later_uses, region);
+                            changed = changed or new_expr != binding.expr;
+                            try new_stmts.append(self.allocator, .{ .cell_init = .{
+                                .cell = binding.cell,
+                                .layout_idx = binding.layout_idx,
+                                .expr = new_expr,
+                            } });
+                        },
+                        .cell_store => |binding| {
+                            const new_expr = try self.retainConsumedOperandsForLaterUse(binding.expr, later_uses, region);
+                            changed = changed or new_expr != binding.expr;
+                            try new_stmts.append(self.allocator, .{ .cell_store = .{
+                                .cell = binding.cell,
+                                .layout_idx = binding.layout_idx,
+                                .expr = new_expr,
+                            } });
+                        },
+                        .cell_drop => try new_stmts.append(self.allocator, stmt),
+                    }
+                }
+
+                const new_final_expr = try self.retainConsumedOperandsForLaterUse(block.final_expr, later_uses, region);
+                changed = changed or new_final_expr != block.final_expr;
+
+                if (!changed) break :blk expr_id;
+                break :blk try self.store.addExpr(.{ .block = .{
+                    .stmts = try self.store.addStmts(new_stmts.items),
+                    .final_expr = new_final_expr,
+                    .result_layout = block.result_layout,
+                } }, region);
+            },
+            .early_return => |ret| blk: {
+                const new_expr = try self.retainConsumedOperandsForLaterUse(ret.expr, later_uses, region);
+                if (new_expr == ret.expr) break :blk expr_id;
+                break :blk try self.store.addExpr(.{ .early_return = .{
+                    .expr = new_expr,
+                    .ret_layout = ret.ret_layout,
+                } }, region);
+            },
             .proc_call => |call| blk: {
                 const args = self.store.getExprSpan(call.args);
                 var new_args = std.ArrayList(LirExprId).empty;
@@ -770,13 +969,14 @@ pub const RcInsertPass = struct {
 
                 var changed = false;
                 for (args) |arg_id| {
+                    const rewritten_arg = try self.retainConsumedOperandsForLaterUse(arg_id, later_uses, region);
                     const retained_arg = try self.retainOperandIfNeededForLaterUse(
-                        arg_id,
+                        rewritten_arg,
                         later_uses,
                         region,
                         &prelude,
                     );
-                    if (retained_arg != arg_id) changed = true;
+                    if (rewritten_arg != arg_id or retained_arg != rewritten_arg) changed = true;
                     try new_args.append(self.allocator, retained_arg);
                 }
 
@@ -792,16 +992,17 @@ pub const RcInsertPass = struct {
 
                 var changed = false;
                 for (args, 0..) |arg_id, i| {
+                    const rewritten_arg = try self.retainConsumedOperandsForLaterUse(arg_id, later_uses, region);
                     const new_arg = switch (arg_ownership[i]) {
                         .consume => try self.retainOperandIfNeededForLaterUse(
-                            arg_id,
+                            rewritten_arg,
                             later_uses,
                             region,
                             &prelude,
                         ),
-                        .borrow => arg_id,
+                        .borrow => rewritten_arg,
                     };
-                    if (new_arg != arg_id) changed = true;
+                    if (rewritten_arg != arg_id or new_arg != rewritten_arg) changed = true;
                     try new_args.append(self.allocator, new_arg);
                 }
 
@@ -813,8 +1014,167 @@ pub const RcInsertPass = struct {
                     .callable_proc = ll.callable_proc,
                 } }, region);
             },
-            .hosted_call => |_| expr_id,
-            else => expr_id,
+            .dbg => |d| blk: {
+                const new_expr = try self.retainConsumedOperandsForLaterUse(d.expr, later_uses, region);
+                if (new_expr == d.expr) break :blk expr_id;
+                break :blk try self.store.addExpr(.{ .dbg = .{
+                    .expr = new_expr,
+                    .result_layout = d.result_layout,
+                } }, region);
+            },
+            .expect => |e| blk: {
+                const new_cond = try self.retainConsumedOperandsForLaterUse(e.cond, later_uses, region);
+                const new_body = try self.retainConsumedOperandsForLaterUse(e.body, later_uses, region);
+                if (new_cond == e.cond and new_body == e.body) break :blk expr_id;
+                break :blk try self.store.addExpr(.{ .expect = .{
+                    .cond = new_cond,
+                    .body = new_body,
+                    .result_layout = e.result_layout,
+                } }, region);
+            },
+            .nominal => |n| blk: {
+                const new_backing = try self.retainConsumedOperandsForLaterUse(n.backing_expr, later_uses, region);
+                if (new_backing == n.backing_expr) break :blk expr_id;
+                break :blk try self.store.addExpr(.{ .nominal = .{
+                    .backing_expr = new_backing,
+                    .nominal_layout = n.nominal_layout,
+                } }, region);
+            },
+            .str_concat => |parts| blk: {
+                const part_exprs = self.store.getExprSpan(parts);
+                var new_parts = std.ArrayList(LirExprId).empty;
+                defer new_parts.deinit(self.allocator);
+
+                var changed = false;
+                for (part_exprs) |part_id| {
+                    const new_part = try self.retainConsumedOperandsForLaterUse(part_id, later_uses, region);
+                    if (new_part != part_id) changed = true;
+                    try new_parts.append(self.allocator, new_part);
+                }
+
+                if (!changed) break :blk expr_id;
+                break :blk try self.store.addExpr(.{ .str_concat = try self.store.addExprSpan(new_parts.items) }, region);
+            },
+            .int_to_str => |its| blk: {
+                const new_value = try self.retainConsumedOperandsForLaterUse(its.value, later_uses, region);
+                if (new_value == its.value) break :blk expr_id;
+                break :blk try self.store.addExpr(.{ .int_to_str = .{
+                    .value = new_value,
+                    .int_precision = its.int_precision,
+                } }, region);
+            },
+            .float_to_str => |fts| blk: {
+                const new_value = try self.retainConsumedOperandsForLaterUse(fts.value, later_uses, region);
+                if (new_value == fts.value) break :blk expr_id;
+                break :blk try self.store.addExpr(.{ .float_to_str = .{
+                    .value = new_value,
+                    .float_precision = fts.float_precision,
+                } }, region);
+            },
+            .dec_to_str => |d| blk: {
+                const new_value = try self.retainConsumedOperandsForLaterUse(d, later_uses, region);
+                if (new_value == d) break :blk expr_id;
+                break :blk try self.store.addExpr(.{ .dec_to_str = new_value }, region);
+            },
+            .str_escape_and_quote => |s| blk: {
+                const new_value = try self.retainConsumedOperandsForLaterUse(s, later_uses, region);
+                if (new_value == s) break :blk expr_id;
+                break :blk try self.store.addExpr(.{ .str_escape_and_quote = new_value }, region);
+            },
+            .discriminant_switch => |ds| blk: {
+                const branches = self.store.getExprSpan(ds.branches);
+                var new_branches = std.ArrayList(LirExprId).empty;
+                defer new_branches.deinit(self.allocator);
+
+                const new_value = try self.retainConsumedOperandsForLaterUse(ds.value, later_uses, region);
+                var changed = new_value != ds.value;
+                for (branches) |branch_id| {
+                    const new_branch = try self.retainConsumedOperandsForLaterUse(branch_id, later_uses, region);
+                    if (new_branch != branch_id) changed = true;
+                    try new_branches.append(self.allocator, new_branch);
+                }
+
+                if (!changed) break :blk expr_id;
+                break :blk try self.store.addExpr(.{ .discriminant_switch = .{
+                    .value = new_value,
+                    .union_layout = ds.union_layout,
+                    .branches = try self.store.addExprSpan(new_branches.items),
+                    .result_layout = ds.result_layout,
+                } }, region);
+            },
+            .tag_payload_access => |tpa| blk: {
+                const new_value = try self.retainConsumedOperandsForLaterUse(tpa.value, later_uses, region);
+                if (new_value == tpa.value) break :blk expr_id;
+                break :blk try self.store.addExpr(.{ .tag_payload_access = .{
+                    .value = new_value,
+                    .union_layout = tpa.union_layout,
+                    .payload_layout = tpa.payload_layout,
+                } }, region);
+            },
+            .for_loop => |fl| blk: {
+                const new_list_expr = try self.retainConsumedOperandsForLaterUse(fl.list_expr, later_uses, region);
+                const new_body = try self.retainConsumedOperandsForLaterUse(fl.body, later_uses, region);
+                if (new_list_expr == fl.list_expr and new_body == fl.body) break :blk expr_id;
+                break :blk try self.store.addExpr(.{ .for_loop = .{
+                    .list_expr = new_list_expr,
+                    .elem_layout = fl.elem_layout,
+                    .elem_pattern = fl.elem_pattern,
+                    .body = new_body,
+                } }, region);
+            },
+            .while_loop => |wl| blk: {
+                const new_cond = try self.retainConsumedOperandsForLaterUse(wl.cond, later_uses, region);
+                const new_body = try self.retainConsumedOperandsForLaterUse(wl.body, later_uses, region);
+                if (new_cond == wl.cond and new_body == wl.body) break :blk expr_id;
+                break :blk try self.store.addExpr(.{ .while_loop = .{
+                    .cond = new_cond,
+                    .body = new_body,
+                } }, region);
+            },
+            .incref => |inc| blk: {
+                const new_value = try self.retainConsumedOperandsForLaterUse(inc.value, later_uses, region);
+                if (new_value == inc.value) break :blk expr_id;
+                break :blk try self.store.addExpr(.{ .incref = .{
+                    .value = new_value,
+                    .layout_idx = inc.layout_idx,
+                    .count = inc.count,
+                } }, region);
+            },
+            .decref => |dec| blk: {
+                const new_value = try self.retainConsumedOperandsForLaterUse(dec.value, later_uses, region);
+                if (new_value == dec.value) break :blk expr_id;
+                break :blk try self.store.addExpr(.{ .decref = .{
+                    .value = new_value,
+                    .layout_idx = dec.layout_idx,
+                } }, region);
+            },
+            .free => |free| blk: {
+                const new_value = try self.retainConsumedOperandsForLaterUse(free.value, later_uses, region);
+                if (new_value == free.value) break :blk expr_id;
+                break :blk try self.store.addExpr(.{ .free = .{
+                    .value = new_value,
+                    .layout_idx = free.layout_idx,
+                } }, region);
+            },
+            .hosted_call => |hc| blk: {
+                const args = self.store.getExprSpan(hc.args);
+                var new_args = std.ArrayList(LirExprId).empty;
+                defer new_args.deinit(self.allocator);
+
+                var changed = false;
+                for (args) |arg_id| {
+                    const new_arg = try self.retainConsumedOperandsForLaterUse(arg_id, later_uses, region);
+                    if (new_arg != arg_id) changed = true;
+                    try new_args.append(self.allocator, new_arg);
+                }
+
+                if (!changed) break :blk expr_id;
+                break :blk try self.store.addExpr(.{ .hosted_call = .{
+                    .index = hc.index,
+                    .args = try self.store.addExprSpan(new_args.items),
+                    .ret_layout = hc.ret_layout,
+                } }, region);
+            },
         };
 
         return self.wrapPreludeAroundExpr(rewritten, self.exprResultLayout(expr_id), region, prelude.items);
@@ -7993,6 +8353,85 @@ test "RC if_then_else: condition preserves live list owner for branch body" {
         .op = .list_len,
         .args = len_args,
         .ret_layout = i64_layout,
+    } }, Region.zero());
+
+    const eq_args = try env.lir_store.addExprSpan(&.{ len_expr, zero });
+    const cond_expr = try env.lir_store.addExpr(.{ .low_level = .{
+        .op = .num_is_eq,
+        .args = eq_args,
+        .ret_layout = .bool,
+    } }, Region.zero());
+
+    const lookup_list_first = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_list, .layout_idx = list_layout } }, Region.zero());
+    const first_args = try env.lir_store.addExprSpan(&.{ lookup_list_first, zero });
+    const first_expr = try env.lir_store.addExpr(.{ .low_level = .{
+        .op = .list_get_unsafe,
+        .args = first_args,
+        .ret_layout = i64_layout,
+    } }, Region.zero());
+
+    const if_branches = try env.lir_store.addIfBranches(&.{.{
+        .cond = cond_expr,
+        .body = first_expr,
+    }});
+    const ite = try env.lir_store.addExpr(.{ .if_then_else = .{
+        .branches = if_branches,
+        .final_else = zero,
+        .result_layout = i64_layout,
+    } }, Region.zero());
+
+    const pat_list = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_list, .layout_idx = list_layout } }, Region.zero());
+    const stmts = try env.lir_store.addStmts(&.{.{ .decl = .{ .pattern = pat_list, .expr = list_expr } }});
+    const block_expr = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = ite,
+        .result_layout = i64_layout,
+    } }, Region.zero());
+
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(block_expr);
+
+    const transformed_if = findFirstIfThenElseExpr(&env.lir_store, result) orelse unreachable;
+    const ite_result = env.lir_store.getExpr(transformed_if).if_then_else;
+    const branch = env.lir_store.getIfBranches(ite_result.branches)[0];
+
+    try std.testing.expectEqual(@as(u32, 1), countIncrefsForSymbol(&env.lir_store, branch.cond, sym_list));
+    try std.testing.expectEqual(@as(u32, 0), countIncrefsForSymbol(&env.lir_store, branch.body, sym_list));
+}
+
+test "RC nested proc_call in condition preserves live list owner for branch body" {
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_layout: LayoutIdx = .i64;
+    const list_layout = try env.layout_store.insertLayout(layout_mod.Layout.list(i64_layout));
+    const sym_list = makeSymbol(1);
+    const sym_proc = makeSymbol(2);
+
+    const zero = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 0, .layout_idx = i64_layout } }, Region.zero());
+    const one = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 1, .layout_idx = i64_layout } }, Region.zero());
+    const two = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 2, .layout_idx = i64_layout } }, Region.zero());
+
+    const elems = try env.lir_store.addExprSpan(&.{ one, two });
+    const list_expr = try env.lir_store.addExpr(.{ .list = .{
+        .list_layout = list_layout,
+        .elem_layout = i64_layout,
+        .elems = elems,
+    } }, Region.zero());
+
+    const lookup_list_call = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_list, .layout_idx = list_layout } }, Region.zero());
+    const cond_proc = try makeProc(&env.lir_store, sym_proc, i64_layout);
+    const proc_args = try env.lir_store.addExprSpan(&.{lookup_list_call});
+    const len_expr = try env.lir_store.addExpr(.{ .proc_call = .{
+        .proc = cond_proc,
+        .args = proc_args,
+        .ret_layout = i64_layout,
+        .called_via = .apply,
     } }, Region.zero());
 
     const eq_args = try env.lir_store.addExprSpan(&.{ len_expr, zero });
