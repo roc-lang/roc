@@ -1573,6 +1573,29 @@ pub const MonoLlvmCodeGen = struct {
         return val;
     }
 
+    fn coerceShiftAmountToType(self: *MonoLlvmCodeGen, val: LlvmBuilder.Value, target_type: LlvmBuilder.Type) Error!LlvmBuilder.Value {
+        if (val == .none) return error.CompilationFailed;
+
+        const wip = self.wip orelse return error.CompilationFailed;
+        const actual_type = val.typeOfWip(wip);
+
+        if (actual_type == target_type) return val;
+        if (!isIntType(actual_type) or !isIntType(target_type)) return error.CompilationFailed;
+
+        const actual_bits = intTypeBits(actual_type);
+        const target_bits = intTypeBits(target_type);
+
+        if (actual_bits < target_bits) {
+            return wip.cast(.zext, val, target_type, "") catch return error.CompilationFailed;
+        }
+
+        if (actual_bits > target_bits) {
+            return wip.cast(.trunc, val, target_type, "") catch return error.CompilationFailed;
+        }
+
+        return val;
+    }
+
     fn isIntType(t: LlvmBuilder.Type) bool {
         return t == .i1 or t == .i8 or t == .i16 or t == .i32 or t == .i64 or t == .i128;
     }
@@ -3523,6 +3546,25 @@ pub const MonoLlvmCodeGen = struct {
                 const adjusted = wip.bin(.add, rem, rhs, "") catch return error.CompilationFailed;
                 return wip.select(.normal, needs_adjust, adjusted, rem, "") catch return error.CompilationFailed;
             },
+            .num_shift_left_by,
+            .num_shift_right_by,
+            .num_shift_right_zf_by,
+            => {
+                std.debug.assert(args.len >= 2);
+                const operand_layout = self.getExprResultLayout(args[0]) orelse ll.ret_layout;
+                var lhs = try self.generateExpr(args[0]);
+                lhs = try self.coerceValueToLayout(lhs, operand_layout);
+
+                var rhs = try self.generateExpr(args[1]);
+                rhs = try self.coerceShiftAmountToType(rhs, lhs.typeOfWip(wip));
+
+                return switch (ll.op) {
+                    .num_shift_left_by => wip.bin(.shl, lhs, rhs, "") catch return error.CompilationFailed,
+                    .num_shift_right_by => wip.bin(.ashr, lhs, rhs, "") catch return error.CompilationFailed,
+                    .num_shift_right_zf_by => wip.bin(.lshr, lhs, rhs, "") catch return error.CompilationFailed,
+                    else => unreachable,
+                };
+            },
             .num_pow => {
                 std.debug.assert(args.len >= 2);
                 const base = try self.generateExpr(args[0]);
@@ -4647,10 +4689,10 @@ pub const MonoLlvmCodeGen = struct {
                 return wip.load(.normal, elem_type, box_ptr, alignment, "") catch return error.CompilationFailed;
             },
 
-            else => std.debug.panic(
-                "LLVM backend missing LowLevel handler for {s}",
-                .{@tagName(ll.op)},
-            ),
+            else => {
+                std.log.err("LLVM backend missing LowLevel handler for {s}", .{@tagName(ll.op)});
+                return error.CompilationFailed;
+            },
         }
     }
 
