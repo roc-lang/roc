@@ -1909,6 +1909,31 @@ fn writeNativeRocStrToWasm(buffer: []u8, result_ptr: usize, str: builtins.str.Ro
     writeWasmStr(buffer, result_ptr, slice.ptr, slice.len);
 }
 
+/// Write a native RocList of RocStr back to wasm32 format.
+/// Allocates a wasm array of 12-byte wasm32 RocStr structs and writes the list header.
+fn writeNativeRocListStrToWasm(buffer: []u8, result_ptr: usize, list: builtins.list.RocList) void {
+    const len = list.length;
+    if (len == 0) {
+        // Write empty list: {null, 0, 0}
+        @memset(buffer[result_ptr..][0..12], 0);
+        return;
+    }
+
+    // Allocate wasm space for the list elements (array of 12-byte wasm32 RocStr)
+    const list_data_start = allocWasmData(buffer, 4, len * 12);
+
+    // Convert each native RocStr to wasm32 format
+    const native_strs: [*]const builtins.str.RocStr = @ptrCast(@alignCast(list.bytes));
+    for (0..len) |i| {
+        writeNativeRocStrToWasm(buffer, list_data_start + i * 12, native_strs[i]);
+    }
+
+    // Write list header: {data_ptr, length, capacity}
+    std.mem.writeInt(u32, buffer[result_ptr..][0..4], @intCast(list_data_start), .little);
+    std.mem.writeInt(u32, buffer[result_ptr + 4 ..][0..4], @intCast(len), .little);
+    std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(len), .little);
+}
+
 /// Create a native RocStr from raw bytes (for parsing functions that need a RocStr).
 fn rocStrFromWasmSlice(data: [*]const u8, len: usize) builtins.str.RocStr {
     if (len < @sizeOf(builtins.str.RocStr)) {
@@ -1983,21 +2008,13 @@ fn hostStrReleaseExcessCapacity(_: ?*anyopaque, module: *bytebox.ModuleInstance,
 
 fn hostStrWithPrefix(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
     const buffer = module.store.getMemory(0).buffer();
-    const str_ptr: usize = @intCast(params[0].I32);
-    const prefix_ptr: usize = @intCast(params[1].I32);
-    const result_ptr: usize = @intCast(params[2].I32);
-    const str = readWasmStr(buffer, str_ptr);
-    const prefix = readWasmStr(buffer, prefix_ptr);
-    const total_len = prefix.len + str.len;
-    if (total_len == 0) {
-        writeWasmEmptyStr(buffer, result_ptr);
-        return;
-    }
-    const dest_start = wasm_heap_ptr;
-    wasm_heap_ptr += @intCast(total_len);
-    @memcpy(buffer[dest_start..][0..prefix.len], prefix.data[0..prefix.len]);
-    @memcpy(buffer[dest_start + prefix.len ..][0..str.len], str.data[0..str.len]);
-    writeWasmStr(buffer, result_ptr, buffer[dest_start..].ptr, total_len);
+    var wasm_env = WasmRocEnv{ .buffer = buffer };
+    var ops = wasm_env.getOps();
+    const native_str = nativeRocStrFromWasm(buffer, @intCast(params[0].I32));
+    const native_prefix = nativeRocStrFromWasm(buffer, @intCast(params[1].I32));
+    // withPrefix is just concat(prefix, str)
+    const result = builtins.str.strConcat(native_prefix, native_str, &ops);
+    writeNativeRocStrToWasm(buffer, @intCast(params[2].I32), result);
 }
 
 fn hostStrDropPrefix(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
@@ -2068,83 +2085,40 @@ fn hostStrCaselessAsciiEquals(_: ?*anyopaque, module: *bytebox.ModuleInstance, p
 
 fn hostStrSplit(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
     const buffer = module.store.getMemory(0).buffer();
-    const str_ptr: usize = @intCast(params[0].I32);
-    const sep_ptr: usize = @intCast(params[1].I32);
-    const result_ptr: usize = @intCast(params[2].I32);
-    const str = readWasmStr(buffer, str_ptr);
-    const sep = readWasmStr(buffer, sep_ptr);
-    const str_slice = str.data[0..str.len];
-    const sep_slice = sep.data[0..sep.len];
-    var count: usize = 1;
-    if (sep.len > 0 and str.len >= sep.len) {
-        var i: usize = 0;
-        while (i + sep.len <= str.len) {
-            if (std.mem.eql(u8, str_slice[i..][0..sep.len], sep_slice)) {
-                count += 1;
-                i += sep.len;
-            } else {
-                i += 1;
-            }
-        }
-    }
-    const list_data_start = allocWasmData(buffer, 4, count * 12);
-    var part_idx: usize = 0;
-    var start: usize = 0;
-    if (sep.len > 0) {
-        var i: usize = 0;
-        while (i + sep.len <= str.len) {
-            if (std.mem.eql(u8, str_slice[i..][0..sep.len], sep_slice)) {
-                writeWasmStr(buffer, list_data_start + part_idx * 12, str_slice[start..].ptr, i - start);
-                part_idx += 1;
-                start = i + sep.len;
-                i = start;
-            } else {
-                i += 1;
-            }
-        }
-    }
-    writeWasmStr(buffer, list_data_start + part_idx * 12, str_slice[start..].ptr, str.len - start);
-    std.mem.writeInt(u32, buffer[result_ptr..][0..4], @intCast(list_data_start), .little);
-    std.mem.writeInt(u32, buffer[result_ptr + 4 ..][0..4], @intCast(count), .little);
-    std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(count), .little);
+    var wasm_env = WasmRocEnv{ .buffer = buffer };
+    var ops = wasm_env.getOps();
+    const native_str = nativeRocStrFromWasm(buffer, @intCast(params[0].I32));
+    const native_sep = nativeRocStrFromWasm(buffer, @intCast(params[1].I32));
+    const result = builtins.str.strSplitOn(native_str, native_sep, &ops);
+    writeNativeRocListStrToWasm(buffer, @intCast(params[2].I32), result);
 }
 
 fn hostStrJoinWith(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
     const buffer = module.store.getMemory(0).buffer();
+    var wasm_env = WasmRocEnv{ .buffer = buffer };
+    var ops = wasm_env.getOps();
+
     const list_ptr: usize = @intCast(params[0].I32);
-    const sep_ptr: usize = @intCast(params[1].I32);
-    const result_ptr: usize = @intCast(params[2].I32);
     const list_data: usize = @intCast(std.mem.readInt(u32, buffer[list_ptr..][0..4], .little));
     const list_len: usize = @intCast(std.mem.readInt(u32, buffer[list_ptr + 4 ..][0..4], .little));
-    if (list_len == 0) {
-        writeWasmEmptyStr(buffer, result_ptr);
-        return;
+    const native_sep = nativeRocStrFromWasm(buffer, @intCast(params[1].I32));
+
+    // Convert wasm list-of-12-byte-strs to native list-of-24-byte-strs
+    var native_strs_buf: [256]builtins.str.RocStr = undefined;
+    const capped_len = @min(list_len, native_strs_buf.len);
+    for (0..capped_len) |i| {
+        native_strs_buf[i] = nativeRocStrFromWasm(buffer, list_data + i * 12);
     }
-    const sep = readWasmStr(buffer, sep_ptr);
-    var total_len: usize = 0;
-    for (0..list_len) |i| {
-        total_len += readWasmStr(buffer, list_data + i * 12).len;
-    }
-    total_len += sep.len * (list_len - 1);
-    if (total_len == 0) {
-        writeWasmEmptyStr(buffer, result_ptr);
-        return;
-    }
-    const dest_start = wasm_heap_ptr;
-    wasm_heap_ptr += @intCast(total_len);
-    var offset: usize = 0;
-    for (0..list_len) |i| {
-        if (i > 0 and sep.len > 0) {
-            @memcpy(buffer[dest_start + offset ..][0..sep.len], sep.data[0..sep.len]);
-            offset += sep.len;
-        }
-        const elem = readWasmStr(buffer, list_data + i * 12);
-        if (elem.len > 0) {
-            @memcpy(buffer[dest_start + offset ..][0..elem.len], elem.data[0..elem.len]);
-            offset += elem.len;
-        }
-    }
-    writeWasmStr(buffer, result_ptr, buffer[dest_start..].ptr, total_len);
+
+    // Build a native RocListStr pointing to our stack buffer
+    const native_list = builtins.str.RocListStr{
+        .list_elements = &native_strs_buf,
+        .list_length = capped_len,
+        .list_capacity_or_alloc_ptr = capped_len,
+    };
+
+    const result = builtins.str.strJoinWith(native_list, native_sep, &ops);
+    writeNativeRocStrToWasm(buffer, @intCast(params[2].I32), result);
 }
 
 fn hostListSortWith(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
@@ -2205,6 +2179,10 @@ fn hostListSortWith(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]
     std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(len), .little);
 }
 
+// TODO: List operations work on raw bytes in wasm memory. The builtins require
+// CopyFallbackFn/CompareFn callbacks and use RocOps for allocation, making
+// delegation complex. These operate correctly on wasm32 byte layouts directly.
+// Full delegation will come with wasm-ld linking (TODO_RELOC_WASM_OBJ_BUILTIN.md).
 fn hostListAppendUnsafe(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
     const buffer = module.store.getMemory(0).buffer();
     const list_ptr: usize = @intCast(params[0].I32);
