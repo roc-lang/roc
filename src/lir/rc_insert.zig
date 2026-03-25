@@ -114,6 +114,9 @@ pub const RcInsertPass = struct {
     /// deterministic RC op ordering regardless of HashMap iteration order.
     scratch_keys: base.Scratch(u64),
 
+    /// Memoized summary of whether a proc result can transfer ownership from a given parameter.
+    proc_param_transfer_cache: std.AutoHashMap(u64, ProcParamTransferState),
+
     ownership: ?OwnershipNormalize.Result,
 
     const LiveRcSymbol = struct {
@@ -132,6 +135,12 @@ pub const RcInsertPass = struct {
     const ExprOwnership = enum {
         consume,
         borrow,
+    };
+
+    const ProcParamTransferState = enum(u2) {
+        visiting,
+        no,
+        yes,
     };
 
     comptime {
@@ -158,6 +167,7 @@ pub const RcInsertPass = struct {
             .scratch_uses = std.AutoHashMap(u64, u32).init(allocator),
             .scratch_consumed_uses = std.AutoHashMap(u64, u32).init(allocator),
             .scratch_keys = try base.Scratch(u64).init(allocator),
+            .proc_param_transfer_cache = std.AutoHashMap(u64, ProcParamTransferState).init(allocator),
             .ownership = null,
         };
     }
@@ -178,6 +188,7 @@ pub const RcInsertPass = struct {
         self.scratch_uses.deinit();
         self.scratch_consumed_uses.deinit();
         self.scratch_keys.deinit();
+        self.proc_param_transfer_cache.deinit();
     }
 
     /// Main entry point: insert RC operations into a LirExpr tree.
@@ -205,6 +216,7 @@ pub const RcInsertPass = struct {
         self.pending_branch_rc_adj.clearRetainingCapacity();
         self.scratch_uses.clearRetainingCapacity();
         self.scratch_consumed_uses.clearRetainingCapacity();
+        self.proc_param_transfer_cache.clearRetainingCapacity();
         self.early_return_scope_base = 0;
         self.early_return_cell_scope_base = 0;
         if (self.ownership) |*ownership| ownership.deinit();
@@ -246,6 +258,7 @@ pub const RcInsertPass = struct {
         self.pending_branch_rc_adj.clearRetainingCapacity();
         self.scratch_uses.clearRetainingCapacity();
         self.scratch_consumed_uses.clearRetainingCapacity();
+        self.proc_param_transfer_cache.clearRetainingCapacity();
         self.early_return_scope_base = 0;
         self.early_return_cell_scope_base = 0;
         if (self.ownership) |*ownership| ownership.deinit();
@@ -750,7 +763,11 @@ pub const RcInsertPass = struct {
         if (!self.shouldMaterializeBorrowedUse(expr_id)) return expr_id;
 
         const layout_idx = self.exprResultLayout(expr_id);
-        const temp = try self.bindExprToFreshLookup(prelude, expr_id, layout_idx, region);
+        const semantics: LirStmt.BindingSemantics = if (self.exprAliasesManagedRef(expr_id, layout_idx) or self.ownerKeyForAliasedExpr(expr_id) != null)
+            .borrow_alias
+        else
+            .owned;
+        const temp = try self.bindExprToFreshLookupWithSemantics(prelude, expr_id, layout_idx, semantics, region);
         return temp.lookup;
     }
 
@@ -776,7 +793,7 @@ pub const RcInsertPass = struct {
         try prelude.append(self.allocator, .{ .decl = .{
             .pattern = temp.pattern,
             .expr = expr_id,
-            .semantics = .retained,
+            .semantics = .borrow_alias,
         } });
         return self.store.addExpr(.{ .lookup = .{
             .symbol = temp.symbol,
@@ -793,8 +810,103 @@ pub const RcInsertPass = struct {
         var prelude = std.ArrayList(LirStmt).empty;
         defer prelude.deinit(self.allocator);
 
-        const retained_lookup = try self.materializeRcCellLoadOperand(expr_id, region, &prelude);
+        const temp = try self.freshResultPattern(layout_idx, region);
+        try prelude.append(self.allocator, .{ .decl = .{
+            .pattern = temp.pattern,
+            .expr = expr_id,
+            .semantics = .retained,
+        } });
+        const retained_lookup = try self.store.addExpr(.{ .lookup = .{
+            .symbol = temp.symbol,
+            .layout_idx = layout_idx,
+        } }, region);
         return self.wrapPreludeAroundExpr(retained_lookup, layout_idx, region, prelude.items);
+    }
+
+    fn procParamTransferCacheKey(proc_id: LIR.LirProcSpecId, param_index: usize) u64 {
+        return (@as(u64, @intFromEnum(proc_id)) << 32) | @as(u32, @intCast(param_index));
+    }
+
+    fn procResultTransfersParamOwner(
+        self: *RcInsertPass,
+        proc_id: LIR.LirProcSpecId,
+        param_index: usize,
+    ) Allocator.Error!bool {
+        const cache_key = procParamTransferCacheKey(proc_id, param_index);
+        if (self.proc_param_transfer_cache.get(cache_key)) |state| {
+            return switch (state) {
+                .yes => true,
+                .no, .visiting => false,
+            };
+        }
+
+        try self.proc_param_transfer_cache.put(cache_key, .visiting);
+
+        const proc = self.store.getProcSpec(proc_id);
+        const params = self.store.getPatternSpan(proc.args);
+        if (param_index >= params.len) {
+            try self.proc_param_transfer_cache.put(cache_key, .no);
+            return false;
+        }
+
+        var owner_keys = std.AutoHashMap(u64, void).init(self.allocator);
+        defer owner_keys.deinit();
+        try self.collectPatternOwnerKeys(params[param_index], &owner_keys);
+
+        var transfers = false;
+        var it = owner_keys.keyIterator();
+        while (it.next()) |owner_key| {
+            if (try self.stmtTransfersOwnerKey(proc.body, owner_key.*)) {
+                transfers = true;
+                break;
+            }
+        }
+
+        try self.proc_param_transfer_cache.put(cache_key, if (transfers) .yes else .no);
+        return transfers;
+    }
+
+    fn stmtTransfersOwnerKey(
+        self: *RcInsertPass,
+        stmt_id: LIR.CFStmtId,
+        key: u64,
+    ) Allocator.Error!bool {
+        if (stmt_id.isNone()) return false;
+
+        return switch (self.store.getCFStmt(stmt_id)) {
+            .ret => |ret| self.exprTransfersOwnerKey(ret.value, key),
+            .expr_stmt => |expr_stmt| self.stmtTransfersOwnerKey(expr_stmt.next, key),
+            .let_stmt => |let_stmt| blk: {
+                if (try self.stmtTransfersOwnerKey(let_stmt.next, key)) break :blk true;
+
+                var bound_owner_keys = std.AutoHashMap(u64, void).init(self.allocator);
+                defer bound_owner_keys.deinit();
+                try self.collectPatternOwnerKeys(let_stmt.pattern, &bound_owner_keys);
+
+                var it = bound_owner_keys.keyIterator();
+                while (it.next()) |bound_owner_key| {
+                    if (!try self.stmtTransfersOwnerKey(let_stmt.next, bound_owner_key.*)) continue;
+                    if (try self.exprTransfersOwnerKey(let_stmt.value, key)) break :blk true;
+                }
+
+                break :blk false;
+            },
+            .switch_stmt => |switch_stmt| blk: {
+                if (!try self.stmtTransfersOwnerKey(switch_stmt.default_branch, key)) break :blk false;
+                for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
+                    if (!try self.stmtTransfersOwnerKey(branch.body, key)) break :blk false;
+                }
+                break :blk true;
+            },
+            .match_stmt => |match_stmt| blk: {
+                for (self.store.getCFMatchBranches(match_stmt.branches)) |branch| {
+                    if (!try self.stmtTransfersOwnerKey(branch.body, key)) break :blk false;
+                }
+                break :blk true;
+            },
+            .join => |join_stmt| self.stmtTransfersOwnerKey(join_stmt.remainder, key),
+            .jump => false,
+        };
     }
 
     fn ownerKeyForAliasedExpr(self: *RcInsertPass, expr_id: LirExprId) ?u64 {
@@ -811,10 +923,90 @@ pub const RcInsertPass = struct {
                 const key = self.cellLoadKey(expr_id, load.cell);
                 break :blk self.consumedOwnerKey(key);
             },
-            .block => |block| self.ownerKeyForAliasedExpr(block.final_expr),
+            .low_level => |ll| blk: {
+                const args = self.store.getExprSpan(ll.args);
+                for (args, 0..) |arg_id, i| {
+                    if (!ll.op.consumedArgMayAliasResult(i)) continue;
+                    break :blk self.ownerKeyForAliasedExpr(arg_id);
+                }
+                break :blk null;
+            },
+            .block => |block| blk: {
+                const final_expr = self.store.getExpr(block.final_expr);
+                if (final_expr == .lookup) {
+                    if (self.blockBindingForLookupSymbol(block.stmts, final_expr.lookup.symbol)) |binding| {
+                        break :blk self.ownerKeyForAliasedExpr(binding.expr);
+                    }
+                }
+                break :blk self.ownerKeyForAliasedExpr(block.final_expr);
+            },
             .dbg => |dbg_expr| self.ownerKeyForAliasedExpr(dbg_expr.expr),
             .nominal => |nominal| self.ownerKeyForAliasedExpr(nominal.backing_expr),
+            .proc_call => |call| blk: {
+                const args = self.store.getExprSpan(call.args);
+                for (args, 0..) |arg_id, i| {
+                    if (!(self.procResultTransfersParamOwner(call.proc, i) catch false)) continue;
+                    break :blk self.ownerKeyForAliasedExpr(arg_id);
+                }
+                break :blk null;
+            },
             else => null,
+        };
+    }
+
+    fn blockBindingForLookupSymbol(self: *const RcInsertPass, stmts_span: LirStmtSpan, symbol: Symbol) ?LirStmt.Binding {
+        if (symbol.isNone()) return null;
+
+        const stmts = self.store.getStmts(stmts_span);
+        var i = stmts.len;
+        while (i > 0) {
+            i -= 1;
+            switch (stmts[i]) {
+                .decl, .mutate => |binding| {
+                    if (self.patternBindsSymbolNoAlloc(binding.pattern, symbol)) {
+                        return binding;
+                    }
+                },
+                .cell_init, .cell_store, .cell_drop => {},
+            }
+        }
+
+        return null;
+    }
+
+    fn patternBindsSymbolNoAlloc(self: *const RcInsertPass, pat_id: LirPatternId, symbol: Symbol) bool {
+        if (pat_id.isNone()) return false;
+
+        return switch (self.store.getPattern(pat_id)) {
+            .bind => |bind| bind.symbol == symbol,
+            .as_pattern => |as_pat| as_pat.symbol == symbol or self.patternBindsSymbolNoAlloc(as_pat.inner, symbol),
+            .tag => |tag_pat| blk: {
+                for (self.store.getPatternSpan(tag_pat.args)) |arg_pat_id| {
+                    if (self.patternBindsSymbolNoAlloc(arg_pat_id, symbol)) break :blk true;
+                }
+                break :blk false;
+            },
+            .struct_ => |struct_pat| blk: {
+                for (self.store.getPatternSpan(struct_pat.fields)) |field_pat_id| {
+                    if (self.patternBindsSymbolNoAlloc(field_pat_id, symbol)) break :blk true;
+                }
+                break :blk false;
+            },
+            .list => |list_pat| blk: {
+                for (self.store.getPatternSpan(list_pat.prefix)) |prefix_pat_id| {
+                    if (self.patternBindsSymbolNoAlloc(prefix_pat_id, symbol)) break :blk true;
+                }
+                if (self.patternBindsSymbolNoAlloc(list_pat.rest, symbol)) break :blk true;
+                for (self.store.getPatternSpan(list_pat.suffix)) |suffix_pat_id| {
+                    if (self.patternBindsSymbolNoAlloc(suffix_pat_id, symbol)) break :blk true;
+                }
+                break :blk false;
+            },
+            .wildcard,
+            .int_literal,
+            .float_literal,
+            .str_literal,
+            => false,
         };
     }
 
@@ -4173,9 +4365,18 @@ pub const RcInsertPass = struct {
                             .expr = new_expr,
                         } });
 
-                        const before_len = stmt_buf.items.len;
-                        try self.emitCellDecrefInto(cell.cell, cell.layout_idx, region, &stmt_buf);
-                        if (stmt_buf.items.len > before_len) changed = true;
+                        const cell_key = @as(u64, @bitCast(cell.cell));
+                        const cell_owner_key = self.consumedOwnerKey(cell_key);
+                        const transfers_cell_owner = if (cell_owner_key) |owner_key|
+                            try self.exprTransfersOwnerKey(new_expr, owner_key)
+                        else
+                            false;
+
+                        if (!transfers_cell_owner) {
+                            const before_len = stmt_buf.items.len;
+                            try self.emitCellDecrefInto(cell.cell, cell.layout_idx, region, &stmt_buf);
+                            if (stmt_buf.items.len > before_len) changed = true;
+                        }
                         try stmt_buf.append(self.allocator, .{ .cell_store = .{
                             .cell = cell.cell,
                             .layout_idx = cell.layout_idx,
@@ -4662,7 +4863,7 @@ pub const RcInsertPass = struct {
         var tail_stmts = std.ArrayList(LirStmt).empty;
         defer tail_stmts.deinit(self.allocator);
         for (params) |pat_id| {
-            try self.emitTailDecrefsForPatternInto(pat_id, &final_local_consumed_uses, region, &tail_stmts);
+            try self.emitTailDecrefsForPatternInto(pat_id, &final_local_consumed_uses, new_body, region, &tail_stmts);
         }
         final_body = try self.wrapExprWithTailStmts(final_body, ret_layout, tail_stmts.items, region);
 
@@ -4712,7 +4913,7 @@ pub const RcInsertPass = struct {
 
         var tail_stmts = std.ArrayList(LirStmt).empty;
         defer tail_stmts.deinit(self.allocator);
-        try self.emitTailDecrefsForPatternInto(fl.elem_pattern, &local_consumed_uses, region, &tail_stmts);
+        try self.emitTailDecrefsForPatternInto(fl.elem_pattern, &local_consumed_uses, LirExprId.none, region, &tail_stmts);
         final_body = try self.wrapExprWithTailStmts(final_body, .zst, tail_stmts.items, region);
 
         if (final_body != fl.body) {
@@ -5113,8 +5314,34 @@ pub const RcInsertPass = struct {
             },
             .dbg => |dbg_expr| self.exprTransfersOwnerKey(dbg_expr.expr, key),
             .nominal => |nominal| self.exprTransfersOwnerKey(nominal.backing_expr, key),
-            .block => |block| self.exprTransfersOwnerKey(block.final_expr, key),
-            .proc_call => false,
+            .block => |block| blk: {
+                const final_expr = self.store.getExpr(block.final_expr);
+                if (final_expr == .lookup) {
+                    if (self.blockBindingForLookupSymbol(block.stmts, final_expr.lookup.symbol)) |binding| {
+                        break :blk switch (binding.semantics) {
+                            .owned, .retained => self.exprTransfersOwnerKey(binding.expr, key),
+                            .borrow_alias, .scoped_borrow => false,
+                        };
+                    }
+                }
+                break :blk self.exprTransfersOwnerKey(block.final_expr, key);
+            },
+            .low_level => |ll| blk: {
+                const args = self.store.getExprSpan(ll.args);
+                for (args, 0..) |arg_id, i| {
+                    if (!ll.op.consumedArgMayAliasResult(i)) continue;
+                    if (try self.exprTransfersOwnerKey(arg_id, key)) break :blk true;
+                }
+                break :blk false;
+            },
+            .proc_call => |call| blk: {
+                const args = self.store.getExprSpan(call.args);
+                for (args, 0..) |arg_id, i| {
+                    if (!try self.exprTransfersOwnerKey(arg_id, key)) continue;
+                    if (try self.procResultTransfersParamOwner(call.proc, i)) break :blk true;
+                }
+                break :blk false;
+            },
             .cell_load => false,
             .list => false,
             .empty_list => false,
@@ -5126,7 +5353,6 @@ pub const RcInsertPass = struct {
             .match_expr => false,
             .early_return => false,
             .break_expr => false,
-            .low_level => false,
             .expect => false,
             .hosted_call => false,
             .i64_literal => false,
@@ -5945,12 +6171,14 @@ pub const RcInsertPass = struct {
         self: *RcInsertPass,
         pat_id: LirPatternId,
         local_uses: *const std.AutoHashMap(u64, u32),
+        final_expr: LirExprId,
         region: Region,
         rc_stmts: *std.ArrayList(LirStmt),
     ) Allocator.Error!void {
         const Ctx = struct {
             pass: *RcInsertPass,
             local_uses: *const std.AutoHashMap(u64, u32),
+            final_expr: LirExprId,
             region: Region,
             rc_stmts: *std.ArrayList(LirStmt),
             fn onBind(ctx: @This(), bind_pat_id: LirPatternId, symbol: Symbol, layout_idx: LayoutIdx, _: bool) Allocator.Error!void {
@@ -5958,6 +6186,7 @@ pub const RcInsertPass = struct {
                 const resolved_layout = ctx.pass.keyLayout(key, layout_idx);
                 if (!ctx.pass.keyIntroducesOwner(key)) return;
                 if (!ctx.pass.layoutNeedsRc(resolved_layout)) return;
+                if (!ctx.final_expr.isNone() and try ctx.pass.exprTransfersOwnerKey(ctx.final_expr, key)) return;
                 const use_count = ctx.pass.ownerUseCountFromMap(ctx.local_uses, key);
                 if (use_count == 0) {
                     try ctx.pass.emitDecrefInto(ctx.pass.keySymbol(key, symbol), resolved_layout, ctx.region, ctx.rc_stmts);
@@ -5967,6 +6196,7 @@ pub const RcInsertPass = struct {
         try walkPatternBinds(self.store, pat_id, Ctx{
             .pass = self,
             .local_uses = local_uses,
+            .final_expr = final_expr,
             .region = region,
             .rc_stmts = rc_stmts,
         });
@@ -6662,6 +6892,254 @@ test "RC: borrowed later statements keep list owner alive until block tail" {
     try std.testing.expectEqual(@as(u32, 1), countDecrefsForSymbol(&env.lir_store, result_expr.block.final_expr, sym_list));
 }
 
+test "RC: list used for capacity sizing and later loop keeps source owner alive" {
+    const allocator = std.testing.allocator;
+    const Search = struct {
+        fn hasOwningAliasForOwner(
+            pass: *RcInsertPass,
+            expr_id: LirExprId,
+            owner_key: u64,
+        ) bool {
+            if (expr_id.isNone()) return false;
+
+            return switch (pass.store.getExpr(expr_id)) {
+                .block => |block| blk: {
+                    for (pass.store.getStmts(block.stmts)) |stmt| {
+                        const found = switch (stmt) {
+                            .decl, .mutate => |binding| blk2: {
+                                if (binding.semantics == .owned or binding.semantics == .retained) {
+                                    if (pass.ownerKeyForAliasedExpr(binding.expr)) |binding_owner_key| {
+                                        if (binding_owner_key == owner_key) break :blk2 true;
+                                    }
+                                }
+                                break :blk2 hasOwningAliasForOwner(pass, binding.expr, owner_key);
+                            },
+                            .cell_init, .cell_store => |binding| hasOwningAliasForOwner(pass, binding.expr, owner_key),
+                            .cell_drop => false,
+                        };
+                        if (found) break :blk true;
+                    }
+                    break :blk hasOwningAliasForOwner(pass, block.final_expr, owner_key);
+                },
+                .if_then_else => |ite| blk: {
+                    for (pass.store.getIfBranches(ite.branches)) |branch| {
+                        if (hasOwningAliasForOwner(pass, branch.cond, owner_key)) break :blk true;
+                        if (hasOwningAliasForOwner(pass, branch.body, owner_key)) break :blk true;
+                    }
+                    break :blk hasOwningAliasForOwner(pass, ite.final_else, owner_key);
+                },
+                .match_expr => |match_expr| blk: {
+                    if (hasOwningAliasForOwner(pass, match_expr.value, owner_key)) break :blk true;
+                    for (pass.store.getMatchBranches(match_expr.branches)) |branch| {
+                        if (hasOwningAliasForOwner(pass, branch.guard, owner_key)) break :blk true;
+                        if (hasOwningAliasForOwner(pass, branch.body, owner_key)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .for_loop => |fl| hasOwningAliasForOwner(pass, fl.list_expr, owner_key) or hasOwningAliasForOwner(pass, fl.body, owner_key),
+                .while_loop => |wl| hasOwningAliasForOwner(pass, wl.cond, owner_key) or hasOwningAliasForOwner(pass, wl.body, owner_key),
+                .discriminant_switch => |ds| blk: {
+                    if (hasOwningAliasForOwner(pass, ds.value, owner_key)) break :blk true;
+                    for (pass.store.getExprSpan(ds.branches)) |branch_expr| {
+                        if (hasOwningAliasForOwner(pass, branch_expr, owner_key)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .proc_call => |call| blk: {
+                    for (pass.store.getExprSpan(call.args)) |arg| {
+                        if (hasOwningAliasForOwner(pass, arg, owner_key)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .low_level => |ll| blk: {
+                    for (pass.store.getExprSpan(ll.args)) |arg| {
+                        if (hasOwningAliasForOwner(pass, arg, owner_key)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .list => |list_expr| blk: {
+                    for (pass.store.getExprSpan(list_expr.elems)) |elem| {
+                        if (hasOwningAliasForOwner(pass, elem, owner_key)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .struct_ => |struct_expr| blk: {
+                    for (pass.store.getExprSpan(struct_expr.fields)) |field| {
+                        if (hasOwningAliasForOwner(pass, field, owner_key)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .tag => |tag_expr| blk: {
+                    for (pass.store.getExprSpan(tag_expr.args)) |arg| {
+                        if (hasOwningAliasForOwner(pass, arg, owner_key)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .struct_access => |sa| hasOwningAliasForOwner(pass, sa.struct_expr, owner_key),
+                .tag_payload_access => |tpa| hasOwningAliasForOwner(pass, tpa.value, owner_key),
+                .nominal => |nominal| hasOwningAliasForOwner(pass, nominal.backing_expr, owner_key),
+                .early_return => |ret| hasOwningAliasForOwner(pass, ret.expr, owner_key),
+                .dbg => |dbg_expr| hasOwningAliasForOwner(pass, dbg_expr.expr, owner_key),
+                .expect => |expect_expr| hasOwningAliasForOwner(pass, expect_expr.cond, owner_key) or hasOwningAliasForOwner(pass, expect_expr.body, owner_key),
+                .str_concat => |parts| blk: {
+                    for (pass.store.getExprSpan(parts)) |part| {
+                        if (hasOwningAliasForOwner(pass, part, owner_key)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .int_to_str => |its| hasOwningAliasForOwner(pass, its.value, owner_key),
+                .float_to_str => |fts| hasOwningAliasForOwner(pass, fts.value, owner_key),
+                .dec_to_str => |value| hasOwningAliasForOwner(pass, value, owner_key),
+                .str_escape_and_quote => |value| hasOwningAliasForOwner(pass, value, owner_key),
+                .hosted_call => |hc| blk: {
+                    for (pass.store.getExprSpan(hc.args)) |arg| {
+                        if (hasOwningAliasForOwner(pass, arg, owner_key)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .lookup,
+                .cell_load,
+                .empty_list,
+                .zero_arg_tag,
+                .i64_literal,
+                .i128_literal,
+                .f64_literal,
+                .f32_literal,
+                .dec_literal,
+                .str_literal,
+                .bool_literal,
+                .incref,
+                .decref,
+                .free,
+                .crash,
+                .runtime_error,
+                .break_expr,
+                => false,
+            };
+        }
+    };
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_layout: LayoutIdx = .i64;
+    const list_layout = try env.layout_store.insertLayout(layout_mod.Layout.list(i64_layout));
+    const sym_list = makeSymbol(1);
+    const sym_result = makeSymbol(2);
+    const sym_elem = makeSymbol(3);
+
+    const one = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 1, .layout_idx = i64_layout } }, Region.zero());
+    const two = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 2, .layout_idx = i64_layout } }, Region.zero());
+    const three = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 3, .layout_idx = i64_layout } }, Region.zero());
+    const src_elems = try env.lir_store.addExprSpan(&.{ one, two, three });
+    const list_expr = try env.lir_store.addExpr(.{ .list = .{
+        .list_layout = list_layout,
+        .elem_layout = i64_layout,
+        .elems = src_elems,
+    } }, Region.zero());
+
+    const lookup_list_for_len = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_list,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+    const len_expr = try env.lir_store.addExpr(.{ .low_level = .{
+        .op = .list_len,
+        .args = try env.lir_store.addExprSpan(&.{lookup_list_for_len}),
+        .ret_layout = i64_layout,
+    } }, Region.zero());
+    const result_init = try env.lir_store.addExpr(.{ .low_level = .{
+        .op = .list_with_capacity,
+        .args = try env.lir_store.addExprSpan(&.{len_expr}),
+        .ret_layout = list_layout,
+    } }, Region.zero());
+
+    const lookup_list_for_loop = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_list,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+    const lookup_result_for_append = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_result,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+    const lookup_elem = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_elem,
+        .layout_idx = i64_layout,
+    } }, Region.zero());
+    const append_expr = try env.lir_store.addExpr(.{ .low_level = .{
+        .op = .list_append_unsafe,
+        .args = try env.lir_store.addExprSpan(&.{ lookup_result_for_append, lookup_elem }),
+        .ret_layout = list_layout,
+    } }, Region.zero());
+
+    const pat_list = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_list,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+    const pat_result = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_result,
+        .layout_idx = list_layout,
+        .reassignable = true,
+    } }, Region.zero());
+    const pat_elem = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_elem,
+        .layout_idx = i64_layout,
+    } }, Region.zero());
+
+    const unit = try env.lir_store.addExpr(.{ .struct_ = .{
+        .struct_layout = .none,
+        .fields = try env.lir_store.addExprSpan(&.{}),
+    } }, Region.zero());
+    const loop_body = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = try env.lir_store.addStmts(&.{.{ .mutate = .{
+            .pattern = pat_result,
+            .expr = append_expr,
+        } }}),
+        .final_expr = unit,
+        .result_layout = .zst,
+    } }, Region.zero());
+    const for_expr = try env.lir_store.addExpr(.{ .for_loop = .{
+        .list_expr = lookup_list_for_loop,
+        .elem_layout = i64_layout,
+        .elem_pattern = pat_elem,
+        .body = loop_body,
+    } }, Region.zero());
+
+    const final_zero = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 0, .layout_idx = i64_layout } }, Region.zero());
+    const wild_zst = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = .zst } }, Region.zero());
+
+    const stmts = try env.lir_store.addStmts(&.{
+        .{ .decl = .{ .pattern = pat_list, .expr = list_expr } },
+        .{ .decl = .{ .pattern = pat_result, .expr = result_init } },
+        .{ .decl = .{ .pattern = wild_zst, .expr = for_expr } },
+    });
+    const block_expr = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = final_zero,
+        .result_layout = i64_layout,
+    } }, Region.zero());
+
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(block_expr);
+    const root = env.lir_store.getExpr(result);
+    try std.testing.expect(root == .block);
+
+    const source_owner_key = pass.consumedOwnerKey(pass.patternKey(pat_list, sym_list)) orelse return error.TestUnexpectedResult;
+    const result_stmts = env.lir_store.getStmts(root.block.stmts);
+    try std.testing.expect(result_stmts.len >= 2);
+    for (result_stmts) |stmt| {
+        const touches_owner = switch (stmt) {
+            .decl, .mutate => |binding| try pass.exprDropTouchesOwnerKey(binding.expr, source_owner_key),
+            .cell_init, .cell_store => |binding| try pass.exprDropTouchesOwnerKey(binding.expr, source_owner_key),
+            .cell_drop => false,
+        };
+        try std.testing.expect(!touches_owner);
+    }
+    try std.testing.expect(!Search.hasOwningAliasForOwner(&pass, result, source_owner_key));
+}
+
 test "RC: consuming stmt preserves list owner for later list_get_unsafe" {
     const allocator = std.testing.allocator;
 
@@ -7351,6 +7829,81 @@ fn makeProc(store: *LirExprStore, symbol: LIR.Symbol, ret_layout: LayoutIdx) !LI
     });
 }
 
+fn makeUnaryIdentityProc(
+    store: *LirExprStore,
+    proc_symbol: LIR.Symbol,
+    arg_symbol: LIR.Symbol,
+    layout_idx: LayoutIdx,
+) !LIR.LirProcSpecId {
+    const arg_pattern = try store.addPattern(.{ .bind = .{
+        .symbol = arg_symbol,
+        .layout_idx = layout_idx,
+    } }, Region.zero());
+    const args = try store.addPatternSpan(&.{arg_pattern});
+    const arg_layouts = try store.addLayoutIdxSpan(&.{layout_idx});
+    const arg_lookup = try store.addExpr(.{ .lookup = .{
+        .symbol = arg_symbol,
+        .layout_idx = layout_idx,
+    } }, Region.zero());
+    const ret_stmt = try store.addCFStmt(.{ .ret = .{ .value = arg_lookup } });
+
+    return store.addProcSpec(.{
+        .name = proc_symbol,
+        .args = args,
+        .arg_layouts = arg_layouts,
+        .body = ret_stmt,
+        .ret_layout = layout_idx,
+        .closure_data_layout = null,
+        .is_self_recursive = .not_self_recursive,
+    });
+}
+
+fn makeListAppendProc(
+    store: *LirExprStore,
+    proc_symbol: LIR.Symbol,
+    list_symbol: LIR.Symbol,
+    elem_symbol: LIR.Symbol,
+    list_layout: LayoutIdx,
+    elem_layout: LayoutIdx,
+) !LIR.LirProcSpecId {
+    const list_pattern = try store.addPattern(.{ .bind = .{
+        .symbol = list_symbol,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+    const elem_pattern = try store.addPattern(.{ .bind = .{
+        .symbol = elem_symbol,
+        .layout_idx = elem_layout,
+    } }, Region.zero());
+    const args = try store.addPatternSpan(&.{ list_pattern, elem_pattern });
+    const arg_layouts = try store.addLayoutIdxSpan(&.{ list_layout, elem_layout });
+
+    const list_lookup = try store.addExpr(.{ .lookup = .{
+        .symbol = list_symbol,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+    const elem_lookup = try store.addExpr(.{ .lookup = .{
+        .symbol = elem_symbol,
+        .layout_idx = elem_layout,
+    } }, Region.zero());
+    const append_args = try store.addExprSpan(&.{ list_lookup, elem_lookup });
+    const append_expr = try store.addExpr(.{ .low_level = .{
+        .op = .list_append_unsafe,
+        .args = append_args,
+        .ret_layout = list_layout,
+    } }, Region.zero());
+    const ret_stmt = try store.addCFStmt(.{ .ret = .{ .value = append_expr } });
+
+    return store.addProcSpec(.{
+        .name = proc_symbol,
+        .args = args,
+        .arg_layouts = arg_layouts,
+        .body = ret_stmt,
+        .ret_layout = list_layout,
+        .closure_data_layout = null,
+        .is_self_recursive = .not_self_recursive,
+    });
+}
+
 test "RC borrowed string expression releases original temporary binding" {
     const allocator = std.testing.allocator;
 
@@ -7910,7 +8463,7 @@ test "RC identity call result matched later tail-cleans matched binding" {
         .elems = elems,
     } }, Region.zero());
 
-    const identity_proc = try makeProc(&env.lir_store, sym_arg, list_layout);
+    const identity_proc = try makeUnaryIdentityProc(&env.lir_store, makeSymbol(99), sym_arg, list_layout);
     const lookup_x_call = try env.lir_store.addExpr(.{ .lookup = .{
         .symbol = sym_x,
         .layout_idx = list_layout,
@@ -7991,7 +8544,7 @@ test "RC repeated identity call tail-cleans the unused second result" {
         .elems = elems,
     } }, Region.zero());
 
-    const identity_proc = try makeProc(&env.lir_store, sym_arg, list_layout);
+    const identity_proc = try makeUnaryIdentityProc(&env.lir_store, makeSymbol(99), sym_arg, list_layout);
     const lookup_x_call_a = try env.lir_store.addExpr(.{ .lookup = .{
         .symbol = sym_x,
         .layout_idx = list_layout,
@@ -8531,7 +9084,7 @@ test "RC proc_call caller: consumed refcounted arg is not tail-decref'd by calle
         .symbol = sym_s,
         .layout_idx = str_layout,
     } }, Region.zero());
-    const proc_id = try makeProc(&env.lir_store, sym_id, str_layout);
+    const proc_id = try makeUnaryIdentityProc(&env.lir_store, sym_id, sym_s, str_layout);
     const call_args = try env.lir_store.addExprSpan(&.{lookup_s});
     const call_expr = try env.lir_store.addExpr(.{ .proc_call = .{
         .proc = proc_id,
@@ -8579,7 +9132,7 @@ test "RC proc_call caller: consumed list arg is not tail-decref'd by caller" {
         .symbol = sym_list,
         .layout_idx = list_layout,
     } }, Region.zero());
-    const proc_id = try makeProc(&env.lir_store, sym_id, list_layout);
+    const proc_id = try makeUnaryIdentityProc(&env.lir_store, sym_id, sym_list, list_layout);
     const call_args = try env.lir_store.addExprSpan(&.{lookup_list});
     const call_expr = try env.lir_store.addExpr(.{ .proc_call = .{
         .proc = proc_id,
@@ -8612,6 +9165,280 @@ test "RC proc_call caller: consumed list arg is not tail-decref'd by caller" {
     defer pass.deinit();
 
     const result = try pass.insertRcOps(block_expr);
+
+    try std.testing.expectEqual(@as(u32, 0), countDecrefsForSymbol(&env.lir_store, result, sym_list));
+}
+
+test "RC proc transfer analysis detects identity and append owner transfer" {
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_layout: LayoutIdx = .i64;
+    const list_layout = try env.layout_store.insertLayout(layout_mod.Layout.list(i64_layout));
+
+    const identity_proc = try makeUnaryIdentityProc(
+        &env.lir_store,
+        makeSymbol(100),
+        makeSymbol(101),
+        list_layout,
+    );
+    const append_proc = try makeListAppendProc(
+        &env.lir_store,
+        makeSymbol(102),
+        makeSymbol(103),
+        makeSymbol(104),
+        list_layout,
+        i64_layout,
+    );
+
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    try std.testing.expect(try pass.procResultTransfersParamOwner(identity_proc, 0));
+    try std.testing.expect(try pass.procResultTransfersParamOwner(append_proc, 0));
+    try std.testing.expect(!(try pass.procResultTransfersParamOwner(append_proc, 1)));
+}
+
+test "RC mutable list append proc update returns transferred owner without RC churn" {
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_layout: LayoutIdx = .i64;
+    const list_layout = try env.layout_store.insertLayout(layout_mod.Layout.list(i64_layout));
+    const sym_acc = makeSymbol(1);
+    const sym_list_arg = makeSymbol(2);
+    const sym_elem_arg = makeSymbol(3);
+    const sym_proc = makeSymbol(4);
+
+    const append_proc = try makeListAppendProc(
+        &env.lir_store,
+        sym_proc,
+        sym_list_arg,
+        sym_elem_arg,
+        list_layout,
+        i64_layout,
+    );
+
+    const empty_list = try env.lir_store.addExpr(.{ .empty_list = .{
+        .elem_layout = i64_layout,
+        .list_layout = list_layout,
+    } }, Region.zero());
+    const lookup_acc = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_acc,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+    const one = try env.lir_store.addExpr(.{ .i64_literal = .{
+        .value = 1,
+        .layout_idx = i64_layout,
+    } }, Region.zero());
+    const call_args = try env.lir_store.addExprSpan(&.{ lookup_acc, one });
+    const append_call = try env.lir_store.addExpr(.{ .proc_call = .{
+        .proc = append_proc,
+        .args = call_args,
+        .ret_layout = list_layout,
+        .called_via = .apply,
+    } }, Region.zero());
+    const final_lookup = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_acc,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+
+    const pat_acc = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_acc,
+        .layout_idx = list_layout,
+        .reassignable = true,
+    } }, Region.zero());
+    const stmts = try env.lir_store.addStmts(&.{
+        .{ .decl = .{ .pattern = pat_acc, .expr = empty_list } },
+        .{ .mutate = .{ .pattern = pat_acc, .expr = append_call } },
+    });
+    const block_expr = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = final_lookup,
+        .result_layout = list_layout,
+    } }, Region.zero());
+
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(block_expr);
+    const rc = countRcOps(&env.lir_store, result);
+
+    try std.testing.expectEqual(@as(u32, 0), rc.increfs);
+    try std.testing.expectEqual(@as(u32, 0), rc.decrefs);
+    try std.testing.expectEqual(@as(u32, 0), countDecrefsForSymbol(&env.lir_store, result, sym_acc));
+}
+
+test "RC mutable list loop append proc preserves accumulator owner on returned final value" {
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_layout: LayoutIdx = .i64;
+    const list_layout = try env.layout_store.insertLayout(layout_mod.Layout.list(i64_layout));
+    const sym_src = makeSymbol(1);
+    const sym_acc = makeSymbol(2);
+    const sym_elem = makeSymbol(3);
+    const sym_list_arg = makeSymbol(4);
+    const sym_elem_arg = makeSymbol(5);
+    const sym_proc = makeSymbol(6);
+
+    const append_proc = try makeListAppendProc(
+        &env.lir_store,
+        sym_proc,
+        sym_list_arg,
+        sym_elem_arg,
+        list_layout,
+        i64_layout,
+    );
+
+    const one = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 1, .layout_idx = i64_layout } }, Region.zero());
+    const two = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 2, .layout_idx = i64_layout } }, Region.zero());
+    const three = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 3, .layout_idx = i64_layout } }, Region.zero());
+    const src_elems = try env.lir_store.addExprSpan(&.{ one, two, three });
+    const src_list = try env.lir_store.addExpr(.{ .list = .{
+        .list_layout = list_layout,
+        .elem_layout = i64_layout,
+        .elems = src_elems,
+    } }, Region.zero());
+    const empty_acc = try env.lir_store.addExpr(.{ .empty_list = .{
+        .elem_layout = i64_layout,
+        .list_layout = list_layout,
+    } }, Region.zero());
+
+    const lookup_acc_for_call = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_acc,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+    const lookup_elem = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_elem,
+        .layout_idx = i64_layout,
+    } }, Region.zero());
+    const append_call_args = try env.lir_store.addExprSpan(&.{ lookup_acc_for_call, lookup_elem });
+    const append_call = try env.lir_store.addExpr(.{ .proc_call = .{
+        .proc = append_proc,
+        .args = append_call_args,
+        .ret_layout = list_layout,
+        .called_via = .apply,
+    } }, Region.zero());
+
+    const pat_acc = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_acc,
+        .layout_idx = list_layout,
+        .reassignable = true,
+    } }, Region.zero());
+    const pat_elem = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_elem,
+        .layout_idx = i64_layout,
+    } }, Region.zero());
+    const mutate_stmts = try env.lir_store.addStmts(&.{.{ .mutate = .{
+        .pattern = pat_acc,
+        .expr = append_call,
+    } }});
+    const unit = try env.lir_store.addExpr(.{ .struct_ = .{
+        .struct_layout = .none,
+        .fields = try env.lir_store.addExprSpan(&.{}),
+    } }, Region.zero());
+    const loop_body = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = mutate_stmts,
+        .final_expr = unit,
+        .result_layout = .zst,
+    } }, Region.zero());
+
+    const lookup_src = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_src,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+    const for_expr = try env.lir_store.addExpr(.{ .for_loop = .{
+        .list_expr = lookup_src,
+        .elem_layout = i64_layout,
+        .elem_pattern = pat_elem,
+        .body = loop_body,
+    } }, Region.zero());
+    const final_lookup = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_acc,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+
+    const pat_src = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_src,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+    const wild_unit = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = .zst } }, Region.zero());
+    const stmts = try env.lir_store.addStmts(&.{
+        .{ .decl = .{ .pattern = pat_src, .expr = src_list } },
+        .{ .decl = .{ .pattern = pat_acc, .expr = empty_acc } },
+        .{ .decl = .{ .pattern = wild_unit, .expr = for_expr } },
+    });
+    const block_expr = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = final_lookup,
+        .result_layout = list_layout,
+    } }, Region.zero());
+
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(block_expr);
+    const rc = countRcOps(&env.lir_store, result);
+
+    try std.testing.expectEqual(@as(u32, 0), countIncrefsForSymbol(&env.lir_store, result, sym_src));
+    try std.testing.expectEqual(@as(u32, 0), countIncrefsForSymbol(&env.lir_store, result, sym_acc));
+    try std.testing.expectEqual(@as(u32, 0), rc.increfs);
+    try std.testing.expectEqual(@as(u32, 1), rc.decrefs);
+    try std.testing.expectEqual(@as(u32, 1), countDecrefsForSymbol(&env.lir_store, result, sym_src));
+    try std.testing.expectEqual(@as(u32, 0), countDecrefsForSymbol(&env.lir_store, result, sym_acc));
+}
+
+test "RC proc body: list_append_unsafe return keeps consumed list owner alive" {
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_layout: LayoutIdx = .i64;
+    const list_layout = try env.layout_store.insertLayout(layout_mod.Layout.list(i64_layout));
+    const sym_list = makeSymbol(1);
+    const sym_elem = makeSymbol(2);
+
+    const lookup_list = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_list,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+    const lookup_elem = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_elem,
+        .layout_idx = i64_layout,
+    } }, Region.zero());
+    const append_args = try env.lir_store.addExprSpan(&.{ lookup_list, lookup_elem });
+    const append_expr = try env.lir_store.addExpr(.{ .low_level = .{
+        .op = .list_append_unsafe,
+        .args = append_args,
+        .ret_layout = list_layout,
+    } }, Region.zero());
+
+    const pat_list = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_list,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+    const pat_elem = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_elem,
+        .layout_idx = i64_layout,
+    } }, Region.zero());
+    const params = try env.lir_store.addPatternSpan(&.{ pat_list, pat_elem });
+
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOpsForProcBody(append_expr, params, list_layout);
 
     try std.testing.expectEqual(@as(u32, 0), countDecrefsForSymbol(&env.lir_store, result, sym_list));
 }
