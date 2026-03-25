@@ -4250,7 +4250,6 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .u128_val = 0 },
-        .skip = SKIP_ALL,
     },
 
     // U128: times
@@ -8091,28 +8090,26 @@ pub const tests = [_]TestCase{
     .{ .name = "F32 to_str", .source = "1.5.F32.to_str()", .expected = .{ .str_val = "1.5" } },
 
     // --- list operations with typed elements ---
-    // TODO: list of typed ints crashes across all backends (likely monomorphization bug)
+    // list of typed ints (len returns U64, to_i64 needs _wrap suffix)
     .{
         .name = "list of I32 len",
         .source =
         \\{
         \\    xs = [1.I32, 2.I32, 3.I32]
-        \\    xs.len().to_i64()
+        \\    xs.len().to_i64_wrap()
         \\}
         ,
         .expected = .{ .i64_val = 3 },
-        .skip = SKIP_ALL,
     },
     .{
         .name = "list of U8 len",
         .source =
         \\{
         \\    xs = [10.U8, 20.U8, 30.U8]
-        \\    xs.len().to_i64()
+        \\    xs.len().to_i64_wrap()
         \\}
         ,
         .expected = .{ .i64_val = 3 },
-        .skip = SKIP_ALL,
     },
 
     // --- tag union with payload ---
