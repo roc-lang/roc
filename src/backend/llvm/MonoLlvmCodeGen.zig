@@ -3005,7 +3005,16 @@ pub const MonoLlvmCodeGen = struct {
 
                 const min_len = builder.intValue(.i64, @as(u64, @intCast(prefix_patterns.len + suffix_patterns.len))) catch return error.OutOfMemory;
                 const len_pred: LlvmBuilder.IntegerCondition = if (list_pat.rest.isNone()) .eq else .uge;
-                var result = wip.icmp(len_pred, list_len, min_len, "") catch return error.OutOfMemory;
+                const len_matches = wip.icmp(len_pred, list_len, min_len, "") catch return error.OutOfMemory;
+                const false_val = builder.intValue(.i1, 0) catch return error.OutOfMemory;
+                const match_block = wip.block(1, "list_pat_match") catch return error.OutOfMemory;
+                const exit_block = wip.block(2, "list_pat_exit") catch return error.OutOfMemory;
+                const entry_block = wip.cursor.block;
+
+                _ = wip.brCond(len_matches, match_block, exit_block, .none) catch return error.CompilationFailed;
+
+                wip.cursor = .{ .block = match_block };
+                var result = builder.intValue(.i1, 1) catch return error.OutOfMemory;
 
                 for (prefix_patterns, 0..) |sub_pat_id, idx| {
                     const elem_index = builder.intValue(.i64, @as(u64, @intCast(idx))) catch return error.OutOfMemory;
@@ -3032,12 +3041,22 @@ pub const MonoLlvmCodeGen = struct {
 
                 if (!list_pat.rest.isNone()) {
                     const prefix_len = builder.intValue(.i64, @as(u64, @intCast(prefix_patterns.len))) catch return error.OutOfMemory;
-                    const rest_val = try self.buildRestSublist(data_ptr, list_len, prefix_len, elem_sa.size);
+                    const rest_val = try self.buildRestSublist(value, list_pat.list_layout, prefix_len);
                     const rest_match = try self.emitPatternMatchCondition(list_pat.rest, rest_val);
                     result = wip.bin(.@"and", result, rest_match, "") catch return error.CompilationFailed;
                 }
 
-                break :blk result;
+                const match_result_block = wip.cursor.block;
+                _ = wip.br(exit_block) catch return error.CompilationFailed;
+
+                wip.cursor = .{ .block = exit_block };
+                const result_phi = wip.phi(.i1, "list_pat_result") catch return error.CompilationFailed;
+                result_phi.finish(
+                    &.{ false_val, result },
+                    &.{ entry_block, match_result_block },
+                    wip,
+                );
+                break :blk result_phi.toValue();
             },
             .float_literal, .str_literal => unreachable,
         };
@@ -3437,7 +3456,7 @@ pub const MonoLlvmCodeGen = struct {
 
         const size_val = builder.intValue(.i64, total_bytes) catch return error.OutOfMemory;
         const align_val = builder.intValue(.i32, elem_align) catch return error.OutOfMemory;
-        const refcounted_val = builder.intValue(.i1, 0) catch return error.OutOfMemory;
+        const refcounted_val = builder.intValue(.i1, @intFromBool(ls.layoutContainsRefcounted(elem_layout_data))) catch return error.OutOfMemory;
 
         const heap_ptr = try self.callBuiltin("roc_builtins_allocate_with_refcount", ptr_type, &.{ .i64, .i32, .i1, ptr_type }, &.{ size_val, align_val, refcounted_val, roc_ops });
 
@@ -7006,29 +7025,30 @@ pub const MonoLlvmCodeGen = struct {
         };
     }
 
-    /// Build a rest-sublist value: creates a list struct {ptr + prefix_len*elem_size, len - prefix_len, 0}
-    /// representing the remainder of a list after prefix elements have been matched.
-    fn buildRestSublist(self: *MonoLlvmCodeGen, data_ptr: LlvmBuilder.Value, list_len: LlvmBuilder.Value, prefix_len: LlvmBuilder.Value, elem_size: u64) Error!LlvmBuilder.Value {
+    /// Build a list rest-pattern value using the regular list_sublist builtin so the
+    /// resulting RocList has correct ownership and refcount behavior.
+    fn buildRestSublist(self: *MonoLlvmCodeGen, list_value: LlvmBuilder.Value, list_layout_idx: layout.Idx, prefix_len: LlvmBuilder.Value) Error!LlvmBuilder.Value {
         const wip = self.wip orelse return error.CompilationFailed;
         const builder = self.builder orelse return error.CompilationFailed;
-
-        // rest_ptr = data_ptr + prefix_len * elem_size (via GEP on i8)
-        const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
-        const elem_size_val = builder.intValue(.i64, elem_size) catch return error.OutOfMemory;
-        const byte_offset = wip.bin(.mul, prefix_len, elem_size_val, "") catch return error.CompilationFailed;
-        const rest_ptr = wip.gep(.inbounds, .i8, data_ptr, &.{byte_offset}, "") catch return error.CompilationFailed;
-
-        // rest_len = list_len - prefix_len
+        const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+        const list_ptr = try self.materializeGeneratedValueToPtr(list_value, list_layout_idx);
+        const off8 = builder.intValue(.i32, 8) catch return error.OutOfMemory;
+        const len_ptr = wip.gep(.inbounds, .i8, list_ptr, &.{off8}, "") catch return error.CompilationFailed;
+        const list_len = wip.load(.normal, .i64, len_ptr, alignment, "") catch return error.CompilationFailed;
         const rest_len = wip.bin(.sub, list_len, prefix_len, "") catch return error.CompilationFailed;
+        const temp_size = try self.materializedLayoutSize(list_layout_idx);
+        const byte_array_type = builder.arrayType(temp_size, .i8) catch return error.OutOfMemory;
+        const temp_ptr = wip.alloca(.normal, byte_array_type, .none, alignment, .default, "rest_sublist") catch return error.CompilationFailed;
+        const zero_byte = builder.intValue(.i8, 0) catch return error.OutOfMemory;
+        const size_val = builder.intValue(.i32, temp_size) catch return error.OutOfMemory;
+        _ = wip.callMemSet(temp_ptr, alignment, zero_byte, size_val, .normal, false) catch return error.CompilationFailed;
 
-        // Build {ptr, len, cap=0} struct
-        const roc_list_type = builder.structType(.normal, &.{ ptr_type, .i64, .i64 }) catch return error.OutOfMemory;
-        const zero_cap = builder.intValue(.i64, 0) catch return error.OutOfMemory;
-        var result = builder.poisonValue(roc_list_type) catch return error.OutOfMemory;
-        result = wip.insertValue(result, rest_ptr, &.{0}, "") catch return error.CompilationFailed;
-        result = wip.insertValue(result, rest_len, &.{1}, "") catch return error.CompilationFailed;
-        result = wip.insertValue(result, zero_cap, &.{2}, "") catch return error.CompilationFailed;
-        return result;
+        const saved_out_ptr = self.out_ptr;
+        self.out_ptr = temp_ptr;
+        defer self.out_ptr = saved_out_ptr;
+
+        _ = try self.callListSublistFromPtr(list_ptr, prefix_len, rest_len, .{ .ret_layout = list_layout_idx });
+        return try self.loadValueFromPtr(temp_ptr, list_layout_idx);
     }
 
     /// Bind a pattern to an LLVM value.
@@ -7084,9 +7104,8 @@ pub const MonoLlvmCodeGen = struct {
 
                 const prefix_patterns = self.store.getPatternSpan(list_pat.prefix);
 
-                // The value is a {ptr, i64, i64} struct. Extract data pointer and length.
+                // The value is a {ptr, i64, i64} struct. Extract the data pointer.
                 const data_ptr = wip.extractValue(value, &.{0}, "") catch return error.CompilationFailed;
-                const list_len = wip.extractValue(value, &.{1}, "") catch return error.CompilationFailed;
 
                 // Get element size info
                 const elem_layout_data = ls.getLayout(list_pat.elem_layout);
@@ -7104,7 +7123,7 @@ pub const MonoLlvmCodeGen = struct {
                 // Handle rest pattern if present (.. as rest)
                 if (!list_pat.rest.isNone()) {
                     const expected_len = builder.intValue(.i64, @as(u64, @intCast(prefix_patterns.len))) catch return error.OutOfMemory;
-                    const rest_val = try self.buildRestSublist(data_ptr, list_len, expected_len, elem_size);
+                    const rest_val = try self.buildRestSublist(value, list_pat.list_layout, expected_len);
                     try self.bindPattern(list_pat.rest, rest_val);
                 }
             },
