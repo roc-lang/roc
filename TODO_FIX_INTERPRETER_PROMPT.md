@@ -66,11 +66,6 @@ There are two test paths that exercise the interpreter:
 - `src/build/roc/Builtin.roc` — per-type associated items (methods like `is_eq`, `plus`, `to_str`)
 - `src/build/builtin_compiler/main.zig` — maps builtin methods to low-level ops
 
-### Resolved bugs (removed from this doc)
-
-- `list_append_stdin_uaf.roc` — now passes
-- `issue8866.roc` — now passes
-
 ---
 
 ## Monomorphization: wrong monotype for numeric literals in specialized functions
@@ -425,29 +420,10 @@ list context get wrong monotype.
 
 ---
 
-### ~~F64 equality (1 test)~~ — RESOLVED (by design)
-
-F64/F32 equality (`==`) is **intentionally unsupported** in Roc — float equality is
-a well-known footgun (NaN, precision issues like `0.1 + 0.2 != 0.3`). The "crash"
-was actually a correct type error: F64/F32 have no `is_eq` method registered in
-`Builtin.roc` or `builtin_compiler/main.zig` (the `eq_types` array deliberately
-excludes them). The test was changed from `SKIP_ALL` with `bool_val` expectation
-to a `.problem` test that verifies the type checker rejects it.
-
----
-
 ### I128/U128 shift operations (2 tests)
 
 - `shift left I128` — `1.I128.shift_left_by(10.U8)` → 1024
 - `shift left U128` — `1.U128.shift_left_by(16.U8)` → 65536
-
----
-
-### Str.contains (2 tests)
-
-Causes infinite loop in interpreter:
-- `Str.contains("hello world", "world")` → true
-- `Str.contains("hello world", "xyz")` → false
 
 ---
 

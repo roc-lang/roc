@@ -8462,8 +8462,8 @@ pub const tests = [_]TestCase{
     // --- Str operations ---
     .{ .name = "Str.concat", .source = "Str.concat(\"hello \", \"world\")", .expected = .{ .str_val = "hello world" } },
     .{ .name = "Str.repeat", .source = "Str.repeat(\"ab\", 3)", .expected = .{ .str_val = "ababab" } },
-    // TODO: Str.contains causes infinite loop in interpreter
-    .{ .name = "Str.contains", .source = "Str.contains(\"hello world\", \"world\")", .expected = .{ .bool_val = true }, .skip = SKIP_ALL },
-    .{ .name = "Str.contains false", .source = "Str.contains(\"hello world\", \"xyz\")", .expected = .{ .bool_val = false }, .skip = SKIP_ALL },
+    // Str.contains hangs in wasm backend only (interpreter and dev pass)
+    .{ .name = "Str.contains", .source = "Str.contains(\"hello world\", \"world\")", .expected = .{ .bool_val = true }, .skip = .{ .wasm = true } },
+    .{ .name = "Str.contains false", .source = "Str.contains(\"hello world\", \"xyz\")", .expected = .{ .bool_val = false }, .skip = .{ .wasm = true } },
     .{ .name = "Str.to_utf8 len", .source = "Str.to_utf8(\"hi\").len()", .expected = .{ .u64_val = 2 } },
 };

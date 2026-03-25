@@ -368,11 +368,12 @@ fn forkAndEval(
             break;
         };
     }
-    posix.close(pipe_read);
-
-    // Clear pipe FD tracking (pipe is now closed).
+    // Close the pipe read end unless the watchdog already closed it.
     if (wid < helpers.worker_pipe_fds.len) {
-        helpers.worker_pipe_fds[wid].store(-1, .release);
+        const prev = helpers.worker_pipe_fds[wid].swap(-1, .acq_rel);
+        if (prev >= 0) posix.close(@intCast(prev));
+    } else {
+        posix.close(pipe_read);
     }
 
     // Now reap the child.
@@ -1242,22 +1243,23 @@ pub fn main() !void {
 
     var wall_timer = Timer.start() catch unreachable;
 
-    // Default timeout: disabled in single-threaded/coverage, 30s in multi-threaded mode.
+    // Default timeout: 30s in multi-threaded mode, 10s in single-threaded mode.
     // The slowest tests take ~5s in isolation; under full parallel load (16+ threads)
     // CPU contention can slow individual tests by 2-3x, so 30s avoids false positives.
-    const hang_timeout_ms: u64 = if (thread_count <= 1)
-        0
-    else if (cli.timeout_ms > 0)
+    // Single-threaded mode uses a shorter default since there's no CPU contention.
+    const hang_timeout_ms: u64 = if (cli.timeout_ms > 0)
         cli.timeout_ms
+    else if (thread_count <= 1)
+        10_000
     else
         30_000;
 
-    // Allocate per-worker state for hang detection (multi-threaded only).
-    const worker_states: ?[]WorkerState = if (thread_count > 1) blk: {
+    // Allocate per-worker state for hang detection.
+    const worker_states: ?[]WorkerState = blk: {
         const ws = try gpa.alloc(WorkerState, thread_count);
         for (ws) |*w| w.* = .{};
         break :blk ws;
-    } else null;
+    };
     defer if (worker_states) |ws| gpa.free(ws);
 
     // Allocate per-worker child PID and pipe FD tracking for fork-based isolation.
@@ -1282,7 +1284,13 @@ pub fn main() !void {
     };
 
     if (thread_count <= 1) {
+        // Spawn watchdog on a separate thread so it can kill hung forks.
+        const watchdog_thread = if (hang_timeout_ms > 0)
+            try std.Thread.spawn(.{}, hangWatchdog, .{ &context, hang_timeout_ms })
+        else
+            null;
         threadMain(&context);
+        if (watchdog_thread) |wd| wd.join();
     } else {
         const threads = try gpa.alloc(std.Thread, thread_count);
         defer gpa.free(threads);
