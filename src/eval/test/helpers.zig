@@ -16,7 +16,6 @@ const eval_mod = @import("../mod.zig");
 const builtin_loading_mod = eval_mod.builtin_loading;
 const DevEvaluator = eval_mod.DevEvaluator;
 const LlvmEvaluator = eval_mod.LlvmEvaluator;
-const StackValue = eval_mod.StackValue;
 const BuiltinTypes = eval_mod.BuiltinTypes;
 const LoadedModule = builtin_loading_mod.LoadedModule;
 const deserializeBuiltinIndices = builtin_loading_mod.deserializeBuiltinIndices;
@@ -384,7 +383,7 @@ pub fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []
 /// Evaluate an expression using the LlvmEvaluator and return the result as a string.
 /// On platforms with fork, the entire LLVM pipeline (compile + execute) runs in
 /// a child process so that LLVM assertion failures don't crash the test runner.
-fn llvmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) LlvmEvalError![]const u8 {
+pub fn llvmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) LlvmEvalError![]const u8 {
     if (has_fork) {
         return llvmForkAndRun(allocator, module_env, expr_idx, builtin_module_env);
     }

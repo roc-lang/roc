@@ -23,6 +23,7 @@ const ModuleEnv = can.ModuleEnv;
 const RocOps = builtins.host_abi.RocOps;
 const LoadedModule = builtin_loading.LoadedModule;
 const DevEvaluator = eval_mod.DevEvaluator;
+const LlvmEvaluator = eval_mod.LlvmEvaluator;
 
 pub const Backend = @import("eval").EvalBackend;
 const ExecutionBackend = enum {
@@ -84,8 +85,10 @@ pub const Repl = struct {
     crash_ctx: ?*CrashContext,
     /// Backend for code evaluation
     backend: ExecutionBackend,
-    /// DevEvaluator instance (initialized when backend is .dev or .llvm)
+    /// DevEvaluator instance (initialized when backend is .dev)
     dev_evaluator: ?DevEvaluator,
+    /// LlvmEvaluator instance (initialized when backend is .llvm)
+    llvm_evaluator: ?LlvmEvaluator,
     /// ModuleEnv from last successful evaluation (for snapshot generation)
     last_module_env: ?*ModuleEnv,
     /// Debug flag to store rendered HTML for snapshot generation
@@ -128,10 +131,14 @@ pub const Repl = struct {
         var builtin_module = try builtin_loading.loadCompiledModule(allocator, compiled_builtins.builtin_bin, "Builtin", builtin_source);
         errdefer builtin_module.deinit();
 
-        // Initialize DevEvaluator if using a native-code backend
+        // Initialize native-code evaluators for the selected backend.
         var dev_evaluator: ?DevEvaluator = null;
-        if (backend == .dev or backend == .llvm) {
+        if (backend == .dev) {
             dev_evaluator = DevEvaluator.init(allocator, null) catch null;
+        }
+        var llvm_evaluator: ?LlvmEvaluator = null;
+        if (backend == .llvm) {
+            llvm_evaluator = LlvmEvaluator.init(allocator, null) catch null;
         }
 
         return Repl{
@@ -141,6 +148,7 @@ pub const Repl = struct {
             .crash_ctx = crash_ctx,
             .backend = backend,
             .dev_evaluator = dev_evaluator,
+            .llvm_evaluator = llvm_evaluator,
             .last_module_env = null,
             .debug_store_snapshots = false,
             .debug_can_html = std.array_list.Managed([]const u8).init(allocator),
@@ -252,6 +260,9 @@ pub const Repl = struct {
         // Clean up DevEvaluator if it exists
         if (self.dev_evaluator) |*dev_eval| {
             dev_eval.deinit();
+        }
+        if (self.llvm_evaluator) |*llvm_eval| {
+            llvm_eval.deinit();
         }
 
         // Clean up debug HTML storage
@@ -771,7 +782,8 @@ pub const Repl = struct {
 
         if (comptime builtin.os.tag != .freestanding) {
             switch (self.backend) {
-                .dev, .llvm => return self.evaluateWithDev(module_env, inspect_expr),
+                .dev => return self.evaluateWithDev(module_env, inspect_expr),
+                .llvm => return self.evaluateWithLlvm(module_env, inspect_expr),
                 .wasm => return self.evaluateWithWasm(module_env, inspect_expr),
                 .interpreter => {},
             }
@@ -796,7 +808,7 @@ pub const Repl = struct {
         if (self.dev_evaluator == null) {
             return .{ .eval_error = try self.allocator.dupe(u8, "Dev backend unavailable") };
         }
-        const backend_name = if (self.backend == .llvm) "LLVM" else "Dev";
+        const backend_name = "Dev";
         const all_module_envs: []const *ModuleEnv = &.{ self.builtin_module.env, module_env };
         var code_result = self.dev_evaluator.?.generateCode(module_env, inspect_expr, all_module_envs, null) catch |err| {
             return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "{s} backend codegen error: {s}", .{ backend_name, @errorName(err) }) };
@@ -830,6 +842,35 @@ pub const Repl = struct {
             return .{ .eval_error = try self.allocator.dupe(u8, "Out of memory") };
         };
         return .{ .expression = output };
+    }
+
+    fn evaluateWithLlvm(self: *Repl, module_env: *ModuleEnv, inspect_expr: can.CIR.Expr.Idx) !StepResult {
+        if (self.llvm_evaluator) |*llvm_eval| {
+            const all_module_envs: []const *ModuleEnv = &.{ self.builtin_module.env, module_env };
+            var code_result = llvm_eval.generateCode(module_env, inspect_expr, all_module_envs, null) catch |err| {
+                return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "LLVM backend codegen error: {s}", .{@errorName(err)}) };
+            };
+            defer code_result.deinit();
+
+            // Materialize evaluator state before calling into generated code.
+            std.debug.print("", .{});
+
+            var result_buf: [512]u8 align(16) = @splat(0);
+            code_result.callWithResultPtrAndRocOps(@ptrCast(&result_buf), @ptrCast(&llvm_eval.roc_ops));
+
+            const output = self.dupResultStr(&result_buf, "LLVM") catch {
+                return .{ .eval_error = try self.allocator.dupe(u8, "Out of memory") };
+            };
+
+            const roc_str: *const RocStr = @ptrCast(@alignCast(&result_buf));
+            if (!roc_str.isSmallStr()) {
+                @constCast(roc_str).decref(&llvm_eval.roc_ops);
+            }
+
+            return .{ .expression = output };
+        }
+
+        return .{ .eval_error = try self.allocator.dupe(u8, "LLVM backend unavailable") };
     }
 
     fn evaluateWithWasm(self: *Repl, module_env: *ModuleEnv, inspect_expr: can.CIR.Expr.Idx) !StepResult {

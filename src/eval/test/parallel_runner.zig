@@ -6,15 +6,14 @@
 //!
 //! ## Architecture overview
 //!
-//! Each test goes through a front-end (parse, canonicalize, type-check)
-//! and is then evaluated by up to three independent backends:
+<<<<<<< HEAD
+//! Each test goes through a shared front-end (parse, canonicalize, type-check)
+//! and is then evaluated by four independent backends:
 //!
 //!   1. **Interpreter** — walks the LIR directly.
 //!   2. **Dev backend** — lowers LIR to native machine code.
 //!   3. **WASM backend** — lowers LIR to WebAssembly, runs via bytebox.
-//!
-//! (LLVM is temporarily disabled — it currently aliases the dev backend.
-//! Infrastructure is kept so it can be re-enabled easily.)
+//!   4. **LLVM backend** — lowers LIR through the LLVM pipeline.
 //!
 //! ALL backends run via Str.inspect and must produce identical output strings.
 //! This catches bugs where a backend produces a value of the right type but
@@ -543,7 +542,7 @@ fn wrapInStrInspect(module_env: *ModuleEnv, inner_expr: CIR.Expr.Idx) !CIR.Expr.
 fn runSingleTest(allocator: std.mem.Allocator, tc: TestCase, preloaded: *const PreloadedBuiltins) TestOutcome {
     // If every backend is skipped, still validate the front-end so we catch
     // syntax errors in skipped tests rather than silently ignoring them.
-    if (tc.skip.interpreter and tc.skip.dev and tc.skip.wasm) {
+    if (tc.skip.interpreter and tc.skip.dev and tc.skip.wasm and tc.skip.llvm) {
         const resources = parseAndCanonicalizeExpr(allocator, tc.source, preloaded) catch {
             return .{ .status = .fail, .message = "INVALID_SYNTAX — skipped test has parse/check errors" };
         };
@@ -567,8 +566,7 @@ fn runSingleTest(allocator: std.mem.Allocator, tc: TestCase, preloaded: *const P
 }
 
 fn hasAnySkip(skip: TestCase.Skip) bool {
-    // NOTE: llvm is excluded — it currently aliases dev, so skip.llvm is ignored.
-    return skip.interpreter or skip.dev or skip.wasm;
+    return skip.interpreter or skip.dev or skip.wasm or skip.llvm;
 }
 
 fn runSingleTestInner(allocator: std.mem.Allocator, tc: TestCase, preloaded: *const PreloadedBuiltins) !TestOutcome {
@@ -624,13 +622,13 @@ fn runValueTest(allocator: std.mem.Allocator, src: []const u8, expected: TestCas
     const skips = if (comptime coverage_mode)
         [NUM_BACKENDS]bool{ skip.interpreter, true, true, true }
     else
-        [NUM_BACKENDS]bool{ skip.interpreter, skip.dev, skip.wasm, true }; // llvm always not_implemented for now
+        [NUM_BACKENDS]bool{ skip.interpreter, skip.dev, skip.wasm, skip.llvm };
 
     const eval_fns = [NUM_BACKENDS]BackendEvalFn{
         helpers.lirInterpreterInspectedStr,
         helpers.devEvaluatorStr,
         helpers.wasmEvaluatorStr,
-        helpers.devEvaluatorStr, // llvm placeholder
+        helpers.llvmEvaluatorStr,
     };
 
     var backends: [NUM_BACKENDS]BackendDetail = [_]BackendDetail{.{ .status = .not_implemented }} ** NUM_BACKENDS;
@@ -638,7 +636,6 @@ fn runValueTest(allocator: std.mem.Allocator, src: []const u8, expected: TestCas
     var any_failure = false;
 
     for (0..NUM_BACKENDS) |i| {
-        if (i == 3) continue; // llvm: not_implemented
         if (skips[i]) {
             backends[i] = .{ .status = .skip };
             continue;
@@ -1148,10 +1145,9 @@ fn printHelp() void {
     const help =
         \\Roc Eval Test Runner
         \\
-        \\Runs eval tests across backends (interpreter, dev, wasm) in parallel
+        \\Runs eval tests across backends (interpreter, dev, wasm, llvm) in parallel
         \\and compares results via Str.inspect. Each backend evaluation runs in
         \\a forked child process for crash isolation.
-        \\(LLVM backend temporarily disabled — currently aliases dev backend.)
         \\
         \\USAGE:
         \\  zig build test-eval               Run with defaults.
@@ -1181,6 +1177,7 @@ fn printHelp() void {
         \\    interp   - interpreter evaluation
         \\    dev      - dev backend codegen + native execution
         \\    wasm     - wasm backend codegen + bytebox execution
+        \\    llvm     - llvm backend codegen + native execution
         \\
         \\  A performance summary table is printed after all tests with min, max,
         \\  mean, median, standard deviation, P95, and total for each phase, plus
@@ -1274,6 +1271,7 @@ fn writeTimingBreakdown(t: EvalTimings) void {
         .{ .name = "interp", .ns = t.interpreter_ns },
         .{ .name = "dev", .ns = t.dev_ns },
         .{ .name = "wasm", .ns = t.wasm_ns },
+        .{ .name = "llvm", .ns = t.llvm_ns },
     };
     var first = true;
     for (fields) |f| {
@@ -1373,6 +1371,8 @@ fn printPerformanceSummary(gpa: std.mem.Allocator, tests: []const TestCase, resu
     defer dev_times.deinit(gpa);
     var wasm_times: std.ArrayListUnmanaged(u64) = .empty;
     defer wasm_times.deinit(gpa);
+    var llvm_times: std.ArrayListUnmanaged(u64) = .empty;
+    defer llvm_times.deinit(gpa);
 
     for (results) |r| {
         const t = r.timings;
@@ -1382,6 +1382,7 @@ fn printPerformanceSummary(gpa: std.mem.Allocator, tests: []const TestCase, resu
         if (t.interpreter_ns > 0) try interp_times.append(gpa, t.interpreter_ns);
         if (t.dev_ns > 0) try dev_times.append(gpa, t.dev_ns);
         if (t.wasm_ns > 0) try wasm_times.append(gpa, t.wasm_ns);
+        if (t.llvm_ns > 0) try llvm_times.append(gpa, t.llvm_ns);
     }
 
     std.debug.print("\n=== Performance Summary (ms) ===\n", .{});
@@ -1397,6 +1398,7 @@ fn printPerformanceSummary(gpa: std.mem.Allocator, tests: []const TestCase, resu
     printStatsRow("interp", computeTimingStats(interp_times.items));
     printStatsRow("dev", computeTimingStats(dev_times.items));
     printStatsRow("wasm", computeTimingStats(wasm_times.items));
+    printStatsRow("llvm", computeTimingStats(llvm_times.items));
 
     // Slowest 5 tests by total duration
     const TopEntry = struct {

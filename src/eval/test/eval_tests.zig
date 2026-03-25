@@ -1,6 +1,6 @@
 //! Data-driven eval test definitions for the parallel test runner.
 //! Each entry corresponds to one `runExpect*` call from the original test files.
-//! The parallel runner exercises every backend (interpreter, dev, wasm)
+//! The parallel runner exercises every backend (interpreter, dev, wasm, llvm)
 //! on each test and compares results.
 
 const TestCase = @import("parallel_runner.zig").TestCase;
