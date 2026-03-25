@@ -159,6 +159,7 @@ pub const MonoLlvmCodeGen = struct {
     const LoopVarAlloca = struct {
         alloca_ptr: LlvmBuilder.Value,
         elem_type: LlvmBuilder.Type,
+        alignment: LlvmBuilder.Alignment,
     };
 
     const BuiltinSymbolMode = enum {
@@ -2007,8 +2008,7 @@ pub const MonoLlvmCodeGen = struct {
         const symbol_key: u64 = @bitCast(symbol);
 
         if (self.cell_allocas.get(symbol_key)) |cell_alloca| {
-            const wip = self.wip orelse return error.CompilationFailed;
-            return wip.load(.normal, cell_alloca.elem_type, cell_alloca.alloca_ptr, LlvmBuilder.Alignment.fromByteUnits(@intCast(@max(llvmTypeByteSize(cell_alloca.elem_type), 1))), "") catch return error.CompilationFailed;
+            return self.loadStoredAlloca(cell_alloca);
         }
 
         // Check if we have a value for this symbol
@@ -2839,14 +2839,11 @@ pub const MonoLlvmCodeGen = struct {
     fn generateCellLoad(self: *MonoLlvmCodeGen, cell: Symbol, layout_idx: layout.Idx) Error!LlvmBuilder.Value {
         const key: u64 = @bitCast(cell);
         if (self.cell_allocas.get(key)) |cell_alloca| {
-            const wip = self.wip orelse return error.CompilationFailed;
-            return wip.load(.normal, cell_alloca.elem_type, cell_alloca.alloca_ptr, self.alignmentForLayout(layout_idx), "") catch return error.CompilationFailed;
+            return self.loadStoredAlloca(cell_alloca);
         }
 
         if (self.loop_var_allocas.get(key)) |lva| {
-            const wip = self.wip orelse return error.CompilationFailed;
-            const alignment = LlvmBuilder.Alignment.fromByteUnits(@intCast(@max(llvmTypeByteSize(lva.elem_type), 1)));
-            return wip.load(.normal, lva.elem_type, lva.alloca_ptr, alignment, "") catch return error.CompilationFailed;
+            return self.loadStoredAlloca(lva);
         }
 
         return self.generateLookup(cell, layout_idx);
@@ -3404,7 +3401,7 @@ pub const MonoLlvmCodeGen = struct {
                 const val_type = val.typeOfWip(wip);
                 const alloca_val = wip.alloca(.normal, val_type, .none, alignment, .default, "lv") catch return error.CompilationFailed;
                 _ = wip.store(.normal, val, alloca_val, alignment) catch return error.CompilationFailed;
-                self.loop_var_allocas.put(key, .{ .alloca_ptr = alloca_val, .elem_type = val_type }) catch return error.OutOfMemory;
+                self.loop_var_allocas.put(key, .{ .alloca_ptr = alloca_val, .elem_type = val_type, .alignment = alignment }) catch return error.OutOfMemory;
                 promoted_keys.append(self.allocator, key) catch return error.OutOfMemory;
             }
         }
@@ -3426,15 +3423,14 @@ pub const MonoLlvmCodeGen = struct {
         wip.cursor = .{ .block = cond_block };
         for (promoted_keys.items) |key| {
             if (self.loop_var_allocas.get(key)) |lva| {
-                const loaded = wip.load(.normal, lva.elem_type, lva.alloca_ptr, alignment, "") catch return error.CompilationFailed;
+                const loaded = try self.loadStoredAlloca(lva);
                 self.symbol_values.put(key, loaded) catch return error.OutOfMemory;
             }
         }
         {
             var cell_it = self.cell_allocas.iterator();
             while (cell_it.next()) |entry| {
-                const cell_alignment = LlvmBuilder.Alignment.fromByteUnits(@intCast(@max(llvmTypeByteSize(entry.value_ptr.elem_type), 1)));
-                const loaded = wip.load(.normal, entry.value_ptr.elem_type, entry.value_ptr.alloca_ptr, cell_alignment, "") catch return error.CompilationFailed;
+                const loaded = try self.loadStoredAlloca(entry.value_ptr.*);
                 self.symbol_values.put(entry.key_ptr.*, loaded) catch return error.OutOfMemory;
             }
         }
@@ -3448,15 +3444,14 @@ pub const MonoLlvmCodeGen = struct {
         wip.cursor = .{ .block = body_block };
         for (promoted_keys.items) |key| {
             if (self.loop_var_allocas.get(key)) |lva| {
-                const loaded = wip.load(.normal, lva.elem_type, lva.alloca_ptr, alignment, "") catch return error.CompilationFailed;
+                const loaded = try self.loadStoredAlloca(lva);
                 self.symbol_values.put(key, loaded) catch return error.OutOfMemory;
             }
         }
         {
             var cell_it = self.cell_allocas.iterator();
             while (cell_it.next()) |entry| {
-                const cell_alignment = LlvmBuilder.Alignment.fromByteUnits(@intCast(@max(llvmTypeByteSize(entry.value_ptr.elem_type), 1)));
-                const loaded = wip.load(.normal, entry.value_ptr.elem_type, entry.value_ptr.alloca_ptr, cell_alignment, "") catch return error.CompilationFailed;
+                const loaded = try self.loadStoredAlloca(entry.value_ptr.*);
                 self.symbol_values.put(entry.key_ptr.*, loaded) catch return error.OutOfMemory;
             }
         }
@@ -3469,15 +3464,14 @@ pub const MonoLlvmCodeGen = struct {
         wip.cursor = .{ .block = exit_block };
         for (promoted_keys.items) |key| {
             if (self.loop_var_allocas.get(key)) |lva| {
-                const final_val = wip.load(.normal, lva.elem_type, lva.alloca_ptr, alignment, "") catch return error.CompilationFailed;
+                const final_val = try self.loadStoredAlloca(lva);
                 self.symbol_values.put(key, final_val) catch return error.OutOfMemory;
             }
         }
         {
             var cell_it = self.cell_allocas.iterator();
             while (cell_it.next()) |entry| {
-                const cell_alignment = LlvmBuilder.Alignment.fromByteUnits(@intCast(@max(llvmTypeByteSize(entry.value_ptr.elem_type), 1)));
-                const loaded = wip.load(.normal, entry.value_ptr.elem_type, entry.value_ptr.alloca_ptr, cell_alignment, "") catch return error.CompilationFailed;
+                const loaded = try self.loadStoredAlloca(entry.value_ptr.*);
                 self.symbol_values.put(entry.key_ptr.*, loaded) catch return error.OutOfMemory;
             }
         }
@@ -3536,7 +3530,7 @@ pub const MonoLlvmCodeGen = struct {
                 const val_type = val.typeOfWip(wip);
                 const alloca_val = wip.alloca(.normal, val_type, .none, alignment, .default, "lv") catch return error.CompilationFailed;
                 _ = wip.store(.normal, val, alloca_val, alignment) catch return error.CompilationFailed;
-                self.loop_var_allocas.put(key, .{ .alloca_ptr = alloca_val, .elem_type = val_type }) catch return error.OutOfMemory;
+                self.loop_var_allocas.put(key, .{ .alloca_ptr = alloca_val, .elem_type = val_type, .alignment = alignment }) catch return error.OutOfMemory;
                 promoted_keys.append(self.allocator, key) catch return error.OutOfMemory;
             }
         }
@@ -3570,15 +3564,14 @@ pub const MonoLlvmCodeGen = struct {
         // so lookups within the body see the latest values.
         for (promoted_keys.items) |key| {
             if (self.loop_var_allocas.get(key)) |lva| {
-                const loaded = wip.load(.normal, lva.elem_type, lva.alloca_ptr, alignment, "") catch return error.CompilationFailed;
+                const loaded = try self.loadStoredAlloca(lva);
                 self.symbol_values.put(key, loaded) catch return error.OutOfMemory;
             }
         }
         {
             var cell_it = self.cell_allocas.iterator();
             while (cell_it.next()) |entry| {
-                const cell_alignment = LlvmBuilder.Alignment.fromByteUnits(@intCast(@max(llvmTypeByteSize(entry.value_ptr.elem_type), 1)));
-                const loaded = wip.load(.normal, entry.value_ptr.elem_type, entry.value_ptr.alloca_ptr, cell_alignment, "") catch return error.CompilationFailed;
+                const loaded = try self.loadStoredAlloca(entry.value_ptr.*);
                 self.symbol_values.put(entry.key_ptr.*, loaded) catch return error.OutOfMemory;
             }
         }
@@ -3623,15 +3616,14 @@ pub const MonoLlvmCodeGen = struct {
         wip.cursor = .{ .block = exit_block };
         for (promoted_keys.items) |key| {
             if (self.loop_var_allocas.get(key)) |lva| {
-                const final_val = wip.load(.normal, lva.elem_type, lva.alloca_ptr, alignment, "") catch return error.CompilationFailed;
+                const final_val = try self.loadStoredAlloca(lva);
                 self.symbol_values.put(key, final_val) catch return error.OutOfMemory;
             }
         }
         {
             var cell_it = self.cell_allocas.iterator();
             while (cell_it.next()) |entry| {
-                const cell_alignment = LlvmBuilder.Alignment.fromByteUnits(@intCast(@max(llvmTypeByteSize(entry.value_ptr.elem_type), 1)));
-                const loaded = wip.load(.normal, entry.value_ptr.elem_type, entry.value_ptr.alloca_ptr, cell_alignment, "") catch return error.CompilationFailed;
+                const loaded = try self.loadStoredAlloca(entry.value_ptr.*);
                 self.symbol_values.put(entry.key_ptr.*, loaded) catch return error.OutOfMemory;
             }
         }
@@ -7532,12 +7524,11 @@ pub const MonoLlvmCodeGen = struct {
         const alignment = self.alignmentForLayout(layout_idx);
         const alloca_ptr = wip.alloca(.normal, cell_type, .none, alignment, .default, "cell") catch return error.CompilationFailed;
         _ = wip.store(.normal, normalized, alloca_ptr, alignment) catch return error.CompilationFailed;
-        self.cell_allocas.put(key, .{ .alloca_ptr = alloca_ptr, .elem_type = cell_type }) catch return error.OutOfMemory;
+        self.cell_allocas.put(key, .{ .alloca_ptr = alloca_ptr, .elem_type = cell_type, .alignment = alignment }) catch return error.OutOfMemory;
         self.symbol_values.put(key, normalized) catch return error.OutOfMemory;
     }
 
     fn storeCell(self: *MonoLlvmCodeGen, cell: Symbol, layout_idx: layout.Idx, value: LlvmBuilder.Value) Error!void {
-        const wip = self.wip orelse return error.CompilationFailed;
         const key: u64 = @bitCast(cell);
         const cell_alloca = self.cell_allocas.get(key) orelse {
             // Mutable locals can legitimately reach their first write before this backend
@@ -7547,7 +7538,7 @@ pub const MonoLlvmCodeGen = struct {
             return;
         };
         const normalized = try self.coerceValueToLayout(value, layout_idx);
-        _ = wip.store(.normal, normalized, cell_alloca.alloca_ptr, self.alignmentForLayout(layout_idx)) catch return error.CompilationFailed;
+        try self.storeStoredAlloca(cell_alloca, normalized);
         self.symbol_values.put(key, normalized) catch return error.OutOfMemory;
     }
 
@@ -7568,6 +7559,16 @@ pub const MonoLlvmCodeGen = struct {
             return self.generateCallToCompiledProc(func_index, call.args, call.ret_layout);
         }
         return error.CompilationFailed;
+    }
+
+    fn loadStoredAlloca(self: *MonoLlvmCodeGen, stored: LoopVarAlloca) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        return wip.load(.normal, stored.elem_type, stored.alloca_ptr, stored.alignment, "") catch return error.CompilationFailed;
+    }
+
+    fn storeStoredAlloca(self: *MonoLlvmCodeGen, stored: LoopVarAlloca, value: LlvmBuilder.Value) Error!void {
+        const wip = self.wip orelse return error.CompilationFailed;
+        _ = wip.store(.normal, value, stored.alloca_ptr, stored.alignment) catch return error.CompilationFailed;
     }
 
     /// Generate a call to a compiled procedure via LLVM call instruction.
@@ -7948,9 +7949,7 @@ pub const MonoLlvmCodeGen = struct {
 
                 // If this symbol has a loop variable alloca, store the updated value
                 if (self.loop_var_allocas.get(key)) |lva| {
-                    const wip = self.wip orelse return error.CompilationFailed;
-                    const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
-                    _ = wip.store(.normal, value, lva.alloca_ptr, alignment) catch return error.CompilationFailed;
+                    try self.storeStoredAlloca(lva, value);
                 }
             },
             .wildcard => {},
@@ -7959,9 +7958,7 @@ pub const MonoLlvmCodeGen = struct {
                 self.symbol_values.put(key, value) catch return error.OutOfMemory;
 
                 if (self.loop_var_allocas.get(key)) |lva| {
-                    const wip = self.wip orelse return error.CompilationFailed;
-                    const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
-                    _ = wip.store(.normal, value, lva.alloca_ptr, alignment) catch return error.CompilationFailed;
+                    try self.storeStoredAlloca(lva, value);
                 }
 
                 if (!as_pat.inner.isNone()) {

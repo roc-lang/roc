@@ -407,6 +407,16 @@ pub const LowLevel = enum {
         };
     }
 
+    /// Some consume-mode low-levels may return the same managed owner they
+    /// consumed, rather than always allocating a distinct result. RC insertion
+    /// must preserve that owner until the returned value has taken over.
+    pub fn consumedArgMayAliasResult(self: LowLevel, arg_index: usize) bool {
+        return switch (self) {
+            .list_append_unsafe, .list_prepend => arg_index == 0,
+            else => false,
+        };
+    }
+
     pub fn getArgOwnership(self: LowLevel) []const ArgOwnership {
         return switch (self) {
             .str_count_utf8_bytes => &.{.borrow},

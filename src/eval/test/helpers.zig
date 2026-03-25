@@ -4805,6 +4805,105 @@ test "dev lowering: mutable loop append decrefs mutable result binding once" {
             };
         }
 
+        fn countCellDecrefs(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, cell: lir.LIR.Symbol) u32 {
+            if (expr_id.isNone()) return 0;
+            const expr = store.getExpr(expr_id);
+            return switch (expr) {
+                .block => |block| blk: {
+                    var total: u32 = 0;
+                    for (store.getStmts(block.stmts)) |stmt| {
+                        total += switch (stmt) {
+                            .decl, .mutate => |binding| countCellDecrefs(store, binding.expr, cell),
+                            .cell_init, .cell_store => |binding| countCellDecrefs(store, binding.expr, cell),
+                            .cell_drop => 0,
+                        };
+                    }
+                    total += countCellDecrefs(store, block.final_expr, cell);
+                    break :blk total;
+                },
+                .if_then_else => |ite| blk: {
+                    var total: u32 = 0;
+                    for (store.getIfBranches(ite.branches)) |branch| {
+                        total += countCellDecrefs(store, branch.cond, cell);
+                        total += countCellDecrefs(store, branch.body, cell);
+                    }
+                    total += countCellDecrefs(store, ite.final_else, cell);
+                    break :blk total;
+                },
+                .match_expr => |m| blk: {
+                    var total: u32 = countCellDecrefs(store, m.value, cell);
+                    for (store.getMatchBranches(m.branches)) |branch| {
+                        total += countCellDecrefs(store, branch.guard, cell);
+                        total += countCellDecrefs(store, branch.body, cell);
+                    }
+                    break :blk total;
+                },
+                .for_loop => |fl| countCellDecrefs(store, fl.list_expr, cell) + countCellDecrefs(store, fl.body, cell),
+                .while_loop => |wl| countCellDecrefs(store, wl.cond, cell) + countCellDecrefs(store, wl.body, cell),
+                .discriminant_switch => |ds| blk: {
+                    var total: u32 = countCellDecrefs(store, ds.value, cell);
+                    for (store.getExprSpan(ds.branches)) |branch_id| total += countCellDecrefs(store, branch_id, cell);
+                    break :blk total;
+                },
+                .proc_call => |call| blk: {
+                    var total: u32 = 0;
+                    if (callCalleeExprId(call)) |callee_expr| {
+                        total += countCellDecrefs(store, callee_expr, cell);
+                    }
+                    for (store.getExprSpan(call.args)) |arg| total += countCellDecrefs(store, arg, cell);
+                    break :blk total;
+                },
+                .low_level => |ll| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(ll.args)) |arg| total += countCellDecrefs(store, arg, cell);
+                    break :blk total;
+                },
+                .list => |list_expr| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(list_expr.elems)) |elem| total += countCellDecrefs(store, elem, cell);
+                    break :blk total;
+                },
+                .struct_ => |s| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(s.fields)) |field| total += countCellDecrefs(store, field, cell);
+                    break :blk total;
+                },
+                .tag => |t| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(t.args)) |arg| total += countCellDecrefs(store, arg, cell);
+                    break :blk total;
+                },
+                .struct_access => |sa| countCellDecrefs(store, sa.struct_expr, cell),
+                .tag_payload_access => |tpa| countCellDecrefs(store, tpa.value, cell),
+                .nominal => |n| countCellDecrefs(store, n.backing_expr, cell),
+                .early_return => |ret| countCellDecrefs(store, ret.expr, cell),
+                .dbg => |d| countCellDecrefs(store, d.expr, cell),
+                .expect => |e| countCellDecrefs(store, e.cond, cell) + countCellDecrefs(store, e.body, cell),
+                .str_concat => |parts| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(parts)) |part| total += countCellDecrefs(store, part, cell);
+                    break :blk total;
+                },
+                .int_to_str => |its| countCellDecrefs(store, its.value, cell),
+                .float_to_str => |fts| countCellDecrefs(store, fts.value, cell),
+                .dec_to_str => |d| countCellDecrefs(store, d, cell),
+                .str_escape_and_quote => |s| countCellDecrefs(store, s, cell),
+                .hosted_call => |hc| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(hc.args)) |arg| total += countCellDecrefs(store, arg, cell);
+                    break :blk total;
+                },
+                .decref => |rc| blk: {
+                    const value = store.getExpr(rc.value);
+                    if (value == .cell_load and value.cell_load.cell.eql(cell)) break :blk 1;
+                    break :blk countCellDecrefs(store, rc.value, cell);
+                },
+                .incref => |rc| countCellDecrefs(store, rc.value, cell),
+                .free => |rc| countCellDecrefs(store, rc.value, cell),
+                else => 0,
+            };
+        }
+
         fn countDecrefsForSymbol(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, symbol: lir.LIR.Symbol) u32 {
             if (expr_id.isNone()) return 0;
 
@@ -5193,6 +5292,7 @@ test "dev lowering: mutable loop append decrefs mutable result binding once" {
                 if (layout_val.tag != .list and layout_val.tag != .list_of_zst) continue;
                 found_cell_result = true;
                 try std.testing.expect(Search.containsCellLoad(&lir_store, with_rc, cell.cell));
+                try std.testing.expectEqual(@as(u32, 1), Search.countCellDecrefs(&lir_store, with_rc, cell.cell));
                 try std.testing.expectEqual(@as(u32, 1), Search.countCellDrops(&lir_store, with_rc, cell.cell));
             },
             .cell_store, .cell_drop => {},
