@@ -75,6 +75,13 @@ const LoadedModule = eval_mod.builtin_loading.LoadedModule;
 const deserializeBuiltinIndices = eval_mod.builtin_loading.deserializeBuiltinIndices;
 const loadCompiledModule = eval_mod.builtin_loading.loadCompiledModule;
 
+/// Pre-loaded builtin data, shared across all tests. In fork mode, loaded
+/// once in the parent and inherited by children via copy-on-write.
+const PreloadedBuiltins = struct {
+    indices: CIR.BuiltinIndices,
+    module: LoadedModule,
+};
+
 // Import backend evaluator functions through eval module (Zig requires
 // each file to belong to exactly one module, so we can't import helpers.zig directly).
 const helpers = eval_mod.test_helpers;
@@ -334,7 +341,10 @@ fn forkAndEval(
         // === Child process ===
         posix.close(pipe_read);
 
-        const child_alloc = std.heap.page_allocator;
+        // Arena batches allocations into fewer mmap calls; child _exit()s
+        // immediately so the OS reclaims everything — no deinit needed.
+        var child_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        const child_alloc = child_arena.allocator();
         const result_str = eval_fn(child_alloc, module_env, expr_idx, builtin_env) catch {
             posix.close(pipe_write);
             std.c._exit(1);
@@ -413,18 +423,19 @@ const ParsedResources = struct {
     builtin_module: LoadedModule,
     builtin_indices: CIR.BuiltinIndices,
     builtin_types: BuiltinTypes,
+    /// When false, builtins are borrowed from PreloadedBuiltins and must not be freed.
+    owns_builtins: bool = true,
     // Frontend phase timings
     parse_ns: u64 = 0,
     canonicalize_ns: u64 = 0,
     typecheck_ns: u64 = 0,
 };
 
-fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) !ParsedResources {
-    // Phase 1: Parse (includes builtin loading + source parsing)
+fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8, preloaded: *const PreloadedBuiltins) !ParsedResources {
+    // Phase 1: Parse
     var parse_timer = Timer.start() catch unreachable;
-    const builtin_indices = try deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
-    var builtin_module = try loadCompiledModule(allocator, compiled_builtins.builtin_bin, "Builtin", compiled_builtins.builtin_source);
-    errdefer builtin_module.deinit();
+    const builtin_indices = preloaded.indices;
+    const builtin_module = preloaded.module;
 
     const module_env = try allocator.create(ModuleEnv);
     module_env.* = try ModuleEnv.init(allocator, source);
@@ -489,6 +500,7 @@ fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) !P
         .builtin_module = builtin_module,
         .builtin_indices = builtin_indices,
         .builtin_types = bts,
+        .owns_builtins = false,
         .parse_ns = parse_elapsed,
         .canonicalize_ns = can_elapsed,
         .typecheck_ns = check_elapsed,
@@ -496,8 +508,10 @@ fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) !P
 }
 
 fn cleanupResources(allocator: std.mem.Allocator, resources: ParsedResources) void {
-    var builtin_module_copy = resources.builtin_module;
-    builtin_module_copy.deinit();
+    if (resources.owns_builtins) {
+        var builtin_module_copy = resources.builtin_module;
+        builtin_module_copy.deinit();
+    }
     resources.checker.deinit();
     resources.can.deinit();
     resources.parse_ast.deinit();
@@ -526,11 +540,11 @@ fn wrapInStrInspect(module_env: *ModuleEnv, inner_expr: CIR.Expr.Idx) !CIR.Expr.
 // Test execution — unified interpreter + backend comparison
 //
 
-fn runSingleTest(allocator: std.mem.Allocator, tc: TestCase) TestOutcome {
+fn runSingleTest(allocator: std.mem.Allocator, tc: TestCase, preloaded: *const PreloadedBuiltins) TestOutcome {
     // If every backend is skipped, still validate the front-end so we catch
     // syntax errors in skipped tests rather than silently ignoring them.
     if (tc.skip.interpreter and tc.skip.dev and tc.skip.wasm) {
-        const resources = parseAndCanonicalizeExpr(allocator, tc.source) catch {
+        const resources = parseAndCanonicalizeExpr(allocator, tc.source, preloaded) catch {
             return .{ .status = .fail, .message = "INVALID_SYNTAX — skipped test has parse/check errors" };
         };
         cleanupResources(allocator, resources);
@@ -541,7 +555,7 @@ fn runSingleTest(allocator: std.mem.Allocator, tc: TestCase) TestOutcome {
         } };
     }
 
-    const outcome = runSingleTestInner(allocator, tc) catch |err| {
+    const outcome = runSingleTestInner(allocator, tc, preloaded) catch |err| {
         return .{ .status = .fail, .message = @errorName(err) };
     };
 
@@ -557,7 +571,7 @@ fn hasAnySkip(skip: TestCase.Skip) bool {
     return skip.interpreter or skip.dev or skip.wasm;
 }
 
-fn runSingleTestInner(allocator: std.mem.Allocator, tc: TestCase) !TestOutcome {
+fn runSingleTestInner(allocator: std.mem.Allocator, tc: TestCase, preloaded: *const PreloadedBuiltins) !TestOutcome {
     return switch (tc.expected) {
         // All value-producing tests go through one unified path.
         .i64_val,
@@ -576,9 +590,9 @@ fn runSingleTestInner(allocator: std.mem.Allocator, tc: TestCase) !TestOutcome {
         .f64_val,
         .dec_val,
         .inspect_str,
-        => runValueTest(allocator, tc.source, tc.expected, tc.skip),
+        => runValueTest(allocator, tc.source, tc.expected, tc.skip, preloaded),
         // Special test flows
-        .problem => runTestProblem(allocator, tc.source),
+        .problem => runTestProblem(allocator, tc.source, preloaded),
     };
 }
 
@@ -586,8 +600,8 @@ fn runSingleTestInner(allocator: std.mem.Allocator, tc: TestCase) !TestOutcome {
 /// 1. Runs ALL non-skipped backends via Str.inspect in forked child processes
 /// 2. Checks cross-backend agreement (all must succeed and match)
 /// 3. For inspect_str tests: also checks each backend against the expected string
-fn runValueTest(allocator: std.mem.Allocator, src: []const u8, expected: TestCase.Expected, skip: TestCase.Skip) !TestOutcome {
-    const resources = try parseAndCanonicalizeExpr(allocator, src);
+fn runValueTest(allocator: std.mem.Allocator, src: []const u8, expected: TestCase.Expected, skip: TestCase.Skip, preloaded: *const PreloadedBuiltins) !TestOutcome {
+    const resources = try parseAndCanonicalizeExpr(allocator, src, preloaded);
     defer cleanupResources(allocator, resources);
 
     const timings = EvalTimings{
@@ -683,9 +697,9 @@ fn runValueTest(allocator: std.mem.Allocator, src: []const u8, expected: TestCas
     return .{ .status = .pass, .timings = final_timings, .backends = backends };
 }
 
-fn runTestProblem(allocator: std.mem.Allocator, src: []const u8) !TestOutcome {
+fn runTestProblem(allocator: std.mem.Allocator, src: []const u8, preloaded: *const PreloadedBuiltins) !TestOutcome {
     var timer = Timer.start() catch unreachable;
-    const resources = parseAndCanonicalizeExpr(allocator, src) catch {
+    const resources = parseAndCanonicalizeExpr(allocator, src, preloaded) catch {
         // Parse or canonicalize error means a problem was found — that's a pass.
         const elapsed = timer.read();
         return .{ .status = .pass, .timings = .{ .parse_ns = elapsed } };
@@ -811,7 +825,7 @@ fn readStr(buf: []const u8, offset: *usize, len: u32, gpa: std.mem.Allocator) ?[
 /// Fork a child process to run a single test. The child runs the full test
 /// pipeline (frontend + all backend evals), serializes the result to the pipe,
 /// and exits. Returns false if fork/pipe failed.
-fn launchChild(slot: *?ChildSlot, tests: []const TestCase, test_idx: usize) bool {
+fn launchChild(slot: *?ChildSlot, tests: []const TestCase, test_idx: usize, preloaded: *const PreloadedBuiltins) bool {
     const pipe_fds = posix.pipe() catch return false;
 
     const pid = posix.fork() catch {
@@ -828,7 +842,7 @@ fn launchChild(slot: *?ChildSlot, tests: []const TestCase, test_idx: usize) bool
         const allocator = arena.allocator();
 
         var timer = Timer.start() catch unreachable;
-        const outcome = runSingleTest(allocator, tests[test_idx]);
+        const outcome = runSingleTest(allocator, tests[test_idx], preloaded);
         const duration = timer.read();
 
         serializeOutcome(pipe_fds[1], outcome, duration);
@@ -895,12 +909,13 @@ fn processPoolMain(
     timeout_ms: u64,
     verbose: bool,
     gpa: std.mem.Allocator,
+    preloaded: *const PreloadedBuiltins,
 ) void {
     if (comptime !has_fork) {
         // Windows fallback: run tests sequentially in-process.
         // No fork/pipe/poll available, but forkAndEval already handles this
         // by running backend evals in-process (no crash isolation).
-        runTestsSequential(tests, results, verbose, gpa);
+        runTestsSequential(tests, results, verbose, gpa, preloaded);
         return;
     }
 
@@ -941,7 +956,7 @@ fn processPoolMain(
     // Fill initial slots
     for (slots) |*slot| {
         if (next_test >= tests.len) break;
-        if (!launchChild(slot, tests, next_test)) {
+        if (!launchChild(slot, tests, next_test, preloaded)) {
             results[next_test] = .{ .status = .crash, .message = null, .duration_ns = 0, .timings = .{} };
             completed += 1;
         }
@@ -990,7 +1005,7 @@ fn processPoolMain(
 
                 // Launch next test
                 if (next_test < tests.len) {
-                    if (!launchChild(&slots[slot_idx], tests, next_test)) {
+                    if (!launchChild(&slots[slot_idx], tests, next_test, preloaded)) {
                         results[next_test] = .{ .status = .crash, .message = null, .duration_ns = 0, .timings = .{} };
                         completed += 1;
                     }
@@ -1038,6 +1053,7 @@ fn runTestsSequential(
     results: []TestResult,
     _: bool,
     gpa: std.mem.Allocator,
+    preloaded: *const PreloadedBuiltins,
 ) void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
@@ -1047,7 +1063,7 @@ fn runTestsSequential(
         const allocator = arena.allocator();
 
         var timer = Timer.start() catch unreachable;
-        const outcome = runSingleTest(allocator, tc);
+        const outcome = runSingleTest(allocator, tc, preloaded);
         const duration = timer.read();
 
         // Dupe strings into the stable GPA so they survive arena reset.
@@ -1451,6 +1467,16 @@ pub fn main() !void {
         return;
     }
 
+    // Pre-load builtins once. In fork mode, children inherit via copy-on-write.
+    // In coverage/sequential mode, avoids re-loading on every arena reset.
+    const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    var builtin_module = try loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Builtin", compiled_builtins.builtin_source);
+    defer builtin_module.deinit();
+    const preloaded = PreloadedBuiltins{
+        .indices = builtin_indices,
+        .module = builtin_module,
+    };
+
     // Coverage mode: simple single-threaded loop, no fork, no watchdog, no threads.
     // Just run each test with the interpreter and print progress to stdout.
     if (comptime coverage_mode) {
@@ -1465,7 +1491,7 @@ pub fn main() !void {
         for (tests, 0..) |tc, i| {
             _ = arena.reset(.retain_capacity);
 
-            const outcome = runSingleTest(arena.allocator(), tc);
+            const outcome = runSingleTest(arena.allocator(), tc, &preloaded);
 
             switch (outcome.status) {
                 .pass => passed += 1,
@@ -1512,7 +1538,7 @@ pub fn main() !void {
     else
         30_000;
 
-    processPoolMain(tests, results, max_children, hang_timeout_ms, cli.verbose, gpa);
+    processPoolMain(tests, results, max_children, hang_timeout_ms, cli.verbose, gpa, &preloaded);
 
     const wall_elapsed = wall_timer.read();
 
