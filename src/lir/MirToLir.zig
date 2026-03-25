@@ -4468,9 +4468,17 @@ fn lowerBlock(self: *Self, block_data: anytype, _: MIR.ExprId, region: Region) A
         }
     }
 
-    const lir_stmts = try self.lir_store.addStmts(self.scratch_lir_stmts.items[save_stmts_len..]);
     const lowered_final = try self.lowerExpr(block_data.final_expr);
-    const lir_final = try self.adaptExprToRuntimeLayout(block_data.final_expr, lowered_final, region);
+    var lir_final = try self.adaptExprToRuntimeLayout(block_data.final_expr, lowered_final, region);
+    if (self.exprSnapshotsMutableCell(lir_final)) {
+        lir_final = try self.materializeRetainedBinding(
+            &self.scratch_lir_stmts,
+            lir_final,
+            result_layout,
+            region,
+        );
+    }
+    const lir_stmts = try self.lir_store.addStmts(self.scratch_lir_stmts.items[save_stmts_len..]);
 
     return self.lir_store.addExpr(.{ .block = .{
         .stmts = lir_stmts,
@@ -7302,6 +7310,57 @@ test "mutable refcounted lookup bound immutably lowers as retained snapshot" {
     const final = env.lir_store.getExpr(lir_expr.block.final_expr);
     try testing.expect(final == .lookup);
     try testing.expectEqual(sym_y, final.lookup.symbol);
+}
+
+test "mutable refcounted block result lowers as retained snapshot" {
+    const allocator = testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+    const list_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .list = .{ .elem = i64_mono } });
+
+    const ident_x = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = true }, .idx = 2 };
+    const sym_x = try testMirSymbol(&env.mir_store, allocator, ident_x);
+
+    const elem = try env.mir_store.addExpr(allocator, .{ .int = .{
+        .value = .{ .bytes = @bitCast(@as(i128, 1)), .kind = .i128 },
+    } }, i64_mono, Region.zero());
+    const list_elems = try env.mir_store.addExprSpan(allocator, &.{elem});
+    const list_expr = try env.mir_store.addExpr(allocator, .{ .list = .{ .elems = list_elems } }, list_mono, Region.zero());
+
+    const lookup_x = try env.mir_store.addExpr(allocator, .{ .lookup = sym_x }, list_mono, Region.zero());
+    const pat_x = try env.mir_store.addPattern(allocator, .{ .bind = sym_x }, list_mono);
+    const stmts = try env.mir_store.addStmts(allocator, &.{
+        .{ .decl_var = .{ .pattern = pat_x, .expr = list_expr } },
+    });
+
+    const block_expr = try env.mir_store.addExpr(allocator, .{ .block = .{
+        .stmts = stmts,
+        .final_expr = lookup_x,
+    } }, list_mono, Region.zero());
+
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.lambda_set_store, env.module_env.idents.true_tag);
+    defer translator.deinit();
+
+    const lir_id = try translator.lower(block_expr);
+    const lir_expr = env.lir_store.getExpr(lir_id);
+    try testing.expect(lir_expr == .block);
+
+    const lir_stmts = env.lir_store.getStmts(lir_expr.block.stmts);
+    try testing.expectEqual(@as(usize, 2), lir_stmts.len);
+    try testing.expect(lir_stmts[0] == .cell_init);
+    try testing.expect(lir_stmts[1] == .decl);
+    try testing.expectEqual(LirStmt.BindingSemantics.retained, lir_stmts[1].decl.semantics);
+
+    const retained_expr = env.lir_store.getExpr(lir_stmts[1].decl.expr);
+    try testing.expect(retained_expr == .cell_load);
+    try testing.expectEqual(sym_x, retained_expr.cell_load.cell);
+
+    const final = env.lir_store.getExpr(lir_expr.block.final_expr);
+    try testing.expect(final == .lookup);
 }
 
 test "MIR for_loop lowers to LIR for_loop" {
