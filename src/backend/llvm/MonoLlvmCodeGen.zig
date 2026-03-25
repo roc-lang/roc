@@ -192,6 +192,93 @@ pub const MonoLlvmCodeGen = struct {
         }
     };
 
+    const FunctionState = struct {
+        symbol_values: std.AutoHashMap(u64, LlvmBuilder.Value),
+        join_points: std.AutoHashMap(u32, LlvmBuilder.Function.Block.Index),
+        join_point_params: std.AutoHashMap(u32, []LirPatternId),
+        join_param_allocas: std.AutoHashMap(u32, []LlvmBuilder.Value),
+        join_param_types: std.AutoHashMap(u32, []LlvmBuilder.Type),
+        loop_var_allocas: std.AutoHashMap(u64, LoopVarAlloca),
+        loop_exit_blocks: std.ArrayList(LlvmBuilder.Function.Block.Index),
+        cell_allocas: std.AutoHashMap(u64, LoopVarAlloca),
+    };
+
+    fn initFunctionState(self: *const MonoLlvmCodeGen) FunctionState {
+        return .{
+            .symbol_values = std.AutoHashMap(u64, LlvmBuilder.Value).init(self.allocator),
+            .join_points = std.AutoHashMap(u32, LlvmBuilder.Function.Block.Index).init(self.allocator),
+            .join_point_params = std.AutoHashMap(u32, []LirPatternId).init(self.allocator),
+            .join_param_allocas = std.AutoHashMap(u32, []LlvmBuilder.Value).init(self.allocator),
+            .join_param_types = std.AutoHashMap(u32, []LlvmBuilder.Type).init(self.allocator),
+            .loop_var_allocas = std.AutoHashMap(u64, LoopVarAlloca).init(self.allocator),
+            .loop_exit_blocks = .empty,
+            .cell_allocas = std.AutoHashMap(u64, LoopVarAlloca).init(self.allocator),
+        };
+    }
+
+    fn captureFunctionState(self: *MonoLlvmCodeGen) FunctionState {
+        return .{
+            .symbol_values = self.symbol_values,
+            .join_points = self.join_points,
+            .join_point_params = self.join_point_params,
+            .join_param_allocas = self.join_param_allocas,
+            .join_param_types = self.join_param_types,
+            .loop_var_allocas = self.loop_var_allocas,
+            .loop_exit_blocks = self.loop_exit_blocks,
+            .cell_allocas = self.cell_allocas,
+        };
+    }
+
+    fn applyFunctionState(self: *MonoLlvmCodeGen, state: FunctionState) void {
+        self.symbol_values = state.symbol_values;
+        self.join_points = state.join_points;
+        self.join_point_params = state.join_point_params;
+        self.join_param_allocas = state.join_param_allocas;
+        self.join_param_types = state.join_param_types;
+        self.loop_var_allocas = state.loop_var_allocas;
+        self.loop_exit_blocks = state.loop_exit_blocks;
+        self.cell_allocas = state.cell_allocas;
+    }
+
+    fn deinitFunctionState(self: *MonoLlvmCodeGen, state: *FunctionState) void {
+        state.symbol_values.deinit();
+        state.join_points.deinit();
+
+        var params_it = state.join_point_params.valueIterator();
+        while (params_it.next()) |params| {
+            self.allocator.free(params.*);
+        }
+        state.join_point_params.deinit();
+
+        var allocas_it = state.join_param_allocas.valueIterator();
+        while (allocas_it.next()) |allocas| {
+            self.allocator.free(allocas.*);
+        }
+        state.join_param_allocas.deinit();
+
+        var types_it = state.join_param_types.valueIterator();
+        while (types_it.next()) |types| {
+            self.allocator.free(types.*);
+        }
+        state.join_param_types.deinit();
+
+        state.loop_var_allocas.deinit();
+        state.loop_exit_blocks.deinit(self.allocator);
+        state.cell_allocas.deinit();
+    }
+
+    fn swapInFreshFunctionState(self: *MonoLlvmCodeGen) FunctionState {
+        const outer = self.captureFunctionState();
+        self.applyFunctionState(self.initFunctionState());
+        return outer;
+    }
+
+    fn restoreFunctionState(self: *MonoLlvmCodeGen, outer: FunctionState) void {
+        var current = self.captureFunctionState();
+        self.deinitFunctionState(&current);
+        self.applyFunctionState(outer);
+    }
+
     /// Result of bitcode generation
     pub const BitcodeResult = struct {
         bitcode: []const u32,
@@ -394,6 +481,9 @@ pub const MonoLlvmCodeGen = struct {
         self.result_layout = result_layout;
         defer self.result_layout = null;
 
+        const outer_fn_state = self.swapInFreshFunctionState();
+        defer self.restoreFunctionState(outer_fn_state);
+
         // Compile all procedures now that the builder is available.
         // Must happen before generateExpr so that call sites can find procs.
         const procs = self.store.getProcSpecs();
@@ -518,6 +608,9 @@ pub const MonoLlvmCodeGen = struct {
         self.out_ptr = null; // Procs don't have a top-level out_ptr
         self.fn_out_ptr = null;
 
+        const outer_fn_state = self.swapInFreshFunctionState();
+        defer self.restoreFunctionState(outer_fn_state);
+
         // Create a new WipFunction for this procedure
         var proc_wip = LlvmBuilder.WipFunction.init(builder, .{
             .function = func,
@@ -576,6 +669,9 @@ pub const MonoLlvmCodeGen = struct {
         defer self.fn_out_ptr = outer_fn_out_ptr;
         const outer_result_layout = self.result_layout;
         defer self.result_layout = outer_result_layout;
+
+        const outer_fn_state = self.swapInFreshFunctionState();
+        defer self.restoreFunctionState(outer_fn_state);
 
         var wrapper_wip = LlvmBuilder.WipFunction.init(builder, .{
             .function = wrapper_fn,
@@ -943,8 +1039,13 @@ pub const MonoLlvmCodeGen = struct {
             },
             .ret => |r| {
                 const wip = self.wip orelse return error.CompilationFailed;
+                const builder = self.builder orelse return error.CompilationFailed;
                 const val = try self.generateExpr(r.value);
-                _ = wip.ret(val) catch return error.CompilationFailed;
+                if (val == .none) return error.CompilationFailed;
+
+                const fn_ret_type = wip.function.typeOf(builder).functionReturn(builder);
+                const coerced = try self.coerceValueToType(val, fn_ret_type, self.getExprResultLayout(r.value));
+                _ = wip.ret(coerced) catch return error.CompilationFailed;
             },
             .join => |j| {
                 const wip = self.wip orelse return error.CompilationFailed;
@@ -6371,33 +6472,8 @@ pub const MonoLlvmCodeGen = struct {
         self.out_ptr = null;
         self.fn_out_ptr = null;
 
-        const outer_symbols = self.symbol_values;
-        self.symbol_values = std.AutoHashMap(u64, LlvmBuilder.Value).init(self.allocator);
-        defer {
-            self.symbol_values.deinit();
-            self.symbol_values = outer_symbols;
-        }
-
-        const outer_loop_var_allocas = self.loop_var_allocas;
-        self.loop_var_allocas = std.AutoHashMap(u64, LoopVarAlloca).init(self.allocator);
-        defer {
-            self.loop_var_allocas.deinit();
-            self.loop_var_allocas = outer_loop_var_allocas;
-        }
-
-        const outer_loop_exit_blocks = self.loop_exit_blocks;
-        self.loop_exit_blocks = .empty;
-        defer {
-            self.loop_exit_blocks.deinit(self.allocator);
-            self.loop_exit_blocks = outer_loop_exit_blocks;
-        }
-
-        const outer_cell_allocas = self.cell_allocas;
-        self.cell_allocas = std.AutoHashMap(u64, LoopVarAlloca).init(self.allocator);
-        defer {
-            self.cell_allocas.deinit();
-            self.cell_allocas = outer_cell_allocas;
-        }
+        const outer_fn_state = self.swapInFreshFunctionState();
+        defer self.restoreFunctionState(outer_fn_state);
 
         var thunk_wip = LlvmBuilder.WipFunction.init(builder, .{
             .function = thunk_fn,
