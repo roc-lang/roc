@@ -145,6 +145,8 @@ The typical workflow:
 
    Available expected types include `.dec_val`, `.bool_val`, `.str_val`, `.f32_val`, `.f64_val`, `.i64_val`, `.u8_val`, `.u64_val`, `.inspect_str` (Str.inspect output), and `.problem` (for compile errors).
 
+   The builtins and syntax available for test expressions are defined in `src/build/roc/Builtin.roc`. This is the source of truth for what modules (Str, List, Bool, Num, etc.) and functions are implemented — check it to know what you can call in test source expressions.
+
 4. **Re-run coverage** to verify your new tests hit the target lines:
    ```bash
    python3 CONTRIBUTING/eval_coverage.py
