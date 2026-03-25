@@ -4193,6 +4193,17 @@ test "focused: list equality order-sensitive" {
     try runExpectBool("[3, 4] == [4, 3]", false, .no_trace);
 }
 
+test "dev: Str.inspect through polymorphic wrapper" {
+    // Regression test: Str.inspect called through a polymorphic wrapper function
+    // should produce the correct output, not "{}".
+    try runDevOnlyExpectStr(
+        \\{
+        \\    show = |x| Str.inspect(x)
+        \\    show(42.I64)
+        \\}
+    , "\"42\"");
+}
+
 test "focused: polymorphic additional specialization via List.append (non-eq)" {
     try runExpectI64(
         \\{

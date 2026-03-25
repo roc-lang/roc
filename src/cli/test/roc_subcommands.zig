@@ -1402,7 +1402,9 @@ test "echo platform: no main is not a default app (dev)" {
     return error.SkipZigTest;
 }
 
-const all_syntax_expected_stdout =
+// Lines shared between interpreter and dev backend expected output (up to the
+// point where they diverge due to a monomorphization bug with print!/module-level defs).
+const all_syntax_common_prefix =
     "Hello, world!\n" ++
     "Hello, world! (using alias)\n" ++
     "{ diff: 5, div: 2, div_trunc: 2, eq: False, gt: True, gteq: True, lt: False, lteq: False, neg: -10, neq: True, prod: 50, rem: 0, sum: 15 }\n" ++
@@ -1427,9 +1429,9 @@ const all_syntax_expected_stdout =
     "[\"a\", \"b\"]\n" ++
     "(\"Roc\", 1.0, 1.0, 1.0)\n" ++
     "10.0\n" ++
-    "{ age: 31, name: \"Alice\" }\n" ++
-    "(5, 5, 5.0, 5.0, 5, 5.0, 5.0, 5, 5.0, 5.0, 5, 5.0, 5.0, 5.0)\n" ++
-    "<opaque>\n" ++
+    "{ age: 31, name: \"Alice\" }\n";
+
+const all_syntax_common_suffix =
     "\"The secret key is: my_secret_key\"\n" ++
     "False\n" ++
     "99\n" ++
@@ -1440,45 +1442,23 @@ const all_syntax_expected_stdout =
     "\"A\"\n" ++
     "\"other letter\"\n";
 
-// TODO: dev backend produces {} for all Str.inspect calls through the polymorphic print! wrapper.
-// Once that is fixed, remove this and use all_syntax_expected_stdout for both tests.
-const all_syntax_expected_stdout_dev =
-    "Hello, world!\n" ++
-    "Hello, world! (using alias)\n" ++
-    "{ diff: 5, div: 2, div_trunc: 2, eq: False, gt: True, gteq: True, lt: False, lteq: False, neg: -10, neq: True, prod: 50, rem: 0, sum: 15 }\n" ++
-    "{}\n" ++ // bool_and_keyword record
-    "{}\n" ++ // "One Two"
-    "{}\n" ++ // "Three Four"
-    "The color is red.\n" ++
-    "{}\n" ++ // 78
-    "Success\n" ++
-    "Line 1\n" ++
-    "Line 2\n" ++
-    "Line 3\n" ++
-    "Unicode escape sequence: \u{00A0}\n" ++
-    "This is an effectful function!\n" ++
-    "{}\n" ++ // Ok(1)
-    "{}\n" ++ // 15.0
-    "{}\n" ++ // False
-    "{}\n" ++ // 10.0
-    "{}\n" ++ // 42.0
-    "NotOneTwoNotFive\n" ++
-    "{}\n" ++ // ("Roc", 1.0)
-    "{}\n" ++ // ["a", "b"]
-    "{}\n" ++ // ("Roc", 1.0, 1.0, 1.0)
-    "{}\n" ++ // 10.0
-    "{}\n" ++ // { age: 31, name: "Alice" }
-    "{}\n" ++ // number_literals
-    "{}\n" ++ // <opaque>
-    "{}\n" ++ // "The secret key is: my_secret_key"
-    "{}\n" ++ // False
-    "{}\n" ++ // 99
-    "{}\n" ++ // "12345.0"
-    "{}\n" ++ // "Foo with 42 and hello"
-    "{}\n" ++ // "other color"
-    "{}\n" ++ // "Names: Alice, Bob, Charlie"
-    "{}\n" ++ // "A"
-    "{}\n"; // "other letter"
+const all_syntax_expected_stdout =
+    all_syntax_common_prefix ++
+    "(5, 5, 5.0, 5.0, 5, 5.0, 5.0, 5, 5.0, 5.0, 5, 5.0, 5.0, 5.0)\n" ++
+    "<opaque>\n" ++
+    all_syntax_common_suffix;
+
+// TODO: dev backend displays module-level records with field names (record
+// format) while the interpreter displays them as tuples. This is because
+// module-level records are stored as e_tuple in the CIR, and the interpreter
+// falls back to tuple format at runtime while the dev backend uses the
+// monotype which preserves field names. Once this format difference is
+// resolved, use all_syntax_expected_stdout.
+const all_syntax_dev_expected_stdout =
+    all_syntax_common_prefix ++
+    "{ binary: 5.0, explicit_i128: 5, explicit_i16: 5, explicit_i32: 5, explicit_i64: 5, explicit_i8: 5, explicit_u128: 5, explicit_u16: 5, explicit_u32: 5, explicit_u64: 5, explicit_u8: 5, hex: 5.0, octal: 5.0, usage_based: 5.0 }\n" ++
+    "<opaque>\n" ++
+    all_syntax_common_suffix;
 
 const all_syntax_expected_stderr = "[dbg] 42.0\n";
 
@@ -1504,7 +1484,7 @@ test "echo platform: all_syntax_test.roc prints expected output (dev backend)" {
 
     try util.checkSuccess(run_result);
 
-    try std.testing.expectEqualStrings(all_syntax_expected_stdout_dev, run_result.stdout);
+    try std.testing.expectEqualStrings(all_syntax_dev_expected_stdout, run_result.stdout);
     // TODO: dev backend doesn't produce dbg output
     try std.testing.expectEqualStrings("", run_result.stderr);
 }
