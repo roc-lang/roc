@@ -8091,34 +8091,30 @@ test "RC op wildcard decls use zst layout" {
     defer testDeinit(&env);
 
     const str_layout: LayoutIdx = .str;
-    const u64_layout: LayoutIdx = .u64;
-
-    const sym_data = makeSymbol(100);
+    const sym_str = makeSymbol(100);
     const str_idx = try env.lir_store.insertString("this is definitely longer than a small string");
-    const def_expr = try env.lir_store.addExpr(.{ .str_literal = str_idx }, Region.zero());
-    try env.lir_store.registerSymbolDef(sym_data, def_expr);
-
-    const lookup_data = try env.lir_store.addExpr(.{ .lookup = .{
-        .symbol = sym_data,
+    const str_expr = try env.lir_store.addExpr(.{ .str_literal = str_idx }, Region.zero());
+    const pat_str = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_str,
         .layout_idx = str_layout,
     } }, Region.zero());
-    const len_expr = try env.lir_store.addExpr(.{ .low_level = .{
-        .op = .str_count_utf8_bytes,
-        .args = try env.lir_store.addExprSpan(&.{lookup_data}),
-        .ret_layout = u64_layout,
+    const lookup_one = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_str,
+        .layout_idx = str_layout,
     } }, Region.zero());
-    const zero = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 0, .layout_idx = .i64 } }, Region.zero());
-    const pat_len = try env.lir_store.addPattern(.{ .bind = .{
-        .symbol = makeSymbol(101),
-        .layout_idx = u64_layout,
+    const lookup_two = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_str,
+        .layout_idx = str_layout,
     } }, Region.zero());
-    const stmts = try env.lir_store.addStmts(&.{
-        .{ .decl = .{ .pattern = pat_len, .expr = len_expr } },
-    });
+    const wildcard = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = str_layout } }, Region.zero());
+
     const block_expr = try env.lir_store.addExpr(.{ .block = .{
-        .stmts = stmts,
-        .final_expr = zero,
-        .result_layout = .i64,
+        .stmts = try env.lir_store.addStmts(&.{
+            .{ .decl = .{ .pattern = pat_str, .expr = str_expr } },
+            .{ .decl = .{ .pattern = wildcard, .expr = lookup_one } },
+        }),
+        .final_expr = lookup_two,
+        .result_layout = str_layout,
     } }, Region.zero());
 
     var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
