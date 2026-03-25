@@ -8157,8 +8157,9 @@ pub const tests = [_]TestCase{
 
     // --- F64/F32 comparisons ---
     .{ .name = "F64 greater than", .source = "3.14.F64 > 2.71.F64", .expected = .{ .bool_val = true } },
-    // TODO: F64 equality crashes across all backends (reached unreachable code)
-    .{ .name = "F64 equality", .source = "1.0.F64 == 1.0.F64", .expected = .{ .bool_val = true }, .skip = SKIP_ALL },
+    // F64/F32 equality is intentionally unsupported — float == is a footgun (NaN, precision).
+    // The type checker rejects it (F64 has no is_eq method), so this should produce a problem.
+    .{ .name = "F64 equality is type error", .source = "1.0.F64 == 1.0.F64", .expected = .{ .problem = {} } },
     .{ .name = "F32 less than", .source = "1.0.F32 < 2.0.F32", .expected = .{ .bool_val = true } },
 
     // --- polymorphic functions with typed numerics (try to hit fallback numeric dispatch) ---

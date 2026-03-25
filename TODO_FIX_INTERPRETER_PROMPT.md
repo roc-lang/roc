@@ -33,15 +33,16 @@ There are two test paths that exercise the interpreter:
 
 1. **Parallel eval test runner** (`zig build test-eval`):
    - Binary at `src/eval/test/parallel_runner.zig`
-   - Test cases defined in `src/eval/test/eval_tests.zig` (~1177 tests)
-   - Runs all backends (interpreter via LIR pipeline, dev, wasm) and compares
-     results via `Str.inspect` string comparison
-   - Crash protection via `setjmp`/`longjmp` + signal handlers
+   - Test cases defined in `src/eval/test/eval_tests.zig` (~1174 tests)
+   - Runs all backends (interpreter, dev, wasm) and compares results via
+     `Str.inspect` string comparison
+   - **All backend evaluation runs in forked child processes** — each backend
+     call is wrapped in `forkAndEval` which forks, runs the eval function in
+     the child, and pipes the result string back. Crashes in any backend are
+     safely contained (the parent sees a non-zero exit or signal via waitpid).
    - The interpreter backend uses `helpers.lirInterpreterInspectedStr` which
      does CIR → MIR → LIR → RC lowering, then `LirInterpreter.eval()`
-   - For typed value tests, also uses `helpers.lirInterpreterEval` to check
-     raw values (int, float, str, bool, dec) against expected
-   - Current status: **1101 passed, 0 failed, 0 crashed, 80 skipped**
+   - Current status: **1064 passed, 0 failed, 0 crashed, 110 skipped**
 
 2. **Unit tests** (`zig build test`):
    - Sequential tests in `src/eval/test/helpers.zig` (low_level_interp_test,
@@ -54,7 +55,7 @@ There are two test paths that exercise the interpreter:
 - `src/eval/cir_to_lir.zig` — CIR → MIR → LIR → RC lowering (`LirProgram`)
 - `src/eval/value.zig` — `Value` type (raw bytes pointer) and `LayoutHelper`
 - `src/eval/work_stack.zig` — WorkStack, ValueStack, continuation types
-- `src/eval/test/helpers.zig` — `lirInterpreterEval`, `lirInterpreterInspectedStr`
+- `src/eval/test/helpers.zig` — `lirInterpreterInspectedStr`, backend eval fns
 - `src/eval/test/parallel_runner.zig` — parallel test runner binary
 - `src/eval/test/eval_tests.zig` — consolidated eval test definitions
 - `src/mir/Monomorphize.zig` — monomorphization pass (type specialization)
@@ -62,6 +63,8 @@ There are two test paths that exercise the interpreter:
 - `src/mir/Monotype.zig` — monotype resolution from type variables
 - `src/lir/MirToLir.zig` — MIR → LIR lowering (literal creation, low-level ops)
 - `src/lir/TailRecursion.zig` — tail-call optimization pass
+- `src/build/roc/Builtin.roc` — per-type associated items (methods like `is_eq`, `plus`, `to_str`)
+- `src/build/builtin_compiler/main.zig` — maps builtin methods to low-level ops
 
 ### Resolved bugs (removed from this doc)
 
@@ -348,14 +351,14 @@ in this case), the comptime evaluator should be able to evaluate `one = 1`.
 ## Skipped Eval Tests (SKIP_ALL — all backends)
 
 These are tests in `src/eval/test/eval_tests.zig` that are skipped across **all**
-backends (interpreter, dev, wasm, llvm). Total: **80 tests** in 10 categories.
+backends (interpreter, dev, wasm, llvm). Total: **~80 tests** in 10 categories.
 
 **Workflow**: Fix one category at a time. After fixing, unskip the tests, run them
 to verify, commit, then **remove the resolved section from this document**.
 
 ---
 
-### U8/U16 large-value arithmetic (30 tests, lines 3354–3792)
+### U8/U16 large-value arithmetic (30 tests)
 
 Some of these hang on x86_64-linux CI (infinite loop in interpreter).
 
@@ -374,18 +377,18 @@ Some of these hang on x86_64-linux CI (infinite loop in interpreter).
 
 **Root cause**: Same monomorphization bug as `repeating pattern segfault`.
 Numeric literals in arithmetic expressions get Dec monotype when the operation
-is specialized for U8/U16. The Dec-scaled values (10^18 × n) cause arithmetic
+is specialized for U8/U16. The Dec-scaled values (10^18 x n) cause arithmetic
 to produce wrong results, which can infinite-loop in comparison-based operations.
 
 ---
 
-### U128 subtraction (1 test, line 4285)
+### U128 subtraction (1 test)
 
 - `U128: minus: 1e29 - 1e29` → expected 0
 
 ---
 
-### Narrowing/wrapping numeric conversions (8 tests, lines 7959–7979)
+### Narrowing/wrapping numeric conversions (8 tests)
 
 Crash across all backends:
 - `U64 to U8 wrapping` (300→44), `U64 to I8 wrapping` (200→-56)
@@ -396,7 +399,7 @@ Crash across all backends:
 
 ---
 
-### Float-to-int / float narrowing conversions (13 tests, lines 8045–8057)
+### Float-to-int / float narrowing conversions (13 tests)
 
 Crash across all backends:
 - F64 → I64, I32, I16, I8, U64, U32, U16, U8
@@ -405,14 +408,14 @@ Crash across all backends:
 
 ---
 
-### Dec-to-int / Dec-to-F32 conversions (11 tests, lines 8066–8076)
+### Dec-to-int / Dec-to-F32 conversions (11 tests)
 
 Crash across all backends:
 - Dec → I64, I32, I16, I8, U64, U32, U16, U8, I128, U128, F32
 
 ---
 
-### List of typed ints (2 tests, lines 8127–8148)
+### List of typed ints (2 tests)
 
 - `list of I32 len` — `[1.I32, 2.I32, 3.I32].len()`
 - `list of U8 len` — `[10.U8, 20.U8, 30.U8].len()`
@@ -422,20 +425,25 @@ list context get wrong monotype.
 
 ---
 
-### F64 equality (1 test, line 8193)
+### ~~F64 equality (1 test)~~ — RESOLVED (by design)
 
-- `1.0.F64 == 1.0.F64` → reaches unreachable code
+F64/F32 equality (`==`) is **intentionally unsupported** in Roc — float equality is
+a well-known footgun (NaN, precision issues like `0.1 + 0.2 != 0.3`). The "crash"
+was actually a correct type error: F64/F32 have no `is_eq` method registered in
+`Builtin.roc` or `builtin_compiler/main.zig` (the `eq_types` array deliberately
+excludes them). The test was changed from `SKIP_ALL` with `bool_val` expectation
+to a `.problem` test that verifies the type checker rejects it.
 
 ---
 
-### I128/U128 shift operations (2 tests, lines 8250–8251)
+### I128/U128 shift operations (2 tests)
 
 - `shift left I128` — `1.I128.shift_left_by(10.U8)` → 1024
 - `shift left U128` — `1.U128.shift_left_by(16.U8)` → 65536
 
 ---
 
-### Str.contains (2 tests, lines 8497–8498)
+### Str.contains (2 tests)
 
 Causes infinite loop in interpreter:
 - `Str.contains("hello world", "world")` → true
@@ -443,7 +451,7 @@ Causes infinite loop in interpreter:
 
 ---
 
-### Known compiler bugs (3 tests, lines 7752–7797)
+### Known compiler bugs (3 tests)
 
 These are upstream compiler/specialization bugs, not interpreter-specific:
 - `early return: ? in closure passed to List.fold`
@@ -475,14 +483,17 @@ There are **two separate test systems** — use the right one:
 
 **Eval test runner** (cross-backend comparison, 1000+ tests):
 ```sh
-# Build once (or after source changes):
-zig build test-eval
+# Build and run all tests:
+zig build test-eval --summary all
 
-# Run a single test by name:
-./zig-out/bin/eval-test-runner --filter "pattern" --verbose
+# Filter by name:
+zig build test-eval --summary all -- --test-filter "pattern"
 
-# Or build + run combined (options go after --):
-zig build test-eval -- --filter "pattern" --verbose
+# Verbose output (shows PASS/SKIP):
+zig build test-eval --summary all -- --test-filter "pattern" --verbose
+
+# Single-threaded (easier to debug output):
+zig build test-eval --summary all -- --test-filter "pattern" --threads 1
 ```
 
 **Unit tests** (fx platform tests, sequential Zig tests):
@@ -491,7 +502,22 @@ zig build test -- --test-filter "list_append_stdin_uaf"
 zig build test -- --test-filter "fx platform IO spec tests (interpreter)"
 ```
 
-Note: eval runner uses `--filter`, unit tests use `--test-filter`.
+Note: eval runner uses `--test-filter`, unit tests use `--test-filter`.
+
+### Process isolation in the test runner
+
+Every backend evaluation (interpreter, dev, wasm) runs in a **forked child
+process**. The child writes its result string through a pipe and exits. If
+the child crashes (segfault, illegal instruction) or hangs (killed by the
+30s watchdog), the parent reports the failure without being affected.
+
+This means:
+- A crash in one backend does NOT crash the test runner.
+- You can safely test changes that might segfault — the runner will report
+  `signal: N` for that backend and continue.
+- Tests that previously "hung" the runner are now safely killed after 30s.
+- `stderr` output from child processes (e.g. debug prints) appears on the
+  runner's stderr, so `std.debug.print` works for debugging.
 
 ### Trace flags
 
@@ -502,8 +528,8 @@ run the binary as normal:
 # Build with tracing:
 zig build test-eval -Dtrace-eval=true -Dtrace-refcount=true
 
-# Run single test with tracing output:
-./zig-out/bin/eval-test-runner --filter "my test" --verbose --threads 1
+# Run single test with tracing output (use --threads 1 to avoid interleaved output):
+zig build test-eval -- --test-filter "my test" --verbose --threads 1
 ```
 
 See `CONTRIBUTING/debugging_backend_bugs.md` for full details on trace output.
@@ -513,6 +539,5 @@ See `CONTRIBUTING/debugging_backend_bugs.md` for full details on trace output.
 - **Hex dumps**: Set `dump_generated_code_hex = true` in `helpers.zig`
 - **INT3 breakpoints**: Insert `0xCC` in `ExecutableMemory.zig` before
   `makeExecutable()` for gdb breakpoints
-- **Bypass fork**: Modify `helpers.zig` to skip fork for direct gdb debugging
 - **Invoke the debug-interpreter skill** (`/debug-interpreter`) for additional
   interpreter-specific debugging guidance
