@@ -8008,20 +8008,20 @@ pub const tests = [_]TestCase{
     },
 
     // --- F32/F64 to int conversions (Gaps #3, #4) ---
-    // float-to-int conversions crash across all backends (real implementation bug)
-    .{ .name = "F64 to I64", .source = "{ 42.0.F64.to_i64_wrap() }", .expected = .{ .i64_val = 42 }, .skip = SKIP_ALL },
-    .{ .name = "F64 to I32", .source = "{ 42.0.F64.to_i32_wrap() }", .expected = .{ .i32_val = 42 }, .skip = SKIP_ALL },
-    .{ .name = "F64 to I16", .source = "{ 42.0.F64.to_i16_wrap() }", .expected = .{ .i16_val = 42 }, .skip = SKIP_ALL },
-    .{ .name = "F64 to I8", .source = "{ 42.0.F64.to_i8_wrap() }", .expected = .{ .i8_val = 42 }, .skip = SKIP_ALL },
-    .{ .name = "F64 to U64", .source = "{ 42.0.F64.to_u64_wrap() }", .expected = .{ .u64_val = 42 }, .skip = SKIP_ALL },
-    .{ .name = "F64 to U32", .source = "{ 42.0.F64.to_u32_wrap() }", .expected = .{ .u32_val = 42 }, .skip = SKIP_ALL },
-    .{ .name = "F64 to U16", .source = "{ 42.0.F64.to_u16_wrap() }", .expected = .{ .u16_val = 42 }, .skip = SKIP_ALL },
-    .{ .name = "F64 to U8", .source = "{ 42.0.F64.to_u8_wrap() }", .expected = .{ .u8_val = 42 }, .skip = SKIP_ALL },
+    // float-to-int conversions (fixed builtin_compiler ident mismatch: _trunc -> _wrap)
+    .{ .name = "F64 to I64", .source = "{ 42.0.F64.to_i64_wrap() }", .expected = .{ .i64_val = 42 } },
+    .{ .name = "F64 to I32", .source = "{ 42.0.F64.to_i32_wrap() }", .expected = .{ .i32_val = 42 } },
+    .{ .name = "F64 to I16", .source = "{ 42.0.F64.to_i16_wrap() }", .expected = .{ .i16_val = 42 } },
+    .{ .name = "F64 to I8", .source = "{ 42.0.F64.to_i8_wrap() }", .expected = .{ .i8_val = 42 } },
+    .{ .name = "F64 to U64", .source = "{ 42.0.F64.to_u64_wrap() }", .expected = .{ .u64_val = 42 } },
+    .{ .name = "F64 to U32", .source = "{ 42.0.F64.to_u32_wrap() }", .expected = .{ .u32_val = 42 } },
+    .{ .name = "F64 to U16", .source = "{ 42.0.F64.to_u16_wrap() }", .expected = .{ .u16_val = 42 } },
+    .{ .name = "F64 to U8", .source = "{ 42.0.F64.to_u8_wrap() }", .expected = .{ .u8_val = 42 } },
     .{ .name = "F64 to F32", .source = "{ 1.5.F64.to_f32_wrap() }", .expected = .{ .f32_val = 1.5 } },
-    .{ .name = "F32 to I64", .source = "{ 42.0.F32.to_i64_wrap() }", .expected = .{ .i64_val = 42 }, .skip = SKIP_ALL },
-    .{ .name = "F32 to I32", .source = "{ 42.0.F32.to_i32_wrap() }", .expected = .{ .i32_val = 42 }, .skip = SKIP_ALL },
-    .{ .name = "F32 to U64", .source = "{ 42.0.F32.to_u64_wrap() }", .expected = .{ .u64_val = 42 }, .skip = SKIP_ALL },
-    .{ .name = "F32 to U32", .source = "{ 42.0.F32.to_u32_wrap() }", .expected = .{ .u32_val = 42 }, .skip = SKIP_ALL },
+    .{ .name = "F32 to I64", .source = "{ 42.0.F32.to_i64_wrap() }", .expected = .{ .i64_val = 42 } },
+    .{ .name = "F32 to I32", .source = "{ 42.0.F32.to_i32_wrap() }", .expected = .{ .i32_val = 42 } },
+    .{ .name = "F32 to U64", .source = "{ 42.0.F32.to_u64_wrap() }", .expected = .{ .u64_val = 42 } },
+    .{ .name = "F32 to U32", .source = "{ 42.0.F32.to_u32_wrap() }", .expected = .{ .u32_val = 42 } },
     .{
         .name = "F32 to F64",
         .source = "{ 1.5.F32.to_f64() }",
@@ -8029,17 +8029,17 @@ pub const tests = [_]TestCase{
     },
 
     // --- Dec to int/float conversions (Gap #2) ---
-    // Dec-to-int conversions crash across all backends (real implementation bug)
-    .{ .name = "Dec to I64", .source = "{ 42.to_i64_wrap() }", .expected = .{ .i64_val = 42 }, .skip = SKIP_ALL },
-    .{ .name = "Dec to I32", .source = "{ 42.to_i32_wrap() }", .expected = .{ .i32_val = 42 }, .skip = SKIP_ALL },
-    .{ .name = "Dec to I16", .source = "{ 42.to_i16_wrap() }", .expected = .{ .i16_val = 42 }, .skip = SKIP_ALL },
-    .{ .name = "Dec to I8", .source = "{ 42.to_i8_wrap() }", .expected = .{ .i8_val = 42 }, .skip = SKIP_ALL },
-    .{ .name = "Dec to U64", .source = "{ 42.to_u64_wrap() }", .expected = .{ .u64_val = 42 }, .skip = SKIP_ALL },
-    .{ .name = "Dec to U32", .source = "{ 42.to_u32_wrap() }", .expected = .{ .u32_val = 42 }, .skip = SKIP_ALL },
-    .{ .name = "Dec to U16", .source = "{ 42.to_u16_wrap() }", .expected = .{ .u16_val = 42 }, .skip = SKIP_ALL },
-    .{ .name = "Dec to U8", .source = "{ 42.to_u8_wrap() }", .expected = .{ .u8_val = 42 }, .skip = SKIP_ALL },
-    .{ .name = "Dec to I128", .source = "{ 42.to_i128_wrap() }", .expected = .{ .i128_val = 42 }, .skip = SKIP_ALL },
-    .{ .name = "Dec to U128", .source = "{ 42.to_u128_wrap() }", .expected = .{ .u128_val = 42 }, .skip = SKIP_ALL },
+    // Dec-to-int conversions (fixed builtin_compiler ident mismatch: _trunc -> _wrap)
+    .{ .name = "Dec to I64", .source = "{ 42.to_i64_wrap() }", .expected = .{ .i64_val = 42 } },
+    .{ .name = "Dec to I32", .source = "{ 42.to_i32_wrap() }", .expected = .{ .i32_val = 42 } },
+    .{ .name = "Dec to I16", .source = "{ 42.to_i16_wrap() }", .expected = .{ .i16_val = 42 } },
+    .{ .name = "Dec to I8", .source = "{ 42.to_i8_wrap() }", .expected = .{ .i8_val = 42 } },
+    .{ .name = "Dec to U64", .source = "{ 42.to_u64_wrap() }", .expected = .{ .u64_val = 42 } },
+    .{ .name = "Dec to U32", .source = "{ 42.to_u32_wrap() }", .expected = .{ .u32_val = 42 } },
+    .{ .name = "Dec to U16", .source = "{ 42.to_u16_wrap() }", .expected = .{ .u16_val = 42 } },
+    .{ .name = "Dec to U8", .source = "{ 42.to_u8_wrap() }", .expected = .{ .u8_val = 42 } },
+    .{ .name = "Dec to I128", .source = "{ 42.to_i128_wrap() }", .expected = .{ .i128_val = 42 } },
+    .{ .name = "Dec to U128", .source = "{ 42.to_u128_wrap() }", .expected = .{ .u128_val = 42 } },
     .{ .name = "Dec to F32", .source = "{ 1.5.to_f32_wrap() }", .expected = .{ .f32_val = 1.5 } },
     .{
         .name = "Dec to F64",

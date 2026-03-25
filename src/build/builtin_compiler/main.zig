@@ -935,61 +935,61 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     }
 
     // F32 conversion operations
-    if (env.common.findIdent("Builtin.Num.F32.to_i8_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.F32.to_i8_wrap")) |ident| {
         try low_level_map.put(ident, .f32_to_i8_trunc);
     }
     if (env.common.findIdent("f32_to_i8_try_unsafe")) |ident| {
         try low_level_map.put(ident, .f32_to_i8_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.F32.to_i16_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.F32.to_i16_wrap")) |ident| {
         try low_level_map.put(ident, .f32_to_i16_trunc);
     }
     if (env.common.findIdent("f32_to_i16_try_unsafe")) |ident| {
         try low_level_map.put(ident, .f32_to_i16_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.F32.to_i32_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.F32.to_i32_wrap")) |ident| {
         try low_level_map.put(ident, .f32_to_i32_trunc);
     }
     if (env.common.findIdent("f32_to_i32_try_unsafe")) |ident| {
         try low_level_map.put(ident, .f32_to_i32_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.F32.to_i64_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.F32.to_i64_wrap")) |ident| {
         try low_level_map.put(ident, .f32_to_i64_trunc);
     }
     if (env.common.findIdent("f32_to_i64_try_unsafe")) |ident| {
         try low_level_map.put(ident, .f32_to_i64_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.F32.to_i128_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.F32.to_i128_wrap")) |ident| {
         try low_level_map.put(ident, .f32_to_i128_trunc);
     }
     if (env.common.findIdent("f32_to_i128_try_unsafe")) |ident| {
         try low_level_map.put(ident, .f32_to_i128_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.F32.to_u8_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.F32.to_u8_wrap")) |ident| {
         try low_level_map.put(ident, .f32_to_u8_trunc);
     }
     if (env.common.findIdent("f32_to_u8_try_unsafe")) |ident| {
         try low_level_map.put(ident, .f32_to_u8_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.F32.to_u16_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.F32.to_u16_wrap")) |ident| {
         try low_level_map.put(ident, .f32_to_u16_trunc);
     }
     if (env.common.findIdent("f32_to_u16_try_unsafe")) |ident| {
         try low_level_map.put(ident, .f32_to_u16_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.F32.to_u32_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.F32.to_u32_wrap")) |ident| {
         try low_level_map.put(ident, .f32_to_u32_trunc);
     }
     if (env.common.findIdent("f32_to_u32_try_unsafe")) |ident| {
         try low_level_map.put(ident, .f32_to_u32_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.F32.to_u64_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.F32.to_u64_wrap")) |ident| {
         try low_level_map.put(ident, .f32_to_u64_trunc);
     }
     if (env.common.findIdent("f32_to_u64_try_unsafe")) |ident| {
         try low_level_map.put(ident, .f32_to_u64_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.F32.to_u128_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.F32.to_u128_wrap")) |ident| {
         try low_level_map.put(ident, .f32_to_u128_trunc);
     }
     if (env.common.findIdent("f32_to_u128_try_unsafe")) |ident| {
@@ -1000,61 +1000,61 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     }
 
     // F64 conversion operations
-    if (env.common.findIdent("Builtin.Num.F64.to_i8_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.F64.to_i8_wrap")) |ident| {
         try low_level_map.put(ident, .f64_to_i8_trunc);
     }
     if (env.common.findIdent("f64_to_i8_try_unsafe")) |ident| {
         try low_level_map.put(ident, .f64_to_i8_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.F64.to_i16_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.F64.to_i16_wrap")) |ident| {
         try low_level_map.put(ident, .f64_to_i16_trunc);
     }
     if (env.common.findIdent("f64_to_i16_try_unsafe")) |ident| {
         try low_level_map.put(ident, .f64_to_i16_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.F64.to_i32_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.F64.to_i32_wrap")) |ident| {
         try low_level_map.put(ident, .f64_to_i32_trunc);
     }
     if (env.common.findIdent("f64_to_i32_try_unsafe")) |ident| {
         try low_level_map.put(ident, .f64_to_i32_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.F64.to_i64_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.F64.to_i64_wrap")) |ident| {
         try low_level_map.put(ident, .f64_to_i64_trunc);
     }
     if (env.common.findIdent("f64_to_i64_try_unsafe")) |ident| {
         try low_level_map.put(ident, .f64_to_i64_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.F64.to_i128_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.F64.to_i128_wrap")) |ident| {
         try low_level_map.put(ident, .f64_to_i128_trunc);
     }
     if (env.common.findIdent("f64_to_i128_try_unsafe")) |ident| {
         try low_level_map.put(ident, .f64_to_i128_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.F64.to_u8_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.F64.to_u8_wrap")) |ident| {
         try low_level_map.put(ident, .f64_to_u8_trunc);
     }
     if (env.common.findIdent("f64_to_u8_try_unsafe")) |ident| {
         try low_level_map.put(ident, .f64_to_u8_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.F64.to_u16_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.F64.to_u16_wrap")) |ident| {
         try low_level_map.put(ident, .f64_to_u16_trunc);
     }
     if (env.common.findIdent("f64_to_u16_try_unsafe")) |ident| {
         try low_level_map.put(ident, .f64_to_u16_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.F64.to_u32_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.F64.to_u32_wrap")) |ident| {
         try low_level_map.put(ident, .f64_to_u32_trunc);
     }
     if (env.common.findIdent("f64_to_u32_try_unsafe")) |ident| {
         try low_level_map.put(ident, .f64_to_u32_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.F64.to_u64_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.F64.to_u64_wrap")) |ident| {
         try low_level_map.put(ident, .f64_to_u64_trunc);
     }
     if (env.common.findIdent("f64_to_u64_try_unsafe")) |ident| {
         try low_level_map.put(ident, .f64_to_u64_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.F64.to_u128_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.F64.to_u128_wrap")) |ident| {
         try low_level_map.put(ident, .f64_to_u128_trunc);
     }
     if (env.common.findIdent("f64_to_u128_try_unsafe")) |ident| {
@@ -1068,61 +1068,61 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     }
 
     // Dec conversion functions
-    if (env.common.findIdent("Builtin.Num.Dec.to_i8_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.Dec.to_i8_wrap")) |ident| {
         try low_level_map.put(ident, .dec_to_i8_trunc);
     }
     if (env.common.findIdent("dec_to_i8_try_unsafe")) |ident| {
         try low_level_map.put(ident, .dec_to_i8_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.Dec.to_i16_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.Dec.to_i16_wrap")) |ident| {
         try low_level_map.put(ident, .dec_to_i16_trunc);
     }
     if (env.common.findIdent("dec_to_i16_try_unsafe")) |ident| {
         try low_level_map.put(ident, .dec_to_i16_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.Dec.to_i32_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.Dec.to_i32_wrap")) |ident| {
         try low_level_map.put(ident, .dec_to_i32_trunc);
     }
     if (env.common.findIdent("dec_to_i32_try_unsafe")) |ident| {
         try low_level_map.put(ident, .dec_to_i32_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.Dec.to_i64_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.Dec.to_i64_wrap")) |ident| {
         try low_level_map.put(ident, .dec_to_i64_trunc);
     }
     if (env.common.findIdent("dec_to_i64_try_unsafe")) |ident| {
         try low_level_map.put(ident, .dec_to_i64_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.Dec.to_i128_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.Dec.to_i128_wrap")) |ident| {
         try low_level_map.put(ident, .dec_to_i128_trunc);
     }
     if (env.common.findIdent("dec_to_i128_try_unsafe")) |ident| {
         try low_level_map.put(ident, .dec_to_i128_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.Dec.to_u8_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.Dec.to_u8_wrap")) |ident| {
         try low_level_map.put(ident, .dec_to_u8_trunc);
     }
     if (env.common.findIdent("dec_to_u8_try_unsafe")) |ident| {
         try low_level_map.put(ident, .dec_to_u8_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.Dec.to_u16_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.Dec.to_u16_wrap")) |ident| {
         try low_level_map.put(ident, .dec_to_u16_trunc);
     }
     if (env.common.findIdent("dec_to_u16_try_unsafe")) |ident| {
         try low_level_map.put(ident, .dec_to_u16_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.Dec.to_u32_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.Dec.to_u32_wrap")) |ident| {
         try low_level_map.put(ident, .dec_to_u32_trunc);
     }
     if (env.common.findIdent("dec_to_u32_try_unsafe")) |ident| {
         try low_level_map.put(ident, .dec_to_u32_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.Dec.to_u64_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.Dec.to_u64_wrap")) |ident| {
         try low_level_map.put(ident, .dec_to_u64_trunc);
     }
     if (env.common.findIdent("dec_to_u64_try_unsafe")) |ident| {
         try low_level_map.put(ident, .dec_to_u64_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.Dec.to_u128_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.Dec.to_u128_wrap")) |ident| {
         try low_level_map.put(ident, .dec_to_u128_trunc);
     }
     if (env.common.findIdent("dec_to_u128_try_unsafe")) |ident| {
