@@ -909,7 +909,8 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
     }
 
     switch (args.opt.toBackend()) {
-        .dev, .llvm => return rocRunDevShim(ctx, args),
+        .dev => return rocRunDevShim(ctx, args),
+        .llvm => return rocRunNativeExecutableWithLlvm(ctx, args),
         .interpreter, .wasm => {},
     }
 
@@ -1618,6 +1619,44 @@ fn rocRunDevShim(ctx: *CliContext, args: cli_args.RunArgs) !void {
     }
 }
 
+fn rocRunNativeExecutableWithLlvm(ctx: *CliContext, args: cli_args.RunArgs) !void {
+    const temp_dir_path = createUniqueTempDir(ctx) catch |err| {
+        return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
+    };
+
+    const exe_display_name = std.fs.path.basename(args.path);
+    const exe_filename = if (builtin.target.os.tag == .windows)
+        std.fmt.allocPrint(ctx.arena, "{s}.exe", .{exe_display_name}) catch return error.OutOfMemory
+    else
+        ctx.arena.dupe(u8, exe_display_name) catch return error.OutOfMemory;
+    const exe_path = std.fs.path.join(ctx.arena, &.{ temp_dir_path, exe_filename }) catch return error.OutOfMemory;
+
+    var warning_count: usize = 0;
+    try rocBuildNative(ctx, .{
+        .path = args.path,
+        .opt = args.opt,
+        .target = args.target,
+        .output = exe_path,
+        .no_link = false,
+        .debug = builtin.mode == .Debug,
+        .allow_errors = args.allow_errors,
+        .verbose = false,
+        .no_cache = args.no_cache,
+        .max_threads = null,
+        .wasm_memory = null,
+        .wasm_stack_size = null,
+        .z_bench_tokenize = null,
+        .z_bench_parse = null,
+        .z_dump_linker = false,
+        .exit_on_warnings = true,
+        .warning_count_out = &warning_count,
+        .require_executable_output = true,
+        .suppress_build_status = true,
+    }, .llvm);
+
+    try runNativeExecutable(ctx, exe_path, args.app_args, warning_count);
+}
+
 /// Extract the dev shim library to the given output path.
 fn extractDevShimLibrary(output_path: []const u8, target: ?roc_target.RocTarget) !void {
     if (builtin.is_test) {
@@ -1657,6 +1696,87 @@ fn classifyNativeRunTermination(term: std.process.Child.Term, warning_count: usi
         .Stopped => |signal| .{ .stopped = signal },
         .Unknown => |status| .{ .unknown = status },
     };
+}
+
+fn nativeBackendLabel(backend_kind: eval.EvalBackend) []const u8 {
+    return switch (backend_kind) {
+        .dev => "dev",
+        .llvm => "LLVM",
+        .interpreter => "interpreter",
+        .wasm => "wasm",
+    };
+}
+
+fn llvmOptimizationMode(opt: cli_args.OptLevel) eval.LlvmOptimizationMode {
+    return switch (opt) {
+        .size => .size,
+        .speed => .speed,
+        else => unreachable,
+    };
+}
+
+fn runNativeExecutable(
+    ctx: *CliContext,
+    exe_path: []const u8,
+    app_args: []const []const u8,
+    warning_count: usize,
+) (CliError || error{OutOfMemory})!void {
+    const argv = ctx.arena.alloc([]const u8, 1 + app_args.len) catch {
+        return error.OutOfMemory;
+    };
+    argv[0] = exe_path;
+    for (app_args, 0..) |arg, i| {
+        argv[1 + i] = arg;
+    }
+
+    var child = std.process.Child.init(argv, ctx.gpa);
+    child.cwd = std.fs.cwd().realpathAlloc(ctx.arena, ".") catch {
+        return ctx.fail(.{ .directory_not_found = .{
+            .path = ".",
+        } });
+    };
+    child.stdout_behavior = .Inherit;
+    child.stderr_behavior = .Inherit;
+
+    child.spawn() catch |err| {
+        return ctx.fail(.{ .child_process_spawn_failed = .{
+            .command = exe_path,
+            .err = err,
+        } });
+    };
+
+    const term = child.wait() catch |err| {
+        return ctx.fail(.{ .child_process_wait_failed = .{
+            .command = exe_path,
+            .err = err,
+        } });
+    };
+
+    switch (classifyNativeRunTermination(term, warning_count)) {
+        .success => {},
+        .exit_code => |code| {
+            ctx.io.flush();
+            std.process.exit(code);
+        },
+        .signal => |signal| {
+            return ctx.fail(.{ .child_process_signaled = .{
+                .command = exe_path,
+                .signal = signal,
+            } });
+        },
+        .stopped => |signal| {
+            return ctx.fail(.{ .child_process_signaled = .{
+                .command = exe_path,
+                .signal = signal,
+            } });
+        },
+        .unknown => |status| {
+            return ctx.fail(.{ .child_process_failed = .{
+                .command = exe_path,
+                .exit_code = status,
+            } });
+        },
+    }
 }
 
 /// Check if a file is a default_app (headerless file with a main! function).
@@ -3896,10 +4016,8 @@ fn rocBuild(ctx: *CliContext, args: cli_args.BuildArgs) !void {
 
     // Select build path based on optimization level
     switch (args.opt.toBackend()) {
-        .dev, .llvm => {
-            // Use native code generation backend
-            try rocBuildNative(ctx, args);
-        },
+        .dev => try rocBuildNative(ctx, args, .dev),
+        .llvm => try rocBuildNative(ctx, args, .llvm),
         .interpreter, .wasm => {
             // Use embedded interpreter build approach
             // This compiles the Roc app, serializes the ModuleEnv, and embeds it in the binary
@@ -3908,14 +4026,14 @@ fn rocBuild(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     }
 }
 
-/// Build using the dev backend to generate native machine code.
+/// Build using a native backend to generate native machine code.
 /// This produces truly compiled executables without an interpreter.
-fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
+fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs, backend_kind: eval.EvalBackend) !void {
     const target_mod = @import("target.zig");
 
     var timer = try std.time.Timer.start();
 
-    std.log.info("Building {s} with native dev backend", .{args.path});
+    std.log.info("Building {s} with native {s} backend", .{ args.path, nativeBackendLabel(backend_kind) });
 
     // Determine output path
     const output_path = if (args.output) |output|
@@ -4050,7 +4168,6 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         return error.UnsupportedCrossCompilation;
     }
 
-    // Check if dev backend supports this target architecture
     const target_arch = target.toCpuArch();
     const target_os = target.toOsTag();
     switch (target_arch) {
@@ -4074,6 +4191,17 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
             try stderr.print("Supported architectures: x86_64, aarch64\n", .{});
             return error.UnsupportedTarget;
         },
+    } else {
+        if (backend_kind == .dev) {
+            switch (target_arch) {
+                .x86_64, .aarch64, .wasm32 => {}, // Supported
+            else => {
+                const stderr = ctx.io.stderr();
+                try stderr.print("Error: The dev backend does not support the '{s}' architecture.\n\n", .{@tagName(target_arch)});
+                try stderr.print("Supported architectures: x86_64, aarch64, wasm32\n", .{});
+                return error.UnsupportedTarget;
+            },
+        }
     }
 
     // Add appropriate file extension based on target and link type
@@ -4411,28 +4539,48 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     const procs = lir_store.getProcSpecs();
 
     // Compile to object file
-    std.log.debug("Generating native code...", .{});
-    var object_compiler = backend.ObjectFileCompiler.init(ctx.gpa);
+    std.log.debug("Generating native code with {s} backend...", .{nativeBackendLabel(backend_kind)});
 
     ensureCompilerCacheDirExists(build_cache_dir) catch |err| {
         std.log.err("Failed to create compiler build cache dir {s}: {}", .{ build_cache_dir, err });
         return err;
     };
 
-    const obj_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_{s}.o", .{@tagName(target)});
+    const obj_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_{s}_{s}.o", .{ @tagName(target), nativeBackendLabel(backend_kind) });
     const obj_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, obj_filename });
 
-    object_compiler.compileToObjectFileAndWrite(
-        &lir_store,
-        &layout_store,
-        entrypoints.items,
-        procs,
-        target,
-        obj_path,
-    ) catch |err| {
-        std.log.err("Native compilation failed: {}", .{err});
-        return error.NativeCompilationFailed;
-    };
+    switch (backend_kind) {
+        .dev => {
+            var object_compiler = backend.ObjectFileCompiler.init(ctx.gpa);
+            object_compiler.compileToObjectFileAndWrite(
+                &lir_store,
+                &layout_store,
+                entrypoints.items,
+                procs,
+                target,
+                obj_path,
+            ) catch |err| {
+                std.log.err("Dev backend compilation failed: {}", .{err});
+                return error.NativeCompilationFailed;
+            };
+        },
+        .llvm => {
+            var object_compiler = eval.LlvmObjectFileCompiler.init(ctx.gpa);
+            object_compiler.compileToObjectFileAndWrite(
+                &lir_store,
+                &layout_store,
+                entrypoints.items,
+                procs,
+                target,
+                llvmOptimizationMode(args.opt),
+                obj_path,
+            ) catch |err| {
+                std.log.err("LLVM backend compilation failed: {}", .{err});
+                return error.NativeCompilationFailed;
+            };
+        },
+        else => unreachable,
+    }
 
     std.log.debug("Object file generated: {s}", .{obj_path});
 
@@ -4488,25 +4636,25 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         }
     }
 
-    // Extract builtins object file for the target and add to link inputs
-    const builtins_bytes = BuiltinsObjects.forTarget(target);
-    const builtins_filename = BuiltinsObjects.filename(target);
-    const builtins_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, builtins_filename });
-
-    // Write builtins object to cache
-    std.fs.cwd().writeFile(.{
-        .sub_path = builtins_path,
-        .data = builtins_bytes,
-    }) catch |err| {
-        std.log.err("Failed to write builtins object file: {}", .{err});
-        return error.BuiltinsExtractionFailed;
-    };
-    std.log.debug("Builtins object file: {s}", .{builtins_path});
-
     // Link the object file with platform files
     var object_files = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 4);
     try object_files.append(obj_path);
-    try object_files.append(builtins_path);
+
+    if (backend_kind == .dev or backend_kind == .llvm) {
+        const builtins_bytes = BuiltinsObjects.forTarget(target);
+        const builtins_filename = BuiltinsObjects.filename(target);
+        const builtins_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, builtins_filename });
+
+        std.fs.cwd().writeFile(.{
+            .sub_path = builtins_path,
+            .data = builtins_bytes,
+        }) catch |err| {
+            std.log.err("Failed to write builtins object file: {}", .{err});
+            return error.BuiltinsExtractionFailed;
+        };
+        std.log.debug("Builtins object file: {s}", .{builtins_path});
+        try object_files.append(builtins_path);
+    }
 
     std.log.debug("Linking: {} pre-files, {} object files, {} post-files", .{
         platform_files_pre.items.len,
@@ -4547,7 +4695,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         if (cache_stats.modules_total > 0 and cache_stats.cache_hits > 0) {
             try stdout.print(" with {}% cache hit", .{cache_percent});
         }
-        try stdout.writeAll(" (dev backend)\n");
+        try stdout.print(" ({s} backend)\n", .{nativeBackendLabel(backend_kind)});
 
         // Print verbose stats if requested
         if (args.verbose) {
@@ -5587,10 +5735,21 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
         cache_failure_reports.deinit(ctx.gpa);
     }
 
+    var all_envs_list = std.array_list.Managed(*ModuleEnv).init(ctx.gpa);
+    defer all_envs_list.deinit();
+    try all_envs_list.append(@constCast(builtin_module_env));
+    try all_envs_list.append(@constCast(root_env));
+    for (other_modules) |mod_env| {
+        if (mod_env != builtin_module_env) {
+            try all_envs_list.append(@constCast(mod_env));
+        }
+    }
+    const all_envs_mut = all_envs_list.items;
+    const all_envs_const: []const *ModuleEnv = all_envs_mut;
+
     // Run tests using the selected backend
     switch (args.opt.toBackend()) {
-        .dev, .llvm => {
-            // Run tests using dev backend (native code generation)
+        .dev => {
             var dev_eval = eval.DevEvaluator.init(ctx.gpa, null) catch |err| {
                 try stderr.print("Failed to create dev evaluator: {}\n", .{err});
                 comptime_evaluator.deinit();
@@ -5598,28 +5757,12 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
             };
             defer dev_eval.deinit();
 
-            // Build all_module_envs array with mutable pointers for codegen
-            // Module 0 must be the builtin module (layout store expects this)
-            var all_envs_list = std.array_list.Managed(*ModuleEnv).init(ctx.gpa);
-            defer all_envs_list.deinit();
-            try all_envs_list.append(@constCast(builtin_module_env));
-            try all_envs_list.append(@constCast(root_env));
-            for (other_modules) |mod_env| {
-                if (mod_env != builtin_module_env) {
-                    try all_envs_list.append(@constCast(mod_env));
-                }
-            }
-            const all_envs_mut = all_envs_list.items;
-
             // Prepare modules for codegen (lambda lifting/set inference handled in lowering)
             dev_eval.prepareModulesForCodegen(all_envs_mut) catch |err| {
                 try stderr.print("Failed to prepare modules for codegen: {}\n", .{err});
                 comptime_evaluator.deinit();
                 return err;
             };
-
-            // Cast to const slice for generateCode
-            const all_envs_const: []const *ModuleEnv = all_envs_mut;
 
             // Helper to run tests in a single module
             const DevTestHelper = struct {
@@ -5777,6 +5920,145 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
                                 if (env == mod_env) {
                                     mod_path = m.path;
                                     break :outer_dev;
+                                }
+                            }
+                        }
+                    }
+
+                    for (results) |result| {
+                        const report_text: []const u8 = if (result.error_msg) |msg| ctx.gpa.dupe(u8, msg) catch "" else "";
+                        appendTestCacheEntry(&cache_entries, &cache_failure_reports, ctx.gpa, result.result == .passed, result.region, report_text);
+                    }
+
+                    module_results.append(.{
+                        .env = mod_env,
+                        .path = mod_path,
+                        .results = results,
+                    }) catch {
+                        ctx.gpa.free(results);
+                    };
+                }
+            }
+        },
+        .llvm => {
+            var llvm_eval = eval.LlvmEvaluator.init(ctx.gpa, null) catch |err| {
+                try stderr.print("Failed to create LLVM evaluator: {}\n", .{err});
+                comptime_evaluator.deinit();
+                return err;
+            };
+            defer llvm_eval.deinit();
+
+            const LlvmTestHelper = struct {
+                fn runModuleTests(
+                    llvm: *eval.LlvmEvaluator,
+                    mod_env: *const ModuleEnv,
+                    envs: []const *ModuleEnv,
+                    allocator: std.mem.Allocator,
+                    results_list: *std.array_list.Managed(TestResultItem),
+                ) struct { passed: u32, failed: u32 } {
+                    var passed: u32 = 0;
+                    var failed: u32 = 0;
+
+                    const statements = mod_env.store.sliceStatements(mod_env.all_statements);
+                    for (statements) |stmt_idx| {
+                        const stmt = mod_env.store.getStatement(stmt_idx);
+                        if (stmt != .s_expect) continue;
+                        const region = mod_env.store.getStatementRegion(stmt_idx);
+
+                        var code_result = llvm.generateCode(
+                            @constCast(mod_env),
+                            stmt.s_expect.body,
+                            envs,
+                            null,
+                        ) catch {
+                            failed += 1;
+                            results_list.append(.{
+                                .result = .failed,
+                                .region = region,
+                                .error_msg = allocator.dupe(u8, "LLVM backend: code generation failed") catch null,
+                            }) catch {};
+                            continue;
+                        };
+                        defer code_result.deinit();
+
+                        var result_word: u64 = 0;
+                        code_result.callWithResultPtrAndRocOps(@ptrCast(&result_word), @ptrCast(&llvm.roc_ops));
+
+                        if (@as(u8, @truncate(result_word)) != 0) {
+                            passed += 1;
+                            results_list.append(.{
+                                .result = .passed,
+                                .region = region,
+                                .error_msg = null,
+                            }) catch {};
+                        } else {
+                            failed += 1;
+                            results_list.append(.{
+                                .result = .failed,
+                                .region = region,
+                                .error_msg = null,
+                            }) catch {};
+                        }
+                    }
+
+                    return .{ .passed = passed, .failed = failed };
+                }
+            };
+
+            {
+                var results_list = std.array_list.Managed(TestResultItem).init(ctx.gpa);
+                defer results_list.deinit();
+
+                const summary = LlvmTestHelper.runModuleTests(
+                    &llvm_eval,
+                    root_env,
+                    all_envs_const,
+                    ctx.gpa,
+                    &results_list,
+                );
+                total_passed += summary.passed;
+                total_failed += summary.failed;
+
+                const results = try ctx.gpa.dupe(TestResultItem, results_list.items);
+                for (results) |result| {
+                    const report_text: []const u8 = if (result.error_msg) |msg| ctx.gpa.dupe(u8, msg) catch "" else "";
+                    appendTestCacheEntry(&cache_entries, &cache_failure_reports, ctx.gpa, result.result == .passed, result.region, report_text);
+                }
+                try module_results.append(.{
+                    .env = root_env,
+                    .path = args.path,
+                    .results = results,
+                });
+            }
+
+            for (other_modules) |mod_env| {
+                if (mod_env == builtin_module_env) continue;
+
+                var results_list = std.array_list.Managed(TestResultItem).init(ctx.gpa);
+                defer results_list.deinit();
+
+                const summary = LlvmTestHelper.runModuleTests(
+                    &llvm_eval,
+                    mod_env,
+                    all_envs_const,
+                    ctx.gpa,
+                    &results_list,
+                );
+                total_passed += summary.passed;
+                total_failed += summary.failed;
+
+                if (results_list.items.len > 0) {
+                    const results = ctx.gpa.dupe(TestResultItem, results_list.items) catch continue;
+
+                    var mod_path: []const u8 = "<unknown>";
+                    var sched_iter2 = build_env.schedulers.iterator();
+                    outer_llvm: while (sched_iter2.next()) |sched_entry| {
+                        const scheduler2 = sched_entry.value_ptr.*;
+                        for (scheduler2.modules.items) |*m| {
+                            if (m.env) |*env| {
+                                if (env == mod_env) {
+                                    mod_path = m.path;
+                                    break :outer_llvm;
                                 }
                             }
                         }

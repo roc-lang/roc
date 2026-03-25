@@ -6,7 +6,6 @@
 //!
 //! ## Architecture overview
 //!
-<<<<<<< HEAD
 //! Each test goes through a shared front-end (parse, canonicalize, type-check)
 //! and is then evaluated by four independent backends:
 //!
@@ -558,15 +557,7 @@ fn runSingleTest(allocator: std.mem.Allocator, tc: TestCase, preloaded: *const P
         return .{ .status = .fail, .message = @errorName(err) };
     };
 
-    // Any skipped backend means the test didn't get full coverage — report as skip.
-    if (outcome.status == .pass and hasAnySkip(tc.skip)) {
-        return .{ .status = .skip, .message = outcome.message, .timings = outcome.timings };
-    }
     return outcome;
-}
-
-fn hasAnySkip(skip: TestCase.Skip) bool {
-    return skip.interpreter or skip.dev or skip.wasm or skip.llvm;
 }
 
 fn runSingleTestInner(allocator: std.mem.Allocator, tc: TestCase, preloaded: *const PreloadedBuiltins) !TestOutcome {

@@ -856,7 +856,7 @@ pub const Repl = struct {
             std.debug.print("", .{});
 
             var result_buf: [512]u8 align(16) = @splat(0);
-            code_result.callWithResultPtrAndRocOps(@ptrCast(&result_buf), @ptrCast(&llvm_eval.roc_ops));
+            code_result.callWithResultPtrAndRocOps(@ptrCast(&result_buf), @ptrCast(self.roc_ops));
 
             const output = self.dupResultStr(&result_buf, "LLVM") catch {
                 return .{ .eval_error = try self.allocator.dupe(u8, "Out of memory") };
@@ -864,7 +864,7 @@ pub const Repl = struct {
 
             const roc_str: *const RocStr = @ptrCast(@alignCast(&result_buf));
             if (!roc_str.isSmallStr()) {
-                @constCast(roc_str).decref(&llvm_eval.roc_ops);
+                @constCast(roc_str).decref(self.roc_ops);
             }
 
             return .{ .expression = output };

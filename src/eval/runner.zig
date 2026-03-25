@@ -22,6 +22,7 @@ const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
 const RocOps = builtins.host_abi.RocOps;
 const DevEvaluator = eval_mod.DevEvaluator;
+const LlvmEvaluator = eval_mod.LlvmEvaluator;
 const ExecutableMemory = eval_mod.ExecutableMemory;
 const BuiltinModules = eval_mod.BuiltinModules;
 const EvalBackend = eval_mod.EvalBackend;
@@ -53,7 +54,17 @@ pub fn run(
     result_ptr: *anyopaque,
 ) RunError!void {
     switch (eval_backend) {
-        .dev, .llvm => try runViaDev(
+        .dev => try runViaDev(
+            gpa,
+            platform_env,
+            all_module_envs,
+            app_module_env,
+            entrypoint_expr,
+            roc_ops,
+            args_ptr,
+            result_ptr,
+        ),
+        .llvm => try runViaLlvm(
             gpa,
             platform_env,
             all_module_envs,
@@ -197,6 +208,73 @@ fn runViaDev(
         error.RocCrashed => return error.EvalFailed,
         error.Segfault => return error.EvalFailed,
     };
+}
+
+fn runViaLlvm(
+    gpa: Allocator,
+    platform_env: *ModuleEnv,
+    all_module_envs: []*ModuleEnv,
+    app_module_env: ?*ModuleEnv,
+    entrypoint_expr: CIR.Expr.Idx,
+    roc_ops: *RocOps,
+    args_ptr: ?*anyopaque,
+    result_ptr: *anyopaque,
+) RunError!void {
+    var llvm_eval = LlvmEvaluator.init(gpa, null) catch {
+        return error.EvalFailed;
+    };
+    defer llvm_eval.deinit();
+
+    const layout_store_ptr = llvm_eval.ensureGlobalLayoutStore(all_module_envs) catch return error.EvalFailed;
+    const module_idx: u32 = for (all_module_envs, 0..) |env, i| {
+        if (env == platform_env) break @intCast(i);
+    } else return error.EvalFailed;
+
+    const expr_type_var = ModuleEnv.varFrom(entrypoint_expr);
+    const resolved_type = platform_env.types.resolveVar(expr_type_var);
+    const maybe_func = resolved_type.desc.content.unwrapFunc();
+
+    var arg_layouts_buf: [16]layout.Idx = undefined;
+    var arg_layouts_len: usize = 0;
+    var ret_layout: layout.Idx = undefined;
+
+    if (maybe_func) |func| {
+        const arg_vars = platform_env.types.sliceVars(func.args);
+        var type_scope = types.TypeScope.init(gpa);
+        defer type_scope.deinit();
+        for (arg_vars, 0..) |arg_var, i| {
+            arg_layouts_buf[i] = layout_store_ptr.fromTypeVar(module_idx, arg_var, &type_scope, null) catch return error.EvalFailed;
+        }
+        arg_layouts_len = arg_vars.len;
+        ret_layout = layout_store_ptr.fromTypeVar(module_idx, func.ret, &type_scope, null) catch return error.EvalFailed;
+    } else {
+        var type_scope = types.TypeScope.init(gpa);
+        defer type_scope.deinit();
+        ret_layout = layout_store_ptr.fromTypeVar(module_idx, expr_type_var, &type_scope, null) catch return error.EvalFailed;
+    }
+
+    const arg_layouts: []const layout.Idx = arg_layouts_buf[0..arg_layouts_len];
+
+    var platform_to_app_idents = if (app_module_env) |ae|
+        platform_env.buildPlatformToAppIdentMap(gpa, ae) catch return error.EvalFailed
+    else
+        std.AutoHashMap(base.Ident.Idx, base.Ident.Idx).init(gpa);
+    defer platform_to_app_idents.deinit();
+
+    var code_result = llvm_eval.generateEntrypointCode(
+        platform_env,
+        entrypoint_expr,
+        all_module_envs,
+        app_module_env,
+        arg_layouts,
+        ret_layout,
+        &platform_to_app_idents,
+    ) catch {
+        return error.EvalFailed;
+    };
+    defer code_result.deinit();
+
+    code_result.callRocABI(@ptrCast(roc_ops), result_ptr, args_ptr);
 }
 
 /// Run via the interpreter.

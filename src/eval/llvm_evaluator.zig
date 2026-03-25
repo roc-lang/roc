@@ -25,6 +25,9 @@ const mir = @import("mir");
 const MIR = mir.MIR;
 const lir = @import("lir");
 const LirExprStore = lir.LirExprStore;
+const lir_program_mod = @import("cir_to_lir.zig");
+const LirProgram = lir_program_mod.LirProgram;
+const buildPlatformTypeScope = lir_program_mod.buildPlatformTypeScope;
 const builtin_loading = @import("builtin_loading.zig");
 const compiled_builtins = @import("compiled_builtins");
 const builtins = @import("builtins");
@@ -45,6 +48,7 @@ const LoadedModule = builtin_loading.LoadedModule;
 // Host ABI types
 const RocOps = builtins.host_abi.RocOps;
 const LlvmEntryFn = *const fn (*anyopaque, *anyopaque) callconv(.c) void;
+const LlvmRocCallEntryFn = *const fn (*anyopaque, *anyopaque, ?*anyopaque) callconv(.c) void;
 
 fn isBuiltinModuleEnv(env: *const ModuleEnv) bool {
     return env.display_module_name_idx.eql(env.idents.builtin_module);
@@ -195,7 +199,7 @@ pub const LlvmEvaluator = struct {
     }
 
     /// Get or create the global layout store for resolving layouts of composite types.
-    fn ensureGlobalLayoutStore(self: *LlvmEvaluator, all_module_envs: []const *ModuleEnv) Error!*layout.Store {
+    pub fn ensureGlobalLayoutStore(self: *LlvmEvaluator, all_module_envs: []const *ModuleEnv) Error!*layout.Store {
         if (self.global_layout_store) |ls| return ls;
 
         var builtin_str: ?base.Ident.Idx = null;
@@ -245,6 +249,23 @@ pub const LlvmEvaluator = struct {
 
         pub fn callWithResultPtrAndRocOps(self: *const CodeResult, result_ptr: *anyopaque, roc_ops: *anyopaque) void {
             self.entry_fn(result_ptr, roc_ops);
+        }
+    };
+
+    pub const EntrypointCodeResult = struct {
+        library: std.DynLib,
+        library_path: [:0]const u8,
+        entry_fn: LlvmRocCallEntryFn,
+        allocator: Allocator,
+
+        pub fn deinit(self: *EntrypointCodeResult) void {
+            self.library.close();
+            std.fs.cwd().deleteFile(self.library_path) catch {};
+            self.allocator.free(self.library_path);
+        }
+
+        pub fn callRocABI(self: *const EntrypointCodeResult, roc_ops: *anyopaque, ret_ptr: *anyopaque, args_ptr: ?*anyopaque) void {
+            self.entry_fn(roc_ops, ret_ptr, args_ptr);
         }
     };
 
@@ -378,6 +399,105 @@ pub const LlvmEvaluator = struct {
             .allocator = self.allocator,
             .result_layout = result_layout,
             .layout_store = layout_store_ptr,
+        };
+    }
+
+    pub fn generateEntrypointCode(
+        self: *LlvmEvaluator,
+        module_env: *ModuleEnv,
+        expr_idx: CIR.Expr.Idx,
+        all_module_envs: []const *ModuleEnv,
+        app_module_env: ?*ModuleEnv,
+        arg_layouts: []const layout.Idx,
+        ret_layout: layout.Idx,
+        platform_to_app_idents: *const std.AutoHashMap(base.Ident.Idx, base.Ident.Idx),
+    ) Error!EntrypointCodeResult {
+        var lir_program = LirProgram.init(self.allocator, base.target.TargetUsize.native);
+        defer lir_program.deinit();
+
+        var platform_type_scope = if (app_module_env) |app_env|
+            try buildPlatformTypeScope(self.allocator, module_env, app_env, platform_to_app_idents)
+        else
+            null;
+        defer if (platform_type_scope) |*ts| ts.deinit();
+
+        var lower_result = lir_program.lowerEntrypointExpr(
+            module_env,
+            expr_idx,
+            all_module_envs,
+            app_module_env,
+            arg_layouts.len == 0,
+            if (platform_type_scope) |*ts| ts else null,
+        ) catch |err| return switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+            error.RuntimeError => error.CompilationFailed,
+            error.ModuleEnvNotFound => error.ModuleEnvNotFound,
+        };
+        defer lower_result.deinit();
+
+        const entry_ret_stmt = lower_result.lir_store.addCFStmt(.{ .ret = .{ .value = lower_result.final_expr_id } }) catch {
+            return error.OutOfMemory;
+        };
+        const entry_proc_id = lower_result.lir_store.addProcSpec(.{
+            .name = lir.Symbol.none,
+            .args = lir.LirPatternSpan.empty(),
+            .arg_layouts = lir.LayoutIdxSpan.empty(),
+            .body = entry_ret_stmt,
+            .ret_layout = ret_layout,
+            .closure_data_layout = null,
+            .is_self_recursive = .not_self_recursive,
+        }) catch {
+            return error.OutOfMemory;
+        };
+
+        const llvm_compile = @import("llvm_compile");
+        const MonoLlvmCodeGen = llvm_compile.MonoLlvmCodeGen;
+
+        var codegen = MonoLlvmCodeGen.init(self.allocator, &lower_result.lir_store);
+        defer codegen.deinit();
+        codegen.layout_store = lower_result.layout_store;
+
+        const Entrypoint = struct {
+            symbol_name: []const u8,
+            proc: lir.LIR.LirProcSpecId,
+            arg_layouts: []const layout.Idx,
+            ret_layout: layout.Idx,
+        };
+        const entrypoints = [_]Entrypoint{.{
+            .symbol_name = "roc_entrypoint",
+            .proc = entry_proc_id,
+            .arg_layouts = arg_layouts,
+            .ret_layout = ret_layout,
+        }};
+
+        var bitcode_result = codegen.generateEntrypointModule("roc_entrypoint_module", &entrypoints) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.CompilationFailed => return error.CompilationFailed,
+        };
+        defer bitcode_result.deinit();
+
+        const library_path = llvm_compile.compileToSharedLibrary(
+            self.allocator,
+            bitcode_result.bitcode,
+            .{ .function_sections = false, .opt_level = .None },
+        ) catch return error.CompilationFailed;
+        errdefer {
+            std.fs.cwd().deleteFile(library_path) catch {};
+            self.allocator.free(library_path);
+        }
+
+        var library = std.DynLib.open(library_path) catch return error.CompilationFailed;
+        errdefer library.close();
+
+        const entry_fn = library.lookup(LlvmRocCallEntryFn, "roc_entrypoint") orelse
+            library.lookup(LlvmRocCallEntryFn, "_roc_entrypoint") orelse
+            return error.CompilationFailed;
+
+        return EntrypointCodeResult{
+            .library = library,
+            .library_path = library_path,
+            .entry_fn = entry_fn,
+            .allocator = self.allocator,
         };
     }
 

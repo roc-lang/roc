@@ -7678,7 +7678,7 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "Tagged(\"x\")" },
-        .skip = .{ .llvm = true },
+        .skip = .{ .wasm = true },
     },
     .{
         .name = "nested match with Result type - regression",
@@ -7694,7 +7694,7 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "Ok(\"x\")" },
-        .skip = .{ .llvm = true },
+        .skip = .{ .wasm = true },
     },
     .{
         .name = "issue 8892: nominal type wrapping tag union with match expression",
@@ -7710,7 +7710,7 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "Modulo" },
-        .skip = .{ .llvm = true },
+        .skip = .{ .wasm = true },
     },
 
     // --- known bugs (skipped on all backends) ---

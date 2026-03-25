@@ -101,6 +101,8 @@ pub const CompileOptions = struct {
     reloc_mode: bindings.RelocMode = .Default,
     /// Whether to use the module's native target triple instead of LLVM's default.
     use_module_target_triple: bool = false,
+    /// Whether to merge the embedded builtins.bc into the module before codegen.
+    merge_builtin_bitcode: bool = true,
 };
 
 fn emitMergedBitcodeToObjectFile(
@@ -143,33 +145,35 @@ fn emitMergedBitcodeToObjectFile(
     defer module.dispose();
     // Note: mem_buf is consumed by parseBitcodeInContext2
 
-    // Load and merge builtin bitcode into the user module.
-    // This makes all builtin functions available.
-    {
-        const builtin_bitcode = @embedFile("builtins.bc");
-        const builtin_mem_buf = bindings.MemoryBuffer.createMemoryBufferWithMemoryRange(
-            builtin_bitcode.ptr,
-            builtin_bitcode.len,
-            "roc_builtins",
-            bindings.Bool.False,
-        );
+    if (options.merge_builtin_bitcode) {
+        // Load and merge builtin bitcode into the user module.
+        // This makes all builtin functions available.
+        {
+            const builtin_bitcode = @embedFile("builtins.bc");
+            const builtin_mem_buf = bindings.MemoryBuffer.createMemoryBufferWithMemoryRange(
+                builtin_bitcode.ptr,
+                builtin_bitcode.len,
+                "roc_builtins",
+                bindings.Bool.False,
+            );
 
-        var builtin_module: *bindings.Module = undefined;
-        if (context.parseBitcodeInContext2(builtin_mem_buf, &builtin_module).toBool()) {
-            builtin_mem_buf.dispose();
-            return Error.BitcodeParseError;
+            var builtin_module: *bindings.Module = undefined;
+            if (context.parseBitcodeInContext2(builtin_mem_buf, &builtin_module).toBool()) {
+                builtin_mem_buf.dispose();
+                return Error.BitcodeParseError;
+            }
+            // Note: builtin_mem_buf is consumed by parseBitcodeInContext2
+
+            // Set the builtin module's target triple and data layout to match the user module.
+            builtin_module.setTargetTriple(module.getTargetTriple());
+            builtin_module.setDataLayout(module.getDataLayout());
+
+            // Link builtins into user module (destroys builtin_module on success)
+            if (module.link(builtin_module).toBool()) {
+                return Error.ModuleLinkFailed;
+            }
+            // Note: builtin_module is now invalid - do NOT dispose it
         }
-        // Note: builtin_mem_buf is consumed by parseBitcodeInContext2
-
-        // Set the builtin module's target triple and data layout to match the user module.
-        builtin_module.setTargetTriple(module.getTargetTriple());
-        builtin_module.setDataLayout(module.getDataLayout());
-
-        // Link builtins into user module (destroys builtin_module on success)
-        if (module.link(builtin_module).toBool()) {
-            return Error.ModuleLinkFailed;
-        }
-        // Note: builtin_module is now invalid - do NOT dispose it
     }
 
     const triple, const dispose_triple = blk: {
@@ -189,12 +193,8 @@ fn emitMergedBitcodeToObjectFile(
         return Error.CompilationFailed;
     }
 
-    // Use a baseline CPU that has the required features for each architecture.
-    const cpu: [*:0]const u8 = switch (builtin.cpu.arch) {
-        .x86_64 => "x86-64",
-        .x86 => "pentium4",
-        else => "generic",
-    };
+    // Use a baseline CPU that matches the selected triple instead of the host CPU.
+    const cpu = defaultCpuForTriple(std.mem.span(triple));
 
     // Create target machine
     const target_machine = bindings.TargetMachine.create(
@@ -256,6 +256,12 @@ fn emitMergedBitcodeToObjectFile(
         bindings.disposeMessage(emit_error);
         return Error.CompilationFailed;
     }
+}
+
+fn defaultCpuForTriple(triple: []const u8) [*:0]const u8 {
+    if (std.mem.startsWith(u8, triple, "x86_64-")) return "x86-64";
+    if (std.mem.startsWith(u8, triple, "i686-")) return "pentium4";
+    return "generic";
 }
 
 /// Compile LLVM bitcode to a native object file.
