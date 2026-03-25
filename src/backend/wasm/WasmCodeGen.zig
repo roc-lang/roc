@@ -3434,6 +3434,171 @@ fn emitI128Sub(self: *Self, lhs_local: u32, rhs_local: u32) Allocator.Error!void
 /// Emit i128 × i128 → i128 truncating multiply.
 /// Takes two i32 pointers to 16-byte i128 values in linear memory.
 /// Pushes an i32 pointer to the 16-byte result.
+/// Emit i128/u128 shift operation. LHS is composite (16 bytes), RHS is U8 (i32 on wasm stack).
+/// Uses wasm structured if/else to handle shift amounts >= 64.
+/// Pushes an i32 pointer to the 16-byte result on the wasm stack.
+fn generateI128Shift(self: *Self, op: anytype, args: []const LirExprId) Allocator.Error!void {
+    const result_offset = try self.allocStackMemory(16, 8);
+    const result_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitFpOffset(result_offset);
+    try self.emitLocalSet(result_local);
+
+    // Load LHS low and high words into locals
+    try self.generateExpr(args[0]);
+    const lhs_local = try self.stabilizeCompositeResult(16);
+
+    const a_low = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
+    try self.emitLocalGet(lhs_local);
+    try self.emitLoadOp(.i64, 0);
+    try self.emitLocalSet(a_low);
+
+    const a_high = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
+    try self.emitLocalGet(lhs_local);
+    try self.emitLoadOp(.i64, 8);
+    try self.emitLocalSet(a_high);
+
+    // Load shift amount (U8 -> i32 on wasm stack) and extend to i64
+    try self.generateExpr(args[1]);
+    const shift_local = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
+    self.body.append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
+    try self.emitLocalSet(shift_local);
+
+    // Locals for result
+    const r_low = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
+    const r_high = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
+
+    // Branch: if shift >= 64
+    try self.emitLocalGet(shift_local);
+    self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+    WasmModule.leb128WriteI64(self.allocator, &self.body, 64) catch return error.OutOfMemory;
+    self.body.append(self.allocator, Op.i64_ge_u) catch return error.OutOfMemory;
+
+    self.body.append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+    self.body.append(self.allocator, @intFromEnum(WasmModule.BlockType.void)) catch return error.OutOfMemory;
+
+    // === shift >= 64 path ===
+    switch (op) {
+        .num_shift_left_by => {
+            // r_low = 0, r_high = a_low << (shift - 64)
+            self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI64(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+            try self.emitLocalSet(r_low);
+            try self.emitLocalGet(a_low);
+            try self.emitLocalGet(shift_local);
+            self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI64(self.allocator, &self.body, 64) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i64_sub) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i64_shl) catch return error.OutOfMemory;
+            try self.emitLocalSet(r_high);
+        },
+        .num_shift_right_by => {
+            // r_high = a_high >> 63 (sign extend), r_low = a_high >> (shift - 64)  [arithmetic]
+            try self.emitLocalGet(a_high);
+            self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI64(self.allocator, &self.body, 63) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i64_shr_s) catch return error.OutOfMemory;
+            try self.emitLocalSet(r_high);
+            try self.emitLocalGet(a_high);
+            try self.emitLocalGet(shift_local);
+            self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI64(self.allocator, &self.body, 64) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i64_sub) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i64_shr_s) catch return error.OutOfMemory;
+            try self.emitLocalSet(r_low);
+        },
+        .num_shift_right_zf_by => {
+            // r_high = 0, r_low = a_high >> (shift - 64)  [logical]
+            self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI64(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+            try self.emitLocalSet(r_high);
+            try self.emitLocalGet(a_high);
+            try self.emitLocalGet(shift_local);
+            self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI64(self.allocator, &self.body, 64) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i64_sub) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i64_shr_u) catch return error.OutOfMemory;
+            try self.emitLocalSet(r_low);
+        },
+        else => unreachable,
+    }
+
+    self.body.append(self.allocator, Op.@"else") catch return error.OutOfMemory;
+
+    // === shift < 64 path ===
+    // inv = 64 - shift
+    const inv_local = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
+    self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+    WasmModule.leb128WriteI64(self.allocator, &self.body, 64) catch return error.OutOfMemory;
+    try self.emitLocalGet(shift_local);
+    self.body.append(self.allocator, Op.i64_sub) catch return error.OutOfMemory;
+    try self.emitLocalSet(inv_local);
+
+    switch (op) {
+        .num_shift_left_by => {
+            // r_low = a_low << shift
+            try self.emitLocalGet(a_low);
+            try self.emitLocalGet(shift_local);
+            self.body.append(self.allocator, Op.i64_shl) catch return error.OutOfMemory;
+            try self.emitLocalSet(r_low);
+            // r_high = (a_high << shift) | (a_low >> inv)
+            try self.emitLocalGet(a_high);
+            try self.emitLocalGet(shift_local);
+            self.body.append(self.allocator, Op.i64_shl) catch return error.OutOfMemory;
+            try self.emitLocalGet(a_low);
+            try self.emitLocalGet(inv_local);
+            self.body.append(self.allocator, Op.i64_shr_u) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i64_or) catch return error.OutOfMemory;
+            try self.emitLocalSet(r_high);
+        },
+        .num_shift_right_by => {
+            // r_high = a_high >> shift  [arithmetic]
+            try self.emitLocalGet(a_high);
+            try self.emitLocalGet(shift_local);
+            self.body.append(self.allocator, Op.i64_shr_s) catch return error.OutOfMemory;
+            try self.emitLocalSet(r_high);
+            // r_low = (a_low >> shift) | (a_high << inv)
+            try self.emitLocalGet(a_low);
+            try self.emitLocalGet(shift_local);
+            self.body.append(self.allocator, Op.i64_shr_u) catch return error.OutOfMemory;
+            try self.emitLocalGet(a_high);
+            try self.emitLocalGet(inv_local);
+            self.body.append(self.allocator, Op.i64_shl) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i64_or) catch return error.OutOfMemory;
+            try self.emitLocalSet(r_low);
+        },
+        .num_shift_right_zf_by => {
+            // r_high = a_high >> shift  [logical]
+            try self.emitLocalGet(a_high);
+            try self.emitLocalGet(shift_local);
+            self.body.append(self.allocator, Op.i64_shr_u) catch return error.OutOfMemory;
+            try self.emitLocalSet(r_high);
+            // r_low = (a_low >> shift) | (a_high << inv)
+            try self.emitLocalGet(a_low);
+            try self.emitLocalGet(shift_local);
+            self.body.append(self.allocator, Op.i64_shr_u) catch return error.OutOfMemory;
+            try self.emitLocalGet(a_high);
+            try self.emitLocalGet(inv_local);
+            self.body.append(self.allocator, Op.i64_shl) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i64_or) catch return error.OutOfMemory;
+            try self.emitLocalSet(r_low);
+        },
+        else => unreachable,
+    }
+
+    self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
+
+    // Store results
+    try self.emitLocalGet(result_local);
+    try self.emitLocalGet(r_low);
+    try self.emitStoreOp(.i64, 0);
+    try self.emitLocalGet(result_local);
+    try self.emitLocalGet(r_high);
+    try self.emitStoreOp(.i64, 8);
+
+    // Push result pointer
+    try self.emitLocalGet(result_local);
+}
+
 ///
 /// Algorithm:
 ///   a = (a_hi, a_lo), b = (b_hi, b_lo)  (each hi/lo is i64)
@@ -9880,8 +10045,13 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LirExprId, re
 
     // Check for composite types (i128/Dec)
     const check_layout = if (use_operand_layout) self.exprLayoutIdx(args[0]) else ret_layout;
-    if (self.isCompositeExpr(args[0]) or self.isCompositeLayout(check_layout)) {
+    const is_shift = op == .num_shift_left_by or op == .num_shift_right_by or op == .num_shift_right_zf_by;
+    if (!is_shift and (self.isCompositeExpr(args[0]) or self.isCompositeLayout(check_layout))) {
         return self.generateCompositeNumericOp(op, args, ret_layout, check_layout);
+    }
+    // I128/U128 shifts: LHS is composite but RHS is U8 — needs dedicated handling.
+    if (is_shift and (self.isCompositeExpr(args[0]) or self.isCompositeLayout(check_layout))) {
+        return self.generateI128Shift(op, args);
     }
 
     // For neg, also check composite via ret_layout

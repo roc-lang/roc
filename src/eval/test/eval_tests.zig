@@ -8091,7 +8091,7 @@ pub const tests = [_]TestCase{
     .{ .name = "F32 to_str", .source = "1.5.F32.to_str()", .expected = .{ .str_val = "1.5" } },
 
     // --- list operations with typed elements ---
-    // TODO: list of typed ints crashes across all backends
+    // TODO: list of typed ints crashes across all backends (likely monomorphization bug)
     .{
         .name = "list of I32 len",
         .source =
@@ -8215,9 +8215,8 @@ pub const tests = [_]TestCase{
     .{ .name = "shift right U64", .source = "{ 256.U64.shift_right_by(4.U8) }", .expected = .{ .u64_val = 16 } },
     .{ .name = "shift right I32", .source = "{ 64.I32.shift_right_by(2.U8) }", .expected = .{ .i32_val = 16 } },
     .{ .name = "shift left I8", .source = "{ 1.I8.shift_left_by(3.U8) }", .expected = .{ .i8_val = 8 } },
-    // TODO: I128/U128 shift crashes across all backends
-    .{ .name = "shift left I128", .source = "{ 1.I128.shift_left_by(10.U8) }", .expected = .{ .i128_val = 1024 }, .skip = SKIP_ALL },
-    .{ .name = "shift left U128", .source = "{ 1.U128.shift_left_by(16.U8) }", .expected = .{ .u128_val = 65536 }, .skip = SKIP_ALL },
+    .{ .name = "shift left I128", .source = "{ 1.I128.shift_left_by(10.U8) }", .expected = .{ .i128_val = 1024 } },
+    .{ .name = "shift left U128", .source = "{ 1.U128.shift_left_by(16.U8) }", .expected = .{ .u128_val = 65536 } },
 
     // --- negation on typed ints ---
     .{ .name = "I32 negation", .source = "{ -(5.I32) }", .expected = .{ .i32_val = -5 } },

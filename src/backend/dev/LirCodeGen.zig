@@ -190,6 +190,9 @@ pub const BuiltinFn = enum {
     num_div_trunc_i128,
     num_rem_trunc_u128,
     num_rem_trunc_i128,
+    num_shl_u128,
+    num_shr_i128,
+    num_shr_u128,
     int_to_str,
     float_to_str,
     int_from_str,
@@ -277,6 +280,9 @@ pub const BuiltinFn = enum {
             .num_div_trunc_i128 => "roc_builtins_num_div_trunc_i128",
             .num_rem_trunc_u128 => "roc_builtins_num_rem_trunc_u128",
             .num_rem_trunc_i128 => "roc_builtins_num_rem_trunc_i128",
+            .num_shl_u128 => "roc_builtins_num_shl_u128",
+            .num_shr_i128 => "roc_builtins_num_shr_i128",
+            .num_shr_u128 => "roc_builtins_num_shr_u128",
             .int_to_str => "roc_builtins_int_to_str",
             .float_to_str => "roc_builtins_float_to_str",
             .int_from_str => "roc_builtins_int_from_str",
@@ -3261,6 +3267,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     if (is_float) {
                         return self.generateFloatBinop(ll.op, lhs_loc, rhs_loc);
+                    } else if (is_i128_op and (ll.op == .num_shift_left_by or ll.op == .num_shift_right_by or ll.op == .num_shift_right_zf_by)) {
+                        // Shifts on i128/u128: LHS is i128, RHS is U8 (not i128).
+                        const adj_lhs = if (lhs_loc == .stack) ValueLocation{ .stack_i128 = lhs_loc.stack.offset } else lhs_loc;
+                        return self.generateI128Shift(ll.op, adj_lhs, rhs_loc, operand_layout);
                     } else if (is_i128_op) {
                         const adj_lhs = if (is_i128_op and lhs_loc == .stack) ValueLocation{ .stack_i128 = lhs_loc.stack.offset } else lhs_loc;
                         const adj_rhs = if (is_i128_op and rhs_loc == .stack) ValueLocation{ .stack_i128 = rhs_loc.stack.offset } else rhs_loc;
@@ -5117,6 +5127,55 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.freeGeneral(result_high);
 
             return .{ .stack_i128 = stack_offset };
+        }
+
+        /// 128-bit shift by a U8 amount. LHS is i128/u128, RHS is U8.
+        /// Delegates to C-callable builtins in dev_wrappers.zig (same pattern as div/rem).
+        fn generateI128Shift(
+            self: *Self,
+            op: LirExpr.LowLevel,
+            lhs_loc: ValueLocation,
+            rhs_loc: ValueLocation,
+            operand_layout: layout.Idx,
+        ) Allocator.Error!ValueLocation {
+            const signedness: std.builtin.Signedness = if (operand_layout == .u128) .unsigned else .signed;
+            const lhs_parts = try self.getI128Parts(lhs_loc, signedness);
+            const amount_reg = try self.ensureInGeneralReg(rhs_loc);
+
+            const fn_addr: usize = switch (op) {
+                .num_shift_left_by => @intFromPtr(&dev_wrappers.roc_builtins_num_shl_u128),
+                .num_shift_right_by => if (signedness == .signed)
+                    @intFromPtr(&dev_wrappers.roc_builtins_num_shr_i128)
+                else
+                    @intFromPtr(&dev_wrappers.roc_builtins_num_shr_u128),
+                .num_shift_right_zf_by => @intFromPtr(&dev_wrappers.roc_builtins_num_shr_u128),
+                else => unreachable,
+            };
+
+            const builtin_fn: BuiltinFn = switch (op) {
+                .num_shift_left_by => .num_shl_u128,
+                .num_shift_right_by => if (signedness == .signed) .num_shr_i128 else .num_shr_u128,
+                .num_shift_right_zf_by => .num_shr_u128,
+                else => unreachable,
+            };
+
+            const result_slot = self.codegen.allocStackSlot(16);
+            const base_reg = frame_ptr;
+
+            // Call: fn(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, shift_amount: u8)
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(base_reg, result_slot); // out_low
+            try builder.addLeaArg(base_reg, result_slot + 8); // out_high
+            try builder.addRegArg(lhs_parts.low);
+            try builder.addRegArg(lhs_parts.high);
+            try builder.addRegArg(amount_reg);
+            try self.callBuiltin(&builder, fn_addr, builtin_fn);
+
+            self.codegen.freeGeneral(lhs_parts.low);
+            self.codegen.freeGeneral(lhs_parts.high);
+            self.codegen.freeGeneral(amount_reg);
+
+            return .{ .stack_i128 = result_slot };
         }
 
         /// Call a C function: fn(out_low: *u64, out_high: *u64, val: T) -> void.

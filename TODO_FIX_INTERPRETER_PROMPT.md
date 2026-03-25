@@ -42,7 +42,7 @@ There are two test paths that exercise the interpreter:
      safely contained (the parent sees a non-zero exit or signal via waitpid).
    - The interpreter backend uses `helpers.lirInterpreterInspectedStr` which
      does CIR → MIR → LIR → RC lowering, then `LirInterpreter.eval()`
-   - Current status: **1064 passed, 0 failed, 0 crashed, 110 skipped**
+   - Current status: **1066 passed, 0 failed, 0 crashed, 108 skipped**
 
 2. **Unit tests** (`zig build test`):
    - Sequential tests in `src/eval/test/helpers.zig` (low_level_interp_test,
@@ -419,11 +419,6 @@ Crash across all backends:
 list context get wrong monotype.
 
 ---
-
-### I128/U128 shift operations (2 tests)
-
-- `shift left I128` — `1.I128.shift_left_by(10.U8)` → 1024
-- `shift left U128` — `1.U128.shift_left_by(16.U8)` → 65536
 
 ---
 
