@@ -664,10 +664,12 @@ pub const RcInsertPass = struct {
         return switch (self.store.getExpr(expr_id)) {
             // This predicate runs during borrowed-use normalization, before
             // ownership analysis has assigned stable ref ids. It must therefore
-            // be purely syntactic: a local lookup or cell load already has
-            // storage we can borrow through, while expressions that cross a
-            // block boundary still need explicit materialization.
-            .lookup => |lookup| !lookup.symbol.isNone(),
+            // stay local and structural: a lookup only has reusable borrow
+            // storage when it refers to a block-local binding, not when it
+            // resolves through `symbol_defs` to a top-level expression tree.
+            // Top-level defs still need an explicit temp so later RC insertion
+            // has a concrete scope to attach cleanup to.
+            .lookup => |lookup| !lookup.symbol.isNone() and self.store.getSymbolDef(lookup.symbol) == null,
             .cell_load => true,
             .nominal => |nominal| self.exprHasReusableBorrowStorage(nominal.backing_expr),
             .struct_access => |access| self.exprHasReusableBorrowStorage(access.struct_expr),
@@ -8488,8 +8490,11 @@ test "RC mutation: final use of reassignable refcounted var emits tail decref" {
 test "RC mutation: future uses of reassigned symbol do not retain pre-mutation owners" {
     // { var s = "a"; s = s ++ "b"; s = s ++ "c"; s }
     // Future uses after each mutation belong to the newly assigned value, not the
-    // consumed pre-mutation owner. RC insertion should therefore emit only the
-    // old-value decrefs for each mutation plus one tail decref for the final use.
+    // consumed pre-mutation owner. In this concrete program that means:
+    // - the initial literal "a" is static, so overwriting it emits no decref
+    // - the first concatenation result is consumed by the second mutation, so it
+    //   gets exactly one old-value decref
+    // - the final result escapes the block, so there is no tail decref here
     const allocator = std.testing.allocator;
 
     var env = try testInit();
@@ -8548,7 +8553,7 @@ test "RC mutation: future uses of reassigned symbol do not retain pre-mutation o
     const rc = countRcOps(&env.lir_store, result);
 
     try std.testing.expectEqual(@as(u32, 0), rc.increfs);
-    try std.testing.expectEqual(@as(u32, 3), rc.decrefs);
+    try std.testing.expectEqual(@as(u32, 1), rc.decrefs);
 }
 
 test "RC for_loop: unused refcounted elem does not decref borrowed element" {
