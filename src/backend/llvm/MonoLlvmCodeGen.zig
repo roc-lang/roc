@@ -1720,6 +1720,8 @@ pub const MonoLlvmCodeGen = struct {
                             break;
                         },
                         .int_literal,
+                        .float_literal,
+                        .str_literal,
                         .tag,
                         .struct_,
                         .list,
@@ -1742,7 +1744,6 @@ pub const MonoLlvmCodeGen = struct {
                                 _ = wip.@"unreachable"() catch return error.CompilationFailed;
                             }
                         },
-                        .float_literal, .str_literal => unreachable,
                     }
                 }
             },
@@ -3677,6 +3678,20 @@ pub const MonoLlvmCodeGen = struct {
                     wip.conv(.unsigned, value, pat_type, "") catch return error.CompilationFailed;
                 break :blk wip.icmp(.eq, cmp_value, pat_val, "") catch return error.OutOfMemory;
             },
+            .float_literal => |float_pat| blk: {
+                const pat_val = if (float_pat.layout_idx == .f32)
+                    try self.emitF32(@floatCast(float_pat.value))
+                else if (float_pat.layout_idx == .f64)
+                    try self.emitF64(float_pat.value)
+                else
+                    return error.CompilationFailed;
+                if (value.typeOfWip(wip) != pat_val.typeOfWip(wip)) return error.CompilationFailed;
+                break :blk wip.fcmp(.normal, .oeq, value, pat_val, "") catch return error.OutOfMemory;
+            },
+            .str_literal => |str_idx| blk: {
+                const pat_val = try self.generateStrLiteral(str_idx);
+                break :blk try self.callStrStr2BoolFromValues(value, pat_val, "roc_builtins_str_equal");
+            },
             .struct_ => |struct_pat| blk: {
                 if (value == .none or !value.typeOfWip(wip).isStruct(builder)) return error.CompilationFailed;
                 var result = builder.intValue(.i1, 1) catch return error.OutOfMemory;
@@ -3806,7 +3821,6 @@ pub const MonoLlvmCodeGen = struct {
                 );
                 break :blk result_phi.toValue();
             },
-            .float_literal, .str_literal => unreachable,
         };
     }
 
@@ -3895,6 +3909,8 @@ pub const MonoLlvmCodeGen = struct {
                 },
 
                 .int_literal,
+                .float_literal,
+                .str_literal,
                 .tag,
                 .list,
                 .struct_,
@@ -3924,8 +3940,6 @@ pub const MonoLlvmCodeGen = struct {
                         _ = wip.@"unreachable"() catch return error.CompilationFailed;
                     }
                 },
-
-                .float_literal, .str_literal => unreachable,
             }
         }
 
@@ -7649,7 +7663,9 @@ pub const MonoLlvmCodeGen = struct {
             .struct_ => |s| s.struct_layout,
             .list => |l| l.list_layout,
             .as_pattern => |a| a.layout_idx,
-            .int_literal, .float_literal, .str_literal => null,
+            .int_literal => |i| i.layout_idx,
+            .float_literal => |f| f.layout_idx,
+            .str_literal => .str,
         };
     }
 
