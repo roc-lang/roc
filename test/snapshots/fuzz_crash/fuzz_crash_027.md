@@ -2496,7 +2496,7 @@ expect {
 (inferred-types
 	(defs
 		(patt (type "(Error, Error)"))
-		(patt (type "Bool -> Dec"))
+		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "U64 -> U64"))
 		(patt (type "[Blue, Red, ..], _arg -> Error"))
 		(patt (type "List(Error) -> Try({}, _d)"))
@@ -2533,7 +2533,7 @@ expect {
 					(ty-rigid-var (name "a"))))))
 	(expressions
 		(expr (type "(Error, Error)"))
-		(expr (type "Bool -> Dec"))
+		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "U64 -> U64"))
 		(expr (type "[Blue, Red, ..], _arg -> Error"))
 		(expr (type "List(Error) -> Try({}, _d)"))

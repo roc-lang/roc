@@ -116,6 +116,9 @@ bool_var: Var,
 str_var: Var,
 /// Map representation of Ident -> Var, used in checking static dispatch constraints
 ident_to_var_map: std.AutoHashMap(Ident.Idx, Var),
+/// Tracks which resolved root vars have been verified in verifyNumericDefaults
+/// to avoid duplicate error reports.
+verified_numeric_vars: std.AutoHashMapUnmanaged(Var, void),
 /// Map representation all top level patterns, and if we've processed them yet
 top_level_ptrns: std.AutoHashMap(CIR.Pattern.Idx, DefProcessed),
 /// The name of the enclosing function, if known.
@@ -305,6 +308,7 @@ fn initAssumePrepared(
         .bool_var = undefined, // Will be initialized in copyBuiltinTypes()
         .str_var = undefined, // Will be initialized in copyBuiltinTypes()
         .ident_to_var_map = std.AutoHashMap(Ident.Idx, Var).init(gpa),
+        .verified_numeric_vars = .empty,
         .top_level_ptrns = std.AutoHashMap(CIR.Pattern.Idx, DefProcessed).init(gpa),
         .enclosing_func_name = null,
         // Initialize with null import_mapping - caller should call fixupTypeWriter() after storing Check
@@ -350,6 +354,7 @@ pub fn deinit(self: *Self) void {
     self.constraint_check_stack.deinit(self.gpa);
     self.import_cache.deinit(self.gpa);
     self.ident_to_var_map.deinit();
+    self.verified_numeric_vars.deinit(self.gpa);
     self.top_level_ptrns.deinit();
     self.type_writer.deinit();
     self.deferred_def_unifications.deinit(self.gpa);
@@ -6337,6 +6342,11 @@ pub fn verifyNumericDefaults(self: *Self) std.mem.Allocator.Error!void {
 fn verifyNumericDefaultsInternal(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     if (self.types.from_numeral_flex_count == 0) return;
 
+    // Track which resolved root vars we've already verified to avoid
+    // duplicate error reports (multiple var indices can resolve to the
+    // same root flex var).
+    self.verified_numeric_vars.clearRetainingCapacity();
+
     const num_vars: u32 = @intCast(self.types.len());
     var i: u32 = 0;
     while (i < num_vars) : (i += 1) {
@@ -6354,6 +6364,10 @@ fn verifyNumericDefaultsInternal(self: *Self, env: *Env) std.mem.Allocator.Error
             }
         }
         if (!has_from_numeral) continue;
+
+        // Skip if we've already verified this resolved root var.
+        const gop = self.verified_numeric_vars.getOrPut(self.gpa, resolved.var_) catch continue;
+        if (gop.found_existing) continue;
 
         // Create a COPY of the flex var with the same constraints, then unify
         // the copy with Dec. This validates that the constraints are compatible

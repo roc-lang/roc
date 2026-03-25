@@ -65,10 +65,10 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "Str => {}"))
-		(patt (type "Dec"))
-		(patt (type "_arg -> Dec")))
+		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(patt (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
 	(expressions
 		(expr (type "Str => {}"))
-		(expr (type "Dec"))
-		(expr (type "_arg -> Dec"))))
+		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(expr (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
 ~~~
