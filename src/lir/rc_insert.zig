@@ -5311,17 +5311,15 @@ pub const RcInsertPass = struct {
                 if (!ctx.pass.keyIntroducesOwner(key)) return;
                 if (!ctx.pass.layoutNeedsRc(resolved_layout)) return;
                 if (!resolved_reassignable and try ctx.pass.hasLaterShadowingDecl(ctx.block_stmts, ctx.stmt_index, symbol)) return;
+                if (try ctx.pass.hasLaterBlockUseKey(ctx.block_stmts, ctx.stmt_index, ctx.final_expr, key)) return;
 
                 if (resolved_reassignable) {
-                    if (try ctx.pass.exprUsesKey(ctx.final_expr, key)) return;
                     try ctx.pass.emitDecrefInto(ctx.pass.keySymbol(key, symbol), resolved_layout, ctx.region, ctx.stmts);
                     return;
                 }
 
                 const use_count = ctx.pass.effectiveGlobalOwnerUseCount(key);
                 if (use_count == 0) {
-                    const final_reads_symbol = try ctx.pass.exprUsesKey(ctx.final_expr, key);
-                    if (final_reads_symbol) return;
                     try ctx.pass.emitDecrefInto(ctx.pass.keySymbol(key, symbol), resolved_layout, ctx.region, ctx.stmts);
                 }
             }
@@ -5359,23 +5357,22 @@ pub const RcInsertPass = struct {
                 if (!ctx.pass.keyIntroducesOwner(key)) return;
                 if (!ctx.pass.layoutNeedsRc(resolved_layout)) return;
                 if (!resolved_reassignable and try ctx.pass.hasLaterShadowingDecl(ctx.block_stmts, ctx.stmt_index, symbol)) return;
-                const final_reads_symbol = try ctx.pass.exprNeedsTailCleanupKey(ctx.final_expr, key, symbol);
-                if (!final_reads_symbol) return;
+                const final_uses_symbol = try ctx.pass.exprUsesKey(ctx.final_expr, key);
+                const final_consumes_symbol = if (final_uses_symbol)
+                    try ctx.pass.exprConsumesKey(ctx.final_expr, key)
+                else
+                    false;
+                const final_borrows_symbol = final_uses_symbol and !final_consumes_symbol;
+                const later_statement_uses = try ctx.pass.hasLaterStatementUseKey(ctx.block_stmts, ctx.stmt_index, key);
+                const use_count = ctx.pass.effectiveGlobalOwnerUseCount(key);
+                const needs_statement_tail_cleanup = later_statement_uses and use_count == 0;
+                if (!final_borrows_symbol and !needs_statement_tail_cleanup) return;
+
                 if (resolved_reassignable) {
-                    if (try ctx.pass.exprConsumesKey(ctx.final_expr, key)) return;
                     try ctx.pass.emitDecrefInto(ctx.pass.keySymbol(key, symbol), resolved_layout, ctx.region, ctx.stmts);
                     return;
                 }
-                const use_count = ctx.pass.effectiveGlobalOwnerUseCount(key);
-                if (use_count != 0) {
-                    // Mirror the extra incref from emitBlockIncrefsForPattern:
-                    // when consumed uses > 0 and the final expression borrows
-                    // (but does not consume) this symbol, the extra incref needs
-                    // a matching tail decref.
-                    const final_uses = try ctx.pass.exprUsesKey(ctx.final_expr, key);
-                    const final_consumes = try ctx.pass.exprConsumesKey(ctx.final_expr, key);
-                    if (!(final_uses and !final_consumes)) return;
-                }
+
                 try ctx.pass.emitDecrefInto(ctx.pass.keySymbol(key, symbol), resolved_layout, ctx.region, ctx.stmts);
             }
         };
@@ -5425,21 +5422,31 @@ pub const RcInsertPass = struct {
         final_expr: LirExprId,
         key: u64,
     ) Allocator.Error!bool {
-        if (stmt_index + 1 < block_stmts.len) {
-            for (block_stmts[stmt_index + 1 ..]) |later_stmt| {
-                switch (later_stmt) {
-                    .decl, .mutate => |binding| {
-                        if (try self.exprUsesKey(binding.expr, key)) return true;
-                    },
-                    .cell_init, .cell_store => |binding| {
-                        if (try self.exprUsesKey(binding.expr, key)) return true;
-                    },
-                    .cell_drop => {},
-                }
+        return (try self.hasLaterStatementUseKey(block_stmts, stmt_index, key)) or
+            (try self.exprUsesKey(final_expr, key));
+    }
+
+    fn hasLaterStatementUseKey(
+        self: *RcInsertPass,
+        block_stmts: []const LirStmt,
+        stmt_index: usize,
+        key: u64,
+    ) Allocator.Error!bool {
+        if (stmt_index + 1 >= block_stmts.len) return false;
+
+        for (block_stmts[stmt_index + 1 ..]) |later_stmt| {
+            switch (later_stmt) {
+                .decl, .mutate => |binding| {
+                    if (try self.exprUsesKey(binding.expr, key)) return true;
+                },
+                .cell_init, .cell_store => |binding| {
+                    if (try self.exprUsesKey(binding.expr, key)) return true;
+                },
+                .cell_drop => {},
             }
         }
 
-        return self.exprUsesKey(final_expr, key);
+        return false;
     }
 
     /// Recursively emit pre-body RC ops for all symbols bound by a pattern.
@@ -6107,6 +6114,91 @@ test "RC: borrowed list statement keeps later block decref" {
     const result = try pass.insertRcOps(block_expr);
 
     try std.testing.expectEqual(@as(u32, 1), countDecrefsForSymbol(&env.lir_store, result, sym_list));
+}
+
+test "RC: borrowed later statements keep list owner alive until block tail" {
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_layout: LayoutIdx = .i64;
+    const list_layout = try env.layout_store.insertLayout(layout_mod.Layout.list(i64_layout));
+    const sym_list = makeSymbol(1);
+    const sym_elem = makeSymbol(2);
+
+    const one = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 1, .layout_idx = i64_layout } }, Region.zero());
+    const two = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 2, .layout_idx = i64_layout } }, Region.zero());
+    const zero = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 0, .layout_idx = i64_layout } }, Region.zero());
+    const elems = try env.lir_store.addExprSpan(&.{ one, two });
+    const list_expr = try env.lir_store.addExpr(.{ .list = .{
+        .list_layout = list_layout,
+        .elem_layout = i64_layout,
+        .elems = elems,
+    } }, Region.zero());
+
+    const lookup_list_len = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_list,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+    const len_expr = try env.lir_store.addExpr(.{ .low_level = .{
+        .op = .list_len,
+        .args = try env.lir_store.addExprSpan(&.{lookup_list_len}),
+        .ret_layout = i64_layout,
+    } }, Region.zero());
+
+    const lookup_list_iter = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_list,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+    const pat_elem = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_elem,
+        .layout_idx = i64_layout,
+    } }, Region.zero());
+    const for_expr = try env.lir_store.addExpr(.{ .for_loop = .{
+        .list_expr = lookup_list_iter,
+        .elem_layout = i64_layout,
+        .elem_pattern = pat_elem,
+        .body = zero,
+    } }, Region.zero());
+
+    const pat_list = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_list,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+    const wild_i64 = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = i64_layout } }, Region.zero());
+    const wild_zst = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = .zst } }, Region.zero());
+
+    const stmts = try env.lir_store.addStmts(&.{
+        .{ .decl = .{ .pattern = pat_list, .expr = list_expr } },
+        .{ .decl = .{ .pattern = wild_i64, .expr = len_expr } },
+        .{ .decl = .{ .pattern = wild_zst, .expr = for_expr } },
+    });
+    const block_expr = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = zero,
+        .result_layout = i64_layout,
+    } }, Region.zero());
+
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(block_expr);
+    const result_expr = env.lir_store.getExpr(result);
+    try std.testing.expect(result_expr == .block);
+
+    for (env.lir_store.getStmts(result_expr.block.stmts)) |stmt| {
+        const decrefs = switch (stmt) {
+            .decl, .mutate => |binding| countDecrefsForSymbol(&env.lir_store, binding.expr, sym_list),
+            .cell_init, .cell_store => |binding| countDecrefsForSymbol(&env.lir_store, binding.expr, sym_list),
+            .cell_drop => 0,
+        };
+        try std.testing.expectEqual(@as(u32, 0), decrefs);
+    }
+
+    try std.testing.expectEqual(@as(u32, 1), countDecrefsForSymbol(&env.lir_store, result, sym_list));
+    try std.testing.expectEqual(@as(u32, 1), countDecrefsForSymbol(&env.lir_store, result_expr.block.final_expr, sym_list));
 }
 
 test "RC: consuming stmt preserves list owner for later list_get_unsafe" {
