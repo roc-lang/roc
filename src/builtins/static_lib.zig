@@ -53,6 +53,7 @@ comptime {
     @export(&dw.roc_builtins_str_escape_and_quote, .{ .name = "roc_builtins_str_escape_and_quote" });
     @export(&dw.roc_builtins_list_with_capacity, .{ .name = "roc_builtins_list_with_capacity" });
     @export(&dw.roc_builtins_list_sort_with, .{ .name = "roc_builtins_list_sort_with" });
+    @export(&dw.roc_builtins_list_sort_with_rc, .{ .name = "roc_builtins_list_sort_with_rc" });
     @export(&dw.roc_builtins_list_append_unsafe, .{ .name = "roc_builtins_list_append_unsafe" });
     @export(&dw.roc_builtins_list_concat, .{ .name = "roc_builtins_list_concat" });
     @export(&dw.roc_builtins_list_prepend, .{ .name = "roc_builtins_list_prepend" });
@@ -67,6 +68,15 @@ comptime {
     @export(&dw.roc_builtins_list_free_with, .{ .name = "roc_builtins_list_free_with" });
     @export(&dw.roc_builtins_box_decref_with, .{ .name = "roc_builtins_box_decref_with" });
     @export(&dw.roc_builtins_box_free_with, .{ .name = "roc_builtins_box_free_with" });
+    @export(&dw.roc_builtins_str_incref_value, .{ .name = "roc_builtins_str_incref_value" });
+    @export(&dw.roc_builtins_str_decref_value, .{ .name = "roc_builtins_str_decref_value" });
+    @export(&dw.roc_builtins_str_free_value, .{ .name = "roc_builtins_str_free_value" });
+    @export(&dw.roc_builtins_list_incref_value, .{ .name = "roc_builtins_list_incref_value" });
+    @export(&dw.roc_builtins_list_decref_value, .{ .name = "roc_builtins_list_decref_value" });
+    @export(&dw.roc_builtins_list_free_value, .{ .name = "roc_builtins_list_free_value" });
+    @export(&dw.roc_builtins_box_incref_value, .{ .name = "roc_builtins_box_incref_value" });
+    @export(&dw.roc_builtins_box_decref_value, .{ .name = "roc_builtins_box_decref_value" });
+    @export(&dw.roc_builtins_box_free_value, .{ .name = "roc_builtins_box_free_value" });
     @export(&dw.roc_builtins_allocate_with_refcount, .{ .name = "roc_builtins_allocate_with_refcount" });
     @export(&dw.roc_builtins_incref_data_ptr, .{ .name = "roc_builtins_incref_data_ptr" });
     @export(&dw.roc_builtins_decref_data_ptr, .{ .name = "roc_builtins_decref_data_ptr" });
