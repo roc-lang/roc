@@ -865,6 +865,14 @@ fn importMonotypeFromStoreRec(
     };
 
     self.store.monotype_store.monotypes.items[@intFromEnum(placeholder)] = mapped_mono;
+
+    // Propagate opaque type markers across stores so that Str.inspect
+    // correctly renders opaque types as "<opaque>" even through polymorphic
+    // wrappers where the type falls back to the structural monotype.
+    if (source_store.isOpaque(monotype)) {
+        try self.store.monotype_store.markOpaque(self.allocator, placeholder);
+    }
+
     return placeholder;
 }
 
@@ -2441,6 +2449,11 @@ fn lowerStrInspectExprByMonotype(
     mono_idx: Monotype.Idx,
     region: Region,
 ) Allocator.Error!MIR.ExprId {
+    // User-defined opaque types should render as "<opaque>" even when we
+    // only have the structural monotype (e.g. through a polymorphic wrapper).
+    if (self.store.monotype_store.isOpaque(mono_idx)) {
+        return self.emitMirStrLiteral("<opaque>", region);
+    }
     const mono = self.store.monotype_store.getMonotype(mono_idx);
     return switch (mono) {
         .prim => |prim| switch (prim) {
@@ -2867,7 +2880,9 @@ fn lowerExprWithMonotypeOverride(
             return try self.lowerRecord(module_env, record, monotype, region);
         },
         .e_tuple => |tuple| {
-            const elems = try self.stabilizeEscapingFunctionSpan(try self.lowerExprSpan(module_env, tuple.elems));
+            const elems = try self.stabilizeEscapingFunctionSpan(
+                try self.lowerTupleExprSpan(module_env, tuple.elems, monotype),
+            );
             return try self.emitMirStructExprFromSpan(elems, monotype, region);
         },
         .e_tag => |tag| {
@@ -3722,6 +3737,73 @@ fn lowerExprSpan(self: *Self, module_env: *const ModuleEnv, span: CIR.Expr.Span)
     }
 
     return try self.store.addExprSpan(self.allocator, self.scratch_expr_ids.sliceFromStart(scratch_top));
+}
+
+/// Lower a CIR tuple Expr.Span, propagating per-element monotypes from the
+/// parent struct monotype. Module-level records are stored as `e_tuple` in
+/// the CIR, but the monomorphizer does not record per-expression monotypes
+/// for their elements. Without overrides, number literals like Dec resolve
+/// to the wrong type (e.g. tag_union instead of dec).
+fn lowerTupleExprSpan(self: *Self, module_env: *const ModuleEnv, span: CIR.Expr.Span, parent_monotype: Monotype.Idx) Allocator.Error!MIR.ExprSpan {
+    const cir_ids = module_env.store.sliceExpr(span);
+    if (cir_ids.len == 0) return MIR.ExprSpan.empty();
+
+    const scratch_top = self.scratch_expr_ids.top();
+    defer self.scratch_expr_ids.clearFrom(scratch_top);
+
+    const mono = self.store.monotype_store.getMonotype(parent_monotype);
+
+    // Extract per-element monotypes from the parent struct/record monotype.
+    const elem_monotypes: ?[]const Monotype.Idx = switch (mono) {
+        .record => |record| blk: {
+            const fields = self.store.monotype_store.getFields(record.fields);
+            if (fields.len != cir_ids.len) break :blk null;
+            const buf = try self.allocator.alloc(Monotype.Idx, fields.len);
+            for (fields, 0..) |field, i| {
+                buf[i] = field.type_idx;
+            }
+            break :blk buf;
+        },
+        .tuple => |tup| blk: {
+            const elems = self.store.monotype_store.getIdxSpan(tup.elems);
+            if (elems.len != cir_ids.len) break :blk null;
+            break :blk elems;
+        },
+        else => null,
+    };
+    defer if (elem_monotypes) |em| {
+        if (mono == .record) self.allocator.free(em);
+    };
+
+    for (cir_ids, 0..) |cir_id, i| {
+        const mir_id = if (elem_monotypes) |em|
+            try self.lowerExprWithMonotypeHint(cir_id, em[i])
+        else
+            try self.lowerExpr(cir_id);
+        try self.scratch_expr_ids.append(mir_id);
+    }
+
+    return try self.store.addExprSpan(self.allocator, self.scratch_expr_ids.sliceFromStart(scratch_top));
+}
+
+/// Like `lowerExprWithMonotypeOverride`, but only applies the hint for
+/// number literal expressions (`e_num`, `e_frac_f32`, `e_frac_f64`) whose
+/// own monotype resolution gives a non-concrete type (e.g. tag_union for
+/// an unresolved number literal). Other expression types (like tag-wrapped
+/// typed literals such as `1.U8`) keep their own resolved monotype.
+fn lowerExprWithMonotypeHint(self: *Self, expr_idx: CIR.Expr.Idx, hint_monotype: Monotype.Idx) Allocator.Error!MIR.ExprId {
+    const module_env = self.all_module_envs[self.current_module_idx];
+    const expr = module_env.store.getExpr(expr_idx);
+    switch (expr) {
+        // Number literals may resolve to tag_union when the monomorphizer
+        // didn't pin their type. Apply the parent's hint for these.
+        .e_num, .e_frac_f32, .e_frac_f64 => {
+            return self.lowerExprWithMonotypeOverride(expr_idx, hint_monotype);
+        },
+        else => {
+            return self.lowerExpr(expr_idx);
+        },
+    }
 }
 
 /// Lower a CIR Pattern.Span to an MIR PatternSpan.
@@ -7012,7 +7094,16 @@ fn lowerRecord(self: *Self, module_env: *const ModuleEnv, record: anytype, monot
 
     for (cir_field_indices) |field_idx| {
         const field = module_env.store.getRecordField(field_idx);
-        const expr = try self.stabilizeEscapingFunctionExpr(try self.lowerExpr(field.value));
+        // Look up the monotype for this field from the record's monotype so that
+        // literal expressions (e.g. `e_num`) receive the correct concrete type even
+        // when the monomorphizer did not record per-expression monotypes (which
+        // happens for module-level definitions).
+        const cur_mono_fields = self.store.monotype_store.getFields(mono_field_span);
+        const mono_field_idx = self.recordFieldIndexByName(field.name, cur_mono_fields);
+        const field_monotype = cur_mono_fields[mono_field_idx].type_idx;
+        const expr = try self.stabilizeEscapingFunctionExpr(
+            try self.lowerExprWithMonotypeOverride(field.value, field_monotype),
+        );
         try provided_fields.append(self.allocator, .{
             .name = field.name,
             .expr = expr,
