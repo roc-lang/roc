@@ -25,14 +25,6 @@ const WasmEvaluator = eval_mod.WasmEvaluator;
 const LirProgram = eval_mod.LirProgram;
 const LirInterpreter = eval_mod.LirInterpreter;
 const i128h = builtins.compiler_rt_128;
-/// Per-worker child PIDs for fork-based test execution.
-/// The hang watchdog in the parallel runner kills these PIDs on timeout.
-/// Set by the parallel runner before tests start; workers index by their worker ID.
-pub var worker_child_pids: []std.atomic.Value(i32) = &.{};
-/// Per-worker pipe read FDs, so the watchdog can close leaked pipes on timeout.
-pub var worker_pipe_fds: []std.atomic.Value(i32) = &.{};
-/// Thread-local worker ID, set by the parallel runner.
-pub threadlocal var my_worker_id: usize = 0;
 const enable_dev_eval_leak_checks = true;
 
 const Check = check.Check;

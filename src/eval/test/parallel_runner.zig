@@ -1,11 +1,12 @@
 //! Parallel eval test runner.
 //!
-//! Runs eval tests across multiple threads, exercising every backend on every
-//! test case and comparing their results via Str.inspect string comparison.
+//! Runs eval tests in parallel using a fork-based process pool, exercising
+//! every backend on every test case and comparing their results via
+//! Str.inspect string comparison.
 //!
 //! ## Architecture overview
 //!
-//! Each test goes through a shared front-end (parse, canonicalize, type-check)
+//! Each test goes through a front-end (parse, canonicalize, type-check)
 //! and is then evaluated by up to three independent backends:
 //!
 //!   1. **Interpreter** — walks the LIR directly.
@@ -19,36 +20,30 @@
 //! This catches bugs where a backend produces a value of the right type but
 //! wrong content.
 //!
-//! ## Process isolation
+//! ## Process pool
 //!
-//! Every backend evaluation runs in a forked child process that communicates
-//! its result back through a pipe. If a child crashes (segfault, illegal
-//! instruction, etc.) or hangs, the parent simply observes it via waitpid
-//! and reports the failure without being affected.
+//! A single-threaded parent process manages up to N concurrent child
+//! processes (one per test). Each child runs the full test pipeline
+//! (frontend + all backend evaluations) and serializes results back
+//! through a pipe. The parent multiplexes pipe reads using poll().
 //!
-//! The `forkAndEval` function implements the fork+pipe+waitpid pattern:
-//!   - Child calls the backend eval function, writes result to pipe, _exit(0).
-//!   - Parent reads the pipe until EOF, then waitpid to reap the child.
-//!   - Reading before waitpid avoids pipe buffer deadlock.
+//! This avoids the fork-in-multithreaded-process hazard: forking from
+//! a threaded parent risks inheriting locked glibc mutexes, causing
+//! deadlocks in child processes. With a single-threaded parent, all
+//! forks are safe.
 //!
-//! ## Threading model
+//! ## Per-backend crash isolation
 //!
-//! Worker threads pull tests from a shared atomic index (lock-free work-
-//! stealing). Each worker owns a per-thread arena allocator that is reset
-//! between tests, so there is no cross-thread allocation contention for
-//! test-local data. A small number of result strings are duplicated into a
-//! shared GPA for the final report.
+//! Within each child process, individual backend evaluations still run
+//! in nested forked subprocesses via `forkAndEval`. Since the child is
+//! single-threaded, these nested forks are safe. If one backend crashes,
+//! the others still produce results.
 //!
-//! ## Hang watchdog
+//! ## Hang detection
 //!
-//! A dedicated thread polls worker timestamps every 500ms. If a worker
-//! exceeds the timeout (default 30s), the watchdog:
-//!   1. Sets a `timed_out` flag on the worker.
-//!   2. Kills any forked child via SIGKILL (unblocks waitpid).
-//!   3. Closes the worker's pipe read FD (unblocks any pipe read).
-//!
-//! The `forkAndEval` function checks the `timed_out` flag after waitpid
-//! to distinguish watchdog-killed children from natural crashes.
+//! Integrated into the parent's poll() loop. If a child has been running
+//! longer than the timeout (default 30s), the parent SIGKILLs it. No
+//! separate watchdog thread is needed.
 //!
 //! ## Usage
 //!
@@ -85,15 +80,6 @@ const loadCompiledModule = eval_mod.builtin_loading.loadCompiledModule;
 const helpers = eval_mod.test_helpers;
 
 const posix = std.posix;
-
-const AtomicUsize = std.atomic.Value(usize);
-const AtomicI32 = std.atomic.Value(i32);
-const AtomicBool = std.atomic.Value(bool);
-
-/// Current wall-clock time in milliseconds, truncated to i32 (~24 day range).
-fn nowMs() i32 {
-    return @truncate(@divFloor(std.time.milliTimestamp(), 1));
-}
 
 // Test definition modules
 const eval_tests = @import("eval_tests.zig");
@@ -237,33 +223,57 @@ const TestResult = struct {
 const Timer = std.time.Timer;
 
 //
-// Runner context
+// Process pool types
 //
 
-/// Per-worker tracking state for the hang watchdog.
-const WorkerState = struct {
-    /// Millisecond timestamp when the worker started its current test (0 = idle).
-    /// Uses i32 for 32-bit atomic compatibility (good for ~24 days of uptime).
-    start_time_ms: AtomicI32 = AtomicI32.init(0),
-    /// Index of the test currently being run (max = done).
-    current_test: AtomicUsize = AtomicUsize.init(std.math.maxInt(usize)),
-    /// Set by the watchdog before killing the child; checked by forkAndEval.
-    timed_out: AtomicBool = AtomicBool.init(false),
+/// Tracks one active child process in the process pool.
+const ChildSlot = struct {
+    pid: posix.pid_t,
+    pipe_fd: posix.fd_t,
+    test_index: usize,
+    start_time_ms: i64,
+    buf: std.ArrayListUnmanaged(u8),
+    timed_out: bool,
 };
 
-const RunnerContext = struct {
-    tests: []const TestCase,
-    index: AtomicUsize,
-    results: []TestResult,
-    verbose: bool,
-    /// Stable allocator for result messages that must outlive the per-test arena.
-    msg_allocator: std.mem.Allocator,
-    /// Per-worker state for hang detection. Null in single-threaded mode.
-    worker_states: ?[]WorkerState = null,
-    /// Counter for workers to claim their worker ID.
-    worker_id_counter: AtomicUsize = AtomicUsize.init(0),
-    /// Per-test timeout in nanoseconds (0 = no timeout).
-    hang_timeout_ms: u64 = 0,
+/// Global pointer to active slots for SIGINT cleanup handler.
+/// Only accessed from the single-threaded parent process.
+var global_slots: ?[]?ChildSlot = null;
+
+fn sigintHandler(_: c_int) callconv(.c) void {
+    const slots = global_slots orelse return;
+    for (slots) |slot_opt| {
+        if (slot_opt) |slot| {
+            posix.kill(slot.pid, posix.SIG.KILL) catch {};
+        }
+    }
+    // Re-raise to get the default behavior (exit with signal status)
+    const default_action = posix.Sigaction{
+        .handler = .{ .handler = posix.SIG.DFL },
+        .mask = posix.sigemptyset(),
+        .flags = 0,
+    };
+    posix.sigaction(posix.SIG.INT, &default_action, null);
+    _ = std.c.raise(posix.SIG.INT);
+}
+
+/// Fixed-size binary header for child-to-parent result serialization.
+/// Native byte order (same machine, no cross-endian concern).
+const WireHeader = extern struct {
+    status: u8,
+    backend_statuses: [NUM_BACKENDS]u8,
+    backend_durations: [NUM_BACKENDS]u64,
+    parse_ns: u64,
+    canonicalize_ns: u64,
+    typecheck_ns: u64,
+    interpreter_ns: u64,
+    dev_ns: u64,
+    wasm_ns: u64,
+    llvm_ns: u64,
+    duration_ns: u64,
+    message_len: u32,
+    expected_str_len: u32,
+    backend_value_lens: [NUM_BACKENDS]u32,
 };
 
 //
@@ -280,10 +290,8 @@ const ForkResult = union(enum) {
     success: []const u8,
     /// Child exited non-zero (eval function returned an error).
     child_error: void,
-    /// Child was killed by a signal (e.g. SIGSEGV=11).
+    /// Child was killed by a signal (e.g. SIGSEGV=11, SIGKILL=9).
     signal_death: u8,
-    /// Child was killed by the watchdog (timed_out flag set).
-    timeout: void,
     /// fork() or pipe() syscall failed.
     fork_failed: void,
 };
@@ -294,8 +302,7 @@ const ForkResult = union(enum) {
 /// writes the resulting string to the pipe, and `_exit(0)`. On error it `_exit(1)`.
 ///
 /// The parent reads the pipe until EOF (important: before waitpid to avoid pipe
-/// buffer deadlock), then reaps the child. The watchdog can kill the child and
-/// close the pipe FD to unblock the parent on timeout.
+/// buffer deadlock), then reaps the child.
 fn forkAndEval(
     eval_fn: BackendEvalFn,
     module_env: *ModuleEnv,
@@ -349,15 +356,6 @@ fn forkAndEval(
     // === Parent process ===
     posix.close(pipe_write);
 
-    // Store child PID and pipe FD so the watchdog can kill/close on timeout.
-    const wid = helpers.my_worker_id;
-    if (wid < helpers.worker_child_pids.len) {
-        helpers.worker_child_pids[wid].store(@intCast(fork_result), .release);
-    }
-    if (wid < helpers.worker_pipe_fds.len) {
-        helpers.worker_pipe_fds[wid].store(@intCast(pipe_read), .release);
-    }
-
     // Read pipe FIRST (before waitpid) to avoid deadlock when child output
     // exceeds the pipe buffer (~64KB). The read returns EOF when the child
     // exits and the write end is closed.
@@ -375,40 +373,16 @@ fn forkAndEval(
             break;
         };
     }
-    // Close the pipe read end unless the watchdog already closed it.
-    if (wid < helpers.worker_pipe_fds.len) {
-        const prev = helpers.worker_pipe_fds[wid].swap(-1, .acq_rel);
-        if (prev >= 0) posix.close(@intCast(prev));
-    } else {
-        posix.close(pipe_read);
-    }
+    posix.close(pipe_read);
 
     // Now reap the child.
     const wait_result = posix.waitpid(fork_result, 0);
-
-    // Clear child PID tracking.
-    if (wid < helpers.worker_child_pids.len) {
-        helpers.worker_child_pids[wid].store(0, .release);
-    }
 
     const status = wait_result.status;
     const termination_signal: u8 = @truncate(status & 0x7f);
 
     if (termination_signal != 0) {
-        // Child was killed by a signal. Check if it was a watchdog timeout.
         result_buf.deinit(std.heap.page_allocator);
-        // Check the worker's timed_out flag (set by hangWatchdog before SIGKILL).
-        if (wid < helpers.worker_child_pids.len) {
-            // Access worker_states through the context isn't possible here,
-            // but the watchdog sets timed_out on the WorkerState. We detect
-            // timeout by checking if SIGKILL (signal 9) was the termination signal,
-            // which is what the watchdog sends.
-            // More precisely, we let the caller (threadMain) check timed_out.
-        }
-        if (termination_signal == 9) {
-            // SIGKILL — likely the watchdog. Let caller distinguish via timed_out flag.
-            return .{ .timeout = {} };
-        }
         return .{ .signal_death = termination_signal };
     }
 
@@ -685,10 +659,6 @@ fn runValueTest(allocator: std.mem.Allocator, src: []const u8, expected: TestCas
                 backends[i] = .{ .status = .fail, .value = allocator.dupe(u8, sig_str) catch "signal", .duration_ns = dur };
                 any_failure = true;
             },
-            .timeout => {
-                backends[i] = .{ .status = .fail, .value = "Timeout", .duration_ns = dur };
-                any_failure = true;
-            },
             .fork_failed => {
                 backends[i] = .{ .status = .fail, .value = "ForkFailed", .duration_ns = dur };
                 any_failure = true;
@@ -739,77 +709,381 @@ fn runTestProblem(allocator: std.mem.Allocator, src: []const u8) !TestOutcome {
 }
 
 //
-// Worker thread
+// Serialization — child-to-parent result protocol
 //
 
-fn threadMain(ctx: *RunnerContext) void {
-    // Claim a worker ID for hang-detection state tracking.
-    const my_id = ctx.worker_id_counter.fetchAdd(1, .monotonic);
-    const my_state: ?*WorkerState = if (ctx.worker_states) |ws|
-        &ws[my_id]
-    else
-        null;
-    helpers.my_worker_id = my_id;
+/// Serialize a TestOutcome + duration to a pipe file descriptor.
+/// Called in child process after runSingleTest returns.
+fn serializeOutcome(fd: posix.fd_t, outcome: TestOutcome, duration_ns: u64) void {
+    var header: WireHeader = .{
+        .status = @intFromEnum(outcome.status),
+        .backend_statuses = undefined,
+        .backend_durations = undefined,
+        .parse_ns = outcome.timings.parse_ns,
+        .canonicalize_ns = outcome.timings.canonicalize_ns,
+        .typecheck_ns = outcome.timings.typecheck_ns,
+        .interpreter_ns = outcome.timings.interpreter_ns,
+        .dev_ns = outcome.timings.dev_ns,
+        .wasm_ns = outcome.timings.wasm_ns,
+        .llvm_ns = outcome.timings.llvm_ns,
+        .duration_ns = duration_ns,
+        .message_len = if (outcome.message) |m| @intCast(m.len) else 0,
+        .expected_str_len = if (outcome.expected_str) |e| @intCast(e.len) else 0,
+        .backend_value_lens = undefined,
+    };
+    for (0..NUM_BACKENDS) |i| {
+        header.backend_statuses[i] = @intFromEnum(outcome.backends[i].status);
+        header.backend_durations[i] = outcome.backends[i].duration_ns;
+        header.backend_value_lens[i] = if (outcome.backends[i].value) |v| @intCast(v.len) else 0;
+    }
 
+    // Write header
+    writeAll(fd, std.mem.asBytes(&header));
+
+    // Write variable-length strings
+    if (outcome.message) |m| writeAll(fd, m);
+    if (outcome.expected_str) |e| writeAll(fd, e);
+    for (outcome.backends) |bd| {
+        if (bd.value) |v| writeAll(fd, v);
+    }
+}
+
+/// Write all bytes to fd, looping on partial writes.
+fn writeAll(fd: posix.fd_t, data: []const u8) void {
+    var written: usize = 0;
+    while (written < data.len) {
+        written += posix.write(fd, data[written..]) catch return;
+    }
+}
+
+/// Deserialize a TestResult from an accumulated pipe buffer.
+fn deserializeOutcome(buf: []const u8, gpa: std.mem.Allocator) ?TestResult {
+    if (buf.len < @sizeOf(WireHeader)) return null;
+
+    const header: *const WireHeader = @ptrCast(@alignCast(buf.ptr));
+    var offset: usize = @sizeOf(WireHeader);
+
+    const message = readStr(buf, &offset, header.message_len, gpa);
+    const expected_str = readStr(buf, &offset, header.expected_str_len, gpa);
+
+    var backends: [NUM_BACKENDS]BackendDetail = undefined;
+    for (0..NUM_BACKENDS) |i| {
+        const value = readStr(buf, &offset, header.backend_value_lens[i], gpa);
+        backends[i] = .{
+            .status = @enumFromInt(header.backend_statuses[i]),
+            .value = value,
+            .duration_ns = header.backend_durations[i],
+        };
+    }
+
+    return .{
+        .status = @enumFromInt(header.status),
+        .message = message,
+        .duration_ns = header.duration_ns,
+        .timings = .{
+            .parse_ns = header.parse_ns,
+            .canonicalize_ns = header.canonicalize_ns,
+            .typecheck_ns = header.typecheck_ns,
+            .interpreter_ns = header.interpreter_ns,
+            .dev_ns = header.dev_ns,
+            .wasm_ns = header.wasm_ns,
+            .llvm_ns = header.llvm_ns,
+        },
+        .backends = backends,
+        .expected_str = expected_str,
+    };
+}
+
+/// Read a string of given length from buffer, advancing offset. Dupe into gpa.
+fn readStr(buf: []const u8, offset: *usize, len: u32, gpa: std.mem.Allocator) ?[]const u8 {
+    if (len == 0) return null;
+    const end = offset.* + len;
+    if (end > buf.len) return null;
+    const slice = buf[offset.*..end];
+    offset.* = end;
+    return gpa.dupe(u8, slice) catch null;
+}
+
+//
+// Process pool
+//
+
+/// Fork a child process to run a single test. The child runs the full test
+/// pipeline (frontend + all backend evals), serializes the result to the pipe,
+/// and exits. Returns false if fork/pipe failed.
+fn launchChild(slot: *?ChildSlot, tests: []const TestCase, test_idx: usize) bool {
+    const pipe_fds = posix.pipe() catch return false;
+
+    const pid = posix.fork() catch {
+        posix.close(pipe_fds[0]);
+        posix.close(pipe_fds[1]);
+        return false;
+    };
+
+    if (pid == 0) {
+        // === Child process (single-threaded) ===
+        posix.close(pipe_fds[0]);
+
+        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        const allocator = arena.allocator();
+
+        var timer = Timer.start() catch unreachable;
+        const outcome = runSingleTest(allocator, tests[test_idx]);
+        const duration = timer.read();
+
+        serializeOutcome(pipe_fds[1], outcome, duration);
+        posix.close(pipe_fds[1]);
+        std.c._exit(0);
+    }
+
+    // === Parent ===
+    posix.close(pipe_fds[1]);
+    slot.* = .{
+        .pid = pid,
+        .pipe_fd = pipe_fds[0],
+        .test_index = test_idx,
+        .start_time_ms = std.time.milliTimestamp(),
+        .buf = .empty,
+        .timed_out = false,
+    };
+    return true;
+}
+
+/// Drain remaining data from pipe, reap child, deserialize result.
+fn reapChild(slot: *?ChildSlot, results: []TestResult, gpa: std.mem.Allocator) void {
+    // Move the slot out so we own the buf exclusively (avoids dangling
+    // pointer in the slot if drainPipe reallocates the buffer).
+    var s = slot.* orelse return;
+    slot.* = null;
+
+    // Drain any remaining data
+    drainPipe(s.pipe_fd, &s.buf);
+    posix.close(s.pipe_fd);
+
+    // Reap child
+    const wait_result = posix.waitpid(s.pid, 0);
+    const term_signal: u8 = @truncate(wait_result.status & 0x7f);
+
+    if (s.timed_out or term_signal == 9) {
+        results[s.test_index] = .{ .status = .timeout, .message = null, .duration_ns = 0, .timings = .{} };
+    } else if (term_signal != 0) {
+        results[s.test_index] = .{ .status = .crash, .message = null, .duration_ns = 0, .timings = .{} };
+    } else {
+        // Normal exit — deserialize
+        results[s.test_index] = deserializeOutcome(s.buf.items, gpa) orelse
+            .{ .status = .crash, .message = null, .duration_ns = 0, .timings = .{} };
+    }
+
+    s.buf.deinit(std.heap.page_allocator);
+}
+
+/// Read all available data from a pipe fd into buf.
+fn drainPipe(fd: posix.fd_t, buf: *std.ArrayListUnmanaged(u8)) void {
+    var read_buf: [4096]u8 = undefined;
+    while (true) {
+        const n = posix.read(fd, &read_buf) catch break;
+        if (n == 0) break;
+        buf.appendSlice(std.heap.page_allocator, read_buf[0..n]) catch break;
+    }
+}
+
+/// Run tests: fork-based process pool on POSIX, sequential in-process on Windows.
+fn processPoolMain(
+    tests: []const TestCase,
+    results: []TestResult,
+    max_children: usize,
+    timeout_ms: u64,
+    verbose: bool,
+    gpa: std.mem.Allocator,
+) void {
+    if (comptime !has_fork) {
+        // Windows fallback: run tests sequentially in-process.
+        // No fork/pipe/poll available, but forkAndEval already handles this
+        // by running backend evals in-process (no crash isolation).
+        runTestsSequential(tests, results, verbose, gpa);
+        return;
+    }
+
+    const slots = gpa.alloc(?ChildSlot, max_children) catch {
+        std.debug.print("fatal: failed to allocate process pool slots\n", .{});
+        return;
+    };
+    defer gpa.free(slots);
+    @memset(slots, null);
+
+    // Install SIGINT handler to kill children on Ctrl-C.
+    global_slots = slots;
+    defer global_slots = null;
+    const sa = posix.Sigaction{
+        .handler = .{ .handler = &sigintHandler },
+        .mask = posix.sigemptyset(),
+        .flags = 0,
+    };
+    posix.sigaction(posix.SIG.INT, &sa, null);
+
+    const poll_fds = gpa.alloc(posix.pollfd, max_children) catch {
+        std.debug.print("fatal: failed to allocate poll fd array\n", .{});
+        return;
+    };
+    defer gpa.free(poll_fds);
+
+    const poll_map = gpa.alloc(usize, max_children) catch {
+        std.debug.print("fatal: failed to allocate poll map array\n", .{});
+        return;
+    };
+    defer gpa.free(poll_map);
+
+    var next_test: usize = 0;
+    var completed: usize = 0;
+    var progress_timer = Timer.start() catch unreachable;
+    var last_progress_ns: u64 = 0;
+
+    // Fill initial slots
+    for (slots) |*slot| {
+        if (next_test >= tests.len) break;
+        if (!launchChild(slot, tests, next_test)) {
+            results[next_test] = .{ .status = .crash, .message = null, .duration_ns = 0, .timings = .{} };
+            completed += 1;
+        }
+        next_test += 1;
+    }
+
+    // Main event loop
+    while (completed < tests.len) {
+        // Build pollfd array from active slots
+        var n_poll: usize = 0;
+
+        for (slots, 0..) |slot, i| {
+            if (slot != null) {
+                poll_fds[n_poll] = .{
+                    .fd = slot.?.pipe_fd,
+                    .events = posix.POLL.IN | posix.POLL.HUP,
+                    .revents = 0,
+                };
+                poll_map[n_poll] = i;
+                n_poll += 1;
+            }
+        }
+
+        if (n_poll == 0) break;
+
+        // Poll with 500ms timeout
+        _ = posix.poll(poll_fds[0..n_poll], 500) catch 0;
+
+        // Process ready FDs — read data and detect pipe close
+        for (poll_fds[0..n_poll], 0..) |pfd, pi| {
+            const slot_idx = poll_map[pi];
+            if (pfd.revents & posix.POLL.IN != 0) {
+                // Read available data
+                var read_buf: [4096]u8 = undefined;
+                const n = posix.read(pfd.fd, &read_buf) catch 0;
+                if (n > 0) {
+                    if (slots[slot_idx]) |*s| {
+                        s.buf.appendSlice(std.heap.page_allocator, read_buf[0..n]) catch {};
+                    }
+                }
+            }
+            if (pfd.revents & (posix.POLL.HUP | posix.POLL.ERR | posix.POLL.NVAL) != 0) {
+                // Pipe closed — child done (or crashed)
+                reapChild(&slots[slot_idx], results, gpa);
+                completed += 1;
+
+                // Launch next test
+                if (next_test < tests.len) {
+                    if (!launchChild(&slots[slot_idx], tests, next_test)) {
+                        results[next_test] = .{ .status = .crash, .message = null, .duration_ns = 0, .timings = .{} };
+                        completed += 1;
+                    }
+                    next_test += 1;
+                }
+            }
+        }
+
+        // Check timeouts on active slots
+        if (timeout_ms > 0) {
+            const now = std.time.milliTimestamp();
+            for (slots) |*slot_opt| {
+                if (slot_opt.*) |*slot| {
+                    const elapsed: u64 = @intCast(@max(0, now - slot.start_time_ms));
+                    if (elapsed > timeout_ms) {
+                        slot.timed_out = true;
+                        const test_name = if (slot.test_index < tests.len) tests[slot.test_index].name else "?";
+                        std.debug.print("\n  HANG  {s}  ({d}ms) — killing child(pid={d})\n", .{ test_name, elapsed, slot.pid });
+                        posix.kill(slot.pid, posix.SIG.KILL) catch {};
+                        // Will be reaped next iteration via POLLHUP
+                    }
+                }
+            }
+        }
+
+        // Print progress every ~1s
+        const progress_elapsed = progress_timer.read();
+        if (progress_elapsed - last_progress_ns >= 1_000_000_000) {
+            last_progress_ns = progress_elapsed;
+            const wall_s = @as(f64, @floatFromInt(progress_elapsed)) / 1_000_000_000.0;
+            std.debug.print("\r  running: {d}/{d} results, {d:.1}s elapsed", .{
+                completed, tests.len, wall_s,
+            });
+        }
+    }
+
+    // Clear progress line
+    std.debug.print("\r{s}\r", .{" " ** 72});
+}
+
+/// Sequential in-process fallback for platforms without fork (Windows).
+/// Runs each test directly — no crash isolation, no timeout detection.
+fn runTestsSequential(
+    tests: []const TestCase,
+    results: []TestResult,
+    verbose: bool,
+    gpa: std.mem.Allocator,
+) void {
+    _ = verbose;
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
 
-    while (true) {
-        const i = ctx.index.fetchAdd(1, .monotonic);
-        if (i >= ctx.tests.len) {
-            // Mark worker as done.
-            if (my_state) |ws| {
-                ws.current_test.store(std.math.maxInt(usize), .release);
-                ws.start_time_ms.store(0, .release);
-            }
-            break;
-        }
-
+    for (tests, 0..) |tc, i| {
         _ = arena.reset(.retain_capacity);
         const allocator = arena.allocator();
 
-        const tc = ctx.tests[i];
-        var wall_timer = Timer.start() catch unreachable;
-
-        // Update watchdog tracking.
-        if (my_state) |ws| {
-            ws.current_test.store(i, .release);
-            ws.timed_out.store(false, .release);
-            ws.start_time_ms.store(nowMs(), .release);
-        }
-
+        var timer = Timer.start() catch unreachable;
         const outcome = runSingleTest(allocator, tc);
+        const duration = timer.read();
 
-        if (my_state) |ws| ws.start_time_ms.store(0, .release);
-        const elapsed = wall_timer.read();
-
-        // Dup the message and backend values to the stable GPA so they survive arena reset.
+        // Dupe strings into the stable GPA so they survive arena reset.
         const stable_msg: ?[]const u8 = if (outcome.message) |msg|
-            (ctx.msg_allocator.dupe(u8, msg) catch null)
+            (gpa.dupe(u8, msg) catch null)
         else
             null;
 
         var stable_backends = outcome.backends;
         for (&stable_backends) |*bd| {
             if (bd.value) |v| {
-                bd.value = ctx.msg_allocator.dupe(u8, v) catch null;
+                bd.value = gpa.dupe(u8, v) catch null;
             }
         }
 
         const stable_expected: ?[]const u8 = if (outcome.expected_str) |es|
-            (ctx.msg_allocator.dupe(u8, es) catch null)
+            (gpa.dupe(u8, es) catch null)
         else
             null;
 
-        ctx.results[i] = .{
+        results[i] = .{
             .status = outcome.status,
             .message = stable_msg,
-            .duration_ns = elapsed,
+            .duration_ns = duration,
             .timings = outcome.timings,
             .backends = stable_backends,
             .expected_str = stable_expected,
         };
+
+        // Print progress
+        if ((i + 1) % 50 == 0 or i + 1 == tests.len) {
+            std.debug.print("\r  [{d}/{d}]", .{ i + 1, tests.len });
+        }
     }
+    std.debug.print("\r{s}\r", .{" " ** 72});
 }
 
 //
@@ -874,9 +1148,9 @@ fn printHelp() void {
         \\OPTIONS:
         \\  -h, --help            Show this help message and exit.
         \\  --filter <PATTERN>    Run only tests whose name or source contains PATTERN.
-        \\  --threads <N>         Max worker threads (default: number of CPU cores).
+        \\  --threads <N>         Max concurrent child processes (default: number of CPU cores).
         \\  --verbose             Print PASS and SKIP results (default: only FAIL/CRASH).
-        \\  --timeout <MS>        Per-test hang timeout in ms (default: 10000). Multi-thread only.
+        \\  --timeout <MS>        Per-test hang timeout in ms (default: 30000).
         \\
         \\COVERAGE:
         \\  Use `zig build coverage-eval` to build with coverage instrumentation.
@@ -1142,82 +1416,6 @@ fn printPerformanceSummary(gpa: std.mem.Allocator, tests: []const TestCase, resu
 // Main
 //
 
-/// Count results that workers have actually written (duration_ns > 0 means
-/// the worker finished and stored a result; the default is 0 / "not started").
-fn countCompletedResults(results: []const TestResult) usize {
-    var n: usize = 0;
-    for (results) |r| {
-        if (r.duration_ns > 0) n += 1;
-    }
-    return n;
-}
-
-/// Watchdog that polls worker threads, prints progress, and kills hangs.
-/// Runs on the main thread while workers are executing.
-fn hangWatchdog(ctx: *RunnerContext, timeout_ms: u64) void {
-    const ws = ctx.worker_states orelse return;
-    var progress_timer = Timer.start() catch unreachable;
-    var last_progress_ns: u64 = 0;
-
-    while (true) {
-        // Sleep 500ms between polls.
-        std.Thread.sleep(500_000_000);
-
-        const now = nowMs();
-        var all_done = true;
-
-        for (ws, 0..) |*worker, idx| {
-            const test_idx = worker.current_test.load(.acquire);
-            if (test_idx == std.math.maxInt(usize)) continue; // worker finished
-
-            all_done = false;
-            const start = worker.start_time_ms.load(.acquire);
-            if (start <= 0) continue; // not actively running a test
-
-            const elapsed_ms: u64 = @intCast(@max(0, now -% start));
-            if (elapsed_ms > timeout_ms) {
-                // This worker is hung. Mark it timed-out and kill any forked child.
-                worker.timed_out.store(true, .release);
-                const test_name = if (test_idx < ctx.tests.len) ctx.tests[test_idx].name else "?";
-                std.debug.print("\n  HANG  {s}  ({d}ms) — killing", .{ test_name, elapsed_ms });
-                if (comptime builtin.os.tag != .windows) {
-                    // Kill any forked child process (unblocks waitpid in forkAndEval).
-                    if (idx < helpers.worker_child_pids.len) {
-                        const cpid = helpers.worker_child_pids[idx].swap(0, .acq_rel);
-                        if (cpid > 0) {
-                            std.debug.print(" child(pid={d})", .{cpid});
-                            posix.kill(@intCast(cpid), posix.SIG.KILL) catch {};
-                        }
-                    }
-                    // Close the worker's pipe read FD so any blocked read() returns.
-                    if (idx < helpers.worker_pipe_fds.len) {
-                        const pfd = helpers.worker_pipe_fds[idx].swap(-1, .acq_rel);
-                        if (pfd >= 0) posix.close(@intCast(pfd));
-                    }
-                }
-                std.debug.print("\n", .{});
-                // Give the child time to die before re-checking.
-                std.Thread.sleep(200_000_000); // 200ms
-            }
-        }
-
-        if (all_done) break;
-
-        // Print progress every ~1s.
-        const progress_elapsed = progress_timer.read();
-        if (progress_elapsed - last_progress_ns >= 1_000_000_000) {
-            last_progress_ns = progress_elapsed;
-            const completed = countCompletedResults(ctx.results);
-            const wall_s = @as(f64, @floatFromInt(progress_elapsed)) / 1_000_000_000.0;
-            std.debug.print("\r  running: {d}/{d} results, {d:.1}s elapsed", .{
-                completed, ctx.tests.len, wall_s,
-            });
-        }
-    }
-
-    // Clear the progress line.
-    std.debug.print("\r{s}\r", .{" " ** 72});
-}
 
 /// Entry point for the parallel eval test runner.
 pub fn main() !void {
@@ -1295,7 +1493,7 @@ pub fn main() !void {
     }
 
     const cpu_count = std.Thread.getCpuCount() catch 1;
-    const thread_count: usize = if (cli.threads > 0)
+    const max_children: usize = if (cli.threads > 0)
         @min(cli.threads, cpu_count)
     else
         @min(cpu_count, tests.len);
@@ -1306,70 +1504,17 @@ pub fn main() !void {
 
     var wall_timer = Timer.start() catch unreachable;
 
-    // Default timeout: 30s in multi-threaded mode, 10s in single-threaded mode.
-    // The slowest tests take ~5s in isolation; under full parallel load (16+ threads)
+    // Default timeout: 30s under parallel load, 10s with single child.
+    // The slowest tests take ~5s in isolation; under full parallel load
     // CPU contention can slow individual tests by 2-3x, so 30s avoids false positives.
-    // Single-threaded mode uses a shorter default since there's no CPU contention.
     const hang_timeout_ms: u64 = if (cli.timeout_ms > 0)
         cli.timeout_ms
-    else if (thread_count <= 1)
+    else if (max_children <= 1)
         10_000
     else
         30_000;
 
-    // Allocate per-worker state for hang detection.
-    const worker_states: ?[]WorkerState = blk: {
-        const ws = try gpa.alloc(WorkerState, thread_count);
-        for (ws) |*w| w.* = .{};
-        break :blk ws;
-    };
-    defer if (worker_states) |ws| gpa.free(ws);
-
-    // Allocate per-worker child PID and pipe FD tracking for fork-based isolation.
-    const child_pids = try gpa.alloc(std.atomic.Value(i32), thread_count);
-    defer gpa.free(child_pids);
-    for (child_pids) |*p| p.* = std.atomic.Value(i32).init(0);
-    helpers.worker_child_pids = child_pids;
-
-    const pipe_fds = try gpa.alloc(std.atomic.Value(i32), thread_count);
-    defer gpa.free(pipe_fds);
-    for (pipe_fds) |*p| p.* = std.atomic.Value(i32).init(-1);
-    helpers.worker_pipe_fds = pipe_fds;
-
-    var context = RunnerContext{
-        .tests = tests,
-        .index = AtomicUsize.init(0),
-        .results = results,
-        .verbose = cli.verbose,
-        .msg_allocator = gpa,
-        .worker_states = worker_states,
-        .hang_timeout_ms = hang_timeout_ms,
-    };
-
-    if (thread_count <= 1) {
-        // Spawn watchdog on a separate thread so it can kill hung forks.
-        const watchdog_thread = if (hang_timeout_ms > 0)
-            try std.Thread.spawn(.{}, hangWatchdog, .{ &context, hang_timeout_ms })
-        else
-            null;
-        threadMain(&context);
-        if (watchdog_thread) |wd| wd.join();
-    } else {
-        const threads = try gpa.alloc(std.Thread, thread_count);
-        defer gpa.free(threads);
-        for (threads) |*t| {
-            t.* = try std.Thread.spawn(.{}, threadMain, .{&context});
-        }
-
-        // Watchdog loop: poll workers for hangs until all are done.
-        if (hang_timeout_ms > 0) {
-            hangWatchdog(&context, hang_timeout_ms);
-        }
-
-        for (threads) |t| {
-            t.join();
-        }
-    }
+    processPoolMain(tests, results, max_children, hang_timeout_ms, cli.verbose, gpa);
 
     const wall_elapsed = wall_timer.read();
 
@@ -1443,12 +1588,12 @@ pub fn main() !void {
 
     const wall_ms = @as(f64, @floatFromInt(wall_elapsed)) / 1_000_000.0;
     if (timed_out > 0) {
-        std.debug.print("\n{d} passed, {d} failed, {d} crashed, {d} hung, {d} skipped ({d} total) in {d:.0}ms using {d} thread(s)\n", .{
-            passed, failed, crashed, timed_out, skipped, tests.len, wall_ms, thread_count,
+        std.debug.print("\n{d} passed, {d} failed, {d} crashed, {d} hung, {d} skipped ({d} total) in {d:.0}ms using {d} process(es)\n", .{
+            passed, failed, crashed, timed_out, skipped, tests.len, wall_ms, max_children,
         });
     } else {
-        std.debug.print("\n{d} passed, {d} failed, {d} crashed, {d} skipped ({d} total) in {d:.0}ms using {d} thread(s)\n", .{
-            passed, failed, crashed, skipped, tests.len, wall_ms, thread_count,
+        std.debug.print("\n{d} passed, {d} failed, {d} crashed, {d} skipped ({d} total) in {d:.0}ms using {d} process(es)\n", .{
+            passed, failed, crashed, skipped, tests.len, wall_ms, max_children,
         });
     }
 

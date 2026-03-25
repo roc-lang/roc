@@ -84,7 +84,7 @@ CRASH List.concat with strings  (21.5ms)
 - **`interp=22ms dev=not_reached`** means the interpreter succeeded but the
   crash is in the dev backend.
 
-Use `--threads 1` for deterministic single-threaded output when debugging.
+Use `--threads 1` for deterministic sequential output when debugging.
 
 ### Unit tests (fx platform tests, etc.)
 
