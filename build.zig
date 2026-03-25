@@ -1383,25 +1383,84 @@ const MiniCiStep = struct {
         return self;
     }
 
+    const Timer = std.time.Timer;
+
+    const StepTiming = struct {
+        name: []const u8,
+        ns: u64,
+    };
+
+    fn recordTiming(timings: []StepTiming, count: *usize, name: []const u8, timer: *Timer) void {
+        timings[count.*] = .{ .name = name, .ns = timer.read() };
+        count.* += 1;
+        timer.* = Timer.start() catch @panic("no clock");
+    }
+
+    fn printTimingSummary(timings: []const StepTiming, wall_ns: u64) void {
+        std.debug.print("\n==== minici timing summary ====\n", .{});
+        for (timings) |t| {
+            const secs = @as(f64, @floatFromInt(t.ns)) / 1_000_000_000.0;
+            std.debug.print("  {s:<40} {d:7.2}s\n", .{ t.name, secs });
+        }
+        const wall_secs = @as(f64, @floatFromInt(wall_ns)) / 1_000_000_000.0;
+        std.debug.print("  {s:<40} {s:->8}\n", .{ "", "" });
+        std.debug.print("  {s:<40} {d:7.2}s\n", .{ "TOTAL", wall_secs });
+        std.debug.print("===============================\n", .{});
+    }
+
     fn make(step: *Step, options: Step.MakeOptions) !void {
         _ = options;
+
+        var timings: [14]StepTiming = undefined;
+        var count: usize = 0;
+        var wall_timer = Timer.start() catch @panic("no clock");
+        var timer = Timer.start() catch @panic("no clock");
 
         // Run the sequence of `zig build` commands that make up the
         // mini CI pipeline.
         try runSubBuild(step, "fmt", "zig build fmt");
+        recordTiming(&timings, &count, "zig build fmt", &timer);
+
         try runZigLints(step);
+        recordTiming(&timings, &count, "zig lints", &timer);
+
         try runTidy(step);
+        recordTiming(&timings, &count, "tidy checks", &timer);
+
         try checkTestWiring(step);
+        recordTiming(&timings, &count, "test wiring", &timer);
+
         try runSubBuild(step, null, "zig build");
+        recordTiming(&timings, &count, "zig build", &timer);
+
         try checkBuiltinRocFormatting(step);
+        recordTiming(&timings, &count, "Builtin.roc formatting", &timer);
+
         try runSubBuild(step, "snapshot", "zig build snapshot");
+        recordTiming(&timings, &count, "zig build snapshot", &timer);
+
         try checkSnapshotChanges(step);
+        recordTiming(&timings, &count, "snapshot changes", &timer);
+
         try checkFxPlatformTestCoverage(step);
+        recordTiming(&timings, &count, "fx platform test coverage", &timer);
+
         try runSubBuild(step, "test", "zig build test");
+        recordTiming(&timings, &count, "zig build test", &timer);
+
         try runSubBuild(step, "test-playground", "zig build test-playground");
+        recordTiming(&timings, &count, "zig build test-playground", &timer);
+
         try runSubBuild(step, "test-serialization-sizes", "zig build test-serialization-sizes");
+        recordTiming(&timings, &count, "zig build test-serialization-sizes", &timer);
+
         try runSubBuild(step, "test-cli", "zig build test-cli");
+        recordTiming(&timings, &count, "zig build test-cli", &timer);
+
         try runSubBuild(step, "coverage", "zig build coverage");
+        recordTiming(&timings, &count, "zig build coverage", &timer);
+
+        printTimingSummary(timings[0..count], wall_timer.read());
     }
 
     fn runZigLints(step: *Step) !void {
@@ -2329,75 +2388,35 @@ pub fn build(b: *std.Build) void {
     // Store glue test step reference so we can add glue host dependency later
     var run_glue_test_step: ?*std.Build.Step = null;
 
-    // CLI integration tests - run actual roc programs like CI does.
-    // These exercise subprocess-heavy build/link paths that are not safe to fan out
-    // as parallel siblings under one `zig build test-cli` invocation.
+    // CLI integration tests - parallel test runner replaces 5 sequential
+    // test_runner invocations with a single fork-based parallel runner.
     if (!no_bin) {
         const install = b.addInstallArtifact(roc_exe, .{});
-        const install_runner = b.addInstallArtifact(test_runner_exe, .{});
         var previous_cli_integration_step: ?*std.Build.Step = null;
 
-        // Test int platform (native mode only for now)
-        const run_int_tests = b.addRunArtifact(test_runner_exe);
-        run_int_tests.addArg("zig-out/bin/roc");
-        run_int_tests.addArg("int");
-        run_int_tests.addArg("--mode=native");
-        run_int_tests.step.dependOn(&install.step);
-        run_int_tests.step.dependOn(&install_runner.step);
-        run_int_tests.step.dependOn(test_platforms_step);
-        previous_cli_integration_step = &run_int_tests.step;
-        test_cli_step.dependOn(&run_int_tests.step);
+        // Parallel CLI test runner (replaces 5 sequential test_runner invocations)
+        const parallel_cli_runner_exe = b.addExecutable(.{
+            .name = "parallel_cli_runner",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/cli/test/parallel_cli_runner.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{},
+            }),
+        });
+        parallel_cli_runner_exe.root_module.link_libc = true;
 
-        // Test str platform (native mode only for now)
-        const run_str_tests = b.addRunArtifact(test_runner_exe);
-        run_str_tests.addArg("zig-out/bin/roc");
-        run_str_tests.addArg("str");
-        run_str_tests.addArg("--mode=native");
-        run_str_tests.step.dependOn(&install.step);
-        run_str_tests.step.dependOn(&install_runner.step);
-        run_str_tests.step.dependOn(test_platforms_step);
-        run_str_tests.step.dependOn(previous_cli_integration_step.?);
-        previous_cli_integration_step = &run_str_tests.step;
-        test_cli_step.dependOn(&run_str_tests.step);
-
-        // Test int platform with dev backend
-        const run_int_dev_tests = b.addRunArtifact(test_runner_exe);
-        run_int_dev_tests.addArg("zig-out/bin/roc");
-        run_int_dev_tests.addArg("int");
-        run_int_dev_tests.addArg("--mode=native");
-        run_int_dev_tests.addArg("--opt=dev");
-        run_int_dev_tests.step.dependOn(&install.step);
-        run_int_dev_tests.step.dependOn(&install_runner.step);
-        run_int_dev_tests.step.dependOn(test_platforms_step);
-        run_int_dev_tests.step.dependOn(previous_cli_integration_step.?);
-        previous_cli_integration_step = &run_int_dev_tests.step;
-        test_cli_step.dependOn(&run_int_dev_tests.step);
-
-        // Test str platform with dev backend
-        const run_str_dev_tests = b.addRunArtifact(test_runner_exe);
-        run_str_dev_tests.addArg("zig-out/bin/roc");
-        run_str_dev_tests.addArg("str");
-        run_str_dev_tests.addArg("--mode=native");
-        run_str_dev_tests.addArg("--opt=dev");
-        run_str_dev_tests.step.dependOn(&install.step);
-        run_str_dev_tests.step.dependOn(&install_runner.step);
-        run_str_dev_tests.step.dependOn(test_platforms_step);
-        run_str_dev_tests.step.dependOn(previous_cli_integration_step.?);
-        previous_cli_integration_step = &run_str_dev_tests.step;
-        test_cli_step.dependOn(&run_str_dev_tests.step);
-
-        // Test fx platform with dev backend
-        const run_fx_dev_tests = b.addRunArtifact(test_runner_exe);
-        run_fx_dev_tests.addArg("zig-out/bin/roc");
-        run_fx_dev_tests.addArg("fx");
-        run_fx_dev_tests.addArg("--mode=native");
-        run_fx_dev_tests.addArg("--opt=dev");
-        run_fx_dev_tests.step.dependOn(&install.step);
-        run_fx_dev_tests.step.dependOn(&install_runner.step);
-        run_fx_dev_tests.step.dependOn(test_platforms_step);
-        run_fx_dev_tests.step.dependOn(previous_cli_integration_step.?);
-        previous_cli_integration_step = &run_fx_dev_tests.step;
-        test_cli_step.dependOn(&run_fx_dev_tests.step);
+        const run_parallel_cli = b.addRunArtifact(parallel_cli_runner_exe);
+        run_parallel_cli.addArg("zig-out/bin/roc");
+        // Pass --test-filter as --filter for the parallel runner
+        if (test_filters.len > 0) {
+            run_parallel_cli.addArg("--filter");
+            run_parallel_cli.addArg(test_filters[0]);
+        }
+        run_parallel_cli.step.dependOn(&install.step);
+        run_parallel_cli.step.dependOn(test_platforms_step);
+        previous_cli_integration_step = &run_parallel_cli.step;
+        test_cli_step.dependOn(&run_parallel_cli.step);
 
         // Roc subcommands integration test
         const roc_subcommands_test = b.addTest(.{
