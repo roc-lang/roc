@@ -579,9 +579,21 @@ fn hasAnySkip(skip: TestCase.Skip) bool {
 fn runSingleTestInner(allocator: std.mem.Allocator, tc: TestCase) !TestOutcome {
     return switch (tc.expected) {
         // All value-producing tests go through one unified path.
-        .i64_val, .u8_val, .u16_val, .u32_val, .u64_val, .u128_val,
-        .i8_val, .i16_val, .i32_val, .i128_val,
-        .bool_val, .str_val, .f32_val, .f64_val, .dec_val,
+        .i64_val,
+        .u8_val,
+        .u16_val,
+        .u32_val,
+        .u64_val,
+        .u128_val,
+        .i8_val,
+        .i16_val,
+        .i32_val,
+        .i128_val,
+        .bool_val,
+        .str_val,
+        .f32_val,
+        .f64_val,
+        .dec_val,
         .inspect_str,
         => runValueTest(allocator, tc.source, tc.expected, tc.skip),
         // Special test flows

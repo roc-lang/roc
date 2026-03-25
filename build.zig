@@ -2962,9 +2962,12 @@ pub fn build(b: *std.Build) void {
     const check_cli_stdio = CheckCliGlobalStdioStep.create(b);
     test_step.dependOn(&check_cli_stdio.step);
 
+    // Run eval tests before the other test suites to avoid resource contention.
+    // The dev backend's forked children allocate heavily (code generation + mmap PROT_EXEC)
+    // and get SIGKILL'd by macOS jetsam under memory pressure when running in parallel
+    // with fx_platform_test and other test suites.
+    tests_summary.step.dependOn(eval_test_step);
     test_step.dependOn(&tests_summary.step);
-
-    // Run the parallel eval test runner as part of `zig build test`
     test_step.dependOn(eval_test_step);
 
     b.default_step.dependOn(playground_step);
