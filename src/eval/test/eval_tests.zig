@@ -2199,6 +2199,18 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "15" },
     },
+    .{
+        // Regression test: Str.inspect called through a polymorphic wrapper function
+        // should produce the correct output, not "{}".
+        .name = "dev only: Str.inspect through polymorphic wrapper",
+        .source =
+        \\{
+        \\    show = |x| Str.inspect(x)
+        \\    show(42.I64)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"42\"" },
+    },
 
     // --- from eval_test.zig: Str operations ---
     .{ .name = "Str.trim: spaces", .source = "Str.trim(\"  hello  \")", .expected = .{ .str_val = "hello" } },

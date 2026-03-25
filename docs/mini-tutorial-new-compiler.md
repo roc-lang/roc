@@ -717,5 +717,5 @@ Roc has a first-class concept of _platforms_ and _applications_. You can [read a
 
 For more, check out:
 - [All builtin functions](https://github.com/roc-lang/roc/blob/main/src/build/roc/Builtin.roc)
-- [A single file demonstrating all Roc syntax](https://github.com/lukewilliamboswell/roc-platform-template-zig/blob/main/examples/all_roc_syntax.roc)
+- [A single file demonstrating all Roc syntax](https://github.com/roc-lang/roc/blob/main/test/echo/all_syntax_test.roc)
 - [Roc getting started guide](https://github.com/rickhull/roc-init) (community contributed)

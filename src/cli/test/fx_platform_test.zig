@@ -290,62 +290,6 @@ test "fx platform expect with numeric literal (dev backend)" {
     try testRocTestSinglePass("--opt=dev", "test/fx/expect_with_literal.roc");
 }
 
-test "fx platform all_syntax_test.roc prints expected output (interpreter)" {
-    const allocator = testing.allocator;
-
-    const run_result = try util.runRoc(allocator, &.{"--opt=interpreter"}, "test/fx/all_syntax_test.roc");
-    defer allocator.free(run_result.stdout);
-    defer allocator.free(run_result.stderr);
-
-    try util.checkSuccess(run_result);
-
-    const expected_stdout =
-        "Hello, world!\n" ++
-        "Hello, world! (using alias)\n" ++
-        "{ diff: 5, div: 2, div_trunc: 2, eq: False, gt: True, gteq: True, lt: False, lteq: False, neg: -10, neq: True, prod: 50, rem: 0, sum: 15 }\n" ++
-        "{ bool_and_keyword: False, bool_or_keyword: True, not_a: False }\n" ++
-        "\"One Two\"\n" ++
-        "\"Three Four\"\n" ++
-        "The color is red.\n" ++
-        "78\n" ++
-        "Success\n" ++
-        "Line 1\n" ++
-        "Line 2\n" ++
-        "Line 3\n" ++
-        "Unicode escape sequence: \u{00A0}\n" ++
-        "This is an effectful function!\n" ++
-        "Ok(1)\n" ++
-        "15.0\n" ++
-        "False\n" ++
-        "10.0\n" ++
-        "42.0\n" ++
-        "NotOneTwoNotFive\n" ++
-        "(\"Roc\", 1.0)\n" ++
-        "[\"a\", \"b\"]\n" ++
-        "(\"Roc\", 1.0, 1.0, 1.0)\n" ++
-        "10.0\n" ++
-        "{ age: 31, name: \"Alice\" }\n" ++
-        "(5, 5, 5.0, 5.0, 5, 5.0, 5.0, 5, 5.0, 5.0, 5, 5.0, 5.0, 5.0)\n" ++
-        "<opaque>\n" ++
-        "\"The secret key is: my_secret_key\"\n" ++
-        "False\n" ++
-        "99\n" ++
-        "\"12345.0\"\n" ++
-        "\"Foo with 42 and hello\"\n" ++
-        "\"other color\"\n" ++
-        "\"Names: Alice, Bob, Charlie\"\n" ++
-        "\"A\"\n" ++
-        "\"other letter\"\n";
-
-    try testing.expectEqualStrings(expected_stdout, run_result.stdout);
-    try testing.expectEqualStrings("ROC DBG: 42.0\n", run_result.stderr);
-}
-
-test "fx platform all_syntax_test.roc prints expected output (dev backend)" {
-    // TODO: dev backend runtime panic "integer does not fit in destination type"
-    return error.SkipZigTest;
-}
-
 test "fx platform match returning string" {
     // Tests that match expressions with string returns work correctly
     const allocator = testing.allocator;

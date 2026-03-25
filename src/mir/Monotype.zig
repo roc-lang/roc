@@ -243,6 +243,11 @@ pub const Store = struct {
     extra_idx: std.ArrayListUnmanaged(u32),
     tags: std.ArrayListUnmanaged(Tag),
     fields: std.ArrayListUnmanaged(Field),
+    /// Monotype indices that originated from user-defined opaque types.
+    /// Used by Str.inspect to render these as "<opaque>" even when type
+    /// resolution falls back to the structural monotype (which strips the
+    /// opaque wrapper).
+    opaque_indices: std.AutoHashMapUnmanaged(Idx, void),
 
     /// Pre-interned index for the unit monotype.
     unit_idx: Idx,
@@ -285,6 +290,16 @@ pub const Store = struct {
         }
     };
 
+    /// Check whether a monotype index originated from a user-defined opaque type.
+    pub fn isOpaque(self: *const Store, idx: Idx) bool {
+        return self.opaque_indices.contains(idx);
+    }
+
+    /// Mark a monotype index as originating from a user-defined opaque type.
+    pub fn markOpaque(self: *Store, allocator: Allocator, idx: Idx) Allocator.Error!void {
+        try self.opaque_indices.put(allocator, idx, {});
+    }
+
     /// Look up the pre-interned index for a primitive type.
     pub fn primIdx(self: *const Store, prim: Prim) Idx {
         return self.prim_idxs[@intFromEnum(prim)];
@@ -325,6 +340,7 @@ pub const Store = struct {
             .extra_idx = .empty,
             .tags = .empty,
             .fields = .empty,
+            .opaque_indices = .empty,
             .unit_idx = unit_idx,
             .prim_idxs = prim_idxs,
             .bool_tag_union_idx = .none,
@@ -336,6 +352,7 @@ pub const Store = struct {
         self.extra_idx.deinit(allocator);
         self.tags.deinit(allocator);
         self.fields.deinit(allocator);
+        self.opaque_indices.deinit(allocator);
     }
 
     pub fn addMonotype(self: *Store, allocator: Allocator, mono: Monotype) !Idx {
@@ -833,7 +850,9 @@ pub const Store = struct {
         }
 
         // For all other nominal types, strip the wrapper and follow the backing var.
-        // In MIR there is no nominal/opaque/structural distinction.
+        // In MIR there is no nominal/opaque/structural distinction for code
+        // generation — but we track opaque origins so Str.inspect can render
+        // them as "<opaque>" even through polymorphic wrappers.
         //
         // Recursive nominal types (e.g. Tree := [Leaf, Node(Tree)]) are the
         // only legitimate source of type cycles — the type checker has already
@@ -848,6 +867,10 @@ pub const Store = struct {
 
         const placeholder_idx = try self.addMonotype(allocator, .recursive_placeholder);
         try nominal_cycle_breakers.put(nominal_var, placeholder_idx);
+
+        if (nominal.is_opaque) {
+            try self.markOpaque(allocator, placeholder_idx);
+        }
 
         const named_specializations_top = try self.pushNominalArgSpecializations(
             allocator,
