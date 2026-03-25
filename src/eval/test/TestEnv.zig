@@ -110,9 +110,9 @@ pub fn crashState(self: *TestEnv) CrashState {
 fn testRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
     const test_env: *TestEnv = @ptrCast(@alignCast(env));
 
-    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(alloc_args.alignment)));
-
     // Calculate additional bytes needed to store the size
+    const min_alignment: usize = @max(alloc_args.alignment, @alignOf(usize));
+    const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
     const size_storage_bytes = @max(alloc_args.alignment, @alignOf(usize));
     const total_size = alloc_args.length + size_storage_bytes;
 
@@ -153,6 +153,7 @@ fn testRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.c) void 
     }
 
     // Calculate where the size metadata is stored
+    const min_alignment: usize = @max(dealloc_args.alignment, @alignOf(usize));
     const size_storage_bytes = @max(dealloc_args.alignment, @alignOf(usize));
     const size_ptr: *const usize = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - @sizeOf(usize));
 
@@ -170,8 +171,7 @@ fn testRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.c) void 
     refcount_ptr.* = POISON_VALUE;
 
     // Calculate alignment
-    const log2_align = std.math.log2_int(u32, @intCast(dealloc_args.alignment));
-    const align_enum: std.mem.Alignment = @enumFromInt(log2_align);
+    const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
 
     // Free the memory (including the size metadata)
     const slice = @as([*]u8, @ptrCast(base_ptr))[0..total_size];
@@ -203,8 +203,9 @@ fn testRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) void 
     // Calculate new total size needed
     const new_total_size = realloc_args.new_length + size_storage_bytes;
 
-    // Get the alignment enum from the passed alignment
-    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(realloc_args.alignment)));
+    // Use the effective base allocation alignment, not just the user-data alignment.
+    const min_alignment: usize = @max(realloc_args.alignment, @alignOf(usize));
+    const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
 
     // Perform reallocation using rawFree + rawAlloc to handle alignment correctly
     // (Zig's realloc doesn't let us specify alignment for the old slice)

@@ -185,6 +185,7 @@ test "Repl - Str.from_utf8 snapshot sequence" {
     };
     try expectStateful(.interpreter, steps);
     try expectStateful(.dev, steps);
+    try expectStateful(.llvm, steps);
 }
 
 test "Repl - U8.from_str result format" {
@@ -352,6 +353,7 @@ test "Repl - issue 9258 opaque type param field access" {
 
     try expectStepsFinal(.interpreter, steps, "\"hello\"");
     try expectStepsFinalInChild(.dev, steps, "\"hello\"");
+    try expectStepsFinalInChild(.llvm, steps, "\"hello\"");
 }
 
 test "Repl - polymorphic numeric in comparison snapshot sequence" {
@@ -362,6 +364,7 @@ test "Repl - polymorphic numeric in comparison snapshot sequence" {
     };
     try expectStateful(.interpreter, steps);
     try expectStateful(.dev, steps);
+    try expectStateful(.llvm, steps);
 }
 
 test "Repl - variable redefinition" {

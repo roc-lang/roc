@@ -59,6 +59,9 @@ pub const runner = @import("runner.zig");
 pub const TestRunner = @import("test_runner.zig").TestRunner;
 /// LLVM-based evaluator for optimized code generation
 pub const LlvmEvaluator = @import("llvm_evaluator.zig").LlvmEvaluator;
+/// LLVM object-file compiler for native build/run/test paths
+pub const LlvmObjectFileCompiler = @import("llvm_object_file_compiler.zig").ObjectFileCompiler;
+pub const LlvmOptimizationMode = @import("llvm_object_file_compiler.zig").OptimizationMode;
 /// WebAssembly-based evaluator for wasm code generation
 const wasm_evaluator_mod = @import("wasm_evaluator.zig");
 pub const WasmEvaluator = wasm_evaluator_mod.WasmEvaluator;
@@ -80,6 +83,7 @@ test "eval tests" {
     std.testing.refAllDecls(@import("crash_context.zig"));
     std.testing.refAllDecls(@import("comptime_evaluator.zig"));
     std.testing.refAllDecls(@import("llvm_evaluator.zig"));
+    std.testing.refAllDecls(@import("llvm_object_file_compiler.zig"));
     std.testing.refAllDecls(@import("cir_to_lir.zig"));
     std.testing.refAllDecls(@import("value.zig"));
     std.testing.refAllDecls(@import("interpreter.zig"));
@@ -97,6 +101,6 @@ test "eval tests" {
     std.testing.refAllDecls(@import("test/comptime_eval_test.zig"));
     std.testing.refAllDecls(@import("test/low_level_interp_test.zig"));
     std.testing.refAllDecls(@import("test/mono_emit_test.zig"));
-
+    std.testing.refAllDecls(@import("test/llvm_backend_test.zig"));
     std.testing.refAllDecls(@import("test/stack_test.zig"));
 }

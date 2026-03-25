@@ -56,6 +56,7 @@ const fromUtf8Lossy = str.fromUtf8Lossy;
 const listConcat = list.listConcat;
 const listPrepend = list.listPrepend;
 const listSublist = list.listSublist;
+const listDropAt = list.listDropAt;
 const listReplace = list.listReplace;
 const listReserve = list.listReserve;
 const listReleaseExcessCapacity = list.listReleaseExcessCapacity;
@@ -63,7 +64,9 @@ const listWithCapacity = list.listWithCapacity;
 const listAppendUnsafe = list.listAppendUnsafe;
 const listAppendSafeC = list.listAppendSafeC;
 const listDecref = list.listDecref;
+const ElementIncrefFn = *const fn (?*anyopaque, ?[*]u8) callconv(.c) void;
 const RcDropFn = *const fn (?[*]u8, *RocOps) callconv(.c) void;
+const RcIncrefFn = *const fn (?[*]u8, isize, *RocOps) callconv(.c) void;
 const SortCmpFn = *const fn (?[*]u8, ?[*]u8, ?[*]u8) callconv(.c) u8;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -338,10 +341,26 @@ const FlatListElementDecrefContext = struct {
     roc_ops: *RocOps,
 };
 
+const CallbackElementIncrefContext = struct {
+    callback: RcIncrefFn,
+    roc_ops: *RocOps,
+};
+
 const CallbackElementDecrefContext = struct {
     callback: RcDropFn,
     roc_ops: *RocOps,
 };
+
+fn callbackListElementIncref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void {
+    if (element == null) return;
+    const ctx_ptr = context orelse unreachable;
+    const ctx: *const CallbackElementIncrefContext = utils.alignedPtrCast(
+        *const CallbackElementIncrefContext,
+        @as([*]u8, @ptrCast(ctx_ptr)),
+        @src(),
+    );
+    ctx.callback(element, 1, ctx.roc_ops);
+}
 
 fn flatListElementDecref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void {
     if (element == null) return;
@@ -378,8 +397,7 @@ pub fn roc_builtins_list_with_capacity(out: *RocList, capacity: u64, alignment: 
     out.* = listWithCapacity(capacity, alignment, element_width, elements_refcounted, null, @ptrCast(&rcNone), roc_ops);
 }
 
-/// Wrapper: listSortWith using a backend-provided comparator trampoline.
-pub fn roc_builtins_list_sort_with(
+fn listSortWithComparatorImpl(
     out: *RocList,
     list_bytes: ?[*]u8,
     list_len: usize,
@@ -388,22 +406,89 @@ pub fn roc_builtins_list_sort_with(
     cmp_data: ?[*]u8,
     alignment: u32,
     element_width: usize,
+    elements_refcounted: bool,
+    element_incref: ?RcIncrefFn,
+    element_decref: ?RcDropFn,
     roc_ops: *RocOps,
-) callconv(.c) void {
+) void {
     if (list_len < 2 or element_width == 0) {
         out.* = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
         return;
     }
 
-    const total_bytes = list_len * element_width;
-    const sorted_bytes = allocateWithRefcountC(total_bytes, alignment, false, roc_ops);
-    if (list_bytes) |src| {
-        @memcpy(sorted_bytes[0..total_bytes], src[0..total_bytes]);
-    }
+    const cmp_fn_ptr_non_null = cmp_fn_ptr orelse {
+        roc_ops.crash("roc_builtins_list_sort_with: missing comparator trampoline");
+        unreachable;
+    };
 
-    const cmp_fn: SortCmpFn = @ptrFromInt(@intFromPtr(cmp_fn_ptr orelse unreachable));
-    const temp_ptr: [*]u8 = @ptrCast(roc_ops.alloc(@max(@as(usize, alignment), 1), element_width));
-    defer roc_ops.dealloc(temp_ptr, @max(@as(usize, alignment), 1));
+    const input = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+
+    var incref_ctx_storage: CallbackElementIncrefContext = undefined;
+    var decref_ctx_storage: CallbackElementDecrefContext = undefined;
+
+    const incref_ctx: ?*anyopaque = blk: {
+        if (!elements_refcounted) break :blk null;
+
+        const incref_callback = element_incref orelse {
+            roc_ops.crash("roc_builtins_list_sort_with: refcounted elements require an incref callback");
+            unreachable;
+        };
+
+        incref_ctx_storage = .{
+            .callback = incref_callback,
+            .roc_ops = roc_ops,
+        };
+
+        break :blk @ptrCast(&incref_ctx_storage);
+    };
+    const incref_fn: ElementIncrefFn = if (elements_refcounted) &callbackListElementIncref else &rcNone;
+    const decref_ctx: ?*anyopaque = blk: {
+        if (!elements_refcounted) break :blk null;
+
+        const decref_callback = element_decref orelse {
+            roc_ops.crash("roc_builtins_list_sort_with: refcounted elements require a decref callback");
+            unreachable;
+        };
+
+        decref_ctx_storage = .{
+            .callback = decref_callback,
+            .roc_ops = roc_ops,
+        };
+
+        break :blk @ptrCast(&decref_ctx_storage);
+    };
+    const decref_fn: ElementIncrefFn = if (elements_refcounted) &callbackListElementDecref else &rcNone;
+
+    const list_value = input.makeUnique(
+        alignment,
+        element_width,
+        elements_refcounted,
+        incref_ctx,
+        incref_fn,
+        decref_ctx,
+        decref_fn,
+        roc_ops,
+    );
+
+    const sorted_bytes = list_value.bytes orelse {
+        out.* = list_value;
+        return;
+    };
+
+    const cmp_fn: SortCmpFn = @ptrFromInt(@intFromPtr(cmp_fn_ptr_non_null));
+
+    var stack_temp: [256]u8 align(16) = undefined;
+    var heap_temp: ?[*]u8 = null;
+    const temp_ptr: [*]u8 = if (element_width <= stack_temp.len) blk: {
+        break :blk @as([*]u8, @ptrCast(&stack_temp));
+    } else blk: {
+        const alloc_ptr: [*]u8 = @ptrCast(roc_ops.alloc(@max(@as(usize, alignment), 1), element_width));
+        heap_temp = alloc_ptr;
+        break :blk alloc_ptr;
+    };
+    defer if (heap_temp) |heap_bytes| {
+        roc_ops.dealloc(heap_bytes, @max(@as(usize, alignment), 1));
+    };
 
     var i: usize = 1;
     while (i < list_len) : (i += 1) {
@@ -425,11 +510,66 @@ pub fn roc_builtins_list_sort_with(
         @memcpy(insert_pos[0..element_width], temp_ptr[0..element_width]);
     }
 
-    out.* = .{
-        .bytes = sorted_bytes,
-        .length = list_len,
-        .capacity_or_alloc_ptr = list_len,
-    };
+    out.* = list_value;
+}
+
+/// Wrapper: listSortWith using a backend-provided comparator trampoline.
+pub fn roc_builtins_list_sort_with(
+    out: *RocList,
+    list_bytes: ?[*]u8,
+    list_len: usize,
+    list_cap: usize,
+    cmp_fn_ptr: ?*const anyopaque,
+    cmp_data: ?[*]u8,
+    alignment: u32,
+    element_width: usize,
+    roc_ops: *RocOps,
+) callconv(.c) void {
+    listSortWithComparatorImpl(
+        out,
+        list_bytes,
+        list_len,
+        list_cap,
+        cmp_fn_ptr,
+        cmp_data,
+        alignment,
+        element_width,
+        false,
+        null,
+        null,
+        roc_ops,
+    );
+}
+
+/// Wrapper: listSortWith with element RC callbacks for refcounted element layouts.
+pub fn roc_builtins_list_sort_with_rc(
+    out: *RocList,
+    list_bytes: ?[*]u8,
+    list_len: usize,
+    list_cap: usize,
+    cmp_fn_ptr: ?*const anyopaque,
+    cmp_data: ?[*]u8,
+    alignment: u32,
+    element_width: usize,
+    elements_refcounted: bool,
+    element_incref: ?RcIncrefFn,
+    element_decref: ?RcDropFn,
+    roc_ops: *RocOps,
+) callconv(.c) void {
+    listSortWithComparatorImpl(
+        out,
+        list_bytes,
+        list_len,
+        list_cap,
+        cmp_fn_ptr,
+        cmp_data,
+        alignment,
+        element_width,
+        elements_refcounted,
+        element_incref,
+        element_decref,
+        roc_ops,
+    );
 }
 
 /// Wrapper: listAppendUnsafe
@@ -455,6 +595,12 @@ pub fn roc_builtins_list_prepend(out: *RocList, list_bytes: ?[*]u8, list_len: us
 pub fn roc_builtins_list_sublist(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element_width: usize, start: u64, len: u64, elements_refcounted: bool, roc_ops: *RocOps) callconv(.c) void {
     const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
     out.* = listSublist(l, alignment, element_width, elements_refcounted, start, len, null, @ptrCast(&rcNone), roc_ops);
+}
+
+/// Wrapper: listDropAt
+pub fn roc_builtins_list_drop_at(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element_width: usize, drop_index: u64, elements_refcounted: bool, roc_ops: *RocOps) callconv(.c) void {
+    const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    out.* = listDropAt(l, alignment, element_width, elements_refcounted, drop_index, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), roc_ops);
 }
 
 /// Wrapper: listReplace for list_set
@@ -632,6 +778,112 @@ pub fn roc_builtins_box_free_with(
     }
 
     freeDataPtrC(payload_ptr, payload_alignment, false, roc_ops);
+}
+
+/// Value-slot wrapper: incref a RocStr stored at `value_ptr`.
+pub fn roc_builtins_str_incref_value(value_ptr: ?[*]u8, amount: isize, roc_ops: *RocOps) callconv(.c) void {
+    const bytes = value_ptr orelse return;
+    const str_ptr: *const RocStr = @ptrCast(@alignCast(bytes));
+    str_ptr.*.incref(@intCast(amount), roc_ops);
+}
+
+/// Value-slot wrapper: decref a RocStr stored at `value_ptr`.
+pub fn roc_builtins_str_decref_value(value_ptr: ?[*]u8, roc_ops: *RocOps) callconv(.c) void {
+    const bytes = value_ptr orelse return;
+    const str_ptr: *const RocStr = @ptrCast(@alignCast(bytes));
+    @constCast(str_ptr).*.decref(roc_ops);
+}
+
+/// Value-slot wrapper: free a RocStr stored at `value_ptr`.
+pub fn roc_builtins_str_free_value(value_ptr: ?[*]u8, roc_ops: *RocOps) callconv(.c) void {
+    const bytes = value_ptr orelse return;
+    const str_ptr: *const RocStr = @ptrCast(@alignCast(bytes));
+    const value = str_ptr.*;
+    if (!value.isSmallStr()) {
+        freeDataPtrC(value.getAllocationPtr(), RocStr.alignment, false, roc_ops);
+    }
+}
+
+/// Value-slot wrapper: incref a RocList stored at `value_ptr`.
+pub fn roc_builtins_list_incref_value(value_ptr: ?[*]u8, elements_refcounted: bool, amount: isize, roc_ops: *RocOps) callconv(.c) void {
+    const bytes = value_ptr orelse return;
+    const list_ptr: *const RocList = @ptrCast(@alignCast(bytes));
+    list_ptr.*.incref(amount, elements_refcounted, roc_ops);
+}
+
+/// Value-slot wrapper: decref a RocList stored at `value_ptr`.
+pub fn roc_builtins_list_decref_value(
+    value_ptr: ?[*]u8,
+    alignment: u32,
+    element_width: usize,
+    element_decref: ?RcDropFn,
+    roc_ops: *RocOps,
+) callconv(.c) void {
+    const bytes = value_ptr orelse return;
+    const list_ptr: *const RocList = @ptrCast(@alignCast(bytes));
+    const value = list_ptr.*;
+    if (element_decref) |callback| {
+        var ctx = CallbackElementDecrefContext{
+            .callback = callback,
+            .roc_ops = roc_ops,
+        };
+        value.decref(alignment, element_width, true, @ptrCast(&ctx), &callbackListElementDecref, roc_ops);
+    } else {
+        value.decref(alignment, element_width, false, null, &rcNone, roc_ops);
+    }
+}
+
+/// Value-slot wrapper: free a RocList stored at `value_ptr`.
+pub fn roc_builtins_list_free_value(
+    value_ptr: ?[*]u8,
+    alignment: u32,
+    element_width: usize,
+    element_decref: ?RcDropFn,
+    roc_ops: *RocOps,
+) callconv(.c) void {
+    const bytes = value_ptr orelse return;
+    const list_ptr: *const RocList = @ptrCast(@alignCast(bytes));
+    const value = list_ptr.*;
+    roc_builtins_list_free_with(
+        value.bytes,
+        value.length,
+        value.capacity_or_alloc_ptr,
+        alignment,
+        element_width,
+        element_decref,
+        roc_ops,
+    );
+}
+
+/// Value-slot wrapper: incref a boxed payload pointer stored at `value_ptr`.
+pub fn roc_builtins_box_incref_value(value_ptr: ?[*]u8, amount: isize, roc_ops: *RocOps) callconv(.c) void {
+    const bytes = value_ptr orelse return;
+    const payload_slot: *const ?[*]u8 = @ptrCast(@alignCast(bytes));
+    increfDataPtrC(payload_slot.*, amount, roc_ops);
+}
+
+/// Value-slot wrapper: decref a boxed payload pointer stored at `value_ptr`.
+pub fn roc_builtins_box_decref_value(
+    value_ptr: ?[*]u8,
+    payload_alignment: u32,
+    payload_decref: ?RcDropFn,
+    roc_ops: *RocOps,
+) callconv(.c) void {
+    const bytes = value_ptr orelse return;
+    const payload_slot: *const ?[*]u8 = @ptrCast(@alignCast(bytes));
+    roc_builtins_box_decref_with(payload_slot.*, payload_alignment, payload_decref, roc_ops);
+}
+
+/// Value-slot wrapper: free a boxed payload pointer stored at `value_ptr`.
+pub fn roc_builtins_box_free_value(
+    value_ptr: ?[*]u8,
+    payload_alignment: u32,
+    payload_decref: ?RcDropFn,
+    roc_ops: *RocOps,
+) callconv(.c) void {
+    const bytes = value_ptr orelse return;
+    const payload_slot: *const ?[*]u8 = @ptrCast(@alignCast(bytes));
+    roc_builtins_box_free_with(payload_slot.*, payload_alignment, payload_decref, roc_ops);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

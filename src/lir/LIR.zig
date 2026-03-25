@@ -298,7 +298,9 @@ pub const LirExpr = union(enum) {
         layout_idx: layout.Idx,
     },
 
-    /// Load the current value of a mutable cell into a fresh owned value.
+    /// Load the current value of a mutable cell as a snapshot expression.
+    /// Bindings that must keep this value independently of later cell mutation
+    /// retain it explicitly during lowering/RC insertion.
     cell_load: struct {
         cell: Symbol,
         layout_idx: layout.Idx,
