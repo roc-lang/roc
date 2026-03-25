@@ -1575,6 +1575,312 @@ pub const MonoLlvmCodeGen = struct {
         });
     }
 
+    fn comparePtrsByLayout(self: *MonoLlvmCodeGen, lhs_ptr: LlvmBuilder.Value, rhs_ptr: LlvmBuilder.Value, layout_idx: layout.Idx) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+
+        switch (layout_idx) {
+            .zst => return builder.intValue(.i1, 1) catch return error.OutOfMemory,
+            .bool => {
+                const lhs = try self.loadValueFromPtr(lhs_ptr, .bool);
+                const rhs = try self.loadValueFromPtr(rhs_ptr, .bool);
+                return wip.icmp(.eq, lhs, rhs, "") catch return error.OutOfMemory;
+            },
+            .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec => {
+                const lhs = try self.loadValueFromPtr(lhs_ptr, layout_idx);
+                const rhs = try self.loadValueFromPtr(rhs_ptr, layout_idx);
+                return wip.icmp(.eq, lhs, rhs, "") catch return error.OutOfMemory;
+            },
+            .f32, .f64 => {
+                const lhs = try self.loadValueFromPtr(lhs_ptr, layout_idx);
+                const rhs = try self.loadValueFromPtr(rhs_ptr, layout_idx);
+                return wip.fcmp(.normal, .oeq, lhs, rhs, "") catch return error.OutOfMemory;
+            },
+            .str => {
+                const lhs = try self.loadValueFromPtr(lhs_ptr, .str);
+                const rhs = try self.loadValueFromPtr(rhs_ptr, .str);
+                return self.callStrStr2BoolFromValues(lhs, rhs, "roc_builtins_str_equal");
+            },
+            else => {},
+        }
+
+        const ls = self.layout_store orelse return error.CompilationFailed;
+        const stored_layout = ls.getLayout(layout_idx);
+        return switch (stored_layout.tag) {
+            .scalar => blk: {
+                const lhs = try self.loadValueFromPtr(lhs_ptr, layout_idx);
+                const rhs = try self.loadValueFromPtr(rhs_ptr, layout_idx);
+                break :blk wip.icmp(.eq, lhs, rhs, "") catch return error.OutOfMemory;
+            },
+            .zst => builder.intValue(.i1, 1) catch return error.OutOfMemory,
+            .closure => error.CompilationFailed,
+            .struct_ => self.compareStructPtrs(lhs_ptr, rhs_ptr, layout_idx),
+            .list => self.compareListPtrs(lhs_ptr, rhs_ptr, layout_idx),
+            .list_of_zst => self.compareListPtrs(lhs_ptr, rhs_ptr, layout_idx),
+            .tag_union => self.compareTagUnionPtrs(lhs_ptr, rhs_ptr, layout_idx),
+            .box => self.compareBoxPtrs(lhs_ptr, rhs_ptr, layout_idx),
+            .box_of_zst => builder.intValue(.i1, 1) catch return error.OutOfMemory,
+        };
+    }
+
+    fn compareStructPtrs(self: *MonoLlvmCodeGen, lhs_ptr: LlvmBuilder.Value, rhs_ptr: LlvmBuilder.Value, struct_layout_idx: layout.Idx) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const ls = self.layout_store orelse return error.CompilationFailed;
+        const stored_layout = ls.getLayout(struct_layout_idx);
+
+        return switch (stored_layout.tag) {
+            .struct_ => blk: {
+                const struct_idx = stored_layout.data.struct_.idx;
+                const struct_data = ls.getStructData(struct_idx);
+                var result = builder.intValue(.i1, 1) catch return error.OutOfMemory;
+
+                for (0..struct_data.getFields().count) |field_i| {
+                    const field_size = ls.getStructFieldSize(struct_idx, @intCast(field_i));
+                    if (field_size == 0) continue;
+
+                    const field_layout_idx = ls.getStructFieldLayout(struct_idx, @intCast(field_i));
+                    const field_offset = ls.getStructFieldOffset(struct_idx, @intCast(field_i));
+                    const field_offset_val = builder.intValue(.i32, field_offset) catch return error.OutOfMemory;
+                    const lhs_field_ptr = wip.gep(.inbounds, .i8, lhs_ptr, &.{field_offset_val}, "") catch return error.CompilationFailed;
+                    const rhs_field_ptr = wip.gep(.inbounds, .i8, rhs_ptr, &.{field_offset_val}, "") catch return error.CompilationFailed;
+                    const field_eq = try self.comparePtrsByLayout(lhs_field_ptr, rhs_field_ptr, field_layout_idx);
+                    result = wip.bin(.@"and", result, field_eq, "") catch return error.CompilationFailed;
+                }
+
+                break :blk result;
+            },
+            .scalar, .zst, .closure, .list, .list_of_zst, .tag_union, .box, .box_of_zst => error.CompilationFailed,
+        };
+    }
+
+    fn compareListPtrs(self: *MonoLlvmCodeGen, lhs_ptr: LlvmBuilder.Value, rhs_ptr: LlvmBuilder.Value, list_layout_idx: layout.Idx) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const ls = self.layout_store orelse return error.CompilationFailed;
+        const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+        const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+        const list_layout = ls.getLayout(list_layout_idx);
+
+        switch (list_layout.tag) {
+            .list, .list_of_zst => {},
+            .scalar, .zst, .closure, .struct_, .tag_union, .box, .box_of_zst => return error.CompilationFailed,
+        }
+
+        const off8 = builder.intValue(.i32, 8) catch return error.OutOfMemory;
+        const lhs_data = wip.load(.normal, ptr_type, lhs_ptr, alignment, "") catch return error.CompilationFailed;
+        const rhs_data = wip.load(.normal, ptr_type, rhs_ptr, alignment, "") catch return error.CompilationFailed;
+        const lhs_len_ptr = wip.gep(.inbounds, .i8, lhs_ptr, &.{off8}, "") catch return error.CompilationFailed;
+        const rhs_len_ptr = wip.gep(.inbounds, .i8, rhs_ptr, &.{off8}, "") catch return error.CompilationFailed;
+        const lhs_len = wip.load(.normal, .i64, lhs_len_ptr, alignment, "") catch return error.CompilationFailed;
+        const rhs_len = wip.load(.normal, .i64, rhs_len_ptr, alignment, "") catch return error.CompilationFailed;
+        const len_eq = wip.icmp(.eq, lhs_len, rhs_len, "") catch return error.OutOfMemory;
+
+        const elem_info = try self.getListElementInfo(list_layout_idx);
+        if (elem_info.elem_size == 0) {
+            return len_eq;
+        }
+
+        const len_mismatch_block = wip.block(1, "list_eq_len_mismatch") catch return error.OutOfMemory;
+        const header_block = wip.block(2, "list_eq_header") catch return error.OutOfMemory;
+        const body_block = wip.block(1, "list_eq_body") catch return error.OutOfMemory;
+        const continue_block = wip.block(1, "list_eq_continue") catch return error.OutOfMemory;
+        const mismatch_elem_block = wip.block(1, "list_eq_elem_mismatch") catch return error.OutOfMemory;
+        const all_equal_block = wip.block(1, "list_eq_all_equal") catch return error.OutOfMemory;
+        const exit_block = wip.block(3, "list_eq_exit") catch return error.OutOfMemory;
+
+        const zero_i64 = builder.intValue(.i64, 0) catch return error.OutOfMemory;
+        const one_i64 = builder.intValue(.i64, 1) catch return error.OutOfMemory;
+        const false_val = builder.intValue(.i1, 0) catch return error.OutOfMemory;
+        const true_val = builder.intValue(.i1, 1) catch return error.OutOfMemory;
+        const elem_size_val = builder.intValue(.i64, elem_info.elem_size) catch return error.OutOfMemory;
+
+        const entry_block = wip.cursor.block;
+        _ = wip.brCond(len_eq, header_block, len_mismatch_block, .none) catch return error.CompilationFailed;
+
+        wip.cursor = .{ .block = len_mismatch_block };
+        _ = wip.br(exit_block) catch return error.CompilationFailed;
+
+        wip.cursor = .{ .block = header_block };
+        const idx_phi = wip.phi(.i64, "list_eq_idx") catch return error.CompilationFailed;
+        const idx = idx_phi.toValue();
+        const in_bounds = wip.icmp(.ult, idx, lhs_len, "") catch return error.OutOfMemory;
+        _ = wip.brCond(in_bounds, body_block, all_equal_block, .none) catch return error.CompilationFailed;
+
+        wip.cursor = .{ .block = body_block };
+        const elem_offset = wip.bin(.mul, idx, elem_size_val, "") catch return error.CompilationFailed;
+        const lhs_elem_ptr = wip.gep(.inbounds, .i8, lhs_data, &.{elem_offset}, "") catch return error.CompilationFailed;
+        const rhs_elem_ptr = wip.gep(.inbounds, .i8, rhs_data, &.{elem_offset}, "") catch return error.CompilationFailed;
+        const elem_eq = try self.comparePtrsByLayout(lhs_elem_ptr, rhs_elem_ptr, elem_info.elem_layout_idx);
+        _ = wip.brCond(elem_eq, continue_block, mismatch_elem_block, .none) catch return error.CompilationFailed;
+
+        wip.cursor = .{ .block = continue_block };
+        const next_idx = wip.bin(.add, idx, one_i64, "") catch return error.CompilationFailed;
+        _ = wip.br(header_block) catch return error.CompilationFailed;
+        idx_phi.finish(
+            &.{ zero_i64, next_idx },
+            &.{ entry_block, continue_block },
+            wip,
+        );
+
+        wip.cursor = .{ .block = mismatch_elem_block };
+        _ = wip.br(exit_block) catch return error.CompilationFailed;
+
+        wip.cursor = .{ .block = all_equal_block };
+        _ = wip.br(exit_block) catch return error.CompilationFailed;
+
+        wip.cursor = .{ .block = exit_block };
+        const result_phi = wip.phi(.i1, "list_eq_result") catch return error.CompilationFailed;
+        result_phi.finish(
+            &.{ false_val, false_val, true_val },
+            &.{ len_mismatch_block, mismatch_elem_block, all_equal_block },
+            wip,
+        );
+        return result_phi.toValue();
+    }
+
+    fn compareTagUnionPtrs(self: *MonoLlvmCodeGen, lhs_ptr: LlvmBuilder.Value, rhs_ptr: LlvmBuilder.Value, union_layout_idx: layout.Idx) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const ls = self.layout_store orelse return error.CompilationFailed;
+        const stored_layout = ls.getLayout(union_layout_idx);
+
+        return switch (stored_layout.tag) {
+            .tag_union => blk: {
+                const tu_data = ls.getTagUnionData(stored_layout.data.tag_union.idx);
+                const variants = ls.getTagUnionVariants(tu_data);
+                const lhs_disc = try self.loadTagDiscriminant(lhs_ptr, union_layout_idx);
+                const rhs_disc = try self.loadTagDiscriminant(rhs_ptr, union_layout_idx);
+                const disc_eq = wip.icmp(.eq, lhs_disc, rhs_disc, "") catch return error.OutOfMemory;
+                const false_val = builder.intValue(.i1, 0) catch return error.OutOfMemory;
+                const true_val = builder.intValue(.i1, 1) catch return error.OutOfMemory;
+
+                if (variants.len == 0) {
+                    break :blk disc_eq;
+                }
+
+                var all_zst = true;
+                for (0..variants.len) |variant_idx| {
+                    if (variants.get(@intCast(variant_idx)).payload_layout != .zst) {
+                        all_zst = false;
+                        break;
+                    }
+                }
+                if (all_zst) {
+                    break :blk disc_eq;
+                }
+
+                const disc_mismatch_block = wip.block(1, "tag_eq_disc_mismatch") catch return error.OutOfMemory;
+                const exit_block = wip.block(@intCast(variants.len + 1), "tag_eq_exit") catch return error.OutOfMemory;
+                const first_check_block = wip.block(1, "tag_eq_check_0") catch return error.OutOfMemory;
+
+                var result_vals = std.ArrayList(LlvmBuilder.Value){};
+                defer result_vals.deinit(self.allocator);
+                var result_blocks = std.ArrayList(LlvmBuilder.Function.Block.Index){};
+                defer result_blocks.deinit(self.allocator);
+
+                _ = wip.brCond(disc_eq, first_check_block, disc_mismatch_block, .none) catch return error.CompilationFailed;
+
+                wip.cursor = .{ .block = disc_mismatch_block };
+                _ = wip.br(exit_block) catch return error.CompilationFailed;
+                result_vals.append(self.allocator, false_val) catch return error.OutOfMemory;
+                result_blocks.append(self.allocator, disc_mismatch_block) catch return error.OutOfMemory;
+
+                var next_check_block = first_check_block;
+                for (0..variants.len) |variant_idx| {
+                    const variant = variants.get(@intCast(variant_idx));
+                    const variant_block = wip.block(1, "tag_eq_variant") catch return error.OutOfMemory;
+                    const is_last = variant_idx + 1 == variants.len;
+                    const current_check_block = next_check_block;
+
+                    wip.cursor = .{ .block = current_check_block };
+                    if (is_last) {
+                        _ = wip.br(variant_block) catch return error.CompilationFailed;
+                    } else {
+                        next_check_block = wip.block(1, "tag_eq_next_check") catch return error.OutOfMemory;
+                        const disc_value = builder.intValue(lhs_disc.typeOfWip(wip), @as(u64, @intCast(variant_idx))) catch return error.OutOfMemory;
+                        const disc_match = wip.icmp(.eq, lhs_disc, disc_value, "") catch return error.OutOfMemory;
+                        _ = wip.brCond(disc_match, variant_block, next_check_block, .none) catch return error.CompilationFailed;
+                    }
+
+                    wip.cursor = .{ .block = variant_block };
+                    const variant_result = if (variant.payload_layout == .zst)
+                        true_val
+                    else payload_blk: {
+                        const lhs_payload = try self.getTagPayloadInfo(lhs_ptr, union_layout_idx, variant_idx);
+                        const rhs_payload = try self.getTagPayloadInfo(rhs_ptr, union_layout_idx, variant_idx);
+                        break :payload_blk try self.comparePtrsByLayout(lhs_payload.root_ptr, rhs_payload.root_ptr, variant.payload_layout);
+                    };
+                    const variant_result_block = wip.cursor.block;
+                    _ = wip.br(exit_block) catch return error.CompilationFailed;
+                    result_vals.append(self.allocator, variant_result) catch return error.OutOfMemory;
+                    result_blocks.append(self.allocator, variant_result_block) catch return error.OutOfMemory;
+                }
+
+                wip.cursor = .{ .block = exit_block };
+                const result_phi = wip.phi(.i1, "tag_eq_result") catch return error.CompilationFailed;
+                result_phi.finish(result_vals.items, result_blocks.items, wip);
+                break :blk result_phi.toValue();
+            },
+            .scalar, .zst, .closure, .struct_, .list, .list_of_zst, .box, .box_of_zst => error.CompilationFailed,
+        };
+    }
+
+    fn compareBoxPtrs(self: *MonoLlvmCodeGen, lhs_ptr: LlvmBuilder.Value, rhs_ptr: LlvmBuilder.Value, box_layout_idx: layout.Idx) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const ls = self.layout_store orelse return error.CompilationFailed;
+        const stored_layout = ls.getLayout(box_layout_idx);
+
+        return switch (stored_layout.tag) {
+            .box => blk: {
+                const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+                const null_ptr = builder.nullValue(ptr_type) catch return error.OutOfMemory;
+                const true_val = builder.intValue(.i1, 1) catch return error.OutOfMemory;
+                const false_val = builder.intValue(.i1, 0) catch return error.OutOfMemory;
+                const lhs_box = try self.loadValueFromPtr(lhs_ptr, box_layout_idx);
+                const rhs_box = try self.loadValueFromPtr(rhs_ptr, box_layout_idx);
+                const same_ptr = wip.icmp(.eq, lhs_box, rhs_box, "") catch return error.OutOfMemory;
+                const lhs_null = wip.icmp(.eq, lhs_box, null_ptr, "") catch return error.OutOfMemory;
+                const rhs_null = wip.icmp(.eq, rhs_box, null_ptr, "") catch return error.OutOfMemory;
+                const either_null = wip.bin(.@"or", lhs_null, rhs_null, "") catch return error.CompilationFailed;
+
+                const same_block = wip.block(1, "box_eq_same") catch return error.OutOfMemory;
+                const check_null_block = wip.block(1, "box_eq_check_null") catch return error.OutOfMemory;
+                const null_block = wip.block(1, "box_eq_null") catch return error.OutOfMemory;
+                const compare_block = wip.block(1, "box_eq_compare") catch return error.OutOfMemory;
+                const exit_block = wip.block(3, "box_eq_exit") catch return error.OutOfMemory;
+
+                _ = wip.brCond(same_ptr, same_block, check_null_block, .none) catch return error.CompilationFailed;
+
+                wip.cursor = .{ .block = same_block };
+                _ = wip.br(exit_block) catch return error.CompilationFailed;
+
+                wip.cursor = .{ .block = check_null_block };
+                _ = wip.brCond(either_null, null_block, compare_block, .none) catch return error.CompilationFailed;
+
+                wip.cursor = .{ .block = null_block };
+                _ = wip.br(exit_block) catch return error.CompilationFailed;
+
+                wip.cursor = .{ .block = compare_block };
+                const inner_eq = try self.comparePtrsByLayout(lhs_box, rhs_box, stored_layout.data.box);
+                const compare_result_block = wip.cursor.block;
+                _ = wip.br(exit_block) catch return error.CompilationFailed;
+
+                wip.cursor = .{ .block = exit_block };
+                const result_phi = wip.phi(.i1, "box_eq_result") catch return error.CompilationFailed;
+                result_phi.finish(
+                    &.{ true_val, false_val, inner_eq },
+                    &.{ same_block, null_block, compare_result_block },
+                    wip,
+                );
+                break :blk result_phi.toValue();
+            },
+            .box_of_zst => builder.intValue(.i1, 1) catch return error.OutOfMemory,
+            .scalar, .zst, .closure, .struct_, .list, .list_of_zst, .tag_union => error.CompilationFailed,
+        };
+    }
+
     fn isSigned(result_layout: layout.Idx) bool {
         return switch (result_layout) {
             .i8, .i16, .i32, .i64, .i128, .dec => true,
@@ -4807,83 +5113,64 @@ pub const MonoLlvmCodeGen = struct {
             },
 
             .list_contains => {
-                // list_contains(list, needle) -> Bool
-                // Inline loop: iterate through list, compare each element
                 std.debug.assert(args.len >= 2);
+                const list_layout_idx = self.getExprResultLayout(args[0]) orelse return error.CompilationFailed;
+                const elem_info = try self.getListElementInfo(list_layout_idx);
                 const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
                 const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
-
-                // Generate needle value first to determine element type
-                const saved = self.out_ptr;
-                self.out_ptr = null;
-                const needle = try self.generateExpr(args[1]);
-                self.out_ptr = saved;
-
-                const elem_type = needle.typeOfWip(wip);
-                const elem_size: u64 = llvmTypeByteSize(elem_type);
-                std.debug.assert(elem_size != 0);
-                const elem_align = LlvmBuilder.Alignment.fromByteUnits(@intCast(elem_size));
-                const is_float = (elem_type == .float or elem_type == .double);
-
-                // Materialize list
+                const needle_size = try self.materializedLayoutSize(elem_info.elem_layout_idx);
+                const needle_ptr = try self.materializeAsPtr(args[1], needle_size);
                 const list_ptr = try self.materializeAsPtr(args[0], 24);
                 const data_ptr = wip.load(.normal, ptr_type, list_ptr, alignment, "") catch return error.CompilationFailed;
                 const off8 = builder.intValue(.i32, 8) catch return error.OutOfMemory;
                 const len_ptr_val = wip.gep(.inbounds, .i8, list_ptr, &.{off8}, "") catch return error.CompilationFailed;
                 const list_len = wip.load(.normal, .i64, len_ptr_val, alignment, "") catch return error.CompilationFailed;
 
-                // Build loop: header -> body -> exit
+                if (elem_info.elem_size == 0) {
+                    const zero_i64 = builder.intValue(.i64, 0) catch return error.OutOfMemory;
+                    return wip.icmp(.ne, list_len, zero_i64, "") catch return error.OutOfMemory;
+                }
+
                 const header_block = wip.block(2, "contains_hdr") catch return error.OutOfMemory;
                 const body_block = wip.block(1, "contains_body") catch return error.OutOfMemory;
+                const continue_block = wip.block(1, "contains_continue") catch return error.OutOfMemory;
                 const found_block = wip.block(1, "contains_found") catch return error.OutOfMemory;
-                const exit_block = wip.block(3, "contains_exit") catch return error.OutOfMemory;
+                const exit_block = wip.block(2, "contains_exit") catch return error.OutOfMemory;
 
                 const zero_i64 = builder.intValue(.i64, 0) catch return error.OutOfMemory;
                 const one_i64 = builder.intValue(.i64, 1) catch return error.OutOfMemory;
                 const false_val = builder.intValue(.i1, 0) catch return error.OutOfMemory;
                 const true_val = builder.intValue(.i1, 1) catch return error.OutOfMemory;
+                const elem_size_val = builder.intValue(.i64, elem_info.elem_size) catch return error.OutOfMemory;
 
                 const entry_block = wip.cursor.block;
                 _ = wip.br(header_block) catch return error.CompilationFailed;
 
-                // Header: phi for counter, compare with len
                 wip.cursor = .{ .block = header_block };
                 const counter_phi = wip.phi(.i64, "ctr") catch return error.CompilationFailed;
                 const ctr_val = counter_phi.toValue();
                 const cond = wip.icmp(.ult, ctr_val, list_len, "") catch return error.OutOfMemory;
                 _ = wip.brCond(cond, body_block, exit_block, .none) catch return error.CompilationFailed;
 
-                // Body: load element, compare with needle
                 wip.cursor = .{ .block = body_block };
-                const size_const = builder.intValue(.i64, elem_size) catch return error.OutOfMemory;
-                const byte_offset = wip.bin(.mul, ctr_val, size_const, "") catch return error.CompilationFailed;
+                const byte_offset = wip.bin(.mul, ctr_val, elem_size_val, "") catch return error.CompilationFailed;
                 const elem_ptr_val = wip.gep(.inbounds, .i8, data_ptr, &.{byte_offset}, "") catch return error.CompilationFailed;
-                const elem_val = wip.load(.normal, elem_type, elem_ptr_val, elem_align, "") catch return error.CompilationFailed;
+                const is_equal = try self.comparePtrsByLayout(elem_ptr_val, needle_ptr, elem_info.elem_layout_idx);
+                _ = wip.brCond(is_equal, found_block, continue_block, .none) catch return error.CompilationFailed;
 
-                // Compare based on type (integer or float)
-                const is_equal = if (is_float)
-                    wip.fcmp(.normal, .oeq, elem_val, needle, "") catch return error.OutOfMemory
-                else
-                    wip.icmp(.eq, elem_val, needle, "") catch return error.OutOfMemory;
-
-                _ = wip.brCond(is_equal, found_block, header_block, .none) catch return error.CompilationFailed;
-
-                // Increment counter for back-edge
+                wip.cursor = .{ .block = continue_block };
                 const next_ctr = wip.bin(.add, ctr_val, one_i64, "") catch return error.CompilationFailed;
-                const body_end_block = wip.cursor.block;
+                _ = wip.br(header_block) catch return error.CompilationFailed;
 
-                // Found block
                 wip.cursor = .{ .block = found_block };
                 _ = wip.br(exit_block) catch return error.CompilationFailed;
 
-                // Finish counter phi: entry->0, body_end->next_ctr
                 counter_phi.finish(
                     &.{ zero_i64, next_ctr },
-                    &.{ entry_block, body_end_block },
+                    &.{ entry_block, continue_block },
                     wip,
                 );
 
-                // Exit block: phi for result (false from header, true from found)
                 wip.cursor = .{ .block = exit_block };
                 const result_phi = wip.phi(.i1, "result") catch return error.CompilationFailed;
                 result_phi.finish(
@@ -6556,7 +6843,7 @@ pub const MonoLlvmCodeGen = struct {
         const elem_layout_idx = switch (list_layout.tag) {
             .list => list_layout.data.list,
             .list_of_zst => layout.Idx.zst,
-            else => return error.CompilationFailed,
+            .scalar, .zst, .closure, .struct_, .tag_union, .box, .box_of_zst => return error.CompilationFailed,
         };
         const elem_layout = ls.getLayout(elem_layout_idx);
         const elem_sa = ls.layoutSizeAlign(elem_layout);
