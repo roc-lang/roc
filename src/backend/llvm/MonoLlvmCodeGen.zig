@@ -2441,10 +2441,6 @@ pub const MonoLlvmCodeGen = struct {
         return result_phi.toValue();
     }
 
-    fn compareTagUnionPtrs(self: *MonoLlvmCodeGen, lhs_ptr: LlvmBuilder.Value, rhs_ptr: LlvmBuilder.Value, union_layout_idx: layout.Idx) Error!LlvmBuilder.Value {
-        return self.compareTagUnionValues(lhs_ptr, rhs_ptr, union_layout_idx);
-    }
-
     fn compareBoxPtrs(self: *MonoLlvmCodeGen, lhs_ptr: LlvmBuilder.Value, rhs_ptr: LlvmBuilder.Value, box_layout_idx: layout.Idx) Error!LlvmBuilder.Value {
         const wip = self.wip orelse return error.CompilationFailed;
         const builder = self.builder orelse return error.CompilationFailed;

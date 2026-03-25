@@ -5169,21 +5169,11 @@ pub const RcInsertPass = struct {
         return false;
     }
 
-    fn exprNeedsTailCleanupKey(self: *RcInsertPass, expr_id: LirExprId, key: u64, symbol: Symbol) Allocator.Error!bool {
-        if (expr_id.isNone()) return false;
-
-        return (try self.exprUsesKey(expr_id, key)) or (try self.exprUsesSymbol(expr_id, symbol));
-    }
-
     fn exprUsesKey(self: *RcInsertPass, expr_id: LirExprId, key: u64) Allocator.Error!bool {
         self.scratch_uses.clearRetainingCapacity();
         defer self.scratch_uses.clearRetainingCapacity();
         try self.countUsesInto(expr_id, &self.scratch_uses);
         return (self.scratch_uses.get(key) orelse 0) > 0;
-    }
-
-    fn exprUsesSymbol(self: *RcInsertPass, expr_id: LirExprId, symbol: Symbol) Allocator.Error!bool {
-        return self.exprUsesKey(expr_id, @as(u64, @bitCast(symbol)));
     }
 
     fn patternBindsSymbol(self: *const RcInsertPass, pat_id: LirPatternId, symbol: Symbol) Allocator.Error!bool {

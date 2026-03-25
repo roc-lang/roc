@@ -105,6 +105,7 @@ pub const CompileOptions = struct {
     merge_builtin_bitcode: bool = true,
 };
 
+/// A temporary shared-library artifact that owns its backing temp directory.
 pub const SharedLibraryArtifact = struct {
     allocator: Allocator,
     temp_dir_path: [:0]const u8,
@@ -117,6 +118,7 @@ pub const SharedLibraryArtifact = struct {
     }
 };
 
+/// Deletes the temp directory used to hold LLVM-produced object and dylib artifacts.
 pub fn deleteTempArtifactDir(temp_dir_path: [:0]const u8) void {
     std.fs.cwd().deleteTree(std.mem.sliceTo(temp_dir_path, 0)) catch {};
 }

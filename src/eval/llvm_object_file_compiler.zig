@@ -15,6 +15,7 @@ const LirProcSpec = lir.LirProcSpec;
 
 pub const Entrypoint = backend.Entrypoint;
 
+/// In-memory native object-file bytes produced by the LLVM backend.
 pub const CompilationResult = struct {
     object_bytes: []const u8,
     allocator: Allocator,
@@ -24,6 +25,7 @@ pub const CompilationResult = struct {
     }
 };
 
+/// Failures that can occur while lowering LIR to a native object file with LLVM.
 pub const CompilationError = error{
     OutOfMemory,
     NoEntrypoints,
@@ -32,11 +34,13 @@ pub const CompilationError = error{
     UnsupportedTarget,
 };
 
+/// Optimization presets supported by the LLVM object-file compiler.
 pub const OptimizationMode = enum {
     size,
     speed,
 };
 
+/// Compiles LIR entrypoints into native object files using the LLVM backend.
 pub const ObjectFileCompiler = struct {
     allocator: Allocator,
 
