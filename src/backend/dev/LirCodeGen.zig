@@ -9281,13 +9281,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.codegen.emit.subRegRegReg(.w64, dst, a, b);
                 try self.codegen.emit.csel(.w64, dst, dst, .ZRSP, .cs);
             } else {
-                // mov dst, a; sub dst, b; mov zero, 0; cmov below, dst, zero
+                // mov dst, a; sub dst, b; jae skip; xor dst, dst; skip:
+                // Uses a conditional jump instead of cmov to avoid allocating a zero register.
                 if (dst != a) try self.codegen.emit.movRegReg(.w64, dst, a);
                 try self.codegen.emit.subRegReg(.w64, dst, b);
-                const zero_reg = try self.allocTempGeneral();
-                try self.codegen.emitLoadImm(zero_reg, 0);
-                try self.codegen.emit.cmovcc(.below, .w64, dst, zero_reg);
-                self.codegen.freeGeneral(zero_reg);
+                const patch_loc = try self.codegen.emitCondJump(.above_or_equal);
+                try self.codegen.emit.xorRegReg(.w64, dst, dst);
+                self.codegen.patchJump(patch_loc, self.codegen.currentOffset());
             }
         }
 
