@@ -2408,10 +2408,10 @@ pub fn build(b: *std.Build) void {
 
         const run_parallel_cli = b.addRunArtifact(parallel_cli_runner_exe);
         run_parallel_cli.addArg("zig-out/bin/roc");
-        // Pass --test-filter as --filter for the parallel runner
-        if (test_filters.len > 0) {
+        // Forward all --test-filter values as --filter args
+        for (test_filters) |f| {
             run_parallel_cli.addArg("--filter");
-            run_parallel_cli.addArg(test_filters[0]);
+            run_parallel_cli.addArg(f);
         }
         run_parallel_cli.step.dependOn(&install.step);
         run_parallel_cli.step.dependOn(test_platforms_step);

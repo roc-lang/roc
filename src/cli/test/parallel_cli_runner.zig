@@ -67,7 +67,7 @@ const run_configs = [_]RunConfig{
 // Spec generation
 // ---------------------------------------------------------------------------
 
-fn buildTestSpecs(allocator: Allocator, filter: ?[]const u8) ![]const CliTestSpec {
+fn buildTestSpecs(allocator: Allocator, filters: []const []const u8) ![]const CliTestSpec {
     var specs: std.ArrayListUnmanaged(CliTestSpec) = .empty;
 
     for (&run_configs) |cfg| {
@@ -77,7 +77,7 @@ fn buildTestSpecs(allocator: Allocator, filter: ?[]const u8) ![]const CliTestSpe
             .single => |app_name| {
                 const roc_file = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ platform.base_dir, app_name });
                 const name = try fmtTestName(allocator, roc_file, cfg.backend);
-                if (matchesFilter(name, filter)) {
+                if (matchesFilters(name, roc_file, filters)) {
                     try specs.append(allocator, .{
                         .name = name,
                         .roc_file = roc_file,
@@ -90,7 +90,7 @@ fn buildTestSpecs(allocator: Allocator, filter: ?[]const u8) ![]const CliTestSpe
             .spec_list => |io_specs| {
                 for (io_specs) |spec| {
                     const name = try fmtTestName(allocator, spec.roc_file, cfg.backend);
-                    if (matchesFilter(name, filter)) {
+                    if (matchesFilters(name, spec.roc_file, filters)) {
                         try specs.append(allocator, .{
                             .name = name,
                             .roc_file = spec.roc_file,
@@ -104,7 +104,7 @@ fn buildTestSpecs(allocator: Allocator, filter: ?[]const u8) ![]const CliTestSpe
             .simple_list => |simple_specs| {
                 for (simple_specs) |spec| {
                     const name = try fmtTestName(allocator, spec.roc_file, cfg.backend);
-                    if (matchesFilter(name, filter)) {
+                    if (matchesFilters(name, spec.roc_file, filters)) {
                         try specs.append(allocator, .{
                             .name = name,
                             .roc_file = spec.roc_file,
@@ -128,9 +128,17 @@ fn fmtTestName(allocator: Allocator, roc_file: []const u8, backend: ?[]const u8)
     return std.fmt.allocPrint(allocator, "{s}", .{roc_file});
 }
 
-fn matchesFilter(name: []const u8, filter: ?[]const u8) bool {
-    const f = filter orelse return true;
-    return std.mem.indexOf(u8, name, f) != null;
+/// Check if a test matches any of the given filters. Matches against both
+/// the formatted name (e.g. "test/fx/hello_world.roc [dev]") and the raw
+/// roc_file path (e.g. "test/fx/hello_world.roc"), so filters from
+/// roc_subcommands_test naming also work here.
+fn matchesFilters(name: []const u8, roc_file: []const u8, filters: []const []const u8) bool {
+    if (filters.len == 0) return true;
+    for (filters) |f| {
+        if (std.mem.indexOf(u8, name, f) != null) return true;
+        if (std.mem.indexOf(u8, roc_file, f) != null) return true;
+    }
+    return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -920,7 +928,7 @@ fn printTimingSummary(gpa: Allocator, tests: []const CliTestSpec, results: []con
 
 const CliArgs = struct {
     roc_binary: []const u8,
-    filter: ?[]const u8 = null,
+    filters: []const []const u8 = &.{},
     max_threads: ?usize = null,
     timeout_ms: u64 = 60_000,
     verbose: bool = false,
@@ -935,7 +943,7 @@ fn parseArgs(allocator: Allocator) !CliArgs {
             \\Usage: parallel_cli_runner <roc_binary> [options]
             \\
             \\Options:
-            \\  --filter <pattern>   Run tests matching pattern (substring of name)
+            \\  --filter <pattern>   Run tests matching pattern (repeatable)
             \\  --threads <N>        Max concurrent workers (default: CPU count)
             \\  --timeout <ms>       Per-test timeout in ms (default: 60000)
             \\  --verbose            Show PASS results with timing
@@ -944,13 +952,14 @@ fn parseArgs(allocator: Allocator) !CliArgs {
         std.process.exit(1);
     }
 
+    var filters: std.ArrayListUnmanaged([]const u8) = .empty;
     var args = CliArgs{ .roc_binary = raw_args[1] };
     var i: usize = 2;
     while (i < raw_args.len) : (i += 1) {
         const arg = raw_args[i];
         if (std.mem.eql(u8, arg, "--filter")) {
             i += 1;
-            if (i < raw_args.len) args.filter = raw_args[i];
+            if (i < raw_args.len) try filters.append(allocator, raw_args[i]);
         } else if (std.mem.eql(u8, arg, "--verbose")) {
             args.verbose = true;
         } else if (std.mem.eql(u8, arg, "--threads")) {
@@ -966,6 +975,7 @@ fn parseArgs(allocator: Allocator) !CliArgs {
         }
     }
 
+    args.filters = try filters.toOwnedSlice(allocator);
     return args;
 }
 
@@ -985,9 +995,11 @@ pub fn main() !void {
     const args = try parseArgs(spec_arena.allocator());
 
     // Build flat test spec array
-    const tests = try buildTestSpecs(spec_arena.allocator(), args.filter);
+    const tests = try buildTestSpecs(spec_arena.allocator(), args.filters);
     if (tests.len == 0) {
-        std.debug.print("No tests matched filter.\n", .{});
+        // Silent exit — this runner is one part of the test-cli umbrella step,
+        // so a filter targeting roc_subcommands_test or glue_test legitimately
+        // matches zero tests here.
         return;
     }
 
