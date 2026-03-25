@@ -1402,8 +1402,7 @@ test "echo platform: no main is not a default app (dev)" {
     return error.SkipZigTest;
 }
 
-// Lines shared between interpreter and dev backend expected output (up to the
-// point where they diverge due to a monomorphization bug with print!/module-level defs).
+// Lines shared between interpreter and dev backend expected output.
 const all_syntax_common_prefix =
     "Hello, world!\n" ++
     "Hello, world! (using alias)\n" ++
