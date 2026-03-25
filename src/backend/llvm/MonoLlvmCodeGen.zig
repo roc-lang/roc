@@ -1004,12 +1004,8 @@ pub const MonoLlvmCodeGen = struct {
                         break :blk builder.structType(.normal, field_types[0..fields.count]) catch return error.CompilationFailed;
                     },
                     .tag_union => {
-                        const tu_data = ls.getTagUnionData(stored_layout.data.tag_union.idx);
-                        const variants = ls.getTagUnionVariants(tu_data);
-                        for (0..variants.len) |variant_idx| {
-                            if (variants.get(@intCast(variant_idx)).payload_layout != .zst) {
-                                break :blk builder.ptrType(.default) catch return error.CompilationFailed;
-                            }
+                        if (self.tagUnionLoweredIndirect(result_layout)) {
+                            break :blk builder.ptrType(.default) catch return error.CompilationFailed;
                         }
                         break :blk .i64;
                     },
@@ -1588,6 +1584,22 @@ pub const MonoLlvmCodeGen = struct {
 
     fn isFloatLayout(l: layout.Idx) bool {
         return l == .f32 or l == .f64;
+    }
+
+    fn tagUnionLoweredIndirect(self: *const MonoLlvmCodeGen, union_layout_idx: layout.Idx) bool {
+        const ls = self.layout_store orelse return false;
+        const stored_layout = ls.getLayout(union_layout_idx);
+        if (stored_layout.tag != .tag_union) return false;
+
+        const tu_data = ls.getTagUnionData(stored_layout.data.tag_union.idx);
+        const variants = ls.getTagUnionVariants(tu_data);
+        for (0..variants.len) |variant_idx| {
+            if (variants.get(@intCast(variant_idx)).payload_layout != .zst) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// Convert a layout.Idx to the LLVM type used for struct fields.
@@ -6512,6 +6524,9 @@ pub const MonoLlvmCodeGen = struct {
                     return wip.load(.normal, llvm_type, ptr, alignment, "") catch return error.CompilationFailed;
                 },
                 .tag_union => {
+                    if (self.tagUnionLoweredIndirect(layout_idx)) {
+                        return ptr;
+                    }
                     const llvm_type = try self.layoutToStructFieldType(layout_idx);
                     return wip.load(.normal, llvm_type, ptr, self.alignmentForLayout(layout_idx), "") catch return error.CompilationFailed;
                 },
