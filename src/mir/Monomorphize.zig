@@ -4576,6 +4576,7 @@ pub const Pass = struct {
 
         if (resolveFuncTypeInStore(template_types, template.type_root)) |resolved_func| {
             const param_vars = template_types.sliceVars(resolved_func.func.args);
+
             if (param_vars.len != actual_args.items.len) {
                 if (std.debug.runtime_safety) {
                     std.debug.panic(
@@ -4950,6 +4951,7 @@ pub const Pass = struct {
                 return;
             }
             const method_name = dispatchMethodIdentForBinop(module_env, binop_expr.op) orelse return;
+
             if (try self.resolveAssociatedMethodProcInstForTypeVar(
                 result,
                 module_idx,
@@ -5278,6 +5280,40 @@ pub const Pass = struct {
         const receiver_nominal = resolveNominalTypeInStore(&module_env.types, receiver_type_var) orelse return null;
         const method_info = try self.lookupAssociatedMethodTemplate(result, module_idx, receiver_nominal, method_ident) orelse return null;
         const receiver_monotype = try self.resolveTypeVarMonotypeIfExactResolved(result, module_idx, receiver_type_var);
+
+        // When active bindings are set (inside a specialized function), the CIR
+        // type var's nominal type may differ from the concrete monotype demanded
+        // by the specialization. For example, the CIR may resolve a Num-constrained
+        // var to its Dec default, but the active bindings specify U64.
+        // Verify the template's first param matches the receiver's concrete type;
+        // if not, return null to let the monotype-based dispatch path handle it.
+        if (self.active_bindings != null and !receiver_monotype.isNone()) {
+            const template = result.getProcTemplate(method_info.template_id).*;
+            const template_types = &self.all_module_envs[template.module_idx].types;
+            if (resolveFuncTypeInStore(template_types, template.type_root)) |resolved_func| {
+                const tpl_param_vars = template_types.sliceVars(resolved_func.func.args);
+                if (tpl_param_vars.len > 0) {
+                    const first_param_mono = try self.monotypeFromTypeVarInStore(
+                        result,
+                        template.module_idx,
+                        template_types,
+                        tpl_param_vars[0],
+                    );
+                    if (!first_param_mono.isNone() and
+                        !try self.monotypesStructurallyEqualAcrossModules(
+                            result,
+                            first_param_mono,
+                            template.module_idx,
+                            receiver_monotype.idx,
+                            receiver_monotype.module_idx,
+                        ))
+                    {
+                        return null;
+                    }
+                }
+            }
+        }
+
         _ = try self.lookupDispatchConstraintForAssociatedMethod(
             result,
             module_idx,
@@ -5301,6 +5337,36 @@ pub const Pass = struct {
         const receiver_nominal = resolveNominalTypeInStore(&module_env.types, receiver_type_var) orelse return null;
         const method_info = try self.lookupAssociatedMethodTemplate(result, module_idx, receiver_nominal, method_ident) orelse return null;
         const receiver_monotype = try self.resolveTypeVarMonotypeIfExactResolved(result, module_idx, receiver_type_var);
+
+        // Same guard as resolveAssociatedMethodProcInstForTypeVar: verify
+        // the template matches the receiver's concrete monotype.
+        if (self.active_bindings != null and !receiver_monotype.isNone()) {
+            const template = result.getProcTemplate(method_info.template_id).*;
+            const template_types = &self.all_module_envs[template.module_idx].types;
+            if (resolveFuncTypeInStore(template_types, template.type_root)) |resolved_func| {
+                const tpl_param_vars = template_types.sliceVars(resolved_func.func.args);
+                if (tpl_param_vars.len > 0) {
+                    const first_param_mono = try self.monotypeFromTypeVarInStore(
+                        result,
+                        template.module_idx,
+                        template_types,
+                        tpl_param_vars[0],
+                    );
+                    if (!first_param_mono.isNone() and
+                        !try self.monotypesStructurallyEqualAcrossModules(
+                            result,
+                            first_param_mono,
+                            template.module_idx,
+                            receiver_monotype.idx,
+                            receiver_monotype.module_idx,
+                        ))
+                    {
+                        return null;
+                    }
+                }
+            }
+        }
+
         const constraint = try self.lookupDispatchConstraintForAssociatedMethod(
             result,
             module_idx,

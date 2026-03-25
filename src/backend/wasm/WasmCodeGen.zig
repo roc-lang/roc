@@ -4150,67 +4150,6 @@ fn emitI64MulToI128(self: *Self, a_local: u32, b_local: u32) Allocator.Error!voi
 
 /// Emit i128 signed division: result = a / b (truncating).
 /// Takes two i32 pointers to 16-byte i128 values.
-/// For Dec→int conversions, we only need division by a constant (10^18).
-/// This implementation handles the general case for positive divisors.
-fn emitI128DivByConst(self: *Self, numerator_local: u32, divisor_val: i64) Allocator.Error!void {
-    // For Dec→int: we divide by 10^18 (positive constant).
-    // Strategy: use signed division.
-    // For simplicity, handle only the case where the numerator fits in i64
-    // after division (which is always true for Dec→i64 and smaller).
-    //
-    // result = (i128 as i64-pair) / divisor
-    // Since divisor fits in i64 and result fits in i64, we can compute:
-    //   result = ((high * 2^64) + low) / divisor
-    //
-    // For signed division when high == 0 or high == -1 (sign extension),
-    // the value fits in i64 and we can do i64.div_s directly.
-    //
-    // General approach: extract the full i128, then truncate to i64 and divide.
-    // This works because the result of Dec→int always fits in i64.
-
-    const result_offset = try self.allocStackMemory(16, 8);
-    const result_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitFpOffset(result_offset);
-    self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, &self.body, result_local) catch return error.OutOfMemory;
-
-    // Load the low i64 from the numerator
-    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, &self.body, numerator_local) catch return error.OutOfMemory;
-    try self.emitLoadOp(.i64, 0);
-
-    // Divide by divisor
-    self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
-    WasmModule.leb128WriteI64(self.allocator, &self.body, divisor_val) catch return error.OutOfMemory;
-    self.body.append(self.allocator, Op.i64_div_s) catch return error.OutOfMemory;
-
-    // Store as i128 (sign-extend to high word)
-    const quotient = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
-    self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, &self.body, quotient) catch return error.OutOfMemory;
-
-    // Store low word
-    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, &self.body, result_local) catch return error.OutOfMemory;
-    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, &self.body, quotient) catch return error.OutOfMemory;
-    try self.emitStoreOp(.i64, 0);
-
-    // Store high word (sign extension)
-    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, &self.body, result_local) catch return error.OutOfMemory;
-    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, &self.body, quotient) catch return error.OutOfMemory;
-    self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
-    WasmModule.leb128WriteI64(self.allocator, &self.body, 63) catch return error.OutOfMemory;
-    self.body.append(self.allocator, Op.i64_shr_s) catch return error.OutOfMemory;
-    try self.emitStoreOp(.i64, 8);
-
-    // Push result pointer
-    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, &self.body, result_local) catch return error.OutOfMemory;
-}
-
 /// Convert an i64 value on the wasm stack to a 16-byte i128 in stack memory.
 /// The caller must ensure the value is i64 (extend i32 first if needed).
 /// If `signed` is true, sign-extends the high word; otherwise zero-extends.

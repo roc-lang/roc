@@ -1871,11 +1871,6 @@ fn writeWasmStr(buffer: []u8, result_ptr: usize, data: [*]const u8, len: usize) 
     }
 }
 
-fn writeWasmEmptyStr(buffer: []u8, result_ptr: usize) void {
-    @memset(buffer[result_ptr..][0..12], 0);
-    buffer[result_ptr + 11] = 0x80;
-}
-
 /// Create a native RocStr from wasm memory bytes.
 /// The result points into the wasm buffer (for read-only use) or uses native SSO.
 /// For builtins that modify strings, use wasmRocStrInit which allocates via RocOps.

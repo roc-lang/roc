@@ -1036,10 +1036,9 @@ fn processPoolMain(
 fn runTestsSequential(
     tests: []const TestCase,
     results: []TestResult,
-    verbose: bool,
+    _: bool,
     gpa: std.mem.Allocator,
 ) void {
-    _ = verbose;
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
 
@@ -1415,7 +1414,6 @@ fn printPerformanceSummary(gpa: std.mem.Allocator, tests: []const TestCase, resu
 //
 // Main
 //
-
 
 /// Entry point for the parallel eval test runner.
 pub fn main() !void {

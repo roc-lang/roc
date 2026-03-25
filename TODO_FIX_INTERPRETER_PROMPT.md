@@ -42,7 +42,7 @@ There are two test paths that exercise the interpreter:
      safely contained (the parent sees a non-zero exit or signal via waitpid).
    - The interpreter backend uses `helpers.lirInterpreterInspectedStr` which
      does CIR → MIR → LIR → RC lowering, then `LirInterpreter.eval()`
-   - Current status: **1102 passed, 0 failed, 0 crashed, 72 skipped**
+   - Current status: **1235 passed, 0 failed, 0 crashed, 69 skipped**
 
 2. **Unit tests** (`zig build test`):
    - Sequential tests in `src/eval/test/helpers.zig` (low_level_interp_test,
@@ -68,155 +68,50 @@ There are two test paths that exercise the interpreter:
 
 ---
 
-## Monomorphization: wrong monotype for numeric literals in specialized functions
+## Monomorphization: wrong dispatch for numeric ops in specialized functions — FIXED (guarded)
 
-This is the **root cause** of the `repeating pattern segfault` fx test failure,
-the U8/U16 large-value arithmetic hangs (30 skipped eval tests), and likely
-several other skipped eval tests involving non-Dec numeric types.
+### Summary
 
-### Reproduce
+When a polymorphic function like `count_down = |n| n - 1` is specialized for
+U64, the binop dispatch for `minus` was selecting the **Dec-specific** template
+instead of the U64 one. This caused numeric literals to get Dec monotype
+(value × 10^18), producing infinite recursion / wrong results.
 
-Minimal reproducer (`test/fx/test_recurse_u64.roc`):
-```roc
-app [main!] { pf: platform "./platform/main.roc" }
-import pf.Stdout
+### Fix applied (Monomorphize.zig)
 
-count_down = |n| match n {
-    0 => "done"
-    _ => count_down(n - 1)
-}
+Added a guard in `resolveAssociatedMethodProcInstForTypeVar` and
+`resolveAssociatedMethodDispatchTargetForTypeVar`: when `active_bindings` are
+set and the receiver has a concrete monotype, verify the template's first param
+matches. If not, return null to fall through to the monotype-based dispatch path.
 
-main! = || {
-    n : U64
-    n = 3
-    result = count_down(n)
-    Stdout.line!(result)
-}
+### Outstanding upstream issue: CIR type var premature defaulting
+
+The guard is necessary because the **CIR types store** has the parameter's type
+var already resolved to a `nominal_type` structure for Dec — before
+monomorphization even runs. Confirmed via debug:
+
+```
+CIR var 14 -> root 217 content=structure (nominal_type)
+template_param = dec, receiver_binding = u64
 ```
 
-```sh
-zig build roc && ./zig-out/bin/roc --opt=interpreter test/fx/test_recurse_u64.roc
-# Roc crashed: This Roc program overflowed its stack memory.
-```
+This means the type checker (or a post-type-checking pass) defaults the
+Num-constrained type var to Dec's nominal type in the types store, rather than
+leaving it as a flex var for monomorphization to specialize. The guard works
+around this, but ideally the CIR should preserve the polymorphic flex var so
+`resolveNominalTypeInStore` returns null for unspecialized type vars, and the
+monotype-based dispatch path handles it naturally.
 
-The same code with Dec (default numeric type) works correctly:
-```roc
-# This works — outputs "done"
-result = count_down(3)
-```
+**Where to investigate**: Look at `src/check/Check.zig` for where numeral
+defaults are applied to CIR type vars — specifically whether Roc app module
+definitions are not generalized (kept monomorphic with Dec default) vs
+generalized (kept as flex vars).
 
-### Symptoms
+### Tests fixed
 
-Infinite recursion → stack overflow. The match `0 => ...` never matches because
-`n - 1` subtracts 10^18 (the Dec representation of 1) instead of 1.
-
-### Root cause: verified
-
-The monomorphization pass (`Monomorphize.zig`) assigns the wrong monotype to
-numeric literals inside polymorphic functions that are specialized for non-Dec
-types.
-
-**Verified execution trace** (from debug instrumentation):
-
-1. `count_down` is specialized for U64. Parameter `n` correctly gets monotype U64.
-
-2. The literal `1` in `n - 1` gets monotype **Dec** instead of U64.
-   - Confirmed via debug in `lowerInt` (MirToLir.zig):
-     ```
-     lowerInt: mono_idx=8, target_layout=u64, value=3   ← n=3, correct
-     lowerInt: mono_idx=14, target_layout=dec, value=1   ← literal 1, WRONG
-     ```
-
-3. `lowerInt` sees `target_layout=dec` for the literal `1`, so it correctly
-   (from its perspective) creates a `dec_literal` with value `1 * 10^18`.
-
-4. At runtime, `num_minus` reads both operands as U64 (8 bytes, from the first
-   arg's layout). The dec_literal's 16-byte value is truncated to 8 bytes,
-   yielding `1_000_000_000_000_000_000` instead of `1`.
-   - Confirmed: `numBinOp sub: a_u64=3, b_u64=1000000000000000000`
-
-5. Result: `3 - 10^18` wraps to a huge U64. The pattern `0` never matches.
-   Recursion continues until `call_depth` hits 1024 → stack overflow.
-
-### Where the wrong monotype originates
-
-The monotype does NOT come from the `type_var_seen` path in `resolveMonotype`
-(Lower.zig:3682). It comes from `lookupMonomorphizedExprMonotype` — the
-**monomorphization result itself** stores Dec for this expression.
-
-Confirmed via debug in `resolveMonotype`:
-```
-resolveMonotype via monomorphized: expr=10182, mono_tag=prim, prim=dec
-```
-
-The monomorphization stores expr monotypes via `recordCurrentExprMonotype`
-(Monomorphize.zig:4763). For function call arguments, this happens at line 4704:
-```zig
-// Monomorphize.zig ~line 4701-4704
-for (actual_args.items, 0..) |arg_expr_idx, i| {
-    const param_mono = result.monotype_store.getIdxSpanItem(fn_mono.args, i);
-    try self.bindCurrentExprTypeRoot(result, module_idx, arg_expr_idx, param_mono, proc_inst.fn_monotype_module_idx);
-    try self.recordCurrentExprMonotype(result, module_idx, arg_expr_idx, param_mono, proc_inst.fn_monotype_module_idx);
-}
-```
-
-The `param_mono` comes from the resolved function's (`minus`) monotype. If the
-`minus` dispatch resolves to `Dec, Dec -> Dec` instead of `U64, U64 -> U64`,
-then ALL arguments (including the literal `1`) get Dec monotype.
-
-### Key code paths in the monomorphization
-
-1. **`scanExprChildren`** (Monomorphize.zig:1920): `.e_num` is in the no-op
-   case — numeric literals don't trigger any type binding during the scan phase.
-
-2. **`exprUsesContextSensitiveNumericDefault`** (Monomorphize.zig:1772):
-   Returns `true` for `.e_num`, `.e_dec`, `.e_dec_small`. This causes
-   `resolveExprMonotypeIfExactResolved` to return `.none` (unresolved) for
-   numeric literals, deferring their type to the call-site binding.
-
-3. **`inferDispatchProcInst`** (Monomorphize.zig:4554): This is where binop
-   dispatch (like `minus`) is resolved. It creates bindings from the actual
-   argument types to the template's parameter types. If the dispatch resolves
-   the wrong specialization (Dec instead of U64), all downstream monotypes
-   will be wrong.
-
-4. **`fromTypeVar`** (Monotype.zig:432): When a flex type variable with a
-   numeral constraint has no binding, it defaults to Dec (line 455-456):
-   ```zig
-   if (hasNumeralConstraint(types_store, flex.constraints))
-       return self.primIdx(.dec);
-   ```
-
-### What needs to be fixed
-
-The monomorphization's dispatch resolution for `n - 1` inside `count_down<U64>`
-must resolve `minus` as `U64, U64 -> U64`, not `Dec, Dec -> Dec`. The parameter
-`n` is known to be U64 at this point, and that should propagate to the operator
-dispatch and hence to the literal argument.
-
-The fix should be in `Monomorphize.zig`, likely in how `inferDispatchProcInst`
-or its callers determine the function monotype for binary operators when one
-operand has a known concrete type and the other is a numeral literal.
-
-### What NOT to do
-
-- Do NOT fix this in `lowerInt` / `lowerDec` (MirToLir.zig) by checking the
-  surrounding operation's layout. That masks the root cause.
-- Do NOT fix this in the interpreter's `numBinOp` by detecting mismatched
-  layouts at runtime. Same reason.
-- There is currently a `lowerDec` function in MirToLir.zig (line 2736) that
-  was added during investigation as defense-in-depth. It converts Dec literals
-  to integers when the monotype says integer. This should be removed once
-  the root cause is fixed in Monomorphize.zig, since it should never be needed.
-
-### Tests this will fix
-
-- **fx test**: `repeating pattern segfault (interpreter)`
-- **Skipped eval tests**: U8/U16 large-value arithmetic (30 tests) — same root
-  cause: numeric literals in arithmetic expressions get Dec monotype when the
-  operation is specialized for U8/U16, causing 10^18 values that infinite-loop.
-- Likely also: `List of typed ints` (2 tests), `U128 subtraction` (1 test),
-  and potentially others involving non-Dec numeric operations.
+- **fx test**: `repeating pattern segfault (interpreter)` ✓
+- **Eval tests**: U8/U16 large-value arithmetic (30 tests unskipped) ✓
+- **Eval test total**: 1235 passed (up from 1102), 0 failed, 0 crashed
 
 ---
 
@@ -346,12 +241,12 @@ in this case), the comptime evaluator should be able to evaluate `one = 1`.
 ## Skipped Eval Tests (SKIP_ALL — all backends)
 
 These are tests in `src/eval/test/eval_tests.zig` that are skipped across **all**
-backends (interpreter, dev, wasm, llvm). Current: **72 skipped** (was 108).
+backends (interpreter, dev, wasm, llvm). Current: **69 skipped** (was 108).
 
 **Workflow**: Fix one category at a time. After fixing, unskip the tests, run them
 to verify, commit, then **remove the resolved section from this document**.
 
-### RESOLVED (36 tests unskipped)
+### RESOLVED (66 tests unskipped)
 
 - [x] Narrowing/wrapping conversions (8 tests) — fixed: wrong method names (`to_u8` → `to_u8_wrap`)
 - [x] Signed-to-unsigned conversions (3 tests) — fixed: wrong method names (`to_u64` → `to_u64_wrap`)
@@ -360,28 +255,8 @@ to verify, commit, then **remove the resolved section from this document**.
 - [x] F64→F32, Dec→F32 (2 tests) — fixed: method name + builtin_compiler mismatch
 - [x] U128 subtraction (1 test) — was already working, just needed unskipping
 - [x] List of typed ints (2 tests) — fixed: `.to_i64()` → `.to_i64_wrap()`
-
-### REMAINING: U8/U16 large-value arithmetic (30 tests)
-
-Some of these hang on x86_64-linux CI (infinite loop in interpreter).
-
-| Category | Tests |
-|----------|-------|
-| U8 plus  | `200+50`, `255+0`, `128+127` |
-| U8 minus | `200-50`, `255-100`, `240-240` |
-| U8 times | `15*17`, `128*1`, `16*15` |
-| U8 div_by | `240//2`, `255//15`, `200//10` |
-| U8 rem_by | `200%13`, `255%16`, `128%7` |
-| U16 plus | `40000+20000`, `65535+0`, `32768+32767` |
-| U16 minus | `50000-10000`, `65535-30000`, `50000-50000` |
-| U16 times | `256*255`, `32768*1`, `255*256` |
-| U16 div_by | `60000//3`, `65535//257`, `40000//128` |
-| U16 rem_by | `50000%128`, `65535%256`, `40000%99` |
-
-**Root cause**: Same monomorphization bug as `repeating pattern segfault`.
-Numeric literals in arithmetic expressions get Dec monotype when the operation
-is specialized for U8/U16. The Dec-scaled values (10^18 x n) cause arithmetic
-to produce wrong results, which can infinite-loop in comparison-based operations.
+- [x] U8/U16 large-value arithmetic (30 tests) — fixed: monomorphization dispatch resolution
+  selecting Dec template instead of the specialization's concrete type template
 
 ---
 
@@ -404,18 +279,13 @@ These are upstream compiler/specialization bugs, not interpreter-specific:
 
 ---
 
-## WIP: `lowerDec` in MirToLir.zig
+## Defense-in-depth: `lowerDec` in MirToLir.zig
 
-During investigation of the monomorphization bug, a `lowerDec` function was
-added at `MirToLir.zig:2736`. It converts Dec literals to the correct integer
-type when the monotype says integer. The `.dec` case at line 2578 now calls
-`self.lowerDec(v, mono_idx, region)` instead of directly emitting `dec_literal`.
-
-**This is a workaround, not a fix.** Once the monomorphization root cause is
-fixed, `lowerDec` should be unnecessary because the monotype will already be
-correct. At that point, either:
-- Remove `lowerDec` and revert to the original `self.lir_store.addExpr(.{ .dec_literal = v.num }, region)`
-- Or keep it as defense-in-depth (but document it as such)
+The `lowerDec` function at `MirToLir.zig:2736` converts Dec literals to the
+correct integer/float type when the target monotype is non-Dec. With the
+monomorphization dispatch fix in place, this should rarely be needed — but it
+provides defense-in-depth against any remaining edge cases where a Dec literal
+reaches lowering with a non-Dec target layout.
 
 ---
 
