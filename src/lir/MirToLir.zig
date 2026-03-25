@@ -2446,6 +2446,17 @@ fn exprAliasesManagedRef(self: *const Self, expr_id: LirExprId, expr_layout: lay
     };
 }
 
+fn exprSnapshotsMutableCell(self: *const Self, expr_id: LirExprId) bool {
+    const expr = self.lir_store.getExpr(expr_id);
+    return switch (expr) {
+        .cell_load => true,
+        .block => |block| self.exprSnapshotsMutableCell(block.final_expr),
+        .dbg => |dbg_expr| self.exprSnapshotsMutableCell(dbg_expr.expr),
+        .nominal => |nominal| self.exprSnapshotsMutableCell(nominal.backing_expr),
+        else => false,
+    };
+}
+
 fn bindingModeForSemantics(semantics: LirStmt.BindingSemantics) BindingOwnershipMode {
     return switch (semantics) {
         .owned, .retained => .owned,
@@ -2455,6 +2466,7 @@ fn bindingModeForSemantics(semantics: LirStmt.BindingSemantics) BindingOwnership
 
 fn bindingSemanticsForExpr(self: *const Self, expr_id: LirExprId, expr_layout: layout.Idx) LirStmt.BindingSemantics {
     if (!self.layout_store.layoutContainsRefcounted(self.layout_store.getLayout(expr_layout))) return .owned;
+    if (self.exprSnapshotsMutableCell(expr_id)) return .retained;
     if (self.exprAliasesManagedRef(expr_id, expr_layout)) return .borrow_alias;
     return .owned;
 }
@@ -7232,6 +7244,64 @@ test "MIR block with decl_var and mutate_var lowers to LIR decl and mutate" {
     // Final expression reads the cell.
     const final = env.lir_store.getExpr(lir_expr.block.final_expr);
     try testing.expect(final == .cell_load);
+}
+
+test "mutable refcounted lookup bound immutably lowers as retained snapshot" {
+    const allocator = testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+    const list_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .list = .{ .elem = i64_mono } });
+
+    const ident_x = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = true }, .idx = 2 };
+    const sym_x = try testMirSymbol(&env.mir_store, allocator, ident_x);
+    const ident_y = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 3 };
+    const sym_y = try testMirSymbol(&env.mir_store, allocator, ident_y);
+
+    const elem = try env.mir_store.addExpr(allocator, .{ .int = .{
+        .value = .{ .bytes = @bitCast(@as(i128, 1)), .kind = .i128 },
+    } }, i64_mono, Region.zero());
+    const list_elems = try env.mir_store.addExprSpan(allocator, &.{elem});
+    const list_expr = try env.mir_store.addExpr(allocator, .{ .list = .{ .elems = list_elems } }, list_mono, Region.zero());
+
+    const lookup_x = try env.mir_store.addExpr(allocator, .{ .lookup = sym_x }, list_mono, Region.zero());
+    const lookup_y = try env.mir_store.addExpr(allocator, .{ .lookup = sym_y }, list_mono, Region.zero());
+
+    const pat_x = try env.mir_store.addPattern(allocator, .{ .bind = sym_x }, list_mono);
+    const pat_y = try env.mir_store.addPattern(allocator, .{ .bind = sym_y }, list_mono);
+    const stmts = try env.mir_store.addStmts(allocator, &.{
+        .{ .decl_var = .{ .pattern = pat_x, .expr = list_expr } },
+        .{ .decl_const = .{ .pattern = pat_y, .expr = lookup_x } },
+    });
+
+    const block_expr = try env.mir_store.addExpr(allocator, .{ .block = .{
+        .stmts = stmts,
+        .final_expr = lookup_y,
+    } }, list_mono, Region.zero());
+
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.lambda_set_store, env.module_env.idents.true_tag);
+    defer translator.deinit();
+
+    const lir_id = try translator.lower(block_expr);
+    const lir_expr = env.lir_store.getExpr(lir_id);
+    try testing.expect(lir_expr == .block);
+
+    const lir_stmts = env.lir_store.getStmts(lir_expr.block.stmts);
+    try testing.expectEqual(@as(usize, 2), lir_stmts.len);
+    try testing.expect(lir_stmts[0] == .cell_init);
+    try testing.expect(lir_stmts[1] == .decl);
+    try testing.expectEqual(LirStmt.BindingSemantics.retained, lir_stmts[1].decl.semantics);
+
+    const bound_expr = env.lir_store.getExpr(lir_stmts[1].decl.expr);
+    try testing.expect(bound_expr == .cell_load);
+    try testing.expectEqual(sym_x, bound_expr.cell_load.cell);
+
+    const final = env.lir_store.getExpr(lir_expr.block.final_expr);
+    try testing.expect(final == .lookup);
+    try testing.expectEqual(sym_y, final.lookup.symbol);
 }
 
 test "MIR for_loop lowers to LIR for_loop" {
