@@ -1274,7 +1274,7 @@ fn hostI128DivS(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]cons
 
     const lhs = readI128FromMem(buffer, lhs_ptr);
     const rhs = readI128FromMem(buffer, rhs_ptr);
-    const result = @divTrunc(lhs, rhs);
+    const result = i128h.divTrunc_i128(lhs, rhs);
     writeI128ToMem(buffer, result_ptr, result);
 }
 
@@ -1290,9 +1290,7 @@ fn hostI128ModS(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]cons
 
     const lhs = readI128FromMem(buffer, lhs_ptr);
     const rhs = readI128FromMem(buffer, rhs_ptr);
-    // Use @rem for truncated remainder (result has same sign as dividend)
-    // This matches Roc's % operator semantics
-    const result = @rem(lhs, rhs);
+    const result = i128h.rem_i128(lhs, rhs);
     writeI128ToMem(buffer, result_ptr, result);
 }
 
@@ -1308,7 +1306,7 @@ fn hostU128Div(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const
 
     const lhs = readU128FromMem(buffer, lhs_ptr);
     const rhs = readU128FromMem(buffer, rhs_ptr);
-    const result = lhs / rhs;
+    const result = i128h.divTrunc_u128(lhs, rhs);
     writeU128ToMem(buffer, result_ptr, result);
 }
 
@@ -1324,7 +1322,7 @@ fn hostU128Mod(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const
 
     const lhs = readU128FromMem(buffer, lhs_ptr);
     const rhs = readU128FromMem(buffer, rhs_ptr);
-    const result = lhs % rhs;
+    const result = i128h.rem_u128(lhs, rhs);
     writeU128ToMem(buffer, result_ptr, result);
 }
 
@@ -1350,10 +1348,9 @@ fn hostDecDiv(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const 
     const lhs = readI128FromMem(buffer, lhs_ptr);
     const rhs = readI128FromMem(buffer, rhs_ptr);
 
-    // Dec division: multiply lhs by 10^18 first, then divide by rhs
-    // This preserves the Dec scaling factor in the result
-    const one_point_zero: i128 = 1_000_000_000_000_000_000; // 10^18
-    // Use i256 for intermediate calculation to avoid overflow
+    // Dec division: multiply lhs by 10^18 first, then divide by rhs.
+    // Uses i256 intermediate to avoid overflow — matches RocDec.div logic.
+    const one_point_zero: i128 = builtins.dec.RocDec.one_point_zero_i128;
     const lhs_scaled: i256 = @as(i256, lhs) * one_point_zero;
     const result: i128 = @intCast(@divTrunc(lhs_scaled, rhs));
 
@@ -1362,7 +1359,6 @@ fn hostDecDiv(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const 
 
 /// Host function for roc_dec_div_trunc: Dec (decimal) truncating division
 /// Result is the integer part of the quotient, scaled as Dec.
-/// result = (lhs / rhs) * 10^18
 /// Signature: (i32 lhs_ptr, i32 rhs_ptr, i32 result_ptr) -> void
 fn hostDecDivTrunc(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
     const mem = module.store.getMemory(0);
@@ -1376,10 +1372,9 @@ fn hostDecDivTrunc(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]c
     const rhs = readI128FromMem(buffer, rhs_ptr);
 
     // Dec truncating division: divide first, then scale up by 10^18
-    // This gives the integer part of the quotient as a Dec value
-    const one_point_zero: i128 = 1_000_000_000_000_000_000; // 10^18
-    const quotient = @divTrunc(lhs, rhs);
-    const result = quotient * one_point_zero;
+    const one_point_zero: i128 = builtins.dec.RocDec.one_point_zero_i128;
+    const quotient = i128h.divTrunc_i128(lhs, rhs);
+    const result = i128h.mul_i128(quotient, one_point_zero);
 
     writeI128ToMem(buffer, result_ptr, result);
 }
@@ -1400,18 +1395,10 @@ fn hostI128ToStr(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]con
 
     const val = readI128FromMem(buffer, val_ptr);
 
-    // Format the i128 value to a string
     var fmt_buf: [48]u8 = undefined;
-    const formatted = std.fmt.bufPrint(&fmt_buf, "{d}", .{val}) catch {
-        results[0] = bytebox.Val{ .I32 = 0 };
-        return;
-    };
-
-    // Write formatted string to wasm memory buffer
-    const len = formatted.len;
-    @memcpy(buffer[buf_ptr..][0..len], formatted);
-
-    results[0] = bytebox.Val{ .I32 = @intCast(len) };
+    const result = i128h.i128_to_str(&fmt_buf, val);
+    @memcpy(buffer[buf_ptr..][0..result.str.len], result.str);
+    results[0] = bytebox.Val{ .I32 = @intCast(result.str.len) };
 }
 
 /// Host function for roc_u128_to_str: convert unsigned 128-bit integer to string
@@ -1430,18 +1417,10 @@ fn hostU128ToStr(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]con
 
     const val = readU128FromMem(buffer, val_ptr);
 
-    // Format the u128 value to a string
     var fmt_buf: [48]u8 = undefined;
-    const formatted = std.fmt.bufPrint(&fmt_buf, "{d}", .{val}) catch {
-        results[0] = bytebox.Val{ .I32 = 0 };
-        return;
-    };
-
-    // Write formatted string to wasm memory buffer
-    const len = formatted.len;
-    @memcpy(buffer[buf_ptr..][0..len], formatted);
-
-    results[0] = bytebox.Val{ .I32 = @intCast(len) };
+    const result = i128h.u128_to_str(&fmt_buf, val);
+    @memcpy(buffer[buf_ptr..][0..result.str.len], result.str);
+    results[0] = bytebox.Val{ .I32 = @intCast(result.str.len) };
 }
 
 fn hostFloatToStr(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
