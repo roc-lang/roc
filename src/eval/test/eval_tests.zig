@@ -8466,4 +8466,169 @@ pub const tests = [_]TestCase{
     .{ .name = "Str.contains", .source = "Str.contains(\"hello world\", \"world\")", .expected = .{ .bool_val = true }, .skip = .{ .wasm = true } },
     .{ .name = "Str.contains false", .source = "Str.contains(\"hello world\", \"xyz\")", .expected = .{ .bool_val = false }, .skip = .{ .wasm = true } },
     .{ .name = "Str.to_utf8 len", .source = "Str.to_utf8(\"hi\").len()", .expected = .{ .u64_val = 2 } },
+
+    // --- Numeric conversions: widening signed integers ---
+    .{ .name = "I16 to I32", .source = "{ (-500.I16).to_i32() }", .expected = .{ .i32_val = -500 } },
+    .{ .name = "I16 to I128", .source = "{ 1000.I16.to_i128() }", .expected = .{ .i128_val = 1000 } },
+    .{ .name = "I32 to I128", .source = "{ (-100000.I32).to_i128() }", .expected = .{ .i128_val = -100000 } },
+    .{ .name = "I64 to I128", .source = "{ 999999.I64.to_i128() }", .expected = .{ .i128_val = 999999 } },
+
+    // --- Numeric conversions: widening unsigned integers ---
+    .{ .name = "U16 to U32", .source = "{ 50000.U16.to_u32() }", .expected = .{ .u32_val = 50000 } },
+    .{ .name = "U16 to U64", .source = "{ 50000.U16.to_u64() }", .expected = .{ .u64_val = 50000 } },
+    .{ .name = "U16 to U128", .source = "{ 50000.U16.to_u128() }", .expected = .{ .u128_val = 50000 } },
+    .{ .name = "U32 to U64", .source = "{ 100000.U32.to_u64() }", .expected = .{ .u64_val = 100000 } },
+    .{ .name = "U32 to U128", .source = "{ 100000.U32.to_u128() }", .expected = .{ .u128_val = 100000 } },
+    .{ .name = "U64 to U128", .source = "{ 123456.U64.to_u128() }", .expected = .{ .u128_val = 123456 } },
+
+    // --- Numeric conversions: narrowing/truncating integers ---
+    .{ .name = "I16 to I8 wrap", .source = "{ 200.I16.to_i8_wrap() }", .expected = .{ .i8_val = -56 }, .skip = .{ .wasm = true } },
+    .{ .name = "I32 to I8 wrap", .source = "{ 300.I32.to_i8_wrap() }", .expected = .{ .i8_val = 44 } },
+    .{ .name = "I32 to I16 wrap", .source = "{ 40000.I32.to_i16_wrap() }", .expected = .{ .i16_val = -25536 }, .skip = .{ .wasm = true } },
+    .{ .name = "U32 to I8 wrap", .source = "{ 300.U32.to_i8_wrap() }", .expected = .{ .i8_val = 44 } },
+    .{ .name = "U32 to U8 wrap", .source = "{ 300.U32.to_u8_wrap() }", .expected = .{ .u8_val = 44 } },
+    .{ .name = "U32 to U16 wrap", .source = "{ 70000.U32.to_u16_wrap() }", .expected = .{ .u16_val = 4464 } },
+    .{ .name = "U64 to I8 wrap", .source = "{ 300.U64.to_i8_wrap() }", .expected = .{ .i8_val = 44 } },
+    .{ .name = "U64 to U8 wrap", .source = "{ 300.U64.to_u8_wrap() }", .expected = .{ .u8_val = 44 } },
+    .{ .name = "U64 to U16 wrap", .source = "{ 70000.U64.to_u16_wrap() }", .expected = .{ .u16_val = 4464 } },
+    .{ .name = "U64 to U32 wrap", .source = "{ 5000000000.U64.to_u32_wrap() }", .expected = .{ .u32_val = 705032704 } },
+    .{ .name = "I64 to I8 wrap", .source = "{ 200.I64.to_i8_wrap() }", .expected = .{ .i8_val = -56 }, .skip = .{ .wasm = true } },
+    .{ .name = "I64 to I16 wrap", .source = "{ 40000.I64.to_i16_wrap() }", .expected = .{ .i16_val = -25536 }, .skip = .{ .wasm = true } },
+    .{ .name = "I64 to I32 wrap", .source = "{ 3000000000.I64.to_i32_wrap() }", .expected = .{ .i32_val = -1294967296 } },
+    .{ .name = "I64 to U8 wrap", .source = "{ 300.I64.to_u8_wrap() }", .expected = .{ .u8_val = 44 } },
+    .{ .name = "I64 to U16 wrap", .source = "{ 70000.I64.to_u16_wrap() }", .expected = .{ .u16_val = 4464 } },
+    .{ .name = "I64 to U32 wrap", .source = "{ 5000000000.I64.to_u32_wrap() }", .expected = .{ .u32_val = 705032704 } },
+    .{ .name = "I64 to U64 wrap", .source = "{ (-1.I64).to_u64_wrap() }", .expected = .{ .u64_val = 18446744073709551615 } },
+
+    // --- Numeric conversions: integer to float ---
+    .{ .name = "I16 to F32", .source = "{ 42.I16.to_f32() }", .expected = .{ .f32_val = 42.0 } },
+    .{ .name = "I16 to F64", .source = "{ (-100.I16).to_f64() }", .expected = .{ .f64_val = -100.0 } },
+    .{ .name = "U16 to F64", .source = "{ 1000.U16.to_f64() }", .expected = .{ .f64_val = 1000.0 } },
+    .{ .name = "I32 to F64", .source = "{ (-5000.I32).to_f64() }", .expected = .{ .f64_val = -5000.0 } },
+    .{ .name = "U32 to F64", .source = "{ 100000.U32.to_f64() }", .expected = .{ .f64_val = 100000.0 } },
+    .{ .name = "I64 to F64", .source = "{ 42.I64.to_f64() }", .expected = .{ .f64_val = 42.0 } },
+    .{ .name = "U64 to F64", .source = "{ 100.U64.to_f64() }", .expected = .{ .f64_val = 100.0 } },
+
+    // --- Numeric conversions: integer to Dec ---
+    .{ .name = "I16 to Dec", .source = "{ 42.I16.to_dec() }", .expected = .{ .dec_val = 42 * RocDec.one_point_zero_i128 } },
+    .{ .name = "U16 to Dec", .source = "{ 1000.U16.to_dec() }", .expected = .{ .dec_val = 1000 * RocDec.one_point_zero_i128 } },
+    .{ .name = "I32 to Dec", .source = "{ (-50.I32).to_dec() }", .expected = .{ .dec_val = -50 * RocDec.one_point_zero_i128 }, .skip = .{ .wasm = true } },
+    .{ .name = "U32 to Dec", .source = "{ 999.U32.to_dec() }", .expected = .{ .dec_val = 999 * RocDec.one_point_zero_i128 } },
+    .{ .name = "I64 to Dec", .source = "{ 7.I64.to_dec() }", .expected = .{ .dec_val = 7 * RocDec.one_point_zero_i128 } },
+    .{ .name = "U64 to Dec", .source = "{ 100.U64.to_dec() }", .expected = .{ .dec_val = 100 * RocDec.one_point_zero_i128 } },
+
+    // --- Numeric conversions: float to int (wrap = truncation) ---
+    // Float-to-int and Dec-to-int wrap methods crash on all backends; skip for now
+    .{ .name = "F64 to I64 wrap", .source = "{ 3.7.F64.to_i64_wrap() }", .expected = .{ .i64_val = 3 }, .skip = SKIP_ALL },
+    .{ .name = "F64 to I32 wrap", .source = "{ 99.9.F64.to_i32_wrap() }", .expected = .{ .i32_val = 99 }, .skip = SKIP_ALL },
+    .{ .name = "F64 to U64 wrap", .source = "{ 42.9.F64.to_u64_wrap() }", .expected = .{ .u64_val = 42 }, .skip = SKIP_ALL },
+    .{ .name = "F32 to I32 wrap", .source = "{ 7.8.F32.to_i32_wrap() }", .expected = .{ .i32_val = 7 }, .skip = SKIP_ALL },
+    .{ .name = "F32 to U32 wrap", .source = "{ 15.9.F32.to_u32_wrap() }", .expected = .{ .u32_val = 15 }, .skip = SKIP_ALL },
+    .{ .name = "F32 to I64 wrap", .source = "{ 100.1.F32.to_i64_wrap() }", .expected = .{ .i64_val = 100 }, .skip = SKIP_ALL },
+
+    // --- Numeric conversions: F32 <-> F64 ---
+    .{ .name = "F32 to F64", .source = "{ 1.5.F32.to_f64() }", .expected = .{ .f64_val = 1.5 } },
+
+    // --- Numeric conversions: Dec to int ---
+    .{ .name = "Dec to I64 wrap", .source = "{ 3.7.to_i64_wrap() }", .expected = .{ .i64_val = 3 }, .skip = SKIP_ALL },
+    .{ .name = "Dec to I32 wrap", .source = "{ 99.9.to_i32_wrap() }", .expected = .{ .i32_val = 99 }, .skip = SKIP_ALL },
+    .{ .name = "Dec to U64 wrap", .source = "{ 42.8.to_u64_wrap() }", .expected = .{ .u64_val = 42 }, .skip = SKIP_ALL },
+
+    // --- List.drop_at ---
+    .{ .name = "List.drop_at middle", .source = "List.drop_at([10.I64, 20.I64, 30.I64], 1).len()", .expected = .{ .u64_val = 2 }, .skip = .{ .dev = true, .wasm = true } },
+    .{
+        .name = "List.drop_at first element value",
+        .source =
+        \\{
+        \\    result = List.drop_at([10.I64, 20.I64, 30.I64], 0)
+        \\    match List.first(result) {
+        \\        Ok(v) => v
+        \\        Err(_) => 0.I64
+        \\    }
+        \\}
+        ,
+        .expected = .{ .i64_val = 20 },
+        .skip = .{ .dev = true, .wasm = true },
+    },
+
+    // --- List.take_first / List.take_last ---
+    .{ .name = "List.take_first len", .source = "List.take_first([1.I64, 2.I64, 3.I64, 4.I64, 5.I64], 3).len()", .expected = .{ .u64_val = 3 } },
+    .{ .name = "List.take_last len", .source = "List.take_last([1.I64, 2.I64, 3.I64, 4.I64, 5.I64], 2).len()", .expected = .{ .u64_val = 2 } },
+    .{
+        .name = "List.take_first value",
+        .source =
+        \\{
+        \\    result = List.take_first([10.I64, 20.I64, 30.I64], 2)
+        \\    match List.last(result) {
+        \\        Ok(v) => v
+        \\        Err(_) => 0.I64
+        \\    }
+        \\}
+        ,
+        .expected = .{ .i64_val = 20 },
+    },
+    .{
+        .name = "List.take_last value",
+        .source =
+        \\{
+        \\    result = List.take_last([10.I64, 20.I64, 30.I64], 2)
+        \\    match List.first(result) {
+        \\        Ok(v) => v
+        \\        Err(_) => 0.I64
+        \\    }
+        \\}
+        ,
+        .expected = .{ .i64_val = 20 },
+    },
+
+    // --- List.rev ---
+    .{
+        .name = "List.rev first element",
+        .source =
+        \\{
+        \\    reversed = List.rev([10.I64, 20.I64, 30.I64])
+        \\    match List.first(reversed) {
+        \\        Ok(v) => v
+        \\        Err(_) => 0.I64
+        \\    }
+        \\}
+        ,
+        .expected = .{ .i64_val = 30 },
+    },
+    .{ .name = "List.rev len", .source = "List.rev([1.I64, 2.I64, 3.I64]).len()", .expected = .{ .u64_val = 3 } },
+
+    // --- String interpolation with 3+ parts ---
+    .{
+        .name = "string interpolation 3 parts",
+        .source =
+        \\{
+        \\    a = "hello"
+        \\    b = "world"
+        \\    "${a} ${b}!"
+        \\}
+        ,
+        .expected = .{ .str_val = "hello world!" },
+    },
+    .{
+        .name = "string interpolation 4 parts",
+        .source =
+        \\{
+        \\    x = "a"
+        \\    y = "b"
+        \\    z = "c"
+        \\    "${x}-${y}-${z}"
+        \\}
+        ,
+        .expected = .{ .str_val = "a-b-c" },
+    },
+
+    // --- Small int to_str (hits u8/i8/u16/i16/u32/i32 to_str paths) ---
+    .{ .name = "I16 to_str", .source = "(-500.I16).to_str()", .expected = .{ .str_val = "-500" } },
+    .{ .name = "U16 to_str", .source = "50000.U16.to_str()", .expected = .{ .str_val = "50000" } },
+    .{ .name = "I8 neg to_str", .source = "(-42.I8).to_str()", .expected = .{ .str_val = "-42" } },
+    .{ .name = "U32 to_str", .source = "100000.U32.to_str()", .expected = .{ .str_val = "100000" } },
+    .{ .name = "I128 neg to_str", .source = "(-999.I128).to_str()", .expected = .{ .str_val = "-999" } },
+    .{ .name = "U128 to_str", .source = "12345.U128.to_str()", .expected = .{ .str_val = "12345" } },
+    .{ .name = "Dec to_str", .source = "3.14.to_str()", .expected = .{ .str_val = "3.14" } },
+    .{ .name = "F32 to_str neg", .source = "(-2.5.F32).to_str()", .expected = .{ .str_val = "-2.5" } },
 };
