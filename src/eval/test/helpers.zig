@@ -1119,70 +1119,25 @@ fn hostDecToStr(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]cons
 
 // ── String and List host functions ──
 //
-// TODO: These reimplement logic from src/builtins/str.zig and src/builtins/list.zig.
-// We cannot delegate to the native (x86_64) builtins because:
+// These host functions delegate to the shared builtins (src/builtins/str.zig,
+// src/builtins/list.zig) via a translation layer that marshals between wasm32
+// and native memory layouts:
 //
-// 1. RocStr/RocList use native-width pointers and usize fields. On x86_64 RocStr is
-//    24 bytes (8+8+8), but in wasm32 it's 12 bytes (4+4+4).
+//   1. Read wasm32 RocStr (12-byte, 32-bit fields) from wasm linear memory
+//   2. Construct a native RocStr (24-byte, 64-bit fields) pointing into the buffer
+//   3. Call the builtin function with a WasmRocOps that allocates in wasm memory
+//   4. Extract result bytes and write back as wasm32 RocStr format
 //
-// 2. Small String Optimization (SSO) threshold depends on sizeof(RocStr):
-//    - Native x86_64: strings up to 23 chars are stored inline (in the 24-byte struct)
-//    - Wasm32: strings up to 11 chars are stored inline (in the 12-byte struct)
-//    Calling native builtins would produce SSO strings for 12-23 char strings that the
-//    wasm module expects as heap-allocated, corrupting memory layout.
-//
-// The proper fix is to link roc_builtins.o (compiled for wasm32) into the wasm module
-// via wasm-ld, so the builtins run inside wasm with matching pointer widths and SSO
-// thresholds. See TODO_RELOC_WASM_OBJ_BUILTIN.md for the full implementation plan.
+// The writeNativeRocStrToWasm helper handles the SSO threshold difference
+// (native: ≤23 chars inline, wasm32: ≤11 chars inline) by always writing
+// back using wasm32 SSO rules regardless of how the native builtin stored it.
 
-/// Host function for roc_str_eq: compares two RocStr structs for content equality.
-/// Signature: (i32 str_a_ptr, i32 str_b_ptr) -> i32 (0 or 1)
-/// Handles both SSO (small string optimization) and heap-allocated strings.
+/// Host function for roc_str_eq: delegates to builtins.str.strEqual.
 fn hostStrEq(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
-    const mem = module.store.getMemory(0);
-    const buffer = mem.buffer();
-
-    const a_ptr: usize = @intCast(params[0].I32);
-    const b_ptr: usize = @intCast(params[1].I32);
-
-    if (a_ptr + 12 > buffer.len or b_ptr + 12 > buffer.len) {
-        results[0] = bytebox.Val{ .I32 = 0 };
-        return;
-    }
-
-    // Read 12-byte RocStr structs
-    const a_bytes = buffer[a_ptr..][0..12];
-    const b_bytes = buffer[b_ptr..][0..12];
-
-    // Check SSO flag (high bit of byte 11)
-    const a_is_sso = (a_bytes[11] & 0x80) != 0;
-    const b_is_sso = (b_bytes[11] & 0x80) != 0;
-
-    // Extract pointer and length for each string
-    const a_data: [*]const u8, const a_len: usize = if (a_is_sso) .{
-        a_bytes[0..11].ptr,
-        @as(usize, a_bytes[11] & 0x7F),
-    } else .{
-        buffer[@as(usize, std.mem.readInt(u32, a_bytes[0..4], .little))..].ptr,
-        @as(usize, std.mem.readInt(u32, a_bytes[4..8], .little)),
-    };
-
-    const b_data: [*]const u8, const b_len: usize = if (b_is_sso) .{
-        b_bytes[0..11].ptr,
-        @as(usize, b_bytes[11] & 0x7F),
-    } else .{
-        buffer[@as(usize, std.mem.readInt(u32, b_bytes[0..4], .little))..].ptr,
-        @as(usize, std.mem.readInt(u32, b_bytes[4..8], .little)),
-    };
-
-    // Compare lengths first, then contents
-    if (a_len != b_len) {
-        results[0] = bytebox.Val{ .I32 = 0 };
-        return;
-    }
-
-    const equal = std.mem.eql(u8, a_data[0..a_len], b_data[0..b_len]);
-    results[0] = bytebox.Val{ .I32 = if (equal) 1 else 0 };
+    const buffer = module.store.getMemory(0).buffer();
+    const native_a = nativeRocStrFromWasm(buffer, @intCast(params[0].I32));
+    const native_b = nativeRocStrFromWasm(buffer, @intCast(params[1].I32));
+    results[0] = bytebox.Val{ .I32 = if (builtins.str.strEqual(native_a, native_b)) 1 else 0 };
 }
 
 /// Host function for roc_list_eq: compares two RocList structs for content equality.
@@ -1685,11 +1640,18 @@ fn hostListListEq(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
     results[0] = bytebox.Val{ .I32 = 1 };
 }
 
-// ── WasmRocOps: native RocOps that allocates in wasm linear memory ──
+// ── Wasm builtin host functions ──
 //
-// This allows calling builtin functions (e.g. RocDec.div) that require a
-// RocOps for crash handling and memory allocation. Allocated memory goes
-// into the wasm buffer so results are visible to the wasm module.
+// For eval tests, the wasm backend uses bytebox host function imports rather than
+// linking roc_builtins.o via wasm-ld. This avoids expensive linker invocation for
+// each test expression while still delegating to the shared builtin implementations.
+//
+// Each host function marshals between wasm32 and native memory layouts, calls the
+// actual builtin from src/builtins/, and writes the result back. WasmRocEnv provides
+// a native RocOps that allocates into the wasm linear memory buffer, allowing builtins
+// that need memory management (string concat, list append, etc.) to work correctly.
+
+// ── WasmRocEnv: native RocOps that allocates in wasm linear memory ──
 
 const RocOps = builtins.host_abi.RocOps;
 const RocAlloc = builtins.host_abi.RocAlloc;
@@ -1922,11 +1884,36 @@ fn writeWasmEmptyStr(buffer: []u8, result_ptr: usize) void {
     buffer[result_ptr + 11] = 0x80;
 }
 
+/// Create a native RocStr from wasm memory bytes.
+/// The result points into the wasm buffer (for read-only use) or uses native SSO.
+/// For builtins that modify strings, use wasmRocStrInit which allocates via RocOps.
+fn nativeRocStrFromWasm(buffer: []u8, str_ptr: usize) builtins.str.RocStr {
+    const wasm_str = readWasmStr(buffer, str_ptr);
+    // Always construct via fromSlice — this correctly handles native SSO threshold.
+    // The data pointer is into the wasm buffer which is valid native memory.
+    if (wasm_str.len < @sizeOf(builtins.str.RocStr)) {
+        return builtins.str.RocStr.fromSliceSmall(wasm_str.data[0..wasm_str.len]);
+    }
+    return .{
+        .bytes = @constCast(wasm_str.data),
+        .length = wasm_str.len,
+        .capacity_or_alloc_ptr = wasm_str.len,
+    };
+}
+
+/// Write a native RocStr result back to wasm32 RocStr format (12 bytes).
+/// Extracts the bytes from the native RocStr (regardless of native SSO/heap)
+/// and writes them using wasm32 SSO rules (threshold = 11 chars).
+fn writeNativeRocStrToWasm(buffer: []u8, result_ptr: usize, str: builtins.str.RocStr) void {
+    const slice = str.asSlice();
+    writeWasmStr(buffer, result_ptr, slice.ptr, slice.len);
+}
+
+/// Create a native RocStr from raw bytes (for parsing functions that need a RocStr).
 fn rocStrFromWasmSlice(data: [*]const u8, len: usize) builtins.str.RocStr {
     if (len < @sizeOf(builtins.str.RocStr)) {
         return builtins.str.RocStr.fromSliceSmall(data[0..len]);
     }
-
     return .{
         .bytes = @constCast(data),
         .length = len,
@@ -1934,89 +1921,64 @@ fn rocStrFromWasmSlice(data: [*]const u8, len: usize) builtins.str.RocStr {
     };
 }
 
-fn isWhitespace(c: u8) bool {
-    return c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == 0x0b or c == 0x0c;
-}
-
 fn hostStrTrim(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
     const buffer = module.store.getMemory(0).buffer();
     const str_ptr: usize = @intCast(params[0].I32);
     const result_ptr: usize = @intCast(params[1].I32);
-    const str = readWasmStr(buffer, str_ptr);
-    const slice = str.data[0..str.len];
-    var start: usize = 0;
-    while (start < slice.len and isWhitespace(slice[start])) : (start += 1) {}
-    var end: usize = slice.len;
-    while (end > start and isWhitespace(slice[end - 1])) : (end -= 1) {}
-    writeWasmStr(buffer, result_ptr, slice[start..].ptr, end - start);
+    var wasm_env = WasmRocEnv{ .buffer = buffer };
+    var ops = wasm_env.getOps();
+    const native_str = nativeRocStrFromWasm(buffer, str_ptr);
+    const result = builtins.str.strTrim(native_str, &ops);
+    writeNativeRocStrToWasm(buffer, result_ptr, result);
 }
 
 fn hostStrTrimStart(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
     const buffer = module.store.getMemory(0).buffer();
     const str_ptr: usize = @intCast(params[0].I32);
     const result_ptr: usize = @intCast(params[1].I32);
-    const str = readWasmStr(buffer, str_ptr);
-    const slice = str.data[0..str.len];
-    var start: usize = 0;
-    while (start < slice.len and isWhitespace(slice[start])) : (start += 1) {}
-    writeWasmStr(buffer, result_ptr, slice[start..].ptr, slice.len - start);
+    var wasm_env = WasmRocEnv{ .buffer = buffer };
+    var ops = wasm_env.getOps();
+    const native_str = nativeRocStrFromWasm(buffer, str_ptr);
+    const result = builtins.str.strTrimStart(native_str, &ops);
+    writeNativeRocStrToWasm(buffer, result_ptr, result);
 }
 
 fn hostStrTrimEnd(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
     const buffer = module.store.getMemory(0).buffer();
     const str_ptr: usize = @intCast(params[0].I32);
     const result_ptr: usize = @intCast(params[1].I32);
-    const str = readWasmStr(buffer, str_ptr);
-    const slice = str.data[0..str.len];
-    var end: usize = slice.len;
-    while (end > 0 and isWhitespace(slice[end - 1])) : (end -= 1) {}
-    writeWasmStr(buffer, result_ptr, slice[0..end].ptr, end);
+    var wasm_env = WasmRocEnv{ .buffer = buffer };
+    var ops = wasm_env.getOps();
+    const native_str = nativeRocStrFromWasm(buffer, str_ptr);
+    const result = builtins.str.strTrimEnd(native_str, &ops);
+    writeNativeRocStrToWasm(buffer, result_ptr, result);
 }
 
 fn hostStrWithAsciiLowercased(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
     const buffer = module.store.getMemory(0).buffer();
-    const str_ptr: usize = @intCast(params[0].I32);
-    const result_ptr: usize = @intCast(params[1].I32);
-    const str = readWasmStr(buffer, str_ptr);
-    if (str.len == 0) {
-        writeWasmEmptyStr(buffer, result_ptr);
-        return;
-    }
-    const dest_start = wasm_heap_ptr;
-    wasm_heap_ptr += @intCast(str.len);
-    const dest = buffer[dest_start..][0..str.len];
-    const src = str.data[0..str.len];
-    for (src, 0..) |c, i| {
-        dest[i] = if (c >= 'A' and c <= 'Z') c + 32 else c;
-    }
-    writeWasmStr(buffer, result_ptr, dest.ptr, str.len);
+    var wasm_env = WasmRocEnv{ .buffer = buffer };
+    var ops = wasm_env.getOps();
+    const native_str = nativeRocStrFromWasm(buffer, @intCast(params[0].I32));
+    const result = builtins.str.strWithAsciiLowercased(native_str, &ops);
+    writeNativeRocStrToWasm(buffer, @intCast(params[1].I32), result);
 }
 
 fn hostStrWithAsciiUppercased(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
     const buffer = module.store.getMemory(0).buffer();
-    const str_ptr: usize = @intCast(params[0].I32);
-    const result_ptr: usize = @intCast(params[1].I32);
-    const str = readWasmStr(buffer, str_ptr);
-    if (str.len == 0) {
-        writeWasmEmptyStr(buffer, result_ptr);
-        return;
-    }
-    const dest_start = wasm_heap_ptr;
-    wasm_heap_ptr += @intCast(str.len);
-    const dest = buffer[dest_start..][0..str.len];
-    const src = str.data[0..str.len];
-    for (src, 0..) |c, i| {
-        dest[i] = if (c >= 'a' and c <= 'z') c - 32 else c;
-    }
-    writeWasmStr(buffer, result_ptr, dest.ptr, str.len);
+    var wasm_env = WasmRocEnv{ .buffer = buffer };
+    var ops = wasm_env.getOps();
+    const native_str = nativeRocStrFromWasm(buffer, @intCast(params[0].I32));
+    const result = builtins.str.strWithAsciiUppercased(native_str, &ops);
+    writeNativeRocStrToWasm(buffer, @intCast(params[1].I32), result);
 }
 
 fn hostStrReleaseExcessCapacity(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
     const buffer = module.store.getMemory(0).buffer();
-    const str_ptr: usize = @intCast(params[0].I32);
-    const result_ptr: usize = @intCast(params[1].I32);
-    const str = readWasmStr(buffer, str_ptr);
-    writeWasmStr(buffer, result_ptr, str.data, str.len);
+    var wasm_env = WasmRocEnv{ .buffer = buffer };
+    var ops = wasm_env.getOps();
+    const native_str = nativeRocStrFromWasm(buffer, @intCast(params[0].I32));
+    const result = builtins.str.strReleaseExcessCapacity(&ops, native_str);
+    writeNativeRocStrToWasm(buffer, @intCast(params[1].I32), result);
 }
 
 fn hostStrWithPrefix(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
@@ -2040,125 +2002,68 @@ fn hostStrWithPrefix(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*
 
 fn hostStrDropPrefix(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
     const buffer = module.store.getMemory(0).buffer();
-    const str_ptr: usize = @intCast(params[0].I32);
-    const prefix_ptr: usize = @intCast(params[1].I32);
-    const result_ptr: usize = @intCast(params[2].I32);
-    const str = readWasmStr(buffer, str_ptr);
-    const prefix = readWasmStr(buffer, prefix_ptr);
-    if (prefix.len <= str.len and std.mem.eql(u8, str.data[0..prefix.len], prefix.data[0..prefix.len])) {
-        const new_len = str.len - prefix.len;
-        writeWasmStr(buffer, result_ptr, str.data + prefix.len, new_len);
-    } else {
-        writeWasmStr(buffer, result_ptr, str.data, str.len);
-    }
+    var wasm_env = WasmRocEnv{ .buffer = buffer };
+    var ops = wasm_env.getOps();
+    const native_str = nativeRocStrFromWasm(buffer, @intCast(params[0].I32));
+    const native_prefix = nativeRocStrFromWasm(buffer, @intCast(params[1].I32));
+    const result = builtins.str.strDropPrefix(native_str, native_prefix, &ops);
+    writeNativeRocStrToWasm(buffer, @intCast(params[2].I32), result);
 }
 
 fn hostStrDropSuffix(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
     const buffer = module.store.getMemory(0).buffer();
-    const str_ptr: usize = @intCast(params[0].I32);
-    const suffix_ptr: usize = @intCast(params[1].I32);
-    const result_ptr: usize = @intCast(params[2].I32);
-    const str = readWasmStr(buffer, str_ptr);
-    const suffix = readWasmStr(buffer, suffix_ptr);
-    if (suffix.len <= str.len and std.mem.eql(u8, (str.data + str.len - suffix.len)[0..suffix.len], suffix.data[0..suffix.len])) {
-        writeWasmStr(buffer, result_ptr, str.data, str.len - suffix.len);
-    } else {
-        writeWasmStr(buffer, result_ptr, str.data, str.len);
-    }
+    var wasm_env = WasmRocEnv{ .buffer = buffer };
+    var ops = wasm_env.getOps();
+    const native_str = nativeRocStrFromWasm(buffer, @intCast(params[0].I32));
+    const native_suffix = nativeRocStrFromWasm(buffer, @intCast(params[1].I32));
+    const result = builtins.str.strDropSuffix(native_str, native_suffix, &ops);
+    writeNativeRocStrToWasm(buffer, @intCast(params[2].I32), result);
 }
 
 fn hostStrConcat(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
     const buffer = module.store.getMemory(0).buffer();
-    const lhs = readWasmStr(buffer, @intCast(params[0].I32));
-    const rhs = readWasmStr(buffer, @intCast(params[1].I32));
-    const total_len = lhs.len + rhs.len;
-    if (total_len == 0) {
-        writeWasmEmptyStr(buffer, @intCast(params[2].I32));
-        return;
-    }
-    const dest_start = wasm_heap_ptr;
-    wasm_heap_ptr += @intCast(total_len);
-    if (lhs.len > 0) {
-        @memcpy(buffer[dest_start..][0..lhs.len], lhs.data[0..lhs.len]);
-    }
-    if (rhs.len > 0) {
-        @memcpy(buffer[dest_start + lhs.len ..][0..rhs.len], rhs.data[0..rhs.len]);
-    }
-    writeWasmStr(buffer, @intCast(params[2].I32), buffer[dest_start..].ptr, total_len);
+    var wasm_env = WasmRocEnv{ .buffer = buffer };
+    var ops = wasm_env.getOps();
+    const native_lhs = nativeRocStrFromWasm(buffer, @intCast(params[0].I32));
+    const native_rhs = nativeRocStrFromWasm(buffer, @intCast(params[1].I32));
+    const result = builtins.str.strConcat(native_lhs, native_rhs, &ops);
+    writeNativeRocStrToWasm(buffer, @intCast(params[2].I32), result);
 }
 
 fn hostStrRepeat(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
     const buffer = module.store.getMemory(0).buffer();
-    const str_ptr: usize = @intCast(params[0].I32);
+    var wasm_env = WasmRocEnv{ .buffer = buffer };
+    var ops = wasm_env.getOps();
+    const native_str = nativeRocStrFromWasm(buffer, @intCast(params[0].I32));
     const count: usize = @intCast(@as(u32, @bitCast(params[1].I32)));
-    const result_ptr: usize = @intCast(params[2].I32);
-    const str = readWasmStr(buffer, str_ptr);
-    if (count == 0 or str.len == 0) {
-        writeWasmEmptyStr(buffer, result_ptr);
-        return;
-    }
-    const total_len = str.len * count;
-    const dest_start = wasm_heap_ptr;
-    wasm_heap_ptr += @intCast(total_len);
-    var offset: usize = 0;
-    for (0..count) |_| {
-        @memcpy(buffer[dest_start + offset ..][0..str.len], str.data[0..str.len]);
-        offset += str.len;
-    }
-    writeWasmStr(buffer, result_ptr, buffer[dest_start..].ptr, total_len);
+    const result = builtins.str.repeatC(native_str, count, &ops);
+    writeNativeRocStrToWasm(buffer, @intCast(params[2].I32), result);
 }
 
 fn hostStrReserve(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
     const buffer = module.store.getMemory(0).buffer();
-    const str_ptr: usize = @intCast(params[0].I32);
+    var wasm_env = WasmRocEnv{ .buffer = buffer };
+    var ops = wasm_env.getOps();
+    const native_str = nativeRocStrFromWasm(buffer, @intCast(params[0].I32));
     const extra_cap: usize = @intCast(@as(u32, @bitCast(params[1].I32)));
-    const result_ptr: usize = @intCast(params[2].I32);
-    const str = readWasmStr(buffer, str_ptr);
-    const needed = str.len + extra_cap;
-    if (needed < 12) {
-        writeWasmStr(buffer, result_ptr, str.data, str.len);
-        return;
-    }
-    const dest_start = allocWasmData(buffer, 1, needed);
-    @memcpy(buffer[dest_start..][0..str.len], str.data[0..str.len]);
-    std.mem.writeInt(u32, buffer[result_ptr..][0..4], dest_start, .little);
-    std.mem.writeInt(u32, buffer[result_ptr + 4 ..][0..4], @intCast(str.len), .little);
-    std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(needed), .little);
+    const result = builtins.str.reserve(native_str, extra_cap, &ops);
+    writeNativeRocStrToWasm(buffer, @intCast(params[2].I32), result);
 }
 
 fn hostStrWithCapacity(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
     const buffer = module.store.getMemory(0).buffer();
+    var wasm_env = WasmRocEnv{ .buffer = buffer };
+    var ops = wasm_env.getOps();
     const cap: usize = @intCast(@as(u32, @bitCast(params[0].I32)));
-    const result_ptr: usize = @intCast(params[1].I32);
-    if (cap < 12) {
-        writeWasmEmptyStr(buffer, result_ptr);
-        return;
-    }
-    const dest_start = allocWasmData(buffer, 1, cap);
-    std.mem.writeInt(u32, buffer[result_ptr..][0..4], dest_start, .little);
-    std.mem.writeInt(u32, buffer[result_ptr + 4 ..][0..4], 0, .little);
-    std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(cap), .little);
+    const result = builtins.str.withCapacityC(cap, &ops);
+    writeNativeRocStrToWasm(buffer, @intCast(params[1].I32), result);
 }
 
 fn hostStrCaselessAsciiEquals(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
     const buffer = module.store.getMemory(0).buffer();
-    const a_ptr: usize = @intCast(params[0].I32);
-    const b_ptr: usize = @intCast(params[1].I32);
-    const a = readWasmStr(buffer, a_ptr);
-    const b = readWasmStr(buffer, b_ptr);
-    if (a.len != b.len) {
-        results[0] = bytebox.Val{ .I32 = 0 };
-        return;
-    }
-    for (0..a.len) |i| {
-        const ac = if (a.data[i] >= 'A' and a.data[i] <= 'Z') a.data[i] + 32 else a.data[i];
-        const bc = if (b.data[i] >= 'A' and b.data[i] <= 'Z') b.data[i] + 32 else b.data[i];
-        if (ac != bc) {
-            results[0] = bytebox.Val{ .I32 = 0 };
-            return;
-        }
-    }
-    results[0] = bytebox.Val{ .I32 = 1 };
+    const native_a = nativeRocStrFromWasm(buffer, @intCast(params[0].I32));
+    const native_b = nativeRocStrFromWasm(buffer, @intCast(params[1].I32));
+    results[0] = bytebox.Val{ .I32 = if (builtins.str.strCaselessAsciiEquals(native_a, native_b)) 1 else 0 };
 }
 
 fn hostStrSplit(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
