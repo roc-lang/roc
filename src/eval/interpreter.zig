@@ -364,6 +364,13 @@ pub const Interpreter = struct {
         return self.roc_env.expect_message;
     }
 
+    /// Release ownership of an evaluated result value.
+    /// Decrements reference counts for any heap-allocated data (strings, lists, boxes)
+    /// according to the value's layout. No-op for non-refcounted types (ints, bools, etc).
+    pub fn dropValue(self: *LirInterpreter, val: Value, layout_idx: layout_mod.Idx) void {
+        self.performRc(.decref, val, layout_idx, 0);
+    }
+
     fn runtimeError(self: *LirInterpreter, message: []const u8) Error {
         self.roc_env.runtime_error_message = message;
         return error.RuntimeError;
@@ -3530,7 +3537,9 @@ pub const Interpreter = struct {
                 const elem_layout = ret_layout_val.data.box;
                 const elem_size = self.helper.sizeOf(elem_layout);
                 const elem_align = self.helper.sizeAlignOf(elem_layout).alignment.toByteUnits();
-                const data_ptr = try self.allocRocData(elem_size, @intCast(elem_align));
+                const elem_layout_data = self.layout_store.getLayout(elem_layout);
+                const contains_refcounted = self.layout_store.layoutContainsRefcounted(elem_layout_data);
+                const data_ptr = try self.allocRocDataWithRc(elem_size, @intCast(elem_align), contains_refcounted);
                 if (elem_size > 0) {
                     @memcpy(data_ptr[0..elem_size], arg.ptr[0..elem_size]);
                 }
@@ -3557,6 +3566,17 @@ pub const Interpreter = struct {
         if (size > 0) {
             result.copyFrom(.{ .ptr = data_ptr }, size);
         }
+
+        // box_unbox consumes the box: free the wrapper allocation.
+        // Inner data ownership transfers to the result, so we pass the
+        // same `elements_refcounted` used during allocation (evalBoxBox)
+        // but do NOT recurse into child elements.
+        const elem_layout = self.layout_store.getLayout(ret_layout);
+        const elem_align = elem_layout.alignment(self.layout_store.targetUsize()).toByteUnits();
+        const contains_refcounted = self.layout_store.layoutContainsRefcounted(elem_layout);
+        const alloc_ptr = boxed.read(?[*]u8);
+        builtins.utils.decrefDataPtrC(alloc_ptr, @intCast(elem_align), contains_refcounted, &self.roc_ops);
+
         return result;
     }
 

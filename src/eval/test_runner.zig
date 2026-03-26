@@ -146,6 +146,7 @@ pub const TestRunner = struct {
         // Create interpreter and evaluate
         var test_env = TestEnv.init(self.allocator);
         defer test_env.deinit();
+        defer test_env.checkForLeaks();
 
         var interp = try Interpreter.init(
             self.allocator,
@@ -165,6 +166,8 @@ pub const TestRunner = struct {
             .early_return => |v| v,
             .break_expr => return error.RuntimeError,
         };
+
+        defer interp.dropValue(value, lower_result.result_layout);
 
         // Check if result is a bool (layout.Idx.bool == 0)
         if (lower_result.result_layout == .bool) {

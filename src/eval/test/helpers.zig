@@ -496,6 +496,7 @@ pub fn lirInterpreterEval(allocator: std.mem.Allocator, module_env: *ModuleEnv, 
 
     var test_env = TestEnv.init(allocator);
     defer test_env.deinit();
+    defer test_env.checkForLeaks();
 
     var interp = try Interpreter.init(allocator, &lower_result.lir_store, lower_result.layout_store, test_env.get_ops());
     defer interp.deinit();
@@ -511,6 +512,8 @@ pub fn lirInterpreterEval(allocator: std.mem.Allocator, module_env: *ModuleEnv, 
         .early_return => |v| v,
         .break_expr => return error.RuntimeError,
     };
+
+    defer interp.dropValue(value, lower_result.result_layout);
 
     // Check well-known layout indices before inspecting the layout tag.
     // Bool is a tag_union at the layout level, but we want a typed result.
@@ -582,6 +585,7 @@ pub fn lirInterpreterInspectedStr(allocator: std.mem.Allocator, module_env: *Mod
 
     var test_env = TestEnv.init(allocator);
     defer test_env.deinit();
+    defer test_env.checkForLeaks();
 
     var interp = try Interpreter.init(allocator, &lower_result.lir_store, lower_result.layout_store, test_env.get_ops());
     defer interp.deinit();
@@ -598,6 +602,8 @@ pub fn lirInterpreterInspectedStr(allocator: std.mem.Allocator, module_env: *Mod
         .early_return => |v| v,
         .break_expr => return error.RuntimeError,
     };
+
+    defer interp.dropValue(value, lower_result.result_layout);
 
     // Result is a RocStr — read and dupe the string content
     var roc_str: builtins.str.RocStr = undefined;

@@ -568,6 +568,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
         defer lower_result.deinit();
         var test_env = EvalTestEnv.init(gpa);
         defer test_env.deinit();
+        defer test_env.checkForLeaks();
 
         var interp = try EvalInterpreter.init(gpa, &lower_result.lir_store, lower_result.layout_store, test_env.get_ops());
         defer interp.deinit();
@@ -579,6 +580,8 @@ test "ModuleEnv serialization and interpreter evaluation" {
             .early_return => |v| v,
             .break_expr => return error.RuntimeError,
         };
+
+        defer interp.dropValue(value, lower_result.result_layout);
 
         // Read result — `5 + 8` produces a Dec (i128) via the default Num type
         const int_value = blk: {
@@ -674,6 +677,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
             defer lower_result2.deinit();
             var test_env2 = EvalTestEnv.init(gpa);
             defer test_env2.deinit();
+            defer test_env2.checkForLeaks();
 
             var interp2 = try EvalInterpreter.init(gpa, &lower_result2.lir_store, lower_result2.layout_store, test_env2.get_ops());
             defer interp2.deinit();
@@ -685,6 +689,8 @@ test "ModuleEnv serialization and interpreter evaluation" {
                 .early_return => |v| v,
                 .break_expr => return error.RuntimeError,
             };
+
+            defer interp2.dropValue(value2, lower_result2.result_layout);
 
             // Verify we get the same result from the deserialized ModuleEnv
             const int_value = blk: {
