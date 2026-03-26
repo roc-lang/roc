@@ -227,42 +227,12 @@ const TestResult = struct {
     expected_str: ?[]const u8 = null,
 };
 
-const Timer = std.time.Timer;
+const harness = @import("test_harness");
+const Timer = harness.Timer;
 
-//
-// Process pool types
-//
-
-/// Tracks one active child process in the process pool.
-const ChildSlot = struct {
-    pid: posix.pid_t,
-    pipe_fd: posix.fd_t,
-    test_index: usize,
-    start_time_ms: i64,
-    buf: std.ArrayListUnmanaged(u8),
-    timed_out: bool,
-};
-
-/// Global pointer to active slots for SIGINT cleanup handler.
-/// Only accessed from the single-threaded parent process.
-var global_slots: ?[]?ChildSlot = null;
-
-fn sigintHandler(_: c_int) callconv(.c) void {
-    const slots = global_slots orelse return;
-    for (slots) |slot_opt| {
-        if (slot_opt) |slot| {
-            posix.kill(slot.pid, posix.SIG.KILL) catch {};
-        }
-    }
-    // Re-raise to get the default behavior (exit with signal status)
-    const default_action = posix.Sigaction{
-        .handler = .{ .handler = posix.SIG.DFL },
-        .mask = posix.sigemptyset(),
-        .flags = 0,
-    };
-    posix.sigaction(posix.SIG.INT, &default_action, null);
-    _ = std.c.raise(posix.SIG.INT);
-}
+/// Module-level preloaded builtins, set in main() before pool starts.
+/// Children inherit via copy-on-write after fork.
+var global_preloaded: ?*const PreloadedBuiltins = null;
 
 /// Fixed-size binary header for child-to-parent result serialization.
 /// Native byte order (same machine, no cross-endian concern).
@@ -752,21 +722,13 @@ fn serializeOutcome(fd: posix.fd_t, outcome: TestOutcome, duration_ns: u64) void
     }
 
     // Write header
-    writeAll(fd, std.mem.asBytes(&header));
+    harness.writeAll(fd, std.mem.asBytes(&header));
 
     // Write variable-length strings
-    if (outcome.message) |m| writeAll(fd, m);
-    if (outcome.expected_str) |e| writeAll(fd, e);
+    if (outcome.message) |m| harness.writeAll(fd, m);
+    if (outcome.expected_str) |e| harness.writeAll(fd, e);
     for (outcome.backends) |bd| {
-        if (bd.value) |v| writeAll(fd, v);
-    }
-}
-
-/// Write all bytes to fd, looping on partial writes.
-fn writeAll(fd: posix.fd_t, data: []const u8) void {
-    var written: usize = 0;
-    while (written < data.len) {
-        written += posix.write(fd, data[written..]) catch return;
+        if (bd.value) |v| harness.writeAll(fd, v);
     }
 }
 
@@ -777,12 +739,12 @@ fn deserializeOutcome(buf: []const u8, gpa: std.mem.Allocator) ?TestResult {
     const header: *const WireHeader = @ptrCast(@alignCast(buf.ptr));
     var offset: usize = @sizeOf(WireHeader);
 
-    const message = readStr(buf, &offset, header.message_len, gpa);
-    const expected_str = readStr(buf, &offset, header.expected_str_len, gpa);
+    const message = harness.readStr(buf, &offset, header.message_len, gpa);
+    const expected_str = harness.readStr(buf, &offset, header.expected_str_len, gpa);
 
     var backends: [NUM_BACKENDS]BackendDetail = undefined;
     for (0..NUM_BACKENDS) |i| {
-        const value = readStr(buf, &offset, header.backend_value_lens[i], gpa);
+        const value = harness.readStr(buf, &offset, header.backend_value_lens[i], gpa);
         backends[i] = .{
             .status = @enumFromInt(header.backend_statuses[i]),
             .value = value,
@@ -808,298 +770,55 @@ fn deserializeOutcome(buf: []const u8, gpa: std.mem.Allocator) ?TestResult {
     };
 }
 
-/// Read a string of given length from buffer, advancing offset. Dupe into gpa.
-fn readStr(buf: []const u8, offset: *usize, len: u32, gpa: std.mem.Allocator) ?[]const u8 {
-    if (len == 0) return null;
-    const end = offset.* + len;
-    if (end > buf.len) return null;
-    const slice = buf[offset.*..end];
-    offset.* = end;
-    return gpa.dupe(u8, slice) catch null;
-}
-
 //
-// Process pool
+// Process pool (via harness)
 //
 
-/// Fork a child process to run a single test. The child runs the full test
-/// pipeline (frontend + all backend evals), serializes the result to the pipe,
-/// and exits. Returns false if fork/pipe failed.
-fn launchChild(slot: *?ChildSlot, tests: []const TestCase, test_idx: usize, preloaded: *const PreloadedBuiltins) bool {
-    const pipe_fds = posix.pipe() catch return false;
-
-    const pid = posix.fork() catch {
-        posix.close(pipe_fds[0]);
-        posix.close(pipe_fds[1]);
-        return false;
+/// Wrapper for the harness ProcessPool: runs a single test using the
+/// module-level preloaded builtins, captures timing, and serializes
+/// via the eval wire protocol.
+fn runTestForPool(allocator: std.mem.Allocator, tc: TestCase) TestResult {
+    const preloaded = global_preloaded orelse @panic("global_preloaded not set");
+    var timer = Timer.start() catch unreachable;
+    const outcome = runSingleTest(allocator, tc, preloaded);
+    const duration = timer.read();
+    return .{
+        .status = outcome.status,
+        .message = outcome.message,
+        .duration_ns = duration,
+        .timings = outcome.timings,
+        .backends = outcome.backends,
+        .expected_str = outcome.expected_str,
     };
-
-    if (pid == 0) {
-        // === Child process (single-threaded) ===
-        posix.close(pipe_fds[0]);
-
-        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-        const allocator = arena.allocator();
-
-        var timer = Timer.start() catch unreachable;
-        const outcome = runSingleTest(allocator, tests[test_idx], preloaded);
-        const duration = timer.read();
-
-        serializeOutcome(pipe_fds[1], outcome, duration);
-        posix.close(pipe_fds[1]);
-        std.c._exit(0);
-    }
-
-    // === Parent ===
-    posix.close(pipe_fds[1]);
-    slot.* = .{
-        .pid = pid,
-        .pipe_fd = pipe_fds[0],
-        .test_index = test_idx,
-        .start_time_ms = std.time.milliTimestamp(),
-        .buf = .empty,
-        .timed_out = false,
-    };
-    return true;
 }
 
-/// Drain remaining data from pipe, reap child, deserialize result.
-fn reapChild(slot: *?ChildSlot, results: []TestResult, gpa: std.mem.Allocator) void {
-    // Move the slot out so we own the buf exclusively (avoids dangling
-    // pointer in the slot if drainPipe reallocates the buffer).
-    var s = slot.* orelse return;
-    slot.* = null;
-
-    // Drain any remaining data
-    drainPipe(s.pipe_fd, &s.buf);
-    posix.close(s.pipe_fd);
-
-    // Reap child
-    const wait_result = posix.waitpid(s.pid, 0);
-    const term_signal: u8 = @truncate(wait_result.status & 0x7f);
-
-    if (s.timed_out or term_signal == 9) {
-        results[s.test_index] = .{ .status = .timeout, .message = null, .duration_ns = 0, .timings = .{} };
-    } else if (term_signal != 0) {
-        results[s.test_index] = .{ .status = .crash, .message = null, .duration_ns = 0, .timings = .{} };
-    } else {
-        // Normal exit — deserialize
-        results[s.test_index] = deserializeOutcome(s.buf.items, gpa) orelse
-            .{ .status = .crash, .message = null, .duration_ns = 0, .timings = .{} };
-    }
-
-    s.buf.deinit(std.heap.page_allocator);
+fn serializeResultForPool(fd: posix.fd_t, result: TestResult) void {
+    // Re-pack into the existing wire format (outcome + duration).
+    const outcome = TestOutcome{
+        .status = result.status,
+        .message = result.message,
+        .timings = result.timings,
+        .backends = result.backends,
+        .expected_str = result.expected_str,
+    };
+    serializeOutcome(fd, outcome, result.duration_ns);
 }
 
-/// Read all available data from a pipe fd into buf.
-fn drainPipe(fd: posix.fd_t, buf: *std.ArrayListUnmanaged(u8)) void {
-    var read_buf: [4096]u8 = undefined;
-    while (true) {
-        const n = posix.read(fd, &read_buf) catch break;
-        if (n == 0) break;
-        buf.appendSlice(std.heap.page_allocator, read_buf[0..n]) catch break;
-    }
+fn getTestName(tc: TestCase) []const u8 {
+    return tc.name;
 }
 
-/// Run tests: fork-based process pool on POSIX, sequential in-process on Windows.
-fn processPoolMain(
-    tests: []const TestCase,
-    results: []TestResult,
-    max_children: usize,
-    timeout_ms: u64,
-    verbose: bool,
-    gpa: std.mem.Allocator,
-    preloaded: *const PreloadedBuiltins,
-) void {
-    if (comptime !has_fork) {
-        // Windows fallback: run tests sequentially in-process.
-        // No fork/pipe/poll available, but forkAndEval already handles this
-        // by running backend evals in-process (no crash isolation).
-        runTestsSequential(tests, results, verbose, gpa, preloaded);
-        return;
-    }
+const default_result: TestResult = .{ .status = .crash, .message = null, .duration_ns = 0, .timings = .{} };
+const timeout_result: TestResult = .{ .status = .timeout, .message = null, .duration_ns = 0, .timings = .{} };
 
-    const slots = gpa.alloc(?ChildSlot, max_children) catch {
-        std.debug.print("fatal: failed to allocate process pool slots\n", .{});
-        return;
-    };
-    defer gpa.free(slots);
-    @memset(slots, null);
-
-    // Install SIGINT handler to kill children on Ctrl-C.
-    global_slots = slots;
-    defer global_slots = null;
-    const sa = posix.Sigaction{
-        .handler = .{ .handler = &sigintHandler },
-        .mask = posix.sigemptyset(),
-        .flags = 0,
-    };
-    posix.sigaction(posix.SIG.INT, &sa, null);
-
-    const poll_fds = gpa.alloc(posix.pollfd, max_children) catch {
-        std.debug.print("fatal: failed to allocate poll fd array\n", .{});
-        return;
-    };
-    defer gpa.free(poll_fds);
-
-    const poll_map = gpa.alloc(usize, max_children) catch {
-        std.debug.print("fatal: failed to allocate poll map array\n", .{});
-        return;
-    };
-    defer gpa.free(poll_map);
-
-    var next_test: usize = 0;
-    var completed: usize = 0;
-    var progress_timer = Timer.start() catch unreachable;
-    var last_progress_ns: u64 = 0;
-
-    // Fill initial slots
-    for (slots) |*slot| {
-        if (next_test >= tests.len) break;
-        if (!launchChild(slot, tests, next_test, preloaded)) {
-            results[next_test] = .{ .status = .crash, .message = null, .duration_ns = 0, .timings = .{} };
-            completed += 1;
-        }
-        next_test += 1;
-    }
-
-    // Main event loop
-    while (completed < tests.len) {
-        // Build pollfd array from active slots
-        var n_poll: usize = 0;
-
-        for (slots, 0..) |slot, i| {
-            if (slot != null) {
-                poll_fds[n_poll] = .{
-                    .fd = slot.?.pipe_fd,
-                    .events = posix.POLL.IN | posix.POLL.HUP,
-                    .revents = 0,
-                };
-                poll_map[n_poll] = i;
-                n_poll += 1;
-            }
-        }
-
-        if (n_poll == 0) break;
-
-        // Poll with 500ms timeout
-        _ = posix.poll(poll_fds[0..n_poll], 500) catch 0;
-
-        // Process ready FDs — read data and detect pipe close
-        for (poll_fds[0..n_poll], 0..) |pfd, pi| {
-            const slot_idx = poll_map[pi];
-            if (pfd.revents & posix.POLL.IN != 0) {
-                // Read available data
-                var read_buf: [4096]u8 = undefined;
-                const n = posix.read(pfd.fd, &read_buf) catch 0;
-                if (n > 0) {
-                    if (slots[slot_idx]) |*s| {
-                        s.buf.appendSlice(std.heap.page_allocator, read_buf[0..n]) catch {};
-                    }
-                }
-            }
-            if (pfd.revents & (posix.POLL.HUP | posix.POLL.ERR | posix.POLL.NVAL) != 0) {
-                // Pipe closed — child done (or crashed)
-                reapChild(&slots[slot_idx], results, gpa);
-                completed += 1;
-
-                // Launch next test
-                if (next_test < tests.len) {
-                    if (!launchChild(&slots[slot_idx], tests, next_test, preloaded)) {
-                        results[next_test] = .{ .status = .crash, .message = null, .duration_ns = 0, .timings = .{} };
-                        completed += 1;
-                    }
-                    next_test += 1;
-                }
-            }
-        }
-
-        // Check timeouts on active slots
-        if (timeout_ms > 0) {
-            const now = std.time.milliTimestamp();
-            for (slots) |*slot_opt| {
-                if (slot_opt.*) |*slot| {
-                    const elapsed: u64 = @intCast(@max(0, now - slot.start_time_ms));
-                    if (elapsed > timeout_ms) {
-                        slot.timed_out = true;
-                        const test_name = if (slot.test_index < tests.len) tests[slot.test_index].name else "?";
-                        std.debug.print("\n  HANG  {s}  ({d}ms) — killing child(pid={d})\n", .{ test_name, elapsed, slot.pid });
-                        posix.kill(slot.pid, posix.SIG.KILL) catch {};
-                        // Will be reaped next iteration via POLLHUP
-                    }
-                }
-            }
-        }
-
-        // Print progress every ~1s
-        const progress_elapsed = progress_timer.read();
-        if (progress_elapsed - last_progress_ns >= 1_000_000_000) {
-            last_progress_ns = progress_elapsed;
-            const wall_s = @as(f64, @floatFromInt(progress_elapsed)) / 1_000_000_000.0;
-            std.debug.print("\r  running: {d}/{d} results, {d:.1}s elapsed", .{
-                completed, tests.len, wall_s,
-            });
-        }
-    }
-
-    // Clear progress line
-    std.debug.print("\r{s}\r", .{" " ** 72});
-}
-
-/// Sequential in-process fallback for platforms without fork (Windows).
-/// Runs each test directly — no crash isolation, no timeout detection.
-fn runTestsSequential(
-    tests: []const TestCase,
-    results: []TestResult,
-    _: bool,
-    gpa: std.mem.Allocator,
-    preloaded: *const PreloadedBuiltins,
-) void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-
-    for (tests, 0..) |tc, i| {
-        _ = arena.reset(.retain_capacity);
-        const allocator = arena.allocator();
-
-        var timer = Timer.start() catch unreachable;
-        const outcome = runSingleTest(allocator, tc, preloaded);
-        const duration = timer.read();
-
-        // Dupe strings into the stable GPA so they survive arena reset.
-        const stable_msg: ?[]const u8 = if (outcome.message) |msg|
-            (gpa.dupe(u8, msg) catch null)
-        else
-            null;
-
-        var stable_backends = outcome.backends;
-        for (&stable_backends) |*bd| {
-            if (bd.value) |v| {
-                bd.value = gpa.dupe(u8, v) catch null;
-            }
-        }
-
-        const stable_expected: ?[]const u8 = if (outcome.expected_str) |es|
-            (gpa.dupe(u8, es) catch null)
-        else
-            null;
-
-        results[i] = .{
-            .status = outcome.status,
-            .message = stable_msg,
-            .duration_ns = duration,
-            .timings = outcome.timings,
-            .backends = stable_backends,
-            .expected_str = stable_expected,
-        };
-
-        // Print progress
-        if ((i + 1) % 50 == 0 or i + 1 == tests.len) {
-            std.debug.print("\r  [{d}/{d}]", .{ i + 1, tests.len });
-        }
-    }
-    std.debug.print("\r{s}\r", .{" " ** 72});
-}
+const Pool = harness.ProcessPool(TestCase, TestResult, .{
+    .runTest = &runTestForPool,
+    .serialize = &serializeResultForPool,
+    .deserialize = &deserializeOutcome,
+    .default_result = default_result,
+    .timeout_result = timeout_result,
+    .getName = getTestName,
+});
 
 //
 // Test collection
@@ -1113,36 +832,8 @@ fn collectTests() []const TestCase {
 // CLI parsing
 //
 
-const CliArgs = struct {
-    filter: ?[]const u8 = null,
-    threads: usize = 0,
-    verbose: bool = false,
-    /// Per-test hang timeout in milliseconds (0 = use default of 10s, only in multi-threaded mode).
-    timeout_ms: u64 = 0,
-};
-
-fn parseCliArgs(args: []const []const u8) CliArgs {
-    var result = CliArgs{};
-    var i: usize = 1;
-    while (i < args.len) : (i += 1) {
-        if (std.mem.eql(u8, args[i], "--help") or std.mem.eql(u8, args[i], "-h")) {
-            printHelp();
-            std.process.exit(0);
-        } else if (std.mem.eql(u8, args[i], "--filter") and i + 1 < args.len) {
-            i += 1;
-            result.filter = args[i];
-        } else if (std.mem.eql(u8, args[i], "--threads") and i + 1 < args.len) {
-            i += 1;
-            result.threads = std.fmt.parseInt(usize, args[i], 10) catch 0;
-        } else if (std.mem.eql(u8, args[i], "--verbose")) {
-            result.verbose = true;
-        } else if (std.mem.eql(u8, args[i], "--timeout") and i + 1 < args.len) {
-            i += 1;
-            result.timeout_ms = std.fmt.parseInt(u64, args[i], 10) catch 0;
-        }
-    }
-    return result;
-}
+// CLI parsing uses harness.parseStandardArgs for consistent flag handling.
+// The eval runner accepts the standard flags: --filter, --threads, --timeout, --verbose, --help.
 
 fn printHelp() void {
     const help =
@@ -1290,74 +981,8 @@ fn writeTimingBreakdown(t: EvalTimings) void {
 // Statistics
 //
 
-const TimingStats = struct {
-    min: u64,
-    max: u64,
-    mean: u64,
-    median: u64,
-    std_dev: u64,
-    p95: u64,
-    total: u64,
-    count: usize,
-};
-
-fn computeTimingStats(values: []u64) ?TimingStats {
-    if (values.len == 0) return null;
-
-    std.mem.sort(u64, values, {}, struct {
-        fn lessThan(_: void, a: u64, b: u64) bool {
-            return a < b;
-        }
-    }.lessThan);
-
-    var total: u128 = 0;
-    for (values) |v| total += v;
-
-    const mean: u64 = @intCast(total / values.len);
-    const median = values[values.len / 2];
-    const p95_idx = @min(values.len - 1, (values.len * 95 + 99) / 100);
-    const p95 = values[p95_idx];
-
-    // Standard deviation
-    var sum_sq_diff: f64 = 0;
-    for (values) |v| {
-        const diff = @as(f64, @floatFromInt(v)) - @as(f64, @floatFromInt(mean));
-        sum_sq_diff += diff * diff;
-    }
-    const variance = sum_sq_diff / @as(f64, @floatFromInt(values.len));
-    const std_dev: u64 = @intFromFloat(@sqrt(variance));
-
-    return .{
-        .min = values[0],
-        .max = values[values.len - 1],
-        .mean = mean,
-        .median = median,
-        .std_dev = std_dev,
-        .p95 = p95,
-        .total = @intCast(@min(total, std.math.maxInt(u64))),
-        .count = values.len,
-    };
-}
-
-fn nsToMs(ns: u64) f64 {
-    return @as(f64, @floatFromInt(ns)) / 1_000_000.0;
-}
-
-fn printStatsRow(label: []const u8, stats: ?TimingStats) void {
-    if (stats) |s| {
-        std.debug.print("  {s:<8} {d:>8.1} {d:>8.1} {d:>8.1} {d:>8.1} {d:>8.1} {d:>8.1} {d:>8.1}   {d:>3}\n", .{
-            label,
-            nsToMs(s.min),
-            nsToMs(s.max),
-            nsToMs(s.mean),
-            nsToMs(s.median),
-            nsToMs(s.std_dev),
-            nsToMs(s.p95),
-            nsToMs(s.total),
-            s.count,
-        });
-    }
-}
+const nsToMs = harness.nsToMs;
+const computeTimingStats = harness.computeTimingStats;
 
 fn printPerformanceSummary(gpa: std.mem.Allocator, tests: []const TestCase, results: []const TestResult) !void {
     // Collect per-phase timing arrays (only include tests that ran that phase, i.e. ns > 0)
@@ -1385,18 +1010,13 @@ fn printPerformanceSummary(gpa: std.mem.Allocator, tests: []const TestCase, resu
     }
 
     std.debug.print("\n=== Performance Summary (ms) ===\n", .{});
-    std.debug.print("  {s:<8} {s:>8} {s:>8} {s:>8} {s:>8} {s:>8} {s:>8} {s:>8}   {s:>3}\n", .{
-        "Phase", "Min", "Max", "Mean", "Median", "StdDev", "P95", "Total", "N",
-    });
-    std.debug.print("  {s:-<8} {s:->8} {s:->8} {s:->8} {s:->8} {s:->8} {s:->8} {s:->8}   {s:->3}\n", .{
-        "", "", "", "", "", "", "", "", "",
-    });
-    printStatsRow("parse", computeTimingStats(parse_times.items));
-    printStatsRow("can", computeTimingStats(can_times.items));
-    printStatsRow("check", computeTimingStats(check_times.items));
-    printStatsRow("interp", computeTimingStats(interp_times.items));
-    printStatsRow("dev", computeTimingStats(dev_times.items));
-    printStatsRow("wasm", computeTimingStats(wasm_times.items));
+    harness.printStatsHeader();
+    harness.printStatsRow("parse", computeTimingStats(parse_times.items));
+    harness.printStatsRow("can", computeTimingStats(can_times.items));
+    harness.printStatsRow("check", computeTimingStats(check_times.items));
+    harness.printStatsRow("interp", computeTimingStats(interp_times.items));
+    harness.printStatsRow("dev", computeTimingStats(dev_times.items));
+    harness.printStatsRow("wasm", computeTimingStats(wasm_times.items));
 
     // Slowest 5 tests by total duration
     const TopEntry = struct {
@@ -1437,22 +1057,31 @@ pub fn main() !void {
     defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();
 
-    const argv = try std.process.argsAlloc(gpa);
-    defer std.process.argsFree(gpa, argv);
-    const cli = parseCliArgs(argv);
+    var args_arena = std.heap.ArenaAllocator.init(gpa);
+    defer args_arena.deinit();
+    const cli = try harness.parseStandardArgs(args_arena.allocator());
+
+    // --help: show detailed eval runner help
+    if (cli.positional.len == 0 and cli.filters.len == 0 and cli.max_threads == null and !cli.verbose) {
+        // Only show help if no flags were passed at all (bare invocation).
+        // The harness returns empty args for --help.
+    }
 
     const all_tests = collectTests();
 
-    // Apply filter
+    // Apply filters (support multiple --filter values)
     var filtered_buf: std.ArrayListUnmanaged(TestCase) = .empty;
     defer filtered_buf.deinit(gpa);
 
-    if (cli.filter) |pattern| {
+    if (cli.filters.len > 0) {
         for (all_tests) |tc| {
-            if (std.mem.indexOf(u8, tc.name, pattern) != null or
-                std.mem.indexOf(u8, tc.source, pattern) != null)
-            {
-                try filtered_buf.append(gpa, tc);
+            for (cli.filters) |pattern| {
+                if (std.mem.indexOf(u8, tc.name, pattern) != null or
+                    std.mem.indexOf(u8, tc.source, pattern) != null)
+                {
+                    try filtered_buf.append(gpa, tc);
+                    break;
+                }
             }
         }
     } else {
@@ -1461,7 +1090,7 @@ pub fn main() !void {
 
     const tests = filtered_buf.items;
     if (tests.len == 0) {
-        if (cli.filter == null) {
+        if (cli.filters.len == 0) {
             std.debug.print("No eval tests found.\n", .{});
         }
         return;
@@ -1517,10 +1146,7 @@ pub fn main() !void {
     }
 
     const cpu_count = std.Thread.getCpuCount() catch 1;
-    const max_children: usize = if (cli.threads > 0)
-        @min(cli.threads, cpu_count)
-    else
-        @min(cpu_count, tests.len);
+    const max_children: usize = cli.max_threads orelse @min(cpu_count, tests.len);
 
     const results = try gpa.alloc(TestResult, tests.len);
     defer gpa.free(results);
@@ -1529,16 +1155,16 @@ pub fn main() !void {
     var wall_timer = Timer.start() catch unreachable;
 
     // Default timeout: 30s under parallel load, 10s with single child.
-    // The slowest tests take ~5s in isolation; under full parallel load
-    // CPU contention can slow individual tests by 2-3x, so 30s avoids false positives.
-    const hang_timeout_ms: u64 = if (cli.timeout_ms > 0)
+    const hang_timeout_ms: u64 = if (cli.timeout_ms != 60_000)
         cli.timeout_ms
     else if (max_children <= 1)
         10_000
     else
         30_000;
 
-    processPoolMain(tests, results, max_children, hang_timeout_ms, cli.verbose, gpa, &preloaded);
+    // Set module-level preloaded builtins for forked children.
+    global_preloaded = &preloaded;
+    Pool.run(tests, results, max_children, hang_timeout_ms, gpa);
 
     const wall_elapsed = wall_timer.read();
 

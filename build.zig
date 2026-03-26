@@ -2609,6 +2609,9 @@ pub fn build(b: *std.Build) void {
     });
     eval_test_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
     eval_test_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
+    eval_test_exe.root_module.addImport("test_harness", b.createModule(.{
+        .root_source_file = b.path("src/build/test_harness.zig"),
+    }));
     eval_test_exe.step.dependOn(&write_compiled_builtins.step);
     eval_test_exe.step.dependOn(&copy_builtins_bc.step);
     try addLlvmSupportToStep(
@@ -2627,15 +2630,16 @@ pub fn build(b: *std.Build) void {
     {
         eval_test_exe.root_module.link_libcpp = true;
     }
-    // Build eval runner args: pass --test-filter values as --filter (the eval runner's flag name).
+    // Build eval runner args: forward all --test-filter values as --filter args.
     const eval_run_args = if (test_filters.len > 0) blk: {
         var eval_args_list = std.ArrayList([]const u8).empty;
         for (run_args) |arg| {
             eval_args_list.append(b.allocator, arg) catch @panic("OOM");
         }
-        // The eval runner supports a single --filter; use the first test filter.
-        eval_args_list.append(b.allocator, "--filter") catch @panic("OOM");
-        eval_args_list.append(b.allocator, test_filters[0]) catch @panic("OOM");
+        for (test_filters) |f| {
+            eval_args_list.append(b.allocator, "--filter") catch @panic("OOM");
+            eval_args_list.append(b.allocator, f) catch @panic("OOM");
+        }
         break :blk eval_args_list.toOwnedSlice(b.allocator) catch @panic("OOM");
     } else run_args;
     install_and_run(b, no_bin, eval_test_exe, eval_test_step, eval_test_step, eval_run_args);
