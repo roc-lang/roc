@@ -126,6 +126,10 @@ next_synthetic_ident: u29,
 /// Tracks symbols currently being lowered (recursion guard).
 in_progress_defs: std.AutoHashMap(u64, void),
 
+/// Tracks nominal types currently being inspected for dbg/Str.inspect
+/// (recursion guard to prevent infinite code generation for recursive types).
+inspect_in_progress_nominals: std.AutoHashMap(u64, void),
+
 /// Tracks proc instances currently being lowered (recursion guard).
 in_progress_proc_insts: std.AutoHashMap(u32, MIR.ExprId),
 
@@ -212,6 +216,7 @@ pub fn init(
         .symbol_metadata = std.AutoHashMap(u64, SymbolMetadata).init(allocator),
         .next_synthetic_ident = Ident.Idx.NONE.idx - 1,
         .in_progress_defs = std.AutoHashMap(u64, void).init(allocator),
+        .inspect_in_progress_nominals = std.AutoHashMap(u64, void).init(allocator),
         .in_progress_proc_insts = std.AutoHashMap(u32, MIR.ExprId).init(allocator),
         .reserved_proc_insts = std.AutoHashMap(u32, MIR.ProcId).init(allocator),
         .skipped_proc_backed_binding_patterns = std.AutoHashMap(u64, void).init(allocator),
@@ -247,6 +252,7 @@ pub fn deinit(self: *Self) void {
     self.lowered_proc_insts.deinit();
     self.symbol_metadata.deinit();
     self.in_progress_defs.deinit();
+    self.inspect_in_progress_nominals.deinit();
     self.in_progress_proc_insts.deinit();
     self.reserved_proc_insts.deinit();
     self.skipped_proc_backed_binding_patterns.deinit();
@@ -1966,6 +1972,14 @@ fn lowerStrInspectNominal(
     region: Region,
 ) Allocator.Error!MIR.ExprId {
     const common = ModuleEnv.CommonIdents.find(&type_env.common);
+
+    // Guard against infinite recursion for recursive nominal types
+    // (e.g. Node := [Text(Str), Element(Str, List(Node))]).
+    // Use (origin_module, ident_idx) as a unique key for the nominal definition.
+    const nominal_key = (@as(u64, @as(u32, @bitCast(nominal.origin_module))) << 32) | @as(u64, @as(u32, @bitCast(nominal.ident.ident_idx)));
+    if (self.inspect_in_progress_nominals.contains(nominal_key)) {
+        return self.emitMirStrLiteral("...", region);
+    }
     const ident = nominal.ident.ident_idx;
 
     if (nominal.origin_module.eql(common.builtin_module)) {
@@ -2017,6 +2031,10 @@ fn lowerStrInspectNominal(
             return self.foldMirStrConcat(&.{ open, inner_str, close }, region);
         }
     }
+
+    // Mark this nominal as in-progress before recursing into the backing type.
+    try self.inspect_in_progress_nominals.put(nominal_key, {});
+    defer _ = self.inspect_in_progress_nominals.remove(nominal_key);
 
     if (try self.lookupAssociatedMethodExternalDef(type_env, nominal, type_env.idents.to_inspect)) |method_info| {
         const resolved_func = resolveFuncTypeInStore(&method_info.target_env.types, method_info.type_var) orelse
