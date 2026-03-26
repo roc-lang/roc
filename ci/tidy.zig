@@ -604,6 +604,7 @@ const DeadFilesDetector = struct {
             "llvm_evaluator.zig", // LLVM evaluator executable
             "darwin_compat.zig", // Compiled to .o by build.zig for macOS linking
             "echo.zig", // Echo platform WASM entry point
+            "parallel_cli_runner.zig", // Parallel CLI test runner executable
         };
         for (entry_points) |entry_point| {
             if (std.mem.startsWith(u8, &file, entry_point)) return true;

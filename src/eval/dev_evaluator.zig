@@ -21,12 +21,9 @@ const can = @import("can");
 const types = @import("types");
 const layout = @import("layout");
 const backend = @import("backend");
-const mir = @import("mir");
-const MIR = mir.MIR;
 const builtin_loading = @import("builtin_loading.zig");
 const builtins = @import("builtins");
 const i128h = builtins.compiler_rt_128;
-const lir = @import("lir");
 const lir_program_mod = @import("cir_to_lir.zig");
 const LirProgram = lir_program_mod.LirProgram;
 
@@ -161,8 +158,6 @@ const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
 const LoadedModule = builtin_loading.LoadedModule;
-
-const findModuleEnvIdx = lir_program_mod.findModuleEnvIdx;
 
 /// Build a TypeScope mapping platform for-clause aliases to app concrete types.
 /// Returns null if the module has no for-clause aliases (non-platform modules or

@@ -19,14 +19,11 @@ const posix = std.posix;
 const Allocator = std.mem.Allocator;
 
 const platform_config = @import("platform_config.zig");
-const fx_test_specs = @import("fx_test_specs.zig");
 
 const Timer = std.time.Timer;
 const has_fork = (builtin.os.tag != .windows);
 
-// ---------------------------------------------------------------------------
 // Test spec types
-// ---------------------------------------------------------------------------
 
 /// A single CLI test operation — one atomic unit of work.
 const CliTestSpec = struct {
@@ -63,9 +60,7 @@ const run_configs = [_]RunConfig{
     .{ .platform_name = "fx", .backend = "dev" },
 };
 
-// ---------------------------------------------------------------------------
 // Spec generation
-// ---------------------------------------------------------------------------
 
 fn buildTestSpecs(allocator: Allocator, filters: []const []const u8) ![]const CliTestSpec {
     var specs: std.ArrayListUnmanaged(CliTestSpec) = .empty;
@@ -141,9 +136,7 @@ fn matchesFilters(name: []const u8, roc_file: []const u8, filters: []const []con
     return false;
 }
 
-// ---------------------------------------------------------------------------
 // Wire protocol (child → parent via pipe)
-// ---------------------------------------------------------------------------
 
 const TestStatus = enum(u8) {
     pass = 0,
@@ -234,9 +227,7 @@ fn writeAll(fd: posix.fd_t, data: []const u8) void {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Child test execution
-// ---------------------------------------------------------------------------
 
 var next_cache_id: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 
@@ -445,9 +436,7 @@ fn hasMemoryErrors(stderr: []const u8) ?[]const u8 {
     return null;
 }
 
-// ---------------------------------------------------------------------------
 // Process pool
-// ---------------------------------------------------------------------------
 
 const ChildSlot = struct {
     pid: posix.pid_t,
@@ -698,9 +687,7 @@ fn runTestsSequential(
     }
 }
 
-// ---------------------------------------------------------------------------
 // Statistics
-// ---------------------------------------------------------------------------
 
 const TimingStats = struct {
     min: u64,
@@ -754,9 +741,7 @@ fn nsToMs(ns: u64) f64 {
     return @as(f64, @floatFromInt(ns)) / 1_000_000.0;
 }
 
-// ---------------------------------------------------------------------------
 // Output
-// ---------------------------------------------------------------------------
 
 fn printResults(
     tests: []const CliTestSpec,
@@ -921,9 +906,7 @@ fn printTimingSummary(gpa: Allocator, tests: []const CliTestSpec, results: []con
     }
 }
 
-// ---------------------------------------------------------------------------
 // CLI argument parsing
-// ---------------------------------------------------------------------------
 
 const CliArgs = struct {
     roc_binary: []const u8,
@@ -978,10 +961,9 @@ fn parseArgs(allocator: Allocator) !CliArgs {
     return args;
 }
 
-// ---------------------------------------------------------------------------
 // Main
-// ---------------------------------------------------------------------------
 
+/// Entry point for the parallel CLI test runner.
 pub fn main() !void {
     var gpa_impl: std.heap.GeneralPurposeAllocator(.{}) = .init;
     defer _ = gpa_impl.deinit();
