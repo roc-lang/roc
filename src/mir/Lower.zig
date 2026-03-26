@@ -5745,6 +5745,7 @@ fn lowerProcInst(self: *Self, proc_inst_id: Monomorphize.ProcInstId) Allocator.E
     const template = self.monomorphization.getProcTemplate(proc_inst.template);
     const module_idx = template.module_idx;
     const module_env = self.all_module_envs[module_idx];
+
     const proc_monotype = try self.importMonotypeFromStore(
         &self.monomorphization.monotype_store,
         proc_inst.fn_monotype,
@@ -6995,11 +6996,14 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
             }
         }
 
+        // Lower the receiver once — used by both the structural equality
+        // fast-path and the general method-call path below.
+        const receiver: MIR.ExprId = if (uses_runtime_receiver) try self.lowerExpr(da.receiver) else .none;
+
         // Structural types: .is_eq() is decomposed field-by-field in MIR.
         structural_eq: {
             if (!uses_runtime_receiver) break :structural_eq;
 
-            const receiver = try self.lowerExpr(da.receiver);
             const rcv_mono_idx = try self.resolveMonotype(da.receiver);
             if (rcv_mono_idx.isNone()) break :structural_eq;
             const rcv_mono = self.store.monotype_store.getMonotype(rcv_mono_idx);
@@ -7016,8 +7020,6 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
             const rhs = try self.lowerExpr(explicit_args[0]);
             return try self.lowerStructuralEquality(receiver, rhs, rcv_mono_idx, monotype, region);
         }
-
-        const receiver: MIR.ExprId = if (uses_runtime_receiver) try self.lowerExpr(da.receiver) else .none;
 
         // Build args as either:
         // - [receiver] ++ explicit_args for instance methods
