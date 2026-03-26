@@ -627,6 +627,13 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
         roc_ops.crash(err_msg);
         return error.EvaluationFailed;
     };
+
+    // Check for failed expects — these don't throw errors but should still
+    // cause the program to exit with failure.
+    if (interp.getExpectMessage()) |expect_msg| {
+        roc_ops.crash(expect_msg);
+        return error.EvaluationFailed;
+    }
 }
 
 /// Result of setting up module environments

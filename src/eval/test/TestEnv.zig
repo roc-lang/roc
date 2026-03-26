@@ -65,6 +65,7 @@ pub fn deinit(self: *TestEnv) void {
     self.crash.deinit();
 }
 
+/// Error set for memory leak detection in tests.
 pub const LeakError = error{MemoryLeak};
 
 /// Check for memory leaks. Returns error.MemoryLeak if any allocations were not freed.

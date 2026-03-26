@@ -418,10 +418,6 @@ pub const Interpreter = struct {
     /// Allocate heap data through roc_ops with a refcount header.
     /// Use this for data that RocList.bytes or RocStr.bytes will point to,
     /// so builtins can safely call isUnique()/decref() on it.
-    fn allocRocData(self: *LirInterpreter, data_bytes: usize, element_alignment: u32) Error![*]u8 {
-        return self.allocRocDataWithRc(data_bytes, element_alignment, false);
-    }
-
     fn allocRocDataWithRc(self: *LirInterpreter, data_bytes: usize, element_alignment: u32, elements_refcounted: bool) Error![*]u8 {
         self.roc_env.resetCrash();
         const sj = setjmp(&self.roc_env.jmp_buf);
@@ -3297,7 +3293,6 @@ pub const Interpreter = struct {
 
     // String operations
 
-
     fn rawBytesEqual(a: []const u8, b: []const u8) bool {
         if (a.len != b.len) return false;
         for (a, b) |lhs, rhs| {
@@ -3563,10 +3558,10 @@ pub const Interpreter = struct {
         switch (ret_layout_val.tag) {
             .box_of_zst => return Value.zst,
             .box => {
-                const elem_layout = ret_layout_val.data.box;
-                const elem_size = self.helper.sizeOf(elem_layout);
-                const elem_align = self.helper.sizeAlignOf(elem_layout).alignment.toByteUnits();
-                const data_ptr = try self.allocRocData(elem_size, @intCast(elem_align));
+                const box_info = self.layout_store.getBoxInfo(ret_layout_val);
+                const elem_size = box_info.elem_size;
+                const elem_align = box_info.elem_alignment;
+                const data_ptr = try self.allocRocDataWithRc(elem_size, elem_align, box_info.contains_refcounted);
                 if (elem_size > 0) {
                     @memcpy(data_ptr[0..elem_size], arg.ptr[0..elem_size]);
                 }
