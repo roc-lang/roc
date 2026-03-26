@@ -6,8 +6,17 @@
 //! - Use-after-free: detected via POISON_VALUE written to refcount slot
 
 const std = @import("std");
+const builtin = @import("builtin");
 const builtins = @import("builtins");
 const eval_mod = @import("../mod.zig");
+
+/// Diagnostic print that is a no-op on freestanding (WASM) where
+/// std.debug.print is unavailable due to missing OS thread/file primitives.
+fn debugPrint(comptime fmt: []const u8, args: anytype) void {
+    if (comptime builtin.os.tag != .freestanding) {
+        std.debug.print(fmt, args);
+    }
+}
 
 const RocOps = builtins.host_abi.RocOps;
 const RocAlloc = builtins.host_abi.RocAlloc;
@@ -61,20 +70,20 @@ pub fn deinit(self: *TestEnv) void {
 pub fn checkForLeaks(self: *TestEnv) void {
     const leak_count = self.allocation_tracker.count();
     if (leak_count > 0) {
-        std.debug.print("\n=== MEMORY LEAK DETECTED ===\n", .{});
-        std.debug.print("Found {} leaked allocation(s):\n", .{leak_count});
+        debugPrint("\n=== MEMORY LEAK DETECTED ===\n", .{});
+        debugPrint("Found {} leaked allocation(s):\n", .{leak_count});
 
         var iter = self.allocation_tracker.iterator();
         var i: usize = 0;
         while (iter.next()) |entry| : (i += 1) {
-            std.debug.print("  [{d}] ptr=0x{x}, size={d}, alignment={d}\n", .{
+            debugPrint("  [{d}] ptr=0x{x}, size={d}, alignment={d}\n", .{
                 i,
                 entry.key_ptr.*,
                 entry.value_ptr.size,
                 entry.value_ptr.alignment,
             });
         }
-        std.debug.print("============================\n", .{});
+        debugPrint("============================\n", .{});
         @panic("Memory leak detected in test");
     }
 }
@@ -146,9 +155,9 @@ fn testRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.c) void 
 
     // Check for double-free
     if (!test_env.allocation_tracker.remove(user_ptr)) {
-        std.debug.print("\n=== DOUBLE-FREE DETECTED ===\n", .{});
-        std.debug.print("Attempted to free ptr=0x{x} which was not allocated or already freed\n", .{user_ptr});
-        std.debug.print("============================\n", .{});
+        debugPrint("\n=== DOUBLE-FREE DETECTED ===\n", .{});
+        debugPrint("Attempted to free ptr=0x{x} which was not allocated or already freed\n", .{user_ptr});
+        debugPrint("============================\n", .{});
         @panic("Double-free detected in test");
     }
 
@@ -184,9 +193,9 @@ fn testRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) void 
 
     // Check that the old pointer was actually allocated
     if (!test_env.allocation_tracker.remove(old_user_ptr)) {
-        std.debug.print("\n=== REALLOC OF UNTRACKED MEMORY ===\n", .{});
-        std.debug.print("Attempted to realloc ptr=0x{x} which was not allocated or already freed\n", .{old_user_ptr});
-        std.debug.print("===================================\n", .{});
+        debugPrint("\n=== REALLOC OF UNTRACKED MEMORY ===\n", .{});
+        debugPrint("Attempted to realloc ptr=0x{x} which was not allocated or already freed\n", .{old_user_ptr});
+        debugPrint("===================================\n", .{});
         @panic("Realloc of untracked memory detected in test");
     }
 
@@ -240,7 +249,7 @@ fn testRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) void 
 
 fn testRocDbg(dbg_args: *const RocDbg, _: *anyopaque) callconv(.c) void {
     const msg = dbg_args.utf8_bytes[0..dbg_args.len];
-    std.debug.print("[dbg] {s}\n", .{msg});
+    debugPrint("[dbg] {s}\n", .{msg});
 }
 
 fn testRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
