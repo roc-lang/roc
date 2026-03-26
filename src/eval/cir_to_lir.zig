@@ -411,7 +411,6 @@ pub const LirProgram = struct {
         const mir_expr_id = mir_lower.lowerExpr(expr_idx) catch {
             return error.RuntimeError;
         };
-
         // Lambda set inference
         var lambda_set_store = mir.LambdaSet.infer(self.allocator, &mir_store, all_module_envs) catch return error.OutOfMemory;
         defer lambda_set_store.deinit(self.allocator);

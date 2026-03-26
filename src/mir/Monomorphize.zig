@@ -601,6 +601,14 @@ pub const Pass = struct {
     type_scope_caller_module_idx: ?u32,
     visited_modules: std.AutoHashMapUnmanaged(u32, void),
     visited_exprs: std.AutoHashMapUnmanaged(u64, void),
+
+    /// Per-convergence-loop visited set for binding-mode traversals.
+    /// Prevents combinatorial explosion from unbounded re-scanning in
+    /// lookup→def→call chains. Keyed by ContextExprKey (not plain expr)
+    /// because scanClosureCaptureSources swaps active_proc_inst_context
+    /// mid-scan and the same source expr must be visitable under different
+    /// proc-inst contexts within one iteration.
+    binding_visited: ?*std.AutoHashMapUnmanaged(ContextExprKey, void) = null,
     in_progress_value_defs: std.AutoHashMapUnmanaged(ContextExprKey, void),
     resolved_dispatch_targets: std.AutoHashMapUnmanaged(ContextExprKey, ResolvedDispatchTarget),
     in_progress_proc_scans: std.AutoHashMapUnmanaged(u32, void),
@@ -1538,6 +1546,18 @@ pub const Pass = struct {
         }
 
         if (self.active_bindings != null or force_rescan_children) {
+            // When a convergence loop is active, deduplicate visits within
+            // each iteration using a context-sensitive key. The loop clears
+            // the set between iterations so updated bindings trigger re-scans.
+            if (self.binding_visited) |bv| {
+                const visit_key = self.resultExprKey(
+                    self.active_proc_inst_context,
+                    module_idx,
+                    expr_idx,
+                );
+                if (bv.contains(visit_key)) return;
+                try bv.put(self.allocator, visit_key, {});
+            }
             try self.scanExprChildren(result, module_idx, expr_idx, expr);
             return;
         }
@@ -3111,10 +3131,15 @@ pub const Pass = struct {
 
         var iteration_expr_monotypes: std.AutoHashMapUnmanaged(ContextExprKey, ResolvedMonotype) = .empty;
         defer iteration_expr_monotypes.deinit(self.allocator);
+        var binding_visited_map: std.AutoHashMapUnmanaged(ContextExprKey, void) = .empty;
+        defer binding_visited_map.deinit(self.allocator);
 
         const saved_bindings = self.active_bindings;
         self.active_bindings = bindings;
         defer self.active_bindings = saved_bindings;
+        const saved_binding_visited = self.binding_visited;
+        self.binding_visited = &binding_visited_map;
+        defer self.binding_visited = saved_binding_visited;
 
         const saved_iteration_expr_monotypes = self.active_iteration_expr_monotypes;
         self.active_iteration_expr_monotypes = &iteration_expr_monotypes;
@@ -3159,6 +3184,7 @@ pub const Pass = struct {
 
             const bindings_before = bindings.count();
             const mutation_revision_before = self.mutation_revision;
+            binding_visited_map.clearRetainingCapacity();
 
             try self.seedTemplateBodyBindingsFromCurrentBindings(result, template, bindings);
 
@@ -8647,6 +8673,8 @@ pub const Pass = struct {
         defer bindings.deinit();
         var iteration_expr_monotypes: std.AutoHashMapUnmanaged(ContextExprKey, ResolvedMonotype) = .empty;
         defer iteration_expr_monotypes.deinit(self.allocator);
+        var binding_visited_map: std.AutoHashMapUnmanaged(ContextExprKey, void) = .empty;
+        defer binding_visited_map.deinit(self.allocator);
 
         const saved_template_context = self.active_template_context;
         self.active_template_context = proc_inst.template;
@@ -8660,6 +8688,9 @@ pub const Pass = struct {
         const saved_bindings = self.active_bindings;
         self.active_bindings = &bindings;
         defer self.active_bindings = saved_bindings;
+        const saved_binding_visited = self.binding_visited;
+        self.binding_visited = &binding_visited_map;
+        defer self.binding_visited = saved_binding_visited;
         const saved_iteration_expr_monotypes = self.active_iteration_expr_monotypes;
         self.active_iteration_expr_monotypes = &iteration_expr_monotypes;
         defer self.active_iteration_expr_monotypes = saved_iteration_expr_monotypes;
@@ -8688,6 +8719,7 @@ pub const Pass = struct {
             const bindings_before = bindings.count();
             const mutation_revision_before = self.mutation_revision;
             iteration_expr_monotypes.clearRetainingCapacity();
+            binding_visited_map.clearRetainingCapacity();
 
             switch (module_env.store.getExpr(template.cir_expr)) {
                 .e_lambda => |lambda_expr| try self.scanValueExpr(result, template.module_idx, lambda_expr.body),
