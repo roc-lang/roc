@@ -1106,10 +1106,27 @@ pub const Interpreter = struct {
                     self.performRcPlan(resolver.plan(field_plan.child), resolver, field_val, count);
                 }
             },
-            .tag_union => {
-                // Tag unions that hand ownership to extracted payloads need
-                // discriminant-aware cleanup at the use site, not generic RC
-                // walking here.
+            .tag_union => |tag_plan| {
+                const variant_count = resolver.tagUnionVariantCount(tag_plan);
+                if (variant_count == 0) return;
+
+                const disc: u32 = blk: {
+                    const tu_data = self.layout_store.getTagUnionData(tag_plan.tag_union_idx);
+                    break :blk switch (tu_data.discriminant_size) {
+                        0 => 0,
+                        1 => val.offset(tu_data.discriminant_offset).read(u8),
+                        2 => val.offset(tu_data.discriminant_offset).read(u16),
+                        else => return,
+                    };
+                };
+                trace_rc.log("tag_union rc: disc={d} variant_count={d}", .{ disc, variant_count });
+
+                if (disc < variant_count) {
+                    if (resolver.tagUnionVariantPlan(tag_plan, disc)) |child_key| {
+                        // Payload is always at offset 0 in the tag union.
+                        self.performRcPlan(resolver.plan(child_key), resolver, val, count);
+                    }
+                }
             },
             .closure => |child_key| {
                 self.performRcPlan(resolver.plan(child_key), resolver, val, count);
@@ -4224,9 +4241,6 @@ pub const Interpreter = struct {
                         offset += s.len;
                     }
                     const result = try self.makeRocStr(buf);
-                    for (vals) |part_val| {
-                        valueToRocStr(part_val).decref(&self.roc_ops);
-                    }
                     try self.pushValue(result);
                 }
                 return null;
@@ -4274,9 +4288,6 @@ pub const Interpreter = struct {
                             } }, branch.guard);
                             return null;
                         }
-                        if (!self.patternHasBindings(branch.pattern)) {
-                            try self.dropOwnedPatternValue(branch.pattern, match_val);
-                        }
                         try self.pushWork(.{ .eval_expr = branch.body });
                         return null;
                     }
@@ -4288,9 +4299,6 @@ pub const Interpreter = struct {
                 if (guard_val.read(u8) != 0) {
                     // Guard passed: evaluate branch body
                     const match_branches = self.store.getMatchBranches(mgc.branches);
-                    if (!self.patternHasBindings(match_branches[mgc.current_branch_idx].pattern)) {
-                        try self.dropOwnedPatternValue(match_branches[mgc.current_branch_idx].pattern, mgc.match_val);
-                    }
                     try self.pushWork(.{ .eval_expr = match_branches[mgc.current_branch_idx].body });
                 } else {
                     // Guard failed: try remaining branches
@@ -4312,9 +4320,6 @@ pub const Interpreter = struct {
                                 } }, branch.guard);
                                 return null;
                             }
-                            if (!self.patternHasBindings(branch.pattern)) {
-                                try self.dropOwnedPatternValue(branch.pattern, mgc.match_val);
-                            }
                             try self.pushWork(.{ .eval_expr = branch.body });
                             return null;
                         }
@@ -4328,7 +4333,6 @@ pub const Interpreter = struct {
                 const disc = self.helper.readTagDiscriminant(switch_val, dsd.union_layout);
                 const disc_branches = self.store.getExprSpan(dsd.branches);
                 if (disc < disc_branches.len) {
-                    self.performRc(.decref, switch_val, dsd.union_layout, 0);
                     try self.pushWork(.{ .eval_expr = disc_branches[disc] });
                 } else {
                     return error.RuntimeError;
@@ -4553,8 +4557,6 @@ pub const Interpreter = struct {
                         try self.pushValue(try self.makeRocStr(slice));
                     },
                     .str_escape_and_quote => {
-                        const owned = valueToRocStr(val);
-                        defer owned.decref(&self.roc_ops);
                         const s = self.readRocStr(val);
                         var escaped = std.ArrayListUnmanaged(u8){};
                         escaped.append(self.allocator, '"') catch return error.OutOfMemory;
