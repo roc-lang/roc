@@ -2044,7 +2044,7 @@ fn setupTestPlatforms(
     target: ResolvedTarget,
     optimize: OptimizeMode,
     roc_modules: modules.RocModules,
-    test_platforms_step: *Step,
+    build_test_hosts_step: *Step,
     strip: bool,
     omit_frame_pointer: ?bool,
     platform_filter: ?[]const u8,
@@ -2132,7 +2132,7 @@ fn setupTestPlatforms(
     }
 
     b.getInstallStep().dependOn(clear_cache_step);
-    test_platforms_step.dependOn(clear_cache_step);
+    build_test_hosts_step.dependOn(clear_cache_step);
 }
 
 pub fn build(b: *std.Build) void {
@@ -2154,9 +2154,12 @@ pub fn build(b: *std.Build) void {
     const playground_test_step = b.step("test-playground", "Build the integration test suite for the WASM playground");
     const serialization_size_step = b.step("test-serialization-sizes", "Verify Serialized types have platform-independent sizes");
     const wasm_static_lib_test_step = b.step("test-wasm-static-lib", "Test WASM static library builds with bytebox");
-    const test_cli_step = b.step("test-cli", "Test the roc CLI by running test programs");
+    const test_cli_step = b.step("test-cli", "Run all CLI integration tests (platforms + subcommands + glue)");
+    const test_platforms_step = b.step("test-platforms", "Test platform integration (int/str/fx build and run)");
+    const test_subcommands_step = b.step("test-subcommands", "Test roc CLI subcommands (check, build, run, fmt, etc.)");
+    const test_glue_step = b.step("test-glue", "Test the roc glue command");
 
-    const test_platforms_step = b.step("test-platforms", "Build test platform host libraries");
+    const build_test_hosts_step = b.step("build-test-hosts", "Build test platform host libraries");
     const coverage_step = b.step("coverage", "Run parser tests with kcov code coverage");
     const release_step = b.step("release", "Build optimized release binary for distribution");
 
@@ -2330,7 +2333,7 @@ pub fn build(b: *std.Build) void {
     roc_modules.lsp.addImport("compiled_builtins", compiled_builtins_module);
 
     // Setup test platform host libraries
-    setupTestPlatforms(b, target, optimize, roc_modules, test_platforms_step, strip, omit_frame_pointer, platform_filter);
+    setupTestPlatforms(b, target, optimize, roc_modules, build_test_hosts_step, strip, omit_frame_pointer, platform_filter);
 
     const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, omit_frame_pointer, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins, flag_enable_tracy) orelse return;
     roc_modules.addAll(roc_exe);
@@ -2390,11 +2393,16 @@ pub fn build(b: *std.Build) void {
 
     // CLI integration tests - parallel test runner replaces 5 sequential
     // test_runner invocations with a single fork-based parallel runner.
+    //
+    // Each sub-step is independently runnable:
+    //   zig build test-platforms    — platform integration tests (int/str/fx)
+    //   zig build test-subcommands  — roc CLI subcommand tests
+    //   zig build test-glue         — glue command tests
+    //   zig build test-cli          — umbrella: runs all three
     if (!no_bin) {
         const install = b.addInstallArtifact(roc_exe, .{});
-        var previous_cli_integration_step: ?*std.Build.Step = null;
 
-        // Parallel CLI test runner (replaces 5 sequential test_runner invocations)
+        // test-platforms: parallel CLI test runner for platform integration
         const parallel_cli_runner_exe = b.addExecutable(.{
             .name = "parallel_cli_runner",
             .root_module = b.createModule(.{
@@ -2412,17 +2420,15 @@ pub fn build(b: *std.Build) void {
 
         const run_parallel_cli = b.addRunArtifact(parallel_cli_runner_exe);
         run_parallel_cli.addArg("zig-out/bin/roc");
-        // Forward all --test-filter values as --filter args
         for (test_filters) |f| {
             run_parallel_cli.addArg("--filter");
             run_parallel_cli.addArg(f);
         }
         run_parallel_cli.step.dependOn(&install.step);
-        run_parallel_cli.step.dependOn(test_platforms_step);
-        previous_cli_integration_step = &run_parallel_cli.step;
-        test_cli_step.dependOn(&run_parallel_cli.step);
+        run_parallel_cli.step.dependOn(build_test_hosts_step);
+        test_platforms_step.dependOn(&run_parallel_cli.step);
 
-        // Roc subcommands integration test
+        // test-subcommands: roc CLI subcommand integration tests
         const roc_subcommands_test = b.addTest(.{
             .name = "roc_subcommands_test",
             .root_module = b.createModule(.{
@@ -2438,12 +2444,10 @@ pub fn build(b: *std.Build) void {
             run_roc_subcommands_test.addArgs(run_args);
         }
         run_roc_subcommands_test.step.dependOn(&install.step);
-        run_roc_subcommands_test.step.dependOn(test_platforms_step);
-        run_roc_subcommands_test.step.dependOn(previous_cli_integration_step.?);
-        previous_cli_integration_step = &run_roc_subcommands_test.step;
-        test_cli_step.dependOn(&run_roc_subcommands_test.step);
+        run_roc_subcommands_test.step.dependOn(build_test_hosts_step);
+        test_subcommands_step.dependOn(&run_roc_subcommands_test.step);
 
-        // Glue command integration test
+        // test-glue: glue command integration tests
         const glue_test = b.addTest(.{
             .name = "glue_test",
             .root_module = b.createModule(.{
@@ -2459,9 +2463,13 @@ pub fn build(b: *std.Build) void {
             run_glue_test.addArgs(run_args);
         }
         run_glue_test.step.dependOn(&install.step);
-        run_glue_test.step.dependOn(previous_cli_integration_step.?);
         run_glue_test_step = &run_glue_test.step;
-        test_cli_step.dependOn(&run_glue_test.step);
+        test_glue_step.dependOn(&run_glue_test.step);
+
+        // test-cli: umbrella depending on all three
+        test_cli_step.dependOn(test_platforms_step);
+        test_cli_step.dependOn(test_subcommands_step);
+        test_cli_step.dependOn(test_glue_step);
     }
 
     // Manual rebuild command: zig build rebuild-builtins
