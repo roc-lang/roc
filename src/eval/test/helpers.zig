@@ -496,7 +496,6 @@ pub fn lirInterpreterEval(allocator: std.mem.Allocator, module_env: *ModuleEnv, 
 
     var test_env = TestEnv.init(allocator);
     defer test_env.deinit();
-    defer test_env.checkForLeaks();
 
     var interp = try Interpreter.init(allocator, &lower_result.lir_store, lower_result.layout_store, test_env.get_ops());
     defer interp.deinit();
@@ -505,60 +504,68 @@ pub fn lirInterpreterEval(allocator: std.mem.Allocator, module_env: *ModuleEnv, 
         .expr_id = lower_result.final_expr_id,
     });
 
-    if (interp.getExpectMessage() != null) return error.Crash;
-
     const value = switch (eval_result) {
         .value => |v| v,
         .early_return => |v| v,
         .break_expr => return error.RuntimeError,
     };
 
-    defer interp.dropValue(value, lower_result.result_layout);
-
-    // Check well-known layout indices before inspecting the layout tag.
-    // Bool is a tag_union at the layout level, but we want a typed result.
-    if (lower_result.result_layout == .bool)
-        return .{ .bool_val = value.read(u8) != 0 };
-
-    const lay = lower_result.layout_store.getLayout(lower_result.result_layout);
-    switch (lay.tag) {
-        .scalar => switch (lay.data.scalar.tag) {
-            .int => {
-                const prec = lay.data.scalar.data.int;
-                return .{ .int = switch (prec) {
-                    .i8 => value.read(i8),
-                    .i16 => value.read(i16),
-                    .i32 => value.read(i32),
-                    .i64 => value.read(i64),
-                    .i128 => value.read(i128),
-                    .u8 => value.read(u8),
-                    .u16 => value.read(u16),
-                    .u32 => value.read(u32),
-                    .u64 => value.read(u64),
-                    .u128 => @bitCast(value.read(u128)),
-                } };
-            },
-            .frac => {
-                const prec = lay.data.scalar.data.frac;
-                return switch (prec) {
-                    .f32 => .{ .float_f32 = value.read(f32) },
-                    .f64 => .{ .float_f64 = value.read(f64) },
-                    .dec => .{ .dec = value.read(i128) },
-                };
-            },
-            .str => {
-                var roc_str: builtins.str.RocStr = undefined;
-                @memcpy(std.mem.asBytes(&roc_str), value.ptr[0..@sizeOf(builtins.str.RocStr)]);
-                return .{ .str = try allocator.dupe(u8, roc_str.asSlice()) };
-            },
-        },
-        .zst => return .{ .unit = {} },
-        else => {
-            // For complex types (structs, tags, lists, tuples), fall back to Str.inspect
-            const str = try lirInterpreterStr(allocator, module_env, expr_idx, builtin_module_env);
-            return .{ .formatted = str };
-        },
+    if (interp.getExpectMessage() != null) {
+        interp.dropValue(value, lower_result.result_layout);
+        return error.Crash;
     }
+
+    // Compute the result, then drop the value and check for leaks.
+    const result: LirEvalResult = result: {
+        // Check well-known layout indices before inspecting the layout tag.
+        // Bool is a tag_union at the layout level, but we want a typed result.
+        if (lower_result.result_layout == .bool)
+            break :result .{ .bool_val = value.read(u8) != 0 };
+
+        const lay = lower_result.layout_store.getLayout(lower_result.result_layout);
+        switch (lay.tag) {
+            .scalar => switch (lay.data.scalar.tag) {
+                .int => {
+                    const prec = lay.data.scalar.data.int;
+                    break :result .{ .int = switch (prec) {
+                        .i8 => value.read(i8),
+                        .i16 => value.read(i16),
+                        .i32 => value.read(i32),
+                        .i64 => value.read(i64),
+                        .i128 => value.read(i128),
+                        .u8 => value.read(u8),
+                        .u16 => value.read(u16),
+                        .u32 => value.read(u32),
+                        .u64 => value.read(u64),
+                        .u128 => @bitCast(value.read(u128)),
+                    } };
+                },
+                .frac => {
+                    const prec = lay.data.scalar.data.frac;
+                    break :result switch (prec) {
+                        .f32 => .{ .float_f32 = value.read(f32) },
+                        .f64 => .{ .float_f64 = value.read(f64) },
+                        .dec => .{ .dec = value.read(i128) },
+                    };
+                },
+                .str => {
+                    var roc_str: builtins.str.RocStr = undefined;
+                    @memcpy(std.mem.asBytes(&roc_str), value.ptr[0..@sizeOf(builtins.str.RocStr)]);
+                    break :result .{ .str = try allocator.dupe(u8, roc_str.asSlice()) };
+                },
+            },
+            .zst => break :result .{ .unit = {} },
+            else => {
+                // For complex types (structs, tags, lists, tuples), fall back to Str.inspect
+                const str = try lirInterpreterStr(allocator, module_env, expr_idx, builtin_module_env);
+                break :result .{ .formatted = str };
+            },
+        }
+    };
+
+    interp.dropValue(value, lower_result.result_layout);
+    try test_env.checkForLeaks();
+    return result;
 }
 
 /// Evaluate an expression using the interpreter and return the formatted result.
@@ -585,7 +592,6 @@ pub fn lirInterpreterInspectedStr(allocator: std.mem.Allocator, module_env: *Mod
 
     var test_env = TestEnv.init(allocator);
     defer test_env.deinit();
-    defer test_env.checkForLeaks();
 
     var interp = try Interpreter.init(allocator, &lower_result.lir_store, lower_result.layout_store, test_env.get_ops());
     defer interp.deinit();
@@ -594,21 +600,26 @@ pub fn lirInterpreterInspectedStr(allocator: std.mem.Allocator, module_env: *Mod
         .expr_id = lower_result.final_expr_id,
     });
 
-    // Check for failed expect assertions (they set the message but don't error)
-    if (interp.getExpectMessage() != null) return error.Crash;
-
     const value = switch (eval_result) {
         .value => |v| v,
         .early_return => |v| v,
         .break_expr => return error.RuntimeError,
     };
 
-    defer interp.dropValue(value, lower_result.result_layout);
+    // Check for failed expect assertions (they set the message but don't error)
+    if (interp.getExpectMessage() != null) {
+        interp.dropValue(value, lower_result.result_layout);
+        return error.Crash;
+    }
 
     // Result is a RocStr — read and dupe the string content
     var roc_str: builtins.str.RocStr = undefined;
     @memcpy(std.mem.asBytes(&roc_str), value.ptr[0..@sizeOf(builtins.str.RocStr)]);
-    return allocator.dupe(u8, roc_str.asSlice());
+    const result = try allocator.dupe(u8, roc_str.asSlice());
+
+    interp.dropValue(value, lower_result.result_layout);
+    try test_env.checkForLeaks();
+    return result;
 }
 
 fn boolStringsEquivalent(a: []const u8, b: []const u8) bool {

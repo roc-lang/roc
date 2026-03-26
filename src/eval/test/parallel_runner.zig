@@ -266,7 +266,7 @@ const ForkResult = union(enum) {
     /// Child exited 0 and wrote result string to pipe.
     success: []const u8,
     /// Child exited non-zero (eval function returned an error).
-    child_error: void,
+    child_error: []const u8,
     /// Child was killed by a signal (e.g. SIGSEGV=11, SIGKILL=9).
     signal_death: u8,
     /// fork() or pipe() syscall failed.
@@ -289,8 +289,8 @@ fn forkAndEval(
     if (comptime !has_fork or coverage_mode) {
         // In-process eval: used on Windows (no fork) and in coverage mode
         // (kcov can't trace forked children, so we must run in the parent).
-        const result = eval_fn(std.heap.page_allocator, module_env, expr_idx, builtin_env) catch {
-            return .{ .child_error = {} };
+        const result = eval_fn(std.heap.page_allocator, module_env, expr_idx, builtin_env) catch |err| {
+            return .{ .child_error = @errorName(err) };
         };
         return .{ .success = result };
     }
@@ -315,9 +315,16 @@ fn forkAndEval(
         // immediately so the OS reclaims everything — no deinit needed.
         var child_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         const child_alloc = child_arena.allocator();
-        const result_str = eval_fn(child_alloc, module_env, expr_idx, builtin_env) catch {
+        const result_str = eval_fn(child_alloc, module_env, expr_idx, builtin_env) catch |err| {
+            // Write error name to pipe so parent can report it, then exit 2
+            // to distinguish "error with name" from other failures.
+            const name = @errorName(err);
+            var w: usize = 0;
+            while (w < name.len) {
+                w += posix.write(pipe_write, name[w..]) catch break;
+            }
             posix.close(pipe_write);
-            std.c._exit(1);
+            std.c._exit(2);
         };
 
         // Write the result string to the pipe.
@@ -367,15 +374,23 @@ fn forkAndEval(
     }
 
     const exit_code: u8 = @truncate((status >> 8) & 0xff);
+    if (exit_code == 2) {
+        // Child wrote error name to pipe and exited 2.
+        const owned = result_buf.toOwnedSlice(std.heap.page_allocator) catch {
+            result_buf.deinit(std.heap.page_allocator);
+            return .{ .child_error = "ChildExecFailed" };
+        };
+        return .{ .child_error = owned };
+    }
     if (exit_code != 0 or read_error) {
         result_buf.deinit(std.heap.page_allocator);
-        return .{ .child_error = {} };
+        return .{ .child_error = "ChildExecFailed" };
     }
 
     // Success — return the string read from the pipe.
     const owned = result_buf.toOwnedSlice(std.heap.page_allocator) catch {
         result_buf.deinit(std.heap.page_allocator);
-        return .{ .child_error = {} };
+        return .{ .child_error = "ChildExecFailed" };
     };
     return .{ .success = owned };
 }
@@ -633,8 +648,8 @@ fn runValueTest(allocator: std.mem.Allocator, src: []const u8, expected: TestCas
                     if (first_ok == null) first_ok = str;
                 }
             },
-            .child_error => {
-                backends[i] = .{ .status = .fail, .value = "ChildExecFailed", .duration_ns = dur };
+            .child_error => |err_name| {
+                backends[i] = .{ .status = .fail, .value = err_name, .duration_ns = dur };
                 any_failure = true;
             },
             .signal_death => |sig| {

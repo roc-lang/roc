@@ -146,7 +146,6 @@ pub const TestRunner = struct {
         // Create interpreter and evaluate
         var test_env = TestEnv.init(self.allocator);
         defer test_env.deinit();
-        defer test_env.checkForLeaks();
 
         var interp = try Interpreter.init(
             self.allocator,
@@ -167,15 +166,15 @@ pub const TestRunner = struct {
             .break_expr => return error.RuntimeError,
         };
 
-        defer interp.dropValue(value, lower_result.result_layout);
+        // Read result before dropping the value.
+        const result: Evaluation = if (lower_result.result_layout == .bool)
+            (if (value.read(u8) != 0) .passed else .failed)
+        else
+            .not_a_bool;
 
-        // Check if result is a bool (layout.Idx.bool == 0)
-        if (lower_result.result_layout == .bool) {
-            const is_true = value.read(u8) != 0;
-            return if (is_true) .passed else .failed;
-        }
-
-        return .not_a_bool;
+        interp.dropValue(value, lower_result.result_layout);
+        try test_env.checkForLeaks();
+        return result;
     }
 
     /// Evaluates all expect statements in the module, returning a summary of the results.
