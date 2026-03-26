@@ -534,7 +534,7 @@ pub const ComptimeEvaluator = struct {
                 .roc_dbg = comptimeRocDbg,
                 .roc_expect_failed = comptimeRocExpectFailed,
                 .roc_crashed = comptimeRocCrashed,
-                .hosted_fns = undefined, // Not used in compile-time eval
+                .hosted_fns = builtins.host_abi.emptyHostedFunctions(),
             };
         }
         self.crash.reset();
@@ -611,13 +611,12 @@ pub const ComptimeEvaluator = struct {
         defer lower_result.deinit();
 
         // Evaluate via interpreter
-        var interp = try Interpreter.init(self.allocator, &lower_result.lir_store, lower_result.layout_store);
+        var interp = try Interpreter.init(self.allocator, &lower_result.lir_store, lower_result.layout_store, self.get_ops());
         interp.detect_infinite_while_loops = true;
         defer interp.deinit();
 
         const eval_result = interp.eval(.{
             .expr_id = lower_result.final_expr_id,
-            .roc_ops = self.get_ops(),
         }) catch |err| {
             switch (err) {
                 error.Crash => {
@@ -1220,14 +1219,13 @@ pub const ComptimeEvaluator = struct {
         };
 
         // Evaluate via interpreter
-        var interp = try Interpreter.init(self.allocator, &lower_result.lir_store, lower_result.layout_store);
+        var interp = try Interpreter.init(self.allocator, &lower_result.lir_store, lower_result.layout_store, self.get_ops());
         interp.detect_infinite_while_loops = true;
         defer interp.deinit();
 
         const arg_layouts = [_]layout_mod.Idx{param_layout_idx};
         _ = interp.eval(.{
             .expr_id = lower_result.final_expr_id,
-            .roc_ops = self.get_ops(),
             .arg_layouts = &arg_layouts,
             .ret_layout = ret_layout_idx,
             .arg_ptr = @ptrCast(arg_buf.ptr),
@@ -1571,13 +1569,13 @@ pub const ComptimeEvaluator = struct {
             self.allocator,
             &batch_result.lir_store,
             batch_result.layout_store,
+            self.get_ops(),
         );
         interp.detect_infinite_while_loops = true;
         defer interp.deinit();
 
         _ = interp.eval(.{
             .expr_id = batch_result.block_expr_id,
-            .roc_ops = self.get_ops(),
         }) catch return;
 
         // Extract per-def values from bindings and fold to CIR.
@@ -1609,13 +1607,12 @@ pub const ComptimeEvaluator = struct {
         defer lower_result.deinit();
 
         // Evaluate via interpreter
-        var interp = try Interpreter.init(self.allocator, &lower_result.lir_store, lower_result.layout_store);
+        var interp = try Interpreter.init(self.allocator, &lower_result.lir_store, lower_result.layout_store, self.get_ops());
         interp.detect_infinite_while_loops = true;
         defer interp.deinit();
 
         const eval_result = interp.eval(.{
             .expr_id = lower_result.final_expr_id,
-            .roc_ops = self.get_ops(),
         }) catch return false;
         const result_value = switch (eval_result) {
             .value => |v| v,

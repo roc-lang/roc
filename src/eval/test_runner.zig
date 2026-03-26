@@ -151,12 +151,12 @@ pub const TestRunner = struct {
             self.allocator,
             &lower_result.lir_store,
             lower_result.layout_store,
+            test_env.get_ops(),
         );
         defer interp.deinit();
 
         const eval_result = interp.eval(.{
             .expr_id = lower_result.final_expr_id,
-            .roc_ops = test_env.get_ops(),
         }) catch |err| {
             return err;
         };

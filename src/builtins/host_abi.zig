@@ -71,6 +71,18 @@ pub const HostedFunctions = extern struct {
     fns: [*]HostedFn,
 };
 
+const empty_hosted_fns = struct {
+    fn dummyHostedFn(_: *anyopaque, _: *anyopaque, _: *anyopaque) callconv(.c) void {}
+
+    var fns: [1]HostedFn = .{hostedFn(&dummyHostedFn)};
+};
+
+/// Return a valid empty hosted function table for callers that don't expose any
+/// platform functions but still need an initialized `RocOps.hosted_fns`.
+pub fn emptyHostedFunctions() HostedFunctions {
+    return .{ .count = 0, .fns = &empty_hosted_fns.fns };
+}
+
 /// Operations that the host provides to Roc code, including memory management,
 /// panic handling, and platform-specific effects.
 pub const RocOps = extern struct {

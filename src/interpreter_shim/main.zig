@@ -600,12 +600,11 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
     defer lower_result.deinit();
 
     // Create interpreter and evaluate
-    var interp = try Interpreter.init(allocator, &lower_result.lir_store, lower_result.layout_store);
+    var interp = try Interpreter.init(allocator, &lower_result.lir_store, lower_result.layout_store, roc_ops);
     defer interp.deinit();
 
     _ = interp.eval(.{
         .expr_id = lower_result.final_expr_id,
-        .roc_ops = roc_ops,
         .arg_layouts = arg_layouts,
         .ret_layout = ret_layout,
         .arg_ptr = arg_ptr,

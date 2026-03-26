@@ -497,12 +497,11 @@ pub fn lirInterpreterEval(allocator: std.mem.Allocator, module_env: *ModuleEnv, 
     var test_env = TestEnv.init(allocator);
     defer test_env.deinit();
 
-    var interp = try Interpreter.init(allocator, &lower_result.lir_store, lower_result.layout_store);
+    var interp = try Interpreter.init(allocator, &lower_result.lir_store, lower_result.layout_store, test_env.get_ops());
     defer interp.deinit();
 
     const eval_result = try interp.eval(.{
         .expr_id = lower_result.final_expr_id,
-        .roc_ops = test_env.get_ops(),
     });
 
     if (interp.getExpectMessage() != null) return error.Crash;
@@ -584,12 +583,11 @@ pub fn lirInterpreterInspectedStr(allocator: std.mem.Allocator, module_env: *Mod
     var test_env = TestEnv.init(allocator);
     defer test_env.deinit();
 
-    var interp = try Interpreter.init(allocator, &lower_result.lir_store, lower_result.layout_store);
+    var interp = try Interpreter.init(allocator, &lower_result.lir_store, lower_result.layout_store, test_env.get_ops());
     defer interp.deinit();
 
     const eval_result = try interp.eval(.{
         .expr_id = lower_result.final_expr_id,
-        .roc_ops = test_env.get_ops(),
     });
 
     // Check for failed expect assertions (they set the message but don't error)

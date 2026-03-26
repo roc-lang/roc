@@ -870,6 +870,7 @@ pub const Repl = struct {
             self.allocator,
             &lower_result.lir_store,
             lower_result.layout_store,
+            self.roc_ops,
         ) catch |err| {
             return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Interpreter init error: {s}", .{@errorName(err)}) };
         };
@@ -877,7 +878,6 @@ pub const Repl = struct {
 
         const eval_result = interp.eval(.{
             .expr_id = lower_result.final_expr_id,
-            .roc_ops = self.roc_ops,
         }) catch |err| switch (err) {
             error.Crash => {
                 const msg = interp.getCrashMessage() orelse "crash during evaluation";

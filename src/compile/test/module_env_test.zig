@@ -569,11 +569,10 @@ test "ModuleEnv serialization and interpreter evaluation" {
         var test_env = EvalTestEnv.init(gpa);
         defer test_env.deinit();
 
-        var interp = try EvalInterpreter.init(gpa, &lower_result.lir_store, lower_result.layout_store);
+        var interp = try EvalInterpreter.init(gpa, &lower_result.lir_store, lower_result.layout_store, test_env.get_ops());
         defer interp.deinit();
         const eval_result = try interp.eval(.{
             .expr_id = lower_result.final_expr_id,
-            .roc_ops = test_env.get_ops(),
         });
         const value = switch (eval_result) {
             .value => |v| v,
@@ -676,11 +675,10 @@ test "ModuleEnv serialization and interpreter evaluation" {
             var test_env2 = EvalTestEnv.init(gpa);
             defer test_env2.deinit();
 
-            var interp2 = try EvalInterpreter.init(gpa, &lower_result2.lir_store, lower_result2.layout_store);
+            var interp2 = try EvalInterpreter.init(gpa, &lower_result2.lir_store, lower_result2.layout_store, test_env2.get_ops());
             defer interp2.deinit();
             const eval_result2 = try interp2.eval(.{
                 .expr_id = lower_result2.final_expr_id,
-                .roc_ops = test_env2.get_ops(),
             });
             const value2 = switch (eval_result2) {
                 .value => |v| v,

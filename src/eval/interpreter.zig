@@ -78,10 +78,10 @@ const longjmp = sljmp.longjmp;
 
 /// Environment for interpreter-managed RocOps forwarding.
 ///
-/// The interpreter always evaluates with caller-provided RocOps. These callbacks
-/// forward the caller's alloc/dealloc/realloc/dbg/expect/crash hooks while
-/// retaining local bookkeeping for crash and expect messages so hosts that care
-/// can inspect the last message after evaluation.
+/// The interpreter always evaluates with the RocOps it was initialized with.
+/// These callbacks forward the caller's alloc/dealloc/realloc/dbg/expect/crash
+/// hooks while retaining local bookkeeping for crash and expect messages so
+/// hosts that care can inspect the last message after evaluation.
 const InterpreterRocEnv = struct {
     allocator: Allocator,
     crashed: bool = false,
@@ -89,10 +89,13 @@ const InterpreterRocEnv = struct {
     runtime_error_message: ?[]const u8 = null,
     expect_message: ?[]const u8 = null,
     jmp_buf: JmpBuf = undefined,
-    active_roc_ops: ?*RocOps = null,
+    caller_roc_ops: *RocOps,
 
-    fn init(allocator: Allocator) InterpreterRocEnv {
-        return .{ .allocator = allocator };
+    fn init(allocator: Allocator, caller_roc_ops: *RocOps) InterpreterRocEnv {
+        return .{
+            .allocator = allocator,
+            .caller_roc_ops = caller_roc_ops,
+        };
     }
 
     fn deinit(self: *InterpreterRocEnv) void {
@@ -115,16 +118,8 @@ const InterpreterRocEnv = struct {
         self.crashed = false;
     }
 
-    fn activateRocOps(self: *InterpreterRocEnv, caller_roc_ops: *RocOps) void {
-        self.active_roc_ops = caller_roc_ops;
-    }
-
-    fn deactivateRocOps(self: *InterpreterRocEnv) void {
-        self.active_roc_ops = null;
-    }
-
     fn currentRocOps(self: *InterpreterRocEnv) *RocOps {
-        return self.active_roc_ops.?;
+        return self.caller_roc_ops;
     }
 
     fn rocAllocFn(roc_alloc: *RocAlloc, env: *anyopaque) callconv(.c) void {
@@ -302,7 +297,6 @@ pub const Interpreter = struct {
 
     pub const EvalRequest = struct {
         expr_id: LirExprId,
-        roc_ops: *RocOps,
         arg_layouts: []const layout_mod.Idx = &.{},
         ret_layout: ?layout_mod.Idx = null,
         arg_ptr: ?*anyopaque = null,
@@ -314,14 +308,10 @@ pub const Interpreter = struct {
         allocator: Allocator,
         store: *const LirExprStore,
         layout_store: *const layout_mod.Store,
+        caller_roc_ops: *RocOps,
     ) Allocator.Error!LirInterpreter {
         const roc_env = try allocator.create(InterpreterRocEnv);
-        roc_env.* = InterpreterRocEnv.init(allocator);
-
-        const empty_hosted_fns = struct {
-            fn dummyHostedFn(_: *anyopaque, _: *anyopaque, _: *anyopaque) callconv(.c) void {}
-            var empty: [1]builtins.host_abi.HostedFn = .{builtins.host_abi.hostedFn(&dummyHostedFn)};
-        };
+        roc_env.* = InterpreterRocEnv.init(allocator, caller_roc_ops);
 
         return .{
             .allocator = allocator,
@@ -342,7 +332,7 @@ pub const Interpreter = struct {
                 .roc_dbg = &InterpreterRocEnv.rocDbgFn,
                 .roc_expect_failed = &InterpreterRocEnv.rocExpectFailedFn,
                 .roc_crashed = &InterpreterRocEnv.rocCrashedFn,
-                .hosted_fns = .{ .count = 0, .fns = &empty_hosted_fns.empty },
+                .hosted_fns = caller_roc_ops.hosted_fns,
             },
         };
     }
@@ -385,7 +375,9 @@ pub const Interpreter = struct {
     }
 
     fn triggerCrash(self: *LirInterpreter, message: []const u8) Error {
-        self.roc_ops.crash(message);
+        if (self.roc_env.crash_message) |old| self.allocator.free(old);
+        self.roc_env.crash_message = self.allocator.dupe(u8, message) catch null;
+        self.roc_env.crashed = true;
         return error.Crash;
     }
 
@@ -487,9 +479,9 @@ pub const Interpreter = struct {
 
     // Expression evaluation
 
-    /// Evaluate a LIR program using caller-provided RocOps.
+    /// Evaluate a LIR program using the RocOps bound at initialization time.
     ///
-    /// Direct expression evaluation uses `.expr_id` + `.roc_ops`.
+    /// Direct expression evaluation uses `.expr_id`.
     /// Host ABI entrypoint evaluation additionally passes `.arg_layouts`,
     /// `.arg_ptr`, and optional `.ret_ptr` / `.ret_layout`.
     pub fn eval(self: *LirInterpreter, request: EvalRequest) Error!EvalResult {
@@ -499,15 +491,10 @@ pub const Interpreter = struct {
             self.eval_active = true;
         }
 
-        const prev_hosted_fns = self.roc_ops.hosted_fns;
-        self.roc_ops.hosted_fns = request.roc_ops.hosted_fns;
-        self.roc_env.activateRocOps(request.roc_ops);
         const prev_recover_runtime_placeholders = self.recover_runtime_placeholders;
         self.recover_runtime_placeholders = request.recover_runtime_placeholders;
         defer {
             self.recover_runtime_placeholders = prev_recover_runtime_placeholders;
-            self.roc_env.deactivateRocOps();
-            self.roc_ops.hosted_fns = prev_hosted_fns;
             if (started_eval) self.eval_active = false;
         }
 

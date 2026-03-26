@@ -40,7 +40,7 @@ const ReplOps = struct {
                 .roc_dbg = replRocDbg,
                 .roc_expect_failed = replRocExpectFailed,
                 .roc_crashed = replRocCrashed,
-                .hosted_fns = .{ .count = 0, .fns = undefined },
+                .hosted_fns = builtins.host_abi.emptyHostedFunctions(),
             },
         };
     }

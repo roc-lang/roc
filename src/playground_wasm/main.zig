@@ -417,7 +417,7 @@ fn createWasmRocOps(crash_ctx: *CrashContext) !*RocOps {
         .roc_dbg = wasmRocDbg,
         .roc_expect_failed = wasmRocExpectFailed,
         .roc_crashed = wasmRocCrashed,
-        .hosted_fns = .{ .count = 0, .fns = undefined }, // Not used in playground
+        .hosted_fns = builtins.host_abi.emptyHostedFunctions(),
     };
     return roc_ops;
 }
