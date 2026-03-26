@@ -65,26 +65,14 @@ pub fn deinit(self: *TestEnv) void {
     self.crash.deinit();
 }
 
-/// Check for memory leaks. Panics if any allocations were not freed.
-/// Call this at the end of tests to verify all memory was properly released.
-pub fn checkForLeaks(self: *TestEnv) void {
-    const leak_count = self.allocation_tracker.count();
-    if (leak_count > 0) {
-        debugPrint("\n=== MEMORY LEAK DETECTED ===\n", .{});
-        debugPrint("Found {} leaked allocation(s):\n", .{leak_count});
+pub const LeakError = error{MemoryLeak};
 
-        var iter = self.allocation_tracker.iterator();
-        var i: usize = 0;
-        while (iter.next()) |entry| : (i += 1) {
-            debugPrint("  [{d}] ptr=0x{x}, size={d}, alignment={d}\n", .{
-                i,
-                entry.key_ptr.*,
-                entry.value_ptr.size,
-                entry.value_ptr.alignment,
-            });
-        }
-        debugPrint("============================\n", .{});
-        @panic("Memory leak detected in test");
+/// Check for memory leaks. Returns error.MemoryLeak if any allocations were not freed.
+/// Call this at the end of tests to verify all memory was properly released.
+/// Leak details are silent by default — use trace-refcount flags to diagnose.
+pub fn checkForLeaks(self: *TestEnv) LeakError!void {
+    if (self.allocation_tracker.count() > 0) {
+        return error.MemoryLeak;
     }
 }
 

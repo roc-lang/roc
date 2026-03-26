@@ -913,7 +913,7 @@ pub const Interpreter = struct {
 
                 if (!list_pat.rest.isNone()) {
                     const rest_len = total_len - fixed_len;
-                    const rest_val = try self.listSliceValue(val, list_pat.list_layout, prefix.len, rest_len);
+                    const rest_val = try self.listSliceValueNoIncref(val, list_pat.list_layout, prefix.len, rest_len);
                     try self.bindPattern(list_pat.rest, rest_val);
                 }
             },
@@ -992,11 +992,9 @@ pub const Interpreter = struct {
                     if (!try self.matchPattern(elem_pat_id, elem_val)) break :blk false;
                 }
 
-                if (!list_pat.rest.isNone()) {
-                    const rest_len = total_len - fixed_len;
-                    const rest_val = try self.listSliceValue(val, list_pat.list_layout, prefix.len, rest_len);
-                    if (!try self.matchPattern(list_pat.rest, rest_val)) break :blk false;
-                }
+                // Rest pattern: no need to create an actual slice for matching —
+                // the length check above already validates the rest is present.
+                // Creating a slice here would incref the list without a corresponding decref.
 
                 break :blk true;
             },
@@ -1066,6 +1064,12 @@ pub const Interpreter = struct {
                     @intFromPtr(rl.bytes),  rl.len(),  rl.capacity_or_alloc_ptr,
                     @intFromPtr(alloc_ptr), has_child, list_plan.elem_alignment,
                 });
+                // Before freeing the list, decref all child elements (mirrors RocList.decref logic)
+                if (list_plan.child) |child_key| {
+                    if (rl.isUnique(&self.roc_ops)) {
+                        self.decrefListElements(rl, list_plan, child_key, resolver, count);
+                    }
+                }
                 builtins.utils.decref(
                     alloc_ptr,
                     rl.capacity_or_alloc_ptr,
@@ -1082,6 +1086,12 @@ pub const Interpreter = struct {
                     @intFromPtr(rl.bytes),  rl.len(),  rl.capacity_or_alloc_ptr,
                     @intFromPtr(alloc_ptr), has_child,
                 });
+                // Before freeing the list, decref all child elements (mirrors RocList.decref logic)
+                if (list_plan.child) |child_key| {
+                    if (rl.isUnique(&self.roc_ops)) {
+                        self.decrefListElements(rl, list_plan, child_key, resolver, count);
+                    }
+                }
                 builtins.utils.decref(
                     alloc_ptr,
                     rl.capacity_or_alloc_ptr,
@@ -1138,6 +1148,28 @@ pub const Interpreter = struct {
             .closure => |child_key| {
                 self.performRcPlan(resolver.plan(child_key), resolver, val, count);
             },
+        }
+    }
+
+    /// Iterate through list elements and recursively decref each child.
+    /// This mirrors the element cleanup logic in RocList.decref.
+    fn decrefListElements(
+        self: *LirInterpreter,
+        rl: builtins.list.RocList,
+        list_plan: layout_mod.RcListPlan,
+        child_key: layout_mod.RcHelperKey,
+        resolver: *const layout_mod.RcHelperResolver,
+        count: u16,
+    ) void {
+        if (rl.getAllocationDataPtr(&self.roc_ops)) |source| {
+            const elem_count = rl.getAllocationElementCount(true, &self.roc_ops);
+            const child_plan = resolver.plan(child_key);
+            var i: usize = 0;
+            while (i < elem_count) : (i += 1) {
+                const element_ptr = source + i * list_plan.elem_width;
+                const element_val = Value{ .ptr = element_ptr };
+                self.performRcPlan(child_plan, resolver, element_val, count);
+            }
         }
     }
 
@@ -1415,6 +1447,29 @@ pub const Interpreter = struct {
         start: usize,
         len: usize,
     ) Error!Value {
+        return self.listSliceValueImpl(list_val, list_layout, start, len, true);
+    }
+
+    /// Like listSliceValue but without incrementing the refcount.
+    /// Used by bindPattern where the LIR manages refcounts through explicit RC expressions.
+    fn listSliceValueNoIncref(
+        self: *LirInterpreter,
+        list_val: Value,
+        list_layout: layout_mod.Idx,
+        start: usize,
+        len: usize,
+    ) Error!Value {
+        return self.listSliceValueImpl(list_val, list_layout, start, len, false);
+    }
+
+    fn listSliceValueImpl(
+        self: *LirInterpreter,
+        list_val: Value,
+        list_layout: layout_mod.Idx,
+        start: usize,
+        len: usize,
+        do_incref: bool,
+    ) Error!Value {
         const rl = valueToRocList(list_val);
         if (len == 0 or start >= rl.len()) {
             return self.rocListToValue(RocList.empty(), list_layout);
@@ -1432,12 +1487,12 @@ pub const Interpreter = struct {
         }
 
         if (start == 0 and keep_len == rl.len()) {
-            rl.incref(1, info.rc, &self.roc_ops);
+            if (do_incref) rl.incref(1, info.rc, &self.roc_ops);
             return self.rocListToValue(rl, list_layout);
         }
 
         const source_ptr = rl.bytes orelse return error.RuntimeError;
-        rl.incref(1, info.rc, &self.roc_ops);
+        if (do_incref) rl.incref(1, info.rc, &self.roc_ops);
 
         const list_alloc_ptr = (@intFromPtr(source_ptr) >> 1) | builtins.list.SEAMLESS_SLICE_BIT;
         const slice_alloc_ptr = rl.capacity_or_alloc_ptr;
@@ -1635,7 +1690,13 @@ pub const Interpreter = struct {
                 const result = builtins.str.strSplitOn(valueToRocStr(args[0]), valueToRocStr(args[1]), &self.roc_ops);
                 break :blk self.rocListToValue(result, ll.ret_layout);
             },
-            .str_join_with => self.evalStrJoinWith(args[0], args[1], ll.ret_layout),
+            .str_join_with => blk: {
+                self.roc_env.resetCrash();
+                const sj = setjmp(&self.roc_env.jmp_buf);
+                if (sj != 0) return error.Crash;
+                const result = builtins.str.strJoinWithC(valueToRocList(args[0]), valueToRocStr(args[1]), &self.roc_ops);
+                break :blk self.rocStrToValue(result, ll.ret_layout);
+            },
             .str_with_capacity => blk: {
                 self.roc_env.resetCrash();
                 const sj = setjmp(&self.roc_env.jmp_buf);
@@ -3236,38 +3297,6 @@ pub const Interpreter = struct {
 
     // String operations
 
-    fn evalStrJoinWith(self: *LirInterpreter, list_arg: Value, sep_arg: Value, _: layout_mod.Idx) Error!Value {
-        const rl = valueToRocList(list_arg);
-        const sep = self.readRocStr(sep_arg);
-        const count = rl.len();
-        if (count == 0) return self.makeRocStr("");
-
-        // Read each RocStr element from the list
-        const str_size = @sizeOf(RocStr);
-        var total_len: usize = 0;
-        var parts = std.array_list.AlignedManaged([]const u8, null).init(self.allocator);
-        defer parts.deinit();
-        for (0..count) |i| {
-            const elem_ptr = rl.bytes.? + i * str_size;
-            const elem_val = Value{ .ptr = elem_ptr };
-            const s = self.readRocStr(elem_val);
-            total_len += s.len;
-            parts.append(s) catch return error.OutOfMemory;
-        }
-        total_len += sep.len * (count - 1);
-
-        const buf = self.arena.allocator().alloc(u8, total_len) catch return error.OutOfMemory;
-        var offset: usize = 0;
-        for (parts.items, 0..) |s, i| {
-            @memcpy(buf[offset..][0..s.len], s);
-            offset += s.len;
-            if (i < parts.items.len - 1) {
-                @memcpy(buf[offset..][0..sep.len], sep);
-                offset += sep.len;
-            }
-        }
-        return self.makeRocStr(buf);
-    }
 
     fn rawBytesEqual(a: []const u8, b: []const u8) bool {
         if (a.len != b.len) return false;
@@ -3537,9 +3566,7 @@ pub const Interpreter = struct {
                 const elem_layout = ret_layout_val.data.box;
                 const elem_size = self.helper.sizeOf(elem_layout);
                 const elem_align = self.helper.sizeAlignOf(elem_layout).alignment.toByteUnits();
-                const elem_layout_data = self.layout_store.getLayout(elem_layout);
-                const contains_refcounted = self.layout_store.layoutContainsRefcounted(elem_layout_data);
-                const data_ptr = try self.allocRocDataWithRc(elem_size, @intCast(elem_align), contains_refcounted);
+                const data_ptr = try self.allocRocData(elem_size, @intCast(elem_align));
                 if (elem_size > 0) {
                     @memcpy(data_ptr[0..elem_size], arg.ptr[0..elem_size]);
                 }
@@ -3567,14 +3594,25 @@ pub const Interpreter = struct {
             result.copyFrom(.{ .ptr = data_ptr }, size);
         }
 
-        // box_unbox consumes the box: free the wrapper allocation.
-        // Inner data ownership transfers to the result, so we pass the
-        // same `elements_refcounted` used during allocation (evalBoxBox)
-        // but do NOT recurse into child elements.
+        // box_unbox consumes the box (OWNERSHIP.md:233-236):
+        //   1. Incref inner element's refcounted parts (new reference created)
+        //   2. If box is unique: decref inner element (about to be freed)
+        //   3. Decref box wrapper
+        // For unique boxes: incref(+1) + child_decref(-1) = net 0. Box freed.
+        // For shared boxes: incref(+1), no child_decref. Box refcount -1.
         const elem_layout = self.layout_store.getLayout(ret_layout);
-        const elem_align = elem_layout.alignment(self.layout_store.targetUsize()).toByteUnits();
         const contains_refcounted = self.layout_store.layoutContainsRefcounted(elem_layout);
         const alloc_ptr = boxed.read(?[*]u8);
+
+        if (contains_refcounted) {
+            self.performRc(.incref, result, ret_layout, 1);
+            if (builtins.utils.isUnique(alloc_ptr, &self.roc_ops)) {
+                const inner_val = Value{ .ptr = data_ptr };
+                self.performRc(.decref, inner_val, ret_layout, 1);
+            }
+        }
+
+        const elem_align = elem_layout.alignment(self.layout_store.targetUsize()).toByteUnits();
         builtins.utils.decrefDataPtrC(alloc_ptr, @intCast(elem_align), contains_refcounted, &self.roc_ops);
 
         return result;
