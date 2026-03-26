@@ -808,6 +808,26 @@ fn getTestName(tc: TestCase) []const u8 {
     return tc.name;
 }
 
+fn dupeOptional(gpa: std.mem.Allocator, value: ?[]const u8) ?[]const u8 {
+    return if (value) |slice| gpa.dupe(u8, slice) catch null else null;
+}
+
+fn stabilizeResult(gpa: std.mem.Allocator, result: TestResult) TestResult {
+    var stable_backends = result.backends;
+    for (&stable_backends) |*backend| {
+        backend.value = dupeOptional(gpa, backend.value);
+    }
+
+    return .{
+        .status = result.status,
+        .message = dupeOptional(gpa, result.message),
+        .duration_ns = result.duration_ns,
+        .timings = result.timings,
+        .backends = stable_backends,
+        .expected_str = dupeOptional(gpa, result.expected_str),
+    };
+}
+
 const default_result: TestResult = .{ .status = .crash, .message = null, .duration_ns = 0, .timings = .{} };
 const timeout_result: TestResult = .{ .status = .timeout, .message = null, .duration_ns = 0, .timings = .{} };
 
@@ -817,6 +837,7 @@ const Pool = harness.ProcessPool(TestCase, TestResult, .{
     .deserialize = &deserializeOutcome,
     .default_result = default_result,
     .timeout_result = timeout_result,
+    .stabilizeResult = &stabilizeResult,
     .getName = getTestName,
 });
 
@@ -1061,10 +1082,9 @@ pub fn main() !void {
     defer args_arena.deinit();
     const cli = try harness.parseStandardArgs(args_arena.allocator());
 
-    // --help: show detailed eval runner help
-    if (cli.positional.len == 0 and cli.filters.len == 0 and cli.max_threads == null and !cli.verbose) {
-        // Only show help if no flags were passed at all (bare invocation).
-        // The harness returns empty args for --help.
+    if (cli.help_requested) {
+        printHelp();
+        return;
     }
 
     const all_tests = collectTests();
@@ -1155,7 +1175,7 @@ pub fn main() !void {
     var wall_timer = Timer.start() catch unreachable;
 
     // Default timeout: 30s under parallel load, 10s with single child.
-    const hang_timeout_ms: u64 = if (cli.timeout_ms != 60_000)
+    const hang_timeout_ms: u64 = if (cli.timeout_provided and cli.timeout_ms > 0)
         cli.timeout_ms
     else if (max_children <= 1)
         10_000

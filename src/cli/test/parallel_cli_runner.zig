@@ -14,17 +14,13 @@
 //!   --verbose            Print PASS results and timing details
 
 const std = @import("std");
-const builtin = @import("builtin");
 const posix = std.posix;
 const Allocator = std.mem.Allocator;
 
 const harness = @import("test_harness");
 const platform_config = @import("platform_config.zig");
-const fx_test_specs = @import("fx_test_specs.zig");
 
-// ---------------------------------------------------------------------------
 // Test spec types
-// ---------------------------------------------------------------------------
 
 /// A single CLI test operation — one atomic unit of work.
 const CliTestSpec = struct {
@@ -61,9 +57,7 @@ const run_configs = [_]RunConfig{
     .{ .platform_name = "fx", .backend = "dev" },
 };
 
-// ---------------------------------------------------------------------------
 // Spec generation
-// ---------------------------------------------------------------------------
 
 fn buildTestSpecs(allocator: Allocator, filters: []const []const u8) ![]const CliTestSpec {
     var specs: std.ArrayListUnmanaged(CliTestSpec) = .empty;
@@ -135,9 +129,7 @@ fn matchesFilters(name: []const u8, roc_file: []const u8, filters: []const []con
     return false;
 }
 
-// ---------------------------------------------------------------------------
 // Wire protocol (child -> parent via pipe)
-// ---------------------------------------------------------------------------
 
 const TestStatus = enum(u8) {
     pass = 0,
@@ -210,9 +202,7 @@ fn deserializeResult(buf: []const u8, gpa: Allocator) ?TestResult {
     };
 }
 
-// ---------------------------------------------------------------------------
 // Child test execution
-// ---------------------------------------------------------------------------
 
 var roc_binary_path: []const u8 = "";
 
@@ -379,9 +369,22 @@ fn getTestName(spec: CliTestSpec) []const u8 {
     return spec.name;
 }
 
-// ---------------------------------------------------------------------------
+fn dupeOptional(gpa: Allocator, value: ?[]const u8) ?[]const u8 {
+    return if (value) |slice| gpa.dupe(u8, slice) catch null else null;
+}
+
+fn stabilizeResult(gpa: Allocator, result: TestResult) TestResult {
+    return .{
+        .status = result.status,
+        .duration_ns = result.duration_ns,
+        .exit_code = result.exit_code,
+        .stderr_capture = dupeOptional(gpa, result.stderr_capture),
+        .stdout_capture = dupeOptional(gpa, result.stdout_capture),
+        .message = dupeOptional(gpa, result.message),
+    };
+}
+
 // Process pool (via harness)
-// ---------------------------------------------------------------------------
 
 const Pool = harness.ProcessPool(CliTestSpec, TestResult, .{
     .runTest = &runSingleTest,
@@ -389,13 +392,12 @@ const Pool = harness.ProcessPool(CliTestSpec, TestResult, .{
     .deserialize = &deserializeResult,
     .default_result = .{ .status = .crash },
     .timeout_result = .{ .status = .timeout },
+    .stabilizeResult = &stabilizeResult,
     .getName = &getTestName,
     .use_process_groups = true,
 });
 
-// ---------------------------------------------------------------------------
 // Output
-// ---------------------------------------------------------------------------
 
 fn printResults(
     tests: []const CliTestSpec,
@@ -502,10 +504,22 @@ fn printRepro(test_name: []const u8) void {
     std.debug.print("        Repro: zig build test-cli -- --test-filter \"{s}\"\n\n", .{test_name});
 }
 
-// ---------------------------------------------------------------------------
 // Main
-// ---------------------------------------------------------------------------
 
+fn printUsage() void {
+    std.debug.print(
+        \\Usage: parallel_cli_runner <roc_binary> [options]
+        \\
+        \\Options:
+        \\  --filter <pattern>   Run tests matching pattern (repeatable)
+        \\  --threads <N>        Max concurrent workers (default: CPU count)
+        \\  --timeout <ms>       Per-test timeout in ms (default: 60000)
+        \\  --verbose            Show PASS results with timing
+        \\
+    , .{});
+}
+
+/// Entry point for the parallel CLI test runner.
 pub fn main() !void {
     var gpa_impl: std.heap.GeneralPurposeAllocator(.{}) = .init;
     defer _ = gpa_impl.deinit();
@@ -516,17 +530,13 @@ pub fn main() !void {
 
     const args = try harness.parseStandardArgs(spec_arena.allocator());
 
+    if (args.help_requested) {
+        printUsage();
+        return;
+    }
+
     if (args.positional.len < 1) {
-        std.debug.print(
-            \\Usage: parallel_cli_runner <roc_binary> [options]
-            \\
-            \\Options:
-            \\  --filter <pattern>   Run tests matching pattern (repeatable)
-            \\  --threads <N>        Max concurrent workers (default: CPU count)
-            \\  --timeout <ms>       Per-test timeout in ms (default: 60000)
-            \\  --verbose            Show PASS results with timing
-            \\
-        , .{});
+        printUsage();
         std.process.exit(1);
     }
 

@@ -605,6 +605,7 @@ const DeadFilesDetector = struct {
             "darwin_compat.zig", // Compiled to .o by build.zig for macOS linking
             "echo.zig", // Echo platform WASM entry point
             "parallel_cli_runner.zig", // Parallel CLI test runner executable
+            "test_harness.zig", // Shared test harness (added via b.addModule)
         };
         for (entry_points) |entry_point| {
             if (std.mem.startsWith(u8, &file, entry_point)) return true;

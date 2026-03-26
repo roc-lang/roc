@@ -14,11 +14,10 @@ const posix = std.posix;
 const Allocator = std.mem.Allocator;
 
 pub const Timer = std.time.Timer;
+/// Whether the platform supports `fork` for child process spawning.
 pub const has_fork = (builtin.os.tag != .windows);
 
-// ---------------------------------------------------------------------------
 // Pipe I/O helpers
-// ---------------------------------------------------------------------------
 
 /// Write all bytes to fd, looping on partial writes.
 pub fn writeAll(fd: posix.fd_t, data: []const u8) void {
@@ -38,10 +37,9 @@ pub fn readStr(buf: []const u8, offset: *usize, len: u32, gpa: Allocator) ?[]con
     return gpa.dupe(u8, slice) catch null;
 }
 
-// ---------------------------------------------------------------------------
 // Timing statistics
-// ---------------------------------------------------------------------------
 
+/// Aggregated timing statistics for a set of measurements.
 pub const TimingStats = struct {
     min: u64,
     max: u64,
@@ -53,6 +51,7 @@ pub const TimingStats = struct {
     count: usize,
 };
 
+/// Compute min, max, mean, median, stddev, p95, and total from a slice of nanosecond values.
 pub fn computeTimingStats(values: []u64) ?TimingStats {
     if (values.len == 0) return null;
 
@@ -90,10 +89,12 @@ pub fn computeTimingStats(values: []u64) ?TimingStats {
     };
 }
 
+/// Convert nanoseconds to milliseconds.
 pub fn nsToMs(ns: u64) f64 {
     return @as(f64, @floatFromInt(ns)) / 1_000_000.0;
 }
 
+/// Print a single row of timing statistics, or dashes if no data is available.
 pub fn printStatsRow(label: []const u8, stats: ?TimingStats) void {
     if (stats) |s| {
         std.debug.print("  {s:<8} {d:>8.1} {d:>8.1} {d:>8.1} {d:>8.1} {d:>8.1} {d:>8.1} {d:>8.1}   {d:>3}\n", .{
@@ -110,6 +111,7 @@ pub fn printStatsRow(label: []const u8, stats: ?TimingStats) void {
     }
 }
 
+/// Print the header row for timing statistics output.
 pub fn printStatsHeader() void {
     std.debug.print("  {s:<8} {s:>8} {s:>8} {s:>8} {s:>8} {s:>8} {s:>8} {s:>8}   {s:>3}\n", .{
         "Phase", "Min", "Max", "Mean", "Median", "StdDev", "P95", "Total", "N",
@@ -156,25 +158,21 @@ pub fn printSlowestN(
     }
 }
 
-// ---------------------------------------------------------------------------
 // CLI argument parsing
-// ---------------------------------------------------------------------------
 
+/// Common CLI arguments shared across parallel test runners.
 pub const StandardArgs = struct {
     filters: []const []const u8 = &.{},
     max_threads: ?usize = null,
     timeout_ms: u64 = 60_000,
+    timeout_provided: bool = false,
     verbose: bool = false,
+    help_requested: bool = false,
     /// Remaining positional args (runner-specific)
     positional: []const []const u8 = &.{},
 };
 
-/// Parse standard harness flags from argv. Runner-specific positional args
-/// (before the first --flag) are collected in `positional`.
-pub fn parseStandardArgs(allocator: Allocator) !StandardArgs {
-    const raw_args = try std.process.argsAlloc(allocator);
-    // Don't free — we reference slices from it.
-
+fn parseStandardArgsFromSlice(raw_args: []const []const u8, allocator: Allocator) !StandardArgs {
     var filters: std.ArrayListUnmanaged([]const u8) = .empty;
     var positional: std.ArrayListUnmanaged([]const u8) = .empty;
     var args = StandardArgs{};
@@ -191,16 +189,20 @@ pub fn parseStandardArgs(allocator: Allocator) !StandardArgs {
         } else if (std.mem.eql(u8, arg, "--threads")) {
             i += 1;
             if (i < raw_args.len) {
-                args.max_threads = std.fmt.parseInt(usize, raw_args[i], 10) catch null;
+                const parsed = std.fmt.parseInt(usize, raw_args[i], 10) catch null;
+                args.max_threads = if (parsed) |value|
+                    if (value > 0) value else null
+                else
+                    null;
             }
         } else if (std.mem.eql(u8, arg, "--timeout")) {
             i += 1;
             if (i < raw_args.len) {
+                args.timeout_provided = true;
                 args.timeout_ms = std.fmt.parseInt(u64, raw_args[i], 10) catch 60_000;
             }
         } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
-            // Caller handles help; signal via empty positional + filter
-            return StandardArgs{};
+            args.help_requested = true;
         } else if (!std.mem.startsWith(u8, arg, "--")) {
             try positional.append(allocator, arg);
         }
@@ -211,9 +213,53 @@ pub fn parseStandardArgs(allocator: Allocator) !StandardArgs {
     return args;
 }
 
-// ---------------------------------------------------------------------------
+/// Parse standard harness flags from argv.
+pub fn parseStandardArgs(allocator: Allocator) !StandardArgs {
+    const raw_args = try std.process.argsAlloc(allocator);
+    // Don't free — we reference slices from it.
+    return parseStandardArgsFromSlice(raw_args, allocator);
+}
+
+test "parseStandardArgsFromSlice preserves help and explicit timeout" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const args = try parseStandardArgsFromSlice(&.{
+        "runner",
+        "--help",
+        "--timeout",
+        "60000",
+    }, arena.allocator());
+
+    try std.testing.expect(args.help_requested);
+    try std.testing.expect(args.timeout_provided);
+    try std.testing.expectEqual(@as(u64, 60_000), args.timeout_ms);
+}
+
+test "parseStandardArgsFromSlice treats threads zero as default and keeps repeatable filters" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const args = try parseStandardArgsFromSlice(&.{
+        "runner",
+        "roc-binary",
+        "--threads",
+        "0",
+        "--filter",
+        "alpha",
+        "--filter",
+        "beta",
+    }, arena.allocator());
+
+    try std.testing.expect(args.max_threads == null);
+    try std.testing.expectEqual(@as(usize, 2), args.filters.len);
+    try std.testing.expectEqualStrings("alpha", args.filters[0]);
+    try std.testing.expectEqualStrings("beta", args.filters[1]);
+    try std.testing.expectEqual(@as(usize, 1), args.positional.len);
+    try std.testing.expectEqualStrings("roc-binary", args.positional[0]);
+}
+
 // Process pool (comptime-generic)
-// ---------------------------------------------------------------------------
 
 /// Configuration for the process pool. The runner provides type-specific
 /// callbacks for test execution, serialization, and deserialization.
@@ -229,6 +275,8 @@ pub fn PoolConfig(comptime Spec: type, comptime Result: type) type {
         default_result: Result,
         /// Result to use for timeout.
         timeout_result: Result,
+        /// Stabilize any arena-owned data for the no-fork sequential fallback.
+        stabilizeResult: *const fn (Allocator, Result) Result,
         /// Extract test name from spec (for timeout messages).
         getName: *const fn (Spec) []const u8,
         /// Use setsid() + kill(-pid) for process group cleanup.
@@ -240,8 +288,6 @@ pub fn PoolConfig(comptime Spec: type, comptime Result: type) type {
 /// Comptime-generic fork-based process pool.
 pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: PoolConfig(Spec, Result)) type {
     return struct {
-        const Self = @This();
-
         const ChildSlot = struct {
             pid: posix.pid_t,
             pipe_fd: posix.fd_t,
@@ -355,7 +401,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             gpa: Allocator,
         ) void {
             if (comptime !has_fork) {
-                runSequential(specs, results);
+                runSequential(specs, results, gpa);
                 return;
             }
 
@@ -480,11 +526,13 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
         }
 
         /// Sequential fallback for platforms without fork (Windows).
-        fn runSequential(specs: []const Spec, results: []Result) void {
+        fn runSequential(specs: []const Spec, results: []Result, gpa: Allocator) void {
             var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+            defer arena.deinit();
             for (specs, 0..) |spec, i| {
                 _ = arena.reset(.retain_capacity);
-                results[i] = cfg.runTest(arena.allocator(), spec);
+                const unstable_result = cfg.runTest(arena.allocator(), spec);
+                results[i] = cfg.stabilizeResult(gpa, unstable_result);
             }
         }
     };
