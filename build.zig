@@ -2401,7 +2401,11 @@ pub fn build(b: *std.Build) void {
                 .root_source_file = b.path("src/cli/test/parallel_cli_runner.zig"),
                 .target = target,
                 .optimize = optimize,
-                .imports = &.{},
+                .imports = &.{
+                    .{ .name = "test_harness", .module = b.createModule(.{
+                        .root_source_file = b.path("src/build/test_harness.zig"),
+                    }) },
+                },
             }),
         });
         parallel_cli_runner_exe.root_module.link_libc = true;
