@@ -826,6 +826,11 @@ pub const Repl = struct {
             },
         };
 
+        const roc_str: *const RocStr = @ptrCast(@alignCast(&result_buf));
+        defer if (!roc_str.isSmallStr()) {
+            @constCast(roc_str).decref(&self.dev_evaluator.?.roc_ops);
+        };
+
         const output = self.dupResultStr(&result_buf, backend_name) catch {
             return .{ .eval_error = try self.allocator.dupe(u8, "Out of memory") };
         };

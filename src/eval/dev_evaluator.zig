@@ -26,6 +26,7 @@ const builtins = @import("builtins");
 const i128h = builtins.compiler_rt_128;
 const lir_program_mod = @import("cir_to_lir.zig");
 const LirProgram = lir_program_mod.LirProgram;
+const RocEnv = @import("roc_env.zig").RocEnv;
 
 // Cross-platform setjmp/longjmp for crash recovery.
 const sljmp = @import("sljmp");
@@ -226,13 +227,15 @@ const StaticDataInterner = backend.StaticDataInterner;
 const MemoryBackend = StaticDataInterner.MemoryBackend;
 
 /// Environment for RocOps in the DevEvaluator.
-/// Manages arena-backed allocation where free() is a no-op.
-/// This enables proper RC tracking for in-place mutation optimization
-/// while arenas handle actual memory deallocation.
+///
+/// In test builds, runtime allocations go through `RocEnv` so leaks are
+/// visible to the test harness. Outside tests, keep the static-buffer fast
+/// path because the generated-code allocator callbacks still have an
+/// unresolved stability issue with allocator vtable calls in some lambda
+/// execution contexts.
 const DevRocEnv = struct {
     allocator: Allocator,
-    /// Track allocations to know their sizes for deallocation
-    allocations: std.AutoHashMap(usize, AllocInfo),
+    tracked_env: RocEnv,
     /// Set to true when roc_crashed is called during execution.
     crashed: bool = false,
     /// The crash message (duped from the callback argument).
@@ -242,38 +245,30 @@ const DevRocEnv = struct {
     /// Io context for routing [dbg] output
     io: Io = Io.default(),
 
-    const AllocInfo = struct {
-        len: usize,
-        alignment: usize,
-    };
-
     fn init(allocator: Allocator, io: ?Io) DevRocEnv {
         return .{
             .allocator = allocator,
-            .allocations = std.AutoHashMap(usize, AllocInfo).init(allocator),
+            .tracked_env = RocEnv.init(allocator),
             .io = io orelse Io.default(),
         };
     }
 
     fn deinit(self: *DevRocEnv) void {
-        // Free all tracked allocations before deiniting the map
-        var iter = self.allocations.iterator();
-        while (iter.next()) |entry| {
-            const ptr_addr = entry.key_ptr.*;
-            const alloc_info = entry.value_ptr.*;
-            const slice_ptr: [*]u8 = @ptrFromInt(ptr_addr);
-
-            switch (alloc_info.alignment) {
-                1 => self.allocator.free(@as([*]align(1) u8, @alignCast(slice_ptr))[0..alloc_info.len]),
-                2 => self.allocator.free(@as([*]align(2) u8, @alignCast(slice_ptr))[0..alloc_info.len]),
-                4 => self.allocator.free(@as([*]align(4) u8, @alignCast(slice_ptr))[0..alloc_info.len]),
-                8 => self.allocator.free(@as([*]align(8) u8, @alignCast(slice_ptr))[0..alloc_info.len]),
-                16 => self.allocator.free(@as([*]align(16) u8, @alignCast(slice_ptr))[0..alloc_info.len]),
-                else => {},
+        const leak_count = if (comptime builtin.is_test) self.tracked_env.leakCount() else 0;
+        if (comptime builtin.is_test) {
+            if (leak_count > 0) {
+                std.debug.print("Dev backend leaked {d} runtime allocation(s)\n", .{leak_count});
+                self.tracked_env.reportLeaks();
             }
         }
-        self.allocations.deinit();
+        self.tracked_env.deinit();
         if (self.crash_message) |msg| self.allocator.free(msg);
+
+        if (comptime builtin.is_test) {
+            if (leak_count > 0) {
+                std.debug.panic("Dev backend runtime leak detected", .{});
+            }
+        }
     }
 
     /// Per-thread static allocator state for alloc/realloc functions.
@@ -322,6 +317,12 @@ const DevRocEnv = struct {
 
     /// Allocation function for RocOps.
     fn rocAllocFn(roc_alloc: *RocAlloc, env: *anyopaque) callconv(.c) void {
+        if (comptime builtin.is_test) {
+            const self: *DevRocEnv = @ptrCast(@alignCast(env));
+            RocEnv.rocAllocFn(roc_alloc, @ptrCast(&self.tracked_env));
+            return;
+        }
+
         // Align the offset to the requested alignment
         const alignment = roc_alloc.alignment;
         const mask = alignment - 1;
@@ -346,13 +347,25 @@ const DevRocEnv = struct {
 
     /// Deallocation function for RocOps.
     /// Currently a no-op since we use a static buffer for allocations.
-    fn rocDeallocFn(_: *RocDealloc, _: *anyopaque) callconv(.c) void {
+    fn rocDeallocFn(roc_dealloc: *RocDealloc, env: *anyopaque) callconv(.c) void {
+        if (comptime builtin.is_test) {
+            const self: *DevRocEnv = @ptrCast(@alignCast(env));
+            RocEnv.rocDeallocFn(roc_dealloc, @ptrCast(&self.tracked_env));
+            return;
+        }
+
         // Static buffer doesn't support deallocation - this is a no-op
     }
 
     /// Reallocation function for RocOps.
     /// With static buffer, we allocate new space and copy data (old space is not reclaimed).
     fn rocReallocFn(roc_realloc: *RocRealloc, env: *anyopaque) callconv(.c) void {
+        if (comptime builtin.is_test) {
+            const self: *DevRocEnv = @ptrCast(@alignCast(env));
+            RocEnv.rocReallocFn(roc_realloc, @ptrCast(&self.tracked_env));
+            return;
+        }
+
         // Align the offset to the requested alignment
         const alignment = roc_realloc.alignment;
         const mask = alignment - 1;
@@ -880,6 +893,7 @@ pub const DevEvaluator = struct {
                 // RocStr is 24 bytes: { bytes: *u8, length: usize, capacity: usize }
                 var roc_str_bytes: [ROCSTR_SIZE]u8 = undefined;
                 executable.callWithResultPtrAndRocOps(@ptrCast(&roc_str_bytes), @constCast(&self.roc_ops));
+                const roc_str: *const RocStr = @ptrCast(@alignCast(&roc_str_bytes));
 
                 // Check if it's a small string (high bit of last byte is set)
                 const len_byte = roc_str_bytes[ROCSTR_SIZE - 1];
@@ -902,11 +916,13 @@ pub const DevEvaluator = struct {
                     const actual_length = length & ~SEAMLESS_SLICE_BIT;
 
                     if (actual_length == 0) {
+                        @constCast(roc_str).decref(&self.roc_ops);
                         break :blk EvalResult{ .str_val = "" };
                     }
 
                     // Copy the string data from the heap-allocated memory
                     const str_copy = self.allocator.dupe(u8, data_ptr[0..actual_length]) catch return error.OutOfMemory;
+                    @constCast(roc_str).decref(&self.roc_ops);
                     break :blk EvalResult{ .str_val = str_copy };
                 }
             },
