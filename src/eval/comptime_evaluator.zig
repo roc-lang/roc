@@ -29,7 +29,7 @@ const Problem = check_mod.problem.Problem;
 const ProblemStore = check_mod.problem.Store;
 
 const LirProgram = eval_mod.LirProgram;
-const LirInterpreter = eval_mod.LirInterpreter;
+const Interpreter = eval_mod.Interpreter;
 const Value = eval_mod.Value;
 const LayoutHelper = eval_mod.value.LayoutHelper;
 const CrashContext = eval_mod.CrashContext;
@@ -611,11 +611,14 @@ pub const ComptimeEvaluator = struct {
         defer lower_result.deinit();
 
         // Evaluate via interpreter
-        var interp = try LirInterpreter.init(self.allocator, &lower_result.lir_store, lower_result.layout_store, self.io);
+        var interp = try Interpreter.init(self.allocator, &lower_result.lir_store, lower_result.layout_store);
         interp.detect_infinite_while_loops = true;
         defer interp.deinit();
 
-        const eval_result = interp.eval(lower_result.final_expr_id) catch |err| {
+        const eval_result = interp.eval(.{
+            .expr_id = lower_result.final_expr_id,
+            .roc_ops = self.get_ops(),
+        }) catch |err| {
             switch (err) {
                 error.Crash => {
                     // Dupe via arena: the message is owned by the interpreter
@@ -884,6 +887,13 @@ pub const ComptimeEvaluator = struct {
                         try self.failed_literal_exprs.put(literal.expr_idx, {});
                         continue;
                     },
+                },
+                .err => {
+                    // Type checking already reported an error for this type variable.
+                    // Don't add a redundant COMPTIME EVAL ERROR — the type checker
+                    // already reported the real error (e.g. TYPE MISMATCH).
+                    // Don't mark as failed either — the literal itself may be valid.
+                    continue;
                 },
                 else => {
                     // Non-structure types (flex, rigid, alias, etc.)
@@ -1210,19 +1220,20 @@ pub const ComptimeEvaluator = struct {
         };
 
         // Evaluate via interpreter
-        var interp = try LirInterpreter.init(self.allocator, &lower_result.lir_store, lower_result.layout_store, self.io);
+        var interp = try Interpreter.init(self.allocator, &lower_result.lir_store, lower_result.layout_store);
         interp.detect_infinite_while_loops = true;
         defer interp.deinit();
 
         const arg_layouts = [_]layout_mod.Idx{param_layout_idx};
-        interp.evalEntrypoint(
-            lower_result.final_expr_id,
-            &arg_layouts,
-            ret_layout_idx,
-            self.get_ops(),
-            @ptrCast(arg_buf.ptr),
-            @ptrCast(ret_buf.ptr),
-        ) catch |err| {
+        _ = interp.eval(.{
+            .expr_id = lower_result.final_expr_id,
+            .roc_ops = self.get_ops(),
+            .arg_layouts = &arg_layouts,
+            .ret_layout = ret_layout_idx,
+            .arg_ptr = @ptrCast(arg_buf.ptr),
+            .ret_ptr = @ptrCast(ret_buf.ptr),
+            .recover_runtime_placeholders = true,
+        }) catch |err| {
             const crash_msg = interp.getCrashMessage() orelse @errorName(err);
             const error_msg = try self.problems.putFmtExtraString(
                 "from_numeral evaluation failed: {s}",
@@ -1556,16 +1567,18 @@ pub const ComptimeEvaluator = struct {
         defer batch_result.deinit();
 
         // Evaluate the synthetic block (all defs chained with decl_const statements)
-        var interp = try LirInterpreter.init(
+        var interp = try Interpreter.init(
             self.allocator,
             &batch_result.lir_store,
             batch_result.layout_store,
-            self.io,
         );
         interp.detect_infinite_while_loops = true;
         defer interp.deinit();
 
-        _ = interp.eval(batch_result.block_expr_id) catch return;
+        _ = interp.eval(.{
+            .expr_id = batch_result.block_expr_id,
+            .roc_ops = self.get_ops(),
+        }) catch return;
 
         // Extract per-def values from bindings and fold to CIR.
         // Already-folded defs (from per-def pass) are skipped by tryFoldExprFromValue.
@@ -1596,11 +1609,14 @@ pub const ComptimeEvaluator = struct {
         defer lower_result.deinit();
 
         // Evaluate via interpreter
-        var interp = try LirInterpreter.init(self.allocator, &lower_result.lir_store, lower_result.layout_store, self.io);
+        var interp = try Interpreter.init(self.allocator, &lower_result.lir_store, lower_result.layout_store);
         interp.detect_infinite_while_loops = true;
         defer interp.deinit();
 
-        const eval_result = interp.eval(lower_result.final_expr_id) catch return false;
+        const eval_result = interp.eval(.{
+            .expr_id = lower_result.final_expr_id,
+            .roc_ops = self.get_ops(),
+        }) catch return false;
         const result_value = switch (eval_result) {
             .value => |v| v,
             .early_return => |v| v,

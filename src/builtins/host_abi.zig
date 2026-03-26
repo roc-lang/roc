@@ -120,6 +120,18 @@ pub const RocOps = extern struct {
         self.roc_dbg(&roc_dbg_args, self.env);
     }
 
+    /// Helper function to report a failed `expect` to the host.
+    pub fn expectFailed(self: *RocOps, msg: []const u8) void {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
+        const roc_expect_failed_args = RocExpectFailed{
+            .utf8_bytes = @constCast(msg.ptr),
+            .len = msg.len,
+        };
+        self.roc_expect_failed(&roc_expect_failed_args, self.env);
+    }
+
     pub fn alloc(self: *RocOps, alignment: usize, length: usize) *anyopaque {
         const trace = tracy.trace(@src());
         defer trace.end();

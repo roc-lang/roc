@@ -189,6 +189,7 @@ pub const LirProgram = struct {
     pub const LowerResult = struct {
         lir_store: LirExprStore,
         final_expr_id: lir.LirExprId,
+        entry_proc_id: lir.LirProcSpecId = lir.LirProcSpecId.none,
         result_layout: layout.Idx,
         layout_store: *layout.Store,
         tuple_len: usize,
@@ -323,16 +324,18 @@ pub const LirProgram = struct {
 
     /// Lower a CIR entrypoint expression to post-RC LIR.
     ///
-    /// When `wrap_zero_arg_call` is true and the MIR expression has a function
-    /// type, wraps it in a zero-arg call so the result is the function's return
-    /// value, not a lambda. This is the same wrapping the dev evaluator does.
+    /// Entrypoints are always lowered into a synthetic top-level proc that
+    /// applies the entrypoint expression to the host-provided arguments. The
+    /// returned `final_expr_id` is a placeholder proc_call used by the
+    /// interpreter entrypoint path to recover that proc id.
     pub fn lowerEntrypointExpr(
         self: *LirProgram,
         module_env: *ModuleEnv,
         expr_idx: CIR.Expr.Idx,
         all_module_envs: []const *ModuleEnv,
         app_module_env: ?*ModuleEnv,
-        wrap_zero_arg_call: bool,
+        arg_layouts: []const layout.Idx,
+        ret_layout: layout.Idx,
         type_scope: ?*const types.TypeScope,
     ) Error!LowerResult {
         // Pre-lowering setup
@@ -405,24 +408,57 @@ pub const LirProgram = struct {
             }
         }
 
-        var mir_expr_id = mir_lower.lowerExpr(expr_idx) catch {
+        const mir_expr_id = mir_lower.lowerExpr(expr_idx) catch {
             return error.RuntimeError;
         };
 
-        // Wrap zero-arg functions in a call (same logic as dev evaluator)
-        if (wrap_zero_arg_call) {
-            const func_mono_idx = mir_store.typeOf(mir_expr_id);
-            const resolved = mir_store.monotype_store.getMonotype(func_mono_idx);
-            if (resolved == .func) {
-                const ret = resolved.func.ret;
-                mir_expr_id = mir_store.addExpr(self.allocator, .{ .call = .{
-                    .func = mir_expr_id,
-                    .args = MIR.ExprSpan.empty(),
-                } }, ret, base.Region.zero()) catch return error.OutOfMemory;
-            }
-        }
+        // Lambda set inference
+        var lambda_set_store = mir.LambdaSet.infer(self.allocator, &mir_store, all_module_envs) catch return error.OutOfMemory;
+        defer lambda_set_store.deinit(self.allocator);
 
-        return self.lowerFromMir(module_env, expr_idx, all_module_envs, &mir_store, mir_expr_id, layout_store_ptr);
+        // MIR → LIR entrypoint proc lowering
+        var lir_store = LirExprStore.init(self.allocator);
+        errdefer lir_store.deinit();
+
+        var mir_to_lir = lir.MirToLir.init(
+            self.allocator,
+            &mir_store,
+            &lir_store,
+            layout_store_ptr,
+            &lambda_set_store,
+            module_env.idents.true_tag,
+        );
+        defer mir_to_lir.deinit();
+
+        const entry_proc_id = mir_to_lir.lowerEntrypointProc(mir_expr_id, arg_layouts, ret_layout) catch {
+            return error.RuntimeError;
+        };
+
+        // The interpreter entrypoint path only needs the proc id and pulls the
+        // actual host arguments from arg_ptr, so the proc_call args can stay empty.
+        const final_expr_id = lir_store.addExpr(.{ .proc_call = .{
+            .proc = entry_proc_id,
+            .args = lir.LirExprSpan.empty(),
+            .ret_layout = ret_layout,
+            .called_via = .apply,
+        } }, base.Region.zero()) catch return error.OutOfMemory;
+
+        lir.RcInsert.insertRcOpsIntoSymbolDefsBestEffort(self.allocator, &lir_store, layout_store_ptr);
+
+        const cir_expr = module_env.store.getExpr(expr_idx);
+        const tuple_len: usize = if (cir_expr == .e_tuple)
+            module_env.store.exprSlice(cir_expr.e_tuple.elems).len
+        else
+            1;
+
+        return LowerResult{
+            .lir_store = lir_store,
+            .final_expr_id = final_expr_id,
+            .entry_proc_id = entry_proc_id,
+            .result_layout = ret_layout,
+            .layout_store = layout_store_ptr,
+            .tuple_len = tuple_len,
+        };
     }
 
     /// Lower a CIR expression to post-RC LIR, given already-resolved module indices

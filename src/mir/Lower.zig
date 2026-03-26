@@ -1334,6 +1334,49 @@ fn lowerStrInspect(self: *Self, module_env: *const ModuleEnv, run_ll: anytype, r
     );
 }
 
+fn lowerDbgExpr(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    inner_expr_idx: CIR.Expr.Idx,
+    region: Region,
+) Allocator.Error!MIR.ExprId {
+    const lowered_inner = try self.lowerExpr(inner_expr_idx);
+    const inner_mono = self.store.typeOf(lowered_inner);
+
+    // Evaluate the argument once, format it through Str.inspect, then return the
+    // original value. This keeps dbg formatting in MIR lowering where type
+    // information is still available and avoids introducing a managed-ref alias
+    // at the dbg node itself.
+    const value_bind = try self.makeSyntheticBind(inner_mono, false);
+    const value_lookup = try self.emitMirLookup(value_bind.symbol, inner_mono, region);
+    const inspected = try self.lowerStrInspectExpr(module_env, value_lookup, ModuleEnv.varFrom(inner_expr_idx), region);
+    const inspected_mono = self.store.typeOf(inspected);
+    const dbg_effect = try self.store.addExpr(
+        self.allocator,
+        .{ .dbg_expr = .{ .expr = inspected } },
+        inspected_mono,
+        region,
+    );
+    const wildcard = try self.store.addPattern(self.allocator, .wildcard, inspected_mono);
+
+    try self.registerBoundSymbolDefIfNeeded(value_bind.pattern, lowered_inner);
+
+    const stmts = try self.store.addStmts(self.allocator, &.{
+        .{ .decl_const = .{ .pattern = value_bind.pattern, .expr = lowered_inner } },
+        .{ .decl_const = .{ .pattern = wildcard, .expr = dbg_effect } },
+    });
+
+    return try self.store.addExpr(
+        self.allocator,
+        .{ .block = .{
+            .stmts = stmts,
+            .final_expr = value_lookup,
+        } },
+        inner_mono,
+        region,
+    );
+}
+
 fn lowerStrInspectExpr(
     self: *Self,
     type_env: *const ModuleEnv,
@@ -3222,10 +3265,7 @@ fn lowerExprWithMonotypeOverride(
             const mir_str = try self.copyStringToMir(module_env, crash.msg);
             break :blk try self.store.addExpr(self.allocator, .{ .crash = mir_str }, monotype, region);
         },
-        .e_dbg => |dbg_expr| {
-            const inner = try self.lowerExpr(dbg_expr.expr);
-            return try self.store.addExpr(self.allocator, .{ .dbg_expr = .{ .expr = inner } }, monotype, region);
-        },
+        .e_dbg => |dbg_expr| try self.lowerDbgExpr(module_env, dbg_expr.expr, region),
         .e_expect => |expect| {
             const body = try self.lowerExpr(expect.body);
             return try self.store.addExpr(self.allocator, .{ .expect = .{ .body = body } }, monotype, region);
@@ -6163,7 +6203,7 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
                 try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = wildcard, .expr = expr } });
             },
             .s_dbg => |s_dbg| {
-                const expr = try self.lowerExpr(s_dbg.expr);
+                const expr = try self.lowerDbgExpr(module_env, s_dbg.expr, stmt_region);
                 const expr_type = self.store.typeOf(expr);
                 const wildcard = try self.store.addPattern(self.allocator, .wildcard, expr_type);
                 try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = wildcard, .expr = expr } });

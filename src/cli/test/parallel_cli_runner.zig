@@ -262,9 +262,8 @@ fn createIsolatedCacheDir(allocator: Allocator) ![]u8 {
     return std.fs.path.join(allocator, &.{ cwd_path, cache_rel });
 }
 
-fn removeCacheDir(allocator: Allocator, cache_dir: []const u8) void {
+fn removeCacheDir(_: Allocator, cache_dir: []const u8) void {
     // Extract the relative part after cwd for cleanup
-    _ = allocator;
     std.fs.cwd().deleteTree(cache_dir) catch {};
 }
 

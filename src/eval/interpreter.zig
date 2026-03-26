@@ -18,7 +18,6 @@ const lir_value = @import("value.zig");
 const lir_program_mod = @import("cir_to_lir.zig");
 const builtins = @import("builtins");
 const sljmp = @import("sljmp");
-const Io = @import("io").Io;
 const work_stack = @import("work_stack.zig");
 const FlatBinding = work_stack.FlatBinding;
 const build_options = @import("build_options");
@@ -77,56 +76,23 @@ const JmpBuf = sljmp.JmpBuf;
 const setjmp = sljmp.setjmp;
 const longjmp = sljmp.longjmp;
 
-/// Environment for RocOps in the interpreter.
-/// Uses a thread-local static buffer for allocation (same pattern as DevRocEnv)
-/// to avoid Zig allocator vtable issues from C-calling-convention callbacks.
+/// Environment for interpreter-managed RocOps forwarding.
+///
+/// The interpreter always evaluates with caller-provided RocOps. These callbacks
+/// forward the caller's alloc/dealloc/realloc/dbg/expect/crash hooks while
+/// retaining local bookkeeping for crash and expect messages so hosts that care
+/// can inspect the last message after evaluation.
 const InterpreterRocEnv = struct {
     allocator: Allocator,
-    io: Io,
     crashed: bool = false,
     crash_message: ?[]const u8 = null,
     runtime_error_message: ?[]const u8 = null,
     expect_message: ?[]const u8 = null,
     jmp_buf: JmpBuf = undefined,
-    forwarded_memory_env: *anyopaque = undefined,
-    forwarded_roc_alloc: ?*const fn (*RocAlloc, *anyopaque) callconv(.c) void = null,
-    forwarded_roc_dealloc: ?*const fn (*RocDealloc, *anyopaque) callconv(.c) void = null,
-    forwarded_roc_realloc: ?*const fn (*RocRealloc, *anyopaque) callconv(.c) void = null,
+    active_roc_ops: ?*RocOps = null,
 
-    /// Thread-local static buffer for allocations from builtins.
-    const StaticAlloc = struct {
-        threadlocal var buffer: [1024 * 1024]u8 align(16) = undefined;
-        threadlocal var offset: usize = 0;
-        const max_allocs = 4096;
-        threadlocal var alloc_ptrs: [max_allocs]usize = [_]usize{0} ** max_allocs;
-        threadlocal var alloc_sizes: [max_allocs]usize = [_]usize{0} ** max_allocs;
-        threadlocal var alloc_count: usize = 0;
-
-        fn recordAlloc(ptr: usize, size: usize) void {
-            if (alloc_count < max_allocs) {
-                alloc_ptrs[alloc_count] = ptr;
-                alloc_sizes[alloc_count] = size;
-                alloc_count += 1;
-            }
-        }
-
-        fn getAllocSize(ptr: usize) usize {
-            var i: usize = alloc_count;
-            while (i > 0) {
-                i -= 1;
-                if (alloc_ptrs[i] == ptr) return alloc_sizes[i];
-            }
-            return 0;
-        }
-
-        fn reset() void {
-            offset = 0;
-            alloc_count = 0;
-        }
-    };
-
-    fn init(allocator: Allocator, io: Io) InterpreterRocEnv {
-        return .{ .allocator = allocator, .io = io };
+    fn init(allocator: Allocator) InterpreterRocEnv {
+        return .{ .allocator = allocator };
     }
 
     fn deinit(self: *InterpreterRocEnv) void {
@@ -142,7 +108,6 @@ const InterpreterRocEnv = struct {
         self.runtime_error_message = null;
         if (self.expect_message) |msg| self.allocator.free(msg);
         self.expect_message = null;
-        StaticAlloc.reset();
     }
 
     /// Reset just the crash state before calling a builtin that might crash.
@@ -150,91 +115,50 @@ const InterpreterRocEnv = struct {
         self.crashed = false;
     }
 
-    fn forwardMemoryOpsFrom(self: *InterpreterRocEnv, caller_roc_ops: *RocOps) void {
-        self.forwarded_memory_env = caller_roc_ops.env;
-        self.forwarded_roc_alloc = caller_roc_ops.roc_alloc;
-        self.forwarded_roc_dealloc = caller_roc_ops.roc_dealloc;
-        self.forwarded_roc_realloc = caller_roc_ops.roc_realloc;
+    fn activateRocOps(self: *InterpreterRocEnv, caller_roc_ops: *RocOps) void {
+        self.active_roc_ops = caller_roc_ops;
     }
 
-    fn resetForwardedMemoryOps(self: *InterpreterRocEnv) void {
-        self.forwarded_roc_alloc = null;
-        self.forwarded_roc_dealloc = null;
-        self.forwarded_roc_realloc = null;
+    fn deactivateRocOps(self: *InterpreterRocEnv) void {
+        self.active_roc_ops = null;
+    }
+
+    fn currentRocOps(self: *InterpreterRocEnv) *RocOps {
+        return self.active_roc_ops.?;
     }
 
     fn rocAllocFn(roc_alloc: *RocAlloc, env: *anyopaque) callconv(.c) void {
         const self: *InterpreterRocEnv = @ptrCast(@alignCast(env));
-        if (self.forwarded_roc_alloc) |forwarded_roc_alloc| {
-            forwarded_roc_alloc(roc_alloc, self.forwarded_memory_env);
-            trace_rc.log("alloc(fwd): ptr=0x{x} size={d} align={d}", .{ @intFromPtr(roc_alloc.answer), roc_alloc.length, roc_alloc.alignment });
-            return;
-        }
-
-        const alignment = roc_alloc.alignment;
-        const mask = alignment - 1;
-        const aligned_offset = (StaticAlloc.offset + mask) & ~mask;
-        if (aligned_offset + roc_alloc.length > StaticAlloc.buffer.len) {
-            self.crashed = true;
-            if (self.crash_message) |old| self.allocator.free(old);
-            self.crash_message = self.allocator.dupe(u8, "static buffer overflow in alloc") catch null;
-            longjmp(&self.jmp_buf, 1);
-        }
-        const ptr: [*]u8 = @ptrCast(&StaticAlloc.buffer[aligned_offset]);
-        StaticAlloc.offset = aligned_offset + roc_alloc.length;
-        StaticAlloc.recordAlloc(@intFromPtr(ptr), roc_alloc.length);
-        roc_alloc.answer = @ptrCast(ptr);
-        trace_rc.log("alloc: ptr=0x{x} size={d} align={d} buf_offset={d}", .{ @intFromPtr(ptr), roc_alloc.length, alignment, StaticAlloc.offset });
+        const caller_roc_ops = self.currentRocOps();
+        caller_roc_ops.roc_alloc(roc_alloc, caller_roc_ops.env);
+        trace_rc.log("alloc(fwd): ptr=0x{x} size={d} align={d}", .{ @intFromPtr(roc_alloc.answer), roc_alloc.length, roc_alloc.alignment });
     }
 
     fn rocDeallocFn(roc_dealloc: *RocDealloc, env: *anyopaque) callconv(.c) void {
         const self: *InterpreterRocEnv = @ptrCast(@alignCast(env));
         trace_rc.log("dealloc: ptr=0x{x} align={d}", .{ @intFromPtr(roc_dealloc.ptr), roc_dealloc.alignment });
-        if (self.forwarded_roc_dealloc) |forwarded_roc_dealloc| {
-            forwarded_roc_dealloc(roc_dealloc, self.forwarded_memory_env);
-        }
+        const caller_roc_ops = self.currentRocOps();
+        caller_roc_ops.roc_dealloc(roc_dealloc, caller_roc_ops.env);
     }
 
     fn rocReallocFn(roc_realloc: *RocRealloc, env: *anyopaque) callconv(.c) void {
         const self: *InterpreterRocEnv = @ptrCast(@alignCast(env));
-        if (self.forwarded_roc_realloc) |forwarded_roc_realloc| {
-            forwarded_roc_realloc(roc_realloc, self.forwarded_memory_env);
-            trace_rc.log("realloc(fwd): old=0x{x} new=0x{x} size={d}", .{ @intFromPtr(roc_realloc.answer), @intFromPtr(roc_realloc.answer), roc_realloc.new_length });
-            return;
-        }
-
-        const alignment = roc_realloc.alignment;
-        const mask = alignment - 1;
-        const aligned_offset = (StaticAlloc.offset + mask) & ~mask;
-        if (aligned_offset + roc_realloc.new_length > StaticAlloc.buffer.len) {
-            self.crashed = true;
-            if (self.crash_message) |old| self.allocator.free(old);
-            self.crash_message = self.allocator.dupe(u8, "static buffer overflow in realloc") catch null;
-            longjmp(&self.jmp_buf, 1);
-        }
-        const new_ptr: [*]u8 = @ptrCast(&StaticAlloc.buffer[aligned_offset]);
-        StaticAlloc.offset = aligned_offset + roc_realloc.new_length;
-        StaticAlloc.recordAlloc(@intFromPtr(new_ptr), roc_realloc.new_length);
-        const old_ptr: [*]u8 = @ptrCast(@alignCast(roc_realloc.answer));
-        const old_size = StaticAlloc.getAllocSize(@intFromPtr(old_ptr));
-        const copy_len = @min(old_size, roc_realloc.new_length);
-        if (copy_len > 0) {
-            @memmove(new_ptr[0..copy_len], old_ptr[0..copy_len]);
-        }
-        roc_realloc.answer = @ptrCast(new_ptr);
-        trace_rc.log("realloc: old=0x{x} new=0x{x} old_size={d} new_size={d} align={d}", .{ @intFromPtr(old_ptr), @intFromPtr(new_ptr), old_size, roc_realloc.new_length, alignment });
+        const caller_roc_ops = self.currentRocOps();
+        const old_ptr = roc_realloc.answer;
+        caller_roc_ops.roc_realloc(roc_realloc, caller_roc_ops.env);
+        trace_rc.log("realloc(fwd): old=0x{x} new=0x{x} size={d}", .{ @intFromPtr(old_ptr), @intFromPtr(roc_realloc.answer), roc_realloc.new_length });
     }
 
     fn rocDbgFn(roc_dbg: *const RocDbg, env: *anyopaque) callconv(.c) void {
         const self: *InterpreterRocEnv = @ptrCast(@alignCast(env));
-        const msg = roc_dbg.utf8_bytes[0..roc_dbg.len];
-        var buf: [256]u8 = undefined;
-        const line = std.fmt.bufPrint(&buf, "[dbg] {s}\n", .{msg}) catch "[dbg] (message too long)\n";
-        self.io.writeStderr(line) catch {};
+        const caller_roc_ops = self.currentRocOps();
+        caller_roc_ops.roc_dbg(roc_dbg, caller_roc_ops.env);
     }
 
     fn rocExpectFailedFn(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
         const self: *InterpreterRocEnv = @ptrCast(@alignCast(env));
+        const caller_roc_ops = self.currentRocOps();
+        caller_roc_ops.roc_expect_failed(expect_args, caller_roc_ops.env);
         const source = expect_args.utf8_bytes[0..expect_args.len];
         if (self.expect_message == null) {
             self.expect_message = self.allocator.dupe(u8, source) catch null;
@@ -243,6 +167,8 @@ const InterpreterRocEnv = struct {
 
     fn rocCrashedFn(roc_crashed: *const RocCrashed, env: *anyopaque) callconv(.c) void {
         const self: *InterpreterRocEnv = @ptrCast(@alignCast(env));
+        const caller_roc_ops = self.currentRocOps();
+        caller_roc_ops.roc_crashed(roc_crashed, caller_roc_ops.env);
         self.crashed = true;
         const msg = roc_crashed.utf8_bytes[0..roc_crashed.len];
         if (self.crash_message) |old| self.allocator.free(old);
@@ -252,7 +178,8 @@ const InterpreterRocEnv = struct {
 };
 
 /// Interprets LIR expressions by walking the expression tree and evaluating directly.
-pub const LirInterpreter = struct {
+pub const Interpreter = struct {
+    const LirInterpreter = @This();
     const max_call_depth: usize = 1024;
     const stack_overflow_message =
         "This Roc program overflowed its stack memory. This usually means there is very deep or infinite recursion somewhere in the code.";
@@ -288,7 +215,7 @@ pub const LirInterpreter = struct {
     roc_env: *InterpreterRocEnv,
     roc_ops: RocOps,
 
-    /// Guard to reset the static buffer only once per top-level eval.
+    /// Guard to reset transient eval state only once per top-level eval.
     eval_active: bool = false,
 
     /// When executing an entrypoint in `roc run --allow-errors`, tolerate
@@ -306,11 +233,6 @@ pub const LirInterpreter = struct {
     /// Current lambda params — used by evalHostedCall to collect implicit args
     /// when the hosted_call has 0 explicit args (same pattern as dev backend).
     current_lambda_params: ?lir.LirPatternSpan = null,
-
-    /// When running via evalEntrypoint, points to the platform's RocOps.
-    /// Hosted functions must receive this (not the interpreter's own RocOps)
-    /// because they cast ops.env to the platform's HostEnv type.
-    caller_roc_ops: ?*RocOps = null,
 
     /// Join point registry for tail-recursive CF statement evaluation.
     join_points: JoinPointMap = .{},
@@ -378,14 +300,23 @@ pub const LirInterpreter = struct {
         break_expr: void,
     };
 
+    pub const EvalRequest = struct {
+        expr_id: LirExprId,
+        roc_ops: *RocOps,
+        arg_layouts: []const layout_mod.Idx = &.{},
+        ret_layout: ?layout_mod.Idx = null,
+        arg_ptr: ?*anyopaque = null,
+        ret_ptr: ?*anyopaque = null,
+        recover_runtime_placeholders: bool = false,
+    };
+
     pub fn init(
         allocator: Allocator,
         store: *const LirExprStore,
         layout_store: *const layout_mod.Store,
-        io: ?Io,
     ) Allocator.Error!LirInterpreter {
         const roc_env = try allocator.create(InterpreterRocEnv);
-        roc_env.* = InterpreterRocEnv.init(allocator, io orelse Io.default());
+        roc_env.* = InterpreterRocEnv.init(allocator);
 
         const empty_hosted_fns = struct {
             fn dummyHostedFn(_: *anyopaque, _: *anyopaque, _: *anyopaque) callconv(.c) void {}
@@ -454,10 +385,12 @@ pub const LirInterpreter = struct {
     }
 
     fn triggerCrash(self: *LirInterpreter, message: []const u8) Error {
-        if (self.roc_env.crash_message) |old| self.allocator.free(old);
-        self.roc_env.crash_message = self.allocator.dupe(u8, message) catch null;
-        self.roc_env.crashed = true;
+        self.roc_ops.crash(message);
         return error.Crash;
+    }
+
+    fn currentRocOps(self: *LirInterpreter) *RocOps {
+        return self.roc_env.currentRocOps();
     }
 
     /// Allocate memory for a value of the given layout.
@@ -497,148 +430,111 @@ pub const LirInterpreter = struct {
         return builtins.utils.allocateWithRefcount(data_bytes, element_alignment, elements_refcounted, &self.roc_ops);
     }
 
-    // Entrypoint evaluation (for roc run / interpreter shim)
-
-    /// Evaluate an entrypoint expression, handling function calls with args.
-    ///
-    /// If the expression is a proc_call, it is called with arguments
-    /// extracted from `arg_ptr` (a packed tuple of arg values). Otherwise the
-    /// expression is evaluated directly. The result is copied to `ret_ptr`.
-    ///
-    /// `caller_roc_ops` provides hosted functions and runtime memory ops from
-    /// the platform; the interpreter splices them into its own RocOps adapter
-    /// while preserving interpreter-local crash/expect/dbg handling.
-    pub fn evalEntrypoint(
-        self: *LirInterpreter,
-        final_expr_id: LirExprId,
-        arg_layouts: []const layout_mod.Idx,
-        ret_layout: layout_mod.Idx,
-        caller_roc_ops: *RocOps,
-        arg_ptr: ?*anyopaque,
-        ret_ptr: *anyopaque,
-    ) Error!void {
-        // Splice in the caller's runtime-facing pieces while keeping
-        // interpreter-local handlers for crash/expect/dbg.
-        const prev_hosted_fns = self.roc_ops.hosted_fns;
-        self.roc_ops.hosted_fns = caller_roc_ops.hosted_fns;
-        self.roc_env.forwardMemoryOpsFrom(caller_roc_ops);
-        self.caller_roc_ops = caller_roc_ops;
-        const prev_recover_runtime_placeholders = self.recover_runtime_placeholders;
-        self.recover_runtime_placeholders = true;
-        defer {
-            self.roc_env.resetForwardedMemoryOps();
-            self.roc_ops.hosted_fns = prev_hosted_fns;
-            self.caller_roc_ops = null;
-            self.recover_runtime_placeholders = prev_recover_runtime_placeholders;
+    fn evalWithEntrypointAbi(self: *LirInterpreter, request: EvalRequest) Error!EvalResult {
+        const final_expr = self.store.getExpr(request.expr_id);
+        if (final_expr != .proc_call) {
+            return self.evalExpr(request.expr_id);
         }
 
-        // Ensure eval state is initialized (matches the guard in self.eval()).
-        if (!self.eval_active) {
-            self.roc_env.resetForEval();
-            self.eval_active = true;
-        }
+        const pc = final_expr.proc_call;
+        const proc_spec = self.store.getProcSpec(pc.proc);
 
-        // Check if the expression is a proc_call that needs argument extraction from host.
-        const final_expr = self.store.getExpr(final_expr_id);
-        const is_proc_call = (final_expr == .proc_call);
+        // The host packs args as a struct sorted by alignment (descending),
+        // then by original index (ascending), matching the Roc ABI.
+        var args_buf: [16]Value = undefined;
+        const arg_count = request.arg_layouts.len;
+        if (request.arg_ptr) |aptr| {
+            const arg_bytes = @as([*]u8, @ptrCast(aptr));
 
-        if (is_proc_call) {
-            // Function entrypoint: call the proc with args from arg_ptr.
-            const pc = final_expr.proc_call;
-            const proc_spec = self.store.getProcSpec(pc.proc);
-
-            // Extract arguments from the packed arg tuple.
-            // The host packs args as a struct sorted by alignment (descending),
-            // then by original index (ascending) -- matching the Roc ABI.
-            // Proc params are in semantic (signature) order, so we compute
-            // each arg's byte offset in the sorted layout and extract accordingly.
-            var args_buf: [16]Value = undefined;
-            const arg_count = arg_layouts.len;
-            if (arg_ptr) |aptr| {
-                const arg_bytes = @as([*]u8, @ptrCast(aptr));
-
-                // Build sorted index order (by alignment descending, index ascending)
-                var sorted_indices: [16]usize = undefined;
-                for (0..arg_count) |i| sorted_indices[i] = i;
-                for (0..arg_count) |i| {
-                    for (i + 1..arg_count) |j| {
-                        const i_al = self.helper.sizeAlignOf(arg_layouts[sorted_indices[i]]).alignment.toByteUnits();
-                        const j_al = self.helper.sizeAlignOf(arg_layouts[sorted_indices[j]]).alignment.toByteUnits();
-                        if (j_al > i_al or (j_al == i_al and sorted_indices[j] < sorted_indices[i])) {
-                            const tmp = sorted_indices[i];
-                            sorted_indices[i] = sorted_indices[j];
-                            sorted_indices[j] = tmp;
-                        }
-                    }
-                }
-
-                // Compute byte offset for each arg in sorted order, then extract
-                var arg_offsets: [16]usize = undefined;
-                var byte_offset: usize = 0;
-                for (sorted_indices[0..arg_count]) |orig_idx| {
-                    const sa = self.helper.sizeAlignOf(arg_layouts[orig_idx]);
-                    const al = sa.alignment.toByteUnits();
-                    byte_offset = std.mem.alignForward(usize, byte_offset, al);
-                    arg_offsets[orig_idx] = byte_offset;
-                    byte_offset += sa.size;
-                }
-
-                // Extract each arg at its computed offset
-                for (0..arg_count) |i| {
-                    const sa = self.helper.sizeAlignOf(arg_layouts[i]);
-                    if (sa.size > 0) {
-                        const copy = try self.allocBytes(sa.size);
-                        @memcpy(copy.ptr[0..sa.size], arg_bytes[arg_offsets[i] .. arg_offsets[i] + sa.size]);
-                        args_buf[i] = copy;
-                    } else {
-                        args_buf[i] = Value.zst;
+            var sorted_indices: [16]usize = undefined;
+            for (0..arg_count) |i| sorted_indices[i] = i;
+            for (0..arg_count) |i| {
+                for (i + 1..arg_count) |j| {
+                    const i_al = self.helper.sizeAlignOf(request.arg_layouts[sorted_indices[i]]).alignment.toByteUnits();
+                    const j_al = self.helper.sizeAlignOf(request.arg_layouts[sorted_indices[j]]).alignment.toByteUnits();
+                    if (j_al > i_al or (j_al == i_al and sorted_indices[j] < sorted_indices[i])) {
+                        const tmp = sorted_indices[i];
+                        sorted_indices[i] = sorted_indices[j];
+                        sorted_indices[j] = tmp;
                     }
                 }
             }
 
-            const call_result = try self.evalProcStackSafe(proc_spec, args_buf[0..arg_count]);
-            const ret_val = switch (call_result) {
-                .value => |v| v,
-                .early_return => |v| v,
-                .break_expr => return error.RuntimeError,
-            };
-
-            const ret_size = self.helper.sizeOf(ret_layout);
-            if (ret_size > 0 and !ret_val.isZst()) {
-                @memcpy(@as([*]u8, @ptrCast(ret_ptr))[0..ret_size], ret_val.readBytes(ret_size));
+            var arg_offsets: [16]usize = undefined;
+            var byte_offset: usize = 0;
+            for (sorted_indices[0..arg_count]) |orig_idx| {
+                const sa = self.helper.sizeAlignOf(request.arg_layouts[orig_idx]);
+                const al = sa.alignment.toByteUnits();
+                byte_offset = std.mem.alignForward(usize, byte_offset, al);
+                arg_offsets[orig_idx] = byte_offset;
+                byte_offset += sa.size;
             }
-        } else {
-            // Non-function expression: evaluate directly.
-            const result = try self.eval(final_expr_id);
-            const val = switch (result) {
-                .value => |v| v,
-                .early_return => |v| v,
-                .break_expr => return error.RuntimeError,
-            };
 
-            const ret_size = self.helper.sizeOf(ret_layout);
-            if (ret_size > 0 and !val.isZst()) {
-                @memcpy(@as([*]u8, @ptrCast(ret_ptr))[0..ret_size], val.readBytes(ret_size));
+            for (0..arg_count) |i| {
+                const sa = self.helper.sizeAlignOf(request.arg_layouts[i]);
+                if (sa.size > 0) {
+                    const copy = try self.allocBytes(sa.size);
+                    @memcpy(copy.ptr[0..sa.size], arg_bytes[arg_offsets[i] .. arg_offsets[i] + sa.size]);
+                    args_buf[i] = copy;
+                } else {
+                    args_buf[i] = Value.zst;
+                }
             }
         }
 
-        // After successful evaluation, check for failed expect assertions.
-        // evalExpect stores the message but does not error — we surface it here
-        // so the host crash handler can report it and exit non-zero.
-        if (self.roc_env.expect_message) |expect_msg| {
-            const crash_msg = std.fmt.allocPrint(self.allocator, "Roc crashed: expect failed: {s}", .{expect_msg}) catch "Roc crashed: expect failed";
-            if (self.roc_env.crash_message) |old| self.allocator.free(old);
-            self.roc_env.crash_message = crash_msg;
-            return error.Crash;
-        }
+        return self.evalProcStackSafe(proc_spec, args_buf[0..arg_count]);
     }
 
     // Expression evaluation
 
+    /// Evaluate a LIR program using caller-provided RocOps.
+    ///
+    /// Direct expression evaluation uses `.expr_id` + `.roc_ops`.
+    /// Host ABI entrypoint evaluation additionally passes `.arg_layouts`,
+    /// `.arg_ptr`, and optional `.ret_ptr` / `.ret_layout`.
+    pub fn eval(self: *LirInterpreter, request: EvalRequest) Error!EvalResult {
+        const started_eval = !self.eval_active;
+        if (started_eval) {
+            self.roc_env.resetForEval();
+            self.eval_active = true;
+        }
+
+        const prev_hosted_fns = self.roc_ops.hosted_fns;
+        self.roc_ops.hosted_fns = request.roc_ops.hosted_fns;
+        self.roc_env.activateRocOps(request.roc_ops);
+        const prev_recover_runtime_placeholders = self.recover_runtime_placeholders;
+        self.recover_runtime_placeholders = request.recover_runtime_placeholders;
+        defer {
+            self.recover_runtime_placeholders = prev_recover_runtime_placeholders;
+            self.roc_env.deactivateRocOps();
+            self.roc_ops.hosted_fns = prev_hosted_fns;
+            if (started_eval) self.eval_active = false;
+        }
+
+        const use_entrypoint_abi = request.arg_ptr != null or request.ret_ptr != null or request.arg_layouts.len > 0 or request.recover_runtime_placeholders;
+        const result = if (use_entrypoint_abi)
+            try self.evalWithEntrypointAbi(request)
+        else
+            try self.evalExpr(request.expr_id);
+
+        if (request.ret_ptr) |ret_ptr| {
+            const ret_layout = request.ret_layout orelse self.exprLayout(request.expr_id);
+            const ret_val = switch (result) {
+                .value => |v| v,
+                .early_return => |v| v,
+                .break_expr => return error.RuntimeError,
+            };
+            const ret_size = self.helper.sizeOf(ret_layout);
+            if (ret_size > 0 and !ret_val.isZst()) {
+                @memcpy(@as([*]u8, @ptrCast(ret_ptr))[0..ret_size], ret_val.readBytes(ret_size));
+            }
+        }
+
+        return result;
+    }
+
     /// Evaluate a LIR expression, returning its value.
-    /// Thin wrapper around evalStackSafe that initializes eval state on the first call.
-    pub fn eval(self: *LirInterpreter, initial_expr_id: LirExprId) Error!EvalResult {
-        // Initialize eval state on first call (not on re-entrant calls from evalLowLevel etc.)
+    fn evalExpr(self: *LirInterpreter, initial_expr_id: LirExprId) Error!EvalResult {
         if (!self.eval_active) {
             self.roc_env.resetForEval();
             self.eval_active = true;
@@ -648,7 +544,7 @@ pub const LirInterpreter = struct {
 
     /// Evaluate an expression, expecting a normal value (not control flow).
     fn evalValue(self: *LirInterpreter, expr_id: LirExprId) Error!Value {
-        const result = try self.eval(expr_id);
+        const result = try self.evalExpr(expr_id);
         return switch (result) {
             .value => |v| v,
             .early_return => |v| v,
@@ -935,7 +831,7 @@ pub const LirInterpreter = struct {
             self.evaluating.put(symbol.raw(), {}) catch return error.OutOfMemory;
             defer _ = self.evaluating.remove(symbol.raw());
 
-            const result = try self.eval(def_expr_id);
+            const result = try self.evalExpr(def_expr_id);
             const val = switch (result) {
                 .value => |v| v,
                 else => return error.RuntimeError,
@@ -1414,7 +1310,7 @@ pub const LirInterpreter = struct {
         // (the host casts ops.env to its own HostEnv type).
         const hosted_fn = self.roc_ops.hosted_fns.fns[hc.index];
         self.roc_env.resetCrash();
-        const ops_for_host: *RocOps = self.caller_roc_ops orelse &self.roc_ops;
+        const ops_for_host = self.currentRocOps();
         hosted_fn(@ptrCast(ops_for_host), @ptrCast(&ret_buf), @ptrCast(args_buf.ptr));
 
         if (self.roc_env.crashed) return error.Crash;
@@ -3975,15 +3871,13 @@ pub const LirInterpreter = struct {
             },
             .crash => |c| {
                 const msg = self.store.getString(c.msg);
-                if (self.roc_env.crash_message) |old| self.allocator.free(old);
-                self.roc_env.crash_message = self.allocator.dupe(u8, msg) catch null;
-                return error.Crash;
+                return self.triggerCrash(msg);
             },
             .runtime_error => |runtime_error_expr| {
                 if (self.recover_runtime_placeholders) {
                     try self.pushValue(try self.placeholderValueForLayout(runtime_error_expr.ret_layout));
                 } else {
-                    return error.RuntimeError;
+                    return self.triggerCrash("RuntimeError");
                 }
             },
         }
@@ -4497,16 +4391,17 @@ pub const LirInterpreter = struct {
                         try self.pushValue(self.normalizeValueToLayout(tag_base.value, actual_payload_layout, tpa.payload_layout));
                     },
                     .dbg_stmt => |ds| {
-                        const dbg_msg = try self.renderExpectValue(val, ds.result_layout);
+                        const dbg_msg = if (ds.result_layout == .str)
+                            self.readRocStr(val)
+                        else
+                            try self.renderExpectValue(val, ds.result_layout);
                         self.roc_ops.dbg(dbg_msg);
                         try self.pushValue(val);
                     },
                     .expect_cond => |ec| {
                         if (val.read(u8) == 0) {
-                            if (self.roc_env.expect_message == null) {
-                                const msg = try self.renderExpectExpr(ec.cond_expr_id);
-                                self.roc_env.expect_message = self.allocator.dupe(u8, msg) catch return error.OutOfMemory;
-                            }
+                            const msg = try self.renderExpectExpr(ec.cond_expr_id);
+                            self.roc_ops.expectFailed(msg);
                         }
                         try self.pushValue(Value.zst);
                     },
@@ -4703,7 +4598,7 @@ pub const LirInterpreter = struct {
     }
 
     /// Call a proc and run to completion, returning the result.
-    /// Used by evalEntrypoint (host entry) and evalListSortWith (sort comparator).
+    /// Used by host-ABI entry evaluation and evalListSortWith (sort comparator).
     fn evalProcStackSafe(self: *LirInterpreter, proc_spec: lir.LirProcSpec, args: []const Value) Error!EvalResult {
         const outer_work_len = self.work_stack.items.len;
         const saved_unwinding = self.unwinding;

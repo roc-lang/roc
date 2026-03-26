@@ -485,7 +485,8 @@ test "ModuleEnv serialization and interpreter evaluation" {
     const gpa = std.heap.smp_allocator;
     const builtin_loading = eval.builtin_loading;
     const EvalLirProgram = eval.LirProgram;
-    const EvalLirInterpreter = eval.LirInterpreter;
+    const EvalInterpreter = eval.Interpreter;
+    const EvalTestEnv = eval.TestEnv;
 
     const Check = check.Check;
     const Allocators = base.Allocators;
@@ -565,9 +566,15 @@ test "ModuleEnv serialization and interpreter evaluation" {
         const all_module_envs = [_]*ModuleEnv{ @constCast(builtin_module.env), &original_env };
         var lower_result = try lir_prog.lowerExpr(&original_env, canonicalized_expr_idx.get_idx(), &all_module_envs, null);
         defer lower_result.deinit();
-        var interp = try EvalLirInterpreter.init(gpa, &lower_result.lir_store, lower_result.layout_store, null);
+        var test_env = EvalTestEnv.init(gpa);
+        defer test_env.deinit();
+
+        var interp = try EvalInterpreter.init(gpa, &lower_result.lir_store, lower_result.layout_store);
         defer interp.deinit();
-        const eval_result = try interp.eval(lower_result.final_expr_id);
+        const eval_result = try interp.eval(.{
+            .expr_id = lower_result.final_expr_id,
+            .roc_ops = test_env.get_ops(),
+        });
         const value = switch (eval_result) {
             .value => |v| v,
             .early_return => |v| v,
@@ -666,9 +673,15 @@ test "ModuleEnv serialization and interpreter evaluation" {
             const all_module_envs2 = [_]*ModuleEnv{ @constCast(builtin_module.env), deserialized_env };
             var lower_result2 = try lir_prog2.lowerExpr(deserialized_env, canonicalized_expr_idx.get_idx(), &all_module_envs2, null);
             defer lower_result2.deinit();
-            var interp2 = try EvalLirInterpreter.init(gpa, &lower_result2.lir_store, lower_result2.layout_store, null);
+            var test_env2 = EvalTestEnv.init(gpa);
+            defer test_env2.deinit();
+
+            var interp2 = try EvalInterpreter.init(gpa, &lower_result2.lir_store, lower_result2.layout_store);
             defer interp2.deinit();
-            const eval_result2 = try interp2.eval(lower_result2.final_expr_id);
+            const eval_result2 = try interp2.eval(.{
+                .expr_id = lower_result2.final_expr_id,
+                .roc_ops = test_env2.get_ops(),
+            });
             const value2 = switch (eval_result2) {
                 .value => |v| v,
                 .early_return => |v| v,

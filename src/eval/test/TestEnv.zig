@@ -238,8 +238,9 @@ fn testRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) void 
     };
 }
 
-fn testRocDbg(_: *const RocDbg, _: *anyopaque) callconv(.c) void {
-    @panic("testRocDbg not implemented yet");
+fn testRocDbg(dbg_args: *const RocDbg, _: *anyopaque) callconv(.c) void {
+    const msg = dbg_args.utf8_bytes[0..dbg_args.len];
+    std.debug.print("[dbg] {s}\n", .{msg});
 }
 
 fn testRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {

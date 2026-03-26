@@ -866,17 +866,19 @@ pub const Repl = struct {
         defer lower_result.deinit();
 
         // Create and run interpreter
-        var interp = eval_mod.LirInterpreter.init(
+        var interp = eval_mod.Interpreter.init(
             self.allocator,
             &lower_result.lir_store,
             lower_result.layout_store,
-            null,
         ) catch |err| {
             return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Interpreter init error: {s}", .{@errorName(err)}) };
         };
         defer interp.deinit();
 
-        const eval_result = interp.eval(lower_result.final_expr_id) catch |err| switch (err) {
+        const eval_result = interp.eval(.{
+            .expr_id = lower_result.final_expr_id,
+            .roc_ops = self.roc_ops,
+        }) catch |err| switch (err) {
             error.Crash => {
                 const msg = interp.getCrashMessage() orelse "crash during evaluation";
                 return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Crash: {s}", .{msg}) };

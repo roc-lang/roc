@@ -23,7 +23,8 @@ const backend = @import("backend");
 const bytebox = @import("bytebox");
 const WasmEvaluator = eval_mod.WasmEvaluator;
 const LirProgram = eval_mod.LirProgram;
-const LirInterpreter = eval_mod.LirInterpreter;
+const Interpreter = eval_mod.Interpreter;
+const TestEnv = eval_mod.TestEnv;
 const i128h = builtins.compiler_rt_128;
 const enable_dev_eval_leak_checks = true;
 
@@ -493,10 +494,16 @@ pub fn lirInterpreterEval(allocator: std.mem.Allocator, module_env: *ModuleEnv, 
     var lower_result = try lir_prog.lowerExpr(module_env, expr_idx, &all_module_envs, null);
     defer lower_result.deinit();
 
-    var interp = try LirInterpreter.init(allocator, &lower_result.lir_store, lower_result.layout_store, null);
+    var test_env = TestEnv.init(allocator);
+    defer test_env.deinit();
+
+    var interp = try Interpreter.init(allocator, &lower_result.lir_store, lower_result.layout_store);
     defer interp.deinit();
 
-    const eval_result = try interp.eval(lower_result.final_expr_id);
+    const eval_result = try interp.eval(.{
+        .expr_id = lower_result.final_expr_id,
+        .roc_ops = test_env.get_ops(),
+    });
 
     if (interp.getExpectMessage() != null) return error.Crash;
 
@@ -574,10 +581,16 @@ pub fn lirInterpreterInspectedStr(allocator: std.mem.Allocator, module_env: *Mod
     var lower_result = try lir_prog.lowerExpr(module_env, inspect_expr, &all_module_envs, null);
     defer lower_result.deinit();
 
-    var interp = try LirInterpreter.init(allocator, &lower_result.lir_store, lower_result.layout_store, null);
+    var test_env = TestEnv.init(allocator);
+    defer test_env.deinit();
+
+    var interp = try Interpreter.init(allocator, &lower_result.lir_store, lower_result.layout_store);
     defer interp.deinit();
 
-    const eval_result = try interp.eval(lower_result.final_expr_id);
+    const eval_result = try interp.eval(.{
+        .expr_id = lower_result.final_expr_id,
+        .roc_ops = test_env.get_ops(),
+    });
 
     // Check for failed expect assertions (they set the message but don't error)
     if (interp.getExpectMessage() != null) return error.Crash;

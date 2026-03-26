@@ -1223,6 +1223,11 @@ fn runtimeValueLayoutFromMirExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator
     }
 
     switch (expr) {
+        .int => {
+            const resolved = try self.layoutFromMonotype(mono_idx);
+            if (resolved == .zst) return .dec;
+            return resolved;
+        },
         .call => |call_data| {
             if (!(try self.monotypeMayContainFunctionValue(mono_idx))) {
                 return self.layoutFromMonotype(mono_idx);
@@ -2688,7 +2693,13 @@ fn lowerInt(self: *Self, int_data: anytype, mono_idx: Monotype.Idx, region: Regi
     // Use the monotype to determine the concrete integer layout.
     // For 128-bit types, always emit i128_literal even if the value fits in i64,
     // so codegen receives the correct ABI width and signedness.
-    const target_layout = try self.layoutFromMonotype(mono_idx);
+    const target_layout = blk: {
+        const resolved = try self.layoutFromMonotype(mono_idx);
+        // Generic unsuffixed integer literals can still be unresolved at this
+        // stage inside polymorphic call sites. Roc defaults those literals to
+        // Dec, so don't propagate a temporary zst layout into runtime codegen.
+        break :blk if (resolved == .zst) layout.Idx.dec else resolved;
+    };
 
     // Dec: integer literals with Dec type must be scaled by 10^18 (RocDec representation).
     // The MIR stores the raw integer value; we convert to Dec here.

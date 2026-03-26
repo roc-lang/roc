@@ -14,7 +14,8 @@ const Allocator = std.mem.Allocator;
 const CIR = can.CIR;
 
 const LirProgram = eval_mod.LirProgram;
-const LirInterpreter = eval_mod.LirInterpreter;
+const Interpreter = eval_mod.Interpreter;
+const TestEnv = eval_mod.TestEnv;
 const CrashContext = eval_mod.CrashContext;
 const CrashState = eval_mod.CrashState;
 
@@ -143,15 +144,20 @@ pub const TestRunner = struct {
         defer lower_result.deinit();
 
         // Create interpreter and evaluate
-        var interp = try LirInterpreter.init(
+        var test_env = TestEnv.init(self.allocator);
+        defer test_env.deinit();
+
+        var interp = try Interpreter.init(
             self.allocator,
             &lower_result.lir_store,
             lower_result.layout_store,
-            null,
         );
         defer interp.deinit();
 
-        const eval_result = interp.eval(lower_result.final_expr_id) catch |err| {
+        const eval_result = interp.eval(.{
+            .expr_id = lower_result.final_expr_id,
+            .roc_ops = test_env.get_ops(),
+        }) catch |err| {
             return err;
         };
         const value = switch (eval_result) {

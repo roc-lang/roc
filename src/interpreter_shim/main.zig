@@ -184,7 +184,7 @@ const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
 const RocOps = builtins.host_abi.RocOps;
 const LirProgram = eval.LirProgram;
-const LirInterpreter = eval.LirInterpreter;
+const Interpreter = eval.Interpreter;
 const layout = eval.layout;
 const safe_memory = base.safe_memory;
 
@@ -584,13 +584,13 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
     defer if (platform_type_scope) |*ts| ts.deinit();
 
     // Lower CIR to LIR
-    const is_zero_arg_func = maybe_func != null and arg_layouts_len == 0;
     var lower_result = lir_program.lowerEntrypointExpr(
         env_ptr,
         expr_idx,
         all_module_envs,
         app_env,
-        is_zero_arg_func,
+        arg_layouts,
+        ret_layout,
         if (platform_type_scope) |*ts| ts else null,
     ) catch |err| {
         const err_msg = std.fmt.bufPrint(&buf, "INTERPRETER SHIM: LIR lowering failed: {s}", .{@errorName(err)}) catch "LIR lowering failed";
@@ -600,17 +600,18 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
     defer lower_result.deinit();
 
     // Create interpreter and evaluate
-    var interp = try LirInterpreter.init(allocator, &lower_result.lir_store, lower_result.layout_store, null);
+    var interp = try Interpreter.init(allocator, &lower_result.lir_store, lower_result.layout_store);
     defer interp.deinit();
 
-    interp.evalEntrypoint(
-        lower_result.final_expr_id,
-        arg_layouts,
-        ret_layout,
-        roc_ops,
-        arg_ptr,
-        ret_ptr,
-    ) catch |err| {
+    _ = interp.eval(.{
+        .expr_id = lower_result.final_expr_id,
+        .roc_ops = roc_ops,
+        .arg_layouts = arg_layouts,
+        .ret_layout = ret_layout,
+        .arg_ptr = arg_ptr,
+        .ret_ptr = ret_ptr,
+        .recover_runtime_placeholders = true,
+    }) catch |err| {
         const err_msg = switch (err) {
             error.Crash => blk: {
                 if (interp.getCrashMessage()) |crash_msg| break :blk crash_msg;

@@ -1133,6 +1133,17 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .str_val = "42.0" },
     },
+    .{
+        .name = "where-clause method dispatch defaults numeric literals for specialization",
+        .source =
+        \\{
+        \\    stringify : a -> Str where [a.to_str : a -> Str]
+        \\    stringify = |value| value.to_str()
+        \\    stringify(12345)
+        \\}
+        ,
+        .expected = .{ .str_val = "12345.0" },
+    },
     .{ .name = "issue 8710: list len", .source = "[1.I64, 2.I64, 3.I64].len()", .expected = .{ .i64_val = 3 } },
     .{
         .name = "issue 8727: make_adder",

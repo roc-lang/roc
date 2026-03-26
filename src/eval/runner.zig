@@ -265,34 +265,32 @@ fn runViaInterpreter(
 
     // Lower CIR to LIR.
     // - Zero-arg functions: wrap in call at MIR level so the LIR executes the body.
-    // - Functions with args: lower as lambda; evalEntrypoint calls it with args.
+    // - Functions with args: lower as lambda; the interpreter eval call binds host ABI args.
     // - Non-functions: lower directly.
-    const is_zero_arg_func = maybe_func != null and arg_layouts_len == 0;
     var lower_result = lir_program.lowerEntrypointExpr(
         platform_env,
         entrypoint_expr,
         const_module_envs,
         app_module_env,
-        is_zero_arg_func,
+        arg_layouts,
+        ret_layout,
         if (platform_type_scope) |*ts| ts else null,
     ) catch return error.CompilationFailed;
     defer lower_result.deinit();
 
     // Create interpreter and evaluate
-    var interp = try eval_mod.LirInterpreter.init(gpa, &lower_result.lir_store, lower_result.layout_store, null);
+    var interp = try eval_mod.Interpreter.init(gpa, &lower_result.lir_store, lower_result.layout_store);
     defer interp.deinit();
 
-    interp.evalEntrypoint(
-        lower_result.final_expr_id,
-        arg_layouts,
-        ret_layout,
-        roc_ops,
-        args_ptr,
-        result_ptr,
-    ) catch |err| {
-        if (comptime builtin.os.tag != .freestanding) {
-            std.debug.print("Interpreter error: {}\n", .{err});
-        }
+    _ = interp.eval(.{
+        .expr_id = lower_result.final_expr_id,
+        .roc_ops = roc_ops,
+        .arg_layouts = arg_layouts,
+        .ret_layout = ret_layout,
+        .arg_ptr = args_ptr,
+        .ret_ptr = result_ptr,
+        .recover_runtime_placeholders = true,
+    }) catch {
         return error.EvalFailed;
     };
 }

@@ -1443,18 +1443,6 @@ const all_syntax_common_suffix =
 
 const all_syntax_expected_stdout =
     all_syntax_common_prefix ++
-    "(5, 5, 5.0, 5.0, 5, 5.0, 5.0, 5, 5.0, 5.0, 5, 5.0, 5.0, 5.0)\n" ++
-    "<opaque>\n" ++
-    all_syntax_common_suffix;
-
-// TODO: dev backend displays module-level records with field names (record
-// format) while the interpreter displays them as tuples. This is because
-// module-level records are stored as e_tuple in the CIR, and the interpreter
-// falls back to tuple format at runtime while the dev backend uses the
-// monotype which preserves field names. Once this format difference is
-// resolved, use all_syntax_expected_stdout.
-const all_syntax_dev_expected_stdout =
-    all_syntax_common_prefix ++
     "{ binary: 5.0, explicit_i128: 5, explicit_i16: 5, explicit_i32: 5, explicit_i64: 5, explicit_i8: 5, explicit_u128: 5, explicit_u16: 5, explicit_u32: 5, explicit_u64: 5, explicit_u8: 5, hex: 5.0, octal: 5.0, usage_based: 5.0 }\n" ++
     "<opaque>\n" ++
     all_syntax_common_suffix;
@@ -1483,7 +1471,7 @@ test "echo platform: all_syntax_test.roc prints expected output (dev backend)" {
 
     try util.checkSuccess(run_result);
 
-    try std.testing.expectEqualStrings(all_syntax_dev_expected_stdout, run_result.stdout);
+    try std.testing.expectEqualStrings(all_syntax_expected_stdout, run_result.stdout);
     // TODO: dev backend doesn't produce dbg output
     try std.testing.expectEqualStrings("", run_result.stderr);
 }

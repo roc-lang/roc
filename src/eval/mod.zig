@@ -37,7 +37,7 @@ pub const value = @import("value.zig");
 pub const Value = value.Value;
 /// LIR expression interpreter
 pub const interpreter = @import("interpreter.zig");
-pub const LirInterpreter = interpreter.LirInterpreter;
+pub const Interpreter = interpreter.Interpreter;
 /// Stack-safe eval engine types (WorkItem, Continuation, FlatBinding)
 pub const work_stack = @import("work_stack.zig");
 /// Backend selection for expression evaluation

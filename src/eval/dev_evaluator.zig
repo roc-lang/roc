@@ -720,21 +720,6 @@ pub const DevEvaluator = struct {
         // Reset the static bump allocator so each evaluation starts fresh
         DevRocEnv.StaticAlloc.reset();
 
-        // Enable runtime inserts and resolve imports
-        for (all_module_envs) |env| {
-            env.common.idents.interner.enableRuntimeInserts(env.gpa) catch return error.OutOfMemory;
-        }
-        module_env.imports.resolveImports(module_env, all_module_envs);
-
-        const module_idx = findModuleEnvIdx(all_module_envs, module_env) orelse return error.ModuleEnvNotFound;
-        const app_module_idx = if (app_module_env) |env|
-            findModuleEnvIdx(all_module_envs, env) orelse return error.ModuleEnvNotFound
-        else
-            null;
-
-        const layout_store_ptr = try self.lir_program.prepareLayoutStores(all_module_envs);
-
-        // CIR → MIR (manual, because we need to wrap zero-arg functions)
         // Build platform type scope for cross-module type resolution (e.g., Model → { value: I64 })
         var platform_type_scope = if (app_module_env) |app_env|
             buildPlatformTypeScope(self.allocator, module_env, app_env, platform_to_app_idents)
@@ -742,72 +727,14 @@ pub const DevEvaluator = struct {
             null;
         defer if (platform_type_scope) |*ts| ts.deinit();
 
-        var mir_store = MIR.Store.init(self.allocator) catch return error.OutOfMemory;
-        defer mir_store.deinit(self.allocator);
-
-        var monomorphization = if (platform_type_scope) |*ts|
-            mir.Monomorphize.runExprWithTypeScope(
-                self.allocator,
-                all_module_envs,
-                &module_env.types,
-                module_idx,
-                app_module_idx,
-                expr_idx,
-                module_idx,
-                ts,
-                app_module_idx.?,
-            ) catch return error.OutOfMemory
-        else
-            mir.Monomorphize.runExpr(
-                self.allocator,
-                all_module_envs,
-                &module_env.types,
-                module_idx,
-                app_module_idx,
-                expr_idx,
-            ) catch return error.OutOfMemory;
-        defer monomorphization.deinit(self.allocator);
-
-        var mir_lower = mir.Lower.init(
-            self.allocator,
-            &mir_store,
-            &monomorphization,
-            all_module_envs,
-            &module_env.types,
-            module_idx,
-            app_module_idx,
-        ) catch return error.OutOfMemory;
-        defer mir_lower.deinit();
-
-        if (platform_type_scope) |*ts| {
-            mir_lower.setTypeScope(module_idx, ts, app_module_idx.?) catch return error.OutOfMemory;
-        }
-
-        var mir_expr_id = mir_lower.lowerExpr(expr_idx) catch {
-            return error.RuntimeError;
-        };
-
-        // Zero-arg function entrypoints like `main! : () => {}` must be lowered
-        // as calls, not as first-class function values.
-        if (arg_layouts.len == 0) {
-            const func_mono_idx = mir_store.typeOf(mir_expr_id);
-            const resolved_func = mir_store.monotype_store.getMonotype(func_mono_idx);
-            if (resolved_func == .func) {
-                mir_expr_id = mir_store.addExpr(self.allocator, .{ .call = .{
-                    .func = mir_expr_id,
-                    .args = MIR.ExprSpan.empty(),
-                } }, resolved_func.func.ret, base.Region.zero()) catch return error.OutOfMemory;
-            }
-        }
-
-        // Complete lowering: lambda set inference → LIR → RC
-        var lower_result = self.lir_program.lowerFromMir(
+        var lower_result = self.lir_program.lowerEntrypointExpr(
             module_env,
             expr_idx,
             all_module_envs,
-            &mir_store,
-            mir_expr_id,
-            layout_store_ptr,
+            app_module_env,
+            arg_layouts,
+            ret_layout,
+            if (platform_type_scope) |*ts| ts else null,
         ) catch |err| return switch (err) {
             error.OutOfMemory => error.OutOfMemory,
             error.RuntimeError => error.RuntimeError,
@@ -824,19 +751,10 @@ pub const DevEvaluator = struct {
         ) catch return error.OutOfMemory;
         defer codegen.deinit();
 
-        // Wrap the final expression into an entry proc spec for the entrypoint wrapper
-        const entry_ret_stmt = lower_result.lir_store.addCFStmt(.{ .ret = .{ .value = lower_result.final_expr_id } }) catch return error.OutOfMemory;
-        const entry_proc_id = lower_result.lir_store.addProcSpec(.{
-            .name = lir.Symbol.none,
-            .args = lir.LirPatternSpan.empty(),
-            .arg_layouts = lir.LayoutIdxSpan.empty(),
-            .body = entry_ret_stmt,
-            .ret_layout = ret_layout,
-            .closure_data_layout = null,
-            .is_self_recursive = .not_self_recursive,
-        }) catch return error.OutOfMemory;
+        const entry_proc_id = lower_result.entry_proc_id;
+        if (entry_proc_id.isNone()) return error.RuntimeError;
 
-        // Compile all procedures (including entry proc)
+        // Compile all procedures (including the synthesized entry proc)
         const procs = lower_result.lir_store.getProcSpecs();
         if (procs.len > 0) {
             codegen.compileAllProcSpecs(procs) catch {
