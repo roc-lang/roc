@@ -1107,8 +1107,9 @@ pub const Interpreter = struct {
                 }
             },
             .tag_union => {
-                // Tag unions with heap-allocated payloads need discriminant-based dispatch.
-                // TODO: implement full tag union RC walking
+                // Tag unions that hand ownership to extracted payloads need
+                // discriminant-aware cleanup at the use site, not generic RC
+                // walking here.
             },
             .closure => |child_key| {
                 self.performRcPlan(resolver.plan(child_key), resolver, val, count);
@@ -2964,6 +2965,18 @@ pub const Interpreter = struct {
         if (sj != 0) return error.Crash;
         const new_list = builtins.list.shallowClone(rl, rl.len(), info.width, info.alignment, info.rc, &self.roc_ops);
         const sorted_bytes = new_list.bytes orelse return self.rocListToValue(new_list, ret_layout);
+        const result_val = try self.rocListToValue(new_list, ret_layout);
+        errdefer self.performRc(.decref, result_val, ret_layout, 0);
+
+        if (info.rc) {
+            const elem_layout = self.listElemLayout(list_layout);
+            for (0..list_len) |idx| {
+                const elem_val = Value{ .ptr = sorted_bytes + idx * info.width };
+                self.performRc(.incref, elem_val, elem_layout, 1);
+            }
+        }
+
+        defer self.performRc(.decref, list_val, list_layout, 0);
 
         // Insertion sort using the comparator proc
         const tmp = self.arena.allocator().alloc(u8, info.width) catch return error.OutOfMemory;
@@ -2999,7 +3012,7 @@ pub const Interpreter = struct {
             @memcpy(sorted_bytes[j * info.width ..][0..info.width], tmp);
         }
 
-        return self.rocListToValue(new_list, ret_layout);
+        return result_val;
     }
 
     fn evalListSplitFirst(self: *LirInterpreter, list_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx) Error!Value {
@@ -3380,6 +3393,89 @@ pub const Interpreter = struct {
             .list => |l| l.list_layout,
             .as_pattern => |ap| ap.layout_idx,
         };
+    }
+
+    fn patternHasBindings(self: *const LirInterpreter, pattern_id: LirPatternId) bool {
+        const pat = self.store.getPattern(pattern_id);
+        return switch (pat) {
+            .bind, .as_pattern => true,
+            .wildcard, .int_literal, .float_literal, .str_literal => false,
+            .struct_ => |s| blk: {
+                for (self.store.getPatternSpan(s.fields)) |field_pat_id| {
+                    if (self.patternHasBindings(field_pat_id)) break :blk true;
+                }
+                break :blk false;
+            },
+            .tag => |t| blk: {
+                for (self.store.getPatternSpan(t.args)) |arg_pat_id| {
+                    if (self.patternHasBindings(arg_pat_id)) break :blk true;
+                }
+                break :blk false;
+            },
+            .list => |l| blk: {
+                for (self.store.getPatternSpan(l.prefix)) |elem_pat_id| {
+                    if (self.patternHasBindings(elem_pat_id)) break :blk true;
+                }
+                for (self.store.getPatternSpan(l.suffix)) |elem_pat_id| {
+                    if (self.patternHasBindings(elem_pat_id)) break :blk true;
+                }
+                if (!l.rest.isNone() and self.patternHasBindings(l.rest)) break :blk true;
+                break :blk false;
+            },
+        };
+    }
+
+    fn dropOwnedPatternValue(self: *LirInterpreter, pattern_id: LirPatternId, val: Value) Error!void {
+        const pat = self.store.getPattern(pattern_id);
+        switch (pat) {
+            .bind, .as_pattern => unreachable,
+            .wildcard => |w| self.performRc(.decref, val, w.layout_idx, 0),
+            .int_literal, .float_literal => {},
+            .str_literal => self.performRc(.decref, val, .str, 0),
+            .struct_ => |s| {
+                const fields = self.store.getPatternSpan(s.fields);
+                for (fields, 0..) |field_pat_id, i| {
+                    const field_offset = self.helper.structFieldOffset(s.struct_layout, @intCast(i));
+                    try self.dropOwnedPatternValue(field_pat_id, val.offset(field_offset));
+                }
+            },
+            .tag => |t| {
+                const args = self.store.getPatternSpan(t.args);
+                for (args, 0..) |arg_pat_id, i| {
+                    const arg_val = self.tagPayloadArgValueForPattern(
+                        val,
+                        t.union_layout,
+                        t.discriminant,
+                        @intCast(i),
+                        arg_pat_id,
+                    );
+                    try self.dropOwnedPatternValue(arg_pat_id, arg_val);
+                }
+            },
+            .list => |list_pat| {
+                const prefix = self.store.getPatternSpan(list_pat.prefix);
+                const suffix = self.store.getPatternSpan(list_pat.suffix);
+                const total_len = valueToRocList(val).len();
+                const fixed_len = prefix.len + suffix.len;
+
+                for (prefix, 0..) |elem_pat_id, i| {
+                    const elem_val = try self.listElementValue(val, list_pat.list_layout, list_pat.elem_layout, i);
+                    try self.dropOwnedPatternValue(elem_pat_id, elem_val);
+                }
+
+                for (suffix, 0..) |elem_pat_id, i| {
+                    const elem_idx = total_len - suffix.len + i;
+                    const elem_val = try self.listElementValue(val, list_pat.list_layout, list_pat.elem_layout, elem_idx);
+                    try self.dropOwnedPatternValue(elem_pat_id, elem_val);
+                }
+
+                if (!list_pat.rest.isNone()) {
+                    const rest_len = total_len - fixed_len;
+                    const rest_val = try self.listSliceValue(val, list_pat.list_layout, prefix.len, rest_len);
+                    try self.dropOwnedPatternValue(list_pat.rest, rest_val);
+                }
+            },
+        }
     }
 
     fn normalizeValueToLayout(
@@ -3802,6 +3898,7 @@ pub const Interpreter = struct {
             },
             .match_expr => |m| {
                 try self.scheduleEvalThen(.{ .match_dispatch = .{
+                    .value_layout = m.value_layout,
                     .branches = m.branches,
                     .result_layout = m.result_layout,
                 } }, m.value);
@@ -4126,7 +4223,11 @@ pub const Interpreter = struct {
                         @memcpy(buf[offset..][0..s.len], s);
                         offset += s.len;
                     }
-                    try self.pushValue(try self.makeRocStr(buf));
+                    const result = try self.makeRocStr(buf);
+                    for (vals) |part_val| {
+                        valueToRocStr(part_val).decref(&self.roc_ops);
+                    }
+                    try self.pushValue(result);
                 }
                 return null;
             },
@@ -4166,11 +4267,15 @@ pub const Interpreter = struct {
                             // Has a guard: evaluate it
                             try self.scheduleEvalThen(.{ .match_guard_check = .{
                                 .match_val = match_val,
+                                .value_layout = md.value_layout,
                                 .branches = md.branches,
                                 .current_branch_idx = @intCast(idx),
                                 .result_layout = md.result_layout,
                             } }, branch.guard);
                             return null;
+                        }
+                        if (!self.patternHasBindings(branch.pattern)) {
+                            try self.dropOwnedPatternValue(branch.pattern, match_val);
                         }
                         try self.pushWork(.{ .eval_expr = branch.body });
                         return null;
@@ -4183,6 +4288,9 @@ pub const Interpreter = struct {
                 if (guard_val.read(u8) != 0) {
                     // Guard passed: evaluate branch body
                     const match_branches = self.store.getMatchBranches(mgc.branches);
+                    if (!self.patternHasBindings(match_branches[mgc.current_branch_idx].pattern)) {
+                        try self.dropOwnedPatternValue(match_branches[mgc.current_branch_idx].pattern, mgc.match_val);
+                    }
                     try self.pushWork(.{ .eval_expr = match_branches[mgc.current_branch_idx].body });
                 } else {
                     // Guard failed: try remaining branches
@@ -4197,11 +4305,15 @@ pub const Interpreter = struct {
                             if (!branch.guard.isNone()) {
                                 try self.scheduleEvalThen(.{ .match_guard_check = .{
                                     .match_val = mgc.match_val,
+                                    .value_layout = mgc.value_layout,
                                     .branches = mgc.branches,
                                     .current_branch_idx = i,
                                     .result_layout = mgc.result_layout,
                                 } }, branch.guard);
                                 return null;
+                            }
+                            if (!self.patternHasBindings(branch.pattern)) {
+                                try self.dropOwnedPatternValue(branch.pattern, mgc.match_val);
                             }
                             try self.pushWork(.{ .eval_expr = branch.body });
                             return null;
@@ -4216,6 +4328,7 @@ pub const Interpreter = struct {
                 const disc = self.helper.readTagDiscriminant(switch_val, dsd.union_layout);
                 const disc_branches = self.store.getExprSpan(dsd.branches);
                 if (disc < disc_branches.len) {
+                    self.performRc(.decref, switch_val, dsd.union_layout, 0);
                     try self.pushWork(.{ .eval_expr = disc_branches[disc] });
                 } else {
                     return error.RuntimeError;
@@ -4440,6 +4553,8 @@ pub const Interpreter = struct {
                         try self.pushValue(try self.makeRocStr(slice));
                     },
                     .str_escape_and_quote => {
+                        const owned = valueToRocStr(val);
+                        defer owned.decref(&self.roc_ops);
                         const s = self.readRocStr(val);
                         var escaped = std.ArrayListUnmanaged(u8){};
                         escaped.append(self.allocator, '"') catch return error.OutOfMemory;

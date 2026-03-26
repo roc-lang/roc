@@ -200,6 +200,7 @@ pub const IfBranch = struct {
 /// After evaluating the match scrutinee — try patterns synchronously
 /// (matchPattern/bindPattern don't recurse into eval).
 pub const ExprMatchDispatch = struct {
+    value_layout: layout_mod.Idx,
     branches: LIR.LirMatchBranchSpan,
     result_layout: layout_mod.Idx,
 };
@@ -208,6 +209,7 @@ pub const ExprMatchDispatch = struct {
 /// the next branch starting at `current_branch_idx + 1`.
 pub const ExprMatchGuardCheck = struct {
     match_val: Value,
+    value_layout: layout_mod.Idx,
     branches: LIR.LirMatchBranchSpan,
     current_branch_idx: u16,
     result_layout: layout_mod.Idx,

@@ -897,6 +897,7 @@ pub const Repl = struct {
             .break_expr => unreachable,
         };
         const roc_str = result_value.read(RocStr);
+        defer roc_str.decref(&interp.roc_ops);
         const slice = if (roc_str.isSmallStr())
             roc_str.asSlice()
         else if (roc_str.len() > 0 and roc_str.len() < 1024 * 1024)
