@@ -2838,12 +2838,14 @@ pub fn build(b: *std.Build) void {
     const stack_overflow_test_helper_exe = b.addExecutable(.{
         .name = "stack_overflow_test_helper",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/base/stack_overflow_test_helper.zig"),
+            .root_source_file = b.path("test/stack_overflow_test_helper.zig"),
             .target = target,
             .optimize = optimize,
         }),
     });
+    stack_overflow_test_helper_exe.root_module.addImport("base", roc_modules.base);
     stack_overflow_test_helper_exe.root_module.addImport("builtins", roc_modules.builtins);
+    roc_modules.addModuleDependencies(stack_overflow_test_helper_exe, .base);
     const install_stack_overflow_test_helper = b.addInstallArtifact(stack_overflow_test_helper_exe, .{});
     const stack_overflow_test_helper_path = b.getInstallPath(.bin, stack_overflow_test_helper_exe.out_filename);
 
