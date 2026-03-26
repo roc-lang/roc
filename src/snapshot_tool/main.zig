@@ -7,6 +7,7 @@
 //! the given Roc code snippet.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const parse = @import("parse");
 const can = @import("can");
@@ -29,11 +30,20 @@ pub const panic = std.debug.FullPanic(panicHandler);
 
 threadlocal var panic_jmp: ?*sljmp.JmpBuf = null;
 threadlocal var panic_msg: ?[]const u8 = null;
-/// Set by signal handlers (SIGALRM/SIGSEGV) when a longjmp interrupts an
-/// allocation.  Once true the GPA mutex is permanently locked and any
-/// alloc/free through it will deadlock, so all further GPA use must be
-/// skipped for the rest of this thread's lifetime.
-threadlocal var gpa_poisoned: bool = false;
+
+const REPL_BACKEND_CHILD_ARG = "--repl-backend-child";
+const SNAPSHOT_CHILD_EXE_ENV_VAR = "ROC_SNAPSHOT_CHILD_EXE";
+const REPL_BACKEND_CHILD_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
+
+const ReplBackendChildEntryTag = enum(u8) {
+    ok = 1,
+    no_output = 2,
+};
+
+const ReplBackendChildEntry = union(ReplBackendChildEntryTag) {
+    ok: []const u8,
+    no_output,
+};
 
 fn panicHandler(msg: []const u8, ret_addr: ?usize) noreturn {
     if (panic_jmp) |jmp| {
@@ -58,7 +68,6 @@ fn panicHandler(msg: []const u8, ret_addr: ?usize) noreturn {
 fn crashSignalHandler(_: i32) callconv(.c) void {
     if (panic_jmp) |jmp| {
         panic_msg = "signal: segfault or illegal instruction in generated code";
-        gpa_poisoned = true;
         panic_jmp = null;
         sljmp.longjmp(jmp, 2);
     }
@@ -77,14 +86,13 @@ fn crashSignalHandler(_: i32) callconv(.c) void {
 fn alarmSignalHandler(_: i32) callconv(.c) void {
     if (panic_jmp) |jmp| {
         panic_msg = "timeout: dev backend execution exceeded time limit";
-        gpa_poisoned = true;
         panic_jmp = null;
         sljmp.longjmp(jmp, 3);
     }
 }
 
 fn installCrashSignalHandlers() void {
-    const native_os = @import("builtin").os.tag;
+    const native_os = builtin.os.tag;
     if (comptime native_os == .windows) return;
 
     const sa = std.posix.Sigaction{
@@ -604,6 +612,11 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(gpa);
     defer std.process.argsFree(gpa, args);
 
+    if (args.len == 4 and std.mem.eql(u8, args[1], REPL_BACKEND_CHILD_ARG)) {
+        try runReplBackendChildMode(gpa, args[2], args[3]);
+        return;
+    }
+
     var snapshot_paths = std.array_list.Managed([]const u8).init(gpa);
     defer snapshot_paths.deinit();
 
@@ -817,10 +830,6 @@ fn checkSnapshotExpectations(gpa: Allocator) !bool {
     var fail_count: usize = 0;
 
     for (work_list.items) |work_item| {
-        // A signal-handler longjmp poisoned the GPA — we cannot allocate or
-        // free through it without deadlocking.  Stop processing immediately.
-        if (gpa_poisoned) break;
-
         const success = switch (work_item.kind) {
             .snapshot_file => processSnapshotFile(gpa, work_item.path, &config) catch false,
             .multi_file_snapshot => blk: {
@@ -3382,8 +3391,7 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, config:
     // Log the file path that was written to
     log("processing snapshot file: {s}", .{snapshot_path});
 
-    const @"1Mb" = 1024 * 1024;
-    const file_content = std.fs.cwd().readFileAlloc(gpa, snapshot_path, @"1Mb") catch |err| {
+    const file_content = std.fs.cwd().readFileAlloc(gpa, snapshot_path, 1024 * 1024) catch |err| {
         std.log.err("failed to read file '{s}': {s}", .{ snapshot_path, @errorName(err) });
         return false;
     };
@@ -4503,21 +4511,19 @@ fn processDevObjectSnapshot(
 // REPL Snapshot Processing
 
 fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []const u8, config: *const Config) !bool {
-    if (gpa_poisoned) return false;
-
     var success = true;
     log("Processing REPL snapshot: {s}", .{output_path});
 
     // Buffer all output in memory before writing files
     var md_buffer_unmanaged = std.ArrayList(u8).empty;
     var md_writer_allocating: std.Io.Writer.Allocating = .fromArrayList(allocator, &md_buffer_unmanaged);
-    defer if (!gpa_poisoned) md_buffer_unmanaged.deinit(allocator);
+    defer md_buffer_unmanaged.deinit(allocator);
 
     var html_buffer_unmanaged: ?std.ArrayList(u8) = if (config.generate_html) std.ArrayList(u8).empty else null;
     var html_writer_allocating: ?std.Io.Writer.Allocating = if (config.generate_html) .fromArrayList(allocator, &html_buffer_unmanaged.?) else null;
-    defer if (!gpa_poisoned) {
+    defer {
         if (html_buffer_unmanaged) |*buf| buf.deinit(allocator);
-    };
+    }
 
     var output = DualOutput.init(allocator, &md_writer_allocating, if (html_writer_allocating) |*hw| hw else null);
 
@@ -4555,53 +4561,337 @@ fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []co
     return success;
 }
 
-fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, content: *const Content, config: *const Config) !bool {
-    // A previous signal-handler longjmp left the GPA mutex locked — any
-    // alloc/free would deadlock.  Nothing useful we can do for this snapshot.
-    if (gpa_poisoned) return false;
+const ReplBackendChildConfig = struct {
+    backend: repl.Backend,
+    label: []const u8,
+};
 
-    var success = true;
-    // Parse REPL inputs from the source using » as delimiter
-    var inputs = std.array_list.Managed([]const u8).init(output.gpa);
-    defer if (!gpa_poisoned) inputs.deinit();
+fn parseReplBackendChildConfig(arg: []const u8) ?ReplBackendChildConfig {
+    if (std.mem.eql(u8, arg, "dev")) {
+        return .{ .backend = .dev, .label = "dev" };
+    }
+    if (std.mem.eql(u8, arg, "llvm")) {
+        return .{ .backend = .llvm, .label = "llvm" };
+    }
+    return null;
+}
 
-    // Split by the » character, each section is a separate REPL input
-    var parts = std.mem.splitSequence(u8, content.source, "»");
+fn parseReplInputs(allocator: Allocator, source: []const u8) !std.array_list.Managed([]const u8) {
+    var inputs = std.array_list.Managed([]const u8).init(allocator);
+    errdefer inputs.deinit();
 
-    // Skip the first part (before the first »)
+    var parts = std.mem.splitSequence(u8, source, "»");
     _ = parts.next();
 
     while (parts.next()) |part| {
-        // Trim whitespace and newlines
         const trimmed = std.mem.trim(u8, part, " \t\r\n");
         if (trimmed.len > 0) {
             try inputs.append(trimmed);
         }
     }
 
+    return inputs;
+}
+
+fn getReplBackendChildExePath(allocator: Allocator) ![]u8 {
+    return std.process.getEnvVarOwned(allocator, SNAPSHOT_CHILD_EXE_ENV_VAR) catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => {
+            if (comptime builtin.is_test) return err;
+            return std.fs.selfExePathAlloc(allocator);
+        },
+        else => return err,
+    };
+}
+
+fn writeReplBackendChildU32(writer: anytype, value: u32) !void {
+    var buf: [4]u8 = undefined;
+    std.mem.writeInt(u32, &buf, value, .little);
+    try writer.writeAll(&buf);
+}
+
+fn readReplBackendChildU32(reader: anytype) !u32 {
+    var buf: [4]u8 = undefined;
+    try reader.readNoEof(&buf);
+    return std.mem.readInt(u32, &buf, .little);
+}
+
+fn writeReplBackendChildEntry(writer: anytype, entry: ReplBackendChildEntry) !void {
+    switch (entry) {
+        .ok => |bytes| {
+            try writer.writeAll(&.{@intFromEnum(ReplBackendChildEntryTag.ok)});
+            try writeReplBackendChildU32(writer, @intCast(bytes.len));
+            try writer.writeAll(bytes);
+        },
+        .no_output => {
+            try writer.writeAll(&.{@intFromEnum(ReplBackendChildEntryTag.no_output)});
+        },
+    }
+}
+
+fn deinitReplBackendChildEntries(allocator: Allocator, entries: *std.array_list.Managed(ReplBackendChildEntry)) void {
+    for (entries.items) |entry| {
+        switch (entry) {
+            .ok => |bytes| allocator.free(bytes),
+            .no_output => {},
+        }
+    }
+    entries.deinit();
+}
+
+fn parseReplBackendChildOutput(allocator: Allocator, bytes: []const u8) !std.array_list.Managed(ReplBackendChildEntry) {
+    var stream = std.io.fixedBufferStream(bytes);
+    const reader = stream.reader();
+
+    var entries = std.array_list.Managed(ReplBackendChildEntry).init(allocator);
+    errdefer deinitReplBackendChildEntries(allocator, &entries);
+
+    const count = try readReplBackendChildU32(reader);
+    for (0..count) |_| {
+        const tag = try reader.readByte();
+        switch (tag) {
+            @intFromEnum(ReplBackendChildEntryTag.ok) => {
+                const len = try readReplBackendChildU32(reader);
+                const output = try allocator.alloc(u8, len);
+                errdefer allocator.free(output);
+                try reader.readNoEof(output);
+                try entries.append(.{ .ok = output });
+            },
+            @intFromEnum(ReplBackendChildEntryTag.no_output) => {
+                try entries.append(.no_output);
+            },
+            else => return error.BadReplBackendChildOutput,
+        }
+    }
+
+    if (stream.pos != bytes.len) return error.BadReplBackendChildOutput;
+
+    return entries;
+}
+
+fn runReplBackendChildMode(gpa: Allocator, snapshot_path: []const u8, backend_arg: []const u8) !void {
+    const child_cfg = parseReplBackendChildConfig(backend_arg) orelse {
+        std.debug.print("Invalid REPL backend child mode backend: {s}\n", .{backend_arg});
+        std.process.exit(2);
+    };
+
+    const file_content = std.fs.cwd().readFileAlloc(gpa, snapshot_path, 1024 * 1024) catch |err| {
+        std.debug.print("Failed to read REPL snapshot {s}: {}\n", .{ snapshot_path, err });
+        std.process.exit(1);
+    };
+    defer gpa.free(file_content);
+
+    const content = extractSections(gpa, file_content) catch |err| {
+        std.debug.print("Failed to parse REPL snapshot {s}: {}\n", .{ snapshot_path, err });
+        std.process.exit(1);
+    };
+    if (content.meta.node_type != .repl) {
+        std.debug.print("REPL backend child mode requires a REPL snapshot, but {s} has type={s}\n", .{
+            snapshot_path,
+            content.meta.node_type.toString(),
+        });
+        std.process.exit(1);
+    }
+
+    var inputs = parseReplInputs(gpa, content.source) catch |err| {
+        std.debug.print("Failed to parse REPL inputs in {s}: {}\n", .{ snapshot_path, err });
+        std.process.exit(1);
+    };
+    defer inputs.deinit();
+
+    installCrashSignalHandlers();
+
+    var snapshot_ops = SnapshotOps.init(gpa);
+    defer snapshot_ops.deinit();
+
+    var init_jmp_buf: sljmp.JmpBuf = undefined;
+    const init_jmp_result = sljmp.setjmp(&init_jmp_buf);
+    if (init_jmp_result != 0) {
+        const msg = panic_msg orelse "unknown";
+        panic_msg = null;
+        std.debug.print("{s} REPL init panic in {s}: {s}\n", .{ child_cfg.label, snapshot_path, msg });
+        std.process.exit(1);
+    }
+
+    panic_jmp = &init_jmp_buf;
+    var backend_repl = Repl.initWithBackend(gpa, snapshot_ops.get_ops(), snapshot_ops.crashContextPtr(), child_cfg.backend) catch |err| {
+        panic_jmp = null;
+        std.debug.print("{s} REPL init failed in {s}: {}\n", .{ child_cfg.label, snapshot_path, err });
+        std.process.exit(1);
+    };
+    panic_jmp = null;
+
+    var stdout_buffer: [4096]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
+    const writer = &stdout_writer.interface;
+    writeReplBackendChildU32(writer, @intCast(inputs.items.len)) catch |err| {
+        std.debug.print("Failed to write {s} REPL child header for {s}: {}\n", .{ child_cfg.label, snapshot_path, err });
+        std.process.exit(1);
+    };
+
+    for (inputs.items, 0..) |input, i| {
+        var jmp_buf: sljmp.JmpBuf = undefined;
+        const jmp_result = sljmp.setjmp(&jmp_buf);
+        if (jmp_result != 0) {
+            const msg = panic_msg orelse "unknown";
+            panic_msg = null;
+            std.debug.print("{s} REPL panic at input {d} in {s}: {s}\n", .{ child_cfg.label, i, snapshot_path, msg });
+            std.process.exit(1);
+        }
+
+        panic_jmp = &jmp_buf;
+        if (comptime builtin.os.tag != .windows) {
+            _ = std.c.alarm(60);
+        }
+
+        const backend_output = backend_repl.step(input) catch |err| {
+            if (comptime builtin.os.tag != .windows) {
+                _ = std.c.alarm(0);
+            }
+            panic_jmp = null;
+            std.debug.print("{s} REPL error at input {d} in {s}: {}\n", .{ child_cfg.label, i, snapshot_path, err });
+            writeReplBackendChildEntry(writer, .no_output) catch |write_err| {
+                std.debug.print("Failed to write {s} REPL child result for {s}: {}\n", .{ child_cfg.label, snapshot_path, write_err });
+                std.process.exit(1);
+            };
+            continue;
+        };
+        defer gpa.free(backend_output);
+
+        if (comptime builtin.os.tag != .windows) {
+            _ = std.c.alarm(0);
+        }
+        panic_jmp = null;
+
+        writeReplBackendChildEntry(writer, .{ .ok = backend_output }) catch |err| {
+            std.debug.print("Failed to write {s} REPL child output for {s}: {}\n", .{ child_cfg.label, snapshot_path, err });
+            std.process.exit(1);
+        };
+    }
+
+    var deinit_jmp_buf: sljmp.JmpBuf = undefined;
+    const deinit_jmp_result = sljmp.setjmp(&deinit_jmp_buf);
+    if (deinit_jmp_result != 0) {
+        const msg = panic_msg orelse "unknown";
+        panic_msg = null;
+        std.debug.print("{s} REPL deinit panic in {s}: {s}\n", .{ child_cfg.label, snapshot_path, msg });
+        std.process.exit(1);
+    }
+
+    panic_jmp = &deinit_jmp_buf;
+    backend_repl.deinit();
+    panic_jmp = null;
+
+    writer.flush() catch |err| {
+        std.debug.print("Failed to flush {s} REPL child output for {s}: {}\n", .{ child_cfg.label, snapshot_path, err });
+        std.process.exit(1);
+    };
+}
+
+fn compareReplBackendInChildProcess(
+    allocator: Allocator,
+    snapshot_path: []const u8,
+    backend: repl.Backend,
+    actual_outputs: []const []const u8,
+    success: *bool,
+) !void {
+    const child_exe_path = getReplBackendChildExePath(allocator) catch |err| {
+        std.debug.print("Failed to locate snapshot child executable for {s}: {s}\n", .{
+            snapshot_path,
+            @errorName(err),
+        });
+        return err;
+    };
+    defer allocator.free(child_exe_path);
+
+    const child_cfg = switch (backend) {
+        .dev => ReplBackendChildConfig{ .backend = .dev, .label = "dev" },
+        .llvm => ReplBackendChildConfig{ .backend = .llvm, .label = "llvm" },
+        else => unreachable,
+    };
+
+    const child_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &.{ child_exe_path, REPL_BACKEND_CHILD_ARG, snapshot_path, child_cfg.label },
+        .max_output_bytes = REPL_BACKEND_CHILD_MAX_OUTPUT_BYTES,
+    });
+    defer allocator.free(child_result.stdout);
+    defer allocator.free(child_result.stderr);
+
+    if (child_result.stderr.len > 0) {
+        std.debug.print("{s}", .{child_result.stderr});
+    }
+
+    switch (child_result.term) {
+        .Exited => |code| {
+            if (code != 0) return;
+        },
+        else => {
+            std.debug.print("{s} REPL child terminated unexpectedly in {s}: {}\n", .{
+                child_cfg.label,
+                snapshot_path,
+                child_result.term,
+            });
+            return;
+        },
+    }
+
+    var child_entries = try parseReplBackendChildOutput(allocator, child_result.stdout);
+    defer deinitReplBackendChildEntries(allocator, &child_entries);
+
+    if (child_entries.items.len != actual_outputs.len) {
+        std.debug.print("{s} REPL child output count mismatch in {s}: got {}, expected {}\n", .{
+            child_cfg.label,
+            snapshot_path,
+            child_entries.items.len,
+            actual_outputs.len,
+        });
+        return;
+    }
+
+    for (child_entries.items, 0..) |entry, i| {
+        switch (entry) {
+            .no_output => continue,
+            .ok => |backend_output| {
+                const max_output_len = 4096;
+                const backend_display = if (backend_output.len > max_output_len)
+                    backend_output[0..max_output_len]
+                else
+                    backend_output;
+
+                const interp_output = actual_outputs[i];
+                if (!std.mem.eql(u8, interp_output, backend_output)) {
+                    std.debug.print(
+                        "REPL backend mismatch at input {d} in {s}:\n  interpreter: '{s}'\n  {s}:         '{s}'{s}\n",
+                        .{ i, snapshot_path, interp_output, child_cfg.label, backend_display, if (backend_output.len > max_output_len) "... (truncated)" else "" },
+                    );
+                    success.* = false;
+                }
+            },
+        }
+    }
+}
+
+fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, content: *const Content, config: *const Config) !bool {
+    var success = true;
+
+    var inputs = try parseReplInputs(output.gpa, content.source);
+    defer inputs.deinit();
+
     var snapshot_ops = SnapshotOps.init(output.gpa);
-    defer if (!gpa_poisoned) snapshot_ops.deinit();
+    defer snapshot_ops.deinit();
 
-    // Initialize REPL
     var repl_instance = try Repl.init(output.gpa, snapshot_ops.get_ops(), snapshot_ops.crashContextPtr());
-    defer if (!gpa_poisoned) repl_instance.deinit();
+    defer repl_instance.deinit();
 
-    // Enable debug snapshots for CAN/TYPES generation
     repl_instance.enableDebugSnapshots();
 
-    // Enable tracing if requested
-    // if (config.trace_eval) {
-    //     repl_instance.setTraceWriter(stderrWriter());
-    // }
-
-    // Process each input and generate output
     var actual_outputs = std.array_list.Managed([]const u8).init(output.gpa);
-    defer if (!gpa_poisoned) {
+    defer {
         for (actual_outputs.items) |item| {
             output.gpa.free(item);
         }
         actual_outputs.deinit();
-    };
+    }
 
     for (inputs.items, 0..) |input, i| {
         var jmp_buf: sljmp.JmpBuf = undefined;
@@ -4610,8 +4900,6 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
             const msg = panic_msg orelse "unknown";
             std.debug.print("interpreter REPL panic at input {d} in {s}: {s}\n", .{ i, snapshot_path, msg });
             panic_msg = null;
-            // Don't set success=false here — the missing output will be
-            // compared against expected and updated by --update-output.
             break;
         }
         panic_jmp = &jmp_buf;
@@ -4625,109 +4913,13 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
         try actual_outputs.append(repl_output);
     }
 
-    // Run native-code backends for comparison with panic protection.
-    // These backends may hit `unreachable` or other panics for unimplemented
-    // features. The custom panic handler longjmps back here instead of aborting,
-    // so we can report the failure and continue with the next snapshot.
-    // Install signal handlers for SIGSEGV/SIGBUS/SIGILL from generated code.
-    installCrashSignalHandlers();
-    inline for (.{
-        .{ .backend = repl.Backend.dev, .label = "dev" },
-        .{ .backend = repl.Backend.llvm, .label = "llvm" },
-    }) |cfg| {
-        if (!gpa_poisoned) {
-            var backend_snapshot_ops = SnapshotOps.init(output.gpa);
-            defer if (!gpa_poisoned) backend_snapshot_ops.deinit();
-            const backend_repl_result = Repl.initWithBackend(output.gpa, backend_snapshot_ops.get_ops(), backend_snapshot_ops.crashContextPtr(), cfg.backend);
-            if (backend_repl_result) |backend_repl_val| {
-                var backend_repl = backend_repl_val;
-
-                for (inputs.items, 0..) |input, i| {
-                    // Set up panic protection via setjmp. If the backend panics,
-                    // the custom panic handler longjmps back here with jmp_result != 0.
-                    var jmp_buf: sljmp.JmpBuf = undefined;
-                    const jmp_result = sljmp.setjmp(&jmp_buf);
-                    if (jmp_result != 0) {
-                        // Returned from a panic — report it and stop this snapshot's run.
-                        // The backend REPL state is corrupted after a panic, so we can't continue.
-                        const msg = panic_msg orelse "unknown";
-                        std.debug.print("{s} REPL panic at input {d} in {s}: {s}\n", .{ cfg.label, i, snapshot_path, msg });
-                        panic_msg = null;
-                        break;
-                    }
-                    panic_jmp = &jmp_buf;
-                    defer {
-                        panic_jmp = null;
-                    }
-
-                    // Set a 60-second timeout to catch infinite loops in generated code.
-                    // Compilation of recursive functions can take 10+ seconds on slow CI
-                    // machines, so we use a generous limit.
-                    // Note: alarm() is process-wide — in parallel mode, SIGALRM may be
-                    // delivered to the wrong thread. The handler checks threadlocal panic_jmp,
-                    // so it's harmless if the receiving thread isn't evaluating.
-                    _ = std.c.alarm(60);
-                    defer _ = std.c.alarm(0);
-
-                    const backend_output = backend_repl.step(input) catch |err| {
-                        std.debug.print("{s} REPL error at input {d} in {s}: {}\n", .{ cfg.label, i, snapshot_path, err });
-                        continue;
-                    };
-                    defer output.gpa.free(backend_output);
-
-                    // Cap backend output to prevent flooding terminal with corrupted string data.
-                    const max_output_len = 4096;
-                    const backend_display = if (backend_output.len > max_output_len)
-                        backend_output[0..max_output_len]
-                    else
-                        backend_output;
-
-                    if (i < actual_outputs.items.len) {
-                        const interp_output = actual_outputs.items[i];
-                        if (!std.mem.eql(u8, interp_output, backend_output)) {
-                            std.debug.print(
-                                "REPL backend mismatch at input {d} in {s}:\n  interpreter: '{s}'\n  {s}:         '{s}'{s}\n",
-                                .{ i, snapshot_path, interp_output, cfg.label, backend_display, if (backend_output.len > max_output_len) "... (truncated)" else "" },
-                            );
-                            success = false;
-                        }
-                    }
-                }
-
-                // Deinit with panic protection — after a codegen panic, the REPL
-                // state may be corrupted and cleanup (e.g. GPA leak detection) can
-                // trigger secondary panics that would otherwise terminate the process.
-                //
-                // After a signal-handler longjmp (SIGALRM timeout, SIGSEGV) the
-                // allocator mutex may be permanently locked, so calling deinit would
-                // deadlock. Skip cleanup entirely in that case — we leak, but we
-                // don't crash the whole test suite.
-                if (!gpa_poisoned) {
-                    var deinit_jmp_buf: sljmp.JmpBuf = undefined;
-                    const deinit_jmp_result = sljmp.setjmp(&deinit_jmp_buf);
-                    if (deinit_jmp_result != 0) {
-                        panic_msg = null;
-                    } else {
-                        panic_jmp = &deinit_jmp_buf;
-                        backend_repl.deinit();
-                        panic_jmp = null;
-                    }
-                }
-            } else |err| {
-                std.debug.print("{s} REPL init failed in {s}: {}\n", .{ cfg.label, snapshot_path, err });
-                success = false;
-            }
-        } // if (!gpa_poisoned)
+    inline for (.{ repl.Backend.dev, repl.Backend.llvm }) |cfg_backend| {
+        try compareReplBackendInChildProcess(output.gpa, snapshot_path, cfg_backend, actual_outputs.items, &success);
     }
-
-    // The GPA allocator is permanently broken — any alloc/free will deadlock.
-    // Bail out now; the snapshot is already marked as failed above.
-    if (gpa_poisoned) return false;
 
     switch (config.output_section_command) {
         .update => {
             try output.begin_section("OUTPUT");
-            // Write actual outputs
             for (actual_outputs.items, 0..) |repl_output, i| {
                 if (i > 0) {
                     try output.md_writer.writer.writeAll("---\n");
@@ -4735,7 +4927,6 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
                 try output.md_writer.writer.writeAll(repl_output);
                 try output.md_writer.writer.writeByte('\n');
 
-                // HTML output
                 if (output.html_writer) |writer| {
                     if (i > 0) {
                         try writer.writer.writeAll("                <hr>\n");
@@ -4752,10 +4943,8 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
         .check, .none => {
             const emit_error = config.output_section_command == .check;
 
-            // Compare with expected output if provided
             if (content.output) |expected| {
                 try output.begin_section("OUTPUT");
-                // Parse expected outputs
                 var expected_outputs = std.array_list.Managed([]const u8).init(output.gpa);
                 defer expected_outputs.deinit();
 
@@ -4767,7 +4956,6 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
                     }
                 }
 
-                // Verify the outputs match
                 if (actual_outputs.items.len != expected_outputs.items.len) {
                     std.debug.print("REPL output count mismatch: got {} outputs, expected {} in {s}\n", .{
                         actual_outputs.items.len,
@@ -4787,7 +4975,6 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
                     }
                 }
 
-                // Write the old outputs back to the file
                 for (expected_outputs.items, 0..) |expected_output, i| {
                     if (i > 0) {
                         try output.md_writer.writer.writeAll("---\n");
@@ -4795,7 +4982,6 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
                     try output.md_writer.writer.writeAll(expected_output);
                     try output.md_writer.writer.writeByte('\n');
 
-                    // HTML output
                     if (output.html_writer) |writer| {
                         if (i > 0) {
                             try writer.writer.writeAll("                <hr>\n");
@@ -4809,7 +4995,6 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
                 }
                 try output.end_section();
             } else {
-                // No existing OUTPUT section - generate one for new snapshots
                 try output.begin_section("OUTPUT");
                 for (actual_outputs.items, 0..) |repl_output, i| {
                     if (i > 0) {
@@ -4818,7 +5003,6 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
                     try output.md_writer.writer.writeAll(repl_output);
                     try output.md_writer.writer.writeByte('\n');
 
-                    // HTML output
                     if (output.html_writer) |writer| {
                         if (i > 0) {
                             try writer.writer.writeAll("                <hr>\n");
@@ -4831,8 +5015,6 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
                     }
                 }
                 try output.end_section();
-
-                // No validation needed for new snapshots - they should have outputs
             }
         },
     }

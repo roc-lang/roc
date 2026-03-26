@@ -2337,7 +2337,7 @@ pub fn build(b: *std.Build) void {
 
     const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, omit_frame_pointer, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins, flag_enable_tracy) orelse return;
     roc_modules.addAll(roc_exe);
-    install_and_run(b, no_bin, roc_exe, roc_step, run_step, run_args);
+    _ = install_and_run(b, no_bin, roc_exe, roc_step, run_step, run_args);
 
     // Clear the Roc cache when building the compiler to ensure stale cached artifacts aren't used
     const clear_cache_step = createClearCacheStep(b);
@@ -2596,7 +2596,7 @@ pub fn build(b: *std.Build) void {
     }
 
     add_tracy(b, roc_modules.build_options, snapshot_exe, target, true, flag_enable_tracy);
-    install_and_run(b, no_bin, snapshot_exe, snapshot_step, snapshot_step, run_args);
+    const snapshot_exe_install = install_and_run(b, no_bin, snapshot_exe, snapshot_step, snapshot_step, run_args);
 
     // Add parallel eval test runner
     const eval_test_exe = b.addExecutable(.{
@@ -2650,7 +2650,7 @@ pub fn build(b: *std.Build) void {
         }
         break :blk eval_args_list.toOwnedSlice(b.allocator) catch @panic("OOM");
     } else run_args;
-    install_and_run(b, no_bin, eval_test_exe, eval_test_step, eval_test_step, eval_run_args);
+    _ = install_and_run(b, no_bin, eval_test_exe, eval_test_step, eval_test_step, eval_run_args);
 
     const playground_exe = b.addExecutable(.{
         .name = "playground",
@@ -2835,6 +2835,18 @@ pub fn build(b: *std.Build) void {
     const tidy_inner = TidyStep.create(b);
     tidy_step.dependOn(&tidy_inner.step);
 
+    const stack_overflow_test_helper_exe = b.addExecutable(.{
+        .name = "stack_overflow_test_helper",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/base/stack_overflow_test_helper.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    stack_overflow_test_helper_exe.root_module.addImport("builtins", roc_modules.builtins);
+    const install_stack_overflow_test_helper = b.addInstallArtifact(stack_overflow_test_helper_exe, .{});
+    const stack_overflow_test_helper_path = b.getInstallPath(.bin, stack_overflow_test_helper_exe.out_filename);
+
     // Create and add module tests
     const module_tests_result = roc_modules.createModuleTests(b, target, optimize, zstd, test_filters);
     const tests_summary = TestsSummaryStep.create(b, test_filters, module_tests_result.forced_passes);
@@ -2866,6 +2878,10 @@ pub fn build(b: *std.Build) void {
         if (run_args.len != 0) {
             module_test.run_step.addArgs(run_args);
         }
+        if (std.mem.eql(u8, module_test.test_step.name, "base")) {
+            module_test.run_step.step.dependOn(&install_stack_overflow_test_helper.step);
+            module_test.run_step.setEnvironmentVariable("ROC_STACK_OVERFLOW_TEST_HELPER", stack_overflow_test_helper_path);
+        }
 
         // Create individual test step for this module
         const test_exe_name = module_test.test_step.name;
@@ -2876,6 +2892,10 @@ pub fn build(b: *std.Build) void {
         const individual_run = b.addRunArtifact(module_test.test_step);
         if (run_args.len != 0) {
             individual_run.addArgs(run_args);
+        }
+        if (std.mem.eql(u8, module_test.test_step.name, "base")) {
+            individual_run.step.dependOn(&install_stack_overflow_test_helper.step);
+            individual_run.setEnvironmentVariable("ROC_STACK_OVERFLOW_TEST_HELPER", stack_overflow_test_helper_path);
         }
         individual_test_step.dependOn(&individual_run.step);
 
@@ -2919,6 +2939,10 @@ pub fn build(b: *std.Build) void {
         add_tracy(b, roc_modules.build_options, snapshot_test, target, true, flag_enable_tracy);
 
         const run_snapshot_test = b.addRunArtifact(snapshot_test);
+        if (snapshot_exe_install) |install| {
+            run_snapshot_test.step.dependOn(&install.step);
+            run_snapshot_test.setEnvironmentVariable("ROC_SNAPSHOT_CHILD_EXE", b.getInstallPath(.bin, snapshot_exe.out_filename));
+        }
         if (run_args.len != 0) {
             run_snapshot_test.addArgs(run_args);
         }
@@ -3501,7 +3525,7 @@ fn add_fuzz_target(
     configureBackend(repro_exe, target);
     repro_exe.root_module.addImport("fuzz_test", fuzz_obj.root_module);
 
-    install_and_run(b, no_bin, repro_exe, repro_step, repro_step, run_args);
+    _ = install_and_run(b, no_bin, repro_exe, repro_step, repro_step, run_args);
 
     if (fuzz and build_afl and !no_bin) {
         const fuzz_step = b.step(name_exe, b.fmt("Generate fuzz executable for {s}", .{name}));
@@ -3759,7 +3783,7 @@ fn install_and_run(
     build_step: *Step,
     run_step: *Step,
     run_args: []const []const u8,
-) void {
+) ?*Step.InstallArtifact {
     if (run_step != build_step) {
         run_step.dependOn(build_step);
     }
@@ -3767,6 +3791,7 @@ fn install_and_run(
         // No build, just build, don't actually install or run.
         build_step.dependOn(&exe.step);
         b.getInstallStep().dependOn(&exe.step);
+        return null;
     } else {
         const install = b.addInstallArtifact(exe, .{});
 
@@ -3783,6 +3808,7 @@ fn install_and_run(
             run.addArgs(run_args);
         }
         run_step.dependOn(&run.step);
+        return install;
     }
 }
 
