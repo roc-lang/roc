@@ -400,6 +400,19 @@ pub const RcInsertPass = struct {
         return .consume;
     }
 
+    fn keyRetainsOwnerSource(self: *const RcInsertPass, key: u64, source_owner_key: u64) bool {
+        if (self.keyInfo(key)) |info| {
+            return switch (info.owner_kind) {
+                .retained => |source_ref| {
+                    const retained_source = self.consumedOwnerKey(@intFromEnum(source_ref)) orelse return false;
+                    return retained_source == source_owner_key;
+                },
+                else => false,
+            };
+        }
+        return false;
+    }
+
     fn keyIntroducesOwner(self: *const RcInsertPass, key: u64) bool {
         if (self.keyInfo(key)) |info| {
             return switch (info.owner_kind) {
@@ -715,10 +728,532 @@ pub const RcInsertPass = struct {
                 const key = self.lookupKey(expr_id, lookup.symbol);
                 break :blk self.consumedOwnerKey(key);
             },
+            .cell_load => blk: {
+                if (self.ownership) |ownership| {
+                    if (ownership.getCellLoadRef(expr_id)) |ref_id| {
+                        break :blk self.consumedOwnerKey(@intFromEnum(ref_id));
+                    }
+                }
+                break :blk null;
+            },
             .block => |block| self.ownerKeyForAliasedExpr(block.final_expr),
             .dbg => |dbg_expr| self.ownerKeyForAliasedExpr(dbg_expr.expr),
             .nominal => |nominal| self.ownerKeyForAliasedExpr(nominal.backing_expr),
             else => null,
+        };
+    }
+
+    fn exprContainsCellLoadOf(
+        self: *RcInsertPass,
+        expr_id: LirExprId,
+        cell: Symbol,
+    ) bool {
+        if (expr_id.isNone()) return false;
+        return switch (self.store.getExpr(expr_id)) {
+            .cell_load => |load| load.cell == cell,
+            .block => |block| blk: {
+                for (self.store.getStmts(block.stmts)) |stmt| {
+                    switch (stmt) {
+                        .decl, .mutate => |binding| if (self.exprContainsCellLoadOf(binding.expr, cell)) break :blk true,
+                        .cell_init, .cell_store => |binding| if (self.exprContainsCellLoadOf(binding.expr, cell)) break :blk true,
+                        .cell_drop => {},
+                    }
+                }
+                break :blk self.exprContainsCellLoadOf(block.final_expr, cell);
+            },
+            .if_then_else => |ite| blk: {
+                for (self.store.getIfBranches(ite.branches)) |branch| {
+                    if (self.exprContainsCellLoadOf(branch.cond, cell) or self.exprContainsCellLoadOf(branch.body, cell)) break :blk true;
+                }
+                break :blk self.exprContainsCellLoadOf(ite.final_else, cell);
+            },
+            .match_expr => |match_expr| blk: {
+                if (self.exprContainsCellLoadOf(match_expr.value, cell)) break :blk true;
+                for (self.store.getMatchBranches(match_expr.branches)) |branch| {
+                    if (self.exprContainsCellLoadOf(branch.guard, cell) or self.exprContainsCellLoadOf(branch.body, cell)) break :blk true;
+                }
+                break :blk false;
+            },
+            .loop => |loop_expr| self.exprContainsCellLoadOf(loop_expr.body, cell),
+            .proc_call => |call| blk: {
+                for (self.store.getExprSpan(call.args)) |arg| if (self.exprContainsCellLoadOf(arg, cell)) break :blk true;
+                break :blk false;
+            },
+            .low_level => |ll| blk: {
+                for (self.store.getExprSpan(ll.args)) |arg| if (self.exprContainsCellLoadOf(arg, cell)) break :blk true;
+                break :blk false;
+            },
+            .list => |list_expr| blk: {
+                for (self.store.getExprSpan(list_expr.elems)) |elem| if (self.exprContainsCellLoadOf(elem, cell)) break :blk true;
+                break :blk false;
+            },
+            .struct_ => |s| blk: {
+                for (self.store.getExprSpan(s.fields)) |field| if (self.exprContainsCellLoadOf(field, cell)) break :blk true;
+                break :blk false;
+            },
+            .tag => |t| blk: {
+                for (self.store.getExprSpan(t.args)) |arg| if (self.exprContainsCellLoadOf(arg, cell)) break :blk true;
+                break :blk false;
+            },
+            .struct_access => |sa| self.exprContainsCellLoadOf(sa.struct_expr, cell),
+            .tag_payload_access => |tpa| self.exprContainsCellLoadOf(tpa.value, cell),
+            .nominal => |n| self.exprContainsCellLoadOf(n.backing_expr, cell),
+            .early_return => |ret| self.exprContainsCellLoadOf(ret.expr, cell),
+            .dbg => |d| self.exprContainsCellLoadOf(d.expr, cell),
+            .expect => |e| self.exprContainsCellLoadOf(e.cond, cell) or self.exprContainsCellLoadOf(e.body, cell),
+            .str_concat => |parts| blk: {
+                for (self.store.getExprSpan(parts)) |part| if (self.exprContainsCellLoadOf(part, cell)) break :blk true;
+                break :blk false;
+            },
+            .int_to_str => |its| self.exprContainsCellLoadOf(its.value, cell),
+            .float_to_str => |fts| self.exprContainsCellLoadOf(fts.value, cell),
+            .dec_to_str => |d| self.exprContainsCellLoadOf(d, cell),
+            .str_escape_and_quote => |s| self.exprContainsCellLoadOf(s, cell),
+            .discriminant_switch => |ds| blk: {
+                if (self.exprContainsCellLoadOf(ds.value, cell)) break :blk true;
+                for (self.store.getExprSpan(ds.branches)) |branch| if (self.exprContainsCellLoadOf(branch, cell)) break :blk true;
+                break :blk false;
+            },
+            .hosted_call => |hc| blk: {
+                for (self.store.getExprSpan(hc.args)) |arg| if (self.exprContainsCellLoadOf(arg, cell)) break :blk true;
+                break :blk false;
+            },
+            else => false,
+        };
+    }
+
+    fn ownerKeyForCellLoadInExpr(
+        self: *RcInsertPass,
+        expr_id: LirExprId,
+        cell: Symbol,
+    ) ?u64 {
+        if (expr_id.isNone()) return null;
+
+        return switch (self.store.getExpr(expr_id)) {
+            .cell_load => |load| if (load.cell == cell) self.ownerKeyForAliasedExpr(expr_id) else null,
+            .block => |block| blk: {
+                for (self.store.getStmts(block.stmts)) |stmt| {
+                    const found = switch (stmt) {
+                        .decl, .mutate => |binding| self.ownerKeyForCellLoadInExpr(binding.expr, cell),
+                        .cell_init, .cell_store => |binding| self.ownerKeyForCellLoadInExpr(binding.expr, cell),
+                        .cell_drop => null,
+                    };
+                    if (found) |key| break :blk key;
+                }
+                break :blk self.ownerKeyForCellLoadInExpr(block.final_expr, cell);
+            },
+            .if_then_else => |ite| blk: {
+                for (self.store.getIfBranches(ite.branches)) |branch| {
+                    if (self.ownerKeyForCellLoadInExpr(branch.cond, cell)) |key| break :blk key;
+                    if (self.ownerKeyForCellLoadInExpr(branch.body, cell)) |key| break :blk key;
+                }
+                break :blk self.ownerKeyForCellLoadInExpr(ite.final_else, cell);
+            },
+            .match_expr => |match_expr| blk: {
+                if (self.ownerKeyForCellLoadInExpr(match_expr.value, cell)) |key| break :blk key;
+                for (self.store.getMatchBranches(match_expr.branches)) |branch| {
+                    if (self.ownerKeyForCellLoadInExpr(branch.guard, cell)) |key| break :blk key;
+                    if (self.ownerKeyForCellLoadInExpr(branch.body, cell)) |key| break :blk key;
+                }
+                break :blk null;
+            },
+            .loop => |loop_expr| self.ownerKeyForCellLoadInExpr(loop_expr.body, cell),
+            .proc_call => |call| blk: {
+                for (self.store.getExprSpan(call.args)) |arg| {
+                    if (self.ownerKeyForCellLoadInExpr(arg, cell)) |key| break :blk key;
+                }
+                break :blk null;
+            },
+            .low_level => |ll| blk: {
+                for (self.store.getExprSpan(ll.args)) |arg| {
+                    if (self.ownerKeyForCellLoadInExpr(arg, cell)) |key| break :blk key;
+                }
+                break :blk null;
+            },
+            .hosted_call => |hc| blk: {
+                for (self.store.getExprSpan(hc.args)) |arg| {
+                    if (self.ownerKeyForCellLoadInExpr(arg, cell)) |key| break :blk key;
+                }
+                break :blk null;
+            },
+            .list => |list_expr| blk: {
+                for (self.store.getExprSpan(list_expr.elems)) |elem| {
+                    if (self.ownerKeyForCellLoadInExpr(elem, cell)) |key| break :blk key;
+                }
+                break :blk null;
+            },
+            .struct_ => |s| blk: {
+                for (self.store.getExprSpan(s.fields)) |field| {
+                    if (self.ownerKeyForCellLoadInExpr(field, cell)) |key| break :blk key;
+                }
+                break :blk null;
+            },
+            .tag => |t| blk: {
+                for (self.store.getExprSpan(t.args)) |arg| {
+                    if (self.ownerKeyForCellLoadInExpr(arg, cell)) |key| break :blk key;
+                }
+                break :blk null;
+            },
+            .struct_access => |sa| self.ownerKeyForCellLoadInExpr(sa.struct_expr, cell),
+            .tag_payload_access => |tpa| self.ownerKeyForCellLoadInExpr(tpa.value, cell),
+            .nominal => |n| self.ownerKeyForCellLoadInExpr(n.backing_expr, cell),
+            .early_return => |ret| self.ownerKeyForCellLoadInExpr(ret.expr, cell),
+            .dbg => |d| self.ownerKeyForCellLoadInExpr(d.expr, cell),
+            .expect => |e| self.ownerKeyForCellLoadInExpr(e.cond, cell) orelse self.ownerKeyForCellLoadInExpr(e.body, cell),
+            .str_concat => |parts| blk: {
+                for (self.store.getExprSpan(parts)) |part| {
+                    if (self.ownerKeyForCellLoadInExpr(part, cell)) |key| break :blk key;
+                }
+                break :blk null;
+            },
+            .int_to_str => |its| self.ownerKeyForCellLoadInExpr(its.value, cell),
+            .float_to_str => |fts| self.ownerKeyForCellLoadInExpr(fts.value, cell),
+            .dec_to_str => |d| self.ownerKeyForCellLoadInExpr(d, cell),
+            .str_escape_and_quote => |s| self.ownerKeyForCellLoadInExpr(s, cell),
+            .discriminant_switch => |ds| blk: {
+                if (self.ownerKeyForCellLoadInExpr(ds.value, cell)) |key| break :blk key;
+                for (self.store.getExprSpan(ds.branches)) |branch| {
+                    if (self.ownerKeyForCellLoadInExpr(branch, cell)) |key| break :blk key;
+                }
+                break :blk null;
+            },
+            else => null,
+        };
+    }
+
+    fn exprMovesCellOwner(
+        self: *RcInsertPass,
+        expr_id: LirExprId,
+        cell: Symbol,
+    ) bool {
+        if (expr_id.isNone()) return false;
+
+        return switch (self.store.getExpr(expr_id)) {
+            .block => |block| blk: {
+                if (self.exprIsCellOwnerTransfer(expr_id, cell)) break :blk true;
+                if (self.exprMovesCellOwner(block.final_expr, cell)) break :blk true;
+
+                const final_expr = self.store.getExpr(block.final_expr);
+                if (final_expr == .lookup) {
+                    const final_symbol = final_expr.lookup.symbol;
+                    for (self.store.getStmts(block.stmts)) |stmt| {
+                        switch (stmt) {
+                            .decl, .mutate => |binding| {
+                                const pat = self.store.getPattern(binding.pattern);
+                                if (pat == .bind and pat.bind.symbol == final_symbol and self.exprIsCellOwnerTransfer(binding.expr, cell)) {
+                                    break :blk true;
+                                }
+                                if (self.exprMovesCellOwner(binding.expr, cell)) break :blk true;
+                            },
+                            .cell_init, .cell_store => |binding| if (self.exprMovesCellOwner(binding.expr, cell)) break :blk true,
+                            .cell_drop => {},
+                        }
+                    }
+                } else {
+                    for (self.store.getStmts(block.stmts)) |stmt| {
+                        switch (stmt) {
+                            .decl, .mutate => |binding| if (self.exprMovesCellOwner(binding.expr, cell)) break :blk true,
+                            .cell_init, .cell_store => |binding| if (self.exprMovesCellOwner(binding.expr, cell)) break :blk true,
+                            .cell_drop => {},
+                        }
+                    }
+                }
+
+                break :blk false;
+            },
+            .dbg => |d| self.exprMovesCellOwner(d.expr, cell),
+            .nominal => |n| self.exprMovesCellOwner(n.backing_expr, cell),
+            else => false,
+        };
+    }
+
+    fn blockStmtsMoveCellOwner(
+        self: *RcInsertPass,
+        stmts: []const LirStmt,
+        final_expr: LirExprId,
+        cell: Symbol,
+    ) bool {
+        if (final_expr.isNone()) return false;
+        const final = self.store.getExpr(final_expr);
+        if (final != .lookup) return false;
+
+        var i = stmts.len;
+        while (i > 0) {
+            i -= 1;
+            switch (stmts[i]) {
+                .decl, .mutate => |binding| {
+                    const pat = self.store.getPattern(binding.pattern);
+                    if (pat != .bind or pat.bind.symbol != final.lookup.symbol) continue;
+                    return self.exprIsCellOwnerTransfer(binding.expr, cell) or self.exprMovesCellOwner(binding.expr, cell);
+                },
+                .cell_init, .cell_store, .cell_drop => {},
+            }
+        }
+
+        return false;
+    }
+
+    fn exprIsCellOwnerTransfer(
+        self: *RcInsertPass,
+        expr_id: LirExprId,
+        cell: Symbol,
+    ) bool {
+        if (expr_id.isNone()) return false;
+        const expr = self.store.getExpr(expr_id);
+        if (expr != .block) return false;
+
+        const stmts = self.store.getStmts(expr.block.stmts);
+        if (stmts.len < 2) return false;
+        if (stmts[0] != .decl or stmts[1] != .decl) return false;
+
+        const retained_binding = stmts[0].decl;
+        const incref_binding = stmts[1].decl;
+        const retained_pat = self.store.getPattern(retained_binding.pattern);
+        if (retained_pat != .bind) return false;
+        if (retained_binding.semantics != .retained) return false;
+        if (self.store.getExpr(retained_binding.expr) != .cell_load) return false;
+        if (self.store.getExpr(retained_binding.expr).cell_load.cell != cell) return false;
+
+        const incref_expr = self.store.getExpr(incref_binding.expr);
+        if (incref_expr != .incref) return false;
+        const incref_value = self.store.getExpr(incref_expr.incref.value);
+        if (incref_value != .lookup or incref_value.lookup.symbol != retained_pat.bind.symbol) return false;
+
+        return self.exprFinalizesTransferredOwner(expr.block.final_expr, retained_pat.bind.symbol);
+    }
+
+    fn exprFinalizesTransferredOwner(
+        self: *RcInsertPass,
+        expr_id: LirExprId,
+        retained_symbol: Symbol,
+    ) bool {
+        if (expr_id.isNone()) return false;
+        const expr = self.store.getExpr(expr_id);
+        if (expr != .block) return false;
+
+        const stmts = self.store.getStmts(expr.block.stmts);
+        if (stmts.len < 2) return false;
+        if (stmts[0] != .decl or stmts[1] != .decl) return false;
+
+        const owned_binding = stmts[0].decl;
+        const decref_binding = stmts[1].decl;
+        const owned_pat = self.store.getPattern(owned_binding.pattern);
+        if (owned_pat != .bind) return false;
+
+        const owned_expr = self.store.getExpr(owned_binding.expr);
+        if (owned_expr != .lookup or owned_expr.lookup.symbol != retained_symbol) return false;
+
+        const decref_expr = self.store.getExpr(decref_binding.expr);
+        if (decref_expr != .decref) return false;
+        const decref_value = self.store.getExpr(decref_expr.decref.value);
+        if (decref_value != .lookup or decref_value.lookup.symbol != retained_symbol) return false;
+
+        const final_expr = self.store.getExpr(expr.block.final_expr);
+        return final_expr == .lookup and final_expr.lookup.symbol == owned_pat.bind.symbol;
+    }
+
+    fn stripRedundantRetainedProcCallPreservation(
+        self: *RcInsertPass,
+        expr_id: LirExprId,
+        cell: Symbol,
+    ) Allocator.Error!LirExprId {
+        if (expr_id.isNone()) return expr_id;
+
+        const region = self.store.getExprRegion(expr_id);
+        return switch (self.store.getExpr(expr_id)) {
+            .block => |block| blk: {
+                var changed = false;
+                var stmts = std.ArrayList(LirStmt).empty;
+                defer stmts.deinit(self.allocator);
+
+                for (self.store.getStmts(block.stmts)) |stmt| {
+                    const new_stmt = switch (stmt) {
+                        .decl => |binding| blk_stmt: {
+                            const new_expr = try self.stripRedundantRetainedProcCallPreservation(binding.expr, cell);
+                            changed = changed or new_expr != binding.expr;
+                            break :blk_stmt LirStmt{ .decl = .{
+                                .pattern = binding.pattern,
+                                .expr = new_expr,
+                                .semantics = binding.semantics,
+                            } };
+                        },
+                        .mutate => |binding| blk_stmt: {
+                            const new_expr = try self.stripRedundantRetainedProcCallPreservation(binding.expr, cell);
+                            changed = changed or new_expr != binding.expr;
+                            break :blk_stmt LirStmt{ .mutate = .{
+                                .pattern = binding.pattern,
+                                .expr = new_expr,
+                                .semantics = binding.semantics,
+                            } };
+                        },
+                        .cell_init => |binding| blk_stmt: {
+                            const new_expr = try self.stripRedundantRetainedProcCallPreservation(binding.expr, cell);
+                            changed = changed or new_expr != binding.expr;
+                            break :blk_stmt LirStmt{ .cell_init = .{
+                                .cell = binding.cell,
+                                .layout_idx = binding.layout_idx,
+                                .expr = new_expr,
+                            } };
+                        },
+                        .cell_store => |binding| blk_stmt: {
+                            const new_expr = try self.stripRedundantRetainedProcCallPreservation(binding.expr, cell);
+                            changed = changed or new_expr != binding.expr;
+                            break :blk_stmt LirStmt{ .cell_store = .{
+                                .cell = binding.cell,
+                                .layout_idx = binding.layout_idx,
+                                .expr = new_expr,
+                            } };
+                        },
+                        .cell_drop => stmt,
+                    };
+                    try stmts.append(self.allocator, new_stmt);
+                }
+
+                var new_final = try self.stripRedundantRetainedProcCallPreservation(block.final_expr, cell);
+                changed = changed or new_final != block.final_expr;
+
+                if (stmts.items.len >= 3 and self.store.getExpr(new_final) == .proc_call) {
+                    const maybe_source_stmt = stmts.items[stmts.items.len - 3];
+                    const maybe_retained_stmt = stmts.items[stmts.items.len - 2];
+                    const maybe_incref_stmt = stmts.items[stmts.items.len - 1];
+                    if (maybe_source_stmt == .decl and maybe_retained_stmt == .decl and maybe_incref_stmt == .decl) {
+                        const source_binding = maybe_source_stmt.decl;
+                        const retained_binding = maybe_retained_stmt.decl;
+                        const incref_binding = maybe_incref_stmt.decl;
+                        const source_pat = self.store.getPattern(source_binding.pattern);
+                        const retained_pat = self.store.getPattern(retained_binding.pattern);
+                        const incref_expr = self.store.getExpr(incref_binding.expr);
+                        const final_call = self.store.getExpr(new_final).proc_call;
+
+                        if (retained_binding.semantics == .retained and
+                            source_pat == .bind and
+                            retained_pat == .bind and
+                            incref_expr == .incref)
+                        {
+                            const inc_value = self.store.getExpr(incref_expr.incref.value);
+                            const final_args = self.store.getExprSpan(final_call.args);
+                            if (inc_value == .lookup and
+                                inc_value.lookup.symbol == retained_pat.bind.symbol and
+                                final_args.len > 0 and
+                                self.store.getExpr(final_args[0]) == .lookup and
+                                self.store.getExpr(final_args[0]).lookup.symbol == retained_pat.bind.symbol)
+                            {
+                                if (self.store.getExpr(retained_binding.expr) == .lookup and
+                                    self.store.getExpr(retained_binding.expr).lookup.symbol == source_pat.bind.symbol and
+                                    self.exprContainsCellLoadOf(source_binding.expr, cell))
+                                {
+                                    var args = std.ArrayList(LirExprId).empty;
+                                    defer args.deinit(self.allocator);
+                                    try args.append(self.allocator, retained_binding.expr);
+                                    for (final_args[1..]) |arg| try args.append(self.allocator, arg);
+                                    new_final = try self.rebuildProcCall(final_call, try self.store.addExprSpan(args.items), region);
+                                    _ = stmts.pop();
+                                    _ = stmts.pop();
+                                    changed = true;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (stmts.items.len >= 4 and self.store.getExpr(new_final) == .proc_call) {
+                    const maybe_source_stmt = stmts.items[stmts.items.len - 4];
+                    const maybe_alias_stmt = stmts.items[stmts.items.len - 3];
+                    const maybe_incref_stmt = stmts.items[stmts.items.len - 2];
+                    const maybe_intermediate_stmt = stmts.items[stmts.items.len - 1];
+
+                    if (maybe_source_stmt == .decl and maybe_alias_stmt == .decl and maybe_incref_stmt == .decl) {
+                        const source_binding = maybe_source_stmt.decl;
+                        const alias_binding = maybe_alias_stmt.decl;
+                        const incref_binding = maybe_incref_stmt.decl;
+                        const source_pat = self.store.getPattern(source_binding.pattern);
+                        const alias_pat = self.store.getPattern(alias_binding.pattern);
+                        const incref_expr = self.store.getExpr(incref_binding.expr);
+                        const final_call = self.store.getExpr(new_final).proc_call;
+
+                        if (source_pat == .bind and alias_pat == .bind and incref_expr == .incref) {
+                            const alias_expr = self.store.getExpr(alias_binding.expr);
+                            const inc_value = self.store.getExpr(incref_expr.incref.value);
+                            const final_args = self.store.getExprSpan(final_call.args);
+                            const intermediate_uses_alias = switch (maybe_intermediate_stmt) {
+                                .decl, .mutate => |binding| try self.exprUsesPatternSymbol(binding.expr, alias_binding.pattern),
+                                .cell_init, .cell_store => |binding| try self.exprUsesPatternSymbol(binding.expr, alias_binding.pattern),
+                                .cell_drop => false,
+                            };
+
+                            if (!intermediate_uses_alias and
+                                alias_expr == .lookup and
+                                alias_expr.lookup.symbol == source_pat.bind.symbol and
+                                inc_value == .lookup and
+                                inc_value.lookup.symbol == alias_pat.bind.symbol and
+                                final_args.len > 0 and
+                                self.store.getExpr(final_args[0]) == .lookup and
+                                self.store.getExpr(final_args[0]).lookup.symbol == alias_pat.bind.symbol and
+                                self.exprContainsCellLoadOf(source_binding.expr, cell))
+                            {
+                                _ = stmts.orderedRemove(stmts.items.len - 2);
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+
+                if (!changed) break :blk expr_id;
+                break :blk try self.store.addExpr(.{ .block = .{
+                    .stmts = try self.store.addStmts(stmts.items),
+                    .final_expr = new_final,
+                    .result_layout = block.result_layout,
+                } }, region);
+            },
+            .if_then_else => |ite| blk: {
+                var changed = false;
+                var branches = std.ArrayList(LirIfBranch).empty;
+                defer branches.deinit(self.allocator);
+                for (self.store.getIfBranches(ite.branches)) |branch| {
+                    const new_cond = try self.stripRedundantRetainedProcCallPreservation(branch.cond, cell);
+                    const new_body = try self.stripRedundantRetainedProcCallPreservation(branch.body, cell);
+                    changed = changed or new_cond != branch.cond or new_body != branch.body;
+                    try branches.append(self.allocator, .{ .cond = new_cond, .body = new_body });
+                }
+                const new_else = try self.stripRedundantRetainedProcCallPreservation(ite.final_else, cell);
+                changed = changed or new_else != ite.final_else;
+                if (!changed) break :blk expr_id;
+                break :blk try self.store.addExpr(.{ .if_then_else = .{
+                    .branches = try self.store.addIfBranches(branches.items),
+                    .final_else = new_else,
+                    .result_layout = ite.result_layout,
+                } }, region);
+            },
+            .match_expr => |match_expr| blk: {
+                var changed = false;
+                const new_value = try self.stripRedundantRetainedProcCallPreservation(match_expr.value, cell);
+                changed = changed or new_value != match_expr.value;
+                var branches = std.ArrayList(LirMatchBranch).empty;
+                defer branches.deinit(self.allocator);
+                for (self.store.getMatchBranches(match_expr.branches)) |branch| {
+                    const new_guard = try self.stripRedundantRetainedProcCallPreservation(branch.guard, cell);
+                    const new_body = try self.stripRedundantRetainedProcCallPreservation(branch.body, cell);
+                    changed = changed or new_guard != branch.guard or new_body != branch.body;
+                    try branches.append(self.allocator, .{
+                        .pattern = branch.pattern,
+                        .guard = new_guard,
+                        .body = new_body,
+                    });
+                }
+                if (!changed) break :blk expr_id;
+                break :blk try self.store.addExpr(.{ .match_expr = .{
+                    .value = new_value,
+                    .value_layout = match_expr.value_layout,
+                    .branches = try self.store.addMatchBranches(branches.items),
+                    .result_layout = match_expr.result_layout,
+                } }, region);
+            },
+            .loop => |loop_expr| blk: {
+                const new_body = try self.stripRedundantRetainedProcCallPreservation(loop_expr.body, cell);
+                if (new_body == loop_expr.body) break :blk expr_id;
+                break :blk try self.store.addExpr(.{ .loop = .{ .body = new_body } }, region);
+            },
+            else => expr_id,
         };
     }
 
@@ -3327,11 +3862,7 @@ pub const RcInsertPass = struct {
                 },
                 .cell_store => |cell| {
                     const processed_expr = try self.processExpr(cell.expr);
-                    const new_expr = try self.retainConsumedOperandsForLaterUse(
-                        processed_expr,
-                        &later_uses.items[stmt_index],
-                        region,
-                    );
+                    const new_expr = processed_expr;
                     if (new_expr != cell.expr) changed = true;
 
                     self.scratch_consumed_uses.clearRetainingCapacity();
@@ -3347,6 +3878,24 @@ pub const RcInsertPass = struct {
                     }
 
                     if (self.layoutNeedsRc(cell.layout_idx)) {
+                        const old_temp = try self.freshResultPattern(cell.layout_idx, region);
+                        const old_load = try self.store.addExpr(.{ .cell_load = .{
+                            .cell = cell.cell,
+                            .layout_idx = cell.layout_idx,
+                        } }, region);
+                        try stmt_buf.append(self.allocator, .{ .decl = .{
+                            .pattern = old_temp.pattern,
+                            .expr = old_load,
+                            .semantics = .retained,
+                        } });
+                        try self.emitBindingIntroductionRcOps(.{
+                            .pattern = old_temp.pattern,
+                            .expr = old_load,
+                            .semantics = .retained,
+                        }, region, &stmt_buf);
+
+                        const stored_expr = try self.stripRedundantRetainedProcCallPreservation(new_expr, cell.cell);
+
                         const temp = try self.freshResultPattern(cell.layout_idx, region);
                         const temp_lookup = try self.store.addExpr(.{ .lookup = .{
                             .symbol = temp.symbol,
@@ -3355,17 +3904,15 @@ pub const RcInsertPass = struct {
 
                         try stmt_buf.append(self.allocator, .{ .decl = .{
                             .pattern = temp.pattern,
-                            .expr = new_expr,
+                            .expr = stored_expr,
                         } });
 
-                        const before_len = stmt_buf.items.len;
-                        try self.emitCellDecrefInto(cell.cell, cell.layout_idx, region, &stmt_buf);
-                        if (stmt_buf.items.len > before_len) changed = true;
                         try stmt_buf.append(self.allocator, .{ .cell_store = .{
                             .cell = cell.cell,
                             .layout_idx = cell.layout_idx,
                             .expr = temp_lookup,
                         } });
+                        try self.emitDecrefInto(old_temp.symbol, cell.layout_idx, region, &stmt_buf);
                         changed = true;
                     } else {
                         try stmt_buf.append(self.allocator, .{ .cell_store = .{
@@ -3458,7 +4005,9 @@ pub const RcInsertPass = struct {
         while (live_cell_index > saved_live_cells_len) {
             live_cell_index -= 1;
             const live_cell = self.live_cells.items[live_cell_index];
-            if (self.layoutNeedsRc(live_cell.layout_idx)) {
+            const result_moves_cell_owner = self.exprMovesCellOwner(new_final, live_cell.cell) or
+                self.blockStmtsMoveCellOwner(stmt_buf.items, new_final, live_cell.cell);
+            if (self.layoutNeedsRc(live_cell.layout_idx) and !result_moves_cell_owner) {
                 try self.emitCellDecrefInto(live_cell.cell, live_cell.layout_idx, region, &tail_cell_stmts);
             }
             try tail_cell_stmts.append(self.allocator, .{ .cell_drop = .{
@@ -3857,88 +4406,6 @@ pub const RcInsertPass = struct {
     /// Process a while loop expression.
     /// While loops don't bind new symbols — just recurse into cond and body.
     fn processLoop(self: *RcInsertPass, loop_expr: anytype, region: Region, expr_id: LirExprId) Allocator.Error!LirExprId {
-        if (self.store.getExpr(loop_expr.body) == .match_expr) {
-            const match_expr = self.store.getExpr(loop_expr.body).match_expr;
-            const branches = self.store.getMatchBranches(match_expr.branches);
-
-            if (branches.len == 2 and branches[0].guard.isNone() and branches[1].guard.isNone() and self.store.getExpr(branches[1].body) == .break_expr) {
-                var cond_demands = std.AutoHashMap(u64, u32).init(self.allocator);
-                defer cond_demands.deinit();
-                try self.countBorrowOwnerDemandUsesInto(match_expr.value, &cond_demands);
-
-                var cond_consumed = std.AutoHashMap(u64, u32).init(self.allocator);
-                defer cond_consumed.deinit();
-                try self.countConsumedUsesInto(match_expr.value, &cond_consumed);
-
-                var body_demands = std.AutoHashMap(u64, u32).init(self.allocator);
-                defer body_demands.deinit();
-                try self.countBorrowOwnerDemandUsesInto(branches[0].body, &body_demands);
-
-                var body_consumed = std.AutoHashMap(u64, u32).init(self.allocator);
-                defer body_consumed.deinit();
-                try self.countConsumedUsesInto(branches[0].body, &body_consumed);
-
-                const live_len = self.live_rc_symbols.items.len;
-
-                var loop_carried_keys = std.AutoHashMap(u64, void).init(self.allocator);
-                defer loop_carried_keys.deinit();
-                for (self.live_rc_symbols.items[0..live_len]) |live| {
-                    if (!live.reassignable) continue;
-                    if (try self.exprMutatesSymbol(branches[0].body, live.symbol)) {
-                        try loop_carried_keys.put(live.key, {});
-                    }
-                }
-
-                const processed_cond = try self.processExpr(match_expr.value);
-                const new_cond = try self.wrapExprWithLiveDemandRcOps(
-                    processed_cond,
-                    live_len,
-                    &cond_demands,
-                    &cond_consumed,
-                    null,
-                    self.exprResultLayout(match_expr.value),
-                    region,
-                );
-
-                var cond_added = try self.pushBorrowedExprUsesToBlockConsumed(match_expr.value);
-                defer {
-                    self.popExprUsesFromBlockConsumed(&cond_added);
-                    cond_added.deinit();
-                }
-
-                const processed_body = try self.processExpr(branches[0].body);
-                const new_body = try self.wrapExprWithLiveDemandRcOps(
-                    processed_body,
-                    live_len,
-                    &body_demands,
-                    &body_consumed,
-                    &loop_carried_keys,
-                    self.exprResultLayout(branches[0].body),
-                    region,
-                );
-
-                if (new_cond != match_expr.value or new_body != branches[0].body) {
-                    var new_branches = try self.allocator.dupe(LirMatchBranch, branches);
-                    defer self.allocator.free(new_branches);
-                    new_branches[0].body = new_body;
-                    new_branches[1].body = branches[1].body;
-
-                    const rebuilt_body = try self.store.addExpr(.{ .match_expr = .{
-                        .value = new_cond,
-                        .value_layout = match_expr.value_layout,
-                        .branches = try self.store.addMatchBranches(new_branches),
-                        .result_layout = match_expr.result_layout,
-                    } }, region);
-
-                    return self.store.addExpr(.{ .loop = .{
-                        .body = rebuilt_body,
-                    } }, region);
-                }
-
-                return expr_id;
-            }
-        }
-
         var body_demands = std.AutoHashMap(u64, u32).init(self.allocator);
         defer body_demands.deinit();
         try self.countBorrowOwnerDemandUsesInto(loop_expr.body, &body_demands);
@@ -4039,7 +4506,9 @@ pub const RcInsertPass = struct {
             cell_index -= 1;
             const live_cell = live_cells[cell_index];
             if (!self.layoutNeedsRc(live_cell.layout_idx)) continue;
-            try self.emitCellDecrefInto(live_cell.cell, live_cell.layout_idx, region, &cleanup_stmts);
+            if (!self.exprMovesCellOwner(new_expr, live_cell.cell)) {
+                try self.emitCellDecrefInto(live_cell.cell, live_cell.layout_idx, region, &cleanup_stmts);
+            }
         }
 
         if (cleanup_stmts.items.len == 0 and new_expr == ret.expr) return expr_id;
@@ -6269,6 +6738,195 @@ fn countIncrefsForSymbol(store: *const LirExprStore, expr_id: LirExprId, symbol:
             const inc_expr = store.getExpr(inc.value);
             break :blk if (inc_expr == .lookup and @as(u64, @bitCast(inc_expr.lookup.symbol)) == key) 1 else 0;
         },
+        else => 0,
+    };
+}
+
+fn countCellDecrefs(store: *const LirExprStore, expr_id: LirExprId, cell: LIR.Symbol) u32 {
+    if (expr_id.isNone()) return 0;
+
+    const expr = store.getExpr(expr_id);
+    return switch (expr) {
+        .block => |block| blk: {
+            var total: u32 = 0;
+            for (store.getStmts(block.stmts)) |stmt| {
+                total += switch (stmt) {
+                    .decl, .mutate => |binding| countCellDecrefs(store, binding.expr, cell),
+                    .cell_init, .cell_store => |binding| countCellDecrefs(store, binding.expr, cell),
+                    .cell_drop => 0,
+                };
+            }
+            total += countCellDecrefs(store, block.final_expr, cell);
+            break :blk total;
+        },
+        .if_then_else => |ite| blk: {
+            var total: u32 = 0;
+            for (store.getIfBranches(ite.branches)) |branch| {
+                total += countCellDecrefs(store, branch.cond, cell);
+                total += countCellDecrefs(store, branch.body, cell);
+            }
+            total += countCellDecrefs(store, ite.final_else, cell);
+            break :blk total;
+        },
+        .match_expr => |m| blk: {
+            var total: u32 = countCellDecrefs(store, m.value, cell);
+            for (store.getMatchBranches(m.branches)) |branch| {
+                total += countCellDecrefs(store, branch.guard, cell);
+                total += countCellDecrefs(store, branch.body, cell);
+            }
+            break :blk total;
+        },
+        .loop => |loop_expr| countCellDecrefs(store, loop_expr.body, cell),
+        .discriminant_switch => |ds| blk: {
+            var total: u32 = countCellDecrefs(store, ds.value, cell);
+            for (store.getExprSpan(ds.branches)) |branch_id| {
+                total += countCellDecrefs(store, branch_id, cell);
+            }
+            break :blk total;
+        },
+        .proc_call => |call| blk: {
+            var total: u32 = 0;
+            for (store.getExprSpan(call.args)) |arg_id| total += countCellDecrefs(store, arg_id, cell);
+            break :blk total;
+        },
+        .low_level => |ll| blk: {
+            var total: u32 = 0;
+            for (store.getExprSpan(ll.args)) |arg_id| total += countCellDecrefs(store, arg_id, cell);
+            break :blk total;
+        },
+        .hosted_call => |hc| blk: {
+            var total: u32 = 0;
+            for (store.getExprSpan(hc.args)) |arg_id| total += countCellDecrefs(store, arg_id, cell);
+            break :blk total;
+        },
+        .list => |l| blk: {
+            var total: u32 = 0;
+            for (store.getExprSpan(l.elems)) |elem_id| total += countCellDecrefs(store, elem_id, cell);
+            break :blk total;
+        },
+        .struct_ => |s| blk: {
+            var total: u32 = 0;
+            for (store.getExprSpan(s.fields)) |field_id| total += countCellDecrefs(store, field_id, cell);
+            break :blk total;
+        },
+        .tag => |t| blk: {
+            var total: u32 = 0;
+            for (store.getExprSpan(t.args)) |arg_id| total += countCellDecrefs(store, arg_id, cell);
+            break :blk total;
+        },
+        .struct_access => |sa| countCellDecrefs(store, sa.struct_expr, cell),
+        .tag_payload_access => |tpa| countCellDecrefs(store, tpa.value, cell),
+        .nominal => |n| countCellDecrefs(store, n.backing_expr, cell),
+        .early_return => |ret| countCellDecrefs(store, ret.expr, cell),
+        .dbg => |d| countCellDecrefs(store, d.expr, cell),
+        .expect => |e| countCellDecrefs(store, e.cond, cell) + countCellDecrefs(store, e.body, cell),
+        .str_concat => |parts| blk: {
+            var total: u32 = 0;
+            for (store.getExprSpan(parts)) |part_id| total += countCellDecrefs(store, part_id, cell);
+            break :blk total;
+        },
+        .int_to_str => |its| countCellDecrefs(store, its.value, cell),
+        .float_to_str => |fts| countCellDecrefs(store, fts.value, cell),
+        .dec_to_str => |d| countCellDecrefs(store, d, cell),
+        .str_escape_and_quote => |s| countCellDecrefs(store, s, cell),
+        .incref => |inc| countCellDecrefs(store, inc.value, cell),
+        .decref => |dec| blk: {
+            const value = store.getExpr(dec.value);
+            break :blk if (value == .cell_load and value.cell_load.cell.eql(cell)) 1 else countCellDecrefs(store, dec.value, cell);
+        },
+        .free => |free| countCellDecrefs(store, free.value, cell),
+        else => 0,
+    };
+}
+
+fn countCellDrops(store: *const LirExprStore, expr_id: LirExprId, cell: LIR.Symbol) u32 {
+    if (expr_id.isNone()) return 0;
+
+    const expr = store.getExpr(expr_id);
+    return switch (expr) {
+        .block => |block| blk: {
+            var total: u32 = 0;
+            for (store.getStmts(block.stmts)) |stmt| {
+                total += switch (stmt) {
+                    .decl, .mutate => |binding| countCellDrops(store, binding.expr, cell),
+                    .cell_init, .cell_store => |binding| countCellDrops(store, binding.expr, cell),
+                    .cell_drop => |drop| if (@as(u64, @bitCast(drop.cell)) == @as(u64, @bitCast(cell))) 1 else 0,
+                };
+            }
+            total += countCellDrops(store, block.final_expr, cell);
+            break :blk total;
+        },
+        .if_then_else => |ite| blk: {
+            var total: u32 = 0;
+            for (store.getIfBranches(ite.branches)) |branch| {
+                total += countCellDrops(store, branch.cond, cell);
+                total += countCellDrops(store, branch.body, cell);
+            }
+            total += countCellDrops(store, ite.final_else, cell);
+            break :blk total;
+        },
+        .match_expr => |m| blk: {
+            var total: u32 = countCellDrops(store, m.value, cell);
+            for (store.getMatchBranches(m.branches)) |branch| {
+                total += countCellDrops(store, branch.guard, cell);
+                total += countCellDrops(store, branch.body, cell);
+            }
+            break :blk total;
+        },
+        .loop => |loop_expr| countCellDrops(store, loop_expr.body, cell),
+        .discriminant_switch => |ds| blk: {
+            var total: u32 = countCellDrops(store, ds.value, cell);
+            for (store.getExprSpan(ds.branches)) |branch_id| total += countCellDrops(store, branch_id, cell);
+            break :blk total;
+        },
+        .proc_call => |call| blk: {
+            var total: u32 = 0;
+            for (store.getExprSpan(call.args)) |arg_id| total += countCellDrops(store, arg_id, cell);
+            break :blk total;
+        },
+        .low_level => |ll| blk: {
+            var total: u32 = 0;
+            for (store.getExprSpan(ll.args)) |arg_id| total += countCellDrops(store, arg_id, cell);
+            break :blk total;
+        },
+        .hosted_call => |hc| blk: {
+            var total: u32 = 0;
+            for (store.getExprSpan(hc.args)) |arg_id| total += countCellDrops(store, arg_id, cell);
+            break :blk total;
+        },
+        .list => |l| blk: {
+            var total: u32 = 0;
+            for (store.getExprSpan(l.elems)) |elem_id| total += countCellDrops(store, elem_id, cell);
+            break :blk total;
+        },
+        .struct_ => |s| blk: {
+            var total: u32 = 0;
+            for (store.getExprSpan(s.fields)) |field_id| total += countCellDrops(store, field_id, cell);
+            break :blk total;
+        },
+        .tag => |t| blk: {
+            var total: u32 = 0;
+            for (store.getExprSpan(t.args)) |arg_id| total += countCellDrops(store, arg_id, cell);
+            break :blk total;
+        },
+        .struct_access => |sa| countCellDrops(store, sa.struct_expr, cell),
+        .tag_payload_access => |tpa| countCellDrops(store, tpa.value, cell),
+        .nominal => |n| countCellDrops(store, n.backing_expr, cell),
+        .early_return => |ret| countCellDrops(store, ret.expr, cell),
+        .dbg => |d| countCellDrops(store, d.expr, cell),
+        .expect => |e| countCellDrops(store, e.cond, cell) + countCellDrops(store, e.body, cell),
+        .str_concat => |parts| blk: {
+            var total: u32 = 0;
+            for (store.getExprSpan(parts)) |part_id| total += countCellDrops(store, part_id, cell);
+            break :blk total;
+        },
+        .int_to_str => |its| countCellDrops(store, its.value, cell),
+        .float_to_str => |fts| countCellDrops(store, fts.value, cell),
+        .dec_to_str => |d| countCellDrops(store, d, cell),
+        .str_escape_and_quote => |s| countCellDrops(store, s, cell),
+        .incref => |inc| countCellDrops(store, inc.value, cell),
+        .decref => |dec| countCellDrops(store, dec.value, cell),
+        .free => |free| countCellDrops(store, free.value, cell),
         else => 0,
     };
 }

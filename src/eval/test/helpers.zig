@@ -5260,6 +5260,651 @@ test "dev lowering: mutable loop append decrefs mutable result binding once" {
     try std.testing.expect(found_mutable_result or found_cell_result);
 }
 
+test "dev lowering: lowered for-loop releases iterated list owner" {
+    const Search = struct {
+        fn printExprTree(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, depth: usize) void {
+            if (expr_id.isNone()) return;
+
+            const expr = store.getExpr(expr_id);
+            for (0..depth) |_| std.debug.print("  ", .{});
+            switch (expr) {
+                .lookup => |lookup| std.debug.print(
+                    "expr {d}: lookup symbol={d} layout={d}\n",
+                    .{ @intFromEnum(expr_id), lookup.symbol.raw(), @intFromEnum(lookup.layout_idx) },
+                ),
+                .struct_access => |sa| {
+                    std.debug.print(
+                        "expr {d}: struct_access field={d} field_layout={d}\n",
+                        .{ @intFromEnum(expr_id), sa.field_idx, @intFromEnum(sa.field_layout) },
+                    );
+                    printExprTree(store, sa.struct_expr, depth + 1);
+                },
+                .struct_ => |struct_expr| {
+                    std.debug.print(
+                        "expr {d}: struct_ layout={d} fields={d}\n",
+                        .{ @intFromEnum(expr_id), @intFromEnum(struct_expr.struct_layout), struct_expr.fields.len },
+                    );
+                    for (store.getExprSpan(struct_expr.fields)) |field| {
+                        printExprTree(store, field, depth + 1);
+                    }
+                },
+                .block => |block| {
+                    std.debug.print(
+                        "expr {d}: block stmts={d} final={d}\n",
+                        .{ @intFromEnum(expr_id), block.stmts.len, @intFromEnum(block.final_expr) },
+                    );
+                    for (store.getStmts(block.stmts), 0..) |stmt, i| {
+                        for (0..depth + 1) |_| std.debug.print("  ", .{});
+                        switch (stmt) {
+                            .decl, .mutate => |binding| {
+                                const pat = store.getPattern(binding.pattern);
+                                if (pat == .bind) {
+                                    std.debug.print(
+                                        "stmt[{d}] {s} symbol={d} layout={d}\n",
+                                        .{ i, @tagName(stmt), pat.bind.symbol.raw(), @intFromEnum(pat.bind.layout_idx) },
+                                    );
+                                } else {
+                                    std.debug.print("stmt[{d}] {s}\n", .{ i, @tagName(stmt) });
+                                }
+                                printExprTree(store, binding.expr, depth + 2);
+                            },
+                            .cell_init, .cell_store => |binding| {
+                                std.debug.print(
+                                    "stmt[{d}] {s} cell={d} layout={d}\n",
+                                    .{ i, @tagName(stmt), @as(u64, @bitCast(binding.cell)), @intFromEnum(binding.layout_idx) },
+                                );
+                                printExprTree(store, binding.expr, depth + 2);
+                            },
+                            .cell_drop => |drop| std.debug.print(
+                                "stmt[{d}] cell_drop cell={d}\n",
+                                .{ i, @as(u64, @bitCast(drop.cell)) },
+                            ),
+                        }
+                    }
+                    printExprTree(store, block.final_expr, depth + 1);
+                },
+                .proc_call => |call| {
+                    std.debug.print(
+                        "expr {d}: proc_call proc={d} argc={d}\n",
+                        .{ @intFromEnum(expr_id), @intFromEnum(call.proc), store.getExprSpan(call.args).len },
+                    );
+                    if (callCalleeExprId(call)) |callee_expr| {
+                        printExprTree(store, callee_expr, depth + 1);
+                    }
+                    for (store.getExprSpan(call.args)) |arg| {
+                        printExprTree(store, arg, depth + 1);
+                    }
+                },
+                .low_level => |ll| {
+                    std.debug.print(
+                        "expr {d}: low_level {s} argc={d}\n",
+                        .{ @intFromEnum(expr_id), @tagName(ll.op), store.getExprSpan(ll.args).len },
+                    );
+                    for (store.getExprSpan(ll.args)) |arg| {
+                        printExprTree(store, arg, depth + 1);
+                    }
+                },
+                .if_then_else => |ite| {
+                    std.debug.print("expr {d}: if_then_else\n", .{@intFromEnum(expr_id)});
+                    for (store.getIfBranches(ite.branches), 0..) |branch, i| {
+                        for (0..depth + 1) |_| std.debug.print("  ", .{});
+                        std.debug.print("branch[{d}] cond\n", .{i});
+                        printExprTree(store, branch.cond, depth + 2);
+                        for (0..depth + 1) |_| std.debug.print("  ", .{});
+                        std.debug.print("branch[{d}] body\n", .{i});
+                        printExprTree(store, branch.body, depth + 2);
+                    }
+                    for (0..depth + 1) |_| std.debug.print("  ", .{});
+                    std.debug.print("else\n", .{});
+                    printExprTree(store, ite.final_else, depth + 2);
+                },
+                .match_expr => |match_expr| {
+                    std.debug.print("expr {d}: match_expr\n", .{@intFromEnum(expr_id)});
+                    for (0..depth + 1) |_| std.debug.print("  ", .{});
+                    std.debug.print("value\n", .{});
+                    printExprTree(store, match_expr.value, depth + 2);
+                    for (store.getMatchBranches(match_expr.branches), 0..) |branch, i| {
+                        for (0..depth + 1) |_| std.debug.print("  ", .{});
+                        std.debug.print("branch[{d}] guard\n", .{i});
+                        printExprTree(store, branch.guard, depth + 2);
+                        for (0..depth + 1) |_| std.debug.print("  ", .{});
+                        std.debug.print("branch[{d}] body\n", .{i});
+                        printExprTree(store, branch.body, depth + 2);
+                    }
+                },
+                .discriminant_switch => |switch_expr| {
+                    std.debug.print("expr {d}: discriminant_switch\n", .{@intFromEnum(expr_id)});
+                    for (0..depth + 1) |_| std.debug.print("  ", .{});
+                    std.debug.print("value\n", .{});
+                    printExprTree(store, switch_expr.value, depth + 2);
+                    for (store.getExprSpan(switch_expr.branches), 0..) |branch_id, i| {
+                        for (0..depth + 1) |_| std.debug.print("  ", .{});
+                        std.debug.print("branch[{d}]\n", .{i});
+                        printExprTree(store, branch_id, depth + 2);
+                    }
+                },
+                .loop => |loop_expr| {
+                    std.debug.print("expr {d}: loop\n", .{@intFromEnum(expr_id)});
+                    printExprTree(store, loop_expr.body, depth + 1);
+                },
+                .break_expr => std.debug.print("expr {d}: break_expr\n", .{@intFromEnum(expr_id)}),
+                .decref => |dec| {
+                    std.debug.print("expr {d}: decref\n", .{@intFromEnum(expr_id)});
+                    printExprTree(store, dec.value, depth + 1);
+                },
+                .incref => |rc| {
+                    std.debug.print("expr {d}: incref\n", .{@intFromEnum(expr_id)});
+                    printExprTree(store, rc.value, depth + 1);
+                },
+                else => std.debug.print("expr {d}: {s}\n", .{ @intFromEnum(expr_id), @tagName(expr) }),
+            }
+        }
+
+        fn assertListOwnersReleased(store: *const LirExprStore, layouts: *const layout.Store, expr_id: lir.LIR.LirExprId, root_expr_id: lir.LIR.LirExprId, found: *bool) !void {
+            if (expr_id.isNone()) return;
+
+            const expr = store.getExpr(expr_id);
+            switch (expr) {
+                .block => |block| {
+                    for (store.getStmts(block.stmts)) |stmt| {
+                        switch (stmt) {
+                            .decl => |binding| {
+                                const pat = store.getPattern(binding.pattern);
+                                if (pat == .bind) {
+                                    const layout_val = layouts.getLayout(pat.bind.layout_idx);
+                                    const binding_expr = store.getExpr(binding.expr);
+                                    if ((layout_val.tag == .list or layout_val.tag == .list_of_zst) and binding_expr == .list) {
+                                        found.* = true;
+                                        const decrefs = countDecrefsForSymbol(store, root_expr_id, pat.bind.symbol);
+                                        std.debug.print(
+                                            "list bind symbol={d} decrefs={d}\n",
+                                            .{ pat.bind.symbol.raw(), decrefs },
+                                        );
+                                        try std.testing.expectEqual(@as(u32, 1), decrefs);
+                                    }
+                                }
+                                try assertListOwnersReleased(store, layouts, binding.expr, root_expr_id, found);
+                            },
+                            .mutate => |binding| try assertListOwnersReleased(store, layouts, binding.expr, root_expr_id, found),
+                            .cell_init => |binding| {
+                                const layout_val = layouts.getLayout(binding.layout_idx);
+                                if (layout_val.tag == .list or layout_val.tag == .list_of_zst) {
+                                    found.* = true;
+                                    const cell_decrefs = countCellDecrefs(store, root_expr_id, binding.cell);
+                                    const cell_drops = countCellDrops(store, root_expr_id, binding.cell);
+                                    std.debug.print(
+                                        "list cell={d} decrefs={d} drops={d}\n",
+                                        .{ @as(u64, @bitCast(binding.cell)), cell_decrefs, cell_drops },
+                                    );
+                                    try std.testing.expectEqual(@as(u32, 1), cell_decrefs);
+                                    try std.testing.expectEqual(@as(u32, 1), cell_drops);
+                                }
+                                try assertListOwnersReleased(store, layouts, binding.expr, root_expr_id, found);
+                            },
+                            .cell_store => |binding| try assertListOwnersReleased(store, layouts, binding.expr, root_expr_id, found),
+                            .cell_drop => {},
+                        }
+                    }
+                    try assertListOwnersReleased(store, layouts, block.final_expr, root_expr_id, found);
+                },
+                .if_then_else => |ite| {
+                    for (store.getIfBranches(ite.branches)) |branch| {
+                        try assertListOwnersReleased(store, layouts, branch.cond, root_expr_id, found);
+                        try assertListOwnersReleased(store, layouts, branch.body, root_expr_id, found);
+                    }
+                    try assertListOwnersReleased(store, layouts, ite.final_else, root_expr_id, found);
+                },
+                .match_expr => |m| {
+                    try assertListOwnersReleased(store, layouts, m.value, root_expr_id, found);
+                    for (store.getMatchBranches(m.branches)) |branch| {
+                        try assertListOwnersReleased(store, layouts, branch.guard, root_expr_id, found);
+                        try assertListOwnersReleased(store, layouts, branch.body, root_expr_id, found);
+                    }
+                },
+                .discriminant_switch => |ds| {
+                    try assertListOwnersReleased(store, layouts, ds.value, root_expr_id, found);
+                    for (store.getExprSpan(ds.branches)) |branch_id| {
+                        try assertListOwnersReleased(store, layouts, branch_id, root_expr_id, found);
+                    }
+                },
+                .loop => |loop_expr| try assertListOwnersReleased(store, layouts, loop_expr.body, root_expr_id, found),
+                .proc_call => |call| {
+                    if (callCalleeExprId(call)) |callee_expr| {
+                        try assertListOwnersReleased(store, layouts, callee_expr, root_expr_id, found);
+                    }
+                    for (store.getExprSpan(call.args)) |arg| {
+                        try assertListOwnersReleased(store, layouts, arg, root_expr_id, found);
+                    }
+                },
+                .low_level => |ll| {
+                    for (store.getExprSpan(ll.args)) |arg| {
+                        try assertListOwnersReleased(store, layouts, arg, root_expr_id, found);
+                    }
+                },
+                .list => |list_expr| {
+                    for (store.getExprSpan(list_expr.elems)) |elem| {
+                        try assertListOwnersReleased(store, layouts, elem, root_expr_id, found);
+                    }
+                },
+                .struct_ => |s| {
+                    for (store.getExprSpan(s.fields)) |field| {
+                        try assertListOwnersReleased(store, layouts, field, root_expr_id, found);
+                    }
+                },
+                .tag => |t| {
+                    for (store.getExprSpan(t.args)) |arg| {
+                        try assertListOwnersReleased(store, layouts, arg, root_expr_id, found);
+                    }
+                },
+                .struct_access => |sa| try assertListOwnersReleased(store, layouts, sa.struct_expr, root_expr_id, found),
+                .tag_payload_access => |tpa| try assertListOwnersReleased(store, layouts, tpa.value, root_expr_id, found),
+                .nominal => |n| try assertListOwnersReleased(store, layouts, n.backing_expr, root_expr_id, found),
+                .early_return => |ret| try assertListOwnersReleased(store, layouts, ret.expr, root_expr_id, found),
+                .dbg => |d| try assertListOwnersReleased(store, layouts, d.expr, root_expr_id, found),
+                .expect => |e| {
+                    try assertListOwnersReleased(store, layouts, e.cond, root_expr_id, found);
+                    try assertListOwnersReleased(store, layouts, e.body, root_expr_id, found);
+                },
+                .str_concat => |parts| {
+                    for (store.getExprSpan(parts)) |part| {
+                        try assertListOwnersReleased(store, layouts, part, root_expr_id, found);
+                    }
+                },
+                .int_to_str => |its| try assertListOwnersReleased(store, layouts, its.value, root_expr_id, found),
+                .float_to_str => |fts| try assertListOwnersReleased(store, layouts, fts.value, root_expr_id, found),
+                .dec_to_str => |d| try assertListOwnersReleased(store, layouts, d, root_expr_id, found),
+                .str_escape_and_quote => |s| try assertListOwnersReleased(store, layouts, s, root_expr_id, found),
+                .hosted_call => |hc| {
+                    for (store.getExprSpan(hc.args)) |arg| {
+                        try assertListOwnersReleased(store, layouts, arg, root_expr_id, found);
+                    }
+                },
+                .decref,
+                .incref,
+                .free,
+                .lookup,
+                .i64_literal,
+                .i128_literal,
+                .f64_literal,
+                .f32_literal,
+                .dec_literal,
+                .str_literal,
+                .bool_literal,
+                .cell_load,
+                .zero_arg_tag,
+                .crash,
+                .runtime_error,
+                .break_expr,
+                .empty_list,
+                => {},
+            }
+        }
+
+        fn countDecrefsForSymbol(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, symbol: lir.LIR.Symbol) u32 {
+            if (expr_id.isNone()) return 0;
+
+            const key = @as(u64, @bitCast(symbol));
+            const expr = store.getExpr(expr_id);
+            return switch (expr) {
+                .block => |block| blk: {
+                    var total: u32 = 0;
+                    for (store.getStmts(block.stmts)) |stmt| {
+                        switch (stmt) {
+                            .decl, .mutate => |binding| total += countDecrefsForSymbol(store, binding.expr, symbol),
+                            .cell_init, .cell_store => |binding| total += countDecrefsForSymbol(store, binding.expr, symbol),
+                            .cell_drop => {},
+                        }
+                    }
+                    total += countDecrefsForSymbol(store, block.final_expr, symbol);
+                    break :blk total;
+                },
+                .if_then_else => |ite| blk: {
+                    var total: u32 = 0;
+                    for (store.getIfBranches(ite.branches)) |branch| {
+                        total += countDecrefsForSymbol(store, branch.cond, symbol);
+                        total += countDecrefsForSymbol(store, branch.body, symbol);
+                    }
+                    total += countDecrefsForSymbol(store, ite.final_else, symbol);
+                    break :blk total;
+                },
+                .match_expr => |match_expr| blk: {
+                    var total: u32 = countDecrefsForSymbol(store, match_expr.value, symbol);
+                    for (store.getMatchBranches(match_expr.branches)) |branch| {
+                        total += countDecrefsForSymbol(store, branch.guard, symbol);
+                        total += countDecrefsForSymbol(store, branch.body, symbol);
+                    }
+                    break :blk total;
+                },
+                .loop => |loop_expr| countDecrefsForSymbol(store, loop_expr.body, symbol),
+                .discriminant_switch => |ds| blk: {
+                    var total: u32 = countDecrefsForSymbol(store, ds.value, symbol);
+                    for (store.getExprSpan(ds.branches)) |branch_id| total += countDecrefsForSymbol(store, branch_id, symbol);
+                    break :blk total;
+                },
+                .proc_call => |call| blk: {
+                    var total: u32 = 0;
+                    if (callCalleeExprId(call)) |callee_expr| total += countDecrefsForSymbol(store, callee_expr, symbol);
+                    for (store.getExprSpan(call.args)) |arg| total += countDecrefsForSymbol(store, arg, symbol);
+                    break :blk total;
+                },
+                .low_level => |ll| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(ll.args)) |arg| total += countDecrefsForSymbol(store, arg, symbol);
+                    break :blk total;
+                },
+                .list => |list_expr| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(list_expr.elems)) |elem| total += countDecrefsForSymbol(store, elem, symbol);
+                    break :blk total;
+                },
+                .struct_ => |s| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(s.fields)) |field| total += countDecrefsForSymbol(store, field, symbol);
+                    break :blk total;
+                },
+                .tag => |t| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(t.args)) |arg| total += countDecrefsForSymbol(store, arg, symbol);
+                    break :blk total;
+                },
+                .struct_access => |sa| countDecrefsForSymbol(store, sa.struct_expr, symbol),
+                .tag_payload_access => |tpa| countDecrefsForSymbol(store, tpa.value, symbol),
+                .nominal => |n| countDecrefsForSymbol(store, n.backing_expr, symbol),
+                .early_return => |ret| countDecrefsForSymbol(store, ret.expr, symbol),
+                .dbg => |d| countDecrefsForSymbol(store, d.expr, symbol),
+                .expect => |e| countDecrefsForSymbol(store, e.cond, symbol) + countDecrefsForSymbol(store, e.body, symbol),
+                .str_concat => |parts| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(parts)) |part| total += countDecrefsForSymbol(store, part, symbol);
+                    break :blk total;
+                },
+                .int_to_str => |its| countDecrefsForSymbol(store, its.value, symbol),
+                .float_to_str => |fts| countDecrefsForSymbol(store, fts.value, symbol),
+                .dec_to_str => |d| countDecrefsForSymbol(store, d, symbol),
+                .str_escape_and_quote => |s| countDecrefsForSymbol(store, s, symbol),
+                .hosted_call => |hc| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(hc.args)) |arg| total += countDecrefsForSymbol(store, arg, symbol);
+                    break :blk total;
+                },
+                .decref => |dec| blk: {
+                    const dec_expr = store.getExpr(dec.value);
+                    break :blk if (dec_expr == .lookup and @as(u64, @bitCast(dec_expr.lookup.symbol)) == key) 1 else 0;
+                },
+                .incref => |rc| countDecrefsForSymbol(store, rc.value, symbol),
+                .free => |rc| countDecrefsForSymbol(store, rc.value, symbol),
+                else => 0,
+            };
+        }
+
+        fn countCellDrops(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, symbol: lir.LIR.Symbol) u32 {
+            if (expr_id.isNone()) return 0;
+            const expr = store.getExpr(expr_id);
+            const key: u64 = @bitCast(symbol);
+            return switch (expr) {
+                .block => |block| blk: {
+                    var total: u32 = 0;
+                    for (store.getStmts(block.stmts)) |stmt| {
+                        total += switch (stmt) {
+                            .decl, .mutate => |binding| countCellDrops(store, binding.expr, symbol),
+                            .cell_init, .cell_store => |binding| countCellDrops(store, binding.expr, symbol),
+                            .cell_drop => |drop| if (@as(u64, @bitCast(drop.cell)) == key) 1 else 0,
+                        };
+                    }
+                    total += countCellDrops(store, block.final_expr, symbol);
+                    break :blk total;
+                },
+                .if_then_else => |ite| blk: {
+                    var total: u32 = 0;
+                    for (store.getIfBranches(ite.branches)) |branch| {
+                        total += countCellDrops(store, branch.cond, symbol);
+                        total += countCellDrops(store, branch.body, symbol);
+                    }
+                    total += countCellDrops(store, ite.final_else, symbol);
+                    break :blk total;
+                },
+                .match_expr => |m| blk: {
+                    var total: u32 = countCellDrops(store, m.value, symbol);
+                    for (store.getMatchBranches(m.branches)) |branch| {
+                        total += countCellDrops(store, branch.guard, symbol);
+                        total += countCellDrops(store, branch.body, symbol);
+                    }
+                    break :blk total;
+                },
+                .loop => |loop_expr| countCellDrops(store, loop_expr.body, symbol),
+                .discriminant_switch => |ds| blk: {
+                    var total: u32 = countCellDrops(store, ds.value, symbol);
+                    for (store.getExprSpan(ds.branches)) |branch_id| total += countCellDrops(store, branch_id, symbol);
+                    break :blk total;
+                },
+                .proc_call => |call| blk: {
+                    var total: u32 = 0;
+                    if (callCalleeExprId(call)) |callee_expr| total += countCellDrops(store, callee_expr, symbol);
+                    for (store.getExprSpan(call.args)) |arg| total += countCellDrops(store, arg, symbol);
+                    break :blk total;
+                },
+                .low_level => |ll| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(ll.args)) |arg| total += countCellDrops(store, arg, symbol);
+                    break :blk total;
+                },
+                .list => |list_expr| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(list_expr.elems)) |elem| total += countCellDrops(store, elem, symbol);
+                    break :blk total;
+                },
+                .struct_ => |s| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(s.fields)) |field| total += countCellDrops(store, field, symbol);
+                    break :blk total;
+                },
+                .tag => |t| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(t.args)) |arg| total += countCellDrops(store, arg, symbol);
+                    break :blk total;
+                },
+                .struct_access => |sa| countCellDrops(store, sa.struct_expr, symbol),
+                .tag_payload_access => |tpa| countCellDrops(store, tpa.value, symbol),
+                .nominal => |n| countCellDrops(store, n.backing_expr, symbol),
+                .early_return => |ret| countCellDrops(store, ret.expr, symbol),
+                .dbg => |d| countCellDrops(store, d.expr, symbol),
+                .expect => |e| countCellDrops(store, e.cond, symbol) + countCellDrops(store, e.body, symbol),
+                .str_concat => |parts| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(parts)) |part| total += countCellDrops(store, part, symbol);
+                    break :blk total;
+                },
+                .int_to_str => |its| countCellDrops(store, its.value, symbol),
+                .float_to_str => |fts| countCellDrops(store, fts.value, symbol),
+                .dec_to_str => |d| countCellDrops(store, d, symbol),
+                .str_escape_and_quote => |s| countCellDrops(store, s, symbol),
+                .hosted_call => |hc| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(hc.args)) |arg| total += countCellDrops(store, arg, symbol);
+                    break :blk total;
+                },
+                else => 0,
+            };
+        }
+
+        fn countCellDecrefs(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, cell: lir.LIR.Symbol) u32 {
+            if (expr_id.isNone()) return 0;
+            const expr = store.getExpr(expr_id);
+            return switch (expr) {
+                .block => |block| blk: {
+                    var total: u32 = 0;
+                    for (store.getStmts(block.stmts)) |stmt| {
+                        total += switch (stmt) {
+                            .decl, .mutate => |binding| countCellDecrefs(store, binding.expr, cell),
+                            .cell_init, .cell_store => |binding| countCellDecrefs(store, binding.expr, cell),
+                            .cell_drop => 0,
+                        };
+                    }
+                    total += countCellDecrefs(store, block.final_expr, cell);
+                    break :blk total;
+                },
+                .if_then_else => |ite| blk: {
+                    var total: u32 = 0;
+                    for (store.getIfBranches(ite.branches)) |branch| {
+                        total += countCellDecrefs(store, branch.cond, cell);
+                        total += countCellDecrefs(store, branch.body, cell);
+                    }
+                    total += countCellDecrefs(store, ite.final_else, cell);
+                    break :blk total;
+                },
+                .match_expr => |m| blk: {
+                    var total: u32 = countCellDecrefs(store, m.value, cell);
+                    for (store.getMatchBranches(m.branches)) |branch| {
+                        total += countCellDecrefs(store, branch.guard, cell);
+                        total += countCellDecrefs(store, branch.body, cell);
+                    }
+                    break :blk total;
+                },
+                .loop => |loop_expr| countCellDecrefs(store, loop_expr.body, cell),
+                .discriminant_switch => |ds| blk: {
+                    var total: u32 = countCellDecrefs(store, ds.value, cell);
+                    for (store.getExprSpan(ds.branches)) |branch_id| total += countCellDecrefs(store, branch_id, cell);
+                    break :blk total;
+                },
+                .proc_call => |call| blk: {
+                    var total: u32 = 0;
+                    if (callCalleeExprId(call)) |callee_expr| total += countCellDecrefs(store, callee_expr, cell);
+                    for (store.getExprSpan(call.args)) |arg| total += countCellDecrefs(store, arg, cell);
+                    break :blk total;
+                },
+                .low_level => |ll| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(ll.args)) |arg| total += countCellDecrefs(store, arg, cell);
+                    break :blk total;
+                },
+                .list => |list_expr| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(list_expr.elems)) |elem| total += countCellDecrefs(store, elem, cell);
+                    break :blk total;
+                },
+                .struct_ => |s| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(s.fields)) |field| total += countCellDecrefs(store, field, cell);
+                    break :blk total;
+                },
+                .tag => |t| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(t.args)) |arg| total += countCellDecrefs(store, arg, cell);
+                    break :blk total;
+                },
+                .struct_access => |sa| countCellDecrefs(store, sa.struct_expr, cell),
+                .tag_payload_access => |tpa| countCellDecrefs(store, tpa.value, cell),
+                .nominal => |n| countCellDecrefs(store, n.backing_expr, cell),
+                .early_return => |ret| countCellDecrefs(store, ret.expr, cell),
+                .dbg => |d| countCellDecrefs(store, d.expr, cell),
+                .expect => |e| countCellDecrefs(store, e.cond, cell) + countCellDecrefs(store, e.body, cell),
+                .str_concat => |parts| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(parts)) |part| total += countCellDecrefs(store, part, cell);
+                    break :blk total;
+                },
+                .int_to_str => |its| countCellDecrefs(store, its.value, cell),
+                .float_to_str => |fts| countCellDecrefs(store, fts.value, cell),
+                .dec_to_str => |d| countCellDecrefs(store, d, cell),
+                .str_escape_and_quote => |s| countCellDecrefs(store, s, cell),
+                .hosted_call => |hc| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(hc.args)) |arg| total += countCellDecrefs(store, arg, cell);
+                    break :blk total;
+                },
+                .decref => |rc| blk: {
+                    const value = store.getExpr(rc.value);
+                    break :blk if (value == .cell_load and value.cell_load.cell.eql(cell)) 1 else countCellDecrefs(store, rc.value, cell);
+                },
+                .incref => |rc| countCellDecrefs(store, rc.value, cell),
+                .free => |rc| countCellDecrefs(store, rc.value, cell),
+                else => 0,
+            };
+        }
+    };
+
+    const resources = try parseAndCanonicalizeExpr(test_allocator,
+        \\{
+        \\    var $acc = { sum: 0 }
+        \\    for item in [1, 2, 3] {
+        \\        $acc = { sum: $acc.sum + item }
+        \\    }
+        \\    $acc == { sum: 6 }
+        \\}
+    );
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(resources.builtin_module.env),
+        resources.module_env,
+    };
+
+    var monomorphization = try mir.Monomorphize.runExpr(
+        test_allocator,
+        all_module_envs[0..],
+        &resources.module_env.types,
+        1,
+        null,
+        resources.expr_idx,
+    );
+    defer monomorphization.deinit(test_allocator);
+
+    var lower = try mir.Lower.init(
+        test_allocator,
+        &mir_store,
+        &monomorphization,
+        all_module_envs[0..],
+        &resources.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    const mir_expr = try lower.lowerExpr(resources.expr_idx);
+
+    var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
+    defer lambda_set_store.deinit(test_allocator);
+
+    var layout_store = try layout.Store.init(
+        all_module_envs[0..],
+        resources.builtin_module.env.idents.builtin_str,
+        test_allocator,
+        base.target.TargetUsize.native,
+    );
+    defer layout_store.deinit();
+
+    var lir_store = LirExprStore.init(test_allocator);
+    defer lir_store.deinit();
+
+    var translator = lir.MirToLir.init(
+        test_allocator,
+        &mir_store,
+        &lir_store,
+        &layout_store,
+        &lambda_set_store,
+        resources.module_env.idents.true_tag,
+    );
+    defer translator.deinit();
+
+    const lowered = try translator.lower(mir_expr);
+    var rc_pass = try lir.RcInsert.RcInsertPass.init(test_allocator, &lir_store, &layout_store);
+    defer rc_pass.deinit();
+    const with_rc = try rc_pass.insertRcOps(lowered);
+
+    const root = lir_store.getExpr(with_rc);
+    try std.testing.expect(root == .block);
+    var found_iterated_list_owner = false;
+    std.debug.print("LIR for lowered for-loop:\n", .{});
+    Search.printExprTree(&lir_store, with_rc, 0);
+    errdefer Search.printExprTree(&lir_store, with_rc, 0);
+    try Search.assertListOwnersReleased(&lir_store, &layout_store, with_rc, with_rc, &found_iterated_list_owner);
+
+    try std.testing.expect(found_iterated_list_owner);
+}
+
 test "dev lowering: mutable list reassignment keeps both decrefs on the reassigned symbol" {
     const Search = struct {
         fn countDecrefsForSymbol(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, symbol: lir.LIR.Symbol) u32 {
@@ -5649,6 +6294,627 @@ test "dev lowering: mutable list reassignment keeps both decrefs on the reassign
     }
 
     try std.testing.expect(found_reassignable_list or found_list_cell);
+}
+
+test "dev lowering: for-loop mutable list append rc shape" {
+    const Debug = struct {
+        fn printExprTree(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, depth: usize) void {
+            if (expr_id.isNone()) return;
+
+            const expr = store.getExpr(expr_id);
+            for (0..depth) |_| std.debug.print("  ", .{});
+            switch (expr) {
+                .lookup => |lookup| std.debug.print(
+                    "expr {d}: lookup symbol={d} layout={d}\n",
+                    .{ @intFromEnum(expr_id), lookup.symbol.raw(), @intFromEnum(lookup.layout_idx) },
+                ),
+                .struct_access => |sa| {
+                    std.debug.print(
+                        "expr {d}: struct_access field={d} field_layout={d}\n",
+                        .{ @intFromEnum(expr_id), sa.field_idx, @intFromEnum(sa.field_layout) },
+                    );
+                    printExprTree(store, sa.struct_expr, depth + 1);
+                },
+                .struct_ => |struct_expr| {
+                    std.debug.print(
+                        "expr {d}: struct_ layout={d} fields={d}\n",
+                        .{ @intFromEnum(expr_id), @intFromEnum(struct_expr.struct_layout), struct_expr.fields.len },
+                    );
+                    for (store.getExprSpan(struct_expr.fields)) |field| {
+                        printExprTree(store, field, depth + 1);
+                    }
+                },
+                .block => |block| {
+                    std.debug.print(
+                        "expr {d}: block stmts={d} final={d}\n",
+                        .{ @intFromEnum(expr_id), block.stmts.len, @intFromEnum(block.final_expr) },
+                    );
+                    for (store.getStmts(block.stmts), 0..) |stmt, i| {
+                        for (0..depth + 1) |_| std.debug.print("  ", .{});
+                        switch (stmt) {
+                            .decl, .mutate => |binding| {
+                                const pat = store.getPattern(binding.pattern);
+                                if (pat == .bind) {
+                                    std.debug.print(
+                                        "stmt[{d}] {s} symbol={d} layout={d}\n",
+                                        .{ i, @tagName(stmt), pat.bind.symbol.raw(), @intFromEnum(pat.bind.layout_idx) },
+                                    );
+                                } else {
+                                    std.debug.print("stmt[{d}] {s}\n", .{ i, @tagName(stmt) });
+                                }
+                                printExprTree(store, binding.expr, depth + 2);
+                            },
+                            .cell_init, .cell_store => |binding| {
+                                std.debug.print(
+                                    "stmt[{d}] {s} cell={d} layout={d}\n",
+                                    .{ i, @tagName(stmt), @as(u64, @bitCast(binding.cell)), @intFromEnum(binding.layout_idx) },
+                                );
+                                printExprTree(store, binding.expr, depth + 2);
+                            },
+                            .cell_drop => |drop| std.debug.print(
+                                "stmt[{d}] cell_drop cell={d}\n",
+                                .{ i, @as(u64, @bitCast(drop.cell)) },
+                            ),
+                        }
+                    }
+                    printExprTree(store, block.final_expr, depth + 1);
+                },
+                .proc_call => |call| {
+                    std.debug.print(
+                        "expr {d}: proc_call proc={d} argc={d}\n",
+                        .{ @intFromEnum(expr_id), @intFromEnum(call.proc), store.getExprSpan(call.args).len },
+                    );
+                    if (callCalleeExprId(call)) |callee_expr| {
+                        printExprTree(store, callee_expr, depth + 1);
+                    }
+                    for (store.getExprSpan(call.args)) |arg| {
+                        printExprTree(store, arg, depth + 1);
+                    }
+                },
+                .low_level => |ll| {
+                    std.debug.print(
+                        "expr {d}: low_level {s} argc={d}\n",
+                        .{ @intFromEnum(expr_id), @tagName(ll.op), store.getExprSpan(ll.args).len },
+                    );
+                    for (store.getExprSpan(ll.args)) |arg| {
+                        printExprTree(store, arg, depth + 1);
+                    }
+                },
+                .match_expr => |match_expr| {
+                    std.debug.print("expr {d}: match_expr\n", .{@intFromEnum(expr_id)});
+                    for (0..depth + 1) |_| std.debug.print("  ", .{});
+                    std.debug.print("value\n", .{});
+                    printExprTree(store, match_expr.value, depth + 2);
+                    for (store.getMatchBranches(match_expr.branches), 0..) |branch, i| {
+                        for (0..depth + 1) |_| std.debug.print("  ", .{});
+                        std.debug.print("branch[{d}] guard\n", .{i});
+                        printExprTree(store, branch.guard, depth + 2);
+                        for (0..depth + 1) |_| std.debug.print("  ", .{});
+                        std.debug.print("branch[{d}] body\n", .{i});
+                        printExprTree(store, branch.body, depth + 2);
+                    }
+                },
+                .loop => |loop_expr| {
+                    std.debug.print("expr {d}: loop\n", .{@intFromEnum(expr_id)});
+                    printExprTree(store, loop_expr.body, depth + 1);
+                },
+                .decref => |dec| {
+                    std.debug.print("expr {d}: decref\n", .{@intFromEnum(expr_id)});
+                    printExprTree(store, dec.value, depth + 1);
+                },
+                .incref => |rc| {
+                    std.debug.print("expr {d}: incref\n", .{@intFromEnum(expr_id)});
+                    printExprTree(store, rc.value, depth + 1);
+                },
+                .break_expr => std.debug.print("expr {d}: break_expr\n", .{@intFromEnum(expr_id)}),
+                else => std.debug.print("expr {d}: {s}\n", .{ @intFromEnum(expr_id), @tagName(expr) }),
+            }
+        }
+
+        fn printStmtTree(store: *const LirExprStore, stmt_id: lir.LIR.CFStmtId, depth: usize) void {
+            if (stmt_id.isNone()) return;
+
+            const stmt = store.getCFStmt(stmt_id);
+            for (0..depth) |_| std.debug.print("  ", .{});
+            switch (stmt) {
+                .ret => |ret| {
+                    std.debug.print("ret\n", .{});
+                    printExprTree(store, ret.value, depth + 1);
+                },
+                .expr_stmt => |expr_stmt| {
+                    std.debug.print("expr_stmt\n", .{});
+                    printExprTree(store, expr_stmt.value, depth + 1);
+                    printStmtTree(store, expr_stmt.next, depth);
+                },
+                .let_stmt => |let_stmt| {
+                    const pat = store.getPattern(let_stmt.pattern);
+                    if (pat == .bind) {
+                        std.debug.print(
+                            "let symbol={d} layout={d}\n",
+                            .{ pat.bind.symbol.raw(), @intFromEnum(pat.bind.layout_idx) },
+                        );
+                    } else {
+                        std.debug.print("let {s}\n", .{@tagName(pat)});
+                    }
+                    printExprTree(store, let_stmt.value, depth + 1);
+                    printStmtTree(store, let_stmt.next, depth);
+                },
+                .switch_stmt => |switch_stmt| {
+                    std.debug.print("switch\n", .{});
+                    printExprTree(store, switch_stmt.cond, depth + 1);
+                    for (store.getCFSwitchBranches(switch_stmt.branches), 0..) |branch, i| {
+                        for (0..depth + 1) |_| std.debug.print("  ", .{});
+                        std.debug.print("branch[{d}]\n", .{i});
+                        printStmtTree(store, branch.body, depth + 2);
+                    }
+                    for (0..depth + 1) |_| std.debug.print("  ", .{});
+                    std.debug.print("default\n", .{});
+                    printStmtTree(store, switch_stmt.default_branch, depth + 2);
+                },
+                .jump => |jump| {
+                    std.debug.print("jump argc={d}\n", .{jump.args.len});
+                },
+                .join => |join| {
+                    std.debug.print("join params={d}\n", .{join.params.len});
+                    printStmtTree(store, join.body, depth + 1);
+                    printStmtTree(store, join.remainder, depth);
+                },
+                .match_stmt => |match_stmt| {
+                    std.debug.print("match\n", .{});
+                    printExprTree(store, match_stmt.value, depth + 1);
+                    for (store.getCFMatchBranches(match_stmt.branches), 0..) |branch, i| {
+                        for (0..depth + 1) |_| std.debug.print("  ", .{});
+                        std.debug.print("branch[{d}]\n", .{i});
+                        printStmtTree(store, branch.body, depth + 2);
+                    }
+                },
+            }
+        }
+    };
+
+    const resources = try parseAndCanonicalizeExpr(test_allocator,
+        \\{
+        \\    list = [1.I64, 2.I64, 3.I64]
+        \\    var $result = List.with_capacity(List.len(list))
+        \\    for item in list {
+        \\        $result = List.append($result, item)
+        \\    }
+        \\    $result
+        \\}
+    );
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(resources.builtin_module.env),
+        resources.module_env,
+    };
+
+    var monomorphization = try mir.Monomorphize.runExpr(
+        test_allocator,
+        all_module_envs[0..],
+        &resources.module_env.types,
+        1,
+        null,
+        resources.expr_idx,
+    );
+    defer monomorphization.deinit(test_allocator);
+
+    var lower = try mir.Lower.init(
+        test_allocator,
+        &mir_store,
+        &monomorphization,
+        all_module_envs[0..],
+        &resources.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    const mir_expr = try lower.lowerExpr(resources.expr_idx);
+
+    var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
+    defer lambda_set_store.deinit(test_allocator);
+
+    var layout_store = try layout.Store.init(
+        all_module_envs[0..],
+        resources.builtin_module.env.idents.builtin_str,
+        test_allocator,
+        base.target.TargetUsize.native,
+    );
+    defer layout_store.deinit();
+
+    var lir_store = LirExprStore.init(test_allocator);
+    defer lir_store.deinit();
+
+    var translator = lir.MirToLir.init(
+        test_allocator,
+        &mir_store,
+        &lir_store,
+        &layout_store,
+        &lambda_set_store,
+        resources.module_env.idents.true_tag,
+    );
+    defer translator.deinit();
+
+    const lowered = try translator.lower(mir_expr);
+    var rc_pass = try lir.RcInsert.RcInsertPass.init(test_allocator, &lir_store, &layout_store);
+    defer rc_pass.deinit();
+    const with_rc = try rc_pass.insertRcOps(lowered);
+
+    std.debug.print("LIR for mutable list append loop:\n", .{});
+    Debug.printExprTree(&lir_store, with_rc, 0);
+    for (lir_store.getProcSpecs(), 0..) |proc_spec, proc_idx| {
+        std.debug.print("proc_spec[{d}] name={d} ret_layout={d}\n", .{
+            proc_idx,
+            proc_spec.name.raw(),
+            @intFromEnum(proc_spec.ret_layout),
+        });
+        std.debug.print("  proc body\n", .{});
+        Debug.printStmtTree(&lir_store, proc_spec.body, 1);
+    }
+}
+
+test "dev lowering: inspect-wrapped mutable list append rc shape" {
+    const Debug = struct {
+        fn printExprTree(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, depth: usize) void {
+            if (expr_id.isNone()) {
+                for (0..depth) |_| std.debug.print("  ", .{});
+                std.debug.print("(none)\n", .{});
+                return;
+            }
+            const expr = store.getExpr(expr_id);
+            for (0..depth) |_| std.debug.print("  ", .{});
+            switch (expr) {
+                .lookup => |lookup| std.debug.print("expr {d}: lookup symbol={d} layout={d}\n", .{ @intFromEnum(expr_id), lookup.symbol.raw(), @intFromEnum(lookup.layout_idx) }),
+                .cell_load => |load| std.debug.print("expr {d}: cell_load cell={d} layout={d}\n", .{
+                    @intFromEnum(expr_id),
+                    load.cell.raw(),
+                    @intFromEnum(load.layout_idx),
+                }),
+                .block => |block| {
+                    std.debug.print("expr {d}: block stmts={d} final={d}\n", .{ @intFromEnum(expr_id), store.getStmts(block.stmts).len, @intFromEnum(block.final_expr) });
+                    for (store.getStmts(block.stmts), 0..) |stmt, i| {
+                        for (0..depth + 1) |_| std.debug.print("  ", .{});
+                        switch (stmt) {
+                            .decl => |binding| {
+                                const pat = store.getPattern(binding.pattern);
+                                if (pat == .bind) {
+                                    std.debug.print("stmt[{d}] decl symbol={d} semantics={s}\n", .{ i, pat.bind.symbol.raw(), @tagName(binding.semantics) });
+                                } else {
+                                    std.debug.print("stmt[{d}] decl semantics={s}\n", .{ i, @tagName(binding.semantics) });
+                                }
+                                printExprTree(store, binding.expr, depth + 2);
+                            },
+                            .cell_init => |binding| {
+                                std.debug.print("stmt[{d}] cell_init cell={d}\n", .{ i, binding.cell.raw() });
+                                printExprTree(store, binding.expr, depth + 2);
+                            },
+                            .cell_store => |binding| {
+                                std.debug.print("stmt[{d}] cell_store cell={d}\n", .{ i, binding.cell.raw() });
+                                printExprTree(store, binding.expr, depth + 2);
+                            },
+                            .cell_drop => |binding| std.debug.print("stmt[{d}] cell_drop cell={d}\n", .{ i, binding.cell.raw() }),
+                            .mutate => |binding| {
+                                const pat = store.getPattern(binding.pattern);
+                                if (pat == .bind) {
+                                    std.debug.print("stmt[{d}] mutate symbol={d} semantics={s}\n", .{ i, pat.bind.symbol.raw(), @tagName(binding.semantics) });
+                                } else {
+                                    std.debug.print("stmt[{d}] mutate semantics={s}\n", .{ i, @tagName(binding.semantics) });
+                                }
+                                printExprTree(store, binding.expr, depth + 2);
+                            },
+                        }
+                    }
+                    printExprTree(store, block.final_expr, depth + 1);
+                },
+                .proc_call => |call| {
+                    std.debug.print("expr {d}: proc_call proc={d} argc={d}\n", .{ @intFromEnum(expr_id), @intFromEnum(call.proc), store.getExprSpan(call.args).len });
+                    for (store.getExprSpan(call.args)) |arg| printExprTree(store, arg, depth + 1);
+                },
+                .low_level => |ll| {
+                    std.debug.print("expr {d}: low_level {s} argc={d}\n", .{ @intFromEnum(expr_id), @tagName(ll.op), store.getExprSpan(ll.args).len });
+                    for (store.getExprSpan(ll.args)) |arg| printExprTree(store, arg, depth + 1);
+                },
+                .match_expr => |m| {
+                    std.debug.print("expr {d}: match_expr\n", .{@intFromEnum(expr_id)});
+                    printExprTree(store, m.value, depth + 1);
+                    for (store.getMatchBranches(m.branches)) |branch| {
+                        printExprTree(store, branch.guard, depth + 1);
+                        printExprTree(store, branch.body, depth + 1);
+                    }
+                },
+                .loop => |loop_expr| {
+                    std.debug.print("expr {d}: loop\n", .{@intFromEnum(expr_id)});
+                    printExprTree(store, loop_expr.body, depth + 1);
+                },
+                .incref => |inc| {
+                    std.debug.print("expr {d}: incref\n", .{@intFromEnum(expr_id)});
+                    printExprTree(store, inc.value, depth + 1);
+                },
+                .decref => |dec| {
+                    std.debug.print("expr {d}: decref\n", .{@intFromEnum(expr_id)});
+                    printExprTree(store, dec.value, depth + 1);
+                },
+                else => std.debug.print("expr {d}: {s}\n", .{ @intFromEnum(expr_id), @tagName(expr) }),
+            }
+        }
+    };
+
+    const resources = try parseAndCanonicalizeExpr(test_allocator,
+        \\{
+        \\    list = [1.I64, 2.I64, 3.I64]
+        \\    var $result = List.with_capacity(List.len(list))
+        \\    for item in list {
+        \\        $result = List.append($result, item)
+        \\    }
+        \\    $result
+        \\}
+    );
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    const inspect_expr = try wrapInStrInspect(resources.module_env, resources.expr_idx);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(resources.builtin_module.env),
+        resources.module_env,
+    };
+
+    var monomorphization = try mir.Monomorphize.runExpr(
+        test_allocator,
+        all_module_envs[0..],
+        &resources.module_env.types,
+        1,
+        null,
+        inspect_expr,
+    );
+    defer monomorphization.deinit(test_allocator);
+
+    var lower = try mir.Lower.init(
+        test_allocator,
+        &mir_store,
+        &monomorphization,
+        all_module_envs[0..],
+        &resources.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    const mir_expr = try lower.lowerExpr(inspect_expr);
+    var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
+    defer lambda_set_store.deinit(test_allocator);
+
+    var layout_store = try layout.Store.init(
+        all_module_envs[0..],
+        resources.builtin_module.env.idents.builtin_str,
+        test_allocator,
+        base.target.TargetUsize.native,
+    );
+    defer layout_store.deinit();
+
+    var lir_store = LirExprStore.init(test_allocator);
+    defer lir_store.deinit();
+
+    var translator = lir.MirToLir.init(
+        test_allocator,
+        &mir_store,
+        &lir_store,
+        &layout_store,
+        &lambda_set_store,
+        resources.module_env.idents.true_tag,
+    );
+    defer translator.deinit();
+
+    const lowered = try translator.lower(mir_expr);
+    var rc_pass = try lir.RcInsert.RcInsertPass.init(test_allocator, &lir_store, &layout_store);
+    defer rc_pass.deinit();
+    const with_rc = try rc_pass.insertRcOps(lowered);
+
+    std.debug.print("LIR for inspect-wrapped mutable list append:\n", .{});
+    Debug.printExprTree(&lir_store, with_rc, 0);
+}
+
+test "dev lowering: for-loop mutable list append with closure rc shape" {
+    const Debug = struct {
+        fn printExprTree(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, depth: usize) void {
+            if (expr_id.isNone()) return;
+
+            const expr = store.getExpr(expr_id);
+            for (0..depth) |_| std.debug.print("  ", .{});
+            switch (expr) {
+                .lookup => |lookup| std.debug.print(
+                    "expr {d}: lookup symbol={d} layout={d}\n",
+                    .{ @intFromEnum(expr_id), lookup.symbol.raw(), @intFromEnum(lookup.layout_idx) },
+                ),
+                .cell_load => |load| std.debug.print(
+                    "expr {d}: cell_load cell={d} layout={d}\n",
+                    .{ @intFromEnum(expr_id), load.cell.raw(), @intFromEnum(load.layout_idx) },
+                ),
+                .struct_access => |sa| {
+                    std.debug.print(
+                        "expr {d}: struct_access field={d} field_layout={d}\n",
+                        .{ @intFromEnum(expr_id), sa.field_idx, @intFromEnum(sa.field_layout) },
+                    );
+                    printExprTree(store, sa.struct_expr, depth + 1);
+                },
+                .struct_ => |struct_expr| {
+                    std.debug.print(
+                        "expr {d}: struct_ layout={d} fields={d}\n",
+                        .{ @intFromEnum(expr_id), @intFromEnum(struct_expr.struct_layout), struct_expr.fields.len },
+                    );
+                    for (store.getExprSpan(struct_expr.fields)) |field| {
+                        printExprTree(store, field, depth + 1);
+                    }
+                },
+                .block => |block| {
+                    std.debug.print(
+                        "expr {d}: block stmts={d} final={d}\n",
+                        .{ @intFromEnum(expr_id), block.stmts.len, @intFromEnum(block.final_expr) },
+                    );
+                    for (store.getStmts(block.stmts), 0..) |stmt, i| {
+                        for (0..depth + 1) |_| std.debug.print("  ", .{});
+                        switch (stmt) {
+                            .decl, .mutate => |binding| {
+                                const pat = store.getPattern(binding.pattern);
+                                if (pat == .bind) {
+                                    std.debug.print(
+                                        "stmt[{d}] {s} symbol={d} layout={d}\n",
+                                        .{ i, @tagName(stmt), pat.bind.symbol.raw(), @intFromEnum(pat.bind.layout_idx) },
+                                    );
+                                } else {
+                                    std.debug.print("stmt[{d}] {s}\n", .{ i, @tagName(stmt) });
+                                }
+                                printExprTree(store, binding.expr, depth + 2);
+                            },
+                            .cell_init, .cell_store => |binding| {
+                                std.debug.print(
+                                    "stmt[{d}] {s} cell={d} layout={d}\n",
+                                    .{ i, @tagName(stmt), @as(u64, @bitCast(binding.cell)), @intFromEnum(binding.layout_idx) },
+                                );
+                                printExprTree(store, binding.expr, depth + 2);
+                            },
+                            .cell_drop => |drop| std.debug.print(
+                                "stmt[{d}] cell_drop cell={d}\n",
+                                .{ i, @as(u64, @bitCast(drop.cell)) },
+                            ),
+                        }
+                    }
+                    printExprTree(store, block.final_expr, depth + 1);
+                },
+                .proc_call => |call| {
+                    std.debug.print(
+                        "expr {d}: proc_call proc={d} argc={d}\n",
+                        .{ @intFromEnum(expr_id), @intFromEnum(call.proc), store.getExprSpan(call.args).len },
+                    );
+                    if (callCalleeExprId(call)) |callee_expr| {
+                        printExprTree(store, callee_expr, depth + 1);
+                    }
+                    for (store.getExprSpan(call.args)) |arg| {
+                        printExprTree(store, arg, depth + 1);
+                    }
+                },
+                .low_level => |ll| {
+                    std.debug.print(
+                        "expr {d}: low_level {s} argc={d}\n",
+                        .{ @intFromEnum(expr_id), @tagName(ll.op), store.getExprSpan(ll.args).len },
+                    );
+                    for (store.getExprSpan(ll.args)) |arg| {
+                        printExprTree(store, arg, depth + 1);
+                    }
+                },
+                .match_expr => |match_expr| {
+                    std.debug.print("expr {d}: match_expr\n", .{@intFromEnum(expr_id)});
+                    for (0..depth + 1) |_| std.debug.print("  ", .{});
+                    std.debug.print("value\n", .{});
+                    printExprTree(store, match_expr.value, depth + 2);
+                    for (store.getMatchBranches(match_expr.branches), 0..) |branch, i| {
+                        for (0..depth + 1) |_| std.debug.print("  ", .{});
+                        std.debug.print("branch[{d}] guard\n", .{i});
+                        printExprTree(store, branch.guard, depth + 2);
+                        for (0..depth + 1) |_| std.debug.print("  ", .{});
+                        std.debug.print("branch[{d}] body\n", .{i});
+                        printExprTree(store, branch.body, depth + 2);
+                    }
+                },
+                .loop => |loop_expr| {
+                    std.debug.print("expr {d}: loop\n", .{@intFromEnum(expr_id)});
+                    printExprTree(store, loop_expr.body, depth + 1);
+                },
+                .decref => |dec| {
+                    std.debug.print("expr {d}: decref\n", .{@intFromEnum(expr_id)});
+                    printExprTree(store, dec.value, depth + 1);
+                },
+                .incref => |rc| {
+                    std.debug.print("expr {d}: incref\n", .{@intFromEnum(expr_id)});
+                    printExprTree(store, rc.value, depth + 1);
+                },
+                .break_expr => std.debug.print("expr {d}: break_expr\n", .{@intFromEnum(expr_id)}),
+                else => std.debug.print("expr {d}: {s}\n", .{ @intFromEnum(expr_id), @tagName(expr) }),
+            }
+        }
+    };
+
+    const resources = try parseAndCanonicalizeExpr(test_allocator,
+        \\{
+        \\    list = [1.I64, 2.I64, 3.I64]
+        \\    identity = |x| x
+        \\    var $result = List.with_capacity(List.len(list))
+        \\    for item in list {
+        \\        $result = List.append($result, identity(item))
+        \\    }
+        \\    $result
+        \\}
+    );
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(resources.builtin_module.env),
+        resources.module_env,
+    };
+
+    var monomorphization = try mir.Monomorphize.runExpr(
+        test_allocator,
+        all_module_envs[0..],
+        &resources.module_env.types,
+        1,
+        null,
+        resources.expr_idx,
+    );
+    defer monomorphization.deinit(test_allocator);
+
+    var lower = try mir.Lower.init(
+        test_allocator,
+        &mir_store,
+        &monomorphization,
+        all_module_envs[0..],
+        &resources.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    const mir_expr = try lower.lowerExpr(resources.expr_idx);
+
+    var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
+    defer lambda_set_store.deinit(test_allocator);
+
+    var layout_store = try layout.Store.init(
+        all_module_envs[0..],
+        resources.builtin_module.env.idents.builtin_str,
+        test_allocator,
+        base.target.TargetUsize.native,
+    );
+    defer layout_store.deinit();
+
+    var lir_store = LirExprStore.init(test_allocator);
+    defer lir_store.deinit();
+
+    var translator = lir.MirToLir.init(
+        test_allocator,
+        &mir_store,
+        &lir_store,
+        &layout_store,
+        &lambda_set_store,
+        resources.module_env.idents.true_tag,
+    );
+    defer translator.deinit();
+
+    const lowered = try translator.lower(mir_expr);
+    var rc_pass = try lir.RcInsert.RcInsertPass.init(test_allocator, &lir_store, &layout_store);
+    defer rc_pass.deinit();
+    const with_rc = try rc_pass.insertRcOps(lowered);
+
+    std.debug.print("LIR for mutable list append loop with closure:\n", .{});
+    Debug.printExprTree(&lir_store, with_rc, 0);
 }
 
 test "lambda sets distinguish closure record fields with different captures" {

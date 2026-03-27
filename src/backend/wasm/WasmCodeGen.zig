@@ -7077,13 +7077,6 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             }
             try self.emitLocalSet(index_local);
 
-            if (builtin.mode == .Debug and ls.getLayout(ll.ret_layout).tag == .tag_union) {
-                std.debug.panic(
-                    "WasmCodeGen invariant violated: list_get_unsafe must not return a tag_union layout",
-                    .{},
-                );
-            }
-
             try self.emitLocalGet(list_local);
             try self.emitLoadOp(.i32, 0);
             try self.emitLocalGet(index_local);
@@ -7092,7 +7085,20 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             self.body.append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
 
-            if (!elem_is_composite) {
+            if (elem_is_composite) {
+                const src_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                try self.emitLocalSet(src_local);
+
+                const elem_align: u32 = @intCast(@max(ls.layoutSizeAlign(ls.getLayout(elem_layout_idx)).alignment.toByteUnits(), 1));
+                const dst_offset = try self.allocStackMemory(elem_size, elem_align);
+                const dst_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                try self.emitFpOffset(dst_offset);
+                try self.emitLocalSet(dst_local);
+
+                try self.emitMemCopy(dst_local, 0, src_local, elem_size);
+                try self.emitRcAtPtr(.incref, dst_local, elem_layout_idx, 1);
+                try self.emitLocalGet(dst_local);
+            } else {
                 try self.emitLoadOpForLayout(elem_layout_idx, 0);
             }
         },

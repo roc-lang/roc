@@ -1317,7 +1317,7 @@ fn lowerListForLoopToWhile(
         self.currentCommonIdents(),
     );
 
-    const list_bind = try self.makeSyntheticBind(self.store.typeOf(list_expr), false);
+    const list_bind = try self.makeSyntheticBind(self.store.typeOf(list_expr), true);
     const len_bind = try self.makeSyntheticBind(u64_mono, false);
     const index_bind = try self.makeSyntheticBind(u64_mono, true);
 
@@ -1373,7 +1373,7 @@ fn lowerListForLoopToWhile(
 
     const while_wildcard = try self.store.addPattern(self.allocator, .wildcard, unit_mono);
     const outer_stmts = try self.store.addStmts(self.allocator, &.{
-        .{ .decl_const = .{ .pattern = list_bind.pattern, .expr = list_expr } },
+        .{ .decl_var = .{ .pattern = list_bind.pattern, .expr = list_expr } },
         .{ .decl_const = .{ .pattern = len_bind.pattern, .expr = len_expr } },
         .{ .decl_var = .{ .pattern = index_bind.pattern, .expr = zero } },
         .{ .decl_const = .{ .pattern = while_wildcard, .expr = while_expr } },

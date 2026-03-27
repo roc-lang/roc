@@ -1862,6 +1862,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     self.codegen.freeGeneral(temp_reg);
                     self.codegen.freeGeneral(addr_reg);
 
+                    if (ls.layoutContainsRefcounted(elem_layout_val)) {
+                        try self.emitIncrefAtStackOffset(elem_slot, elem_layout_idx);
+                    }
+
                     var result_loc: ValueLocation = if (elem_layout_idx == .i128 or elem_layout_idx == .u128 or elem_layout_idx == .dec)
                         .{ .stack_i128 = elem_slot }
                     else if (elem_layout_idx == .str)
@@ -9640,15 +9644,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Generate code for an infinite loop.
         fn generateLoop(self: *Self, loop_expr: anytype) Allocator.Error!ValueLocation {
-            if (self.store.getExpr(loop_expr.body) == .match_expr) {
-                const match_expr = self.store.getExpr(loop_expr.body).match_expr;
-                const branches = self.store.getMatchBranches(match_expr.branches);
-
-                if (branches.len == 2 and branches[0].guard.isNone() and branches[1].guard.isNone() and self.store.getExpr(branches[1].body) == .break_expr) {
-                    return self.generateCanonicalWhileLoop(match_expr.value, branches[0].body);
-                }
-            }
-
             // Record loop start position for the backward jump
             const loop_start = self.codegen.currentOffset();
 
@@ -9670,65 +9665,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.loop_break_patches.shrinkRetainingCapacity(saved_break_patches_len);
 
             // Loops return unit (empty record)
-            return .{ .immediate_i64 = 0 };
-        }
-
-        fn generateCanonicalWhileLoop(self: *Self, cond_expr: LirExprId, body_expr: LirExprId) Allocator.Error!ValueLocation {
-            const loop_start = self.codegen.currentOffset();
-
-            const cond_loc = try self.generateExpr(cond_expr);
-
-            const cond_reg = switch (cond_loc) {
-                .immediate_i64 => |val| blk: {
-                    const reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(reg, @intCast(val));
-                    break :blk reg;
-                },
-                .stack => |s| blk: {
-                    const off = s.offset;
-                    const reg = try self.allocTempGeneral();
-                    try self.emitLoad(.w64, reg, frame_ptr, off);
-                    break :blk reg;
-                },
-                .general_reg => |r| blk: {
-                    const reg = try self.allocTempGeneral();
-                    try self.codegen.emit.movRegReg(.w64, reg, r);
-                    break :blk reg;
-                },
-                else => unreachable,
-            };
-
-            if (comptime target.toCpuArch() == .aarch64) {
-                const mask_reg = try self.allocTempGeneral();
-                try self.codegen.emitLoadImm(mask_reg, 0xFF);
-                try self.codegen.emit.andRegRegReg(.w64, cond_reg, cond_reg, mask_reg);
-                self.codegen.freeGeneral(mask_reg);
-            } else {
-                try self.codegen.emit.andRegImm32(cond_reg, 0xFF);
-            }
-
-            const zero_reg = try self.allocTempGeneral();
-            try self.codegen.emitLoadImm(zero_reg, 0);
-            try self.emitCmpReg(cond_reg, zero_reg);
-            self.codegen.freeGeneral(zero_reg);
-            self.codegen.freeGeneral(cond_reg);
-
-            const exit_patch = try self.emitJumpIfEqual();
-
-            const saved_break_patches_len = self.loop_break_patches.items.len;
-
-            _ = try self.generateExpr(body_expr);
-
-            try self.emitJumpBackward(loop_start);
-
-            const loop_exit_offset = self.codegen.currentOffset();
-            self.codegen.patchJump(exit_patch, loop_exit_offset);
-
-            for (self.loop_break_patches.items[saved_break_patches_len..]) |patch| {
-                self.codegen.patchJump(patch, loop_exit_offset);
-            }
-            self.loop_break_patches.shrinkRetainingCapacity(saved_break_patches_len);
-
             return .{ .immediate_i64 = 0 };
         }
 

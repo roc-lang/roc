@@ -1018,6 +1018,63 @@ test "mutable record loop accumulator equality" {
     , true, .no_trace);
 }
 
+test "dev regression: for loop mutable record accumulator equality" {
+    try runDevOnlyExpectStr(
+        \\{
+        \\    var $acc = { sum: 0 }
+        \\    for item in [1, 2, 3] {
+        \\        $acc = { sum: $acc.sum + item }
+        \\    }
+        \\    $acc == { sum: 6 }
+        \\}
+    , "True");
+}
+
+test "dev regression: for loop mutable record accumulator sum" {
+    try runDevOnlyExpectStr(
+        \\{
+        \\    var $acc = { sum: 0 }
+        \\    for item in [1, 2, 3] {
+        \\        $acc = { sum: $acc.sum + item }
+        \\    }
+        \\    $acc.sum
+        \\}
+    , "6.0");
+}
+
+test "dev regression: for loop list literal no-op" {
+    try runDevOnlyExpectStr(
+        \\{
+        \\    for _item in [1.I64, 2.I64, 3.I64] {
+        \\        {}
+        \\    }
+        \\    0.I64
+        \\}
+    , "0");
+}
+
+test "dev regression: for loop integer accumulator sum" {
+    try runDevOnlyExpectStr(
+        \\{
+        \\    var $acc = 0.I64
+        \\    for item in [1.I64, 2.I64, 3.I64] {
+        \\        $acc = $acc + item
+        \\    }
+        \\    $acc
+        \\}
+    , "6");
+}
+
+test "dev regression: list alias dropped at block exit" {
+    try runDevOnlyExpectStr(
+        \\{
+        \\    x = [1.I64, 2.I64, 3.I64]
+        \\    _y = x
+        \\    0.I64
+        \\}
+    , "0");
+}
+
 test "string field equality" {
     try runExpectBool("{ name: \"hello\" } == { name: \"hello\" }", true, .no_trace);
     try runExpectBool("{ name: \"hello\" } == { name: \"world\" }", false, .no_trace);
@@ -2382,6 +2439,22 @@ test "issue 8979 runtime: while (True) with conditional break evaluates" {
         \\    $i
         \\}
     , 5, .no_trace);
+}
+
+test "dev regression: while loop mutable record accumulator equality" {
+    try runDevOnlyExpectStr(
+        \\{
+        \\    var current = 1.I64
+        \\    var acc = { sum: 0.I64 }
+        \\
+        \\    while current <= 3.I64 {
+        \\        acc = { sum: acc.sum + current }
+        \\        current = current + 1.I64
+        \\    }
+        \\
+        \\    acc == { sum: 6.I64 }
+        \\}
+    , "True");
 }
 
 test "list fold_rev i64 dev regression" {
