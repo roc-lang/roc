@@ -476,12 +476,10 @@ pub const LirExpr = union(enum) {
         payload_layout: layout.Idx,
     },
 
-    /// While loop
-    /// Executes body while condition is true
-    /// Returns empty record (unit) after loop completes
-    while_loop: struct {
-        /// Condition expression (must return Bool)
-        cond: LirExprId,
+    /// Infinite loop
+    /// Executes body until a nested `break_expr` exits the loop.
+    /// Returns empty record (unit) after loop completes.
+    loop: struct {
         /// Body expression (typically a block with statements and reassignments)
         body: LirExprId,
     },

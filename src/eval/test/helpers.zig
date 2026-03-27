@@ -3637,6 +3637,7 @@ test "dev lowering: imported List.any directly calls passed predicate member" {
                     }
                     return false;
                 },
+                .loop => |loop_expr| return hasDirectUnaryProcCall(store, loop_expr.body),
                 .early_return => |ret| return hasDirectUnaryProcCall(store, ret.expr),
                 .low_level => |ll| {
                     for (store.getExprSpan(ll.args)) |arg| {
@@ -3690,7 +3691,6 @@ test "dev lowering: imported List.any directly calls passed predicate member" {
                     return false;
                 },
                 .tag_payload_access => |tpa| return hasDirectUnaryProcCall(store, tpa.value),
-                .while_loop => |loop| return hasDirectUnaryProcCall(store, loop.cond) or hasDirectUnaryProcCall(store, loop.body),
                 .incref => |rc| return hasDirectUnaryProcCall(store, rc.value),
                 .decref => |rc| return hasDirectUnaryProcCall(store, rc.value),
                 .free => |rc| return hasDirectUnaryProcCall(store, rc.value),
@@ -3786,7 +3786,7 @@ test "dev lowering: imported List.any directly calls passed predicate member" {
                     return false;
                 },
                 .tag_payload_access => |tpa| return containsEarlyReturn(store, tpa.value),
-                .while_loop => |loop| return containsEarlyReturn(store, loop.cond) or containsEarlyReturn(store, loop.body),
+                .loop => |loop_expr| return containsEarlyReturn(store, loop_expr.body),
                 .hosted_call => |call| {
                     for (store.getExprSpan(call.args)) |arg| {
                         if (containsEarlyReturn(store, arg)) return true;
@@ -3890,9 +3890,8 @@ test "dev lowering: imported List.any directly calls passed predicate member" {
                     return null;
                 },
                 .tag_payload_access => |tpa| return firstEarlyReturnLayout(store, tpa.value),
-                .while_loop => |loop| {
-                    return firstEarlyReturnLayout(store, loop.cond) orelse
-                        firstEarlyReturnLayout(store, loop.body);
+                .loop => |loop_expr| {
+                    return firstEarlyReturnLayout(store, loop_expr.body);
                 },
                 .hosted_call => |call| {
                     for (store.getExprSpan(call.args)) |arg| {
@@ -4059,6 +4058,7 @@ test "dev lowering: local any-style HOF directly calls passed predicate member" 
                     }
                     return false;
                 },
+                .loop => |loop_expr| return hasDirectUnaryProcCall(store, loop_expr.body),
                 .early_return => |ret| return hasDirectUnaryProcCall(store, ret.expr),
                 .low_level => |ll| {
                     for (store.getExprSpan(ll.args)) |arg| {
@@ -4196,8 +4196,7 @@ test "dev lowering: list identity proc keeps ownership transfer in LIR" {
                     }
                     break :blk total;
                 },
-                .while_loop => |loop| countExprDecrefsForSymbol(store, loop.cond, symbol) +
-                    countExprDecrefsForSymbol(store, loop.body, symbol),
+                .loop => |loop_expr| countExprDecrefsForSymbol(store, loop_expr.body, symbol),
                 .discriminant_switch => |switch_expr| blk: {
                     var total: u32 = countExprDecrefsForSymbol(store, switch_expr.value, symbol);
                     for (store.getExprSpan(switch_expr.branches)) |branch_id| {
@@ -4510,9 +4509,8 @@ test "dev lowering: list rest pattern emits two list decrefs" {
                         walk(store, ls, branch.body, counts);
                     }
                 },
-                .while_loop => |wl| {
-                    walk(store, ls, wl.cond, counts);
-                    walk(store, ls, wl.body, counts);
+                .loop => |loop_expr| {
+                    walk(store, ls, loop_expr.body, counts);
                 },
                 .discriminant_switch => |ds| {
                     walk(store, ls, ds.value, counts);
@@ -4620,7 +4618,7 @@ test "dev lowering: list rest pattern emits two list decrefs" {
                     }
                     break :blk false;
                 },
-                .while_loop => |wl| exprUsesSymbol(store, wl.cond, symbol) or exprUsesSymbol(store, wl.body, symbol),
+                .loop => |loop_expr| exprUsesSymbol(store, loop_expr.body, symbol),
                 .discriminant_switch => |ds| blk: {
                     if (exprUsesSymbol(store, ds.value, symbol)) break :blk true;
                     for (store.getExprSpan(ds.branches)) |branch_id| {
@@ -4725,7 +4723,7 @@ test "dev lowering: list rest pattern emits two list decrefs" {
                     }
                     break :blk total;
                 },
-                .while_loop => |wl| countDecrefsForSymbol(store, wl.cond, symbol) + countDecrefsForSymbol(store, wl.body, symbol),
+                .loop => |loop_expr| countDecrefsForSymbol(store, loop_expr.body, symbol),
                 .discriminant_switch => |ds| blk: {
                     var total: u32 = countDecrefsForSymbol(store, ds.value, symbol);
                     for (store.getExprSpan(ds.branches)) |branch_id| total += countDecrefsForSymbol(store, branch_id, symbol);
@@ -4914,7 +4912,7 @@ test "dev lowering: mutable loop append decrefs mutable result binding once" {
                     }
                     break :blk false;
                 },
-                .while_loop => |loop| containsCellLoad(store, loop.cond, symbol) or containsCellLoad(store, loop.body, symbol),
+                .loop => |loop_expr| containsCellLoad(store, loop_expr.body, symbol),
                 .proc_call => |call| blk: {
                     if (callCalleeExprId(call)) |callee_expr| {
                         if (containsCellLoad(store, callee_expr, symbol)) break :blk true;
@@ -4966,6 +4964,7 @@ test "dev lowering: mutable loop append decrefs mutable result binding once" {
         }
 
         fn countCellDrops(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, symbol: lir.LIR.Symbol) u32 {
+            if (expr_id.isNone()) return 0;
             const expr = store.getExpr(expr_id);
             const key: u64 = @bitCast(symbol);
             return switch (expr) {
@@ -4998,7 +4997,7 @@ test "dev lowering: mutable loop append decrefs mutable result binding once" {
                     }
                     break :blk total;
                 },
-                .while_loop => |wl| countCellDrops(store, wl.cond, symbol) + countCellDrops(store, wl.body, symbol),
+                .loop => |loop_expr| countCellDrops(store, loop_expr.body, symbol),
                 .discriminant_switch => |ds| blk: {
                     var total: u32 = countCellDrops(store, ds.value, symbol);
                     for (store.getExprSpan(ds.branches)) |branch_id| total += countCellDrops(store, branch_id, symbol);
@@ -5091,7 +5090,7 @@ test "dev lowering: mutable loop append decrefs mutable result binding once" {
                     }
                     break :blk total;
                 },
-                .while_loop => |wl| countDecrefsForSymbol(store, wl.cond, symbol) + countDecrefsForSymbol(store, wl.body, symbol),
+                .loop => |loop_expr| countDecrefsForSymbol(store, loop_expr.body, symbol),
                 .discriminant_switch => |ds| blk: {
                     var total: u32 = countDecrefsForSymbol(store, ds.value, symbol);
                     for (store.getExprSpan(ds.branches)) |branch_id| total += countDecrefsForSymbol(store, branch_id, symbol);
@@ -5295,7 +5294,7 @@ test "dev lowering: mutable list reassignment keeps both decrefs on the reassign
                     }
                     break :blk total;
                 },
-                .while_loop => |wl| countDecrefsForSymbol(store, wl.cond, symbol) + countDecrefsForSymbol(store, wl.body, symbol),
+                .loop => |loop_expr| countDecrefsForSymbol(store, loop_expr.body, symbol),
                 .discriminant_switch => |ds| blk: {
                     var total: u32 = countDecrefsForSymbol(store, ds.value, symbol);
                     for (store.getExprSpan(ds.branches)) |branch_id| total += countDecrefsForSymbol(store, branch_id, symbol);
@@ -5393,7 +5392,7 @@ test "dev lowering: mutable list reassignment keeps both decrefs on the reassign
                     }
                     break :blk total;
                 },
-                .while_loop => |wl| countCellDecrefs(store, wl.cond, cell) + countCellDecrefs(store, wl.body, cell),
+                .loop => |loop_expr| countCellDecrefs(store, loop_expr.body, cell),
                 .discriminant_switch => |ds| blk: {
                     var total: u32 = countCellDecrefs(store, ds.value, cell);
                     for (store.getExprSpan(ds.branches)) |branch_id| total += countCellDecrefs(store, branch_id, cell);
@@ -5492,7 +5491,7 @@ test "dev lowering: mutable list reassignment keeps both decrefs on the reassign
                     }
                     break :blk total;
                 },
-                .while_loop => |wl| countCellDrops(store, wl.cond, cell) + countCellDrops(store, wl.body, cell),
+                .loop => |loop_expr| countCellDrops(store, loop_expr.body, cell),
                 .discriminant_switch => |ds| blk: {
                     var total: u32 = countCellDrops(store, ds.value, cell);
                     for (store.getExprSpan(ds.branches)) |branch_id| total += countCellDrops(store, branch_id, cell);
@@ -6584,9 +6583,8 @@ test "LIR proc-backed closures have no dangling lookups" {
                     }
                     return null;
                 },
-                .while_loop => |loop| {
-                    if (try go(store, loop.cond, bound, visiting_defs, allocator)) |found| return found;
-                    return go(store, loop.body, bound, visiting_defs, allocator);
+                .loop => |loop_expr| {
+                    return go(store, loop_expr.body, bound, visiting_defs, allocator);
                 },
                 .incref => |expr_inner| return go(store, expr_inner.value, bound, visiting_defs, allocator),
                 .decref => |expr_inner| return go(store, expr_inner.value, bound, visiting_defs, allocator),
@@ -7110,9 +7108,8 @@ test "LIR List.contains has no dangling lookups" {
                     }
                     return null;
                 },
-                .while_loop => |loop| {
-                    if (try go(store, loop.cond, bound, visiting_defs, allocator)) |found| return found;
-                    return go(store, loop.body, bound, visiting_defs, allocator);
+                .loop => |loop_expr| {
+                    return go(store, loop_expr.body, bound, visiting_defs, allocator);
                 },
                 .incref => |expr_inner| return go(store, expr_inner.value, bound, visiting_defs, allocator),
                 .decref => |expr_inner| return go(store, expr_inner.value, bound, visiting_defs, allocator),

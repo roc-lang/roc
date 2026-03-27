@@ -69,7 +69,7 @@ fn lirExprResultLayout(store: *const LirExprStore, expr_id: LirExprId) layout.Id
         .hosted_call => |hc| hc.ret_layout,
         .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote => .str,
         .tag_payload_access => |tpa| tpa.payload_layout,
-        .while_loop, .incref, .decref, .free => .zst,
+        .loop, .incref, .decref, .free => .zst,
         .crash => |c| c.ret_layout,
         .runtime_error => |re| re.ret_layout,
         .break_expr => {

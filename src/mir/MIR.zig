@@ -476,9 +476,8 @@ pub const Expr = union(enum) {
 
     // --- Control flow (imperative) ---
 
-    /// While loop
-    while_loop: struct {
-        cond: ExprId,
+    /// Infinite loop
+    loop: struct {
         body: ExprId,
     },
 

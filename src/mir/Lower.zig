@@ -1148,6 +1148,39 @@ fn emitMirUnitExpr(self: *Self, region: Region) Allocator.Error!MIR.ExprId {
     return try self.emitMirStructExpr(&.{}, self.store.monotype_store.unit_idx, region);
 }
 
+fn coerceExprToUnit(self: *Self, expr: MIR.ExprId, region: Region) Allocator.Error!MIR.ExprId {
+    const unit_mono = self.store.monotype_store.unit_idx;
+    if (self.store.typeOf(expr) == unit_mono) return expr;
+
+    const unit_expr = try self.emitMirUnitExpr(region);
+    const wildcard = try self.store.addPattern(self.allocator, .wildcard, unit_mono);
+    const stmts = try self.store.addStmts(self.allocator, &.{
+        .{ .decl_const = .{ .pattern = wildcard, .expr = expr } },
+    });
+
+    return try self.store.addExpr(self.allocator, .{ .block = .{
+        .stmts = stmts,
+        .final_expr = unit_expr,
+    } }, unit_mono, region);
+}
+
+fn lowerWhileToLoop(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    cond_expr: MIR.ExprId,
+    body_expr: MIR.ExprId,
+    region: Region,
+) Allocator.Error!MIR.ExprId {
+    const unit_mono = self.store.monotype_store.unit_idx;
+    const body_unit = try self.coerceExprToUnit(body_expr, region);
+    const break_expr = try self.store.addExpr(self.allocator, .{ .break_expr = {} }, unit_mono, region);
+    const loop_body = try self.createBoolMatch(module_env, cond_expr, body_unit, break_expr, unit_mono, region);
+
+    return try self.store.addExpr(self.allocator, .{ .loop = .{
+        .body = loop_body,
+    } }, unit_mono, region);
+}
+
 fn emitMirBoolLiteral(self: *Self, module_env: *const ModuleEnv, value: bool, region: Region) Allocator.Error!MIR.ExprId {
     const bool_mono = try self.store.monotype_store.addBoolTagUnion(
         self.allocator,
@@ -1270,7 +1303,7 @@ fn registerBoundSymbolDefIfNeeded(self: *Self, pattern: MIR.PatternId, expr: MIR
 
 fn lowerListForLoopToWhile(
     self: *Self,
-    _: *const ModuleEnv,
+    module_env: *const ModuleEnv,
     list_expr: MIR.ExprId,
     elem_pattern: MIR.PatternId,
     body_expr: MIR.ExprId,
@@ -1336,10 +1369,7 @@ fn lowerListForLoopToWhile(
         .final_expr = unit_expr,
     } }, unit_mono, region);
 
-    const while_expr = try self.store.addExpr(self.allocator, .{ .while_loop = .{
-        .cond = while_cond,
-        .body = loop_body,
-    } }, unit_mono, region);
+    const while_expr = try self.lowerWhileToLoop(module_env, while_cond, loop_body, region);
 
     const while_wildcard = try self.store.addPattern(self.allocator, .wildcard, unit_mono);
     const outer_stmts = try self.store.addStmts(self.allocator, &.{
@@ -6213,10 +6243,7 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
                 const cond = try self.lowerExpr(s_while.cond);
                 const body = try self.lowerExpr(s_while.body);
                 const unit_monotype = self.store.monotype_store.unit_idx;
-                const expr = try self.store.addExpr(self.allocator, .{ .while_loop = .{
-                    .cond = cond,
-                    .body = body,
-                } }, unit_monotype, stmt_region);
+                const expr = try self.lowerWhileToLoop(module_env, cond, body, stmt_region);
                 const wildcard = try self.store.addPattern(self.allocator, .wildcard, unit_monotype);
                 try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = wildcard, .expr = expr } });
             },
@@ -6881,10 +6908,7 @@ fn lowerListEquality(
     } }, unit_mono, region);
 
     // While loop
-    const while_expr = try self.store.addExpr(self.allocator, .{ .while_loop = .{
-        .cond = while_cond,
-        .body = while_body,
-    } }, unit_mono, region);
+    const while_expr = try self.lowerWhileToLoop(module_env, while_cond, while_body, region);
 
     // True branch block: { var result = True; var i = 0; _ = while(...); result }
     const while_wildcard = try self.store.addPattern(self.allocator, .wildcard, unit_mono);

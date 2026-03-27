@@ -1376,7 +1376,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .empty_list => |l| l.list_layout,
                 .list => |l| l.list_layout,
                 // Loops return unit (ZST)
-                .while_loop => .zst,
+                .loop => .zst,
                 // Statements, not value-producing expressions
                 .incref, .decref, .free => .zst,
                 // Noreturn
@@ -1483,8 +1483,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .decref => |rc_op| try self.generateDecref(rc_op),
                 .free => |rc_op| try self.generateFree(rc_op),
 
-                // While loop
-                .while_loop => |while_loop| try self.generateWhileLoop(while_loop),
+                // Loop
+                .loop => |loop_expr| try self.generateLoop(loop_expr),
 
                 // Early return from a block
                 .early_return => |er| try self.generateEarlyReturn(er),
@@ -9638,16 +9638,46 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .stack_str = base_offset };
         }
 
-        /// Generate code for a while loop
-        /// Executes body while condition is true
-        fn generateWhileLoop(self: *Self, while_loop: anytype) Allocator.Error!ValueLocation {
+        /// Generate code for an infinite loop.
+        fn generateLoop(self: *Self, loop_expr: anytype) Allocator.Error!ValueLocation {
+            if (self.store.getExpr(loop_expr.body) == .match_expr) {
+                const match_expr = self.store.getExpr(loop_expr.body).match_expr;
+                const branches = self.store.getMatchBranches(match_expr.branches);
+
+                if (branches.len == 2 and branches[0].guard.isNone() and branches[1].guard.isNone() and self.store.getExpr(branches[1].body) == .break_expr) {
+                    return self.generateCanonicalWhileLoop(match_expr.value, branches[0].body);
+                }
+            }
+
             // Record loop start position for the backward jump
             const loop_start = self.codegen.currentOffset();
 
-            // Evaluate condition
-            const cond_loc = try self.generateExpr(while_loop.cond);
+            // Save break patches length before body generation
+            const saved_break_patches_len = self.loop_break_patches.items.len;
 
-            // Get condition value into a register for comparison
+            // Execute the body (result is discarded)
+            _ = try self.generateExpr(loop_expr.body);
+
+            // Jump back to loop start
+            try self.emitJumpBackward(loop_start);
+
+            const loop_exit_offset = self.codegen.currentOffset();
+
+            // Patch break jumps to loop exit
+            for (self.loop_break_patches.items[saved_break_patches_len..]) |patch| {
+                self.codegen.patchJump(patch, loop_exit_offset);
+            }
+            self.loop_break_patches.shrinkRetainingCapacity(saved_break_patches_len);
+
+            // Loops return unit (empty record)
+            return .{ .immediate_i64 = 0 };
+        }
+
+        fn generateCanonicalWhileLoop(self: *Self, cond_expr: LirExprId, body_expr: LirExprId) Allocator.Error!ValueLocation {
+            const loop_start = self.codegen.currentOffset();
+
+            const cond_loc = try self.generateExpr(cond_expr);
+
             const cond_reg = switch (cond_loc) {
                 .immediate_i64 => |val| blk: {
                     const reg = try self.allocTempGeneral();
@@ -9668,9 +9698,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 else => unreachable,
             };
 
-            // While loop condition is Bool (1 byte). When loaded from a mutable
-            // variable's stack slot, upper bytes may contain uninitialized data.
-            // Mask to the low byte to ensure correct zero-comparison.
             if (comptime target.toCpuArch() == .aarch64) {
                 const mask_reg = try self.allocTempGeneral();
                 try self.codegen.emitLoadImm(mask_reg, 0xFF);
@@ -9680,36 +9707,28 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.codegen.emit.andRegImm32(cond_reg, 0xFF);
             }
 
-            // Compare condition with 0 (false)
             const zero_reg = try self.allocTempGeneral();
             try self.codegen.emitLoadImm(zero_reg, 0);
             try self.emitCmpReg(cond_reg, zero_reg);
             self.codegen.freeGeneral(zero_reg);
             self.codegen.freeGeneral(cond_reg);
 
-            // Jump to end if condition is false (equal to 0)
             const exit_patch = try self.emitJumpIfEqual();
 
-            // Save break patches length before body generation
             const saved_break_patches_len = self.loop_break_patches.items.len;
 
-            // Execute the body (result is discarded)
-            _ = try self.generateExpr(while_loop.body);
+            _ = try self.generateExpr(body_expr);
 
-            // Jump back to loop start (to re-evaluate condition)
             try self.emitJumpBackward(loop_start);
 
-            // Patch the exit jump to point here
             const loop_exit_offset = self.codegen.currentOffset();
             self.codegen.patchJump(exit_patch, loop_exit_offset);
 
-            // Patch break jumps to loop exit
             for (self.loop_break_patches.items[saved_break_patches_len..]) |patch| {
                 self.codegen.patchJump(patch, loop_exit_offset);
             }
             self.loop_break_patches.shrinkRetainingCapacity(saved_break_patches_len);
 
-            // While loops return unit (empty record)
             return .{ .immediate_i64 = 0 };
         }
 
@@ -15981,21 +16000,6 @@ test "two-arg proc list loop returns full length" {
         .symbol = sym_start,
         .layout_idx = u32_layout,
     } }, base.Region.zero());
-    const end_lookup = try store.addExpr(.{ .lookup = .{
-        .symbol = sym_end,
-        .layout_idx = u32_layout,
-    } }, base.Region.zero());
-    const current_load_cond = try store.addExpr(.{ .cell_load = .{
-        .cell = sym_current,
-        .layout_idx = u32_layout,
-    } }, base.Region.zero());
-    const cond_args = try store.addExprSpan(&.{ current_load_cond, end_lookup });
-    const cond_expr = try store.addExpr(.{ .low_level = .{
-        .op = .num_is_lte,
-        .args = cond_args,
-        .ret_layout = .bool,
-    } }, base.Region.zero());
-
     const answer_load_append = try store.addExpr(.{ .cell_load = .{
         .cell = sym_answer,
         .layout_idx = list_layout,
@@ -16048,8 +16052,7 @@ test "two-arg proc list loop returns full length" {
         .final_expr = unit,
         .result_layout = .zst,
     } }, base.Region.zero());
-    const while_expr = try store.addExpr(.{ .while_loop = .{
-        .cond = cond_expr,
+    const while_expr = try store.addExpr(.{ .loop = .{
         .body = loop_body,
     } }, base.Region.zero());
 

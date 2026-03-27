@@ -2332,7 +2332,7 @@ fn isAtomicExpr(expr: LirExpr) bool {
         .str_escape_and_quote,
         .discriminant_switch,
         .tag_payload_access,
-        .while_loop,
+        .loop,
         .incref,
         .decref,
         .free,
@@ -2396,7 +2396,7 @@ fn lirExprResultLayout(self: *const Self, expr_id: LirExprId) layout.Idx {
         .dec_to_str,
         .str_escape_and_quote,
         => .str,
-        .while_loop,
+        .loop,
         .incref,
         .decref,
         .free,
@@ -2647,7 +2647,7 @@ fn lowerExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirExprId {
         },
         .dbg_expr => |d| self.lowerDbg(d, mir_expr_id, region),
         .expect => |e| self.lowerExpect(e, mono_idx, region),
-        .while_loop => |w| self.lowerWhileLoop(w, mono_idx, region),
+        .loop => |loop_expr| self.lowerLoop(loop_expr, mono_idx, region),
         .return_expr => |r| self.lowerReturn(r, mir_expr_id, region),
         .break_expr => self.lir_store.addExpr(.break_expr, region),
     };
@@ -5112,13 +5112,11 @@ fn monotypeRepresentsUnit(self: *Self, mono_idx: Monotype.Idx) bool {
     };
 }
 
-fn lowerWhileLoop(self: *Self, w: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
+fn lowerLoop(self: *Self, loop_expr: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
     std.debug.assert(self.monotypeRepresentsUnit(mono_idx));
-    const lir_cond = try self.lowerExpr(w.cond);
-    const lir_body = try self.lowerExpr(w.body);
+    const lir_body = try self.lowerExpr(loop_expr.body);
 
-    return self.lir_store.addExpr(.{ .while_loop = .{
-        .cond = lir_cond,
+    return self.lir_store.addExpr(.{ .loop = .{
         .body = lir_body,
     } }, region);
 }
@@ -7198,31 +7196,23 @@ test "MIR block with decl_var and mutate_var lowers to LIR decl and mutate" {
     try testing.expect(final == .cell_load);
 }
 
-test "MIR while_loop lowers to LIR while_loop" {
+test "MIR loop lowers to LIR loop" {
     const allocator = testing.allocator;
 
     var env = try testInit();
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const bool_mono = try env.mir_store.monotype_store.addBoolTagUnion(allocator, 0, env.module_env.idents);
     const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
     const unit_mono = env.mir_store.monotype_store.unit_idx;
-
-    // Build MIR: while cond { body }
-    // cond: a bool placeholder (int literal used as stand-in)
-    const cond_expr = try env.mir_store.addExpr(allocator, .{ .int = .{
-        .value = .{ .bytes = @bitCast(@as(i128, 1)), .kind = .i128 },
-    } }, bool_mono, Region.zero());
 
     // body: integer literal
     const body_expr = try env.mir_store.addExpr(allocator, .{ .int = .{
         .value = .{ .bytes = @bitCast(@as(i128, 0)), .kind = .i128 },
     } }, i64_mono, Region.zero());
 
-    // while_loop expression
-    const while_expr = try env.mir_store.addExpr(allocator, .{ .while_loop = .{
-        .cond = cond_expr,
+    // loop expression
+    const while_expr = try env.mir_store.addExpr(allocator, .{ .loop = .{
         .body = body_expr,
     } }, unit_mono, Region.zero());
     var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.lambda_set_store, env.module_env.idents.true_tag);
@@ -7231,7 +7221,7 @@ test "MIR while_loop lowers to LIR while_loop" {
     const lir_id = try translator.lower(while_expr);
     const lir_expr = env.lir_store.getExpr(lir_id);
 
-    try testing.expect(lir_expr == .while_loop);
+    try testing.expect(lir_expr == .loop);
 }
 
 test "MIR dbg_expr lowers to LIR dbg" {

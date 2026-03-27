@@ -154,7 +154,7 @@ pub const MonoLlvmCodeGen = struct {
     result_layout: ?layout.Idx = null,
 
     /// Allocas for mutable variables inside loop bodies.
-    /// When a symbol is reassigned inside a while_loop body,
+    /// When a symbol is reassigned inside a loop body,
     /// its value is stored to an alloca so that post-loop code can load
     /// the final value (avoiding SSA domination issues).
     /// Stores both the alloca pointer and the element type for correct loads.
@@ -1018,7 +1018,7 @@ pub const MonoLlvmCodeGen = struct {
             },
 
             // Loops
-            .while_loop => |wl| self.generateWhileLoop(wl),
+            .loop => |loop_expr| self.generateLoop(loop_expr),
             .break_expr => self.generateBreakExpr(),
 
             // These should never reach LLVM codegen:
@@ -1769,9 +1769,9 @@ pub const MonoLlvmCodeGen = struct {
     /// Conditional patterns (int_literal, tag) compare and branch.
     // Loop generation-------
 
-    /// Generate a while loop: header checks condition, body executes, then loops back.
+    /// Generate an infinite loop. The body is responsible for breaking out.
     /// Returns unit (i8 0).
-    fn generateWhileLoop(self: *MonoLlvmCodeGen, wl: anytype) Error!LlvmBuilder.Value {
+    fn generateLoop(self: *MonoLlvmCodeGen, loop_expr: anytype) Error!LlvmBuilder.Value {
         const wip = self.wip orelse return error.CompilationFailed;
         const builder = self.builder orelse return error.CompilationFailed;
 
@@ -1800,40 +1800,15 @@ pub const MonoLlvmCodeGen = struct {
             }
         }
 
-        // Create blocks: cond has 2 incoming (entry + back-edge), body/exit have 1 each
-        const cond_block = wip.block(2, "while_cond") catch return error.OutOfMemory;
-        const body_block = wip.block(1, "while_body") catch return error.OutOfMemory;
-        const exit_incoming = 1 + self.countBreakEdges(wl.body);
-        const exit_block = wip.block(exit_incoming, "while_exit") catch return error.OutOfMemory;
+        const body_block = wip.block(1, "loop_body") catch return error.OutOfMemory;
+        const exit_incoming = @max(1, self.countBreakEdges(loop_expr.body));
+        const exit_block = wip.block(exit_incoming, "loop_exit") catch return error.OutOfMemory;
         self.loop_exit_blocks.append(self.allocator, exit_block) catch return error.OutOfMemory;
         defer _ = self.loop_exit_blocks.pop();
 
-        // Branch to condition check
-        _ = wip.br(cond_block) catch return error.CompilationFailed;
+        _ = wip.br(body_block) catch return error.CompilationFailed;
 
-        // Condition block: load loop-carried variables before evaluating condition
-        wip.cursor = .{ .block = cond_block };
-        for (promoted_keys.items) |key| {
-            if (self.loop_var_allocas.get(key)) |lva| {
-                const loaded = wip.load(.normal, lva.elem_type, lva.alloca_ptr, alignment, "") catch return error.CompilationFailed;
-                self.symbol_values.put(key, loaded) catch return error.OutOfMemory;
-            }
-        }
-        {
-            var cell_it = self.cell_allocas.iterator();
-            while (cell_it.next()) |entry| {
-                const cell_alignment = LlvmBuilder.Alignment.fromByteUnits(@intCast(@max(llvmTypeByteSize(entry.value_ptr.elem_type), 1)));
-                const loaded = wip.load(.normal, entry.value_ptr.elem_type, entry.value_ptr.alloca_ptr, cell_alignment, "") catch return error.CompilationFailed;
-                self.symbol_values.put(entry.key_ptr.*, loaded) catch return error.OutOfMemory;
-            }
-        }
-        var cond_val = try self.generateExpr(wl.cond);
-        if (cond_val.typeOfWip(wip) != .i1) {
-            cond_val = wip.cast(.trunc, cond_val, .i1, "") catch return error.CompilationFailed;
-        }
-        _ = wip.brCond(cond_val, body_block, exit_block, .none) catch return error.CompilationFailed;
-
-        // Body block: load loop-carried variables, execute body
+        // Load loop-carried variables before executing the body.
         wip.cursor = .{ .block = body_block };
         for (promoted_keys.items) |key| {
             if (self.loop_var_allocas.get(key)) |lva| {
@@ -1849,8 +1824,8 @@ pub const MonoLlvmCodeGen = struct {
                 self.symbol_values.put(entry.key_ptr.*, loaded) catch return error.OutOfMemory;
             }
         }
-        _ = try self.generateExpr(wl.body);
-        _ = wip.br(cond_block) catch return error.CompilationFailed;
+        _ = try self.generateExpr(loop_expr.body);
+        _ = wip.br(body_block) catch return error.CompilationFailed;
 
         // Exit block: load final values from allocas
         wip.cursor = .{ .block = exit_block };
@@ -5281,7 +5256,7 @@ pub const MonoLlvmCodeGen = struct {
             .dbg => |d| self.countBreakEdges(d.expr),
             .expect => |e| self.countBreakEdges(e.body),
             .nominal => |nom| self.countBreakEdges(nom.backing_expr),
-            .lambda, .while_loop => 0,
+            .lambda, .loop => 0,
             else => 0,
         };
     }

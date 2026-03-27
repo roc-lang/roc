@@ -297,9 +297,8 @@ pub const RcInsertPass = struct {
                     try self.validateExprTreeIds(branch.body);
                 }
             },
-            .while_loop => |wl| {
-                try self.validateExprTreeIds(wl.cond);
-                try self.validateExprTreeIds(wl.body);
+            .loop => |loop_expr| {
+                try self.validateExprTreeIds(loop_expr.body);
             },
             .proc_call => |call| {
                 for (self.store.getExprSpan(call.args)) |arg| try self.validateExprTreeIds(arg);
@@ -608,7 +607,7 @@ pub const RcInsertPass = struct {
             .empty_list => |l| l.list_layout,
             .hosted_call => |hc| hc.ret_layout,
             .tag_payload_access => |tpa| tpa.payload_layout,
-            .while_loop, .incref, .decref, .free, .break_expr => .zst,
+            .loop, .incref, .decref, .free, .break_expr => .zst,
             .crash => |c| c.ret_layout,
             .runtime_error => |re| re.ret_layout,
             .str_concat,
@@ -1035,18 +1034,12 @@ pub const RcInsertPass = struct {
                 if (!changed) return expr_id;
                 return self.wrapPreludeAroundExpr(rebuilt, match_expr.result_layout, region, value_prelude.items);
             },
-            .while_loop => |wl| {
-                const new_cond_raw = try self.materializeRcCellLoadOperands(wl.cond);
-                var cond_prelude = std.ArrayList(LirStmt).empty;
-                defer cond_prelude.deinit(self.allocator);
-                const new_cond = try self.materializeRcCellLoadOperand(new_cond_raw, region, &cond_prelude);
-                const new_body = try self.materializeRcCellLoadOperands(wl.body);
-                const rebuilt = try self.store.addExpr(.{ .while_loop = .{
-                    .cond = new_cond,
+            .loop => |loop_expr| {
+                const new_body = try self.materializeRcCellLoadOperands(loop_expr.body);
+                if (new_body == loop_expr.body) return expr_id;
+                return self.store.addExpr(.{ .loop = .{
                     .body = new_body,
                 } }, region);
-                if (new_cond == wl.cond and new_body == wl.body and cond_prelude.items.len == 0) return expr_id;
-                return self.wrapPreludeAroundExpr(rebuilt, .zst, region, cond_prelude.items);
             },
             .proc_call => |call| {
                 var prelude = std.ArrayList(LirStmt).empty;
@@ -1385,12 +1378,10 @@ pub const RcInsertPass = struct {
                     .result_layout = match_expr.result_layout,
                 } }, region);
             },
-            .while_loop => |wl| {
-                const new_cond = try self.normalizeBorrowedLoopSources(wl.cond);
-                const new_body = try self.normalizeBorrowedLoopSources(wl.body);
-                if (new_cond == wl.cond and new_body == wl.body) return expr_id;
-                return self.store.addExpr(.{ .while_loop = .{
-                    .cond = new_cond,
+            .loop => |loop_expr| {
+                const new_body = try self.normalizeBorrowedLoopSources(loop_expr.body);
+                if (new_body == loop_expr.body) return expr_id;
+                return self.store.addExpr(.{ .loop = .{
                     .body = new_body,
                 } }, region);
             },
@@ -1718,9 +1709,8 @@ pub const RcInsertPass = struct {
                 }
                 try self.uniquifyBindingPatterns(ite.final_else);
             },
-            .while_loop => |*wl| {
-                try self.uniquifyBindingPatterns(wl.cond);
-                try self.uniquifyBindingPatterns(wl.body);
+            .loop => |*loop_expr| {
+                try self.uniquifyBindingPatterns(loop_expr.body);
             },
             .discriminant_switch => |*ds| {
                 try self.uniquifyBindingPatterns(ds.value);
@@ -1972,9 +1962,8 @@ pub const RcInsertPass = struct {
             .tag_payload_access => |tpa| {
                 try self.countUsesInto(tpa.value, target);
             },
-            .while_loop => |wl| {
-                try self.countUsesInto(wl.cond, target);
-                try self.countUsesInto(wl.body, target);
+            .loop => |loop_expr| {
+                try self.countUsesInto(loop_expr.body, target);
             },
             .incref => |inc| try self.countUsesInto(inc.value, target),
             .decref => |dec| try self.countUsesInto(dec.value, target),
@@ -2170,13 +2159,12 @@ pub const RcInsertPass = struct {
             .float_to_str => |fts| try self.countConsumedUsesInto(fts.value, target),
             .dec_to_str => |d| try self.countConsumedUsesInto(d, target),
             .str_escape_and_quote => |s| try self.countConsumedUsesInto(s, target),
-            .while_loop => |wl| {
+            .loop => |loop_expr| {
                 // Loop-carried outer bindings must survive across iterations.
-                // Any consuming use inside the condition/body should therefore
+                // Any consuming use inside the body should therefore
                 // be satisfied by per-iteration retained owners, not by
                 // consuming the original outer binding once at the loop site.
-                try self.countConsumedUsesInto(wl.cond, target);
-                try self.countConsumedUsesInto(wl.body, target);
+                try self.countConsumedUsesInto(loop_expr.body, target);
             },
             .lookup => {},
             .incref => |inc| try self.countConsumedUsesInto(inc.value, target),
@@ -2381,9 +2369,8 @@ pub const RcInsertPass = struct {
             .float_to_str => |fts| try self.countBorrowOwnerDemandUsesInto(fts.value, target),
             .dec_to_str => |d| try self.countBorrowOwnerDemandUsesInto(d, target),
             .str_escape_and_quote => |s| try self.countBorrowOwnerDemandUsesInto(s, target),
-            .while_loop => |wl| {
-                try self.countBorrowOwnerDemandUsesInto(wl.cond, target);
-                try self.countBorrowOwnerDemandUsesInto(wl.body, target);
+            .loop => |loop_expr| {
+                try self.countBorrowOwnerDemandUsesInto(loop_expr.body, target);
             },
             .incref => |inc| try self.countBorrowOwnerDemandUsesInto(inc.value, target),
             .decref => |dec| try self.countBorrowOwnerDemandValueInto(dec.value, target),
@@ -2698,7 +2685,7 @@ pub const RcInsertPass = struct {
             .block => |block| self.processBlock(expr_id, block.stmts, block.final_expr, block.result_layout, region),
             .if_then_else => |ite| self.processIfThenElse(ite.branches, ite.final_else, ite.result_layout, region),
             .match_expr => |w| self.processMatch(w.value, w.value_layout, w.branches, w.result_layout, region),
-            .while_loop => |wl| self.processWhileLoop(wl, region, expr_id),
+            .loop => |loop_expr| self.processLoop(loop_expr, region, expr_id),
             .discriminant_switch => |ds| self.processDiscriminantSwitch(ds, region),
             .early_return => |ret| self.processEarlyReturn(ret, region, expr_id),
             .cell_load => expr_id,
@@ -3869,22 +3856,96 @@ pub const RcInsertPass = struct {
 
     /// Process a while loop expression.
     /// While loops don't bind new symbols — just recurse into cond and body.
-    fn processWhileLoop(self: *RcInsertPass, wl: anytype, region: Region, expr_id: LirExprId) Allocator.Error!LirExprId {
-        var cond_demands = std.AutoHashMap(u64, u32).init(self.allocator);
-        defer cond_demands.deinit();
-        try self.countBorrowOwnerDemandUsesInto(wl.cond, &cond_demands);
+    fn processLoop(self: *RcInsertPass, loop_expr: anytype, region: Region, expr_id: LirExprId) Allocator.Error!LirExprId {
+        if (self.store.getExpr(loop_expr.body) == .match_expr) {
+            const match_expr = self.store.getExpr(loop_expr.body).match_expr;
+            const branches = self.store.getMatchBranches(match_expr.branches);
 
-        var cond_consumed = std.AutoHashMap(u64, u32).init(self.allocator);
-        defer cond_consumed.deinit();
-        try self.countConsumedUsesInto(wl.cond, &cond_consumed);
+            if (branches.len == 2 and branches[0].guard.isNone() and branches[1].guard.isNone() and self.store.getExpr(branches[1].body) == .break_expr) {
+                var cond_demands = std.AutoHashMap(u64, u32).init(self.allocator);
+                defer cond_demands.deinit();
+                try self.countBorrowOwnerDemandUsesInto(match_expr.value, &cond_demands);
+
+                var cond_consumed = std.AutoHashMap(u64, u32).init(self.allocator);
+                defer cond_consumed.deinit();
+                try self.countConsumedUsesInto(match_expr.value, &cond_consumed);
+
+                var body_demands = std.AutoHashMap(u64, u32).init(self.allocator);
+                defer body_demands.deinit();
+                try self.countBorrowOwnerDemandUsesInto(branches[0].body, &body_demands);
+
+                var body_consumed = std.AutoHashMap(u64, u32).init(self.allocator);
+                defer body_consumed.deinit();
+                try self.countConsumedUsesInto(branches[0].body, &body_consumed);
+
+                const live_len = self.live_rc_symbols.items.len;
+
+                var loop_carried_keys = std.AutoHashMap(u64, void).init(self.allocator);
+                defer loop_carried_keys.deinit();
+                for (self.live_rc_symbols.items[0..live_len]) |live| {
+                    if (!live.reassignable) continue;
+                    if (try self.exprMutatesSymbol(branches[0].body, live.symbol)) {
+                        try loop_carried_keys.put(live.key, {});
+                    }
+                }
+
+                const processed_cond = try self.processExpr(match_expr.value);
+                const new_cond = try self.wrapExprWithLiveDemandRcOps(
+                    processed_cond,
+                    live_len,
+                    &cond_demands,
+                    &cond_consumed,
+                    null,
+                    self.exprResultLayout(match_expr.value),
+                    region,
+                );
+
+                var cond_added = try self.pushBorrowedExprUsesToBlockConsumed(match_expr.value);
+                defer {
+                    self.popExprUsesFromBlockConsumed(&cond_added);
+                    cond_added.deinit();
+                }
+
+                const processed_body = try self.processExpr(branches[0].body);
+                const new_body = try self.wrapExprWithLiveDemandRcOps(
+                    processed_body,
+                    live_len,
+                    &body_demands,
+                    &body_consumed,
+                    &loop_carried_keys,
+                    self.exprResultLayout(branches[0].body),
+                    region,
+                );
+
+                if (new_cond != match_expr.value or new_body != branches[0].body) {
+                    var new_branches = try self.allocator.dupe(LirMatchBranch, branches);
+                    defer self.allocator.free(new_branches);
+                    new_branches[0].body = new_body;
+                    new_branches[1].body = branches[1].body;
+
+                    const rebuilt_body = try self.store.addExpr(.{ .match_expr = .{
+                        .value = new_cond,
+                        .value_layout = match_expr.value_layout,
+                        .branches = try self.store.addMatchBranches(new_branches),
+                        .result_layout = match_expr.result_layout,
+                    } }, region);
+
+                    return self.store.addExpr(.{ .loop = .{
+                        .body = rebuilt_body,
+                    } }, region);
+                }
+
+                return expr_id;
+            }
+        }
 
         var body_demands = std.AutoHashMap(u64, u32).init(self.allocator);
         defer body_demands.deinit();
-        try self.countBorrowOwnerDemandUsesInto(wl.body, &body_demands);
+        try self.countBorrowOwnerDemandUsesInto(loop_expr.body, &body_demands);
 
         var body_consumed = std.AutoHashMap(u64, u32).init(self.allocator);
         defer body_consumed.deinit();
-        try self.countConsumedUsesInto(wl.body, &body_consumed);
+        try self.countConsumedUsesInto(loop_expr.body, &body_consumed);
 
         const live_len = self.live_rc_symbols.items.len;
 
@@ -3892,42 +3953,39 @@ pub const RcInsertPass = struct {
         defer loop_carried_keys.deinit();
         for (self.live_rc_symbols.items[0..live_len]) |live| {
             if (!live.reassignable) continue;
-            if (try self.exprMutatesSymbol(wl.body, live.symbol)) {
+            if (try self.exprMutatesSymbol(loop_expr.body, live.symbol)) {
                 try loop_carried_keys.put(live.key, {});
             }
         }
 
-        const processed_cond = try self.processExpr(wl.cond);
-        const new_cond = try self.wrapExprWithLiveDemandRcOps(
-            processed_cond,
+        const processed_body = try self.processExpr(loop_expr.body);
+        var body_tail_stmts = std.ArrayList(LirStmt).empty;
+        defer body_tail_stmts.deinit(self.allocator);
+        try self.emitLiveDemandRcTailDecrefsForSymbolsInto(
             live_len,
-            &cond_demands,
-            &cond_consumed,
-            null,
-            self.exprResultLayout(wl.cond),
+            &body_demands,
+            &body_consumed,
             region,
+            &body_tail_stmts,
         );
 
-        var cond_added = try self.pushBorrowedExprUsesToBlockConsumed(wl.cond);
-        defer {
-            self.popExprUsesFromBlockConsumed(&cond_added);
-            cond_added.deinit();
-        }
-
-        const processed_body = try self.processExpr(wl.body);
-        const new_body = try self.wrapExprWithLiveDemandRcOps(
+        const body_with_break_cleanup = try self.wrapBreaksWithTailStmts(
             processed_body,
+            body_tail_stmts.items,
+            region,
+        );
+        const new_body = try self.wrapExprWithLiveDemandRcOps(
+            body_with_break_cleanup,
             live_len,
             &body_demands,
             &body_consumed,
             &loop_carried_keys,
-            self.exprResultLayout(wl.body),
+            self.exprResultLayout(loop_expr.body),
             region,
         );
 
-        if (new_cond != wl.cond or new_body != wl.body) {
-            return self.store.addExpr(.{ .while_loop = .{
-                .cond = new_cond,
+        if (new_body != loop_expr.body) {
+            return self.store.addExpr(.{ .loop = .{
                 .body = new_body,
             } }, region);
         }
@@ -4143,9 +4201,8 @@ pub const RcInsertPass = struct {
                 }
                 return false;
             },
-            .while_loop => |while_loop| {
-                if (try self.exprMutatesSymbol(while_loop.cond, symbol)) return true;
-                return self.exprMutatesSymbol(while_loop.body, symbol);
+            .loop => |loop_expr| {
+                return self.exprMutatesSymbol(loop_expr.body, symbol);
             },
             .discriminant_switch => |switch_expr| {
                 if (try self.exprMutatesSymbol(switch_expr.value, symbol)) return true;
@@ -4275,9 +4332,8 @@ pub const RcInsertPass = struct {
                     try self.collectExprBoundSymbols(branch.body, set);
                 }
             },
-            .while_loop => |wl| {
-                try self.collectExprBoundSymbols(wl.cond, set);
-                try self.collectExprBoundSymbols(wl.body, set);
+            .loop => |loop_expr| {
+                try self.collectExprBoundSymbols(loop_expr.body, set);
             },
             .discriminant_switch => |ds| {
                 try self.collectExprBoundSymbols(ds.value, set);
@@ -4562,6 +4618,189 @@ pub const RcInsertPass = struct {
             .final_expr = final_lookup,
             .result_layout = result_layout,
         } }, region);
+    }
+
+    fn wrapBreaksWithTailStmts(
+        self: *RcInsertPass,
+        expr_id: LirExprId,
+        tail_stmts: []const LirStmt,
+        region: Region,
+    ) Allocator.Error!LirExprId {
+        if (tail_stmts.len == 0 or expr_id.isNone()) return expr_id;
+
+        const expr = self.store.getExpr(expr_id);
+        return switch (expr) {
+            .break_expr => {
+                const stmts_span = try self.store.addStmts(tail_stmts);
+                return self.store.addExpr(.{ .block = .{
+                    .stmts = stmts_span,
+                    .final_expr = expr_id,
+                    .result_layout = .zst,
+                } }, region);
+            },
+            .block => |block| {
+                var changed = false;
+                var stmts = std.ArrayList(LirStmt).empty;
+                defer stmts.deinit(self.allocator);
+
+                for (self.store.getStmts(block.stmts)) |stmt| {
+                    const new_stmt = switch (stmt) {
+                        .decl => |binding| blk: {
+                            const new_expr = try self.wrapBreaksWithTailStmts(binding.expr, tail_stmts, region);
+                            changed = changed or new_expr != binding.expr;
+                            break :blk LirStmt{ .decl = .{
+                                .pattern = binding.pattern,
+                                .expr = new_expr,
+                            } };
+                        },
+                        .mutate => |binding| blk: {
+                            const new_expr = try self.wrapBreaksWithTailStmts(binding.expr, tail_stmts, region);
+                            changed = changed or new_expr != binding.expr;
+                            break :blk LirStmt{ .mutate = .{
+                                .pattern = binding.pattern,
+                                .expr = new_expr,
+                            } };
+                        },
+                        .cell_init => |binding| blk: {
+                            const new_expr = try self.wrapBreaksWithTailStmts(binding.expr, tail_stmts, region);
+                            changed = changed or new_expr != binding.expr;
+                            break :blk LirStmt{ .cell_init = .{
+                                .cell = binding.cell,
+                                .layout_idx = binding.layout_idx,
+                                .expr = new_expr,
+                            } };
+                        },
+                        .cell_store => |binding| blk: {
+                            const new_expr = try self.wrapBreaksWithTailStmts(binding.expr, tail_stmts, region);
+                            changed = changed or new_expr != binding.expr;
+                            break :blk LirStmt{ .cell_store = .{
+                                .cell = binding.cell,
+                                .layout_idx = binding.layout_idx,
+                                .expr = new_expr,
+                            } };
+                        },
+                        .cell_drop => stmt,
+                    };
+                    try stmts.append(self.allocator, new_stmt);
+                }
+
+                const new_final = try self.wrapBreaksWithTailStmts(block.final_expr, tail_stmts, region);
+                changed = changed or new_final != block.final_expr;
+
+                if (!changed) return expr_id;
+
+                return self.store.addExpr(.{ .block = .{
+                    .stmts = try self.store.addStmts(stmts.items),
+                    .final_expr = new_final,
+                    .result_layout = block.result_layout,
+                } }, region);
+            },
+            .if_then_else => |ite| {
+                var changed = false;
+                var branches = std.ArrayList(LirIfBranch).empty;
+                defer branches.deinit(self.allocator);
+
+                for (self.store.getIfBranches(ite.branches)) |branch| {
+                    const new_cond = try self.wrapBreaksWithTailStmts(branch.cond, tail_stmts, region);
+                    const new_body = try self.wrapBreaksWithTailStmts(branch.body, tail_stmts, region);
+                    changed = changed or new_cond != branch.cond or new_body != branch.body;
+                    try branches.append(self.allocator, .{
+                        .cond = new_cond,
+                        .body = new_body,
+                    });
+                }
+
+                const new_else = try self.wrapBreaksWithTailStmts(ite.final_else, tail_stmts, region);
+                changed = changed or new_else != ite.final_else;
+
+                if (!changed) return expr_id;
+
+                return self.store.addExpr(.{ .if_then_else = .{
+                    .branches = try self.store.addIfBranches(branches.items),
+                    .final_else = new_else,
+                    .result_layout = ite.result_layout,
+                } }, region);
+            },
+            .match_expr => |match_expr| {
+                var changed = false;
+                const new_value = try self.wrapBreaksWithTailStmts(match_expr.value, tail_stmts, region);
+                changed = changed or new_value != match_expr.value;
+
+                var branches = std.ArrayList(LirMatchBranch).empty;
+                defer branches.deinit(self.allocator);
+
+                for (self.store.getMatchBranches(match_expr.branches)) |branch| {
+                    const new_guard = try self.wrapBreaksWithTailStmts(branch.guard, tail_stmts, region);
+                    const new_body = try self.wrapBreaksWithTailStmts(branch.body, tail_stmts, region);
+                    changed = changed or new_guard != branch.guard or new_body != branch.body;
+                    try branches.append(self.allocator, .{
+                        .pattern = branch.pattern,
+                        .guard = new_guard,
+                        .body = new_body,
+                    });
+                }
+
+                if (!changed) return expr_id;
+
+                return self.store.addExpr(.{ .match_expr = .{
+                    .value = new_value,
+                    .value_layout = match_expr.value_layout,
+                    .branches = try self.store.addMatchBranches(branches.items),
+                    .result_layout = match_expr.result_layout,
+                } }, region);
+            },
+            .discriminant_switch => |switch_expr| {
+                var changed = false;
+                const new_value = try self.wrapBreaksWithTailStmts(switch_expr.value, tail_stmts, region);
+                changed = changed or new_value != switch_expr.value;
+
+                var branches = std.ArrayList(LirExprId).empty;
+                defer branches.deinit(self.allocator);
+
+                for (self.store.getExprSpan(switch_expr.branches)) |branch_id| {
+                    const new_branch = try self.wrapBreaksWithTailStmts(branch_id, tail_stmts, region);
+                    changed = changed or new_branch != branch_id;
+                    try branches.append(self.allocator, new_branch);
+                }
+
+                if (!changed) return expr_id;
+
+                return self.store.addExpr(.{ .discriminant_switch = .{
+                    .value = new_value,
+                    .union_layout = switch_expr.union_layout,
+                    .branches = try self.store.addExprSpan(branches.items),
+                    .result_layout = switch_expr.result_layout,
+                } }, region);
+            },
+            .dbg => |dbg_expr| {
+                const new_expr = try self.wrapBreaksWithTailStmts(dbg_expr.expr, tail_stmts, region);
+                if (new_expr == dbg_expr.expr) return expr_id;
+                return self.store.addExpr(.{ .dbg = .{
+                    .expr = new_expr,
+                    .result_layout = dbg_expr.result_layout,
+                } }, region);
+            },
+            .expect => |expect_expr| {
+                const new_cond = try self.wrapBreaksWithTailStmts(expect_expr.cond, tail_stmts, region);
+                const new_body = try self.wrapBreaksWithTailStmts(expect_expr.body, tail_stmts, region);
+                if (new_cond == expect_expr.cond and new_body == expect_expr.body) return expr_id;
+                return self.store.addExpr(.{ .expect = .{
+                    .cond = new_cond,
+                    .body = new_body,
+                    .result_layout = expect_expr.result_layout,
+                } }, region);
+            },
+            .nominal => |nom| {
+                const new_backing = try self.wrapBreaksWithTailStmts(nom.backing_expr, tail_stmts, region);
+                if (new_backing == nom.backing_expr) return expr_id;
+                return self.store.addExpr(.{ .nominal = .{
+                    .backing_expr = new_backing,
+                    .nominal_layout = nom.nominal_layout,
+                } }, region);
+            },
+            .loop => expr_id,
+            else => expr_id,
+        };
     }
 
     /// Recursively emit decrefs for a mutated pattern's old value.
@@ -5697,11 +5936,8 @@ fn countRcOps(store: *const LirExprStore, expr_id: LirExprId) RcOpCounts {
                 decrefs += sub.decrefs;
             }
         },
-        .while_loop => |wl| {
-            const sub_cond = countRcOps(store, wl.cond);
-            increfs += sub_cond.increfs;
-            decrefs += sub_cond.decrefs;
-            const sub_body = countRcOps(store, wl.body);
+        .loop => |loop_expr| {
+            const sub_body = countRcOps(store, loop_expr.body);
             increfs += sub_body.increfs;
             decrefs += sub_body.decrefs;
         },
@@ -5865,7 +6101,7 @@ fn countDecrefsForSymbol(store: *const LirExprStore, expr_id: LirExprId, symbol:
             }
             break :blk total;
         },
-        .while_loop => |wl| countDecrefsForSymbol(store, wl.cond, symbol) + countDecrefsForSymbol(store, wl.body, symbol),
+        .loop => |loop_expr| countDecrefsForSymbol(store, loop_expr.body, symbol),
         .discriminant_switch => |ds| blk: {
             var total: u32 = countDecrefsForSymbol(store, ds.value, symbol);
             for (store.getExprSpan(ds.branches)) |branch_id| {
@@ -5963,7 +6199,7 @@ fn countIncrefsForSymbol(store: *const LirExprStore, expr_id: LirExprId, symbol:
             }
             break :blk total;
         },
-        .while_loop => |wl| countIncrefsForSymbol(store, wl.cond, symbol) + countIncrefsForSymbol(store, wl.body, symbol),
+        .loop => |loop_expr| countIncrefsForSymbol(store, loop_expr.body, symbol),
         .discriminant_switch => |ds| blk: {
             var total: u32 = countIncrefsForSymbol(store, ds.value, symbol);
             for (store.getExprSpan(ds.branches)) |branch_id| {
@@ -6070,9 +6306,8 @@ fn findFirstIfThenElseExpr(store: *const LirExprStore, expr_id: LirExprId) ?LirE
             }
             return null;
         },
-        .while_loop => |wl| {
-            if (findFirstIfThenElseExpr(store, wl.cond)) |found| return found;
-            return findFirstIfThenElseExpr(store, wl.body);
+        .loop => |loop_expr| {
+            return findFirstIfThenElseExpr(store, loop_expr.body);
         },
         .proc_call => |call| {
             for (store.getExprSpan(call.args)) |arg_id| {
@@ -6141,7 +6376,7 @@ fn findFirstWhileExpr(store: *const LirExprStore, expr_id: LirExprId) ?LirExprId
 
     const expr = store.getExpr(expr_id);
     switch (expr) {
-        .while_loop => return expr_id,
+        .loop => return expr_id,
         .block => |block| {
             for (store.getStmts(block.stmts)) |stmt| {
                 const nested = switch (stmt) {

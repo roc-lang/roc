@@ -115,10 +115,9 @@ fn dumpMirExpr(mir_store: *const MIR.Store, expr_id: MIR.ExprId, depth: usize) v
             std.debug.print("\n", .{});
             for (mir_store.getExprSpan(struct_.fields)) |field| dumpMirExpr(mir_store, field, depth + 1);
         },
-        .while_loop => |while_loop| {
+        .loop => |loop_expr| {
             std.debug.print("\n", .{});
-            dumpMirExpr(mir_store, while_loop.cond, depth + 1);
-            dumpMirExpr(mir_store, while_loop.body, depth + 1);
+            dumpMirExpr(mir_store, loop_expr.body, depth + 1);
         },
         .match_expr => |match_expr| {
             std.debug.print("\n", .{});
@@ -237,9 +236,8 @@ fn firstForeignParamLookup(
         },
         .dbg_expr => |dbg_expr| return firstForeignParamLookup(mir_store, dbg_expr.expr, proc_id, all_param_symbols),
         .expect => |expect| return firstForeignParamLookup(mir_store, expect.body, proc_id, all_param_symbols),
-        .while_loop => |while_loop| {
-            if (firstForeignParamLookup(mir_store, while_loop.cond, proc_id, all_param_symbols)) |found| return found;
-            return firstForeignParamLookup(mir_store, while_loop.body, proc_id, all_param_symbols);
+        .loop => |loop_expr| {
+            return firstForeignParamLookup(mir_store, loop_expr.body, proc_id, all_param_symbols);
         },
         .return_expr => |ret| return firstForeignParamLookup(mir_store, ret.expr, proc_id, all_param_symbols),
     }
@@ -323,9 +321,8 @@ fn firstReachableMissingFunctionLookup(
         },
         .dbg_expr => |dbg_expr| return firstReachableMissingFunctionLookup(mir_store, ls_store, dbg_expr.expr),
         .expect => |expect| return firstReachableMissingFunctionLookup(mir_store, ls_store, expect.body),
-        .while_loop => |while_loop| {
-            if (firstReachableMissingFunctionLookup(mir_store, ls_store, while_loop.cond)) |found| return found;
-            return firstReachableMissingFunctionLookup(mir_store, ls_store, while_loop.body);
+        .loop => |loop_expr| {
+            return firstReachableMissingFunctionLookup(mir_store, ls_store, loop_expr.body);
         },
         .return_expr => |ret| return firstReachableMissingFunctionLookup(mir_store, ls_store, ret.expr),
         .proc_ref,
@@ -349,7 +346,13 @@ fn findLoopItemPattern(mir_store: *const MIR.Store, expr_id: MIR.ExprId) ?MIR.Pa
         .block => |block| {
             for (mir_store.getStmts(block.stmts)) |stmt| {
                 const stmt_expr_id = switch (stmt) {
-                    .decl_const => |binding| binding.expr,
+                    .decl_const => |binding| blk: {
+                        const binding_expr = mir_store.getExpr(binding.expr);
+                        if (binding_expr == .run_low_level and binding_expr.run_low_level.op == .list_get_unsafe) {
+                            return binding.pattern;
+                        }
+                        break :blk binding.expr;
+                    },
                     .decl_var => |binding| binding.expr,
                     .mutate_var => |binding| binding.expr,
                 };
@@ -357,20 +360,7 @@ fn findLoopItemPattern(mir_store: *const MIR.Store, expr_id: MIR.ExprId) ?MIR.Pa
             }
             return findLoopItemPattern(mir_store, block.final_expr);
         },
-        .while_loop => |while_loop| {
-            const while_body = mir_store.getExpr(while_loop.body);
-            if (while_body != .block) return null;
-
-            for (mir_store.getStmts(while_body.block.stmts)) |stmt| {
-                switch (stmt) {
-                    .decl_const => |binding| return binding.pattern,
-                    .decl_var => |binding| return binding.pattern,
-                    .mutate_var => {},
-                }
-            }
-
-            return null;
-        },
+        .loop => |loop_expr| return findLoopItemPattern(mir_store, loop_expr.body),
         .match_expr => |match_expr| {
             if (findLoopItemPattern(mir_store, match_expr.cond)) |pattern| return pattern;
             for (mir_store.getBranches(match_expr.branches)) |branch| {
@@ -1929,10 +1919,10 @@ test "lowerExpr: for loop" {
     const expr = try env.lowerFirstDef();
     const result = env.mir_store.getExpr(expr);
     try testing.expect(result == .block);
-    // The block should contain a synthesized while_loop in its statements
+    // The block should contain a synthesized loop in its statements
     // (expression stmts are lowered as `_ = expr`, i.e. decl_const with wildcard)
     const stmts = env.mir_store.getStmts(result.block.stmts);
-    var found_while = false;
+    var found_loop = false;
     for (stmts) |stmt| {
         switch (stmt) {
             .decl_const => |dc| {
@@ -1941,7 +1931,7 @@ test "lowerExpr: for loop" {
                     for (env.mir_store.getStmts(stmt_expr.block.stmts)) |inner_stmt| {
                         switch (inner_stmt) {
                             .decl_const => |inner_dc| {
-                                if (env.mir_store.getExpr(inner_dc.expr) == .while_loop) found_while = true;
+                                if (env.mir_store.getExpr(inner_dc.expr) == .loop) found_loop = true;
                             },
                             else => {},
                         }
@@ -1951,7 +1941,7 @@ test "lowerExpr: for loop" {
             else => {},
         }
     }
-    try testing.expect(found_while);
+    try testing.expect(found_loop);
 }
 
 test "lowerExpr: multi-segment string interpolation produces str_concat" {

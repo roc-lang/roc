@@ -977,8 +977,8 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
             // debug removed
             try self.generateDiscriminantSwitch(ds);
         },
-        .while_loop => |wl| {
-            try self.generateWhileLoop(wl);
+        .loop => |loop_expr| {
+            try self.generateLoop(loop_expr);
         },
         .list => |l| {
             try self.generateList(l);
@@ -2232,7 +2232,7 @@ fn exprLayoutIdx(self: *Self, expr_id: LirExprId) layout.Idx {
         .discriminant_switch => |ds| ds.result_layout,
         .early_return => |er| er.ret_layout,
         .cell_load => |l| l.layout_idx,
-        .while_loop => layout.Idx.zst,
+        .loop => layout.Idx.zst,
         .break_expr, .crash, .runtime_error => {
             if (builtin.mode == .Debug) {
                 std.debug.panic(
@@ -2289,7 +2289,7 @@ fn exprValType(self: *Self, expr_id: LirExprId) ValType {
         .str_escape_and_quote => .i32, // pointer to 12-byte RocStr
         .tag_payload_access => |tpa| self.resolveValType(tpa.payload_layout),
         .hosted_call => |hc| self.resolveValType(hc.ret_layout),
-        .while_loop => .i32, // returns unit (empty record)
+        .loop => .i32, // returns unit (empty record)
         .crash, .runtime_error, .break_expr => {
             if (builtin.mode == .Debug) std.debug.panic("LIR/wasm invariant violated: exprValType called on non-value expression {s}", .{@tagName(expr)});
             unreachable;
@@ -2337,7 +2337,7 @@ fn isCompositeExpr(self: *const Self, expr_id: LirExprId) bool {
         .hosted_call => |hc| self.isCompositeLayout(hc.ret_layout),
         .early_return => |er| self.isCompositeLayout(er.ret_layout),
         .i64_literal, .f64_literal, .f32_literal, .bool_literal => false, // scalars
-        .while_loop, .break_expr, .crash, .runtime_error => false, // unit/noreturn
+        .loop, .break_expr, .crash, .runtime_error => false, // unit/noreturn
     };
 }
 
@@ -6519,8 +6519,8 @@ fn generateDiscSwitchBranches(self: *Self, branches: []const LirExprId, disc_loc
 
 /// Generate a while loop expression.
 /// Wasm structure: block { loop { <cond> i32.eqz br_if 1 <body> drop br 0 } } i32.const 0
-fn generateWhileLoop(self: *Self, wl: anytype) Allocator.Error!void {
-    // block (void) — exit target for br_if
+fn generateLoop(self: *Self, loop_expr: anytype) Allocator.Error!void {
+    // block (void) — exit target for break_expr
     self.body.append(self.allocator, Op.block) catch return error.OutOfMemory;
     self.body.append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
     self.pushExprControlFrame();
@@ -6537,16 +6537,8 @@ fn generateWhileLoop(self: *Self, wl: anytype) Allocator.Error!void {
         self.popExprControlFrame();
     }
 
-    // Generate condition
-    try self.generateExpr(wl.cond);
-
-    // If condition is false (0), break out of the block
-    self.body.append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
-    self.body.append(self.allocator, Op.br_if) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, &self.body, 1) catch return error.OutOfMemory; // break out of block (depth 1)
-
     // Generate body (result is discarded)
-    try self.generateExpr(wl.body);
+    try self.generateExpr(loop_expr.body);
     self.body.append(self.allocator, Op.drop) catch return error.OutOfMemory;
 
     // Branch back to loop start
@@ -6558,7 +6550,7 @@ fn generateWhileLoop(self: *Self, wl: anytype) Allocator.Error!void {
     // end block
     self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
 
-    // While loops return unit — push dummy i32 0
+    // Loops return unit — push dummy i32 0
     self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
     WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
 }

@@ -86,7 +86,7 @@ fn lirExprResultLayout(store: *const LirExprStore, expr_id: lir.LirExprId) layou
         .hosted_call => |hc| hc.ret_layout,
         .tag_payload_access => |tpa| tpa.payload_layout,
         .lambda => |l| l.fn_layout,
-        .while_loop, .incref, .decref, .free => .zst,
+        .loop, .incref, .decref, .free => .zst,
         .crash => |c| c.ret_layout,
         .runtime_error => |re| re.ret_layout,
         .break_expr => {

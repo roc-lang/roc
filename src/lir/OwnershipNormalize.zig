@@ -423,11 +423,10 @@ const Analyzer = struct {
                 for (self.store.getExprSpan(ds.branches)) |branch| try self.analyzeExpr(branch);
             },
             .tag_payload_access => |tpa| try self.analyzeExpr(tpa.value),
-            .while_loop => |wl| {
-                try self.analyzeExpr(wl.cond);
+            .loop => |loop_expr| {
                 const mark = self.pushScope();
                 defer self.popScope(mark);
-                try self.analyzeExpr(wl.body);
+                try self.analyzeExpr(loop_expr.body);
             },
             .hosted_call => |hc| {
                 for (self.store.getExprSpan(hc.args)) |arg| try self.analyzeExpr(arg);
