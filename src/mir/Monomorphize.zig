@@ -2811,6 +2811,8 @@ pub const Pass = struct {
             .func => |func| func,
             else => return,
         };
+        // Capture before scanProcInst which may grow proc_insts and invalidate the pointer.
+        const fn_monotype_module_idx = proc_inst.fn_monotype_module_idx;
         const arg_exprs = module_env.store.sliceExpr(call_expr.args);
         try self.prepareCallableArgsForProcInst(result, module_idx, arg_exprs, proc_inst_id);
         try self.scanProcInst(result, proc_inst_id);
@@ -2821,7 +2823,7 @@ pub const Pass = struct {
             module_idx,
             call_expr_idx,
             proc_inst_fn_mono.ret,
-            proc_inst.fn_monotype_module_idx,
+            fn_monotype_module_idx,
         );
     }
 
