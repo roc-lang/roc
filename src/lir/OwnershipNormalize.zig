@@ -489,6 +489,81 @@ pub fn analyzeWithParams(
     return analyzer.finish();
 }
 
+fn patternContainsRef(result: *const Result, store: *const LirExprStore, pat_id: LirPatternId, ref_id: RefId) bool {
+    if (pat_id.isNone()) return false;
+
+    if (result.getPatternRef(pat_id)) |pat_ref| {
+        if (pat_ref == ref_id) return true;
+    }
+
+    return switch (store.getPattern(pat_id)) {
+        .as_pattern => |as_pat| patternContainsRef(result, store, as_pat.inner, ref_id),
+        .tag => |tag_pat| blk: {
+            for (store.getPatternSpan(tag_pat.args)) |arg| {
+                if (patternContainsRef(result, store, arg, ref_id)) break :blk true;
+            }
+            break :blk false;
+        },
+        .struct_ => |struct_pat| blk: {
+            for (store.getPatternSpan(struct_pat.fields)) |field| {
+                if (patternContainsRef(result, store, field, ref_id)) break :blk true;
+            }
+            break :blk false;
+        },
+        .list => |list_pat| blk: {
+            for (store.getPatternSpan(list_pat.prefix)) |prefix| {
+                if (patternContainsRef(result, store, prefix, ref_id)) break :blk true;
+            }
+            if (patternContainsRef(result, store, list_pat.rest, ref_id)) break :blk true;
+            for (store.getPatternSpan(list_pat.suffix)) |suffix| {
+                if (patternContainsRef(result, store, suffix, ref_id)) break :blk true;
+            }
+            break :blk false;
+        },
+        .bind, .wildcard, .int_literal, .float_literal, .str_literal => false,
+    };
+}
+
+pub fn resultAliasParamMask(
+    allocator: Allocator,
+    store: *const LirExprStore,
+    params: lir.LirPatternSpan,
+    root_expr: LirExprId,
+) Allocator.Error!u64 {
+    var analyzer = try Analyzer.init(allocator, store);
+    defer analyzer.deinit();
+
+    const mark = analyzer.pushScope();
+    defer analyzer.popScope(mark);
+
+    const param_patterns = store.getPatternSpan(params);
+    if (builtin.mode == .Debug and param_patterns.len > 64) {
+        std.debug.panic(
+            "proc ownership summary currently supports at most 64 params, got {d}",
+            .{param_patterns.len},
+        );
+    }
+
+    for (param_patterns) |param| {
+        try analyzer.registerPattern(param, .owned, .consume);
+    }
+    try analyzer.analyzeExpr(root_expr);
+
+    var result = analyzer.finish();
+    defer result.deinit();
+
+    const source_ref = analyzer.sourceRefForAliasedExpr(root_expr);
+    if (source_ref.isNone()) return 0;
+
+    var mask: u64 = 0;
+    for (param_patterns, 0..) |param, i| {
+        if (patternContainsRef(&result, store, param, source_ref)) {
+            mask |= (@as(u64, 1) << @intCast(i));
+        }
+    }
+    return mask;
+}
+
 fn testSymbolFromIdent(ident: base.Ident.Idx) Symbol {
     return Symbol.fromRaw(@as(u64, @as(u32, @bitCast(ident))));
 }

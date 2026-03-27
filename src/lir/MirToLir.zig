@@ -28,6 +28,7 @@ const LambdaSet = mir_mod.LambdaSet;
 
 const LIR = @import("LIR.zig");
 const LirExprStore = @import("LirExprStore.zig");
+const OwnershipNormalize = @import("OwnershipNormalize.zig");
 const RcInsert = @import("rc_insert.zig");
 
 const Allocator = std.mem.Allocator;
@@ -3507,6 +3508,13 @@ fn lowerProcWithParamLayouts(
         }
     }
 
+    const result_aliases_args_mask = try OwnershipNormalize.resultAliasParamMask(
+        self.allocator,
+        self.lir_store,
+        lir_params,
+        lir_body,
+    );
+
     var proc_rc_pass = try RcInsert.RcInsertPass.init(self.allocator, self.lir_store, self.layout_store);
     defer proc_rc_pass.deinit();
     lir_body = try proc_rc_pass.insertRcOpsForProcBody(lir_body, lir_params, ret_layout);
@@ -3518,6 +3526,7 @@ fn lowerProcWithParamLayouts(
         .arg_layouts = arg_layouts,
         .body = body_stmt,
         .ret_layout = ret_layout,
+        .result_aliases_args_mask = result_aliases_args_mask,
         .closure_data_layout = if (proc.capture_bindings.isEmpty()) null else param_layouts[param_layouts.len - 1],
         .force_pass_by_ptr = force_pass_by_ptr,
         .is_self_recursive = selfRecursiveForProc(proc),

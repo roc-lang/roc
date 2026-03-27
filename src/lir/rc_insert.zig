@@ -59,6 +59,11 @@ pub const RcInsertPass = struct {
     /// retained temporaries, so the original owner is not preserved twice.
     retained_owner_use_debits: std.AutoHashMap(u64, u32),
 
+    /// Tracks owner-preservation decrefs that should be suppressed while
+    /// processing an expression because that owner is being transferred
+    /// directly into another location, not preserved for later reuse.
+    transferred_owner_preserve_debits: std.AutoHashMap(u64, u32),
+
     /// Tracks layout for each symbol (for generating incref/decref with correct layout).
     symbol_layouts: std.AutoHashMap(u64, LayoutIdx),
 
@@ -140,6 +145,7 @@ pub const RcInsertPass = struct {
             .symbol_use_counts = std.AutoHashMap(u64, u32).init(allocator),
             .symbol_consumed_counts = std.AutoHashMap(u64, u32).init(allocator),
             .retained_owner_use_debits = std.AutoHashMap(u64, u32).init(allocator),
+            .transferred_owner_preserve_debits = std.AutoHashMap(u64, u32).init(allocator),
             .symbol_layouts = std.AutoHashMap(u64, LayoutIdx).init(allocator),
             .live_rc_symbols = std.ArrayList(LiveRcSymbol).empty,
             .live_cells = std.ArrayList(LiveCell).empty,
@@ -160,6 +166,7 @@ pub const RcInsertPass = struct {
         self.symbol_use_counts.deinit();
         self.symbol_consumed_counts.deinit();
         self.retained_owner_use_debits.deinit();
+        self.transferred_owner_preserve_debits.deinit();
         self.symbol_layouts.deinit();
         self.live_rc_symbols.deinit(self.allocator);
         self.live_cells.deinit(self.allocator);
@@ -187,6 +194,7 @@ pub const RcInsertPass = struct {
         self.symbol_use_counts.clearRetainingCapacity();
         self.symbol_consumed_counts.clearRetainingCapacity();
         self.retained_owner_use_debits.clearRetainingCapacity();
+        self.transferred_owner_preserve_debits.clearRetainingCapacity();
         self.symbol_layouts.clearRetainingCapacity();
         self.live_rc_symbols.clearRetainingCapacity();
         self.live_cells.clearRetainingCapacity();
@@ -227,6 +235,7 @@ pub const RcInsertPass = struct {
         self.symbol_use_counts.clearRetainingCapacity();
         self.symbol_consumed_counts.clearRetainingCapacity();
         self.retained_owner_use_debits.clearRetainingCapacity();
+        self.transferred_owner_preserve_debits.clearRetainingCapacity();
         self.symbol_layouts.clearRetainingCapacity();
         self.live_rc_symbols.clearRetainingCapacity();
         self.live_cells.clearRetainingCapacity();
@@ -453,6 +462,28 @@ pub const RcInsertPass = struct {
             }
         }
         return current;
+    }
+
+    fn pushTransferredOwnerPreserveDebit(self: *RcInsertPass, key: u64) Allocator.Error!void {
+        const gop = try self.transferred_owner_preserve_debits.getOrPut(key);
+        if (gop.found_existing) {
+            gop.value_ptr.* += 1;
+        } else {
+            gop.value_ptr.* = 1;
+        }
+    }
+
+    fn popTransferredOwnerPreserveDebit(self: *RcInsertPass, key: u64) void {
+        const count = self.transferred_owner_preserve_debits.getPtr(key) orelse return;
+        if (count.* <= 1) {
+            _ = self.transferred_owner_preserve_debits.remove(key);
+        } else {
+            count.* -= 1;
+        }
+    }
+
+    fn transferredOwnerPreserveDebit(self: *const RcInsertPass, key: u64) u32 {
+        return self.transferred_owner_preserve_debits.get(key) orelse 0;
     }
 
     fn ownerUseCountFromMap(self: *const RcInsertPass, uses: *const std.AutoHashMap(u64, u32), key: u64) u32 {
@@ -1054,6 +1085,7 @@ pub const RcInsertPass = struct {
     fn materializeRcCellLoadSpan(
         self: *RcInsertPass,
         span: LirExprSpan,
+        ownership: ExprOwnership,
         region: Region,
         prelude: *std.ArrayList(LirStmt),
     ) Allocator.Error!struct { span: LirExprSpan, changed: bool } {
@@ -1065,7 +1097,10 @@ pub const RcInsertPass = struct {
         defer new_exprs.deinit(self.allocator);
 
         for (exprs) |expr_id| {
-            const new_expr = try self.materializeRcCellLoadOperand(expr_id, region, prelude);
+            const new_expr = switch (ownership) {
+                .borrow => try self.materializeRcCellLoadOperand(expr_id, region, prelude),
+                .consume => expr_id,
+            };
             changed = changed or new_expr != expr_id;
             try new_exprs.append(self.allocator, new_expr);
         }
@@ -1266,7 +1301,7 @@ pub const RcInsertPass = struct {
                 var prelude = std.ArrayList(LirStmt).empty;
                 defer prelude.deinit(self.allocator);
 
-                const args_res = try self.materializeRcCellLoadSpan(call.args, region, &prelude);
+                const args_res = try self.materializeRcCellLoadSpan(call.args, .consume, region, &prelude);
                 const rebuilt = try self.rebuildProcCall(call, args_res.span, region);
                 if (!args_res.changed and prelude.items.len == 0) return expr_id;
                 return self.wrapPreludeAroundExpr(rebuilt, call.ret_layout, region, prelude.items);
@@ -1274,7 +1309,7 @@ pub const RcInsertPass = struct {
             .list => |list_expr| {
                 var prelude = std.ArrayList(LirStmt).empty;
                 defer prelude.deinit(self.allocator);
-                const elems_res = try self.materializeRcCellLoadSpan(list_expr.elems, region, &prelude);
+                const elems_res = try self.materializeRcCellLoadSpan(list_expr.elems, .consume, region, &prelude);
                 const rebuilt = try self.store.addExpr(.{ .list = .{
                     .list_layout = list_expr.list_layout,
                     .elem_layout = list_expr.elem_layout,
@@ -1286,7 +1321,7 @@ pub const RcInsertPass = struct {
             .struct_ => |struct_expr| {
                 var prelude = std.ArrayList(LirStmt).empty;
                 defer prelude.deinit(self.allocator);
-                const fields_res = try self.materializeRcCellLoadSpan(struct_expr.fields, region, &prelude);
+                const fields_res = try self.materializeRcCellLoadSpan(struct_expr.fields, .consume, region, &prelude);
                 const rebuilt = try self.store.addExpr(.{ .struct_ = .{
                     .struct_layout = struct_expr.struct_layout,
                     .fields = fields_res.span,
@@ -1297,7 +1332,7 @@ pub const RcInsertPass = struct {
             .tag => |tag_expr| {
                 var prelude = std.ArrayList(LirStmt).empty;
                 defer prelude.deinit(self.allocator);
-                const args_res = try self.materializeRcCellLoadSpan(tag_expr.args, region, &prelude);
+                const args_res = try self.materializeRcCellLoadSpan(tag_expr.args, .consume, region, &prelude);
                 const rebuilt = try self.store.addExpr(.{ .tag = .{
                     .discriminant = tag_expr.discriminant,
                     .union_layout = tag_expr.union_layout,
@@ -1373,20 +1408,35 @@ pub const RcInsertPass = struct {
             .low_level => |ll| {
                 var prelude = std.ArrayList(LirStmt).empty;
                 defer prelude.deinit(self.allocator);
-                const args_res = try self.materializeRcCellLoadSpan(ll.args, region, &prelude);
+                const args = self.store.getExprSpan(ll.args);
+                const arg_ownership = ll.op.getArgOwnership();
+
+                var changed = false;
+                var new_args = std.ArrayList(LirExprId).empty;
+                defer new_args.deinit(self.allocator);
+
+                for (args, 0..) |arg_id, i| {
+                    const new_arg = switch (arg_ownership[i]) {
+                        .borrow => try self.materializeRcCellLoadOperand(arg_id, region, &prelude),
+                        .consume => arg_id,
+                    };
+                    changed = changed or new_arg != arg_id;
+                    try new_args.append(self.allocator, new_arg);
+                }
+
                 const rebuilt = try self.store.addExpr(.{ .low_level = .{
                     .op = ll.op,
-                    .args = args_res.span,
+                    .args = if (changed) try self.store.addExprSpan(new_args.items) else ll.args,
                     .ret_layout = ll.ret_layout,
                     .callable_proc = ll.callable_proc,
                 } }, region);
-                if (!args_res.changed and prelude.items.len == 0) return expr_id;
+                if (!changed and prelude.items.len == 0) return expr_id;
                 return self.wrapPreludeAroundExpr(rebuilt, ll.ret_layout, region, prelude.items);
             },
             .hosted_call => |hc| {
                 var prelude = std.ArrayList(LirStmt).empty;
                 defer prelude.deinit(self.allocator);
-                const args_res = try self.materializeRcCellLoadSpan(hc.args, region, &prelude);
+                const args_res = try self.materializeRcCellLoadSpan(hc.args, .borrow, region, &prelude);
                 const rebuilt = try self.store.addExpr(.{ .hosted_call = .{
                     .index = hc.index,
                     .args = args_res.span,
@@ -1398,7 +1448,7 @@ pub const RcInsertPass = struct {
             .str_concat => |parts| {
                 var prelude = std.ArrayList(LirStmt).empty;
                 defer prelude.deinit(self.allocator);
-                const parts_res = try self.materializeRcCellLoadSpan(parts, region, &prelude);
+                const parts_res = try self.materializeRcCellLoadSpan(parts, .borrow, region, &prelude);
                 const rebuilt = try self.store.addExpr(.{ .str_concat = parts_res.span }, region);
                 if (!parts_res.changed and prelude.items.len == 0) return expr_id;
                 return self.wrapPreludeAroundExpr(rebuilt, .str, region, prelude.items);
@@ -1450,7 +1500,7 @@ pub const RcInsertPass = struct {
                 var prelude = std.ArrayList(LirStmt).empty;
                 defer prelude.deinit(self.allocator);
                 const new_value = try self.materializeRcCellLoadOperand(new_value_raw, region, &prelude);
-                const branches_res = try self.materializeRcCellLoadSpan(ds.branches, region, &prelude);
+                const branches_res = try self.materializeRcCellLoadSpan(ds.branches, .consume, region, &prelude);
                 const rebuilt = try self.store.addExpr(.{ .discriminant_switch = .{
                     .value = new_value,
                     .union_layout = ds.union_layout,
@@ -2523,8 +2573,12 @@ pub const RcInsertPass = struct {
             },
             .proc_call => |call| {
                 const args = self.store.getExprSpan(call.args);
-                for (args) |arg_id| {
-                    try self.countBorrowOwnerDemandValueInto(arg_id, target);
+                for (args, 0..) |arg_id, i| {
+                    if (self.procCallArgNeedsOwnerForResult(call, i)) {
+                        try self.countBorrowOwnerDemandValueInto(arg_id, target);
+                    } else {
+                        try self.countBorrowOwnerDemandUsesInto(arg_id, target);
+                    }
                 }
             },
             .list => |list| {
@@ -2729,6 +2783,11 @@ pub const RcInsertPass = struct {
             .list_get_unsafe => self.layoutNeedsRc(ll.ret_layout),
             else => true,
         };
+    }
+
+    fn procCallArgNeedsOwnerForResult(self: *const RcInsertPass, call: anytype, arg_index: usize) bool {
+        const proc_spec = self.store.getProcSpec(call.proc);
+        return ((proc_spec.result_aliases_args_mask >> @intCast(arg_index)) & 1) != 0;
     }
 
     /// Count symbol consumption within an expression whose result is consumed by
@@ -3547,6 +3606,19 @@ pub const RcInsertPass = struct {
                     });
                 },
                 .cell_store => |cell| {
+                    const transferred_owner_key = blk: {
+                        if (!self.layoutNeedsRc(cell.layout_idx)) break :blk null;
+                        const owner_key = self.ownerKeyForCellLoadInExpr(cell.expr, cell.cell) orelse break :blk null;
+                        if (!try self.exprConsumesKey(cell.expr, owner_key)) break :blk null;
+                        break :blk owner_key;
+                    };
+                    if (transferred_owner_key) |owner_key| {
+                        try self.pushTransferredOwnerPreserveDebit(owner_key);
+                    }
+                    defer if (transferred_owner_key) |owner_key| {
+                        self.popTransferredOwnerPreserveDebit(owner_key);
+                    };
+
                     const processed_expr = try self.processExpr(cell.expr);
                     const new_expr = processed_expr;
                     if (new_expr != cell.expr) changed = true;
@@ -3576,10 +3648,7 @@ pub const RcInsertPass = struct {
                         } });
 
                         const stored_expr = new_expr;
-                        const cell_owner_consumed_by_store = blk: {
-                            const owner_key = self.ownerKeyForCellLoadInExpr(stored_expr, cell.cell) orelse break :blk false;
-                            break :blk try self.exprConsumesKey(stored_expr, owner_key);
-                        };
+                        const cell_owner_consumed_by_store = transferred_owner_key != null;
 
                         const temp = try self.freshResultPattern(cell.layout_idx, region);
                         const temp_lookup = try self.store.addExpr(.{ .lookup = .{
@@ -5163,10 +5232,12 @@ pub const RcInsertPass = struct {
             const demand_count = self.ownerUseCountFromMap(local_demands, live.key);
             const consumed_count = self.ownerUseCountFromMap(local_consumed, live.key);
             const is_loop_carried = if (loop_carried_keys) |keys| keys.contains(live.key) else false;
-            const preserve_count: u32 = if (is_loop_carried)
+            const transferred_debit = self.transferredOwnerPreserveDebit(live.key);
+            const raw_preserve_count: u32 = if (is_loop_carried)
                 if (consumed_count > 0) consumed_count - 1 else 0
             else
                 consumed_count;
+            const preserve_count: u32 = raw_preserve_count -| transferred_debit;
             const borrow_only_count: u32 = if (demand_count > consumed_count)
                 demand_count - consumed_count
             else
@@ -5183,10 +5254,12 @@ pub const RcInsertPass = struct {
             const demand_count = self.ownerUseCountFromMap(local_demands, key);
             const consumed_count = self.ownerUseCountFromMap(local_consumed, key);
             const is_loop_carried = if (loop_carried_keys) |keys| keys.contains(key) else false;
-            const preserve_count: u32 = if (is_loop_carried)
+            const transferred_debit = self.transferredOwnerPreserveDebit(key);
+            const raw_preserve_count: u32 = if (is_loop_carried)
                 if (consumed_count > 0) consumed_count - 1 else 0
             else
                 consumed_count;
+            const preserve_count: u32 = raw_preserve_count -| transferred_debit;
             const borrow_only_count: u32 = if (demand_count > consumed_count)
                 demand_count - consumed_count
             else

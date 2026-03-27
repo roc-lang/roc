@@ -768,6 +768,9 @@ pub const LirProcSpec = struct {
     body: CFStmtId,
     /// Return type layout
     ret_layout: layout.Idx,
+    /// Bitmask of top-level arguments whose owner may be aliased by the result.
+    /// Bit `i` corresponds to top-level arg `i`.
+    result_aliases_args_mask: u64 = 0,
     /// Layout of closure data (if this is a closure), null otherwise
     closure_data_layout: ?layout.Idx,
     /// When true, bind parameters from pointers instead of direct value words.
