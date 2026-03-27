@@ -1778,8 +1778,33 @@ pub fn checkPlatformRequirements(
     // (e.g., method calls like `args.drop_first(1)`) whose receiver types are only
     // resolved by platform requirements would never get their dispatch targets set,
     // causing panics during MIR lowering.
-    if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
-        try self.checkStaticDispatchConstraints(&env, false);
+    //
+    // Skip entries whose constraints are all from_numeral — these are numeric literal
+    // constraints whose flex vars were unified with non-numeric platform types (e.g.,
+    // Err(1) where the platform expects Err([Exit(I32)])). They will be resolved
+    // later by finalizeNumericDefaults; processing them here would produce spurious
+    // "missing method" errors.
+    {
+        var i: usize = 0;
+        while (i < env.deferred_static_dispatch_constraints.items.items.len) {
+            const dc = env.deferred_static_dispatch_constraints.items.items[i];
+            const constraints = self.types.sliceStaticDispatchConstraints(dc.constraints);
+            var all_from_numeral = true;
+            for (constraints) |c| {
+                if (c.origin != .from_numeral) {
+                    all_from_numeral = false;
+                    break;
+                }
+            }
+            if (all_from_numeral) {
+                _ = env.deferred_static_dispatch_constraints.items.orderedRemove(i);
+            } else {
+                i += 1;
+            }
+        }
+        if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
+            try self.checkStaticDispatchConstraints(&env, false);
+        }
     }
 }
 
