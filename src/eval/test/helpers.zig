@@ -5929,11 +5929,11 @@ test "dev lowering: mutable list reassignment keeps both decrefs on the reassign
                             .decl, .mutate => |binding| {
                                 const pat = store.getPattern(binding.pattern);
                                 if (pat == .bind) {
-                                    std.debug.print("stmt[{d}] {s} symbol={d} layout={d}\n", .{
-                                        i, @tagName(stmt), pat.bind.symbol.raw(), @intFromEnum(pat.bind.layout_idx),
+                                    std.debug.print("stmt[{d}] {s} symbol={d} layout={d} semantics={s}\n", .{
+                                        i, @tagName(stmt), pat.bind.symbol.raw(), @intFromEnum(pat.bind.layout_idx), @tagName(binding.semantics),
                                     });
                                 } else {
-                                    std.debug.print("stmt[{d}] {s}\n", .{ i, @tagName(stmt) });
+                                    std.debug.print("stmt[{d}] {s} semantics={s}\n", .{ i, @tagName(stmt), @tagName(binding.semantics) });
                                 }
                                 printExprTree(store, binding.expr, depth + 2);
                             },
@@ -6963,6 +6963,69 @@ test "dev lowering: inspect-wrapped mutable list append rc shape" {
                 else => std.debug.print("expr {d}: {s}\n", .{ @intFromEnum(expr_id), @tagName(expr) }),
             }
         }
+
+        fn printCFStmtTree(store: *const LirExprStore, stmt_id: lir.LIR.CFStmtId, depth: usize) void {
+            if (stmt_id.isNone()) return;
+
+            const stmt = store.getCFStmt(stmt_id);
+            for (0..depth) |_| std.debug.print("  ", .{});
+            switch (stmt) {
+                .let_stmt => |let_stmt| {
+                    const pat = store.getPattern(let_stmt.pattern);
+                    if (pat == .bind) {
+                        std.debug.print("cf let symbol={d} layout={d}\n", .{
+                            pat.bind.symbol.raw(), @intFromEnum(pat.bind.layout_idx),
+                        });
+                    } else {
+                        std.debug.print("cf let\n", .{});
+                    }
+                    printExprTree(store, let_stmt.value, depth + 1);
+                    printCFStmtTree(store, let_stmt.next, depth + 1);
+                },
+                .expr_stmt => |expr_stmt| {
+                    std.debug.print("cf expr_stmt\n", .{});
+                    printExprTree(store, expr_stmt.value, depth + 1);
+                    printCFStmtTree(store, expr_stmt.next, depth + 1);
+                },
+                .ret => |ret| {
+                    std.debug.print("cf ret\n", .{});
+                    printExprTree(store, ret.value, depth + 1);
+                },
+                .match_stmt => |match_stmt| {
+                    std.debug.print("cf match_stmt\n", .{});
+                    printExprTree(store, match_stmt.value, depth + 1);
+                    for (store.getCFMatchBranches(match_stmt.branches), 0..) |branch, i| {
+                        for (0..depth + 1) |_| std.debug.print("  ", .{});
+                        std.debug.print("cf branch[{d}] guard\n", .{i});
+                        printExprTree(store, branch.guard, depth + 2);
+                        for (0..depth + 1) |_| std.debug.print("  ", .{});
+                        std.debug.print("cf branch[{d}] body\n", .{i});
+                        printCFStmtTree(store, branch.body, depth + 2);
+                    }
+                },
+                .switch_stmt => |switch_stmt| {
+                    std.debug.print("cf switch_stmt\n", .{});
+                    printExprTree(store, switch_stmt.cond, depth + 1);
+                    for (store.getCFSwitchBranches(switch_stmt.branches), 0..) |branch, i| {
+                        for (0..depth + 1) |_| std.debug.print("  ", .{});
+                        std.debug.print("cf switch branch[{d}]={d}\n", .{ i, branch.value });
+                        printCFStmtTree(store, branch.body, depth + 2);
+                    }
+                    for (0..depth + 1) |_| std.debug.print("  ", .{});
+                    std.debug.print("cf default\n", .{});
+                    printCFStmtTree(store, switch_stmt.default_branch, depth + 2);
+                },
+                .join => |join| {
+                    std.debug.print("cf join id={d}\n", .{@intFromEnum(join.id)});
+                    printCFStmtTree(store, join.body, depth + 1);
+                    printCFStmtTree(store, join.remainder, depth + 1);
+                },
+                .jump => |jump| {
+                    std.debug.print("cf jump target={d}\n", .{@intFromEnum(jump.target)});
+                    for (store.getExprSpan(jump.args)) |arg| printExprTree(store, arg, depth + 1);
+                },
+            }
+        }
     };
 
     const resources = try parseAndCanonicalizeExpr(test_allocator,
@@ -7160,6 +7223,69 @@ test "dev lowering: for-loop mutable list append with closure rc shape" {
                 else => std.debug.print("expr {d}: {s}\n", .{ @intFromEnum(expr_id), @tagName(expr) }),
             }
         }
+
+        fn printCFStmtTree(store: *const LirExprStore, stmt_id: lir.LIR.CFStmtId, depth: usize) void {
+            if (stmt_id.isNone()) return;
+
+            const stmt = store.getCFStmt(stmt_id);
+            for (0..depth) |_| std.debug.print("  ", .{});
+            switch (stmt) {
+                .let_stmt => |let_stmt| {
+                    const pat = store.getPattern(let_stmt.pattern);
+                    if (pat == .bind) {
+                        std.debug.print("cf let symbol={d} layout={d}\n", .{
+                            pat.bind.symbol.raw(), @intFromEnum(pat.bind.layout_idx),
+                        });
+                    } else {
+                        std.debug.print("cf let\n", .{});
+                    }
+                    printExprTree(store, let_stmt.value, depth + 1);
+                    printCFStmtTree(store, let_stmt.next, depth + 1);
+                },
+                .expr_stmt => |expr_stmt| {
+                    std.debug.print("cf expr_stmt\n", .{});
+                    printExprTree(store, expr_stmt.value, depth + 1);
+                    printCFStmtTree(store, expr_stmt.next, depth + 1);
+                },
+                .ret => |ret| {
+                    std.debug.print("cf ret\n", .{});
+                    printExprTree(store, ret.value, depth + 1);
+                },
+                .match_stmt => |match_stmt| {
+                    std.debug.print("cf match_stmt\n", .{});
+                    printExprTree(store, match_stmt.value, depth + 1);
+                    for (store.getCFMatchBranches(match_stmt.branches), 0..) |branch, i| {
+                        for (0..depth + 1) |_| std.debug.print("  ", .{});
+                        std.debug.print("cf branch[{d}] guard\n", .{i});
+                        printExprTree(store, branch.guard, depth + 2);
+                        for (0..depth + 1) |_| std.debug.print("  ", .{});
+                        std.debug.print("cf branch[{d}] body\n", .{i});
+                        printCFStmtTree(store, branch.body, depth + 2);
+                    }
+                },
+                .switch_stmt => |switch_stmt| {
+                    std.debug.print("cf switch_stmt\n", .{});
+                    printExprTree(store, switch_stmt.cond, depth + 1);
+                    for (store.getCFSwitchBranches(switch_stmt.branches), 0..) |branch, i| {
+                        for (0..depth + 1) |_| std.debug.print("  ", .{});
+                        std.debug.print("cf switch branch[{d}]={d}\n", .{ i, branch.value });
+                        printCFStmtTree(store, branch.body, depth + 2);
+                    }
+                    for (0..depth + 1) |_| std.debug.print("  ", .{});
+                    std.debug.print("cf default\n", .{});
+                    printCFStmtTree(store, switch_stmt.default_branch, depth + 2);
+                },
+                .join => |join| {
+                    std.debug.print("cf join id={d}\n", .{@intFromEnum(join.id)});
+                    printCFStmtTree(store, join.body, depth + 1);
+                    printCFStmtTree(store, join.remainder, depth + 1);
+                },
+                .jump => |jump| {
+                    std.debug.print("cf jump target={d}\n", .{@intFromEnum(jump.target)});
+                    for (store.getExprSpan(jump.args)) |arg| printExprTree(store, arg, depth + 1);
+                },
+            }
+        }
     };
 
     const resources = try parseAndCanonicalizeExpr(test_allocator,
@@ -7315,6 +7441,69 @@ test "dev lowering: list alias then shadow rc shape" {
                 else => std.debug.print("expr {d}: {s}\n", .{ @intFromEnum(expr_id), @tagName(expr) }),
             }
         }
+
+        fn printCFStmtTree(store: *const LirExprStore, stmt_id: lir.LIR.CFStmtId, depth: usize) void {
+            if (stmt_id.isNone()) return;
+
+            const stmt = store.getCFStmt(stmt_id);
+            for (0..depth) |_| std.debug.print("  ", .{});
+            switch (stmt) {
+                .let_stmt => |let_stmt| {
+                    const pat = store.getPattern(let_stmt.pattern);
+                    if (pat == .bind) {
+                        std.debug.print("cf let symbol={d} layout={d}\n", .{
+                            pat.bind.symbol.raw(), @intFromEnum(pat.bind.layout_idx),
+                        });
+                    } else {
+                        std.debug.print("cf let\n", .{});
+                    }
+                    printExprTree(store, let_stmt.value, depth + 1);
+                    printCFStmtTree(store, let_stmt.next, depth + 1);
+                },
+                .expr_stmt => |expr_stmt| {
+                    std.debug.print("cf expr_stmt\n", .{});
+                    printExprTree(store, expr_stmt.value, depth + 1);
+                    printCFStmtTree(store, expr_stmt.next, depth + 1);
+                },
+                .ret => |ret| {
+                    std.debug.print("cf ret\n", .{});
+                    printExprTree(store, ret.value, depth + 1);
+                },
+                .match_stmt => |match_stmt| {
+                    std.debug.print("cf match_stmt\n", .{});
+                    printExprTree(store, match_stmt.value, depth + 1);
+                    for (store.getCFMatchBranches(match_stmt.branches), 0..) |branch, i| {
+                        for (0..depth + 1) |_| std.debug.print("  ", .{});
+                        std.debug.print("cf branch[{d}] guard\n", .{i});
+                        printExprTree(store, branch.guard, depth + 2);
+                        for (0..depth + 1) |_| std.debug.print("  ", .{});
+                        std.debug.print("cf branch[{d}] body\n", .{i});
+                        printCFStmtTree(store, branch.body, depth + 2);
+                    }
+                },
+                .switch_stmt => |switch_stmt| {
+                    std.debug.print("cf switch_stmt\n", .{});
+                    printExprTree(store, switch_stmt.cond, depth + 1);
+                    for (store.getCFSwitchBranches(switch_stmt.branches), 0..) |branch, i| {
+                        for (0..depth + 1) |_| std.debug.print("  ", .{});
+                        std.debug.print("cf switch branch[{d}]={d}\n", .{ i, branch.value });
+                        printCFStmtTree(store, branch.body, depth + 2);
+                    }
+                    for (0..depth + 1) |_| std.debug.print("  ", .{});
+                    std.debug.print("cf default\n", .{});
+                    printCFStmtTree(store, switch_stmt.default_branch, depth + 2);
+                },
+                .join => |join| {
+                    std.debug.print("cf join id={d}\n", .{@intFromEnum(join.id)});
+                    printCFStmtTree(store, join.body, depth + 1);
+                    printCFStmtTree(store, join.remainder, depth + 1);
+                },
+                .jump => |jump| {
+                    std.debug.print("cf jump target={d}\n", .{@intFromEnum(jump.target)});
+                    for (store.getExprSpan(jump.args)) |arg| printExprTree(store, arg, depth + 1);
+                },
+            }
+        }
     };
 
     const resources = try parseAndCanonicalizeExpr(test_allocator,
@@ -7389,6 +7578,462 @@ test "dev lowering: list alias then shadow rc shape" {
 
     std.debug.print("LIR for list alias then shadow:\n", .{});
     Debug.printExprTree(&lir_store, with_rc, 0);
+}
+
+test "dev lowering: nested list equality rc shape" {
+    const Debug = struct {
+        fn printExprTree(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, depth: usize) void {
+            if (expr_id.isNone()) return;
+
+            const expr = store.getExpr(expr_id);
+            for (0..depth) |_| std.debug.print("  ", .{});
+            switch (expr) {
+                .lookup => |lookup| std.debug.print("expr {d}: lookup symbol={d} layout={d}\n", .{
+                    @intFromEnum(expr_id), lookup.symbol.raw(), @intFromEnum(lookup.layout_idx),
+                }),
+                .cell_load => |load| std.debug.print("expr {d}: cell_load cell={d} layout={d}\n", .{
+                    @intFromEnum(expr_id), load.cell.raw(), @intFromEnum(load.layout_idx),
+                }),
+                .block => |block| {
+                    std.debug.print("expr {d}: block stmts={d} final={d}\n", .{
+                        @intFromEnum(expr_id), block.stmts.len, @intFromEnum(block.final_expr),
+                    });
+                    for (store.getStmts(block.stmts), 0..) |stmt, i| {
+                        for (0..depth + 1) |_| std.debug.print("  ", .{});
+                        switch (stmt) {
+                            .decl, .mutate => |binding| {
+                                const pat = store.getPattern(binding.pattern);
+                                if (pat == .bind) {
+                                    std.debug.print("stmt[{d}] {s} symbol={d} layout={d} semantics={s}\n", .{
+                                        i, @tagName(stmt), pat.bind.symbol.raw(), @intFromEnum(pat.bind.layout_idx), @tagName(binding.semantics),
+                                    });
+                                } else {
+                                    std.debug.print("stmt[{d}] {s} semantics={s}\n", .{ i, @tagName(stmt), @tagName(binding.semantics) });
+                                }
+                                printExprTree(store, binding.expr, depth + 2);
+                            },
+                            .cell_init, .cell_store => |binding| {
+                                std.debug.print("stmt[{d}] {s} cell={d} layout={d}\n", .{
+                                    i, @tagName(stmt), @as(u64, @bitCast(binding.cell)), @intFromEnum(binding.layout_idx),
+                                });
+                                printExprTree(store, binding.expr, depth + 2);
+                            },
+                            .cell_drop => |drop| std.debug.print("stmt[{d}] cell_drop cell={d}\n", .{
+                                i, @as(u64, @bitCast(drop.cell)),
+                            }),
+                        }
+                    }
+                    printExprTree(store, block.final_expr, depth + 1);
+                },
+                .proc_call => |call| {
+                    std.debug.print("expr {d}: proc_call proc={d} argc={d}\n", .{
+                        @intFromEnum(expr_id), @intFromEnum(call.proc), store.getExprSpan(call.args).len,
+                    });
+                    for (store.getExprSpan(call.args)) |arg| printExprTree(store, arg, depth + 1);
+                },
+                .low_level => |ll| {
+                    std.debug.print("expr {d}: low_level {s} argc={d}\n", .{
+                        @intFromEnum(expr_id), @tagName(ll.op), store.getExprSpan(ll.args).len,
+                    });
+                    for (store.getExprSpan(ll.args)) |arg| printExprTree(store, arg, depth + 1);
+                },
+                .match_expr => |m| {
+                    std.debug.print("expr {d}: match_expr\n", .{@intFromEnum(expr_id)});
+                    printExprTree(store, m.value, depth + 1);
+                    for (store.getMatchBranches(m.branches), 0..) |branch, i| {
+                        for (0..depth + 1) |_| std.debug.print("  ", .{});
+                        std.debug.print("branch[{d}] guard\n", .{i});
+                        printExprTree(store, branch.guard, depth + 2);
+                        for (0..depth + 1) |_| std.debug.print("  ", .{});
+                        std.debug.print("branch[{d}] body\n", .{i});
+                        printExprTree(store, branch.body, depth + 2);
+                    }
+                },
+                .loop => |loop_expr| {
+                    std.debug.print("expr {d}: loop\n", .{@intFromEnum(expr_id)});
+                    printExprTree(store, loop_expr.body, depth + 1);
+                },
+                .decref => |dec| {
+                    std.debug.print("expr {d}: decref\n", .{@intFromEnum(expr_id)});
+                    printExprTree(store, dec.value, depth + 1);
+                },
+                .incref => |inc| {
+                    std.debug.print("expr {d}: incref\n", .{@intFromEnum(expr_id)});
+                    printExprTree(store, inc.value, depth + 1);
+                },
+                else => std.debug.print("expr {d}: {s}\n", .{ @intFromEnum(expr_id), @tagName(expr) }),
+            }
+        }
+
+        fn printCFStmtTree(store: *const LirExprStore, stmt_id: lir.LIR.CFStmtId, depth: usize) void {
+            if (stmt_id.isNone()) return;
+
+            const stmt = store.getCFStmt(stmt_id);
+            for (0..depth) |_| std.debug.print("  ", .{});
+            switch (stmt) {
+                .ret => |ret| {
+                    std.debug.print("cf ret\n", .{});
+                    printExprTree(store, ret.value, depth + 1);
+                },
+                .jump => |jump| {
+                    std.debug.print("cf jump join={d}\n", .{@intFromEnum(jump.join_point)});
+                    for (store.getExprSpan(jump.args)) |arg| printExprTree(store, arg, depth + 1);
+                },
+                .join => |join| {
+                    std.debug.print("cf join id={d}\n", .{@intFromEnum(join.id)});
+                    printCFStmtTree(store, join.body, depth + 1);
+                    printCFStmtTree(store, join.remainder, depth + 1);
+                },
+                .let_stmt => |let_stmt| {
+                    const pat = store.getPattern(let_stmt.pattern);
+                    if (pat == .bind) {
+                        std.debug.print("cf let symbol={d} layout={d} semantics={s}\n", .{
+                            pat.bind.symbol.raw(),
+                            @intFromEnum(pat.bind.layout_idx),
+                            @tagName(let_stmt.binding.semantics),
+                        });
+                    } else {
+                        std.debug.print("cf let semantics={s}\n", .{@tagName(let_stmt.binding.semantics)});
+                    }
+                    printExprTree(store, let_stmt.value, depth + 1);
+                    printCFStmtTree(store, let_stmt.next, depth + 1);
+                },
+                .expr_stmt => |expr_stmt| {
+                    std.debug.print("cf expr_stmt\n", .{});
+                    printExprTree(store, expr_stmt.value, depth + 1);
+                    printCFStmtTree(store, expr_stmt.next, depth + 1);
+                },
+                .match_stmt => |match_stmt| {
+                    std.debug.print("cf match_stmt\n", .{});
+                    printExprTree(store, match_stmt.value, depth + 1);
+                    for (store.getCFMatchBranches(match_stmt.branches), 0..) |branch, i| {
+                        for (0..depth + 1) |_| std.debug.print("  ", .{});
+                        std.debug.print("cf branch[{d}] guard\n", .{i});
+                        printExprTree(store, branch.guard, depth + 2);
+                        for (0..depth + 1) |_| std.debug.print("  ", .{});
+                        std.debug.print("cf branch[{d}] body\n", .{i});
+                        printCFStmtTree(store, branch.body, depth + 2);
+                    }
+                },
+                .switch_stmt => |switch_stmt| {
+                    std.debug.print("cf switch_stmt\n", .{});
+                    printExprTree(store, switch_stmt.cond, depth + 1);
+                    for (store.getCFSwitchBranches(switch_stmt.branches), 0..) |branch, i| {
+                        for (0..depth + 1) |_| std.debug.print("  ", .{});
+                        std.debug.print("cf switch branch[{d}]={d}\n", .{ i, branch.value });
+                        printCFStmtTree(store, branch.body, depth + 2);
+                    }
+                    for (0..depth + 1) |_| std.debug.print("  ", .{});
+                    std.debug.print("cf default\n", .{});
+                    printCFStmtTree(store, switch_stmt.default_branch, depth + 2);
+                },
+            }
+        }
+    };
+
+    const resources = try parseAndCanonicalizeExpr(test_allocator, "[[1, 2]] == [[1, 2]]");
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(resources.builtin_module.env),
+        resources.module_env,
+    };
+
+    var monomorphization = try mir.Monomorphize.runExpr(
+        test_allocator,
+        all_module_envs[0..],
+        &resources.module_env.types,
+        1,
+        null,
+        resources.expr_idx,
+    );
+    defer monomorphization.deinit(test_allocator);
+
+    var lower = try mir.Lower.init(
+        test_allocator,
+        &mir_store,
+        &monomorphization,
+        all_module_envs[0..],
+        &resources.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    const mir_expr = try lower.lowerExpr(resources.expr_idx);
+
+    var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
+    defer lambda_set_store.deinit(test_allocator);
+
+    var layout_store = try layout.Store.init(
+        all_module_envs[0..],
+        resources.builtin_module.env.idents.builtin_str,
+        test_allocator,
+        base.target.TargetUsize.native,
+    );
+    defer layout_store.deinit();
+
+    var lir_store = LirExprStore.init(test_allocator);
+    defer lir_store.deinit();
+
+    var translator = lir.MirToLir.init(
+        test_allocator,
+        &mir_store,
+        &lir_store,
+        &layout_store,
+        &lambda_set_store,
+        resources.module_env.idents.true_tag,
+    );
+    defer translator.deinit();
+
+    const lowered = try translator.lower(mir_expr);
+    var rc_pass = try lir.RcInsert.RcInsertPass.init(test_allocator, &lir_store, &layout_store);
+    defer rc_pass.deinit();
+    const with_rc = try rc_pass.insertRcOps(lowered);
+
+    std.debug.print("LIR for nested list equality:\n", .{});
+    Debug.printExprTree(&lir_store, with_rc, 0);
+}
+
+test "dev lowering: fold exact list pattern rc shape" {
+    const Debug = struct {
+        fn printExprTree(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, depth: usize) void {
+            if (expr_id.isNone()) return;
+
+            const expr = store.getExpr(expr_id);
+            for (0..depth) |_| std.debug.print("  ", .{});
+            switch (expr) {
+                .lookup => |lookup| std.debug.print("expr {d}: lookup symbol={d} layout={d}\n", .{
+                    @intFromEnum(expr_id), lookup.symbol.raw(), @intFromEnum(lookup.layout_idx),
+                }),
+                .cell_load => |load| std.debug.print("expr {d}: cell_load cell={d} layout={d}\n", .{
+                    @intFromEnum(expr_id), load.cell.raw(), @intFromEnum(load.layout_idx),
+                }),
+                .block => |block| {
+                    std.debug.print("expr {d}: block stmts={d} final={d}\n", .{
+                        @intFromEnum(expr_id), block.stmts.len, @intFromEnum(block.final_expr),
+                    });
+                    for (store.getStmts(block.stmts), 0..) |stmt, i| {
+                        for (0..depth + 1) |_| std.debug.print("  ", .{});
+                        switch (stmt) {
+                            .decl, .mutate => |binding| {
+                                const pat = store.getPattern(binding.pattern);
+                                if (pat == .bind) {
+                                    std.debug.print("stmt[{d}] {s} symbol={d} layout={d} semantics={s}\n", .{
+                                        i, @tagName(stmt), pat.bind.symbol.raw(), @intFromEnum(pat.bind.layout_idx), @tagName(binding.semantics),
+                                    });
+                                } else {
+                                    std.debug.print("stmt[{d}] {s} semantics={s}\n", .{ i, @tagName(stmt), @tagName(binding.semantics) });
+                                }
+                                printExprTree(store, binding.expr, depth + 2);
+                            },
+                            .cell_init, .cell_store => |binding| {
+                                std.debug.print("stmt[{d}] {s} cell={d} layout={d}\n", .{
+                                    i, @tagName(stmt), @as(u64, @bitCast(binding.cell)), @intFromEnum(binding.layout_idx),
+                                });
+                                printExprTree(store, binding.expr, depth + 2);
+                            },
+                            .cell_drop => |drop| std.debug.print("stmt[{d}] cell_drop cell={d}\n", .{
+                                i, @as(u64, @bitCast(drop.cell)),
+                            }),
+                        }
+                    }
+                    printExprTree(store, block.final_expr, depth + 1);
+                },
+                .proc_call => |call| {
+                    std.debug.print("expr {d}: proc_call proc={d} argc={d}\n", .{
+                        @intFromEnum(expr_id), @intFromEnum(call.proc), store.getExprSpan(call.args).len,
+                    });
+                    for (store.getExprSpan(call.args)) |arg| printExprTree(store, arg, depth + 1);
+                },
+                .low_level => |ll| {
+                    std.debug.print("expr {d}: low_level {s} argc={d}\n", .{
+                        @intFromEnum(expr_id), @tagName(ll.op), store.getExprSpan(ll.args).len,
+                    });
+                    for (store.getExprSpan(ll.args)) |arg| printExprTree(store, arg, depth + 1);
+                },
+                .match_expr => |m| {
+                    std.debug.print("expr {d}: match_expr\n", .{@intFromEnum(expr_id)});
+                    printExprTree(store, m.value, depth + 1);
+                    for (store.getMatchBranches(m.branches), 0..) |branch, i| {
+                        for (0..depth + 1) |_| std.debug.print("  ", .{});
+                        std.debug.print("branch[{d}] guard\n", .{i});
+                        printExprTree(store, branch.guard, depth + 2);
+                        for (0..depth + 1) |_| std.debug.print("  ", .{});
+                        std.debug.print("branch[{d}] body\n", .{i});
+                        printExprTree(store, branch.body, depth + 2);
+                    }
+                },
+                .loop => |loop_expr| {
+                    std.debug.print("expr {d}: loop\n", .{@intFromEnum(expr_id)});
+                    printExprTree(store, loop_expr.body, depth + 1);
+                },
+                .decref => |dec| {
+                    std.debug.print("expr {d}: decref\n", .{@intFromEnum(expr_id)});
+                    printExprTree(store, dec.value, depth + 1);
+                },
+                .incref => |inc| {
+                    std.debug.print("expr {d}: incref\n", .{@intFromEnum(expr_id)});
+                    printExprTree(store, inc.value, depth + 1);
+                },
+                else => std.debug.print("expr {d}: {s}\n", .{ @intFromEnum(expr_id), @tagName(expr) }),
+            }
+        }
+
+        fn printCFStmtTree(store: *const LirExprStore, stmt_id: lir.LIR.CFStmtId, depth: usize) void {
+            if (stmt_id.isNone()) return;
+
+            const stmt = store.getCFStmt(stmt_id);
+            for (0..depth) |_| std.debug.print("  ", .{});
+            switch (stmt) {
+                .let_stmt => |let_stmt| {
+                    const pat = store.getPattern(let_stmt.pattern);
+                    if (pat == .bind) {
+                        std.debug.print("cf let symbol={d} layout={d}\n", .{
+                            pat.bind.symbol.raw(),
+                            @intFromEnum(pat.bind.layout_idx),
+                        });
+                    } else {
+                        std.debug.print("cf let\n", .{});
+                    }
+                    printExprTree(store, let_stmt.value, depth + 1);
+                    printCFStmtTree(store, let_stmt.next, depth + 1);
+                },
+                .expr_stmt => |expr_stmt| {
+                    std.debug.print("cf expr_stmt\n", .{});
+                    printExprTree(store, expr_stmt.value, depth + 1);
+                    printCFStmtTree(store, expr_stmt.next, depth + 1);
+                },
+                .ret => |ret| {
+                    std.debug.print("cf ret\n", .{});
+                    printExprTree(store, ret.value, depth + 1);
+                },
+                .match_stmt => |match_stmt| {
+                    std.debug.print("cf match_stmt\n", .{});
+                    printExprTree(store, match_stmt.value, depth + 1);
+                    for (store.getCFMatchBranches(match_stmt.branches), 0..) |branch, i| {
+                        for (0..depth + 1) |_| std.debug.print("  ", .{});
+                        std.debug.print("cf branch[{d}] guard\n", .{i});
+                        printExprTree(store, branch.guard, depth + 2);
+                        for (0..depth + 1) |_| std.debug.print("  ", .{});
+                        std.debug.print("cf branch[{d}] body\n", .{i});
+                        printCFStmtTree(store, branch.body, depth + 2);
+                    }
+                },
+                .switch_stmt => |switch_stmt| {
+                    std.debug.print("cf switch_stmt\n", .{});
+                    printExprTree(store, switch_stmt.cond, depth + 1);
+                    for (store.getCFSwitchBranches(switch_stmt.branches), 0..) |branch, i| {
+                        for (0..depth + 1) |_| std.debug.print("  ", .{});
+                        std.debug.print("cf switch branch[{d}]={d}\n", .{ i, branch.value });
+                        printCFStmtTree(store, branch.body, depth + 2);
+                    }
+                    for (0..depth + 1) |_| std.debug.print("  ", .{});
+                    std.debug.print("cf default\n", .{});
+                    printCFStmtTree(store, switch_stmt.default_branch, depth + 2);
+                },
+                .join => |join| {
+                    std.debug.print("cf join id={d}\n", .{@intFromEnum(join.id)});
+                    printCFStmtTree(store, join.body, depth + 1);
+                    printCFStmtTree(store, join.remainder, depth + 1);
+                },
+                .jump => |jump| {
+                    std.debug.print("cf jump target={d}\n", .{@intFromEnum(jump.target)});
+                    for (store.getExprSpan(jump.args)) |arg| printExprTree(store, arg, depth + 1);
+                },
+            }
+        }
+    };
+
+    const resources = try parseAndCanonicalizeExpr(test_allocator,
+        \\List.fold([[1, 2], [3, 4], [5, 6]], {total: 0}, |acc, [a, b]| {total: acc.total + a + b})
+    );
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(resources.builtin_module.env),
+        resources.module_env,
+    };
+
+    var monomorphization = try mir.Monomorphize.runExpr(
+        test_allocator,
+        all_module_envs[0..],
+        &resources.module_env.types,
+        1,
+        null,
+        resources.expr_idx,
+    );
+    defer monomorphization.deinit(test_allocator);
+
+    var lower = try mir.Lower.init(
+        test_allocator,
+        &mir_store,
+        &monomorphization,
+        all_module_envs[0..],
+        &resources.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    const mir_expr = try lower.lowerExpr(resources.expr_idx);
+
+    var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
+    defer lambda_set_store.deinit(test_allocator);
+
+    var layout_store = try layout.Store.init(
+        all_module_envs[0..],
+        resources.builtin_module.env.idents.builtin_str,
+        test_allocator,
+        base.target.TargetUsize.native,
+    );
+    defer layout_store.deinit();
+
+    var lir_store = LirExprStore.init(test_allocator);
+    defer lir_store.deinit();
+
+    var translator = lir.MirToLir.init(
+        test_allocator,
+        &mir_store,
+        &lir_store,
+        &layout_store,
+        &lambda_set_store,
+        resources.module_env.idents.true_tag,
+    );
+    defer translator.deinit();
+
+    const lowered = try translator.lower(mir_expr);
+    std.debug.print("Pre-RC LIR for fold exact list pattern:\n", .{});
+    Debug.printExprTree(&lir_store, lowered, 0);
+    for (lir_store.getProcSpecs(), 0..) |proc_spec, i| {
+        std.debug.print("pre-rc proc_spec[{d}] name={d} ret_layout={d}\n", .{
+            i, proc_spec.name.raw(), @intFromEnum(proc_spec.ret_layout),
+        });
+        if (!proc_spec.body.isNone()) {
+            Debug.printCFStmtTree(&lir_store, proc_spec.body, 1);
+        }
+    }
+
+    var rc_pass = try lir.RcInsert.RcInsertPass.init(test_allocator, &lir_store, &layout_store);
+    defer rc_pass.deinit();
+    const with_rc = try rc_pass.insertRcOps(lowered);
+
+    std.debug.print("LIR for fold exact list pattern:\n", .{});
+    Debug.printExprTree(&lir_store, with_rc, 0);
+    for (lir_store.getProcSpecs(), 0..) |proc_spec, i| {
+        std.debug.print("proc_spec[{d}] name={d} ret_layout={d}\n", .{
+            i, proc_spec.name.raw(), @intFromEnum(proc_spec.ret_layout),
+        });
+        if (!proc_spec.body.isNone()) {
+            Debug.printCFStmtTree(&lir_store, proc_spec.body, 1);
+        }
+    }
 }
 
 test "lambda sets distinguish closure record fields with different captures" {

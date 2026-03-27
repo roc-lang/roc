@@ -3473,13 +3473,13 @@ pub const RcInsertPass = struct {
             .lookup,
             .empty_list,
             .zero_arg_tag,
-            .break_expr,
             .crash,
             .runtime_error,
             .incref,
             .decref,
             .free,
             => expr_id,
+            .break_expr => expr_id,
         };
     }
 
@@ -4440,14 +4440,33 @@ pub const RcInsertPass = struct {
             }
         }
 
+        var prelude_stmts = std.ArrayList(LirStmt).empty;
+        defer prelude_stmts.deinit(self.allocator);
+        try self.emitLiveDemandRcOpsForSymbolsInto(live_len, &body_demands, &body_consumed, &loop_carried_keys, region, &prelude_stmts);
+
+        var tail_stmts = std.ArrayList(LirStmt).empty;
+        defer tail_stmts.deinit(self.allocator);
+        try self.emitLiveDemandRcTailDecrefsForSymbolsInto(live_len, &body_demands, &body_consumed, region, &tail_stmts);
+
         const processed_body = try self.processExpr(loop_expr.body);
-        const new_body = try self.wrapExprWithLiveDemandRcOps(
-            processed_body,
-            live_len,
-            &body_demands,
-            &body_consumed,
-            &loop_carried_keys,
+        const body_with_break_cleanup = if (tail_stmts.items.len > 0)
+            try self.wrapLoopBreaksWithCleanup(
+                processed_body,
+                try self.store.addStmts(tail_stmts.items),
+                region,
+            )
+        else
+            processed_body;
+        const with_prelude = try self.wrapPreludeAroundExpr(
+            body_with_break_cleanup,
             self.exprResultLayout(loop_expr.body),
+            region,
+            prelude_stmts.items,
+        );
+        const new_body = try self.wrapExprWithTailStmts(
+            with_prelude,
+            self.exprResultLayout(loop_expr.body),
+            tail_stmts.items,
             region,
         );
 
@@ -4457,6 +4476,187 @@ pub const RcInsertPass = struct {
             } }, region);
         }
         return expr_id;
+    }
+
+    fn wrapLoopBreaksWithCleanup(
+        self: *RcInsertPass,
+        expr_id: LirExprId,
+        cleanup_span: LirStmtSpan,
+        region: Region,
+    ) Allocator.Error!LirExprId {
+        if (expr_id.isNone()) return expr_id;
+        if (self.store.getStmts(cleanup_span).len == 0) return expr_id;
+
+        switch (self.store.getExpr(expr_id)) {
+            .break_expr => {
+                return self.store.addExpr(.{ .block = .{
+                    .stmts = cleanup_span,
+                    .final_expr = expr_id,
+                    .result_layout = .zst,
+                } }, region);
+            },
+            .block => |block| {
+                const stmts = self.store.getStmts(block.stmts);
+                var new_stmts = std.ArrayList(LirStmt).empty;
+                defer new_stmts.deinit(self.allocator);
+                var changed = false;
+
+                for (stmts) |stmt| {
+                    switch (stmt) {
+                        .decl => |binding| {
+                            const new_expr = try self.wrapLoopBreaksWithCleanup(binding.expr, cleanup_span, region);
+                            if (new_expr != binding.expr) changed = true;
+                            try new_stmts.append(self.allocator, .{ .decl = .{
+                                .pattern = binding.pattern,
+                                .expr = new_expr,
+                                .semantics = binding.semantics,
+                            } });
+                        },
+                        .mutate => |binding| {
+                            const new_expr = try self.wrapLoopBreaksWithCleanup(binding.expr, cleanup_span, region);
+                            if (new_expr != binding.expr) changed = true;
+                            try new_stmts.append(self.allocator, .{ .mutate = .{
+                                .pattern = binding.pattern,
+                                .expr = new_expr,
+                                .semantics = binding.semantics,
+                            } });
+                        },
+                        .cell_init => |binding| {
+                            const new_expr = try self.wrapLoopBreaksWithCleanup(binding.expr, cleanup_span, region);
+                            if (new_expr != binding.expr) changed = true;
+                            try new_stmts.append(self.allocator, .{ .cell_init = .{
+                                .cell = binding.cell,
+                                .layout_idx = binding.layout_idx,
+                                .expr = new_expr,
+                            } });
+                        },
+                        .cell_store => |binding| {
+                            const new_expr = try self.wrapLoopBreaksWithCleanup(binding.expr, cleanup_span, region);
+                            if (new_expr != binding.expr) changed = true;
+                            try new_stmts.append(self.allocator, .{ .cell_store = .{
+                                .cell = binding.cell,
+                                .layout_idx = binding.layout_idx,
+                                .expr = new_expr,
+                            } });
+                        },
+                        .cell_drop => try new_stmts.append(self.allocator, stmt),
+                    }
+                }
+
+                const new_final = try self.wrapLoopBreaksWithCleanup(block.final_expr, cleanup_span, region);
+                if (new_final != block.final_expr) changed = true;
+                if (!changed) return expr_id;
+
+                return self.store.addExpr(.{ .block = .{
+                    .stmts = try self.store.addStmts(new_stmts.items),
+                    .final_expr = new_final,
+                    .result_layout = block.result_layout,
+                } }, region);
+            },
+            .if_then_else => |ite| {
+                const branches = self.store.getIfBranches(ite.branches);
+                var new_branches = std.ArrayList(LirIfBranch).empty;
+                defer new_branches.deinit(self.allocator);
+                var changed = false;
+
+                for (branches) |branch| {
+                    const new_cond = try self.wrapLoopBreaksWithCleanup(branch.cond, cleanup_span, region);
+                    const new_body = try self.wrapLoopBreaksWithCleanup(branch.body, cleanup_span, region);
+                    if (new_cond != branch.cond or new_body != branch.body) changed = true;
+                    try new_branches.append(self.allocator, .{
+                        .cond = new_cond,
+                        .body = new_body,
+                    });
+                }
+
+                const new_else = try self.wrapLoopBreaksWithCleanup(ite.final_else, cleanup_span, region);
+                if (new_else != ite.final_else) changed = true;
+                if (!changed) return expr_id;
+
+                return self.store.addExpr(.{ .if_then_else = .{
+                    .branches = try self.store.addIfBranches(new_branches.items),
+                    .final_else = new_else,
+                    .result_layout = ite.result_layout,
+                } }, region);
+            },
+            .match_expr => |match_expr| {
+                const branches = self.store.getMatchBranches(match_expr.branches);
+                var new_branches = std.ArrayList(LirMatchBranch).empty;
+                defer new_branches.deinit(self.allocator);
+                var changed = false;
+
+                const new_value = try self.wrapLoopBreaksWithCleanup(match_expr.value, cleanup_span, region);
+                if (new_value != match_expr.value) changed = true;
+
+                for (branches) |branch| {
+                    const new_guard = try self.wrapLoopBreaksWithCleanup(branch.guard, cleanup_span, region);
+                    const new_body = try self.wrapLoopBreaksWithCleanup(branch.body, cleanup_span, region);
+                    if (new_guard != branch.guard or new_body != branch.body) changed = true;
+                    try new_branches.append(self.allocator, .{
+                        .pattern = branch.pattern,
+                        .guard = new_guard,
+                        .body = new_body,
+                    });
+                }
+
+                if (!changed) return expr_id;
+                return self.store.addExpr(.{ .match_expr = .{
+                    .value = new_value,
+                    .value_layout = match_expr.value_layout,
+                    .branches = try self.store.addMatchBranches(new_branches.items),
+                    .result_layout = match_expr.result_layout,
+                } }, region);
+            },
+            .discriminant_switch => |ds| {
+                const new_value = try self.wrapLoopBreaksWithCleanup(ds.value, cleanup_span, region);
+                const branches = self.store.getExprSpan(ds.branches);
+                var new_branches = std.ArrayList(LirExprId).empty;
+                defer new_branches.deinit(self.allocator);
+                var changed = new_value != ds.value;
+
+                for (branches) |branch_expr| {
+                    const new_branch = try self.wrapLoopBreaksWithCleanup(branch_expr, cleanup_span, region);
+                    if (new_branch != branch_expr) changed = true;
+                    try new_branches.append(self.allocator, new_branch);
+                }
+
+                if (!changed) return expr_id;
+                return self.store.addExpr(.{ .discriminant_switch = .{
+                    .value = new_value,
+                    .union_layout = ds.union_layout,
+                    .branches = try self.store.addExprSpan(new_branches.items),
+                    .result_layout = ds.result_layout,
+                } }, region);
+            },
+            .dbg => |dbg_expr| {
+                const new_expr = try self.wrapLoopBreaksWithCleanup(dbg_expr.expr, cleanup_span, region);
+                if (new_expr == dbg_expr.expr) return expr_id;
+                return self.store.addExpr(.{ .dbg = .{
+                    .expr = new_expr,
+                    .result_layout = dbg_expr.result_layout,
+                } }, region);
+            },
+            .expect => |expect_expr| {
+                const new_cond = try self.wrapLoopBreaksWithCleanup(expect_expr.cond, cleanup_span, region);
+                const new_body = try self.wrapLoopBreaksWithCleanup(expect_expr.body, cleanup_span, region);
+                if (new_cond == expect_expr.cond and new_body == expect_expr.body) return expr_id;
+                return self.store.addExpr(.{ .expect = .{
+                    .cond = new_cond,
+                    .body = new_body,
+                    .result_layout = expect_expr.result_layout,
+                } }, region);
+            },
+            .nominal => |nominal| {
+                const new_backing = try self.wrapLoopBreaksWithCleanup(nominal.backing_expr, cleanup_span, region);
+                if (new_backing == nominal.backing_expr) return expr_id;
+                return self.store.addExpr(.{ .nominal = .{
+                    .nominal_layout = nominal.nominal_layout,
+                    .backing_expr = new_backing,
+                } }, region);
+            },
+            .loop => return expr_id,
+            else => return expr_id,
+        }
     }
 
     /// Collect all symbols bound by a pattern into a set.
@@ -4517,6 +4717,13 @@ pub const RcInsertPass = struct {
         defer self.scratch_uses.clearRetainingCapacity();
         try self.countUsesInto(expr_id, &self.scratch_uses);
         return (self.scratch_uses.get(key) orelse 0) > 0;
+    }
+
+    fn exprUsesOwnerKey(self: *RcInsertPass, expr_id: LirExprId, key: u64) Allocator.Error!bool {
+        self.scratch_uses.clearRetainingCapacity();
+        defer self.scratch_uses.clearRetainingCapacity();
+        try self.countUsesInto(expr_id, &self.scratch_uses);
+        return self.ownerUseCountFromMap(&self.scratch_uses, key) > 0;
     }
 
     fn exprUsesSymbol(self: *RcInsertPass, expr_id: LirExprId, symbol: Symbol) Allocator.Error!bool {
@@ -5225,6 +5432,7 @@ pub const RcInsertPass = struct {
                 if (!ctx.pass.keyIntroducesOwner(key)) return;
                 if (!ctx.pass.layoutNeedsRc(resolved_layout)) return;
                 if (!resolved_reassignable and try ctx.pass.hasLaterShadowingDecl(ctx.block_stmts, ctx.stmt_index, symbol)) return;
+                if (try ctx.pass.hasLaterBlockOwnerUseKey(ctx.block_stmts, ctx.stmt_index, ctx.final_expr, key)) return;
 
                 if (resolved_reassignable) {
                     if (try ctx.pass.exprUsesKey(ctx.final_expr, key)) return;
@@ -5273,7 +5481,8 @@ pub const RcInsertPass = struct {
                 if (!ctx.pass.keyIntroducesOwner(key)) return;
                 if (!ctx.pass.layoutNeedsRc(resolved_layout)) return;
                 if (!resolved_reassignable and try ctx.pass.hasLaterShadowingDecl(ctx.block_stmts, ctx.stmt_index, symbol)) return;
-                const final_reads_symbol = try ctx.pass.exprNeedsTailCleanupKey(ctx.final_expr, key, symbol);
+                const final_reads_symbol = try ctx.pass.hasLaterBlockOwnerUseKey(ctx.block_stmts, ctx.stmt_index, ctx.final_expr, key) or
+                    (try ctx.pass.exprNeedsTailCleanupKey(ctx.final_expr, key, symbol));
                 if (!final_reads_symbol) return;
                 if (resolved_reassignable) {
                     if (try ctx.pass.exprConsumesKey(ctx.final_expr, key)) return;
@@ -5346,6 +5555,30 @@ pub const RcInsertPass = struct {
         }
 
         return self.exprUsesKey(final_expr, key);
+    }
+
+    fn hasLaterBlockOwnerUseKey(
+        self: *RcInsertPass,
+        block_stmts: []const LirStmt,
+        stmt_index: usize,
+        final_expr: LirExprId,
+        key: u64,
+    ) Allocator.Error!bool {
+        if (stmt_index + 1 < block_stmts.len) {
+            for (block_stmts[stmt_index + 1 ..]) |later_stmt| {
+                switch (later_stmt) {
+                    .decl, .mutate => |binding| {
+                        if (try self.exprUsesOwnerKey(binding.expr, key)) return true;
+                    },
+                    .cell_init, .cell_store => |binding| {
+                        if (try self.exprUsesOwnerKey(binding.expr, key)) return true;
+                    },
+                    .cell_drop => {},
+                }
+            }
+        }
+
+        return self.exprUsesOwnerKey(final_expr, key);
     }
 
     /// Recursively emit pre-body RC ops for all symbols bound by a pattern.

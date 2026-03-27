@@ -4252,6 +4252,10 @@ test "focused: nested list equality" {
     try runExpectBool("[[1, 2]] == [[1, 2]]", true, .no_trace);
 }
 
+test "focused: nested list len" {
+    try runExpectBool("List.len([[1, 2]]) == 1", true, .no_trace);
+}
+
 test "focused: nested list equality i64 literals" {
     try runExpectBool("[[1.I64, 2.I64]] == [[1.I64, 2.I64]]", true, .no_trace);
 }

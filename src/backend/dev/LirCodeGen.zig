@@ -1861,10 +1861,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     self.codegen.freeGeneral(temp_reg);
                     self.codegen.freeGeneral(addr_reg);
 
-                    if (ls.layoutContainsRefcounted(elem_layout_val)) {
-                        try self.emitIncrefAtStackOffset(elem_slot, elem_layout_idx);
-                    }
-
                     var result_loc: ValueLocation = if (elem_layout_idx == .i128 or elem_layout_idx == .u128 or elem_layout_idx == .dec)
                         .{ .stack_i128 = elem_slot }
                     else if (elem_layout_idx == .str)
