@@ -476,13 +476,6 @@ pub const Expr = union(enum) {
 
     // --- Control flow (imperative) ---
 
-    /// For loop over a list
-    for_loop: struct {
-        list: ExprId,
-        elem_pattern: PatternId,
-        body: ExprId,
-    },
-
     /// While loop
     while_loop: struct {
         cond: ExprId,

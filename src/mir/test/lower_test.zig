@@ -115,11 +115,6 @@ fn dumpMirExpr(mir_store: *const MIR.Store, expr_id: MIR.ExprId, depth: usize) v
             std.debug.print("\n", .{});
             for (mir_store.getExprSpan(struct_.fields)) |field| dumpMirExpr(mir_store, field, depth + 1);
         },
-        .for_loop => |for_loop| {
-            std.debug.print("\n", .{});
-            dumpMirExpr(mir_store, for_loop.list, depth + 1);
-            dumpMirExpr(mir_store, for_loop.body, depth + 1);
-        },
         .while_loop => |while_loop| {
             std.debug.print("\n", .{});
             dumpMirExpr(mir_store, while_loop.cond, depth + 1);
@@ -242,10 +237,6 @@ fn firstForeignParamLookup(
         },
         .dbg_expr => |dbg_expr| return firstForeignParamLookup(mir_store, dbg_expr.expr, proc_id, all_param_symbols),
         .expect => |expect| return firstForeignParamLookup(mir_store, expect.body, proc_id, all_param_symbols),
-        .for_loop => |for_loop| {
-            if (firstForeignParamLookup(mir_store, for_loop.list, proc_id, all_param_symbols)) |found| return found;
-            return firstForeignParamLookup(mir_store, for_loop.body, proc_id, all_param_symbols);
-        },
         .while_loop => |while_loop| {
             if (firstForeignParamLookup(mir_store, while_loop.cond, proc_id, all_param_symbols)) |found| return found;
             return firstForeignParamLookup(mir_store, while_loop.body, proc_id, all_param_symbols);
@@ -332,10 +323,6 @@ fn firstReachableMissingFunctionLookup(
         },
         .dbg_expr => |dbg_expr| return firstReachableMissingFunctionLookup(mir_store, ls_store, dbg_expr.expr),
         .expect => |expect| return firstReachableMissingFunctionLookup(mir_store, ls_store, expect.body),
-        .for_loop => |for_loop| {
-            if (firstReachableMissingFunctionLookup(mir_store, ls_store, for_loop.list)) |found| return found;
-            return firstReachableMissingFunctionLookup(mir_store, ls_store, for_loop.body);
-        },
         .while_loop => |while_loop| {
             if (firstReachableMissingFunctionLookup(mir_store, ls_store, while_loop.cond)) |found| return found;
             return firstReachableMissingFunctionLookup(mir_store, ls_store, while_loop.body);
@@ -354,6 +341,72 @@ fn firstReachableMissingFunctionLookup(
         .crash,
         .break_expr,
         => return null,
+    }
+}
+
+fn findLoopItemPattern(mir_store: *const MIR.Store, expr_id: MIR.ExprId) ?MIR.PatternId {
+    switch (mir_store.getExpr(expr_id)) {
+        .block => |block| {
+            for (mir_store.getStmts(block.stmts)) |stmt| {
+                const stmt_expr_id = switch (stmt) {
+                    .decl_const => |binding| binding.expr,
+                    .decl_var => |binding| binding.expr,
+                    .mutate_var => |binding| binding.expr,
+                };
+                if (findLoopItemPattern(mir_store, stmt_expr_id)) |pattern| return pattern;
+            }
+            return findLoopItemPattern(mir_store, block.final_expr);
+        },
+        .while_loop => |while_loop| {
+            const while_body = mir_store.getExpr(while_loop.body);
+            if (while_body != .block) return null;
+
+            for (mir_store.getStmts(while_body.block.stmts)) |stmt| {
+                switch (stmt) {
+                    .decl_const => |binding| return binding.pattern,
+                    .decl_var => |binding| return binding.pattern,
+                    .mutate_var => {},
+                }
+            }
+
+            return null;
+        },
+        .match_expr => |match_expr| {
+            if (findLoopItemPattern(mir_store, match_expr.cond)) |pattern| return pattern;
+            for (mir_store.getBranches(match_expr.branches)) |branch| {
+                if (!branch.guard.isNone()) {
+                    if (findLoopItemPattern(mir_store, branch.guard)) |pattern| return pattern;
+                }
+                if (findLoopItemPattern(mir_store, branch.body)) |pattern| return pattern;
+            }
+            return null;
+        },
+        .call => |call| {
+            if (findLoopItemPattern(mir_store, call.func)) |pattern| return pattern;
+            for (mir_store.getExprSpan(call.args)) |arg| {
+                if (findLoopItemPattern(mir_store, arg)) |pattern| return pattern;
+            }
+            return null;
+        },
+        .borrow_scope => |borrow_scope| {
+            for (mir_store.getBorrowBindings(borrow_scope.bindings)) |binding| {
+                if (findLoopItemPattern(mir_store, binding.expr)) |pattern| return pattern;
+            }
+            return findLoopItemPattern(mir_store, borrow_scope.body);
+        },
+        .closure_make => |closure| return findLoopItemPattern(mir_store, closure.captures),
+        .struct_access => |access| return findLoopItemPattern(mir_store, access.struct_),
+        .str_escape_and_quote => |inner| return findLoopItemPattern(mir_store, inner),
+        .run_low_level => |low_level| {
+            for (mir_store.getExprSpan(low_level.args)) |arg| {
+                if (findLoopItemPattern(mir_store, arg)) |pattern| return pattern;
+            }
+            return null;
+        },
+        .dbg_expr => |dbg_expr| return findLoopItemPattern(mir_store, dbg_expr.expr),
+        .expect => |expect| return findLoopItemPattern(mir_store, expect.body),
+        .return_expr => |ret| return findLoopItemPattern(mir_store, ret.expr),
+        else => return null,
     }
 }
 
@@ -1387,35 +1440,9 @@ test "lambda set: imported List.any receives predicate lambda set" {
     try testing.expect(predicate_pat == .bind);
     const predicate_sym = predicate_pat.bind;
 
-    var body_expr = lambda_body;
-    var loop_item_pat: ?MIR.PatternId = null;
-    while (true) {
-        switch (env.mir_store.getExpr(body_expr)) {
-            .block => |block| {
-                const stmts = env.mir_store.getStmts(block.stmts);
-                if (stmts.len > 0) {
-                    const stmt_expr_id = switch (stmts[0]) {
-                        .decl_const => |binding| binding.expr,
-                        .decl_var => |binding| binding.expr,
-                        .mutate_var => |binding| binding.expr,
-                    };
-                    const stmt_expr = env.mir_store.getExpr(stmt_expr_id);
-                    if (stmt_expr == .for_loop) {
-                        loop_item_pat = stmt_expr.for_loop.elem_pattern;
-                        break;
-                    }
-                }
-                body_expr = block.final_expr;
-            },
-            .for_loop => |loop| {
-                loop_item_pat = loop.elem_pattern;
-                break;
-            },
-            else => return error.TestUnexpectedResult,
-        }
-    }
+    const loop_item_pat = findLoopItemPattern(env.mir_store, lambda_body) orelse return error.TestUnexpectedResult;
 
-    const loop_item_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.patternTypeOf(loop_item_pat.?));
+    const loop_item_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.patternTypeOf(loop_item_pat));
     try testing.expect(loop_item_mono == .prim);
     try testing.expectEqual(Monotype.Prim.i64, loop_item_mono.prim);
 
@@ -1902,19 +1929,29 @@ test "lowerExpr: for loop" {
     const expr = try env.lowerFirstDef();
     const result = env.mir_store.getExpr(expr);
     try testing.expect(result == .block);
-    // The block should contain a for_loop in its statements
+    // The block should contain a synthesized while_loop in its statements
     // (expression stmts are lowered as `_ = expr`, i.e. decl_const with wildcard)
     const stmts = env.mir_store.getStmts(result.block.stmts);
-    var found_for = false;
+    var found_while = false;
     for (stmts) |stmt| {
         switch (stmt) {
             .decl_const => |dc| {
-                if (env.mir_store.getExpr(dc.expr) == .for_loop) found_for = true;
+                const stmt_expr = env.mir_store.getExpr(dc.expr);
+                if (stmt_expr == .block) {
+                    for (env.mir_store.getStmts(stmt_expr.block.stmts)) |inner_stmt| {
+                        switch (inner_stmt) {
+                            .decl_const => |inner_dc| {
+                                if (env.mir_store.getExpr(inner_dc.expr) == .while_loop) found_while = true;
+                            },
+                            else => {},
+                        }
+                    }
+                }
             },
             else => {},
         }
     }
-    try testing.expect(found_for);
+    try testing.expect(found_while);
 }
 
 test "lowerExpr: multi-segment string interpolation produces str_concat" {

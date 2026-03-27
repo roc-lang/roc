@@ -1268,6 +1268,97 @@ fn registerBoundSymbolDefIfNeeded(self: *Self, pattern: MIR.PatternId, expr: MIR
     }
 }
 
+fn lowerListForLoopToWhile(
+    self: *Self,
+    _: *const ModuleEnv,
+    list_expr: MIR.ExprId,
+    elem_pattern: MIR.PatternId,
+    body_expr: MIR.ExprId,
+    region: Region,
+) Allocator.Error!MIR.ExprId {
+    const unit_mono = self.store.monotype_store.unit_idx;
+    const u64_mono = self.store.monotype_store.primIdx(.u64);
+    const bool_mono = try self.store.monotype_store.addBoolTagUnion(
+        self.allocator,
+        self.current_module_idx,
+        self.currentCommonIdents(),
+    );
+
+    const list_bind = try self.makeSyntheticBind(self.store.typeOf(list_expr), false);
+    const len_bind = try self.makeSyntheticBind(u64_mono, false);
+    const index_bind = try self.makeSyntheticBind(u64_mono, true);
+
+    const zero = try self.store.addExpr(self.allocator, .{ .int = .{
+        .value = .{ .bytes = @bitCast(@as(i128, 0)), .kind = .i128 },
+    } }, u64_mono, region);
+    const one = try self.store.addExpr(self.allocator, .{ .int = .{
+        .value = .{ .bytes = @bitCast(@as(i128, 1)), .kind = .i128 },
+    } }, u64_mono, region);
+
+    const list_lookup_len = try self.emitMirLookup(list_bind.symbol, self.store.typeOf(list_expr), region);
+    const len_args = try self.store.addExprSpan(self.allocator, &.{list_lookup_len});
+    const len_expr = try self.store.addExpr(self.allocator, .{ .run_low_level = .{
+        .op = .list_len,
+        .args = len_args,
+    } }, u64_mono, region);
+
+    const index_lookup_cond = try self.emitMirLookup(index_bind.symbol, u64_mono, region);
+    const len_lookup_cond = try self.emitMirLookup(len_bind.symbol, u64_mono, region);
+    const cond_args = try self.store.addExprSpan(self.allocator, &.{ index_lookup_cond, len_lookup_cond });
+    const while_cond = try self.store.addExpr(self.allocator, .{ .run_low_level = .{
+        .op = .num_is_lt,
+        .args = cond_args,
+    } }, bool_mono, region);
+
+    const list_lookup_elem = try self.emitMirLookup(list_bind.symbol, self.store.typeOf(list_expr), region);
+    const index_lookup_elem = try self.emitMirLookup(index_bind.symbol, u64_mono, region);
+    const elem_args = try self.store.addExprSpan(self.allocator, &.{ list_lookup_elem, index_lookup_elem });
+    const elem_expr = try self.store.addExpr(self.allocator, .{ .run_low_level = .{
+        .op = .list_get_unsafe,
+        .args = elem_args,
+    } }, self.store.patternTypeOf(elem_pattern), region);
+
+    const index_lookup_inc = try self.emitMirLookup(index_bind.symbol, u64_mono, region);
+    const inc_args = try self.store.addExprSpan(self.allocator, &.{ index_lookup_inc, one });
+    const index_plus_one = try self.store.addExpr(self.allocator, .{ .run_low_level = .{
+        .op = .num_plus,
+        .args = inc_args,
+    } }, u64_mono, region);
+
+    const unit_expr = try self.emitMirUnitExpr(region);
+    const loop_body_stmts = try self.store.addStmts(self.allocator, &.{
+        .{ .decl_const = .{ .pattern = elem_pattern, .expr = elem_expr } },
+        .{ .decl_const = .{ .pattern = try self.store.addPattern(self.allocator, .wildcard, unit_mono), .expr = body_expr } },
+        .{ .mutate_var = .{ .pattern = index_bind.pattern, .expr = index_plus_one } },
+    });
+    const loop_body = try self.store.addExpr(self.allocator, .{ .block = .{
+        .stmts = loop_body_stmts,
+        .final_expr = unit_expr,
+    } }, unit_mono, region);
+
+    const while_expr = try self.store.addExpr(self.allocator, .{ .while_loop = .{
+        .cond = while_cond,
+        .body = loop_body,
+    } }, unit_mono, region);
+
+    const while_wildcard = try self.store.addPattern(self.allocator, .wildcard, unit_mono);
+    const outer_stmts = try self.store.addStmts(self.allocator, &.{
+        .{ .decl_const = .{ .pattern = list_bind.pattern, .expr = list_expr } },
+        .{ .decl_const = .{ .pattern = len_bind.pattern, .expr = len_expr } },
+        .{ .decl_var = .{ .pattern = index_bind.pattern, .expr = zero } },
+        .{ .decl_const = .{ .pattern = while_wildcard, .expr = while_expr } },
+    });
+
+    try self.registerBoundSymbolDefIfNeeded(list_bind.pattern, list_expr);
+    try self.registerBoundSymbolDefIfNeeded(len_bind.pattern, len_expr);
+    try self.registerBoundSymbolDefIfNeeded(index_bind.pattern, zero);
+
+    return try self.store.addExpr(self.allocator, .{ .block = .{
+        .stmts = outer_stmts,
+        .final_expr = unit_expr,
+    } }, unit_mono, region);
+}
+
 fn debugAssertLookupExpr(self: *Self, expr_id: MIR.ExprId, context: []const u8) void {
     if (!std.debug.runtime_safety) return;
 
@@ -2410,16 +2501,7 @@ fn lowerStrInspectList(
         region,
     );
 
-    const for_expr = try self.store.addExpr(
-        self.allocator,
-        .{ .for_loop = .{
-            .list = value_expr,
-            .elem_pattern = elem_bind.pattern,
-            .body = body_expr,
-        } },
-        unit_mono,
-        region,
-    );
+    const for_expr = try self.lowerListForLoopToWhile(current_env, value_expr, elem_bind.pattern, body_expr, region);
     const wildcard = try self.store.addPattern(self.allocator, .wildcard, unit_mono);
     const loop_stmt: MIR.Stmt = .{ .decl_const = .{ .pattern = wildcard, .expr = for_expr } };
 
@@ -2707,16 +2789,7 @@ fn lowerStrInspectListByMonotype(
         region,
     );
 
-    const for_expr = try self.store.addExpr(
-        self.allocator,
-        .{ .for_loop = .{
-            .list = value_expr,
-            .elem_pattern = elem_bind.pattern,
-            .body = body_expr,
-        } },
-        unit_mono,
-        region,
-    );
+    const for_expr = try self.lowerListForLoopToWhile(module_env, value_expr, elem_bind.pattern, body_expr, region);
     const wildcard = try self.store.addPattern(self.allocator, .wildcard, unit_mono);
     const loop_stmt: MIR.Stmt = .{ .decl_const = .{ .pattern = wildcard, .expr = for_expr } };
 
@@ -3193,11 +3266,7 @@ fn lowerExprWithMonotypeOverride(
             const list_expr = try self.lowerExpr(for_expr.expr);
             const pat = try self.lowerPattern(module_env, for_expr.patt);
             const body = try self.lowerExpr(for_expr.body);
-            return try self.store.addExpr(self.allocator, .{ .for_loop = .{
-                .list = list_expr,
-                .elem_pattern = pat,
-                .body = body,
-            } }, monotype, region);
+            return try self.lowerListForLoopToWhile(module_env, list_expr, pat, body, region);
         },
 
         // --- Special ---
@@ -6136,11 +6205,7 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
                 const pat = try self.lowerPattern(module_env, s_for.patt);
                 const body = try self.lowerExpr(s_for.body);
                 const unit_monotype = self.store.monotype_store.unit_idx;
-                const expr = try self.store.addExpr(self.allocator, .{ .for_loop = .{
-                    .list = list_expr,
-                    .elem_pattern = pat,
-                    .body = body,
-                } }, unit_monotype, stmt_region);
+                const expr = try self.lowerListForLoopToWhile(module_env, list_expr, pat, body, stmt_region);
                 const wildcard = try self.store.addPattern(self.allocator, .wildcard, unit_monotype);
                 try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = wildcard, .expr = expr } });
             },

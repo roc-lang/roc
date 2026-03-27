@@ -2649,7 +2649,6 @@ fn lowerExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirExprId {
         },
         .dbg_expr => |d| self.lowerDbg(d, mir_expr_id, region),
         .expect => |e| self.lowerExpect(e, mono_idx, region),
-        .for_loop => |f| self.lowerForLoop(f, mono_idx, region),
         .while_loop => |w| self.lowerWhileLoop(w, mono_idx, region),
         .return_expr => |r| self.lowerReturn(r, mir_expr_id, region),
         .break_expr => self.lir_store.addExpr(.break_expr, region),
@@ -5115,45 +5114,6 @@ fn monotypeRepresentsUnit(self: *Self, mono_idx: Monotype.Idx) bool {
     };
 }
 
-fn lowerForLoop(self: *Self, f: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
-    std.debug.assert(self.monotypeRepresentsUnit(mono_idx));
-    var acc = self.startLetAccumulator();
-    const list_layout = try self.runtimeValueLayoutFromMirExpr(f.list);
-    const lir_list_raw = try self.lowerExpr(f.list);
-    const lir_list = if (self.isBorrowAtomicExpr(lir_list_raw))
-        lir_list_raw
-    else blk: {
-        break :blk try acc.bindBorrow(lir_list_raw, list_layout, region);
-    };
-
-    const elem_layout = try self.runtimeListElemLayoutFromMirExpr(f.list);
-    try self.beginBindingScope();
-    defer self.endBindingScope();
-    const save_rest_bindings = self.scratch_deferred_list_rest_bindings.items.len;
-    defer self.scratch_deferred_list_rest_bindings.shrinkRetainingCapacity(save_rest_bindings);
-    try self.registerBindingPatternSymbols(f.elem_pattern, elem_layout);
-    const lowered_pat = try self.lowerBindingPatternForRuntimeLayout(f.elem_pattern, elem_layout, .borrowed, region);
-    const elem_rewrite = try self.rewriteTopLevelRestBinding(lowered_pat, elem_layout, .borrowed, region);
-    const raw_body = try self.lowerExpr(f.body);
-    const lir_body = try self.wrapExprWithTopLevelRestBindingPrelude(
-        raw_body,
-        .zst,
-        elem_rewrite,
-        &.{},
-        lowered_pat.deferred_rest_start,
-        lowered_pat.deferred_rest_len,
-        region,
-    );
-
-    const for_expr = try self.lir_store.addExpr(.{ .for_loop = .{
-        .list_expr = lir_list,
-        .elem_layout = elem_layout,
-        .elem_pattern = if (elem_rewrite) |rw| rw.source_pattern else lowered_pat.pattern,
-        .body = lir_body,
-    } }, region);
-    return acc.finish(for_expr, .zst, region);
-}
-
 fn lowerWhileLoop(self: *Self, w: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
     std.debug.assert(self.monotypeRepresentsUnit(mono_idx));
     const lir_cond = try self.lowerExpr(w.cond);
@@ -7238,46 +7198,6 @@ test "MIR block with decl_var and mutate_var lowers to LIR decl and mutate" {
     // Final expression reads the cell.
     const final = env.lir_store.getExpr(lir_expr.block.final_expr);
     try testing.expect(final == .cell_load);
-}
-
-test "MIR for_loop lowers to LIR for_loop" {
-    const allocator = testing.allocator;
-
-    var env = try testInit();
-    try testInitLayoutStore(&env);
-    defer testDeinit(&env);
-
-    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
-    const list_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .list = .{ .elem = i64_mono } });
-    const unit_mono = env.mir_store.monotype_store.unit_idx;
-
-    // Build MIR: for elem in list { body }
-    // list expression: empty list of I64
-    const list_expr = try env.mir_store.addExpr(allocator, .{ .list = .{
-        .elems = MIR.ExprSpan.empty(),
-    } }, list_mono, Region.zero());
-
-    // elem pattern: wildcard
-    const elem_pat = try env.mir_store.addPattern(allocator, .{ .wildcard = {} }, i64_mono);
-
-    // body: integer literal 0 (just a placeholder body)
-    const body_expr = try env.mir_store.addExpr(allocator, .{ .int = .{
-        .value = .{ .bytes = @bitCast(@as(i128, 0)), .kind = .i128 },
-    } }, i64_mono, Region.zero());
-
-    // for_loop expression
-    const for_expr = try env.mir_store.addExpr(allocator, .{ .for_loop = .{
-        .list = list_expr,
-        .elem_pattern = elem_pat,
-        .body = body_expr,
-    } }, unit_mono, Region.zero());
-    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.lambda_set_store, env.module_env.idents.true_tag);
-    defer translator.deinit();
-
-    const lir_id = try translator.lower(for_expr);
-    const lir_expr = env.lir_store.getExpr(lir_id);
-
-    try testing.expect(lir_expr == .for_loop);
 }
 
 test "MIR while_loop lowers to LIR while_loop" {
