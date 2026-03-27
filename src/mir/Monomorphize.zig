@@ -2777,8 +2777,10 @@ pub const Pass = struct {
             else => {},
         }
 
-        const proc_inst = result.getProcInst(proc_inst_id);
-        const callee_template = result.getProcTemplate(proc_inst.template);
+        // Snapshot by value before scanning. Scanning can discover more demanded
+        // callables and append to proc_insts/proc_templates, which would invalidate pointers.
+        const proc_inst = result.getProcInst(proc_inst_id).*;
+        const callee_template = result.getProcTemplate(proc_inst.template).*;
         try self.recordExprProcInst(
             result,
             self.active_proc_inst_context,
