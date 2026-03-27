@@ -154,7 +154,7 @@ pub const MonoLlvmCodeGen = struct {
     result_layout: ?layout.Idx = null,
 
     /// Allocas for mutable variables inside loop bodies.
-    /// When a symbol is reassigned inside a for_loop or while_loop body,
+    /// When a symbol is reassigned inside a while_loop body,
     /// its value is stored to an alloca so that post-loop code can load
     /// the final value (avoiding SSA domination issues).
     /// Stores both the alloca pointer and the element type for correct loads.
@@ -1019,7 +1019,6 @@ pub const MonoLlvmCodeGen = struct {
 
             // Loops
             .while_loop => |wl| self.generateWhileLoop(wl),
-            .for_loop => |fl| self.generateForLoop(fl),
             .break_expr => self.generateBreakExpr(),
 
             // These should never reach LLVM codegen:
@@ -1783,8 +1782,8 @@ pub const MonoLlvmCodeGen = struct {
 
         const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
 
-        // Promote existing symbol bindings to allocas for SSA correctness
-        // (same as for_loop — loop body mutations must be visible after exit)
+        // Promote existing symbol bindings to allocas for SSA correctness so
+        // loop body mutations remain visible after exit.
         var promoted_keys: std.ArrayList(u64) = .{};
         defer promoted_keys.deinit(self.allocator);
         {
@@ -1871,130 +1870,6 @@ pub const MonoLlvmCodeGen = struct {
         }
 
         // Clean up loop variable allocas
-        for (promoted_keys.items) |key| {
-            _ = self.loop_var_allocas.remove(key);
-        }
-
-        return builder.intValue(.i8, 0) catch return error.OutOfMemory;
-    }
-
-    /// Generate a for loop over a list: iterate elements, bind pattern, execute body.
-    /// Returns unit (i8 0).
-    fn generateForLoop(self: *MonoLlvmCodeGen, fl: anytype) Error!LlvmBuilder.Value {
-        const wip = self.wip orelse return error.CompilationFailed;
-        const builder = self.builder orelse return error.CompilationFailed;
-        const ls = self.layout_store orelse unreachable;
-
-        // Get element size for pointer arithmetic
-        const elem_layout_data = ls.getLayout(fl.elem_layout);
-        const elem_sa = ls.layoutSizeAlign(elem_layout_data);
-        const elem_size: u32 = elem_sa.size;
-
-        // Materialize the list as a pointer so we can read ptr/len
-        const list_ptr = try self.materializeAsPtr(fl.list_expr, 24);
-
-        // Load list data pointer (offset 0) and length (offset 8)
-        const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
-        const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
-        const data_ptr = wip.load(.normal, ptr_type, list_ptr, alignment, "") catch return error.CompilationFailed;
-
-        const len_off = builder.intValue(.i32, 8) catch return error.OutOfMemory;
-        const len_ptr = wip.gep(.inbounds, .i8, list_ptr, &.{len_off}, "") catch return error.CompilationFailed;
-        const list_len = wip.load(.normal, .i64, len_ptr, alignment, "") catch return error.CompilationFailed;
-
-        // Clear out_ptr for loop body
-        const saved_out_ptr = self.out_ptr;
-        self.out_ptr = null;
-        defer self.out_ptr = saved_out_ptr;
-
-        // Promote existing symbol bindings to allocas so that loop body
-        // mutations are visible after the loop exit (SSA domination fix).
-        // The loop body may rebind variables via let_stmts; without allocas,
-        // the new SSA values from the body block don't dominate the exit block.
-        var promoted_keys: std.ArrayList(u64) = .{};
-        defer promoted_keys.deinit(self.allocator);
-        {
-            var sym_it = self.symbol_values.iterator();
-            while (sym_it.next()) |entry| {
-                const key = entry.key_ptr.*;
-                const val = entry.value_ptr.*;
-                // Skip if already promoted (nested loops)
-                if (self.loop_var_allocas.contains(key)) continue;
-                const val_type = val.typeOfWip(wip);
-                const alloca_val = wip.alloca(.normal, val_type, .none, alignment, .default, "lv") catch return error.CompilationFailed;
-                _ = wip.store(.normal, val, alloca_val, alignment) catch return error.CompilationFailed;
-                self.loop_var_allocas.put(key, .{ .alloca_ptr = alloca_val, .elem_type = val_type }) catch return error.OutOfMemory;
-                promoted_keys.append(self.allocator, key) catch return error.OutOfMemory;
-            }
-        }
-
-        // Create blocks: header (phi for index), body, exit
-        const header_block = wip.block(2, "for_header") catch return error.OutOfMemory;
-        const body_block = wip.block(1, "for_body") catch return error.OutOfMemory;
-        const exit_incoming = 1 + self.countBreakEdges(fl.body);
-        const exit_block = wip.block(exit_incoming, "for_exit") catch return error.OutOfMemory;
-        self.loop_exit_blocks.append(self.allocator, exit_block) catch return error.OutOfMemory;
-        defer _ = self.loop_exit_blocks.pop();
-
-        // Entry → header
-        const zero = builder.intValue(.i64, 0) catch return error.OutOfMemory;
-        const entry_block = wip.cursor.block;
-        _ = wip.br(header_block) catch return error.CompilationFailed;
-
-        // Header: phi for loop index, compare with length
-        wip.cursor = .{ .block = header_block };
-        const idx_phi = wip.phi(.i64, "idx") catch return error.CompilationFailed;
-        const idx_val = idx_phi.toValue();
-        const cond = wip.icmp(.ult, idx_val, list_len, "") catch return error.OutOfMemory;
-        _ = wip.brCond(cond, body_block, exit_block, .none) catch return error.CompilationFailed;
-
-        // Body: load element, bind pattern, execute body, increment index
-        wip.cursor = .{ .block = body_block };
-
-        // Load loop-carried variables from allocas at the start of the body
-        // so lookups within the body see the latest values.
-        for (promoted_keys.items) |key| {
-            if (self.loop_var_allocas.get(key)) |lva| {
-                const loaded = wip.load(.normal, lva.elem_type, lva.alloca_ptr, alignment, "") catch return error.CompilationFailed;
-                self.symbol_values.put(key, loaded) catch return error.OutOfMemory;
-            }
-        }
-
-        // Load element from data_ptr + idx * elem_size
-        const size_const = builder.intValue(.i64, elem_size) catch return error.OutOfMemory;
-        const byte_offset = wip.bin(.mul, idx_val, size_const, "") catch return error.CompilationFailed;
-        const elem_ptr = wip.gep(.inbounds, .i8, data_ptr, &.{byte_offset}, "") catch return error.CompilationFailed;
-        const elem_val = try self.loadValueFromPtr(elem_ptr, fl.elem_layout);
-
-        // Bind the element to the pattern
-        try self.bindPattern(fl.elem_pattern, elem_val);
-
-        // Execute the body
-        _ = try self.generateExpr(fl.body);
-
-        // Increment index and loop back
-        const one = builder.intValue(.i64, 1) catch return error.OutOfMemory;
-        const next_idx = wip.bin(.add, idx_val, one, "") catch return error.CompilationFailed;
-        const body_end_block = wip.cursor.block;
-        _ = wip.br(header_block) catch return error.CompilationFailed;
-
-        // Finish phi: entry→0, body_end→next_idx
-        idx_phi.finish(
-            &.{ zero, next_idx },
-            &.{ entry_block, body_end_block },
-            wip,
-        );
-
-        // Exit block: load final values from allocas into symbol_values
-        wip.cursor = .{ .block = exit_block };
-        for (promoted_keys.items) |key| {
-            if (self.loop_var_allocas.get(key)) |lva| {
-                const final_val = wip.load(.normal, lva.elem_type, lva.alloca_ptr, alignment, "") catch return error.CompilationFailed;
-                self.symbol_values.put(key, final_val) catch return error.OutOfMemory;
-            }
-        }
-
-        // Clean up loop variable allocas (un-promote for this loop level)
         for (promoted_keys.items) |key| {
             _ = self.loop_var_allocas.remove(key);
         }
@@ -5406,7 +5281,7 @@ pub const MonoLlvmCodeGen = struct {
             .dbg => |d| self.countBreakEdges(d.expr),
             .expect => |e| self.countBreakEdges(e.body),
             .nominal => |nom| self.countBreakEdges(nom.backing_expr),
-            .lambda, .while_loop, .for_loop => 0,
+            .lambda, .while_loop => 0,
             else => 0,
         };
     }

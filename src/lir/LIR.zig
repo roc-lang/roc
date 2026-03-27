@@ -388,7 +388,7 @@ pub const LirExpr = union(enum) {
         ret_layout: layout.Idx,
     },
 
-    /// Break out of the enclosing loop (for_loop or while_loop)
+    /// Break out of the enclosing loop
     break_expr: void,
 
     /// Low-level builtin operation
@@ -474,20 +474,6 @@ pub const LirExpr = union(enum) {
         union_layout: layout.Idx,
         /// Layout of the payload to extract
         payload_layout: layout.Idx,
-    },
-
-    /// For loop over a list
-    /// Iterates over each element in the list, binding it to the pattern and executing the body
-    /// Returns empty record (unit) after all iterations
-    for_loop: struct {
-        /// The list to iterate over
-        list_expr: LirExprId,
-        /// Layout of list elements
-        elem_layout: layout.Idx,
-        /// Pattern to bind each element to
-        elem_pattern: LirPatternId,
-        /// Body expression to execute for each element
-        body: LirExprId,
     },
 
     /// While loop

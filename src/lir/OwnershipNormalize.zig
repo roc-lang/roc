@@ -423,18 +423,6 @@ const Analyzer = struct {
                 for (self.store.getExprSpan(ds.branches)) |branch| try self.analyzeExpr(branch);
             },
             .tag_payload_access => |tpa| try self.analyzeExpr(tpa.value),
-            .for_loop => |loop_expr| {
-                try self.analyzeExpr(loop_expr.list_expr);
-                const mark = self.pushScope();
-                defer self.popScope(mark);
-                const list_ref = self.sourceRefForAliasedExpr(loop_expr.list_expr);
-                try self.registerPattern(
-                    loop_expr.elem_pattern,
-                    if (list_ref.isNone()) .unmanaged else OwnerKind{ .borrowed = list_ref },
-                    .borrow,
-                );
-                try self.analyzeExpr(loop_expr.body);
-            },
             .while_loop => |wl| {
                 try self.analyzeExpr(wl.cond);
                 const mark = self.pushScope();
