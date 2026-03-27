@@ -1864,7 +1864,11 @@ fn bindFlatTypeMonotypesInStore(
                 const tag_names = type_tags.items(.name);
                 const tag_args = type_tags.items(.args);
                 for (tag_names, tag_args) |tag_name, args_range| {
-                    const tag_idx = self.tagIndexByName(tag_name, mono_tags);
+                    // A template tag may be absent from the monotype when a
+                    // polymorphic function (e.g. matching on Try(ok, err)) is
+                    // called with a value whose concrete type has fewer tags
+                    // (e.g. only Ok). Skip binding for the missing tag.
+                    const tag_idx = self.tagIndexByName(tag_name, mono_tags) orelse continue;
                     try appendSeenIndex(self.allocator, &seen_tag_indices, tag_idx);
                     const payload_vars = store_types.sliceVars(args_range);
                     try self.bindTagPayloadsByName(tag_name, payload_vars, mono_tags);
@@ -3792,7 +3796,10 @@ fn bindPatternMonotypes(
                     .{@tagName(self.store.monotype_store.getMonotype(monotype))},
                 ),
             };
-            const tag_idx = self.tagIndexByName(tag.name, mono_tags);
+            // The pattern's tag may be absent from the monotype when
+            // a match covers more tags than the concrete type has
+            // (e.g. matching on Try but the value is always Ok).
+            const tag_idx = self.tagIndexByName(tag.name, mono_tags) orelse return;
             const mono_payloads = self.store.monotype_store.getIdxSpan(mono_tags[tag_idx].payloads);
             const payload_patterns = module_env.store.slicePatterns(tag.args);
 
@@ -4027,6 +4034,13 @@ fn lowerMatch(self: *Self, module_env: *const ModuleEnv, match_expr: CIR.Expr.Ma
         const bp_top = self.scratch_branch_patterns.top();
         defer self.scratch_branch_patterns.clearFrom(bp_top);
 
+        // Skip branches where all patterns reference tags absent from
+        // the condition's monotype. This happens when a polymorphic
+        // function matches on more tags than the concrete type has
+        // (e.g. matching on Try(ok, err) but the value is always Ok).
+        if (self.allPatternsAbsentFromMonotype(module_env, cir_bp_indices, cond_mono))
+            continue;
+
         const representative_pattern_idx = if (cir_bp_indices.len > 0)
             module_env.store.getMatchBranchPattern(cir_bp_indices[0]).pattern
         else
@@ -4034,6 +4048,10 @@ fn lowerMatch(self: *Self, module_env: *const ModuleEnv, match_expr: CIR.Expr.Ma
 
         for (cir_bp_indices, 0..) |bp_idx, bp_index| {
             const cir_bp = module_env.store.getMatchBranchPattern(bp_idx);
+            // Skip individual patterns for absent tags when there are
+            // alternative patterns in the same branch.
+            if (self.isPatternAbsentTag(module_env, cir_bp.pattern, cond_mono))
+                continue;
             if (bp_index != 0) {
                 if (representative_pattern_idx) |rep_pattern_idx| {
                     try self.alignAlternativePatternSymbols(module_env, rep_pattern_idx, cir_bp.pattern);
@@ -4059,6 +4077,41 @@ fn lowerMatch(self: *Self, module_env: *const ModuleEnv, match_expr: CIR.Expr.Ma
         .cond = cond,
         .branches = branch_span,
     } }, monotype, region);
+}
+
+/// Check if a CIR pattern is an applied_tag whose tag is absent from
+/// the given tag union monotype.
+fn isPatternAbsentTag(self: *Self, module_env: *const ModuleEnv, pattern_idx: CIR.Pattern.Idx, cond_mono: Monotype.Idx) bool {
+    const pattern = module_env.store.getPattern(pattern_idx);
+    const tag_name = switch (pattern) {
+        .applied_tag => |tag| tag.name,
+        .nominal => |nom| return self.isPatternAbsentTag(module_env, nom.backing_pattern, cond_mono),
+        .nominal_external => |nom| return self.isPatternAbsentTag(module_env, nom.backing_pattern, cond_mono),
+        else => return false,
+    };
+    const mono_tags = switch (self.store.monotype_store.getMonotype(cond_mono)) {
+        .tag_union => |tag_union| self.store.monotype_store.getTags(tag_union.tags),
+        else => return false,
+    };
+    for (mono_tags) |mono_tag| {
+        if (self.identsTagNameEquivalent(mono_tag.name, tag_name)) return false;
+    }
+    return true;
+}
+
+/// Check if ALL branch patterns in a set reference tags absent from the
+/// condition's monotype (i.e. the entire branch is dead code).
+fn allPatternsAbsentFromMonotype(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    cir_bp_indices: []const CIR.Expr.Match.BranchPattern.Idx,
+    cond_mono: Monotype.Idx,
+) bool {
+    for (cir_bp_indices) |bp_idx| {
+        const cir_bp = module_env.store.getMatchBranchPattern(bp_idx);
+        if (!self.isPatternAbsentTag(module_env, cir_bp.pattern, cond_mono)) return false;
+    }
+    return cir_bp_indices.len > 0;
 }
 
 /// Lower `e_lambda` to a proc-backed MIR function value (no captures).
@@ -7467,18 +7520,13 @@ fn tagIndexByName(
     self: *Self,
     tag_name: Ident.Idx,
     mono_tags: []const Monotype.Tag,
-) u32 {
+) ?u32 {
     for (mono_tags, 0..) |mono_tag, tag_idx| {
         if (self.identsTagNameEquivalent(mono_tag.name, tag_name)) {
             return @intCast(tag_idx);
         }
     }
-
-    const module_env = self.all_module_envs[self.current_module_idx];
-    typeBindingInvariant(
-        "tag '{s}' missing from monotype",
-        .{module_env.getIdent(tag_name)},
-    );
+    return null;
 }
 
 fn seenIndex(seen_indices: []const u32, idx: u32) bool {
@@ -7686,11 +7734,9 @@ fn bindTagPayloadsByName(
         return;
     }
 
-    const module_env = self.all_module_envs[self.current_module_idx];
-    typeBindingInvariant(
-        "bindFlatTypeMonotypes(tag_union): tag '{s}' missing from monotype",
-        .{module_env.getIdent(tag_name)},
-    );
+    // Tag absent from monotype — nothing to bind. This happens when a
+    // polymorphic function matches on more tags than the concrete call
+    // site provides (e.g. matching on Try but the value is always Ok).
 }
 
 /// Bind concrete monotypes to polymorphic vars for the current lowering scope.
@@ -7980,7 +8026,11 @@ fn bindFlatTypeMonotypes(self: *Self, flat_type: types.FlatType, monotype: Monot
                 const type_tag_args = type_tags.items(.args);
 
                 for (type_tag_names, type_tag_args) |tag_name, tag_args| {
-                    const tag_idx = self.tagIndexByName(tag_name, mono_tags);
+                    // A template tag may be absent from the monotype when a
+                    // polymorphic function (e.g. matching on Try(ok, err)) is
+                    // called with a value whose concrete type has fewer tags
+                    // (e.g. only Ok). Skip binding for the missing tag.
+                    const tag_idx = self.tagIndexByName(tag_name, mono_tags) orelse continue;
                     try appendSeenIndex(self.allocator, &seen_tag_indices, tag_idx);
                     const payload_vars = self.types_store.sliceVars(tag_args);
                     try self.bindTagPayloadsByName(tag_name, payload_vars, mono_tags);

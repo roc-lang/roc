@@ -385,6 +385,11 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>Text",
         .description = "Recursive nominal type with List and pattern matching",
     },
+    .{
+        .roc_file = "test/fx/keep_oks.roc",
+        .io_spec = "1>done",
+        .description = "Regression test: Monomorphize panic when callback always returns Ok but match expects Err tag",
+    },
 };
 
 /// Get the total number of IO spec tests
