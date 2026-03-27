@@ -366,7 +366,7 @@ Builtin :: [].{
 				list
 			} else {
 				match List.first(list) {
-					Ok(pivot) =>
+					Ok(pivot) => {
 						rest = List.drop_first(list, 1)
 						less_or_equal =
 							List.keep_if(
@@ -393,6 +393,7 @@ Builtin :: [].{
 							List.sort_with(less_or_equal, order),
 							List.concat(List.single(pivot), List.sort_with(greater, order)),
 						)
+					}
 
 					Err(_) => list
 				}
