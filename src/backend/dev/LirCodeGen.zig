@@ -1462,7 +1462,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .zero_arg_tag => |tag| try self.generateZeroArgTag(tag),
                 .tag => |tag| try self.generateTag(tag),
 
-                .list => @panic("TODO implement list literal codegen in dev backend"),
+                .list => |list| try self.generateList(list),
                 .empty_list => try self.generateEmptyList(),
 
                 // Low-level operations

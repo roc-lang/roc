@@ -952,6 +952,62 @@ pub const RcInsertPass = struct {
         };
     }
 
+    fn ownerTransferSourceForCellStoreExpr(
+        self: *RcInsertPass,
+        stmts: []const LirStmt,
+        stmt_index: usize,
+        expr_id: LirExprId,
+        cell: Symbol,
+    ) ?struct { owner_key: u64, source_expr: LirExprId } {
+        if (self.returnedCellOwnerKey(expr_id, cell)) |owner_key| {
+            return .{ .owner_key = owner_key, .source_expr = expr_id };
+        }
+
+        if (expr_id.isNone()) return null;
+        const expr = self.store.getExpr(expr_id);
+        if (expr != .lookup) return null;
+
+        var i = stmt_index;
+        while (i > 0) {
+            i -= 1;
+            switch (stmts[i]) {
+                .decl, .mutate => |binding| {
+                    const pat = self.store.getPattern(binding.pattern);
+                    if (pat != .bind or pat.bind.symbol != expr.lookup.symbol) continue;
+                    const owner_key = self.returnedCellOwnerKey(binding.expr, cell) orelse return null;
+                    return .{ .owner_key = owner_key, .source_expr = binding.expr };
+                },
+                .cell_init, .cell_store, .cell_drop => {},
+            }
+        }
+
+        return null;
+    }
+
+    fn returnedCellOwnerKey(
+        self: *RcInsertPass,
+        expr_id: LirExprId,
+        cell: Symbol,
+    ) ?u64 {
+        if (expr_id.isNone()) return null;
+
+        return switch (self.store.getExpr(expr_id)) {
+            .cell_load => |load| if (load.cell == cell) self.ownerKeyForAliasedExpr(expr_id) else null,
+            .proc_call => |call| blk: {
+                const args = self.store.getExprSpan(call.args);
+                for (args, 0..) |arg_id, i| {
+                    if (!self.procCallArgNeedsOwnerForResult(call, i)) continue;
+                    if (self.ownerKeyForCellLoadInExpr(arg_id, cell)) |owner_key| break :blk owner_key;
+                }
+                break :blk null;
+            },
+            .dbg => |d| self.returnedCellOwnerKey(d.expr, cell),
+            .nominal => |n| self.returnedCellOwnerKey(n.backing_expr, cell),
+            .block => |block| self.returnedCellOwnerKey(block.final_expr, cell),
+            else => null,
+        };
+    }
+
     fn exprMovesCellOwner(
         self: *RcInsertPass,
         expr_id: LirExprId,
@@ -3810,9 +3866,10 @@ pub const RcInsertPass = struct {
                 .cell_store => |cell| {
                     const transferred_owner_key = blk: {
                         if (!self.layoutNeedsRc(cell.layout_idx)) break :blk null;
-                        const owner_key = self.ownerKeyForCellLoadInExpr(cell.expr, cell.cell) orelse break :blk null;
-                        if (!try self.exprConsumesKey(cell.expr, owner_key)) break :blk null;
-                        break :blk owner_key;
+                        const transfer_source = self.ownerTransferSourceForCellStoreExpr(stmts, stmt_index, cell.expr, cell.cell) orelse break :blk null;
+                        const returns_cell_owner = self.returnedCellOwnerKey(transfer_source.source_expr, cell.cell) != null;
+                        if (!returns_cell_owner and !try self.exprConsumesKey(transfer_source.source_expr, transfer_source.owner_key)) break :blk null;
+                        break :blk transfer_source.owner_key;
                     };
                     if (transferred_owner_key) |owner_key| {
                         try self.pushTransferredOwnerPreserveDebit(owner_key);

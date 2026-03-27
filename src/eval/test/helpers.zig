@@ -6081,6 +6081,15 @@ test "dev lowering: mutable list reassignment keeps both decrefs on the reassign
         }
 
         fn countCellDecrefs(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, cell: lir.LIR.Symbol) u32 {
+            return countCellDecrefsFromRoot(store, expr_id, expr_id, cell);
+        }
+
+        fn countCellDecrefsFromRoot(
+            store: *const LirExprStore,
+            root_expr_id: lir.LIR.LirExprId,
+            expr_id: lir.LIR.LirExprId,
+            cell: lir.LIR.Symbol,
+        ) u32 {
             if (expr_id.isNone()) return 0;
             const expr = store.getExpr(expr_id);
             return switch (expr) {
@@ -6088,93 +6097,322 @@ test "dev lowering: mutable list reassignment keeps both decrefs on the reassign
                     var total: u32 = 0;
                     for (store.getStmts(block.stmts)) |stmt| {
                         total += switch (stmt) {
-                            .decl, .mutate => |binding| countCellDecrefs(store, binding.expr, cell),
-                            .cell_init, .cell_store => |binding| countCellDecrefs(store, binding.expr, cell),
+                            .decl, .mutate => |binding| countCellDecrefsFromRoot(store, root_expr_id, binding.expr, cell),
+                            .cell_init, .cell_store => |binding| countCellDecrefsFromRoot(store, root_expr_id, binding.expr, cell),
                             .cell_drop => 0,
                         };
                     }
-                    total += countCellDecrefs(store, block.final_expr, cell);
+                    total += countCellDecrefsFromRoot(store, root_expr_id, block.final_expr, cell);
                     break :blk total;
                 },
                 .if_then_else => |ite| blk: {
                     var total: u32 = 0;
                     for (store.getIfBranches(ite.branches)) |branch| {
-                        total += countCellDecrefs(store, branch.cond, cell);
-                        total += countCellDecrefs(store, branch.body, cell);
+                        total += countCellDecrefsFromRoot(store, root_expr_id, branch.cond, cell);
+                        total += countCellDecrefsFromRoot(store, root_expr_id, branch.body, cell);
                     }
-                    total += countCellDecrefs(store, ite.final_else, cell);
+                    total += countCellDecrefsFromRoot(store, root_expr_id, ite.final_else, cell);
                     break :blk total;
                 },
                 .match_expr => |m| blk: {
-                    var total: u32 = countCellDecrefs(store, m.value, cell);
+                    var total: u32 = countCellDecrefsFromRoot(store, root_expr_id, m.value, cell);
                     for (store.getMatchBranches(m.branches)) |branch| {
-                        total += countCellDecrefs(store, branch.guard, cell);
-                        total += countCellDecrefs(store, branch.body, cell);
+                        total += countCellDecrefsFromRoot(store, root_expr_id, branch.guard, cell);
+                        total += countCellDecrefsFromRoot(store, root_expr_id, branch.body, cell);
                     }
                     break :blk total;
                 },
-                .loop => |loop_expr| countCellDecrefs(store, loop_expr.body, cell),
+                .loop => |loop_expr| countCellDecrefsFromRoot(store, root_expr_id, loop_expr.body, cell),
                 .discriminant_switch => |ds| blk: {
-                    var total: u32 = countCellDecrefs(store, ds.value, cell);
-                    for (store.getExprSpan(ds.branches)) |branch_id| total += countCellDecrefs(store, branch_id, cell);
+                    var total: u32 = countCellDecrefsFromRoot(store, root_expr_id, ds.value, cell);
+                    for (store.getExprSpan(ds.branches)) |branch_id| total += countCellDecrefsFromRoot(store, root_expr_id, branch_id, cell);
                     break :blk total;
                 },
                 .proc_call => |call| blk: {
                     var total: u32 = 0;
                     if (callCalleeExprId(call)) |callee_expr| {
-                        total += countCellDecrefs(store, callee_expr, cell);
+                        total += countCellDecrefsFromRoot(store, root_expr_id, callee_expr, cell);
                     }
-                    for (store.getExprSpan(call.args)) |arg| total += countCellDecrefs(store, arg, cell);
+                    for (store.getExprSpan(call.args)) |arg| total += countCellDecrefsFromRoot(store, root_expr_id, arg, cell);
                     break :blk total;
                 },
                 .low_level => |ll| blk: {
                     var total: u32 = 0;
-                    for (store.getExprSpan(ll.args)) |arg| total += countCellDecrefs(store, arg, cell);
+                    for (store.getExprSpan(ll.args)) |arg| total += countCellDecrefsFromRoot(store, root_expr_id, arg, cell);
                     break :blk total;
                 },
                 .list => |list_expr| blk: {
                     var total: u32 = 0;
-                    for (store.getExprSpan(list_expr.elems)) |elem| total += countCellDecrefs(store, elem, cell);
+                    for (store.getExprSpan(list_expr.elems)) |elem| total += countCellDecrefsFromRoot(store, root_expr_id, elem, cell);
                     break :blk total;
                 },
                 .struct_ => |s| blk: {
                     var total: u32 = 0;
-                    for (store.getExprSpan(s.fields)) |field| total += countCellDecrefs(store, field, cell);
+                    for (store.getExprSpan(s.fields)) |field| total += countCellDecrefsFromRoot(store, root_expr_id, field, cell);
                     break :blk total;
                 },
                 .tag => |t| blk: {
                     var total: u32 = 0;
-                    for (store.getExprSpan(t.args)) |arg| total += countCellDecrefs(store, arg, cell);
+                    for (store.getExprSpan(t.args)) |arg| total += countCellDecrefsFromRoot(store, root_expr_id, arg, cell);
                     break :blk total;
                 },
-                .struct_access => |sa| countCellDecrefs(store, sa.struct_expr, cell),
-                .tag_payload_access => |tpa| countCellDecrefs(store, tpa.value, cell),
-                .nominal => |n| countCellDecrefs(store, n.backing_expr, cell),
-                .early_return => |ret| countCellDecrefs(store, ret.expr, cell),
-                .dbg => |d| countCellDecrefs(store, d.expr, cell),
-                .expect => |e| countCellDecrefs(store, e.cond, cell) + countCellDecrefs(store, e.body, cell),
+                .struct_access => |sa| countCellDecrefsFromRoot(store, root_expr_id, sa.struct_expr, cell),
+                .tag_payload_access => |tpa| countCellDecrefsFromRoot(store, root_expr_id, tpa.value, cell),
+                .nominal => |n| countCellDecrefsFromRoot(store, root_expr_id, n.backing_expr, cell),
+                .early_return => |ret| countCellDecrefsFromRoot(store, root_expr_id, ret.expr, cell),
+                .dbg => |d| countCellDecrefsFromRoot(store, root_expr_id, d.expr, cell),
+                .expect => |e| countCellDecrefsFromRoot(store, root_expr_id, e.cond, cell) + countCellDecrefsFromRoot(store, root_expr_id, e.body, cell),
                 .str_concat => |parts| blk: {
                     var total: u32 = 0;
-                    for (store.getExprSpan(parts)) |part| total += countCellDecrefs(store, part, cell);
+                    for (store.getExprSpan(parts)) |part| total += countCellDecrefsFromRoot(store, root_expr_id, part, cell);
                     break :blk total;
                 },
-                .int_to_str => |its| countCellDecrefs(store, its.value, cell),
-                .float_to_str => |fts| countCellDecrefs(store, fts.value, cell),
-                .dec_to_str => |d| countCellDecrefs(store, d, cell),
-                .str_escape_and_quote => |s| countCellDecrefs(store, s, cell),
+                .int_to_str => |its| countCellDecrefsFromRoot(store, root_expr_id, its.value, cell),
+                .float_to_str => |fts| countCellDecrefsFromRoot(store, root_expr_id, fts.value, cell),
+                .dec_to_str => |d| countCellDecrefsFromRoot(store, root_expr_id, d, cell),
+                .str_escape_and_quote => |s| countCellDecrefsFromRoot(store, root_expr_id, s, cell),
                 .hosted_call => |hc| blk: {
                     var total: u32 = 0;
-                    for (store.getExprSpan(hc.args)) |arg| total += countCellDecrefs(store, arg, cell);
+                    for (store.getExprSpan(hc.args)) |arg| total += countCellDecrefsFromRoot(store, root_expr_id, arg, cell);
                     break :blk total;
                 },
                 .decref => |rc| blk: {
                     const value = store.getExpr(rc.value);
                     if (value == .cell_load and value.cell_load.cell.eql(cell)) break :blk 1;
-                    break :blk countCellDecrefs(store, rc.value, cell);
+                    if (value == .lookup and
+                        symbolLoadsCell(store, root_expr_id, value.lookup.symbol, cell) and
+                        !symbolHasExplicitRetain(store, root_expr_id, value.lookup.symbol))
+                    {
+                        break :blk 1;
+                    }
+                    break :blk countCellDecrefsFromRoot(store, root_expr_id, rc.value, cell);
                 },
-                .incref => |rc| countCellDecrefs(store, rc.value, cell),
-                .free => |rc| countCellDecrefs(store, rc.value, cell),
+                .incref => |rc| countCellDecrefsFromRoot(store, root_expr_id, rc.value, cell),
+                .free => |rc| countCellDecrefsFromRoot(store, root_expr_id, rc.value, cell),
                 else => 0,
+            };
+        }
+
+        fn symbolLoadsCell(
+            store: *const LirExprStore,
+            expr_id: lir.LIR.LirExprId,
+            symbol: lir.LIR.Symbol,
+            cell: lir.LIR.Symbol,
+        ) bool {
+            if (expr_id.isNone()) return false;
+            const expr = store.getExpr(expr_id);
+            return switch (expr) {
+                .block => |block| blk: {
+                    for (store.getStmts(block.stmts)) |stmt| {
+                        switch (stmt) {
+                            .decl, .mutate => |binding| {
+                                const pat = store.getPattern(binding.pattern);
+                                if (pat == .bind and pat.bind.symbol.eql(symbol)) {
+                                    const bound_expr = store.getExpr(binding.expr);
+                                    if (bound_expr == .cell_load and bound_expr.cell_load.cell.eql(cell)) break :blk true;
+                                }
+                                if (symbolLoadsCell(store, binding.expr, symbol, cell)) break :blk true;
+                            },
+                            .cell_init, .cell_store => |binding| {
+                                if (symbolLoadsCell(store, binding.expr, symbol, cell)) break :blk true;
+                            },
+                            .cell_drop => {},
+                        }
+                    }
+                    break :blk symbolLoadsCell(store, block.final_expr, symbol, cell);
+                },
+                .if_then_else => |ite| blk: {
+                    for (store.getIfBranches(ite.branches)) |branch| {
+                        if (symbolLoadsCell(store, branch.cond, symbol, cell)) break :blk true;
+                        if (symbolLoadsCell(store, branch.body, symbol, cell)) break :blk true;
+                    }
+                    break :blk symbolLoadsCell(store, ite.final_else, symbol, cell);
+                },
+                .match_expr => |m| blk: {
+                    if (symbolLoadsCell(store, m.value, symbol, cell)) break :blk true;
+                    for (store.getMatchBranches(m.branches)) |branch| {
+                        if (symbolLoadsCell(store, branch.guard, symbol, cell)) break :blk true;
+                        if (symbolLoadsCell(store, branch.body, symbol, cell)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .loop => |loop_expr| symbolLoadsCell(store, loop_expr.body, symbol, cell),
+                .discriminant_switch => |ds| blk: {
+                    if (symbolLoadsCell(store, ds.value, symbol, cell)) break :blk true;
+                    for (store.getExprSpan(ds.branches)) |branch_id| {
+                        if (symbolLoadsCell(store, branch_id, symbol, cell)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .proc_call => |call| blk: {
+                    if (callCalleeExprId(call)) |callee_expr| {
+                        if (symbolLoadsCell(store, callee_expr, symbol, cell)) break :blk true;
+                    }
+                    for (store.getExprSpan(call.args)) |arg| {
+                        if (symbolLoadsCell(store, arg, symbol, cell)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .low_level => |ll| blk: {
+                    for (store.getExprSpan(ll.args)) |arg| {
+                        if (symbolLoadsCell(store, arg, symbol, cell)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .hosted_call => |hc| blk: {
+                    for (store.getExprSpan(hc.args)) |arg| {
+                        if (symbolLoadsCell(store, arg, symbol, cell)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .list => |list_expr| blk: {
+                    for (store.getExprSpan(list_expr.elems)) |elem| {
+                        if (symbolLoadsCell(store, elem, symbol, cell)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .struct_ => |s| blk: {
+                    for (store.getExprSpan(s.fields)) |field| {
+                        if (symbolLoadsCell(store, field, symbol, cell)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .tag => |t| blk: {
+                    for (store.getExprSpan(t.args)) |arg| {
+                        if (symbolLoadsCell(store, arg, symbol, cell)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .struct_access => |sa| symbolLoadsCell(store, sa.struct_expr, symbol, cell),
+                .tag_payload_access => |tpa| symbolLoadsCell(store, tpa.value, symbol, cell),
+                .nominal => |n| symbolLoadsCell(store, n.backing_expr, symbol, cell),
+                .early_return => |ret| symbolLoadsCell(store, ret.expr, symbol, cell),
+                .dbg => |d| symbolLoadsCell(store, d.expr, symbol, cell),
+                .expect => |e| symbolLoadsCell(store, e.cond, symbol, cell) or symbolLoadsCell(store, e.body, symbol, cell),
+                .str_concat => |parts| blk: {
+                    for (store.getExprSpan(parts)) |part| {
+                        if (symbolLoadsCell(store, part, symbol, cell)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .int_to_str => |its| symbolLoadsCell(store, its.value, symbol, cell),
+                .float_to_str => |fts| symbolLoadsCell(store, fts.value, symbol, cell),
+                .dec_to_str => |d| symbolLoadsCell(store, d, symbol, cell),
+                .str_escape_and_quote => |s| symbolLoadsCell(store, s, symbol, cell),
+                .incref => |rc| symbolLoadsCell(store, rc.value, symbol, cell),
+                .decref => |rc| symbolLoadsCell(store, rc.value, symbol, cell),
+                .free => |rc| symbolLoadsCell(store, rc.value, symbol, cell),
+                else => false,
+            };
+        }
+
+        fn symbolHasExplicitRetain(
+            store: *const LirExprStore,
+            expr_id: lir.LIR.LirExprId,
+            symbol: lir.LIR.Symbol,
+        ) bool {
+            if (expr_id.isNone()) return false;
+            const expr = store.getExpr(expr_id);
+            return switch (expr) {
+                .block => |block| blk: {
+                    for (store.getStmts(block.stmts)) |stmt| {
+                        switch (stmt) {
+                            .decl, .mutate => |binding| {
+                                if (symbolHasExplicitRetain(store, binding.expr, symbol)) break :blk true;
+                            },
+                            .cell_init, .cell_store => |binding| {
+                                if (symbolHasExplicitRetain(store, binding.expr, symbol)) break :blk true;
+                            },
+                            .cell_drop => {},
+                        }
+                    }
+                    break :blk symbolHasExplicitRetain(store, block.final_expr, symbol);
+                },
+                .if_then_else => |ite| blk: {
+                    for (store.getIfBranches(ite.branches)) |branch| {
+                        if (symbolHasExplicitRetain(store, branch.cond, symbol)) break :blk true;
+                        if (symbolHasExplicitRetain(store, branch.body, symbol)) break :blk true;
+                    }
+                    break :blk symbolHasExplicitRetain(store, ite.final_else, symbol);
+                },
+                .match_expr => |m| blk: {
+                    if (symbolHasExplicitRetain(store, m.value, symbol)) break :blk true;
+                    for (store.getMatchBranches(m.branches)) |branch| {
+                        if (symbolHasExplicitRetain(store, branch.guard, symbol)) break :blk true;
+                        if (symbolHasExplicitRetain(store, branch.body, symbol)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .loop => |loop_expr| symbolHasExplicitRetain(store, loop_expr.body, symbol),
+                .discriminant_switch => |ds| blk: {
+                    if (symbolHasExplicitRetain(store, ds.value, symbol)) break :blk true;
+                    for (store.getExprSpan(ds.branches)) |branch_id| {
+                        if (symbolHasExplicitRetain(store, branch_id, symbol)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .proc_call => |call| blk: {
+                    if (callCalleeExprId(call)) |callee_expr| {
+                        if (symbolHasExplicitRetain(store, callee_expr, symbol)) break :blk true;
+                    }
+                    for (store.getExprSpan(call.args)) |arg| {
+                        if (symbolHasExplicitRetain(store, arg, symbol)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .low_level => |ll| blk: {
+                    for (store.getExprSpan(ll.args)) |arg| {
+                        if (symbolHasExplicitRetain(store, arg, symbol)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .hosted_call => |hc| blk: {
+                    for (store.getExprSpan(hc.args)) |arg| {
+                        if (symbolHasExplicitRetain(store, arg, symbol)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .list => |list_expr| blk: {
+                    for (store.getExprSpan(list_expr.elems)) |elem| {
+                        if (symbolHasExplicitRetain(store, elem, symbol)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .struct_ => |s| blk: {
+                    for (store.getExprSpan(s.fields)) |field| {
+                        if (symbolHasExplicitRetain(store, field, symbol)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .tag => |t| blk: {
+                    for (store.getExprSpan(t.args)) |arg| {
+                        if (symbolHasExplicitRetain(store, arg, symbol)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .struct_access => |sa| symbolHasExplicitRetain(store, sa.struct_expr, symbol),
+                .tag_payload_access => |tpa| symbolHasExplicitRetain(store, tpa.value, symbol),
+                .nominal => |n| symbolHasExplicitRetain(store, n.backing_expr, symbol),
+                .early_return => |ret| symbolHasExplicitRetain(store, ret.expr, symbol),
+                .dbg => |d| symbolHasExplicitRetain(store, d.expr, symbol),
+                .expect => |e| symbolHasExplicitRetain(store, e.cond, symbol) or symbolHasExplicitRetain(store, e.body, symbol),
+                .str_concat => |parts| blk: {
+                    for (store.getExprSpan(parts)) |part| {
+                        if (symbolHasExplicitRetain(store, part, symbol)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .int_to_str => |its| symbolHasExplicitRetain(store, its.value, symbol),
+                .float_to_str => |fts| symbolHasExplicitRetain(store, fts.value, symbol),
+                .dec_to_str => |d| symbolHasExplicitRetain(store, d, symbol),
+                .str_escape_and_quote => |s| symbolHasExplicitRetain(store, s, symbol),
+                .incref => |rc| blk: {
+                    const value = store.getExpr(rc.value);
+                    break :blk value == .lookup and value.lookup.symbol.eql(symbol);
+                },
+                .decref => |rc| symbolHasExplicitRetain(store, rc.value, symbol),
+                .free => |rc| symbolHasExplicitRetain(store, rc.value, symbol),
+                else => false,
             };
         }
 
