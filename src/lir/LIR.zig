@@ -151,6 +151,7 @@ pub const ParamRefContract = struct {
     projections: RefProjectionSpan = .empty(),
 };
 
+/// Platform-hosted proc metadata used for external proc ABIs.
 pub const HostedProc = struct {
     /// Symbol exported by the platform host for this hosted proc.
     symbol_name: Ident.Idx,
