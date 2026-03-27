@@ -31,7 +31,6 @@ const CopyFn = *const fn (Opaque, Opaque) callconv(.c) void;
 pub const CopyFallbackFn = *const fn (Opaque, Opaque, usize) callconv(.c) void;
 
 const Inc = *const fn (?*anyopaque, ?[*]u8) callconv(.c) void;
-const IncN = *const fn (?*anyopaque, ?[*]u8, usize) callconv(.c) void;
 const Dec = *const fn (?*anyopaque, ?[*]u8) callconv(.c) void;
 
 /// A bit mask were the only set bit is the bit indicating if the List is a seamless slice.

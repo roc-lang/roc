@@ -17,7 +17,6 @@
 //! executed via a temporary shared library.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const base = @import("base");
 const can = @import("can");
 const layout = @import("layout");

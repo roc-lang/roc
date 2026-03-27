@@ -13,7 +13,6 @@ const layout = @import("layout");
 const interpreter_layout = @import("interpreter_layout");
 const interpreter_values = @import("interpreter_values");
 const mir = @import("mir");
-const lir = @import("lir");
 const roc_target = @import("roc_target");
 const eval_mod = @import("../mod.zig");
 const builtin_loading_mod = eval_mod.builtin_loading;
@@ -39,39 +38,9 @@ const Check = check.Check;
 const Can = can.Can;
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
-const LirExprId = lir.LIR.LirExprId;
-
-fn callCalleeExprId(_: anytype) ?LirExprId {
-    return null;
-}
-
-fn mirProcIdFromExpr(mir_store: *const MIR.Store, expr_id: MIR.ExprId) ?MIR.ProcId {
-    return switch (mir_store.getExpr(expr_id)) {
-        .proc_ref => |proc_id| proc_id,
-        .closure_make => |closure| closure.proc,
-        .block => |block| mirProcIdFromExpr(mir_store, block.final_expr),
-        .dbg_expr => |dbg_expr| mirProcIdFromExpr(mir_store, dbg_expr.expr),
-        .expect => |expect| mirProcIdFromExpr(mir_store, expect.body),
-        .return_expr => |ret| mirProcIdFromExpr(mir_store, ret.expr),
-        else => null,
-    };
-}
-
-fn mirProcIdFromValueDef(mir_store: *const MIR.Store, symbol: MIR.Symbol) ?MIR.ProcId {
-    const def_expr = mir_store.getValueDef(symbol) orelse return null;
-    return mirProcIdFromExpr(mir_store, def_expr);
-}
-
-fn mirProcIdFromCallableExpr(mir_store: *const MIR.Store, expr_id: MIR.ExprId) ?MIR.ProcId {
-    return switch (mir_store.getExpr(expr_id)) {
-        .lookup => |sym| mirProcIdFromValueDef(mir_store, sym),
-        else => mirProcIdFromExpr(mir_store, expr_id),
-    };
-}
 const Allocators = base.Allocators;
 const MIR = mir.MIR;
 const LambdaSet = mir.LambdaSet;
-const LirStore = lir.LirStore;
 
 /// Convert a StackValue to a RocValue for formatting.
 fn stackValueToRocValue(result: StackValue, layout_idx_hint: ?interpreter_layout.Idx) interpreter_values.RocValue {

@@ -64,7 +64,6 @@ const listAppendUnsafe = list.listAppendUnsafe;
 const listAppendSafeC = list.listAppendSafeC;
 const listDecref = list.listDecref;
 const RcDropFn = *const fn (?[*]u8, *RocOps) callconv(.c) void;
-const SortCmpFn = *const fn (?[*]u8, ?[*]u8, ?[*]u8) callconv(.c) u8;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // String Wrappers
