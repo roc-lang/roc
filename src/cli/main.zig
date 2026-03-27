@@ -4416,7 +4416,11 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         return error.NoEntrypointsLowered;
     }
 
-    lir.RcInsert.insertRcOpsIntoSymbolDefsBestEffort(ctx.gpa, &lir_store, &layout_store);
+    try mir_to_lir.flush();
+
+    var rc_pass = try lir.RcInsert.RcInsertPass.init(ctx.gpa, &lir_store, &layout_store);
+    defer rc_pass.deinit();
+    try rc_pass.insertRcOpsForAllProcs();
 
     // Get procedures from the LIR store
     const procs = lir_store.getProcSpecs();

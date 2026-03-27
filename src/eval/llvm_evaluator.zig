@@ -52,63 +52,6 @@ fn isBuiltinModuleEnv(env: *const ModuleEnv) bool {
 /// Layout index for result types
 pub const LayoutIdx = layout.Idx;
 
-/// Extract the result layout from a LIR expression.
-/// This is total for value-producing expressions and unit-valued RC/loop nodes.
-fn lirExprResultLayout(store: *const LirStore, expr_id: lir.LirExprId) layout.Idx {
-    const LirExpr = lir.LirExpr;
-    const expr: LirExpr = store.getExpr(expr_id);
-    return switch (expr) {
-        .block => |b| b.result_layout,
-        .if_then_else => |ite| ite.result_layout,
-        .match_expr => |w| w.result_layout,
-        .dbg => |d| d.result_layout,
-        .expect => |e| e.result_layout,
-        .call => |c| c.ret_layout,
-        .low_level => |ll| ll.ret_layout,
-        .early_return => |er| er.ret_layout,
-        .lookup => |l| l.layout_idx,
-        .cell_load => |l| l.layout_idx,
-        .struct_ => |s| s.struct_layout,
-        .tag => |t| t.union_layout,
-        .zero_arg_tag => |z| z.union_layout,
-        .struct_access => |sa| sa.field_layout,
-        .nominal => |n| n.nominal_layout,
-        .discriminant_switch => |ds| ds.result_layout,
-        .f64_literal => .f64,
-        .f32_literal => .f32,
-        .bool_literal => .bool,
-        .dec_literal => .dec,
-        .str_literal => .str,
-        .i64_literal => |i| i.layout_idx,
-        .i128_literal => |i| i.layout_idx,
-        .list => |l| l.list_layout,
-        .empty_list => |l| l.list_layout,
-        .hosted_call => |hc| hc.ret_layout,
-        .tag_payload_access => |tpa| tpa.payload_layout,
-        .lambda => |l| l.fn_layout,
-        .loop, .incref, .decref, .free => .zst,
-        .crash => |c| c.ret_layout,
-        .runtime_error => |re| re.ret_layout,
-        .break_expr => {
-            if (builtin.mode == .Debug) {
-                std.debug.panic(
-                    "LIR/eval invariant violated: lirExprResultLayout called on break_expr",
-                    .{},
-                );
-            }
-            unreachable;
-        },
-
-        // String-producing operations always return Str layout
-        .str_concat,
-        .int_to_str,
-        .float_to_str,
-        .dec_to_str,
-        .str_escape_and_quote,
-        => .str,
-    };
-}
-
 /// LLVM-based evaluator for Roc expressions
 ///
 /// Orchestrates the full compilation pipeline:
@@ -309,20 +252,17 @@ pub const LlvmEvaluator = struct {
         var mir_to_lir = lir.MirToLir.init(self.allocator, &mir_store, &lir_store, layout_store_ptr, &mir_analyses);
         defer mir_to_lir.deinit();
 
-        const lir_expr_id = mir_to_lir.lower(mir_expr_id) catch {
+        const root_proc_id = mir_to_lir.lower(mir_expr_id) catch {
             return error.CompilationFailed;
         };
 
-        // 3. RC insertion pass on the LIR
+        // 3. RC insertion pass over the full lowered proc graph.
         var rc_pass = lir.RcInsert.RcInsertPass.init(self.allocator, &lir_store, layout_store_ptr) catch return error.OutOfMemory;
         defer rc_pass.deinit();
-        const final_expr_id = rc_pass.insertRcOps(lir_expr_id) catch lir_expr_id;
-
-        // Run RC insertion on all function definitions (symbol_defs)
-        lir.RcInsert.insertRcOpsIntoSymbolDefsBestEffort(self.allocator, &lir_store, layout_store_ptr);
+        try rc_pass.insertRcOpsForAllProcs();
 
         // 4. Determine result layout from LIR expression.
-        const result_layout = lirExprResultLayout(&lir_store, final_expr_id);
+        const result_layout = lir_store.getProcSpec(root_proc_id).ret_layout;
 
         // 5. Generate LLVM bitcode
         const llvm_compile = @import("llvm_compile");
@@ -334,7 +274,7 @@ pub const LlvmEvaluator = struct {
         // Provide layout store for composite types (records, tuples)
         codegen.layout_store = layout_store_ptr;
 
-        var gen_result = codegen.generateCode(final_expr_id, result_layout) catch |e| switch (e) {
+        var gen_result = codegen.generateCode(root_proc_id, result_layout) catch |e| switch (e) {
             error.OutOfMemory => return error.OutOfMemory,
             error.CompilationFailed => unreachable,
         };

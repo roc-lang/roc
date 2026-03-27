@@ -17,6 +17,13 @@ const CFStmt = LIR.CFStmt;
 const CFStmtId = LIR.CFStmtId;
 const LocalRef = LIR.LocalRef;
 const LirProcSpecId = LIR.LirProcSpecId;
+const AssignRefStmt = std.meta.TagPayload(CFStmt, .assign_ref);
+const AssignLiteralStmt = std.meta.TagPayload(CFStmt, .assign_literal);
+const AssignCallStmt = std.meta.TagPayload(CFStmt, .assign_call);
+const AssignLowLevelStmt = std.meta.TagPayload(CFStmt, .assign_low_level);
+const AssignListStmt = std.meta.TagPayload(CFStmt, .assign_list);
+const AssignStructStmt = std.meta.TagPayload(CFStmt, .assign_struct);
+const AssignTagStmt = std.meta.TagPayload(CFStmt, .assign_tag);
 
 pub const RcInsertPass = struct {
     allocator: Allocator,
@@ -48,6 +55,12 @@ pub const RcInsertPass = struct {
         const proc = self.store.getProcSpec(proc_id);
         try self.countUsesInStmt(proc.body);
         self.store.getProcSpecPtr(proc_id).body = try self.processStmt(proc.body);
+    }
+
+    pub fn insertRcOpsForAllProcs(self: *RcInsertPass) Allocator.Error!void {
+        for (0..self.store.getProcSpecs().len) |i| {
+            try self.insertRcOpsForProc(@enumFromInt(@as(u32, @intCast(i))));
+        }
     }
 
     fn localKey(local: LocalRef) u64 {
@@ -294,31 +307,31 @@ pub const RcInsertPass = struct {
         };
     }
 
-    fn processAssignRef(self: *RcInsertPass, assign: CFStmt.assign_ref) Allocator.Error!CFStmtId {
+    fn processAssignRef(self: *RcInsertPass, assign: AssignRefStmt) Allocator.Error!CFStmtId {
         return self.wrapAssignLike(.{ .assign_ref = assign }, assign.target, assign.next);
     }
 
-    fn processAssignLiteral(self: *RcInsertPass, assign: CFStmt.assign_literal) Allocator.Error!CFStmtId {
+    fn processAssignLiteral(self: *RcInsertPass, assign: AssignLiteralStmt) Allocator.Error!CFStmtId {
         return self.wrapAssignLike(.{ .assign_literal = assign }, assign.target, assign.next);
     }
 
-    fn processAssignCall(self: *RcInsertPass, assign: CFStmt.assign_call) Allocator.Error!CFStmtId {
+    fn processAssignCall(self: *RcInsertPass, assign: AssignCallStmt) Allocator.Error!CFStmtId {
         return self.wrapAssignLike(.{ .assign_call = assign }, assign.target, assign.next);
     }
 
-    fn processAssignLowLevel(self: *RcInsertPass, assign: CFStmt.assign_low_level) Allocator.Error!CFStmtId {
+    fn processAssignLowLevel(self: *RcInsertPass, assign: AssignLowLevelStmt) Allocator.Error!CFStmtId {
         return self.wrapAssignLike(.{ .assign_low_level = assign }, assign.target, assign.next);
     }
 
-    fn processAssignList(self: *RcInsertPass, assign: CFStmt.assign_list) Allocator.Error!CFStmtId {
+    fn processAssignList(self: *RcInsertPass, assign: AssignListStmt) Allocator.Error!CFStmtId {
         return self.wrapAssignLike(.{ .assign_list = assign }, assign.target, assign.next);
     }
 
-    fn processAssignStruct(self: *RcInsertPass, assign: CFStmt.assign_struct) Allocator.Error!CFStmtId {
+    fn processAssignStruct(self: *RcInsertPass, assign: AssignStructStmt) Allocator.Error!CFStmtId {
         return self.wrapAssignLike(.{ .assign_struct = assign }, assign.target, assign.next);
     }
 
-    fn processAssignTag(self: *RcInsertPass, assign: CFStmt.assign_tag) Allocator.Error!CFStmtId {
+    fn processAssignTag(self: *RcInsertPass, assign: AssignTagStmt) Allocator.Error!CFStmtId {
         return self.wrapAssignLike(.{ .assign_tag = assign }, assign.target, assign.next);
     }
 };

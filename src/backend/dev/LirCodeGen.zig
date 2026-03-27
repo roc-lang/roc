@@ -7964,11 +7964,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn generateStruct(self: *Self, s: anytype) Allocator.Error!ValueLocation {
             const ls = self.layout_store;
 
-            // Validate layout index before use
-            if (@intFromEnum(s.struct_layout) >= ls.layouts.len()) {
-                unreachable;
-            }
-
             // Get the struct layout
             const struct_layout = ls.getLayout(s.target_layout);
             // Empty structs (ZST) have scalar layout, not struct_ layout
@@ -10683,8 +10678,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const saved_float_owners = self.codegen.float_owners;
             const saved_roc_ops_reg = self.roc_ops_reg;
             const saved_ret_ptr_slot = self.ret_ptr_slot;
-            const saved_binding_symbol = self.current_binding_symbol;
-
             // Reset register state for new function scope — each RC helper is a
             // separate callable with its own prologue/epilogue, so it starts with
             // a full set of registers regardless of what the parent is using.
@@ -10694,7 +10687,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.general_owners = [_]?u32{null} ** CodeGen.NUM_GENERAL_REGS;
             self.codegen.free_float = CodeGen.INITIAL_FREE_FLOAT;
             self.codegen.float_owners = [_]?u32{null} ** CodeGen.NUM_FLOAT_REGS;
-            self.current_binding_symbol = null;
             self.roc_ops_reg = null;
 
             if (comptime target.toCpuArch() == .x86_64) {
@@ -10718,7 +10710,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.codegen.float_owners = saved_float_owners;
                 self.roc_ops_reg = saved_roc_ops_reg;
                 self.ret_ptr_slot = saved_ret_ptr_slot;
-                self.current_binding_symbol = saved_binding_symbol;
                 self.codegen.patchJump(skip_jump, self.codegen.currentOffset());
             }
 
@@ -10824,7 +10815,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.free_float = saved_free_float;
             self.codegen.float_owners = saved_float_owners;
             self.roc_ops_reg = saved_roc_ops_reg;
-            self.current_binding_symbol = saved_binding_symbol;
 
             self.codegen.patchJump(skip_jump, self.codegen.currentOffset());
             return final_offset;
@@ -12682,8 +12672,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 if (nr == 0) continue;
 
                 const is_i128_param = local.layout_idx == .i128 or local.layout_idx == .u128 or local.layout_idx == .dec;
-                if (comptime target.toCpuArch() == .aarch64 and is_i128_param and pre_reg_count < max_arg_regs and pre_reg_count % 2 != 0) {
-                    pre_reg_count += 1;
+                if (comptime target.toCpuArch() == .aarch64) {
+                    if (is_i128_param and pre_reg_count < max_arg_regs and pre_reg_count % 2 != 0) {
+                        pre_reg_count += 1;
+                    }
                 }
 
                 if (pre_reg_count + nr <= max_arg_regs) {
@@ -12719,8 +12711,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const pnr = param_num_regs[pi];
                     const pbp = param_pass_by_ptr[pi];
                     const is_i128_param = local.layout_idx == .i128 or local.layout_idx == .u128 or local.layout_idx == .dec;
-                    if (comptime target.toCpuArch() == .aarch64 and !pbp and is_i128_param and pre_reg_count < max_arg_regs and pre_reg_count % 2 != 0) {
-                        pre_reg_count += 1;
+                    if (comptime target.toCpuArch() == .aarch64) {
+                        if (!pbp and is_i128_param and pre_reg_count < max_arg_regs and pre_reg_count % 2 != 0) {
+                            pre_reg_count += 1;
+                        }
                     }
 
                     const eff_regs: u8 = if (pbp) 1 else pnr;
@@ -12760,8 +12754,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     continue;
                 }
 
-                if (comptime target.toCpuArch() == .aarch64 and num_regs == 2 and (local.layout_idx == .i128 or local.layout_idx == .u128 or local.layout_idx == .dec) and reg_idx % 2 != 0) {
-                    reg_idx += 1;
+                if (comptime target.toCpuArch() == .aarch64) {
+                    if (num_regs == 2 and (local.layout_idx == .i128 or local.layout_idx == .u128 or local.layout_idx == .dec) and reg_idx % 2 != 0) {
+                        reg_idx += 1;
+                    }
                 }
 
                 if (reg_idx + num_regs <= max_arg_regs) {

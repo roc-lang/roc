@@ -32,6 +32,7 @@ pub const CFSwitchBranch = LIR.CFSwitchBranch;
 pub const CFSwitchBranchSpan = LIR.CFSwitchBranchSpan;
 pub const LirProcSpec = LIR.LirProcSpec;
 pub const LirProcSpecId = LIR.LirProcSpecId;
+pub const LowLevel = LIR.LowLevel;
 
 test "lir tests" {
     std.testing.refAllDecls(@This());

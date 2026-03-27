@@ -4302,7 +4302,11 @@ fn processDevObjectSnapshot(
         return false;
     }
 
-    lir_mod.RcInsert.insertRcOpsIntoSymbolDefsBestEffort(allocator, &lir_store, &layout_store);
+    try mir_to_lir.flush();
+
+    var rc_pass = try lir_mod.RcInsert.RcInsertPass.init(allocator, &lir_store, &layout_store);
+    defer rc_pass.deinit();
+    try rc_pass.insertRcOpsForAllProcs();
 
     const procs = lir_store.getProcSpecs();
 

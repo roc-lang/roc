@@ -32,57 +32,7 @@ fn isBuiltinModuleEnv(env: *const ModuleEnv) bool {
 
 const MIR = mir.MIR;
 const LirStore = lir.LirStore;
-const LirExprId = lir.LirExprId;
-const LirExpr = lir.LirExpr;
 const WasmCodeGen = backend.wasm.WasmCodeGen;
-
-/// Extract the result layout from a LIR expression.
-/// Mirrors the logic in dev_evaluator.zig.
-fn lirExprResultLayout(store: *const LirStore, expr_id: LirExprId) layout.Idx {
-    const expr: LirExpr = store.getExpr(expr_id);
-    return switch (expr) {
-        .block => |b| b.result_layout,
-        .if_then_else => |ite| ite.result_layout,
-        .match_expr => |w| w.result_layout,
-        .dbg => |d| d.result_layout,
-        .expect => |e| e.result_layout,
-        .proc_call => |c| c.ret_layout,
-        .low_level => |ll| ll.ret_layout,
-        .early_return => |er| er.ret_layout,
-        .lookup => |l| l.layout_idx,
-        .cell_load => |l| l.layout_idx,
-        .struct_ => |s| s.struct_layout,
-        .tag => |t| t.union_layout,
-        .zero_arg_tag => |z| z.union_layout,
-        .struct_access => |sa| sa.field_layout,
-        .nominal => |n| n.nominal_layout,
-        .discriminant_switch => |ds| ds.result_layout,
-        .f64_literal => .f64,
-        .f32_literal => .f32,
-        .bool_literal => .bool,
-        .dec_literal => .dec,
-        .str_literal => .str,
-        .i64_literal => |i| i.layout_idx,
-        .i128_literal => |i| i.layout_idx,
-        .list => |l| l.list_layout,
-        .empty_list => |l| l.list_layout,
-        .hosted_call => |hc| hc.ret_layout,
-        .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote => .str,
-        .tag_payload_access => |tpa| tpa.payload_layout,
-        .loop, .incref, .decref, .free => .zst,
-        .crash => |c| c.ret_layout,
-        .runtime_error => |re| re.ret_layout,
-        .break_expr => {
-            if (std.debug.runtime_safety) {
-                std.debug.panic(
-                    "LIR/eval invariant violated: lirExprResultLayout called on break_expr",
-                    .{},
-                );
-            }
-            unreachable;
-        },
-    };
-}
 
 /// Result of wasm code generation
 pub const WasmCodeResult = struct {
@@ -250,20 +200,17 @@ pub const WasmEvaluator = struct {
         var mir_to_lir = lir.MirToLir.init(self.allocator, &mir_store, &lir_store, layout_store_ptr, &mir_analyses);
         defer mir_to_lir.deinit();
 
-        const lir_expr_id = mir_to_lir.lower(mir_expr_id) catch {
+        const root_proc_id = mir_to_lir.lower(mir_expr_id) catch {
             return error.RuntimeError;
         };
-        // Run RC insertion pass on the LIR
+        // Run RC insertion over the full lowered proc graph before codegen.
         var rc_pass = lir.RcInsert.RcInsertPass.init(self.allocator, &lir_store, layout_store_ptr) catch return error.OutOfMemory;
         defer rc_pass.deinit();
-        const final_expr_id = rc_pass.insertRcOps(lir_expr_id) catch lir_expr_id;
-
-        // Run RC insertion pass on all function definitions (symbol_defs)
-        lir.RcInsert.insertRcOpsIntoSymbolDefsBestEffort(self.allocator, &lir_store, layout_store_ptr);
+        try rc_pass.insertRcOpsForAllProcs();
 
         // Determine result layout
         const cir_expr = module_env.store.getExpr(expr_idx);
-        const result_layout = lirExprResultLayout(&lir_store, final_expr_id);
+        const result_layout = lir_store.getProcSpec(root_proc_id).ret_layout;
 
         // Detect tuple length
         const tuple_len: usize = if (cir_expr == .e_tuple)
@@ -276,7 +223,7 @@ pub const WasmEvaluator = struct {
         codegen.wasm_stack_bytes = self.wasm_stack_bytes;
         defer codegen.deinit();
 
-        const gen_result = codegen.generateModule(final_expr_id, result_layout) catch {
+        const gen_result = codegen.generateModule(root_proc_id, result_layout) catch {
             return error.RuntimeError;
         };
 

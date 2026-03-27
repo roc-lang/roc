@@ -89,18 +89,7 @@ pub fn deinit(self: *Self) void {
 }
 
 pub fn lower(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirProcSpecId {
-    if (self.flushed) {
-        std.debug.panic(
-            "MirToLir invariant violated: translator instances are single-use after proc flushing",
-            .{},
-        );
-    }
-    if (self.lir_store.getProcSpecs().len != 0) {
-        std.debug.panic(
-            "MirToLir invariant violated: strongest-form proc flushing requires an empty LirStore proc table",
-            .{},
-        );
-    }
+    self.ensureCanLowerMoreProcs();
 
     const ret_layout = try self.runtimeValueLayoutFromMirExpr(mir_expr_id);
     const body = try self.lowerEntrypointBody(mir_expr_id, ret_layout);
@@ -128,9 +117,70 @@ pub fn lower(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirProcSpecId
         .result_contract = result_contract,
     };
     const root_proc_id = try self.addResolvedProc(proc);
+    try self.flush();
+    return root_proc_id;
+}
+
+pub fn lowerEntrypointProc(
+    self: *Self,
+    mir_expr_id: MIR.ExprId,
+    arg_layouts: []const layout.Idx,
+    ret_layout: layout.Idx,
+) Allocator.Error!LirProcSpecId {
+    self.ensureCanLowerMoreProcs();
+
+    const args = try self.allocator.alloc(LocalRef, arg_layouts.len);
+    defer self.allocator.free(args);
+
+    for (arg_layouts, 0..) |arg_layout, i| {
+        args[i] = self.freshLocal(arg_layout);
+    }
+
+    const arg_span = try self.lir_store.addLocalRefs(args);
+    const lowered = try self.lowerEntrypointProcBody(mir_expr_id, args, ret_layout);
+
+    if (builtin.mode == .Debug) {
+        // This verifier exists only to catch compiler implementation bugs by
+        // re-scanning already-lowered LIR. It must remain debug-only because
+        // release compiler builds must not pay for extra full-LIR verification.
+        try DebugVerifyLir.verifyProc(
+            self.allocator,
+            self.lir_store,
+            arg_span,
+            lowered.result_contract,
+            lowered.body,
+        );
+    }
+
+    return self.addResolvedProc(.{
+        .name = self.lir_store.freshSyntheticSymbol(),
+        .args = arg_span,
+        .body = lowered.body,
+        .ret_layout = ret_layout,
+        .result_contract = lowered.result_contract,
+        .hosted = null,
+    });
+}
+
+pub fn flush(self: *Self) Allocator.Error!void {
+    if (self.flushed) return;
     try self.flushBuilderProcs();
     self.flushed = true;
-    return root_proc_id;
+}
+
+fn ensureCanLowerMoreProcs(self: *const Self) void {
+    if (self.flushed) {
+        std.debug.panic(
+            "MirToLir invariant violated: translator instances are single-use after proc flushing",
+            .{},
+        );
+    }
+    if (self.lir_store.getProcSpecs().len != 0) {
+        std.debug.panic(
+            "MirToLir invariant violated: strongest-form proc flushing requires an empty LirStore proc table",
+            .{},
+        );
+    }
 }
 
 fn freshBorrowScope(self: *Self) LIR.BorrowScopeId {
@@ -360,10 +410,160 @@ fn emitRet(self: *Self, value: LocalRef) Allocator.Error!CFStmtId {
     return self.lir_store.addCFStmt(.{ .ret = .{ .value = value } });
 }
 
+const LoweredEntrypointProcBody = struct {
+    body: CFStmtId,
+    result_contract: LIR.ProcResultContract,
+};
+
 fn lowerEntrypointBody(self: *Self, mir_expr_id: MIR.ExprId, ret_layout: layout.Idx) Allocator.Error!CFStmtId {
     const target = self.freshLocal(ret_layout);
     const ret_stmt = try self.emitRet(target);
     return self.lowerExprIntoStmt(mir_expr_id, target, ret_stmt);
+}
+
+fn lowerEntrypointProcBody(
+    self: *Self,
+    mir_expr_id: MIR.ExprId,
+    arg_locals: []const LocalRef,
+    ret_layout: layout.Idx,
+) Allocator.Error!LoweredEntrypointProcBody {
+    const mir_mono = self.mir_store.monotype_store.getMonotype(self.mir_store.typeOf(mir_expr_id));
+    const must_call = arg_locals.len != 0 or mir_mono == .func;
+
+    if (!must_call) {
+        return .{
+            .body = try self.lowerEntrypointBody(mir_expr_id, ret_layout),
+            .result_contract = try self.lowerRootResultContract(mir_expr_id),
+        };
+    }
+
+    const target = self.freshLocal(ret_layout);
+    const ret_stmt = try self.emitRet(target);
+    return self.lowerEntrypointCallableInto(mir_expr_id, arg_locals, target, ret_stmt);
+}
+
+fn loweredProcRetLayout(self: *const Self, proc_id: LirProcSpecId) layout.Idx {
+    return switch (self.builder_procs.items[@intFromEnum(proc_id)]) {
+        .resolved => |proc| proc.ret_layout,
+        .unresolved => |header| header.ret_layout,
+    };
+}
+
+fn lowerEntrypointCallResultContract(
+    self: *Self,
+    proc_id: LirProcSpecId,
+    visible_arg_count: usize,
+) LIR.ProcResultContract {
+    return switch (self.getProcResultContract(proc_id)) {
+        .fresh => .fresh,
+        .alias_of_param => |param_ref| {
+            if (param_ref.param_index >= visible_arg_count) {
+                std.debug.panic(
+                    "MirToLir invariant violated: entrypoint proc result cannot alias hidden closure captures",
+                    .{},
+                );
+            }
+            return .{ .alias_of_param = param_ref };
+        },
+        .borrow_of_param => |param_ref| {
+            if (param_ref.param_index >= visible_arg_count) {
+                std.debug.panic(
+                    "MirToLir invariant violated: entrypoint proc result cannot borrow hidden closure captures",
+                    .{},
+                );
+            }
+            return .{ .borrow_of_param = param_ref };
+        },
+    };
+}
+
+fn emitEntrypointCall(
+    self: *Self,
+    proc_id: LirProcSpecId,
+    visible_args: []const LocalRef,
+    hidden_capture: ?LocalRef,
+    target: LocalRef,
+    next: CFStmtId,
+) Allocator.Error!LoweredEntrypointProcBody {
+    const callee_ret_layout = self.loweredProcRetLayout(proc_id);
+    if (callee_ret_layout != target.layout_idx) {
+        std.debug.panic(
+            "MirToLir invariant violated: entrypoint wrapper result layout does not match callee result layout",
+            .{},
+        );
+    }
+
+    const has_capture = hidden_capture != null;
+    const call_arg_count = visible_args.len + @intFromBool(has_capture);
+    const call_args = try self.allocator.alloc(LocalRef, call_arg_count);
+    defer self.allocator.free(call_args);
+
+    @memcpy(call_args[0..visible_args.len], visible_args);
+    if (hidden_capture) |capture_local| {
+        call_args[visible_args.len] = capture_local;
+    }
+
+    const arg_span = try self.lir_store.addLocalRefs(call_args);
+    return .{
+        .body = try self.lir_store.addCFStmt(.{ .assign_call = .{
+            .target = target,
+            .result = self.callResultSemantics(proc_id, call_args),
+            .proc = proc_id,
+            .args = arg_span,
+            .next = next,
+        } }),
+        .result_contract = self.lowerEntrypointCallResultContract(proc_id, visible_args.len),
+    };
+}
+
+fn lowerEntrypointCallableInto(
+    self: *Self,
+    mir_expr_id: MIR.ExprId,
+    arg_locals: []const LocalRef,
+    target: LocalRef,
+    next: CFStmtId,
+) Allocator.Error!LoweredEntrypointProcBody {
+    return switch (self.mir_store.getExpr(mir_expr_id)) {
+        .proc_ref => |proc_id| self.emitEntrypointCall(
+            try self.lowerProc(proc_id),
+            arg_locals,
+            null,
+            target,
+            next,
+        ),
+        .closure_make => |closure| blk: {
+            const lowered_proc_id = try self.lowerProc(closure.proc);
+            const captures_local = self.freshLocal(try self.runtimeValueLayoutFromMirExpr(closure.captures));
+            const emitted = try self.emitEntrypointCall(
+                lowered_proc_id,
+                arg_locals,
+                captures_local,
+                target,
+                next,
+            );
+            break :blk .{
+                .body = try self.lowerExprIntoStmt(closure.captures, captures_local, emitted.body),
+                .result_contract = emitted.result_contract,
+            };
+        },
+        .dbg_expr => |dbg_expr| self.lowerEntrypointCallableInto(dbg_expr.expr, arg_locals, target, next),
+        .expect => |expect| self.lowerEntrypointCallableInto(expect.body, arg_locals, target, next),
+        .return_expr => |ret| self.lowerEntrypointCallableInto(ret.expr, arg_locals, target, next),
+        .block => |block| blk: {
+            var lowered = try self.lowerEntrypointCallableInto(block.final_expr, arg_locals, target, next);
+            const stmts = self.mir_store.getStmts(block.stmts);
+            var i = stmts.len;
+            while (i > 0) {
+                i -= 1;
+                lowered.body = try self.lowerStmtInto(stmts[i], lowered.body);
+            }
+            break :blk lowered;
+        },
+        else => std.debug.panic(
+            "MirToLir invariant violated: entrypoint wrapper requires a proc-backed MIR callable",
+            .{},
+        ),
+    };
 }
 
 fn tagDiscriminantForExpr(
