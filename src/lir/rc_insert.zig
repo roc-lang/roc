@@ -931,35 +931,7 @@ pub const RcInsertPass = struct {
         return switch (self.store.getExpr(expr_id)) {
             .block => |block| blk: {
                 if (self.exprIsCellOwnerTransfer(expr_id, cell)) break :blk true;
-                if (self.exprMovesCellOwner(block.final_expr, cell)) break :blk true;
-
-                const final_expr = self.store.getExpr(block.final_expr);
-                if (final_expr == .lookup) {
-                    const final_symbol = final_expr.lookup.symbol;
-                    for (self.store.getStmts(block.stmts)) |stmt| {
-                        switch (stmt) {
-                            .decl, .mutate => |binding| {
-                                const pat = self.store.getPattern(binding.pattern);
-                                if (pat == .bind and pat.bind.symbol == final_symbol and self.exprIsCellOwnerTransfer(binding.expr, cell)) {
-                                    break :blk true;
-                                }
-                                if (self.exprMovesCellOwner(binding.expr, cell)) break :blk true;
-                            },
-                            .cell_init, .cell_store => |binding| if (self.exprMovesCellOwner(binding.expr, cell)) break :blk true,
-                            .cell_drop => {},
-                        }
-                    }
-                } else {
-                    for (self.store.getStmts(block.stmts)) |stmt| {
-                        switch (stmt) {
-                            .decl, .mutate => |binding| if (self.exprMovesCellOwner(binding.expr, cell)) break :blk true,
-                            .cell_init, .cell_store => |binding| if (self.exprMovesCellOwner(binding.expr, cell)) break :blk true,
-                            .cell_drop => {},
-                        }
-                    }
-                }
-
-                break :blk false;
+                break :blk self.exprMovesCellOwner(block.final_expr, cell);
             },
             .dbg => |d| self.exprMovesCellOwner(d.expr, cell),
             .nominal => |n| self.exprMovesCellOwner(n.backing_expr, cell),
@@ -1010,7 +982,6 @@ pub const RcInsertPass = struct {
         const incref_binding = stmts[1].decl;
         const retained_pat = self.store.getPattern(retained_binding.pattern);
         if (retained_pat != .bind) return false;
-        if (retained_binding.semantics != .retained) return false;
         if (self.store.getExpr(retained_binding.expr) != .cell_load) return false;
         if (self.store.getExpr(retained_binding.expr).cell_load.cell != cell) return false;
 
@@ -1255,6 +1226,126 @@ pub const RcInsertPass = struct {
             },
             else => expr_id,
         };
+    }
+
+    fn stripTransferredCellProcArg(
+        self: *RcInsertPass,
+        expr_id: LirExprId,
+        cell: Symbol,
+    ) Allocator.Error!struct {
+        expr: LirExprId,
+        consumes_cell_owner: bool,
+    } {
+        if (expr_id.isNone()) return .{ .expr = expr_id, .consumes_cell_owner = false };
+        const expr = self.store.getExpr(expr_id);
+        if (expr != .block) return .{ .expr = expr_id, .consumes_cell_owner = false };
+
+        const block = expr.block;
+        if (self.store.getExpr(block.final_expr) != .proc_call) {
+            return .{ .expr = expr_id, .consumes_cell_owner = false };
+        }
+
+        const call = self.store.getExpr(block.final_expr).proc_call;
+        const args = self.store.getExprSpan(call.args);
+        if (args.len == 0) return .{ .expr = expr_id, .consumes_cell_owner = false };
+        const first_arg = self.store.getExpr(args[0]);
+        if (first_arg != .lookup) return .{ .expr = expr_id, .consumes_cell_owner = false };
+
+        const TrackedOwner = struct {
+            source_expr: LirExprId,
+            removable_stmt_count: usize,
+        };
+
+        var tracked_symbols = std.AutoHashMap(u64, TrackedOwner).init(self.allocator);
+        defer tracked_symbols.deinit();
+
+        var removable_stmt_indices = std.ArrayList(usize).empty;
+        defer removable_stmt_indices.deinit(self.allocator);
+
+        const stmts = self.store.getStmts(block.stmts);
+        for (stmts, 0..) |stmt, stmt_index| {
+            if (stmt != .decl) continue;
+
+            const binding = stmt.decl;
+            const pat = self.store.getPattern(binding.pattern);
+            if (pat != .bind) continue;
+
+            const binding_expr = self.store.getExpr(binding.expr);
+            if (binding_expr == .lookup) {
+                const source = tracked_symbols.get(@bitCast(binding_expr.lookup.symbol)) orelse continue;
+                try tracked_symbols.put(@bitCast(pat.bind.symbol), .{
+                    .source_expr = source.source_expr,
+                    .removable_stmt_count = source.removable_stmt_count + 1,
+                });
+                try removable_stmt_indices.append(self.allocator, stmt_index);
+                continue;
+            }
+
+            if (binding_expr != .block) continue;
+            const transfer_block = binding_expr.block;
+            const transfer_stmts = self.store.getStmts(transfer_block.stmts);
+            if (transfer_stmts.len != 2 or transfer_stmts[0] != .decl or transfer_stmts[1] != .decl) continue;
+
+            const source_binding = transfer_stmts[0].decl;
+            const source_pat = self.store.getPattern(source_binding.pattern);
+            if (source_pat != .bind) continue;
+            if (!self.exprContainsCellLoadOf(source_binding.expr, cell)) continue;
+
+            const incref_expr = self.store.getExpr(transfer_stmts[1].decl.expr);
+            if (incref_expr != .incref) continue;
+            const incref_value = self.store.getExpr(incref_expr.incref.value);
+            if (incref_value != .lookup or incref_value.lookup.symbol != source_pat.bind.symbol) continue;
+            if (!self.exprFinalizesTransferredOwner(transfer_block.final_expr, source_pat.bind.symbol)) continue;
+
+            try tracked_symbols.put(@bitCast(pat.bind.symbol), .{
+                .source_expr = source_binding.expr,
+                .removable_stmt_count = removable_stmt_indices.items.len + 1,
+            });
+            try removable_stmt_indices.append(self.allocator, stmt_index);
+        }
+
+        const tracked = tracked_symbols.get(@bitCast(first_arg.lookup.symbol)) orelse {
+            return .{ .expr = expr_id, .consumes_cell_owner = false };
+        };
+
+        var new_args = std.ArrayList(LirExprId).empty;
+        defer new_args.deinit(self.allocator);
+        try new_args.append(self.allocator, tracked.source_expr);
+        for (args[1..]) |arg| try new_args.append(self.allocator, arg);
+
+        const rebuilt_call = try self.rebuildProcCall(
+            call,
+            try self.store.addExprSpan(new_args.items),
+            self.store.getExprRegion(expr_id),
+        );
+
+        if (tracked.removable_stmt_count == 0) {
+            return .{ .expr = rebuilt_call, .consumes_cell_owner = true };
+        }
+
+        var remove_flags = std.ArrayList(bool).empty;
+        defer remove_flags.deinit(self.allocator);
+        try remove_flags.appendNTimes(self.allocator, false, stmts.len);
+        for (removable_stmt_indices.items[0..tracked.removable_stmt_count]) |idx| {
+            remove_flags.items[idx] = true;
+        }
+
+        var kept_stmts = std.ArrayList(LirStmt).empty;
+        defer kept_stmts.deinit(self.allocator);
+        for (stmts, 0..) |stmt, idx| {
+            if (!remove_flags.items[idx]) try kept_stmts.append(self.allocator, stmt);
+        }
+
+        const rebuilt_expr = if (kept_stmts.items.len == 0)
+            rebuilt_call
+        else
+            try self.store.addExpr(.{ .block = .{
+                .stmts = try self.store.addStmts(kept_stmts.items),
+                .final_expr = rebuilt_call,
+                .result_layout = block.result_layout,
+            } }, self.store.getExprRegion(expr_id));
+
+        return .{ .expr = rebuilt_expr, .consumes_cell_owner = true };
     }
 
     fn retainOperandIfNeededForLaterUse(
@@ -3886,15 +3977,16 @@ pub const RcInsertPass = struct {
                         try stmt_buf.append(self.allocator, .{ .decl = .{
                             .pattern = old_temp.pattern,
                             .expr = old_load,
-                            .semantics = .retained,
+                            .semantics = .borrow_alias,
                         } });
-                        try self.emitBindingIntroductionRcOps(.{
-                            .pattern = old_temp.pattern,
-                            .expr = old_load,
-                            .semantics = .retained,
-                        }, region, &stmt_buf);
 
-                        const stored_expr = try self.stripRedundantRetainedProcCallPreservation(new_expr, cell.cell);
+                        const stripped_expr = try self.stripRedundantRetainedProcCallPreservation(new_expr, cell.cell);
+                        const stored_info = try self.stripTransferredCellProcArg(stripped_expr, cell.cell);
+                        const stored_expr = stored_info.expr;
+                        const cell_owner_consumed_by_store = if (stored_info.consumes_cell_owner) true else blk: {
+                            const owner_key = self.ownerKeyForCellLoadInExpr(stored_expr, cell.cell) orelse break :blk false;
+                            break :blk try self.exprConsumesKey(stored_expr, owner_key);
+                        };
 
                         const temp = try self.freshResultPattern(cell.layout_idx, region);
                         const temp_lookup = try self.store.addExpr(.{ .lookup = .{
@@ -3912,7 +4004,9 @@ pub const RcInsertPass = struct {
                             .layout_idx = cell.layout_idx,
                             .expr = temp_lookup,
                         } });
-                        try self.emitDecrefInto(old_temp.symbol, cell.layout_idx, region, &stmt_buf);
+                        if (!cell_owner_consumed_by_store) {
+                            try self.emitDecrefInto(old_temp.symbol, cell.layout_idx, region, &stmt_buf);
+                        }
                         changed = true;
                     } else {
                         try stmt_buf.append(self.allocator, .{ .cell_store = .{

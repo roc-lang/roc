@@ -5907,6 +5907,82 @@ test "dev lowering: lowered for-loop releases iterated list owner" {
 
 test "dev lowering: mutable list reassignment keeps both decrefs on the reassigned symbol" {
     const Search = struct {
+        fn printExprTree(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, depth: usize) void {
+            if (expr_id.isNone()) return;
+
+            const expr = store.getExpr(expr_id);
+            for (0..depth) |_| std.debug.print("  ", .{});
+            switch (expr) {
+                .lookup => |lookup| std.debug.print("expr {d}: lookup symbol={d} layout={d}\n", .{
+                    @intFromEnum(expr_id), lookup.symbol.raw(), @intFromEnum(lookup.layout_idx),
+                }),
+                .cell_load => |load| std.debug.print("expr {d}: cell_load cell={d} layout={d}\n", .{
+                    @intFromEnum(expr_id), load.cell.raw(), @intFromEnum(load.layout_idx),
+                }),
+                .block => |block| {
+                    std.debug.print("expr {d}: block stmts={d} final={d}\n", .{
+                        @intFromEnum(expr_id), block.stmts.len, @intFromEnum(block.final_expr),
+                    });
+                    for (store.getStmts(block.stmts), 0..) |stmt, i| {
+                        for (0..depth + 1) |_| std.debug.print("  ", .{});
+                        switch (stmt) {
+                            .decl, .mutate => |binding| {
+                                const pat = store.getPattern(binding.pattern);
+                                if (pat == .bind) {
+                                    std.debug.print("stmt[{d}] {s} symbol={d} layout={d}\n", .{
+                                        i, @tagName(stmt), pat.bind.symbol.raw(), @intFromEnum(pat.bind.layout_idx),
+                                    });
+                                } else {
+                                    std.debug.print("stmt[{d}] {s}\n", .{ i, @tagName(stmt) });
+                                }
+                                printExprTree(store, binding.expr, depth + 2);
+                            },
+                            .cell_init, .cell_store => |binding| {
+                                std.debug.print("stmt[{d}] {s} cell={d} layout={d}\n", .{
+                                    i, @tagName(stmt), @as(u64, @bitCast(binding.cell)), @intFromEnum(binding.layout_idx),
+                                });
+                                printExprTree(store, binding.expr, depth + 2);
+                            },
+                            .cell_drop => |drop| std.debug.print("stmt[{d}] cell_drop cell={d}\n", .{
+                                i, @as(u64, @bitCast(drop.cell)),
+                            }),
+                        }
+                    }
+                    printExprTree(store, block.final_expr, depth + 1);
+                },
+                .proc_call => |call| {
+                    std.debug.print("expr {d}: proc_call proc={d} argc={d}\n", .{
+                        @intFromEnum(expr_id), @intFromEnum(call.proc), store.getExprSpan(call.args).len,
+                    });
+                    if (callCalleeExprId(call)) |callee_expr| printExprTree(store, callee_expr, depth + 1);
+                    for (store.getExprSpan(call.args)) |arg| printExprTree(store, arg, depth + 1);
+                },
+                .low_level => |ll| {
+                    std.debug.print("expr {d}: low_level {s} argc={d}\n", .{
+                        @intFromEnum(expr_id), @tagName(ll.op), store.getExprSpan(ll.args).len,
+                    });
+                    for (store.getExprSpan(ll.args)) |arg| printExprTree(store, arg, depth + 1);
+                },
+                .match_expr => |m| {
+                    std.debug.print("expr {d}: match_expr\n", .{@intFromEnum(expr_id)});
+                    printExprTree(store, m.value, depth + 1);
+                    for (store.getMatchBranches(m.branches)) |branch| {
+                        printExprTree(store, branch.guard, depth + 1);
+                        printExprTree(store, branch.body, depth + 1);
+                    }
+                },
+                .decref => |dec| {
+                    std.debug.print("expr {d}: decref\n", .{@intFromEnum(expr_id)});
+                    printExprTree(store, dec.value, depth + 1);
+                },
+                .incref => |inc| {
+                    std.debug.print("expr {d}: incref\n", .{@intFromEnum(expr_id)});
+                    printExprTree(store, inc.value, depth + 1);
+                },
+                else => std.debug.print("expr {d}: {s}\n", .{ @intFromEnum(expr_id), @tagName(expr) }),
+            }
+        }
+
         fn countDecrefsForSymbol(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, symbol: lir.LIR.Symbol) u32 {
             const expr = store.getExpr(expr_id);
             return switch (expr) {
@@ -6266,6 +6342,8 @@ test "dev lowering: mutable list reassignment keeps both decrefs on the reassign
 
     const root = lir_store.getExpr(with_rc);
     try std.testing.expect(root == .block);
+    std.debug.print("LIR for mutable list reassignment:\n", .{});
+    Search.printExprTree(&lir_store, with_rc, 0);
 
     const stmts = lir_store.getStmts(root.block.stmts);
     var found_reassignable_list = false;
@@ -6379,6 +6457,12 @@ test "dev lowering: for-loop mutable list append rc shape" {
                     for (store.getExprSpan(ll.args)) |arg| {
                         printExprTree(store, arg, depth + 1);
                     }
+                },
+                .cell_load => |load| {
+                    std.debug.print(
+                        "expr {d}: cell_load cell={d} layout={d}\n",
+                        .{ @intFromEnum(expr_id), load.cell.raw(), @intFromEnum(load.layout_idx) },
+                    );
                 },
                 .match_expr => |match_expr| {
                     std.debug.print("expr {d}: match_expr\n", .{@intFromEnum(expr_id)});
@@ -6914,6 +6998,158 @@ test "dev lowering: for-loop mutable list append with closure rc shape" {
     const with_rc = try rc_pass.insertRcOps(lowered);
 
     std.debug.print("LIR for mutable list append loop with closure:\n", .{});
+    Debug.printExprTree(&lir_store, with_rc, 0);
+}
+
+test "dev lowering: list alias then shadow rc shape" {
+    const Debug = struct {
+        fn printExprTree(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, depth: usize) void {
+            if (expr_id.isNone()) return;
+
+            const expr = store.getExpr(expr_id);
+            for (0..depth) |_| std.debug.print("  ", .{});
+            switch (expr) {
+                .lookup => |lookup| std.debug.print("expr {d}: lookup symbol={d} layout={d}\n", .{
+                    @intFromEnum(expr_id), lookup.symbol.raw(), @intFromEnum(lookup.layout_idx),
+                }),
+                .cell_load => |load| std.debug.print("expr {d}: cell_load cell={d} layout={d}\n", .{
+                    @intFromEnum(expr_id), load.cell.raw(), @intFromEnum(load.layout_idx),
+                }),
+                .block => |block| {
+                    std.debug.print("expr {d}: block stmts={d} final={d}\n", .{
+                        @intFromEnum(expr_id), block.stmts.len, @intFromEnum(block.final_expr),
+                    });
+                    for (store.getStmts(block.stmts), 0..) |stmt, i| {
+                        for (0..depth + 1) |_| std.debug.print("  ", .{});
+                        switch (stmt) {
+                            .decl, .mutate => |binding| {
+                                const pat = store.getPattern(binding.pattern);
+                                if (pat == .bind) {
+                                    std.debug.print("stmt[{d}] {s} symbol={d} layout={d}\n", .{
+                                        i, @tagName(stmt), pat.bind.symbol.raw(), @intFromEnum(pat.bind.layout_idx),
+                                    });
+                                } else {
+                                    std.debug.print("stmt[{d}] {s}\n", .{ i, @tagName(stmt) });
+                                }
+                                printExprTree(store, binding.expr, depth + 2);
+                            },
+                            .cell_init, .cell_store => |binding| {
+                                std.debug.print("stmt[{d}] {s} cell={d} layout={d}\n", .{
+                                    i, @tagName(stmt), @as(u64, @bitCast(binding.cell)), @intFromEnum(binding.layout_idx),
+                                });
+                                printExprTree(store, binding.expr, depth + 2);
+                            },
+                            .cell_drop => |drop| std.debug.print("stmt[{d}] cell_drop cell={d}\n", .{
+                                i, @as(u64, @bitCast(drop.cell)),
+                            }),
+                        }
+                    }
+                    printExprTree(store, block.final_expr, depth + 1);
+                },
+                .proc_call => |call| {
+                    std.debug.print("expr {d}: proc_call proc={d} argc={d}\n", .{
+                        @intFromEnum(expr_id), @intFromEnum(call.proc), store.getExprSpan(call.args).len,
+                    });
+                    for (store.getExprSpan(call.args)) |arg| printExprTree(store, arg, depth + 1);
+                },
+                .low_level => |ll| {
+                    std.debug.print("expr {d}: low_level {s} argc={d}\n", .{
+                        @intFromEnum(expr_id), @tagName(ll.op), store.getExprSpan(ll.args).len,
+                    });
+                    for (store.getExprSpan(ll.args)) |arg| printExprTree(store, arg, depth + 1);
+                },
+                .match_expr => |m| {
+                    std.debug.print("expr {d}: match_expr\n", .{@intFromEnum(expr_id)});
+                    printExprTree(store, m.value, depth + 1);
+                    for (store.getMatchBranches(m.branches)) |branch| {
+                        printExprTree(store, branch.guard, depth + 1);
+                        printExprTree(store, branch.body, depth + 1);
+                    }
+                },
+                .decref => |dec| {
+                    std.debug.print("expr {d}: decref\n", .{@intFromEnum(expr_id)});
+                    printExprTree(store, dec.value, depth + 1);
+                },
+                .incref => |inc| {
+                    std.debug.print("expr {d}: incref\n", .{@intFromEnum(expr_id)});
+                    printExprTree(store, inc.value, depth + 1);
+                },
+                else => std.debug.print("expr {d}: {s}\n", .{ @intFromEnum(expr_id), @tagName(expr) }),
+            }
+        }
+    };
+
+    const resources = try parseAndCanonicalizeExpr(test_allocator,
+        \\{
+        \\    var $x = [1, 2]
+        \\    y = $x
+        \\    $x = [3, 4]
+        \\    match y { [a, b] => a + b, _ => 0 }
+        \\}
+    );
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(resources.builtin_module.env),
+        resources.module_env,
+    };
+
+    var monomorphization = try mir.Monomorphize.runExpr(
+        test_allocator,
+        all_module_envs[0..],
+        &resources.module_env.types,
+        1,
+        null,
+        resources.expr_idx,
+    );
+    defer monomorphization.deinit(test_allocator);
+
+    var lower = try mir.Lower.init(
+        test_allocator,
+        &mir_store,
+        &monomorphization,
+        all_module_envs[0..],
+        &resources.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    const mir_expr = try lower.lowerExpr(resources.expr_idx);
+
+    var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
+    defer lambda_set_store.deinit(test_allocator);
+
+    var layout_store = try layout.Store.init(
+        all_module_envs[0..],
+        resources.builtin_module.env.idents.builtin_str,
+        test_allocator,
+        base.target.TargetUsize.native,
+    );
+    defer layout_store.deinit();
+
+    var lir_store = LirExprStore.init(test_allocator);
+    defer lir_store.deinit();
+
+    var translator = lir.MirToLir.init(
+        test_allocator,
+        &mir_store,
+        &lir_store,
+        &layout_store,
+        &lambda_set_store,
+        resources.module_env.idents.true_tag,
+    );
+    defer translator.deinit();
+
+    const lowered = try translator.lower(mir_expr);
+    var rc_pass = try lir.RcInsert.RcInsertPass.init(test_allocator, &lir_store, &layout_store);
+    defer rc_pass.deinit();
+    const with_rc = try rc_pass.insertRcOps(lowered);
+
+    std.debug.print("LIR for list alias then shadow:\n", .{});
     Debug.printExprTree(&lir_store, with_rc, 0);
 }
 
