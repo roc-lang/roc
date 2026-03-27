@@ -1092,14 +1092,13 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
         .builtin_indices = builtin_indices,
     };
 
-    // Create module_envs map for canonicalization (enables qualified calls)
-    var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
-    defer module_envs_map.deinit();
-    // Use the shared populateModuleEnvs function to set up auto-imported types
-    try Can.populateModuleEnvs(&module_envs_map, module_env, builtin_module.env, builtin_indices);
-
     logDebug("compileSource: Starting canonicalization\n", .{});
-    var czer = try Can.init(&allocators, env, result.parse_ast.?, &module_envs_map);
+    var czer = try Can.initModule(&allocators, env, result.parse_ast.?, .{
+        .builtin_types = .{
+            .builtin_module_env = builtin_module.env,
+            .builtin_indices = builtin_indices,
+        },
+    });
     defer czer.deinit();
 
     czer.canonicalizeFile() catch |err| {
@@ -1142,7 +1141,7 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
         type_can_ir.imports.resolveImports(type_can_ir, imported_envs);
 
         // Use pointer to the stored CIR to ensure solver references valid memory
-        var solver = try Check.init(allocator, &type_can_ir.types, type_can_ir, imported_envs, &module_envs_map, &type_can_ir.store.regions, module_builtin_ctx);
+        var solver = try Check.init(allocator, &type_can_ir.types, type_can_ir, imported_envs, null, &type_can_ir.store.regions, module_builtin_ctx);
         result.solver = solver;
 
         solver.checkFile() catch |check_err| {

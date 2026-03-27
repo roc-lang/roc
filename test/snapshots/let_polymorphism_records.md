@@ -383,29 +383,24 @@ NO CHANGE
 					(e-num (value "3"))))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-closure
-			(captures
-				(capture (ident "update_data"))
-				(capture (ident "int_container"))
-				(capture (ident "str_container")))
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-block
-					(s-expr
-						(e-binop (op "add")
-							(e-num (value "1"))
-							(e-lookup-local
-								(p-assign (ident "update_data")))))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-block
+				(s-expr
 					(e-binop (op "add")
-						(e-dot-access (field "count")
-							(receiver
-								(e-lookup-local
-									(p-assign (ident "int_container")))))
-						(e-dot-access (field "count")
-							(receiver
-								(e-lookup-local
-									(p-assign (ident "str_container")))))))))))
+						(e-num (value "1"))
+						(e-lookup-local
+							(p-assign (ident "update_data")))))
+				(e-binop (op "add")
+					(e-dot-access (field "count")
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "int_container")))))
+					(e-dot-access (field "count")
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "str_container"))))))))))
 ~~~
 # TYPES
 ~~~clojure

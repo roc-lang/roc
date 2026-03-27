@@ -112,16 +112,13 @@ main! = |_| processNested([])
 					(ty-lookup (name "Str") (builtin))))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-closure
-			(captures
-				(capture (ident "processNested")))
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-call
-					(e-lookup-local
-						(p-assign (ident "processNested")))
-					(e-empty_list))))))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-call
+				(e-lookup-local
+					(p-assign (ident "processNested")))
+				(e-empty_list)))))
 ~~~
 # TYPES
 ~~~clojure

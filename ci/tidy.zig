@@ -602,6 +602,7 @@ const DeadFilesDetector = struct {
             "roc_subcommands.zig", // CLI subcommand tests
             "test_runner.zig", // Test runner executable
             "llvm_evaluator.zig", // LLVM evaluator executable
+            "darwin_compat.zig", // Compiled to .o by build.zig for macOS linking
             "echo.zig", // Echo platform WASM entry point
         };
         for (entry_points) |entry_point| {

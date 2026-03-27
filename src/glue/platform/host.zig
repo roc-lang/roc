@@ -48,13 +48,17 @@ fn handleRocStackOverflow() noreturn {
         const kernel32 = struct {
             extern "kernel32" fn GetStdHandle(nStdHandle: DWORD) callconv(.winapi) HANDLE;
             extern "kernel32" fn WriteFile(hFile: HANDLE, lpBuffer: [*]const u8, nNumberOfBytesToWrite: DWORD, lpNumberOfBytesWritten: ?*DWORD, lpOverlapped: ?*anyopaque) callconv(.winapi) i32;
-            extern "kernel32" fn ExitProcess(uExitCode: c_uint) callconv(.winapi) noreturn;
+            extern "kernel32" fn TerminateProcess(hProcess: HANDLE, uExitCode: c_uint) callconv(.winapi) i32;
+            extern "kernel32" fn GetCurrentProcess() callconv(.winapi) HANDLE;
         };
 
         const stderr_handle = kernel32.GetStdHandle(STD_ERROR_HANDLE);
         var bytes_written: DWORD = 0;
         _ = kernel32.WriteFile(stderr_handle, STACK_OVERFLOW_MESSAGE.ptr, STACK_OVERFLOW_MESSAGE.len, &bytes_written, null);
-        kernel32.ExitProcess(134);
+        // Use TerminateProcess instead of ExitProcess: after a stack overflow the
+        // stack is blown and ExitProcess's DLL cleanup can trigger a secondary crash.
+        _ = kernel32.TerminateProcess(kernel32.GetCurrentProcess(), 134);
+        @trap();
     } else if (comptime builtin.os.tag != .wasi) {
         _ = posix.write(posix.STDERR_FILENO, STACK_OVERFLOW_MESSAGE) catch {};
         posix.exit(134);

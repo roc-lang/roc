@@ -12,7 +12,6 @@ const CIR = @import("can").CIR;
 
 pub const store = @import("store.zig");
 
-const Ident = base.Ident;
 const target = base.target;
 
 /// Tag for Layout variants
@@ -22,8 +21,7 @@ pub const LayoutTag = enum(u4) {
     box_of_zst, // Box of a zero-sized type, e.g. Box({}) - needs a special-cased runtime implementation
     list,
     list_of_zst, // List of zero-sized types, e.g. List({}) - needs a special-cased runtime implementation
-    record,
-    tuple,
+    struct_, // Unified struct layout for both records and tuples (fields sorted by alignment)
     closure,
     zst, // Zero-sized type (empty records, empty tuples, phantom types, etc.)
     tag_union, // Tag union with variant-specific layouts for proper refcounting
@@ -39,10 +37,9 @@ const layout_bit_size = 32;
 /// Scalar and Idx using branchless arithmetic instructions. Don't change them
 /// lightly, and make sure to re-run tests if you do!
 pub const ScalarTag = enum(u3) {
-    opaque_ptr = 0, // Maps to Idx 2
-    str = 1, // Maps to Idx 1
-    int = 2, // Maps to Idx 3-12 (depending on precision)
-    frac = 3, // Maps to Idx 13-15 (depending on precision)
+    str = 0, // Maps to Idx 1
+    int = 1, // Maps to Idx 2-11 (depending on precision)
+    frac = 2, // Maps to Idx 12-14 (depending on precision)
 };
 
 /// The union portion of the Scalar packed tagged union.
@@ -51,13 +48,12 @@ pub const ScalarTag = enum(u3) {
 /// such as the precision of a particular int or frac. This union
 /// stores that extra information.
 pub const ScalarUnion = packed union {
-    opaque_ptr: void,
     str: void,
     int: types.Int.Precision,
     frac: types.Frac.Precision,
 };
 
-/// A scalar value such as a str, int, frac, or opaque pointer type.
+/// A scalar value such as a str, int, or frac.
 pub const Scalar = packed struct {
     // This can't be a normal Zig tagged union because it uses a packed union to reduce memory use,
     // and Zig tagged unions don't support being packed.
@@ -84,27 +80,26 @@ pub const Idx = enum(@Type(.{
     // so be careful when changing them! (Changing them will, at a minimum, cause tests to fail.)
     bool = 0,
     str = 1,
-    opaque_ptr = 2,
 
     // ints
-    u8 = 3,
-    i8 = 4,
-    u16 = 5,
-    i16 = 6,
-    u32 = 7,
-    i32 = 8,
-    u64 = 9,
-    i64 = 10,
-    u128 = 11,
-    i128 = 12,
+    u8 = 2,
+    i8 = 3,
+    u16 = 4,
+    i16 = 5,
+    u32 = 6,
+    i32 = 7,
+    u64 = 8,
+    i64 = 9,
+    u128 = 10,
+    i128 = 11,
 
     // fracs
-    f32 = 13,
-    f64 = 14,
-    dec = 15,
+    f32 = 12,
+    f64 = 13,
+    dec = 14,
 
     // zero-sized type
-    zst = 16,
+    zst = 15,
 
     // Regular indices start from here.
     // num_primitives in store.zig must refer to how many variants we had up to this point.
@@ -113,6 +108,17 @@ pub const Idx = enum(@Type(.{
     /// Sentinel value representing "not present" / "no layout".
     /// Used by ArrayListMap as the empty slot marker.
     pub const none: Idx = @enumFromInt(std.math.maxInt(@typeInfo(Idx).@"enum".tag_type));
+
+    /// Returns true if this layout represents a signed integer type.
+    /// Used for determining signed vs unsigned operations (sdiv vs udiv, etc.)
+    pub fn isSigned(self: Idx) bool {
+        return switch (self) {
+            .i8, .i16, .i32, .i64, .i128, .dec => true,
+            .u8, .u16, .u32, .u64, .u128 => false,
+            // Default to signed for other types (floats don't use this, bools are unsigned)
+            else => true,
+        };
+    }
 
     /// Sentinel for call expressions where the function is resolved by name
     /// (e.g., external method calls like `List.map`), not by closure dispatch.
@@ -146,108 +152,90 @@ pub const LayoutUnion = packed union {
     box_of_zst: void,
     list: Idx,
     list_of_zst: void,
-    record: RecordLayout,
-    tuple: TupleLayout,
+    struct_: StructLayout,
     closure: ClosureLayout,
     zst: void,
     tag_union: TagUnionLayout,
 };
 
-/// Record field layout
-pub const RecordField = struct {
-    /// The interned string name of the field
-    name: Ident.Idx,
+/// Unified struct field layout — used for both records and tuples at the layout level.
+/// At the LIR level, records and tuples are both just contiguous fields sorted by alignment.
+/// The `index` field stores the canonical semantic field index:
+///   - For records: alphabetical closed-record field order
+///   - For tuples: the original tuple element index (e.g. .0, .1, .2)
+pub const StructField = struct {
+    /// The canonical semantic index of this field before layout sorting.
+    index: u16,
     /// The layout of the field's value
     layout: Idx,
 
-    /// A SafeMultiList for storing record fields
-    pub const SafeMultiList = collections.SafeMultiList(RecordField);
+    /// A SafeMultiList for storing struct fields
+    pub const SafeMultiList = collections.SafeMultiList(StructField);
 };
 
-/// Record layout - stores alignment and index to full data in Store
-pub const RecordLayout = packed struct {
-    /// Alignment of the record
+/// Backwards-compat aliases so existing code that references the old names still compiles.
+/// Callers will be migrated incrementally.
+pub const RecordField = StructField;
+/// Backwards-compat alias for `StructField`.
+pub const TupleField = StructField;
+/// Backwards-compat alias for `StructField`.
+pub const TupleFieldLayout = StructField;
+
+/// Struct layout - stores alignment and index to full data in Store.
+/// Unified representation for both records and tuples.
+pub const StructLayout = packed struct {
+    /// Alignment of the struct
     alignment: std.mem.Alignment,
-    /// Index into the Store's record data
-    idx: RecordIdx,
+    /// Index into the Store's struct data
+    idx: StructIdx,
 };
 
-/// Index into the Store's record data
-pub const RecordIdx = packed struct {
+/// Backwards-compat alias for `StructLayout`.
+pub const RecordLayout = StructLayout;
+/// Backwards-compat alias for `StructLayout`.
+pub const TupleLayout = StructLayout;
+
+/// Index into the Store's struct data
+pub const StructIdx = packed struct {
     int_idx: @Type(.{
         .int = .{
             .signedness = .unsigned,
-            // We need to be able to fit this in a Layout along with the alignment field in the RecordLayout.
+            // We need to be able to fit this in a Layout along with the alignment field in the StructLayout.
             .bits = layout_bit_size - @bitSizeOf(LayoutTag) - @bitSizeOf(std.mem.Alignment),
         },
     }),
 };
 
-/// Record data stored in the layout Store
-pub const RecordData = struct {
-    /// Size of the record, in bytes
+/// Backwards-compat alias for `StructIdx`.
+pub const RecordIdx = StructIdx;
+/// Backwards-compat alias for `StructIdx`.
+pub const TupleIdx = StructIdx;
+
+/// Struct data stored in the layout Store — unified for records and tuples.
+pub const StructData = struct {
+    /// Size of the struct, in bytes
     size: u32,
-    /// Range of fields in the record_fields list
+    /// Range of fields in the struct_fields list
     fields: collections.NonEmptyRange,
 
-    pub fn getFields(self: RecordData) RecordField.SafeMultiList.Range {
-        // Handle empty records specially - NonEmptyRange.toRange() asserts count > 0
+    pub fn getFields(self: StructData) StructField.SafeMultiList.Range {
+        // Handle empty structs specially - NonEmptyRange.toRange() asserts count > 0
         if (self.fields.count == 0) {
-            return RecordField.SafeMultiList.Range.empty();
+            return StructField.SafeMultiList.Range.empty();
         }
-        return self.fields.toRange(RecordField.SafeMultiList.Idx);
+        return self.fields.toRange(StructField.SafeMultiList.Idx);
     }
 };
 
-/// Tuple field layout
-pub const TupleField = struct {
-    /// The index of the field in the original tuple (e.g. 0 would be the first element in the tuple)
-    index: u16,
-    /// The layout of the field's value
-    layout: Idx,
-
-    /// A SafeMultiList for storing tuple fields
-    pub const SafeMultiList = collections.SafeMultiList(TupleField);
-};
+/// Backwards-compat alias for `StructData`.
+pub const RecordData = StructData;
+/// Backwards-compat alias for `StructData`.
+pub const TupleData = StructData;
 
 /// Closure layout - stores captures layout index
 pub const ClosureLayout = packed struct {
     /// Layout index of the captured environment
     captures_layout_idx: Idx,
-};
-
-/// Tuple field layout type alias for compatibility
-pub const TupleFieldLayout = TupleField;
-
-/// Tuple layout - stores alignment and index to full data in Store
-pub const TupleLayout = packed struct {
-    /// Alignment of the tuple
-    alignment: std.mem.Alignment,
-    /// Index into the Store's tuple data
-    idx: TupleIdx,
-};
-
-/// Index into the Store's tuple data
-pub const TupleIdx = packed struct {
-    int_idx: @Type(.{
-        .int = .{
-            .signedness = .unsigned,
-            // We need to be able to fit this in a Layout along with the alignment field in the TupleLayout.
-            .bits = layout_bit_size - @bitSizeOf(LayoutTag) - @bitSizeOf(std.mem.Alignment),
-        },
-    }),
-};
-
-/// Tuple data stored in the layout Store
-pub const TupleData = struct {
-    /// Size of the tuple, in bytes
-    size: u32,
-    /// Range of fields in the tuple_fields list
-    fields: collections.NonEmptyRange,
-
-    pub fn getFields(self: TupleData) TupleField.SafeMultiList.Range {
-        return self.fields.toRange(TupleField.SafeMultiList.Idx);
-    }
 };
 
 /// Tag union layout - stores alignment and index to full data in Store
@@ -276,7 +264,9 @@ pub const TagUnionData = struct {
     size: u32,
     /// Offset of the discriminant within the union (usually after payload)
     discriminant_offset: u16,
-    /// Size of the discriminant in bytes (1, 2, 4, or 8)
+    /// Size of the discriminant in bytes (0, 1, 2, 4, or 8).
+    /// A size of 0 means the tag union has exactly one variant, so the
+    /// discriminant is implicit and always 0.
     discriminant_size: u8,
     /// Range of variants in the tag_union_variants list
     variants: collections.NonEmptyRange,
@@ -288,6 +278,7 @@ pub const TagUnionData = struct {
     /// Read the discriminant value from memory at the given base pointer.
     /// Adds discriminant_offset internally to find the discriminant location.
     pub fn readDiscriminant(self: TagUnionData, base_ptr: [*]const u8) u32 {
+        if (self.discriminant_size == 0) return 0;
         return self.readDiscriminantFromPtr(base_ptr + self.discriminant_offset);
     }
 
@@ -295,17 +286,19 @@ pub const TagUnionData = struct {
     /// Use this when you have a pre-computed discriminant pointer (e.g., from getTagUnionDiscriminantOffset).
     pub fn readDiscriminantFromPtr(self: TagUnionData, disc_ptr: [*]const u8) u32 {
         return switch (self.discriminant_size) {
+            0 => 0,
             1 => disc_ptr[0],
             2 => @as(u32, disc_ptr[0]) | (@as(u32, disc_ptr[1]) << 8),
             4 => @as(u32, disc_ptr[0]) | (@as(u32, disc_ptr[1]) << 8) | (@as(u32, disc_ptr[2]) << 16) | (@as(u32, disc_ptr[3]) << 24),
             8 => @as(u32, disc_ptr[0]) | (@as(u32, disc_ptr[1]) << 8) | (@as(u32, disc_ptr[2]) << 16) | (@as(u32, disc_ptr[3]) << 24), // truncate to u32
-            else => unreachable, // discriminant_size is 1, 2, 4, or 8
+            else => unreachable, // discriminant_size is 0, 1, 2, 4, or 8
         };
     }
 
     /// Write a discriminant value to memory at the given base pointer.
     /// Adds discriminant_offset internally to find the discriminant location.
     pub fn writeDiscriminant(self: TagUnionData, base_ptr: [*]u8, value: u32) void {
+        if (self.discriminant_size == 0) return;
         self.writeDiscriminantToPtr(base_ptr + self.discriminant_offset, value);
     }
 
@@ -313,6 +306,7 @@ pub const TagUnionData = struct {
     /// Use this when you have a pre-computed discriminant pointer (e.g., from getTagUnionDiscriminantOffset).
     pub fn writeDiscriminantToPtr(self: TagUnionData, disc_ptr: [*]u8, value: u32) void {
         switch (self.discriminant_size) {
+            0 => {},
             1 => disc_ptr[0] = @intCast(value),
             2 => {
                 disc_ptr[0] = @intCast(value & 0xFF);
@@ -334,7 +328,7 @@ pub const TagUnionData = struct {
                 disc_ptr[6] = 0;
                 disc_ptr[7] = 0;
             },
-            else => unreachable, // discriminant_size is 1, 2, 4, or 8
+            else => unreachable, // discriminant_size is 0, 1, 2, 4, or 8
         }
     }
 
@@ -347,11 +341,12 @@ pub const TagUnionData = struct {
     /// Can be called before a TagUnionData is created.
     pub fn alignmentForDiscriminantSize(size: u8) std.mem.Alignment {
         return switch (size) {
+            0 => .@"1",
             1 => .@"1",
             2 => .@"2",
             4 => .@"4",
             8 => .@"8",
-            else => unreachable, // discriminant_size is 1, 2, 4, or 8
+            else => unreachable, // discriminant_size is 0, 1, 2, 4, or 8
         };
     }
 
@@ -370,11 +365,12 @@ pub const TagUnionData = struct {
     /// Can be called before a TagUnionData is created.
     pub fn precisionForDiscriminantSize(size: u8) types.Int.Precision {
         return switch (size) {
+            0 => .u8,
             1 => .u8,
             2 => .u16,
             4 => .u32,
             8 => .u64,
-            else => unreachable, // discriminant_size is 1, 2, 4, or 8
+            else => unreachable, // discriminant_size is 0, 1, 2, 4, or 8
         };
     }
 };
@@ -489,29 +485,22 @@ pub const BoxInfo = struct {
     contains_refcounted: bool,
 };
 
-/// Bundled information about a record layout
-pub const RecordInfo = struct {
-    data: *const RecordData,
+/// Bundled information about a struct layout (unified for records and tuples)
+pub const StructInfo = struct {
+    data: *const StructData,
     alignment: std.mem.Alignment,
-    fields: RecordField.SafeMultiList.Slice,
+    fields: StructField.SafeMultiList.Slice,
     contains_refcounted: bool,
 
-    pub fn size(self: RecordInfo) u32 {
+    pub fn size(self: StructInfo) u32 {
         return self.data.size;
     }
 };
 
-/// Bundled information about a tuple layout
-pub const TupleInfo = struct {
-    data: *const TupleData,
-    alignment: std.mem.Alignment,
-    fields: TupleField.SafeMultiList.Slice,
-    contains_refcounted: bool,
-
-    pub fn size(self: TupleInfo) u32 {
-        return self.data.size;
-    }
-};
+/// Backwards-compat alias for `StructInfo`.
+pub const RecordInfo = StructInfo;
+/// Backwards-compat alias for `StructInfo`.
+pub const TupleInfo = StructInfo;
 
 /// Bundled information about a tag union layout
 pub const TagUnionInfo = struct {
@@ -547,8 +536,9 @@ pub const ScalarInfo = struct {
 /// sizes on 32-bit and 64-bit targets. No other target information is needed.
 ///
 /// When a Roc type gets converted to a Layout, zero-sized types (ZSTs)
-/// like empty records, empty tag unions, and phantom type parameters are
-/// represented with a first-class ZST layout (`.zst` tag). ZST fields in
+/// like empty records and empty tag unions are represented with a first-class
+/// ZST layout (`.zst` tag). Abstract type parameters must already have been
+/// eliminated or collapsed to ZST before reaching this layer. ZST fields in
 /// records and tuples are kept (not dropped) since they're a normal part
 /// of the type structure, they just happen to have size 0.
 /// (Exception: List({}) and Box({}) get special layouts `.list_of_zst` and
@@ -558,9 +548,9 @@ pub const ScalarInfo = struct {
 /// Once a type has been converted to a Layout, there is no longer any
 /// distinction between nominal and structural types, there's just memory.
 /// Records and tuples have both been flattened (so, no more extension vars)
-/// and converted into structs whose fields are sorted by alignment and then
-/// alphabetically by field name (or numerically by tuple field index).
-/// We still store their original field names (and tuple indices) for debuginfo later.
+/// and converted into a single unified struct type whose fields are sorted
+/// by alignment and then by field name (records) or tuple index (tuples).
+/// We store the original source index for each field (for tuple element access).
 pub const Layout = packed struct {
     // This can't be a normal Zig tagged union because it uses a packed union to reduce memory use,
     // and Zig tagged unions don't support being packed.
@@ -573,12 +563,11 @@ pub const Layout = packed struct {
             .scalar => switch (self.data.scalar.tag) {
                 .int => self.data.scalar.data.int.alignment(),
                 .frac => self.data.scalar.data.frac.alignment(),
-                .str, .opaque_ptr => target_usize.alignment(),
+                .str => target_usize.alignment(),
             },
             .box, .box_of_zst => target_usize.alignment(),
             .list, .list_of_zst => target_usize.alignment(),
-            .record => self.data.record.alignment,
-            .tuple => self.data.tuple.alignment,
+            .struct_ => self.data.struct_.alignment,
             .tag_union => self.data.tag_union.alignment,
             .closure => target_usize.alignment(),
             .zst => std.mem.Alignment.@"1",
@@ -600,9 +589,10 @@ pub const Layout = packed struct {
         return Layout.frac(.dec);
     }
 
-    /// Bool layout - just a u8 discriminant for [True, False]
+    /// Canonical layout for any two-nullary tag union.
+    /// The shared layout store reserves tag-union metadata index 0 for this shape.
     pub fn boolType() Layout {
-        return Layout.int(.u8);
+        return Layout.tagUnion(.@"1", .{ .int_idx = 0 });
     }
 
     /// bool layout (alias for consistency)
@@ -635,20 +625,15 @@ pub const Layout = packed struct {
         return Layout{ .data = .{ .list_of_zst = {} }, .tag = .list_of_zst };
     }
 
-    /// opaque pointer from the host's perspective (e.g. the void* that we pass to the host for flex vars etc.)
-    pub fn opaquePtr() Layout {
-        return Layout{ .data = .{ .scalar = .{ .data = .{ .opaque_ptr = {} }, .tag = .opaque_ptr } }, .tag = .scalar };
+    /// struct layout with the given alignment and struct metadata (e.g. size and field layouts)
+    /// Used for both records and tuples — at the layout level they are identical.
+    pub fn struct_(struct_alignment: std.mem.Alignment, struct_idx: StructIdx) Layout {
+        return Layout{ .data = .{ .struct_ = .{ .alignment = struct_alignment, .idx = struct_idx } }, .tag = .struct_ };
     }
 
-    /// record layout with the given alignment and record metadata (e.g. size and field layouts)
-    pub fn record(record_alignment: std.mem.Alignment, record_idx: RecordIdx) Layout {
-        return Layout{ .data = .{ .record = .{ .alignment = record_alignment, .idx = record_idx } }, .tag = .record };
-    }
-
-    /// tuple layout with the given alignment and tuple metadata (e.g. size and field layouts)
-    pub fn tuple(tuple_alignment: std.mem.Alignment, tuple_idx: TupleIdx) Layout {
-        return Layout{ .data = .{ .tuple = .{ .alignment = tuple_alignment, .idx = tuple_idx } }, .tag = .tuple };
-    }
+    /// Backwards-compat aliases
+    pub const record = struct_;
+    pub const tuple = struct_;
 
     pub fn closure(captures_layout_idx: Idx) Layout {
         return Layout{
@@ -687,7 +672,7 @@ pub const Layout = packed struct {
         if (self.tag != other.tag) return false;
         return switch (self.tag) {
             .scalar => self.data.scalar.tag == other.data.scalar.tag and switch (self.data.scalar.tag) {
-                .opaque_ptr, .str => true, // No additional data to compare
+                .str => true, // No additional data to compare
                 .int => self.data.scalar.data.int == other.data.scalar.data.int,
                 .frac => self.data.scalar.data.frac == other.data.scalar.data.frac,
             },
@@ -695,10 +680,8 @@ pub const Layout = packed struct {
             .box_of_zst => true, // No additional data
             .list => self.data.list == other.data.list,
             .list_of_zst => true, // No additional data
-            .record => self.data.record.alignment == other.data.record.alignment and
-                self.data.record.idx.int_idx == other.data.record.idx.int_idx,
-            .tuple => self.data.tuple.alignment == other.data.tuple.alignment and
-                self.data.tuple.idx.int_idx == other.data.tuple.idx.int_idx,
+            .struct_ => self.data.struct_.alignment == other.data.struct_.alignment and
+                self.data.struct_.idx.int_idx == other.data.struct_.idx.int_idx,
             .closure => self.data.closure.captures_layout_idx == other.data.closure.captures_layout_idx,
             .zst => true, // No additional data
             .tag_union => self.data.tag_union.alignment == other.data.tag_union.alignment and
@@ -731,7 +714,6 @@ test "Layout.alignment() - scalar types" {
         try testing.expectEqual(std.mem.Alignment.@"16", Layout.frac(.dec).alignment(target_usize));
         try testing.expectEqual(std.mem.Alignment.@"1", Layout.boolType().alignment(target_usize));
         try testing.expectEqual(target_usize.alignment(), Layout.str().alignment(target_usize));
-        try testing.expectEqual(target_usize.alignment(), Layout.opaquePtr().alignment(target_usize));
     }
 }
 
@@ -746,24 +728,24 @@ test "Layout.alignment() - types containing pointers" {
     }
 }
 
-test "Layout.alignment() - record types" {
+test "Layout.alignment() - struct types" {
     const testing = std.testing;
 
     for (target.TargetUsize.all()) |target_usize| {
-        try testing.expectEqual(std.mem.Alignment.fromByteUnits(4), Layout.record(std.mem.Alignment.@"4", RecordIdx{ .int_idx = 0 }).alignment(target_usize));
-        try testing.expectEqual(std.mem.Alignment.fromByteUnits(16), Layout.record(std.mem.Alignment.@"16", RecordIdx{ .int_idx = 1 }).alignment(target_usize));
+        try testing.expectEqual(std.mem.Alignment.fromByteUnits(4), Layout.struct_(std.mem.Alignment.@"4", StructIdx{ .int_idx = 0 }).alignment(target_usize));
+        try testing.expectEqual(std.mem.Alignment.fromByteUnits(16), Layout.struct_(std.mem.Alignment.@"16", StructIdx{ .int_idx = 1 }).alignment(target_usize));
     }
 }
 
-test "RecordData.getFields()" {
+test "StructData.getFields()" {
     const testing = std.testing;
 
-    const record_data = RecordData{
+    const struct_data = StructData{
         .size = 40,
         .fields = .{ .start = 10, .count = 5 },
     };
 
-    const fields_range = record_data.getFields();
+    const fields_range = struct_data.getFields();
     try testing.expectEqual(@as(u32, 10), @intFromEnum(fields_range.start));
     try testing.expectEqual(@as(u32, 15), @intFromEnum(fields_range.start) + fields_range.count);
 }
@@ -783,23 +765,16 @@ test "Layout scalar data access" {
     try testing.expectEqual(ScalarTag.frac, frac_layout.data.scalar.tag);
     try testing.expectEqual(types.Frac.Precision.f64, frac_layout.data.scalar.data.frac);
 
-    // Test bool (now stored as u8)
+    // Test canonical two-nullary enum layout
     const bool_layout = Layout.boolType();
-    try testing.expectEqual(LayoutTag.scalar, bool_layout.tag);
-    try testing.expectEqual(ScalarTag.int, bool_layout.data.scalar.tag);
-    try testing.expectEqual(types.Int.Precision.u8, bool_layout.data.scalar.data.int);
+    try testing.expectEqual(LayoutTag.tag_union, bool_layout.tag);
+    try testing.expectEqual(@as(u16, 0), bool_layout.data.tag_union.idx.int_idx);
 
     // Test str
     const str_layout = Layout.str();
     try testing.expectEqual(LayoutTag.scalar, str_layout.tag);
     try testing.expectEqual(ScalarTag.str, str_layout.data.scalar.tag);
     try testing.expectEqual({}, str_layout.data.scalar.data.str);
-
-    // Test opaque_ptr
-    const opaque_ptr_layout = Layout.opaquePtr();
-    try testing.expectEqual(LayoutTag.scalar, opaque_ptr_layout.tag);
-    try testing.expectEqual(ScalarTag.opaque_ptr, opaque_ptr_layout.data.scalar.tag);
-    try testing.expectEqual({}, opaque_ptr_layout.data.scalar.data.opaque_ptr);
 }
 
 test "Layout non-scalar types" {
@@ -812,8 +787,8 @@ test "Layout non-scalar types" {
     const list_layout = Layout.list(.bool);
     try testing.expectEqual(LayoutTag.list, list_layout.tag);
 
-    const record_layout = Layout.record(std.mem.Alignment.@"4", RecordIdx{ .int_idx = 0 });
-    try testing.expectEqual(LayoutTag.record, record_layout.tag);
+    const struct_layout = Layout.struct_(std.mem.Alignment.@"4", StructIdx{ .int_idx = 0 });
+    try testing.expectEqual(LayoutTag.struct_, struct_layout.tag);
 }
 
 test "Layout scalar variants" {
@@ -834,10 +809,6 @@ test "Layout scalar variants" {
     try testing.expectEqual(ScalarTag.frac, frac_scalar.data.scalar.tag);
     try testing.expectEqual(types.Frac.Precision.f64, frac_scalar.data.scalar.data.frac);
 
-    const opaque_ptr_layout = Layout.opaquePtr();
-    try testing.expectEqual(LayoutTag.scalar, opaque_ptr_layout.tag);
-    try testing.expectEqual(ScalarTag.opaque_ptr, opaque_ptr_layout.data.scalar.tag);
-
     // Test zst variants separately
     const box_zst = Layout.boxOfZst();
     try testing.expectEqual(LayoutTag.box_of_zst, box_zst.tag);
@@ -850,17 +821,12 @@ test "Scalar memory optimization - comprehensive coverage" {
     const testing = std.testing;
 
     const bool_layout = Layout.boolType();
-    try testing.expectEqual(LayoutTag.scalar, bool_layout.tag);
-    try testing.expectEqual(ScalarTag.int, bool_layout.data.scalar.tag);
-    try testing.expectEqual(types.Int.Precision.u8, bool_layout.data.scalar.data.int);
+    try testing.expectEqual(LayoutTag.tag_union, bool_layout.tag);
+    try testing.expectEqual(@as(u16, 0), bool_layout.data.tag_union.idx.int_idx);
 
     const str_layout = Layout.str();
     try testing.expectEqual(LayoutTag.scalar, str_layout.tag);
     try testing.expectEqual(ScalarTag.str, str_layout.data.scalar.tag);
-
-    const opaque_ptr_layout = Layout.opaquePtr();
-    try testing.expectEqual(LayoutTag.scalar, opaque_ptr_layout.tag);
-    try testing.expectEqual(ScalarTag.opaque_ptr, opaque_ptr_layout.data.scalar.tag);
 
     // Test ALL integer precisions
     const int_u8 = Layout.int(.u8);
@@ -943,11 +909,11 @@ test "Non-scalar layout variants - fallback to indexed approach" {
     try testing.expectEqual(LayoutTag.list, list_non_scalar.tag);
     try testing.expectEqual(@as(u28, 123), @intFromEnum(list_non_scalar.data.list));
 
-    // Test record layout (definitely non-scalar)
-    const record_layout = Layout.record(std.mem.Alignment.@"8", RecordIdx{ .int_idx = 456 });
-    try testing.expectEqual(LayoutTag.record, record_layout.tag);
-    try testing.expectEqual(std.mem.Alignment.@"8", record_layout.data.record.alignment);
-    try testing.expectEqual(@as(u19, 456), record_layout.data.record.idx.int_idx);
+    // Test struct layout (definitely non-scalar)
+    const struct_layout = Layout.struct_(std.mem.Alignment.@"8", StructIdx{ .int_idx = 456 });
+    try testing.expectEqual(LayoutTag.struct_, struct_layout.tag);
+    try testing.expectEqual(std.mem.Alignment.@"8", struct_layout.data.struct_.alignment);
+    try testing.expectEqual(@as(u19, 456), struct_layout.data.struct_.idx.int_idx);
 }
 
 test "Layout scalar precision coverage" {
@@ -975,8 +941,8 @@ test "Layout scalar precision coverage" {
         Layout.boxOfZst(),
         Layout.list(.bool),
         Layout.listOfZst(),
-        Layout.record(std.mem.Alignment.@"4", RecordIdx{ .int_idx = 0 }),
-        Layout.tuple(std.mem.Alignment.@"8", TupleIdx{ .int_idx = 0 }),
+        Layout.struct_(std.mem.Alignment.@"4", StructIdx{ .int_idx = 0 }),
+        Layout.struct_(std.mem.Alignment.@"8", StructIdx{ .int_idx = 0 }),
     };
 
     const expected_tags = [_]LayoutTag{
@@ -984,8 +950,8 @@ test "Layout scalar precision coverage" {
         .box_of_zst,
         .list,
         .list_of_zst,
-        .record,
-        .tuple,
+        .struct_,
+        .struct_,
     };
 
     for (complex_layouts, expected_tags) |layout, expected_tag| {

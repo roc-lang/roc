@@ -243,18 +243,16 @@ pub const ReadLineError =
 
 /// Reads a line of input from stdin with line editing and history support.
 /// Falls back to simple line reading when stdin is not a TTY (e.g., piped input).
-pub fn readLine(self: *ReplLine, outlive: Allocator, prompt: []const u8) ReadLineError![]u8 {
+pub fn readLine(self: *ReplLine, outlive: Allocator, prompt: []const u8, stdin: std.fs.File) ReadLineError![]u8 {
     var stdout_buffer: [1024]u8 = undefined;
     var stdout_writer = std.fs.File.stdout().writerStreaming(&stdout_buffer);
 
-    const stdin_file = std.fs.File.stdin();
-
     // Use simple line reading for non-TTY input (pipes, redirects, tests)
-    if (!stdin_file.isTty()) {
-        return readLineSimple(outlive, prompt, &stdout_writer.interface, stdin_file);
+    if (!stdin.isTty()) {
+        return readLineSimple(outlive, prompt, &stdout_writer.interface, stdin);
     }
 
-    return helper(self, outlive, prompt, &stdout_writer.interface, stdin_file);
+    return helper(self, outlive, prompt, &stdout_writer.interface, stdin);
 }
 
 /// Simple line reading for non-TTY input (no raw mode, no escape sequences).

@@ -63,24 +63,24 @@ pub const BuiltinIdents = struct {
     /// Numeric types have [] as backing but are inhabited primitives.
     pub fn isBuiltinNumericType(self: BuiltinIdents, nominal: types.NominalType) bool {
         // First check if it's from the Builtin module
-        if (nominal.origin_module != self.builtin_module) {
+        if (!nominal.origin_module.eql(self.builtin_module)) {
             return false;
         }
         // Then check if it's one of the numeric types
         const ident = nominal.ident.ident_idx;
-        return ident == self.u8_type or
-            ident == self.i8_type or
-            ident == self.u16_type or
-            ident == self.i16_type or
-            ident == self.u32_type or
-            ident == self.i32_type or
-            ident == self.u64_type or
-            ident == self.i64_type or
-            ident == self.u128_type or
-            ident == self.i128_type or
-            ident == self.f32_type or
-            ident == self.f64_type or
-            ident == self.dec_type;
+        return ident.eql(self.u8_type) or
+            ident.eql(self.i8_type) or
+            ident.eql(self.u16_type) or
+            ident.eql(self.i16_type) or
+            ident.eql(self.u32_type) or
+            ident.eql(self.i32_type) or
+            ident.eql(self.u64_type) or
+            ident.eql(self.i64_type) or
+            ident.eql(self.u128_type) or
+            ident.eql(self.i128_type) or
+            ident.eql(self.f32_type) or
+            ident.eql(self.f64_type) or
+            ident.eql(self.dec_type);
     }
 };
 
@@ -1138,6 +1138,7 @@ fn pushTagUnionWork(gpa: std.mem.Allocator, type_store: *TypeStore, work_list: *
         // Cycle detection for extension chain
         const gop = try seen_exts.getOrPut(gpa, ext_var);
         if (gop.found_existing) {
+            // Cycle detected - treat as closed to be safe
             break;
         }
 
@@ -1367,17 +1368,14 @@ fn isOpenExtension(type_store: *TypeStore, ext: Var) bool {
 }
 
 /// Find the tag_id for a tag name within a union.
-/// Compares only the string index, not attributes, since the same tag name
-/// from a pattern vs a type definition may have different attributes.
+/// Uses Ident.Idx equality directly.
 fn findTagId(union_info: Union, tag_name: Ident.Idx) ?TagId {
     for (union_info.alternatives) |alt| {
         const alt_ident = switch (alt.name) {
-            .tag => |t| if (t == Ident.Idx.NONE) continue else t,
+            .tag => |t| if (t.eql(Ident.Idx.NONE)) continue else t,
             .opaque_type => |o| o,
         };
-        // Compare just the idx (interned string index), not the full Ident.Idx
-        // which includes attributes that may differ between pattern and type
-        if (alt_ident.idx == tag_name.idx) {
+        if (alt_ident.eql(tag_name)) {
             // Return the stored tag_id, not the array position.
             // The tag_id preserves the original index for getCtorArgTypes.
             return alt.tag_id;
@@ -1698,8 +1696,7 @@ fn getRecordFieldTypeByName(type_store: *TypeStore, record_type: Var, field_name
                     const field_vars = fields_slice.items(.var_);
 
                     for (field_names, field_vars) |name, var_| {
-                        // Compare by idx (interned string index), not the full Ident.Idx
-                        if (name.idx == field_name.idx) {
+                        if (name.eql(field_name)) {
                             return var_;
                         }
                     }
@@ -1713,7 +1710,7 @@ fn getRecordFieldTypeByName(type_store: *TypeStore, record_type: Var, field_name
                     const field_vars = fields_slice.items(.var_);
 
                     for (field_names, field_vars) |name, var_| {
-                        if (name.idx == field_name.idx) {
+                        if (name.eql(field_name)) {
                             return var_;
                         }
                     }
@@ -1975,6 +1972,7 @@ const CollectedCtorsSketched = union(enum) {
     ctors: struct {
         found: []const TagId,
         union_info: Union,
+        has_wildcards: bool,
     },
     /// List patterns found
     lists: []const ListArity,
@@ -2036,7 +2034,7 @@ fn collectCtorsSketched(
                             // Add if not already present
                             var already_present = false;
                             for (all_record_fields.items) |existing| {
-                                if (existing.idx == field.idx) {
+                                if (existing.eql(field)) {
                                     already_present = true;
                                     break;
                                 }
@@ -2103,6 +2101,7 @@ fn collectCtorsSketched(
         return .{ .ctors = .{
             .found = try found_tags.toOwnedSlice(allocator),
             .union_info = result_union_info,
+            .has_wildcards = found_wildcard,
         } };
     }
 
@@ -2114,11 +2113,16 @@ fn collectCtorsSketched(
         // present, which caused false non-exhaustive errors because wildcards
         // covering all list arities weren't being considered.
         var arities: std.ArrayList(ListArity) = .empty;
-        for (first_col) |pat| {
-            if (pat == .list) {
-                try arities.append(allocator, pat.list.arity);
+        for (first_col) |p| {
+            if (p == .list) {
+                try arities.append(allocator, p.list.arity);
             }
         }
+        try arities.append(allocator, .{ .slice = .{
+            .prefix = 0,
+            .suffix = 0,
+        } });
+
         return .{ .lists = try arities.toOwnedSlice(allocator) };
     }
 
@@ -2185,7 +2189,7 @@ fn specializeByConstructorSketched(
                             // Find this field in the pattern's field list
                             var found = false;
                             for (pat_fields, 0..) |pat_field, j| {
-                                if (pat_field.idx == target_field.idx) {
+                                if (pat_field.eql(target_field)) {
                                     // Found the field - use the pattern's arg
                                     new_row[i] = if (j < kc.args.len) kc.args[j] else .anything;
                                     found = true;
@@ -2295,6 +2299,101 @@ fn specializeByListAritySketched(
     return SketchedMatrix.init(allocator, try new_rows.toOwnedSlice(allocator));
 }
 
+/// Walk a tag union's ext var chain and collect any flex ext vars.
+fn collectFlexExtVars(
+    allocator: std.mem.Allocator,
+    type_store: *TypeStore,
+    type_var: Var,
+    out: *std.ArrayList(Var),
+) std.mem.Allocator.Error!void {
+    const resolved = type_store.resolveVar(type_var);
+    const tag_union = resolved.desc.content.unwrapTagUnion() orelse return;
+
+    var current_ext = tag_union.ext;
+    while (true) {
+        const ext_resolved = type_store.resolveVar(current_ext);
+        switch (ext_resolved.desc.content) {
+            .flex => {
+                try out.append(allocator, ext_resolved.var_);
+                break;
+            },
+            .structure => |ft| switch (ft) {
+                .tag_union => |ext_tu| current_ext = ext_tu.ext,
+                .empty_tag_union => break,
+                else => break,
+            },
+            .alias => |alias| {
+                current_ext = type_store.getAliasBackingVar(alias);
+            },
+            else => break,
+        }
+    }
+}
+
+/// Recurse into all constructors' payloads to check for missing patterns.
+/// Shared between the "all covered" and "exhaustive open union" paths.
+fn recurseIntoAllCtors(
+    allocator: std.mem.Allocator,
+    type_store: *TypeStore,
+    builtin_idents: BuiltinIdents,
+    matrix: SketchedMatrix,
+    column_types: ColumnTypes,
+    ext_vars_to_close: *std.ArrayList(Var),
+    ext_vars_to_keep_open: *std.ArrayList(Var),
+    alternatives: []const CtorInfo,
+    union_info: Union,
+    first_col_type: Var,
+) ReifyError![]const Pattern {
+    for (alternatives) |alt| {
+        // Skip uninhabited constructors
+        const arg_types = getCtorArgTypes(allocator, type_store, first_col_type, alt.tag_id);
+        if (!try areAllTypesInhabited(type_store, builtin_idents, arg_types)) {
+            continue;
+        }
+
+        const specialized = try specializeByConstructorSketched(
+            allocator,
+            matrix,
+            alt.tag_id,
+            alt.arity,
+            union_info,
+        );
+
+        // Use field-name-based lookup for records, positional for everything else
+        const specialized_types = switch (union_info.render_as) {
+            .record => |field_names| try column_types.specializeByRecordPattern(allocator, field_names),
+            else => try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity),
+        };
+        const missing = try checkExhaustiveSketched(allocator, type_store, builtin_idents, specialized, specialized_types, ext_vars_to_close, ext_vars_to_keep_open);
+
+        if (missing.len > 0) {
+            const args = try allocator.alloc(Pattern, alt.arity);
+            for (0..alt.arity) |i| {
+                if (i < missing.len) {
+                    args[i] = missing[i];
+                } else {
+                    const arg_type = if (i < specialized_types.types.len) specialized_types.types[i] else null;
+                    args[i] = .{ .anything = arg_type };
+                }
+            }
+
+            const missing_pattern = Pattern{ .ctor = .{
+                .union_info = union_info,
+                .tag_id = alt.tag_id,
+                .args = args,
+            } };
+
+            if (try missing_pattern.isInhabited(column_types.type_store, column_types.builtin_idents)) {
+                const result = try allocator.alloc(Pattern, 1);
+                result[0] = missing_pattern;
+                return result;
+            }
+        }
+    }
+
+    return &[_]Pattern{};
+}
+
 /// Check if a sketched pattern matrix is exhaustive.
 /// Reifies patterns on-demand when type information is needed.
 /// Returns missing patterns as reified Pattern for error messages.
@@ -2304,6 +2403,8 @@ pub fn checkExhaustiveSketched(
     builtin_idents: BuiltinIdents,
     matrix: SketchedMatrix,
     column_types: ColumnTypes,
+    ext_vars_to_close: *std.ArrayList(Var),
+    ext_vars_to_keep_open: *std.ArrayList(Var),
 ) ReifyError![]const Pattern {
     const n = column_types.len();
 
@@ -2332,9 +2433,14 @@ pub fn checkExhaustiveSketched(
 
     return switch (ctors) {
         .non_exhaustive_wildcards => {
+            // All patterns are wildcards at this column. If the column type is an
+            // open tag union, mark its ext var as keep-open so we don't close it
+            // even if a different specialized branch collected it for closing.
+            try collectFlexExtVars(allocator, type_store, first_col_type, ext_vars_to_keep_open);
+
             const new_matrix = try specializeByAnythingSketched(allocator, matrix);
             const rest_types = column_types.dropFirst();
-            const rest = try checkExhaustiveSketched(allocator, type_store, builtin_idents, new_matrix, rest_types);
+            const rest = try checkExhaustiveSketched(allocator, type_store, builtin_idents, new_matrix, rest_types, ext_vars_to_close, ext_vars_to_keep_open);
 
             if (rest.len == 0) return &[_]Pattern{};
 
@@ -2347,6 +2453,37 @@ pub fn checkExhaustiveSketched(
         .ctors => |ctor_info| {
             const num_found = ctor_info.found.len;
             const num_alts = ctor_info.union_info.alternatives.len;
+
+            // If the union is open and has wildcards, mark its ext var as
+            // keep-open to prevent a different specialized branch from closing it.
+            if (ctor_info.union_info.has_flex_extension and ctor_info.has_wildcards) {
+                try collectFlexExtVars(allocator, type_store, first_col_type, ext_vars_to_keep_open);
+            }
+
+            // Detect exhaustive open unions: all real tags covered, no wildcards.
+            // The only "missing" constructor is the synthetic #Open.
+            // Record the ext var for closing and recurse into payloads.
+            std.debug.assert(num_found <= num_alts);
+            if (ctor_info.union_info.has_flex_extension and
+                !ctor_info.has_wildcards and
+                num_found == num_alts - 1)
+            {
+                try collectFlexExtVars(allocator, type_store, first_col_type, ext_vars_to_close);
+
+                // Recurse into all real constructors' payloads (skip #Open synthetic).
+                return recurseIntoAllCtors(
+                    allocator,
+                    type_store,
+                    builtin_idents,
+                    matrix,
+                    column_types,
+                    ext_vars_to_close,
+                    ext_vars_to_keep_open,
+                    ctor_info.union_info.alternatives[0 .. num_alts - 1],
+                    ctor_info.union_info,
+                    first_col_type,
+                );
+            }
 
             if (num_found < num_alts) {
                 // Check missing constructors
@@ -2379,15 +2516,18 @@ pub fn checkExhaustiveSketched(
                             .record => |field_names| try column_types.specializeByRecordPattern(allocator, field_names),
                             else => try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity),
                         };
-                        const inner_missing = try checkExhaustiveSketched(allocator, type_store, builtin_idents, specialized, specialized_types);
+                        const inner_missing = try checkExhaustiveSketched(allocator, type_store, builtin_idents, specialized, specialized_types, ext_vars_to_close, ext_vars_to_keep_open);
 
                         // For arity-0 constructors with no matching rows, the specialized matrix
                         // is empty with 0 columns, which returns empty inner_missing. But we still
                         // need to report the constructor as missing.
-                        // Note: We skip the #Open synthetic tag (arity-0 with no name) - it represents
-                        // "possibly more constructors" and is handled by the union's has_flex_extension flag.
+                        // The #Open synthetic tag (arity-0 with no name) represents "possibly more
+                        // constructors". For flex extensions, it's skipped because the union will be
+                        // closed. For rigid extensions (from annotations), #Open represents real
+                        // unknown tags and must be reported as missing.
                         const is_open_synthetic = alt.name.tag.isNone();
-                        const is_missing = inner_missing.len > 0 or (alt.arity == 0 and specialized.isEmpty() and !is_open_synthetic);
+                        const skip_open = is_open_synthetic and ctor_info.union_info.has_flex_extension;
+                        const is_missing = inner_missing.len > 0 or (alt.arity == 0 and specialized.isEmpty() and !skip_open);
                         if (is_missing) {
                             const missing_pattern = Pattern{ .ctor = .{
                                 .union_info = ctor_info.union_info,
@@ -2406,54 +2546,18 @@ pub fn checkExhaustiveSketched(
             }
 
             // All constructors covered - check each recursively
-            for (ctor_info.union_info.alternatives) |alt| {
-                // Skip uninhabited constructors
-                const arg_types = getCtorArgTypes(allocator, type_store, first_col_type, alt.tag_id);
-                if (!try areAllTypesInhabited(type_store, builtin_idents, arg_types)) {
-                    continue;
-                }
-
-                const specialized = try specializeByConstructorSketched(
-                    allocator,
-                    matrix,
-                    alt.tag_id,
-                    alt.arity,
-                    ctor_info.union_info,
-                );
-
-                // Use field-name-based lookup for records, positional for everything else
-                const specialized_types = switch (ctor_info.union_info.render_as) {
-                    .record => |field_names| try column_types.specializeByRecordPattern(allocator, field_names),
-                    else => try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity),
-                };
-                const missing = try checkExhaustiveSketched(allocator, type_store, builtin_idents, specialized, specialized_types);
-
-                if (missing.len > 0) {
-                    const args = try allocator.alloc(Pattern, alt.arity);
-                    for (0..alt.arity) |i| {
-                        if (i < missing.len) {
-                            args[i] = missing[i];
-                        } else {
-                            const arg_type = if (i < specialized_types.types.len) specialized_types.types[i] else null;
-                            args[i] = .{ .anything = arg_type };
-                        }
-                    }
-
-                    const missing_pattern = Pattern{ .ctor = .{
-                        .union_info = ctor_info.union_info,
-                        .tag_id = alt.tag_id,
-                        .args = args,
-                    } };
-
-                    if (try missing_pattern.isInhabited(column_types.type_store, column_types.builtin_idents)) {
-                        const result = try allocator.alloc(Pattern, 1);
-                        result[0] = missing_pattern;
-                        return result;
-                    }
-                }
-            }
-
-            return &[_]Pattern{};
+            return recurseIntoAllCtors(
+                allocator,
+                type_store,
+                builtin_idents,
+                matrix,
+                column_types,
+                ext_vars_to_close,
+                ext_vars_to_keep_open,
+                ctor_info.union_info.alternatives,
+                ctor_info.union_info,
+                first_col_type,
+            );
         },
 
         .lists => |arities| {
@@ -2479,7 +2583,7 @@ pub fn checkExhaustiveSketched(
 
                 const specialized = try specializeByListAritySketched(allocator, matrix, list_arity);
                 const specialized_types = try column_types.specializeForList(allocator, min_len);
-                const missing = try checkExhaustiveSketched(allocator, type_store, builtin_idents, specialized, specialized_types);
+                const missing = try checkExhaustiveSketched(allocator, type_store, builtin_idents, specialized, specialized_types, ext_vars_to_close, ext_vars_to_keep_open);
 
                 // For length-0 lists (empty list) with no matching rows, the specialized matrix
                 // is empty with 0 columns, which returns empty missing. But we still
@@ -2593,7 +2697,7 @@ pub fn isUsefulSketched(
                                         for (mat_fields) |field| {
                                             var already_present = false;
                                             for (all_fields.items) |existing| {
-                                                if (existing.idx == field.idx) {
+                                                if (existing.eql(field)) {
                                                     already_present = true;
                                                     break;
                                                 }
@@ -2658,7 +2762,7 @@ pub fn isUsefulSketched(
                     for (merged_fields, 0..) |merged_field, i| {
                         var found = false;
                         for (current_fields, 0..) |cur_field, j| {
-                            if (cur_field.idx == merged_field.idx) {
+                            if (cur_field.eql(merged_field)) {
                                 row[i] = if (j < kc.args.len) kc.args[j] else .anything;
                                 found = true;
                                 break;
@@ -3008,6 +3112,10 @@ pub const CheckResult = struct {
     unmatchable_indices: []const u32,
     /// Regions of unmatchable branches
     unmatchable_regions: []const Region,
+    /// Flex ext vars to close via unification with empty_tag_union.
+    /// These are tag union positions where all constructors were exhaustively
+    /// covered without wildcards.
+    ext_vars_to_close: []const Var,
 
     /// Free all allocated memory in the result
     pub fn deinit(self: CheckResult, allocator: std.mem.Allocator) void {
@@ -3019,6 +3127,7 @@ pub const CheckResult = struct {
         allocator.free(self.redundant_regions);
         allocator.free(self.unmatchable_indices);
         allocator.free(self.unmatchable_regions);
+        allocator.free(self.ext_vars_to_close);
     }
 
     fn freePattern(allocator: std.mem.Allocator, pattern: Pattern) void {
@@ -3101,13 +3210,35 @@ pub fn checkMatch(
 
     // Phase 3: Check exhaustiveness on non-redundant patterns
     const sketched_matrix = SketchedMatrix.init(arena_alloc, redundancy.non_redundant_rows);
+    var ext_vars_to_close: std.ArrayList(Var) = .empty;
+    var ext_vars_to_keep_open: std.ArrayList(Var) = .empty;
     const missing = try checkExhaustiveSketched(
         arena_alloc,
         type_store,
         builtin_idents,
         sketched_matrix,
         column_types,
+        &ext_vars_to_close,
+        &ext_vars_to_keep_open,
     );
+
+    // Filter: remove any ext vars that should be kept open.
+    // This handles cases where a specialized branch (e.g., one match arm) sees
+    // all tags without wildcards, but a different branch has wildcards for the
+    // same type position — meaning the union should stay open.
+    var filtered_close: std.ArrayList(Var) = .empty;
+    for (ext_vars_to_close.items) |close_var| {
+        var dominated = false;
+        for (ext_vars_to_keep_open.items) |keep_var| {
+            if (@intFromEnum(close_var) == @intFromEnum(keep_var)) {
+                dominated = true;
+                break;
+            }
+        }
+        if (!dominated) {
+            try filtered_close.append(arena_alloc, close_var);
+        }
+    }
 
     // Copy results to the original allocator before freeing the arena
     const result_patterns = try allocator.alloc(Pattern, missing.len);
@@ -3122,6 +3253,7 @@ pub fn checkMatch(
         .redundant_regions = try allocator.dupe(Region, redundancy.redundant_regions),
         .unmatchable_indices = try allocator.dupe(u32, redundancy.unmatchable_indices),
         .unmatchable_regions = try allocator.dupe(Region, redundancy.unmatchable_regions),
+        .ext_vars_to_close = try allocator.dupe(Var, filtered_close.items),
     };
 }
 
@@ -3192,7 +3324,7 @@ fn formatPatternInto(
                     const alt = c.union_info.alternatives[c.tag_id.toInt()];
                     switch (alt.name) {
                         .tag => |t| {
-                            if (t == Ident.Idx.NONE) {
+                            if (t.eql(Ident.Idx.NONE)) {
                                 // This is the #Open synthetic tag - show as wildcard
                                 try writer.writeAll("_");
                                 return;

@@ -22,16 +22,13 @@ const LirExpr = ir.LirExpr;
 const LirPattern = ir.LirPattern;
 const LirExprId = ir.LirExprId;
 const LirPatternId = ir.LirPatternId;
+const LirProcSpecId = ir.LirProcSpecId;
 const LirExprSpan = ir.LirExprSpan;
 const LirPatternSpan = ir.LirPatternSpan;
 const LirCaptureSpan = ir.LirCaptureSpan;
 const LirCapture = ir.LirCapture;
-const ClosureData = ir.ClosureData;
-const ClosureDataId = ir.ClosureDataId;
 const LirMatchBranch = ir.LirMatchBranch;
 const LirMatchBranchSpan = ir.LirMatchBranchSpan;
-const LambdaSetMember = ir.LambdaSetMember;
-const LambdaSetMemberSpan = ir.LambdaSetMemberSpan;
 const LirIfBranch = ir.LirIfBranch;
 const LirIfBranchSpan = ir.LirIfBranchSpan;
 const LirStmt = ir.LirStmt;
@@ -46,7 +43,7 @@ const CFSwitchBranchSpan = ir.CFSwitchBranchSpan;
 const CFMatchBranch = ir.CFMatchBranch;
 const CFMatchBranchSpan = ir.CFMatchBranchSpan;
 const LayoutIdxSpan = ir.LayoutIdxSpan;
-const LirProc = ir.LirProc;
+const LirProcSpec = ir.LirProcSpec;
 
 const Self = @This();
 
@@ -78,12 +75,6 @@ stmts: std.ArrayList(LirStmt),
 /// Captures (symbols captured by closures)
 captures: std.ArrayList(LirCapture),
 
-/// Closure data (side table to reduce LirExpr union size)
-closure_data: std.ArrayList(ClosureData),
-
-/// Lambda set members (for closure dispatch)
-lambda_set_members: std.ArrayList(LambdaSetMember),
-
 /// Control flow statements (for tail recursion optimization)
 cf_stmts: std.ArrayList(CFStmt),
 
@@ -93,19 +84,24 @@ cf_switch_branches: std.ArrayList(CFSwitchBranch),
 /// Control flow match branches (pattern matching)
 cf_match_branches: std.ArrayList(CFMatchBranch),
 
-/// Complete procedures (for two-pass compilation)
-procs: std.ArrayList(LirProc),
+/// Complete proc specs (for two-pass compilation)
+proc_specs: std.ArrayList(LirProcSpec),
 
 /// Map from global symbol to its definition expression
 /// Used for looking up top-level definitions
 symbol_defs: std.AutoHashMap(u64, LirExprId),
 
-/// String literal store for strings generated during lowering (e.g., by str_inspekt)
+/// String literal store for strings generated during lowering (e.g., by str_inspect)
 /// This allows us to add new string literals without needing mutable module envs.
 strings: base.StringLiteral.Store,
 
 /// Allocator used for this store
 allocator: Allocator,
+
+/// Store-global synthetic symbol counter for later lowering passes.
+/// This must be shared across all passes that mutate the same store so
+/// generated symbol ids never collide.
+next_synthetic_symbol: u64,
 
 /// Initialize an empty LirExprStore
 pub fn init(allocator: Allocator) Self {
@@ -119,16 +115,22 @@ pub fn init(allocator: Allocator) Self {
         .if_branches = std.ArrayList(LirIfBranch).empty,
         .stmts = std.ArrayList(LirStmt).empty,
         .captures = std.ArrayList(LirCapture).empty,
-        .closure_data = std.ArrayList(ClosureData).empty,
-        .lambda_set_members = std.ArrayList(LambdaSetMember).empty,
         .cf_stmts = std.ArrayList(CFStmt).empty,
         .cf_switch_branches = std.ArrayList(CFSwitchBranch).empty,
         .cf_match_branches = std.ArrayList(CFMatchBranch).empty,
-        .procs = std.ArrayList(LirProc).empty,
+        .proc_specs = std.ArrayList(LirProcSpec).empty,
         .symbol_defs = std.AutoHashMap(u64, LirExprId).init(allocator),
         .strings = base.StringLiteral.Store{},
         .allocator = allocator,
+        .next_synthetic_symbol = 0xf000_0000_0000_0000,
     };
+}
+
+/// Allocate a fresh synthetic symbol in the store-global reserved namespace.
+pub fn freshSyntheticSymbol(self: *Self) Symbol {
+    const symbol = Symbol.fromRaw(self.next_synthetic_symbol);
+    self.next_synthetic_symbol += 1;
+    return symbol;
 }
 
 /// Initialize with pre-allocated capacity
@@ -154,12 +156,10 @@ pub fn deinit(self: *Self) void {
     self.if_branches.deinit(self.allocator);
     self.stmts.deinit(self.allocator);
     self.captures.deinit(self.allocator);
-    self.closure_data.deinit(self.allocator);
-    self.lambda_set_members.deinit(self.allocator);
     self.cf_stmts.deinit(self.allocator);
     self.cf_switch_branches.deinit(self.allocator);
     self.cf_match_branches.deinit(self.allocator);
-    self.procs.deinit(self.allocator);
+    self.proc_specs.deinit(self.allocator);
     self.symbol_defs.deinit();
     self.strings.deinit(self.allocator);
 }
@@ -266,27 +266,8 @@ pub fn getPatternSpan(self: *const Self, span: LirPatternSpan) []const LirPatter
     return @ptrCast(slice);
 }
 
-/// Add a span of field names (Ident.Idx)
-pub fn addFieldNameSpan(self: *Self, field_names: []const base.Ident.Idx) Allocator.Error!ir.LirFieldNameSpan {
-    if (field_names.len == 0) {
-        return ir.LirFieldNameSpan.empty();
-    }
-
-    const start = @as(u32, @intCast(self.extra_data.items.len));
-
-    try self.extra_data.ensureUnusedCapacity(self.allocator, field_names.len);
-    for (field_names) |name| {
-        self.extra_data.appendAssumeCapacity(@bitCast(name));
-    }
-
-    return .{
-        .start = start,
-        .len = @intCast(field_names.len),
-    };
-}
-
-/// Get field names from a span
-pub fn getFieldNameSpan(self: *const Self, span: ir.LirFieldNameSpan) []const base.Ident.Idx {
+/// Get mutable pattern IDs from a span.
+pub fn getPatternSpanMut(self: *Self, span: LirPatternSpan) []LirPatternId {
     if (span.len == 0) return &.{};
     const slice = self.extra_data.items[span.start..][0..span.len];
     return @ptrCast(slice);
@@ -313,6 +294,12 @@ pub fn getMatchBranches(self: *const Self, span: LirMatchBranchSpan) []const Lir
     return self.match_branches.items[span.start..][0..span.len];
 }
 
+/// Get mutable match branches from a span.
+pub fn getMatchBranchesMut(self: *Self, span: LirMatchBranchSpan) []LirMatchBranch {
+    if (span.len == 0) return &.{};
+    return self.match_branches.items[span.start..][0..span.len];
+}
+
 /// Add if branches and return a span
 pub fn addIfBranches(self: *Self, branches: []const LirIfBranch) Allocator.Error!LirIfBranchSpan {
     if (branches.len == 0) {
@@ -330,6 +317,12 @@ pub fn addIfBranches(self: *Self, branches: []const LirIfBranch) Allocator.Error
 
 /// Get if branches from a span
 pub fn getIfBranches(self: *const Self, span: LirIfBranchSpan) []const LirIfBranch {
+    if (span.len == 0) return &.{};
+    return self.if_branches.items[span.start..][0..span.len];
+}
+
+/// Get mutable if branches from a span.
+pub fn getIfBranchesMut(self: *Self, span: LirIfBranchSpan) []LirIfBranch {
     if (span.len == 0) return &.{};
     return self.if_branches.items[span.start..][0..span.len];
 }
@@ -355,6 +348,12 @@ pub fn getStmts(self: *const Self, span: LirStmtSpan) []const LirStmt {
     return self.stmts.items[span.start..][0..span.len];
 }
 
+/// Get mutable statements from a span.
+pub fn getStmtsMut(self: *Self, span: LirStmtSpan) []LirStmt {
+    if (span.len == 0) return &.{};
+    return self.stmts.items[span.start..][0..span.len];
+}
+
 /// Add captures and return a span
 pub fn addCaptures(self: *Self, capture_list: []const LirCapture) Allocator.Error!LirCaptureSpan {
     if (capture_list.len == 0) {
@@ -376,49 +375,32 @@ pub fn getCaptures(self: *const Self, span: LirCaptureSpan) []const LirCapture {
     return self.captures.items[span.start..][0..span.len];
 }
 
-/// Add closure data to the side table and return its ID
-pub fn addClosureData(self: *Self, data: ClosureData) Allocator.Error!ClosureDataId {
-    const idx = self.closure_data.items.len;
-    try self.closure_data.append(self.allocator, data);
-    return @enumFromInt(@as(u32, @intCast(idx)));
-}
-
-/// Get closure data by ID
-pub fn getClosureData(self: *const Self, id: ClosureDataId) ClosureData {
-    std.debug.assert(!id.isNone());
-    return self.closure_data.items[@intFromEnum(id)];
-}
-
-/// Add lambda set members and return a span
-pub fn addLambdaSetMembers(self: *Self, members: []const LambdaSetMember) Allocator.Error!LambdaSetMemberSpan {
-    if (members.len == 0) {
-        return LambdaSetMemberSpan.empty();
-    }
-
-    const start = @as(u32, @intCast(self.lambda_set_members.items.len));
-    try self.lambda_set_members.appendSlice(self.allocator, members);
-
-    return .{
-        .start = start,
-        .len = @intCast(members.len),
-    };
-}
-
-/// Get lambda set members from a span
-pub fn getLambdaSetMembers(self: *const Self, span: LambdaSetMemberSpan) []const LambdaSetMember {
-    if (span.len == 0) return &.{};
-    return self.lambda_set_members.items[span.start..][0..span.len];
-}
-
 /// Register a top-level symbol definition
 pub fn registerSymbolDef(self: *Self, symbol: Symbol, expr_id: LirExprId) Allocator.Error!void {
-    std.debug.assert(!self.symbol_defs.contains(@bitCast(symbol)));
-    try self.symbol_defs.put(@bitCast(symbol), expr_id);
+    const key: u64 = @bitCast(symbol);
+    const gop = try self.symbol_defs.getOrPut(key);
+    if (!gop.found_existing) {
+        gop.value_ptr.* = expr_id;
+        return;
+    }
+
+    if (std.debug.runtime_safety) {
+        std.debug.panic(
+            "LIR duplicate symbol definition for symbol key {d}: existing expr {}, new expr {}",
+            .{ key, @intFromEnum(gop.value_ptr.*), @intFromEnum(expr_id) },
+        );
+    }
+    unreachable;
 }
 
 /// Look up a top-level symbol definition
 pub fn getSymbolDef(self: *const Self, symbol: Symbol) ?LirExprId {
     return self.symbol_defs.get(@bitCast(symbol));
+}
+
+/// Set or replace a top-level symbol definition.
+pub fn setSymbolDef(self: *Self, symbol: Symbol, expr_id: LirExprId) Allocator.Error!void {
+    try self.symbol_defs.put(@bitCast(symbol), expr_id);
 }
 
 /// Insert a string literal and return its index
@@ -523,27 +505,32 @@ pub fn getLayoutIdxSpan(self: *const Self, span: LayoutIdxSpan) []const layout.I
     return @ptrCast(slice);
 }
 
-/// Add a procedure and return its index
-pub fn addProc(self: *Self, proc: LirProc) Allocator.Error!usize {
+/// Add a proc spec and return its index
+pub fn addProcSpec(self: *Self, proc: LirProcSpec) Allocator.Error!LirProcSpecId {
     std.debug.assert(proc.args.len == proc.arg_layouts.len);
-    const idx = self.procs.items.len;
-    try self.procs.append(self.allocator, proc);
-    return idx;
+    const idx = self.proc_specs.items.len;
+    try self.proc_specs.append(self.allocator, proc);
+    return @enumFromInt(@as(u32, @intCast(idx)));
 }
 
-/// Get a procedure by index
-pub fn getProc(self: *const Self, idx: usize) LirProc {
-    return self.procs.items[idx];
+/// Get a proc spec by index
+pub fn getProcSpec(self: *const Self, idx: LirProcSpecId) LirProcSpec {
+    return self.proc_specs.items[@intFromEnum(idx)];
 }
 
-/// Get all procedures
-pub fn getProcs(self: *const Self) []const LirProc {
-    return self.procs.items;
+/// Get a mutable proc spec by index.
+pub fn getProcSpecPtr(self: *Self, idx: LirProcSpecId) *LirProcSpec {
+    return &self.proc_specs.items[@intFromEnum(idx)];
 }
 
-/// Get the number of procedures
-pub fn procCount(self: *const Self) usize {
-    return self.procs.items.len;
+/// Get all proc specs
+pub fn getProcSpecs(self: *const Self) []const LirProcSpec {
+    return self.proc_specs.items;
+}
+
+/// Get the number of proc specs
+pub fn procSpecCount(self: *const Self) usize {
+    return self.proc_specs.items.len;
 }
 
 /// Get the number of expressions in the store
@@ -564,12 +551,12 @@ test "basic expr storage" {
     const region = Region.zero();
 
     // Add a simple literal
-    const id1 = try store.addExpr(.{ .i64_literal = 42 }, region);
+    const id1 = try store.addExpr(.{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } }, region);
     try std.testing.expectEqual(@as(u32, 0), @intFromEnum(id1));
 
     // Retrieve it
     const expr1 = store.getExpr(id1);
-    try std.testing.expectEqual(@as(i64, 42), expr1.i64_literal);
+    try std.testing.expectEqual(@as(i64, 42), expr1.i64_literal.value);
 
     // Add another
     const id2 = try store.addExpr(.{ .bool_literal = true }, region);
@@ -584,9 +571,9 @@ test "expr span storage" {
     const region = Region.zero();
 
     // Add some expressions
-    const id1 = try store.addExpr(.{ .i64_literal = 1 }, region);
-    const id2 = try store.addExpr(.{ .i64_literal = 2 }, region);
-    const id3 = try store.addExpr(.{ .i64_literal = 3 }, region);
+    const id1 = try store.addExpr(.{ .i64_literal = .{ .value = 1, .layout_idx = .i64 } }, region);
+    const id2 = try store.addExpr(.{ .i64_literal = .{ .value = 2, .layout_idx = .i64 } }, region);
+    const id3 = try store.addExpr(.{ .i64_literal = .{ .value = 3, .layout_idx = .i64 } }, region);
 
     // Create a span
     const span = try store.addExprSpan(&.{ id1, id2, id3 });
@@ -607,7 +594,7 @@ test "pattern storage" {
 
     const region = Region.zero();
     const ident = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 5 };
-    const symbol = Symbol{ .module_idx = 0, .ident_idx = ident };
+    const symbol = Symbol.fromRaw(@as(u64, @as(u32, @bitCast(ident))));
 
     const pat_id = try store.addPattern(.{ .bind = .{
         .symbol = symbol,
@@ -625,9 +612,9 @@ test "symbol def lookup" {
 
     const region = Region.zero();
     const ident = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 42 };
-    const symbol = Symbol{ .module_idx = 1, .ident_idx = ident };
+    const symbol = Symbol.fromRaw(@as(u64, @as(u32, @bitCast(ident))));
 
-    const expr_id = try store.addExpr(.{ .i64_literal = 100 }, region);
+    const expr_id = try store.addExpr(.{ .i64_literal = .{ .value = 100, .layout_idx = .i64 } }, region);
     try store.registerSymbolDef(symbol, expr_id);
 
     const found = store.getSymbolDef(symbol);
@@ -636,6 +623,6 @@ test "symbol def lookup" {
 
     // Non-existent symbol
     const ident2 = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
-    const other = Symbol{ .module_idx = 2, .ident_idx = ident2 };
+    const other = Symbol.fromRaw(@as(u64, @as(u32, @bitCast(ident2))));
     try std.testing.expect(store.getSymbolDef(other) == null);
 }

@@ -3325,7 +3325,7 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
         .OpenCurly => {
             self.advance(); // Advance past OpenCurly
             const scratch_top = self.store.scratchAnnoRecordFieldTop();
-            var ext_anno: ?AST.TypeAnno.Idx = null;
+            var ext: AST.TypeAnno.RecordExt = .closed;
 
             // Parse record fields, with support for record extension
             while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
@@ -3334,14 +3334,14 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
                     const double_dot_start = self.pos;
                     self.advance(); // consume DoubleDot
 
-                    if (self.peek() == .LowerIdent) {
-                        // Parse the extension type variable
-                        ext_anno = try self.parseTypeAnno(.looking_for_args);
+                    if (self.peek() == .LowerIdent or self.peek() == .NamedUnderscore) {
+                        // Parse the named extension type variable
+                        const named_anno = try self.parseTypeAnno(.looking_for_args);
+                        const anno_region = self.store.getTypeAnno(named_anno).to_tokenized_region();
+                        ext = .{ .named = .{ .anno = named_anno, .region = anno_region } };
                     } else {
-                        // Anonymous extension (just ..) - create an underscore type annotation
-                        ext_anno = try self.store.addTypeAnno(.{ .underscore = .{
-                            .region = .{ .start = double_dot_start, .end = self.pos },
-                        } });
+                        // Anonymous extension (just ..)
+                        ext = .{ .open = double_dot_start };
                     }
                     // Break out since .. must be the last element
                     self.expect(.Comma) catch {};
@@ -3362,7 +3362,7 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
             anno = try self.store.addTypeAnno(.{ .record = .{
                 .region = .{ .start = start, .end = self.pos },
                 .fields = fields,
-                .ext = ext_anno,
+                .ext = ext,
             } });
         },
         .OpenSquare => {
@@ -3379,7 +3379,9 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
 
                     if (self.peek() == .LowerIdent or self.peek() == .NamedUnderscore) {
                         // Parse the named extension type variable
-                        ext = .{ .named = try self.parseTypeAnno(.looking_for_args) };
+                        const named_anno = try self.parseTypeAnno(.looking_for_args);
+                        const anno_region = self.store.getTypeAnno(named_anno).to_tokenized_region();
+                        ext = .{ .named = .{ .anno = named_anno, .region = anno_region } };
                     } else {
                         // Anonymous extension (just ..) - store the DoubleDot token position
                         ext = .{ .open = double_dot_pos };

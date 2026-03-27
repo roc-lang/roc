@@ -6,12 +6,14 @@ const parse = @import("parse");
 const CIR = @import("../CIR.zig");
 const Can = @import("../Can.zig");
 const ModuleEnv = @import("../ModuleEnv.zig");
+const BuiltinTestContext = @import("./BuiltinTestContext.zig").BuiltinTestContext;
 const Allocators = base.Allocators;
 
 gpa: std.mem.Allocator,
 module_env: *ModuleEnv,
 parse_ast: *parse.AST,
 can: *Can,
+builtin_ctx: BuiltinTestContext,
 
 /// Test environment for canonicalization testing, providing a convenient wrapper around ModuleEnv, AST, and Can.
 pub const TestEnv = @This();
@@ -49,13 +51,17 @@ pub fn init(source: []const u8) !TestEnv {
 
     try module_env.initCIRFields("test");
 
-    can.* = try Can.init(&allocators, module_env, parse_ast, null);
+    var builtin_ctx = try BuiltinTestContext.init(gpa);
+    errdefer builtin_ctx.deinit();
+
+    can.* = try Can.initModule(&allocators, module_env, parse_ast, builtin_ctx.canInitContext());
 
     return TestEnv{
         .gpa = gpa,
         .module_env = module_env,
         .parse_ast = parse_ast,
         .can = can,
+        .builtin_ctx = builtin_ctx,
     };
 }
 
@@ -68,6 +74,7 @@ pub fn deinit(self: *TestEnv) void {
     // Since common is now a value field, we don't need to free it separately
     self.module_env.deinit();
     self.gpa.destroy(self.module_env);
+    self.builtin_ctx.deinit();
 }
 
 /// Canonicalizes the root expression from the parsed AST, returning null if there are parse errors.

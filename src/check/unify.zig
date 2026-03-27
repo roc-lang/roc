@@ -493,8 +493,8 @@ const Unifier = struct {
             },
             .alias => |b_alias| {
                 const b_backing_var = self.types_store.getAliasBackingVar(b_alias);
-                if (a_alias.origin_module == b_alias.origin_module and
-                    a_alias.ident.ident_idx == b_alias.ident.ident_idx)
+                if (a_alias.origin_module.eql(b_alias.origin_module) and
+                    a_alias.ident.ident_idx.eql(b_alias.ident.ident_idx))
                 {
                     try self.unifyTwoAliases(vars, a_alias, b_alias);
                 } else {
@@ -1024,8 +1024,8 @@ const Unifier = struct {
             return;
         }
 
-        if (a_type.origin_module != b_type.origin_module or
-            a_type.ident.ident_idx != b_type.ident.ident_idx)
+        if (!a_type.origin_module.eql(b_type.origin_module) or
+            !a_type.ident.ident_idx.eql(b_type.ident.ident_idx))
         {
             return error.TypeMismatch;
         }
@@ -1043,8 +1043,12 @@ const Unifier = struct {
             try self.unifyGuarded(a_arg, b_arg);
         }
 
-        // Merge after all checks pass
-        // Note that we *do not* unify backing variable
+        // Merge after all checks pass.
+        // We intentionally do not unify backing vars here: nominal identity is
+        // defined by origin/name/args, and forcing backing vars to coincide at
+        // unification time over-constrains row-polymorphic nominals like Try.
+        // MIR monotype lowering substitutes formal nominal params into backing
+        // types explicitly when it strips nominal wrappers.
         self.merge(vars, vars.b.desc.content);
     }
 
@@ -1119,7 +1123,7 @@ const Unifier = struct {
             for (anon_names) |anon_name| {
                 var found = false;
                 for (nominal_names) |nominal_name| {
-                    if (anon_name == nominal_name) {
+                    if (anon_name.eql(nominal_name)) {
                         found = true;
                         break;
                     }
@@ -2227,16 +2231,35 @@ const Unifier = struct {
 
         const top: u32 = @intCast(self.types_store.static_dispatch_constraints.len());
 
-        // Ensure we have enough memory for the new contiguous list
-        const capacity = partitioned.in_both.len() + partitioned.only_in_a.len() + partitioned.only_in_b.len();
+        // Ensure we have enough memory for the new contiguous list.
+        // Count extra capacity for "in_both" entries where a and b have different source_expr_idx —
+        // both call sites need a resolved dispatch target.
+        var extra_capacity: usize = 0;
+        for (self.scratch.in_both_static_dispatch_constraints.sliceRange(partitioned.in_both)) |two_constraints| {
+            if (two_constraints.a.source_expr_idx != two_constraints.b.source_expr_idx and
+                two_constraints.a.source_expr_idx != StaticDispatchConstraint.no_source_expr)
+            {
+                extra_capacity += 1;
+            }
+        }
+
+        const capacity = partitioned.in_both.len() + partitioned.only_in_a.len() + partitioned.only_in_b.len() + extra_capacity;
         try self.types_store.static_dispatch_constraints.items.ensureUnusedCapacity(
             self.types_store.gpa,
             capacity,
         );
 
         for (self.scratch.in_both_static_dispatch_constraints.sliceRange(partitioned.in_both)) |two_constraints| {
-            // Here, we append the constraint's b, but since a & b, it doesn't actually matter
             self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(two_constraints.b);
+            // When a and b have different source_expr_idx, both call sites need a resolved
+            // dispatch target. Emit a duplicate with a's source_expr_idx.
+            if (two_constraints.a.source_expr_idx != two_constraints.b.source_expr_idx and
+                two_constraints.a.source_expr_idx != StaticDispatchConstraint.no_source_expr)
+            {
+                var a_copy = two_constraints.b;
+                a_copy.source_expr_idx = two_constraints.a.source_expr_idx;
+                self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(a_copy);
+            }
         }
         for (self.scratch.only_in_a_static_dispatch_constraints.sliceRange(partitioned.only_in_a)) |only_a| {
             self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(only_a);
@@ -2576,7 +2599,7 @@ pub const Scratch = struct {
         var new_count: usize = 0;
         for (ext_names) |ext_name| {
             const is_dup = for (current_fields) |existing| {
-                if (existing.name == ext_name) break true;
+                if (existing.name.eql(ext_name)) break true;
             } else false;
             if (!is_dup) new_count += 1;
         }
@@ -2593,7 +2616,7 @@ pub const Scratch = struct {
         // Append non-duplicate extension fields
         for (ext_names, ext_vars) |name, var_| {
             const is_dup = for (current_fields) |existing| {
-                if (existing.name == name) break true;
+                if (existing.name.eql(name)) break true;
             } else false;
             if (!is_dup) {
                 self.gathered_fields.items.appendAssumeCapacity(RecordField{ .name = name, .var_ = var_ });
@@ -2635,7 +2658,7 @@ pub const Scratch = struct {
         var new_count: usize = 0;
         for (ext_names) |ext_name| {
             const is_dup = for (current_tags) |existing| {
-                if (existing.name == ext_name) break true;
+                if (existing.name.eql(ext_name)) break true;
             } else false;
             if (!is_dup) new_count += 1;
         }
@@ -2648,7 +2671,7 @@ pub const Scratch = struct {
         // Append non-duplicate extension tags
         for (ext_names, ext_args) |name, args| {
             const is_dup = for (current_tags) |existing| {
-                if (existing.name == name) break true;
+                if (existing.name.eql(name)) break true;
             } else false;
             if (!is_dup) {
                 self.gathered_tags.items.appendAssumeCapacity(Tag{ .name = name, .args = args });

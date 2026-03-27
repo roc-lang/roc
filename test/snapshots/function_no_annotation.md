@@ -123,22 +123,18 @@ NO CHANGE
 					(p-assign (ident "n"))))))
 	(d-let
 		(p-assign (ident "process!"))
-		(e-closure
-			(captures
-				(capture (ident "print_number!"))
-				(capture (ident "multiply")))
-			(e-lambda
-				(args
-					(p-assign (ident "x")))
+		(e-lambda
+			(args
+				(p-assign (ident "x")))
+			(e-call
+				(e-lookup-local
+					(p-assign (ident "print_number!")))
 				(e-call
 					(e-lookup-local
-						(p-assign (ident "print_number!")))
-					(e-call
-						(e-lookup-local
-							(p-assign (ident "multiply")))
-						(e-lookup-local
-							(p-assign (ident "x")))
-						(e-num (value "2")))))))
+						(p-assign (ident "multiply")))
+					(e-lookup-local
+						(p-assign (ident "x")))
+					(e-num (value "2"))))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-call

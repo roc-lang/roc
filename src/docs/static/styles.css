@@ -348,7 +348,7 @@ padding: 0px 16px;
     grid-column-end: main-content;
     position: relative;
     display: grid;
-    grid-template-rows: min-content min-content 1fr;
+    grid-template-rows: min-content 1fr;
     box-sizing: border-box;
     width: 100%;
     background-color: var(--sidebar-bg-color);
@@ -668,15 +668,13 @@ pre>samp {
 #module-search-form {
   display: flex;
   align-items: center;
-  align-content: center;
+  justify-content: center;
   position: sticky;
-  flex-grow: 1;
   box-sizing: border-box;
-  padding: 8px 16px;
+  padding: 12px 0;
   background-color: var(--body-bg-color);
   top: 0;
   z-index: 1;
-  border-bottom: 1px solid var(--border-color);
   margin-bottom: 8px;
 }
 
@@ -711,6 +709,7 @@ pre>samp {
   position: relative;
   box-sizing: border-box;
   width: 100%;
+  max-width: 600px;
   font-size: 16px;
   line-height: 18px;
   color: var(--faded-color);
@@ -740,9 +739,11 @@ pre>samp {
   gap: 0px;
   flex-direction: column;
   position: absolute;
-  top: calc(var(--module-search-padding-height) + var(--module-search-height));
-  left: var(--module-search-form-padding-width);
-  width: calc(100% - 2 * var(--module-search-form-padding-width));
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 100%;
+  max-width: 600px;
   box-sizing: border-box;
   z-index: 100;
   background-color: var(--body-bg-color);

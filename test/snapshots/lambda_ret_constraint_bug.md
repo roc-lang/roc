@@ -90,17 +90,14 @@ NO CHANGE
 				(ty-lookup (name "I64") (builtin)))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-closure
-			(captures
-				(capture (ident "helper")))
-			(e-lambda
-				(args
-					(p-underscore)
-					(p-underscore))
-				(e-call
-					(e-lookup-local
-						(p-assign (ident "helper")))
-					(e-num (value "5")))))
+		(e-lambda
+			(args
+				(p-underscore)
+				(p-underscore))
+			(e-call
+				(e-lookup-local
+					(p-assign (ident "helper")))
+				(e-num (value "5"))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "I64") (builtin))

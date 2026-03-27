@@ -7,6 +7,7 @@ const CIR = @import("../CIR.zig");
 const Can = @import("../Can.zig");
 const ModuleEnv = @import("../ModuleEnv.zig");
 const Scope = @import("../Scope.zig");
+const BuiltinTestContext = @import("./BuiltinTestContext.zig").BuiltinTestContext;
 const Ident = base.Ident;
 const Pattern = CIR.Pattern;
 const TypeAnno = CIR.TypeAnno;
@@ -17,6 +18,7 @@ const ScopeTestContext = struct {
     self: Can,
     module_env: *ModuleEnv,
     gpa: std.mem.Allocator,
+    builtin_ctx: BuiltinTestContext,
 
     fn init(gpa: std.mem.Allocator) !ScopeTestContext {
         // heap allocate ModuleEnv for testing
@@ -24,14 +26,18 @@ const ScopeTestContext = struct {
         module_env.* = try ModuleEnv.init(gpa, "");
         try module_env.initCIRFields("test");
 
+        var builtin_ctx = try BuiltinTestContext.init(gpa);
+        errdefer builtin_ctx.deinit();
+
         var allocators: Allocators = undefined;
         allocators.initInPlace(gpa);
         defer allocators.deinit();
 
         return ScopeTestContext{
-            .self = try Can.init(&allocators, module_env, undefined, null),
+            .self = try Can.initModule(&allocators, module_env, undefined, builtin_ctx.canInitContext()),
             .module_env = module_env,
             .gpa = gpa,
+            .builtin_ctx = builtin_ctx,
         };
     }
 
@@ -39,6 +45,7 @@ const ScopeTestContext = struct {
         ctx.self.deinit();
         ctx.module_env.deinit();
         ctx.gpa.destroy(ctx.module_env);
+        ctx.builtin_ctx.deinit();
     }
 };
 

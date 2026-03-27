@@ -8,6 +8,6 @@ type=repl
 » Try.Ok(42) ?? 0
 ~~~
 # OUTPUT
-42
+42.0
 # PROBLEMS
 NIL

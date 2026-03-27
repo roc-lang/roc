@@ -1,20 +1,36 @@
 //! Monomorphic type system for MIR.
 //!
-//! Monotypes are fully concrete types with no type variables, no extensions,
-//! no aliases, and no nominal/opaque/structural distinction. Records, tag unions,
-//! and tuples are just records, tag unions, and tuples — the distinctions that
-//! existed for static dispatch and module boundary enforcement are no longer needed.
+//! Monotypes are MIR-visible types with no extensions, no aliases, and no
+//! nominal/opaque/structural distinction. Records, tag unions, and tuples are
+//! just records, tag unions, and tuples. MIR is required to stay monomorphic:
+//! non-numeric unresolved type vars must never survive into this IR.
 //!
 //! Each MIR expression has exactly one Monotype via a 1:1 Expr.Idx → Monotype.Idx mapping.
 
 const std = @import("std");
 const base = @import("base");
-const types = @import("types");
 const can = @import("can");
+const types = @import("types");
 
 const Ident = base.Ident;
 const Allocator = std.mem.Allocator;
-const CIR = can.CIR;
+const ModuleEnv = can.ModuleEnv;
+const CommonIdents = can.ModuleEnv.CommonIdents;
+const StaticDispatchConstraint = types.StaticDispatchConstraint;
+
+/// Check if a constraint range contains a numeric constraint (from_numeral,
+/// desugared_binop, or desugared_unaryop). These imply the type variable is
+/// numeric and should default to Dec rather than unit.
+fn hasNumeralConstraint(types_store: *const types.Store, constraints: StaticDispatchConstraint.SafeList.Range) bool {
+    if (constraints.isEmpty()) return false;
+    for (types_store.sliceStaticDispatchConstraints(constraints)) |constraint| {
+        switch (constraint.origin) {
+            .from_numeral, .desugared_binop, .desugared_unaryop => return true,
+            .method_call, .where_clause => {},
+        }
+    }
+    return false;
+}
 
 /// Index into the Store's monotypes array.
 /// Since MIR has a 1:1 expr-to-type mapping, an Expr.Idx can be directly
@@ -82,11 +98,15 @@ pub const Monotype = union(enum) {
 
     /// Unit / empty record
     unit: void,
+
+    /// Temporary placeholder used during recursive type construction.
+    /// Must be overwritten before construction completes; surviving
+    /// placeholders indicate a bug in fromFlatType/fromFuncType/fromNominalType.
+    recursive_placeholder: void,
 };
 
 /// Primitive type kinds.
 pub const Prim = enum {
-    bool,
     str,
     u8,
     i8,
@@ -105,9 +125,19 @@ pub const Prim = enum {
 
 /// A tag in a tag union.
 pub const Tag = struct {
-    name: Ident.Idx,
+    name: Name,
     /// Span of Monotype.Idx for payload types
     payloads: Span,
+
+    pub fn sortByNameAsc(all_module_envs: []const *const ModuleEnv, a: Tag, b: Tag) bool {
+        return orderByName(all_module_envs, a, b) == .lt;
+    }
+
+    fn orderByName(all_module_envs: []const *const ModuleEnv, a: Tag, b: Tag) std.math.Order {
+        const a_text = a.name.text(all_module_envs);
+        const b_text = b.name.text(all_module_envs);
+        return std.mem.order(u8, a_text, b_text);
+    }
 };
 
 /// Span of Tags stored in the tags array.
@@ -126,8 +156,47 @@ pub const TagSpan = extern struct {
 
 /// A field in a record.
 pub const Field = struct {
-    name: Ident.Idx,
+    name: Name,
     type_idx: Idx,
+
+    pub fn sortByNameAsc(all_module_envs: []const *const ModuleEnv, a: Field, b: Field) bool {
+        return orderByName(all_module_envs, a, b) == .lt;
+    }
+
+    fn orderByName(all_module_envs: []const *const ModuleEnv, a: Field, b: Field) std.math.Order {
+        const a_text = a.name.text(all_module_envs);
+        const b_text = b.name.text(all_module_envs);
+        return std.mem.order(u8, a_text, b_text);
+    }
+};
+
+/// A named tag or record field label paired with the module that owns its ident.
+pub const Name = struct {
+    module_idx: u32,
+    ident: Ident.Idx,
+
+    pub fn eql(self: Name, other: Name) bool {
+        return self.module_idx == other.module_idx and self.ident.eql(other.ident);
+    }
+
+    pub fn text(self: Name, all_module_envs: []const *const ModuleEnv) []const u8 {
+        return all_module_envs[self.module_idx].getIdent(self.ident);
+    }
+
+    pub fn textEqual(self: Name, all_module_envs: []const *const ModuleEnv, other: Name) bool {
+        if (self.eql(other)) return true;
+        return std.mem.eql(u8, self.text(all_module_envs), other.text(all_module_envs));
+    }
+
+    pub fn textEqualsIdent(
+        self: Name,
+        all_module_envs: []const *const ModuleEnv,
+        ident_module_idx: u32,
+        ident: Ident.Idx,
+    ) bool {
+        if (self.module_idx == ident_module_idx and self.ident.eql(ident)) return true;
+        return std.mem.eql(u8, self.text(all_module_envs), all_module_envs[ident_module_idx].getIdent(ident));
+    }
 };
 
 /// Span of Fields stored in the fields array.
@@ -144,6 +213,29 @@ pub const FieldSpan = extern struct {
     }
 };
 
+const NamedSpecialization = struct {
+    name_text: []const u8,
+    type_idx: Idx,
+};
+
+fn scopedName(scratches: *const Store.Scratches, ident: Ident.Idx) Name {
+    const module_idx = scratches.module_idx orelse unreachable;
+    return .{
+        .module_idx = module_idx,
+        .ident = ident,
+    };
+}
+
+fn namesEqual(all_module_envs: []const *const ModuleEnv, lhs: Name, rhs: Name) bool {
+    return lhs.textEqual(all_module_envs, rhs);
+}
+
+fn nameEqualsIdent(scratches: *const Store.Scratches, lhs: Name, ident: Ident.Idx) bool {
+    const all_module_envs = scratches.all_module_envs orelse unreachable;
+    const module_idx = scratches.module_idx orelse unreachable;
+    return lhs.textEqualsIdent(all_module_envs, module_idx, ident);
+}
+
 /// Flat storage for monomorphic types.
 pub const Store = struct {
     monotypes: std.ArrayListUnmanaged(Monotype),
@@ -151,11 +243,18 @@ pub const Store = struct {
     extra_idx: std.ArrayListUnmanaged(u32),
     tags: std.ArrayListUnmanaged(Tag),
     fields: std.ArrayListUnmanaged(Field),
+    /// Monotype indices that originated from user-defined opaque types.
+    /// Used by Str.inspect to render these as "<opaque>" even when type
+    /// resolution falls back to the structural monotype (which strips the
+    /// opaque wrapper).
+    opaque_indices: std.AutoHashMapUnmanaged(Idx, void),
 
     /// Pre-interned index for the unit monotype.
     unit_idx: Idx,
     /// Pre-interned indices for each primitive monotype, indexed by `@intFromEnum(Prim)`.
     prim_idxs: [prim_count]Idx,
+    /// Cached ordinary tag-union monotype for nominal Bool.
+    bool_tag_union_idx: Idx,
 
     const prim_count = @typeInfo(Prim).@"enum".fields.len;
 
@@ -163,12 +262,23 @@ pub const Store = struct {
         fields: base.Scratch(Field),
         tags: base.Scratch(Tag),
         idxs: base.Scratch(Idx),
+        named_specializations: base.Scratch(NamedSpecialization),
+        /// Ident store for sorting tag names alphabetically.
+        /// Updated when switching modules during cross-module lowering.
+        ident_store: ?*const Ident.Store = null,
+        /// Module env owning the current `types_store` / `ident_store`.
+        module_env: ?*const ModuleEnv = null,
+        /// Module index owning the current `types_store` / `module_env`.
+        module_idx: ?u32 = null,
+        /// Shared module env slice used to resolve nominal definitions by origin module.
+        all_module_envs: ?[]const *const ModuleEnv = null,
 
         pub fn init(allocator: Allocator) Allocator.Error!Scratches {
             return .{
                 .fields = try base.Scratch(Field).init(allocator),
                 .tags = try base.Scratch(Tag).init(allocator),
                 .idxs = try base.Scratch(Idx).init(allocator),
+                .named_specializations = try base.Scratch(NamedSpecialization).init(allocator),
             };
         }
 
@@ -176,12 +286,37 @@ pub const Store = struct {
             self.fields.deinit();
             self.tags.deinit();
             self.idxs.deinit();
+            self.named_specializations.deinit();
         }
     };
+
+    /// Check whether a monotype index originated from a user-defined opaque type.
+    pub fn isOpaque(self: *const Store, idx: Idx) bool {
+        return self.opaque_indices.contains(idx);
+    }
+
+    /// Mark a monotype index as originating from a user-defined opaque type.
+    pub fn markOpaque(self: *Store, allocator: Allocator, idx: Idx) Allocator.Error!void {
+        try self.opaque_indices.put(allocator, idx, {});
+    }
 
     /// Look up the pre-interned index for a primitive type.
     pub fn primIdx(self: *const Store, prim: Prim) Idx {
         return self.prim_idxs[@intFromEnum(prim)];
+    }
+
+    pub fn addBoolTagUnion(self: *Store, allocator: Allocator, module_idx: u32, common_idents: CommonIdents) !Idx {
+        if (!self.bool_tag_union_idx.isNone()) return self.bool_tag_union_idx;
+
+        const false_payloads = Span.empty();
+        const true_payloads = Span.empty();
+        const tags = try self.addTags(allocator, &.{
+            .{ .name = .{ .module_idx = module_idx, .ident = common_idents.false_tag }, .payloads = false_payloads },
+            .{ .name = .{ .module_idx = module_idx, .ident = common_idents.true_tag }, .payloads = true_payloads },
+        });
+        const idx = try self.addMonotype(allocator, .{ .tag_union = .{ .tags = tags } });
+        self.bool_tag_union_idx = idx;
+        return idx;
     }
 
     /// Pre-populate the store with the 16 fixed monotypes (unit + 15 primitives).
@@ -205,8 +340,10 @@ pub const Store = struct {
             .extra_idx = .empty,
             .tags = .empty,
             .fields = .empty,
+            .opaque_indices = .empty,
             .unit_idx = unit_idx,
             .prim_idxs = prim_idxs,
+            .bool_tag_union_idx = .none,
         };
     }
 
@@ -215,9 +352,19 @@ pub const Store = struct {
         self.extra_idx.deinit(allocator);
         self.tags.deinit(allocator);
         self.fields.deinit(allocator);
+        self.opaque_indices.deinit(allocator);
     }
 
     pub fn addMonotype(self: *Store, allocator: Allocator, mono: Monotype) !Idx {
+        switch (mono) {
+            .record => |record| {
+                if (record.fields.isEmpty()) {
+                    return self.unit_idx;
+                }
+            },
+            else => {},
+        }
+
         const idx: u32 = @intCast(self.monotypes.items.len);
         try self.monotypes.append(allocator, mono);
         return @enumFromInt(idx);
@@ -244,6 +391,12 @@ pub const Store = struct {
         return @ptrCast(raw);
     }
 
+    /// Read one Monotype.Idx from a Span without borrowing a slice that may be invalidated by later appends.
+    pub fn getIdxSpanItem(self: *const Store, span: Span, index: usize) Idx {
+        std.debug.assert(index < span.len);
+        return @enumFromInt(self.extra_idx.items[span.start + index]);
+    }
+
     /// Add tags to the tags array and return a TagSpan.
     pub fn addTags(self: *Store, allocator: Allocator, tag_slice: []const Tag) !TagSpan {
         if (tag_slice.len == 0) return TagSpan.empty();
@@ -256,6 +409,12 @@ pub const Store = struct {
     pub fn getTags(self: *const Store, span: TagSpan) []const Tag {
         if (span.len == 0) return &.{};
         return self.tags.items[span.start..][0..span.len];
+    }
+
+    /// Read one Tag from a TagSpan without borrowing a slice that may be invalidated by later appends.
+    pub fn getTagItem(self: *const Store, span: TagSpan, index: usize) Tag {
+        std.debug.assert(index < span.len);
+        return self.tags.items[span.start + index];
     }
 
     /// Add fields to the fields array and return a FieldSpan.
@@ -272,39 +431,87 @@ pub const Store = struct {
         return self.fields.items[span.start..][0..span.len];
     }
 
+    /// Read one Field from a FieldSpan without borrowing a slice that may be invalidated by later appends.
+    pub fn getFieldItem(self: *const Store, span: FieldSpan, index: usize) Field {
+        std.debug.assert(index < span.len);
+        return self.fields.items[span.start + index];
+    }
+
     /// Convert a CIR type variable to a Monotype, recursively resolving all
-    /// type structure. Uses `seen` for cycle detection on recursive types.
+    /// type structure.
+    ///
+    /// `specializations` is a read-only map of type vars already bound to
+    /// concrete monotypes by `bindTypeVarMonotypes` (polymorphic specialization).
+    ///
+    /// Cycle detection for recursive nominal types (the only legitimate source
+    /// of cycles after type checking) is handled internally by `fromNominalType`
+    /// using `nominal_cycle_breakers`.
     pub fn fromTypeVar(
         self: *Store,
         allocator: Allocator,
         types_store: *const types.Store,
         type_var: types.Var,
-        builtin_indices: CIR.BuiltinIndices,
-        seen: *std.AutoHashMap(types.Var, Idx),
+        common_idents: CommonIdents,
+        specializations: *const std.AutoHashMap(types.Var, Idx),
+        nominal_cycle_breakers: *std.AutoHashMap(types.Var, Idx),
         scratches: *Scratches,
     ) Allocator.Error!Idx {
         const resolved = types_store.resolveVar(type_var);
 
-        // Cycle detection: if we've already seen this var, return the cached idx
-        if (seen.get(resolved.var_)) |cached| return cached;
+        // Check specialization bindings first (from bindTypeVarMonotypes).
+        if (specializations.get(resolved.var_)) |cached| return cached;
+
+        // Check nominal cycle breakers (for recursive nominal types like Tree := [Leaf, Node(Tree)]).
+        if (nominal_cycle_breakers.get(resolved.var_)) |cached| return cached;
 
         return switch (resolved.desc.content) {
-            .flex, .rigid => {
-                // Unresolved type variables must not appear in monomorphic code.
-                // Reaching here means the type checker left something unresolved.
-                unreachable;
+            .flex => |flex| {
+                if (flex.name) |name| {
+                    if (lookupNamedSpecialization(scratches, name)) |specialized| return specialized;
+                }
+                if (hasNumeralConstraint(types_store, flex.constraints))
+                    return self.primIdx(.dec);
+                // MIR must remain monomorphic. By the time we are manufacturing a
+                // MIR-visible type, the only surviving unresolved non-numeric vars
+                // should come from roots whose runtime representation is provably
+                // zero-sized already: empty-list element vars, phantom-only
+                // top-level constants, or larger shapes composed entirely of such
+                // ZST pieces.
+                //
+                // In those cases, collapsing to `unit` is representation-preserving:
+                // there is no runtime data to carry, and later layout lowering can
+                // still produce `.zst`, `.list_of_zst`, or `.box_of_zst` as needed.
+                //
+                // If an earlier compiler bug lets a representationful unresolved
+                // var reach MIR here, this branch will still collapse it to `unit`.
+                // That is not ideal, but carrying polymorphism into MIR is worse:
+                // MIR is explicitly required to be monomorphic. Unfortunately this
+                // branch is also hit by legitimate ZST cases, so there is no useful
+                // debug assert we can place here without rejecting correct programs.
+                return self.unit_idx;
+            },
+            .rigid => |rigid| {
+                if (lookupNamedSpecialization(scratches, rigid.name)) |specialized| return specialized;
+                if (hasNumeralConstraint(types_store, rigid.constraints))
+                    return self.primIdx(.dec);
+                // See the unresolved flex branch above. The same monomorphic-MIR
+                // invariant applies to unresolved rigid vars.
+                return self.unit_idx;
             },
             .alias => |alias| {
                 // Aliases are transparent — follow the backing var
                 const backing_var = types_store.getAliasBackingVar(alias);
-                return try self.fromTypeVar(allocator, types_store, backing_var, builtin_indices, seen, scratches);
+                return try self.fromTypeVar(allocator, types_store, backing_var, common_idents, specializations, nominal_cycle_breakers, scratches);
             },
             .structure => |flat_type| {
-                return try self.fromFlatType(allocator, types_store, resolved.var_, flat_type, builtin_indices, seen, scratches);
+                return try self.fromFlatType(allocator, types_store, resolved.var_, flat_type, common_idents, specializations, nominal_cycle_breakers, scratches);
             },
-            // Error types are caught in lowerExpr before resolveMonotype;
-            // reaching here means a compiler bug in an earlier phase.
-            .err => unreachable,
+            // Error types can appear nested inside function types (as argument
+            // or return types) when --allow-errors is used. The guard in
+            // lowerExpr only catches top-level error types, so we need to handle
+            // them here too. Return unit as a safe placeholder so lowering can
+            // continue and the runtime-error path is hit at runtime.
+            .err => return self.unit_idx,
         };
     }
 
@@ -314,36 +521,120 @@ pub const Store = struct {
         types_store: *const types.Store,
         var_: types.Var,
         flat_type: types.FlatType,
-        builtin_indices: CIR.BuiltinIndices,
-        seen: *std.AutoHashMap(types.Var, Idx),
+        common_idents: CommonIdents,
+        specializations: *const std.AutoHashMap(types.Var, Idx),
+        nominal_cycle_breakers: *std.AutoHashMap(types.Var, Idx),
         scratches: *Scratches,
     ) Allocator.Error!Idx {
         return switch (flat_type) {
             .nominal_type => |nominal| {
-                return try self.fromNominalType(allocator, types_store, var_, nominal, builtin_indices, seen, scratches);
+                return try self.fromNominalType(allocator, types_store, var_, nominal, common_idents, specializations, nominal_cycle_breakers, scratches);
             },
             .empty_record => self.unit_idx,
             .empty_tag_union => try self.addMonotype(allocator, .{ .tag_union = .{ .tags = TagSpan.empty() } }),
             .record => |record| {
-                // Reserve a slot for cycle detection before recursing into fields
-                const placeholder_idx = try self.addMonotype(allocator, .unit);
-                try seen.put(var_, placeholder_idx);
-
-                const fields_slice = types_store.getRecordFieldsSlice(record.fields);
-                const names = fields_slice.items(.name);
-                const vars = fields_slice.items(.var_);
-
                 const scratch_top = scratches.fields.top();
                 defer scratches.fields.clearFrom(scratch_top);
 
-                for (names, vars) |name, field_var| {
-                    const field_type = try self.fromTypeVar(allocator, types_store, field_var, builtin_indices, seen, scratches);
-                    try scratches.fields.append(.{ .name = name, .type_idx = field_type });
+                // Follow the record extension chain to collect ALL fields.
+                // Roc's type system represents records as linked rows:
+                // { a: A | ext } where ext -> { b: B | ext2 } where ext2 -> {}
+                var current_row = record;
+                rows: while (true) {
+                    const fields_slice = types_store.getRecordFieldsSlice(current_row.fields);
+                    const names = fields_slice.items(.name);
+                    const vars = fields_slice.items(.var_);
+
+                    for (names, vars) |name, field_var| {
+                        var seen_name = false;
+                        for (scratches.fields.sliceFromStart(scratch_top)) |existing| {
+                            if (nameEqualsIdent(scratches, existing.name, name)) {
+                                seen_name = true;
+                                break;
+                            }
+                        }
+                        if (seen_name) continue;
+
+                        const field_type = try self.fromTypeVar(allocator, types_store, field_var, common_idents, specializations, nominal_cycle_breakers, scratches);
+                        try scratches.fields.append(.{ .name = scopedName(scratches, name), .type_idx = field_type });
+                    }
+
+                    var ext_var = current_row.ext;
+                    while (true) {
+                        const ext_resolved = types_store.resolveVar(ext_var);
+                        switch (ext_resolved.desc.content) {
+                            .alias => |alias| {
+                                ext_var = types_store.getAliasBackingVar(alias);
+                                continue;
+                            },
+                            .structure => |ext_flat| switch (ext_flat) {
+                                .record => |next_row| {
+                                    current_row = next_row;
+                                    continue :rows;
+                                },
+                                .record_unbound => |fields_range| {
+                                    // Final open-row segment: append known fields.
+                                    const ext_fields = types_store.getRecordFieldsSlice(fields_range);
+                                    const ext_names = ext_fields.items(.name);
+                                    const ext_vars = ext_fields.items(.var_);
+                                    for (ext_names, ext_vars) |name, field_var| {
+                                        var seen_name = false;
+                                        for (scratches.fields.sliceFromStart(scratch_top)) |existing| {
+                                            if (nameEqualsIdent(scratches, existing.name, name)) {
+                                                seen_name = true;
+                                                break;
+                                            }
+                                        }
+                                        if (seen_name) continue;
+
+                                        const field_type = try self.fromTypeVar(allocator, types_store, field_var, common_idents, specializations, nominal_cycle_breakers, scratches);
+                                        try scratches.fields.append(.{ .name = scopedName(scratches, name), .type_idx = field_type });
+                                    }
+                                    break :rows;
+                                },
+                                .empty_record => break :rows,
+                                else => {
+                                    if (std.debug.runtime_safety) {
+                                        std.debug.panic(
+                                            "Monotype.fromTypeVar(record): unexpected row extension flat type '{s}'",
+                                            .{@tagName(ext_flat)},
+                                        );
+                                    }
+                                    unreachable;
+                                },
+                            },
+                            .flex => {
+                                if (findNamedRowExtensionMonotype(scratches, ext_var, types_store)) |specialized| {
+                                    try self.appendSpecializedRecordFields(specialized, scratch_top, scratches);
+                                }
+                                break :rows; // Open record — treat as closed with collected fields
+                            },
+                            .rigid => {
+                                if (findNamedRowExtensionMonotype(scratches, ext_var, types_store)) |specialized| {
+                                    try self.appendSpecializedRecordFields(specialized, scratch_top, scratches);
+                                }
+                                break :rows; // Rigid record — treat as closed with collected fields
+                            },
+                            .err => {
+                                if (std.debug.runtime_safety) {
+                                    std.debug.panic(
+                                        "Monotype.fromTypeVar(record): error row extension tail",
+                                        .{},
+                                    );
+                                }
+                                unreachable;
+                            },
+                        }
+                    }
                 }
 
-                const field_span = try self.addFields(allocator, scratches.fields.sliceFromStart(scratch_top));
-                self.monotypes.items[@intFromEnum(placeholder_idx)] = .{ .record = .{ .fields = field_span } };
-                return placeholder_idx;
+                const collected_fields = scratches.fields.sliceFromStart(scratch_top);
+                // Each row segment is sorted, but concatenation may not be.
+                if (scratches.all_module_envs) |all_module_envs| {
+                    std.mem.sort(Field, collected_fields, all_module_envs, Field.sortByNameAsc);
+                }
+                const field_span = try self.addFields(allocator, collected_fields);
+                return try self.addMonotype(allocator, .{ .record = .{ .fields = field_span } });
             },
             .record_unbound => |fields_range| {
                 // Extensible record — treat like a closed record with the known fields
@@ -351,70 +642,119 @@ pub const Store = struct {
                 const names = fields_slice.items(.name);
                 const vars = fields_slice.items(.var_);
 
-                const placeholder_idx = try self.addMonotype(allocator, .unit);
-                try seen.put(var_, placeholder_idx);
-
                 const scratch_top = scratches.fields.top();
                 defer scratches.fields.clearFrom(scratch_top);
 
                 for (names, vars) |name, field_var| {
-                    const field_type = try self.fromTypeVar(allocator, types_store, field_var, builtin_indices, seen, scratches);
-                    try scratches.fields.append(.{ .name = name, .type_idx = field_type });
+                    const field_type = try self.fromTypeVar(allocator, types_store, field_var, common_idents, specializations, nominal_cycle_breakers, scratches);
+                    try scratches.fields.append(.{ .name = scopedName(scratches, name), .type_idx = field_type });
                 }
 
                 const field_span = try self.addFields(allocator, scratches.fields.sliceFromStart(scratch_top));
-                self.monotypes.items[@intFromEnum(placeholder_idx)] = .{ .record = .{ .fields = field_span } };
-                return placeholder_idx;
+                return try self.addMonotype(allocator, .{ .record = .{ .fields = field_span } });
             },
             .tuple => |tuple| {
-                const placeholder_idx = try self.addMonotype(allocator, .unit);
-                try seen.put(var_, placeholder_idx);
-
                 const elem_vars = types_store.sliceVars(tuple.elems);
                 const scratch_top = scratches.idxs.top();
                 defer scratches.idxs.clearFrom(scratch_top);
 
                 for (elem_vars) |elem_var| {
-                    const elem_type = try self.fromTypeVar(allocator, types_store, elem_var, builtin_indices, seen, scratches);
+                    const elem_type = try self.fromTypeVar(allocator, types_store, elem_var, common_idents, specializations, nominal_cycle_breakers, scratches);
                     try scratches.idxs.append(elem_type);
                 }
 
                 const elem_span = try self.addIdxSpan(allocator, scratches.idxs.sliceFromStart(scratch_top));
-                self.monotypes.items[@intFromEnum(placeholder_idx)] = .{ .tuple = .{ .elems = elem_span } };
-                return placeholder_idx;
+                return try self.addMonotype(allocator, .{ .tuple = .{ .elems = elem_span } });
             },
-            .tag_union => |tag_union| {
-                const placeholder_idx = try self.addMonotype(allocator, .unit);
-                try seen.put(var_, placeholder_idx);
-
-                const tags_slice = types_store.getTagsSlice(tag_union.tags);
-                const tag_names = tags_slice.items(.name);
-                const tag_args = tags_slice.items(.args);
-
+            .tag_union => |tag_union_row| {
                 const tags_top = scratches.tags.top();
                 defer scratches.tags.clearFrom(tags_top);
 
-                for (tag_names, tag_args) |name, args_range| {
-                    const arg_vars = types_store.sliceVars(args_range);
-                    const idxs_top = scratches.idxs.top();
-                    defer scratches.idxs.clearFrom(idxs_top);
+                // Follow the tag union extension chain to collect ALL tags.
+                // Roc's type system represents tag unions as linked rows:
+                // [Ok a | ext] where ext -> [Err b | ext2] where ext2 -> empty_tag_union
+                var current_row = tag_union_row;
+                rows: while (true) {
+                    const tags_slice = types_store.getTagsSlice(current_row.tags);
+                    const tag_names = tags_slice.items(.name);
+                    const tag_args = tags_slice.items(.args);
 
-                    for (arg_vars) |arg_var| {
-                        const payload_type = try self.fromTypeVar(allocator, types_store, arg_var, builtin_indices, seen, scratches);
-                        try scratches.idxs.append(payload_type);
+                    for (tag_names, tag_args) |name, args_range| {
+                        const arg_vars = types_store.sliceVars(args_range);
+                        const idxs_top = scratches.idxs.top();
+                        defer scratches.idxs.clearFrom(idxs_top);
+
+                        for (arg_vars) |arg_var| {
+                            const payload_type = try self.fromTypeVar(allocator, types_store, arg_var, common_idents, specializations, nominal_cycle_breakers, scratches);
+                            try scratches.idxs.append(payload_type);
+                        }
+
+                        const payloads_span = try self.addIdxSpan(allocator, scratches.idxs.sliceFromStart(idxs_top));
+                        try scratches.tags.append(.{ .name = scopedName(scratches, name), .payloads = payloads_span });
                     }
 
-                    const payloads_span = try self.addIdxSpan(allocator, scratches.idxs.sliceFromStart(idxs_top));
-                    try scratches.tags.append(.{ .name = name, .payloads = payloads_span });
+                    // Follow extension variable to find more tags
+                    var ext_var = current_row.ext;
+                    while (true) {
+                        const ext_resolved = types_store.resolveVar(ext_var);
+                        switch (ext_resolved.desc.content) {
+                            .alias => |alias| {
+                                ext_var = types_store.getAliasBackingVar(alias);
+                                continue;
+                            },
+                            .structure => |ext_flat| switch (ext_flat) {
+                                .tag_union => |next_row| {
+                                    current_row = next_row;
+                                    continue :rows;
+                                },
+                                .empty_tag_union => break :rows,
+                                else => {
+                                    if (std.debug.runtime_safety) {
+                                        std.debug.panic(
+                                            "Monotype.fromTypeVar(tag_union): unexpected row extension flat type '{s}'",
+                                            .{@tagName(ext_flat)},
+                                        );
+                                    }
+                                    unreachable;
+                                },
+                            },
+                            .flex => {
+                                if (findNamedRowExtensionMonotype(scratches, ext_var, types_store)) |specialized| {
+                                    try self.appendSpecializedTagUnionTags(specialized, scratches);
+                                }
+                                break :rows; // Open tag union — treat as closed with collected tags
+                            },
+                            .rigid => {
+                                if (findNamedRowExtensionMonotype(scratches, ext_var, types_store)) |specialized| {
+                                    try self.appendSpecializedTagUnionTags(specialized, scratches);
+                                }
+                                break :rows; // Rigid tag union — treat as closed with collected tags
+                            },
+                            .err => {
+                                if (std.debug.runtime_safety) {
+                                    std.debug.panic(
+                                        "Monotype.fromTypeVar(tag_union): error row extension tail",
+                                        .{},
+                                    );
+                                }
+                                unreachable;
+                            },
+                        }
+                    }
                 }
 
-                const tag_span = try self.addTags(allocator, scratches.tags.sliceFromStart(tags_top));
-                self.monotypes.items[@intFromEnum(placeholder_idx)] = .{ .tag_union = .{ .tags = tag_span } };
-                return placeholder_idx;
+                const collected_tags = scratches.tags.sliceFromStart(tags_top);
+                // Sort tags alphabetically to match discriminant assignment order.
+                // Each ext-chain row is pre-sorted, but the concatenation may not be.
+                if (scratches.all_module_envs) |all_module_envs| {
+                    std.mem.sort(Tag, collected_tags, all_module_envs, Tag.sortByNameAsc);
+                }
+                const tag_span = try self.addTags(allocator, collected_tags);
+                return try self.addMonotype(allocator, .{ .tag_union = .{ .tags = tag_span } });
             },
-            .fn_pure => |func| try self.fromFuncType(allocator, types_store, var_, func, false, builtin_indices, seen, scratches),
-            .fn_effectful => |func| try self.fromFuncType(allocator, types_store, var_, func, true, builtin_indices, seen, scratches),
-            .fn_unbound => |func| try self.fromFuncType(allocator, types_store, var_, func, false, builtin_indices, seen, scratches),
+            .fn_pure => |func| try self.fromFuncType(allocator, types_store, func, false, common_idents, specializations, nominal_cycle_breakers, scratches),
+            .fn_effectful => |func| try self.fromFuncType(allocator, types_store, func, true, common_idents, specializations, nominal_cycle_breakers, scratches),
+            .fn_unbound => |func| try self.fromFuncType(allocator, types_store, func, false, common_idents, specializations, nominal_cycle_breakers, scratches),
         };
     }
 
@@ -422,34 +762,30 @@ pub const Store = struct {
         self: *Store,
         allocator: Allocator,
         types_store: *const types.Store,
-        var_: types.Var,
         func: types.Func,
         effectful: bool,
-        builtin_indices: CIR.BuiltinIndices,
-        seen: *std.AutoHashMap(types.Var, Idx),
+        common_idents: CommonIdents,
+        specializations: *const std.AutoHashMap(types.Var, Idx),
+        nominal_cycle_breakers: *std.AutoHashMap(types.Var, Idx),
         scratches: *Scratches,
     ) Allocator.Error!Idx {
-        const placeholder_idx = try self.addMonotype(allocator, .unit);
-        try seen.put(var_, placeholder_idx);
-
         const arg_vars = types_store.sliceVars(func.args);
         const scratch_top = scratches.idxs.top();
         defer scratches.idxs.clearFrom(scratch_top);
 
         for (arg_vars) |arg_var| {
-            const arg_type = try self.fromTypeVar(allocator, types_store, arg_var, builtin_indices, seen, scratches);
+            const arg_type = try self.fromTypeVar(allocator, types_store, arg_var, common_idents, specializations, nominal_cycle_breakers, scratches);
             try scratches.idxs.append(arg_type);
         }
 
         const args_span = try self.addIdxSpan(allocator, scratches.idxs.sliceFromStart(scratch_top));
-        const ret = try self.fromTypeVar(allocator, types_store, func.ret, builtin_indices, seen, scratches);
+        const ret = try self.fromTypeVar(allocator, types_store, func.ret, common_idents, specializations, nominal_cycle_breakers, scratches);
 
-        self.monotypes.items[@intFromEnum(placeholder_idx)] = .{ .func = .{
+        return try self.addMonotype(allocator, .{ .func = .{
             .args = args_span,
             .ret = ret,
             .effectful = effectful,
-        } };
-        return placeholder_idx;
+        } });
     }
 
     fn fromNominalType(
@@ -458,71 +794,320 @@ pub const Store = struct {
         types_store: *const types.Store,
         nominal_var: types.Var,
         nominal: types.NominalType,
-        builtin_indices: CIR.BuiltinIndices,
-        seen: *std.AutoHashMap(types.Var, Idx),
+        common_idents: CommonIdents,
+        specializations: *const std.AutoHashMap(types.Var, Idx),
+        nominal_cycle_breakers: *std.AutoHashMap(types.Var, Idx),
         scratches: *Scratches,
     ) Allocator.Error!Idx {
         const ident = nominal.ident.ident_idx;
+        const origin = nominal.origin_module;
 
-        // Check if this is a builtin primitive type
-        if (ident == builtin_indices.bool_ident) return self.primIdx(.bool);
-        if (ident == builtin_indices.str_ident) return self.primIdx(.str);
-        if (ident == builtin_indices.u8_ident) return self.primIdx(.u8);
-        if (ident == builtin_indices.i8_ident) return self.primIdx(.i8);
-        if (ident == builtin_indices.u16_ident) return self.primIdx(.u16);
-        if (ident == builtin_indices.i16_ident) return self.primIdx(.i16);
-        if (ident == builtin_indices.u32_ident) return self.primIdx(.u32);
-        if (ident == builtin_indices.i32_ident) return self.primIdx(.i32);
-        if (ident == builtin_indices.u64_ident) return self.primIdx(.u64);
-        if (ident == builtin_indices.i64_ident) return self.primIdx(.i64);
-        if (ident == builtin_indices.u128_ident) return self.primIdx(.u128);
-        if (ident == builtin_indices.i128_ident) return self.primIdx(.i128);
-        if (ident == builtin_indices.dec_ident) return self.primIdx(.dec);
-        if (ident == builtin_indices.f32_ident) return self.primIdx(.f32);
-        if (ident == builtin_indices.f64_ident) return self.primIdx(.f64);
-
-        // Check if this is a builtin List type
-        if (ident == builtin_indices.list_ident) {
-            const type_args = types_store.sliceNominalArgs(nominal);
-            if (type_args.len > 0) {
-                const elem_type = try self.fromTypeVar(allocator, types_store, type_args[0], builtin_indices, seen, scratches);
-                return try self.addMonotype(allocator, .{ .list = .{ .elem = elem_type } });
+        if (origin.eql(common_idents.builtin_module)) {
+            // Bool/Str: unqualified idents from source declarations
+            if (ident.eql(common_idents.str)) return self.primIdx(.str);
+            if (ident.eql(common_idents.bool)) {
+                const module_idx = scratches.module_idx orelse unreachable;
+                return try self.addBoolTagUnion(allocator, module_idx, common_idents);
             }
-            // List with no type arg — shouldn't happen in well-typed code
-            return self.unit_idx;
         }
 
-        // Check if this is a builtin Box type
-        if (ident == builtin_indices.box_ident) {
-            const type_args = types_store.sliceNominalArgs(nominal);
-            if (type_args.len > 0) {
-                const inner_type = try self.fromTypeVar(allocator, types_store, type_args[0], builtin_indices, seen, scratches);
-                return try self.addMonotype(allocator, .{ .box = .{ .inner = inner_type } });
+        if (origin.eql(common_idents.builtin_module)) {
+
+            // List: unqualified ident from mkListContent
+            if (ident.eql(common_idents.list)) {
+                const type_args = types_store.sliceNominalArgs(nominal);
+                if (type_args.len > 0) {
+                    const elem_type = try self.fromTypeVar(allocator, types_store, type_args[0], common_idents, specializations, nominal_cycle_breakers, scratches);
+                    return try self.addMonotype(allocator, .{ .list = .{ .elem = elem_type } });
+                }
+                return self.unit_idx;
             }
-            return self.unit_idx;
+
+            // Box: unqualified ident from mkBoxContent
+            if (ident.eql(common_idents.box)) {
+                const type_args = types_store.sliceNominalArgs(nominal);
+                if (type_args.len > 0) {
+                    const inner_type = try self.fromTypeVar(allocator, types_store, type_args[0], common_idents, specializations, nominal_cycle_breakers, scratches);
+                    return try self.addMonotype(allocator, .{ .box = .{ .inner = inner_type } });
+                }
+                return self.unit_idx;
+            }
+
+            // Numeric types: qualified idents from mkNumberTypeContent (e.g. "Builtin.Num.I64")
+            if (ident.eql(common_idents.i64_type)) return self.primIdx(.i64);
+            if (ident.eql(common_idents.u8_type)) return self.primIdx(.u8);
+            if (ident.eql(common_idents.i8_type)) return self.primIdx(.i8);
+            if (ident.eql(common_idents.u16_type)) return self.primIdx(.u16);
+            if (ident.eql(common_idents.i16_type)) return self.primIdx(.i16);
+            if (ident.eql(common_idents.u32_type)) return self.primIdx(.u32);
+            if (ident.eql(common_idents.i32_type)) return self.primIdx(.i32);
+            if (ident.eql(common_idents.u64_type)) return self.primIdx(.u64);
+            if (ident.eql(common_idents.u128_type)) return self.primIdx(.u128);
+            if (ident.eql(common_idents.i128_type)) return self.primIdx(.i128);
+            if (ident.eql(common_idents.f32_type)) return self.primIdx(.f32);
+            if (ident.eql(common_idents.f64_type)) return self.primIdx(.f64);
+            if (ident.eql(common_idents.dec_type)) return self.primIdx(.dec);
         }
 
         // For all other nominal types, strip the wrapper and follow the backing var.
-        // In MIR there is no nominal/opaque/structural distinction.
+        // In MIR there is no nominal/opaque/structural distinction for code
+        // generation — but we track opaque origins so Str.inspect can render
+        // them as "<opaque>" even through polymorphic wrappers.
         //
-        // We must register a placeholder in `seen` before recursing so that
-        // mutually-recursive nominal types (e.g. A → B → {field: A}) don't
-        // loop forever. Cycle detection returns `placeholder_idx` to callers,
-        // so we must overwrite it in-place with the real value — we can't just
-        // return `backing_idx` because earlier callers already captured
-        // `placeholder_idx`.
-        const placeholder_idx = try self.addMonotype(allocator, .unit);
-        try seen.put(nominal_var, placeholder_idx);
+        // Recursive nominal types (e.g. Tree := [Leaf, Node(Tree)]) are the
+        // only legitimate source of type cycles — the type checker has already
+        // converted infinite/anonymous recursive types to errors. We use
+        // `nominal_cycle_breakers` (separate from the specialization map) to
+        // break these cycles: register a placeholder before recursing, then
+        // overwrite it in-place with the real value.
+        if (nominal_cycle_breakers.get(nominal_var)) |cached| return cached;
+        if (findEquivalentNominalCycleBreaker(types_store, nominal, nominal_cycle_breakers)) |cached| {
+            return cached;
+        }
+
+        const placeholder_idx = try self.addMonotype(allocator, .recursive_placeholder);
+        try nominal_cycle_breakers.put(nominal_var, placeholder_idx);
+
+        if (nominal.is_opaque) {
+            try self.markOpaque(allocator, placeholder_idx);
+        }
+
+        const named_specializations_top = try self.pushNominalArgSpecializations(
+            allocator,
+            types_store,
+            nominal,
+            common_idents,
+            specializations,
+            nominal_cycle_breakers,
+            scratches,
+        );
+        defer scratches.named_specializations.clearFrom(named_specializations_top);
 
         const backing_var = types_store.getNominalBackingVar(nominal);
-        const backing_idx = try self.fromTypeVar(allocator, types_store, backing_var, builtin_indices, seen, scratches);
+        const backing_idx = try self.fromTypeVar(allocator, types_store, backing_var, common_idents, specializations, nominal_cycle_breakers, scratches);
 
         // Copy the resolved backing type's value into our placeholder slot.
-        // This value-copy is safe (unlike the other handlers which build fresh
-        // values from indices) because every field inside a Monotype is an index
-        // (Idx, Span, Ident.Idx) — never a pointer. The monotype store is
-        // append-only, so all indices remain valid after the copy.
+        // This value-copy is safe because every field inside a Monotype is an
+        // index (Idx, Span, Ident.Idx) — never a pointer. The monotype store
+        // is append-only, so all indices remain valid after the copy.
         self.monotypes.items[@intFromEnum(placeholder_idx)] = self.monotypes.items[@intFromEnum(backing_idx)];
+        if (std.debug.runtime_safety) {
+            std.debug.assert(self.monotypes.items[@intFromEnum(placeholder_idx)] != .recursive_placeholder);
+        }
         return placeholder_idx;
     }
+
+    fn lookupNamedSpecialization(scratches: *const Scratches, name: Ident.Idx) ?Idx {
+        const ident_store = scratches.ident_store orelse return null;
+        const name_text = ident_store.getText(name);
+        const items = scratches.named_specializations.items.items;
+
+        var i = items.len;
+        while (i > 0) {
+            i -= 1;
+            if (std.mem.eql(u8, items[i].name_text, name_text)) {
+                return items[i].type_idx;
+            }
+        }
+        return null;
+    }
+
+    fn findNamedRowExtensionMonotype(scratches: *const Scratches, ext_var: types.Var, types_store: *const types.Store) ?Idx {
+        const resolved = types_store.resolveVar(ext_var);
+        return switch (resolved.desc.content) {
+            .flex => |flex| if (flex.name) |name| lookupNamedSpecialization(scratches, name) else null,
+            .rigid => |rigid| lookupNamedSpecialization(scratches, rigid.name),
+            else => null,
+        };
+    }
+
+    fn appendSpecializedRecordFields(
+        self: *Store,
+        specialized: Idx,
+        scratch_top: u32,
+        scratches: *Scratches,
+    ) Allocator.Error!void {
+        const mono = self.getMonotype(specialized);
+        const all_module_envs = scratches.all_module_envs orelse unreachable;
+        switch (mono) {
+            .record => |record| {
+                for (self.getFields(record.fields)) |field| {
+                    var seen_name = false;
+                    for (scratches.fields.sliceFromStart(scratch_top)) |existing| {
+                        if (namesEqual(all_module_envs, existing.name, field.name)) {
+                            seen_name = true;
+                            break;
+                        }
+                    }
+                    if (seen_name) continue;
+                    try scratches.fields.append(field);
+                }
+            },
+            .unit => {},
+            else => {
+                if (std.debug.runtime_safety) {
+                    std.debug.panic(
+                        "Monotype.fromTypeVar(record): nominal row specialization must be record or unit, found '{s}'",
+                        .{@tagName(mono)},
+                    );
+                }
+                unreachable;
+            },
+        }
+    }
+
+    fn appendSpecializedTagUnionTags(
+        self: *Store,
+        specialized: Idx,
+        scratches: *Scratches,
+    ) Allocator.Error!void {
+        const mono = self.getMonotype(specialized);
+        switch (mono) {
+            .tag_union => |tag_union| {
+                for (self.getTags(tag_union.tags)) |tag| {
+                    try scratches.tags.append(tag);
+                }
+            },
+            else => {
+                if (std.debug.runtime_safety) {
+                    std.debug.panic(
+                        "Monotype.fromTypeVar(tag_union): nominal row specialization must be tag_union, found '{s}'",
+                        .{@tagName(mono)},
+                    );
+                }
+                unreachable;
+            },
+        }
+    }
+
+    fn pushNominalArgSpecializations(
+        self: *Store,
+        allocator: Allocator,
+        types_store: *const types.Store,
+        nominal: types.NominalType,
+        common_idents: CommonIdents,
+        specializations: *const std.AutoHashMap(types.Var, Idx),
+        nominal_cycle_breakers: *std.AutoHashMap(types.Var, Idx),
+        scratches: *Scratches,
+    ) Allocator.Error!u32 {
+        const top = scratches.named_specializations.top();
+
+        const source_env = scratches.module_env orelse return top;
+        const all_module_envs = scratches.all_module_envs orelse return top;
+        const definition_env = findNominalDefinitionEnv(source_env, all_module_envs, nominal.origin_module) orelse return top;
+        const type_name = source_env.getIdent(nominal.ident.ident_idx);
+        const definition_nominal = findDefinitionNominal(definition_env, type_name) orelse return top;
+
+        const formal_args = definition_env.types.sliceNominalArgs(definition_nominal);
+        const actual_args = types_store.sliceNominalArgs(nominal);
+        if (formal_args.len != actual_args.len) {
+            if (std.debug.runtime_safety) {
+                std.debug.panic(
+                    "Monotype.fromNominalType: arg arity mismatch for nominal '{s}' (formal={d}, actual={d})",
+                    .{ type_name, formal_args.len, actual_args.len },
+                );
+            }
+            unreachable;
+        }
+
+        for (formal_args, actual_args) |formal_arg, actual_arg| {
+            const formal_name_text = resolvedTypeVarNameText(&definition_env.types, definition_env, formal_arg) orelse continue;
+            const actual_mono = try self.fromTypeVar(
+                allocator,
+                types_store,
+                actual_arg,
+                common_idents,
+                specializations,
+                nominal_cycle_breakers,
+                scratches,
+            );
+            try scratches.named_specializations.append(.{
+                .name_text = formal_name_text,
+                .type_idx = actual_mono,
+            });
+        }
+
+        return top;
+    }
+
+    fn resolvedTypeVarNameText(
+        types_store: *const types.Store,
+        module_env: *const ModuleEnv,
+        var_: types.Var,
+    ) ?[]const u8 {
+        const resolved = types_store.resolveVar(var_);
+        return switch (resolved.desc.content) {
+            .rigid => |rigid| module_env.getIdent(rigid.name),
+            .flex => |flex| if (flex.name) |name| module_env.getIdent(name) else null,
+            else => null,
+        };
+    }
+
+    fn findNominalDefinitionEnv(
+        source_env: *const ModuleEnv,
+        all_module_envs: []const *const ModuleEnv,
+        origin_module: Ident.Idx,
+    ) ?*const ModuleEnv {
+        const origin_name = source_env.getIdent(origin_module);
+        for (all_module_envs) |candidate_env| {
+            const candidate_name = candidate_env.getIdent(candidate_env.qualified_module_ident);
+            if (std.mem.eql(u8, origin_name, candidate_name)) return candidate_env;
+        }
+        return null;
+    }
+
+    fn findDefinitionNominal(definition_env: *const ModuleEnv, type_name: []const u8) ?types.NominalType {
+        for (definition_env.store.sliceStatements(definition_env.all_statements)) |stmt_idx| {
+            const stmt = definition_env.store.getStatement(stmt_idx);
+            switch (stmt) {
+                .s_nominal_decl => |nominal_decl| {
+                    const header = definition_env.store.getTypeHeader(nominal_decl.header);
+                    if (!std.mem.eql(u8, definition_env.getIdent(header.relative_name), type_name)) continue;
+
+                    const resolved = definition_env.types.resolveVar(ModuleEnv.varFrom(stmt_idx));
+                    if (resolved.desc.content == .structure and resolved.desc.content.structure == .nominal_type) {
+                        return resolved.desc.content.structure.nominal_type;
+                    }
+                },
+                else => {},
+            }
+        }
+        return null;
+    }
 };
+
+fn findEquivalentNominalCycleBreaker(
+    types_store: *const types.Store,
+    nominal: types.NominalType,
+    nominal_cycle_breakers: *const std.AutoHashMap(types.Var, Idx),
+) ?Idx {
+    var iter = nominal_cycle_breakers.iterator();
+    while (iter.next()) |entry| {
+        const resolved = types_store.resolveVar(entry.key_ptr.*);
+        if (resolved.desc.content != .structure) continue;
+        const flat = resolved.desc.content.structure;
+        if (flat != .nominal_type) continue;
+        const other_nominal = flat.nominal_type;
+
+        if (!nominal.origin_module.eql(other_nominal.origin_module)) continue;
+        if (!nominal.ident.ident_idx.eql(other_nominal.ident.ident_idx)) continue;
+
+        const lhs_args = types_store.sliceNominalArgs(nominal);
+        const rhs_args = types_store.sliceNominalArgs(other_nominal);
+        if (lhs_args.len != rhs_args.len) continue;
+
+        var args_match = true;
+        for (lhs_args, rhs_args) |lhs_arg, rhs_arg| {
+            const lhs_resolved = types_store.resolveVar(lhs_arg);
+            const rhs_resolved = types_store.resolveVar(rhs_arg);
+            if (lhs_resolved.var_ != rhs_resolved.var_) {
+                args_match = false;
+                break;
+            }
+        }
+
+        if (args_match) return entry.value_ptr.*;
+    }
+
+    return null;
+}

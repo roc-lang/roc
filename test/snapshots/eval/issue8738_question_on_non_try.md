@@ -136,52 +136,49 @@ NO CHANGE
 				(ty-rigid-var-lookup (ty-rigid-var (name "ok"))))))
 	(d-let
 		(p-assign (ident "do_something"))
-		(e-closure
-			(captures
-				(capture (ident "ok_or")))
-			(e-lambda
-				(args)
-				(e-block
-					(s-let
-						(p-assign (ident "_x"))
-						(e-match
-							(match
-								(cond
-									(e-call
+		(e-lambda
+			(args)
+			(e-block
+				(s-let
+					(p-assign (ident "_x"))
+					(e-match
+						(match
+							(cond
+								(e-call
+									(e-lookup-local
+										(p-assign (ident "ok_or")))
+									(e-tag (name "Err")
+										(args
+											(e-string
+												(e-literal (string "")))))
+									(e-tag (name "Exit")
+										(args
+											(e-num (value "5"))))))
+							(branches
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-nominal-external (builtin)
+												(p-applied-tag))))
+									(value
 										(e-lookup-local
-											(p-assign (ident "ok_or")))
-										(e-tag (name "Err")
-											(args
-												(e-string
-													(e-literal (string "")))))
-										(e-tag (name "Exit")
-											(args
-												(e-num (value "5"))))))
-								(branches
-									(branch
-										(patterns
-											(pattern (degenerate false)
-												(p-nominal-external (builtin)
-													(p-applied-tag))))
-										(value
-											(e-lookup-local
-												(p-assign (ident "#ok")))))
-									(branch
-										(patterns
-											(pattern (degenerate false)
-												(p-nominal-external (builtin)
-													(p-applied-tag))))
-										(value
-											(e-return
-												(e-nominal-external
-													(builtin)
-													(e-tag (name "Err")
-														(args
-															(e-lookup-local
-																(p-assign (ident "#err")))))))))))))
-					(e-tag (name "Ok")
-						(args
-							(e-empty_record)))))))
+											(p-assign (ident "#ok")))))
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-nominal-external (builtin)
+												(p-applied-tag))))
+									(value
+										(e-return
+											(e-nominal-external
+												(builtin)
+												(e-tag (name "Err")
+													(args
+														(e-lookup-local
+															(p-assign (ident "#err")))))))))))))
+				(e-tag (name "Ok")
+					(args
+						(e-empty_record))))))
 	(d-let
 		(p-assign (ident "result"))
 		(e-call

@@ -26,8 +26,8 @@ const Relocation = @import("Relocation.zig").Relocation;
 
 /// Calling convention configuration for a specific target
 pub const CallingConvention = struct {
-    /// Argument registers for integer/pointer arguments
-    param_regs: []const x86_64.GeneralReg,
+    /// Argument registers for integer/pointer arguments, tagged by architecture
+    param_regs: ParamRegs,
     /// Number of argument registers available
     num_param_regs: usize,
     /// Shadow space required before calls (Windows: 32 bytes)
@@ -36,20 +36,33 @@ pub const CallingConvention = struct {
     return_by_ptr_threshold: usize,
     /// Threshold for pass-by-pointer (large structs passed as pointer)
     pass_by_ptr_threshold: usize,
-    /// Whether this is a Windows target (for additional ABI rules)
+    /// Whether x64 Windows ABI special rules apply.
+    /// Note: Windows aarch64 follows AAPCS64 in this backend.
     is_windows: bool,
+
+    pub const ParamReg = union(enum) {
+        x86_64: x86_64.GeneralReg,
+        aarch64: aarch64.GeneralReg,
+    };
+
+    const ParamRegs = union(enum) {
+        x86_64: []const x86_64.GeneralReg,
+        aarch64: []const aarch64.GeneralReg,
+    };
 
     /// x86_64 System V argument registers
     const SYSV_PARAM_REGS = [_]x86_64.GeneralReg{ .RDI, .RSI, .RDX, .RCX, .R8, .R9 };
     /// x86_64 Windows argument registers
     const WIN64_PARAM_REGS = [_]x86_64.GeneralReg{ .RCX, .RDX, .R8, .R9 };
+    /// aarch64 AAPCS64 argument registers
+    const AAPCS64_PARAM_REGS = [_]aarch64.GeneralReg{ .X0, .X1, .X2, .X3, .X4, .X5, .X6, .X7 };
 
     /// Create calling convention for a given target
     pub fn forTarget(target: RocTarget) CallingConvention {
         return switch (target.toCpuArch()) {
             .x86_64 => if (target.isWindows())
                 CallingConvention{
-                    .param_regs = &WIN64_PARAM_REGS,
+                    .param_regs = .{ .x86_64 = &WIN64_PARAM_REGS },
                     .num_param_regs = WIN64_PARAM_REGS.len,
                     .shadow_space = 32,
                     .return_by_ptr_threshold = 8,
@@ -58,7 +71,7 @@ pub const CallingConvention = struct {
                 }
             else
                 CallingConvention{
-                    .param_regs = &SYSV_PARAM_REGS,
+                    .param_regs = .{ .x86_64 = &SYSV_PARAM_REGS },
                     .num_param_regs = SYSV_PARAM_REGS.len,
                     .shadow_space = 0,
                     .return_by_ptr_threshold = 16,
@@ -66,29 +79,56 @@ pub const CallingConvention = struct {
                     .is_windows = false,
                 },
             .aarch64, .aarch64_be => CallingConvention{
-                // aarch64 uses X0-X7 for args, but we store as x86_64 regs for now
-                // Real aarch64 support would need separate register type
-                .param_regs = &SYSV_PARAM_REGS, // placeholder
-                .num_param_regs = 8,
+                .param_regs = .{ .aarch64 = &AAPCS64_PARAM_REGS },
+                .num_param_regs = AAPCS64_PARAM_REGS.len,
                 .shadow_space = 0,
                 .return_by_ptr_threshold = 16,
                 .pass_by_ptr_threshold = std.math.maxInt(usize),
                 .is_windows = false,
             },
-            else => CallingConvention{
-                .param_regs = &SYSV_PARAM_REGS,
-                .num_param_regs = 6,
-                .shadow_space = 0,
-                .return_by_ptr_threshold = 16,
-                .pass_by_ptr_threshold = std.math.maxInt(usize),
-                .is_windows = false,
+            else => unsupportedArchCallingConvention(target),
+        };
+    }
+
+    fn unsupportedArchCallingConvention(target: RocTarget) CallingConvention {
+        if (std.debug.runtime_safety) {
+            std.debug.panic("CallingConvention.forTarget called for unsupported arch: {s}", .{@tagName(target.toCpuArch())});
+        }
+        unreachable;
+    }
+
+    /// Get argument register at index as an architecture-tagged register
+    pub fn getParamReg(self: CallingConvention, index: usize) ParamReg {
+        return switch (self.param_regs) {
+            .x86_64 => |regs| .{ .x86_64 = regs[index] },
+            .aarch64 => |regs| .{ .aarch64 = regs[index] },
+        };
+    }
+
+    /// Get argument register at index for x86_64 targets.
+    pub fn getX86ParamReg(self: CallingConvention, index: usize) x86_64.GeneralReg {
+        return switch (self.param_regs) {
+            .x86_64 => |regs| regs[index],
+            .aarch64 => {
+                if (std.debug.runtime_safety) {
+                    @panic("getX86ParamReg called for aarch64 calling convention");
+                }
+                unreachable;
             },
         };
     }
 
-    /// Get argument register at index
-    pub fn getParamReg(self: CallingConvention, index: usize) x86_64.GeneralReg {
-        return self.param_regs[index];
+    /// Get argument register at index for aarch64 targets.
+    pub fn getAarch64ParamReg(self: CallingConvention, index: usize) aarch64.GeneralReg {
+        return switch (self.param_regs) {
+            .aarch64 => |regs| regs[index],
+            .x86_64 => {
+                if (std.debug.runtime_safety) {
+                    @panic("getAarch64ParamReg called for x86_64 calling convention");
+                }
+                unreachable;
+            },
+        };
     }
 
     /// Check if return type needs to use pointer (implicit first arg)
@@ -97,8 +137,8 @@ pub const CallingConvention = struct {
     }
 
     /// Check if a struct argument needs to be passed by pointer.
-    /// Windows (x64 and ARM64): Only structs of size 1, 2, 4, 8 bytes can be passed by value.
-    /// All other sizes must be passed by pointer.
+    /// Windows x64: only structs of size 1, 2, 4, 8 bytes can be passed by value.
+    /// aarch64 and System V: no pass-by-pointer rule in this layer.
     pub fn needsPassByPointer(self: CallingConvention, arg_size: usize) bool {
         if (self.is_windows) {
             // Windows: only power-of-2 sizes up to 8 can pass by value
@@ -164,6 +204,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
         const Self = @This();
 
         emit: *EmitType,
+        stack_offset: *i32,
         int_arg_index: usize = 0,
         /// Float argument index (separate from int_arg_index on System V, same on Windows)
         float_arg_index: usize = 0,
@@ -186,7 +227,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
         /// The stack_offset pointer should point to the CodeGen's stack_offset field.
         /// This method will allocate space by decrementing the stack offset on Windows.
         pub fn init(emit: *EmitType, stack_offset: *i32) !Self {
-            var self = Self{ .emit = emit };
+            var self = Self{ .emit = emit, .stack_offset = stack_offset };
             if (comptime is_x86_64 and is_windows) {
                 // Allocate 16-byte slot for R12 save to maintain 16-byte alignment
                 // for subsequent allocations (important for i128/RocDec which need
@@ -328,7 +369,8 @@ pub fn CallBuilder(comptime EmitType: type) type {
                     self.int_arg_index += 1;
                 } else {
                     // Float args beyond position 3 go on stack
-                    @panic("Stack float args not yet implemented for Windows CallBuilder");
+                    // TODO: Implement stack float args for Windows CallBuilder.
+                    @panic("TODO: stack float args not yet implemented for Windows CallBuilder");
                 }
             } else {
                 // System V: separate float register pool
@@ -344,7 +386,8 @@ pub fn CallBuilder(comptime EmitType: type) type {
                     self.float_arg_index += 1;
                 } else {
                     // Float args beyond XMM7 go on stack
-                    @panic("Stack float args not yet implemented for System V CallBuilder");
+                    // TODO: Implement stack float args for System V CallBuilder.
+                    @panic("TODO: stack float args not yet implemented for System V CallBuilder");
                 }
             }
         }
@@ -374,7 +417,8 @@ pub fn CallBuilder(comptime EmitType: type) type {
                     }
                     self.int_arg_index += 1;
                 } else {
-                    @panic("Stack float args not yet implemented for Windows CallBuilder");
+                    // TODO: Implement stack float args for Windows CallBuilder.
+                    @panic("TODO: stack float args not yet implemented for Windows CallBuilder");
                 }
             } else {
                 // System V: separate float register pool
@@ -387,7 +431,8 @@ pub fn CallBuilder(comptime EmitType: type) type {
                     }
                     self.float_arg_index += 1;
                 } else {
-                    @panic("Stack float args not yet implemented for System V CallBuilder");
+                    // TODO: Implement stack float args for System V CallBuilder.
+                    @panic("TODO: stack float args not yet implemented for System V CallBuilder");
                 }
             }
         }
@@ -478,6 +523,31 @@ pub fn CallBuilder(comptime EmitType: type) type {
             }
         }
 
+        /// If stack args will use SCRATCH_REG as a temp, and a deferred register arg
+        /// sources from SCRATCH_REG, save SCRATCH_REG to the caller's frame and
+        /// redirect the deferred arg to load from memory instead.
+        fn saveScratchIfConflict(self: *Self) !void {
+            if (comptime !is_x86_64) return;
+
+            // Check if any stack arg needs SCRATCH_REG as a temp
+            const needs_scratch = for (self.stack_args[0..self.stack_arg_count]) |arg| {
+                if (arg != .from_reg) break true;
+            } else false;
+            if (!needs_scratch) return;
+
+            // Check if any deferred register arg sources from SCRATCH_REG
+            for (self.reg_args[0..self.reg_arg_count]) |*ra| {
+                if (ra.src == .from_reg and ra.src.from_reg == CC_EMIT.SCRATCH_REG) {
+                    // Allocate a stack slot in the caller's frame and save SCRATCH_REG
+                    self.stack_offset.* -= 8;
+                    const save_offset = self.stack_offset.*;
+                    try self.emit.movMemReg(.w64, CC_EMIT.BASE_PTR, save_offset, CC_EMIT.SCRATCH_REG);
+                    ra.src = .{ .from_mem = .{ .base = CC_EMIT.BASE_PTR, .offset = save_offset } };
+                    break;
+                }
+            }
+        }
+
         /// Resolve deferred register arguments using Rideau-Serpette-Leroy parallel move algorithm.
         /// This handles arbitrary permutations of param registers without clobbering,
         /// using SCRATCH_REG to break cycles. At most one scratch save per cycle.
@@ -545,6 +615,9 @@ pub fn CallBuilder(comptime EmitType: type) type {
             std.debug.assert(self.stack_arg_count == 0 or total_space >= CC_EMIT.SHADOW_SPACE + 8);
 
             if (comptime is_x86_64) {
+                // Save SCRATCH_REG if it conflicts with stack arg processing
+                try self.saveScratchIfConflict();
+
                 // Allocate all stack space at once
                 if (total_space > 0) {
                     try self.emit.subRegImm32(.w64, CC_EMIT.STACK_PTR, @intCast(total_space));
@@ -639,6 +712,9 @@ pub fn CallBuilder(comptime EmitType: type) type {
             std.debug.assert(self.stack_arg_count == 0 or total_space >= CC_EMIT.SHADOW_SPACE + 8);
 
             if (comptime is_x86_64) {
+                // Save SCRATCH_REG if it conflicts with stack arg processing
+                try self.saveScratchIfConflict();
+
                 // Allocate all stack space at once
                 if (total_space > 0) {
                     try self.emit.subRegImm32(.w64, CC_EMIT.STACK_PTR, @intCast(total_space));
@@ -724,6 +800,9 @@ pub fn CallBuilder(comptime EmitType: type) type {
             std.debug.assert(self.stack_arg_count == 0 or total_space >= CC_EMIT.SHADOW_SPACE + 8);
 
             if (comptime is_x86_64) {
+                // Save SCRATCH_REG if it conflicts with stack arg processing
+                try self.saveScratchIfConflict();
+
                 // Allocate all stack space at once
                 if (total_space > 0) {
                     try self.emit.subRegImm32(.w64, CC_EMIT.STACK_PTR, @intCast(total_space));
@@ -831,10 +910,10 @@ test "CallingConvention.forTarget Windows" {
     try std.testing.expect(cc.is_windows);
 
     // Check register order: RCX, RDX, R8, R9
-    try std.testing.expectEqual(x86_64.GeneralReg.RCX, cc.getParamReg(0));
-    try std.testing.expectEqual(x86_64.GeneralReg.RDX, cc.getParamReg(1));
-    try std.testing.expectEqual(x86_64.GeneralReg.R8, cc.getParamReg(2));
-    try std.testing.expectEqual(x86_64.GeneralReg.R9, cc.getParamReg(3));
+    try std.testing.expectEqual(x86_64.GeneralReg.RCX, cc.getX86ParamReg(0));
+    try std.testing.expectEqual(x86_64.GeneralReg.RDX, cc.getX86ParamReg(1));
+    try std.testing.expectEqual(x86_64.GeneralReg.R8, cc.getX86ParamReg(2));
+    try std.testing.expectEqual(x86_64.GeneralReg.R9, cc.getX86ParamReg(3));
 }
 
 test "CallingConvention.forTarget Linux" {
@@ -846,12 +925,12 @@ test "CallingConvention.forTarget Linux" {
     try std.testing.expect(!cc.is_windows);
 
     // Check register order: RDI, RSI, RDX, RCX, R8, R9
-    try std.testing.expectEqual(x86_64.GeneralReg.RDI, cc.getParamReg(0));
-    try std.testing.expectEqual(x86_64.GeneralReg.RSI, cc.getParamReg(1));
-    try std.testing.expectEqual(x86_64.GeneralReg.RDX, cc.getParamReg(2));
-    try std.testing.expectEqual(x86_64.GeneralReg.RCX, cc.getParamReg(3));
-    try std.testing.expectEqual(x86_64.GeneralReg.R8, cc.getParamReg(4));
-    try std.testing.expectEqual(x86_64.GeneralReg.R9, cc.getParamReg(5));
+    try std.testing.expectEqual(x86_64.GeneralReg.RDI, cc.getX86ParamReg(0));
+    try std.testing.expectEqual(x86_64.GeneralReg.RSI, cc.getX86ParamReg(1));
+    try std.testing.expectEqual(x86_64.GeneralReg.RDX, cc.getX86ParamReg(2));
+    try std.testing.expectEqual(x86_64.GeneralReg.RCX, cc.getX86ParamReg(3));
+    try std.testing.expectEqual(x86_64.GeneralReg.R8, cc.getX86ParamReg(4));
+    try std.testing.expectEqual(x86_64.GeneralReg.R9, cc.getX86ParamReg(5));
 }
 
 test "CallingConvention.forTarget macOS" {
@@ -1824,6 +1903,12 @@ test "CallingConvention.forTarget for aarch64 targets" {
 
     try std.testing.expectEqual(linux_cc.shadow_space, win_cc.shadow_space);
     try std.testing.expectEqual(@as(u8, 0), linux_cc.shadow_space);
+
+    // Verify aarch64 register ordering (X0..X7), with no x86 placeholder.
+    try std.testing.expectEqual(aarch64.GeneralReg.X0, linux_cc.getAarch64ParamReg(0));
+    try std.testing.expectEqual(aarch64.GeneralReg.X1, linux_cc.getAarch64ParamReg(1));
+    try std.testing.expectEqual(aarch64.GeneralReg.X6, linux_cc.getAarch64ParamReg(6));
+    try std.testing.expectEqual(aarch64.GeneralReg.X7, linux_cc.getAarch64ParamReg(7));
 }
 
 test "CC constants for macOS x64" {

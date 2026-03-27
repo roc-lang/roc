@@ -453,7 +453,7 @@ test "NodeStore round trip - Expressions" {
     });
     try expressions.append(gpa, CIR.Expr{
         .e_run_low_level = .{
-            .op = .str_is_empty,
+            .op = .str_count_utf8_bytes,
             .args = .{ .span = .{ .start = rand.random().int(u32), .len = rand.random().int(u32) } },
         },
     });
@@ -653,6 +653,12 @@ test "NodeStore round trip - Diagnostics" {
 
     try diagnostics.append(gpa, CIR.Diagnostic{
         .where_clause_not_allowed_in_type_decl = .{
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .open_ext_not_allowed_in_type_decl = .{
             .region = rand_region(),
         },
     });

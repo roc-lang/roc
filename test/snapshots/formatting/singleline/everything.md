@@ -39,8 +39,6 @@ h = |x, y| {
 # EXPECTED
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:6:1:6:60
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:7:1:7:60
-MODULE NOT FOUND - everything.md:2:1:2:30
-MODULE NOT FOUND - everything.md:3:1:3:46
 UNUSED VARIABLE - everything.md:25:10:25:11
 UNUSED VARIABLE - everything.md:26:9:26:10
 UNUSED VARIABLE - everything.md:27:11:27:12
@@ -52,6 +50,7 @@ UNUSED VARIABLE - everything.md:21:2:21:4
 UNUSED VARIABLE - everything.md:22:2:22:4
 UNSUPPORTED WHERE CLAUSE - everything.md:15:19:15:22
 UNSUPPORTED WHERE CLAUSE - everything.md:15:24:15:27
+NON-EXHAUSTIVE MATCH - everything.md:24:2:29:3
 # PROBLEMS
 **WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
 You cannot define a `where` clause inside a type declaration.
@@ -73,28 +72,6 @@ You're attempting do this here:
 B(b) : b where [b.b1 : (b, b) -> Str, b.b2 : (b, b) -> Str]
 ```
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**MODULE NOT FOUND**
-The module `I1` was not found in this Roc project.
-
-You're attempting to use this module here:
-**everything.md:2:1:2:30:**
-```roc
-import I1 exposing [I11, I12]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**MODULE NOT FOUND**
-The module `I2` was not found in this Roc project.
-
-You're attempting to use this module here:
-**everything.md:3:1:3:46:**
-```roc
-import I2 exposing [I21 as Ias1, I22 as Ias2]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -224,6 +201,26 @@ g : e -> e where [e.A, e.B]
                        ^^^
 
 This syntax was used for abilities, which have been removed from Roc. Use method constraints like `where [a.methodName(args) -> ret]` instead.
+
+**NON-EXHAUSTIVE MATCH**
+This `match` expression doesn't cover all possible cases:
+**everything.md:24:2:29:3:**
+```roc
+	match x {
+		Z1((a, b)) => a
+		Z2(a, b) => a
+		Z3({ a, b }) => a
+		Z4([a, b]) => a
+	}
+```
+
+The value being matched on has type:
+        _[Z1((c, _field)), Z2(c, _d), Z3({ a: c, b: _field, .. }), Z4(List(c))]_
+
+Missing patterns:
+        Z4 []
+
+Hint: Add branches to handle these cases, or use `_` to match anything.
 
 # TOKENS
 ~~~zig
@@ -408,100 +405,97 @@ NO CHANGE
 				(alias (ty-rigid-var-lookup (ty-rigid-var (name "e"))) (name "B")))))
 	(d-let
 		(p-assign (ident "h"))
-		(e-closure
-			(captures
-				(capture (ident "h")))
-			(e-lambda
-				(args
-					(p-assign (ident "x"))
-					(p-assign (ident "y")))
-				(e-block
-					(s-let
-						(p-assign (ident "h1"))
-						(e-record
-							(fields
-								(field (name "h11")
-									(e-lookup-local
-										(p-assign (ident "x"))))
-								(field (name "h12")
-									(e-lookup-local
-										(p-assign (ident "x"))))
-								(field (name "h13")
-									(e-record
-										(fields
-											(field (name "h131")
-												(e-lookup-local
-													(p-assign (ident "x"))))
-											(field (name "h132")
-												(e-lookup-local
-													(p-assign (ident "y"))))))))))
-					(s-let
-						(p-assign (ident "h2"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "h")))
+		(e-lambda
+			(args
+				(p-assign (ident "x"))
+				(p-assign (ident "y")))
+			(e-block
+				(s-let
+					(p-assign (ident "h1"))
+					(e-record
+						(fields
+							(field (name "h11")
+								(e-lookup-local
+									(p-assign (ident "x"))))
+							(field (name "h12")
+								(e-lookup-local
+									(p-assign (ident "x"))))
+							(field (name "h13")
+								(e-record
+									(fields
+										(field (name "h131")
+											(e-lookup-local
+												(p-assign (ident "x"))))
+										(field (name "h132")
+											(e-lookup-local
+												(p-assign (ident "y"))))))))))
+				(s-let
+					(p-assign (ident "h2"))
+					(e-call
+						(e-lookup-local
+							(p-assign (ident "h")))
+						(e-lookup-local
+							(p-assign (ident "x")))
+						(e-lookup-local
+							(p-assign (ident "y")))))
+				(s-let
+					(p-assign (ident "h3"))
+					(e-tag (name "A")
+						(args
 							(e-lookup-local
 								(p-assign (ident "x")))
 							(e-lookup-local
-								(p-assign (ident "y")))))
-					(s-let
-						(p-assign (ident "h3"))
-						(e-tag (name "A")
-							(args
-								(e-lookup-local
-									(p-assign (ident "x")))
-								(e-lookup-local
-									(p-assign (ident "y"))))))
-					(s-let
-						(p-assign (ident "h4"))
-						(e-list
-							(elems
-								(e-lookup-local
-									(p-assign (ident "x")))
-								(e-lookup-local
-									(p-assign (ident "y"))))))
-					(s-let
-						(p-assign (ident "h5"))
-						(e-tuple
-							(elems
-								(e-lookup-local
-									(p-assign (ident "x")))
-								(e-lookup-local
-									(p-assign (ident "y"))))))
-					(e-match
-						(match
-							(cond
-								(e-lookup-local
-									(p-assign (ident "x"))))
-							(branches
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag)))
-									(value
-										(e-lookup-local
-											(p-assign (ident "a")))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag)))
-									(value
-										(e-lookup-local
-											(p-assign (ident "a")))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag)))
-									(value
-										(e-lookup-local
-											(p-assign (ident "a")))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag)))
-									(value
-										(e-lookup-local
-											(p-assign (ident "a"))))))))))))
+								(p-assign (ident "y"))))))
+				(s-let
+					(p-assign (ident "h4"))
+					(e-list
+						(elems
+							(e-lookup-local
+								(p-assign (ident "x")))
+							(e-lookup-local
+								(p-assign (ident "y"))))))
+				(s-let
+					(p-assign (ident "h5"))
+					(e-tuple
+						(elems
+							(e-lookup-local
+								(p-assign (ident "x")))
+							(e-lookup-local
+								(p-assign (ident "y"))))))
+				(e-match
+					(match
+						(cond
+							(e-lookup-local
+								(p-assign (ident "x"))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag)))
+								(value
+									(e-lookup-local
+										(p-assign (ident "a")))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag)))
+								(value
+									(e-lookup-local
+										(p-assign (ident "a")))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag)))
+								(value
+									(e-lookup-local
+										(p-assign (ident "a")))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag)))
+								(value
+									(e-lookup-local
+										(p-assign (ident "a")))))))))))
 	(s-alias-decl
 		(ty-header (name "A")
 			(ty-args
@@ -558,7 +552,7 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "e -> e"))
-		(patt (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i, ..j }), Z4(List(c)), ..k], [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i, ..j }), Z4(List(c)), ..k] -> c")))
+		(patt (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i, ..j }), Z4(List(c))], [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i, ..j }), Z4(List(c))] -> c")))
 	(type_decls
 		(alias (type "A(a)")
 			(ty-header (name "A")
@@ -586,5 +580,5 @@ NO CHANGE
 			(ty-header (name "G"))))
 	(expressions
 		(expr (type "e -> e"))
-		(expr (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i, ..j }), Z4(List(c)), ..k], [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i, ..j }), Z4(List(c)), ..k] -> c"))))
+		(expr (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i, ..j }), Z4(List(c))], [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i, ..j }), Z4(List(c))] -> c"))))
 ~~~

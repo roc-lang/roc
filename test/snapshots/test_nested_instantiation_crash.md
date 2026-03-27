@@ -182,21 +182,17 @@ answer = composed([42])
 				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))
 	(d-let
 		(p-assign (ident "composed"))
-		(e-closure
-			(captures
-				(capture (ident "get_value"))
-				(capture (ident "make_record")))
-			(e-lambda
-				(args
-					(p-assign (ident "n")))
+		(e-lambda
+			(args
+				(p-assign (ident "n")))
+			(e-call
+				(e-lookup-local
+					(p-assign (ident "get_value")))
 				(e-call
 					(e-lookup-local
-						(p-assign (ident "get_value")))
-					(e-call
-						(e-lookup-local
-							(p-assign (ident "make_record")))
-						(e-lookup-local
-							(p-assign (ident "n")))))))
+						(p-assign (ident "make_record")))
+					(e-lookup-local
+						(p-assign (ident "n"))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)

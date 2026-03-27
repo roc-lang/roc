@@ -54,14 +54,11 @@ NO CHANGE
 		(e-num (value "5")))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-closure
-			(captures
-				(capture (ident "x")))
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-lookup-local
-					(p-assign (ident "x")))))))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-lookup-local
+				(p-assign (ident "x"))))))
 ~~~
 # TYPES
 ~~~clojure

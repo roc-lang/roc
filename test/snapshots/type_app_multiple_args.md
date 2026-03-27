@@ -114,23 +114,20 @@ NO CHANGE
 					(ty-lookup (name "Str") (builtin))))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-closure
-			(captures
-				(capture (ident "processDict")))
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-call
-					(e-lookup-local
-						(p-assign (ident "processDict")))
-					(e-dot-access (field "insert")
-						(receiver
-							(e-call
-								(e-runtime-error (tag "nested_value_not_found"))))
-						(args
-							(e-string
-								(e-literal (string "one")))
-							(e-num (value "1")))))))))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-call
+				(e-lookup-local
+					(p-assign (ident "processDict")))
+				(e-dot-access (field "insert")
+					(receiver
+						(e-call
+							(e-runtime-error (tag "nested_value_not_found"))))
+					(args
+						(e-string
+							(e-literal (string "one")))
+						(e-num (value "1"))))))))
 ~~~
 # TYPES
 ~~~clojure

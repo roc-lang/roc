@@ -188,6 +188,8 @@ pub const CommonIdents = extern struct {
     // Synthetic identifiers for ? operator desugaring
     question_ok: Ident.Idx,
     question_err: Ident.Idx,
+    // Synthetic identifier for .. implicit rigids in open tag unions or records
+    open_ext: Ident.Idx,
 
     /// Insert all well-known identifiers into a CommonEnv.
     /// Use this when creating a fresh ModuleEnv from scratch.
@@ -277,6 +279,8 @@ pub const CommonIdents = extern struct {
             // Synthetic identifiers for ? operator desugaring
             .question_ok = try common.insertIdent(gpa, Ident.for_text("#ok")),
             .question_err = try common.insertIdent(gpa, Ident.for_text("#err")),
+            // Synthetic identifier for .. implicit rigids in open tag unions or records
+            .open_ext = try common.insertIdent(gpa, Ident.for_text("#others")),
         };
     }
 
@@ -369,6 +373,8 @@ pub const CommonIdents = extern struct {
             // Synthetic identifiers for ? operator desugaring
             .question_ok = common.findIdent("#ok") orelse unreachable,
             .question_err = common.findIdent("#err") orelse unreachable,
+            // Synthetic identifier for .. implicit rigids in open tag unions or records
+            .open_ext = common.findIdent("#others") orelse unreachable,
         };
     }
 };
@@ -459,12 +465,6 @@ import_mapping: types_mod.import_mapping.ImportMapping,
 /// Enables O(1) index-based method lookup during type checking and evaluation.
 /// Populated during canonicalization when methods are defined in associated blocks.
 method_idents: MethodIdents,
-
-/// Whether lambda lifting has been run on this module
-is_lambda_lifted: bool = false,
-
-/// Whether closures have been defunctionalized in this module
-is_defunctionalized: bool = false,
 
 /// Whether to defer finalizing numeric defaults until after platform requirements are checked.
 /// Set to true for app modules that have platform imports, so that numeric literals can be
@@ -594,7 +594,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .builtin_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .external_decls = try CIR.ExternalDecl.SafeList.initCapacity(gpa, 16),
         .imports = CIR.Import.Store.init(),
-        .module_name = undefined, // Will be set later during canonicalization
+        .module_name = "", // May be set later during canonicalization
         .display_module_name_idx = Ident.Idx.NONE, // Will be set later during canonicalization
         .qualified_module_ident = Ident.Idx.NONE, // Will be set by coordinator
         .diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } },
@@ -604,8 +604,6 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .deferred_numeric_literals = try DeferredNumericLiteral.SafeList.initCapacity(gpa, 32),
         .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
         .method_idents = MethodIdents.init(),
-        .is_lambda_lifted = false,
-        .is_defunctionalized = false,
     };
 }
 
@@ -1772,6 +1770,36 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .open_ext_not_allowed_in_type_decl => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "OPEN EXT NOT ALLOWED IN TYPE DECLARATION", .warning);
+
+            // Format the message to match origin/main
+            try report.document.addText("You cannot use a ");
+            try report.document.addInlineCode("..");
+            try report.document.addReflowingText(" inside a type declaration:");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addAnnotated("Hint:", .emphasized);
+            try report.document.addReflowingText(" You need a named variable, like ");
+            try report.document.addInlineCode("..others");
+            try report.document.addReflowingText(", to use this here.");
+
+            break :blk report;
+        },
         .type_module_missing_matching_type => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
@@ -2378,10 +2406,8 @@ pub const Serialized = extern struct {
     deferred_numeric_literals: DeferredNumericLiteral.SafeList.Serialized,
     import_mapping_reserved: [6]u64, // Reserved space for import_mapping (AutoHashMap is ~40 bytes), initialized at runtime
     method_idents: MethodIdents.Serialized,
-    // Reserved space for is_lambda_lifted and is_defunctionalized booleans
-    // (2 bytes of data + 6 bytes padding to maintain alignment)
-    is_lambda_lifted_reserved: u8,
-    is_defunctionalized_reserved: u8,
+    // Reserved space (was is_lambda_lifted and is_defunctionalized, now unused)
+    _reserved_flags: [2]u8 = .{ 0, 0 },
     _padding: [6]u8 = .{ 0, 0, 0, 0, 0, 0 },
 
     /// Serialize a ModuleEnv into this Serialized struct, appending data to the writer
@@ -2433,9 +2459,7 @@ pub const Serialized = extern struct {
         // Serialize method_idents map
         try self.method_idents.serialize(&env.method_idents, allocator, writer);
 
-        // Set lambda lifting status flags (these are runtime-only and initialized during deserialization)
-        self.is_lambda_lifted_reserved = 0;
-        self.is_defunctionalized_reserved = 0;
+        self._reserved_flags = .{ 0, 0 };
     }
 
     /// Deserialize into a freshly allocated ModuleEnv (no in-place modification of cache buffer).
@@ -2525,8 +2549,6 @@ pub const Serialized = extern struct {
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
             .method_idents = self.method_idents.deserializeInto(base_addr),
             .rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, TypeVar){},
-            .is_lambda_lifted = false,
-            .is_defunctionalized = false,
         };
 
         return env;
@@ -2561,8 +2583,7 @@ pub fn getExposedNodeIndexById(self: *const Self, ident_idx: Ident.Idx) ?u16 {
 /// Get the exposed node index for a type given its statement index.
 /// This is used for auto-imported builtin types where we have the statement index pre-computed.
 /// For auto-imported types, the statement index IS the node/var index directly.
-pub fn getExposedNodeIndexByStatementIdx(self: *const Self, stmt_idx: CIR.Statement.Idx) ?u16 {
-    _ = self; // Not needed for this simplified implementation
+pub fn getExposedNodeIndexByStatementIdx(_: *const Self, stmt_idx: CIR.Statement.Idx) ?u16 {
 
     // For auto-imported builtin types (Bool, Try, etc.), the statement index
     // IS the node/var index. This is because type declarations get type variables

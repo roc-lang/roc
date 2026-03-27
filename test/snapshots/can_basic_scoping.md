@@ -118,32 +118,29 @@ outerFunc = |_| {
 		(e-num (value "10")))
 	(d-let
 		(p-assign (ident "outerFunc"))
-		(e-closure
-			(captures
-				(capture (ident "y")))
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-block
-					(s-let
-						(p-assign (ident "x"))
-						(e-num (value "20")))
-					(s-let
-						(p-assign (ident "innerResult"))
-						(e-block
-							(s-let
-								(p-assign (ident "z"))
-								(e-binop (op "add")
-									(e-lookup-local
-										(p-assign (ident "x")))
-									(e-lookup-local
-										(p-assign (ident "y")))))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-block
+				(s-let
+					(p-assign (ident "x"))
+					(e-num (value "20")))
+				(s-let
+					(p-assign (ident "innerResult"))
+					(e-block
+						(s-let
+							(p-assign (ident "z"))
 							(e-binop (op "add")
 								(e-lookup-local
-									(p-assign (ident "z")))
-								(e-num (value "1")))))
-					(e-lookup-local
-						(p-assign (ident "innerResult"))))))))
+									(p-assign (ident "x")))
+								(e-lookup-local
+									(p-assign (ident "y")))))
+						(e-binop (op "add")
+							(e-lookup-local
+								(p-assign (ident "z")))
+							(e-num (value "1")))))
+				(e-lookup-local
+					(p-assign (ident "innerResult")))))))
 ~~~
 # TYPES
 ~~~clojure

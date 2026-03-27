@@ -2184,7 +2184,7 @@ pub const TypeAnno = union(enum) {
     },
     record: struct {
         fields: AnnoRecordField.Span,
-        ext: ?TypeAnno.Idx,
+        ext: RecordExt,
         region: TokenizedRegion,
     },
     @"fn": struct {
@@ -2212,14 +2212,31 @@ pub const TypeAnno = union(enum) {
         /// Anonymous open tag union: `[A, B, ..]` - stores the DoubleDot token index
         open: Token.Idx,
         /// Named open tag union: `[A, B, ..ext]`
-        named: TypeAnno.Idx,
+        named: struct { anno: TypeAnno.Idx, region: TokenizedRegion },
     };
 
     pub const TagUnionRhs = packed struct {
         /// 0 = closed, 1 = anonymous open, 2 = named open
         ext_kind: u2,
-        tags_len: u30,
+        _padding: u30 = 0,
     };
+
+    /// Extension type for open records
+    pub const RecordExt = union(enum) {
+        /// Closed record: `{ name: Str }`
+        closed,
+        /// Anonymous open record: `{ name: Str, .. }` - stores the DoubleDot token index
+        open: Token.Idx,
+        /// Named open record: `{ name: Str, ..ext }`
+        named: struct { anno: TypeAnno.Idx, region: TokenizedRegion },
+    };
+
+    pub const RecordRhs = packed struct {
+        /// 0 = closed, 1 = anonymous open, 2 = named open
+        ext_kind: u2,
+        _padding: u30 = 0,
+    };
+
     pub const TypeAnnoFnRhs = packed struct { effectful: u1, args_len: u31 };
 
     /// Extract the region from any TypeAnno variant
@@ -2304,8 +2321,8 @@ pub const TypeAnno = union(enum) {
                 try tree.endNode(tags_begin, attrs2);
 
                 switch (a.ext) {
-                    .named => |named_idx| {
-                        try ast.store.getTypeAnno(named_idx).pushToSExprTree(gpa, env, ast, tree);
+                    .named => |named| {
+                        try ast.store.getTypeAnno(named.anno).pushToSExprTree(gpa, env, ast, tree);
                     },
                     .open => {
                         try tree.pushStaticAtom("..");
@@ -2348,12 +2365,22 @@ pub const TypeAnno = union(enum) {
                 }
 
                 // Output extension if present
-                if (a.ext) |ext_idx| {
-                    const ext_begin = tree.beginNode();
-                    try tree.pushStaticAtom("ty-record-ext");
-                    const ext_attrs = tree.beginNode();
-                    try ast.store.getTypeAnno(ext_idx).pushToSExprTree(gpa, env, ast, tree);
-                    try tree.endNode(ext_begin, ext_attrs);
+                switch (a.ext) {
+                    .named => |named| {
+                        const ext_begin = tree.beginNode();
+                        try tree.pushStaticAtom("ty-record-ext");
+                        const ext_attrs = tree.beginNode();
+                        try ast.store.getTypeAnno(named.anno).pushToSExprTree(gpa, env, ast, tree);
+                        try tree.endNode(ext_begin, ext_attrs);
+                    },
+                    .open => {
+                        const ext_begin = tree.beginNode();
+                        try tree.pushStaticAtom("ty-record-ext");
+                        const ext_attrs = tree.beginNode();
+                        try tree.pushStaticAtom("..");
+                        try tree.endNode(ext_begin, ext_attrs);
+                    },
+                    .closed => {},
                 }
 
                 try tree.endNode(begin, attrs);

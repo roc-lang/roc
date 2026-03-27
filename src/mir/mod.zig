@@ -8,18 +8,24 @@ const std = @import("std");
 
 pub const MIR = @import("MIR.zig");
 pub const Monotype = @import("Monotype.zig");
+pub const Monomorphize = @import("Monomorphize.zig");
 pub const Lower = @import("Lower.zig");
+pub const LambdaSet = @import("LambdaSet.zig");
 
 /// Re-export of MIR expression type
 pub const Expr = MIR.Expr;
 /// Re-export of MIR pattern type
 pub const Pattern = MIR.Pattern;
-/// Globally unique symbol identifier (module + ident)
+/// Globally unique opaque symbol identifier
 pub const Symbol = MIR.Symbol;
 /// Index into the MIR expression store
 pub const ExprId = MIR.ExprId;
 /// Index into the MIR pattern store
 pub const PatternId = MIR.PatternId;
+/// Index into the MIR proc store
+pub const ProcId = MIR.ProcId;
+/// MIR proc metadata
+pub const Proc = MIR.Proc;
 /// MIR expression and pattern store with parallel type mapping
 pub const Store = MIR.Store;
 
@@ -27,6 +33,8 @@ test "mir tests" {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(MIR);
     std.testing.refAllDecls(Monotype);
+    std.testing.refAllDecls(Monomorphize);
     std.testing.refAllDecls(Lower);
+    std.testing.refAllDecls(LambdaSet);
     std.testing.refAllDecls(@import("test/lower_test.zig"));
 }

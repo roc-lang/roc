@@ -4,6 +4,7 @@
 //! function prologues/epilogues and instruction selection.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const RocTarget = @import("roc_target").RocTarget;
 
@@ -37,9 +38,13 @@ pub fn CodeGen(comptime target: RocTarget) type {
         pub const roc_target = target;
 
         /// Number of general-purpose registers
-        const NUM_GENERAL_REGS = 32;
+        pub const NUM_GENERAL_REGS = 32;
         /// Number of float registers
-        const NUM_FLOAT_REGS = 32;
+        pub const NUM_FLOAT_REGS = 32;
+
+        /// Initial free register masks (caller-saved registers available at function entry)
+        pub const INITIAL_FREE_GENERAL: u32 = CC.CALLER_SAVED_GENERAL_MASK;
+        pub const INITIAL_FREE_FLOAT: u32 = CC.CALLER_SAVED_FLOAT_MASK;
 
         /// Size of callee-saved area in bytes (5 pairs * 16 bytes = 80)
         /// Used by MonoExprCodeGen to reserve stack space for callee-saved registers
@@ -159,8 +164,8 @@ pub fn CodeGen(comptime target: RocTarget) type {
                 return reg;
             }
 
-            // 3. All registers in use - must spill one
-            return self.spillAndAllocGeneral(local);
+            // 3. All registers in use — panic (spills are not supported)
+            return self.spillAndAllocGeneral();
         }
 
         /// Allocate a general-purpose register without associating it with a local.
@@ -220,46 +225,23 @@ pub fn CodeGen(comptime target: RocTarget) type {
         }
 
         /// Spill a register to make room and allocate it for the given local.
-        fn spillAndAllocGeneral(self: *Self, local: u32) !GeneralReg {
-            // Find a register to spill - prefer lowest-numbered for consistency
-            // Skip special registers (FP, LR, SP/ZR)
-            var victim: ?GeneralReg = null;
-            for (0..NUM_GENERAL_REGS) |i| {
-                const reg: GeneralReg = @enumFromInt(i);
-                // Skip special registers
-                if (reg == .FP or reg == .LR or reg == .ZRSP or reg == .PR) continue;
-                // Skip registers we don't own (they're free)
-                if (self.general_owners[i] != null) {
-                    victim = reg;
-                    break;
+        /// WARNING: This function is fundamentally unsafe for LirCodeGen's usage pattern.
+        /// See the x86_64 version for the full explanation.
+        fn spillAndAllocGeneral(self: *Self) !GeneralReg {
+            if (builtin.mode == .Debug) {
+                var owned_count: u32 = 0;
+                for (0..NUM_GENERAL_REGS) |i| {
+                    if (self.general_owners[i] != null) owned_count += 1;
                 }
+                std.debug.panic(
+                    "Register spill triggered: all {d} general registers are in use " ++
+                        "(free_general=0x{x}, callee_saved_available=0x{x}). " ++
+                        "LirCodeGen does not support spills — raw register references would become stale. " ++
+                        "Fix the caller to free registers before allocating new ones.",
+                    .{ owned_count, self.free_general, self.callee_saved_available },
+                );
             }
-
-            const reg = victim orelse unreachable;
-            const owner = self.general_owners[@intFromEnum(reg)].?;
-
-            // Allocate stack slot for the spilled value
-            const slot = self.allocStack(8);
-
-            // Emit store instruction
-            try self.emitStoreStack(.w64, slot, reg);
-
-            // Update the owner's location to stack
-            try self.locals.put(owner, .{ .stack = slot });
-
-            // DEBUG: Verify no OTHER register already owns this local before assignment
-            if (std.debug.runtime_safety) {
-                for (self.general_owners, 0..) |other_owner, i| {
-                    if (other_owner) |owned_local| {
-                        std.debug.assert(owned_local != local or i == @intFromEnum(reg));
-                    }
-                }
-            }
-
-            // Clear old ownership, set new ownership
-            self.general_owners[@intFromEnum(reg)] = local;
-
-            return reg;
+            unreachable;
         }
 
         /// Reload a spilled value back into a register.
@@ -389,20 +371,9 @@ pub fn CodeGen(comptime target: RocTarget) type {
 
         pub fn allocStack(self: *Self, size: u32) i32 {
             const aligned_size: i32 = @intCast((size + 15) & ~@as(u32, 15)); // 16-byte align
-
-            // For aarch64 procedure frames, stack_offset is positive and grows upward.
-            // We return the current offset and increment for the next allocation.
-            // For main expression frames, stack_offset is negative and grows downward.
-            if (self.stack_offset >= 0) {
-                // Procedure frame: return current offset, then increment
-                const offset = self.stack_offset;
-                self.stack_offset += aligned_size;
-                return offset;
-            } else {
-                // Main expression frame: decrement, then return (standard downward growth)
-                self.stack_offset -= aligned_size;
-                return self.stack_offset;
-            }
+            const offset = self.stack_offset;
+            self.stack_offset += aligned_size;
+            return offset;
         }
 
         /// Alias for allocStack - allocate a stack slot of the given size
@@ -591,6 +562,10 @@ pub fn CodeGen(comptime target: RocTarget) type {
             try self.emit.fnegRegReg(.double, dst, src);
         }
 
+        pub fn emitAbsF64(self: *Self, dst: FloatReg, src: FloatReg) !void {
+            try self.emit.fabsRegReg(.double, dst, src);
+        }
+
         /// Emit float32 addition: dst = a + b
         pub fn emitAddF32(self: *Self, dst: FloatReg, a: FloatReg, b: FloatReg) !void {
             try self.emit.faddRegRegReg(.single, dst, a, b);
@@ -623,12 +598,19 @@ pub fn CodeGen(comptime target: RocTarget) type {
             if (offset >= -256 and offset <= 255) {
                 try self.emit.ldurRegMem(width, dst, .FP, @intCast(offset));
             } else if (offset > 0) {
-                // Positive offset - use scaled unsigned form
-                const uoffset: u12 = @intCast(@as(u32, @intCast(offset)) >> (if (width == .w64) 3 else 2));
-                try self.emit.ldrRegMemUoff(width, dst, .FP, uoffset);
+                // Positive offset - try scaled unsigned form
+                const shift: u5 = if (width == .w64) 3 else 2;
+                const shifted = @as(u32, @intCast(offset)) >> shift;
+                if (shifted <= std.math.maxInt(u12)) {
+                    try self.emit.ldrRegMemUoff(width, dst, .FP, @intCast(shifted));
+                    return;
+                }
+                // Large positive offset - add offset to FP, then load
+                try self.emit.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
+                try self.emit.addRegRegReg(.w64, .IP0, .FP, .IP0);
+                try self.emit.ldrRegMemUoff(width, dst, .IP0, 0);
             } else {
                 // Large negative offset - add offset to FP, then load
-                // Use IP0 as scratch register
                 try self.emit.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
                 try self.emit.addRegRegReg(.w64, .IP0, .FP, .IP0);
                 try self.emit.ldrRegMemUoff(width, dst, .IP0, 0);
@@ -640,12 +622,19 @@ pub fn CodeGen(comptime target: RocTarget) type {
             if (offset >= -256 and offset <= 255) {
                 try self.emit.sturRegMem(width, src, .FP, @intCast(offset));
             } else if (offset > 0) {
-                // Positive offset - use scaled unsigned form
-                const uoffset: u12 = @intCast(@as(u32, @intCast(offset)) >> (if (width == .w64) 3 else 2));
-                try self.emit.strRegMemUoff(width, src, .FP, uoffset);
+                // Positive offset - try scaled unsigned form
+                const shift: u5 = if (width == .w64) 3 else 2;
+                const shifted = @as(u32, @intCast(offset)) >> shift;
+                if (shifted <= std.math.maxInt(u12)) {
+                    try self.emit.strRegMemUoff(width, src, .FP, @intCast(shifted));
+                    return;
+                }
+                // Large positive offset - add offset to FP, then store
+                try self.emit.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
+                try self.emit.addRegRegReg(.w64, .IP0, .FP, .IP0);
+                try self.emit.strRegMemUoff(width, src, .IP0, 0);
             } else {
                 // Large negative offset - add offset to FP, then store
-                // Use IP0 as scratch register
                 try self.emit.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
                 try self.emit.addRegRegReg(.w64, .IP0, .FP, .IP0);
                 try self.emit.strRegMemUoff(width, src, .IP0, 0);
@@ -680,12 +669,12 @@ pub fn CodeGen(comptime target: RocTarget) type {
         pub fn emitLoadStackByte(self: *Self, dst: GeneralReg, offset: i32) !void {
             if (offset >= -256 and offset <= 255) {
                 try self.emit.ldurbRegMem(dst, .FP, @intCast(offset));
-            } else if (offset > 0) {
+            } else if (offset > 0 and offset <= 4095) {
                 // Positive offset - use scaled unsigned form (byte: no shift needed)
                 const uoffset: u12 = @intCast(@as(u32, @intCast(offset)));
                 try self.emit.ldrbRegMem(dst, .FP, uoffset);
             } else {
-                // Large negative offset - add offset to FP, then load
+                // Large offset - add offset to FP, then load
                 try self.emit.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
                 try self.emit.addRegRegReg(.w64, .IP0, .FP, .IP0);
                 try self.emit.ldrbRegMem(dst, .IP0, 0);
@@ -696,12 +685,12 @@ pub fn CodeGen(comptime target: RocTarget) type {
         pub fn emitLoadStackHalfword(self: *Self, dst: GeneralReg, offset: i32) !void {
             if (offset >= -256 and offset <= 255) {
                 try self.emit.ldurhRegMem(dst, .FP, @intCast(offset));
-            } else if (offset > 0) {
+            } else if (offset > 0 and offset <= 8190) {
                 // Positive offset - use scaled unsigned form (halfword: shift by 1)
                 const uoffset: u12 = @intCast(@as(u32, @intCast(offset)) >> 1);
                 try self.emit.ldrhRegMem(dst, .FP, uoffset);
             } else {
-                // Large negative offset - add offset to FP, then load
+                // Large offset - add offset to FP, then load
                 try self.emit.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
                 try self.emit.addRegRegReg(.w64, .IP0, .FP, .IP0);
                 try self.emit.ldrhRegMem(dst, .IP0, 0);
@@ -710,12 +699,12 @@ pub fn CodeGen(comptime target: RocTarget) type {
 
         /// Load float64 from stack slot
         pub fn emitLoadStackF64(self: *Self, dst: FloatReg, offset: i32) !void {
-            if (offset >= 0) {
+            if (offset >= 0 and offset <= 32760) {
                 // Positive offset - use scaled unsigned form
                 const uoffset: u12 = @intCast(@as(u32, @intCast(offset)) >> 3);
                 try self.emit.fldrRegMemUoff(.double, dst, .FP, uoffset);
             } else {
-                // Negative offset - add offset to FP, then load
+                // Large or negative offset - add offset to FP, then load
                 try self.emit.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
                 try self.emit.addRegRegReg(.w64, .IP0, .FP, .IP0);
                 try self.emit.fldrRegMemUoff(.double, dst, .IP0, 0);
@@ -724,12 +713,12 @@ pub fn CodeGen(comptime target: RocTarget) type {
 
         /// Store float64 to stack slot
         pub fn emitStoreStackF64(self: *Self, offset: i32, src: FloatReg) !void {
-            if (offset >= 0) {
+            if (offset >= 0 and offset <= 32760) {
                 // Positive offset - use scaled unsigned form
                 const uoffset: u12 = @intCast(@as(u32, @intCast(offset)) >> 3);
                 try self.emit.fstrRegMemUoff(.double, src, .FP, uoffset);
             } else {
-                // Negative offset - add offset to FP, then store
+                // Large or negative offset - add offset to FP, then store
                 try self.emit.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
                 try self.emit.addRegRegReg(.w64, .IP0, .FP, .IP0);
                 try self.emit.fstrRegMemUoff(.double, src, .IP0, 0);

@@ -56,7 +56,7 @@ NO CHANGE
 		(annotation
 			(ty-tag-union
 				(ty-malformed)
-				(ty-underscore)))))
+				(ty-rigid-var (name "#others"))))))
 ~~~
 # TYPES
 ~~~clojure

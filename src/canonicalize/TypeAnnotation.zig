@@ -453,23 +453,23 @@ pub const TypeAnno = union(enum) {
         /// Check if an identifier index matches any builtin type name.
         /// This is more efficient than fromBytes() as it compares indices directly.
         pub fn isBuiltinTypeIdent(ident: base.Ident.Idx, idents: anytype) bool {
-            return ident == idents.list or
-                ident == idents.box or
-                ident == idents.str or
-                ident == idents.num or
-                ident == idents.u8 or
-                ident == idents.u16 or
-                ident == idents.u32 or
-                ident == idents.u64 or
-                ident == idents.u128 or
-                ident == idents.i8 or
-                ident == idents.i16 or
-                ident == idents.i32 or
-                ident == idents.i64 or
-                ident == idents.i128 or
-                ident == idents.f32 or
-                ident == idents.f64 or
-                ident == idents.dec;
+            return ident.eql(idents.list) or
+                ident.eql(idents.box) or
+                ident.eql(idents.str) or
+                ident.eql(idents.num) or
+                ident.eql(idents.u8) or
+                ident.eql(idents.u16) or
+                ident.eql(idents.u32) or
+                ident.eql(idents.u64) or
+                ident.eql(idents.u128) or
+                ident.eql(idents.i8) or
+                ident.eql(idents.i16) or
+                ident.eql(idents.i32) or
+                ident.eql(idents.i64) or
+                ident.eql(idents.i128) or
+                ident.eql(idents.f32) or
+                ident.eql(idents.f64) or
+                ident.eql(idents.dec);
         }
     };
 };

@@ -12,7 +12,7 @@ type=repl
 # OUTPUT
 "Test"
 ---
-42
+42.0
 ---
 False
 # PROBLEMS

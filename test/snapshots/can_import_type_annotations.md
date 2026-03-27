@@ -44,7 +44,6 @@ combineTrys = |result1, result2|
     }
 ~~~
 # EXPECTED
-DUPLICATE DEFINITION - can_import_type_annotations.md:3:1:3:32
 UNDECLARED TYPE - can_import_type_annotations.md:5:18:5:25
 UNDECLARED TYPE - can_import_type_annotations.md:5:29:5:37
 UNDEFINED VARIABLE - can_import_type_annotations.md:6:24:6:44
@@ -57,24 +56,6 @@ MODULE NOT IMPORTED - can_import_type_annotations.md:24:18:24:36
 MODULE NOT IMPORTED - can_import_type_annotations.md:24:61:24:78
 UNDEFINED VARIABLE - can_import_type_annotations.md:25:40:25:61
 # PROBLEMS
-**DUPLICATE DEFINITION**
-The name `Try` is being redeclared in this scope.
-
-The redeclaration is here:
-**can_import_type_annotations.md:3:1:3:32:**
-```roc
-import utils.Try exposing [Try]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-But `Try` was already defined here:
-**can_import_type_annotations.md:1:1:1:1:**
-```roc
-import http.Client as Http exposing [Request, Response]
-```
-^
-
-
 **UNDECLARED TYPE**
 The type _Request_ is not declared in this scope.
 
