@@ -1462,8 +1462,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .zero_arg_tag => |tag| try self.generateZeroArgTag(tag),
                 .tag => |tag| try self.generateTag(tag),
 
-                // Lists (not fully implemented - returns placeholder for now)
-                .list => |list| try self.generateList(list),
+                .list => @panic("TODO implement list literal codegen in dev backend"),
                 .empty_list => try self.generateEmptyList(),
 
                 // Low-level operations

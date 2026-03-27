@@ -1023,150 +1023,6 @@ pub const RcInsertPass = struct {
         return final_expr == .lookup and final_expr.lookup.symbol == owned_pat.bind.symbol;
     }
 
-    fn stripTransferredCellProcArg(
-        self: *RcInsertPass,
-        expr_id: LirExprId,
-        cell: Symbol,
-    ) Allocator.Error!struct {
-        expr: LirExprId,
-        consumes_cell_owner: bool,
-    } {
-        if (expr_id.isNone()) return .{ .expr = expr_id, .consumes_cell_owner = false };
-        const expr = self.store.getExpr(expr_id);
-        if (expr != .block) return .{ .expr = expr_id, .consumes_cell_owner = false };
-
-        const block = expr.block;
-        if (self.store.getExpr(block.final_expr) != .proc_call) {
-            return .{ .expr = expr_id, .consumes_cell_owner = false };
-        }
-
-        const call = self.store.getExpr(block.final_expr).proc_call;
-        const args = self.store.getExprSpan(call.args);
-        if (args.len == 0) return .{ .expr = expr_id, .consumes_cell_owner = false };
-        const first_arg = self.store.getExpr(args[0]);
-        if (first_arg != .lookup) return .{ .expr = expr_id, .consumes_cell_owner = false };
-
-        const TrackedOwner = struct {
-            source_expr: LirExprId,
-            removable_stmt_count: usize,
-        };
-
-        var tracked_symbols = std.AutoHashMap(u64, TrackedOwner).init(self.allocator);
-        defer tracked_symbols.deinit();
-
-        var removable_stmt_indices = std.ArrayList(usize).empty;
-        defer removable_stmt_indices.deinit(self.allocator);
-
-        const stmts = self.store.getStmts(block.stmts);
-        for (stmts, 0..) |stmt, stmt_index| {
-            if (stmt != .decl) continue;
-
-            const binding = stmt.decl;
-            const pat = self.store.getPattern(binding.pattern);
-            if (pat != .bind) continue;
-
-            const binding_expr = self.store.getExpr(binding.expr);
-            if (binding_expr == .lookup) {
-                const source = tracked_symbols.get(@bitCast(binding_expr.lookup.symbol)) orelse continue;
-                try tracked_symbols.put(@bitCast(pat.bind.symbol), .{
-                    .source_expr = source.source_expr,
-                    .removable_stmt_count = source.removable_stmt_count + 1,
-                });
-                try removable_stmt_indices.append(self.allocator, stmt_index);
-                continue;
-            }
-
-            if (binding_expr != .block) continue;
-            const transfer_block = binding_expr.block;
-            const transfer_stmts = self.store.getStmts(transfer_block.stmts);
-            if (transfer_stmts.len != 2 or transfer_stmts[0] != .decl or transfer_stmts[1] != .decl) continue;
-
-            const source_binding = transfer_stmts[0].decl;
-            const source_pat = self.store.getPattern(source_binding.pattern);
-            if (source_pat != .bind) continue;
-            if (!self.exprContainsCellLoadOf(source_binding.expr, cell)) continue;
-
-            const incref_expr = self.store.getExpr(transfer_stmts[1].decl.expr);
-            if (incref_expr != .incref) continue;
-            const incref_value = self.store.getExpr(incref_expr.incref.value);
-            if (incref_value != .lookup or incref_value.lookup.symbol != source_pat.bind.symbol) continue;
-            if (!self.exprFinalizesTransferredOwner(transfer_block.final_expr, source_pat.bind.symbol)) continue;
-
-            try tracked_symbols.put(@bitCast(pat.bind.symbol), .{
-                .source_expr = source_binding.expr,
-                .removable_stmt_count = removable_stmt_indices.items.len + 1,
-            });
-            try removable_stmt_indices.append(self.allocator, stmt_index);
-        }
-
-        const tracked = tracked_symbols.get(@bitCast(first_arg.lookup.symbol)) orelse {
-            return .{ .expr = expr_id, .consumes_cell_owner = false };
-        };
-
-        var new_args = std.ArrayList(LirExprId).empty;
-        defer new_args.deinit(self.allocator);
-        try new_args.append(self.allocator, tracked.source_expr);
-        for (args[1..]) |arg| try new_args.append(self.allocator, arg);
-
-        const rebuilt_call = try self.rebuildProcCall(
-            call,
-            try self.store.addExprSpan(new_args.items),
-            self.store.getExprRegion(expr_id),
-        );
-
-        if (tracked.removable_stmt_count == 0) {
-            return .{ .expr = rebuilt_call, .consumes_cell_owner = true };
-        }
-
-        var remove_flags = std.ArrayList(bool).empty;
-        defer remove_flags.deinit(self.allocator);
-        try remove_flags.appendNTimes(self.allocator, false, stmts.len);
-        for (removable_stmt_indices.items[0..tracked.removable_stmt_count]) |idx| {
-            remove_flags.items[idx] = true;
-        }
-
-        var kept_stmts = std.ArrayList(LirStmt).empty;
-        defer kept_stmts.deinit(self.allocator);
-        for (stmts, 0..) |stmt, idx| {
-            if (!remove_flags.items[idx]) try kept_stmts.append(self.allocator, stmt);
-        }
-
-        const rebuilt_expr = if (kept_stmts.items.len == 0)
-            rebuilt_call
-        else
-            try self.store.addExpr(.{ .block = .{
-                .stmts = try self.store.addStmts(kept_stmts.items),
-                .final_expr = rebuilt_call,
-                .result_layout = block.result_layout,
-            } }, self.store.getExprRegion(expr_id));
-
-        return .{ .expr = rebuilt_expr, .consumes_cell_owner = true };
-    }
-
-    fn retainOperandIfNeededForLaterUse(
-        self: *RcInsertPass,
-        operand_id: LirExprId,
-        later_uses: *const std.AutoHashMap(u64, u32),
-        region: Region,
-        prelude: *std.ArrayList(LirStmt),
-    ) Allocator.Error!LirExprId {
-        const owner_key = self.ownerKeyForAliasedExpr(operand_id) orelse return operand_id;
-        if (self.ownerUseCountFromMap(later_uses, owner_key) == 0) return operand_id;
-
-        const layout_idx = self.exprResultLayout(operand_id);
-        if (!self.layoutNeedsRc(layout_idx)) return operand_id;
-
-        const temp = try self.bindExprToFreshLookupWithSemantics(prelude, operand_id, layout_idx, .retained, region);
-        try self.emitIncrefInto(temp.symbol, layout_idx, 1, region, prelude);
-        const gop = try self.retained_owner_use_debits.getOrPut(owner_key);
-        if (gop.found_existing) {
-            gop.value_ptr.* += 1;
-        } else {
-            gop.value_ptr.* = 1;
-        }
-        return temp.lookup;
-    }
-
     fn retainConsumedOperandsForLaterUse(
         self: *RcInsertPass,
         expr_id: LirExprId,
@@ -1174,66 +1030,10 @@ pub const RcInsertPass = struct {
         region: Region,
     ) Allocator.Error!LirExprId {
         if (expr_id.isNone()) return expr_id;
-
-        var prelude = std.ArrayList(LirStmt).empty;
-        defer prelude.deinit(self.allocator);
-
-        const rewritten = switch (self.store.getExpr(expr_id)) {
-            .proc_call => |call| blk: {
-                const args = self.store.getExprSpan(call.args);
-                var new_args = std.ArrayList(LirExprId).empty;
-                defer new_args.deinit(self.allocator);
-
-                var changed = false;
-                for (args) |arg_id| {
-                    const retained_arg = try self.retainOperandIfNeededForLaterUse(
-                        arg_id,
-                        later_uses,
-                        region,
-                        &prelude,
-                    );
-                    if (retained_arg != arg_id) changed = true;
-                    try new_args.append(self.allocator, retained_arg);
-                }
-
-                if (!changed) break :blk expr_id;
-                break :blk try self.rebuildProcCall(call, try self.store.addExprSpan(new_args.items), region);
-            },
-            .low_level => |ll| blk: {
-                const args = self.store.getExprSpan(ll.args);
-                const arg_ownership = ll.op.getArgOwnership();
-
-                var new_args = std.ArrayList(LirExprId).empty;
-                defer new_args.deinit(self.allocator);
-
-                var changed = false;
-                for (args, 0..) |arg_id, i| {
-                    const new_arg = switch (arg_ownership[i]) {
-                        .consume => try self.retainOperandIfNeededForLaterUse(
-                            arg_id,
-                            later_uses,
-                            region,
-                            &prelude,
-                        ),
-                        .borrow => arg_id,
-                    };
-                    if (new_arg != arg_id) changed = true;
-                    try new_args.append(self.allocator, new_arg);
-                }
-
-                if (!changed) break :blk expr_id;
-                break :blk try self.store.addExpr(.{ .low_level = .{
-                    .op = ll.op,
-                    .args = try self.store.addExprSpan(new_args.items),
-                    .ret_layout = ll.ret_layout,
-                    .callable_proc = ll.callable_proc,
-                } }, region);
-            },
-            .hosted_call => |_| expr_id,
-            else => expr_id,
-        };
-
-        return self.wrapPreludeAroundExpr(rewritten, self.exprResultLayout(expr_id), region, prelude.items);
+        _ = self;
+        _ = later_uses;
+        _ = region;
+        return expr_id;
     }
 
     fn wrapPreludeAroundExpr(
@@ -3108,7 +2908,7 @@ pub const RcInsertPass = struct {
             .match_expr => |w| self.processMatch(w.value, w.value_layout, w.branches, w.result_layout, region),
             .loop => |loop_expr| self.processLoop(loop_expr, region, expr_id),
             .discriminant_switch => |ds| self.processDiscriminantSwitch(ds, region),
-            .early_return => |ret| self.processEarlyReturn(ret, region, expr_id),
+            .early_return => expr_id,
             .cell_load => expr_id,
             .proc_call => |call| {
                 const args_res = try self.processExprSpanSequenced(call.args, .consume);
@@ -3775,9 +3575,8 @@ pub const RcInsertPass = struct {
                             .semantics = .borrow_alias,
                         } });
 
-                        const stored_info = try self.stripTransferredCellProcArg(new_expr, cell.cell);
-                        const stored_expr = stored_info.expr;
-                        const cell_owner_consumed_by_store = if (stored_info.consumes_cell_owner) true else blk: {
+                        const stored_expr = new_expr;
+                        const cell_owner_consumed_by_store = blk: {
                             const owner_key = self.ownerKeyForCellLoadInExpr(stored_expr, cell.cell) orelse break :blk false;
                             break :blk try self.exprConsumesKey(stored_expr, owner_key);
                         };
@@ -4314,23 +4113,8 @@ pub const RcInsertPass = struct {
         }
 
         const processed_body = try self.processExpr(loop_expr.body);
-        var body_tail_stmts = std.ArrayList(LirStmt).empty;
-        defer body_tail_stmts.deinit(self.allocator);
-        try self.emitLiveDemandRcTailDecrefsForSymbolsInto(
-            live_len,
-            &body_demands,
-            &body_consumed,
-            region,
-            &body_tail_stmts,
-        );
-
-        const body_with_break_cleanup = try self.wrapBreaksWithTailStmts(
-            processed_body,
-            body_tail_stmts.items,
-            region,
-        );
         const new_body = try self.wrapExprWithLiveDemandRcOps(
-            body_with_break_cleanup,
+            processed_body,
             live_len,
             &body_demands,
             &body_consumed,
@@ -4345,97 +4129,6 @@ pub const RcInsertPass = struct {
             } }, region);
         }
         return expr_id;
-    }
-
-    /// Process an early_return expression.
-    /// Emits cleanup decrefs for all live RC symbols in enclosing blocks
-    /// (from early_return_scope_base onward) that are NOT consumed by the
-    /// return value expression itself.
-    fn processEarlyReturn(self: *RcInsertPass, ret: anytype, region: Region, expr_id: LirExprId) Allocator.Error!LirExprId {
-        // Recurse into the return value expression
-        const new_expr = try self.processExpr(ret.expr);
-
-        // Find which symbols the return expression consumes (using scratch_uses)
-        self.scratch_consumed_uses.clearRetainingCapacity();
-        try self.countConsumedValueInto(ret.expr, &self.scratch_consumed_uses);
-
-        // Collect cleanup decrefs for live RC symbols not consumed by the return
-        var cleanup_stmts = std.ArrayList(LirStmt).empty;
-        defer cleanup_stmts.deinit(self.allocator);
-
-        const live_syms = self.live_rc_symbols.items[self.early_return_scope_base..];
-        for (live_syms) |live| {
-            const key = live.key;
-            const ret_use_count = self.ownerUseCountFromMap(&self.scratch_consumed_uses, key);
-            // Total refs = live owner refs for this binding + pending branch RC adjustments.
-            // The branch wrapper will prepend RC ops that execute before
-            // the early return: increfs (positive adj) add refs to clean up,
-            // decrefs (negative adj) reduce refs since they're already handled.
-            const branch_adj: i32 = self.pending_branch_rc_adj.get(key) orelse 0;
-            const effective_signed: i32 = @as(i32, @intCast(live.owned_ref_count)) + branch_adj;
-            if (effective_signed <= 0) continue; // branch wrapper decrefs handle all refs
-            const effective_count: u32 = @intCast(effective_signed);
-            // Include uses consumed by outer enclosing blocks (cumulative)
-            // plus uses consumed by the current inner block's prior statements.
-            const consumed_before = self.ownerUseCountFromMap(&self.cumulative_consumed_uses, key) +
-                self.ownerUseCountFromMap(&self.block_consumed_uses, key);
-            const total_consumed = consumed_before + ret_use_count;
-            if (total_consumed >= effective_count) continue; // all refs accounted for
-            const remaining = effective_count - total_consumed;
-            var i: u32 = 0;
-            while (i < remaining) : (i += 1) {
-                try self.emitDecrefInto(live.symbol, live.layout_idx, region, &cleanup_stmts);
-            }
-        }
-
-        const live_cells = self.live_cells.items[self.early_return_cell_scope_base..];
-        var cell_index = live_cells.len;
-        while (cell_index > 0) {
-            cell_index -= 1;
-            const live_cell = live_cells[cell_index];
-            if (!self.layoutNeedsRc(live_cell.layout_idx)) continue;
-            if (!self.exprMovesCellOwner(new_expr, live_cell.cell)) {
-                try self.emitCellDecrefInto(live_cell.cell, live_cell.layout_idx, region, &cleanup_stmts);
-            }
-        }
-
-        if (cleanup_stmts.items.len == 0 and new_expr == ret.expr) return expr_id;
-
-        // Preserve the return value before cleanup so early-return RC cleanup
-        // cannot free the value before it is actually evaluated.
-        const ret_temp = try self.freshResultPattern(ret.ret_layout, region);
-        const ret_lookup = try self.store.addExpr(.{ .lookup = .{
-            .symbol = ret_temp.symbol,
-            .layout_idx = ret.ret_layout,
-        } }, region);
-
-        var stmts = std.ArrayList(LirStmt).empty;
-        defer stmts.deinit(self.allocator);
-        try stmts.append(self.allocator, .{ .decl = .{
-            .pattern = ret_temp.pattern,
-            .expr = new_expr,
-        } });
-        try stmts.appendSlice(self.allocator, cleanup_stmts.items);
-
-        const early_ret_id = try self.store.addExpr(.{ .early_return = .{
-            .expr = ret_lookup,
-            .ret_layout = ret.ret_layout,
-        } }, region);
-
-        const wildcard = try self.store.addPattern(.{ .wildcard = .{ .layout_idx = .zst } }, region);
-        try stmts.append(self.allocator, .{ .decl = .{
-            .pattern = wildcard,
-            .expr = early_ret_id,
-        } });
-
-        // The block's final_expr is never reached (early_return diverges),
-        // but we need a distinct valid expr — not early_ret_id which is already used as a stmt.
-        const dead_final = try self.store.addExpr(.{ .runtime_error = .{ .ret_layout = ret.ret_layout } }, region);
-        return self.store.addExpr(.{ .block = .{
-            .stmts = try self.store.addStmts(stmts.items),
-            .final_expr = dead_final,
-            .result_layout = ret.ret_layout,
-        } }, region);
     }
 
     /// Collect all symbols bound by a pattern into a set.
@@ -4975,189 +4668,6 @@ pub const RcInsertPass = struct {
             .final_expr = final_lookup,
             .result_layout = result_layout,
         } }, region);
-    }
-
-    fn wrapBreaksWithTailStmts(
-        self: *RcInsertPass,
-        expr_id: LirExprId,
-        tail_stmts: []const LirStmt,
-        region: Region,
-    ) Allocator.Error!LirExprId {
-        if (tail_stmts.len == 0 or expr_id.isNone()) return expr_id;
-
-        const expr = self.store.getExpr(expr_id);
-        return switch (expr) {
-            .break_expr => {
-                const stmts_span = try self.store.addStmts(tail_stmts);
-                return self.store.addExpr(.{ .block = .{
-                    .stmts = stmts_span,
-                    .final_expr = expr_id,
-                    .result_layout = .zst,
-                } }, region);
-            },
-            .block => |block| {
-                var changed = false;
-                var stmts = std.ArrayList(LirStmt).empty;
-                defer stmts.deinit(self.allocator);
-
-                for (self.store.getStmts(block.stmts)) |stmt| {
-                    const new_stmt = switch (stmt) {
-                        .decl => |binding| blk: {
-                            const new_expr = try self.wrapBreaksWithTailStmts(binding.expr, tail_stmts, region);
-                            changed = changed or new_expr != binding.expr;
-                            break :blk LirStmt{ .decl = .{
-                                .pattern = binding.pattern,
-                                .expr = new_expr,
-                            } };
-                        },
-                        .mutate => |binding| blk: {
-                            const new_expr = try self.wrapBreaksWithTailStmts(binding.expr, tail_stmts, region);
-                            changed = changed or new_expr != binding.expr;
-                            break :blk LirStmt{ .mutate = .{
-                                .pattern = binding.pattern,
-                                .expr = new_expr,
-                            } };
-                        },
-                        .cell_init => |binding| blk: {
-                            const new_expr = try self.wrapBreaksWithTailStmts(binding.expr, tail_stmts, region);
-                            changed = changed or new_expr != binding.expr;
-                            break :blk LirStmt{ .cell_init = .{
-                                .cell = binding.cell,
-                                .layout_idx = binding.layout_idx,
-                                .expr = new_expr,
-                            } };
-                        },
-                        .cell_store => |binding| blk: {
-                            const new_expr = try self.wrapBreaksWithTailStmts(binding.expr, tail_stmts, region);
-                            changed = changed or new_expr != binding.expr;
-                            break :blk LirStmt{ .cell_store = .{
-                                .cell = binding.cell,
-                                .layout_idx = binding.layout_idx,
-                                .expr = new_expr,
-                            } };
-                        },
-                        .cell_drop => stmt,
-                    };
-                    try stmts.append(self.allocator, new_stmt);
-                }
-
-                const new_final = try self.wrapBreaksWithTailStmts(block.final_expr, tail_stmts, region);
-                changed = changed or new_final != block.final_expr;
-
-                if (!changed) return expr_id;
-
-                return self.store.addExpr(.{ .block = .{
-                    .stmts = try self.store.addStmts(stmts.items),
-                    .final_expr = new_final,
-                    .result_layout = block.result_layout,
-                } }, region);
-            },
-            .if_then_else => |ite| {
-                var changed = false;
-                var branches = std.ArrayList(LirIfBranch).empty;
-                defer branches.deinit(self.allocator);
-
-                for (self.store.getIfBranches(ite.branches)) |branch| {
-                    const new_cond = try self.wrapBreaksWithTailStmts(branch.cond, tail_stmts, region);
-                    const new_body = try self.wrapBreaksWithTailStmts(branch.body, tail_stmts, region);
-                    changed = changed or new_cond != branch.cond or new_body != branch.body;
-                    try branches.append(self.allocator, .{
-                        .cond = new_cond,
-                        .body = new_body,
-                    });
-                }
-
-                const new_else = try self.wrapBreaksWithTailStmts(ite.final_else, tail_stmts, region);
-                changed = changed or new_else != ite.final_else;
-
-                if (!changed) return expr_id;
-
-                return self.store.addExpr(.{ .if_then_else = .{
-                    .branches = try self.store.addIfBranches(branches.items),
-                    .final_else = new_else,
-                    .result_layout = ite.result_layout,
-                } }, region);
-            },
-            .match_expr => |match_expr| {
-                var changed = false;
-                const new_value = try self.wrapBreaksWithTailStmts(match_expr.value, tail_stmts, region);
-                changed = changed or new_value != match_expr.value;
-
-                var branches = std.ArrayList(LirMatchBranch).empty;
-                defer branches.deinit(self.allocator);
-
-                for (self.store.getMatchBranches(match_expr.branches)) |branch| {
-                    const new_guard = try self.wrapBreaksWithTailStmts(branch.guard, tail_stmts, region);
-                    const new_body = try self.wrapBreaksWithTailStmts(branch.body, tail_stmts, region);
-                    changed = changed or new_guard != branch.guard or new_body != branch.body;
-                    try branches.append(self.allocator, .{
-                        .pattern = branch.pattern,
-                        .guard = new_guard,
-                        .body = new_body,
-                    });
-                }
-
-                if (!changed) return expr_id;
-
-                return self.store.addExpr(.{ .match_expr = .{
-                    .value = new_value,
-                    .value_layout = match_expr.value_layout,
-                    .branches = try self.store.addMatchBranches(branches.items),
-                    .result_layout = match_expr.result_layout,
-                } }, region);
-            },
-            .discriminant_switch => |switch_expr| {
-                var changed = false;
-                const new_value = try self.wrapBreaksWithTailStmts(switch_expr.value, tail_stmts, region);
-                changed = changed or new_value != switch_expr.value;
-
-                var branches = std.ArrayList(LirExprId).empty;
-                defer branches.deinit(self.allocator);
-
-                for (self.store.getExprSpan(switch_expr.branches)) |branch_id| {
-                    const new_branch = try self.wrapBreaksWithTailStmts(branch_id, tail_stmts, region);
-                    changed = changed or new_branch != branch_id;
-                    try branches.append(self.allocator, new_branch);
-                }
-
-                if (!changed) return expr_id;
-
-                return self.store.addExpr(.{ .discriminant_switch = .{
-                    .value = new_value,
-                    .union_layout = switch_expr.union_layout,
-                    .branches = try self.store.addExprSpan(branches.items),
-                    .result_layout = switch_expr.result_layout,
-                } }, region);
-            },
-            .dbg => |dbg_expr| {
-                const new_expr = try self.wrapBreaksWithTailStmts(dbg_expr.expr, tail_stmts, region);
-                if (new_expr == dbg_expr.expr) return expr_id;
-                return self.store.addExpr(.{ .dbg = .{
-                    .expr = new_expr,
-                    .result_layout = dbg_expr.result_layout,
-                } }, region);
-            },
-            .expect => |expect_expr| {
-                const new_cond = try self.wrapBreaksWithTailStmts(expect_expr.cond, tail_stmts, region);
-                const new_body = try self.wrapBreaksWithTailStmts(expect_expr.body, tail_stmts, region);
-                if (new_cond == expect_expr.cond and new_body == expect_expr.body) return expr_id;
-                return self.store.addExpr(.{ .expect = .{
-                    .cond = new_cond,
-                    .body = new_body,
-                    .result_layout = expect_expr.result_layout,
-                } }, region);
-            },
-            .nominal => |nom| {
-                const new_backing = try self.wrapBreaksWithTailStmts(nom.backing_expr, tail_stmts, region);
-                if (new_backing == nom.backing_expr) return expr_id;
-                return self.store.addExpr(.{ .nominal = .{
-                    .backing_expr = new_backing,
-                    .nominal_layout = nom.nominal_layout,
-                } }, region);
-            },
-            .loop => expr_id,
-            else => expr_id,
-        };
     }
 
     /// Recursively emit decrefs for a mutated pattern's old value.
