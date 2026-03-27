@@ -865,6 +865,14 @@ fn importMonotypeFromStoreRec(
     };
 
     self.store.monotype_store.monotypes.items[@intFromEnum(placeholder)] = mapped_mono;
+
+    // Propagate opaque type markers across stores so that Str.inspect
+    // correctly renders opaque types as "<opaque>" even through polymorphic
+    // wrappers where the type falls back to the structural monotype.
+    if (source_store.isOpaque(monotype)) {
+        try self.store.monotype_store.markOpaque(self.allocator, placeholder);
+    }
+
     return placeholder;
 }
 
@@ -1347,7 +1355,10 @@ fn lowerStrInspectExpr(
             .fn_pure, .fn_effectful, .fn_unbound => self.emitMirStrLiteral("<function>", region),
         },
         .flex, .rigid => {
-            const mono_idx = try self.monotypeFromTypeVarInEnv(type_env, type_var);
+            // When the type variable is unresolved (e.g. polymorphic parameter),
+            // use the monotype of the already-lowered value expression which has
+            // the correct concrete type from monomorphization.
+            const mono_idx = self.store.typeOf(value_expr);
             return self.lowerStrInspectExprByMonotype(type_env, value_expr, mono_idx, region);
         },
         .err => try self.store.addExpr(
@@ -2029,6 +2040,12 @@ fn lowerStrInspectNominal(
         return self.lowerStrInspectExpr(method_info.target_env, call_expr, resolved_func.func.ret, region);
     }
 
+    // User-defined opaque types without a to_inspect method render as "<opaque>".
+    // Builtin primitives (handled above) are excluded from this check.
+    if (nominal.is_opaque) {
+        return self.emitMirStrLiteral("<opaque>", region);
+    }
+
     return self.lowerStrInspectExpr(type_env, value_expr, type_env.types.getNominalBackingVar(nominal), region);
 }
 
@@ -2432,6 +2449,11 @@ fn lowerStrInspectExprByMonotype(
     mono_idx: Monotype.Idx,
     region: Region,
 ) Allocator.Error!MIR.ExprId {
+    // User-defined opaque types should render as "<opaque>" even when we
+    // only have the structural monotype (e.g. through a polymorphic wrapper).
+    if (self.store.monotype_store.isOpaque(mono_idx)) {
+        return self.emitMirStrLiteral("<opaque>", region);
+    }
     const mono = self.store.monotype_store.getMonotype(mono_idx);
     return switch (mono) {
         .prim => |prim| switch (prim) {

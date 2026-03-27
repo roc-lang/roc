@@ -7815,6 +7815,147 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.freeGeneral(list_ptr_reg);
         }
 
+        /// Emit literal value checks for list pattern prefix/suffix elements.
+        /// For each literal pattern in the prefix/suffix, loads the element from
+        /// the list and compares it with the expected value. Appends fail patches
+        /// (jumps to next branch) for each failed comparison.
+        fn emitListLiteralChecks(
+            self: *Self,
+            list_pattern: anytype,
+            value_loc: ValueLocation,
+            fail_patches: *std.ArrayList(usize),
+        ) Allocator.Error!void {
+            const ls = self.layout_store;
+            const prefix_patterns = self.store.getPatternSpan(list_pattern.prefix);
+            const suffix_patterns = self.store.getPatternSpan(list_pattern.suffix);
+
+            const elem_layout = ls.getLayout(list_pattern.elem_layout);
+            const elem_size = ls.layoutSizeAlign(elem_layout).size;
+
+            const base_offset: i32 = switch (value_loc) {
+                .stack => |s| s.offset,
+                .stack_str => |off| off,
+                .list_stack => |list_info| list_info.struct_offset,
+                else => unreachable,
+            };
+
+            // Check prefix literal elements
+            var has_prefix_literals = false;
+            for (prefix_patterns) |elem_pattern_id| {
+                const elem_pattern = self.store.getPattern(elem_pattern_id);
+                if (elem_pattern == .int_literal) {
+                    has_prefix_literals = true;
+                    break;
+                }
+            }
+
+            if (has_prefix_literals) {
+                const list_ptr_reg = try self.allocTempGeneral();
+                try self.emitLoad(.w64, list_ptr_reg, frame_ptr, base_offset);
+
+                for (prefix_patterns, 0..) |elem_pattern_id, elem_idx| {
+                    const elem_pattern = self.store.getPattern(elem_pattern_id);
+                    switch (elem_pattern) {
+                        .int_literal => |int_lit| {
+                            const elem_offset = @as(i32, @intCast(elem_idx * elem_size));
+                            const elem_slot = self.codegen.allocStackSlot(@intCast(elem_size));
+                            const temp_reg = try self.allocTempGeneral();
+
+                            if (elem_size <= 8) {
+                                try self.emitLoad(.w64, temp_reg, list_ptr_reg, elem_offset);
+                                try self.emitStore(.w64, frame_ptr, elem_slot, temp_reg);
+                            } else {
+                                try self.copyChunked(temp_reg, list_ptr_reg, elem_offset, frame_ptr, elem_slot, elem_size);
+                            }
+
+                            self.codegen.freeGeneral(temp_reg);
+                            const elem_loc = self.stackLocationForLayout(list_pattern.elem_layout, elem_slot);
+                            try self.emitIntPatternCheck(int_lit.value, elem_loc);
+                            const patch = try self.emitJumpIfNotEqual();
+                            try fail_patches.append(self.allocator, patch);
+                        },
+                        else => {},
+                    }
+                }
+
+                self.codegen.freeGeneral(list_ptr_reg);
+            }
+
+            // Check suffix literal elements
+            if (suffix_patterns.len > 0) {
+                var has_suffix_literals = false;
+                for (suffix_patterns) |elem_pattern_id| {
+                    const elem_pattern = self.store.getPattern(elem_pattern_id);
+                    if (elem_pattern == .int_literal) {
+                        has_suffix_literals = true;
+                        break;
+                    }
+                }
+
+                if (has_suffix_literals) {
+                    const list_ptr_reg = try self.allocTempGeneral();
+                    try self.emitLoad(.w64, list_ptr_reg, frame_ptr, base_offset);
+                    const suf_len_reg = try self.allocTempGeneral();
+                    try self.emitLoad(.w64, suf_len_reg, frame_ptr, base_offset + 8);
+
+                    const suffix_count = @as(u32, @intCast(suffix_patterns.len));
+                    const suf_ptr_reg = try self.allocTempGeneral();
+
+                    if (comptime target.toCpuArch() == .aarch64) {
+                        try self.codegen.emit.subRegRegImm12(.w64, suf_len_reg, suf_len_reg, @intCast(suffix_count));
+                        if (elem_size == 1) {
+                            try self.codegen.emit.addRegRegReg(.w64, suf_ptr_reg, list_ptr_reg, suf_len_reg);
+                        } else {
+                            const imm_reg = try self.allocTempGeneral();
+                            try self.codegen.emitLoadImm(imm_reg, @intCast(elem_size));
+                            try self.codegen.emit.mulRegRegReg(.w64, suf_len_reg, suf_len_reg, imm_reg);
+                            try self.codegen.emit.addRegRegReg(.w64, suf_ptr_reg, list_ptr_reg, suf_len_reg);
+                            self.codegen.freeGeneral(imm_reg);
+                        }
+                    } else {
+                        try self.codegen.emit.subRegImm32(.w64, suf_len_reg, @intCast(suffix_count));
+                        if (elem_size > 1) {
+                            const imm_reg = try self.allocTempGeneral();
+                            try self.codegen.emitLoadImm(imm_reg, @intCast(elem_size));
+                            try self.codegen.emit.imulRegReg(.w64, suf_len_reg, imm_reg);
+                            self.codegen.freeGeneral(imm_reg);
+                        }
+                        try self.codegen.emit.movRegReg(.w64, suf_ptr_reg, list_ptr_reg);
+                        try self.codegen.emit.addRegReg(.w64, suf_ptr_reg, suf_len_reg);
+                    }
+                    self.codegen.freeGeneral(suf_len_reg);
+
+                    for (suffix_patterns, 0..) |suf_pattern_id, suf_idx| {
+                        const suf_pattern = self.store.getPattern(suf_pattern_id);
+                        switch (suf_pattern) {
+                            .int_literal => |int_lit| {
+                                const suf_offset = @as(i32, @intCast(suf_idx * elem_size));
+                                const suf_slot = self.codegen.allocStackSlot(@intCast(elem_size));
+                                const temp_reg = try self.allocTempGeneral();
+
+                                if (elem_size <= 8) {
+                                    try self.emitLoad(.w64, temp_reg, suf_ptr_reg, suf_offset);
+                                    try self.emitStore(.w64, frame_ptr, suf_slot, temp_reg);
+                                } else {
+                                    try self.copyChunked(temp_reg, suf_ptr_reg, suf_offset, frame_ptr, suf_slot, elem_size);
+                                }
+
+                                self.codegen.freeGeneral(temp_reg);
+                                const elem_loc = self.stackLocationForLayout(list_pattern.elem_layout, suf_slot);
+                                try self.emitIntPatternCheck(int_lit.value, elem_loc);
+                                const patch = try self.emitJumpIfNotEqual();
+                                try fail_patches.append(self.allocator, patch);
+                            },
+                            else => {},
+                        }
+                    }
+
+                    self.codegen.freeGeneral(suf_ptr_reg);
+                    self.codegen.freeGeneral(list_ptr_reg);
+                }
+            }
+        }
+
         /// Emit a length check for a list pattern. Sets CPU flags for comparison.
         /// For exact matches (no rest/suffix), emitJumpIfNotEqual() skips on mismatch.
         /// For rest/suffix patterns, emitJumpIfLessThan() skips if too short.
@@ -8067,6 +8208,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             }
                         }
 
+                        // Check literal values in prefix/suffix elements.
+                        // For patterns like [1, 2, ..], we must verify that the
+                        // actual list elements match the literal values, not just
+                        // the list length.
+                        var literal_fail_patches = std.ArrayList(usize).empty;
+                        defer literal_fail_patches.deinit(self.allocator);
+                        if (!is_last_branch) {
+                            try self.emitListLiteralChecks(list_pattern, value_loc, &literal_fail_patches);
+                        }
+
                         // Bind prefix, suffix, and rest elements
                         try self.emitListPatternBindings(list_pattern, value_loc);
 
@@ -8082,10 +8233,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             const end_patch = try self.codegen.emitJump();
                             try end_patches.append(self.allocator, end_patch);
 
-                            // Patch the next branch jump to here
+                            // Patch the length check and all literal check jumps
+                            // to the start of the next branch.
+                            const next_branch_offset = self.codegen.currentOffset();
                             if (next_patch) |patch| {
-                                const current_offset = self.codegen.currentOffset();
-                                self.codegen.patchJump(patch, current_offset);
+                                self.codegen.patchJump(patch, next_branch_offset);
+                            }
+                            for (literal_fail_patches.items) |patch| {
+                                self.codegen.patchJump(patch, next_branch_offset);
                             }
                         }
                         if (guard_patch) |patch| {
@@ -9126,13 +9281,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.codegen.emit.subRegRegReg(.w64, dst, a, b);
                 try self.codegen.emit.csel(.w64, dst, dst, .ZRSP, .cs);
             } else {
-                // mov dst, a; sub dst, b; mov zero, 0; cmov below, dst, zero
+                // mov dst, a; sub dst, b; jae skip; xor dst, dst; skip:
+                // Uses a conditional jump instead of cmov to avoid allocating a zero register.
                 if (dst != a) try self.codegen.emit.movRegReg(.w64, dst, a);
                 try self.codegen.emit.subRegReg(.w64, dst, b);
-                const zero_reg = try self.allocTempGeneral();
-                try self.codegen.emitLoadImm(zero_reg, 0);
-                try self.codegen.emit.cmovcc(.below, .w64, dst, zero_reg);
-                self.codegen.freeGeneral(zero_reg);
+                const patch_loc = try self.codegen.emitCondJump(.above_or_equal);
+                try self.codegen.emit.xorRegReg(.w64, dst, dst);
+                self.codegen.patchJump(patch_loc, self.codegen.currentOffset());
             }
         }
 
