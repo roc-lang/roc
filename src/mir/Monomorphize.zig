@@ -2777,8 +2777,10 @@ pub const Pass = struct {
             else => {},
         }
 
-        const proc_inst = result.getProcInst(proc_inst_id);
-        const callee_template = result.getProcTemplate(proc_inst.template);
+        // Snapshot by value before scanning. Scanning can discover more demanded
+        // callables and append to proc_insts/proc_templates, which would invalidate pointers.
+        const proc_inst = result.getProcInst(proc_inst_id).*;
+        const callee_template = result.getProcTemplate(proc_inst.template).*;
         try self.recordExprProcInst(
             result,
             self.active_proc_inst_context,
@@ -3671,20 +3673,21 @@ pub const Pass = struct {
                 );
             },
             .applied_tag => |tag_pat| {
-                const mono_tags = switch (result.monotype_store.getMonotype(resolved_mono.idx)) {
-                    .tag_union => |tag_union| result.monotype_store.getTags(tag_union.tags),
+                const tag_union_tags = switch (result.monotype_store.getMonotype(resolved_mono.idx)) {
+                    .tag_union => |tag_union| tag_union.tags,
                     else => return,
                 };
+                const mono_tags = result.monotype_store.getTags(tag_union_tags);
+                // The pattern's tag may be absent from the monotype when
+                // a match covers more tags than the concrete type has
+                // (e.g. matching on Try but the value is always Ok).
                 const tag_idx = self.tagIndexByNameInSpan(
                     result,
                     module_idx,
                     tag_pat.name,
                     resolved_mono.module_idx,
-                    switch (result.monotype_store.getMonotype(resolved_mono.idx)) {
-                        .tag_union => |tag_union| tag_union.tags,
-                        else => unreachable,
-                    },
-                );
+                    tag_union_tags,
+                ) orelse return;
                 const mono_tag = mono_tags[tag_idx];
                 const mono_payloads = result.monotype_store.getIdxSpan(mono_tag.payloads);
                 const payload_patterns = module_env.store.slicePatterns(tag_pat.args);
@@ -9250,7 +9253,7 @@ pub const Pass = struct {
         tag_name: base.Ident.Idx,
         mono_module_idx: u32,
         mono_tags: Monotype.TagSpan,
-    ) u32 {
+    ) ?u32 {
         var tag_i: usize = 0;
         while (tag_i < mono_tags.len) : (tag_i += 1) {
             const mono_tag = result.monotype_store.getTagItem(mono_tags, tag_i);
@@ -9263,14 +9266,7 @@ pub const Pass = struct {
                 return @intCast(tag_i);
             }
         }
-
-        if (std.debug.runtime_safety) {
-            std.debug.panic(
-                "Monomorphize: tag '{s}' missing from monotype",
-                .{self.all_module_envs[template_module_idx].getIdent(tag_name)},
-            );
-        }
-        unreachable;
+        return null;
     }
 
     fn seenIndex(seen_indices: []const u32, idx: u32) bool {
@@ -9427,13 +9423,9 @@ pub const Pass = struct {
             return;
         }
 
-        if (std.debug.runtime_safety) {
-            std.debug.panic(
-                "Monomorphize: tag '{s}' missing from monotype",
-                .{self.all_module_envs[template_module_idx].getIdent(tag_name)},
-            );
-        }
-        unreachable;
+        // Tag absent from monotype — nothing to bind. This happens when a
+        // polymorphic function matches on more tags than the concrete call
+        // site provides (e.g. matching on Try but the value is always Ok).
     }
 
     fn bindTypeVarMonotypes(
@@ -9865,13 +9857,18 @@ pub const Pass = struct {
                     const tag_names = type_tags.items(.name);
                     const tag_args = type_tags.items(.args);
                     for (tag_names, tag_args) |tag_name, args_range| {
+                        // A template tag may be absent from the monotype when a
+                        // polymorphic function (e.g. matching on Try(ok, err)) is
+                        // called with a value whose concrete type has fewer tags
+                        // (e.g. only Ok). Skip binding for the missing tag — its
+                        // type variables are unused in this specialization.
                         const tag_idx = self.tagIndexByNameInSpan(
                             result,
                             template_module_idx,
                             tag_name,
                             mono_module_idx,
                             mtag.tags,
-                        );
+                        ) orelse continue;
                         try appendSeenIndex(self.allocator, &seen_tag_indices, tag_idx);
                         try self.bindTagPayloadsByName(
                             result,
