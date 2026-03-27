@@ -8,6 +8,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const base = @import("base");
 const layout = @import("layout");
 const mir_mod = @import("mir");
 
@@ -49,6 +50,7 @@ allocator: Allocator,
 mir_store: *const MIR.Store,
 lir_store: *LirStore,
 layout_store: *layout.Store,
+mir_layout_resolver: layout.MirMonotypeLayoutResolver,
 analyses: *const Analyses,
 lowered_procs: LoweredProcMap,
 builder_procs: std.ArrayList(BuilderProc),
@@ -69,6 +71,11 @@ pub fn init(
         .mir_store = mir_store,
         .lir_store = lir_store,
         .layout_store = layout_store,
+        .mir_layout_resolver = layout.MirMonotypeLayoutResolver.init(
+            allocator,
+            &mir_store.monotype_store,
+            layout_store,
+        ),
         .analyses = analyses,
         .lowered_procs = LoweredProcMap.init(allocator),
         .builder_procs = std.ArrayList(BuilderProc).empty,
@@ -78,6 +85,7 @@ pub fn init(
 pub fn deinit(self: *Self) void {
     self.lowered_procs.deinit();
     self.builder_procs.deinit(self.allocator);
+    self.mir_layout_resolver.deinit();
 }
 
 pub fn lower(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirProcSpecId {
@@ -138,17 +146,11 @@ fn freshLocal(self: *Self, layout_idx: layout.Idx) LocalRef {
 }
 
 fn runtimeValueLayoutFromMirExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!layout.Idx {
-    return self.layout_store.mirMonotypeLayout(
-        self.mir_store.monotype_store,
-        self.mir_store.typeOf(mir_expr_id),
-    );
+    return self.mir_layout_resolver.resolve(self.mir_store.typeOf(mir_expr_id), null);
 }
 
 fn runtimeValueLayoutFromMirPattern(self: *Self, pattern_id: MIR.PatternId) Allocator.Error!layout.Idx {
-    return self.layout_store.mirMonotypeLayout(
-        self.mir_store.monotype_store,
-        self.mir_store.patternTypeOf(pattern_id),
-    );
+    return self.mir_layout_resolver.resolve(self.mir_store.patternTypeOf(pattern_id), null);
 }
 
 fn singleProjectionSpan(self: *Self, projection: LIR.RefProjection) Allocator.Error!LIR.RefProjectionSpan {
@@ -364,6 +366,30 @@ fn lowerEntrypointBody(self: *Self, mir_expr_id: MIR.ExprId, ret_layout: layout.
     return self.lowerExprIntoStmt(mir_expr_id, target, ret_stmt);
 }
 
+fn tagDiscriminantForExpr(
+    self: *Self,
+    mir_expr_id: MIR.ExprId,
+    tag_name: base.Ident.Idx,
+) u16 {
+    const mono = self.mir_store.monotype_store.getMonotype(self.mir_store.typeOf(mir_expr_id));
+    const tags = switch (mono) {
+        .tag_union => |tag_union| self.mir_store.monotype_store.getTags(tag_union.tags),
+        else => std.debug.panic(
+            "MirToLir invariant violated: tag expr does not have a tag-union monotype",
+            .{},
+        ),
+    };
+
+    for (tags, 0..) |tag, index| {
+        if (tag.name.ident.eql(tag_name)) return @intCast(index);
+    }
+
+    std.debug.panic(
+        "MirToLir invariant violated: tag constructor missing from result monotype",
+        .{},
+    );
+}
+
 fn lowerBorrowBindingPattern(
     self: *Self,
     pattern_id: MIR.PatternId,
@@ -497,26 +523,27 @@ fn lowerExprIntoStmt(
             } });
         },
         .int => |int_lit| {
-            const value: LiteralValue = switch (int_lit.value.kind) {
-                .i128, .u128 => .{ .i128_literal = .{
+            const value: LiteralValue = switch (result_layout) {
+                .u128, .i128 => .{ .i128_literal = .{
                     .value = @bitCast(int_lit.value.bytes),
                     .layout_idx = result_layout,
                 } },
-                else => .{ .i64_literal = .{
-                    .value = @intCast(@as(i128, @bitCast(int_lit.value.bytes))),
+                .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64 => .{ .i64_literal = .{
+                    .value = @intCast(switch (int_lit.value.kind) {
+                        .i128 => @as(i128, @bitCast(int_lit.value.bytes)),
+                        .u128 => @as(i128, @intCast(@as(u128, @bitCast(int_lit.value.bytes)))),
+                    }),
                     .layout_idx = result_layout,
                 } },
+                else => std.debug.panic(
+                    "MirToLir invariant violated: integer literal lowered to non-integer layout {s}",
+                    .{@tagName(result_layout)},
+                ),
             };
             return self.emitAssignLiteral(target, value, next);
         },
-        .float => |f| self.emitAssignLiteral(
-            target,
-            switch (result_layout) {
-                .f32 => .{ .f32_literal = @floatCast(f) },
-                else => .{ .f64_literal = f },
-            },
-            next,
-        ),
+        .frac_f32 => |f| self.emitAssignLiteral(target, .{ .f32_literal = f }, next),
+        .frac_f64 => |f| self.emitAssignLiteral(target, .{ .f64_literal = f }, next),
         .str => |s| self.emitAssignLiteral(target, .{ .str_literal = s }, next),
         .list => |list_data| blk: {
             const elems = self.mir_store.getExprSpan(list_data.elems);
@@ -538,14 +565,8 @@ fn lowerExprIntoStmt(
             }
             break :blk entry;
         },
-        .record, .tuple, .struct_ => blk: {
-            const field_exprs = switch (expr) {
-                .record => |r| r.fields,
-                .tuple => |t| t.fields,
-                .struct_ => |s| s.fields,
-                else => unreachable,
-            };
-            const fields = self.mir_store.getExprSpan(field_exprs);
+        .struct_ => |struct_data| blk: {
+            const fields = self.mir_store.getExprSpan(struct_data.fields);
             const refs = try self.allocator.alloc(LocalRef, fields.len);
             defer self.allocator.free(refs);
             for (fields, 0..) |field_expr, i| refs[i] = self.freshLocal(try self.runtimeValueLayoutFromMirExpr(field_expr));
@@ -561,6 +582,27 @@ fn lowerExprIntoStmt(
             while (i > 0) {
                 i -= 1;
                 entry = try self.lowerExprIntoStmt(fields[i], refs[i], entry);
+            }
+            break :blk entry;
+        },
+        .tag => |tag_expr| blk: {
+            const args = self.mir_store.getExprSpan(tag_expr.args);
+            const refs = try self.allocator.alloc(LocalRef, args.len);
+            defer self.allocator.free(refs);
+            for (args, 0..) |arg_expr, i| refs[i] = self.freshLocal(try self.runtimeValueLayoutFromMirExpr(arg_expr));
+            const ref_span = try self.lir_store.addLocalRefs(refs);
+            const assign_stmt = try self.lir_store.addCFStmt(.{ .assign_tag = .{
+                .target = target,
+                .result = .fresh,
+                .discriminant = self.tagDiscriminantForExpr(mir_expr_id, tag_expr.name),
+                .args = ref_span,
+                .next = next,
+            } });
+            var entry = assign_stmt;
+            var i = args.len;
+            while (i > 0) {
+                i -= 1;
+                entry = try self.lowerExprIntoStmt(args[i], refs[i], entry);
             }
             break :blk entry;
         },
@@ -591,7 +633,7 @@ fn lowerExprIntoStmt(
             const assign_stmt = try self.lir_store.addCFStmt(.{ .assign_low_level = .{
                 .target = target,
                 .result = .fresh,
-                .op = .str_escape_and_quote,
+                .op = .str_inspect,
                 .args = args,
                 .next = next,
             } });
@@ -647,7 +689,7 @@ fn lowerExprIntoStmt(
             "statement-only MirToLir must lower proc-backed values through lowered proc specs before value emission",
             .{},
         ),
-        .if_then_else, .match_expr, .loop, .while_loop, .break_expr, .tag, .tag_union, .when => std.debug.panic(
+        .match_expr, .loop, .break_expr => std.debug.panic(
             "strongest-form MirToLir requires control-flow and destructuring lowering before value lowering for MIR expr tag {s}",
             .{@tagName(expr)},
         ),
@@ -684,10 +726,7 @@ fn lowerProc(self: *Self, proc_id: MIR.ProcId) Allocator.Error!LirProcSpecId {
 
     const proc = self.mir_store.getProc(proc_id);
 
-    const ret_layout = try self.layout_store.mirMonotypeLayout(
-        self.mir_store.monotype_store,
-        proc.ret_monotype,
-    );
+    const ret_layout = try self.mir_layout_resolver.resolve(proc.ret_monotype, null);
 
     const arg_patterns = self.mir_store.getPatternSpan(proc.params);
     const args = try self.allocator.alloc(LocalRef, arg_patterns.len);

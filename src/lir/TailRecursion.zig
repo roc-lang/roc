@@ -41,12 +41,12 @@ pub const TailRecursionPass = struct {
         };
     }
 
-    fn isTailCallToTarget(self: *TailRecursionPass, assign: CFStmt.assign_call) bool {
+    fn isTailCallToTarget(self: *TailRecursionPass, assign: @FieldType(CFStmt, "assign_call")) bool {
         const proc = self.store.getProcSpec(assign.proc);
         return proc.name.eql(self.target_symbol);
     }
 
-    fn transformAssignLike(self: *TailRecursionPass, stmt: CFStmt, next_raw: CFStmtId) !CFStmtId {
+    fn transformAssignLike(self: *TailRecursionPass, stmt: CFStmt, next_raw: CFStmtId) Allocator.Error!CFStmtId {
         const next = try self.transformStmt(next_raw);
         return switch (stmt) {
             .assign_ref => |assign| self.store.addCFStmt(.{ .assign_ref = .{
@@ -98,7 +98,7 @@ pub const TailRecursionPass = struct {
         };
     }
 
-    pub fn transformStmt(self: *TailRecursionPass, stmt_id: CFStmtId) !CFStmtId {
+    pub fn transformStmt(self: *TailRecursionPass, stmt_id: CFStmtId) Allocator.Error!CFStmtId {
         const stmt = self.store.getCFStmt(stmt_id);
         return switch (stmt) {
             .assign_call => |assign| blk: {
@@ -160,7 +160,7 @@ pub fn makeTailRecursive(
     body: CFStmtId,
     params: LocalRefSpan,
     allocator: Allocator,
-) !?CFStmtId {
+) Allocator.Error!?CFStmtId {
     var pass = TailRecursionPass.init(store, proc_symbol, join_point_id, allocator);
     const transformed_body = try pass.transformStmt(body);
 

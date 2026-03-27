@@ -152,15 +152,13 @@ const Analyzer = struct {
     allocator: Allocator,
     mir_store: *const MIR.Store,
     layout_store: *layout.Store,
+    mir_layout_resolver: *layout.MirMonotypeLayoutResolver,
     table: *Table,
     proc_states: ?[]const ProcSummaryState,
     next_scope_id: u32 = 0,
 
     fn runtimeValueLayoutFromExpr(self: *Analyzer, expr_id: MIR.ExprId) Allocator.Error!layout.Idx {
-        return self.layout_store.mirMonotypeLayout(
-            self.mir_store.monotype_store,
-            self.mir_store.typeOf(expr_id),
-        );
+        return self.mir_layout_resolver.resolve(self.mir_store.typeOf(expr_id), null);
     }
 
     fn procSummary(self: *const Analyzer, proc_id: MIR.ProcId) ProcSummaryState {
@@ -265,7 +263,7 @@ const Analyzer = struct {
         }
     }
 
-    fn contractFromOrigin(self: *Analyzer, origin: Origin) ProcResultContract {
+    fn contractFromOrigin(_: *Analyzer, origin: Origin) ProcResultContract {
         return switch (origin) {
             .fresh => .fresh,
             .alias_of_param => |aliased| .{ .alias_of_param = aliased },
@@ -650,6 +648,13 @@ pub fn build(
     var table = Table.init(allocator);
     errdefer table.deinit();
 
+    var mir_layout_resolver = layout.MirMonotypeLayoutResolver.init(
+        allocator,
+        &mir_store.monotype_store,
+        layout_store,
+    );
+    defer mir_layout_resolver.deinit();
+
     var states = std.ArrayList(ProcSummaryState).empty;
     defer states.deinit(allocator);
     try states.appendNTimes(allocator, .no_return, mir_store.procCount());
@@ -662,6 +667,7 @@ pub fn build(
                 .allocator = allocator,
                 .mir_store = mir_store,
                 .layout_store = layout_store,
+                .mir_layout_resolver = &mir_layout_resolver,
                 .table = &table,
                 .proc_states = states.items,
             };
@@ -695,6 +701,7 @@ pub fn build(
             .allocator = allocator,
             .mir_store = mir_store,
             .layout_store = layout_store,
+            .mir_layout_resolver = &mir_layout_resolver,
             .table = &table,
             .proc_states = null,
         };

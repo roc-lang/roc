@@ -87,7 +87,7 @@ const JoinScopes = struct {
         self: *JoinScopes,
         join_id: JoinPointId,
         active_scopes: []const BorrowScopeId,
-        params: LocalRefSpan,
+        join_params: LocalRefSpan,
     ) Allocator.Error!void {
         const owned = try self.allocator.alloc(BorrowScopeId, active_scopes.len);
         @memcpy(owned, active_scopes);
@@ -100,7 +100,7 @@ const JoinScopes = struct {
                     .{@intFromEnum(join_id)},
                 );
             }
-            if (gop.value_ptr.params.start != params.start or gop.value_ptr.params.len != params.len) {
+            if (gop.value_ptr.params.start != join_params.start or gop.value_ptr.params.len != join_params.len) {
                 std.debug.panic(
                     "DebugVerifyLir invariant violated: join point {d} was recorded with incompatible parameter signatures",
                     .{@intFromEnum(join_id)},
@@ -110,7 +110,7 @@ const JoinScopes = struct {
         } else {
             gop.value_ptr.* = .{
                 .scopes = owned,
-                .params = params,
+                .params = join_params,
             };
         }
     }
@@ -159,13 +159,13 @@ const VerifyEnv = struct {
     }
 
     fn clone(self: *const VerifyEnv) Allocator.Error!VerifyEnv {
-        var clone = VerifyEnv.init(self.allocator);
+        var cloned = VerifyEnv.init(self.allocator);
         var it = self.results.iterator();
         while (it.next()) |entry| {
-            try clone.results.put(entry.key_ptr.*, entry.value_ptr.*);
+            try cloned.results.put(entry.key_ptr.*, entry.value_ptr.*);
         }
-        try clone.active_scopes.appendSlice(self.allocator, self.active_scopes.items);
-        return clone;
+        try cloned.active_scopes.appendSlice(self.allocator, self.active_scopes.items);
+        return cloned;
     }
 };
 

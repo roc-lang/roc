@@ -17,6 +17,7 @@ const LocalRef = ir.LocalRef;
 const LocalRefSpan = ir.LocalRefSpan;
 const RefProjection = ir.RefProjection;
 const RefProjectionSpan = ir.RefProjectionSpan;
+const Symbol = ir.Symbol;
 
 const Self = @This();
 
