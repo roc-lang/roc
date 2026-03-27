@@ -2046,7 +2046,10 @@ pub const Pass = struct {
             },
             .e_str => |str_expr| try self.scanValueExprSpan(result, module_idx, module_env.store.sliceExpr(str_expr.span)),
             .e_list => |list_expr| try self.scanValueExprSpan(result, module_idx, module_env.store.sliceExpr(list_expr.elems)),
-            .e_tuple => |tuple_expr| try self.scanValueExprSpan(result, module_idx, module_env.store.sliceExpr(tuple_expr.elems)),
+            .e_tuple => |tuple_expr| {
+                try self.recordDemandedTupleElemMonotypes(result, module_idx, expr_idx, tuple_expr);
+                try self.scanValueExprSpan(result, module_idx, module_env.store.sliceExpr(tuple_expr.elems));
+            },
             .e_match => |match_expr| {
                 try self.scanExpr(result, module_idx, match_expr.cond);
 
@@ -3896,8 +3899,18 @@ pub const Pass = struct {
                 exact_arg_mono
             else if (self.exprUsesContextSensitiveNumericDefault(actual_module_idx, arg_expr_idx))
                 resolvedMonotype(.none, actual_module_idx)
-            else
-                try self.resolveExprMonotypeResolved(result, actual_module_idx, arg_expr_idx);
+            else blk: {
+                const resolved = try self.resolveExprMonotypeResolved(result, actual_module_idx, arg_expr_idx);
+                if (!resolved.isNone()) break :blk resolved;
+                // When exact resolution fails (e.g., tag unions with flex extension
+                // variables like [Red, ..]), fall back to monomorphizable resolution
+                // which closes flex extensions to produce a concrete monotype.
+                break :blk try self.resolveTypeVarMonotypeIfMonomorphizableResolved(
+                    result,
+                    actual_module_idx,
+                    ModuleEnv.varFrom(arg_expr_idx),
+                );
+            };
 
             if (arg_mono.isNone()) continue;
             try self.bindTemplateParamActualMonotype(
@@ -4919,6 +4932,59 @@ pub const Pass = struct {
                 mono_field.type_idx,
                 record_mono.module_idx,
             );
+        }
+    }
+
+    /// Propagate per-element monotypes from a tuple expression's resolved
+    /// monotype to its element expressions. Module-level records are stored
+    /// as `e_tuple` in the CIR, and their element expressions (e.g. number
+    /// literals) are context-sensitive so they don't get monotypes recorded
+    /// automatically during scanning. This propagates the concrete element
+    /// types from the parent's monotype so that downstream lowering resolves
+    /// them correctly.
+    fn recordDemandedTupleElemMonotypes(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        tuple_expr: @TypeOf(@as(CIR.Expr, undefined).e_tuple),
+    ) Allocator.Error!void {
+        const tuple_mono = try self.resolveExprMonotypeResolved(result, module_idx, expr_idx);
+        if (tuple_mono.idx.isNone()) return;
+
+        const mono = result.monotype_store.getMonotype(tuple_mono.idx);
+        const module_env = self.all_module_envs[module_idx];
+        const elems = module_env.store.sliceExpr(tuple_expr.elems);
+
+        switch (mono) {
+            .record => |record| {
+                const fields = result.monotype_store.getFields(record.fields);
+                if (fields.len != elems.len) return;
+                for (elems, 0..) |elem_expr_idx, i| {
+                    const field = result.monotype_store.getFieldItem(record.fields, i);
+                    try self.recordCurrentExprMonotype(
+                        result,
+                        module_idx,
+                        elem_expr_idx,
+                        field.type_idx,
+                        tuple_mono.module_idx,
+                    );
+                }
+            },
+            .tuple => |tup| {
+                if (tup.elems.len != elems.len) return;
+                for (elems, 0..) |elem_expr_idx, i| {
+                    const elem_mono = result.monotype_store.getIdxSpanItem(tup.elems, i);
+                    try self.recordCurrentExprMonotype(
+                        result,
+                        module_idx,
+                        elem_expr_idx,
+                        elem_mono,
+                        tuple_mono.module_idx,
+                    );
+                }
+            },
+            else => {},
         }
     }
 
