@@ -2567,11 +2567,7 @@ fn lowerAnfSpan(self: *Self, acc: *LetAccumulator, mir_expr_ids: []const MIR.Exp
         const lir_id = try self.adaptExprToRuntimeLayout(mir_id, lowered, region);
         const arg_layout = try self.runtimeValueLayoutFromMirExpr(mir_id);
         const ensured = try acc.ensureSymbol(lir_id, arg_layout, region);
-        const owned = if (self.exprAliasesManagedRef(ensured, arg_layout))
-            try acc.bindRetained(ensured, arg_layout, region)
-        else
-            ensured;
-        try self.scratch_lir_expr_ids.append(self.allocator, owned);
+        try self.scratch_lir_expr_ids.append(self.allocator, ensured);
     }
     return self.lir_store.addExprSpan(self.scratch_lir_expr_ids.items[save_len..]);
 }
@@ -4999,7 +4995,7 @@ fn lowerLowLevel(self: *Self, ll: anytype, mir_expr_id: MIR.ExprId, region: Regi
             },
             .consume => blk: {
                 const source_arg = try acc.ensureSymbol(lowered_arg, arg_layout, region);
-                const owned_arg = if (self.exprAliasesManagedRef(source_arg, arg_layout))
+                const owned_arg = if (ll.op.borrowedArgNeededForResult(i) and self.exprAliasesManagedRef(source_arg, arg_layout))
                     try acc.bindRetained(source_arg, arg_layout, region)
                 else
                     source_arg;
