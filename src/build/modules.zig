@@ -33,9 +33,7 @@ fn aggregatorFilters(module_type: ModuleType) []const []const u8 {
         .check => &.{"check tests"},
         .parse => &.{"parser tests"},
         .layout => &.{"layout tests"},
-        .interpreter_layout => &.{},
         .values => &.{"values tests"},
-        .interpreter_values => &.{},
         .eval => &.{"eval tests"},
         .ipc => &.{"ipc tests"},
         .repl => &.{"repl tests"},
@@ -273,7 +271,7 @@ pub const ModuleTest = struct {
 /// unnamed wrappers) so callers can correct the reported totals.
 pub const ModuleTestsResult = struct {
     /// Compile/run steps for each module's tests, in creation order.
-    tests: [27]ModuleTest,
+    tests: [26]ModuleTest,
     /// Number of synthetic passes the summary must subtract when filters were injected.
     /// Includes aggregator ensures and unconditional wrapper tests.
     forced_passes: usize,
@@ -295,9 +293,7 @@ pub const ModuleType = enum {
     io,
     build_options,
     layout,
-    interpreter_layout,
     values,
-    interpreter_values,
     eval,
     ipc,
     repl,
@@ -332,10 +328,8 @@ pub const ModuleType = enum {
             .can => &.{ .tracy, .builtins, .collections, .types, .base, .parse, .reporting, .build_options },
             .check => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .reporting },
             .layout => &.{ .tracy, .collections, .base, .types, .builtins, .can, .mir },
-            .interpreter_layout => &.{ .tracy, .collections, .base, .types, .builtins, .can },
             .values => &.{ .collections, .base, .builtins, .layout },
-            .interpreter_values => &.{ .collections, .base, .builtins, .interpreter_layout },
-            .eval => &.{ .tracy, .io, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .interpreter_layout, .values, .interpreter_values, .build_options, .reporting, .backend, .mir, .lir, .roc_target, .sljmp },
+            .eval => &.{ .tracy, .io, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .values, .build_options, .reporting, .backend, .mir, .lir, .roc_target, .sljmp },
             .compile => &.{ .tracy, .build_options, .io, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .eval, .unbundle, .roc_target },
             .ipc => &.{},
             .repl => &.{ .base, .collections, .compile, .parse, .types, .can, .check, .builtins, .layout, .values, .eval, .backend, .roc_target },
@@ -373,9 +367,7 @@ pub const RocModules = struct {
     io: *Module,
     build_options: *Module,
     layout: *Module,
-    interpreter_layout: *Module,
     values: *Module,
-    interpreter_values: *Module,
     eval: *Module,
     ipc: *Module,
     repl: *Module,
@@ -416,9 +408,7 @@ pub const RocModules = struct {
                 .{ .root_source_file = build_options_step.getOutput() },
             ),
             .layout = b.addModule("layout", .{ .root_source_file = b.path("src/layout/mod.zig") }),
-            .interpreter_layout = b.addModule("interpreter_layout", .{ .root_source_file = b.path("src/interpreter_layout/mod.zig") }),
             .values = b.addModule("values", .{ .root_source_file = b.path("src/values/mod.zig") }),
-            .interpreter_values = b.addModule("interpreter_values", .{ .root_source_file = b.path("src/interpreter_values/mod.zig") }),
             .eval = b.addModule("eval", .{ .root_source_file = b.path("src/eval/mod.zig") }),
             .ipc = b.addModule("ipc", .{ .root_source_file = b.path("src/ipc/mod.zig") }),
             .repl = b.addModule("repl", .{ .root_source_file = b.path("src/repl/mod.zig") }),
@@ -465,9 +455,7 @@ pub const RocModules = struct {
             .io,
             .build_options,
             .layout,
-            .interpreter_layout,
             .values,
-            .interpreter_values,
             .eval,
             .ipc,
             .repl,
@@ -560,9 +548,7 @@ pub const RocModules = struct {
             .io => self.io,
             .build_options => self.build_options,
             .layout => self.layout,
-            .interpreter_layout => self.interpreter_layout,
             .values => self.values,
-            .interpreter_values => self.interpreter_values,
             .eval => self.eval,
             .ipc => self.ipc,
             .repl => self.repl,
@@ -613,7 +599,6 @@ pub const RocModules = struct {
             .io,
             .layout,
             .values,
-            .eval,
             .ipc,
             .repl,
             .fmt,
@@ -651,7 +636,8 @@ pub const RocModules = struct {
                     // Bundle module needs libc for C zstd (unbundle uses stdlib zstd)
                     // Eval/repl modules need libc for setjmp/longjmp crash protection
                     // sljmp module needs libc for setjmp/longjmp functions
-                    .link_libc = (module_type == .ipc or module_type == .bundle or module_type == .eval or module_type == .repl or module_type == .sljmp),
+                    // compile/lsp modules transitively depend on eval->sljmp, so also need libc
+                    .link_libc = (module_type == .ipc or module_type == .bundle or module_type == .eval or module_type == .repl or module_type == .sljmp or module_type == .compile or module_type == .lsp),
                 }),
                 .filters = filter_injection.filters,
             });

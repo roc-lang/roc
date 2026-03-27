@@ -190,6 +190,9 @@ pub const BuiltinFn = enum {
     num_div_trunc_i128,
     num_rem_trunc_u128,
     num_rem_trunc_i128,
+    num_shl_u128,
+    num_shr_i128,
+    num_shr_u128,
     int_to_str,
     float_to_str,
     int_from_str,
@@ -277,6 +280,9 @@ pub const BuiltinFn = enum {
             .num_div_trunc_i128 => "roc_builtins_num_div_trunc_i128",
             .num_rem_trunc_u128 => "roc_builtins_num_rem_trunc_u128",
             .num_rem_trunc_i128 => "roc_builtins_num_rem_trunc_i128",
+            .num_shl_u128 => "roc_builtins_num_shl_u128",
+            .num_shr_i128 => "roc_builtins_num_shr_i128",
+            .num_shr_u128 => "roc_builtins_num_shr_u128",
             .int_to_str => "roc_builtins_int_to_str",
             .float_to_str => "roc_builtins_float_to_str",
             .int_from_str => "roc_builtins_int_from_str",
@@ -512,11 +518,11 @@ fn wrapStrEscapeAndQuote(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, str_ca
     }
 }
 
-/// Wrapper: listConcat(RocList, RocList, alignment, element_width, ..., *RocOps) -> RocList
-fn wrapListConcat(out: *RocList, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, alignment: u32, element_width: usize, roc_ops: *RocOps) callconv(.c) void {
+/// Wrapper: listConcat(RocList, RocList, alignment, element_width, elements_refcounted, ..., *RocOps) -> RocList
+fn wrapListConcat(out: *RocList, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, alignment: u32, element_width: usize, elements_refcounted: bool, roc_ops: *RocOps) callconv(.c) void {
     const a = RocList{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
     const b = RocList{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
-    out.* = listConcat(a, b, alignment, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), roc_ops);
+    out.* = listConcat(a, b, alignment, element_width, elements_refcounted, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), roc_ops);
 }
 
 /// Wrapper: listPrepend(RocList, alignment, element, element_width, ..., *RocOps) -> RocList
@@ -1890,13 +1896,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const ls = self.layout_store;
                     const roc_ops_reg = self.roc_ops_reg orelse unreachable;
 
-                    const elem_size_align: layout.SizeAlign = blk: {
-                        const ret_layout = ls.getLayout(ll.ret_layout);
-                        break :blk switch (ret_layout.tag) {
-                            .list => ls.layoutSizeAlign(ls.getLayout(ret_layout.data.list)),
-                            .list_of_zst => .{ .size = 0, .alignment = .@"1" },
-                            else => unreachable,
-                        };
+                    const ret_layout = ls.getLayout(ll.ret_layout);
+                    const elem_size_align: layout.SizeAlign = switch (ret_layout.tag) {
+                        .list => ls.layoutSizeAlign(ls.getLayout(ret_layout.data.list)),
+                        .list_of_zst => .{ .size = 0, .alignment = .@"1" },
+                        else => unreachable,
+                    };
+
+                    // Determine if elements contain refcounted data
+                    const elements_refcounted: bool = switch (ret_layout.tag) {
+                        .list => ls.layoutContainsRefcounted(ls.getLayout(ret_layout.data.list)),
+                        else => false,
                     };
 
                     const list_a_off = try self.ensureOnStack(list_a_loc, roc_list_size);
@@ -1906,7 +1916,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const fn_addr: usize = @intFromPtr(&wrapListConcat);
 
                     {
-                        // wrapListConcat(out, a_bytes, a_len, a_cap, b_bytes, b_len, b_cap, alignment, element_width, roc_ops)
+                        // wrapListConcat(out, a_bytes, a_len, a_cap, b_bytes, b_len, b_cap, alignment, element_width, elements_refcounted, roc_ops)
                         const base_reg = frame_ptr;
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
 
@@ -1919,6 +1929,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addMemArg(base_reg, list_b_off + 16);
                         try builder.addImmArg(@intCast(alignment_bytes));
                         try builder.addImmArg(@intCast(elem_size_align.size));
+                        try builder.addImmArg(if (elements_refcounted) 1 else 0);
                         try builder.addRegArg(roc_ops_reg);
 
                         try self.callBuiltin(&builder, fn_addr, .list_concat);
@@ -3256,6 +3267,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     if (is_float) {
                         return self.generateFloatBinop(ll.op, lhs_loc, rhs_loc);
+                    } else if (is_i128_op and (ll.op == .num_shift_left_by or ll.op == .num_shift_right_by or ll.op == .num_shift_right_zf_by)) {
+                        // Shifts on i128/u128: LHS is i128, RHS is U8 (not i128).
+                        const adj_lhs = if (lhs_loc == .stack) ValueLocation{ .stack_i128 = lhs_loc.stack.offset } else lhs_loc;
+                        return self.generateI128Shift(ll.op, adj_lhs, rhs_loc, operand_layout);
                     } else if (is_i128_op) {
                         const adj_lhs = if (is_i128_op and lhs_loc == .stack) ValueLocation{ .stack_i128 = lhs_loc.stack.offset } else lhs_loc;
                         const adj_rhs = if (is_i128_op and rhs_loc == .stack) ValueLocation{ .stack_i128 = rhs_loc.stack.offset } else rhs_loc;
@@ -5112,6 +5127,55 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.freeGeneral(result_high);
 
             return .{ .stack_i128 = stack_offset };
+        }
+
+        /// 128-bit shift by a U8 amount. LHS is i128/u128, RHS is U8.
+        /// Delegates to C-callable builtins in dev_wrappers.zig (same pattern as div/rem).
+        fn generateI128Shift(
+            self: *Self,
+            op: LirExpr.LowLevel,
+            lhs_loc: ValueLocation,
+            rhs_loc: ValueLocation,
+            operand_layout: layout.Idx,
+        ) Allocator.Error!ValueLocation {
+            const signedness: std.builtin.Signedness = if (operand_layout == .u128) .unsigned else .signed;
+            const lhs_parts = try self.getI128Parts(lhs_loc, signedness);
+            const amount_reg = try self.ensureInGeneralReg(rhs_loc);
+
+            const fn_addr: usize = switch (op) {
+                .num_shift_left_by => @intFromPtr(&dev_wrappers.roc_builtins_num_shl_u128),
+                .num_shift_right_by => if (signedness == .signed)
+                    @intFromPtr(&dev_wrappers.roc_builtins_num_shr_i128)
+                else
+                    @intFromPtr(&dev_wrappers.roc_builtins_num_shr_u128),
+                .num_shift_right_zf_by => @intFromPtr(&dev_wrappers.roc_builtins_num_shr_u128),
+                else => unreachable,
+            };
+
+            const builtin_fn: BuiltinFn = switch (op) {
+                .num_shift_left_by => .num_shl_u128,
+                .num_shift_right_by => if (signedness == .signed) .num_shr_i128 else .num_shr_u128,
+                .num_shift_right_zf_by => .num_shr_u128,
+                else => unreachable,
+            };
+
+            const result_slot = self.codegen.allocStackSlot(16);
+            const base_reg = frame_ptr;
+
+            // Call: fn(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, shift_amount: u8)
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(base_reg, result_slot); // out_low
+            try builder.addLeaArg(base_reg, result_slot + 8); // out_high
+            try builder.addRegArg(lhs_parts.low);
+            try builder.addRegArg(lhs_parts.high);
+            try builder.addRegArg(amount_reg);
+            try self.callBuiltin(&builder, fn_addr, builtin_fn);
+
+            self.codegen.freeGeneral(lhs_parts.low);
+            self.codegen.freeGeneral(lhs_parts.high);
+            self.codegen.freeGeneral(amount_reg);
+
+            return .{ .stack_i128 = result_slot };
         }
 
         /// Call a C function: fn(out_low: *u64, out_high: *u64, val: T) -> void.
@@ -7521,9 +7585,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             switch (pattern) {
                 .bind => |bind| {
                     if (!try self.layoutsStructurallyCompatible(bind.layout_idx, runtime_layout_idx)) {
+                        const pat_l = ls.getLayout(bind.layout_idx);
+                        const rt_l = ls.getLayout(runtime_layout_idx);
+                        const pat_sa = ls.layoutSizeAlign(pat_l);
+                        const rt_sa = ls.layoutSizeAlign(rt_l);
                         std.debug.panic(
-                            "LIR/codegen invariant violated: {s} bind layout mismatch: pattern={d} runtime={d}",
-                            .{ context, @intFromEnum(bind.layout_idx), @intFromEnum(runtime_layout_idx) },
+                            "LIR/codegen invariant violated: {s} bind layout mismatch: pattern={d}({s} size={d}) runtime={d}({s} size={d})",
+                            .{ context, @intFromEnum(bind.layout_idx), @tagName(pat_l.tag), pat_sa.size, @intFromEnum(runtime_layout_idx), @tagName(rt_l.tag), rt_sa.size },
                         );
                     }
                 },
@@ -8000,18 +8068,40 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             var result_size: u32 = ls.layoutSizeAlign(result_layout_val).size;
             var use_stack_result = result_size > 8;
             const value_layout_val = ls.getLayout(when_expr.value_layout);
-            const tu_disc_offset: i32 = if (value_layout_val.tag == .tag_union) blk: {
-                const tu_data = ls.getTagUnionData(value_layout_val.data.tag_union.idx);
+
+            // For boxed recursive tag unions, dereference the box to access the
+            // inner tag_union on the heap. Copy it to the stack so discriminant
+            // reading and payload binding work uniformly.
+            const effective_layout_val = if (value_layout_val.tag == .box) ls.getLayout(value_layout_val.data.box) else value_layout_val;
+            var value_loc_resolved = value_loc;
+            if (value_layout_val.tag == .box and effective_layout_val.tag == .tag_union) {
+                const inner_size = ls.layoutSizeAlign(effective_layout_val).size;
+                const box_ptr_reg = try self.ensureInGeneralReg(value_loc);
+                defer self.codegen.freeGeneral(box_ptr_reg);
+                const detached_slot = self.codegen.allocStackSlot(inner_size);
+                var copied: u32 = 0;
+                while (copied < inner_size) {
+                    const temp_reg = try self.allocTempGeneral();
+                    try self.emitLoad(.w64, temp_reg, box_ptr_reg, @intCast(copied));
+                    try self.emitStore(.w64, frame_ptr, detached_slot + @as(i32, @intCast(copied)), temp_reg);
+                    self.codegen.freeGeneral(temp_reg);
+                    copied += 8;
+                }
+                value_loc_resolved = self.stackLocationForLayout(value_layout_val.data.box, detached_slot);
+            }
+
+            const tu_disc_offset: i32 = if (effective_layout_val.tag == .tag_union) blk: {
+                const tu_data = ls.getTagUnionData(effective_layout_val.data.tag_union.idx);
                 break :blk @intCast(tu_data.discriminant_offset);
             } else 0;
-            const tu_total_size: u32 = if (value_layout_val.tag == .tag_union) blk: {
-                const tu_data = ls.getTagUnionData(value_layout_val.data.tag_union.idx);
+            const tu_total_size: u32 = if (effective_layout_val.tag == .tag_union) blk: {
+                const tu_data = ls.getTagUnionData(effective_layout_val.data.tag_union.idx);
                 break :blk tu_data.size;
-            } else ls.layoutSizeAlign(value_layout_val).size;
-            const tu_disc_size: u8 = if (value_layout_val.tag == .tag_union) blk: {
-                const tu_data = ls.getTagUnionData(value_layout_val.data.tag_union.idx);
+            } else ls.layoutSizeAlign(effective_layout_val).size;
+            const tu_disc_size: u8 = if (effective_layout_val.tag == .tag_union) blk: {
+                const tu_data = ls.getTagUnionData(effective_layout_val.data.tag_union.idx);
                 break :blk tu_data.discriminant_size;
-            } else @intCast(@max(ls.layoutSizeAlign(value_layout_val).size, 1));
+            } else @intCast(@max(ls.layoutSizeAlign(effective_layout_val).size, 1));
             // Use .w32 for discriminant loads when .w64 would read past the tag union.
             // Discriminants are at most 4 bytes, so .w32 is always sufficient.
             const disc_use_w32 = (tu_disc_offset + 8 > @as(i32, @intCast(tu_total_size)));
@@ -8133,8 +8223,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         }
                     },
                     .tag => |tag_pattern| {
-                        // Match on tag discriminant
-                        const disc_reg = try self.loadAndMaskDiscriminant(value_loc, disc_use_w32, tu_disc_offset, tu_disc_size);
+                        // Match on tag discriminant (use resolved loc for boxed unions)
+                        const disc_reg = try self.loadAndMaskDiscriminant(value_loc_resolved, disc_use_w32, tu_disc_offset, tu_disc_size);
                         try self.emitCmpImm(disc_reg, @intCast(tag_pattern.discriminant));
                         self.codegen.freeGeneral(disc_reg);
 
@@ -8155,15 +8245,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         if (!is_last_branch) {
                             try self.emitInnerTagArgDiscriminantChecks(
                                 tag_pattern,
-                                value_loc,
+                                value_loc_resolved,
                                 when_expr.value_layout,
-                                value_layout_val,
+                                effective_layout_val,
                                 &inner_fail_patches,
                             );
                         }
 
-                        // Bind tag payload fields
-                        try self.bindTagPayloadFields(tag_pattern, value_loc, when_expr.value_layout, value_layout_val);
+                        // Bind tag payload fields (use resolved loc/layout for boxed unions)
+                        try self.bindTagPayloadFields(tag_pattern, value_loc_resolved, when_expr.value_layout, effective_layout_val);
 
                         // Guard check (after bindings, since guard may reference bound vars)
                         const guard_patch = try self.emitGuardCheck(branch.guard);

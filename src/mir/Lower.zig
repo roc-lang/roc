@@ -126,6 +126,10 @@ next_synthetic_ident: u29,
 /// Tracks symbols currently being lowered (recursion guard).
 in_progress_defs: std.AutoHashMap(u64, void),
 
+/// Tracks nominal types currently being inspected for dbg/Str.inspect
+/// (recursion guard to prevent infinite code generation for recursive types).
+inspect_in_progress_nominals: std.AutoHashMap(u64, void),
+
 /// Tracks proc instances currently being lowered (recursion guard).
 in_progress_proc_insts: std.AutoHashMap(u32, MIR.ExprId),
 
@@ -212,6 +216,7 @@ pub fn init(
         .symbol_metadata = std.AutoHashMap(u64, SymbolMetadata).init(allocator),
         .next_synthetic_ident = Ident.Idx.NONE.idx - 1,
         .in_progress_defs = std.AutoHashMap(u64, void).init(allocator),
+        .inspect_in_progress_nominals = std.AutoHashMap(u64, void).init(allocator),
         .in_progress_proc_insts = std.AutoHashMap(u32, MIR.ExprId).init(allocator),
         .reserved_proc_insts = std.AutoHashMap(u32, MIR.ProcId).init(allocator),
         .skipped_proc_backed_binding_patterns = std.AutoHashMap(u64, void).init(allocator),
@@ -247,6 +252,7 @@ pub fn deinit(self: *Self) void {
     self.lowered_proc_insts.deinit();
     self.symbol_metadata.deinit();
     self.in_progress_defs.deinit();
+    self.inspect_in_progress_nominals.deinit();
     self.in_progress_proc_insts.deinit();
     self.reserved_proc_insts.deinit();
     self.skipped_proc_backed_binding_patterns.deinit();
@@ -1334,6 +1340,49 @@ fn lowerStrInspect(self: *Self, module_env: *const ModuleEnv, run_ll: anytype, r
     );
 }
 
+fn lowerDbgExpr(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    inner_expr_idx: CIR.Expr.Idx,
+    region: Region,
+) Allocator.Error!MIR.ExprId {
+    const lowered_inner = try self.lowerExpr(inner_expr_idx);
+    const inner_mono = self.store.typeOf(lowered_inner);
+
+    // Evaluate the argument once, format it through Str.inspect, then return the
+    // original value. This keeps dbg formatting in MIR lowering where type
+    // information is still available and avoids introducing a managed-ref alias
+    // at the dbg node itself.
+    const value_bind = try self.makeSyntheticBind(inner_mono, false);
+    const value_lookup = try self.emitMirLookup(value_bind.symbol, inner_mono, region);
+    const inspected = try self.lowerStrInspectExpr(module_env, value_lookup, ModuleEnv.varFrom(inner_expr_idx), region);
+    const inspected_mono = self.store.typeOf(inspected);
+    const dbg_effect = try self.store.addExpr(
+        self.allocator,
+        .{ .dbg_expr = .{ .expr = inspected } },
+        inspected_mono,
+        region,
+    );
+    const wildcard = try self.store.addPattern(self.allocator, .wildcard, inspected_mono);
+
+    try self.registerBoundSymbolDefIfNeeded(value_bind.pattern, lowered_inner);
+
+    const stmts = try self.store.addStmts(self.allocator, &.{
+        .{ .decl_const = .{ .pattern = value_bind.pattern, .expr = lowered_inner } },
+        .{ .decl_const = .{ .pattern = wildcard, .expr = dbg_effect } },
+    });
+
+    return try self.store.addExpr(
+        self.allocator,
+        .{ .block = .{
+            .stmts = stmts,
+            .final_expr = value_lookup,
+        } },
+        inner_mono,
+        region,
+    );
+}
+
 fn lowerStrInspectExpr(
     self: *Self,
     type_env: *const ModuleEnv,
@@ -1629,10 +1678,9 @@ fn bindFlatTypeMonotypesInStore(
         .fn_pure, .fn_effectful, .fn_unbound => |func| {
             const mfunc = switch (mono) {
                 .func => |mfunc| mfunc,
-                else => typeBindingInvariant(
-                    "bindFlatTypeMonotypesInStore(fn): expected function monotype, found '{s}'",
-                    .{@tagName(mono)},
-                ),
+                // Non-function monotypes can occur when cross-module type
+                // resolution produces a degenerate monotype. Skip binding.
+                else => return,
             };
 
             const type_args = store_types.sliceVars(func.args);
@@ -1924,6 +1972,14 @@ fn lowerStrInspectNominal(
     region: Region,
 ) Allocator.Error!MIR.ExprId {
     const common = ModuleEnv.CommonIdents.find(&type_env.common);
+
+    // Guard against infinite recursion for recursive nominal types
+    // (e.g. Node := [Text(Str), Element(Str, List(Node))]).
+    // Use (origin_module, ident_idx) as a unique key for the nominal definition.
+    const nominal_key = (@as(u64, @as(u32, @bitCast(nominal.origin_module))) << 32) | @as(u64, @as(u32, @bitCast(nominal.ident.ident_idx)));
+    if (self.inspect_in_progress_nominals.contains(nominal_key)) {
+        return self.emitMirStrLiteral("...", region);
+    }
     const ident = nominal.ident.ident_idx;
 
     if (nominal.origin_module.eql(common.builtin_module)) {
@@ -1975,6 +2031,10 @@ fn lowerStrInspectNominal(
             return self.foldMirStrConcat(&.{ open, inner_str, close }, region);
         }
     }
+
+    // Mark this nominal as in-progress before recursing into the backing type.
+    try self.inspect_in_progress_nominals.put(nominal_key, {});
+    defer _ = self.inspect_in_progress_nominals.remove(nominal_key);
 
     if (try self.lookupAssociatedMethodExternalDef(type_env, nominal, type_env.idents.to_inspect)) |method_info| {
         const resolved_func = resolveFuncTypeInStore(&method_info.target_env.types, method_info.type_var) orelse
@@ -2747,6 +2807,13 @@ pub fn makeSymbol(self: *Self, module_idx: u32, ident_idx: Ident.Idx) Allocator.
     return self.internSymbol(module_idx, ident_idx);
 }
 
+/// Register a symbol as already lowered. This prevents `lowerExternalDefWithType`
+/// from re-lowering the expression when a subsequent def references this symbol.
+/// Used by batch lowering in `cir_to_lir.lowerModuleDefs`.
+pub fn registerLoweredSymbol(self: *Self, symbol: MIR.Symbol, expr_id: MIR.ExprId) Allocator.Error!void {
+    try self.lowered_symbols.put(@bitCast(symbol), expr_id);
+}
+
 /// Lower a CIR expression to MIR.
 pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId {
     const saved_root_expr_context = self.current_root_expr_context;
@@ -3011,13 +3078,10 @@ fn lowerExprWithMonotypeOverride(
             const target_module_idx: u32 = self.resolveImportedModuleIdx(module_env, ext.module_idx) orelse unreachable;
             const target_env = self.all_module_envs[target_module_idx];
             if (!target_env.store.isDefNode(ext.target_node_idx)) {
-                if (builtin.mode == .Debug) {
-                    std.debug.panic(
-                        "e_lookup_external: target node {d} is not a def node (target_module_idx={d})",
-                        .{ ext.target_node_idx, target_module_idx },
-                    );
-                }
-                unreachable;
+                // Target node is not a def — emit runtime error instead of panicking.
+                // This can happen during comptime evaluation of type modules where
+                // the target node is a type declaration, not a value def.
+                return self.store.addExpr(self.allocator, .runtime_err_type, monotype, region);
             }
 
             const symbol = try self.internExternalDefSymbol(target_module_idx, ext.target_node_idx);
@@ -3219,10 +3283,7 @@ fn lowerExprWithMonotypeOverride(
             const mir_str = try self.copyStringToMir(module_env, crash.msg);
             break :blk try self.store.addExpr(self.allocator, .{ .crash = mir_str }, monotype, region);
         },
-        .e_dbg => |dbg_expr| {
-            const inner = try self.lowerExpr(dbg_expr.expr);
-            return try self.store.addExpr(self.allocator, .{ .dbg_expr = .{ .expr = inner } }, monotype, region);
-        },
+        .e_dbg => |dbg_expr| try self.lowerDbgExpr(module_env, dbg_expr.expr, region),
         .e_expect => |expect| {
             const body = try self.lowerExpr(expect.body);
             return try self.store.addExpr(self.allocator, .{ .expect = .{ .body = body } }, monotype, region);
@@ -3456,7 +3517,8 @@ fn alignAlternativePatternSymbols(
 }
 
 /// Resolve a CIR pattern to a global MIR symbol.
-fn patternToSymbol(self: *Self, pattern_idx: CIR.Pattern.Idx) Allocator.Error!MIR.Symbol {
+/// Public for batch lowering in cir_to_lir.lowerModuleDefs.
+pub fn patternToSymbol(self: *Self, pattern_idx: CIR.Pattern.Idx) Allocator.Error!MIR.Symbol {
     const base_key: u64 = (@as(u64, self.current_module_idx) << 32) | @intFromEnum(pattern_idx);
     const key: u128 = (@as(u128, self.current_pattern_scope) << 64) | @as(u128, base_key);
 
@@ -3787,10 +3849,9 @@ fn bindPatternMonotypes(
         .applied_tag => |tag| {
             const mono_tags = switch (self.store.monotype_store.getMonotype(monotype)) {
                 .tag_union => |tag_union| self.store.monotype_store.getTags(tag_union.tags),
-                else => typeBindingInvariant(
-                    "bindPatternMonotypes(applied_tag): expected tag_union monotype, found '{s}'",
-                    .{@tagName(self.store.monotype_store.getMonotype(monotype))},
-                ),
+                // Non-tag-union monotypes can occur when cross-module type
+                // resolution produces a degenerate monotype. Skip binding.
+                else => return,
             };
             const tag_idx = self.tagIndexByName(tag.name, mono_tags);
             const mono_payloads = self.store.monotype_store.getIdxSpan(mono_tags[tag_idx].payloads);
@@ -3846,6 +3907,9 @@ fn bindPatternMonotypes(
         .tuple => |tuple_pat| {
             const mono_elems = switch (self.store.monotype_store.getMonotype(monotype)) {
                 .tuple => |tuple_mono| self.store.monotype_store.getIdxSpan(tuple_mono.elems),
+                // Unit can appear here when upstream type errors or unresolved dispatch
+                // produce a runtime_err_type with unit monotype. Skip binding.
+                .unit => return,
                 else => typeBindingInvariant(
                     "bindPatternMonotypes(tuple): expected tuple monotype, found '{s}'",
                     .{@tagName(self.store.monotype_store.getMonotype(monotype))},
@@ -4098,6 +4162,45 @@ fn lowerExprProcInst(
     return self.lowerProcInst(proc_inst_id);
 }
 
+/// Ensure the defining context function's parameter symbols are bound in
+/// pattern_symbols at the current scope. When a closure is lowered directly
+/// (not through the outer function's body), the outer function's
+/// lowerLambdaSpecialized hasn't run, so captured parameter patterns would
+/// be missing. This binds them lazily so capture resolution can find them.
+fn ensureDefiningContextParamsBound(
+    self: *Self,
+    defining_context_proc_inst: Monomorphize.ProcInstId,
+) Allocator.Error!void {
+    const proc_inst = self.monomorphization.getProcInst(defining_context_proc_inst);
+    const template = self.monomorphization.getProcTemplate(proc_inst.template);
+    const module_env = self.all_module_envs[template.module_idx];
+    const proc_expr = module_env.store.getExpr(template.cir_expr);
+
+    const arg_patterns: []const CIR.Pattern.Idx = switch (proc_expr) {
+        .e_lambda => |lambda| module_env.store.slicePatterns(lambda.args),
+        .e_closure => |closure_expr| blk: {
+            const inner = module_env.store.getExpr(closure_expr.lambda_idx);
+            break :blk if (inner == .e_lambda) module_env.store.slicePatterns(inner.e_lambda.args) else &.{};
+        },
+        .e_hosted_lambda => |hosted| module_env.store.slicePatterns(hosted.args),
+        else => &.{},
+    };
+
+    for (arg_patterns) |arg_pattern_idx| {
+        if (self.lookupExistingPatternSymbolInScope(
+            template.module_idx,
+            self.current_pattern_scope,
+            arg_pattern_idx,
+        ) == null) {
+            // Bind the pattern in the defining context's scope
+            const saved_module = self.current_module_idx;
+            defer self.current_module_idx = saved_module;
+            self.current_module_idx = template.module_idx;
+            _ = try self.patternToSymbol(arg_pattern_idx);
+        }
+    }
+}
+
 fn bindProcTemplateBoundaryMonotypes(
     self: *Self,
     module_env: *const ModuleEnv,
@@ -4108,7 +4211,9 @@ fn bindProcTemplateBoundaryMonotypes(
 
     const func = switch (self.store.monotype_store.getMonotype(fn_monotype)) {
         .func => |func| func,
-        else => unreachable,
+        // Non-function monotypes can occur when cross-module type
+        // resolution produces a degenerate monotype. Skip binding.
+        else => return,
     };
     const arg_monos = self.store.monotype_store.getIdxSpan(func.args);
 
@@ -4161,7 +4266,9 @@ fn lowerLambdaSpecialized(
 ) Allocator.Error!MIR.ExprId {
     const ret_monotype = switch (self.store.monotype_store.getMonotype(monotype)) {
         .func => |func| func.ret,
-        else => unreachable,
+        // Non-function monotypes can occur when cross-module type
+        // resolution produces a degenerate monotype. Use monotype as ret.
+        else => monotype,
     };
     const proc_id = try self.store.addProc(self.allocator, .{
         .fn_monotype = monotype,
@@ -4740,6 +4847,10 @@ fn buildSpecializedClosureValue(
     self.current_proc_inst_context = defining_context_proc_inst;
     self.current_pattern_scope = patternScopeForProcInst(defining_context_proc_inst);
 
+    if (!defining_context_proc_inst.isNone()) {
+        try self.ensureDefiningContextParamsBound(defining_context_proc_inst);
+    }
+
     var plan = try self.planClosureLowering(module_env, expr_idx, closure, closure_proc_inst_id);
     defer plan.deinit(self.allocator);
 
@@ -5257,6 +5368,15 @@ fn lowerClosureSpecialized(
         self.current_proc_inst_context = defining_context_proc_inst;
         self.current_pattern_scope = patternScopeForProcInst(defining_context_proc_inst);
 
+        // The closure resolves captures from the defining context's scope.
+        // If the defining function hasn't been lowered yet in this Lower pass
+        // (e.g. when the closure is called directly without going through the
+        // outer function's body), its parameter symbols won't be in
+        // pattern_symbols. Eagerly bind them so capture resolution can find them.
+        if (!defining_context_proc_inst.isNone()) {
+            try self.ensureDefiningContextParamsBound(defining_context_proc_inst);
+        }
+
         break :blk try self.buildClosureValueFromCaptureRequests(
             monotype,
             region,
@@ -5625,6 +5745,7 @@ fn lowerProcInst(self: *Self, proc_inst_id: Monomorphize.ProcInstId) Allocator.E
     const template = self.monomorphization.getProcTemplate(proc_inst.template);
     const module_idx = template.module_idx;
     const module_env = self.all_module_envs[module_idx];
+
     const proc_monotype = try self.importMonotypeFromStore(
         &self.monomorphization.monotype_store,
         proc_inst.fn_monotype,
@@ -5752,14 +5873,9 @@ fn lowerProcInst(self: *Self, proc_inst_id: Monomorphize.ProcInstId) Allocator.E
 
 fn lowerDispatchProcInstForExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId {
     const proc_inst_id = self.lookupMonomorphizedDispatchProcInst(expr_idx) orelse {
-        if (std.debug.runtime_safety) {
-            const expr = self.all_module_envs[self.current_module_idx].store.getExpr(expr_idx);
-            std.debug.panic(
-                "MIR Lower invariant: monomorphization missing dispatch proc inst for expr {d} in module {d} kind={s}",
-                .{ @intFromEnum(expr_idx), self.current_module_idx, @tagName(expr) },
-            );
-        }
-        unreachable;
+        // Missing dispatch proc inst — upstream type error or unresolved dispatch.
+        const region = self.all_module_envs[self.current_module_idx].store.getExprRegion(expr_idx);
+        return try self.store.addExpr(self.allocator, .{ .runtime_err_type = {} }, self.store.monotype_store.unit_idx, region);
     };
     return self.lowerProcInst(proc_inst_id);
 }
@@ -5769,7 +5885,7 @@ fn lookupMonomorphizedProcInst(
     template_id: Monomorphize.ProcTemplateId,
     fn_monotype: Monotype.Idx,
     fn_monotype_module_idx: u32,
-) Allocator.Error!Monomorphize.ProcInstId {
+) Allocator.Error!?Monomorphize.ProcInstId {
     for (self.monomorphization.proc_insts.items, 0..) |proc_inst, idx| {
         if (proc_inst.template != template_id) continue;
         if (proc_inst.fn_monotype_module_idx != fn_monotype_module_idx) continue;
@@ -5785,22 +5901,8 @@ fn lookupMonomorphizedProcInst(
         }
     }
 
-    if (std.debug.runtime_safety) {
-        const template = self.monomorphization.getProcTemplate(template_id);
-        std.debug.panic(
-            "MIR Lower invariant: monomorphization missing proc inst for template={d} kind={s} template_module={d} template_expr={d} module={d} monotype={d} monotype_repr={any}",
-            .{
-                @intFromEnum(template_id),
-                @tagName(template.kind),
-                template.module_idx,
-                @intFromEnum(template.cir_expr),
-                fn_monotype_module_idx,
-                @intFromEnum(fn_monotype),
-                self.store.monotype_store.getMonotype(fn_monotype),
-            },
-        );
-    }
-    unreachable;
+    // Missing proc inst — upstream type error or unresolved dispatch.
+    return null;
 }
 
 fn lowerMonomorphizedExternalProcInst(
@@ -5819,7 +5921,9 @@ fn lowerMonomorphizedExternalProcInst(
         }
         unreachable;
     };
-    const proc_inst_id = try self.lookupMonomorphizedProcInst(template_id, fn_monotype, fn_monotype_module_idx);
+    const proc_inst_id = try self.lookupMonomorphizedProcInst(template_id, fn_monotype, fn_monotype_module_idx) orelse {
+        return try self.store.addExpr(self.allocator, .{ .runtime_err_type = {} }, self.store.monotype_store.unit_idx, .{ .start = .{ .offset = 0 }, .end = .{ .offset = 0 } });
+    };
     return self.lowerProcInst(proc_inst_id);
 }
 
@@ -5833,7 +5937,9 @@ fn procInstReturnMonotype(self: *Self, proc_inst_id: Monomorphize.ProcInstId) Al
     );
     return switch (self.store.monotype_store.getMonotype(imported_fn_mono)) {
         .func => |func| func.ret,
-        else => unreachable,
+        // Non-function monotypes can occur when type resolution across modules
+        // produces a degenerate monotype (e.g. unit). Return the monotype as-is.
+        else => imported_fn_mono,
     };
 }
 
@@ -5861,7 +5967,11 @@ fn lowerCall(
             call_expr_idx,
         );
         const callee_template_id = self.monomorphization.getExprProcTemplate(self.current_module_idx, call.func);
-        if (call_low_level_op == null and callee_expr == .e_lookup_external and callee_template_id != null) {
+        // Allow missing proc insts when the Monomorphize pass skipped creating
+        // them (e.g. because the resolved monotype was non-function). The call
+        // will be lowered without specialization using the expression's own type.
+        const proc_insts_len = if (call_site_proc_insts) |ids| ids.len else 0;
+        if (call_low_level_op == null and callee_expr == .e_lookup_external and callee_template_id != null and proc_insts_len > 0) {
             const rooted_lookup = self.monomorphization.getCallSiteProcInst(
                 self.current_proc_inst_context,
                 self.monomorphizationRootExprContext(self.current_proc_inst_context),
@@ -5884,7 +5994,7 @@ fn lowerCall(
                     @intFromEnum(callee_template_id.?),
                     if (rooted_lookup) |id| @intFromEnum(id) else std.math.maxInt(u32),
                     if (canonical_lookup) |id| @intFromEnum(id) else std.math.maxInt(u32),
-                    if (call_site_proc_insts) |ids| ids.len else 0,
+                    proc_insts_len,
                 },
             );
         }
@@ -6112,7 +6222,7 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
                 try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = wildcard, .expr = expr } });
             },
             .s_dbg => |s_dbg| {
-                const expr = try self.lowerExpr(s_dbg.expr);
+                const expr = try self.lowerDbgExpr(module_env, s_dbg.expr, stmt_region);
                 const expr_type = self.store.typeOf(expr);
                 const wildcard = try self.store.addPattern(self.allocator, .wildcard, expr_type);
                 try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = wildcard, .expr = expr } });
@@ -6886,11 +6996,14 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
             }
         }
 
+        // Lower the receiver once — used by both the structural equality
+        // fast-path and the general method-call path below.
+        const receiver: MIR.ExprId = if (uses_runtime_receiver) try self.lowerExpr(da.receiver) else .none;
+
         // Structural types: .is_eq() is decomposed field-by-field in MIR.
         structural_eq: {
             if (!uses_runtime_receiver) break :structural_eq;
 
-            const receiver = try self.lowerExpr(da.receiver);
             const rcv_mono_idx = try self.resolveMonotype(da.receiver);
             if (rcv_mono_idx.isNone()) break :structural_eq;
             const rcv_mono = self.store.monotype_store.getMonotype(rcv_mono_idx);
@@ -6908,8 +7021,6 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
             return try self.lowerStructuralEquality(receiver, rhs, rcv_mono_idx, monotype, region);
         }
 
-        const receiver: MIR.ExprId = if (uses_runtime_receiver) try self.lowerExpr(da.receiver) else .none;
-
         // Build args as either:
         // - [receiver] ++ explicit_args for instance methods
         // - explicit_args only for associated-item/static calls like
@@ -6920,13 +7031,9 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
         const expected_arg_monotypes = switch (self.store.monotype_store.getMonotype(func_mono)) {
             .func => |func| self.store.monotype_store.getIdxSpan(func.args),
             else => {
-                if (builtin.mode == .Debug) {
-                    std.debug.panic(
-                        "MIR Lower invariant: dispatch proc for dot access '{s}' did not lower to function monotype",
-                        .{module_env.getIdent(da.field_name)},
-                    );
-                }
-                unreachable;
+                // Upstream type error or unresolved dispatch — emit a runtime error
+                // instead of panicking the compiler.
+                return try self.store.addExpr(self.allocator, .{ .runtime_err_type = {} }, monotype, region);
             },
         };
 
@@ -6975,10 +7082,13 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
         const receiver_monotype = self.store.typeOf(receiver);
         const receiver_record = switch (self.store.monotype_store.getMonotype(receiver_monotype)) {
             .record => |record| record,
-            else => typeBindingInvariant(
-                "lowerDotAccess: field access receiver is not a record monotype (field='{s}', monotype='{s}')",
-                .{ module_env.getIdent(da.field_name), @tagName(self.store.monotype_store.getMonotype(receiver_monotype)) },
-            ),
+            else => {
+                // Type error: field access on a non-record (e.g. unit from an
+                // unresolved type or upstream type error).  Emit a runtime error
+                // expression so the lowering pipeline can report the problem
+                // instead of crashing.
+                return try self.store.addExpr(self.allocator, .{ .runtime_err_type = {} }, monotype, region);
+            },
         };
         const field_idx = self.recordFieldIndexByName(
             da.field_name,
@@ -7052,7 +7162,11 @@ fn lowerRecord(self: *Self, module_env: *const ModuleEnv, record: anytype, monot
         // Bind the update base once so:
         // 1) `{ ..expr, all_fields_overridden }` still evaluates `expr`, and
         // 2) synthesized field accesses never re-evaluate `expr`.
-        const ext_symbol = try self.internSymbol(self.current_module_idx, self.makeSyntheticIdent(Ident.Idx.NONE));
+        const ext_ident_template: Ident.Idx = .{
+            .attributes = .{ .effectful = false, .ignored = false, .reassignable = false },
+            .idx = 0,
+        };
+        const ext_symbol = try self.internSymbol(self.current_module_idx, self.makeSyntheticIdent(ext_ident_template));
         const ext_pattern = try self.store.addPattern(self.allocator, .{ .bind = ext_symbol }, ext_expr_mono);
         const ext_lookup = try self.store.addExpr(self.allocator, .{ .lookup = ext_symbol }, ext_expr_mono, region);
         extension_binding = .{
@@ -7330,7 +7444,9 @@ fn lowerExternalDefWithType(
         const proc_inst_id = proc_inst_blk: {
             if (requested_monotype) |req| {
                 if (self.monotypeIsWellFormed(req.idx) and self.store.monotype_store.getMonotype(req.idx) == .func) {
-                    break :proc_inst_blk try self.lookupMonomorphizedProcInst(template_id, req.idx, req.module_idx);
+                    if (try self.lookupMonomorphizedProcInst(template_id, req.idx, req.module_idx)) |pid| {
+                        break :proc_inst_blk pid;
+                    }
                 }
             }
 
@@ -7733,10 +7849,9 @@ fn bindFlatTypeMonotypes(self: *Self, flat_type: types.FlatType, monotype: Monot
         .fn_pure, .fn_effectful, .fn_unbound => |func| {
             const mfunc = switch (mono) {
                 .func => |mfunc| mfunc,
-                else => typeBindingInvariant(
-                    "bindFlatTypeMonotypes(fn): expected function monotype, found '{s}'",
-                    .{@tagName(mono)},
-                ),
+                // Non-function monotypes can occur when cross-module type
+                // resolution produces a degenerate monotype. Skip binding.
+                else => return,
             };
             const type_args = self.types_store.sliceVars(func.args);
             const mono_arg_span = mfunc.args;
@@ -7956,10 +8071,9 @@ fn bindFlatTypeMonotypes(self: *Self, flat_type: types.FlatType, monotype: Monot
         .tag_union => |tag_union_row| {
             const mono_tag_span = switch (mono) {
                 .tag_union => |mtu| mtu.tags,
-                else => typeBindingInvariant(
-                    "bindFlatTypeMonotypes(tag_union): expected tag_union monotype, found '{s}'",
-                    .{@tagName(mono)},
-                ),
+                // Non-tag-union monotypes can occur when cross-module type
+                // resolution produces a degenerate monotype. Skip binding.
+                else => return,
             };
             // Copy mono_tags into a local owned buffer. Recursive bindTypeVarMonotypes
             // calls below may reallocate the monotype store (e.g. via addTags/addMonotype

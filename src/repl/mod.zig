@@ -7,7 +7,7 @@ const std = @import("std");
 
 const eval_zig = @import("eval.zig");
 pub const Repl = eval_zig.Repl;
-pub const Backend = @import("backend").EvalBackend;
+pub const Backend = @import("eval").EvalBackend;
 
 test "repl tests" {
     std.testing.refAllDecls(@This());

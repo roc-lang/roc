@@ -142,6 +142,18 @@ pub fn findIdent(self: *const CommonEnv, text: []const u8) ?Ident.Idx {
     return self.idents.findByString(text);
 }
 
+/// Finds an identifier from another CommonEnv's store in this store.
+/// Performs cross-store ident resolution without exposing string operations to callers.
+pub fn findIdentFrom(self: *const CommonEnv, source: *const CommonEnv, source_idx: Ident.Idx) ?Ident.Idx {
+    return self.findIdent(source.getIdent(source_idx));
+}
+
+/// Finds or creates an identifier from another CommonEnv's store in this store.
+/// Performs cross-store ident resolution without exposing string operations to callers.
+pub fn insertIdentFrom(self: *CommonEnv, gpa: std.mem.Allocator, source: *const CommonEnv, source_idx: Ident.Idx) std.mem.Allocator.Error!Ident.Idx {
+    return self.insertIdent(gpa, Ident.for_text(source.getIdent(source_idx)));
+}
+
 /// Retrieves the text of an identifier by its index.
 pub fn getIdent(self: *const CommonEnv, idx: Ident.Idx) []const u8 {
     return self.idents.getText(idx);

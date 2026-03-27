@@ -601,6 +601,14 @@ pub const Pass = struct {
     type_scope_caller_module_idx: ?u32,
     visited_modules: std.AutoHashMapUnmanaged(u32, void),
     visited_exprs: std.AutoHashMapUnmanaged(u64, void),
+
+    /// Per-convergence-loop visited set for binding-mode traversals.
+    /// Prevents combinatorial explosion from unbounded re-scanning in
+    /// lookup→def→call chains. Keyed by ContextExprKey (not plain expr)
+    /// because scanClosureCaptureSources swaps active_proc_inst_context
+    /// mid-scan and the same source expr must be visitable under different
+    /// proc-inst contexts within one iteration.
+    binding_visited: ?*std.AutoHashMapUnmanaged(ContextExprKey, void) = null,
     in_progress_value_defs: std.AutoHashMapUnmanaged(ContextExprKey, void),
     resolved_dispatch_targets: std.AutoHashMapUnmanaged(ContextExprKey, ResolvedDispatchTarget),
     in_progress_proc_scans: std.AutoHashMapUnmanaged(u32, void),
@@ -1538,6 +1546,18 @@ pub const Pass = struct {
         }
 
         if (self.active_bindings != null or force_rescan_children) {
+            // When a convergence loop is active, deduplicate visits within
+            // each iteration using a context-sensitive key. The loop clears
+            // the set between iterations so updated bindings trigger re-scans.
+            if (self.binding_visited) |bv| {
+                const visit_key = self.resultExprKey(
+                    self.active_proc_inst_context,
+                    module_idx,
+                    expr_idx,
+                );
+                if (bv.contains(visit_key)) return;
+                try bv.put(self.allocator, visit_key, {});
+            }
             try self.scanExprChildren(result, module_idx, expr_idx, expr);
             return;
         }
@@ -2789,8 +2809,10 @@ pub const Pass = struct {
         try self.bindCurrentCallFromProcInst(result, module_idx, call_expr_idx, call_expr, proc_inst_id);
         const proc_inst_fn_mono = switch (result.monotype_store.getMonotype(proc_inst.fn_monotype)) {
             .func => |func| func,
-            else => unreachable,
+            else => return,
         };
+        // Capture before scanProcInst which may grow proc_insts and invalidate the pointer.
+        const fn_monotype_module_idx = proc_inst.fn_monotype_module_idx;
         const arg_exprs = module_env.store.sliceExpr(call_expr.args);
         try self.prepareCallableArgsForProcInst(result, module_idx, arg_exprs, proc_inst_id);
         try self.scanProcInst(result, proc_inst_id);
@@ -2801,7 +2823,7 @@ pub const Pass = struct {
             module_idx,
             call_expr_idx,
             proc_inst_fn_mono.ret,
-            proc_inst.fn_monotype_module_idx,
+            fn_monotype_module_idx,
         );
     }
 
@@ -2968,7 +2990,9 @@ pub const Pass = struct {
         const proc_inst = result.getProcInst(proc_inst_id);
         const proc_inst_fn_mono = switch (result.monotype_store.getMonotype(proc_inst.fn_monotype)) {
             .func => |func| func,
-            else => unreachable,
+            // Upstream type error or unresolved dispatch can produce a non-func monotype
+            // (e.g. unit). Skip arg preparation — the lowering will emit a runtime error.
+            else => return,
         };
 
         try self.assignCallableArgProcInstsFromParams(
@@ -3109,10 +3133,15 @@ pub const Pass = struct {
 
         var iteration_expr_monotypes: std.AutoHashMapUnmanaged(ContextExprKey, ResolvedMonotype) = .empty;
         defer iteration_expr_monotypes.deinit(self.allocator);
+        var binding_visited_map: std.AutoHashMapUnmanaged(ContextExprKey, void) = .empty;
+        defer binding_visited_map.deinit(self.allocator);
 
         const saved_bindings = self.active_bindings;
         self.active_bindings = bindings;
         defer self.active_bindings = saved_bindings;
+        const saved_binding_visited = self.binding_visited;
+        self.binding_visited = &binding_visited_map;
+        defer self.binding_visited = saved_binding_visited;
 
         const saved_iteration_expr_monotypes = self.active_iteration_expr_monotypes;
         self.active_iteration_expr_monotypes = &iteration_expr_monotypes;
@@ -3157,6 +3186,7 @@ pub const Pass = struct {
 
             const bindings_before = bindings.count();
             const mutation_revision_before = self.mutation_revision;
+            binding_visited_map.clearRetainingCapacity();
 
             try self.seedTemplateBodyBindingsFromCurrentBindings(result, template, bindings);
 
@@ -3242,6 +3272,12 @@ pub const Pass = struct {
         }
 
         const template = result.getProcTemplate(template_id).*;
+        // Closures without an active owning proc inst cannot be inferred here.
+        if (templateRequiresConcreteOwnerProcInst(result, template_id) and
+            self.active_proc_inst_context.isNone())
+        {
+            return null;
+        }
         const template_env = self.all_module_envs[template.module_idx];
         const template_types = &template_env.types;
         const desired_fn_monotype = resolvedMonotype(
@@ -3354,6 +3390,10 @@ pub const Pass = struct {
             &callee_bindings,
         );
         if (fn_monotype.isNone()) return null;
+        // Only create proc insts for function monotypes. Non-function monotypes
+        // (e.g. unit) can occur when cross-module type resolution produces a
+        // degenerate monotype for type module methods.
+        if (result.monotype_store.getMonotype(fn_monotype) != .func) return null;
 
         if (!try self.procSignatureAcceptsFnMonotype(
             result,
@@ -3684,7 +3724,7 @@ pub const Pass = struct {
                         .tag_union => |tag_union| tag_union.tags,
                         else => unreachable,
                     },
-                );
+                ) orelse return;
                 const mono_tag = mono_tags[tag_idx];
                 const mono_payloads = result.monotype_store.getIdxSpan(mono_tag.payloads);
                 const payload_patterns = module_env.store.slicePatterns(tag_pat.args);
@@ -3896,11 +3936,14 @@ pub const Pass = struct {
                 bound
             else if (!exact_arg_mono.isNone())
                 exact_arg_mono
-            else if (self.exprUsesContextSensitiveNumericDefault(actual_module_idx, arg_expr_idx))
-                resolvedMonotype(.none, actual_module_idx)
             else blk: {
                 const resolved = try self.resolveExprMonotypeResolved(result, actual_module_idx, arg_expr_idx);
                 if (!resolved.isNone()) break :blk resolved;
+                // Deferred numerics (e.g. `12345`) intentionally skip exact
+                // binding in the first pass so surrounding context can refine
+                // them. If no stronger binding emerged by this second pass,
+                // resolve their default monotype now (typically Dec) so
+                // generic call specialization can proceed.
                 // When exact resolution fails (e.g., tag unions with flex extension
                 // variables like [Red, ..]), fall back to monomorphizable resolution
                 // which closes flex extensions to produce a concrete monotype.
@@ -4060,7 +4103,9 @@ pub const Pass = struct {
         const proc_inst = result.getProcInst(proc_inst_id);
         const fn_mono = switch (result.monotype_store.getMonotype(proc_inst.fn_monotype)) {
             .func => |func| func,
-            else => unreachable,
+            // Non-function monotypes can occur when type resolution across modules
+            // produces a degenerate monotype (e.g. unit). Skip binding in that case.
+            else => return,
         };
 
         const arg_exprs = self.all_module_envs[module_idx].store.sliceExpr(call_expr.args);
@@ -4575,6 +4620,7 @@ pub const Pass = struct {
 
         if (resolveFuncTypeInStore(template_types, template.type_root)) |resolved_func| {
             const param_vars = template_types.sliceVars(resolved_func.func.args);
+
             if (param_vars.len != actual_args.items.len) {
                 if (std.debug.runtime_safety) {
                     std.debug.panic(
@@ -4686,7 +4732,9 @@ pub const Pass = struct {
         const proc_inst = result.getProcInst(proc_inst_id);
         const fn_mono = switch (result.monotype_store.getMonotype(proc_inst.fn_monotype)) {
             .func => |func| func,
-            else => unreachable,
+            // Upstream type error or unresolved dispatch can produce a non-func monotype
+            // (e.g. unit). Skip binding — the lowering will emit a runtime error.
+            else => return,
         };
 
         var actual_args = std.ArrayList(CIR.Expr.Idx).empty;
@@ -4779,34 +4827,14 @@ pub const Pass = struct {
                 return;
             }
 
-            if (std.debug.runtime_safety) {
-                const module_env = self.all_module_envs[module_idx];
-                const expr = module_env.store.getExpr(expr_idx);
-                const expr_region = module_env.store.getExprRegion(expr_idx);
-                const context_template: ?ProcTemplate = if (!self.active_proc_inst_context.isNone())
-                    result.getProcTemplate(result.getProcInst(self.active_proc_inst_context).template).*
-                else
-                    null;
-                std.debug.panic(
-                    "Monomorphize: conflicting exact expr monotypes for ctx={d} module={d} expr={d} kind={s} region={any} existing={d}@{d} existing_mono={any} new={d}@{d} new_mono={any} template_expr={d} template_kind={s}",
-                    .{
-                        @intFromEnum(self.active_proc_inst_context),
-                        module_idx,
-                        @intFromEnum(expr_idx),
-                        @tagName(expr),
-                        expr_region,
-                        @intFromEnum(existing.idx),
-                        existing.module_idx,
-                        result.monotype_store.getMonotype(existing.idx),
-                        @intFromEnum(resolved.idx),
-                        resolved.module_idx,
-                        result.monotype_store.getMonotype(resolved.idx),
-                        if (context_template) |template| @intFromEnum(template.cir_expr) else std.math.maxInt(u32),
-                        if (context_template) |template| @tagName(template.kind) else "none",
-                    },
-                );
+            if (self.binding_probe_mode) {
+                self.binding_probe_failed = true;
+                return;
             }
-            unreachable;
+            // Conflicting expr monotype — keep existing binding and continue.
+            // This can occur when the comptime evaluator monomorphizes
+            // expressions with upstream type errors or unresolved dispatch.
+            return;
         }
 
         if (self.active_iteration_expr_monotypes) |iteration_map| {
@@ -4922,7 +4950,7 @@ pub const Pass = struct {
                 field.name,
                 record_mono.module_idx,
                 mono_record.fields,
-            );
+            ) orelse continue;
             const mono_field = result.monotype_store.getFieldItem(mono_record.fields, mono_field_idx);
             try self.recordCurrentExprMonotype(
                 result,
@@ -5020,6 +5048,7 @@ pub const Pass = struct {
                 return;
             }
             const method_name = dispatchMethodIdentForBinop(module_env, binop_expr.op) orelse return;
+
             if (try self.resolveAssociatedMethodProcInstForTypeVar(
                 result,
                 module_idx,
@@ -5156,10 +5185,10 @@ pub const Pass = struct {
         const resolved_target = if (associated_target) |target| target else switch (expr) {
             .e_binop => |binop_expr| blk: {
                 const method_name = dispatchMethodIdentForBinop(module_env, binop_expr.op) orelse return;
-                break :blk try self.resolveBinopDispatchTarget(result, module_idx, expr_idx, binop_expr, method_name);
+                break :blk try self.resolveBinopDispatchTarget(result, module_idx, expr_idx, binop_expr, method_name) orelse return;
             },
             .e_unary_minus => blk: {
-                break :blk try self.resolveDispatchTargetForExpr(result, module_idx, expr_idx, module_env.idents.negate);
+                break :blk try self.resolveDispatchTargetForExpr(result, module_idx, expr_idx, module_env.idents.negate) orelse return;
             },
             .e_dot_access => |dot_expr| blk: {
                 if (dot_expr.args == null) return;
@@ -5171,24 +5200,18 @@ pub const Pass = struct {
                         expr_idx,
                         dot_expr.field_name,
                         receiver_monotype.idx,
-                    );
+                    ) orelse return;
                 }
-                break :blk try self.resolveDispatchTargetForExpr(result, module_idx, expr_idx, dot_expr.field_name);
+                break :blk try self.resolveDispatchTargetForExpr(result, module_idx, expr_idx, dot_expr.field_name) orelse return;
             },
             .e_type_var_dispatch => |dispatch_expr| blk: {
-                break :blk try self.resolveDispatchTargetForExpr(result, module_idx, expr_idx, dispatch_expr.method_name);
+                break :blk try self.resolveDispatchTargetForExpr(result, module_idx, expr_idx, dispatch_expr.method_name) orelse return;
             },
             else => return,
         };
         const template_id = try self.lookupResolvedDispatchTemplate(result, module_idx, resolved_target) orelse {
-            if (std.debug.runtime_safety) {
-                const method_name = self.dispatchTargetMethodText(module_env, resolved_target) orelse "<unreadable>";
-                std.debug.panic(
-                    "Monomorphize: demanded dispatch expr {d} in module {d} resolved to method '{s}' without a proc template",
-                    .{ @intFromEnum(expr_idx), module_idx, method_name },
-                );
-            }
-            unreachable;
+            // Dispatch target resolved but no proc template — skip this expression.
+            return;
         };
         const proc_inst_id = blk: {
             if (self.active_bindings == null) {
@@ -5315,7 +5338,7 @@ pub const Pass = struct {
         expr_idx: CIR.Expr.Idx,
         binop_expr: CIR.Expr.Binop,
         method_name: Ident.Idx,
-    ) Allocator.Error!ResolvedDispatchTarget {
+    ) Allocator.Error!?ResolvedDispatchTarget {
         const lhs_monotype = try self.resolveExprMonotypeResolved(result, module_idx, binop_expr.lhs);
         if (lhs_monotype.isNone()) {
             return self.resolveDispatchTargetForExpr(result, module_idx, expr_idx, method_name);
@@ -5354,6 +5377,7 @@ pub const Pass = struct {
         const receiver_nominal = resolveNominalTypeInStore(&module_env.types, receiver_type_var) orelse return null;
         const method_info = try self.lookupAssociatedMethodTemplate(result, module_idx, receiver_nominal, method_ident) orelse return null;
         const receiver_monotype = try self.resolveTypeVarMonotypeIfExactResolved(result, module_idx, receiver_type_var);
+
         _ = try self.lookupDispatchConstraintForAssociatedMethod(
             result,
             module_idx,
@@ -5377,6 +5401,7 @@ pub const Pass = struct {
         const receiver_nominal = resolveNominalTypeInStore(&module_env.types, receiver_type_var) orelse return null;
         const method_info = try self.lookupAssociatedMethodTemplate(result, module_idx, receiver_nominal, method_ident) orelse return null;
         const receiver_monotype = try self.resolveTypeVarMonotypeIfExactResolved(result, module_idx, receiver_type_var);
+
         const constraint = try self.lookupDispatchConstraintForAssociatedMethod(
             result,
             module_idx,
@@ -5634,18 +5659,13 @@ pub const Pass = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
         method_name: Ident.Idx,
-    ) Allocator.Error!ResolvedDispatchTarget {
+    ) Allocator.Error!?ResolvedDispatchTarget {
         if (self.lookupResolvedDispatchTarget(module_idx, expr_idx)) |cached| return cached;
 
         const module_env = self.all_module_envs[module_idx];
         const constraint = try self.lookupDispatchConstraintForExpr(result, module_idx, expr_idx, method_name) orelse {
-            if (std.debug.runtime_safety) {
-                std.debug.panic(
-                    "Monomorphize: no static dispatch constraint for expr={d} method='{s}'",
-                    .{ @intFromEnum(expr_idx), module_env.getIdent(method_name) },
-                );
-            }
-            unreachable;
+            // No static dispatch constraint — upstream type error or unresolved dispatch.
+            return null;
         };
 
         const desired_func_monotype = try self.resolveTypeVarMonotypeIfMonomorphizableResolved(result, module_idx, constraint.fn_var);
@@ -5675,7 +5695,7 @@ pub const Pass = struct {
                 method_name,
                 constraint,
                 desired_func_monotype,
-            );
+            ) orelse return null;
         };
 
         try self.resolved_dispatch_targets.put(
@@ -5693,7 +5713,7 @@ pub const Pass = struct {
         expr_idx: CIR.Expr.Idx,
         method_name: Ident.Idx,
         receiver_monotype: Monotype.Idx,
-    ) Allocator.Error!ResolvedDispatchTarget {
+    ) Allocator.Error!?ResolvedDispatchTarget {
         const module_env = self.all_module_envs[module_idx];
 
         var first_candidate: ?ResolvedDispatchTarget = null;
@@ -5757,7 +5777,7 @@ pub const Pass = struct {
         else if (first_candidate) |target|
             target
         else
-            try self.resolveDispatchTargetForExpr(result, module_idx, expr_idx, method_name);
+            try self.resolveDispatchTargetForExpr(result, module_idx, expr_idx, method_name) orelse return null;
 
         try self.resolved_dispatch_targets.put(
             self.allocator,
@@ -5874,7 +5894,7 @@ pub const Pass = struct {
         method_name: Ident.Idx,
         constraint: types.StaticDispatchConstraint,
         desired_func_monotype: ResolvedMonotype,
-    ) Allocator.Error!ResolvedDispatchTarget {
+    ) Allocator.Error!?ResolvedDispatchTarget {
         const module_env = self.all_module_envs[module_idx];
         const method_name_text = module_env.getIdent(method_name);
         var found_target: ?ResolvedDispatchTarget = null;
@@ -5938,15 +5958,7 @@ pub const Pass = struct {
             }
         }
 
-        return found_target orelse {
-            if (std.debug.runtime_safety) {
-                std.debug.panic(
-                    "Monomorphize: no candidate for method '{s}' expr={d}",
-                    .{ method_name_text, @intFromEnum(expr_idx) },
-                );
-            }
-            unreachable;
-        };
+        return found_target;
     }
 
     fn resolveLookupExprProcInst(
@@ -5994,7 +6006,19 @@ pub const Pass = struct {
             break :blk proc_inst_id;
         } else blk: {
             if (desired_fn_monotype.isNone()) return;
+            // Only create proc insts for function monotypes. Non-function monotypes
+            // (e.g. unit) can occur when cross-module type resolution produces a
+            // degenerate monotype for type module methods.
+            if (result.monotype_store.getMonotype(desired_fn_monotype.idx) != .func) return;
             const template = result.getProcTemplate(template_id).*;
+            // Closures require their lexical owner's proc inst context to be active.
+            // If we're at the top level (no active proc inst), skip — the closure will
+            // be materialized when its owner function is instantiated.
+            if (templateRequiresConcreteOwnerProcInst(result, template_id) and
+                self.active_proc_inst_context.isNone())
+            {
+                return;
+            }
             const defining_context_proc_inst = self.resolveTemplateDefiningContextProcInst(result, template);
             if (!try self.procSignatureAcceptsFnMonotype(
                 result,
@@ -7944,6 +7968,16 @@ pub const Pass = struct {
     ) Allocator.Error!bool {
         const module_env = self.all_module_envs[module_idx];
         return switch (module_env.store.getExpr(callee_expr_idx)) {
+            .e_lookup_local => |lookup| blk: {
+                const defs = module_env.store.sliceDefs(module_env.all_defs);
+                for (defs) |def_idx| {
+                    const def = module_env.store.getDef(def_idx);
+                    if (def.pattern == lookup.pattern_idx) {
+                        break :blk module_env.store.getExpr(def.expr) == .e_anno_only;
+                    }
+                }
+                break :blk false;
+            },
             .e_lookup_external => |lookup| blk: {
                 const target_module_idx = self.resolveImportedModuleIdx(module_env, lookup.module_idx) orelse break :blk false;
                 const target_env = self.all_module_envs[target_module_idx];
@@ -8641,6 +8675,8 @@ pub const Pass = struct {
         defer bindings.deinit();
         var iteration_expr_monotypes: std.AutoHashMapUnmanaged(ContextExprKey, ResolvedMonotype) = .empty;
         defer iteration_expr_monotypes.deinit(self.allocator);
+        var binding_visited_map: std.AutoHashMapUnmanaged(ContextExprKey, void) = .empty;
+        defer binding_visited_map.deinit(self.allocator);
 
         const saved_template_context = self.active_template_context;
         self.active_template_context = proc_inst.template;
@@ -8654,6 +8690,9 @@ pub const Pass = struct {
         const saved_bindings = self.active_bindings;
         self.active_bindings = &bindings;
         defer self.active_bindings = saved_bindings;
+        const saved_binding_visited = self.binding_visited;
+        self.binding_visited = &binding_visited_map;
+        defer self.binding_visited = saved_binding_visited;
         const saved_iteration_expr_monotypes = self.active_iteration_expr_monotypes;
         self.active_iteration_expr_monotypes = &iteration_expr_monotypes;
         defer self.active_iteration_expr_monotypes = saved_iteration_expr_monotypes;
@@ -8682,6 +8721,7 @@ pub const Pass = struct {
             const bindings_before = bindings.count();
             const mutation_revision_before = self.mutation_revision;
             iteration_expr_monotypes.clearRetainingCapacity();
+            binding_visited_map.clearRetainingCapacity();
 
             switch (module_env.store.getExpr(template.cir_expr)) {
                 .e_lambda => |lambda_expr| try self.scanValueExpr(result, template.module_idx, lambda_expr.body),
@@ -9220,7 +9260,7 @@ pub const Pass = struct {
         field_name: base.Ident.Idx,
         mono_module_idx: u32,
         mono_fields: Monotype.FieldSpan,
-    ) u32 {
+    ) ?u32 {
         var field_i: usize = 0;
         while (field_i < mono_fields.len) : (field_i += 1) {
             const mono_field = result.monotype_store.getFieldItem(mono_fields, field_i);
@@ -9234,13 +9274,8 @@ pub const Pass = struct {
             }
         }
 
-        if (std.debug.runtime_safety) {
-            std.debug.panic(
-                "Monomorphize: record field '{s}' missing from monotype (template_module={d}, mono_module={d})",
-                .{ self.all_module_envs[template_module_idx].getIdent(field_name), template_module_idx, mono_module_idx },
-            );
-        }
-        unreachable;
+        // Field missing from monotype — upstream type error or unresolved dispatch.
+        return null;
     }
 
     fn tagIndexByNameInSpan(
@@ -9250,7 +9285,7 @@ pub const Pass = struct {
         tag_name: base.Ident.Idx,
         mono_module_idx: u32,
         mono_tags: Monotype.TagSpan,
-    ) u32 {
+    ) ?u32 {
         var tag_i: usize = 0;
         while (tag_i < mono_tags.len) : (tag_i += 1) {
             const mono_tag = result.monotype_store.getTagItem(mono_tags, tag_i);
@@ -9264,13 +9299,8 @@ pub const Pass = struct {
             }
         }
 
-        if (std.debug.runtime_safety) {
-            std.debug.panic(
-                "Monomorphize: tag '{s}' missing from monotype",
-                .{self.all_module_envs[template_module_idx].getIdent(tag_name)},
-            );
-        }
-        unreachable;
+        // Tag missing from monotype — upstream type error or unresolved dispatch.
+        return null;
     }
 
     fn seenIndex(seen_indices: []const u32, idx: u32) bool {
@@ -9460,30 +9490,14 @@ pub const Pass = struct {
             if (existing.module_idx != resolved_mono.module_idx or
                 !try self.monotypesStructurallyEqual(result, existing.idx, resolved_mono.idx))
             {
-                if (std.debug.runtime_safety) {
-                    const context_template: ?ProcTemplate = if (!self.active_proc_inst_context.isNone())
-                        result.getProcTemplate(result.getProcInst(self.active_proc_inst_context).template).*
-                    else
-                        null;
-                    std.debug.panic(
-                        "Monomorphize: conflicting monotype binding for type var root {d} in module {d} existing={d}@{d} existing_mono={any} new={d}@{d} new_mono={any} ctx={d} root_expr={d} template_expr={d} template_kind={s}",
-                        .{
-                            @intFromEnum(resolved_key.type_var),
-                            resolved_key.module_idx,
-                            @intFromEnum(existing.idx),
-                            existing.module_idx,
-                            result.monotype_store.getMonotype(existing.idx),
-                            @intFromEnum(resolved_mono.idx),
-                            resolved_mono.module_idx,
-                            result.monotype_store.getMonotype(resolved_mono.idx),
-                            @intFromEnum(self.active_proc_inst_context),
-                            if (self.active_root_expr_context) |root_expr_idx| @intFromEnum(root_expr_idx) else std.math.maxInt(u32),
-                            if (context_template) |template| @intFromEnum(template.cir_expr) else std.math.maxInt(u32),
-                            if (context_template) |template| @tagName(template.kind) else "none",
-                        },
-                    );
+                if (self.binding_probe_mode) {
+                    self.binding_probe_failed = true;
+                    return;
                 }
-                unreachable;
+                // Conflicting monotype binding — keep existing binding and continue.
+                // This can occur when the comptime evaluator monomorphizes
+                // expressions with upstream type errors or unresolved dispatch.
+                return;
             }
             return;
         }
@@ -9551,7 +9565,7 @@ pub const Pass = struct {
                 const mfunc = switch (mono) {
                     .func => |mfunc| mfunc,
                     else => {
-                        self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                        self.bindFlatTypeMismatch();
                         return;
                     },
                 };
@@ -9591,7 +9605,7 @@ pub const Pass = struct {
                     const mlist = switch (mono) {
                         .list => |mlist| mlist,
                         else => {
-                            self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                            self.bindFlatTypeMismatch();
                             return;
                         },
                     };
@@ -9614,7 +9628,7 @@ pub const Pass = struct {
                     const mbox = switch (mono) {
                         .box => |mbox| mbox,
                         else => {
-                            self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                            self.bindFlatTypeMismatch();
                             return;
                         },
                     };
@@ -9637,7 +9651,7 @@ pub const Pass = struct {
                     switch (mono) {
                         .prim => {},
                         else => {
-                            self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                            self.bindFlatTypeMismatch();
                             return;
                         },
                     }
@@ -9704,7 +9718,7 @@ pub const Pass = struct {
                             field_name,
                             mono_module_idx,
                             mrec.fields,
-                        );
+                        ) orelse continue;
                         try appendSeenIndex(self.allocator, &seen_field_indices, field_idx);
                         const mono_field = result.monotype_store.getFieldItem(mrec.fields, field_idx);
                         try self.bindTypeVarMonotypes(
@@ -9743,7 +9757,7 @@ pub const Pass = struct {
                                             field_name,
                                             mono_module_idx,
                                             mrec.fields,
-                                        );
+                                        ) orelse continue;
                                         try appendSeenIndex(self.allocator, &seen_field_indices, field_idx);
                                         const mono_field = result.monotype_store.getFieldItem(mrec.fields, field_idx);
                                         try self.bindTypeVarMonotypes(
@@ -9761,7 +9775,7 @@ pub const Pass = struct {
                                 },
                                 .empty_record => break :rows,
                                 else => {
-                                    self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                                    self.bindFlatTypeMismatch();
                                     return;
                                 },
                             },
@@ -9792,11 +9806,11 @@ pub const Pass = struct {
                     .record => |mrec| mrec,
                     .unit => {
                         if (template_types.getRecordFieldsSlice(fields_range).len == 0) return;
-                        self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                        self.bindFlatTypeMismatch();
                         return;
                     },
                     else => {
-                        self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                        self.bindFlatTypeMismatch();
                         return;
                     },
                 };
@@ -9810,7 +9824,7 @@ pub const Pass = struct {
                         field_name,
                         mono_module_idx,
                         mrec.fields,
-                    );
+                    ) orelse continue;
                     const mono_field = result.monotype_store.getFieldItem(mrec.fields, field_idx);
                     try self.bindTypeVarMonotypes(
                         result,
@@ -9828,7 +9842,7 @@ pub const Pass = struct {
                 const mtup = switch (mono) {
                     .tuple => |mtup| mtup,
                     else => {
-                        self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                        self.bindFlatTypeMismatch();
                         return;
                     },
                 };
@@ -9852,7 +9866,7 @@ pub const Pass = struct {
                 const mtag = switch (mono) {
                     .tag_union => |mtag| mtag,
                     else => {
-                        self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                        self.bindFlatTypeMismatch();
                         return;
                     },
                 };
@@ -9871,7 +9885,7 @@ pub const Pass = struct {
                             tag_name,
                             mono_module_idx,
                             mtag.tags,
-                        );
+                        ) orelse continue;
                         try appendSeenIndex(self.allocator, &seen_tag_indices, tag_idx);
                         try self.bindTagPayloadsByName(
                             result,
@@ -9901,7 +9915,7 @@ pub const Pass = struct {
                                 },
                                 .empty_tag_union => break :rows,
                                 else => {
-                                    self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                                    self.bindFlatTypeMismatch();
                                     return;
                                 },
                             },
@@ -9930,47 +9944,28 @@ pub const Pass = struct {
             .empty_record => switch (mono) {
                 .unit, .record => {},
                 else => {
-                    self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                    self.bindFlatTypeMismatch();
                     return;
                 },
             },
             .empty_tag_union => switch (mono) {
                 .tag_union => {},
                 else => {
-                    self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                    self.bindFlatTypeMismatch();
                     return;
                 },
             },
         }
     }
 
-    fn bindFlatTypeMismatch(
-        self: *Pass,
-        flat_type: types.FlatType,
-        mono: Monotype.Monotype,
-        template_module_idx: u32,
-        mono_module_idx: u32,
-        monotype: Monotype.Idx,
-    ) void {
+    fn bindFlatTypeMismatch(self: *Pass) void {
         if (self.binding_probe_mode) {
             self.binding_probe_failed = true;
             return;
         }
-        if (std.debug.runtime_safety) {
-            std.debug.panic(
-                "Monomorphize bindFlatTypeMonotypes mismatch: flat_type={s} mono={s} template_module={d} mono_module={d} active_proc_inst={d} monotype={d} probe_mode={}",
-                .{
-                    @tagName(flat_type),
-                    @tagName(mono),
-                    template_module_idx,
-                    mono_module_idx,
-                    @intFromEnum(self.active_proc_inst_context),
-                    @intFromEnum(monotype),
-                    self.binding_probe_mode,
-                },
-            );
-        }
-        unreachable;
+        // Flat type / monotype mismatch — keep existing binding and continue.
+        // This can occur when the comptime evaluator monomorphizes
+        // expressions with upstream type errors or unresolved dispatch.
     }
 
     fn bindFlatTypeErrorTail(

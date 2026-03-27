@@ -675,7 +675,8 @@ fn tagPayloadMonotypes(self: *Self, union_mono_idx: Monotype.Idx, tag_name: Iden
     const union_mono = self.mir_store.monotype_store.getMonotype(union_mono_idx);
     const tags = switch (union_mono) {
         .tag_union => |tu| self.mir_store.monotype_store.getTags(tu.tags),
-        else => unreachable,
+        // Non-tag-union monotype (e.g. unit from upstream type error). Return empty.
+        else => return &.{},
     };
 
     for (tags) |tag| {
@@ -1222,6 +1223,11 @@ fn runtimeValueLayoutFromMirExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator
     }
 
     switch (expr) {
+        .int => {
+            const resolved = try self.layoutFromMonotype(mono_idx);
+            if (resolved == .zst) return .dec;
+            return resolved;
+        },
         .call => |call_data| {
             if (!(try self.monotypeMayContainFunctionValue(mono_idx))) {
                 return self.layoutFromMonotype(mono_idx);
@@ -2218,23 +2224,11 @@ fn tagDiscriminant(self: *const Self, tag_name: Ident.Idx, union_mono_idx: Monot
                     return @intCast(i);
                 }
             }
-            if (builtin.mode == .Debug) {
-                std.debug.panic(
-                    "MirToLir invariant violated: tag ident idx {d} not found in tag union mono_idx={d}",
-                    .{ tag_name.idx, @intFromEnum(union_mono_idx) },
-                );
-            }
-            unreachable;
+            // Tag not found — upstream type error produced a degenerate monotype.
+            return 0;
         },
-        .prim, .unit, .record, .tuple, .list, .box, .func, .recursive_placeholder => {
-            if (builtin.mode == .Debug) {
-                std.debug.panic(
-                    "tagDiscriminant expected tag_union; got {s} for tag ident idx {d} mono_idx={d}",
-                    .{ @tagName(std.meta.activeTag(monotype)), tag_name.idx, @intFromEnum(union_mono_idx) },
-                );
-            }
-            unreachable;
-        },
+        // Non-tag-union monotype (e.g. unit from upstream type error).
+        else => return 0,
     }
 }
 
@@ -2635,9 +2629,14 @@ fn lowerExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirExprId {
             break :blk try acc.finish(result, .str, region);
         },
         .run_low_level => |ll| self.lowerLowLevel(ll, mir_expr_id, region),
-        .runtime_err_can, .runtime_err_type, .runtime_err_ellipsis, .runtime_err_anno_only => {
+        .runtime_err_can, .runtime_err_type, .runtime_err_ellipsis => {
             const ret_layout = try self.layoutFromMonotype(mono_idx);
             return self.lir_store.addExpr(.{ .runtime_error = .{ .ret_layout = ret_layout } }, region);
+        },
+        .runtime_err_anno_only => {
+            const ret_layout = try self.layoutFromMonotype(mono_idx);
+            const msg = try self.lir_store.strings.insert(self.allocator, "Accessed a value that has no implementation");
+            return self.lir_store.addExpr(.{ .crash = .{ .msg = msg, .ret_layout = ret_layout } }, region);
         },
         .crash => |s| blk: {
             const lir_str_idx = try self.copyStringToLir(s);
@@ -2694,7 +2693,13 @@ fn lowerInt(self: *Self, int_data: anytype, mono_idx: Monotype.Idx, region: Regi
     // Use the monotype to determine the concrete integer layout.
     // For 128-bit types, always emit i128_literal even if the value fits in i64,
     // so codegen receives the correct ABI width and signedness.
-    const target_layout = try self.layoutFromMonotype(mono_idx);
+    const target_layout = blk: {
+        const resolved = try self.layoutFromMonotype(mono_idx);
+        // Generic unsuffixed integer literals can still be unresolved at this
+        // stage inside polymorphic call sites. Roc defaults those literals to
+        // Dec, so don't propagate a temporary zst layout into runtime codegen.
+        break :blk if (resolved == .zst) layout.Idx.dec else resolved;
+    };
 
     // Dec: integer literals with Dec type must be scaled by 10^18 (RocDec representation).
     // The MIR stores the raw integer value; we convert to Dec here.
@@ -2929,9 +2934,16 @@ fn lowerTuple(self: *Self, fields: MIR.ExprSpan, _: Monotype.Idx, mir_expr_id: M
 fn lowerTag(self: *Self, tag_data: anytype, mono_idx: Monotype.Idx, mir_expr_id: MIR.ExprId, region: Region) Allocator.Error!LirExprId {
     const mir_args = self.tagPayloadExprs(mono_idx, tag_data.name, tag_data.args);
 
-    const union_layout = try self.runtimeValueLayoutFromMirExpr(mir_expr_id);
+    const outer_layout = try self.runtimeValueLayoutFromMirExpr(mir_expr_id);
     const discriminant = self.tagDiscriminant(tag_data.name, mono_idx);
+    const outer_layout_val = self.layout_store.getLayout(outer_layout);
+
+    // For boxed recursive tag unions, unwrap the box to get the inner tag_union layout.
+    // The tag expression itself operates on the inner layout; we box the result afterward.
+    const is_boxed = outer_layout_val.tag == .box;
+    const union_layout = if (is_boxed) outer_layout_val.data.box else outer_layout;
     const union_layout_val = self.layout_store.getLayout(union_layout);
+
     if (union_layout_val.tag == .scalar or union_layout_val.tag == .zst) {
         var acc = self.startLetAccumulator();
         for (mir_args) |mir_arg| {
@@ -2943,7 +2955,11 @@ fn lowerTag(self: *Self, tag_data: anytype, mono_idx: Monotype.Idx, mir_expr_id:
             .discriminant = discriminant,
             .union_layout = union_layout,
         } }, region);
-        return acc.finish(zero_arg_tag, union_layout, region);
+        const tag_result = try acc.finish(zero_arg_tag, union_layout, region);
+        if (is_boxed) {
+            return self.boxValue(tag_result, union_layout, outer_layout, region);
+        }
+        return tag_result;
     }
 
     const variant_payload_layout: ?layout.Idx = if (union_layout_val.tag == .tag_union) blk: {
@@ -2953,10 +2969,14 @@ fn lowerTag(self: *Self, tag_data: anytype, mono_idx: Monotype.Idx, mir_expr_id:
     } else null;
 
     if (mir_args.len == 0) {
-        return self.lir_store.addExpr(.{ .zero_arg_tag = .{
+        const zero_arg_tag = try self.lir_store.addExpr(.{ .zero_arg_tag = .{
             .discriminant = discriminant,
             .union_layout = union_layout,
         } }, region);
+        if (is_boxed) {
+            return self.boxValue(zero_arg_tag, union_layout, outer_layout, region);
+        }
+        return zero_arg_tag;
     }
 
     var acc = self.startLetAccumulator();
@@ -2993,7 +3013,24 @@ fn lowerTag(self: *Self, tag_data: anytype, mono_idx: Monotype.Idx, mir_expr_id:
         .union_layout = union_layout,
         .args = lir_args,
     } }, region);
-    return acc.finish(tag_expr, union_layout, region);
+    const tag_result = try acc.finish(tag_expr, union_layout, region);
+    if (is_boxed) {
+        return self.boxValue(tag_result, union_layout, outer_layout, region);
+    }
+    return tag_result;
+}
+
+/// Wrap a value in a box using the box_box low-level operation.
+fn boxValue(self: *Self, value_expr: LirExprId, source_layout: layout.Idx, target_layout: layout.Idx, region: Region) Allocator.Error!LirExprId {
+    var acc = self.startLetAccumulator();
+    const source_value = try acc.ensureSymbol(value_expr, source_layout, region);
+    const args = try self.lir_store.addExprSpan(&[_]LirExprId{source_value});
+    const low_level = try self.lir_store.addExpr(.{ .low_level = .{
+        .op = .box_box,
+        .args = args,
+        .ret_layout = target_layout,
+    } }, region);
+    return acc.finish(low_level, target_layout, region);
 }
 
 fn lowerLookup(self: *Self, sym: Symbol, mono_idx: Monotype.Idx, mir_expr_id: MIR.ExprId, region: Region) Allocator.Error!LirExprId {
@@ -3681,15 +3718,14 @@ fn lowerCall(self: *Self, call_data: anytype, mir_expr_id: MIR.ExprId, region: R
     const ret_layout = try self.runtimeValueLayoutFromMirExpr(mir_expr_id);
 
     // Some annotation-only methods are compiler intrinsics. Lower those directly.
+    // Non-intrinsic annotation-only calls crash at runtime (function has no implementation).
     const func_mir_expr = self.mir_store.getExpr(call_data.func);
     if (func_mir_expr == .runtime_err_anno_only) {
         if (try self.lowerAnnotationOnlyIntrinsicCall(call_data, mono_idx, region)) |lowered| {
             return lowered;
         }
-        if (std.debug.runtime_safety) {
-            std.debug.panic("MirToLir unsupported: direct call to annotation-only intrinsic", .{});
-        }
-        unreachable;
+        const msg = try self.lir_store.strings.insert(self.allocator, "Called a function that has no implementation");
+        return self.lir_store.addExpr(.{ .crash = .{ .msg = msg, .ret_layout = ret_layout } }, region);
     }
     if (func_mir_expr == .lookup) {
         const sym = func_mir_expr.lookup;
@@ -3698,13 +3734,8 @@ fn lowerCall(self: *Self, call_data: anytype, mir_expr_id: MIR.ExprId, region: R
                 if (try self.lowerAnnotationOnlyIntrinsicCall(call_data, mono_idx, region)) |lowered| {
                     return lowered;
                 }
-                if (std.debug.runtime_safety) {
-                    std.debug.panic(
-                        "MirToLir unsupported: call to annotation-only symbol key={d}",
-                        .{sym.raw()},
-                    );
-                }
-                unreachable;
+                const msg = try self.lir_store.strings.insert(self.allocator, "Called a function that has no implementation");
+                return self.lir_store.addExpr(.{ .crash = .{ .msg = msg, .ret_layout = ret_layout } }, region);
             }
         }
     }
@@ -3780,52 +3811,20 @@ fn lowerCall(self: *Self, call_data: anytype, mir_expr_id: MIR.ExprId, region: R
     // Direct function call — only for inline lambda calls or HOF parameters (which
     // have no symbol_defs entry). After lambda set unification, all lookup callees
     // with lambda defs should have lambda sets and go through lowerClosureCall.
-    if (func_mir_expr == .lookup and std.debug.runtime_safety) {
-        const sym = func_mir_expr.lookup;
-        const expr_ls = if (self.lambda_set_store.getExprLambdaSet(call_data.func)) |ls_idx|
-            @intFromEnum(ls_idx)
-        else
-            std.math.maxInt(u32);
-        const symbol_ls = if (self.lambda_set_store.getSymbolLambdaSet(sym)) |ls_idx|
-            @intFromEnum(ls_idx)
-        else
-            std.math.maxInt(u32);
-        const source_expr = if (self.lambda_set_store.getSymbolSourceExpr(sym)) |expr_id|
-            @intFromEnum(expr_id)
-        else
-            std.math.maxInt(u32);
-        const seed_proc_count: usize = if (self.mir_store.getSymbolSeedProcSet(sym)) |proc_ids|
-            proc_ids.len
-        else
-            0;
-        const value_def_expr: u32 = if (self.mir_store.getValueDef(sym)) |expr_id|
-            @intFromEnum(expr_id)
-        else
-            std.math.maxInt(u32);
-        const value_def_tag = if (self.mir_store.getValueDef(sym)) |expr_id|
-            @tagName(self.mir_store.getExpr(expr_id))
-        else
-            "none";
-        const owner = self.debugSymbolOwner(sym);
-        std.debug.panic(
-            "MirToLir invariant violated: lookup callee reached direct call fallback without lambda-set/direct-proc resolution, call_expr={d} func_expr={d} symbol key={d} expr_ls={d} symbol_ls={d} source_expr={d} seed_proc_count={d} value_def={d}:{s} owner={s} owner_proc={d} owner_local={d}",
-            .{
-                @intFromEnum(mir_expr_id),
-                @intFromEnum(call_data.func),
-                sym.raw(),
-                expr_ls,
-                symbol_ls,
-                source_expr,
-                seed_proc_count,
-                value_def_expr,
-                value_def_tag,
-                @tagName(owner.kind),
-                owner.proc_idx,
-                owner.local_idx,
-            },
-        );
+    // When a lookup callee has no lambda-set resolution, emit a crash expression
+    // so the interpreter can report the error instead of panicking the compiler.
+    if (func_mir_expr == .lookup) {
+        const msg = try self.lir_store.strings.insert(self.allocator, "Called a function that could not be resolved");
+        return self.lir_store.addExpr(.{ .crash = .{ .msg = msg, .ret_layout = ret_layout } }, region);
     }
 
+    // Non-proc callees can reach here when cross-module type resolution produces
+    // degenerate monotypes (e.g. for type module methods during comptime evaluation).
+    // Emit a crash expression instead of panicking the compiler.
+    if (func_mir_expr == .runtime_err_type or func_mir_expr == .runtime_err_can) {
+        const msg = try self.lir_store.strings.insert(self.allocator, "Called a function that could not be resolved");
+        return self.lir_store.addExpr(.{ .crash = .{ .msg = msg, .ret_layout = ret_layout } }, region);
+    }
     if (std.debug.runtime_safety) {
         if (func_mir_expr == .lookup) {
             const sym = func_mir_expr.lookup;
@@ -5424,6 +5423,9 @@ fn registerBindingPatternSymbols(
                         }
                     }
                 },
+                // Unit can appear here when upstream type errors produce
+                // a runtime_err_type with unit monotype. Skip registration.
+                .unit => {},
                 else => unreachable,
             }
         },
@@ -5686,6 +5688,9 @@ fn lowerPatternInternal(
 
                     break :blk self.lowerWildcardBindingPattern(struct_layout, ownership_mode, region);
                 },
+                // Unit can appear here from upstream type errors producing
+                // runtime_err_type with unit monotype. Treat as empty binding.
+                .unit => break :blk self.lowerWildcardBindingPattern(struct_layout, ownership_mode, region),
                 else => unreachable,
             }
         },

@@ -9,7 +9,6 @@ pub const dev = @import("dev/mod.zig");
 pub const wasm = @import("wasm/mod.zig");
 
 // Re-export dev backend types at top level.
-pub const EvalBackend = dev.EvalBackend;
 pub const x86_64 = dev.x86_64;
 pub const aarch64 = dev.aarch64;
 pub const object = dev.object;

@@ -1011,7 +1011,7 @@ pub const BuildEnv = struct {
         // Now finalize numeric defaults for the app module. This must happen AFTER
         // checkPlatformRequirements so that numeric literals can be constrained by
         // platform types (e.g., I64) before defaulting to Dec.
-        try checker.finalizeNumericDefaults();
+        try checker.verifyNumericDefaults();
 
         // If there are type problems, convert them to reports and emit via sink
         if (checker.problems.problems.items.len > 0) {

@@ -2807,6 +2807,30 @@ pub fn getIdentText(self: *const Self, idx: Ident.Idx) []const u8 {
     return self.getIdent(idx);
 }
 
+/// Builds a mapping from platform for-clause alias ident indices to the
+/// equivalent ident indices in the app module's store.
+///
+/// This encapsulates all cross-module string-based ident resolution so that
+/// downstream code (e.g. in src/eval/) only needs to do index lookups via `map.get()`.
+pub fn buildPlatformToAppIdentMap(
+    self: *const Self,
+    gpa: std.mem.Allocator,
+    app_env: *const Self,
+) std.mem.Allocator.Error!std.AutoHashMap(Ident.Idx, Ident.Idx) {
+    var map = std.AutoHashMap(Ident.Idx, Ident.Idx).init(gpa);
+    errdefer map.deinit();
+    const all_aliases = self.for_clause_aliases.items.items;
+    for (self.requires_types.items.items) |required_type| {
+        const type_aliases_slice = all_aliases[@intFromEnum(required_type.type_aliases.start)..][0..required_type.type_aliases.count];
+        for (type_aliases_slice) |alias| {
+            if (app_env.common.findIdentFrom(&self.common, alias.alias_name)) |app_ident| {
+                try map.put(alias.alias_name, app_ident);
+            }
+        }
+    }
+    return map;
+}
+
 /// Helper function to generate the S-expression node for the entire module.
 /// If a single expression is provided, only that expression is returned.
 pub fn pushToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *SExprTree) std.mem.Allocator.Error!void {
