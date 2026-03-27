@@ -112,7 +112,6 @@ pub fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, ex
         env_imports.addHostFunction("roc_dec_from_str", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostDecFromStr, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_float_from_str", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostFloatFromStr, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_list_append_unsafe", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostListAppendUnsafe, null) catch return error.WasmExecFailed;
-        env_imports.addHostFunction("roc_list_sort_with", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostListSortWith, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_list_reverse", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostListReverse, null) catch return error.WasmExecFailed;
 
         const imports = [_]bytebox.ModuleImportPackage{env_imports};
@@ -858,64 +857,6 @@ fn hostStrJoinWith(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]c
         }
     }
     writeWasmStr(buffer, @intCast(params[2].I32), buffer[dest_start..].ptr, total_len);
-}
-
-fn hostListSortWith(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
-    const buffer = module.store.getMemory(0).buffer();
-    const list_ptr: usize = @intCast(params[0].I32);
-    const cmp_fn_idx: u32 = @bitCast(params[1].I32);
-    const elem_width: usize = @intCast(params[2].I32);
-    const alignment: u32 = @bitCast(params[3].I32);
-    const result_ptr: usize = @intCast(params[4].I32);
-
-    const data_ptr: usize = @intCast(std.mem.readInt(u32, buffer[list_ptr..][0..4], .little));
-    const len: usize = @intCast(std.mem.readInt(u32, buffer[list_ptr + 4 ..][0..4], .little));
-    const cap: usize = @intCast(std.mem.readInt(u32, buffer[list_ptr + 8 ..][0..4], .little));
-
-    if (len < 2 or elem_width == 0) {
-        std.mem.writeInt(u32, buffer[result_ptr..][0..4], @intCast(data_ptr), .little);
-        std.mem.writeInt(u32, buffer[result_ptr + 4 ..][0..4], @intCast(len), .little);
-        std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(cap), .little);
-        return;
-    }
-
-    const sorted_data = allocWasmData(buffer, alignment, len * elem_width);
-    @memcpy(buffer[sorted_data..][0 .. len * elem_width], buffer[data_ptr..][0 .. len * elem_width]);
-
-    const temp_ptr = allocWasmData(buffer, alignment, elem_width);
-    const cmp_handle = bytebox.FunctionHandle{ .index = cmp_fn_idx };
-    var cmp_params = [3]bytebox.Val{
-        .{ .I32 = 0 },
-        .{ .I32 = 0 },
-        .{ .I32 = 0 },
-    };
-    var cmp_returns: [1]bytebox.Val = undefined;
-
-    var i: usize = 1;
-    while (i < len) : (i += 1) {
-        const elem_i = sorted_data + i * elem_width;
-        @memcpy(buffer[temp_ptr..][0..elem_width], buffer[elem_i..][0..elem_width]);
-
-        var j = i;
-        while (j > 0) {
-            const prev_elem = sorted_data + (j - 1) * elem_width;
-            cmp_params[1] = .{ .I32 = @intCast(temp_ptr) };
-            cmp_params[2] = .{ .I32 = @intCast(prev_elem) };
-            module.invoke(cmp_handle, &cmp_params, &cmp_returns, .{}) catch return;
-            if (cmp_returns[0].I32 != 2) break;
-
-            const dst_elem = sorted_data + j * elem_width;
-            @memcpy(buffer[dst_elem..][0..elem_width], buffer[prev_elem..][0..elem_width]);
-            j -= 1;
-        }
-
-        const insert_pos = sorted_data + j * elem_width;
-        @memcpy(buffer[insert_pos..][0..elem_width], buffer[temp_ptr..][0..elem_width]);
-    }
-
-    std.mem.writeInt(u32, buffer[result_ptr..][0..4], @intCast(sorted_data), .little);
-    std.mem.writeInt(u32, buffer[result_ptr + 4 ..][0..4], @intCast(len), .little);
-    std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(len), .little);
 }
 
 fn hostListAppendUnsafe(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {

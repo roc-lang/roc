@@ -31,14 +31,14 @@ fn isBuiltinModuleEnv(env: *const ModuleEnv) bool {
 }
 
 const MIR = mir.MIR;
-const LirExprStore = lir.LirExprStore;
+const LirStore = lir.LirStore;
 const LirExprId = lir.LirExprId;
 const LirExpr = lir.LirExpr;
 const WasmCodeGen = backend.wasm.WasmCodeGen;
 
 /// Extract the result layout from a LIR expression.
 /// Mirrors the logic in dev_evaluator.zig.
-fn lirExprResultLayout(store: *const LirExprStore, expr_id: LirExprId) layout.Idx {
+fn lirExprResultLayout(store: *const LirStore, expr_id: LirExprId) layout.Idx {
     const expr: LirExpr = store.getExpr(expr_id);
     return switch (expr) {
         .block => |b| b.result_layout,
@@ -239,16 +239,15 @@ pub const WasmEvaluator = struct {
             return error.RuntimeError;
         };
 
-        // Run lambda set inference
         const mir_mod = @import("mir");
-        var lambda_set_store = mir_mod.LambdaSet.infer(self.allocator, &mir_store, all_module_envs) catch return error.OutOfMemory;
-        defer lambda_set_store.deinit(self.allocator);
+        var mir_analyses = try mir_mod.Analyses.init(self.allocator, &mir_store, layout_store_ptr, &.{mir_expr_id});
+        defer mir_analyses.deinit();
 
         // Lower MIR -> LIR
-        var lir_store = LirExprStore.init(self.allocator);
+        var lir_store = LirStore.init(self.allocator);
         defer lir_store.deinit();
 
-        var mir_to_lir = lir.MirToLir.init(self.allocator, &mir_store, &lir_store, layout_store_ptr, &lambda_set_store, module_env.idents.true_tag);
+        var mir_to_lir = lir.MirToLir.init(self.allocator, &mir_store, &lir_store, layout_store_ptr, &mir_analyses);
         defer mir_to_lir.deinit();
 
         const lir_expr_id = mir_to_lir.lower(mir_expr_id) catch {

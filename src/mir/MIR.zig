@@ -964,6 +964,24 @@ pub const Store = struct {
         return self.value_defs.get(@bitCast(symbol));
     }
 
+    /// Resolve a proc-backed callable identity through transparent MIR wrappers.
+    ///
+    /// This is a semantic MIR helper. It answers "which proc does this callable
+    /// value represent?" and does not enforce later lowering-stage restrictions
+    /// such as whether statementful wrapper nodes are admissible at a given
+    /// lowering boundary.
+    pub fn resolveCallableProcId(self: *const Store, expr_id: ExprId) ?ProcId {
+        return switch (self.getExpr(expr_id)) {
+            .proc_ref => |proc_id| proc_id,
+            .closure_make => |closure| closure.proc,
+            .block => |block| self.resolveCallableProcId(block.final_expr),
+            .dbg_expr => |dbg_expr| self.resolveCallableProcId(dbg_expr.expr),
+            .expect => |expect| self.resolveCallableProcId(expect.body),
+            .return_expr => |ret| self.resolveCallableProcId(ret.expr),
+            else => null,
+        };
+    }
+
     /// Register mutability metadata for a symbol.
     pub fn registerSymbolReassignable(self: *Store, allocator: Allocator, symbol: Symbol, reassignable: bool) !void {
         const key = symbol.raw();

@@ -359,6 +359,71 @@ Builtin :: [].{
 		with_capacity : U64 -> List(item)
 		## Sort with a custom comparison function
 		sort_with : List(item), (item, item -> [LT, EQ, GT]) -> List(item)
+		sort_with = |list, order| {
+			list_len = List.len(list)
+
+			if list_len < 2 {
+				list
+			} else {
+				List.sort_with_help(list, order, 0, Num.sub_wrap(list_len, 1))
+			}
+		}
+
+		sort_with_help : List(item), (item, item -> [LT, EQ, GT]), U64, U64 -> List(item)
+		sort_with_help = |list, order, low, high| {
+			if low < high {
+				when List.sort_with_partition(low, high, list, order) is
+					Pair(partition_index, partitioned) ->
+						partitioned
+						|> List.sort_with_help(order, low, Num.sub_saturated(partition_index, 1))
+						|> List.sort_with_help(order, partition_index + 1, high)
+			} else {
+				list
+			}
+		}
+
+		sort_with_partition : U64, U64, List(item), (item, item -> [LT, EQ, GT]) -> [Pair U64 (List(item))]
+		sort_with_partition = |low, high, initial_list, order| {
+			when List.get(initial_list, high) is
+				Ok(pivot) ->
+					when List.sort_with_partition_help(low, low, initial_list, order, high, pivot) is
+						Pair(new_low, new_list) ->
+							Pair(new_low, List.sort_with_swap(new_low, high, new_list))
+
+				Err(_) ->
+					Pair(low, initial_list)
+		}
+
+		sort_with_partition_help : U64, U64, List(item), (item, item -> [LT, EQ, GT]), U64, item -> [Pair U64 (List(item))]
+		sort_with_partition_help = |i, j, list, order, high, pivot| {
+			if j < high {
+				when List.get(list, j) is
+					Ok(value) ->
+						when order(value, pivot) is
+							LT | EQ ->
+								List.sort_with_partition_help(i + 1, j + 1, List.sort_with_swap(i, j, list), order, high, pivot)
+
+							GT ->
+								List.sort_with_partition_help(i, j + 1, list, order, high, pivot)
+
+					Err(_) ->
+						Pair(i, list)
+			} else {
+				Pair(i, list)
+			}
+		}
+
+		sort_with_swap : U64, U64, List(item) -> List(item)
+		sort_with_swap = |i, j, list| {
+			when Pair(List.get(list, i), List.get(list, j)) is
+				Pair(Ok(at_i), Ok(at_j)) ->
+					list
+					|> List.set(i, at_j)
+					|> List.set(j, at_i)
+
+				_ ->
+					list
+		}
 
 		is_eq : List(item), List(item) -> Bool
 			where [item.is_eq : item, item -> Bool]

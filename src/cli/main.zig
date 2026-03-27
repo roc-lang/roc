@@ -4369,14 +4369,19 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         return error.NoEntrypointsLowered;
     }
 
-    // Run lambda set inference after MIR lowering so the store sees the actual entrypoint graph.
-    var lambda_set_store = mir.LambdaSet.infer(ctx.gpa, &mir_store, all_module_envs) catch return error.OutOfMemory;
-    defer lambda_set_store.deinit(ctx.gpa);
+    const pending_root_exprs = try ctx.gpa.alloc(MIR.ExprId, pending_entrypoints.items.len);
+    defer ctx.gpa.free(pending_root_exprs);
+    for (pending_entrypoints.items, 0..) |pending, i| {
+        pending_root_exprs[i] = pending.mir_expr_id;
+    }
 
-    var lir_store = lir.LirExprStore.init(ctx.gpa);
+    var mir_analyses = try mir.Analyses.init(ctx.gpa, &mir_store, &layout_store, pending_root_exprs);
+    defer mir_analyses.deinit();
+
+    var lir_store = lir.LirStore.init(ctx.gpa);
     defer lir_store.deinit();
 
-    var mir_to_lir = lir.MirToLir.init(ctx.gpa, &mir_store, &lir_store, &layout_store, &lambda_set_store, all_module_envs[0].idents.true_tag);
+    var mir_to_lir = lir.MirToLir.init(ctx.gpa, &mir_store, &lir_store, &layout_store, &mir_analyses);
     defer mir_to_lir.deinit();
 
     var entrypoints = try std.ArrayList(backend.Entrypoint).initCapacity(ctx.gpa, pending_entrypoints.items.len);

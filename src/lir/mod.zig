@@ -1,92 +1,45 @@
-//! Low-level Intermediate Representation (LIR)
-//!
-//! This module provides the IR layer between MIR and code generation.
-//! It solves cross-module index collisions by using globally unique symbols.
-//!
-//! Key components:
-//! - `LIR`: Core types (LirExpr, LirPattern, Symbol)
-//! - `LirExprStore`: Flat storage for all lowered expressions
-//! - `MirToLir`: MIR → LIR translation pass
-//!
-//! Usage:
-//! ```zig
-//! const lir = @import("lir");
-//!
-//! // Create a store for lowered expressions
-//! var store = lir.LirExprStore.init(allocator);
-//! defer store.deinit();
-//!
-//! // Access the lowered expression
-//! const lir_expr = store.getExpr(expr_id);
-//! ```
+//! Statement-only LIR module.
 
 const std = @import("std");
+const DebugOwnershipSummary = @import("DebugOwnershipSummary.zig");
+const DebugVerifyLir = @import("DebugVerifyLir.zig");
 
-/// Core IR types: LirExpr, LirPattern, Symbol, etc.
 pub const LIR = @import("LIR.zig");
-
-/// Flat storage for expressions and patterns
-pub const LirExprStore = @import("LirExprStore.zig");
-
-/// Tail recursion detection and transformation
+pub const LirStore = @import("LirStore.zig");
 pub const TailRecursion = @import("TailRecursion.zig");
-
-/// MIR → LIR translation pass
 pub const MirToLir = @import("MirToLir.zig");
-
-/// Ownership normalization for binding-based RC analysis
-pub const OwnershipNormalize = @import("OwnershipNormalize.zig");
-
-/// LIR-level reference counting insertion pass
 pub const RcInsert = @import("rc_insert.zig");
 
-/// Re-export commonly used types from LIR
-pub const LirExpr = LIR.LirExpr;
-/// Re-export pattern type
-pub const LirPattern = LIR.LirPattern;
-/// Re-export symbol type
 pub const Symbol = LIR.Symbol;
-/// Re-export expression ID type
-pub const LirExprId = LIR.LirExprId;
-/// Re-export pattern ID type
-pub const LirPatternId = LIR.LirPatternId;
-/// Re-export expression span type
-pub const LirExprSpan = LIR.LirExprSpan;
-/// Re-export pattern span type
-pub const LirPatternSpan = LIR.LirPatternSpan;
-/// Re-export capture type
-pub const LirCapture = LIR.LirCapture;
-/// Re-export recursive flag type
-pub const Recursive = LIR.Recursive;
-/// Re-export self-recursive flag type
-pub const SelfRecursive = LIR.SelfRecursive;
-/// Re-export join point ID type
+pub const LocalRef = LIR.LocalRef;
+pub const LocalRefSpan = LIR.LocalRefSpan;
 pub const JoinPointId = LIR.JoinPointId;
-/// Control flow statement type for tail recursion
+pub const BorrowScopeId = LIR.BorrowScopeId;
+pub const LiteralValue = LIR.LiteralValue;
+pub const HostedProc = LIR.HostedProc;
+pub const AliasedRef = LIR.AliasedRef;
+pub const BorrowRegion = LIR.BorrowRegion;
+pub const BorrowedRef = LIR.BorrowedRef;
+pub const ResultSemantics = LIR.ResultSemantics;
+pub const RefOp = LIR.RefOp;
+pub const RefProjection = LIR.RefProjection;
+pub const RefProjectionSpan = LIR.RefProjectionSpan;
+pub const ParamRefContract = LIR.ParamRefContract;
+pub const ProcResultContract = LIR.ProcResultContract;
 pub const CFStmt = LIR.CFStmt;
-/// Control flow statement ID type
 pub const CFStmtId = LIR.CFStmtId;
-/// Control flow switch branch type
 pub const CFSwitchBranch = LIR.CFSwitchBranch;
-/// Control flow switch branch span type
 pub const CFSwitchBranchSpan = LIR.CFSwitchBranchSpan;
-/// Control flow match branch type
-pub const CFMatchBranch = LIR.CFMatchBranch;
-/// Control flow match branch span type
-pub const CFMatchBranchSpan = LIR.CFMatchBranchSpan;
-/// Layout index span type
-pub const LayoutIdxSpan = LIR.LayoutIdxSpan;
-/// LIR proc-spec ID type
-pub const LirProcSpecId = LIR.LirProcSpecId;
-/// LIR proc-spec type
 pub const LirProcSpec = LIR.LirProcSpec;
+pub const LirProcSpecId = LIR.LirProcSpecId;
 
 test "lir tests" {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(LIR);
-    std.testing.refAllDecls(LirExprStore);
+    std.testing.refAllDecls(LirStore);
     std.testing.refAllDecls(MirToLir);
-    std.testing.refAllDecls(OwnershipNormalize);
+    std.testing.refAllDecls(DebugOwnershipSummary);
+    std.testing.refAllDecls(DebugVerifyLir);
     std.testing.refAllDecls(TailRecursion);
     std.testing.refAllDecls(RcInsert);
 }

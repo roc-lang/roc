@@ -378,60 +378,6 @@ pub fn roc_builtins_list_with_capacity(out: *RocList, capacity: u64, alignment: 
     out.* = listWithCapacity(capacity, alignment, element_width, elements_refcounted, null, @ptrCast(&rcNone), roc_ops);
 }
 
-/// Wrapper: listSortWith using a backend-provided comparator trampoline.
-pub fn roc_builtins_list_sort_with(
-    out: *RocList,
-    list_bytes: ?[*]u8,
-    list_len: usize,
-    list_cap: usize,
-    cmp_fn_ptr: ?*const anyopaque,
-    cmp_data: ?[*]u8,
-    alignment: u32,
-    element_width: usize,
-    roc_ops: *RocOps,
-) callconv(.c) void {
-    if (list_len < 2 or element_width == 0) {
-        out.* = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-        return;
-    }
-
-    const total_bytes = list_len * element_width;
-    const sorted_bytes = allocateWithRefcountC(total_bytes, alignment, false, roc_ops);
-    if (list_bytes) |src| {
-        @memcpy(sorted_bytes[0..total_bytes], src[0..total_bytes]);
-    }
-
-    const cmp_fn: SortCmpFn = @ptrFromInt(@intFromPtr(cmp_fn_ptr orelse unreachable));
-    const temp_ptr: [*]u8 = @ptrCast(roc_ops.alloc(@max(@as(usize, alignment), 1), element_width));
-    defer roc_ops.dealloc(temp_ptr, @max(@as(usize, alignment), 1));
-
-    var i: usize = 1;
-    while (i < list_len) : (i += 1) {
-        const elem_i = sorted_bytes + i * element_width;
-        @memcpy(temp_ptr[0..element_width], elem_i[0..element_width]);
-
-        var j: usize = i;
-        while (j > 0) {
-            const prev_elem = sorted_bytes + (j - 1) * element_width;
-            const cmp_result = cmp_fn(cmp_data, temp_ptr, prev_elem);
-            if (cmp_result != 2) break;
-
-            const dst_elem = sorted_bytes + j * element_width;
-            @memcpy(dst_elem[0..element_width], prev_elem[0..element_width]);
-            j -= 1;
-        }
-
-        const insert_pos = sorted_bytes + j * element_width;
-        @memcpy(insert_pos[0..element_width], temp_ptr[0..element_width]);
-    }
-
-    out.* = .{
-        .bytes = sorted_bytes,
-        .length = list_len,
-        .capacity_or_alloc_ptr = list_len,
-    };
-}
-
 /// Wrapper: listAppendUnsafe
 pub fn roc_builtins_list_append_unsafe(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, element: ?[*]const u8, element_width: usize, _: *RocOps) callconv(.c) void {
     const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };

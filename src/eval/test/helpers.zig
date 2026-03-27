@@ -71,7 +71,7 @@ fn mirProcIdFromCallableExpr(mir_store: *const MIR.Store, expr_id: MIR.ExprId) ?
 const Allocators = base.Allocators;
 const MIR = mir.MIR;
 const LambdaSet = mir.LambdaSet;
-const LirExprStore = lir.LirExprStore;
+const LirStore = lir.LirStore;
 
 /// Convert a StackValue to a RocValue for formatting.
 fn stackValueToRocValue(result: StackValue, layout_idx_hint: ?interpreter_layout.Idx) interpreter_values.RocValue {
@@ -985,9 +985,6 @@ pub fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, ex
             return error.WasmExecFailed;
         };
         env_imports.addHostFunction("roc_list_append_unsafe", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostListAppendUnsafe, null) catch {
-            return error.WasmExecFailed;
-        };
-        env_imports.addHostFunction("roc_list_sort_with", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostListSortWith, null) catch {
             return error.WasmExecFailed;
         };
         env_imports.addHostFunction("roc_list_reverse", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostListReverse, null) catch {
@@ -2187,64 +2184,6 @@ fn hostStrJoinWith(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]c
         }
     }
     writeWasmStr(buffer, result_ptr, buffer[dest_start..].ptr, total_len);
-}
-
-fn hostListSortWith(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
-    const buffer = module.store.getMemory(0).buffer();
-    const list_ptr: usize = @intCast(params[0].I32);
-    const cmp_fn_idx: u32 = @bitCast(params[1].I32);
-    const elem_width: usize = @intCast(params[2].I32);
-    const alignment: u32 = @bitCast(params[3].I32);
-    const result_ptr: usize = @intCast(params[4].I32);
-
-    const data_ptr: usize = @intCast(std.mem.readInt(u32, buffer[list_ptr..][0..4], .little));
-    const len: usize = @intCast(std.mem.readInt(u32, buffer[list_ptr + 4 ..][0..4], .little));
-    const cap: usize = @intCast(std.mem.readInt(u32, buffer[list_ptr + 8 ..][0..4], .little));
-
-    if (len < 2 or elem_width == 0) {
-        std.mem.writeInt(u32, buffer[result_ptr..][0..4], @intCast(data_ptr), .little);
-        std.mem.writeInt(u32, buffer[result_ptr + 4 ..][0..4], @intCast(len), .little);
-        std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(cap), .little);
-        return;
-    }
-
-    const sorted_data: usize = allocWasmData(buffer, alignment, len * elem_width);
-    @memcpy(buffer[sorted_data..][0 .. len * elem_width], buffer[data_ptr..][0 .. len * elem_width]);
-
-    const temp_ptr: usize = allocWasmData(buffer, alignment, elem_width);
-    const cmp_handle = bytebox.FunctionHandle{ .index = cmp_fn_idx };
-    var cmp_params = [3]bytebox.Val{
-        .{ .I32 = 0 },
-        .{ .I32 = 0 },
-        .{ .I32 = 0 },
-    };
-    var cmp_returns: [1]bytebox.Val = undefined;
-
-    var i: usize = 1;
-    while (i < len) : (i += 1) {
-        const elem_i = sorted_data + i * elem_width;
-        @memcpy(buffer[temp_ptr..][0..elem_width], buffer[elem_i..][0..elem_width]);
-
-        var j = i;
-        while (j > 0) {
-            const prev_elem = sorted_data + (j - 1) * elem_width;
-            cmp_params[1] = .{ .I32 = @intCast(temp_ptr) };
-            cmp_params[2] = .{ .I32 = @intCast(prev_elem) };
-            module.invoke(cmp_handle, &cmp_params, &cmp_returns, .{}) catch return;
-            if (cmp_returns[0].I32 != 2) break;
-
-            const dst_elem = sorted_data + j * elem_width;
-            @memcpy(buffer[dst_elem..][0..elem_width], buffer[prev_elem..][0..elem_width]);
-            j -= 1;
-        }
-
-        const insert_pos = sorted_data + j * elem_width;
-        @memcpy(buffer[insert_pos..][0..elem_width], buffer[temp_ptr..][0..elem_width]);
-    }
-
-    std.mem.writeInt(u32, buffer[result_ptr..][0..4], @intCast(sorted_data), .little);
-    std.mem.writeInt(u32, buffer[result_ptr + 4 ..][0..4], @intCast(len), .little);
-    std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(len), .little);
 }
 
 fn hostListAppendUnsafe(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
@@ -3586,23 +3525,25 @@ test "dev lowering: imported List.any directly calls passed predicate member" {
     );
     defer layout_store.deinit();
 
-    var lir_store = LirExprStore.init(test_allocator);
+    var lir_store = LirStore.init(test_allocator);
     defer lir_store.deinit();
+
+    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &layout_store, &.{mir_expr});
+    defer mir_analyses.deinit();
 
     var translator = lir.MirToLir.init(
         test_allocator,
         &mir_store,
         &lir_store,
         &layout_store,
-        &lambda_set_store,
-        resources.module_env.idents.true_tag,
+        &mir_analyses,
     );
     defer translator.deinit();
 
     _ = try translator.lower(mir_expr);
 
     const Search = struct {
-        fn hasDirectUnaryProcCall(store: *const LirExprStore, expr_id: lir.LIR.LirExprId) bool {
+        fn hasDirectUnaryProcCall(store: *const LirStore, expr_id: lir.LIR.LirExprId) bool {
             const expr = store.getExpr(expr_id);
             switch (expr) {
                 .proc_call => |call| {
@@ -3698,7 +3639,7 @@ test "dev lowering: imported List.any directly calls passed predicate member" {
             }
         }
 
-        fn containsEarlyReturn(store: *const LirExprStore, expr_id: lir.LIR.LirExprId) bool {
+        fn containsEarlyReturn(store: *const LirStore, expr_id: lir.LIR.LirExprId) bool {
             const expr = store.getExpr(expr_id);
             switch (expr) {
                 .early_return => return true,
@@ -3800,7 +3741,7 @@ test "dev lowering: imported List.any directly calls passed predicate member" {
             }
         }
 
-        fn firstEarlyReturnLayout(store: *const LirExprStore, expr_id: lir.LIR.LirExprId) ?layout.Idx {
+        fn firstEarlyReturnLayout(store: *const LirStore, expr_id: lir.LIR.LirExprId) ?layout.Idx {
             const expr = store.getExpr(expr_id);
             switch (expr) {
                 .early_return => |ret| return ret.ret_layout,
@@ -4007,23 +3948,25 @@ test "dev lowering: local any-style HOF directly calls passed predicate member" 
     );
     defer layout_store.deinit();
 
-    var lir_store = LirExprStore.init(test_allocator);
+    var lir_store = LirStore.init(test_allocator);
     defer lir_store.deinit();
+
+    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &layout_store, &.{mir_expr});
+    defer mir_analyses.deinit();
 
     var translator = lir.MirToLir.init(
         test_allocator,
         &mir_store,
         &lir_store,
         &layout_store,
-        &lambda_set_store,
-        resources.module_env.idents.true_tag,
+        &mir_analyses,
     );
     defer translator.deinit();
 
     _ = try translator.lower(mir_expr);
 
     const Search = struct {
-        fn hasDirectUnaryProcCall(store: *const LirExprStore, expr_id: lir.LIR.LirExprId) bool {
+        fn hasDirectUnaryProcCall(store: *const LirStore, expr_id: lir.LIR.LirExprId) bool {
             const expr = store.getExpr(expr_id);
             switch (expr) {
                 .proc_call => |call| {
@@ -4133,9 +4076,6 @@ test "dev lowering: list identity proc keeps ownership transfer in LIR" {
     defer lower.deinit();
 
     const mir_expr = try lower.lowerExpr(resources.expr_idx);
-    var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
-    defer lambda_set_store.deinit(test_allocator);
-
     var layout_store = try layout.Store.init(
         all_module_envs[0..],
         resources.builtin_module.env.idents.builtin_str,
@@ -4144,16 +4084,18 @@ test "dev lowering: list identity proc keeps ownership transfer in LIR" {
     );
     defer layout_store.deinit();
 
-    var lir_store = LirExprStore.init(test_allocator);
+    var lir_store = LirStore.init(test_allocator);
     defer lir_store.deinit();
+
+    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &layout_store, &.{mir_expr});
+    defer mir_analyses.deinit();
 
     var translator = lir.MirToLir.init(
         test_allocator,
         &mir_store,
         &lir_store,
         &layout_store,
-        &lambda_set_store,
-        resources.module_env.idents.true_tag,
+        &mir_analyses,
     );
     defer translator.deinit();
 
@@ -4163,7 +4105,7 @@ test "dev lowering: list identity proc keeps ownership transfer in LIR" {
     const with_rc = try rc_pass.insertRcOps(lowered);
 
     const Search = struct {
-        fn countExprDecrefsForSymbol(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, symbol: lir.LIR.Symbol) u32 {
+        fn countExprDecrefsForSymbol(store: *const LirStore, expr_id: lir.LIR.LirExprId, symbol: lir.LIR.Symbol) u32 {
             if (expr_id.isNone()) return 0;
             const expr = store.getExpr(expr_id);
             return switch (expr) {
@@ -4275,7 +4217,7 @@ test "dev lowering: list identity proc keeps ownership transfer in LIR" {
             };
         }
 
-        fn countStmtDecrefsForSymbol(store: *const LirExprStore, stmt_id: lir.LIR.CFStmtId, symbol: lir.LIR.Symbol) u32 {
+        fn countStmtDecrefsForSymbol(store: *const LirStore, stmt_id: lir.LIR.CFStmtId, symbol: lir.LIR.Symbol) u32 {
             if (stmt_id.isNone()) return 0;
             const stmt = store.getCFStmt(stmt_id);
             return switch (stmt) {
@@ -4312,7 +4254,7 @@ test "dev lowering: list identity proc keeps ownership transfer in LIR" {
             };
         }
 
-        fn findFirstProcCall(store: *const LirExprStore, expr_id: lir.LIR.LirExprId) ?lir.LIR.LirProcSpecId {
+        fn findFirstProcCall(store: *const LirStore, expr_id: lir.LIR.LirExprId) ?lir.LIR.LirProcSpecId {
             if (expr_id.isNone()) return null;
             const expr = store.getExpr(expr_id);
             return switch (expr) {
@@ -4347,7 +4289,7 @@ test "dev lowering: list identity proc keeps ownership transfer in LIR" {
             };
         }
 
-        fn findListLiteralBindingSymbol(store: *const LirExprStore, expr_id: lir.LIR.LirExprId) ?lir.LIR.Symbol {
+        fn findListLiteralBindingSymbol(store: *const LirStore, expr_id: lir.LIR.LirExprId) ?lir.LIR.Symbol {
             if (expr_id.isNone()) return null;
             const expr = store.getExpr(expr_id);
             return switch (expr) {
@@ -4450,9 +4392,6 @@ test "dev lowering: list rest pattern emits two list decrefs" {
 
     const mir_expr = try lower.lowerExpr(resources.expr_idx);
 
-    var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
-    defer lambda_set_store.deinit(test_allocator);
-
     var layout_store = try layout.Store.init(
         all_module_envs[0..],
         resources.builtin_module.env.idents.builtin_str,
@@ -4461,16 +4400,18 @@ test "dev lowering: list rest pattern emits two list decrefs" {
     );
     defer layout_store.deinit();
 
-    var lir_store = LirExprStore.init(test_allocator);
+    var lir_store = LirStore.init(test_allocator);
     defer lir_store.deinit();
+
+    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &layout_store, &.{mir_expr});
+    defer mir_analyses.deinit();
 
     var translator = lir.MirToLir.init(
         test_allocator,
         &mir_store,
         &lir_store,
         &layout_store,
-        &lambda_set_store,
-        resources.module_env.idents.true_tag,
+        &mir_analyses,
     );
     defer translator.deinit();
 
@@ -4480,7 +4421,7 @@ test "dev lowering: list rest pattern emits two list decrefs" {
     const with_rc = try rc_pass.insertRcOps(lowered);
 
     const Count = struct {
-        fn walk(store: *const LirExprStore, ls: *const layout.Store, expr_id: lir.LIR.LirExprId, counts: *ListRcCounts) void {
+        fn walk(store: *const LirStore, ls: *const layout.Store, expr_id: lir.LIR.LirExprId, counts: *ListRcCounts) void {
             if (expr_id.isNone()) return;
 
             const expr = store.getExpr(expr_id);
@@ -4584,7 +4525,7 @@ test "dev lowering: list rest pattern emits two list decrefs" {
     };
 
     const SymbolInspector = struct {
-        fn exprUsesSymbol(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, symbol: lir.LIR.Symbol) bool {
+        fn exprUsesSymbol(store: *const LirStore, expr_id: lir.LIR.LirExprId, symbol: lir.LIR.Symbol) bool {
             if (expr_id.isNone()) return false;
             const key = @as(u64, @bitCast(symbol));
             const expr = store.getExpr(expr_id);
@@ -4688,7 +4629,7 @@ test "dev lowering: list rest pattern emits two list decrefs" {
             };
         }
 
-        fn countDecrefsForSymbol(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, symbol: lir.LIR.Symbol) u32 {
+        fn countDecrefsForSymbol(store: *const LirStore, expr_id: lir.LIR.LirExprId, symbol: lir.LIR.Symbol) u32 {
             if (expr_id.isNone()) return 0;
 
             const key = @as(u64, @bitCast(symbol));
@@ -4785,7 +4726,7 @@ test "dev lowering: list rest pattern emits two list decrefs" {
             };
         }
 
-        fn collectListBindSymbols(store: *const LirExprStore, layout_store_: *const layout.Store, root_expr_id: lir.LIR.LirExprId, expr_id: lir.LIR.LirExprId, out: *std.ArrayList(SymbolCounts)) !void {
+        fn collectListBindSymbols(store: *const LirStore, layout_store_: *const layout.Store, root_expr_id: lir.LIR.LirExprId, expr_id: lir.LIR.LirExprId, out: *std.ArrayList(SymbolCounts)) !void {
             if (expr_id.isNone()) return;
             const expr = store.getExpr(expr_id);
             switch (expr) {
@@ -4832,7 +4773,7 @@ test "dev lowering: list rest pattern emits two list decrefs" {
             }
         }
 
-        fn printBindingBlocks(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, symbol: lir.LIR.Symbol) void {
+        fn printBindingBlocks(store: *const LirStore, expr_id: lir.LIR.LirExprId, symbol: lir.LIR.Symbol) void {
             if (expr_id.isNone()) return;
             const expr = store.getExpr(expr_id);
             switch (expr) {
@@ -4884,7 +4825,7 @@ test "dev lowering: list rest pattern emits two list decrefs" {
 
 test "dev lowering: mutable loop append decrefs mutable result binding once" {
     const Search = struct {
-        fn containsCellLoad(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, symbol: lir.LIR.Symbol) bool {
+        fn containsCellLoad(store: *const LirStore, expr_id: lir.LIR.LirExprId, symbol: lir.LIR.Symbol) bool {
             const expr = store.getExpr(expr_id);
             const key: u64 = @bitCast(symbol);
             return switch (expr) {
@@ -4963,7 +4904,7 @@ test "dev lowering: mutable loop append decrefs mutable result binding once" {
             };
         }
 
-        fn countCellDrops(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, symbol: lir.LIR.Symbol) u32 {
+        fn countCellDrops(store: *const LirStore, expr_id: lir.LIR.LirExprId, symbol: lir.LIR.Symbol) u32 {
             if (expr_id.isNone()) return 0;
             const expr = store.getExpr(expr_id);
             const key: u64 = @bitCast(symbol);
@@ -5055,7 +4996,7 @@ test "dev lowering: mutable loop append decrefs mutable result binding once" {
             };
         }
 
-        fn countDecrefsForSymbol(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, symbol: lir.LIR.Symbol) u32 {
+        fn countDecrefsForSymbol(store: *const LirStore, expr_id: lir.LIR.LirExprId, symbol: lir.LIR.Symbol) u32 {
             if (expr_id.isNone()) return 0;
 
             const key = @as(u64, @bitCast(symbol));
@@ -5198,9 +5139,6 @@ test "dev lowering: mutable loop append decrefs mutable result binding once" {
 
     const mir_expr = try lower.lowerExpr(resources.expr_idx);
 
-    var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
-    defer lambda_set_store.deinit(test_allocator);
-
     var layout_store = try layout.Store.init(
         all_module_envs[0..],
         resources.builtin_module.env.idents.builtin_str,
@@ -5209,16 +5147,18 @@ test "dev lowering: mutable loop append decrefs mutable result binding once" {
     );
     defer layout_store.deinit();
 
-    var lir_store = LirExprStore.init(test_allocator);
+    var lir_store = LirStore.init(test_allocator);
     defer lir_store.deinit();
+
+    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &layout_store, &.{mir_expr});
+    defer mir_analyses.deinit();
 
     var translator = lir.MirToLir.init(
         test_allocator,
         &mir_store,
         &lir_store,
         &layout_store,
-        &lambda_set_store,
-        resources.module_env.idents.true_tag,
+        &mir_analyses,
     );
     defer translator.deinit();
 
@@ -5262,7 +5202,7 @@ test "dev lowering: mutable loop append decrefs mutable result binding once" {
 
 test "dev lowering: lowered for-loop releases iterated list owner" {
     const Search = struct {
-        fn printExprTree(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, depth: usize) void {
+        fn printExprTree(store: *const LirStore, expr_id: lir.LIR.LirExprId, depth: usize) void {
             if (expr_id.isNone()) return;
 
             const expr = store.getExpr(expr_id);
@@ -5400,7 +5340,7 @@ test "dev lowering: lowered for-loop releases iterated list owner" {
             }
         }
 
-        fn assertListOwnersReleased(store: *const LirExprStore, layouts: *const layout.Store, expr_id: lir.LIR.LirExprId, root_expr_id: lir.LIR.LirExprId, found: *bool) !void {
+        fn assertListOwnersReleased(store: *const LirStore, layouts: *const layout.Store, expr_id: lir.LIR.LirExprId, root_expr_id: lir.LIR.LirExprId, found: *bool) !void {
             if (expr_id.isNone()) return;
 
             const expr = store.getExpr(expr_id);
@@ -5540,7 +5480,7 @@ test "dev lowering: lowered for-loop releases iterated list owner" {
             }
         }
 
-        fn countDecrefsForSymbol(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, symbol: lir.LIR.Symbol) u32 {
+        fn countDecrefsForSymbol(store: *const LirStore, expr_id: lir.LIR.LirExprId, symbol: lir.LIR.Symbol) u32 {
             if (expr_id.isNone()) return 0;
 
             const key = @as(u64, @bitCast(symbol));
@@ -5637,7 +5577,7 @@ test "dev lowering: lowered for-loop releases iterated list owner" {
             };
         }
 
-        fn countCellDrops(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, symbol: lir.LIR.Symbol) u32 {
+        fn countCellDrops(store: *const LirStore, expr_id: lir.LIR.LirExprId, symbol: lir.LIR.Symbol) u32 {
             if (expr_id.isNone()) return 0;
             const expr = store.getExpr(expr_id);
             const key: u64 = @bitCast(symbol);
@@ -5727,7 +5667,7 @@ test "dev lowering: lowered for-loop releases iterated list owner" {
             };
         }
 
-        fn countCellDecrefs(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, cell: lir.LIR.Symbol) u32 {
+        fn countCellDecrefs(store: *const LirStore, expr_id: lir.LIR.LirExprId, cell: lir.LIR.Symbol) u32 {
             if (expr_id.isNone()) return 0;
             const expr = store.getExpr(expr_id);
             return switch (expr) {
@@ -5865,9 +5805,6 @@ test "dev lowering: lowered for-loop releases iterated list owner" {
 
     const mir_expr = try lower.lowerExpr(resources.expr_idx);
 
-    var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
-    defer lambda_set_store.deinit(test_allocator);
-
     var layout_store = try layout.Store.init(
         all_module_envs[0..],
         resources.builtin_module.env.idents.builtin_str,
@@ -5876,16 +5813,18 @@ test "dev lowering: lowered for-loop releases iterated list owner" {
     );
     defer layout_store.deinit();
 
-    var lir_store = LirExprStore.init(test_allocator);
+    var lir_store = LirStore.init(test_allocator);
     defer lir_store.deinit();
+
+    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &layout_store, &.{mir_expr});
+    defer mir_analyses.deinit();
 
     var translator = lir.MirToLir.init(
         test_allocator,
         &mir_store,
         &lir_store,
         &layout_store,
-        &lambda_set_store,
-        resources.module_env.idents.true_tag,
+        &mir_analyses,
     );
     defer translator.deinit();
 
@@ -5907,7 +5846,7 @@ test "dev lowering: lowered for-loop releases iterated list owner" {
 
 test "dev lowering: mutable list reassignment keeps both decrefs on the reassigned symbol" {
     const Search = struct {
-        fn printExprTree(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, depth: usize) void {
+        fn printExprTree(store: *const LirStore, expr_id: lir.LIR.LirExprId, depth: usize) void {
             if (expr_id.isNone()) return;
 
             const expr = store.getExpr(expr_id);
@@ -5983,7 +5922,7 @@ test "dev lowering: mutable list reassignment keeps both decrefs on the reassign
             }
         }
 
-        fn countDecrefsForSymbol(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, symbol: lir.LIR.Symbol) u32 {
+        fn countDecrefsForSymbol(store: *const LirStore, expr_id: lir.LIR.LirExprId, symbol: lir.LIR.Symbol) u32 {
             const expr = store.getExpr(expr_id);
             return switch (expr) {
                 .block => |block| blk: {
@@ -6080,12 +6019,12 @@ test "dev lowering: mutable list reassignment keeps both decrefs on the reassign
             };
         }
 
-        fn countCellDecrefs(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, cell: lir.LIR.Symbol) u32 {
+        fn countCellDecrefs(store: *const LirStore, expr_id: lir.LIR.LirExprId, cell: lir.LIR.Symbol) u32 {
             return countCellDecrefsFromRoot(store, expr_id, expr_id, cell);
         }
 
         fn countCellDecrefsFromRoot(
-            store: *const LirExprStore,
+            store: *const LirStore,
             root_expr_id: lir.LIR.LirExprId,
             expr_id: lir.LIR.LirExprId,
             cell: lir.LIR.Symbol,
@@ -6194,7 +6133,7 @@ test "dev lowering: mutable list reassignment keeps both decrefs on the reassign
         }
 
         fn symbolLoadsCell(
-            store: *const LirExprStore,
+            store: *const LirStore,
             expr_id: lir.LIR.LirExprId,
             symbol: lir.LIR.Symbol,
             cell: lir.LIR.Symbol,
@@ -6307,7 +6246,7 @@ test "dev lowering: mutable list reassignment keeps both decrefs on the reassign
         }
 
         fn symbolHasExplicitRetain(
-            store: *const LirExprStore,
+            store: *const LirStore,
             expr_id: lir.LIR.LirExprId,
             symbol: lir.LIR.Symbol,
         ) bool {
@@ -6416,7 +6355,7 @@ test "dev lowering: mutable list reassignment keeps both decrefs on the reassign
             };
         }
 
-        fn countCellDrops(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, cell: lir.LIR.Symbol) u32 {
+        fn countCellDrops(store: *const LirStore, expr_id: lir.LIR.LirExprId, cell: lir.LIR.Symbol) u32 {
             if (expr_id.isNone()) return 0;
             const expr = store.getExpr(expr_id);
             const key: u64 = @bitCast(cell);
@@ -6549,9 +6488,6 @@ test "dev lowering: mutable list reassignment keeps both decrefs on the reassign
 
     const mir_expr = try lower.lowerExpr(resources.expr_idx);
 
-    var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
-    defer lambda_set_store.deinit(test_allocator);
-
     var layout_store = try layout.Store.init(
         all_module_envs[0..],
         resources.builtin_module.env.idents.builtin_str,
@@ -6560,16 +6496,18 @@ test "dev lowering: mutable list reassignment keeps both decrefs on the reassign
     );
     defer layout_store.deinit();
 
-    var lir_store = LirExprStore.init(test_allocator);
+    var lir_store = LirStore.init(test_allocator);
     defer lir_store.deinit();
+
+    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &layout_store, &.{mir_expr});
+    defer mir_analyses.deinit();
 
     var translator = lir.MirToLir.init(
         test_allocator,
         &mir_store,
         &lir_store,
         &layout_store,
-        &lambda_set_store,
-        resources.module_env.idents.true_tag,
+        &mir_analyses,
     );
     defer translator.deinit();
 
@@ -6614,7 +6552,7 @@ test "dev lowering: mutable list reassignment keeps both decrefs on the reassign
 
 test "dev lowering: for-loop mutable list append rc shape" {
     const Debug = struct {
-        fn printExprTree(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, depth: usize) void {
+        fn printExprTree(store: *const LirStore, expr_id: lir.LIR.LirExprId, depth: usize) void {
             if (expr_id.isNone()) return;
 
             const expr = store.getExpr(expr_id);
@@ -6733,7 +6671,7 @@ test "dev lowering: for-loop mutable list append rc shape" {
             }
         }
 
-        fn printStmtTree(store: *const LirExprStore, stmt_id: lir.LIR.CFStmtId, depth: usize) void {
+        fn printStmtTree(store: *const LirStore, stmt_id: lir.LIR.CFStmtId, depth: usize) void {
             if (stmt_id.isNone()) return;
 
             const stmt = store.getCFStmt(stmt_id);
@@ -6837,9 +6775,6 @@ test "dev lowering: for-loop mutable list append rc shape" {
 
     const mir_expr = try lower.lowerExpr(resources.expr_idx);
 
-    var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
-    defer lambda_set_store.deinit(test_allocator);
-
     var layout_store = try layout.Store.init(
         all_module_envs[0..],
         resources.builtin_module.env.idents.builtin_str,
@@ -6848,16 +6783,18 @@ test "dev lowering: for-loop mutable list append rc shape" {
     );
     defer layout_store.deinit();
 
-    var lir_store = LirExprStore.init(test_allocator);
+    var lir_store = LirStore.init(test_allocator);
     defer lir_store.deinit();
+
+    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &layout_store, &.{mir_expr});
+    defer mir_analyses.deinit();
 
     var translator = lir.MirToLir.init(
         test_allocator,
         &mir_store,
         &lir_store,
         &layout_store,
-        &lambda_set_store,
-        resources.module_env.idents.true_tag,
+        &mir_analyses,
     );
     defer translator.deinit();
 
@@ -6881,7 +6818,7 @@ test "dev lowering: for-loop mutable list append rc shape" {
 
 test "dev lowering: inspect-wrapped mutable list append rc shape" {
     const Debug = struct {
-        fn printExprTree(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, depth: usize) void {
+        fn printExprTree(store: *const LirStore, expr_id: lir.LIR.LirExprId, depth: usize) void {
             if (expr_id.isNone()) {
                 for (0..depth) |_| std.debug.print("  ", .{});
                 std.debug.print("(none)\n", .{});
@@ -6964,7 +6901,7 @@ test "dev lowering: inspect-wrapped mutable list append rc shape" {
             }
         }
 
-        fn printCFStmtTree(store: *const LirExprStore, stmt_id: lir.LIR.CFStmtId, depth: usize) void {
+        fn printCFStmtTree(store: *const LirStore, stmt_id: lir.LIR.CFStmtId, depth: usize) void {
             if (stmt_id.isNone()) return;
 
             const stmt = store.getCFStmt(stmt_id);
@@ -7072,9 +7009,6 @@ test "dev lowering: inspect-wrapped mutable list append rc shape" {
     defer lower.deinit();
 
     const mir_expr = try lower.lowerExpr(inspect_expr);
-    var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
-    defer lambda_set_store.deinit(test_allocator);
-
     var layout_store = try layout.Store.init(
         all_module_envs[0..],
         resources.builtin_module.env.idents.builtin_str,
@@ -7083,16 +7017,18 @@ test "dev lowering: inspect-wrapped mutable list append rc shape" {
     );
     defer layout_store.deinit();
 
-    var lir_store = LirExprStore.init(test_allocator);
+    var lir_store = LirStore.init(test_allocator);
     defer lir_store.deinit();
+
+    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &layout_store, &.{mir_expr});
+    defer mir_analyses.deinit();
 
     var translator = lir.MirToLir.init(
         test_allocator,
         &mir_store,
         &lir_store,
         &layout_store,
-        &lambda_set_store,
-        resources.module_env.idents.true_tag,
+        &mir_analyses,
     );
     defer translator.deinit();
 
@@ -7107,7 +7043,7 @@ test "dev lowering: inspect-wrapped mutable list append rc shape" {
 
 test "dev lowering: for-loop mutable list append with closure rc shape" {
     const Debug = struct {
-        fn printExprTree(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, depth: usize) void {
+        fn printExprTree(store: *const LirStore, expr_id: lir.LIR.LirExprId, depth: usize) void {
             if (expr_id.isNone()) return;
 
             const expr = store.getExpr(expr_id);
@@ -7224,7 +7160,7 @@ test "dev lowering: for-loop mutable list append with closure rc shape" {
             }
         }
 
-        fn printCFStmtTree(store: *const LirExprStore, stmt_id: lir.LIR.CFStmtId, depth: usize) void {
+        fn printCFStmtTree(store: *const LirStore, stmt_id: lir.LIR.CFStmtId, depth: usize) void {
             if (stmt_id.isNone()) return;
 
             const stmt = store.getCFStmt(stmt_id);
@@ -7332,9 +7268,6 @@ test "dev lowering: for-loop mutable list append with closure rc shape" {
 
     const mir_expr = try lower.lowerExpr(resources.expr_idx);
 
-    var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
-    defer lambda_set_store.deinit(test_allocator);
-
     var layout_store = try layout.Store.init(
         all_module_envs[0..],
         resources.builtin_module.env.idents.builtin_str,
@@ -7343,16 +7276,18 @@ test "dev lowering: for-loop mutable list append with closure rc shape" {
     );
     defer layout_store.deinit();
 
-    var lir_store = LirExprStore.init(test_allocator);
+    var lir_store = LirStore.init(test_allocator);
     defer lir_store.deinit();
+
+    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &layout_store, &.{mir_expr});
+    defer mir_analyses.deinit();
 
     var translator = lir.MirToLir.init(
         test_allocator,
         &mir_store,
         &lir_store,
         &layout_store,
-        &lambda_set_store,
-        resources.module_env.idents.true_tag,
+        &mir_analyses,
     );
     defer translator.deinit();
 
@@ -7367,7 +7302,7 @@ test "dev lowering: for-loop mutable list append with closure rc shape" {
 
 test "dev lowering: list alias then shadow rc shape" {
     const Debug = struct {
-        fn printExprTree(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, depth: usize) void {
+        fn printExprTree(store: *const LirStore, expr_id: lir.LIR.LirExprId, depth: usize) void {
             if (expr_id.isNone()) return;
 
             const expr = store.getExpr(expr_id);
@@ -7442,7 +7377,7 @@ test "dev lowering: list alias then shadow rc shape" {
             }
         }
 
-        fn printCFStmtTree(store: *const LirExprStore, stmt_id: lir.LIR.CFStmtId, depth: usize) void {
+        fn printCFStmtTree(store: *const LirStore, stmt_id: lir.LIR.CFStmtId, depth: usize) void {
             if (stmt_id.isNone()) return;
 
             const stmt = store.getCFStmt(stmt_id);
@@ -7547,9 +7482,6 @@ test "dev lowering: list alias then shadow rc shape" {
 
     const mir_expr = try lower.lowerExpr(resources.expr_idx);
 
-    var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
-    defer lambda_set_store.deinit(test_allocator);
-
     var layout_store = try layout.Store.init(
         all_module_envs[0..],
         resources.builtin_module.env.idents.builtin_str,
@@ -7558,16 +7490,18 @@ test "dev lowering: list alias then shadow rc shape" {
     );
     defer layout_store.deinit();
 
-    var lir_store = LirExprStore.init(test_allocator);
+    var lir_store = LirStore.init(test_allocator);
     defer lir_store.deinit();
+
+    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &layout_store, &.{mir_expr});
+    defer mir_analyses.deinit();
 
     var translator = lir.MirToLir.init(
         test_allocator,
         &mir_store,
         &lir_store,
         &layout_store,
-        &lambda_set_store,
-        resources.module_env.idents.true_tag,
+        &mir_analyses,
     );
     defer translator.deinit();
 
@@ -7582,7 +7516,7 @@ test "dev lowering: list alias then shadow rc shape" {
 
 test "dev lowering: nested list equality rc shape" {
     const Debug = struct {
-        fn printExprTree(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, depth: usize) void {
+        fn printExprTree(store: *const LirStore, expr_id: lir.LIR.LirExprId, depth: usize) void {
             if (expr_id.isNone()) return;
 
             const expr = store.getExpr(expr_id);
@@ -7665,7 +7599,7 @@ test "dev lowering: nested list equality rc shape" {
             }
         }
 
-        fn printCFStmtTree(store: *const LirExprStore, stmt_id: lir.LIR.CFStmtId, depth: usize) void {
+        fn printCFStmtTree(store: *const LirStore, stmt_id: lir.LIR.CFStmtId, depth: usize) void {
             if (stmt_id.isNone()) return;
 
             const stmt = store.getCFStmt(stmt_id);
@@ -7765,9 +7699,6 @@ test "dev lowering: nested list equality rc shape" {
 
     const mir_expr = try lower.lowerExpr(resources.expr_idx);
 
-    var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
-    defer lambda_set_store.deinit(test_allocator);
-
     var layout_store = try layout.Store.init(
         all_module_envs[0..],
         resources.builtin_module.env.idents.builtin_str,
@@ -7776,16 +7707,18 @@ test "dev lowering: nested list equality rc shape" {
     );
     defer layout_store.deinit();
 
-    var lir_store = LirExprStore.init(test_allocator);
+    var lir_store = LirStore.init(test_allocator);
     defer lir_store.deinit();
+
+    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &layout_store, &.{mir_expr});
+    defer mir_analyses.deinit();
 
     var translator = lir.MirToLir.init(
         test_allocator,
         &mir_store,
         &lir_store,
         &layout_store,
-        &lambda_set_store,
-        resources.module_env.idents.true_tag,
+        &mir_analyses,
     );
     defer translator.deinit();
 
@@ -7800,7 +7733,7 @@ test "dev lowering: nested list equality rc shape" {
 
 test "dev lowering: fold exact list pattern rc shape" {
     const Debug = struct {
-        fn printExprTree(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, depth: usize) void {
+        fn printExprTree(store: *const LirStore, expr_id: lir.LIR.LirExprId, depth: usize) void {
             if (expr_id.isNone()) return;
 
             const expr = store.getExpr(expr_id);
@@ -7883,7 +7816,7 @@ test "dev lowering: fold exact list pattern rc shape" {
             }
         }
 
-        fn printCFStmtTree(store: *const LirExprStore, stmt_id: lir.LIR.CFStmtId, depth: usize) void {
+        fn printCFStmtTree(store: *const LirStore, stmt_id: lir.LIR.CFStmtId, depth: usize) void {
             if (stmt_id.isNone()) return;
 
             const stmt = store.getCFStmt(stmt_id);
@@ -7984,9 +7917,6 @@ test "dev lowering: fold exact list pattern rc shape" {
 
     const mir_expr = try lower.lowerExpr(resources.expr_idx);
 
-    var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
-    defer lambda_set_store.deinit(test_allocator);
-
     var layout_store = try layout.Store.init(
         all_module_envs[0..],
         resources.builtin_module.env.idents.builtin_str,
@@ -7995,16 +7925,18 @@ test "dev lowering: fold exact list pattern rc shape" {
     );
     defer layout_store.deinit();
 
-    var lir_store = LirExprStore.init(test_allocator);
+    var lir_store = LirStore.init(test_allocator);
     defer lir_store.deinit();
+
+    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &layout_store, &.{mir_expr});
+    defer mir_analyses.deinit();
 
     var translator = lir.MirToLir.init(
         test_allocator,
         &mir_store,
         &lir_store,
         &layout_store,
-        &lambda_set_store,
-        resources.module_env.idents.true_tag,
+        &mir_analyses,
     );
     defer translator.deinit();
 
@@ -8123,11 +8055,11 @@ test "lambda sets distinguish closure record fields with different captures" {
 
 test "LIR record field closures keep distinct field indices and payload layouts" {
     const findStructAccessExpr = struct {
-        fn go(store: *const LirExprStore, expr_id: lir.LIR.LirExprId) ?lir.LIR.LirExprId {
+        fn go(store: *const LirStore, expr_id: lir.LIR.LirExprId) ?lir.LIR.LirExprId {
             return goDepth(store, expr_id, 32);
         }
 
-        fn goDepth(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, remaining: usize) ?lir.LIR.LirExprId {
+        fn goDepth(store: *const LirStore, expr_id: lir.LIR.LirExprId, remaining: usize) ?lir.LIR.LirExprId {
             if (remaining == 0) return null;
 
             const expr = store.getExpr(expr_id);
@@ -8203,9 +8135,6 @@ test "LIR record field closures keep distinct field indices and payload layouts"
     defer lower.deinit();
 
     const mir_expr = try lower.lowerExpr(resources.expr_idx);
-    var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
-    defer lambda_set_store.deinit(test_allocator);
-
     var layout_store = try layout.Store.init(
         all_module_envs[0..],
         resources.builtin_module.env.idents.builtin_str,
@@ -8214,16 +8143,18 @@ test "LIR record field closures keep distinct field indices and payload layouts"
     );
     defer layout_store.deinit();
 
-    var lir_store = LirExprStore.init(test_allocator);
+    var lir_store = LirStore.init(test_allocator);
     defer lir_store.deinit();
+
+    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &layout_store, &.{mir_expr});
+    defer mir_analyses.deinit();
 
     var translator = lir.MirToLir.init(
         test_allocator,
         &mir_store,
         &lir_store,
         &layout_store,
-        &lambda_set_store,
-        resources.module_env.idents.true_tag,
+        &mir_analyses,
     );
     defer translator.deinit();
 
@@ -8318,9 +8249,6 @@ test "LIR parenthesized record field closure call registers synthetic closure bi
     defer lower.deinit();
 
     const mir_expr = try lower.lowerExpr(resources.expr_idx);
-    var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
-    defer lambda_set_store.deinit(test_allocator);
-
     var layout_store = try layout.Store.init(
         all_module_envs[0..],
         resources.builtin_module.env.idents.builtin_str,
@@ -8329,16 +8257,18 @@ test "LIR parenthesized record field closure call registers synthetic closure bi
     );
     defer layout_store.deinit();
 
-    var lir_store = LirExprStore.init(test_allocator);
+    var lir_store = LirStore.init(test_allocator);
     defer lir_store.deinit();
+
+    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &layout_store, &.{mir_expr});
+    defer mir_analyses.deinit();
 
     var translator = lir.MirToLir.init(
         test_allocator,
         &mir_store,
         &lir_store,
         &layout_store,
-        &lambda_set_store,
-        resources.module_env.idents.true_tag,
+        &mir_analyses,
     );
     defer translator.deinit();
 
@@ -8555,16 +8485,18 @@ test "LIR lifted closure with function-valued captures keeps both capture slots"
     );
     defer layout_store.deinit();
 
-    var lir_store = LirExprStore.init(test_allocator);
+    var lir_store = LirStore.init(test_allocator);
     defer lir_store.deinit();
+
+    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &layout_store, &.{mir_expr});
+    defer mir_analyses.deinit();
 
     var translator = lir.MirToLir.init(
         test_allocator,
         &mir_store,
         &lir_store,
         &layout_store,
-        &lambda_set_store,
-        resources.module_env.idents.true_tag,
+        &mir_analyses,
     );
     defer translator.deinit();
 
@@ -8639,9 +8571,6 @@ test "LIR proc-backed closures have no dangling lookups" {
 
     const mir_expr = try lower.lowerExpr(resources.expr_idx);
 
-    var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
-    defer lambda_set_store.deinit(test_allocator);
-
     var layout_store = try layout.Store.init(
         all_module_envs[0..],
         resources.builtin_module.env.idents.builtin_str,
@@ -8650,16 +8579,18 @@ test "LIR proc-backed closures have no dangling lookups" {
     );
     defer layout_store.deinit();
 
-    var lir_store = LirExprStore.init(test_allocator);
+    var lir_store = LirStore.init(test_allocator);
     defer lir_store.deinit();
+
+    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &layout_store, &.{mir_expr});
+    defer mir_analyses.deinit();
 
     var translator = lir.MirToLir.init(
         test_allocator,
         &mir_store,
         &lir_store,
         &layout_store,
-        &lambda_set_store,
-        resources.module_env.idents.true_tag,
+        &mir_analyses,
     );
     defer translator.deinit();
 
@@ -8671,7 +8602,7 @@ test "LIR proc-backed closures have no dangling lookups" {
             symbol: lir.LIR.Symbol,
         };
 
-        fn printExprTree(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, depth: usize) void {
+        fn printExprTree(store: *const LirStore, expr_id: lir.LIR.LirExprId, depth: usize) void {
             if (expr_id.isNone()) return;
 
             const expr = store.getExpr(expr_id);
@@ -8762,7 +8693,7 @@ test "LIR proc-backed closures have no dangling lookups" {
             }
         }
 
-        fn printStmtTree(store: *const LirExprStore, stmt_id: lir.LIR.CFStmtId, depth: usize) void {
+        fn printStmtTree(store: *const LirStore, stmt_id: lir.LIR.CFStmtId, depth: usize) void {
             if (stmt_id.isNone()) return;
 
             const stmt = store.getCFStmt(stmt_id);
@@ -8823,7 +8754,7 @@ test "LIR proc-backed closures have no dangling lookups" {
         }
 
         fn appendPatternSymbols(
-            store: *const LirExprStore,
+            store: *const LirStore,
             pattern_id: lir.LIR.LirPatternId,
             out: *std.ArrayListUnmanaged(lir.LIR.Symbol),
             allocator: std.mem.Allocator,
@@ -8866,7 +8797,7 @@ test "LIR proc-backed closures have no dangling lookups" {
         }
 
         fn go(
-            store: *const LirExprStore,
+            store: *const LirStore,
             expr_id: lir.LIR.LirExprId,
             bound: *std.ArrayListUnmanaged(lir.LIR.Symbol),
             visiting_defs: *std.AutoHashMapUnmanaged(u32, void),
@@ -9005,7 +8936,7 @@ test "LIR proc-backed closures have no dangling lookups" {
         }
 
         fn goCF(
-            store: *const LirExprStore,
+            store: *const LirStore,
             stmt_id: lir.LIR.CFStmtId,
             bound: *std.ArrayListUnmanaged(lir.LIR.Symbol),
             visiting_defs: *std.AutoHashMapUnmanaged(u32, void),
@@ -9164,9 +9095,6 @@ test "LIR List.contains has no dangling lookups" {
 
     const mir_expr = try lower.lowerExpr(resources.expr_idx);
 
-    var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
-    defer lambda_set_store.deinit(test_allocator);
-
     var layout_store = try layout.Store.init(
         all_module_envs[0..],
         resources.builtin_module.env.idents.builtin_str,
@@ -9175,16 +9103,18 @@ test "LIR List.contains has no dangling lookups" {
     );
     defer layout_store.deinit();
 
-    var lir_store = LirExprStore.init(test_allocator);
+    var lir_store = LirStore.init(test_allocator);
     defer lir_store.deinit();
+
+    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &layout_store, &.{mir_expr});
+    defer mir_analyses.deinit();
 
     var translator = lir.MirToLir.init(
         test_allocator,
         &mir_store,
         &lir_store,
         &layout_store,
-        &lambda_set_store,
-        resources.module_env.idents.true_tag,
+        &mir_analyses,
     );
     defer translator.deinit();
 
@@ -9196,7 +9126,7 @@ test "LIR List.contains has no dangling lookups" {
             symbol: lir.LIR.Symbol,
         };
 
-        fn printExprTree(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, depth: usize) void {
+        fn printExprTree(store: *const LirStore, expr_id: lir.LIR.LirExprId, depth: usize) void {
             if (expr_id.isNone()) return;
 
             const expr = store.getExpr(expr_id);
@@ -9287,7 +9217,7 @@ test "LIR List.contains has no dangling lookups" {
             }
         }
 
-        fn printStmtTree(store: *const LirExprStore, stmt_id: lir.LIR.CFStmtId, depth: usize) void {
+        fn printStmtTree(store: *const LirStore, stmt_id: lir.LIR.CFStmtId, depth: usize) void {
             if (stmt_id.isNone()) return;
 
             const stmt = store.getCFStmt(stmt_id);
@@ -9348,7 +9278,7 @@ test "LIR List.contains has no dangling lookups" {
         }
 
         fn appendPatternSymbols(
-            store: *const LirExprStore,
+            store: *const LirStore,
             pattern_id: lir.LIR.LirPatternId,
             out: *std.ArrayListUnmanaged(lir.LIR.Symbol),
             allocator: std.mem.Allocator,
@@ -9391,7 +9321,7 @@ test "LIR List.contains has no dangling lookups" {
         }
 
         fn go(
-            store: *const LirExprStore,
+            store: *const LirStore,
             expr_id: lir.LIR.LirExprId,
             bound: *std.ArrayListUnmanaged(lir.LIR.Symbol),
             visiting_defs: *std.AutoHashMapUnmanaged(u32, void),
@@ -9530,7 +9460,7 @@ test "LIR List.contains has no dangling lookups" {
         }
 
         fn goCF(
-            store: *const LirExprStore,
+            store: *const LirStore,
             stmt_id: lir.LIR.CFStmtId,
             bound: *std.ArrayListUnmanaged(lir.LIR.Symbol),
             visiting_defs: *std.AutoHashMapUnmanaged(u32, void),

@@ -80,7 +80,7 @@ const FromUtf8Try = builtins.str.FromUtf8Try;
 const Relocation = @import("Relocation.zig").Relocation;
 const StaticDataInterner = @import("StaticDataInterner.zig");
 
-const LirExprStore = lir.LirExprStore;
+const LirStore = lir.LirStore;
 const LirExpr = lir.LirExpr;
 const LirExprId = lir.LirExprId;
 const LirPatternId = lir.LirPatternId;
@@ -161,7 +161,6 @@ pub const BuiltinFn = enum {
     list_free_flat_list,
     box_decref_with,
     box_free_with,
-    list_sort_with,
 
     // Numeric operations
     dec_to_str,
@@ -248,7 +247,6 @@ pub const BuiltinFn = enum {
             .list_free_flat_list => "roc_builtins_list_free_flat_list",
             .box_decref_with => "roc_builtins_box_decref_with",
             .box_free_with => "roc_builtins_box_free_with",
-            .list_sort_with => "roc_builtins_list_sort_with",
 
             // Numeric operations
             .dec_to_str => "roc_builtins_dec_to_str",
@@ -543,107 +541,6 @@ fn wrapListReleaseExcessCapacity(out: *RocList, list_bytes: ?[*]u8, list_len: us
     out.* = listReleaseExcessCapacity(list, alignment, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), .Immutable, roc_ops);
 }
 
-/// Context passed through the opaque `cmp_data` pointer to the sort comparison trampoline.
-const SortCmpContext = extern struct {
-    roc_fn_addr: usize,
-    element_width: usize,
-};
-
-/// C-callable comparison trampoline for listSortWith.
-/// Loads element values from pointers and calls the compiled Roc comparison function.
-fn sortCmpTrampoline(cmp_data: ?[*]u8, a_ptr: ?[*]u8, b_ptr: ?[*]u8) callconv(.c) u8 {
-    const ctx: *const SortCmpContext = @ptrCast(@alignCast(cmp_data));
-    const ew = ctx.element_width;
-
-    if (ew <= 8) {
-        // Safe to pass values directly: single-register types (u8..u64) have
-        // identical layouts in both C callconv and the Roc internal calling
-        // convention on all platforms, so no ABI mismatch is possible.
-        const cmp_fn: *const fn (u64, u64) callconv(.c) u8 = @ptrFromInt(ctx.roc_fn_addr);
-        var a_val: u64 = 0;
-        var b_val: u64 = 0;
-        if (a_ptr) |ap| @memcpy(@as([*]u8, @ptrCast(&a_val))[0..ew], ap[0..ew]);
-        if (b_ptr) |bp| @memcpy(@as([*]u8, @ptrCast(&b_val))[0..ew], bp[0..ew]);
-        return cmp_fn(a_val, b_val);
-    } else {
-        // For ew > 8 (multi-register types like Dec/i128/u128 and large structs),
-        // we pass element pointers directly. The comparator lambda is compiled with
-        // force_pass_by_ptr so its prologue loads values from these pointers.
-        //
-        // This avoids ABI mismatches between the Zig callconv(.c) and the Roc
-        // internal calling convention. For example:
-        // - Windows C ABI passes u128 by pointer (RCX=&a, RDX=&b), but the Roc
-        //   lambda's bindLambdaParams may convert only the first param to pointer
-        //   and pass the second in registers (RCX=&a, RDX=b_low, R8=b_high).
-        // - System V C ABI passes large structs by pointer, but bindLambdaParams
-        //   may keep one param in registers if it fits.
-        const cmp_fn: *const fn (?[*]u8, ?[*]u8) callconv(.c) u8 = @ptrFromInt(ctx.roc_fn_addr);
-        return cmp_fn(a_ptr, b_ptr);
-    }
-}
-
-/// Wrapper: listSortWith — sorts a list using a compiled Roc comparison function.
-/// Uses a simple insertion sort to avoid ABI complexities with fluxsort.
-fn wrapListSortWith(
-    out: *RocList,
-    list_bytes: ?[*]u8,
-    list_len: usize,
-    list_cap: usize,
-    cmp_fn_addr: usize,
-    alignment: u32,
-    element_width: usize,
-    roc_ops: *RocOps,
-) callconv(.c) void {
-    if (list_len < 2) {
-        out.* = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-        return;
-    }
-
-    // Allocate a new list for the sorted result
-    const total_bytes = list_len * element_width;
-    const sorted_bytes = allocateWithRefcountC(total_bytes, alignment, false, roc_ops);
-    if (list_bytes) |src| {
-        @memcpy(sorted_bytes[0..total_bytes], src[0..total_bytes]);
-    }
-
-    // Insertion sort using the comparison trampoline
-    const cmp_ctx = SortCmpContext{
-        .roc_fn_addr = cmp_fn_addr,
-        .element_width = element_width,
-    };
-
-    var temp_buf: [256]u8 align(16) = undefined;
-
-    var i: usize = 1;
-    while (i < list_len) : (i += 1) {
-        // Save element[i] to temp
-        const elem_i = sorted_bytes + i * element_width;
-        @memcpy(temp_buf[0..element_width], elem_i[0..element_width]);
-
-        // Shift elements right until we find the insertion point
-        var j: usize = i;
-        while (j > 0) {
-            const elem_j_minus_1 = sorted_bytes + (j - 1) * element_width;
-            // Compare temp (element being inserted) with element[j-1]
-            const cmp_result = sortCmpTrampoline(@ptrCast(@constCast(&cmp_ctx)), &temp_buf, elem_j_minus_1);
-            if (cmp_result != 2) break; // not LT, stop shifting (EQ=0, GT=1)
-            // Shift element[j-1] to element[j]
-            const elem_j = sorted_bytes + j * element_width;
-            @memcpy(elem_j[0..element_width], elem_j_minus_1[0..element_width]);
-            j -= 1;
-        }
-        // Insert temp at position j
-        const insert_pos = sorted_bytes + j * element_width;
-        @memcpy(insert_pos[0..element_width], temp_buf[0..element_width]);
-    }
-
-    out.* = RocList{
-        .bytes = sorted_bytes,
-        .length = list_len,
-        .capacity_or_alloc_ptr = list_len,
-    };
-}
-
 const LirProcSpec = lir.LirProcSpec;
 
 const Allocator = std.mem.Allocator;
@@ -734,7 +631,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         codegen: CodeGen,
 
         /// The LIR store containing expressions to compile
-        store: *const LirExprStore,
+        store: *const LirStore,
 
         /// Layout store for accessing struct/tag field offsets
         layout_store: *const LayoutStore,
@@ -1012,7 +909,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Target is determined at compile time via the LirCodeGen(target) parameter
         pub fn init(
             allocator: Allocator,
-            store: *const LirExprStore,
+            store: *const LirStore,
             layout_store_opt: *const LayoutStore,
             static_interner: ?*StaticDataInterner,
         ) Allocator.Error!Self {
@@ -3343,87 +3240,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .compare,
                 => {
                     std.debug.panic("UNIMPLEMENTED low-level op: {s}", .{@tagName(ll.op)});
-                },
-                .list_sort_with => {
-                    // list_sort_with(list, comparator) -> List
-                    if (args.len != 2) unreachable;
-                    const list_loc = try self.generateExpr(args[0]);
-
-                    const ls = self.layout_store;
-                    const roc_ops_reg = self.roc_ops_reg orelse unreachable;
-
-                    const elem_size_align: layout.SizeAlign = blk: {
-                        const ret_layout = ls.getLayout(ll.ret_layout);
-                        break :blk switch (ret_layout.tag) {
-                            .list => ls.layoutSizeAlign(ls.getLayout(ret_layout.data.list)),
-                            .list_of_zst => .{ .size = 0, .alignment = .@"1" },
-                            else => unreachable,
-                        };
-                    };
-
-                    // The comparator proc must be explicit in LIR; codegen does not
-                    // recover callables from the function-value expression.
-                    if (ll.callable_proc.isNone()) {
-                        if (builtin.mode == .Debug) {
-                            std.debug.panic(
-                                "LIR/codegen invariant violated: list_sort_with is missing callable_proc metadata",
-                                .{},
-                            );
-                        }
-                        unreachable;
-                    }
-                    const cmp_code_offset: usize = try self.resolveComparatorOffset(ll.callable_proc);
-
-                    // Compute the absolute address of the lambda at runtime using
-                    // PC-relative addressing: emit LEA/ADR that resolves to the
-                    // lambda's code address when the instruction executes.
-                    const cmp_addr_slot = self.codegen.allocStackSlot(8);
-                    {
-                        const current = self.codegen.currentOffset();
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            // ADR X9, (target - current)
-                            const rel: i21 = @intCast(@as(i64, @intCast(cmp_code_offset)) - @as(i64, @intCast(current)));
-                            try self.codegen.emit.adr(.X9, rel);
-                            try self.codegen.emitStoreStack(.w64, cmp_addr_slot, .X9);
-                        } else {
-                            // LEA RAX, [RIP + (target - current - 7)]
-                            // 7 = size of the LEA instruction itself (REX + opcode + modrm + disp32)
-                            const rel: i32 = @intCast(@as(i64, @intCast(cmp_code_offset)) - @as(i64, @intCast(current)) - 7);
-                            try self.codegen.emit.leaRegRipRel(.RAX, rel);
-                            try self.codegen.emitStoreStack(.w64, cmp_addr_slot, .RAX);
-                        }
-
-                        // Record this as an internal address patch so deferred-prologue
-                        // proc body shifts can update it.
-                        try self.internal_addr_patches.append(self.allocator, .{
-                            .instr_offset = current,
-                            .target_offset = cmp_code_offset,
-                        });
-                    }
-
-                    const list_off = try self.ensureOnStack(list_loc, roc_list_size);
-                    const result_offset = self.codegen.allocStackSlot(roc_list_size);
-                    const alignment_bytes = elem_size_align.alignment.toByteUnits();
-                    const fn_addr: usize = @intFromPtr(&wrapListSortWith);
-
-                    {
-                        // wrapListSortWith(out, list_bytes, list_len, list_cap, cmp_fn_addr, alignment, element_width, roc_ops)
-                        const base_reg = frame_ptr;
-                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-
-                        try builder.addLeaArg(base_reg, result_offset);
-                        try builder.addMemArg(base_reg, list_off);
-                        try builder.addMemArg(base_reg, list_off + 8);
-                        try builder.addMemArg(base_reg, list_off + 16);
-                        try builder.addMemArg(base_reg, cmp_addr_slot);
-                        try builder.addImmArg(@intCast(alignment_bytes));
-                        try builder.addImmArg(@intCast(elem_size_align.size));
-                        try builder.addRegArg(roc_ops_reg);
-
-                        try self.callBuiltin(&builder, fn_addr, .list_sort_with);
-                    }
-
-                    return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
                 },
                 .box_box => {
                     // Box.box(value) -> Box(value): heap-allocate and copy value
@@ -11768,21 +11584,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             unreachable;
         }
 
-        /// Resolve the pre-lowered comparator proc for list_sort_with to a compiled code offset.
-        fn resolveComparatorOffset(self: *Self, proc_id: lir.LIR.LirProcSpecId) Allocator.Error!usize {
-            const compiled = try self.procCodeOffsetWithOptions(proc_id, .{});
-            if (compiled.code_start == unresolved_proc_code_start) {
-                if (std.debug.runtime_safety) {
-                    std.debug.panic(
-                        "list_sort_with comparator proc {d} was not compiled before codegen",
-                        .{@intFromEnum(proc_id)},
-                    );
-                }
-                unreachable;
-            }
-            return compiled.code_start;
-        }
-
         /// Generate code for a direct proc call.
         fn generateCall(self: *Self, call: anytype) Allocator.Error!ValueLocation {
             const proc = try self.procCodeOffsetWithOptions(call.proc, .{});
@@ -15715,7 +15516,7 @@ test "code generator initialization" {
     }
 
     const allocator = std.testing.allocator;
-    var store = LirExprStore.init(allocator);
+    var store = LirStore.init(allocator);
     defer store.deinit();
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
@@ -15730,7 +15531,7 @@ test "proc params and mutable list cells use distinct stack slots" {
     }
 
     const allocator = std.testing.allocator;
-    var store = LirExprStore.init(allocator);
+    var store = LirStore.init(allocator);
     defer store.deinit();
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
@@ -15898,7 +15699,7 @@ test "two-arg proc list loop returns full length" {
     };
 
     const allocator = std.testing.allocator;
-    var store = LirExprStore.init(allocator);
+    var store = LirStore.init(allocator);
     defer store.deinit();
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
@@ -16083,7 +15884,7 @@ test "generate i64 literal" {
     }
 
     const allocator = std.testing.allocator;
-    var store = LirExprStore.init(allocator);
+    var store = LirStore.init(allocator);
     defer store.deinit();
 
     // Add an i64 literal
@@ -16107,7 +15908,7 @@ test "generate bool literal" {
     }
 
     const allocator = std.testing.allocator;
-    var store = LirExprStore.init(allocator);
+    var store = LirStore.init(allocator);
     defer store.deinit();
 
     const expr_id = try store.addExpr(.{ .bool_literal = true }, base.Region.zero());
@@ -16129,7 +15930,7 @@ test "entrypoint arg offsets preserve Roc alignment order" {
     }
 
     const allocator = std.testing.allocator;
-    var store = LirExprStore.init(allocator);
+    var store = LirStore.init(allocator);
     defer store.deinit();
 
     var test_state = try TestLayoutState.init(allocator);
@@ -16150,7 +15951,7 @@ test "entrypoint param slots round aggregates to ABI word width" {
     }
 
     const allocator = std.testing.allocator;
-    var store = LirExprStore.init(allocator);
+    var store = LirStore.init(allocator);
     defer store.deinit();
 
     var test_state = try TestLayoutState.init(allocator);
@@ -16176,7 +15977,7 @@ test "tag payload bind invariant rejects mismatched pattern layout" {
     }
 
     const allocator = std.testing.allocator;
-    var store = LirExprStore.init(allocator);
+    var store = LirStore.init(allocator);
     defer store.deinit();
 
     const pattern_id = try store.addPattern(.{ .wildcard = .{ .layout_idx = .zst } }, base.Region.zero());
@@ -16196,7 +15997,7 @@ test "generate addition" {
     }
 
     const allocator = std.testing.allocator;
-    var store = LirExprStore.init(allocator);
+    var store = LirStore.init(allocator);
     defer store.deinit();
 
     // Create: 1 + 2
@@ -16247,7 +16048,7 @@ test "record equality uses layout-aware comparison" {
     const record_layout_idx = try layout_store.putRecord(&[_]Layout{ Layout.str(), Layout.str() });
 
     // Create LIR expressions: two record literals and an eq binop
-    var store = LirExprStore.init(allocator);
+    var store = LirStore.init(allocator);
     defer store.deinit();
 
     // Field values (string literals represented as i64 placeholders — the codegen
@@ -16295,7 +16096,7 @@ test "generate modulo" {
     }
 
     const allocator = std.testing.allocator;
-    var store = LirExprStore.init(allocator);
+    var store = LirStore.init(allocator);
     defer store.deinit();
 
     // Create: 10 % 3
@@ -16325,7 +16126,7 @@ test "generate shift left" {
     }
 
     const allocator = std.testing.allocator;
-    var store = LirExprStore.init(allocator);
+    var store = LirStore.init(allocator);
     defer store.deinit();
 
     // Create: 1 << 4
@@ -16355,7 +16156,7 @@ test "generate shift right" {
     }
 
     const allocator = std.testing.allocator;
-    var store = LirExprStore.init(allocator);
+    var store = LirStore.init(allocator);
     defer store.deinit();
 
     // Create: 64 >> 2 (arithmetic shift right, sign-extending)
@@ -16385,7 +16186,7 @@ test "generate shift right zero-fill" {
     }
 
     const allocator = std.testing.allocator;
-    var store = LirExprStore.init(allocator);
+    var store = LirStore.init(allocator);
     defer store.deinit();
 
     // Create: 64 >>> 2 (logical shift right, zero-filling)
@@ -16415,7 +16216,7 @@ test "generate unary minus" {
     }
 
     const allocator = std.testing.allocator;
-    var store = LirExprStore.init(allocator);
+    var store = LirStore.init(allocator);
     defer store.deinit();
 
     // Create: -42

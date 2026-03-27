@@ -26,7 +26,6 @@ const increfDataPtrC = utils.increfDataPtrC;
 
 /// Pointer to the bytes of a list element or similar data
 pub const Opaque = ?[*]u8;
-const CompareFn = *const fn (Opaque, Opaque, Opaque) callconv(.c) u8;
 const CopyFn = *const fn (Opaque, Opaque) callconv(.c) void;
 /// Function copying data between 2 Opaques with a slot for the element's width
 pub const CopyFallbackFn = *const fn (Opaque, Opaque, usize) callconv(.c) void;
@@ -1122,57 +1121,6 @@ pub fn listDropAt(
     } else {
         return RocList.empty();
     }
-}
-
-/// Sort list elements using provided comparison function for custom ordering.
-pub fn listSortWith(
-    input: RocList,
-    cmp: CompareFn,
-    cmp_data: Opaque,
-    inc_n_context: ?*anyopaque,
-    inc_n_data: IncN,
-    data_is_owned: bool,
-    alignment: u32,
-    element_width: usize,
-    elements_refcounted: bool,
-    inc_context: ?*anyopaque,
-    inc: Inc,
-    dec_context: ?*anyopaque,
-    dec: Dec,
-    copy: CopyFn,
-    roc_ops: *RocOps,
-) callconv(.c) RocList {
-    if (input.len() < 2) {
-        return input;
-    }
-    var list = input.makeUnique(
-        alignment,
-        element_width,
-        elements_refcounted,
-        inc_context,
-        inc,
-        dec_context,
-        dec,
-        roc_ops,
-    );
-
-    if (list.bytes) |source_ptr| {
-        @import("sort.zig").fluxsort(
-            source_ptr,
-            list.len(),
-            cmp,
-            cmp_data,
-            data_is_owned,
-            inc_n_context,
-            inc_n_data,
-            element_width,
-            alignment,
-            copy,
-            roc_ops,
-        );
-    }
-
-    return list;
 }
 
 // SWAP ELEMENTS

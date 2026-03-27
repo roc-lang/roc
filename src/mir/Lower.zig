@@ -3381,18 +3381,6 @@ fn patternBoundSymbol(self: *Self, pattern_id: MIR.PatternId) ?MIR.Symbol {
     };
 }
 
-fn resolveProcIdFromCallableExpr(self: *Self, expr_id: MIR.ExprId) ?MIR.ProcId {
-    return switch (self.store.getExpr(expr_id)) {
-        .proc_ref => |proc_id| proc_id,
-        .closure_make => |closure| closure.proc,
-        .block => |block| self.resolveProcIdFromCallableExpr(block.final_expr),
-        .dbg_expr => |dbg_expr| self.resolveProcIdFromCallableExpr(dbg_expr.expr),
-        .expect => |expect| self.resolveProcIdFromCallableExpr(expect.body),
-        .return_expr => |ret| self.resolveProcIdFromCallableExpr(ret.expr),
-        else => null,
-    };
-}
-
 fn seedCallableParamSymbols(
     self: *Self,
     original_patterns: []const CIR.Pattern.Idx,
@@ -3425,7 +3413,7 @@ fn seedCallableParamSymbols(
                 .closure => try self.ensureClosureProcInstLoweredForSeed(proc_inst_id),
                 else => blk: {
                     const proc_expr = try self.lowerProcInst(proc_inst_id);
-                    const resolved = self.resolveProcIdFromCallableExpr(proc_expr) orelse {
+                    const resolved = self.store.resolveCallableProcId(proc_expr) orelse {
                         if (builtin.mode == .Debug) {
                             std.debug.panic(
                                 "MIR Lower invariant: callable param pattern {d} lowered proc inst {d} to non-callable expr {}",
@@ -5037,7 +5025,7 @@ fn lowerClosureProcBodyForSeed(
             region,
             closure_proc_inst_id,
         );
-        return self.resolveProcIdFromCallableExpr(proc_expr) orelse unreachable;
+        return self.store.resolveCallableProcId(proc_expr) orelse unreachable;
     }
 
     var capture_monotypes_snapshot = std.ArrayList(Monotype.Idx).empty;
@@ -5128,7 +5116,7 @@ fn lowerClosureProcBodyForSeed(
                 .closure => try self.ensureClosureProcInstLoweredForSeed(capture_proc_inst_id),
                 else => blk: {
                     const capture_expr = try self.lowerProcInst(capture_proc_inst_id);
-                    break :blk self.resolveProcIdFromCallableExpr(capture_expr) orelse unreachable;
+                    break :blk self.store.resolveCallableProcId(capture_expr) orelse unreachable;
                 },
             };
             try self.store.registerSymbolSeedProcSet(self.allocator, local_symbol, &.{capture_proc_id});

@@ -4263,15 +4263,18 @@ fn processDevObjectSnapshot(
         return false;
     }
 
-    // Run lambda set inference after MIR lowering so all symbol defs are visible.
     const mir_module = @import("mir");
-    var lambda_set_store = mir_module.LambdaSet.infer(allocator, &mir_store, all_module_envs) catch {
-        std.log.err("Failed to run lambda set inference", .{});
-        return false;
-    };
-    defer lambda_set_store.deinit(allocator);
 
-    var lir_store = lir_mod.LirExprStore.init(allocator);
+    const pending_root_exprs = try allocator.alloc(MIR.ExprId, pending_entrypoints.items.len);
+    defer allocator.free(pending_root_exprs);
+    for (pending_entrypoints.items, 0..) |pending, i| {
+        pending_root_exprs[i] = pending.mir_expr_id;
+    }
+
+    var mir_analyses = try mir_module.Analyses.init(allocator, &mir_store, &layout_store, pending_root_exprs);
+    defer mir_analyses.deinit();
+
+    var lir_store = lir_mod.LirStore.init(allocator);
     defer lir_store.deinit();
 
     var mir_to_lir = lir_mod.MirToLir.init(
@@ -4279,8 +4282,7 @@ fn processDevObjectSnapshot(
         &mir_store,
         &lir_store,
         &layout_store,
-        &lambda_set_store,
-        all_module_envs[0].idents.true_tag,
+        &mir_analyses,
     );
     defer mir_to_lir.deinit();
 

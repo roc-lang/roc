@@ -20,7 +20,7 @@ const lir = @import("lir");
 
 const LlvmBuilder = @import("Builder.zig");
 
-const LirExprStore = lir.LirExprStore;
+const LirStore = lir.LirStore;
 const LirExprId = lir.LirExprId;
 const LirPatternId = lir.LirPatternId;
 const Symbol = lir.Symbol;
@@ -98,7 +98,7 @@ pub const MonoLlvmCodeGen = struct {
     allocator: Allocator,
 
     /// The LIR store containing expressions to compile
-    store: *const LirExprStore,
+    store: *const LirStore,
 
     /// Map from Symbol to LLVM value
     symbol_values: std.AutoHashMap(u64, LlvmBuilder.Value),
@@ -244,7 +244,7 @@ pub const MonoLlvmCodeGen = struct {
     /// Initialize the code generator
     pub fn init(
         allocator: Allocator,
-        store: *const LirExprStore,
+        store: *const LirStore,
     ) MonoLlvmCodeGen {
         return .{
             .allocator = allocator,
@@ -3777,11 +3777,6 @@ pub const MonoLlvmCodeGen = struct {
                 return .none;
             },
 
-            .list_sort_with => {
-                std.debug.assert(args.len >= 2);
-                return try self.generateListSortWith(args[0], args[1], ll.ret_layout);
-            },
-
             .list_first => {
                 // list_first(list) -> element at index 0
                 std.debug.assert(args.len >= 1);
@@ -6026,11 +6021,6 @@ pub const MonoLlvmCodeGen = struct {
         elements_refcounted: bool,
     };
 
-    const SortComparatorThunk = struct {
-        fn_ptr: LlvmBuilder.Value,
-        cmp_data: LlvmBuilder.Value,
-    };
-
     fn getListElementInfo(self: *MonoLlvmCodeGen, list_layout_idx: layout.Idx) Error!ListElementInfo {
         const ls = self.layout_store orelse return error.CompilationFailed;
         const list_layout = ls.getLayout(list_layout_idx);
@@ -6047,176 +6037,6 @@ pub const MonoLlvmCodeGen = struct {
             .elem_align = @intCast(elem_sa.alignment.toByteUnits()),
             .elements_refcounted = ls.layoutContainsRefcounted(elem_layout),
         };
-    }
-
-    fn generateListSortWith(self: *MonoLlvmCodeGen, list_expr_id: LirExprId, cmp_expr_id: LirExprId, ret_layout: layout.Idx) Error!LlvmBuilder.Value {
-        const wip = self.wip orelse return error.CompilationFailed;
-        const builder = self.builder orelse return error.CompilationFailed;
-        const dest_ptr = self.out_ptr orelse return error.CompilationFailed;
-        const roc_ops = self.roc_ops_arg orelse return error.CompilationFailed;
-        const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
-        const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
-
-        const list_ptr = try self.materializeAsPtr(list_expr_id, 24);
-        const list_bytes = wip.load(.normal, ptr_type, list_ptr, alignment, "") catch return error.CompilationFailed;
-        const off8 = builder.intValue(.i32, 8) catch return error.OutOfMemory;
-        const off16 = builder.intValue(.i32, 16) catch return error.OutOfMemory;
-        const len_ptr = wip.gep(.inbounds, .i8, list_ptr, &.{off8}, "") catch return error.CompilationFailed;
-        const list_len = wip.load(.normal, .i64, len_ptr, alignment, "") catch return error.CompilationFailed;
-        const cap_ptr = wip.gep(.inbounds, .i8, list_ptr, &.{off16}, "") catch return error.CompilationFailed;
-        const list_cap = wip.load(.normal, .i64, cap_ptr, alignment, "") catch return error.CompilationFailed;
-
-        const elem_info = try self.getListElementInfo(ret_layout);
-        if (elem_info.elem_size == 0) {
-            const list_size_val = builder.intValue(.i32, 24) catch return error.OutOfMemory;
-            _ = wip.callMemCpy(dest_ptr, alignment, list_ptr, alignment, list_size_val, .normal, false) catch return error.CompilationFailed;
-            return .none;
-        }
-
-        const cmp_thunk = try self.buildListSortComparatorThunk(cmp_expr_id, elem_info);
-        const align_val = builder.intValue(.i32, elem_info.elem_align) catch return error.OutOfMemory;
-        const width_val = builder.intValue(.i64, elem_info.elem_size) catch return error.OutOfMemory;
-
-        _ = try self.callBuiltin("roc_builtins_list_sort_with", .void, &.{
-            ptr_type, ptr_type, .i64, .i64, ptr_type, ptr_type, .i32, .i64, ptr_type,
-        }, &.{
-            dest_ptr, list_bytes, list_len, list_cap, cmp_thunk.fn_ptr, cmp_thunk.cmp_data, align_val, width_val, roc_ops,
-        });
-
-        return .none;
-    }
-
-    fn buildListSortComparatorThunk(self: *MonoLlvmCodeGen, cmp_expr_id: LirExprId, elem_info: ListElementInfo) Error!SortComparatorThunk {
-        const builder = self.builder orelse return error.CompilationFailed;
-        const wip = self.wip orelse return error.CompilationFailed;
-        const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
-
-        const meta = self.resolveToClosureMeta(cmp_expr_id) orelse return error.CompilationFailed;
-        switch (meta.representation) {
-            .direct_call => {},
-            else => return error.CompilationFailed,
-        }
-        if (self.store.getCaptures(meta.captures).len != 0) {
-            return error.CompilationFailed;
-        }
-
-        const lambda_expr = self.store.getExpr(meta.lambda);
-        if (lambda_expr != .lambda) return error.CompilationFailed;
-        const lambda = lambda_expr.lambda;
-
-        const func_idx = try self.compileLambdaAsFunc(meta.lambda, lambda, lambda.ret_layout, null);
-        const thunk_idx = try self.compileListSortComparatorThunk(meta.lambda, lambda, func_idx, elem_info);
-        var fn_ptr = thunk_idx.toValue(builder);
-        if (fn_ptr.typeOfWip(wip) != ptr_type) {
-            fn_ptr = wip.cast(.bitcast, fn_ptr, ptr_type, "") catch return error.CompilationFailed;
-        }
-
-        return .{
-            .fn_ptr = fn_ptr,
-            .cmp_data = self.roc_ops_arg orelse return error.CompilationFailed,
-        };
-    }
-
-    fn compileListSortComparatorThunk(
-        self: *MonoLlvmCodeGen,
-        lambda_expr_id: LirExprId,
-        lambda: anytype,
-        func_idx: LlvmBuilder.Function.Index,
-        elem_info: ListElementInfo,
-    ) Error!LlvmBuilder.Function.Index {
-        const builder = self.builder orelse return error.CompilationFailed;
-        const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
-
-        const fn_type = builder.fnType(.i8, &.{ ptr_type, ptr_type, ptr_type }, .normal) catch return error.OutOfMemory;
-        var name_buf: [96]u8 = undefined;
-        const name_str = std.fmt.bufPrint(&name_buf, "roc_sort_cmp_{d}_{d}", .{
-            @intFromEnum(lambda_expr_id),
-            @intFromEnum(elem_info.elem_layout_idx),
-        }) catch return error.OutOfMemory;
-        const fn_name = builder.strtabString(name_str) catch return error.OutOfMemory;
-        const thunk_fn = builder.addFunction(fn_type, fn_name, .default) catch return error.OutOfMemory;
-
-        const outer_wip = self.wip;
-        defer self.wip = outer_wip;
-        const outer_roc_ops = self.roc_ops_arg;
-        defer self.roc_ops_arg = outer_roc_ops;
-        const outer_out_ptr = self.out_ptr;
-        defer self.out_ptr = outer_out_ptr;
-        const outer_fn_out_ptr = self.fn_out_ptr;
-        defer self.fn_out_ptr = outer_fn_out_ptr;
-        self.out_ptr = null;
-        self.fn_out_ptr = null;
-
-        const outer_symbols = self.symbol_values;
-        self.symbol_values = std.AutoHashMap(u64, LlvmBuilder.Value).init(self.allocator);
-        defer {
-            self.symbol_values.deinit();
-            self.symbol_values = outer_symbols;
-        }
-
-        const outer_loop_var_allocas = self.loop_var_allocas;
-        self.loop_var_allocas = std.AutoHashMap(u64, LoopVarAlloca).init(self.allocator);
-        defer {
-            self.loop_var_allocas.deinit();
-            self.loop_var_allocas = outer_loop_var_allocas;
-        }
-
-        const outer_loop_exit_blocks = self.loop_exit_blocks;
-        self.loop_exit_blocks = .empty;
-        defer {
-            self.loop_exit_blocks.deinit(self.allocator);
-            self.loop_exit_blocks = outer_loop_exit_blocks;
-        }
-
-        const outer_cell_allocas = self.cell_allocas;
-        self.cell_allocas = std.AutoHashMap(u64, LoopVarAlloca).init(self.allocator);
-        defer {
-            self.cell_allocas.deinit();
-            self.cell_allocas = outer_cell_allocas;
-        }
-
-        const outer_closure_bindings = self.closure_bindings;
-        self.closure_bindings = std.AutoHashMap(u64, ClosureMeta).init(self.allocator);
-        defer {
-            self.closure_bindings.deinit();
-            self.closure_bindings = outer_closure_bindings;
-        }
-
-        var thunk_wip = LlvmBuilder.WipFunction.init(builder, .{
-            .function = thunk_fn,
-            .strip = true,
-        }) catch return error.OutOfMemory;
-        defer thunk_wip.deinit();
-
-        self.wip = &thunk_wip;
-
-        const entry_block = thunk_wip.block(0, "entry") catch return error.OutOfMemory;
-        thunk_wip.cursor = .{ .block = entry_block };
-
-        const cmp_data = thunk_wip.arg(0);
-        const a_ptr = thunk_wip.arg(1);
-        const b_ptr = thunk_wip.arg(2);
-        self.roc_ops_arg = cmp_data;
-
-        const params = self.store.getPatternSpan(lambda.params);
-        if (params.len != 2) return error.CompilationFailed;
-
-        const elem_alignment = LlvmBuilder.Alignment.fromByteUnits(@max(@as(u64, elem_info.elem_align), 1));
-        const param0_layout = self.getPatternLayoutIdx(params[0]) orelse return error.CompilationFailed;
-        const param1_layout = self.getPatternLayoutIdx(params[1]) orelse return error.CompilationFailed;
-        const param0_type = try self.layoutToLlvmTypeFull(param0_layout);
-        const param1_type = try self.layoutToLlvmTypeFull(param1_layout);
-        const lhs = thunk_wip.load(.normal, param0_type, a_ptr, elem_alignment, "") catch return error.CompilationFailed;
-        const rhs = thunk_wip.load(.normal, param1_type, b_ptr, elem_alignment, "") catch return error.CompilationFailed;
-
-        const lambda_fn_type = try self.buildLambdaFunctionType(lambda, null);
-        const callee = func_idx.toValue(builder);
-        const cmp_result = thunk_wip.call(.normal, .ccc, .none, lambda_fn_type, callee, &.{ lhs, rhs, cmp_data }, "") catch return error.CompilationFailed;
-        const coerced = try self.coerceValueToType(cmp_result, .i8, lambda.ret_layout);
-        _ = thunk_wip.ret(coerced) catch return error.CompilationFailed;
-        thunk_wip.finish() catch return error.CompilationFailed;
-
-        return thunk_fn;
     }
 
     /// Convert a layout index to an LLVM type suitable for memory loads.

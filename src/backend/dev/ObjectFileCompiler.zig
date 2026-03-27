@@ -16,7 +16,7 @@ const Allocator = std.mem.Allocator;
 
 const layout = @import("layout");
 const lir = @import("lir");
-const LirExprStore = lir.LirExprStore;
+const LirStore = lir.LirStore;
 const LirProcSpec = lir.LirProcSpec;
 const RocTarget = @import("roc_target").RocTarget;
 
@@ -75,7 +75,7 @@ pub const ObjectFileCompiler = struct {
     /// Returns CompilationError.UnsupportedTarget for arm32 and wasm32 targets.
     pub fn compileToObjectFile(
         self: *ObjectFileCompiler,
-        lir_store: *const LirExprStore,
+        lir_store: *const LirStore,
         layout_store: *const layout.Store,
         entrypoints: []const Entrypoint,
         proc_specs: []const LirProcSpec,
@@ -87,7 +87,7 @@ pub const ObjectFileCompiler = struct {
     /// Compile to an object file and write it to a path.
     pub fn compileToObjectFileAndWrite(
         self: *ObjectFileCompiler,
-        lir_store: *const LirExprStore,
+        lir_store: *const LirStore,
         layout_store: *const layout.Store,
         entrypoints: []const Entrypoint,
         proc_specs: []const LirProcSpec,
@@ -118,7 +118,7 @@ pub const ObjectFileCompiler = struct {
 fn compileWithCodeGen(
     comptime CodeGen: type,
     allocator: Allocator,
-    lir_store: *const LirExprStore,
+    lir_store: *const LirStore,
     layout_store: *const layout.Store,
     entrypoints: []const Entrypoint,
     proc_specs: []const LirProcSpec,
@@ -264,7 +264,7 @@ fn compileWithCodeGen(
 /// Uses inline for over RocTarget enum fields to select the correct LirCodeGen instantiation.
 fn crossCompileDispatch(
     allocator: Allocator,
-    lir_store: *const LirExprStore,
+    lir_store: *const LirStore,
     layout_store: *const layout.Store,
     entrypoints: []const Entrypoint,
     proc_specs: []const LirProcSpec,
