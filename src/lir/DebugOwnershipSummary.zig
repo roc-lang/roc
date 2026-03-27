@@ -30,14 +30,17 @@ const ResolvedReturnKind = union(enum) {
     borrow_of_param: u8,
 };
 
+/// Debug-only ownership summary artifacts derived from lowered LIR.
 pub const Result = struct {
     alias_sources: std.AutoHashMap(u64, u64),
 
+    /// Releases all storage owned by this debug summary result.
     pub fn deinit(self: *Result) void {
         self.alias_sources.deinit();
     }
 };
 
+/// Re-derives alias-source facts for one lowered statement graph.
 pub fn analyze(allocator: Allocator, store: *const LirStore, root: CFStmtId) Allocator.Error!Result {
     var result = Result{
         .alias_sources = std.AutoHashMap(u64, u64).init(allocator),
@@ -46,10 +49,12 @@ pub fn analyze(allocator: Allocator, store: *const LirStore, root: CFStmtId) All
     return result;
 }
 
+/// Re-derives alias-source facts for one lowered proc body.
 pub fn analyzeProc(allocator: Allocator, store: *const LirStore, proc_id: LirProcSpecId) Allocator.Error!Result {
     return analyze(allocator, store, store.getProcSpec(proc_id).body);
 }
 
+/// Re-derives a proc result contract from a lowered proc body for debug verification.
 pub fn resultContractForProc(
     allocator: Allocator,
     store: *LirStore,

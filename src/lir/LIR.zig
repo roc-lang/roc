@@ -16,57 +16,71 @@ const mir = @import("mir");
 const StringLiteral = base.StringLiteral;
 const Ident = base.Ident;
 
+/// MIR symbols reused for LIR locals and proc names.
 pub const Symbol = mir.Symbol;
 
+/// Identifier of a lowered LIR proc specification.
 pub const LirProcSpecId = enum(u32) {
     _,
 };
 
+/// Identifier of a stored statement/control-flow node.
 pub const CFStmtId = enum(u32) {
     _,
 };
 
+/// Identifier of a join point targeted by `jump`.
 pub const JoinPointId = enum(u32) {
     _,
 };
 
+/// Identifier of a lexical borrow scope.
 pub const BorrowScopeId = enum(u32) {
     _,
 };
 
+/// Explicit local produced and consumed by statement-only LIR.
 pub const LocalRef = struct {
     symbol: Symbol,
     layout_idx: layout.Idx,
 };
 
+/// Span into flat local-reference storage.
 pub const LocalRefSpan = extern struct {
     start: u32,
     len: u16,
 
+    /// Returns an empty local-reference span.
     pub fn empty() LocalRefSpan {
         return .{ .start = 0, .len = 0 };
     }
 
+    /// Reports whether this span contains no local references.
     pub fn isEmpty(self: LocalRefSpan) bool {
         return self.len == 0;
     }
 };
 
+/// Span into flat ref-projection storage.
 pub const RefProjectionSpan = extern struct {
     start: u32,
     len: u16,
 
+    /// Returns an empty ref-projection span.
     pub fn empty() RefProjectionSpan {
         return .{ .start = 0, .len = 0 };
     }
 
+    /// Reports whether this span contains no ref projections.
     pub fn isEmpty(self: RefProjectionSpan) bool {
         return self.len == 0;
     }
 };
 
+/// Builtin low-level operations reused from `base`.
 pub const LowLevel = base.LowLevel;
 
+/// Literal RHS values supported by `assign_literal`.
 pub const LiteralValue = union(enum) {
     i64_literal: struct {
         value: i64,
@@ -83,34 +97,40 @@ pub const LiteralValue = union(enum) {
     bool_literal: bool,
 };
 
+/// Alias provenance rooted in another local plus optional projections.
 pub const AliasedRef = struct {
     owner: LocalRef,
     projections: RefProjectionSpan = .empty(),
 };
 
+/// Lifetime region attached to a borrow.
 pub const BorrowRegion = union(enum) {
     proc,
     scope: BorrowScopeId,
 };
 
+/// Borrow provenance rooted in another local plus optional projections.
 pub const BorrowedRef = struct {
     owner: LocalRef,
     projections: RefProjectionSpan = .empty(),
     region: BorrowRegion,
 };
 
+/// Ownership/provenance summary attached to every value-producing statement.
 pub const ResultSemantics = union(enum) {
     fresh,
     alias_of: AliasedRef,
     borrow_of: BorrowedRef,
 };
 
+/// One projection step applied to an alias or borrow root.
 pub const RefProjection = union(enum) {
     field: u16,
     tag_payload,
     nominal,
 };
 
+/// Reference-producing operation lowered by `assign_ref`.
 pub const RefOp = union(enum) {
     local: LocalRef,
     field: struct {
@@ -125,6 +145,7 @@ pub const RefOp = union(enum) {
     },
 };
 
+/// Param-relative alias/borrow contract with an optional projection path.
 pub const ParamRefContract = struct {
     param_index: u8,
     projections: RefProjectionSpan = .empty(),
@@ -137,21 +158,25 @@ pub const HostedProc = struct {
     index: u32,
 };
 
+/// Proc-level summary of how a proc's result relates to its parameters.
 pub const ProcResultContract = union(enum) {
     fresh,
     alias_of_param: ParamRefContract,
     borrow_of_param: ParamRefContract,
 };
 
+/// One explicit switch branch keyed by an integer branch value.
 pub const CFSwitchBranch = struct {
     value: u64,
     body: CFStmtId,
 };
 
+/// Span into flat switch-branch storage.
 pub const CFSwitchBranchSpan = extern struct {
     start: u32,
     len: u16,
 
+    /// Returns an empty switch-branch span.
     pub fn empty() CFSwitchBranchSpan {
         return .{ .start = 0, .len = 0 };
     }
@@ -257,6 +282,7 @@ pub const CFStmt = union(enum) {
     },
 };
 
+/// Lowered proc specification rooted at a statement body.
 pub const LirProcSpec = struct {
     name: Symbol,
     args: LocalRefSpan,

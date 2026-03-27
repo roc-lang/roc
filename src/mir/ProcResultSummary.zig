@@ -10,47 +10,56 @@ const MIR = @import("MIR.zig");
 
 const Allocator = std.mem.Allocator;
 
+/// One projection step used in param-relative provenance summaries.
 pub const RefProjection = union(enum) {
     field: u16,
     tag_payload,
     nominal,
 };
 
+/// Span into flat ref-projection storage owned by the summary table.
 pub const RefProjectionSpan = extern struct {
     start: u32,
     len: u16,
 
+    /// Returns an empty projection span.
     pub fn empty() RefProjectionSpan {
         return .{ .start = 0, .len = 0 };
     }
 
+    /// Reports whether this span contains no projections.
     pub fn isEmpty(self: RefProjectionSpan) bool {
         return self.len == 0;
     }
 };
 
+/// Param-relative alias/borrow contract with an optional projection path.
 pub const ParamRefContract = struct {
     param_index: u8,
     projections: RefProjectionSpan = .empty(),
 };
 
+/// Proc- or root-level summary of result provenance.
 pub const ProcResultContract = union(enum) {
     fresh,
     alias_of_param: ParamRefContract,
     borrow_of_param: ParamRefContract,
 };
 
+/// Immutable root-expression summary entry.
 pub const RootContractEntry = struct {
     expr_id: MIR.ExprId,
     contract: ProcResultContract,
 };
 
+/// Finalized proc/root result-summary table used by downstream lowering.
 pub const Table = struct {
     allocator: Allocator,
     ref_projections: std.ArrayList(RefProjection),
     proc_contracts: std.ArrayList(ProcResultContract),
     root_contract_entries: std.ArrayList(RootContractEntry),
 
+    /// Initializes an empty summary table.
     pub fn init(allocator: Allocator) Table {
         return .{
             .allocator = allocator,
@@ -60,6 +69,7 @@ pub const Table = struct {
         };
     }
 
+    /// Releases all storage owned by this summary table.
     pub fn deinit(self: *Table) void {
         self.ref_projections.deinit(self.allocator);
         self.proc_contracts.deinit(self.allocator);
@@ -74,15 +84,18 @@ pub const Table = struct {
         return .{ .start = start, .len = @intCast(projections.len) };
     }
 
+    /// Resolves a stored projection span to its projection slice.
     pub fn getRefProjectionSpan(self: *const Table, span: RefProjectionSpan) []const RefProjection {
         if (span.len == 0) return &.{};
         return self.ref_projections.items[span.start..][0..span.len];
     }
 
+    /// Returns the precomputed result contract for a MIR proc.
     pub fn getProcContract(self: *const Table, proc_id: MIR.ProcId) ProcResultContract {
         return self.proc_contracts.items[@intFromEnum(proc_id)];
     }
 
+    /// Returns the precomputed result contract for a requested root expression.
     pub fn getRootContract(self: *const Table, expr_id: MIR.ExprId) ProcResultContract {
         var low: usize = 0;
         var high: usize = self.root_contract_entries.items.len;
@@ -643,6 +656,7 @@ const Analyzer = struct {
     }
 };
 
+/// Builds proc and root result summaries from finished MIR.
 pub fn build(
     allocator: Allocator,
     mir_store: *const MIR.Store,

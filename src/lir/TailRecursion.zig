@@ -20,6 +20,7 @@ const JoinPointId = ir.JoinPointId;
 const LocalRefSpan = ir.LocalRefSpan;
 const Symbol = ir.Symbol;
 
+/// Tail-recursion rewrite state for one target proc body.
 pub const TailRecursionPass = struct {
     store: *LirStore,
     target_symbol: Symbol,
@@ -27,6 +28,7 @@ pub const TailRecursionPass = struct {
     allocator: Allocator,
     found_tail_call: bool = false,
 
+    /// Initializes a tail-recursion pass for one proc body.
     pub fn init(
         store: *LirStore,
         target_symbol: Symbol,
@@ -98,6 +100,7 @@ pub const TailRecursionPass = struct {
         };
     }
 
+    /// Transforms a statement graph, rewriting tail-recursive call/return pairs into jumps.
     pub fn transformStmt(self: *TailRecursionPass, stmt_id: CFStmtId) Allocator.Error!CFStmtId {
         const stmt = self.store.getCFStmt(stmt_id);
         return switch (stmt) {
@@ -153,6 +156,7 @@ pub const TailRecursionPass = struct {
     }
 };
 
+/// Rewrites a proc body into an explicit `join`/`jump` loop when tail recursion is present.
 pub fn makeTailRecursive(
     store: *LirStore,
     proc_symbol: Symbol,

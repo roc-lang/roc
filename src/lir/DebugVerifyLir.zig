@@ -32,6 +32,7 @@ const JoinMeta = struct {
     params: LocalRefSpan,
 };
 
+/// Re-derives and checks debug-only invariants for one lowered proc body.
 pub fn verifyProc(
     allocator: Allocator,
     store: *LirStore,

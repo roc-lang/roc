@@ -25,6 +25,7 @@ const AssignListStmt = std.meta.TagPayload(CFStmt, .assign_list);
 const AssignStructStmt = std.meta.TagPayload(CFStmt, .assign_struct);
 const AssignTagStmt = std.meta.TagPayload(CFStmt, .assign_tag);
 
+/// Inserts explicit reference-count statements into statement-only LIR.
 pub const RcInsertPass = struct {
     allocator: Allocator,
     store: *LirStore,
@@ -33,6 +34,7 @@ pub const RcInsertPass = struct {
     symbol_use_counts: std.AutoHashMap(u64, u32),
     symbol_alias_sources: std.AutoHashMap(u64, u64),
 
+    /// Initializes an RC insertion pass over the provided LIR store.
     pub fn init(allocator: Allocator, store: *LirStore, layout_store: *const layout_mod.Store) Allocator.Error!RcInsertPass {
         return .{
             .allocator = allocator,
@@ -43,11 +45,13 @@ pub const RcInsertPass = struct {
         };
     }
 
+    /// Releases all temporary analysis state owned by this pass.
     pub fn deinit(self: *RcInsertPass) void {
         self.symbol_use_counts.deinit();
         self.symbol_alias_sources.deinit();
     }
 
+    /// Inserts RC statements for one proc body.
     pub fn insertRcOpsForProc(self: *RcInsertPass, proc_id: LirProcSpecId) Allocator.Error!void {
         self.symbol_use_counts.clearRetainingCapacity();
         self.symbol_alias_sources.clearRetainingCapacity();
@@ -57,6 +61,7 @@ pub const RcInsertPass = struct {
         self.store.getProcSpecPtr(proc_id).body = try self.processStmt(proc.body);
     }
 
+    /// Inserts RC statements for every proc currently stored in the LIR store.
     pub fn insertRcOpsForAllProcs(self: *RcInsertPass) Allocator.Error!void {
         for (0..self.store.getProcSpecs().len) |i| {
             try self.insertRcOpsForProc(@enumFromInt(@as(u32, @intCast(i))));

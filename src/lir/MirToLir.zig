@@ -59,6 +59,7 @@ flushed: bool = false,
 next_borrow_scope: u32 = 0,
 current_borrow_region: LIR.BorrowRegion = .proc,
 
+/// Initializes MIR-to-LIR lowering state over a finished MIR module.
 pub fn init(
     allocator: Allocator,
     mir_store: *const MIR.Store,
@@ -82,12 +83,14 @@ pub fn init(
     };
 }
 
+/// Releases temporary lowering state owned by this translator.
 pub fn deinit(self: *Self) void {
     self.lowered_procs.deinit();
     self.builder_procs.deinit(self.allocator);
     self.mir_layout_resolver.deinit();
 }
 
+/// Lowers a root MIR expression into a zero-argument LIR proc and flushes all lowered procs.
 pub fn lower(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirProcSpecId {
     self.ensureCanLowerMoreProcs();
 
@@ -121,6 +124,7 @@ pub fn lower(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirProcSpecId
     return root_proc_id;
 }
 
+/// Lowers an entrypoint MIR expression into an explicit-argument LIR proc.
 pub fn lowerEntrypointProc(
     self: *Self,
     mir_expr_id: MIR.ExprId,
@@ -162,6 +166,7 @@ pub fn lowerEntrypointProc(
     });
 }
 
+/// Finalizes all builder-owned procs into the destination `LirStore`.
 pub fn flush(self: *Self) Allocator.Error!void {
     if (self.flushed) return;
     try self.flushBuilderProcs();
