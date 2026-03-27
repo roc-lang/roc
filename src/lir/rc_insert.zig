@@ -1061,10 +1061,139 @@ pub const RcInsertPass = struct {
         region: Region,
     ) Allocator.Error!LirExprId {
         if (expr_id.isNone()) return expr_id;
-        _ = self;
-        _ = later_uses;
-        _ = region;
-        return expr_id;
+
+        const retainConsumedOperand = struct {
+            fn apply(
+                pass: *RcInsertPass,
+                operand_id: LirExprId,
+                later_uses_map: *const std.AutoHashMap(u64, u32),
+                expr_region: Region,
+                prelude: *std.ArrayList(LirStmt),
+            ) Allocator.Error!LirExprId {
+                const owner_key = pass.ownerKeyForAliasedExpr(operand_id) orelse return operand_id;
+                if (pass.ownerUseCountFromMap(later_uses_map, owner_key) == 0) return operand_id;
+
+                const layout_idx = pass.exprResultLayout(operand_id);
+                if (!pass.layoutNeedsRc(layout_idx)) return operand_id;
+
+                const temp = try pass.bindExprToFreshLookupWithSemantics(prelude, operand_id, layout_idx, .retained, expr_region);
+                try pass.emitIncrefInto(temp.symbol, layout_idx, 1, expr_region, prelude);
+
+                const gop = try pass.retained_owner_use_debits.getOrPut(owner_key);
+                if (gop.found_existing) {
+                    gop.value_ptr.* += 1;
+                } else {
+                    gop.value_ptr.* = 1;
+                }
+
+                return temp.lookup;
+            }
+        }.apply;
+
+        var prelude = std.ArrayList(LirStmt).empty;
+        defer prelude.deinit(self.allocator);
+
+        const rewritten = switch (self.store.getExpr(expr_id)) {
+            .proc_call => |call| blk: {
+                const args = self.store.getExprSpan(call.args);
+                var new_args = std.ArrayList(LirExprId).empty;
+                defer new_args.deinit(self.allocator);
+
+                var changed = false;
+                for (args) |arg_id| {
+                    const new_arg = try retainConsumedOperand(self, arg_id, later_uses, region, &prelude);
+                    if (new_arg != arg_id) changed = true;
+                    try new_args.append(self.allocator, new_arg);
+                }
+
+                if (!changed) break :blk expr_id;
+                break :blk try self.rebuildProcCall(call, try self.store.addExprSpan(new_args.items), region);
+            },
+            .low_level => |ll| blk: {
+                const args = self.store.getExprSpan(ll.args);
+                const ownership = ll.op.getArgOwnership();
+
+                var new_args = std.ArrayList(LirExprId).empty;
+                defer new_args.deinit(self.allocator);
+
+                var changed = false;
+                for (args, 0..) |arg_id, i| {
+                    const new_arg = switch (ownership[i]) {
+                        .consume => try retainConsumedOperand(self, arg_id, later_uses, region, &prelude),
+                        .borrow => arg_id,
+                    };
+                    if (new_arg != arg_id) changed = true;
+                    try new_args.append(self.allocator, new_arg);
+                }
+
+                if (!changed) break :blk expr_id;
+                break :blk try self.store.addExpr(.{ .low_level = .{
+                    .op = ll.op,
+                    .args = try self.store.addExprSpan(new_args.items),
+                    .ret_layout = ll.ret_layout,
+                    .callable_proc = ll.callable_proc,
+                } }, region);
+            },
+            .list => |list| blk: {
+                const elems = self.store.getExprSpan(list.elems);
+                var new_elems = std.ArrayList(LirExprId).empty;
+                defer new_elems.deinit(self.allocator);
+
+                var changed = false;
+                for (elems) |elem_id| {
+                    const new_elem = try retainConsumedOperand(self, elem_id, later_uses, region, &prelude);
+                    if (new_elem != elem_id) changed = true;
+                    try new_elems.append(self.allocator, new_elem);
+                }
+
+                if (!changed) break :blk expr_id;
+                break :blk try self.store.addExpr(.{ .list = .{
+                    .list_layout = list.list_layout,
+                    .elem_layout = list.elem_layout,
+                    .elems = try self.store.addExprSpan(new_elems.items),
+                } }, region);
+            },
+            .struct_ => |s| blk: {
+                const fields = self.store.getExprSpan(s.fields);
+                var new_fields = std.ArrayList(LirExprId).empty;
+                defer new_fields.deinit(self.allocator);
+
+                var changed = false;
+                for (fields) |field_id| {
+                    const new_field = try retainConsumedOperand(self, field_id, later_uses, region, &prelude);
+                    if (new_field != field_id) changed = true;
+                    try new_fields.append(self.allocator, new_field);
+                }
+
+                if (!changed) break :blk expr_id;
+                break :blk try self.store.addExpr(.{ .struct_ = .{
+                    .struct_layout = s.struct_layout,
+                    .fields = try self.store.addExprSpan(new_fields.items),
+                } }, region);
+            },
+            .tag => |t| blk: {
+                const args = self.store.getExprSpan(t.args);
+                var new_args = std.ArrayList(LirExprId).empty;
+                defer new_args.deinit(self.allocator);
+
+                var changed = false;
+                for (args) |arg_id| {
+                    const new_arg = try retainConsumedOperand(self, arg_id, later_uses, region, &prelude);
+                    if (new_arg != arg_id) changed = true;
+                    try new_args.append(self.allocator, new_arg);
+                }
+
+                if (!changed) break :blk expr_id;
+                break :blk try self.store.addExpr(.{ .tag = .{
+                    .discriminant = t.discriminant,
+                    .union_layout = t.union_layout,
+                    .args = try self.store.addExprSpan(new_args.items),
+                } }, region);
+            },
+            else => expr_id,
+        };
+
+        return self.wrapPreludeAroundExpr(rewritten, self.exprResultLayout(expr_id), region, prelude.items);
     }
 
     fn wrapPreludeAroundExpr(
@@ -2967,7 +3096,80 @@ pub const RcInsertPass = struct {
             .match_expr => |w| self.processMatch(w.value, w.value_layout, w.branches, w.result_layout, region),
             .loop => |loop_expr| self.processLoop(loop_expr, region, expr_id),
             .discriminant_switch => |ds| self.processDiscriminantSwitch(ds, region),
-            .early_return => expr_id,
+            .early_return => |ret| {
+                const new_expr = try self.processExpr(ret.expr);
+
+                self.scratch_consumed_uses.clearRetainingCapacity();
+                try self.countConsumedValueInto(new_expr, &self.scratch_consumed_uses);
+
+                var cleanup_stmts = std.ArrayList(LirStmt).empty;
+                defer cleanup_stmts.deinit(self.allocator);
+
+                const live_syms = self.live_rc_symbols.items[self.early_return_scope_base..];
+                for (live_syms) |live| {
+                    const ret_use_count = self.ownerUseCountFromMap(&self.scratch_consumed_uses, live.key);
+                    const branch_adj: i32 = self.pending_branch_rc_adj.get(live.key) orelse 0;
+                    const effective_signed: i32 = @as(i32, @intCast(live.owned_ref_count)) + branch_adj;
+                    if (effective_signed <= 0) continue;
+
+                    const effective_count: u32 = @intCast(effective_signed);
+                    const consumed_before = self.ownerUseCountFromMap(&self.cumulative_consumed_uses, live.key) +
+                        self.ownerUseCountFromMap(&self.block_consumed_uses, live.key);
+                    const total_consumed = consumed_before + ret_use_count;
+                    if (total_consumed >= effective_count) continue;
+
+                    const remaining = effective_count - total_consumed;
+                    var i: u32 = 0;
+                    while (i < remaining) : (i += 1) {
+                        try self.emitDecrefInto(live.symbol, live.layout_idx, region, &cleanup_stmts);
+                    }
+                }
+
+                const live_cells = self.live_cells.items[self.early_return_cell_scope_base..];
+                var cell_index = live_cells.len;
+                while (cell_index > 0) {
+                    cell_index -= 1;
+                    const live_cell = live_cells[cell_index];
+                    if (!self.layoutNeedsRc(live_cell.layout_idx)) continue;
+                    if (!self.exprMovesCellOwner(new_expr, live_cell.cell)) {
+                        try self.emitCellDecrefInto(live_cell.cell, live_cell.layout_idx, region, &cleanup_stmts);
+                    }
+                }
+
+                if (cleanup_stmts.items.len == 0 and new_expr == ret.expr) return expr_id;
+
+                const ret_temp = try self.freshResultPattern(ret.ret_layout, region);
+                const ret_lookup = try self.store.addExpr(.{ .lookup = .{
+                    .symbol = ret_temp.symbol,
+                    .layout_idx = ret.ret_layout,
+                } }, region);
+
+                var stmts = std.ArrayList(LirStmt).empty;
+                defer stmts.deinit(self.allocator);
+                try stmts.append(self.allocator, .{ .decl = .{
+                    .pattern = ret_temp.pattern,
+                    .expr = new_expr,
+                } });
+                try stmts.appendSlice(self.allocator, cleanup_stmts.items);
+
+                const early_ret_id = try self.store.addExpr(.{ .early_return = .{
+                    .expr = ret_lookup,
+                    .ret_layout = ret.ret_layout,
+                } }, region);
+
+                const wildcard = try self.store.addPattern(.{ .wildcard = .{ .layout_idx = .zst } }, region);
+                try stmts.append(self.allocator, .{ .decl = .{
+                    .pattern = wildcard,
+                    .expr = early_ret_id,
+                } });
+
+                const dead_final = try self.store.addExpr(.{ .runtime_error = .{ .ret_layout = ret.ret_layout } }, region);
+                return self.store.addExpr(.{ .block = .{
+                    .stmts = try self.store.addStmts(stmts.items),
+                    .final_expr = dead_final,
+                    .result_layout = ret.ret_layout,
+                } }, region);
+            },
             .cell_load => expr_id,
             .proc_call => |call| {
                 const args_res = try self.processExprSpanSequenced(call.args, .consume);

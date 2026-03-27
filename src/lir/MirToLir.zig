@@ -2308,6 +2308,7 @@ fn isAtomicExpr(expr: LirExpr) bool {
         .zero_arg_tag,
         .empty_list,
         .runtime_error,
+        .cell_load,
         => true,
 
         .proc_call,
@@ -2325,7 +2326,6 @@ fn isAtomicExpr(expr: LirExpr) bool {
         .expect,
         .crash,
         .nominal,
-        .cell_load,
         .str_concat,
         .int_to_str,
         .float_to_str,
