@@ -3,8 +3,6 @@
 //! These are release-path analysis artifacts computed once from finished MIR
 //! and then consumed by downstream lowering passes like MIR -> LIR.
 
-const layout = @import("layout");
-
 const MIR = @import("MIR.zig");
 const ProcResultSummary = @import("ProcResultSummary.zig");
 
@@ -17,14 +15,12 @@ proc_result_summary: ProcResultSummary.Table,
 pub fn init(
     allocator: Allocator,
     mir_store: *const MIR.Store,
-    layout_store: *layout.Store,
     root_expr_ids: []const MIR.ExprId,
 ) Allocator.Error!Self {
     return .{
         .proc_result_summary = try ProcResultSummary.build(
             allocator,
             mir_store,
-            layout_store,
             root_expr_ids,
         ),
     };

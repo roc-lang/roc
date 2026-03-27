@@ -5,7 +5,6 @@
 //! call-result semantics do not depend on post-hoc analysis of finished LIR.
 
 const std = @import("std");
-const layout = @import("layout");
 
 const MIR = @import("MIR.zig");
 
@@ -151,15 +150,9 @@ const LocalOriginMap = std.AutoHashMap(u64, Origin);
 const Analyzer = struct {
     allocator: Allocator,
     mir_store: *const MIR.Store,
-    layout_store: *layout.Store,
-    mir_layout_resolver: *layout.MirMonotypeLayoutResolver,
     table: *Table,
     proc_states: ?[]const ProcSummaryState,
     next_scope_id: u32 = 0,
-
-    fn runtimeValueLayoutFromExpr(self: *Analyzer, expr_id: MIR.ExprId) Allocator.Error!layout.Idx {
-        return self.mir_layout_resolver.resolve(self.mir_store.typeOf(expr_id), null);
-    }
 
     fn procSummary(self: *const Analyzer, proc_id: MIR.ProcId) ProcSummaryState {
         if (self.proc_states) |states| {
@@ -481,15 +474,26 @@ const Analyzer = struct {
                             RefProjectionSpan.empty(),
                         ) };
                     },
-                    else => {
-                        const result_layout = try self.runtimeValueLayoutFromExpr(expr_id);
-                        if (self.layout_store.layoutContainsRefcounted(self.layout_store.getLayout(result_layout))) {
-                            std.debug.panic(
-                                "ProcResultSummary invariant violated: refcounted low-level result {s} must be explicitly classified",
-                                .{@tagName(ll.op)},
-                            );
-                        }
-                        break :blk .{ .value = .fresh };
+                    else => break :blk switch (ll.op.procResultSemantics()) {
+                        .fresh => .{ .value = .fresh },
+                        .borrow_arg => |arg_index| blk_inner: {
+                            if (arg_index >= arg_origins.len) {
+                                std.debug.panic(
+                                    "ProcResultSummary invariant violated: low-level {s} borrows arg {d}, but call only has {d} args",
+                                    .{ @tagName(ll.op), arg_index, arg_origins.len },
+                                );
+                            }
+                            break :blk_inner .{ .value = try self.borrowOrigin(
+                                arg_origins[arg_index],
+                                region,
+                                RefProjectionSpan.empty(),
+                            ) };
+                        },
+                        .no_return => .no_return,
+                        .requires_explicit_summary => std.debug.panic(
+                            "ProcResultSummary invariant violated: low-level result {s} requires explicit provenance summary",
+                            .{@tagName(ll.op)},
+                        ),
                     },
                 }
             },
@@ -642,18 +646,10 @@ const Analyzer = struct {
 pub fn build(
     allocator: Allocator,
     mir_store: *const MIR.Store,
-    layout_store: *layout.Store,
     root_expr_ids: []const MIR.ExprId,
 ) Allocator.Error!Table {
     var table = Table.init(allocator);
     errdefer table.deinit();
-
-    var mir_layout_resolver = layout.MirMonotypeLayoutResolver.init(
-        allocator,
-        &mir_store.monotype_store,
-        layout_store,
-    );
-    defer mir_layout_resolver.deinit();
 
     var states = std.ArrayList(ProcSummaryState).empty;
     defer states.deinit(allocator);
@@ -666,8 +662,6 @@ pub fn build(
             var analyzer = Analyzer{
                 .allocator = allocator,
                 .mir_store = mir_store,
-                .layout_store = layout_store,
-                .mir_layout_resolver = &mir_layout_resolver,
                 .table = &table,
                 .proc_states = states.items,
             };
@@ -700,8 +694,6 @@ pub fn build(
         var analyzer = Analyzer{
             .allocator = allocator,
             .mir_store = mir_store,
-            .layout_store = layout_store,
-            .mir_layout_resolver = &mir_layout_resolver,
             .table = &table,
             .proc_states = null,
         };

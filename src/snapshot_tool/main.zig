@@ -4271,7 +4271,7 @@ fn processDevObjectSnapshot(
         pending_root_exprs[i] = pending.mir_expr_id;
     }
 
-    var mir_analyses = try mir_module.Analyses.init(allocator, &mir_store, &layout_store, pending_root_exprs);
+    var mir_analyses = try mir_module.Analyses.init(allocator, &mir_store, pending_root_exprs);
     defer mir_analyses.deinit();
 
     var lir_store = lir_mod.LirStore.init(allocator);

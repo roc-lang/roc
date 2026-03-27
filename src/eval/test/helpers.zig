@@ -3528,7 +3528,7 @@ test "dev lowering: imported List.any directly calls passed predicate member" {
     var lir_store = LirStore.init(test_allocator);
     defer lir_store.deinit();
 
-    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &layout_store, &.{mir_expr});
+    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &.{mir_expr});
     defer mir_analyses.deinit();
 
     var translator = lir.MirToLir.init(
@@ -3951,7 +3951,7 @@ test "dev lowering: local any-style HOF directly calls passed predicate member" 
     var lir_store = LirStore.init(test_allocator);
     defer lir_store.deinit();
 
-    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &layout_store, &.{mir_expr});
+    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &.{mir_expr});
     defer mir_analyses.deinit();
 
     var translator = lir.MirToLir.init(
@@ -4087,7 +4087,7 @@ test "dev lowering: list identity proc keeps ownership transfer in LIR" {
     var lir_store = LirStore.init(test_allocator);
     defer lir_store.deinit();
 
-    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &layout_store, &.{mir_expr});
+    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &.{mir_expr});
     defer mir_analyses.deinit();
 
     var translator = lir.MirToLir.init(
@@ -4403,7 +4403,7 @@ test "dev lowering: list rest pattern emits two list decrefs" {
     var lir_store = LirStore.init(test_allocator);
     defer lir_store.deinit();
 
-    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &layout_store, &.{mir_expr});
+    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &.{mir_expr});
     defer mir_analyses.deinit();
 
     var translator = lir.MirToLir.init(
@@ -5150,7 +5150,7 @@ test "dev lowering: mutable loop append decrefs mutable result binding once" {
     var lir_store = LirStore.init(test_allocator);
     defer lir_store.deinit();
 
-    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &layout_store, &.{mir_expr});
+    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &.{mir_expr});
     defer mir_analyses.deinit();
 
     var translator = lir.MirToLir.init(
@@ -5816,7 +5816,7 @@ test "dev lowering: lowered for-loop releases iterated list owner" {
     var lir_store = LirStore.init(test_allocator);
     defer lir_store.deinit();
 
-    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &layout_store, &.{mir_expr});
+    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &.{mir_expr});
     defer mir_analyses.deinit();
 
     var translator = lir.MirToLir.init(
@@ -6499,7 +6499,7 @@ test "dev lowering: mutable list reassignment keeps both decrefs on the reassign
     var lir_store = LirStore.init(test_allocator);
     defer lir_store.deinit();
 
-    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &layout_store, &.{mir_expr});
+    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &.{mir_expr});
     defer mir_analyses.deinit();
 
     var translator = lir.MirToLir.init(
@@ -6786,7 +6786,7 @@ test "dev lowering: for-loop mutable list append rc shape" {
     var lir_store = LirStore.init(test_allocator);
     defer lir_store.deinit();
 
-    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &layout_store, &.{mir_expr});
+    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &.{mir_expr});
     defer mir_analyses.deinit();
 
     var translator = lir.MirToLir.init(
@@ -7020,7 +7020,7 @@ test "dev lowering: inspect-wrapped mutable list append rc shape" {
     var lir_store = LirStore.init(test_allocator);
     defer lir_store.deinit();
 
-    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &layout_store, &.{mir_expr});
+    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &.{mir_expr});
     defer mir_analyses.deinit();
 
     var translator = lir.MirToLir.init(
@@ -7279,7 +7279,7 @@ test "dev lowering: for-loop mutable list append with closure rc shape" {
     var lir_store = LirStore.init(test_allocator);
     defer lir_store.deinit();
 
-    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &layout_store, &.{mir_expr});
+    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &.{mir_expr});
     defer mir_analyses.deinit();
 
     var translator = lir.MirToLir.init(
@@ -7493,7 +7493,7 @@ test "dev lowering: list alias then shadow rc shape" {
     var lir_store = LirStore.init(test_allocator);
     defer lir_store.deinit();
 
-    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &layout_store, &.{mir_expr});
+    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &.{mir_expr});
     defer mir_analyses.deinit();
 
     var translator = lir.MirToLir.init(
@@ -7710,7 +7710,7 @@ test "dev lowering: nested list equality rc shape" {
     var lir_store = LirStore.init(test_allocator);
     defer lir_store.deinit();
 
-    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &layout_store, &.{mir_expr});
+    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &.{mir_expr});
     defer mir_analyses.deinit();
 
     var translator = lir.MirToLir.init(
@@ -7928,7 +7928,7 @@ test "dev lowering: fold exact list pattern rc shape" {
     var lir_store = LirStore.init(test_allocator);
     defer lir_store.deinit();
 
-    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &layout_store, &.{mir_expr});
+    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &.{mir_expr});
     defer mir_analyses.deinit();
 
     var translator = lir.MirToLir.init(
@@ -8146,7 +8146,7 @@ test "LIR record field closures keep distinct field indices and payload layouts"
     var lir_store = LirStore.init(test_allocator);
     defer lir_store.deinit();
 
-    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &layout_store, &.{mir_expr});
+    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &.{mir_expr});
     defer mir_analyses.deinit();
 
     var translator = lir.MirToLir.init(
@@ -8260,7 +8260,7 @@ test "LIR parenthesized record field closure call registers synthetic closure bi
     var lir_store = LirStore.init(test_allocator);
     defer lir_store.deinit();
 
-    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &layout_store, &.{mir_expr});
+    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &.{mir_expr});
     defer mir_analyses.deinit();
 
     var translator = lir.MirToLir.init(
@@ -8488,7 +8488,7 @@ test "LIR lifted closure with function-valued captures keeps both capture slots"
     var lir_store = LirStore.init(test_allocator);
     defer lir_store.deinit();
 
-    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &layout_store, &.{mir_expr});
+    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &.{mir_expr});
     defer mir_analyses.deinit();
 
     var translator = lir.MirToLir.init(
@@ -8582,7 +8582,7 @@ test "LIR proc-backed closures have no dangling lookups" {
     var lir_store = LirStore.init(test_allocator);
     defer lir_store.deinit();
 
-    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &layout_store, &.{mir_expr});
+    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &.{mir_expr});
     defer mir_analyses.deinit();
 
     var translator = lir.MirToLir.init(
@@ -9106,7 +9106,7 @@ test "LIR List.contains has no dangling lookups" {
     var lir_store = LirStore.init(test_allocator);
     defer lir_store.deinit();
 
-    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &layout_store, &.{mir_expr});
+    var mir_analyses = try mir.Analyses.init(test_allocator, &mir_store, &.{mir_expr});
     defer mir_analyses.deinit();
 
     var translator = lir.MirToLir.init(

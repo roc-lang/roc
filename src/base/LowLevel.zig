@@ -395,6 +395,13 @@ pub const LowLevel = enum {
         consume,
     };
 
+    pub const ProcResultSemantics = union(enum) {
+        fresh,
+        borrow_arg: usize,
+        no_return,
+        requires_explicit_summary,
+    };
+
     /// Some borrow-mode low-levels still need the source owner to remain live
     /// until the result has been fully materialized. This is separate from
     /// argument ownership: the source is still borrowed, but RC insertion must
@@ -693,6 +700,23 @@ pub const LowLevel = enum {
 
             .box_box, .box_unbox, .crash => &.{.consume},
             .compare => &.{ .borrow, .borrow },
+        };
+    }
+
+    pub fn procResultSemantics(self: LowLevel) ProcResultSemantics {
+        return switch (self) {
+            .crash => .no_return,
+            .list_get_unsafe => .{ .borrow_arg = 0 },
+
+            // These produce container results whose payload provenance needs a more
+            // precise summary than strongest-form MIR currently computes.
+            .list_first,
+            .list_last,
+            .list_split_first,
+            .list_split_last,
+            => .requires_explicit_summary,
+
+            else => .fresh,
         };
     }
 };
