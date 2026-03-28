@@ -793,12 +793,12 @@ pub const DevEvaluator = struct {
             mir_lower.setTypeScope(module_idx, ts, app_module_idx.?) catch return error.OutOfMemory;
         }
 
-        const mir_expr_id = mir_lower.lowerExpr(expr_idx) catch {
+        const root_const_id = mir_lower.lowerExpr(expr_idx) catch {
             return error.RuntimeError;
         };
 
         const mir_mod = @import("mir");
-        var mir_analyses = try mir_mod.Analyses.init(self.allocator, &mir_store, all_module_envs, module_idx, &.{mir_expr_id});
+        var mir_analyses = try mir_mod.Analyses.init(self.allocator, &mir_store, all_module_envs, module_idx, &.{root_const_id});
         defer mir_analyses.deinit();
 
         // Lower MIR to LIR
@@ -808,7 +808,7 @@ pub const DevEvaluator = struct {
         var mir_to_lir = lir.MirToLir.init(self.allocator, &mir_store, &lir_store, layout_store_ptr, &mir_analyses);
         defer mir_to_lir.deinit();
 
-        const root_proc_id = mir_to_lir.lower(mir_expr_id) catch {
+        const root_proc_id = mir_to_lir.lower(root_const_id) catch {
             return error.RuntimeError;
         };
         // Run RC insertion over the full lowered proc graph before codegen.

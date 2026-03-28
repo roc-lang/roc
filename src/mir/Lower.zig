@@ -3049,13 +3049,318 @@ pub fn makeSymbol(self: *Self, module_idx: u32, ident_idx: Ident.Idx) Allocator.
 }
 
 /// Lower a CIR expression to MIR.
-pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId {
+pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ConstDefId {
     const saved_root_expr_context = self.current_root_expr_context;
     if (self.current_proc_inst_context.isNone() and self.current_root_expr_context == null) {
         self.current_root_expr_context = expr_idx;
     }
     defer self.current_root_expr_context = saved_root_expr_context;
-    return self.lowerExprWithMonotypeOverride(expr_idx, null);
+    return self.lowerRootConstDef(expr_idx);
+}
+
+fn freshSyntheticLocal(self: *Self, monotype: Monotype.Idx, reassignable: bool) Allocator.Error!MIR.LocalId {
+    const ident = self.makeSyntheticIdent(Ident.Idx.NONE);
+    const symbol = try self.internSymbol(self.current_module_idx, ident);
+    return self.store.addLocal(self.allocator, .{
+        .monotype = monotype,
+        .source_symbol = symbol,
+        .reassignable = reassignable,
+    });
+}
+
+fn lowerRootConstDef(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ConstDefId {
+    const module_env = self.all_module_envs[self.current_module_idx];
+    const region = module_env.store.getExprRegion(expr_idx);
+    const monotype = try self.resolveMonotype(expr_idx);
+    const result_local = try self.freshSyntheticLocal(monotype, false);
+    const ret_stmt = try self.store.addCFStmt(self.allocator, .{ .ret = .{ .value = result_local } });
+    const body = try self.lowerTrivialRootExprInto(expr_idx, result_local, ret_stmt);
+    const symbol = try self.internSymbol(
+        self.current_module_idx,
+        self.makeSyntheticIdent(Ident.Idx.NONE),
+    );
+
+    return self.store.registerConstDef(self.allocator, .{
+        .symbol = symbol,
+        .body = body,
+        .monotype = monotype,
+        .source_region = region,
+    });
+}
+
+fn lowerTrivialStringConcatInto(
+    self: *Self,
+    segments: []const CIR.Expr.Idx,
+    target: MIR.LocalId,
+    next: MIR.CFStmtId,
+) Allocator.Error!MIR.CFStmtId {
+    if (segments.len == 0) {
+        const empty = try self.store.insertString(self.allocator, "");
+        return self.store.addCFStmt(self.allocator, .{ .assign_literal = .{
+            .target = target,
+            .literal = .{ .str = empty },
+            .next = next,
+        } });
+    }
+    if (segments.len == 1) return self.lowerTrivialRootExprInto(segments[0], target, next);
+
+    const monotype = self.store.getLocal(target).monotype;
+    const lhs_local = try self.freshSyntheticLocal(monotype, false);
+    const rhs_local = try self.freshSyntheticLocal(monotype, false);
+    const concat_stmt = try self.store.addCFStmt(self.allocator, .{ .assign_low_level = .{
+        .target = target,
+        .op = .str_concat,
+        .args = try self.store.addLocalSpan(self.allocator, &.{ lhs_local, rhs_local }),
+        .next = next,
+    } });
+    const rhs_entry = try self.lowerTrivialRootExprInto(segments[segments.len - 1], rhs_local, concat_stmt);
+    return self.lowerTrivialStringConcatInto(segments[0 .. segments.len - 1], lhs_local, rhs_entry);
+}
+
+fn lowerTrivialRootExprInto(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    target: MIR.LocalId,
+    next: MIR.CFStmtId,
+) Allocator.Error!MIR.CFStmtId {
+    const module_env = self.all_module_envs[self.current_module_idx];
+    const expr = module_env.store.getExpr(expr_idx);
+    const monotype = self.store.getLocal(target).monotype;
+
+    return switch (expr) {
+        .e_num => |num| self.store.addCFStmt(self.allocator, .{ .assign_literal = .{
+            .target = target,
+            .literal = .{ .int = num.value },
+            .next = next,
+        } }),
+        .e_frac_f32 => |frac| self.store.addCFStmt(self.allocator, .{ .assign_literal = .{
+            .target = target,
+            .literal = .{ .frac_f32 = frac.value },
+            .next = next,
+        } }),
+        .e_frac_f64 => |frac| self.store.addCFStmt(self.allocator, .{ .assign_literal = .{
+            .target = target,
+            .literal = .{ .frac_f64 = frac.value },
+            .next = next,
+        } }),
+        .e_dec => |dec| self.store.addCFStmt(self.allocator, .{ .assign_literal = .{
+            .target = target,
+            .literal = .{ .dec = dec.value },
+            .next = next,
+        } }),
+        .e_dec_small => |dec| self.store.addCFStmt(self.allocator, .{ .assign_literal = .{
+            .target = target,
+            .literal = .{ .dec = dec.value.toRocDec() },
+            .next = next,
+        } }),
+        .e_typed_int => |ti| self.store.addCFStmt(self.allocator, .{ .assign_literal = .{
+            .target = target,
+            .literal = .{ .int = ti.value },
+            .next = next,
+        } }),
+        .e_typed_frac => |tf| blk: {
+            const mono = self.store.monotype_store.getMonotype(monotype);
+            const roc_dec = builtins.dec.RocDec{ .num = tf.value.toI128() };
+            const literal: MIR.LiteralValue = switch (mono) {
+                .prim => |p| switch (p) {
+                    .f64 => .{ .frac_f64 = roc_dec.toF64() },
+                    .f32 => .{ .frac_f32 = @floatCast(roc_dec.toF64()) },
+                    .dec => .{ .dec = roc_dec },
+                    else => std.debug.panic(
+                        "statement-only MIR lowerExpr: unsupported typed fractional literal monotype for expr {d}",
+                        .{@intFromEnum(expr_idx)},
+                    ),
+                },
+                else => std.debug.panic(
+                    "statement-only MIR lowerExpr: non-primitive typed fractional literal for expr {d}",
+                    .{@intFromEnum(expr_idx)},
+                ),
+            };
+            break :blk self.store.addCFStmt(self.allocator, .{ .assign_literal = .{
+                .target = target,
+                .literal = literal,
+                .next = next,
+            } });
+        },
+        .e_str_segment => |seg| blk: {
+            const mir_str = try self.copyStringToMir(module_env, seg.literal);
+            break :blk self.store.addCFStmt(self.allocator, .{ .assign_literal = .{
+                .target = target,
+                .literal = .{ .str = mir_str },
+                .next = next,
+            } });
+        },
+        .e_str => |str_expr| blk: {
+            const span = module_env.store.sliceExpr(str_expr.span);
+            break :blk try self.lowerTrivialStringConcatInto(span, target, next);
+        },
+        .e_empty_list => self.store.addCFStmt(self.allocator, .{ .assign_list = .{
+            .target = target,
+            .elems = MIR.LocalSpan.empty(),
+            .next = next,
+        } }),
+        .e_list => |list| blk: {
+            const cir_elems = module_env.store.sliceExpr(list.elems);
+            const top = self.scratch_local_ids.top();
+            defer self.scratch_local_ids.clearFrom(top);
+
+            var lowered_next = next;
+            var i: usize = cir_elems.len;
+            while (i > 0) {
+                i -= 1;
+                const elem_idx = cir_elems[i];
+                const elem_local = try self.freshSyntheticLocal(try self.resolveMonotype(elem_idx), false);
+                try self.scratch_local_ids.append(elem_local);
+                lowered_next = try self.lowerTrivialRootExprInto(elem_idx, elem_local, lowered_next);
+            }
+            std.mem.reverse(MIR.LocalId, self.scratch_local_ids.items.items[top..]);
+            const elems = try self.store.addLocalSpan(self.allocator, self.scratch_local_ids.sliceFromStart(top));
+            break :blk try self.store.addCFStmt(self.allocator, .{ .assign_list = .{
+                .target = target,
+                .elems = elems,
+                .next = lowered_next,
+            } });
+        },
+        .e_empty_record => self.store.addCFStmt(self.allocator, .{ .assign_struct = .{
+            .target = target,
+            .fields = MIR.LocalSpan.empty(),
+            .next = next,
+        } }),
+        .e_tuple => |tuple| blk: {
+            const elems = module_env.store.sliceExpr(tuple.elems);
+            const top = self.scratch_local_ids.top();
+            defer self.scratch_local_ids.clearFrom(top);
+
+            var lowered_next = next;
+            var i: usize = elems.len;
+            while (i > 0) {
+                i -= 1;
+                const elem_idx = elems[i];
+                const elem_local = try self.freshSyntheticLocal(try self.resolveMonotype(elem_idx), false);
+                try self.scratch_local_ids.append(elem_local);
+                lowered_next = try self.lowerTrivialRootExprInto(elem_idx, elem_local, lowered_next);
+            }
+            std.mem.reverse(MIR.LocalId, self.scratch_local_ids.items.items[top..]);
+            const fields = try self.store.addLocalSpan(self.allocator, self.scratch_local_ids.sliceFromStart(top));
+            break :blk try self.store.addCFStmt(self.allocator, .{ .assign_struct = .{
+                .target = target,
+                .fields = fields,
+                .next = lowered_next,
+            } });
+        },
+        .e_record => |record| blk: {
+            if (record.ext != null) {
+                std.debug.panic(
+                    "statement-only MIR lowerExpr: record updates are not implemented yet for expr {d}",
+                    .{@intFromEnum(expr_idx)},
+                );
+            }
+
+            const mono_record = switch (self.store.monotype_store.getMonotype(monotype)) {
+                .record => |mono_record| mono_record,
+                .unit => {
+                    break :blk self.store.addCFStmt(self.allocator, .{ .assign_struct = .{
+                        .target = target,
+                        .fields = MIR.LocalSpan.empty(),
+                        .next = next,
+                    } });
+                },
+                else => std.debug.panic(
+                    "statement-only MIR lowerExpr: record literal expected record monotype for expr {d}",
+                    .{@intFromEnum(expr_idx)},
+                ),
+            };
+
+            const mono_fields = self.store.monotype_store.getFields(mono_record.fields);
+            const ordered = try self.allocator.alloc(?CIR.Expr.Idx, mono_fields.len);
+            defer self.allocator.free(ordered);
+            @memset(ordered, null);
+
+            for (module_env.store.sliceRecordFields(record.fields)) |field_idx| {
+                const field = module_env.store.getRecordField(field_idx);
+                const canonical_idx = self.recordFieldIndexByName(field.name, mono_fields);
+                ordered[canonical_idx] = field.value;
+            }
+
+            const top = self.scratch_local_ids.top();
+            defer self.scratch_local_ids.clearFrom(top);
+
+            var lowered_next = next;
+            var i: usize = ordered.len;
+            while (i > 0) {
+                i -= 1;
+                const field_expr_idx = ordered[i] orelse std.debug.panic(
+                    "statement-only MIR lowerExpr: record literal missing canonical field {d} for expr {d}",
+                    .{ i, @intFromEnum(expr_idx) },
+                );
+                const field_local = try self.freshSyntheticLocal(mono_fields[i].type_idx, false);
+                try self.scratch_local_ids.append(field_local);
+                lowered_next = try self.lowerTrivialRootExprInto(field_expr_idx, field_local, lowered_next);
+            }
+            std.mem.reverse(MIR.LocalId, self.scratch_local_ids.items.items[top..]);
+            const fields = try self.store.addLocalSpan(self.allocator, self.scratch_local_ids.sliceFromStart(top));
+            break :blk try self.store.addCFStmt(self.allocator, .{ .assign_struct = .{
+                .target = target,
+                .fields = fields,
+                .next = lowered_next,
+            } });
+        },
+        .e_zero_argument_tag => |tag| self.store.addCFStmt(self.allocator, .{ .assign_tag = .{
+            .target = target,
+            .name = self.resolveTagNameForMonotype(monotype, tag.name),
+            .args = MIR.LocalSpan.empty(),
+            .next = next,
+        } }),
+        .e_tag => |tag| blk: {
+            const args = module_env.store.sliceExpr(tag.args);
+            const top = self.scratch_local_ids.top();
+            defer self.scratch_local_ids.clearFrom(top);
+
+            var lowered_next = next;
+            var i: usize = args.len;
+            while (i > 0) {
+                i -= 1;
+                const arg_idx = args[i];
+                const arg_local = try self.freshSyntheticLocal(try self.resolveMonotype(arg_idx), false);
+                try self.scratch_local_ids.append(arg_local);
+                lowered_next = try self.lowerTrivialRootExprInto(arg_idx, arg_local, lowered_next);
+            }
+            std.mem.reverse(MIR.LocalId, self.scratch_local_ids.items.items[top..]);
+            const arg_span = try self.store.addLocalSpan(self.allocator, self.scratch_local_ids.sliceFromStart(top));
+            break :blk try self.store.addCFStmt(self.allocator, .{ .assign_tag = .{
+                .target = target,
+                .name = self.resolveTagNameForMonotype(monotype, tag.name),
+                .args = arg_span,
+                .next = lowered_next,
+            } });
+        },
+        .e_nominal => |nominal| blk: {
+            const backing_local = try self.freshSyntheticLocal(try self.resolveMonotype(nominal.backing_expr), false);
+            const nominal_stmt = try self.store.addCFStmt(self.allocator, .{ .assign_nominal = .{
+                .target = target,
+                .backing = backing_local,
+                .next = next,
+            } });
+            break :blk try self.lowerTrivialRootExprInto(nominal.backing_expr, backing_local, nominal_stmt);
+        },
+        .e_nominal_external => |nominal| blk: {
+            const backing_local = try self.freshSyntheticLocal(try self.resolveMonotype(nominal.backing_expr), false);
+            const nominal_stmt = try self.store.addCFStmt(self.allocator, .{ .assign_nominal = .{
+                .target = target,
+                .backing = backing_local,
+                .next = next,
+            } });
+            break :blk try self.lowerTrivialRootExprInto(nominal.backing_expr, backing_local, nominal_stmt);
+        },
+        .e_runtime_error => |err| self.store.addCFStmt(self.allocator, .{ .runtime_error = .{
+            .can_diagnostic = err.diagnostic,
+        } }),
+        .e_crash => |crash| self.store.addCFStmt(self.allocator, .{ .crash = crash.msg }),
+        else => std.debug.panic(
+            "statement-only MIR lowerExpr is not implemented yet for CIR expr {d} kind={s}",
+            .{ @intFromEnum(expr_idx), @tagName(expr) },
+        ),
+    };
 }
 
 fn lowerExprWithMonotypeOverrideIsolated(
