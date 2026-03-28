@@ -1202,9 +1202,7 @@ fn internSymbol(self: *Self, namespace_idx: u32, ident_idx: Ident.Idx) Allocator
             ),
         }
     }
-    const symbol = MIR.Symbol.fromRaw(raw);
-    try self.store.registerSymbolReassignable(self.allocator, symbol, ident_idx.attributes.reassignable);
-    return symbol;
+    return MIR.Symbol.fromRaw(raw);
 }
 
 fn internExternalDefSymbol(self: *Self, module_idx: u32, def_node_idx: u16) Allocator.Error!MIR.Symbol {
@@ -1269,9 +1267,7 @@ fn internExternalDefSymbol(self: *Self, module_idx: u32, def_node_idx: u16) Allo
         }
     }
 
-    const symbol = MIR.Symbol.fromRaw(raw);
-    try self.store.registerSymbolReassignable(self.allocator, symbol, display_ident.attributes.reassignable);
-    return symbol;
+    return MIR.Symbol.fromRaw(raw);
 }
 
 fn getSymbolMetadata(self: *const Self, symbol: MIR.Symbol) SymbolMetadata {

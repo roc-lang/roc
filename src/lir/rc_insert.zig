@@ -18,6 +18,7 @@ const CFStmtId = LIR.CFStmtId;
 const LocalId = LIR.LocalId;
 const LirProcSpecId = LIR.LirProcSpecId;
 const AssignRefStmt = std.meta.TagPayload(CFStmt, .assign_ref);
+const AssignSymbolStmt = std.meta.TagPayload(CFStmt, .assign_symbol);
 const AssignLiteralStmt = std.meta.TagPayload(CFStmt, .assign_literal);
 const AssignCallStmt = std.meta.TagPayload(CFStmt, .assign_call);
 const AssignLowLevelStmt = std.meta.TagPayload(CFStmt, .assign_low_level);
@@ -103,6 +104,7 @@ pub const RcInsertPass = struct {
 
     fn countUsesInStmt(self: *RcInsertPass, stmt_id: CFStmtId) Allocator.Error!void {
         switch (self.store.getCFStmt(stmt_id)) {
+            .assign_symbol => |assign| try self.countUsesInStmt(assign.next),
             .assign_ref => |assign| {
                 try self.bumpUse(refOpSource(assign.op));
                 try self.countUsesInStmt(assign.next);
@@ -165,6 +167,7 @@ pub const RcInsertPass = struct {
 
     fn resultSemantics(stmt: CFStmt) LIR.ResultSemantics {
         return switch (stmt) {
+            .assign_symbol => .fresh,
             .assign_ref => |assign| assign.result,
             .assign_literal => |assign| assign.result,
             .assign_call => |assign| assign.result,
@@ -195,6 +198,7 @@ pub const RcInsertPass = struct {
     fn processStmt(self: *RcInsertPass, stmt_id: CFStmtId) Allocator.Error!CFStmtId {
         const stmt = self.store.getCFStmt(stmt_id);
         return switch (stmt) {
+            .assign_symbol => |assign| try self.processAssignSymbol(assign),
             .assign_ref => |assign| try self.processAssignRef(assign),
             .assign_literal => |assign| try self.processAssignLiteral(assign),
             .assign_call => |assign| try self.processAssignCall(assign),
@@ -270,6 +274,11 @@ pub const RcInsertPass = struct {
 
     fn rebuildAssignStmt(self: *RcInsertPass, stmt: CFStmt, next: CFStmtId) Allocator.Error!CFStmtId {
         return switch (stmt) {
+            .assign_symbol => |assign| self.store.addCFStmt(.{ .assign_symbol = .{
+                .target = assign.target,
+                .symbol = assign.symbol,
+                .next = next,
+            } }),
             .assign_ref => |assign| self.store.addCFStmt(.{ .assign_ref = .{
                 .target = assign.target,
                 .result = assign.result,
@@ -321,6 +330,10 @@ pub const RcInsertPass = struct {
 
     fn processAssignRef(self: *RcInsertPass, assign: AssignRefStmt) Allocator.Error!CFStmtId {
         return self.wrapAssignLike(.{ .assign_ref = assign }, assign.target, assign.next);
+    }
+
+    fn processAssignSymbol(self: *RcInsertPass, assign: AssignSymbolStmt) Allocator.Error!CFStmtId {
+        return self.wrapAssignLike(.{ .assign_symbol = assign }, assign.target, assign.next);
     }
 
     fn processAssignLiteral(self: *RcInsertPass, assign: AssignLiteralStmt) Allocator.Error!CFStmtId {

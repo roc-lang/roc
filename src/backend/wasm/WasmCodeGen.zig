@@ -384,7 +384,7 @@ pub fn generateModule(self: *Self, root_proc_id: LIR.LirProcSpecId, result_layou
         if (builtin.mode == .Debug) {
             std.debug.panic(
                 "WASM/codegen invariant violated: synthetic main expects a zero-arg root proc, got {d} args",
-                .{self.store.getLocalRefs(root_proc.args).len},
+                .{self.store.getLocalSpan(root_proc.args).len},
             );
         }
         unreachable;
@@ -3766,13 +3766,13 @@ fn registerProcSpec(self: *Self, proc: LirProcSpec) Allocator.Error!void {
     const key: u64 = @bitCast(proc.name);
 
     // Build parameter types: roc_ops_ptr first, then explicit proc args.
-    const args = self.store.getLocalRefs(proc.args);
+    const args = self.store.getLocalSpan(proc.args);
     var param_types: std.ArrayList(ValType) = .empty;
     defer param_types.deinit(self.allocator);
 
     param_types.append(self.allocator, .i32) catch return error.OutOfMemory;
     for (args) |arg| {
-        const vt = self.resolveValType(arg.layout_idx);
+        const vt = self.resolveValType(self.store.getLocal(arg).layout_idx);
         param_types.append(self.allocator, vt) catch return error.OutOfMemory;
     }
 
@@ -3790,7 +3790,7 @@ fn compileProcSpecBody(self: *Self, proc: LirProcSpec) Allocator.Error!void {
     // Get the pre-registered func_idx (must exist — registerProcSpec runs in pass 1)
     const func_idx = self.registered_procs.get(key) orelse unreachable;
 
-    const args = self.store.getLocalRefs(proc.args);
+    const args = self.store.getLocalSpan(proc.args);
     const ret_vt = self.resolveValType(proc.ret_layout);
 
     // Save current codegen state
@@ -3815,8 +3815,9 @@ fn compileProcSpecBody(self: *Self, proc: LirProcSpec) Allocator.Error!void {
 
     // Bind parameters to locals (starting at local 1 after roc_ops_ptr).
     for (args) |arg| {
-        const vt = self.resolveValType(arg.layout_idx);
-        _ = self.storage.allocLocal(arg.symbol, vt) catch return error.OutOfMemory;
+        const local = self.store.getLocal(arg);
+        const vt = self.resolveValType(local.layout_idx);
+        _ = self.storage.allocLocal(local.source_symbol, vt) catch return error.OutOfMemory;
     }
 
     // Pre-allocate frame pointer local (after params, so it doesn't conflict)
@@ -4066,7 +4067,7 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
         .join => |j| {
             const jp_key = @intFromEnum(j.id);
 
-            const jp_params = self.store.getLocalRefs(j.params);
+            const jp_params = self.store.getLocalSpan(j.params);
             var param_locals = self.allocator.alloc(u32, jp_params.len) catch return error.OutOfMemory;
 
             for (jp_params, 0..) |param, i| {
@@ -4091,7 +4092,7 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
         },
         .jump => |jmp| {
             const jp_key = @intFromEnum(jmp.target);
-            const args = self.store.getLocalRefs(jmp.args);
+            const args = self.store.getLocalSpan(jmp.args);
 
             const param_locals = self.join_point_param_locals.get(jp_key) orelse unreachable;
             if (args.len != param_locals.len) {
@@ -4346,7 +4347,7 @@ fn emitCall(self: *Self, func_idx: u32) Allocator.Error!void {
 
 /// Generate call arguments (helper to avoid duplication).
 fn generateCallArgs(self: *Self, args: LocalRefSpan) Allocator.Error!void {
-    const arg_refs = self.store.getLocalRefs(args);
+    const arg_refs = self.store.getLocalSpan(args);
     for (arg_refs) |arg| {
         try self.generateExpr(arg);
     }
@@ -4701,7 +4702,7 @@ fn generateStruct(self: *Self, r: anytype) Allocator.Error!void {
     // This must happen before zero-init because field expressions may read from
     // memory that aliases the output record (e.g., in loops where $acc is rebound
     // to the same stack offset each iteration).
-    const fields = self.store.getLocalRefs(r.fields);
+    const fields = self.store.getLocalSpan(r.fields);
 
     const field_val_locals = self.allocator.alloc(u32, fields.len) catch return error.OutOfMemory;
     defer self.allocator.free(field_val_locals);
@@ -5027,7 +5028,7 @@ fn generateTag(self: *Self, t: anytype) Allocator.Error!void {
         // Still generate args for side effects (e.g., early_return from ? operator).
         // Args must be zero-sized since the tag has no payload room, but they may
         // contain control flow like early returns that need to execute.
-        const small_args = self.store.getLocalRefs(t.args);
+        const small_args = self.store.getLocalSpan(t.args);
         for (small_args) |arg_expr_id| {
             try self.generateExpr(arg_expr_id);
             self.body.append(self.allocator, Op.drop) catch return error.OutOfMemory;
@@ -5048,7 +5049,7 @@ fn generateTag(self: *Self, t: anytype) Allocator.Error!void {
     // Store payload args at offset 0 FIRST (payload may overlap discriminant
     // if the expression generates a wider type than the payload slot, e.g. i64
     // for a u32 tag payload — the i64 store would clobber the discriminant)
-    const args = self.store.getLocalRefs(t.args);
+    const args = self.store.getLocalSpan(t.args);
     var payload_offset: u32 = 0;
     for (args) |arg_expr_id| {
         const arg_byte_size = self.exprByteSize(arg_expr_id);
@@ -5085,7 +5086,7 @@ fn generateTag(self: *Self, t: anytype) Allocator.Error!void {
 /// cascading if/else branches indexed by discriminant value.
 fn generateList(self: *Self, l: anytype) Allocator.Error!void {
     const ls = self.getLayoutStore();
-    const elems = self.store.getLocalRefs(l.elems);
+    const elems = self.store.getLocalSpan(l.elems);
 
     if (elems.len == 0) {
         // Empty list — same as empty_list
@@ -5173,7 +5174,7 @@ fn generateList(self: *Self, l: anytype) Allocator.Error!void {
 
 /// Generate a low-level operation.
 fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
-    const args = self.store.getLocalRefs(ll.args);
+    const args = self.store.getLocalSpan(ll.args);
 
     switch (ll.op) {
         // Numeric operations (arithmetic, comparisons, shifts)

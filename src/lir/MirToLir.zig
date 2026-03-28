@@ -28,8 +28,8 @@ const JoinPointId = LIR.JoinPointId;
 const LirProcSpec = LIR.LirProcSpec;
 const LirProcSpecId = LIR.LirProcSpecId;
 const LiteralValue = LIR.LiteralValue;
-const LocalRef = LIR.LocalRef;
-const LocalRefSpan = LIR.LocalRefSpan;
+const LocalRef = LIR.LocalId;
+const LocalRefSpan = LIR.LocalSpan;
 const ResultSemantics = LIR.ResultSemantics;
 const RefOp = LIR.RefOp;
 const SummaryContract = ProcResultSummary.ProcResultContract;
@@ -40,7 +40,7 @@ const dec_literal_scale: i128 = std.math.pow(i128, 10, 18);
 
 const BuilderProcHeader = struct {
     name: LIR.Symbol,
-    args: LIR.LocalRefSpan,
+    args: LocalRefSpan,
     ret_layout: layout.Idx,
     result_contract: LIR.ProcResultContract,
     hosted: ?LIR.HostedProc,
@@ -112,14 +112,15 @@ pub fn deinit(self: *Self) void {
     self.mir_layout_resolver.deinit();
 }
 
-/// Lowers a root MIR expression into a zero-argument LIR proc and flushes all lowered procs.
-pub fn lower(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirProcSpecId {
+/// Lowers a root MIR constant body into a zero-argument LIR proc and flushes all lowered procs.
+pub fn lower(self: *Self, root_const_id: MIR.ConstDefId) Allocator.Error!LirProcSpecId {
     self.ensureCanLowerMoreProcs();
 
-    const ret_layout = try self.runtimeValueLayoutFromMirExpr(mir_expr_id);
-    const summary_contract = self.analyses.getRootResultContract(mir_expr_id);
-    const body = try self.lowerEntrypointBody(mir_expr_id, ret_layout, summary_contract);
-    const args = LIR.LocalRefSpan.empty();
+    const root_const = self.mir_store.getConstDef(root_const_id);
+    const ret_layout = try self.runtimeValueLayoutFromMirMonotype(root_const.monotype);
+    const summary_contract = self.analyses.getConstResultContract(root_const_id);
+    const body = try self.lowerEntrypointBody(root_const.body, ret_layout, summary_contract);
+    const args = LocalRefSpan.empty();
     const result_contract = try self.lowerSummaryProcResultContract(summary_contract);
 
     if (builtin.mode == .Debug) {
@@ -147,10 +148,10 @@ pub fn lower(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirProcSpecId
     return root_proc_id;
 }
 
-/// Lowers an entrypoint MIR expression into an explicit-argument LIR proc.
+/// Lowers an entrypoint MIR constant body into an explicit-argument LIR proc.
 pub fn lowerEntrypointProc(
     self: *Self,
-    mir_expr_id: MIR.ExprId,
+    root_const_id: MIR.ConstDefId,
     arg_layouts: []const layout.Idx,
     ret_layout: layout.Idx,
 ) Allocator.Error!LirProcSpecId {
@@ -160,11 +161,11 @@ pub fn lowerEntrypointProc(
     defer self.allocator.free(args);
 
     for (arg_layouts, 0..) |arg_layout, i| {
-        args[i] = self.freshLocal(arg_layout);
+        args[i] = try self.freshLocal(arg_layout);
     }
 
-    const arg_span = try self.lir_store.addLocalRefs(args);
-    const lowered = try self.lowerEntrypointProcBody(mir_expr_id, args, ret_layout);
+    const arg_span = try self.lir_store.addLocalSpan(args);
+    const lowered = try self.lowerEntrypointProcBody(root_const_id, args, ret_layout);
 
     if (builtin.mode == .Debug) {
         // This verifier exists only to catch compiler implementation bugs by
@@ -222,11 +223,11 @@ fn freshJoinPoint(self: *Self) JoinPointId {
     return @enumFromInt(self.next_join_point);
 }
 
-fn freshLocal(self: *Self, layout_idx: layout.Idx) LocalRef {
-    return .{
-        .symbol = self.lir_store.freshSyntheticSymbol(),
+fn freshLocal(self: *Self, layout_idx: layout.Idx) Allocator.Error!LocalRef {
+    return self.lir_store.addLocal(.{
         .layout_idx = layout_idx,
-    };
+        .source_symbol = self.lir_store.freshSyntheticSymbol(),
+    });
 }
 
 fn runtimeRepresentationLayoutIdx(self: *Self, layout_idx: layout.Idx) layout.Idx {
@@ -426,7 +427,7 @@ fn lowerExprIntoStmtWithContract(
         ),
     }
 
-    const value_local = self.freshLocal(target.layout_idx);
+    const value_local = try self.freshLocal(target.layout_idx);
     var normalized_next = try self.emitAssignRef(
         target,
         .fresh,
@@ -647,9 +648,9 @@ fn lowerProcBackedValueInto(
             const refs = try self.allocator.alloc(LocalRef, captures_fields.len);
             defer self.allocator.free(refs);
             for (captures_fields, 0..) |field_expr, i| {
-                refs[i] = self.freshLocal(try self.runtimeValueLayoutFromMirExpr(field_expr));
+                refs[i] = try self.freshLocal(try self.runtimeValueLayoutFromMirExpr(field_expr));
             }
-            const ref_span = try self.lir_store.addLocalRefs(refs);
+            const ref_span = try self.lir_store.addLocalSpan(refs);
             const assign_stmt = try self.lir_store.addCFStmt(.{ .assign_struct = .{
                 .target = target,
                 .result = .fresh,
@@ -683,7 +684,7 @@ fn lowerProcBackedValueInto(
 fn freshHiddenCaptureLocal(self: *Self, mir_proc_id: MIR.ProcId) Allocator.Error!?LocalRef {
     const mir_proc = self.mir_store.getProc(mir_proc_id);
     if (mir_proc.captures_param.isNone()) return null;
-    return self.freshLocal(try self.runtimeValueLayoutFromMirPattern(mir_proc.captures_param));
+    return try self.freshLocal(try self.runtimeValueLayoutFromMirPattern(mir_proc.captures_param));
 }
 
 fn lowerHiddenCaptureArg(
@@ -692,7 +693,7 @@ fn lowerHiddenCaptureArg(
     hidden_capture_local: LocalRef,
     next: CFStmtId,
 ) Allocator.Error!CFStmtId {
-    const callable_local = self.freshLocal(try self.runtimeValueLayoutFromMirExpr(callee_expr_id));
+    const callable_local = try self.freshLocal(try self.runtimeValueLayoutFromMirExpr(callee_expr_id));
     const bind_capture = try self.emitAssignRef(
         hidden_capture_local,
         aliasSemantics(callable_local, LIR.RefProjectionSpan.empty()),
@@ -713,7 +714,7 @@ const LoweredEntrypointProcBody = struct {
 
 fn lowerEntrypointBody(
     self: *Self,
-    mir_expr_id: MIR.ExprId,
+    root_body: MIR.CFStmtId,
     ret_layout: layout.Idx,
     result_contract: SummaryContract,
 ) Allocator.Error!CFStmtId {
@@ -727,14 +728,14 @@ fn lowerEntrypointBody(
     defer self.current_local_symbols = prev_local_symbols;
     defer self.current_proc_result_summary = prev_result_contract;
 
-    const target = self.freshLocal(ret_layout);
+    const target = try self.freshLocal(ret_layout);
     const ret_stmt = try self.emitRet(target);
-    return self.lowerExprIntoStmtWithContract(mir_expr_id, target, .{ .concrete = result_contract }, ret_stmt);
+    return self.lowerExprIntoStmtWithContract(root_body, target, .{ .concrete = result_contract }, ret_stmt);
 }
 
 fn lowerEntrypointProcBody(
     self: *Self,
-    mir_expr_id: MIR.ExprId,
+    root_const_id: MIR.ConstDefId,
     arg_locals: []const LocalRef,
     ret_layout: layout.Idx,
 ) Allocator.Error!LoweredEntrypointProcBody {
@@ -745,21 +746,22 @@ fn lowerEntrypointProcBody(
     self.current_local_symbols = &local_symbols;
     defer self.current_local_symbols = prev_local_symbols;
 
-    const mir_mono = self.mir_store.monotype_store.getMonotype(self.mir_store.typeOf(mir_expr_id));
+    const root_const = self.mir_store.getConstDef(root_const_id);
+    const mir_mono = self.mir_store.monotype_store.getMonotype(root_const.monotype);
     const must_call = arg_locals.len != 0 or mir_mono == .func;
 
-    const root_result_contract = self.analyses.getRootResultContract(mir_expr_id);
+    const root_result_contract = self.analyses.getConstResultContract(root_const_id);
 
     if (!must_call) {
         return .{
-            .body = try self.lowerEntrypointBody(mir_expr_id, ret_layout, root_result_contract),
+            .body = try self.lowerEntrypointBody(root_const.body, ret_layout, root_result_contract),
             .result_contract = try self.lowerSummaryProcResultContract(root_result_contract),
         };
     }
 
-    const target = self.freshLocal(ret_layout);
+    const target = try self.freshLocal(ret_layout);
     const ret_stmt = try self.emitRet(target);
-    return self.lowerEntrypointCallableInto(mir_expr_id, arg_locals, target, ret_stmt);
+    return self.lowerEntrypointCallableInto(root_const.body, arg_locals, target, ret_stmt);
 }
 
 fn loweredProcRetLayout(self: *const Self, proc_id: LirProcSpecId) layout.Idx {
@@ -823,7 +825,7 @@ fn emitEntrypointCall(
         call_args[visible_args.len] = capture_local;
     }
 
-    const arg_span = try self.lir_store.addLocalRefs(call_args);
+    const arg_span = try self.lir_store.addLocalSpan(call_args);
     return .{
         .body = try self.lir_store.addCFStmt(.{ .assign_call = .{
             .target = target,
@@ -853,7 +855,7 @@ fn lowerEntrypointCallableInto(
         ),
         .closure_make => |closure| blk: {
             const lowered_proc_id = try self.lowerProc(closure.proc);
-            const captures_local = self.freshLocal(try self.runtimeValueLayoutFromMirExpr(closure.captures));
+            const captures_local = try self.freshLocal(try self.runtimeValueLayoutFromMirExpr(closure.captures));
             const emitted = try self.emitEntrypointCall(
                 lowered_proc_id,
                 arg_locals,
@@ -953,7 +955,7 @@ fn lowerBorrowBinding(
     scope_id: LIR.BorrowScopeId,
     next: CFStmtId,
 ) Allocator.Error!CFStmtId {
-    const source = self.freshLocal(try self.runtimeValueLayoutFromMirExpr(binding.expr));
+    const source = try self.freshLocal(try self.runtimeValueLayoutFromMirExpr(binding.expr));
     const body = try self.lowerBorrowBindingPattern(binding.pattern, source, scope_id, next);
     return self.lowerExprIntoStmt(binding.expr, source, body);
 }
@@ -970,7 +972,7 @@ fn lowerStmtBinding(self: *Self, binding: MIR.Stmt.Binding, next: CFStmtId) Allo
         ),
         .wildcard => self.lowerExprIntoStmt(
             binding.expr,
-            self.freshLocal(try self.runtimeValueLayoutFromMirExpr(binding.expr)),
+            try self.freshLocal(try self.runtimeValueLayoutFromMirExpr(binding.expr)),
             next,
         ),
         else => std.debug.panic(
@@ -1332,7 +1334,7 @@ fn collectLoopCarrierLocals(self: *Self, body_expr_id: MIR.ExprId) Allocator.Err
     defer local_scope.deinit(self.allocator);
 
     try collector.collectExpr(body_expr_id, &local_scope);
-    return self.lir_store.addLocalRefs(collector.carriers.items);
+    return self.lir_store.addLocalSpan(collector.carriers.items);
 }
 
 fn isCurrentLocalSymbol(self: *const Self, symbol: MIR.Symbol) bool {
@@ -1573,9 +1575,9 @@ fn lowerLiteralPatternInto(
     on_match: CFStmtId,
     on_fail: CFStmtId,
 ) Allocator.Error!CFStmtId {
-    const literal_local = self.freshLocal(source.layout_idx);
-    const eq_local = self.freshLocal(.bool);
-    const eq_args = try self.lir_store.addLocalRefs(&.{ source, literal_local });
+    const literal_local = try self.freshLocal(source.layout_idx);
+    const eq_local = try self.freshLocal(.bool);
+    const eq_args = try self.lir_store.addLocalSpan(&.{ source, literal_local });
     const eq_switch = try self.emitBoolSwitch(eq_local, on_match, on_fail);
     const eq_stmt = try self.lir_store.addCFStmt(.{ .assign_low_level = .{
         .target = eq_local,
@@ -1623,7 +1625,7 @@ fn lowerPatternInto(
             );
         },
         .tag => |tag_pattern| blk: {
-            const discr_local = self.freshLocal(.u32);
+            const discr_local = try self.freshLocal(.u32);
             const variant = self.tagVariantInfoForSource(source_mono, tag_pattern.name);
             const payload_patterns = self.mir_store.getPatternSpan(tag_pattern.args);
 
@@ -1641,7 +1643,7 @@ fn lowerPatternInto(
                 );
 
                 const payload_pattern = payload_patterns[0];
-                const payload_local = self.freshLocal(try self.runtimeValueLayoutFromMirMonotype(payload_mono));
+                const payload_local = try self.freshLocal(try self.runtimeValueLayoutFromMirMonotype(payload_mono));
                 const payload_match = try self.lowerPatternInto(payload_local, payload_mono, payload_pattern, on_match, on_fail);
                 break :blk_matched try self.emitAssignRef(
                     payload_local,
@@ -1667,7 +1669,7 @@ fn lowerPatternInto(
                 i -= 1;
                 const field_pattern = fields[i];
                 const field_mono = self.fieldMonotypeForSource(source_mono, i);
-                const field_local = self.freshLocal(try self.runtimeValueLayoutFromMirMonotype(field_mono));
+                const field_local = try self.freshLocal(try self.runtimeValueLayoutFromMirMonotype(field_mono));
                 const field_match = try self.lowerPatternInto(field_local, field_mono, field_pattern, entry, on_fail);
                 entry = try self.emitAssignRef(
                     field_local,
@@ -1726,7 +1728,7 @@ fn lowerMatchBranchAlternative(
 
     var on_match = try self.lowerExprIntoStmtWithContract(branch.body, target, expr_result_contract, next);
     if (!branch.guard.isNone()) {
-        const guard_local = self.freshLocal(try self.runtimeValueLayoutFromMirExpr(branch.guard));
+        const guard_local = try self.freshLocal(try self.runtimeValueLayoutFromMirExpr(branch.guard));
         const guard_switch = try self.emitBoolSwitch(guard_local, on_match, on_fail);
         on_match = try self.lowerExprIntoStmt(branch.guard, guard_local, guard_switch);
     }
@@ -1747,9 +1749,9 @@ fn lowerMatchExprInto(
     next: CFStmtId,
 ) Allocator.Error!CFStmtId {
     const cond_mono = self.mir_store.typeOf(match_expr.cond);
-    const cond_local = self.freshLocal(try self.runtimeValueLayoutFromMirExpr(match_expr.cond));
+    const cond_local = try self.freshLocal(try self.runtimeValueLayoutFromMirExpr(match_expr.cond));
     const merge_join = self.freshJoinPoint();
-    const merge_params = try self.lir_store.addLocalRefs(&.{target});
+    const merge_params = try self.lir_store.addLocalSpan(&.{target});
     var entry = try self.lir_store.addCFStmt(.{ .runtime_error = {} });
     const expr_result_contract: ExprSummaryContract = switch (self.analyses.getExprResultContract(expr_id)) {
         .borrow_of_fresh => .borrow_of_fresh,
@@ -1770,10 +1772,10 @@ fn lowerMatchExprInto(
         var pattern_i = patterns.len;
         while (pattern_i > 0) {
             pattern_i -= 1;
-            const branch_result = self.freshLocal(target.layout_idx);
+            const branch_result = try self.freshLocal(target.layout_idx);
             const branch_jump = try self.lir_store.addCFStmt(.{ .jump = .{
                 .target = merge_join,
-                .args = try self.lir_store.addLocalRefs(&.{branch_result}),
+                .args = try self.lir_store.addLocalSpan(&.{branch_result}),
             } });
             branch_entry = try self.lowerMatchBranchAlternative(
                 cond_local,
@@ -1873,8 +1875,8 @@ fn lowerExprIntoStmt(
             const elems = self.mir_store.getExprSpan(list_data.elems);
             const refs = try self.allocator.alloc(LocalRef, elems.len);
             defer self.allocator.free(refs);
-            for (elems, 0..) |elem_expr, i| refs[i] = self.freshLocal(try self.runtimeValueLayoutFromMirExpr(elem_expr));
-            const ref_span = try self.lir_store.addLocalRefs(refs);
+            for (elems, 0..) |elem_expr, i| refs[i] = try self.freshLocal(try self.runtimeValueLayoutFromMirExpr(elem_expr));
+            const ref_span = try self.lir_store.addLocalSpan(refs);
             const assign_stmt = try self.lir_store.addCFStmt(.{ .assign_list = .{
                 .target = target,
                 .result = .fresh,
@@ -1898,8 +1900,8 @@ fn lowerExprIntoStmt(
             const fields = self.mir_store.getExprSpan(struct_data.fields);
             const refs = try self.allocator.alloc(LocalRef, fields.len);
             defer self.allocator.free(refs);
-            for (fields, 0..) |field_expr, i| refs[i] = self.freshLocal(try self.runtimeValueLayoutFromMirExpr(field_expr));
-            const ref_span = try self.lir_store.addLocalRefs(refs);
+            for (fields, 0..) |field_expr, i| refs[i] = try self.freshLocal(try self.runtimeValueLayoutFromMirExpr(field_expr));
+            const ref_span = try self.lir_store.addLocalSpan(refs);
             const assign_stmt = try self.lir_store.addCFStmt(.{ .assign_struct = .{
                 .target = target,
                 .result = .fresh,
@@ -1923,8 +1925,8 @@ fn lowerExprIntoStmt(
             const args = self.mir_store.getExprSpan(tag_expr.args);
             const refs = try self.allocator.alloc(LocalRef, args.len);
             defer self.allocator.free(refs);
-            for (args, 0..) |arg_expr, i| refs[i] = self.freshLocal(try self.runtimeValueLayoutFromMirExpr(arg_expr));
-            const ref_span = try self.lir_store.addLocalRefs(refs);
+            for (args, 0..) |arg_expr, i| refs[i] = try self.freshLocal(try self.runtimeValueLayoutFromMirExpr(arg_expr));
+            const ref_span = try self.lir_store.addLocalSpan(refs);
             const assign_stmt = try self.lir_store.addCFStmt(.{ .assign_tag = .{
                 .target = target,
                 .result = .fresh,
@@ -1949,8 +1951,8 @@ fn lowerExprIntoStmt(
             const args = self.mir_store.getExprSpan(ll.args);
             const refs = try self.allocator.alloc(LocalRef, args.len);
             defer self.allocator.free(refs);
-            for (args, 0..) |arg_expr, i| refs[i] = self.freshLocal(try self.runtimeValueLayoutFromMirExpr(arg_expr));
-            const ref_span = try self.lir_store.addLocalRefs(refs);
+            for (args, 0..) |arg_expr, i| refs[i] = try self.freshLocal(try self.runtimeValueLayoutFromMirExpr(arg_expr));
+            const ref_span = try self.lir_store.addLocalSpan(refs);
             const assign_stmt = try self.lir_store.addCFStmt(.{ .assign_low_level = .{
                 .target = target,
                 .result = lowLevelResultSemantics(self, self.current_borrow_region, ll.op, refs),
@@ -1967,8 +1969,8 @@ fn lowerExprIntoStmt(
             break :blk entry;
         },
         .str_escape_and_quote => |inner| blk: {
-            const arg = self.freshLocal(try self.runtimeValueLayoutFromMirExpr(inner));
-            const args = try self.lir_store.addLocalRefs(&.{arg});
+            const arg = try self.freshLocal(try self.runtimeValueLayoutFromMirExpr(inner));
+            const args = try self.lir_store.addLocalSpan(&.{arg});
             const assign_stmt = try self.lir_store.addCFStmt(.{ .assign_low_level = .{
                 .target = target,
                 .result = .fresh,
@@ -1980,7 +1982,7 @@ fn lowerExprIntoStmt(
         },
         .struct_access => |access| blk: {
             const source_layout = try self.runtimeValueLayoutFromMirExpr(access.struct_);
-            const source = self.freshLocal(source_layout);
+            const source = try self.freshLocal(source_layout);
             const projection = try self.singleProjectionSpan(.{ .field = @intCast(access.field_idx) });
             const assign_stmt = try self.emitAssignRef(
                 target,
@@ -2000,14 +2002,14 @@ fn lowerExprIntoStmt(
             const hidden_capture_count: usize = @intFromBool(hidden_capture_local != null);
             const refs = try self.allocator.alloc(LocalRef, args.len + hidden_capture_count);
             defer self.allocator.free(refs);
-            for (args, 0..) |arg_expr, i| refs[i] = self.freshLocal(try self.runtimeValueLayoutFromMirExpr(arg_expr));
+            for (args, 0..) |arg_expr, i| refs[i] = try self.freshLocal(try self.runtimeValueLayoutFromMirExpr(arg_expr));
             if (hidden_capture_local) |capture_local| {
                 refs[args.len] = capture_local;
             }
-            const ref_span = try self.lir_store.addLocalRefs(refs);
+            const ref_span = try self.lir_store.addLocalSpan(refs);
             const result = self.callResultSemantics(lir_proc_id, refs);
             const call_target = if (needsFreshTempForSelfAliasResult(target, result))
-                self.freshLocal(target.layout_idx)
+                try self.freshLocal(target.layout_idx)
             else
                 target;
             const assign_stmt = try self.lir_store.addCFStmt(.{ .assign_call = .{
@@ -2035,7 +2037,7 @@ fn lowerExprIntoStmt(
             .msg = try self.internMirStringLiteral(msg),
         } }),
         .return_expr => |ret| blk: {
-            const ret_local = self.freshLocal(try self.runtimeValueLayoutFromMirExpr(ret.expr));
+            const ret_local = try self.freshLocal(try self.runtimeValueLayoutFromMirExpr(ret.expr));
             const ret_stmt = try self.emitRet(ret_local);
             const proc_result_contract = self.current_proc_result_summary orelse std.debug.panic(
                 "MirToLir invariant violated: return_expr lowering requires an active proc result contract",
@@ -2049,14 +2051,14 @@ fn lowerExprIntoStmt(
             const exit_join = self.freshJoinPoint();
             const loop_head = self.freshJoinPoint();
             const carried_args = try self.collectLoopCarrierLocals(loop_expr.body);
-            const initial_carried_values = self.lir_store.getLocalRefs(carried_args);
+            const initial_carried_values = self.lir_store.getLocalSpan(carried_args);
             const loop_params = try self.allocator.alloc(LocalRef, initial_carried_values.len);
             defer self.allocator.free(loop_params);
 
             for (initial_carried_values, 0..) |carried, i| {
-                loop_params[i] = self.freshLocal(carried.layout_idx);
+                loop_params[i] = try self.freshLocal(carried.layout_idx);
             }
-            const loop_param_span = try self.lir_store.addLocalRefs(loop_params);
+            const loop_param_span = try self.lir_store.addLocalSpan(loop_params);
 
             const initial_jump = try self.lir_store.addCFStmt(.{ .jump = .{
                 .target = loop_head,
@@ -2072,9 +2074,9 @@ fn lowerExprIntoStmt(
             try self.break_targets.append(self.allocator, exit_join);
             defer _ = self.break_targets.pop();
 
-            const body_result = self.freshLocal(result_layout);
+            const body_result = try self.freshLocal(result_layout);
             var body = try self.lowerExprIntoStmt(loop_expr.body, body_result, backedge_jump);
-            const carried_values = self.lir_store.getLocalRefs(carried_args);
+            const carried_values = self.lir_store.getLocalSpan(carried_args);
             var i = loop_params.len;
             while (i > 0) {
                 i -= 1;
@@ -2133,10 +2135,10 @@ fn lowerProc(self: *Self, proc_id: MIR.ProcId) Allocator.Error!LirProcSpecId {
     for (0..arg_count) |i| {
         const arg_pat = self.mir_store.getProcValueParamPattern(proc, i);
         const arg_layout = try self.runtimeValueLayoutFromMirPattern(arg_pat);
-        args[i] = self.freshLocal(arg_layout);
+        args[i] = try self.freshLocal(arg_layout);
     }
 
-    const arg_span = try self.lir_store.addLocalRefs(args);
+    const arg_span = try self.lir_store.addLocalSpan(args);
     const proc_name = if (proc.debug_name.isNone())
         self.lir_store.freshSyntheticSymbol()
     else
@@ -2163,7 +2165,7 @@ fn lowerProc(self: *Self, proc_id: MIR.ProcId) Allocator.Error!LirProcSpecId {
     defer self.current_local_symbols = prev_local_symbols;
     defer self.current_proc_result_summary = prev_result_contract;
 
-    const target = self.freshLocal(ret_layout);
+    const target = try self.freshLocal(ret_layout);
     const ret_stmt = try self.emitRet(target);
     var body = try self.lowerExprIntoStmtWithContract(proc.body, target, .{ .concrete = summary_result_contract }, ret_stmt);
     const param_fail = try self.lir_store.addCFStmt(.{ .runtime_error = {} });

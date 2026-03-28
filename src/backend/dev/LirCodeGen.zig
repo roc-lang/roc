@@ -4213,6 +4213,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (gop.found_existing) return;
 
             switch (self.store.getCFStmt(stmt_id)) {
+                .assign_symbol => |assign| try self.collectStmtReadLocals(assign.next, locals, visited),
                 .assign_ref => |assign| {
                     try locals.put(localKey(refOpSource(assign.op)), refOpSource(assign.op));
                     try self.collectStmtReadLocals(assign.next, locals, visited);
@@ -4297,6 +4298,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (gop.found_existing) return;
 
             switch (self.store.getCFStmt(stmt_id)) {
+                .assign_symbol => |assign| {
+                    try locals.put(localKey(assign.target), assign.target);
+                    try self.collectStmtLocals(assign.next, locals, visited);
+                },
                 .assign_ref => |assign| {
                     try locals.put(localKey(assign.target), assign.target);
                     try locals.put(localKey(refOpSource(assign.op)), refOpSource(assign.op));
@@ -11458,6 +11463,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const stmt = self.store.getCFStmt(stmt_id);
 
             switch (stmt) {
+                .assign_symbol => |assign| {
+                    std.debug.panic(
+                        "Dev/codegen invariant violated: assign_symbol for symbol {d} is not implemented in statement-only dev codegen yet",
+                        .{assign.symbol.raw()},
+                    );
+                },
                 .assign_ref => |assign| {
                     const value_loc = try self.generateRefOp(assign.op, self.localLayout(assign.target));
                     try self.bindAssignedLocal(assign.target, value_loc);

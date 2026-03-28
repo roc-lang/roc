@@ -954,12 +954,12 @@ pub const DevEvaluator = struct {
             mir_lower.setTypeScope(module_idx, ts, app_module_idx.?) catch return error.OutOfMemory;
         }
 
-        const mir_expr_id = mir_lower.lowerExpr(expr_idx) catch {
+        const root_const_id = mir_lower.lowerExpr(expr_idx) catch {
             return error.RuntimeError;
         };
 
         const mir_mod = @import("mir");
-        var mir_analyses = try mir_mod.Analyses.init(self.allocator, &mir_store, all_module_envs, module_idx, &.{mir_expr_id});
+        var mir_analyses = try mir_mod.Analyses.init(self.allocator, &mir_store, all_module_envs, module_idx, &.{root_const_id});
         defer mir_analyses.deinit();
 
         // Lower MIR to LIR
@@ -969,7 +969,7 @@ pub const DevEvaluator = struct {
         var mir_to_lir = lir.MirToLir.init(self.allocator, &mir_store, &lir_store, layout_store_ptr, &mir_analyses);
         defer mir_to_lir.deinit();
 
-        const entry_proc = mir_to_lir.lowerEntrypointProc(mir_expr_id, arg_layouts, ret_layout) catch {
+        const entry_proc = mir_to_lir.lowerEntrypointProc(root_const_id, arg_layouts, ret_layout) catch {
             return error.RuntimeError;
         };
         try mir_to_lir.flush();
