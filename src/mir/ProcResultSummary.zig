@@ -5,6 +5,7 @@
 //! call-result semantics do not depend on post-hoc analysis of finished LIR.
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 const MIR = @import("MIR.zig");
 const LambdaSet = @import("LambdaSet.zig");
@@ -98,6 +99,15 @@ pub const Table = struct {
     /// Resolves a stored projection span to its projection slice.
     pub fn getRefProjectionSpan(self: *const Table, span: RefProjectionSpan) []const RefProjection {
         if (span.len == 0) return &.{};
+        if (builtin.mode == .Debug) {
+            const end = @as(u64, span.start) + @as(u64, span.len);
+            if (end > self.ref_projections.items.len) {
+                std.debug.panic(
+                    "ProcResultSummary invariant violated: projection span start={d} len={d} exceeds ref-projection storage len={d}",
+                    .{ span.start, span.len, self.ref_projections.items.len },
+                );
+            }
+        }
         return self.ref_projections.items[span.start..][0..span.len];
     }
 
@@ -212,10 +222,66 @@ const Analyzer = struct {
 
         const lambda_set_idx = self.lambda_sets.getExprLambdaSet(expr_id) orelse return null;
         const members = self.lambda_sets.getMembers(self.lambda_sets.getLambdaSet(lambda_set_idx).members);
-        return switch (members.len) {
-            1 => members[0].proc,
-            else => null,
-        };
+        if (members.len == 1) return members[0].proc;
+
+        const expected_fn_monotype = self.mir_store.typeOf(expr_id);
+        var resolved: ?MIR.ProcId = null;
+        for (members) |member| {
+            if (self.mir_store.getProc(member.proc).fn_monotype != expected_fn_monotype) continue;
+            if (resolved) |existing| {
+                if (existing != member.proc) return null;
+            } else {
+                resolved = member.proc;
+            }
+        }
+
+        return resolved;
+    }
+
+    fn panicUnresolvedCallable(self: *const Analyzer, expr_id: MIR.ExprId) noreturn {
+        const expr = self.mir_store.getExpr(expr_id);
+        std.debug.print(
+            "ProcResultSummary unresolved callable: expr={d} tag={s} fn_monotype={d}\n",
+            .{ @intFromEnum(expr_id), @tagName(expr), @intFromEnum(self.mir_store.typeOf(expr_id)) },
+        );
+
+        switch (expr) {
+            .lookup => |symbol| {
+                std.debug.print("  lookup symbol={d}\n", .{symbol.raw()});
+                if (self.mir_store.getSymbolSeedProcSet(symbol)) |proc_ids| {
+                    std.debug.print("  seed procs:", .{});
+                    for (proc_ids) |proc_id| {
+                        std.debug.print(
+                            " {d}(fn_mono={d})",
+                            .{ @intFromEnum(proc_id), @intFromEnum(self.mir_store.getProc(proc_id).fn_monotype) },
+                        );
+                    }
+                    std.debug.print("\n", .{});
+                } else {
+                    std.debug.print("  seed procs: none\n", .{});
+                }
+            },
+            else => {},
+        }
+
+        if (self.lambda_sets.getExprLambdaSet(expr_id)) |lambda_set_idx| {
+            const members = self.lambda_sets.getMembers(self.lambda_sets.getLambdaSet(lambda_set_idx).members);
+            std.debug.print("  lambda members:", .{});
+            for (members) |member| {
+                std.debug.print(
+                    " {d}(fn_mono={d})",
+                    .{ @intFromEnum(member.proc), @intFromEnum(self.mir_store.getProc(member.proc).fn_monotype) },
+                );
+            }
+            std.debug.print("\n", .{});
+        } else {
+            std.debug.print("  lambda members: none\n", .{});
+        }
+
+        std.debug.panic(
+            "ProcResultSummary invariant violated: call callee must resolve to a unique proc before strongest-form lowering",
+            .{},
+        );
     }
 
     fn freshScopeRegion(self: *Analyzer) BorrowRegion {
@@ -722,10 +788,7 @@ const Analyzer = struct {
             },
 
             .call => |call| blk: {
-                const proc_id = self.resolveCallableProcId(call.func) orelse std.debug.panic(
-                    "ProcResultSummary invariant violated: call callee must resolve to a unique proc before strongest-form lowering",
-                    .{},
-                );
+                const proc_id = self.resolveCallableProcId(call.func) orelse self.panicUnresolvedCallable(call.func);
                 const arg_exprs = self.mir_store.getExprSpan(call.args);
                 const arg_origins = try self.allocator.alloc(Origin, arg_exprs.len);
                 defer self.allocator.free(arg_origins);
@@ -781,24 +844,22 @@ const Analyzer = struct {
 
                 const body_outcome = try self.analyzeExpr(&scope_env, scope_region, accumulator, scope.body, loop_depth);
                 break :blk if (body_outcome.value) |origin| switch (origin) {
-                        .borrow_of_param => |borrowed| switch (borrowed.region) {
-                            .proc => ExprOutcome{ .value = origin, .breaks = body_outcome.breaks },
-                            .scope => |scope_id| std.debug.panic(
-                                "ProcResultSummary invariant violated: borrow scope result escaped local scope {d}",
-                                .{scope_id},
-                            ),
-                        },
-                        .borrow_of_fresh => |borrowed| switch (borrowed.region) {
-                            .proc => ExprOutcome{ .value = origin, .breaks = body_outcome.breaks },
-                            .scope => |scope_id| std.debug.panic(
-                                "ProcResultSummary invariant violated: borrow scope result escaped local scope {d}",
-                                .{scope_id},
-                            ),
-                        },
-                        else => ExprOutcome{ .value = origin, .breaks = body_outcome.breaks },
-                    }
-                else
-                    ExprOutcome{ .breaks = body_outcome.breaks };
+                    .borrow_of_param => |borrowed| switch (borrowed.region) {
+                        .proc => ExprOutcome{ .value = origin, .breaks = body_outcome.breaks },
+                        .scope => |scope_id| std.debug.panic(
+                            "ProcResultSummary invariant violated: borrow scope result escaped local scope {d}",
+                            .{scope_id},
+                        ),
+                    },
+                    .borrow_of_fresh => |borrowed| switch (borrowed.region) {
+                        .proc => ExprOutcome{ .value = origin, .breaks = body_outcome.breaks },
+                        .scope => |scope_id| std.debug.panic(
+                            "ProcResultSummary invariant violated: borrow scope result escaped local scope {d}",
+                            .{scope_id},
+                        ),
+                    },
+                    else => ExprOutcome{ .value = origin, .breaks = body_outcome.breaks },
+                } else ExprOutcome{ .breaks = body_outcome.breaks };
             },
 
             .dbg_expr => |dbg_expr| self.analyzeExpr(env, region, accumulator, dbg_expr.expr, loop_depth),

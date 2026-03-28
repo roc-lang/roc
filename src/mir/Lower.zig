@@ -1190,7 +1190,10 @@ fn emitMirBoolLiteral(self: *Self, module_env: *const ModuleEnv, value: bool, re
     return try self.store.addExpr(
         self.allocator,
         .{ .tag = .{
-            .name = if (value) module_env.idents.true_tag else module_env.idents.false_tag,
+            .name = self.resolveTagNameForMonotype(
+                bool_mono,
+                if (value) module_env.idents.true_tag else module_env.idents.false_tag,
+            ),
             .args = MIR.ExprSpan.empty(),
         } },
         bool_mono,
@@ -2427,7 +2430,7 @@ fn lowerStrInspectTagUnion(
         const tag_args = try self.wrapMultiPayloadTagPatterns(mono_tag.name.ident, union_mono, payload_pattern_span);
         const tag_pattern = try self.store.addPattern(
             self.allocator,
-            .{ .tag = .{ .name = mono_tag.name.ident, .args = tag_args } },
+            .{ .tag = .{ .name = mono_tag.name, .args = tag_args } },
             union_mono,
         );
         const branch_patterns = try self.store.addBranchPatterns(self.allocator, &.{MIR.BranchPattern{
@@ -2715,7 +2718,7 @@ fn lowerStrInspectTagUnionByMonotype(
         const tag_args = try self.wrapMultiPayloadTagPatterns(tag.name.ident, mono_idx, payload_pattern_span);
         const tag_pattern = try self.store.addPattern(
             self.allocator,
-            .{ .tag = .{ .name = tag.name.ident, .args = tag_args } },
+            .{ .tag = .{ .name = tag.name, .args = tag_args } },
             mono_idx,
         );
         const branch_patterns = try self.store.addBranchPatterns(self.allocator, &.{MIR.BranchPattern{
@@ -2990,13 +2993,13 @@ fn lowerExprWithMonotypeOverride(
             const lowered_args = try self.stabilizeEscapingFunctionSpan(try self.lowerExprSpan(module_env, tag.args));
             const args = try self.wrapMultiPayloadTagExprs(tag.name, monotype, lowered_args, region);
             return try self.store.addExpr(self.allocator, .{ .tag = .{
-                .name = tag.name,
+                .name = self.resolveTagNameForMonotype(monotype, tag.name),
                 .args = args,
             } }, monotype, region);
         },
         .e_zero_argument_tag => |zat| {
             return try self.store.addExpr(self.allocator, .{ .tag = .{
-                .name = zat.name,
+                .name = self.resolveTagNameForMonotype(monotype, zat.name),
                 .args = MIR.ExprSpan.empty(),
             } }, monotype, region);
         },
@@ -3985,7 +3988,7 @@ fn lowerPattern(self: *Self, module_env: *const ModuleEnv, pattern_idx: CIR.Patt
             const lowered_args = try self.lowerPatternSpan(module_env, tag.args);
             const args = try self.wrapMultiPayloadTagPatterns(tag.name, monotype, lowered_args);
             break :blk try self.store.addPattern(self.allocator, .{ .tag = .{
-                .name = tag.name,
+                .name = self.resolveTagNameForMonotype(monotype, tag.name),
                 .args = args,
             } }, monotype);
         },
@@ -5213,19 +5216,7 @@ fn lowerClosureProcBodyForSeed(
             .final_expr = body,
         } }, self.store.typeOf(body), region);
 
-    const orig_param_ids = self.store.getPatternSpan(params);
-    const pat_top = self.scratch_pattern_ids.top();
-    defer self.scratch_pattern_ids.clearFrom(pat_top);
-    for (orig_param_ids) |pid| {
-        try self.scratch_pattern_ids.append(pid);
-    }
-    if (!captures_param_pattern.isNone()) {
-        try self.scratch_pattern_ids.append(captures_param_pattern);
-    }
-    const all_params = try self.store.addPatternSpan(
-        self.allocator,
-        self.scratch_pattern_ids.sliceFromStart(pat_top),
-    );
+    const visible_params = params;
 
     const capture_binding_span = if (capture_local_symbols.items.len == 0)
         MIR.CaptureBindingSpan.empty()
@@ -5254,7 +5245,7 @@ fn lowerClosureProcBodyForSeed(
 
     self.store.getProcPtr(proc_id).* = .{
         .fn_monotype = monotype,
-        .params = all_params,
+        .params = visible_params,
         .body = lifted_body,
         .ret_monotype = orig_func.ret,
         .debug_name = MIR.Symbol.none,
@@ -5479,17 +5470,9 @@ fn lowerClosureSpecialized(
             .final_expr = body,
         } }, self.store.typeOf(body), region);
 
-    // --- Step 8: Build the lifted lambda's param list (original params + captures param) ---
-    const orig_param_ids = self.store.getPatternSpan(params);
-    const pat_top = self.scratch_pattern_ids.top();
-    defer self.scratch_pattern_ids.clearFrom(pat_top);
-    for (orig_param_ids) |pid| {
-        try self.scratch_pattern_ids.append(pid);
-    }
-    if (!captures_param_pattern.isNone()) {
-        try self.scratch_pattern_ids.append(captures_param_pattern);
-    }
-    const all_params = try self.store.addPatternSpan(self.allocator, self.scratch_pattern_ids.sliceFromStart(pat_top));
+    // --- Step 8: Keep only user-visible params in proc.params.
+    // The hidden captures param is represented solely by proc.captures_param.
+    const visible_params = params;
 
     const capture_binding_span = if (lower_plan.capture_requests.items.len == 0) MIR.CaptureBindingSpan.empty() else blk: {
         const binding_top = self.scratch_capture_bindings.top();
@@ -5507,7 +5490,7 @@ fn lowerClosureSpecialized(
 
     self.store.getProcPtr(proc_id).* = .{
         .fn_monotype = monotype,
-        .params = all_params,
+        .params = visible_params,
         .body = lifted_body,
         .ret_monotype = orig_func.ret,
         .debug_name = MIR.Symbol.none,
@@ -6289,7 +6272,7 @@ fn lowerBinop(self: *Self, expr_idx: CIR.Expr.Idx, binop: CIR.Expr.Binop, monoty
                 self.currentCommonIdents(),
             );
             const false_expr = try self.store.addExpr(self.allocator, .{ .tag = .{
-                .name = module_env.idents.false_tag,
+                .name = self.resolveTagNameForMonotype(bool_monotype, module_env.idents.false_tag),
                 .args = MIR.ExprSpan.empty(),
             } }, bool_monotype, region);
             return try self.createBoolMatch(module_env, cond, body_true, false_expr, monotype, region);
@@ -6305,7 +6288,7 @@ fn lowerBinop(self: *Self, expr_idx: CIR.Expr.Idx, binop: CIR.Expr.Binop, monoty
                 self.currentCommonIdents(),
             );
             const true_expr = try self.store.addExpr(self.allocator, .{ .tag = .{
-                .name = module_env.idents.true_tag,
+                .name = self.resolveTagNameForMonotype(bool_monotype, module_env.idents.true_tag),
                 .args = MIR.ExprSpan.empty(),
             } }, bool_monotype, region);
             return try self.createBoolMatch(module_env, cond, true_expr, body_else, monotype, region);
@@ -6413,7 +6396,7 @@ fn createBoolMatch(
     );
 
     const true_pattern = try self.store.addPattern(self.allocator, .{ .tag = .{
-        .name = module_env.idents.true_tag,
+        .name = self.resolveTagNameForMonotype(bool_monotype, module_env.idents.true_tag),
         .args = MIR.PatternSpan.empty(),
     } }, bool_monotype);
     const wildcard_pattern = try self.store.addPattern(self.allocator, .wildcard, bool_monotype);
@@ -6440,11 +6423,11 @@ fn negBool(self: *Self, module_env: *const ModuleEnv, expr: MIR.ExprId, monotype
         self.currentCommonIdents(),
     );
     const false_expr = try self.store.addExpr(self.allocator, .{ .tag = .{
-        .name = module_env.idents.false_tag,
+        .name = self.resolveTagNameForMonotype(bool_monotype, module_env.idents.false_tag),
         .args = MIR.ExprSpan.empty(),
     } }, bool_monotype, region);
     const true_expr = try self.store.addExpr(self.allocator, .{ .tag = .{
-        .name = module_env.idents.true_tag,
+        .name = self.resolveTagNameForMonotype(bool_monotype, module_env.idents.true_tag),
         .args = MIR.ExprSpan.empty(),
     } }, bool_monotype, region);
     return try self.createBoolMatch(module_env, expr, false_expr, true_expr, monotype, region);
@@ -6680,7 +6663,7 @@ fn lowerTagUnionEquality(
         const lhs_tag_args = try self.wrapMultiPayloadTagPatterns(tag.name.ident, tu_monotype, lhs_payload_patterns);
 
         const lhs_tag_pattern = try self.store.addPattern(self.allocator, .{ .tag = .{
-            .name = tag.name.ident,
+            .name = tag.name,
             .args = lhs_tag_args,
         } }, tu_monotype);
         const lhs_bp = try self.store.addBranchPatterns(self.allocator, &.{.{
@@ -6702,7 +6685,7 @@ fn lowerTagUnionEquality(
         const rhs_tag_args = try self.wrapMultiPayloadTagPatterns(tag.name.ident, tu_monotype, rhs_payload_patterns);
 
         const rhs_tag_pattern = try self.store.addPattern(self.allocator, .{ .tag = .{
-            .name = tag.name.ident,
+            .name = tag.name,
             .args = rhs_tag_args,
         } }, tu_monotype);
         const rhs_bp = try self.store.addBranchPatterns(self.allocator, &.{.{
@@ -7681,6 +7664,31 @@ fn tagPayloadMonotypesByName(
         if (self.identsTagNameEquivalent(tag.name, tag_name)) {
             return self.store.monotype_store.getIdxSpan(tag.payloads);
         }
+    }
+
+    const module_env = self.all_module_envs[self.current_module_idx];
+    typeBindingInvariant(
+        "tag '{s}' missing from monotype",
+        .{module_env.getIdent(tag_name)},
+    );
+}
+
+fn resolveTagNameForMonotype(
+    self: *Self,
+    union_monotype: Monotype.Idx,
+    tag_name: Ident.Idx,
+) Monotype.Name {
+    const mono = self.store.monotype_store.getMonotype(union_monotype);
+    const tags = switch (mono) {
+        .tag_union => |tu| self.store.monotype_store.getTags(tu.tags),
+        else => typeBindingInvariant(
+            "tag name lookup expected tag_union monotype, found '{s}'",
+            .{@tagName(mono)},
+        ),
+    };
+
+    for (tags) |tag| {
+        if (self.identsTagNameEquivalent(tag.name, tag_name)) return tag.name;
     }
 
     const module_env = self.all_module_envs[self.current_module_idx];

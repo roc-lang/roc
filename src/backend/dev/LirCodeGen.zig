@@ -305,6 +305,24 @@ fn wrapStrToUtf8(out: *RocList, str_bytes: ?[*]u8, str_len: usize, str_cap: usiz
 fn wrapStrConcat(out: *RocStr, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, roc_ops: *RocOps) callconv(.c) void {
     const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
     const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
+
+    if (builtin.mode == .Debug) {
+        const debugAssertValidStr = struct {
+            fn check(label: []const u8, s: RocStr) void {
+                if (s.isSmallStr()) return;
+                if (s.bytes != null) return;
+
+                std.debug.panic(
+                    "LIR/codegen invariant violated: wrapStrConcat received invalid RocStr {s} (len={d}, cap=0x{x})",
+                    .{ label, s.len(), s.capacity_or_alloc_ptr },
+                );
+            }
+        }.check;
+
+        debugAssertValidStr("lhs", a);
+        debugAssertValidStr("rhs", b);
+    }
+
     out.* = strConcatC(a, b, roc_ops);
 }
 
@@ -2394,6 +2412,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (args.len != 2) unreachable;
                     const a_loc = try self.generateExpr(args[0]);
                     const b_loc = try self.generateExpr(args[1]);
+                    if (builtin.mode == .Debug and (a_loc != .stack_str or b_loc != .stack_str)) {
+                        std.debug.panic(
+                            "LIR/codegen invariant violated: str_concat expects stack_str args, got lhs={s} rhs={s}",
+                            .{ @tagName(a_loc), @tagName(b_loc) },
+                        );
+                    }
                     const a_off = try self.ensureOnStack(a_loc, roc_str_size);
                     const b_off = try self.ensureOnStack(b_loc, roc_str_size);
                     return try self.callStr2RocOpsToStr(a_off, b_off, @intFromPtr(&wrapStrConcat), .str_concat);
@@ -4300,12 +4324,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             if (std.debug.runtime_safety) {
                 const definition = self.findSymbolDefinition(symbol);
-                if (self.current_stmt_id) |stmt_id| {
-                    self.debugPrintStmtSummary(stmt_id);
-                }
-                if (definition.kind == .stmt) {
-                    self.debugPrintStmtSummary(@enumFromInt(definition.id));
-                }
                 self.debugPrintSymbolMentions(symbol);
                 var symbol_is_proc_arg = false;
                 if (self.current_proc_args) |args_span| {
@@ -4467,63 +4485,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     },
                     else => {},
                 }
-            }
-        }
-
-        fn debugPrintStmtSummary(self: *Self, stmt_id: CFStmtId) void {
-            switch (self.store.getCFStmt(stmt_id)) {
-                .assign_ref => |assign| std.debug.print(
-                    "LirCodeGen stmt {d}: assign_ref target={d} source={d} next={d}\n",
-                    .{ @intFromEnum(stmt_id), assign.target.symbol.raw(), refOpSource(assign.op).symbol.raw(), @intFromEnum(assign.next) },
-                ),
-                .assign_literal => |assign| std.debug.print(
-                    "LirCodeGen stmt {d}: assign_literal target={d} next={d}\n",
-                    .{ @intFromEnum(stmt_id), assign.target.symbol.raw(), @intFromEnum(assign.next) },
-                ),
-                .assign_call => |assign| std.debug.print(
-                    "LirCodeGen stmt {d}: assign_call target={d} next={d}\n",
-                    .{ @intFromEnum(stmt_id), assign.target.symbol.raw(), @intFromEnum(assign.next) },
-                ),
-                .assign_low_level => |assign| std.debug.print(
-                    "LirCodeGen stmt {d}: assign_low_level target={d} op={s} next={d}\n",
-                    .{ @intFromEnum(stmt_id), assign.target.symbol.raw(), @tagName(assign.op), @intFromEnum(assign.next) },
-                ),
-                .assign_list => |assign| std.debug.print(
-                    "LirCodeGen stmt {d}: assign_list target={d} next={d}\n",
-                    .{ @intFromEnum(stmt_id), assign.target.symbol.raw(), @intFromEnum(assign.next) },
-                ),
-                .assign_struct => |assign| std.debug.print(
-                    "LirCodeGen stmt {d}: assign_struct target={d} next={d}\n",
-                    .{ @intFromEnum(stmt_id), assign.target.symbol.raw(), @intFromEnum(assign.next) },
-                ),
-                .assign_tag => |assign| std.debug.print(
-                    "LirCodeGen stmt {d}: assign_tag target={d} next={d}\n",
-                    .{ @intFromEnum(stmt_id), assign.target.symbol.raw(), @intFromEnum(assign.next) },
-                ),
-                .switch_stmt => |sw| std.debug.print(
-                    "LirCodeGen stmt {d}: switch cond={d} default={d}\n",
-                    .{ @intFromEnum(stmt_id), sw.cond.symbol.raw(), @intFromEnum(sw.default_branch) },
-                ),
-                .borrow_scope => |scope| std.debug.print(
-                    "LirCodeGen stmt {d}: borrow_scope id={d} body={d} remainder={d}\n",
-                    .{ @intFromEnum(stmt_id), @intFromEnum(scope.id), @intFromEnum(scope.body), @intFromEnum(scope.remainder) },
-                ),
-                .join => |join| std.debug.print(
-                    "LirCodeGen stmt {d}: join body={d} remainder={d}\n",
-                    .{ @intFromEnum(stmt_id), @intFromEnum(join.body), @intFromEnum(join.remainder) },
-                ),
-                .jump => |jump| std.debug.print(
-                    "LirCodeGen stmt {d}: jump target={d}\n",
-                    .{ @intFromEnum(stmt_id), @intFromEnum(jump.target) },
-                ),
-                .ret => |ret_stmt| std.debug.print(
-                    "LirCodeGen stmt {d}: ret value={d}\n",
-                    .{ @intFromEnum(stmt_id), ret_stmt.value.symbol.raw() },
-                ),
-                else => std.debug.print(
-                    "LirCodeGen stmt {d}: {s}\n",
-                    .{ @intFromEnum(stmt_id), @tagName(self.store.getCFStmt(stmt_id)) },
-                ),
             }
         }
 
@@ -8638,8 +8599,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn generateStruct(self: *Self, s: anytype) Allocator.Error!ValueLocation {
             const ls = self.layout_store;
             const struct_layout = ls.getLayout(self.runtimeRepresentationLayoutIdx(s.target_layout));
-            if (struct_layout.tag != .struct_) {
-                return .{ .immediate_i64 = 0 };
+            switch (struct_layout.tag) {
+                .zst => return .{ .immediate_i64 = 0 },
+                .struct_ => {},
+                else => {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic(
+                            "LIR/codegen invariant violated: assign_struct target layout {s} is not runtime struct or zst layout",
+                            .{@tagName(struct_layout.tag)},
+                        );
+                    }
+                    unreachable;
+                },
             }
 
             const struct_data = ls.getStructData(struct_layout.data.struct_.idx);
@@ -9256,6 +9227,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     break :blk slot;
                 },
                 .immediate_i64 => |val| blk: {
+                    if (builtin.mode == .Debug and size > 8) {
+                        std.debug.panic(
+                            "LIR/codegen invariant violated: ensureOnStack cannot materialize immediate_i64 into {d}-byte value",
+                            .{size},
+                        );
+                    }
                     const slot = self.codegen.allocStackSlot(@max(8, @as(u32, @intCast(size))));
                     const temp = try self.allocTempGeneral();
                     try self.codegen.emitLoadImm(temp, val);
@@ -9408,6 +9385,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// leaking into narrower typed bindings/calls.
         fn coerceImmediateToLayout(_: *Self, loc: ValueLocation, target_layout: layout.Idx) ValueLocation {
             return switch (target_layout) {
+                .str => switch (loc) {
+                    .immediate_i64, .immediate_i128 => if (builtin.mode == .Debug) {
+                        std.debug.panic(
+                            "LIR/codegen invariant violated: scalar immediate cannot stand in for RocStr layout",
+                            .{},
+                        );
+                    } else unreachable,
+                    else => loc,
+                },
                 .f32, .f64 => switch (loc) {
                     .immediate_i64 => |v| .{ .immediate_f64 = @floatFromInt(v) },
                     .immediate_i128 => |v| .{ .immediate_f64 = @floatFromInt(v) },
@@ -11892,9 +11878,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.join_point_params.put(jp_key, params);
         }
 
-        /// Rebind join point parameters to new argument values (for jump)
-        /// This writes the new values directly to the stack slots used by symbol_locations,
-        /// so that the join point body can read the updated values.
+        /// Rebind join point parameters to new argument values (for jump).
+        ///
+        /// This backend only moves bytes into the destination slots. Any
+        /// ownership changes required on loop/control-flow edges must already be
+        /// represented by explicit LIR `incref`/`decref` statements; codegen
+        /// must not invent RC behavior while rebinding join params.
         fn rebindJoinPointParams(self: *Self, join_point: JoinPointId, arg_locs: []const ValueLocation) Allocator.Error!void {
             const jp_key = @intFromEnum(join_point);
             const params = self.join_point_params.get(jp_key) orelse unreachable;
@@ -11925,10 +11914,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const runtime_layout_idx = self.runtimeRepresentationLayoutIdx(local.layout_idx);
                 try self.copyParamValueToStack(temp_loc, temp_offset, size, runtime_layout_idx == .i128 or runtime_layout_idx == .u128 or runtime_layout_idx == .dec);
 
-                if (self.layout_store.layoutContainsRefcounted(self.layout_store.getLayout(local.layout_idx))) {
-                    try self.emitIncrefAtStackOffset(temp_offset, local.layout_idx);
-                }
-
                 try temp_infos.append(self.allocator, .{
                     .offset = temp_offset,
                     .size = size,
@@ -11953,10 +11938,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .stack_str => |off| off,
                     .general_reg, .float_reg, .immediate_i64, .immediate_i128, .immediate_f64, .noreturn => unreachable,
                 };
-
-                if (self.layout_store.layoutContainsRefcounted(self.layout_store.getLayout(local.layout_idx))) {
-                    try self.emitDecrefAtStackOffset(dst_offset, local.layout_idx);
-                }
 
                 const temp_reg = try self.allocTempGeneral();
                 var bytes_copied: u8 = 0;

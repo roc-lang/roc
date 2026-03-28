@@ -241,7 +241,7 @@ pub const LlvmEvaluator = struct {
         };
 
         const mir_mod = @import("mir");
-        var mir_analyses = try mir_mod.Analyses.init(self.allocator, &mir_store, &.{mir_expr_id});
+        var mir_analyses = try mir_mod.Analyses.init(self.allocator, &mir_store, all_module_envs, module_idx, &.{mir_expr_id});
         defer mir_analyses.deinit();
 
         // 2. Lower MIR to LIR

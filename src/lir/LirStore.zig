@@ -1,6 +1,7 @@
 //! Flat storage for statement-only LIR.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 
 const ir = @import("LIR.zig");
@@ -83,6 +84,15 @@ pub fn addLocalRefs(self: *Self, refs: []const LocalRef) Allocator.Error!LocalRe
 /// Resolves a local-reference span to its stored slice.
 pub fn getLocalRefs(self: *const Self, span: LocalRefSpan) []const LocalRef {
     if (span.len == 0) return &.{};
+    if (builtin.mode == .Debug) {
+        const end = @as(u64, span.start) + @as(u64, span.len);
+        if (end > self.local_refs.items.len) {
+            std.debug.panic(
+                "LirStore invariant violated: local-ref span start={d} len={d} exceeds local-ref storage len={d}",
+                .{ span.start, span.len, self.local_refs.items.len },
+            );
+        }
+    }
     return self.local_refs.items[span.start..][0..span.len];
 }
 
@@ -98,6 +108,15 @@ pub fn addRefProjectionSpan(self: *Self, projections: []const RefProjection) All
 /// Resolves a ref-projection span to its stored slice.
 pub fn getRefProjectionSpan(self: *const Self, span: RefProjectionSpan) []const RefProjection {
     if (span.len == 0) return &.{};
+    if (builtin.mode == .Debug) {
+        const end = @as(u64, span.start) + @as(u64, span.len);
+        if (end > self.ref_projections.items.len) {
+            std.debug.panic(
+                "LirStore invariant violated: ref-projection span start={d} len={d} exceeds ref-projection storage len={d}",
+                .{ span.start, span.len, self.ref_projections.items.len },
+            );
+        }
+    }
     return self.ref_projections.items[span.start..][0..span.len];
 }
 
@@ -130,6 +149,15 @@ pub fn addCFSwitchBranches(self: *Self, branches: []const CFSwitchBranch) Alloca
 /// Resolves a switch-branch span to its stored slice.
 pub fn getCFSwitchBranches(self: *const Self, span: CFSwitchBranchSpan) []const CFSwitchBranch {
     if (span.len == 0) return &.{};
+    if (builtin.mode == .Debug) {
+        const end = @as(u64, span.start) + @as(u64, span.len);
+        if (end > self.cf_switch_branches.items.len) {
+            std.debug.panic(
+                "LirStore invariant violated: switch-branch span start={d} len={d} exceeds switch-branch storage len={d}",
+                .{ span.start, span.len, self.cf_switch_branches.items.len },
+            );
+        }
+    }
     return self.cf_switch_branches.items[span.start..][0..span.len];
 }
 

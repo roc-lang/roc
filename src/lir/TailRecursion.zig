@@ -125,19 +125,20 @@ pub const TailRecursionPass = struct {
             .assign_tag => |assign| try self.transformAssignLike(stmt, assign.next),
             .incref, .decref, .free, .scope_exit, .jump, .ret, .crash, .runtime_error => stmt_id,
             .switch_stmt => |switch_stmt| blk: {
-                const start = self.store.cf_switch_branches.items.len;
+                var rewritten_branches: std.ArrayListUnmanaged(ir.CFSwitchBranch) = .empty;
+                defer rewritten_branches.deinit(self.allocator);
+
                 for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
-                    try self.store.cf_switch_branches.append(self.allocator, .{
+                    try rewritten_branches.append(self.allocator, .{
                         .value = branch.value,
                         .body = try self.transformStmt(branch.body),
                     });
                 }
+
+                const branch_span = try self.store.addCFSwitchBranches(rewritten_branches.items);
                 break :blk try self.store.addCFStmt(.{ .switch_stmt = .{
                     .cond = switch_stmt.cond,
-                    .branches = .{
-                        .start = @intCast(start),
-                        .len = @intCast(self.store.cf_switch_branches.items.len - start),
-                    },
+                    .branches = branch_span,
                     .default_branch = try self.transformStmt(switch_stmt.default_branch),
                 } });
             },

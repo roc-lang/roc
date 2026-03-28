@@ -184,7 +184,15 @@ fn buildPlatformTypeScope(
     const rigid_scope = &type_scope.scopes.items[0];
 
     for (module_env.requires_types.items.items) |required_type| {
-        const type_aliases_slice = all_aliases[@intFromEnum(required_type.type_aliases.start)..][0..required_type.type_aliases.count];
+        const range_start = @intFromEnum(required_type.type_aliases.start);
+        const range_end = range_start + required_type.type_aliases.count;
+        if (builtin.mode == .Debug and range_end > all_aliases.len) {
+            std.debug.panic(
+                "DevEvaluator invariant violated: requires-type alias range start={d} count={d} exceeds for-clause alias storage len={d}",
+                .{ range_start, required_type.type_aliases.count, all_aliases.len },
+            );
+        }
+        const type_aliases_slice = all_aliases[range_start..range_end];
         for (type_aliases_slice) |alias| {
             const alias_stmt = module_env.store.getStatement(alias.alias_stmt_idx);
             std.debug.assert(alias_stmt == .s_alias_decl);
@@ -790,7 +798,7 @@ pub const DevEvaluator = struct {
         };
 
         const mir_mod = @import("mir");
-        var mir_analyses = try mir_mod.Analyses.init(self.allocator, &mir_store, &.{mir_expr_id});
+        var mir_analyses = try mir_mod.Analyses.init(self.allocator, &mir_store, all_module_envs, module_idx, &.{mir_expr_id});
         defer mir_analyses.deinit();
 
         // Lower MIR to LIR
@@ -951,7 +959,7 @@ pub const DevEvaluator = struct {
         };
 
         const mir_mod = @import("mir");
-        var mir_analyses = try mir_mod.Analyses.init(self.allocator, &mir_store, &.{mir_expr_id});
+        var mir_analyses = try mir_mod.Analyses.init(self.allocator, &mir_store, all_module_envs, module_idx, &.{mir_expr_id});
         defer mir_analyses.deinit();
 
         // Lower MIR to LIR

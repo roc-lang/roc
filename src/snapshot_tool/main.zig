@@ -7,6 +7,7 @@
 //! the given Roc code snippet.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const parse = @import("parse");
 const can = @import("can");
@@ -4112,7 +4113,15 @@ fn processDevObjectSnapshot(
         const all_aliases = platform_env.for_clause_aliases.items.items;
 
         for (platform_env.requires_types.items.items) |required_type| {
-            const type_aliases_slice = all_aliases[@intFromEnum(required_type.type_aliases.start)..][0..required_type.type_aliases.count];
+            const range_start = @intFromEnum(required_type.type_aliases.start);
+            const range_end = range_start + required_type.type_aliases.count;
+            if (builtin.mode == .Debug and range_end > all_aliases.len) {
+                std.debug.panic(
+                    "SnapshotTool invariant violated: requires-type alias range start={d} count={d} exceeds for-clause alias storage len={d}",
+                    .{ range_start, required_type.type_aliases.count, all_aliases.len },
+                );
+            }
+            const type_aliases_slice = all_aliases[range_start..range_end];
             for (type_aliases_slice) |alias| {
                 const alias_stmt = platform_env.store.getStatement(alias.alias_stmt_idx);
                 std.debug.assert(alias_stmt == .s_alias_decl);
@@ -4271,7 +4280,7 @@ fn processDevObjectSnapshot(
         pending_root_exprs[i] = pending.mir_expr_id;
     }
 
-    var mir_analyses = try mir_module.Analyses.init(allocator, &mir_store, pending_root_exprs);
+    var mir_analyses = try mir_module.Analyses.init(allocator, &mir_store, all_module_envs, platform_module_idx, pending_root_exprs);
     defer mir_analyses.deinit();
 
     var lir_store = lir_mod.LirStore.init(allocator);

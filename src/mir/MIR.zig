@@ -375,7 +375,7 @@ pub const Expr = union(enum) {
 
     /// Tag application (zero-arg tag is just len=0 args)
     tag: struct {
-        name: Ident.Idx,
+        name: Monotype.Name,
         args: ExprSpan,
     },
 
@@ -502,7 +502,7 @@ pub const Pattern = union(enum) {
 
     /// Match a specific tag and optionally destructure payload
     tag: struct {
-        name: Ident.Idx,
+        name: Monotype.Name,
         args: PatternSpan,
     },
 
@@ -972,6 +972,28 @@ pub const Store = struct {
         return self.getProcSpan(span);
     }
 
+    /// Resolve one monomorphic callable expression to the unique proc whose
+    /// function monotype matches the expression's monotype.
+    pub fn resolveUniqueProcByFnMonotype(
+        self: *const Store,
+        expr_id: ExprId,
+        proc_ids: []const ProcId,
+    ) ?ProcId {
+        const expected_fn_monotype = self.typeOf(expr_id);
+        var resolved: ?ProcId = null;
+
+        for (proc_ids) |proc_id| {
+            if (self.getProc(proc_id).fn_monotype != expected_fn_monotype) continue;
+            if (resolved) |existing| {
+                if (existing != proc_id) return null;
+            } else {
+                resolved = proc_id;
+            }
+        }
+
+        return resolved;
+    }
+
     /// Register a value definition.
     pub fn registerValueDef(self: *Store, allocator: Allocator, symbol: Symbol, expr_id: ExprId) !void {
         const key: u64 = @bitCast(symbol);
@@ -1019,6 +1041,7 @@ pub const Store = struct {
             .lookup => |symbol| blk: {
                 if (self.getSymbolSeedProcSet(symbol)) |proc_ids| {
                     if (proc_ids.len == 1) break :blk proc_ids[0];
+                    if (self.resolveUniqueProcByFnMonotype(expr_id, proc_ids)) |proc_id| break :blk proc_id;
                 }
 
                 if (self.getValueDef(symbol)) |def_expr| {

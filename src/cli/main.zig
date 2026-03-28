@@ -4375,7 +4375,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         pending_root_exprs[i] = pending.mir_expr_id;
     }
 
-    var mir_analyses = try mir.Analyses.init(ctx.gpa, &mir_store, pending_root_exprs);
+    var mir_analyses = try mir.Analyses.init(ctx.gpa, &mir_store, all_module_envs, platform_module_idx, pending_root_exprs);
     defer mir_analyses.deinit();
 
     var lir_store = lir.LirStore.init(ctx.gpa);

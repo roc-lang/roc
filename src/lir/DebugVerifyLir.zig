@@ -37,8 +37,6 @@ const JoinInput = struct {
     borrow_region: ?LIR.BorrowRegion,
 };
 
-const synthetic_symbol_base: u64 = 0xf000_0000_0000_0000;
-
 /// Re-derives and checks debug-only invariants for one lowered proc body.
 pub fn verifyProc(
     allocator: Allocator,
@@ -581,10 +579,14 @@ fn resolveBorrowRegionInner(
     const key = localKey(local);
     const gop = try visited.getOrPut(key);
     if (gop.found_existing) {
-        std.debug.panic(
-            "DebugVerifyLir invariant violated: cyclic borrow provenance for local {d}",
-            .{local.symbol.raw()},
-        );
+        // Strongest-form LIR is not SSA. Rebinding through alias-only temps can
+        // create finite alias cycles (for example, call-argument temps around a
+        // proc that returns one of its inputs). This borrow resolver only needs
+        // to know whether any path reaches a scoped borrow. Since `borrow_of`
+        // terminates immediately below, reaching an already-visited local means
+        // this cycle contains only alias edges and therefore carries no borrow
+        // region information.
+        return null;
     }
 
     const semantics = results.get(key) orelse std.debug.panic(
@@ -691,14 +693,14 @@ fn debugPrintSymbolMentions(store: *const LirStore, symbol: LIR.Symbol) void {
             .assign_ref => |assign| {
                 if (assign.target.symbol == symbol) {
                     std.debug.print(
-                        "DebugVerifyLir symbol {d}: stmt {d} defines via assign_ref\n",
-                        .{ symbol.raw(), stmt_index },
+                        "DebugVerifyLir symbol {d}: stmt {d} defines via assign_ref source={d} result={s}\n",
+                        .{ symbol.raw(), stmt_index, refOpSource(assign.op).symbol.raw(), @tagName(assign.result) },
                     );
                 }
                 if (refOpSource(assign.op).symbol == symbol) {
                     std.debug.print(
-                        "DebugVerifyLir symbol {d}: stmt {d} uses via assign_ref\n",
-                        .{ symbol.raw(), stmt_index },
+                        "DebugVerifyLir symbol {d}: stmt {d} uses via assign_ref target={d} result={s}\n",
+                        .{ symbol.raw(), stmt_index, assign.target.symbol.raw(), @tagName(assign.result) },
                     );
                 }
             },
@@ -856,11 +858,12 @@ fn debugPrintSymbolMentions(store: *const LirStore, symbol: LIR.Symbol) void {
 fn debugPrintStmtSummary(store: *const LirStore, stmt_id: CFStmtId) void {
     switch (store.getCFStmt(stmt_id)) {
         .assign_ref => |assign| std.debug.print(
-            "DebugVerifyLir stmt {d}: assign_ref target={d} source={d} next={d}\n",
+            "DebugVerifyLir stmt {d}: assign_ref target={d} source={d} result={s} next={d}\n",
             .{
                 @intFromEnum(stmt_id),
                 assign.target.symbol.raw(),
                 refOpSource(assign.op).symbol.raw(),
+                @tagName(assign.result),
                 @intFromEnum(assign.next),
             },
         ),
@@ -868,10 +871,37 @@ fn debugPrintStmtSummary(store: *const LirStore, stmt_id: CFStmtId) void {
             "DebugVerifyLir stmt {d}: assign_literal target={d} next={d}\n",
             .{ @intFromEnum(stmt_id), assign.target.symbol.raw(), @intFromEnum(assign.next) },
         ),
-        .assign_call => |assign| std.debug.print(
-            "DebugVerifyLir stmt {d}: assign_call target={d} next={d}\n",
-            .{ @intFromEnum(stmt_id), assign.target.symbol.raw(), @intFromEnum(assign.next) },
-        ),
+        .assign_call => |assign| switch (assign.result) {
+            .alias_of => |aliased| std.debug.print(
+                "DebugVerifyLir stmt {d}: assign_call target={d} result=alias_of owner={d} args={any} next={d}\n",
+                .{
+                    @intFromEnum(stmt_id),
+                    assign.target.symbol.raw(),
+                    aliased.owner.symbol.raw(),
+                    store.getLocalRefs(assign.args),
+                    @intFromEnum(assign.next),
+                },
+            ),
+            .borrow_of => |borrowed| std.debug.print(
+                "DebugVerifyLir stmt {d}: assign_call target={d} result=borrow_of owner={d} args={any} next={d}\n",
+                .{
+                    @intFromEnum(stmt_id),
+                    assign.target.symbol.raw(),
+                    borrowed.owner.symbol.raw(),
+                    store.getLocalRefs(assign.args),
+                    @intFromEnum(assign.next),
+                },
+            ),
+            .fresh => std.debug.print(
+                "DebugVerifyLir stmt {d}: assign_call target={d} result=fresh args={any} next={d}\n",
+                .{
+                    @intFromEnum(stmt_id),
+                    assign.target.symbol.raw(),
+                    store.getLocalRefs(assign.args),
+                    @intFromEnum(assign.next),
+                },
+            ),
+        },
         .assign_low_level => |assign| std.debug.print(
             "DebugVerifyLir stmt {d}: assign_low_level target={d} op={s} next={d}\n",
             .{ @intFromEnum(stmt_id), assign.target.symbol.raw(), @tagName(assign.op), @intFromEnum(assign.next) },

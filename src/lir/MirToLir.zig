@@ -486,12 +486,54 @@ fn emitAssignRef(
     op: RefOp,
     next: CFStmtId,
 ) Allocator.Error!CFStmtId {
+    switch (op) {
+        .local => |source| {
+            if (target.symbol == source.symbol and target.layout_idx == source.layout_idx) {
+                switch (result) {
+                    .alias_of => |aliased| {
+                        if (aliased.owner.symbol == source.symbol and
+                            aliased.owner.layout_idx == source.layout_idx and
+                            aliased.projections.start == LIR.RefProjectionSpan.empty().start and
+                            aliased.projections.len == LIR.RefProjectionSpan.empty().len)
+                        {
+                            return next;
+                        }
+                    },
+                    .borrow_of => |borrowed| {
+                        if (borrowed.owner.symbol == source.symbol and
+                            borrowed.owner.layout_idx == source.layout_idx and
+                            borrowed.projections.start == LIR.RefProjectionSpan.empty().start and
+                            borrowed.projections.len == LIR.RefProjectionSpan.empty().len)
+                        {
+                            std.debug.panic(
+                                "MirToLir invariant violated: self-local borrow assign_ref must not be emitted",
+                                .{},
+                            );
+                        }
+                    },
+                    .fresh => {},
+                }
+            }
+        },
+        else => {},
+    }
+
     return self.lir_store.addCFStmt(.{ .assign_ref = .{
         .target = target,
         .result = result,
         .op = op,
         .next = next,
     } });
+}
+
+fn needsFreshTempForSelfAliasResult(target: LocalRef, result: ResultSemantics) bool {
+    return switch (result) {
+        .alias_of => |aliased| aliased.owner.symbol == target.symbol and
+            aliased.owner.layout_idx == target.layout_idx and
+            aliased.projections.start == LIR.RefProjectionSpan.empty().start and
+            aliased.projections.len == LIR.RefProjectionSpan.empty().len,
+        .fresh, .borrow_of => false,
+    };
 }
 
 fn emitAssignLiteral(
@@ -780,7 +822,7 @@ fn lowerEntrypointCallableInto(
 fn tagDiscriminantForExpr(
     self: *Self,
     mir_expr_id: MIR.ExprId,
-    tag_name: base.Ident.Idx,
+    tag_name: mir_mod.Monotype.Name,
 ) u16 {
     const mono = self.mir_store.monotype_store.getMonotype(self.mir_store.typeOf(mir_expr_id));
     const tags = switch (mono) {
@@ -792,7 +834,7 @@ fn tagDiscriminantForExpr(
     };
 
     for (tags, 0..) |tag, index| {
-        if (tag.name.ident.eql(tag_name)) return @intCast(index);
+        if (tag.name.textEqual(self.analyses.all_module_envs, tag_name)) return @intCast(index);
     }
 
     std.debug.panic(
@@ -1295,7 +1337,7 @@ const TagVariantInfo = struct {
 fn tagVariantInfoForSource(
     self: *Self,
     source_mono: MirMonotypeIdx,
-    tag_name: base.Ident.Idx,
+    tag_name: mir_mod.Monotype.Name,
 ) TagVariantInfo {
     const mono = self.mir_store.monotype_store.getMonotype(source_mono);
     const tags = switch (mono) {
@@ -1307,7 +1349,7 @@ fn tagVariantInfoForSource(
     };
 
     for (tags, 0..) |tag, index| {
-        if (!tag.name.ident.eql(tag_name)) continue;
+        if (!tag.name.textEqual(self.analyses.all_module_envs, tag_name)) continue;
 
         const payloads = self.mir_store.monotype_store.getIdxSpan(tag.payloads);
         const payload_mono = switch (payloads.len) {
@@ -1358,8 +1400,9 @@ fn emitBoolSwitch(
     return self.emitSwitchOnValue(cond, 1, on_true, on_false);
 }
 
-fn mirIntLiteralValue(layout_idx: layout.Idx, int_value: @import("can").CIR.IntValue) LiteralValue {
+fn mirIntLiteralValue(self: *Self, layout_idx: layout.Idx, int_value: @import("can").CIR.IntValue) LiteralValue {
     return switch (layout_idx) {
+        .bool => .{ .bool_literal = mirIntValueAsI128(int_value) != 0 },
         .u128, .i128 => .{ .i128_literal = .{
             .value = @bitCast(int_value.bytes),
             .layout_idx = layout_idx,
@@ -1378,10 +1421,45 @@ fn mirIntLiteralValue(layout_idx: layout.Idx, int_value: @import("can").CIR.IntV
             .value = @intCast(mirIntValueAsI128(int_value)),
             .layout_idx = layout_idx,
         } },
-        else => std.debug.panic(
-            "MirToLir invariant violated: integer literal lowered to non-integer layout {s}",
-            .{@tagName(layout_idx)},
-        ),
+        else => {
+            const raw_idx = @intFromEnum(layout_idx);
+            if (raw_idx < self.layout_store.layouts.len()) {
+                const layout_val = self.layout_store.getLayout(layout_idx);
+                if (layout_val.tag == .zst) {
+                    return .{ .i64_literal = .{
+                        .value = @intCast(mirIntValueAsI128(int_value)),
+                        .layout_idx = layout_idx,
+                    } };
+                }
+                if (layout_val.tag == .tag_union) {
+                    const tu_data = self.layout_store.getTagUnionData(layout_val.data.tag_union.idx);
+                    const variants = self.layout_store.getTagUnionVariants(tu_data);
+                    const all_variants_zst = blk: {
+                        for (0..variants.len) |i| {
+                            if (self.layout_store.getLayout(variants.get(i).payload_layout).tag != .zst) {
+                                break :blk false;
+                            }
+                        }
+                        break :blk true;
+                    };
+                    if (all_variants_zst and tu_data.size <= 8) {
+                        return .{ .i64_literal = .{
+                            .value = @intCast(mirIntValueAsI128(int_value)),
+                            .layout_idx = layout_idx,
+                        } };
+                    }
+                }
+                std.debug.panic(
+                    "MirToLir invariant violated: integer literal lowered to non-integer layout idx {d} with runtime tag {s}",
+                    .{ raw_idx, @tagName(layout_val.tag) },
+                );
+            }
+
+            std.debug.panic(
+                "MirToLir invariant violated: integer literal lowered to unknown layout idx {d}",
+                .{raw_idx},
+            );
+        },
     };
 }
 
@@ -1398,7 +1476,7 @@ fn literalPatternValue(
     target_layout: layout.Idx,
 ) Allocator.Error!LiteralValue {
     return switch (self.mir_store.getPattern(pattern_id)) {
-        .int_literal => |int_lit| mirIntLiteralValue(target_layout, int_lit.value),
+        .int_literal => |int_lit| mirIntLiteralValue(self, target_layout, int_lit.value),
         .str_literal => |str_idx| .{ .str_literal = try self.internMirStringLiteral(str_idx) },
         .dec_literal => |dec_lit| .{ .dec_literal = dec_lit.num },
         .frac_f32_literal => |frac| .{ .f32_literal = frac },
@@ -1603,6 +1681,8 @@ fn lowerMatchExprInto(
 ) Allocator.Error!CFStmtId {
     const cond_mono = self.mir_store.typeOf(match_expr.cond);
     const cond_local = self.freshLocal(try self.runtimeValueLayoutFromMirExpr(match_expr.cond));
+    const merge_join = self.freshJoinPoint();
+    const merge_params = try self.lir_store.addLocalRefs(&.{target});
     var entry = try self.lir_store.addCFStmt(.{ .runtime_error = {} });
     const expr_result_contract: ExprSummaryContract = switch (self.analyses.getExprResultContract(expr_id)) {
         .borrow_of_fresh => .borrow_of_fresh,
@@ -1623,21 +1703,32 @@ fn lowerMatchExprInto(
         var pattern_i = patterns.len;
         while (pattern_i > 0) {
             pattern_i -= 1;
+            const branch_result = self.freshLocal(target.layout_idx);
+            const branch_jump = try self.lir_store.addCFStmt(.{ .jump = .{
+                .target = merge_join,
+                .args = try self.lir_store.addLocalRefs(&.{branch_result}),
+            } });
             branch_entry = try self.lowerMatchBranchAlternative(
                 cond_local,
                 cond_mono,
                 branch,
                 patterns[pattern_i].pattern,
                 expr_result_contract,
-                target,
-                next,
+                branch_result,
+                branch_jump,
                 branch_entry,
             );
         }
         entry = branch_entry;
     }
 
-    return self.lowerExprIntoStmt(match_expr.cond, cond_local, entry);
+    const lowered = try self.lowerExprIntoStmt(match_expr.cond, cond_local, entry);
+    return self.lir_store.addCFStmt(.{ .join = .{
+        .id = merge_join,
+        .params = merge_params,
+        .body = next,
+        .remainder = lowered,
+    } });
 }
 
 fn lowerExprIntoStmt(
@@ -1650,15 +1741,19 @@ fn lowerExprIntoStmt(
     const result_layout = try self.runtimeValueLayoutFromMirExpr(mir_expr_id);
 
     return switch (expr) {
-        .lookup => |symbol| if (self.isCurrentLocalSymbol(symbol))
-            self.emitAssignRef(
+        .lookup => |symbol| if (self.isCurrentLocalSymbol(symbol)) blk: {
+            const source_local: LocalRef = .{ .symbol = symbol, .layout_idx = result_layout };
+            if (target.symbol == source_local.symbol and target.layout_idx == source_local.layout_idx) {
+                break :blk next;
+            }
+
+            break :blk self.emitAssignRef(
                 target,
-                aliasSemantics(.{ .symbol = symbol, .layout_idx = result_layout }, LIR.RefProjectionSpan.empty()),
-                .{ .local = .{ .symbol = symbol, .layout_idx = result_layout } },
+                aliasSemantics(source_local, LIR.RefProjectionSpan.empty()),
+                .{ .local = source_local },
                 next,
-            )
-        else
-            self.lowerNonLocalLookupInto(symbol, target, next),
+            );
+        } else self.lowerNonLocalLookupInto(symbol, target, next),
         .block => |block| self.lowerBlockInto(block, target, next),
         .borrow_scope => |scope| blk: {
             const prev_region = self.current_borrow_region;
@@ -1697,7 +1792,7 @@ fn lowerExprIntoStmt(
             } });
         },
         .int => |int_lit| {
-            return self.emitAssignLiteral(target, mirIntLiteralValue(result_layout, int_lit.value), next);
+            return self.emitAssignLiteral(target, mirIntLiteralValue(self, result_layout, int_lit.value), next);
         },
         .dec => |dec_lit| self.emitAssignLiteral(target, .{ .dec_literal = dec_lit.num }, next),
         .frac_f32 => |f| self.emitAssignLiteral(target, .{ .f32_literal = f }, next),
@@ -1828,9 +1923,14 @@ fn lowerExprIntoStmt(
                 refs[args.len] = capture_local;
             }
             const ref_span = try self.lir_store.addLocalRefs(refs);
+            const result = self.callResultSemantics(callee.lir_proc_id, refs);
+            const call_target = if (needsFreshTempForSelfAliasResult(target, result))
+                self.freshLocal(target.layout_idx)
+            else
+                target;
             const assign_stmt = try self.lir_store.addCFStmt(.{ .assign_call = .{
-                .target = target,
-                .result = self.callResultSemantics(callee.lir_proc_id, refs),
+                .target = call_target,
+                .result = result,
                 .proc = callee.lir_proc_id,
                 .args = ref_span,
                 .next = next,

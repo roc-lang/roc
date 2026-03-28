@@ -841,7 +841,15 @@ pub const Interpreter = struct {
         const requires_types_slice = platform_env.requires_types.items.items;
         for (requires_types_slice) |required_type| {
             // Get the type aliases for this required type
-            const type_aliases_slice = all_aliases[@intFromEnum(required_type.type_aliases.start)..][0..required_type.type_aliases.count];
+            const range_start = @intFromEnum(required_type.type_aliases.start);
+            const range_end = range_start + required_type.type_aliases.count;
+            if (builtin.mode == .Debug and range_end > all_aliases.len) {
+                std.debug.panic(
+                    "Interpreter invariant violated: requires-type alias range start={d} count={d} exceeds for-clause alias storage len={d}",
+                    .{ range_start, required_type.type_aliases.count, all_aliases.len },
+                );
+            }
+            const type_aliases_slice = all_aliases[range_start..range_end];
 
             for (type_aliases_slice) |alias| {
                 // Get the alias name (e.g., "Model") - translate to app's ident store
