@@ -17,10 +17,12 @@ pub const RcInsert = @import("rc_insert.zig");
 
 /// Symbol identifiers reused from MIR.
 pub const Symbol = LIR.Symbol;
-/// Explicit local reference used throughout statement-only LIR.
-pub const LocalRef = LIR.LocalRef;
-/// Span into flat local-reference storage.
-pub const LocalRefSpan = LIR.LocalRefSpan;
+/// Explicit local metadata used throughout statement-only LIR.
+pub const Local = LIR.Local;
+/// Identifier of one LIR local.
+pub const LocalId = LIR.LocalId;
+/// Span into flat local-id storage.
+pub const LocalSpan = LIR.LocalSpan;
 /// Identifier for LIR join points.
 pub const JoinPointId = LIR.JoinPointId;
 /// Identifier for lexical borrow scopes.

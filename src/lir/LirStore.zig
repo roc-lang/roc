@@ -1,4 +1,4 @@
-//! Flat storage for statement-only LIR.
+//! Flat storage for statement-only, local-centric LIR.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -14,8 +14,9 @@ const CFSwitchBranch = ir.CFSwitchBranch;
 const CFSwitchBranchSpan = ir.CFSwitchBranchSpan;
 const LirProcSpec = ir.LirProcSpec;
 const LirProcSpecId = ir.LirProcSpecId;
-const LocalRef = ir.LocalRef;
-const LocalRefSpan = ir.LocalRefSpan;
+const Local = ir.Local;
+const LocalId = ir.LocalId;
+const LocalSpan = ir.LocalSpan;
 const RefProjection = ir.RefProjection;
 const RefProjectionSpan = ir.RefProjectionSpan;
 const Symbol = ir.Symbol;
@@ -24,7 +25,8 @@ const Self = @This();
 
 cf_stmts: std.ArrayList(CFStmt),
 cf_switch_branches: std.ArrayList(CFSwitchBranch),
-local_refs: std.ArrayList(LocalRef),
+locals: std.ArrayList(Local),
+local_ids: std.ArrayList(LocalId),
 ref_projections: std.ArrayList(RefProjection),
 proc_specs: std.ArrayList(LirProcSpec),
 strings: base.StringLiteral.Store,
@@ -36,7 +38,8 @@ pub fn init(allocator: Allocator) Self {
     return .{
         .cf_stmts = std.ArrayList(CFStmt).empty,
         .cf_switch_branches = std.ArrayList(CFSwitchBranch).empty,
-        .local_refs = std.ArrayList(LocalRef).empty,
+        .locals = std.ArrayList(Local).empty,
+        .local_ids = std.ArrayList(LocalId).empty,
         .ref_projections = std.ArrayList(RefProjection).empty,
         .proc_specs = std.ArrayList(LirProcSpec).empty,
         .strings = base.StringLiteral.Store{},
@@ -49,7 +52,8 @@ pub fn init(allocator: Allocator) Self {
 pub fn deinit(self: *Self) void {
     self.cf_stmts.deinit(self.allocator);
     self.cf_switch_branches.deinit(self.allocator);
-    self.local_refs.deinit(self.allocator);
+    self.locals.deinit(self.allocator);
+    self.local_ids.deinit(self.allocator);
     self.ref_projections.deinit(self.allocator);
     self.proc_specs.deinit(self.allocator);
     self.strings.deinit(self.allocator);
@@ -72,28 +76,45 @@ pub fn getString(self: *const Self, idx: base.StringLiteral.Idx) []const u8 {
     return self.strings.get(idx);
 }
 
-/// Appends local references and returns the corresponding flat-storage span.
-pub fn addLocalRefs(self: *Self, refs: []const LocalRef) Allocator.Error!LocalRefSpan {
-    if (refs.len == 0) return LocalRefSpan.empty();
-
-    const start = @as(u32, @intCast(self.local_refs.items.len));
-    try self.local_refs.appendSlice(self.allocator, refs);
-    return .{ .start = start, .len = @intCast(refs.len) };
+/// Registers one LIR local and returns its id.
+pub fn addLocal(self: *Self, local: Local) Allocator.Error!LocalId {
+    const idx = self.locals.items.len;
+    try self.locals.append(self.allocator, local);
+    return @enumFromInt(@as(u32, @intCast(idx)));
 }
 
-/// Resolves a local-reference span to its stored slice.
-pub fn getLocalRefs(self: *const Self, span: LocalRefSpan) []const LocalRef {
+/// Returns one stored LIR local.
+pub fn getLocal(self: *const Self, id: LocalId) Local {
+    return self.locals.items[@intFromEnum(id)];
+}
+
+/// Returns a mutable pointer to one stored LIR local.
+pub fn getLocalPtr(self: *Self, id: LocalId) *Local {
+    return &self.locals.items[@intFromEnum(id)];
+}
+
+/// Stores local ids and returns the corresponding flat-storage span.
+pub fn addLocalSpan(self: *Self, ids: []const LocalId) Allocator.Error!LocalSpan {
+    if (ids.len == 0) return LocalSpan.empty();
+
+    const start = @as(u32, @intCast(self.local_ids.items.len));
+    try self.local_ids.appendSlice(self.allocator, ids);
+    return .{ .start = start, .len = @intCast(ids.len) };
+}
+
+/// Resolves a local-id span to its stored slice.
+pub fn getLocalSpan(self: *const Self, span: LocalSpan) []const LocalId {
     if (span.len == 0) return &.{};
     if (builtin.mode == .Debug) {
         const end = @as(u64, span.start) + @as(u64, span.len);
-        if (end > self.local_refs.items.len) {
+        if (end > self.local_ids.items.len) {
             std.debug.panic(
-                "LirStore invariant violated: local-ref span start={d} len={d} exceeds local-ref storage len={d}",
-                .{ span.start, span.len, self.local_refs.items.len },
+                "LirStore invariant violated: local-id span start={d} len={d} exceeds local-id storage len={d}",
+                .{ span.start, span.len, self.local_ids.items.len },
             );
         }
     }
-    return self.local_refs.items[span.start..][0..span.len];
+    return self.local_ids.items[span.start..][0..span.len];
 }
 
 /// Appends ref projections and returns the corresponding flat-storage span.

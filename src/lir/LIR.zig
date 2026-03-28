@@ -5,7 +5,8 @@
 //! - no block expressions
 //! - no control-flow expressions
 //! - no runtime patterns/destructuring
-//! - all intermediate results are assigned to explicit locals
+//! - all intermediate results flow through compact local ids
+//! - global symbols only appear when materialized into locals
 //! - all control flow is represented through `CFStmt`
 
 const std = @import("std");
@@ -16,11 +17,16 @@ const mir = @import("mir");
 const StringLiteral = base.StringLiteral;
 const Ident = base.Ident;
 
-/// MIR symbols reused for LIR locals and proc names.
+/// MIR symbols reused only for global/top-level identity in LIR.
 pub const Symbol = mir.Symbol;
 
 /// Identifier of a lowered LIR proc specification.
 pub const LirProcSpecId = enum(u32) {
+    _,
+};
+
+/// Identifier of one LIR local.
+pub const LocalId = enum(u32) {
     _,
 };
 
@@ -39,24 +45,24 @@ pub const BorrowScopeId = enum(u32) {
     _,
 };
 
-/// Explicit local produced and consumed by statement-only LIR.
-pub const LocalRef = struct {
-    symbol: Symbol,
+/// One explicitly typed LIR local.
+pub const Local = struct {
     layout_idx: layout.Idx,
+    source_symbol: Symbol,
 };
 
-/// Span into flat local-reference storage.
-pub const LocalRefSpan = extern struct {
+/// Span into flat local-id storage.
+pub const LocalSpan = extern struct {
     start: u32,
     len: u16,
 
-    /// Returns an empty local-reference span.
-    pub fn empty() LocalRefSpan {
+    /// Returns an empty local-id span.
+    pub fn empty() LocalSpan {
         return .{ .start = 0, .len = 0 };
     }
 
-    /// Reports whether this span contains no local references.
-    pub fn isEmpty(self: LocalRefSpan) bool {
+    /// Reports whether this span contains no local ids.
+    pub fn isEmpty(self: LocalSpan) bool {
         return self.len == 0;
     }
 };
@@ -99,7 +105,7 @@ pub const LiteralValue = union(enum) {
 
 /// Alias provenance rooted in another local plus optional projections.
 pub const AliasedRef = struct {
-    owner: LocalRef,
+    owner: LocalId,
     projections: RefProjectionSpan = .empty(),
 };
 
@@ -111,7 +117,7 @@ pub const BorrowRegion = union(enum) {
 
 /// Borrow provenance rooted in another local plus optional projections.
 pub const BorrowedRef = struct {
-    owner: LocalRef,
+    owner: LocalId,
     projections: RefProjectionSpan = .empty(),
     region: BorrowRegion,
 };
@@ -132,19 +138,19 @@ pub const RefProjection = union(enum) {
 
 /// Reference-producing operation lowered by `assign_ref`.
 pub const RefOp = union(enum) {
-    local: LocalRef,
+    local: LocalId,
     discriminant: struct {
-        source: LocalRef,
+        source: LocalId,
     },
     field: struct {
-        source: LocalRef,
+        source: LocalId,
         field_idx: u16,
     },
     tag_payload: struct {
-        source: LocalRef,
+        source: LocalId,
     },
     nominal: struct {
-        backing_ref: LocalRef,
+        backing_ref: LocalId,
     },
 };
 
@@ -188,99 +194,97 @@ pub const CFSwitchBranchSpan = extern struct {
 
 /// Single canonical statement/control-flow language for all lowered code.
 pub const CFStmt = union(enum) {
+    assign_symbol: struct {
+        target: LocalId,
+        symbol: Symbol,
+        next: CFStmtId,
+    },
     assign_ref: struct {
-        target: LocalRef,
+        target: LocalId,
         result: ResultSemantics,
         op: RefOp,
         next: CFStmtId,
     },
     assign_literal: struct {
-        target: LocalRef,
+        target: LocalId,
         result: ResultSemantics,
         value: LiteralValue,
         next: CFStmtId,
     },
     assign_call: struct {
-        target: LocalRef,
+        target: LocalId,
         result: ResultSemantics,
         proc: LirProcSpecId,
-        args: LocalRefSpan,
+        args: LocalSpan,
         next: CFStmtId,
     },
     assign_low_level: struct {
-        target: LocalRef,
+        target: LocalId,
         result: ResultSemantics,
         op: LowLevel,
-        args: LocalRefSpan,
+        args: LocalSpan,
         next: CFStmtId,
     },
     assign_list: struct {
-        target: LocalRef,
+        target: LocalId,
         result: ResultSemantics,
-        elems: LocalRefSpan,
+        elems: LocalSpan,
         next: CFStmtId,
     },
     assign_struct: struct {
-        target: LocalRef,
+        target: LocalId,
         result: ResultSemantics,
-        fields: LocalRefSpan,
+        fields: LocalSpan,
         next: CFStmtId,
     },
     assign_tag: struct {
-        target: LocalRef,
+        target: LocalId,
         result: ResultSemantics,
         discriminant: u16,
-        args: LocalRefSpan,
+        args: LocalSpan,
         next: CFStmtId,
     },
-    /// Compiler-generated impossible execution path. This is terminal and does
-    /// not continue with `next`.
+    /// Compiler-generated impossible execution path. This is terminal.
     runtime_error: void,
-
     incref: struct {
-        value: LocalRef,
+        value: LocalId,
         count: u16 = 1,
         next: CFStmtId,
     },
     decref: struct {
-        value: LocalRef,
+        value: LocalId,
         next: CFStmtId,
     },
     free: struct {
-        value: LocalRef,
+        value: LocalId,
         next: CFStmtId,
     },
-
     switch_stmt: struct {
-        cond: LocalRef,
+        cond: LocalId,
         branches: CFSwitchBranchSpan,
         default_branch: CFStmtId,
     },
-
     borrow_scope: struct {
         id: BorrowScopeId,
         body: CFStmtId,
         remainder: CFStmtId,
     },
-
-    scope_exit: void,
-
+    scope_exit: struct {
+        id: BorrowScopeId,
+    },
     join: struct {
         id: JoinPointId,
-        params: LocalRefSpan,
+        params: LocalSpan,
         body: CFStmtId,
         remainder: CFStmtId,
     },
-
     jump: struct {
         target: JoinPointId,
-        args: LocalRefSpan,
+        args: LocalSpan,
     },
-
     ret: struct {
-        value: LocalRef,
+        value: LocalId,
     },
-
     crash: struct {
         msg: StringLiteral.Idx,
     },
@@ -289,7 +293,7 @@ pub const CFStmt = union(enum) {
 /// Lowered proc specification rooted at a statement body.
 pub const LirProcSpec = struct {
     name: Symbol,
-    args: LocalRefSpan,
+    args: LocalSpan,
     body: CFStmtId,
     ret_layout: layout.Idx,
     result_contract: ProcResultContract,

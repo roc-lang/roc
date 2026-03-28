@@ -1,20 +1,24 @@
 //! Monomorphic Intermediate Representation (MIR)
 //!
 //! MIR sits between CIR (Canonical IR, per-module, polymorphic) and LIR
-//! (Layout IR, backend-ready). It is:
+//! (layout- and backend-oriented). This strongest-form MIR is:
 //!
-//! - **Monomorphic**: All types are concrete. No type variables or extensions.
-//! - **Desugared**: No `if` (just `match`), no binops, no static dispatch.
-//!   Everything is fully resolved function calls.
-//! - **Globally unique**: Symbols are opaque 64-bit IDs, not module-local indices.
-//! - **Lambda-aware**: Lambdas are still present as first-class values.
-//!   Lambda set inference happens later on top of MIR.
+//! - **Monomorphic**: every local, pattern, lambda, and top-level def has a
+//!   concrete monotype
+//! - **Statement-only**: nested value expressions are gone; computation is
+//!   explicit local-defining statements
+//! - **Lambda-aware**: lambdas and closures are still explicit MIR concepts
+//! - **Pattern-aware**: match and destructuring patterns still exist here
+//! - **Pre-layout**: MIR knows monotypes, not layouts
+//! - **Local-centric**: executable flow uses compact local ids; global symbols
+//!   only appear when materialized into locals
 //!
-//! Each expression has exactly one monotype via a 1:1 ExprId → Monotype.Idx mapping.
-//! No nominal/opaque/structural distinction — just records, tag unions, and tuples.
+//! Control flow is explicit with statements, joins, jumps, returns, crashes,
+//! and borrow scopes. `if` is expected to be lowered to `match` before values
+//! reach strongest-form MIR. Match guards are expected to be lowered into
+//! explicit branch-local statements instead of remaining as nested expressions.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const base = @import("base");
 const builtins = @import("builtins");
 const Monotype = @import("Monotype.zig");
@@ -26,8 +30,6 @@ const Allocator = std.mem.Allocator;
 
 const CIR = @import("can").CIR;
 
-// --- ID types ---
-
 /// Global identifier (opaque 64-bit id).
 pub const Symbol = packed struct(u64) {
     id: u64,
@@ -37,51 +39,91 @@ pub const Symbol = packed struct(u64) {
         std.debug.assert(@alignOf(Symbol) == @alignOf(u64));
     }
 
+    /// Builds one symbol from its raw 64-bit identity.
     pub fn fromRaw(id: u64) Symbol {
         return .{ .id = id };
     }
 
+    /// Returns the raw 64-bit identity of this symbol.
     pub fn raw(self: Symbol) u64 {
         return self.id;
     }
 
+    /// Reports whether two symbols are identical.
     pub fn eql(a: Symbol, b: Symbol) bool {
         return a.id == b.id;
     }
 
+    /// Hashes this symbol by its raw identity.
     pub fn hash(self: Symbol) u64 {
         return self.id;
     }
 
-    pub const none: Symbol = .{
-        .id = std.math.maxInt(u64),
-    };
+    pub const none: Symbol = .{ .id = std.math.maxInt(u64) };
 
+    /// Reports whether this is the distinguished sentinel symbol.
     pub fn isNone(self: Symbol) bool {
-        return self.id == std.math.maxInt(u64);
+        return self == .none;
     }
 };
 
-/// Index into Store.exprs
-pub const ExprId = enum(u32) {
+/// Index into Store.locals.
+pub const LocalId = enum(u32) {
     _,
-
-    pub const none: ExprId = @enumFromInt(std.math.maxInt(u32));
-
-    pub fn isNone(self: ExprId) bool {
-        return self == none;
-    }
 };
 
-/// Index into Store.patterns
+/// Index into Store.patterns.
 pub const PatternId = enum(u32) {
     _,
 
     pub const none: PatternId = @enumFromInt(std.math.maxInt(u32));
 
+    /// Reports whether this is the distinguished sentinel pattern id.
     pub fn isNone(self: PatternId) bool {
         return self == none;
     }
+};
+
+/// Index into Store.cf_stmts.
+pub const CFStmtId = enum(u32) {
+    _,
+};
+
+/// Index into Store.lambdas.
+pub const LambdaId = enum(u32) {
+    _,
+};
+
+/// Index into Store.const_defs.
+pub const ConstDefId = enum(u32) {
+    _,
+};
+
+/// Index into Store.function_defs.
+pub const FunctionDefId = enum(u32) {
+    _,
+};
+
+/// Index into Store.closure_members.
+pub const ClosureMemberId = enum(u32) {
+    _,
+
+    pub const none: ClosureMemberId = @enumFromInt(std.math.maxInt(u32));
+
+    /// Reports whether this is the distinguished sentinel closure member id.
+    pub fn isNone(self: ClosureMemberId) bool {
+        return self == none;
+    }
+};
+
+/// Join point identity for explicit control-flow merges.
+pub const JoinPointId = enum(u32) {
+    _,
+};
+
+/// Borrow-scope identity for explicit lexical borrow regions.
+pub const BorrowScopeId = enum(u32) {
+    _,
 };
 
 /// Index of the `..` rest pattern within a list destructure, or `.none` if absent.
@@ -89,80 +131,54 @@ pub const RestIndex = enum(u32) {
     none = std.math.maxInt(u32),
     _,
 
+    /// Reports whether this pattern omits a rest binding.
     pub fn isNone(self: RestIndex) bool {
         return self == .none;
     }
 };
 
-/// Index into Store.closure_members
-pub const ClosureMemberId = enum(u32) {
-    _,
-
-    pub const none: ClosureMemberId = @enumFromInt(std.math.maxInt(u32));
-
-    pub fn isNone(self: ClosureMemberId) bool {
-        return self == none;
-    }
+/// One explicitly typed MIR local.
+pub const Local = struct {
+    monotype: Monotype.Idx,
+    source_symbol: Symbol,
+    reassignable: bool = false,
 };
 
-/// Index into Store.procs
-pub const ProcId = enum(u32) {
-    _,
-
-    pub const none: ProcId = @enumFromInt(std.math.maxInt(u32));
-
-    pub fn isNone(self: ProcId) bool {
-        return self == none;
-    }
-};
-
-// --- Span types ---
-
-/// Span of ExprId values stored in extra_data.
-pub const ExprSpan = extern struct {
+/// Span of LocalId values stored in Store.local_ids.
+pub const LocalSpan = extern struct {
     start: u32,
     len: u16,
 
-    pub fn empty() ExprSpan {
+    /// Returns an empty local span.
+    pub fn empty() LocalSpan {
         return .{ .start = 0, .len = 0 };
     }
 
-    pub fn isEmpty(self: ExprSpan) bool {
+    /// Reports whether this span is empty.
+    pub fn isEmpty(self: LocalSpan) bool {
         return self.len == 0;
     }
 };
 
-/// Span of PatternId values stored in extra_data.
+/// Span of PatternId values stored in Store.pattern_ids.
 pub const PatternSpan = extern struct {
     start: u32,
     len: u16,
 
+    /// Returns an empty pattern span.
     pub fn empty() PatternSpan {
         return .{ .start = 0, .len = 0 };
     }
 
+    /// Reports whether this span is empty.
     pub fn isEmpty(self: PatternSpan) bool {
-        return self.len == 0;
-    }
-};
-
-/// Span of ProcId values stored in extra_data.
-pub const ProcSpan = extern struct {
-    start: u32,
-    len: u16,
-
-    pub fn empty() ProcSpan {
-        return .{ .start = 0, .len = 0 };
-    }
-
-    pub fn isEmpty(self: ProcSpan) bool {
         return self.len == 0;
     }
 };
 
 /// One exact callable member associated with a symbol seed.
 pub const SeedMember = struct {
-    proc: ProcId,
+    lambda: LambdaId,
     closure_member: ClosureMemberId = .none,
 };
 
@@ -171,783 +187,634 @@ pub const SeedMemberSpan = extern struct {
     start: u32,
     len: u16,
 
+    /// Returns an empty seed-member span.
     pub fn empty() SeedMemberSpan {
         return .{ .start = 0, .len = 0 };
     }
 
+    /// Reports whether this span is empty.
     pub fn isEmpty(self: SeedMemberSpan) bool {
         return self.len == 0;
     }
 };
 
-/// Span of Stmt values stored in stmts array.
-pub const StmtSpan = extern struct {
-    start: u32,
-    len: u16,
-
-    pub fn empty() StmtSpan {
-        return .{ .start = 0, .len = 0 };
-    }
-
-    pub fn isEmpty(self: StmtSpan) bool {
-        return self.len == 0;
-    }
-};
-
-/// Span of Branch values stored in branches array.
-pub const BranchSpan = extern struct {
-    start: u32,
-    len: u16,
-
-    pub fn empty() BranchSpan {
-        return .{ .start = 0, .len = 0 };
-    }
-
-    pub fn isEmpty(self: BranchSpan) bool {
-        return self.len == 0;
-    }
-};
-
-/// Span of BranchPattern values stored in branch_patterns array.
-pub const BranchPatternSpan = extern struct {
-    start: u32,
-    len: u16,
-
-    pub fn empty() BranchPatternSpan {
-        return .{ .start = 0, .len = 0 };
-    }
-
-    pub fn isEmpty(self: BranchPatternSpan) bool {
-        return self.len == 0;
-    }
-};
-
-/// Span of Capture values stored in captures array.
-pub const CaptureSpan = extern struct {
-    start: u32,
-    len: u16,
-
-    pub fn empty() CaptureSpan {
-        return .{ .start = 0, .len = 0 };
-    }
-
-    pub fn isEmpty(self: CaptureSpan) bool {
-        return self.len == 0;
-    }
-};
-
-/// Span of CaptureBinding values stored in capture_bindings array.
-pub const CaptureBindingSpan = extern struct {
-    start: u32,
-    len: u16,
-
-    pub fn empty() CaptureBindingSpan {
-        return .{ .start = 0, .len = 0 };
-    }
-
-    pub fn isEmpty(self: CaptureBindingSpan) bool {
-        return self.len == 0;
-    }
-};
-
-/// Span of borrow bindings stored in borrow_bindings array.
-pub const BorrowBindingSpan = extern struct {
-    start: u32,
-    len: u16,
-
-    pub fn empty() BorrowBindingSpan {
-        return .{ .start = 0, .len = 0 };
-    }
-
-    pub fn isEmpty(self: BorrowBindingSpan) bool {
-        return self.len == 0;
-    }
-};
-
-// --- Composite types ---
-
-/// A let binding in a block.
-pub const Stmt = union(enum) {
-    /// Immutable binding (e.g. `x = expr`)
-    decl_const: Binding,
-    /// Mutable binding (e.g. `x = expr` declared with `var`)
-    decl_var: Binding,
-    /// Mutation of existing var (e.g. `x = new_value`)
-    mutate_var: Binding,
-
-    pub const Binding = struct {
-        pattern: PatternId,
-        expr: ExprId,
-    };
-};
-
-/// A binding introduced for the duration of a borrow scope.
-pub const BorrowBinding = struct {
-    pattern: PatternId,
-    expr: ExprId,
-};
-
-/// A branch in a match expression.
-pub const Branch = struct {
-    /// Patterns to match (multiple for `|` alternatives)
-    patterns: BranchPatternSpan,
-    /// Body expression if patterns match
-    body: ExprId,
-    /// Optional guard expression (ExprId.none if no guard)
-    guard: ExprId,
-};
-
-/// A single pattern within a branch (branches can have multiple via `|`).
+/// One pattern alternative in a match branch.
 pub const BranchPattern = struct {
     pattern: PatternId,
     degenerate: bool,
 };
 
-/// A captured variable in a closure.
-pub const Capture = struct {
-    symbol: Symbol,
+/// Span of BranchPattern values stored in Store.branch_patterns.
+pub const BranchPatternSpan = extern struct {
+    start: u32,
+    len: u16,
+
+    /// Returns an empty branch-pattern span.
+    pub fn empty() BranchPatternSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+
+    /// Reports whether this span is empty.
+    pub fn isEmpty(self: BranchPatternSpan) bool {
+        return self.len == 0;
+    }
 };
 
-/// One capture slot of a lifted closure, described without committing to a layout.
+/// One branch of an explicit MIR match statement.
+pub const MatchBranch = struct {
+    patterns: BranchPatternSpan,
+    body: CFStmtId,
+};
+
+/// Span of MatchBranch values stored in Store.match_branches.
+pub const MatchBranchSpan = extern struct {
+    start: u32,
+    len: u16,
+
+    /// Returns an empty match-branch span.
+    pub fn empty() MatchBranchSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+
+    /// Reports whether this span is empty.
+    pub fn isEmpty(self: MatchBranchSpan) bool {
+        return self.len == 0;
+    }
+};
+
+/// A binding introduced for the duration of a borrow scope.
+pub const BorrowBinding = struct {
+    pattern: PatternId,
+    source: LocalId,
+};
+
+/// Span of BorrowBinding values stored in Store.borrow_bindings.
+pub const BorrowBindingSpan = extern struct {
+    start: u32,
+    len: u16,
+
+    /// Returns an empty borrow-binding span.
+    pub fn empty() BorrowBindingSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+
+    /// Reports whether this span is empty.
+    pub fn isEmpty(self: BorrowBindingSpan) bool {
+        return self.len == 0;
+    }
+};
+
+/// One capture slot of a lifted closure, described without committing to layout.
 pub const CaptureBinding = struct {
-    /// Local symbol introduced in the lifted function body for this capture slot.
-    local_symbol: Symbol,
-    /// The semantic source expression captured at the closure creation site.
-    /// This is used for lambda-set propagation and capture-layout analysis.
-    source_expr: ExprId,
-    /// The runtime expression evaluated to populate the capture payload slot.
-    value_expr: ExprId,
-    /// Monotype of the captured value.
-    monotype: Monotype.Idx,
+    local: LocalId,
+    source: LocalId,
+    value: LocalId,
+};
+
+/// Span of CaptureBinding values stored in Store.capture_bindings.
+pub const CaptureBindingSpan = extern struct {
+    start: u32,
+    len: u16,
+
+    /// Returns an empty capture-binding span.
+    pub fn empty() CaptureBindingSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+
+    /// Reports whether this span is empty.
+    pub fn isEmpty(self: CaptureBindingSpan) bool {
+        return self.len == 0;
+    }
 };
 
 /// Semantic closure member information for a lifted closure value.
 pub const ClosureMember = struct {
-    /// Proc identity of the lifted function.
-    proc: ProcId,
-    /// Capture slots in the order used by the closure payload.
+    lambda: LambdaId,
     capture_bindings: CaptureBindingSpan,
 };
 
-/// Whether a proc is recursive, and if so whether the recursion is tail-recursive.
-pub const ProcRecursion = enum {
+/// Whether a lambda is recursive and whether that recursion is tail-recursive.
+pub const LambdaRecursion = enum {
     not_recursive,
     recursive,
     tail_recursive,
 };
 
-/// Hosted proc metadata used to link proc-backed calls to platform-provided implementations.
-pub const HostedProc = struct {
+/// Hosted lambda metadata used to link lambda-backed calls to platform implementations.
+pub const HostedLambda = struct {
     symbol_name: Ident.Idx,
     index: u32,
 };
 
-/// Proc metadata for proc-backed callable identity.
-/// Callable bodies will move here instead of being discovered through value defs.
-pub const Proc = struct {
+/// One lowered MIR lambda body.
+pub const Lambda = struct {
     fn_monotype: Monotype.Idx,
     params: PatternSpan,
-    body: ExprId,
+    body: CFStmtId,
     ret_monotype: Monotype.Idx,
     debug_name: Symbol,
     source_region: Region,
     capture_bindings: CaptureBindingSpan,
     captures_param: PatternId,
-    recursion: ProcRecursion,
-    hosted: ?HostedProc = null,
+    recursion: LambdaRecursion,
+    hosted: ?HostedLambda = null,
 };
 
-// --- Expression ---
+/// One top-level constant definition.
+pub const ConstDef = struct {
+    symbol: Symbol,
+    body: CFStmtId,
+    monotype: Monotype.Idx,
+    source_region: Region,
+};
 
-/// A monomorphic, desugared expression.
-pub const Expr = union(enum) {
-    // --- Literals ---
+/// One top-level function or method definition.
+pub const FunctionDef = struct {
+    symbol: Symbol,
+    lambda: LambdaId,
+};
 
-    /// Integer literal (concrete type known from Monotype)
-    int: struct {
-        value: CIR.IntValue,
-    },
-
-    /// 32-bit float literal
+/// One MIR literal value.
+pub const LiteralValue = union(enum) {
+    int: CIR.IntValue,
     frac_f32: f32,
-
-    /// 64-bit float literal
     frac_f64: f64,
-
-    /// Decimal literal
     dec: builtins.dec.RocDec,
-
-    /// String literal
     str: StringLiteral.Idx,
-
-    // --- Collections ---
-
-    /// List literal (empty list is just len=0)
-    list: struct {
-        elems: ExprSpan,
-    },
-
-    /// Structural product literal.
-    /// For records, fields are in canonical closed-record order.
-    /// For tuples, fields are in element-index order.
-    struct_: struct {
-        fields: ExprSpan,
-    },
-
-    /// Tag application (zero-arg tag is just len=0 args)
-    tag: struct {
-        name: Monotype.Name,
-        args: ExprSpan,
-    },
-
-    // --- Lookup ---
-
-    /// Variable reference (globally unique)
-    lookup: Symbol,
-
-    // --- Control flow ---
-
-    /// Match expression — the only control flow construct.
-    /// `if` is desugared to `match` on Bool.
-    match_expr: struct {
-        cond: ExprId,
-        branches: BranchSpan,
-    },
-
-    // --- Functions ---
-
-    /// Zero-capture function value referring directly to a MIR proc.
-    proc_ref: ProcId,
-
-    /// Captured closure value backed by a MIR proc plus runtime capture data.
-    closure_make: struct {
-        proc: ProcId,
-        captures: ExprId,
-    },
-
-    /// Function call (fully resolved — no static dispatch, no dot-call syntax)
-    call: struct {
-        proc: ProcId,
-        func: ExprId,
-        args: ExprSpan,
-    },
-
-    // --- Block ---
-
-    /// Block with let bindings and a final expression
-    block: struct {
-        stmts: StmtSpan,
-        final_expr: ExprId,
-    },
-
-    /// Borrow scope with compiler-generated lexical bindings.
-    borrow_scope: struct {
-        bindings: BorrowBindingSpan,
-        body: ExprId,
-    },
-
-    // --- Access ---
-
-    /// Structural product field access by semantic field index.
-    /// For records this is canonical closed-record field order.
-    /// For tuples this is the tuple element index.
-    struct_access: struct {
-        struct_: ExprId,
-        field_idx: u32,
-    },
-
-    // --- Low-level ---
-
-    /// Escape and quote a string for inspect output
-    str_escape_and_quote: ExprId,
-
-    /// Low-level builtin operation
-    run_low_level: struct {
-        op: CIR.Expr.LowLevel,
-        args: ExprSpan,
-    },
-
-    // --- Error/Debug ---
-
-    /// Runtime error from a CIR diagnostic (e.g. e_runtime_error, s_runtime_error)
-    runtime_err_can: struct {
-        diagnostic: CIR.Diagnostic.Idx,
-    },
-
-    /// Runtime error because the type checker resolved this expression's type to .err
-    runtime_err_type: void,
-
-    /// Runtime error from an ellipsis expression (...)
-    runtime_err_ellipsis: void,
-
-    /// Runtime error from an annotation-only expression (no body)
-    runtime_err_anno_only: void,
-
-    /// Crash with message
-    crash: StringLiteral.Idx,
-
-    /// Debug expression (evaluates to inner value)
-    dbg_expr: struct {
-        expr: ExprId,
-    },
-
-    /// Expect assertion
-    expect: struct {
-        body: ExprId,
-    },
-
-    // --- Control flow (imperative) ---
-
-    /// Infinite loop
-    loop: struct {
-        body: ExprId,
-    },
-
-    /// Return expression
-    return_expr: struct {
-        expr: ExprId,
-    },
-
-    /// Break expression
-    break_expr: void,
 };
 
-// --- Pattern ---
+/// Runtime-error reasons that remain explicit in MIR.
+pub const RuntimeError = union(enum) {
+    can_diagnostic: CIR.Diagnostic.Idx,
+    type_error,
+    ellipsis,
+    anno_only,
+};
 
-/// A monomorphic pattern for use in match expressions.
+/// Single canonical statement/control-flow language for strongest-form MIR.
+pub const CFStmt = union(enum) {
+    assign_symbol: struct {
+        target: LocalId,
+        symbol: Symbol,
+        next: CFStmtId,
+    },
+    assign_alias: struct {
+        target: LocalId,
+        source: LocalId,
+        next: CFStmtId,
+    },
+    assign_literal: struct {
+        target: LocalId,
+        literal: LiteralValue,
+        next: CFStmtId,
+    },
+    assign_lambda: struct {
+        target: LocalId,
+        lambda: LambdaId,
+        next: CFStmtId,
+    },
+    assign_closure: struct {
+        target: LocalId,
+        lambda: LambdaId,
+        captures: LocalSpan,
+        next: CFStmtId,
+    },
+    assign_call: struct {
+        target: LocalId,
+        callee: LocalId,
+        args: LocalSpan,
+        next: CFStmtId,
+    },
+    assign_low_level: struct {
+        target: LocalId,
+        op: CIR.Expr.LowLevel,
+        args: LocalSpan,
+        next: CFStmtId,
+    },
+    assign_list: struct {
+        target: LocalId,
+        elems: LocalSpan,
+        next: CFStmtId,
+    },
+    assign_struct: struct {
+        target: LocalId,
+        fields: LocalSpan,
+        next: CFStmtId,
+    },
+    assign_tag: struct {
+        target: LocalId,
+        name: Monotype.Name,
+        args: LocalSpan,
+        next: CFStmtId,
+    },
+    assign_field: struct {
+        target: LocalId,
+        source: LocalId,
+        field_idx: u32,
+        next: CFStmtId,
+    },
+    assign_tag_payload: struct {
+        target: LocalId,
+        source: LocalId,
+        payload_idx: u32,
+        next: CFStmtId,
+    },
+    assign_nominal: struct {
+        target: LocalId,
+        backing: LocalId,
+        next: CFStmtId,
+    },
+    assign_str_escape_and_quote: struct {
+        target: LocalId,
+        source: LocalId,
+        next: CFStmtId,
+    },
+    debug: struct {
+        value: LocalId,
+        next: CFStmtId,
+    },
+    expect: struct {
+        condition: LocalId,
+        next: CFStmtId,
+    },
+    runtime_error: RuntimeError,
+    match_stmt: struct {
+        scrutinee: LocalId,
+        branches: MatchBranchSpan,
+    },
+    borrow_scope: struct {
+        id: BorrowScopeId,
+        bindings: BorrowBindingSpan,
+        body: CFStmtId,
+        remainder: CFStmtId,
+    },
+    scope_exit: struct {
+        id: BorrowScopeId,
+    },
+    join: struct {
+        id: JoinPointId,
+        params: LocalSpan,
+        body: CFStmtId,
+        remainder: CFStmtId,
+    },
+    jump: struct {
+        id: JoinPointId,
+        args: LocalSpan,
+    },
+    ret: struct {
+        value: LocalId,
+    },
+    crash: StringLiteral.Idx,
+};
+
+/// One monomorphic pattern for MIR match and destructuring.
 pub const Pattern = union(enum) {
-    /// Bind to a symbol
-    bind: Symbol,
-
-    /// Wildcard (_)
+    bind: LocalId,
     wildcard: void,
-
-    /// Match a specific tag and optionally destructure payload
     tag: struct {
         name: Monotype.Name,
         args: PatternSpan,
     },
-
-    /// Match a specific integer
     int_literal: struct {
         value: CIR.IntValue,
     },
-
-    /// Match a specific string
     str_literal: StringLiteral.Idx,
-
-    /// Match a specific decimal
     dec_literal: builtins.dec.RocDec,
-
-    /// Match a specific f32
     frac_f32_literal: f32,
-
-    /// Match a specific f64
     frac_f64_literal: f64,
-
-    /// Structural product destructure.
-    /// Records use full canonical closed-record order.
-    /// Tuples use element-index order.
     struct_destructure: struct {
         fields: PatternSpan,
     },
-
-    /// Destructure a list
     list_destructure: struct {
         patterns: PatternSpan,
         rest_index: RestIndex,
-        rest_pattern: PatternId, // PatternId.none if no rest binding
+        rest_pattern: PatternId,
     },
-
-    /// As-pattern: match inner and also bind
     as_pattern: struct {
         pattern: PatternId,
-        symbol: Symbol,
+        local: LocalId,
     },
-
-    /// Runtime error pattern
     runtime_error: void,
 };
 
-// --- Store ---
-
-/// Flat storage for all MIR expressions, patterns, and their types.
+/// Flat storage for strongest-form MIR.
 pub const Store = struct {
-    /// All expressions
-    exprs: std.ArrayListUnmanaged(Expr),
-    /// 1:1 mapping: type_map[i] is the monotype of exprs[i]
-    type_map: std.ArrayListUnmanaged(Monotype.Idx),
-    /// Source regions for each expression
-    expr_regions: std.ArrayListUnmanaged(Region),
-
-    /// All patterns
-    patterns: std.ArrayListUnmanaged(Pattern),
-    /// 1:1 mapping: pattern_type_map[i] is the monotype of patterns[i]
-    pattern_type_map: std.ArrayListUnmanaged(Monotype.Idx),
-
-    /// Extra data (ExprId/PatternId/Ident.Idx arrays for spans)
-    extra_data: std.ArrayListUnmanaged(u32),
-
-    /// Match branches
-    branches: std.ArrayListUnmanaged(Branch),
-
-    /// Branch patterns (for `|` alternatives)
+    cf_stmts: std.ArrayListUnmanaged(CFStmt),
+    match_branches: std.ArrayListUnmanaged(MatchBranch),
     branch_patterns: std.ArrayListUnmanaged(BranchPattern),
-
-    /// Statements (let bindings in blocks)
-    stmts: std.ArrayListUnmanaged(Stmt),
-
-    /// Borrow-scope bindings
+    patterns: std.ArrayListUnmanaged(Pattern),
+    pattern_type_map: std.ArrayListUnmanaged(Monotype.Idx),
+    pattern_ids: std.ArrayListUnmanaged(PatternId),
+    locals: std.ArrayListUnmanaged(Local),
+    local_ids: std.ArrayListUnmanaged(LocalId),
     borrow_bindings: std.ArrayListUnmanaged(BorrowBinding),
-
-    /// Captures (closure captured variables)
-    captures: std.ArrayListUnmanaged(Capture),
-
-    /// Capture bindings for lifted closures
     capture_bindings: std.ArrayListUnmanaged(CaptureBinding),
-
-    /// Proc table for explicit callable identity.
-    procs: std.ArrayListUnmanaged(Proc),
-
-    /// The monotype store (owns all monotypes)
-    monotype_store: Monotype.Store,
-
-    /// Map from global symbol key (u64 bitcast) to its value definition ExprId
-    value_defs: std.AutoHashMapUnmanaged(u64, ExprId),
-
-    /// Explicit mutability metadata for symbols.
-    /// `true` means symbol is reassignable (mutable), `false` means immutable.
-    symbol_reassignable: std.AutoHashMapUnmanaged(u64, bool),
-
-    /// Closure members produced by closure lifting.
+    lambdas: std.ArrayListUnmanaged(Lambda),
+    const_defs: std.ArrayListUnmanaged(ConstDef),
+    function_defs: std.ArrayListUnmanaged(FunctionDef),
     closure_members: std.ArrayListUnmanaged(ClosureMember),
-
-    /// Maps a closure-valued ExprId to its lifted closure member.
-    expr_closure_members: std.AutoHashMapUnmanaged(u32, ClosureMemberId),
-
-    /// Exact callable members known for lowered MIR symbols.
     seed_members: std.ArrayListUnmanaged(SeedMember),
+    monotype_store: Monotype.Store,
+    const_defs_by_symbol: std.AutoHashMapUnmanaged(u64, ConstDefId),
+    function_defs_by_symbol: std.AutoHashMapUnmanaged(u64, FunctionDefId),
     symbol_seed_members: std.AutoHashMapUnmanaged(u64, SeedMemberSpan),
-
-    /// String literals copied from CIR during lowering.
-    /// MIR owns its own string data so downstream passes (LIR, codegen)
-    /// never need to reach back into CIR module envs.
     strings: StringLiteral.Store,
 
+    /// Initializes an empty MIR store.
     pub fn init(allocator: Allocator) Allocator.Error!Store {
         return .{
-            .exprs = .empty,
-            .type_map = .empty,
-            .expr_regions = .empty,
+            .cf_stmts = .empty,
+            .match_branches = .empty,
+            .branch_patterns = .empty,
             .patterns = .empty,
             .pattern_type_map = .empty,
-            .extra_data = .empty,
-            .branches = .empty,
-            .branch_patterns = .empty,
-            .stmts = .empty,
+            .pattern_ids = .empty,
+            .locals = .empty,
+            .local_ids = .empty,
             .borrow_bindings = .empty,
-            .captures = .empty,
             .capture_bindings = .empty,
-            .procs = .empty,
-            .monotype_store = try Monotype.Store.init(allocator),
+            .lambdas = .empty,
+            .const_defs = .empty,
+            .function_defs = .empty,
             .closure_members = .empty,
-            .expr_closure_members = .empty,
             .seed_members = .empty,
+            .monotype_store = try Monotype.Store.init(allocator),
+            .const_defs_by_symbol = .empty,
+            .function_defs_by_symbol = .empty,
             .symbol_seed_members = .empty,
-            .value_defs = .empty,
-            .symbol_reassignable = .empty,
             .strings = .{},
         };
     }
 
+    /// Releases all storage owned by this MIR store.
     pub fn deinit(self: *Store, allocator: Allocator) void {
-        self.exprs.deinit(allocator);
-        self.type_map.deinit(allocator);
-        self.expr_regions.deinit(allocator);
+        self.cf_stmts.deinit(allocator);
+        self.match_branches.deinit(allocator);
+        self.branch_patterns.deinit(allocator);
         self.patterns.deinit(allocator);
         self.pattern_type_map.deinit(allocator);
-        self.extra_data.deinit(allocator);
-        self.branches.deinit(allocator);
-        self.branch_patterns.deinit(allocator);
-        self.stmts.deinit(allocator);
+        self.pattern_ids.deinit(allocator);
+        self.locals.deinit(allocator);
+        self.local_ids.deinit(allocator);
         self.borrow_bindings.deinit(allocator);
-        self.captures.deinit(allocator);
         self.capture_bindings.deinit(allocator);
-        self.procs.deinit(allocator);
-        self.monotype_store.deinit(allocator);
+        self.lambdas.deinit(allocator);
+        self.const_defs.deinit(allocator);
+        self.function_defs.deinit(allocator);
         self.closure_members.deinit(allocator);
-        self.expr_closure_members.deinit(allocator);
         self.seed_members.deinit(allocator);
+        self.monotype_store.deinit(allocator);
+        self.const_defs_by_symbol.deinit(allocator);
+        self.function_defs_by_symbol.deinit(allocator);
         self.symbol_seed_members.deinit(allocator);
-        self.value_defs.deinit(allocator);
-        self.symbol_reassignable.deinit(allocator);
         self.strings.deinit(allocator);
     }
 
-    /// Add an expression with its monotype and region. Returns the ExprId.
-    pub fn addExpr(self: *Store, allocator: Allocator, expr: Expr, monotype: Monotype.Idx, region: Region) !ExprId {
-        const idx: u32 = @intCast(self.exprs.items.len);
-        try self.exprs.ensureUnusedCapacity(allocator, 1);
-        try self.type_map.ensureUnusedCapacity(allocator, 1);
-        try self.expr_regions.ensureUnusedCapacity(allocator, 1);
-        self.exprs.appendAssumeCapacity(expr);
-        self.type_map.appendAssumeCapacity(monotype);
-        self.expr_regions.appendAssumeCapacity(region);
-        return @enumFromInt(idx);
+    /// Interns a string literal in the store-level string table.
+    pub fn insertString(self: *Store, allocator: Allocator, text: []const u8) Allocator.Error!StringLiteral.Idx {
+        return self.strings.insert(allocator, text);
     }
 
-    /// Get the monotype of an expression (1:1 mapping).
-    pub fn typeOf(self: *const Store, id: ExprId) Monotype.Idx {
-        return self.type_map.items[@intFromEnum(id)];
-    }
-
-    /// Get an expression by ID.
-    pub fn getExpr(self: *const Store, id: ExprId) Expr {
-        return self.exprs.items[@intFromEnum(id)];
-    }
-
-    /// Returns the number of stored MIR expressions.
-    pub fn exprCount(self: *const Store) usize {
-        return self.exprs.items.len;
-    }
-
-    /// Get the region of an expression.
-    pub fn getRegion(self: *const Store, id: ExprId) Region {
-        return self.expr_regions.items[@intFromEnum(id)];
-    }
-
-    /// Get a string literal by its index.
+    /// Returns the text for an interned string literal.
     pub fn getString(self: *const Store, idx: StringLiteral.Idx) []const u8 {
         return self.strings.get(idx);
     }
 
-    /// Add a pattern with its monotype. Returns the PatternId.
-    pub fn addPattern(self: *Store, allocator: Allocator, pattern: Pattern, monotype: Monotype.Idx) !PatternId {
-        const idx: u32 = @intCast(self.patterns.items.len);
-        try self.patterns.ensureUnusedCapacity(allocator, 1);
-        try self.pattern_type_map.ensureUnusedCapacity(allocator, 1);
-        self.patterns.appendAssumeCapacity(pattern);
-        self.pattern_type_map.appendAssumeCapacity(monotype);
+    /// Registers one MIR local and returns its id.
+    pub fn addLocal(self: *Store, allocator: Allocator, local: Local) Allocator.Error!LocalId {
+        const idx: u32 = @intCast(self.locals.items.len);
+        try self.locals.append(allocator, local);
         return @enumFromInt(idx);
     }
 
-    /// Get a pattern by ID.
+    /// Returns one MIR local by id.
+    pub fn getLocal(self: *const Store, id: LocalId) Local {
+        return self.locals.items[@intFromEnum(id)];
+    }
+
+    /// Returns a mutable pointer to one MIR local.
+    pub fn getLocalPtr(self: *Store, id: LocalId) *Local {
+        return &self.locals.items[@intFromEnum(id)];
+    }
+
+    /// Stores a local-id slice and returns its span.
+    pub fn addLocalSpan(self: *Store, allocator: Allocator, ids: []const LocalId) Allocator.Error!LocalSpan {
+        if (ids.len == 0) return LocalSpan.empty();
+        const start: u32 = @intCast(self.local_ids.items.len);
+        try self.local_ids.appendSlice(allocator, ids);
+        return .{ .start = start, .len = @intCast(ids.len) };
+    }
+
+    /// Resolves one stored local-id span.
+    pub fn getLocalSpan(self: *const Store, span: LocalSpan) []const LocalId {
+        if (span.len == 0) return &.{};
+        return self.local_ids.items[span.start..][0..span.len];
+    }
+
+    /// Appends one MIR statement and returns its id.
+    pub fn addCFStmt(self: *Store, allocator: Allocator, stmt: CFStmt) Allocator.Error!CFStmtId {
+        const idx: u32 = @intCast(self.cf_stmts.items.len);
+        try self.cf_stmts.append(allocator, stmt);
+        return @enumFromInt(idx);
+    }
+
+    /// Returns one MIR statement by id.
+    pub fn getCFStmt(self: *const Store, id: CFStmtId) CFStmt {
+        return self.cf_stmts.items[@intFromEnum(id)];
+    }
+
+    /// Returns a mutable pointer to one MIR statement.
+    pub fn getCFStmtPtr(self: *Store, id: CFStmtId) *CFStmt {
+        return &self.cf_stmts.items[@intFromEnum(id)];
+    }
+
+    /// Registers one MIR pattern and returns its id.
+    pub fn addPattern(self: *Store, allocator: Allocator, pattern: Pattern, monotype: Monotype.Idx) Allocator.Error!PatternId {
+        const idx: u32 = @intCast(self.patterns.items.len);
+        try self.patterns.append(allocator, pattern);
+        try self.pattern_type_map.append(allocator, monotype);
+        return @enumFromInt(idx);
+    }
+
+    /// Returns one MIR pattern by id.
     pub fn getPattern(self: *const Store, id: PatternId) Pattern {
         return self.patterns.items[@intFromEnum(id)];
     }
 
-    /// Get the monotype of a pattern.
+    /// Returns the monotype of one MIR pattern.
     pub fn patternTypeOf(self: *const Store, id: PatternId) Monotype.Idx {
         return self.pattern_type_map.items[@intFromEnum(id)];
     }
 
-    // --- Span helpers ---
-
-    /// Store ExprIds in extra_data and return an ExprSpan.
-    pub fn addExprSpan(self: *Store, allocator: Allocator, ids: []const ExprId) !ExprSpan {
-        if (ids.len == 0) return ExprSpan.empty();
-        const start: u32 = @intCast(self.extra_data.items.len);
-        for (ids) |id| {
-            try self.extra_data.append(allocator, @intFromEnum(id));
-        }
-        return .{ .start = start, .len = @intCast(ids.len) };
-    }
-
-    /// Retrieve ExprIds from an ExprSpan.
-    pub fn getExprSpan(self: *const Store, span: ExprSpan) []const ExprId {
-        if (span.len == 0) return &.{};
-        const raw = self.extra_data.items[span.start..][0..span.len];
-        return @ptrCast(raw);
-    }
-
-    /// Store PatternIds in extra_data and return a PatternSpan.
-    pub fn addPatternSpan(self: *Store, allocator: Allocator, ids: []const PatternId) !PatternSpan {
+    /// Stores a pattern-id slice and returns its span.
+    pub fn addPatternSpan(self: *Store, allocator: Allocator, ids: []const PatternId) Allocator.Error!PatternSpan {
         if (ids.len == 0) return PatternSpan.empty();
-        const start: u32 = @intCast(self.extra_data.items.len);
-        for (ids) |id| {
-            try self.extra_data.append(allocator, @intFromEnum(id));
-        }
+        const start: u32 = @intCast(self.pattern_ids.items.len);
+        try self.pattern_ids.appendSlice(allocator, ids);
         return .{ .start = start, .len = @intCast(ids.len) };
     }
 
-    /// Retrieve PatternIds from a PatternSpan.
+    /// Resolves one stored pattern-id span.
     pub fn getPatternSpan(self: *const Store, span: PatternSpan) []const PatternId {
         if (span.len == 0) return &.{};
-        const raw = self.extra_data.items[span.start..][0..span.len];
-        return @ptrCast(raw);
+        return self.pattern_ids.items[span.start..][0..span.len];
     }
 
-    /// Store ProcIds in extra_data and return a ProcSpan.
-    pub fn addProcSpan(self: *Store, allocator: Allocator, ids: []const ProcId) !ProcSpan {
-        if (ids.len == 0) return ProcSpan.empty();
-        const start: u32 = @intCast(self.extra_data.items.len);
-        for (ids) |id| {
-            try self.extra_data.append(allocator, @intFromEnum(id));
-        }
-        return .{ .start = start, .len = @intCast(ids.len) };
+    /// Stores match branches and returns their span.
+    pub fn addMatchBranches(self: *Store, allocator: Allocator, branches: []const MatchBranch) Allocator.Error!MatchBranchSpan {
+        if (branches.len == 0) return MatchBranchSpan.empty();
+        const start: u32 = @intCast(self.match_branches.items.len);
+        try self.match_branches.appendSlice(allocator, branches);
+        return .{ .start = start, .len = @intCast(branches.len) };
     }
 
-    /// Retrieve ProcIds from a ProcSpan.
-    pub fn getProcSpan(self: *const Store, span: ProcSpan) []const ProcId {
+    /// Resolves one stored match-branch span.
+    pub fn getMatchBranches(self: *const Store, span: MatchBranchSpan) []const MatchBranch {
         if (span.len == 0) return &.{};
-        const raw = self.extra_data.items[span.start..][0..span.len];
-        return @ptrCast(raw);
+        return self.match_branches.items[span.start..][0..span.len];
     }
 
-    /// Add branches and return a BranchSpan.
-    pub fn addBranches(self: *Store, allocator: Allocator, branch_list: []const Branch) !BranchSpan {
-        if (branch_list.len == 0) return BranchSpan.empty();
-        const start: u32 = @intCast(self.branches.items.len);
-        try self.branches.appendSlice(allocator, branch_list);
-        return .{ .start = start, .len = @intCast(branch_list.len) };
-    }
-
-    /// Get branches from a BranchSpan.
-    pub fn getBranches(self: *const Store, span: BranchSpan) []const Branch {
-        if (span.len == 0) return &.{};
-        return self.branches.items[span.start..][0..span.len];
-    }
-
-    /// Add branch patterns and return a BranchPatternSpan.
-    pub fn addBranchPatterns(self: *Store, allocator: Allocator, bp_list: []const BranchPattern) !BranchPatternSpan {
-        if (bp_list.len == 0) return BranchPatternSpan.empty();
+    /// Stores branch-pattern entries and returns their span.
+    pub fn addBranchPatterns(self: *Store, allocator: Allocator, patterns: []const BranchPattern) Allocator.Error!BranchPatternSpan {
+        if (patterns.len == 0) return BranchPatternSpan.empty();
         const start: u32 = @intCast(self.branch_patterns.items.len);
-        try self.branch_patterns.appendSlice(allocator, bp_list);
-        return .{ .start = start, .len = @intCast(bp_list.len) };
+        try self.branch_patterns.appendSlice(allocator, patterns);
+        return .{ .start = start, .len = @intCast(patterns.len) };
     }
 
-    /// Get branch patterns from a BranchPatternSpan.
+    /// Resolves one stored branch-pattern span.
     pub fn getBranchPatterns(self: *const Store, span: BranchPatternSpan) []const BranchPattern {
         if (span.len == 0) return &.{};
         return self.branch_patterns.items[span.start..][0..span.len];
     }
 
-    /// Add statements and return a StmtSpan.
-    pub fn addStmts(self: *Store, allocator: Allocator, stmt_list: []const Stmt) !StmtSpan {
-        if (stmt_list.len == 0) return StmtSpan.empty();
-        const start: u32 = @intCast(self.stmts.items.len);
-        try self.stmts.appendSlice(allocator, stmt_list);
-        return .{ .start = start, .len = @intCast(stmt_list.len) };
-    }
-
-    /// Get statements from a StmtSpan.
-    pub fn getStmts(self: *const Store, span: StmtSpan) []const Stmt {
-        if (span.len == 0) return &.{};
-        return self.stmts.items[span.start..][0..span.len];
-    }
-
-    /// Add borrow bindings and return a BorrowBindingSpan.
-    pub fn addBorrowBindings(self: *Store, allocator: Allocator, binding_list: []const BorrowBinding) !BorrowBindingSpan {
-        if (binding_list.len == 0) return BorrowBindingSpan.empty();
+    /// Stores borrow bindings and returns their span.
+    pub fn addBorrowBindings(self: *Store, allocator: Allocator, bindings: []const BorrowBinding) Allocator.Error!BorrowBindingSpan {
+        if (bindings.len == 0) return BorrowBindingSpan.empty();
         const start: u32 = @intCast(self.borrow_bindings.items.len);
-        try self.borrow_bindings.appendSlice(allocator, binding_list);
-        return .{ .start = start, .len = @intCast(binding_list.len) };
+        try self.borrow_bindings.appendSlice(allocator, bindings);
+        return .{ .start = start, .len = @intCast(bindings.len) };
     }
 
-    /// Get borrow bindings from a BorrowBindingSpan.
+    /// Resolves one stored borrow-binding span.
     pub fn getBorrowBindings(self: *const Store, span: BorrowBindingSpan) []const BorrowBinding {
         if (span.len == 0) return &.{};
         return self.borrow_bindings.items[span.start..][0..span.len];
     }
 
-    /// Add captures and return a CaptureSpan.
-    pub fn addCaptures(self: *Store, allocator: Allocator, capture_list: []const Capture) !CaptureSpan {
-        if (capture_list.len == 0) return CaptureSpan.empty();
-        const start: u32 = @intCast(self.captures.items.len);
-        try self.captures.appendSlice(allocator, capture_list);
-        return .{ .start = start, .len = @intCast(capture_list.len) };
-    }
-
-    /// Get captures from a CaptureSpan.
-    pub fn getCaptures(self: *const Store, span: CaptureSpan) []const Capture {
-        if (span.len == 0) return &.{};
-        return self.captures.items[span.start..][0..span.len];
-    }
-
-    /// Add capture bindings and return a CaptureBindingSpan.
-    pub fn addCaptureBindings(self: *Store, allocator: Allocator, binding_list: []const CaptureBinding) !CaptureBindingSpan {
-        if (binding_list.len == 0) return CaptureBindingSpan.empty();
+    /// Stores capture bindings and returns their span.
+    pub fn addCaptureBindings(self: *Store, allocator: Allocator, bindings: []const CaptureBinding) Allocator.Error!CaptureBindingSpan {
+        if (bindings.len == 0) return CaptureBindingSpan.empty();
         const start: u32 = @intCast(self.capture_bindings.items.len);
-        try self.capture_bindings.appendSlice(allocator, binding_list);
-        return .{ .start = start, .len = @intCast(binding_list.len) };
+        try self.capture_bindings.appendSlice(allocator, bindings);
+        return .{ .start = start, .len = @intCast(bindings.len) };
     }
 
-    /// Get capture bindings from a CaptureBindingSpan.
+    /// Resolves one stored capture-binding span.
     pub fn getCaptureBindings(self: *const Store, span: CaptureBindingSpan) []const CaptureBinding {
         if (span.len == 0) return &.{};
         return self.capture_bindings.items[span.start..][0..span.len];
     }
 
-    /// Register one MIR proc and return its id.
-    pub fn addProc(self: *Store, allocator: Allocator, proc: Proc) !ProcId {
-        const idx: u32 = @intCast(self.procs.items.len);
-        try self.procs.append(allocator, proc);
+    /// Registers one MIR lambda and returns its id.
+    pub fn addLambda(self: *Store, allocator: Allocator, lambda: Lambda) Allocator.Error!LambdaId {
+        const idx: u32 = @intCast(self.lambdas.items.len);
+        try self.lambdas.append(allocator, lambda);
         return @enumFromInt(idx);
     }
 
-    /// Get one MIR proc by id.
-    pub fn getProc(self: *const Store, id: ProcId) Proc {
-        return self.procs.items[@intFromEnum(id)];
+    /// Returns one MIR lambda by id.
+    pub fn getLambda(self: *const Store, id: LambdaId) Lambda {
+        return self.lambdas.items[@intFromEnum(id)];
     }
 
-    /// Count the value parameters a proc receives at call/lowering time.
-    ///
-    /// This includes the hidden captures parameter when the proc represents a
-    /// closure with an environment.
-    pub fn procValueParamCount(self: *const Store, proc: Proc) usize {
-        return self.getPatternSpan(proc.params).len + @intFromBool(!proc.captures_param.isNone());
+    /// Returns a mutable pointer to one MIR lambda.
+    pub fn getLambdaPtr(self: *Store, id: LambdaId) *Lambda {
+        return &self.lambdas.items[@intFromEnum(id)];
     }
 
-    /// Get one proc value parameter in call/lowering order.
-    ///
-    /// Visible params come first, followed by the hidden captures param when
-    /// present.
-    pub fn getProcValueParamPattern(self: *const Store, proc: Proc, index: usize) PatternId {
-        const params = self.getPatternSpan(proc.params);
-        if (index < params.len) return params[index];
-        if (index == params.len and !proc.captures_param.isNone()) return proc.captures_param;
+    /// Returns all stored MIR lambdas.
+    pub fn getLambdas(self: *const Store) []const Lambda {
+        return self.lambdas.items;
+    }
 
-        if (std.debug.runtime_safety) {
+    /// Registers one top-level constant definition.
+    pub fn addConstDef(self: *Store, allocator: Allocator, def: ConstDef) Allocator.Error!ConstDefId {
+        const idx: u32 = @intCast(self.const_defs.items.len);
+        try self.const_defs.append(allocator, def);
+        return @enumFromInt(idx);
+    }
+
+    /// Returns one top-level constant definition.
+    pub fn getConstDef(self: *const Store, id: ConstDefId) ConstDef {
+        return self.const_defs.items[@intFromEnum(id)];
+    }
+
+    /// Registers one constant definition under its global symbol.
+    pub fn registerConstDef(self: *Store, allocator: Allocator, def: ConstDef) Allocator.Error!ConstDefId {
+        const key = def.symbol.raw();
+        const gop = try self.const_defs_by_symbol.getOrPut(allocator, key);
+        if (gop.found_existing) {
             std.debug.panic(
-                "MIR invariant violated: proc value param index {d} out of bounds (visible={d}, has_captures={any})",
-                .{ index, params.len, !proc.captures_param.isNone() },
+                "MIR duplicate constant definition for symbol key {d}",
+                .{key},
             );
         }
-        unreachable;
+
+        const id = try self.addConstDef(allocator, def);
+        gop.value_ptr.* = id;
+        return id;
     }
 
-    /// Get a mutable MIR proc by id.
-    pub fn getProcPtr(self: *Store, id: ProcId) *Proc {
-        return &self.procs.items[@intFromEnum(id)];
+    /// Resolves one registered constant definition by symbol.
+    pub fn getConstDefForSymbol(self: *const Store, symbol: Symbol) ?ConstDefId {
+        return self.const_defs_by_symbol.get(symbol.raw());
     }
 
-    /// Get all MIR procs.
-    pub fn getProcs(self: *const Store) []const Proc {
-        return self.procs.items;
+    /// Registers one top-level function or method definition.
+    pub fn addFunctionDef(self: *Store, allocator: Allocator, def: FunctionDef) Allocator.Error!FunctionDefId {
+        const idx: u32 = @intCast(self.function_defs.items.len);
+        try self.function_defs.append(allocator, def);
+        return @enumFromInt(idx);
     }
 
-    /// Get the number of MIR procs.
-    pub fn procCount(self: *const Store) usize {
-        return self.procs.items.len;
+    /// Returns one top-level function or method definition.
+    pub fn getFunctionDef(self: *const Store, id: FunctionDefId) FunctionDef {
+        return self.function_defs.items[@intFromEnum(id)];
     }
 
-    /// Register a lifted closure member.
-    pub fn addClosureMember(self: *Store, allocator: Allocator, member: ClosureMember) !ClosureMemberId {
+    /// Registers one function definition under its global symbol.
+    pub fn registerFunctionDef(self: *Store, allocator: Allocator, def: FunctionDef) Allocator.Error!FunctionDefId {
+        const key = def.symbol.raw();
+        const gop = try self.function_defs_by_symbol.getOrPut(allocator, key);
+        if (gop.found_existing) {
+            std.debug.panic(
+                "MIR duplicate function definition for symbol key {d}",
+                .{key},
+            );
+        }
+
+        const id = try self.addFunctionDef(allocator, def);
+        gop.value_ptr.* = id;
+        return id;
+    }
+
+    /// Resolves one registered function definition by symbol.
+    pub fn getFunctionDefForSymbol(self: *const Store, symbol: Symbol) ?FunctionDefId {
+        return self.function_defs_by_symbol.get(symbol.raw());
+    }
+
+    /// Registers one closure member, reusing an existing identical entry when possible.
+    pub fn addClosureMember(self: *Store, allocator: Allocator, member: ClosureMember) Allocator.Error!ClosureMemberId {
         const candidate_bindings = self.getCaptureBindings(member.capture_bindings);
         for (self.closure_members.items, 0..) |existing, idx| {
-            if (existing.proc != member.proc) continue;
+            if (existing.lambda != member.lambda) continue;
 
             const existing_bindings = self.getCaptureBindings(existing.capture_bindings);
             if (existing_bindings.len != candidate_bindings.len) continue;
 
             for (existing_bindings, candidate_bindings) |lhs, rhs| {
-                if (lhs.local_symbol != rhs.local_symbol or
-                    lhs.source_expr != rhs.source_expr or
-                    lhs.value_expr != rhs.value_expr or
-                    lhs.monotype != rhs.monotype)
-                {
-                    break;
-                }
+                if (!std.meta.eql(lhs, rhs)) break;
             } else {
                 return @enumFromInt(idx);
             }
@@ -958,48 +825,38 @@ pub const Store = struct {
         return @enumFromInt(idx);
     }
 
-    /// Get a closure member by ID.
+    /// Returns one closure member by id.
     pub fn getClosureMember(self: *const Store, id: ClosureMemberId) ClosureMember {
         return self.closure_members.items[@intFromEnum(id)];
     }
 
-    /// Store SeedMember values and return a SeedMemberSpan.
-    pub fn addSeedMemberSpan(self: *Store, allocator: Allocator, members: []const SeedMember) !SeedMemberSpan {
+    /// Stores exact callable seed members and returns their span.
+    pub fn addSeedMemberSpan(self: *Store, allocator: Allocator, members: []const SeedMember) Allocator.Error!SeedMemberSpan {
         if (members.len == 0) return SeedMemberSpan.empty();
         const start: u32 = @intCast(self.seed_members.items.len);
         try self.seed_members.appendSlice(allocator, members);
         return .{ .start = start, .len = @intCast(members.len) };
     }
 
-    /// Retrieve SeedMember values from a SeedMemberSpan.
+    /// Resolves one stored seed-member span.
     pub fn getSeedMemberSpan(self: *const Store, span: SeedMemberSpan) []const SeedMember {
         if (span.len == 0) return &.{};
         return self.seed_members.items[span.start..][0..span.len];
     }
 
-    /// Register a closure-valued expression's member identity.
-    pub fn registerExprClosureMember(self: *Store, allocator: Allocator, expr_id: ExprId, member_id: ClosureMemberId) !void {
-        try self.expr_closure_members.put(allocator, @intFromEnum(expr_id), member_id);
-    }
-
-    /// Look up the closure member for a closure-valued expression, if any.
-    pub fn getExprClosureMember(self: *const Store, expr_id: ExprId) ?ClosureMemberId {
-        return self.expr_closure_members.get(@intFromEnum(expr_id));
-    }
-
-    pub fn registerSymbolSeedMembers(self: *Store, allocator: Allocator, symbol: Symbol, members: []const SeedMember) !void {
+    /// Registers exact callable members known for one global symbol.
+    pub fn registerSymbolSeedMembers(self: *Store, allocator: Allocator, symbol: Symbol, members: []const SeedMember) Allocator.Error!void {
         const key = symbol.raw();
         const gop = try self.symbol_seed_members.getOrPut(allocator, key);
         if (!gop.found_existing) {
-            const span = try self.addSeedMemberSpan(allocator, members);
-            gop.value_ptr.* = span;
+            gop.value_ptr.* = try self.addSeedMemberSpan(allocator, members);
             return;
         }
 
         const existing = self.getSeedMemberSpan(gop.value_ptr.*);
         if (existing.len == members.len) {
             for (existing, members) |lhs, rhs| {
-                if (lhs.proc != rhs.proc or lhs.closure_member != rhs.closure_member) break;
+                if (!std.meta.eql(lhs, rhs)) break;
             } else {
                 return;
             }
@@ -1011,11 +868,7 @@ pub const Store = struct {
         try merged.appendSlice(allocator, existing);
         outer: for (members) |member| {
             for (merged.items) |existing_member| {
-                if (existing_member.proc == member.proc and
-                    existing_member.closure_member == member.closure_member)
-                {
-                    continue :outer;
-                }
+                if (std.meta.eql(existing_member, member)) continue :outer;
             }
             try merged.append(allocator, member);
         }
@@ -1026,7 +879,7 @@ pub const Store = struct {
             {},
             struct {
                 fn lessThan(_: void, lhs: SeedMember, rhs: SeedMember) bool {
-                    if (lhs.proc != rhs.proc) return @intFromEnum(lhs.proc) < @intFromEnum(rhs.proc);
+                    if (lhs.lambda != rhs.lambda) return @intFromEnum(lhs.lambda) < @intFromEnum(rhs.lambda);
                     return @intFromEnum(lhs.closure_member) < @intFromEnum(rhs.closure_member);
                 }
             }.lessThan,
@@ -1035,211 +888,9 @@ pub const Store = struct {
         gop.value_ptr.* = try self.addSeedMemberSpan(allocator, merged.items);
     }
 
+    /// Resolves exact callable members known for one global symbol, if any.
     pub fn getSymbolSeedMembers(self: *const Store, symbol: Symbol) ?[]const SeedMember {
         const span = self.symbol_seed_members.get(symbol.raw()) orelse return null;
         return self.getSeedMemberSpan(span);
-    }
-
-    /// Resolve one monomorphic callable expression to the unique proc whose
-    /// function monotype matches the expression's monotype.
-    pub fn resolveUniqueProcByFnMonotype(
-        self: *const Store,
-        expr_id: ExprId,
-        proc_ids: []const ProcId,
-    ) ?ProcId {
-        const expected_fn_monotype = self.typeOf(expr_id);
-        var resolved: ?ProcId = null;
-
-        for (proc_ids) |proc_id| {
-            if (self.getProc(proc_id).fn_monotype != expected_fn_monotype) continue;
-            if (resolved) |existing| {
-                if (existing != proc_id) return null;
-            } else {
-                resolved = proc_id;
-            }
-        }
-
-        return resolved;
-    }
-
-    /// Register a value definition.
-    pub fn registerValueDef(self: *Store, allocator: Allocator, symbol: Symbol, expr_id: ExprId) !void {
-        const key: u64 = @bitCast(symbol);
-        const gop = try self.value_defs.getOrPut(allocator, key);
-        if (!gop.found_existing) {
-            gop.value_ptr.* = expr_id;
-            return;
-        }
-
-        if (std.debug.runtime_safety) {
-            std.debug.panic(
-                "MIR duplicate value definition for symbol key {d}: existing expr {}, new expr {}",
-                .{ key, @intFromEnum(gop.value_ptr.*), @intFromEnum(expr_id) },
-            );
-        }
-        unreachable;
-    }
-
-    /// Look up a value definition.
-    pub fn getValueDef(self: *const Store, symbol: Symbol) ?ExprId {
-        return self.value_defs.get(@bitCast(symbol));
-    }
-
-    /// Resolve a proc-backed callable identity through transparent MIR wrappers.
-    ///
-    /// This is a semantic MIR helper. It answers "which proc does this callable
-    /// value represent?" and does not enforce later lowering-stage restrictions
-    /// such as whether statementful wrapper nodes are admissible at a given
-    /// lowering boundary.
-    pub fn resolveCallableProcId(self: *const Store, expr_id: ExprId) ?ProcId {
-        var visited_symbols: [64]u64 = undefined;
-        var visited_len: usize = 0;
-        return self.resolveCallableProcIdInner(expr_id, &visited_symbols, &visited_len);
-    }
-
-    /// Resolve the proc-backed callable identity represented by a pattern.
-    ///
-    /// This handles callable parameters seeded by monomorphization as well as
-    /// local bindings whose value definition is a proc-backed expression.
-    pub fn resolveCallableProcIdForPattern(self: *const Store, pattern_id: PatternId) ?ProcId {
-        return switch (self.getPattern(pattern_id)) {
-            .bind => |symbol| blk: {
-                if (self.getSymbolSeedMembers(symbol)) |seed_members| {
-                    if (seed_members.len == 1) break :blk seed_members[0].proc;
-
-                    const expected_fn_monotype = self.patternTypeOf(pattern_id);
-                    var resolved: ?ProcId = null;
-                    for (seed_members) |seed_member| {
-                        const proc_id = seed_member.proc;
-                        if (self.getProc(proc_id).fn_monotype != expected_fn_monotype) continue;
-                        if (resolved) |existing| {
-                            if (existing != proc_id) return null;
-                        } else {
-                            resolved = proc_id;
-                        }
-                    }
-                    if (resolved) |proc_id| break :blk proc_id;
-                    if (builtin.mode == .Debug) {
-                        std.debug.panic(
-                            "MIR invariant violated: callable pattern {d} for symbol {d} has seeded callable members {any} but none match fn monotype {d}",
-                            .{
-                                @intFromEnum(pattern_id),
-                                symbol.raw(),
-                                seed_members,
-                                @intFromEnum(expected_fn_monotype),
-                            },
-                        );
-                    }
-                }
-
-                if (self.getValueDef(symbol)) |expr_id| {
-                    break :blk self.resolveCallableProcId(expr_id);
-                }
-
-                break :blk null;
-            },
-            .as_pattern => |as_pattern| self.resolveCallableProcIdForPattern(as_pattern.pattern),
-            else => null,
-        };
-    }
-
-    fn resolveCallableProcIdInner(
-        self: *const Store,
-        expr_id: ExprId,
-        visited_symbols: *[64]u64,
-        visited_len: *usize,
-    ) ?ProcId {
-        return switch (self.getExpr(expr_id)) {
-            .proc_ref => |proc_id| proc_id,
-            .closure_make => |closure| closure.proc,
-            .lookup => |symbol| blk: {
-                if (self.getSymbolSeedMembers(symbol)) |seed_members| {
-                    if (seed_members.len == 1) break :blk seed_members[0].proc;
-                    const expected_fn_monotype = self.typeOf(expr_id);
-                    var resolved: ?ProcId = null;
-                    for (seed_members) |seed_member| {
-                        const proc_id = seed_member.proc;
-                        if (self.getProc(proc_id).fn_monotype != expected_fn_monotype) continue;
-                        if (resolved) |existing| {
-                            if (existing != proc_id) return null;
-                        } else {
-                            resolved = proc_id;
-                        }
-                    }
-                    if (resolved) |proc_id| break :blk proc_id;
-                }
-
-                if (self.getValueDef(symbol)) |def_expr| {
-                    for (visited_symbols[0..visited_len.*]) |visited| {
-                        if (visited == symbol.raw()) {
-                            std.debug.panic(
-                                "MIR invariant violated: cyclic proc-backed callable lookup for symbol {d}",
-                                .{symbol.raw()},
-                            );
-                        }
-                    }
-
-                    if (visited_len.* >= visited_symbols.len) {
-                        std.debug.panic(
-                            "MIR invariant violated: callable lookup depth exceeded fixed recursion budget while resolving symbol {d}",
-                            .{symbol.raw()},
-                        );
-                    }
-
-                    visited_symbols[visited_len.*] = symbol.raw();
-                    visited_len.* += 1;
-                    defer visited_len.* -= 1;
-
-                    break :blk self.resolveCallableProcIdInner(def_expr, visited_symbols, visited_len);
-                }
-
-                break :blk null;
-            },
-            .block => |block| self.resolveCallableProcIdInner(block.final_expr, visited_symbols, visited_len),
-            .dbg_expr => |dbg_expr| self.resolveCallableProcIdInner(dbg_expr.expr, visited_symbols, visited_len),
-            .expect => |expect| self.resolveCallableProcIdInner(expect.body, visited_symbols, visited_len),
-            .return_expr => |ret| self.resolveCallableProcIdInner(ret.expr, visited_symbols, visited_len),
-            else => null,
-        };
-    }
-
-    /// Register mutability metadata for a symbol.
-    pub fn registerSymbolReassignable(self: *Store, allocator: Allocator, symbol: Symbol, reassignable: bool) !void {
-        const key = symbol.raw();
-        const gop = try self.symbol_reassignable.getOrPut(allocator, key);
-        if (!gop.found_existing) {
-            gop.value_ptr.* = reassignable;
-            return;
-        }
-
-        if (std.debug.runtime_safety and gop.value_ptr.* != reassignable) {
-            std.debug.panic(
-                "MIR symbol mutability mismatch for symbol key {d}: existing={any}, new={any}",
-                .{ key, gop.value_ptr.*, reassignable },
-            );
-        }
-    }
-
-    /// Query mutability metadata for a symbol.
-    pub fn isSymbolReassignable(self: *const Store, symbol: Symbol) bool {
-        if (symbol.isNone()) return false;
-        return self.symbol_reassignable.get(symbol.raw()) orelse {
-            if (std.debug.runtime_safety) {
-                std.debug.panic(
-                    "Missing MIR symbol mutability metadata for symbol key {d}",
-                    .{symbol.raw()},
-                );
-            }
-            unreachable;
-        };
-    }
-
-    /// Explicitly set mutability metadata for a symbol.
-    /// This is used when statement-level mutability (`var`) overrides the
-    /// underlying identifier attributes that were present when the symbol was interned.
-    pub fn setSymbolReassignable(self: *Store, allocator: Allocator, symbol: Symbol, reassignable: bool) !void {
-        const key = symbol.raw();
-        const gop = try self.symbol_reassignable.getOrPut(allocator, key);
-        gop.value_ptr.* = reassignable;
     }
 };
