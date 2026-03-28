@@ -2212,17 +2212,21 @@ WASM since padded LEB128 is a valid encoding of any value).
 
 ---
 
-## Appendix C: Open Questions
+## Appendix C: Open Questions (Resolved)
 
-1. **Builtins `.o` availability**: Is `roc_builtins.o` for wasm32 already built by `build.zig`?
-   If not, we need to add a build step that compiles `src/builtins/` to
-   `targets/wasm32/roc_builtins.o`. The dev backend already has this for native targets.
+1. **Builtins `.o` availability**: ~~Is `roc_builtins.o` for wasm32 already built by `build.zig`?~~
+   **Answer:** Yes. `roc_builtins.o` for wasm32 is built by `build.zig` and embedded in the
+   Roc CLI binary at compile time, so it is available at run/link time when building a Roc app.
+   No additional build step is needed.
 
-2. **Host module format**: What tool do platform authors use to produce the relocatable host
-   `.wasm`? Likely `clang --target=wasm32 -c -o host.wasm host.c` or Zig's
-   `--target=wasm32-freestanding`. We should document the exact flags needed and provide
-   an example Makefile/build.zig for platform authors.
+2. **Host module format**: ~~What tool do platform authors use to produce the relocatable host
+   `.wasm`?~~
+   **Answer:** Platform authors build their relocatable WASM modules using systems-level
+   programming languages such as Zig. The exact toolchain details are out of scope for this
+   plan. We already have a WASM test platform at `test/wasm/platform/` that we will use to
+   validate this implementation.
 
 3. **COMDAT groups**: The linking section can contain COMDAT info (for deduplicating template
-   instantiations in C++). The old Rust compiler parsed but did not use this. We should parse
-   it for correctness but can skip processing it initially.
+   instantiations in C++). The old Rust compiler parsed but did not use this.
+   **Status:** Needs further investigation before deciding on an approach. For now, parse the
+   COMDAT subsection for correctness but skip processing it, as noted in Phase 1.
