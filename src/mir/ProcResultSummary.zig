@@ -142,11 +142,19 @@ const ReturnAccumulator = struct {
 
 const LocalOriginMap = std.AutoHashMap(u32, Origin);
 
+const JoinOriginState = struct {
+    params: []const MIR.LocalId,
+    merged_origins: []?Origin,
+};
+
+const ActiveJoinMap = std.AutoHashMap(u32, JoinOriginState);
+
 const Analyzer = struct {
     allocator: Allocator,
     mir_store: *const MIR.Store,
     table: *Table,
     lambda_states: ?[]const ProcSummaryState,
+    active_joins: *ActiveJoinMap,
 
     fn lambdaSummary(self: *const Analyzer, lambda_id: MIR.LambdaId) ProcSummaryState {
         if (self.lambda_states) |states| {
@@ -309,6 +317,55 @@ const Analyzer = struct {
             try clone.put(entry.key_ptr.*, entry.value_ptr.*);
         }
         return clone;
+    }
+
+    fn originIsScopedBorrow(origin: Origin) bool {
+        return switch (origin) {
+            .borrow_of_param => |borrowed| switch (borrowed.region) {
+                .proc => false,
+                .scope => true,
+            },
+            .borrow_of_fresh => |borrowed| switch (borrowed.region) {
+                .proc => false,
+                .scope => true,
+            },
+            else => false,
+        };
+    }
+
+    fn originsEqual(self: *const Analyzer, left: Origin, right: Origin) bool {
+        return switch (left) {
+            .fresh => right == .fresh,
+            .alias_of_param => |left_param| switch (right) {
+                .alias_of_param => |right_param| left_param.param_index == right_param.param_index and
+                    projectionSpansEqual(self.table, left_param.projections, right_param.projections),
+                else => false,
+            },
+            .borrow_of_param => |left_borrow| switch (right) {
+                .borrow_of_param => |right_borrow| left_borrow.param_index == right_borrow.param_index and
+                    projectionSpansEqual(self.table, left_borrow.projections, right_borrow.projections) and
+                    std.meta.eql(left_borrow.region, right_borrow.region),
+                else => false,
+            },
+            .borrow_of_fresh => |left_borrow| switch (right) {
+                .borrow_of_fresh => |right_borrow| projectionSpansEqual(self.table, left_borrow.projections, right_borrow.projections) and
+                    std.meta.eql(left_borrow.region, right_borrow.region),
+                else => false,
+            },
+        };
+    }
+
+    fn mergeOrigins(self: *const Analyzer, left: Origin, right: Origin) Origin {
+        if (self.originsEqual(left, right)) return left;
+
+        if (originIsScopedBorrow(left) or originIsScopedBorrow(right)) {
+            std.debug.panic(
+                "ProcResultSummary invariant violated: join merged incompatible scoped-borrow origins",
+                .{},
+            );
+        }
+
+        return .fresh;
     }
 
     fn originForLocal(_: *Analyzer, env: *const LocalOriginMap, local: MIR.LocalId) Origin {
@@ -575,14 +632,84 @@ const Analyzer = struct {
                 return self.analyzeStmt(&scope_env, region, accumulator, scope.remainder);
             },
             .scope_exit => return false,
-            .join => |join| std.debug.panic(
-                "ProcResultSummary invariant violated: join {d} is not implemented in strongest-form MIR result summaries yet",
-                .{@intFromEnum(join.id)},
-            ),
-            .jump => |jump| std.debug.panic(
-                "ProcResultSummary invariant violated: jump to join {d} is not implemented in strongest-form MIR result summaries yet",
-                .{@intFromEnum(jump.id)},
-            ),
+            .join => |join| {
+                const join_key = @intFromEnum(join.id);
+                const join_params = self.mir_store.getLocalSpan(join.params);
+                const merged_origins = try self.allocator.alloc(?Origin, join_params.len);
+                errdefer self.allocator.free(merged_origins);
+                @memset(merged_origins, null);
+
+                const gop = try self.active_joins.getOrPut(join_key);
+                if (gop.found_existing) {
+                    std.debug.panic(
+                        "ProcResultSummary invariant violated: nested/duplicate active join {d}",
+                        .{join_key},
+                    );
+                }
+                gop.value_ptr.* = .{
+                    .params = join_params,
+                    .merged_origins = merged_origins,
+                };
+                defer {
+                    const removed = self.active_joins.fetchRemove(join_key) orelse unreachable;
+                    self.allocator.free(removed.value.merged_origins);
+                }
+
+                const remainder_continues = try self.analyzeStmt(env, region, accumulator, join.remainder);
+                if (remainder_continues) {
+                    std.debug.panic(
+                        "ProcResultSummary invariant violated: join {d} remainder fell through without explicit jump",
+                        .{join_key},
+                    );
+                }
+
+                var saw_incoming = false;
+                for (merged_origins) |incoming| {
+                    if (incoming != null) {
+                        saw_incoming = true;
+                        break;
+                    }
+                }
+                if (!saw_incoming) return false;
+
+                var body_env = try self.cloneEnv(env);
+                defer body_env.deinit();
+
+                for (join_params, merged_origins, 0..) |param, incoming, i| {
+                    try body_env.put(
+                        localKey(param),
+                        incoming orelse std.debug.panic(
+                            "ProcResultSummary invariant violated: join {d} param {d} had no incoming origin",
+                            .{ join_key, i },
+                        ),
+                    );
+                }
+
+                return self.analyzeStmt(&body_env, region, accumulator, join.body);
+            },
+            .jump => |jump| {
+                const join_state = self.active_joins.getPtr(@intFromEnum(jump.id)) orelse std.debug.panic(
+                    "ProcResultSummary invariant violated: jump to unknown active join {d}",
+                    .{@intFromEnum(jump.id)},
+                );
+                const args = self.mir_store.getLocalSpan(jump.args);
+                if (args.len != join_state.params.len) {
+                    std.debug.panic(
+                        "ProcResultSummary invariant violated: jump to join {d} passed {d} args, expected {d}",
+                        .{ @intFromEnum(jump.id), args.len, join_state.params.len },
+                    );
+                }
+
+                for (args, 0..) |arg, i| {
+                    const incoming = self.originForLocal(env, arg);
+                    if (join_state.merged_origins[i]) |current| {
+                        join_state.merged_origins[i] = self.mergeOrigins(current, incoming);
+                    } else {
+                        join_state.merged_origins[i] = incoming;
+                    }
+                }
+                return false;
+            },
             .ret => |ret| {
                 self.mergeReturnedOrigin(accumulator, self.originForLocal(env, ret.value));
                 return false;
@@ -595,6 +722,16 @@ const Analyzer = struct {
         const lambda = self.mir_store.getLambda(lambda_id);
         var env = LocalOriginMap.init(self.allocator);
         defer env.deinit();
+        var active_joins = ActiveJoinMap.init(self.allocator);
+        defer {
+            var it = active_joins.valueIterator();
+            while (it.next()) |value| {
+                self.allocator.free(value.merged_origins);
+            }
+            active_joins.deinit();
+        }
+
+        self.active_joins = &active_joins;
 
         const visible_params = self.mir_store.getPatternSpan(lambda.params);
         for (visible_params, 0..) |pattern_id, i| {
@@ -620,6 +757,16 @@ const Analyzer = struct {
         const def = self.mir_store.getConstDef(const_id);
         var env = LocalOriginMap.init(self.allocator);
         defer env.deinit();
+        var active_joins = ActiveJoinMap.init(self.allocator);
+        defer {
+            var it = active_joins.valueIterator();
+            while (it.next()) |value| {
+                self.allocator.free(value.merged_origins);
+            }
+            active_joins.deinit();
+        }
+
+        self.active_joins = &active_joins;
 
         var accumulator = ReturnAccumulator{};
         _ = try self.analyzeStmt(&env, .proc, &accumulator, def.body);
@@ -653,6 +800,7 @@ pub fn build(
                 .mir_store = mir_store,
                 .table = &table,
                 .lambda_states = states.items,
+                .active_joins = undefined,
             };
             const lambda_id: MIR.LambdaId = @enumFromInt(@as(u32, @intCast(i)));
             const next_state = try analyzer.analyzeLambda(lambda_id);
@@ -679,6 +827,7 @@ pub fn build(
             .mir_store = mir_store,
             .table = &table,
             .lambda_states = null,
+            .active_joins = undefined,
         };
         const const_id: MIR.ConstDefId = @enumFromInt(@as(u32, @intCast(i)));
         const state = try analyzer.analyzeConst(const_id);

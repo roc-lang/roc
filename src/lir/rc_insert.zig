@@ -5,6 +5,7 @@
 //! before codegen sees the IR.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const layout_mod = @import("layout");
 
 const LIR = @import("LIR.zig");
@@ -34,6 +35,7 @@ pub const RcInsertPass = struct {
 
     symbol_use_counts: std.AutoHashMap(u64, u32),
     symbol_alias_sources: std.AutoHashMap(u64, u64),
+    active_join_params: std.AutoHashMap(u32, LIR.LocalSpan),
 
     /// Initializes an RC insertion pass over the provided LIR store.
     pub fn init(allocator: Allocator, store: *LirStore, layout_store: *const layout_mod.Store) Allocator.Error!RcInsertPass {
@@ -43,6 +45,7 @@ pub const RcInsertPass = struct {
             .layout_store = layout_store,
             .symbol_use_counts = std.AutoHashMap(u64, u32).init(allocator),
             .symbol_alias_sources = std.AutoHashMap(u64, u64).init(allocator),
+            .active_join_params = std.AutoHashMap(u32, LIR.LocalSpan).init(allocator),
         };
     }
 
@@ -50,12 +53,14 @@ pub const RcInsertPass = struct {
     pub fn deinit(self: *RcInsertPass) void {
         self.symbol_use_counts.deinit();
         self.symbol_alias_sources.deinit();
+        self.active_join_params.deinit();
     }
 
     /// Inserts RC statements for one proc body.
     pub fn insertRcOpsForProc(self: *RcInsertPass, proc_id: LirProcSpecId) Allocator.Error!void {
         self.symbol_use_counts.clearRetainingCapacity();
         self.symbol_alias_sources.clearRetainingCapacity();
+        self.active_join_params.clearRetainingCapacity();
 
         const proc = self.store.getProcSpec(proc_id);
         try self.countUsesInStmt(proc.body);
@@ -106,16 +111,19 @@ pub const RcInsertPass = struct {
         switch (self.store.getCFStmt(stmt_id)) {
             .assign_symbol => |assign| try self.countUsesInStmt(assign.next),
             .assign_ref => |assign| {
-                try self.bumpUse(refOpSource(assign.op));
                 try self.countUsesInStmt(assign.next);
+                const target_use_count = self.symbol_use_counts.get(localKey(assign.target)) orelse 0;
+                if (target_use_count == 0) return;
+                switch (assign.result) {
+                    .fresh => {},
+                    .alias_of, .borrow_of => try self.bumpUse(refOpSource(assign.op)),
+                }
             },
             .assign_literal => |assign| try self.countUsesInStmt(assign.next),
             .assign_call => |assign| {
-                try self.countUsesInLocals(self.store.getLocalSpan(assign.args));
                 try self.countUsesInStmt(assign.next);
             },
             .assign_low_level => |assign| {
-                try self.countUsesInLocals(self.store.getLocalSpan(assign.args));
                 try self.countUsesInStmt(assign.next);
             },
             .assign_list => |assign| {
@@ -144,13 +152,23 @@ pub const RcInsertPass = struct {
                 try self.countUsesInStmt(free_stmt.next);
             },
             .switch_stmt => |switch_stmt| {
-                try self.bumpUse(switch_stmt.cond);
                 for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
                     try self.countUsesInStmt(branch.body);
                 }
                 try self.countUsesInStmt(switch_stmt.default_branch);
             },
             .join => |join| {
+                const join_key = @intFromEnum(join.id);
+                const gop = try self.active_join_params.getOrPut(join_key);
+                if (builtin.mode == .Debug and gop.found_existing) {
+                    std.debug.panic(
+                        "RcInsertPass invariant violated: nested/duplicate active join {d}",
+                        .{join_key},
+                    );
+                }
+                gop.value_ptr.* = join.params;
+                defer _ = self.active_join_params.remove(join_key);
+
                 try self.countUsesInStmt(join.body);
                 try self.countUsesInStmt(join.remainder);
             },
@@ -159,7 +177,24 @@ pub const RcInsertPass = struct {
                 try self.countUsesInStmt(scope.remainder);
             },
             .scope_exit => {},
-            .jump => |jump| try self.countUsesInLocals(self.store.getLocalSpan(jump.args)),
+            .jump => |jump| {
+                const params = self.active_join_params.get(@intFromEnum(jump.target)) orelse std.debug.panic(
+                    "RcInsertPass invariant violated: jump to unknown active join {d}",
+                    .{@intFromEnum(jump.target)},
+                );
+                const args = self.store.getLocalSpan(jump.args);
+                const param_locals = self.store.getLocalSpan(params);
+                if (builtin.mode == .Debug and args.len != param_locals.len) {
+                    std.debug.panic(
+                        "RcInsertPass invariant violated: jump to join {d} passed {d} args, expected {d}",
+                        .{ @intFromEnum(jump.target), args.len, param_locals.len },
+                    );
+                }
+                for (args, param_locals) |arg, param| {
+                    if (arg == param) continue;
+                    try self.bumpUse(arg);
+                }
+            },
             .ret => |ret| try self.bumpUse(ret.value),
             .crash => {},
         }
@@ -329,6 +364,11 @@ pub const RcInsertPass = struct {
     }
 
     fn processAssignRef(self: *RcInsertPass, assign: AssignRefStmt) Allocator.Error!CFStmtId {
+        const target_layout = self.localLayout(assign.target);
+        const target_use_count = self.symbol_use_counts.get(localKey(assign.target)) orelse 0;
+        if (self.layoutNeedsRc(target_layout) and target_use_count == 0) {
+            return self.processStmt(assign.next);
+        }
         return self.wrapAssignLike(.{ .assign_ref = assign }, assign.target, assign.next);
     }
 

@@ -62,6 +62,11 @@ const LoweredSymbol = union(enum) {
     function_def: MIR.FunctionDefId,
 };
 
+const LoopContext = struct {
+    exit_id: MIR.JoinPointId,
+    carried_locals: MIR.LocalSpan,
+};
+
 // --- Fields ---
 
 allocator: Allocator,
@@ -135,6 +140,12 @@ next_synthetic_ident: u29,
 /// Counter for assigning unique local-pattern scopes to statement-lowered lambdas.
 next_statement_pattern_scope: u64,
 
+/// Counter for assigning unique explicit join-point ids in strongest-form MIR.
+next_join_point_id: u32,
+
+/// First local index that belongs to the currently lowered root/lambda body.
+current_body_local_floor: usize,
+
 /// Tracks symbols currently being lowered (recursion guard).
 in_progress_defs: std.AutoHashMap(u64, void),
 
@@ -168,6 +179,7 @@ scratch_branch_patterns: base.Scratch(MIR.BranchPattern),
 scratch_cf_stmt_ids: base.Scratch(MIR.CFStmtId),
 scratch_capture_locals: base.Scratch(MIR.LocalId),
 scratch_capture_bindings: base.Scratch(MIR.CaptureBinding),
+active_loops: std.ArrayList(LoopContext),
 mono_scratches: Monotype.Store.Scratches,
 
 // --- Init/Deinit ---
@@ -221,6 +233,8 @@ pub fn init(
         .symbol_metadata = std.AutoHashMap(u64, SymbolMetadata).init(allocator),
         .next_synthetic_ident = Ident.Idx.NONE.idx - 1,
         .next_statement_pattern_scope = 1,
+        .next_join_point_id = 0,
+        .current_body_local_floor = 0,
         .in_progress_defs = std.AutoHashMap(u64, void).init(allocator),
         .in_progress_proc_insts = std.AutoHashMap(u32, MIR.LambdaId).init(allocator),
         .reserved_proc_insts = std.AutoHashMap(u32, MIR.LambdaId).init(allocator),
@@ -236,6 +250,7 @@ pub fn init(
         .scratch_cf_stmt_ids = try base.Scratch(MIR.CFStmtId).init(allocator),
         .scratch_capture_locals = try base.Scratch(MIR.LocalId).init(allocator),
         .scratch_capture_bindings = try base.Scratch(MIR.CaptureBinding).init(allocator),
+        .active_loops = .empty,
         .mono_scratches = blk: {
             var ms = try Monotype.Store.Scratches.init(allocator);
             ms.ident_store = all_module_envs[current_module_idx].getIdentStoreConst();
@@ -270,6 +285,7 @@ pub fn deinit(self: *Self) void {
     self.scratch_cf_stmt_ids.deinit();
     self.scratch_capture_locals.deinit();
     self.scratch_capture_bindings.deinit();
+    self.active_loops.deinit(self.allocator);
     self.mono_scratches.deinit();
 }
 
@@ -3098,6 +3114,31 @@ fn freshSyntheticLocal(self: *Self, monotype: Monotype.Idx, reassignable: bool) 
     });
 }
 
+fn freshJoinPointId(self: *Self) MIR.JoinPointId {
+    if (builtin.mode == .Debug and self.next_join_point_id == std.math.maxInt(u32)) {
+        std.debug.panic(
+            "statement-only MIR ran out of join point ids",
+            .{},
+        );
+    }
+
+    const id = self.next_join_point_id;
+    self.next_join_point_id += 1;
+    return @enumFromInt(id);
+}
+
+fn currentBodyReassignableLocals(self: *Self) Allocator.Error![]MIR.LocalId {
+    var locals = std.ArrayList(MIR.LocalId).empty;
+    errdefer locals.deinit(self.allocator);
+
+    for (self.store.locals.items[self.current_body_local_floor..], self.current_body_local_floor..) |local, i| {
+        if (!local.reassignable) continue;
+        try locals.append(self.allocator, @enumFromInt(@as(u32, @intCast(i))));
+    }
+
+    return locals.toOwnedSlice(self.allocator);
+}
+
 fn rootResultMonotype(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!Monotype.Idx {
     const module_env = self.all_module_envs[self.current_module_idx];
     const expr = module_env.store.getExpr(expr_idx);
@@ -3116,6 +3157,9 @@ fn lowerRootConstDef(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.Co
     const module_env = self.all_module_envs[self.current_module_idx];
     const region = module_env.store.getExprRegion(expr_idx);
     const monotype = try self.rootResultMonotype(expr_idx);
+    const saved_body_local_floor = self.current_body_local_floor;
+    self.current_body_local_floor = self.store.locals.items.len;
+    defer self.current_body_local_floor = saved_body_local_floor;
     const result_local = try self.freshSyntheticLocal(monotype, false);
     const ret_stmt = try self.store.addCFStmt(self.allocator, .{ .ret = .{ .value = result_local } });
     const body = try self.lowerTrivialRootExprInto(expr_idx, result_local, ret_stmt);
@@ -3784,6 +3828,9 @@ fn lowerTrivialLambda(
     const saved_scope = self.current_pattern_scope;
     self.current_pattern_scope = self.freshStatementPatternScope();
     defer self.current_pattern_scope = saved_scope;
+    const saved_body_local_floor = self.current_body_local_floor;
+    self.current_body_local_floor = self.store.locals.items.len;
+    defer self.current_body_local_floor = saved_body_local_floor;
 
     const params = try self.lowerPatternSpan(module_env, lambda.args);
     const result_local = try self.freshSyntheticLocal(ret_monotype, false);
@@ -3836,6 +3883,9 @@ fn lowerTrivialClosureLambda(
     const saved_scope = self.current_pattern_scope;
     self.current_pattern_scope = self.freshStatementPatternScope();
     defer self.current_pattern_scope = saved_scope;
+    const saved_body_local_floor = self.current_body_local_floor;
+    self.current_body_local_floor = self.store.locals.items.len;
+    defer self.current_body_local_floor = saved_body_local_floor;
 
     const params = try self.lowerPatternSpan(module_env, lambda_expr.e_lambda.args);
 
@@ -4027,6 +4077,9 @@ fn lowerReservedTrivialClosureLambda(
     const saved_scope = self.current_pattern_scope;
     self.current_pattern_scope = self.freshStatementPatternScope();
     defer self.current_pattern_scope = saved_scope;
+    const saved_body_local_floor = self.current_body_local_floor;
+    self.current_body_local_floor = self.store.locals.items.len;
+    defer self.current_body_local_floor = saved_body_local_floor;
 
     const params = try self.lowerPatternSpan(module_env, lambda_expr.e_lambda.args);
 
@@ -5049,6 +5102,11 @@ fn trivialBinopLowLevel(self: *Self, op: CIR.Expr.Binop.Op, lhs_mono: Monotype.I
                 .str => .str_is_eq,
                 else => .num_is_eq,
             },
+            .record,
+            .tuple,
+            .tag_union,
+            .list,
+            => .num_is_eq,
             else => null,
         },
         .@"and", .@"or" => null,
@@ -5261,7 +5319,10 @@ fn lowerTrivialDotAccessInto(
     return self.lowerTrivialRootExprInto(da.receiver, receiver_local, field_stmt);
 }
 
-fn lowerTrivialIfInto(
+// CIR `if` is only front-end sugar here. Strongest-form MIR lowers it
+// immediately into explicit Bool `match_stmt` control flow plus `join`/`jump`
+// value merges.
+fn lowerTrivialBoolBranchChainInto(
     self: *Self,
     branches: []const CIR.Expr.IfBranch.Idx,
     final_else: CIR.Expr.Idx,
@@ -5276,9 +5337,26 @@ fn lowerTrivialIfInto(
 
     const branch = module_env.store.getIfBranch(branches[0]);
     const cond_mono = try self.resolveMonotype(branch.cond);
+    const result_mono = self.store.getLocal(target).monotype;
     const cond_local = try self.freshSyntheticLocal(cond_mono, false);
-    const else_body = try self.lowerTrivialIfInto(branches[1..], final_else, target, next);
-    const then_body = try self.lowerTrivialRootExprInto(branch.body, target, next);
+    const join_id = self.freshJoinPointId();
+    const join_params = try self.store.addLocalSpan(self.allocator, &.{target});
+    const outer_jump = try self.store.addCFStmt(self.allocator, .{ .jump = .{
+        .id = join_id,
+        .args = try self.store.addLocalSpan(self.allocator, &.{target}),
+    } });
+
+    const else_body = try self.lowerTrivialBoolBranchChainInto(branches[1..], final_else, target, outer_jump);
+
+    const then_value = try self.freshSyntheticLocal(result_mono, false);
+    const then_body = try self.lowerTrivialRootExprInto(
+        branch.body,
+        then_value,
+        try self.store.addCFStmt(self.allocator, .{ .jump = .{
+            .id = join_id,
+            .args = try self.store.addLocalSpan(self.allocator, &.{then_value}),
+        } }),
+    );
     const tag_names = boolTagNamesForMonotype(self, cond_mono) orelse std.debug.panic(
         "statement-only MIR if expected Bool condition monotype for expr {d}",
         .{@intFromEnum(branch.cond)},
@@ -5305,7 +5383,12 @@ fn lowerTrivialIfInto(
         }),
     } });
 
-    return self.lowerTrivialRootExprInto(branch.cond, cond_local, match_stmt);
+    return self.store.addCFStmt(self.allocator, .{ .join = .{
+        .id = join_id,
+        .params = join_params,
+        .body = next,
+        .remainder = try self.lowerTrivialRootExprInto(branch.cond, cond_local, match_stmt),
+    } });
 }
 
 fn setPatternLocalsReassignable(
@@ -5384,6 +5467,407 @@ fn lowerTrivialPatternBindingInto(
     return self.lowerTrivialRootExprInto(expr_idx, source_local, match_stmt);
 }
 
+fn lowerTrivialPatternMatchLocalInto(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    pattern_idx: CIR.Pattern.Idx,
+    source_local: MIR.LocalId,
+    on_match: MIR.CFStmtId,
+    on_fail: MIR.CFStmtId,
+) Allocator.Error!MIR.CFStmtId {
+    const source_mono = self.store.getLocal(source_local).monotype;
+    const pattern = try self.lowerPattern(module_env, pattern_idx);
+
+    const success_patterns = try self.store.addBranchPatterns(self.allocator, &.{.{
+        .pattern = pattern,
+        .degenerate = false,
+    }});
+    const fallback_pattern = try self.store.addPattern(self.allocator, .wildcard, source_mono);
+    const fallback_patterns = try self.store.addBranchPatterns(self.allocator, &.{.{
+        .pattern = fallback_pattern,
+        .degenerate = false,
+    }});
+    return self.store.addCFStmt(self.allocator, .{ .match_stmt = .{
+        .scrutinee = source_local,
+        .branches = try self.store.addMatchBranches(self.allocator, &.{
+            .{ .patterns = success_patterns, .body = on_match },
+            .{ .patterns = fallback_patterns, .body = on_fail },
+        }),
+    } });
+}
+
+fn lowerTrivialPatternBindingLocalInto(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    pattern_idx: CIR.Pattern.Idx,
+    source_local: MIR.LocalId,
+    next: MIR.CFStmtId,
+) Allocator.Error!MIR.CFStmtId {
+    const failure = try self.store.addCFStmt(self.allocator, .{ .runtime_error = .type_error });
+    return self.lowerTrivialPatternMatchLocalInto(
+        module_env,
+        pattern_idx,
+        source_local,
+        next,
+        failure,
+    );
+}
+
+fn lowerLoopBreakJump(self: *Self) Allocator.Error!MIR.CFStmtId {
+    const loop_ctx = self.active_loops.getLastOrNull() orelse std.debug.panic(
+        "statement-only MIR break appeared outside any active loop",
+        .{},
+    );
+    return self.store.addCFStmt(self.allocator, .{ .jump = .{
+        .id = loop_ctx.exit_id,
+        .args = loop_ctx.carried_locals,
+    } });
+}
+
+fn lowerTrivialWhileStmtInto(
+    self: *Self,
+    while_stmt: std.meta.TagPayload(CIR.Statement, .s_while),
+    next: MIR.CFStmtId,
+) Allocator.Error!MIR.CFStmtId {
+    const carried_locals = try self.currentBodyReassignableLocals();
+    defer self.allocator.free(carried_locals);
+
+    const carried_span = try self.store.addLocalSpan(self.allocator, carried_locals);
+    const loop_exit_id = self.freshJoinPointId();
+    const loop_head_id = self.freshJoinPointId();
+
+    try self.active_loops.append(self.allocator, .{
+        .exit_id = loop_exit_id,
+        .carried_locals = carried_span,
+    });
+    defer _ = self.active_loops.pop();
+
+    const cond_mono = try self.resolveMonotype(while_stmt.cond);
+    const cond_local = try self.freshSyntheticLocal(cond_mono, false);
+
+    const continue_jump = try self.store.addCFStmt(self.allocator, .{ .jump = .{
+        .id = loop_head_id,
+        .args = carried_span,
+    } });
+    const body_value = try self.freshSyntheticLocal(try self.resolveMonotype(while_stmt.body), false);
+    const true_body = try self.lowerTrivialRootExprInto(while_stmt.body, body_value, continue_jump);
+    const false_body = try self.store.addCFStmt(self.allocator, .{ .jump = .{
+        .id = loop_exit_id,
+        .args = carried_span,
+    } });
+
+    const tag_names = boolTagNamesForMonotype(self, cond_mono) orelse std.debug.panic(
+        "statement-only MIR while expected Bool condition monotype for expr {d}",
+        .{@intFromEnum(while_stmt.cond)},
+    );
+    const true_pattern = try self.store.addPattern(self.allocator, .{ .tag = .{
+        .name = tag_names.true_name,
+        .args = MIR.PatternSpan.empty(),
+    } }, cond_mono);
+    const wildcard_pattern = try self.store.addPattern(self.allocator, .wildcard, cond_mono);
+    const true_branch_patterns = try self.store.addBranchPatterns(self.allocator, &.{MIR.BranchPattern{
+        .pattern = true_pattern,
+        .degenerate = false,
+    }});
+    const false_branch_patterns = try self.store.addBranchPatterns(self.allocator, &.{MIR.BranchPattern{
+        .pattern = wildcard_pattern,
+        .degenerate = false,
+    }});
+    const match_stmt = try self.store.addCFStmt(self.allocator, .{ .match_stmt = .{
+        .scrutinee = cond_local,
+        .branches = try self.store.addMatchBranches(self.allocator, &.{
+            .{ .patterns = true_branch_patterns, .body = true_body },
+            .{ .patterns = false_branch_patterns, .body = false_body },
+        }),
+    } });
+    const head_body = try self.lowerTrivialRootExprInto(while_stmt.cond, cond_local, match_stmt);
+
+    const head_join = try self.store.addCFStmt(self.allocator, .{ .join = .{
+        .id = loop_head_id,
+        .params = carried_span,
+        .body = head_body,
+        .remainder = try self.store.addCFStmt(self.allocator, .{ .jump = .{
+            .id = loop_head_id,
+            .args = carried_span,
+        } }),
+    } });
+
+    return self.store.addCFStmt(self.allocator, .{ .join = .{
+        .id = loop_exit_id,
+        .params = carried_span,
+        .body = next,
+        .remainder = head_join,
+    } });
+}
+
+fn lowerTrivialBoolExprInto(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    on_true: MIR.CFStmtId,
+    on_false: MIR.CFStmtId,
+) Allocator.Error!MIR.CFStmtId {
+    const cond_mono = try self.resolveMonotype(expr_idx);
+    const cond_local = try self.freshSyntheticLocal(cond_mono, false);
+    const tag_names = boolTagNamesForMonotype(self, cond_mono) orelse std.debug.panic(
+        "statement-only MIR Bool control-flow expected Bool condition monotype for expr {d}",
+        .{@intFromEnum(expr_idx)},
+    );
+
+    const true_pattern = try self.store.addPattern(self.allocator, .{ .tag = .{
+        .name = tag_names.true_name,
+        .args = MIR.PatternSpan.empty(),
+    } }, cond_mono);
+    const wildcard_pattern = try self.store.addPattern(self.allocator, .wildcard, cond_mono);
+    const true_branch_patterns = try self.store.addBranchPatterns(self.allocator, &.{MIR.BranchPattern{
+        .pattern = true_pattern,
+        .degenerate = false,
+    }});
+    const false_branch_patterns = try self.store.addBranchPatterns(self.allocator, &.{MIR.BranchPattern{
+        .pattern = wildcard_pattern,
+        .degenerate = false,
+    }});
+    const match_stmt = try self.store.addCFStmt(self.allocator, .{ .match_stmt = .{
+        .scrutinee = cond_local,
+        .branches = try self.store.addMatchBranches(self.allocator, &.{
+            .{ .patterns = true_branch_patterns, .body = on_true },
+            .{ .patterns = false_branch_patterns, .body = on_false },
+        }),
+    } });
+    return self.lowerTrivialRootExprInto(expr_idx, cond_local, match_stmt);
+}
+
+fn lowerTrivialForStmtInto(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    for_stmt: std.meta.TagPayload(CIR.Statement, .s_for),
+    next: MIR.CFStmtId,
+) Allocator.Error!MIR.CFStmtId {
+    const carried_locals = try self.currentBodyReassignableLocals();
+    defer self.allocator.free(carried_locals);
+
+    const list_mono = try self.resolveMonotype(for_stmt.expr);
+    const item_pattern = try self.lowerPattern(module_env, for_stmt.patt);
+    const item_mono = self.store.patternTypeOf(item_pattern);
+    const u64_mono = self.store.monotype_store.primIdx(.u64);
+    const bool_mono = try self.store.monotype_store.addBoolTagUnion(
+        self.allocator,
+        self.current_module_idx,
+        self.currentCommonIdents(),
+    );
+
+    const list_local = try self.freshSyntheticLocal(list_mono, false);
+    const len_local = try self.freshSyntheticLocal(u64_mono, false);
+    const index_local = try self.freshSyntheticLocal(u64_mono, false);
+
+    const head_args = try self.allocator.alloc(MIR.LocalId, carried_locals.len + 3);
+    defer self.allocator.free(head_args);
+    @memcpy(head_args[0..carried_locals.len], carried_locals);
+    head_args[carried_locals.len] = list_local;
+    head_args[carried_locals.len + 1] = len_local;
+    head_args[carried_locals.len + 2] = index_local;
+
+    const carried_span = try self.store.addLocalSpan(self.allocator, carried_locals);
+    const head_params = try self.store.addLocalSpan(self.allocator, head_args);
+
+    const loop_exit_id = self.freshJoinPointId();
+    const loop_head_id = self.freshJoinPointId();
+
+    try self.active_loops.append(self.allocator, .{
+        .exit_id = loop_exit_id,
+        .carried_locals = carried_span,
+    });
+    defer _ = self.active_loops.pop();
+
+    const false_body = try self.store.addCFStmt(self.allocator, .{ .jump = .{
+        .id = loop_exit_id,
+        .args = carried_span,
+    } });
+
+    const one_local = try self.freshSyntheticLocal(u64_mono, false);
+    const next_index_local = try self.freshSyntheticLocal(u64_mono, false);
+    const item_local = try self.freshSyntheticLocal(item_mono, false);
+    const body_value = try self.freshSyntheticLocal(try self.resolveMonotype(for_stmt.body), false);
+    const loop_back_args = try self.allocator.alloc(MIR.LocalId, carried_locals.len + 3);
+    defer self.allocator.free(loop_back_args);
+    @memcpy(loop_back_args[0..carried_locals.len], carried_locals);
+    loop_back_args[carried_locals.len] = list_local;
+    loop_back_args[carried_locals.len + 1] = len_local;
+    loop_back_args[carried_locals.len + 2] = next_index_local;
+
+    const loop_back = try self.store.addCFStmt(self.allocator, .{ .jump = .{
+        .id = loop_head_id,
+        .args = try self.store.addLocalSpan(self.allocator, loop_back_args),
+    } });
+    const increment_stmt = try self.store.addCFStmt(self.allocator, .{ .assign_low_level = .{
+        .target = next_index_local,
+        .op = .num_plus,
+        .args = try self.store.addLocalSpan(self.allocator, &.{ index_local, one_local }),
+        .next = loop_back,
+    } });
+    const body_stmt = try self.lowerTrivialRootExprInto(for_stmt.body, body_value, increment_stmt);
+    const bind_item = try self.lowerTrivialPatternBindingLocalInto(module_env, for_stmt.patt, item_local, body_stmt);
+    const get_item = try self.store.addCFStmt(self.allocator, .{ .assign_low_level = .{
+        .target = item_local,
+        .op = .list_get_unsafe,
+        .args = try self.store.addLocalSpan(self.allocator, &.{ list_local, index_local }),
+        .next = bind_item,
+    } });
+    const true_body = try self.store.addCFStmt(self.allocator, .{ .assign_literal = .{
+        .target = one_local,
+        .literal = .{ .int = .{ .bytes = @bitCast(@as(i128, 1)), .kind = .i128 } },
+        .next = get_item,
+    } });
+
+    const cond_local = try self.freshSyntheticLocal(bool_mono, false);
+    const tag_names = boolTagNamesForMonotype(self, bool_mono) orelse std.debug.panic(
+        "statement-only MIR for-loop expected Bool condition monotype",
+        .{},
+    );
+    const true_pattern = try self.store.addPattern(self.allocator, .{ .tag = .{
+        .name = tag_names.true_name,
+        .args = MIR.PatternSpan.empty(),
+    } }, bool_mono);
+    const wildcard_pattern = try self.store.addPattern(self.allocator, .wildcard, bool_mono);
+    const true_branch_patterns = try self.store.addBranchPatterns(self.allocator, &.{MIR.BranchPattern{
+        .pattern = true_pattern,
+        .degenerate = false,
+    }});
+    const false_branch_patterns = try self.store.addBranchPatterns(self.allocator, &.{MIR.BranchPattern{
+        .pattern = wildcard_pattern,
+        .degenerate = false,
+    }});
+    const match_stmt = try self.store.addCFStmt(self.allocator, .{ .match_stmt = .{
+        .scrutinee = cond_local,
+        .branches = try self.store.addMatchBranches(self.allocator, &.{
+            .{ .patterns = true_branch_patterns, .body = true_body },
+            .{ .patterns = false_branch_patterns, .body = false_body },
+        }),
+    } });
+    const cond_stmt = try self.store.addCFStmt(self.allocator, .{ .assign_low_level = .{
+        .target = cond_local,
+        .op = .num_is_lt,
+        .args = try self.store.addLocalSpan(self.allocator, &.{ index_local, len_local }),
+        .next = match_stmt,
+    } });
+
+    const initial_jump = try self.store.addCFStmt(self.allocator, .{ .jump = .{
+        .id = loop_head_id,
+        .args = head_params,
+    } });
+    const init_index = try self.store.addCFStmt(self.allocator, .{ .assign_literal = .{
+        .target = index_local,
+        .literal = .{ .int = .{ .bytes = @bitCast(@as(i128, 0)), .kind = .i128 } },
+        .next = initial_jump,
+    } });
+    const init_len = try self.store.addCFStmt(self.allocator, .{ .assign_low_level = .{
+        .target = len_local,
+        .op = .list_len,
+        .args = try self.store.addLocalSpan(self.allocator, &.{list_local}),
+        .next = init_index,
+    } });
+    const init_list = try self.lowerTrivialRootExprInto(for_stmt.expr, list_local, init_len);
+
+    const head_join = try self.store.addCFStmt(self.allocator, .{ .join = .{
+        .id = loop_head_id,
+        .params = head_params,
+        .body = cond_stmt,
+        .remainder = init_list,
+    } });
+
+    return self.store.addCFStmt(self.allocator, .{ .join = .{
+        .id = loop_exit_id,
+        .params = carried_span,
+        .body = next,
+        .remainder = head_join,
+    } });
+}
+
+fn lowerTrivialMatchInto(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    match_expr: CIR.Expr.Match,
+    target: MIR.LocalId,
+    next: MIR.CFStmtId,
+) Allocator.Error!MIR.CFStmtId {
+    const cond_mono = try self.resolveMonotype(match_expr.cond);
+    const result_mono = self.store.getLocal(target).monotype;
+    const cond_local = try self.freshSyntheticLocal(cond_mono, false);
+    const join_id = self.freshJoinPointId();
+    const join_params = try self.store.addLocalSpan(self.allocator, &.{target});
+
+    const branch_indices = module_env.store.sliceMatchBranches(match_expr.branches);
+    for (branch_indices) |branch_idx| {
+        const cir_branch = module_env.store.getMatchBranch(branch_idx);
+        const branch_pattern_indices = module_env.store.sliceMatchBranchPatterns(cir_branch.patterns);
+        const representative_pattern_idx = if (branch_pattern_indices.len > 0)
+            module_env.store.getMatchBranchPattern(branch_pattern_indices[0]).pattern
+        else
+            null;
+
+        for (branch_pattern_indices, 0..) |branch_pattern_idx, pattern_i| {
+            const branch_pattern = module_env.store.getMatchBranchPattern(branch_pattern_idx);
+            if (pattern_i != 0) {
+                if (representative_pattern_idx) |representative| {
+                    try self.alignAlternativePatternSymbols(module_env, representative, branch_pattern.pattern);
+                }
+            }
+            try self.bindPatternMonotypes(module_env, branch_pattern.pattern, cond_mono);
+            _ = try self.lowerPattern(module_env, branch_pattern.pattern);
+        }
+    }
+
+    const match_failure = try self.store.addCFStmt(self.allocator, .{ .runtime_error = .type_error });
+    const branch_degenerate_failure = try self.store.addCFStmt(self.allocator, .{ .runtime_error = .type_error });
+
+    var entry = match_failure;
+    var branch_i = branch_indices.len;
+    while (branch_i > 0) {
+        branch_i -= 1;
+        const cir_branch = module_env.store.getMatchBranch(branch_indices[branch_i]);
+        const branch_fallthrough = entry;
+        const branch_value_local = try self.freshSyntheticLocal(result_mono, false);
+        const branch_value = try self.lowerTrivialRootExprInto(
+            cir_branch.value,
+            branch_value_local,
+            try self.store.addCFStmt(self.allocator, .{ .jump = .{
+                .id = join_id,
+                .args = try self.store.addLocalSpan(self.allocator, &.{branch_value_local}),
+            } }),
+        );
+        const guarded_body = if (cir_branch.guard) |guard_idx|
+            try self.lowerTrivialBoolExprInto(guard_idx, branch_value, branch_fallthrough)
+        else
+            branch_value;
+
+        const branch_pattern_indices = module_env.store.sliceMatchBranchPatterns(cir_branch.patterns);
+        var branch_entry = branch_fallthrough;
+        var pattern_i = branch_pattern_indices.len;
+        while (pattern_i > 0) {
+            pattern_i -= 1;
+            const branch_pattern = module_env.store.getMatchBranchPattern(branch_pattern_indices[pattern_i]);
+            branch_entry = try self.lowerTrivialPatternMatchLocalInto(
+                module_env,
+                branch_pattern.pattern,
+                cond_local,
+                if (branch_pattern.degenerate) branch_degenerate_failure else guarded_body,
+                branch_entry,
+            );
+        }
+
+        if (branch_pattern_indices.len == 0) {
+            branch_entry = guarded_body;
+        }
+        entry = branch_entry;
+    }
+
+    return self.store.addCFStmt(self.allocator, .{ .join = .{
+        .id = join_id,
+        .params = join_params,
+        .body = next,
+        .remainder = try self.lowerTrivialRootExprInto(match_expr.cond, cond_local, entry),
+    } });
+}
+
 fn lowerTrivialBlockStmtInto(
     self: *Self,
     module_env: *const ModuleEnv,
@@ -5452,13 +5936,9 @@ fn lowerTrivialBlockStmtInto(
         .s_type_anno,
         .s_type_var_alias,
         => next,
-        .s_for,
-        .s_while,
-        .s_break,
-        => std.debug.panic(
-            "statement-only MIR block lowering is not implemented yet for CIR statement {s}",
-            .{@tagName(stmt)},
-        ),
+        .s_for => |s_for| self.lowerTrivialForStmtInto(module_env, s_for, next),
+        .s_while => |s_while| self.lowerTrivialWhileStmtInto(s_while, next),
+        .s_break => self.lowerLoopBreakJump(),
     };
 }
 
@@ -5839,7 +6319,8 @@ fn lowerTrivialRootExprInto(
         .e_binop => |binop| self.lowerTrivialBinopInto(binop, target, next),
         .e_unary_minus => |um| self.lowerTrivialUnaryMinusInto(um, target, next),
         .e_call => |call| self.lowerTrivialCallInto(module_env, expr_idx, call, target, next),
-        .e_if => |if_expr| self.lowerTrivialIfInto(
+        .e_match => |match_expr| self.lowerTrivialMatchInto(module_env, match_expr, target, next),
+        .e_if => |if_expr| self.lowerTrivialBoolBranchChainInto(
             module_env.store.sliceIfBranches(if_expr.branches),
             if_expr.final_else,
             target,
