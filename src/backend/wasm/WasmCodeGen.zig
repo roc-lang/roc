@@ -4309,6 +4309,15 @@ fn listElemLayout(self: *Self, list_layout_idx: layout.Idx) layout.Idx {
     };
 }
 
+fn runtimeRepresentationLayoutIdx(self: *const Self, layout_idx: layout.Idx) layout.Idx {
+    const ls = self.getLayoutStore();
+    const layout_val = ls.getLayout(layout_idx);
+    return switch (layout_val.tag) {
+        .closure => self.runtimeRepresentationLayoutIdx(layout_val.data.closure.captures_layout_idx),
+        else => layout_idx,
+    };
+}
+
 /// Generate code for a function call.
 /// In the new pipeline, MIR→LIR generates all closure dispatch as generic LIR
 /// constructs (discriminant_switch, tag_payload_access, direct calls). The backend
@@ -4662,7 +4671,7 @@ fn emitZeroInit(self: *Self, base_local: u32, byte_count: u32) Allocator.Error!v
 /// Allocates stack memory, stores each field in layout order, returns pointer.
 fn generateStruct(self: *Self, r: anytype) Allocator.Error!void {
     const ls = self.getLayoutStore();
-    const l = ls.getLayout(r.struct_layout);
+    const l = ls.getLayout(self.runtimeRepresentationLayoutIdx(r.struct_layout));
     // Empty structs (ZST) have scalar layout, not struct_ — push dummy pointer
     if (l.tag != .struct_) {
         self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;

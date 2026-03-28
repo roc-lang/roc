@@ -574,6 +574,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Map from Symbol to value location (register or stack slot)
         symbol_locations: std.AutoHashMap(u64, ValueLocation),
 
+        /// Current proc argument span, used only for debug invariant reporting.
+        current_proc_args: ?LocalRefSpan = null,
+
         /// Map from JoinPointId to code offset (for recursive closure jumps)
         join_points: std.AutoHashMap(u32, usize),
 
@@ -628,6 +631,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Proc currently being compiled, for debug-time invariant reporting.
         current_proc_name: ?Symbol = null,
+
+        /// Statement currently being generated, for debug-time invariant reporting.
+        current_stmt_id: ?CFStmtId = null,
 
         /// Stack slot where the hidden return pointer is saved (for return-by-pointer
         /// convention used when the return type exceeds the register limit).
@@ -925,6 +931,49 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 list.deinit(self.allocator);
             }
             map.deinit();
+        }
+
+        const StmtEnvSnapshot = struct {
+            symbol_locations: std.AutoHashMap(u64, ValueLocation),
+            join_points: std.AutoHashMap(u32, usize),
+            join_point_jumps: std.AutoHashMap(u32, std.ArrayList(JumpRecord)),
+            join_point_params: std.AutoHashMap(u32, LocalRefSpan),
+            loop_break_patches: std.ArrayList(usize),
+
+            fn deinit(self: *StmtEnvSnapshot, owner: *Self) void {
+                self.symbol_locations.deinit();
+                self.join_points.deinit();
+                owner.deinitJoinPointJumpsMap(&self.join_point_jumps);
+                self.join_point_params.deinit();
+                self.loop_break_patches.deinit(owner.allocator);
+            }
+        };
+
+        fn captureStmtEnv(self: *Self) Allocator.Error!StmtEnvSnapshot {
+            return .{
+                .symbol_locations = try self.symbol_locations.clone(),
+                .join_points = try self.join_points.clone(),
+                .join_point_jumps = try self.cloneJoinPointJumpsMap(&self.join_point_jumps),
+                .join_point_params = try self.join_point_params.clone(),
+                .loop_break_patches = try self.loop_break_patches.clone(self.allocator),
+            };
+        }
+
+        fn restoreStmtEnv(self: *Self, snapshot: *const StmtEnvSnapshot) Allocator.Error!void {
+            self.symbol_locations.deinit();
+            self.symbol_locations = try snapshot.symbol_locations.clone();
+
+            self.join_points.deinit();
+            self.join_points = try snapshot.join_points.clone();
+
+            self.deinitJoinPointJumpsMap(&self.join_point_jumps);
+            self.join_point_jumps = try self.cloneJoinPointJumpsMap(&snapshot.join_point_jumps);
+
+            self.join_point_params.deinit();
+            self.join_point_params = try snapshot.join_point_params.clone();
+
+            self.loop_break_patches.deinit(self.allocator);
+            self.loop_break_patches = try snapshot.loop_break_patches.clone(self.allocator);
         }
 
         fn clearFunctionControlFlowState(self: *Self) void {
@@ -4250,21 +4299,495 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             if (std.debug.runtime_safety) {
+                const definition = self.findSymbolDefinition(symbol);
+                if (self.current_stmt_id) |stmt_id| {
+                    self.debugPrintStmtSummary(stmt_id);
+                }
+                if (definition.kind == .stmt) {
+                    self.debugPrintStmtSummary(@enumFromInt(definition.id));
+                }
+                self.debugPrintSymbolMentions(symbol);
+                var symbol_is_proc_arg = false;
+                if (self.current_proc_args) |args_span| {
+                    for (self.store.getLocalRefs(args_span)) |arg| {
+                        if (arg.symbol == symbol) {
+                            symbol_is_proc_arg = true;
+                            break;
+                        }
+                    }
+                }
                 std.debug.panic(
-                    "generateLookup: missing symbol location for symbol={d} layout={d} current_proc={d}",
+                    "generateLookup: missing symbol location for symbol={d} layout={d} current_proc={d} current_stmt={d} current_stmt_tag={s} is_proc_arg={any} definition_kind={s} definition_id={d}",
                     .{
                         symbol.raw(),
                         @intFromEnum(layout_idx),
                         if (self.current_proc_name) |sym| sym.raw() else std.math.maxInt(u64),
+                        if (self.current_stmt_id) |stmt_id| @intFromEnum(stmt_id) else std.math.maxInt(u32),
+                        if (self.current_stmt_id) |stmt_id|
+                            @tagName(self.store.getCFStmt(stmt_id))
+                        else
+                            "none",
+                        symbol_is_proc_arg,
+                        @tagName(definition.kind),
+                        definition.id,
                     },
                 );
             }
             unreachable;
         }
 
+        const SymbolDefinition = struct {
+            kind: enum {
+                stmt,
+                join_param,
+                proc_arg,
+                missing,
+            },
+            id: u64,
+        };
+
+        fn findSymbolDefinition(self: *Self, symbol: Symbol) SymbolDefinition {
+            for (self.store.cf_stmts.items, 0..) |stmt, stmt_index| {
+                switch (stmt) {
+                    .assign_ref => |assign| if (assign.target.symbol == symbol) return .{ .kind = .stmt, .id = stmt_index },
+                    .assign_literal => |assign| if (assign.target.symbol == symbol) return .{ .kind = .stmt, .id = stmt_index },
+                    .assign_call => |assign| if (assign.target.symbol == symbol) return .{ .kind = .stmt, .id = stmt_index },
+                    .assign_low_level => |assign| if (assign.target.symbol == symbol) return .{ .kind = .stmt, .id = stmt_index },
+                    .assign_list => |assign| if (assign.target.symbol == symbol) return .{ .kind = .stmt, .id = stmt_index },
+                    .assign_struct => |assign| if (assign.target.symbol == symbol) return .{ .kind = .stmt, .id = stmt_index },
+                    .assign_tag => |assign| if (assign.target.symbol == symbol) return .{ .kind = .stmt, .id = stmt_index },
+                    .join => |join| {
+                        for (self.store.getLocalRefs(join.params)) |param| {
+                            if (param.symbol == symbol) return .{ .kind = .join_param, .id = stmt_index };
+                        }
+                    },
+                    else => {},
+                }
+            }
+            for (self.store.proc_specs.items, 0..) |proc_spec, proc_index| {
+                for (self.store.getLocalRefs(proc_spec.args)) |arg| {
+                    if (arg.symbol == symbol) return .{ .kind = .proc_arg, .id = proc_index };
+                }
+            }
+            return .{ .kind = .missing, .id = std.math.maxInt(u64) };
+        }
+
+        fn debugPrintSymbolMentions(self: *Self, symbol: Symbol) void {
+            for (self.store.cf_stmts.items, 0..) |stmt, stmt_index| {
+                switch (stmt) {
+                    .assign_ref => |assign| {
+                        if (assign.target.symbol == symbol) {
+                            std.debug.print("LirCodeGen symbol {d}: stmt {d} defines via assign_ref\n", .{ symbol.raw(), stmt_index });
+                        }
+                        if (refOpSource(assign.op).symbol == symbol) {
+                            std.debug.print("LirCodeGen symbol {d}: stmt {d} uses via assign_ref\n", .{ symbol.raw(), stmt_index });
+                        }
+                    },
+                    .assign_literal => |assign| if (assign.target.symbol == symbol) {
+                        std.debug.print("LirCodeGen symbol {d}: stmt {d} defines via assign_literal\n", .{ symbol.raw(), stmt_index });
+                    },
+                    .assign_call => |assign| {
+                        if (assign.target.symbol == symbol) {
+                            std.debug.print("LirCodeGen symbol {d}: stmt {d} defines via assign_call\n", .{ symbol.raw(), stmt_index });
+                        }
+                        for (self.store.getLocalRefs(assign.args)) |arg| {
+                            if (arg.symbol == symbol) {
+                                std.debug.print("LirCodeGen symbol {d}: stmt {d} uses via assign_call arg\n", .{ symbol.raw(), stmt_index });
+                            }
+                        }
+                    },
+                    .assign_low_level => |assign| {
+                        if (assign.target.symbol == symbol) {
+                            std.debug.print("LirCodeGen symbol {d}: stmt {d} defines via assign_low_level {s}\n", .{ symbol.raw(), stmt_index, @tagName(assign.op) });
+                        }
+                        for (self.store.getLocalRefs(assign.args)) |arg| {
+                            if (arg.symbol == symbol) {
+                                std.debug.print("LirCodeGen symbol {d}: stmt {d} uses via assign_low_level arg {s}\n", .{ symbol.raw(), stmt_index, @tagName(assign.op) });
+                            }
+                        }
+                    },
+                    .assign_list => |assign| {
+                        if (assign.target.symbol == symbol) {
+                            std.debug.print("LirCodeGen symbol {d}: stmt {d} defines via assign_list\n", .{ symbol.raw(), stmt_index });
+                        }
+                        for (self.store.getLocalRefs(assign.elems)) |elem| {
+                            if (elem.symbol == symbol) {
+                                std.debug.print("LirCodeGen symbol {d}: stmt {d} uses via assign_list elem\n", .{ symbol.raw(), stmt_index });
+                            }
+                        }
+                    },
+                    .assign_struct => |assign| {
+                        if (assign.target.symbol == symbol) {
+                            std.debug.print("LirCodeGen symbol {d}: stmt {d} defines via assign_struct\n", .{ symbol.raw(), stmt_index });
+                        }
+                        for (self.store.getLocalRefs(assign.fields)) |field| {
+                            if (field.symbol == symbol) {
+                                std.debug.print("LirCodeGen symbol {d}: stmt {d} uses via assign_struct field\n", .{ symbol.raw(), stmt_index });
+                            }
+                        }
+                    },
+                    .assign_tag => |assign| {
+                        if (assign.target.symbol == symbol) {
+                            std.debug.print("LirCodeGen symbol {d}: stmt {d} defines via assign_tag\n", .{ symbol.raw(), stmt_index });
+                        }
+                        for (self.store.getLocalRefs(assign.args)) |arg| {
+                            if (arg.symbol == symbol) {
+                                std.debug.print("LirCodeGen symbol {d}: stmt {d} uses via assign_tag arg\n", .{ symbol.raw(), stmt_index });
+                            }
+                        }
+                    },
+                    .incref => |inc| if (inc.value.symbol == symbol) {
+                        std.debug.print("LirCodeGen symbol {d}: stmt {d} uses via incref\n", .{ symbol.raw(), stmt_index });
+                    },
+                    .decref => |dec| if (dec.value.symbol == symbol) {
+                        std.debug.print("LirCodeGen symbol {d}: stmt {d} uses via decref\n", .{ symbol.raw(), stmt_index });
+                    },
+                    .free => |free_stmt| if (free_stmt.value.symbol == symbol) {
+                        std.debug.print("LirCodeGen symbol {d}: stmt {d} uses via free\n", .{ symbol.raw(), stmt_index });
+                    },
+                    .switch_stmt => |sw| if (sw.cond.symbol == symbol) {
+                        std.debug.print("LirCodeGen symbol {d}: stmt {d} uses via switch cond\n", .{ symbol.raw(), stmt_index });
+                    },
+                    .jump => |jump| {
+                        for (self.store.getLocalRefs(jump.args)) |arg| {
+                            if (arg.symbol == symbol) {
+                                std.debug.print("LirCodeGen symbol {d}: stmt {d} uses via jump arg\n", .{ symbol.raw(), stmt_index });
+                            }
+                        }
+                    },
+                    .ret => |ret_stmt| if (ret_stmt.value.symbol == symbol) {
+                        std.debug.print("LirCodeGen symbol {d}: stmt {d} uses via ret\n", .{ symbol.raw(), stmt_index });
+                    },
+                    .join => |join| {
+                        for (self.store.getLocalRefs(join.params)) |param| {
+                            if (param.symbol == symbol) {
+                                std.debug.print("LirCodeGen symbol {d}: stmt {d} defines via join param\n", .{ symbol.raw(), stmt_index });
+                            }
+                        }
+                    },
+                    else => {},
+                }
+            }
+        }
+
+        fn debugPrintStmtSummary(self: *Self, stmt_id: CFStmtId) void {
+            switch (self.store.getCFStmt(stmt_id)) {
+                .assign_ref => |assign| std.debug.print(
+                    "LirCodeGen stmt {d}: assign_ref target={d} source={d} next={d}\n",
+                    .{ @intFromEnum(stmt_id), assign.target.symbol.raw(), refOpSource(assign.op).symbol.raw(), @intFromEnum(assign.next) },
+                ),
+                .assign_literal => |assign| std.debug.print(
+                    "LirCodeGen stmt {d}: assign_literal target={d} next={d}\n",
+                    .{ @intFromEnum(stmt_id), assign.target.symbol.raw(), @intFromEnum(assign.next) },
+                ),
+                .assign_call => |assign| std.debug.print(
+                    "LirCodeGen stmt {d}: assign_call target={d} next={d}\n",
+                    .{ @intFromEnum(stmt_id), assign.target.symbol.raw(), @intFromEnum(assign.next) },
+                ),
+                .assign_low_level => |assign| std.debug.print(
+                    "LirCodeGen stmt {d}: assign_low_level target={d} op={s} next={d}\n",
+                    .{ @intFromEnum(stmt_id), assign.target.symbol.raw(), @tagName(assign.op), @intFromEnum(assign.next) },
+                ),
+                .assign_list => |assign| std.debug.print(
+                    "LirCodeGen stmt {d}: assign_list target={d} next={d}\n",
+                    .{ @intFromEnum(stmt_id), assign.target.symbol.raw(), @intFromEnum(assign.next) },
+                ),
+                .assign_struct => |assign| std.debug.print(
+                    "LirCodeGen stmt {d}: assign_struct target={d} next={d}\n",
+                    .{ @intFromEnum(stmt_id), assign.target.symbol.raw(), @intFromEnum(assign.next) },
+                ),
+                .assign_tag => |assign| std.debug.print(
+                    "LirCodeGen stmt {d}: assign_tag target={d} next={d}\n",
+                    .{ @intFromEnum(stmt_id), assign.target.symbol.raw(), @intFromEnum(assign.next) },
+                ),
+                .switch_stmt => |sw| std.debug.print(
+                    "LirCodeGen stmt {d}: switch cond={d} default={d}\n",
+                    .{ @intFromEnum(stmt_id), sw.cond.symbol.raw(), @intFromEnum(sw.default_branch) },
+                ),
+                .borrow_scope => |scope| std.debug.print(
+                    "LirCodeGen stmt {d}: borrow_scope id={d} body={d} remainder={d}\n",
+                    .{ @intFromEnum(stmt_id), @intFromEnum(scope.id), @intFromEnum(scope.body), @intFromEnum(scope.remainder) },
+                ),
+                .join => |join| std.debug.print(
+                    "LirCodeGen stmt {d}: join body={d} remainder={d}\n",
+                    .{ @intFromEnum(stmt_id), @intFromEnum(join.body), @intFromEnum(join.remainder) },
+                ),
+                .jump => |jump| std.debug.print(
+                    "LirCodeGen stmt {d}: jump target={d}\n",
+                    .{ @intFromEnum(stmt_id), @intFromEnum(jump.target) },
+                ),
+                .ret => |ret_stmt| std.debug.print(
+                    "LirCodeGen stmt {d}: ret value={d}\n",
+                    .{ @intFromEnum(stmt_id), ret_stmt.value.symbol.raw() },
+                ),
+                else => std.debug.print(
+                    "LirCodeGen stmt {d}: {s}\n",
+                    .{ @intFromEnum(stmt_id), @tagName(self.store.getCFStmt(stmt_id)) },
+                ),
+            }
+        }
+
         fn bindAssignedLocal(self: *Self, local_ref: LocalRef, value_loc: ValueLocation) Allocator.Error!void {
+            const symbol_key: u64 = @bitCast(local_ref.symbol);
+            if (self.symbol_locations.get(symbol_key)) |stable_loc| {
+                try self.storeValueIntoStableLocation(stable_loc, value_loc, local_ref.layout_idx);
+                return;
+            }
+
             const stable_loc = try self.materializeValueToStackForLayout(value_loc, local_ref.layout_idx);
-            try self.symbol_locations.put(@bitCast(local_ref.symbol), stable_loc);
+            try self.symbol_locations.put(symbol_key, stable_loc);
+        }
+
+        fn storeValueIntoStableLocation(
+            self: *Self,
+            stable_loc: ValueLocation,
+            value_loc: ValueLocation,
+            layout_idx: layout.Idx,
+        ) Allocator.Error!void {
+            const normalized = self.coerceImmediateToLayout(value_loc, layout_idx);
+            if (std.meta.eql(normalized, stable_loc)) return;
+
+            const size = self.getLayoutSize(layout_idx);
+            switch (stable_loc) {
+                .stack => |stack_loc| try self.copyBytesToStackOffset(stack_loc.offset, normalized, size),
+                .stack_i128 => |offset| try self.copyBytesToStackOffset(offset, normalized, 16),
+                .stack_str => |offset| try self.copyBytesToStackOffset(offset, normalized, roc_str_size),
+                .list_stack => |list_loc| try self.copyBytesToStackOffset(list_loc.struct_offset, normalized, roc_list_size),
+                else => std.debug.panic(
+                    "LirCodeGen invariant violated: assigned locals must use stack-backed stable locations, found {s}",
+                    .{@tagName(stable_loc)},
+                ),
+            }
+        }
+
+        fn ensureStableLocationForLocal(self: *Self, local: LocalRef) Allocator.Error!void {
+            const symbol_key: u64 = @bitCast(local.symbol);
+            if (self.symbol_locations.contains(symbol_key)) return;
+
+            const size = self.getLayoutSize(local.layout_idx);
+            const stable_loc = if (size == 0)
+                self.stackLocationForLayout(local.layout_idx, 0)
+            else
+                self.stackLocationForLayout(local.layout_idx, self.codegen.allocStackSlot(size));
+            try self.symbol_locations.put(symbol_key, stable_loc);
+        }
+
+        fn collectStmtReadLocals(
+            self: *Self,
+            stmt_id: CFStmtId,
+            locals: *std.AutoHashMap(u64, LocalRef),
+            visited: *std.AutoHashMap(u32, void),
+        ) Allocator.Error!void {
+            const gop = try visited.getOrPut(@intFromEnum(stmt_id));
+            if (gop.found_existing) return;
+
+            switch (self.store.getCFStmt(stmt_id)) {
+                .assign_ref => |assign| {
+                    try locals.put(@bitCast(refOpSource(assign.op).symbol), refOpSource(assign.op));
+                    try self.collectStmtReadLocals(assign.next, locals, visited);
+                },
+                .assign_literal => |assign| try self.collectStmtReadLocals(assign.next, locals, visited),
+                .assign_call => |assign| {
+                    for (self.store.getLocalRefs(assign.args)) |arg| {
+                        try locals.put(@bitCast(arg.symbol), arg);
+                    }
+                    try self.collectStmtReadLocals(assign.next, locals, visited);
+                },
+                .assign_low_level => |assign| {
+                    for (self.store.getLocalRefs(assign.args)) |arg| {
+                        try locals.put(@bitCast(arg.symbol), arg);
+                    }
+                    try self.collectStmtReadLocals(assign.next, locals, visited);
+                },
+                .assign_list => |assign| {
+                    for (self.store.getLocalRefs(assign.elems)) |elem| {
+                        try locals.put(@bitCast(elem.symbol), elem);
+                    }
+                    try self.collectStmtReadLocals(assign.next, locals, visited);
+                },
+                .assign_struct => |assign| {
+                    for (self.store.getLocalRefs(assign.fields)) |field| {
+                        try locals.put(@bitCast(field.symbol), field);
+                    }
+                    try self.collectStmtReadLocals(assign.next, locals, visited);
+                },
+                .assign_tag => |assign| {
+                    for (self.store.getLocalRefs(assign.args)) |arg| {
+                        try locals.put(@bitCast(arg.symbol), arg);
+                    }
+                    try self.collectStmtReadLocals(assign.next, locals, visited);
+                },
+                .runtime_error => {},
+                .incref => |inc| {
+                    try locals.put(@bitCast(inc.value.symbol), inc.value);
+                    try self.collectStmtReadLocals(inc.next, locals, visited);
+                },
+                .decref => |dec| {
+                    try locals.put(@bitCast(dec.value.symbol), dec.value);
+                    try self.collectStmtReadLocals(dec.next, locals, visited);
+                },
+                .free => |free_stmt| {
+                    try locals.put(@bitCast(free_stmt.value.symbol), free_stmt.value);
+                    try self.collectStmtReadLocals(free_stmt.next, locals, visited);
+                },
+                .switch_stmt => |sw| {
+                    try locals.put(@bitCast(sw.cond.symbol), sw.cond);
+                    for (self.store.getCFSwitchBranches(sw.branches)) |branch| {
+                        try self.collectStmtReadLocals(branch.body, locals, visited);
+                    }
+                    try self.collectStmtReadLocals(sw.default_branch, locals, visited);
+                },
+                .borrow_scope => |scope| {
+                    try self.collectStmtReadLocals(scope.body, locals, visited);
+                    try self.collectStmtReadLocals(scope.remainder, locals, visited);
+                },
+                .scope_exit => {},
+                .join => |join| {
+                    try self.collectStmtReadLocals(join.body, locals, visited);
+                    try self.collectStmtReadLocals(join.remainder, locals, visited);
+                },
+                .jump => |jump| {
+                    for (self.store.getLocalRefs(jump.args)) |arg| {
+                        try locals.put(@bitCast(arg.symbol), arg);
+                    }
+                },
+                .ret => |ret_stmt| try locals.put(@bitCast(ret_stmt.value.symbol), ret_stmt.value),
+                .crash => {},
+            }
+        }
+
+        fn collectStmtLocals(
+            self: *Self,
+            stmt_id: CFStmtId,
+            locals: *std.AutoHashMap(u64, LocalRef),
+            visited: *std.AutoHashMap(u32, void),
+        ) Allocator.Error!void {
+            const gop = try visited.getOrPut(@intFromEnum(stmt_id));
+            if (gop.found_existing) return;
+
+            switch (self.store.getCFStmt(stmt_id)) {
+                .assign_ref => |assign| {
+                    try locals.put(@bitCast(assign.target.symbol), assign.target);
+                    try locals.put(@bitCast(refOpSource(assign.op).symbol), refOpSource(assign.op));
+                    try self.collectStmtLocals(assign.next, locals, visited);
+                },
+                .assign_literal => |assign| {
+                    try locals.put(@bitCast(assign.target.symbol), assign.target);
+                    try self.collectStmtLocals(assign.next, locals, visited);
+                },
+                .assign_call => |assign| {
+                    try locals.put(@bitCast(assign.target.symbol), assign.target);
+                    for (self.store.getLocalRefs(assign.args)) |arg| {
+                        try locals.put(@bitCast(arg.symbol), arg);
+                    }
+                    try self.collectStmtLocals(assign.next, locals, visited);
+                },
+                .assign_low_level => |assign| {
+                    try locals.put(@bitCast(assign.target.symbol), assign.target);
+                    for (self.store.getLocalRefs(assign.args)) |arg| {
+                        try locals.put(@bitCast(arg.symbol), arg);
+                    }
+                    try self.collectStmtLocals(assign.next, locals, visited);
+                },
+                .assign_list => |assign| {
+                    try locals.put(@bitCast(assign.target.symbol), assign.target);
+                    for (self.store.getLocalRefs(assign.elems)) |elem| {
+                        try locals.put(@bitCast(elem.symbol), elem);
+                    }
+                    try self.collectStmtLocals(assign.next, locals, visited);
+                },
+                .assign_struct => |assign| {
+                    try locals.put(@bitCast(assign.target.symbol), assign.target);
+                    for (self.store.getLocalRefs(assign.fields)) |field| {
+                        try locals.put(@bitCast(field.symbol), field);
+                    }
+                    try self.collectStmtLocals(assign.next, locals, visited);
+                },
+                .assign_tag => |assign| {
+                    try locals.put(@bitCast(assign.target.symbol), assign.target);
+                    for (self.store.getLocalRefs(assign.args)) |arg| {
+                        try locals.put(@bitCast(arg.symbol), arg);
+                    }
+                    try self.collectStmtLocals(assign.next, locals, visited);
+                },
+                .runtime_error => {},
+                .incref => |inc| {
+                    try locals.put(@bitCast(inc.value.symbol), inc.value);
+                    try self.collectStmtLocals(inc.next, locals, visited);
+                },
+                .decref => |dec| {
+                    try locals.put(@bitCast(dec.value.symbol), dec.value);
+                    try self.collectStmtLocals(dec.next, locals, visited);
+                },
+                .free => |free_stmt| {
+                    try locals.put(@bitCast(free_stmt.value.symbol), free_stmt.value);
+                    try self.collectStmtLocals(free_stmt.next, locals, visited);
+                },
+                .switch_stmt => |sw| {
+                    try locals.put(@bitCast(sw.cond.symbol), sw.cond);
+                    for (self.store.getCFSwitchBranches(sw.branches)) |branch| {
+                        try self.collectStmtLocals(branch.body, locals, visited);
+                    }
+                    try self.collectStmtLocals(sw.default_branch, locals, visited);
+                },
+                .borrow_scope => |scope| {
+                    try self.collectStmtLocals(scope.body, locals, visited);
+                    try self.collectStmtLocals(scope.remainder, locals, visited);
+                },
+                .scope_exit => {},
+                .join => |join| {
+                    for (self.store.getLocalRefs(join.params)) |param| {
+                        try locals.put(@bitCast(param.symbol), param);
+                    }
+                    try self.collectStmtLocals(join.body, locals, visited);
+                    try self.collectStmtLocals(join.remainder, locals, visited);
+                },
+                .jump => |jump| {
+                    for (self.store.getLocalRefs(jump.args)) |arg| {
+                        try locals.put(@bitCast(arg.symbol), arg);
+                    }
+                },
+                .ret => |ret_stmt| try locals.put(@bitCast(ret_stmt.value.symbol), ret_stmt.value),
+                .crash => {},
+            }
+        }
+
+        fn refOpSource(op: lir.RefOp) LocalRef {
+            return switch (op) {
+                .local => |local| local,
+                .discriminant => |disc| disc.source,
+                .field => |field| field.source,
+                .tag_payload => |payload| payload.source,
+                .nominal => |nominal| nominal.backing_ref,
+            };
+        }
+
+        fn ensureStableLocationsForStmtReads(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
+            var locals = std.AutoHashMap(u64, LocalRef).init(self.allocator);
+            defer locals.deinit();
+            var visited = std.AutoHashMap(u32, void).init(self.allocator);
+            defer visited.deinit();
+
+            try self.collectStmtReadLocals(stmt_id, &locals, &visited);
+
+            var it = locals.valueIterator();
+            while (it.next()) |local| {
+                try self.ensureStableLocationForLocal(local.*);
+            }
+        }
+
+        fn ensureStableLocationsForStmtLocals(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
+            var locals = std.AutoHashMap(u64, LocalRef).init(self.allocator);
+            defer locals.deinit();
+            var visited = std.AutoHashMap(u32, void).init(self.allocator);
+            defer visited.deinit();
+
+            try self.collectStmtLocals(stmt_id, &locals, &visited);
+
+            var it = locals.valueIterator();
+            while (it.next()) |local| {
+                try self.ensureStableLocationForLocal(local.*);
+            }
         }
 
         fn generateRefOp(self: *Self, op: lir.RefOp, target_layout: layout.Idx) Allocator.Error!ValueLocation {
@@ -6893,12 +7416,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Multi-word types (strings, i128/Dec, lists) need specific location variants
         /// so downstream code loads the correct number of bytes.
         fn stackLocationForLayout(self: *Self, layout_idx: layout.Idx, stack_offset: i32) ValueLocation {
-            if (layout_idx == .i128 or layout_idx == .u128 or layout_idx == .dec)
+            const runtime_layout_idx = self.runtimeRepresentationLayoutIdx(layout_idx);
+            if (runtime_layout_idx == .i128 or runtime_layout_idx == .u128 or runtime_layout_idx == .dec)
                 return .{ .stack_i128 = stack_offset };
-            if (layout_idx == .str)
+            if (runtime_layout_idx == .str)
                 return .{ .stack_str = stack_offset };
             const ls = self.layout_store;
-            const resolved = ls.getLayout(layout_idx);
+            const resolved = ls.getLayout(runtime_layout_idx);
             if (resolved.tag == .list or resolved.tag == .list_of_zst)
                 return .{ .list_stack = .{ .struct_offset = stack_offset, .data_offset = 0, .num_elements = 0 } };
             const size = ls.layoutSizeAlign(resolved).size;
@@ -8113,7 +8637,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn generateStruct(self: *Self, s: anytype) Allocator.Error!ValueLocation {
             const ls = self.layout_store;
-            const struct_layout = ls.getLayout(s.target_layout);
+            const struct_layout = ls.getLayout(self.runtimeRepresentationLayoutIdx(s.target_layout));
             if (struct_layout.tag != .struct_) {
                 return .{ .immediate_i64 = 0 };
             }
@@ -8580,14 +9104,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Check for list/string types - need 3 registers (24 bytes: ptr, len, capacity)
             if (arg_loc == .list_stack or arg_loc == .stack_str) return 3;
             if (arg_layout) |al| {
-                if (al == .str) return 3; // Strings are 24 bytes
+                const runtime_layout_idx = self.runtimeRepresentationLayoutIdx(al);
+                if (runtime_layout_idx == .str) return 3; // Strings are 24 bytes
                 {
                     const ls = self.layout_store;
-                    const layout_val = ls.getLayout(al);
+                    const layout_val = ls.getLayout(runtime_layout_idx);
                     if (layout_val.tag == .zst or ls.layoutSizeAlign(layout_val).size == 0) return 0;
                     if (layout_val.tag == .list or layout_val.tag == .list_of_zst) return 3;
                     // Check for aggregate values > 8 bytes
-                    if (layout_val.tag == .struct_ or layout_val.tag == .tag_union or layout_val.tag == .closure) {
+                    if (layout_val.tag == .struct_ or layout_val.tag == .tag_union) {
                         const size = ls.layoutSizeAlign(layout_val).size;
                         if (size > 8) return @intCast((size + 7) / 8);
                     }
@@ -8670,9 +9195,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Get the size in bytes for a layout index.
+        fn runtimeRepresentationLayoutIdx(self: *Self, layout_idx: layout.Idx) layout.Idx {
+            const ls = self.layout_store;
+            if (@intFromEnum(layout_idx) >= ls.layouts.len()) return layout_idx;
+
+            const layout_val = ls.getLayout(layout_idx);
+            return switch (layout_val.tag) {
+                .closure => self.runtimeRepresentationLayoutIdx(layout_val.data.closure.captures_layout_idx),
+                else => layout_idx,
+            };
+        }
+
         fn getLayoutSize(self: *Self, layout_idx: layout.Idx) u32 {
             const ls = self.layout_store;
-            const layout_val = ls.getLayout(layout_idx);
+            const layout_val = ls.getLayout(self.runtimeRepresentationLayoutIdx(layout_idx));
             return ls.layoutSizeAlign(layout_val).size;
         }
 
@@ -9159,7 +9695,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 else => {
                     // Check if this is a composite type (record/tuple/list) via layout store
                     const ls = self.layout_store;
-                    const layout_val = ls.getLayout(result_layout);
+                    const layout_val = ls.getLayout(self.runtimeRepresentationLayoutIdx(result_layout));
                     switch (layout_val.tag) {
                         .struct_ => {
                             const struct_data = ls.getStructData(layout_val.data.struct_.idx);
@@ -9195,11 +9731,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             // Zero-sized type — nothing to store.
                             return;
                         },
-                        .closure => {
-                            const sa = ls.layoutSizeAlign(layout_val);
-                            try self.copyStackToPtr(loc, saved_ptr_reg, sa.size);
-                            return;
-                        },
                         .box => {
                             // Box is a heap pointer (machine word)
                             const reg = try self.ensureInGeneralReg(loc);
@@ -9209,6 +9740,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .box_of_zst => {
                             // Box of zero-sized type — nothing to store.
                             return;
+                        },
+                        .closure => {
+                            if (builtin.mode == .Debug) {
+                                std.debug.panic(
+                                    "LIR/codegen invariant violated: runtimeRepresentationLayoutIdx returned closure for result layout {}",
+                                    .{@intFromEnum(result_layout)},
+                                );
+                            }
+                            unreachable;
                         },
                     }
                 },
@@ -10089,6 +10629,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const saved_roc_ops_reg = self.roc_ops_reg;
             const saved_ret_ptr_slot = self.ret_ptr_slot;
             const saved_current_proc_name = self.current_proc_name;
+            const saved_current_proc_args = self.current_proc_args;
+            const saved_current_stmt_id = self.current_stmt_id;
             var saved_symbol_locations = self.symbol_locations.clone() catch return error.OutOfMemory;
             defer saved_symbol_locations.deinit();
             var saved_join_points = self.join_points.clone() catch return error.OutOfMemory;
@@ -10111,6 +10653,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.float_owners = [_]?u32{null} ** CodeGen.NUM_FLOAT_REGS;
             self.roc_ops_reg = null;
             self.current_proc_name = proc.name;
+            self.current_proc_args = proc.args;
+            self.current_stmt_id = null;
 
             // Reserve R12/X20 for roc_ops exactly like standalone lambda compilation.
             if (comptime target.toCpuArch() == .x86_64) {
@@ -10175,6 +10719,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.codegen.float_owners = saved_float_owners;
                 self.roc_ops_reg = saved_roc_ops_reg;
                 self.current_proc_name = saved_current_proc_name;
+                self.current_proc_args = saved_current_proc_args;
+                self.current_stmt_id = saved_current_stmt_id;
                 self.symbol_locations.deinit();
                 self.symbol_locations = saved_symbol_locations.clone() catch unreachable;
                 self.join_points.deinit();
@@ -10202,6 +10748,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // first argument register for the return buffer.
             const initial_param_reg_idx: u8 = if (needs_ret_ptr) 1 else 0;
             try self.bindProcParams(proc.args, initial_param_reg_idx);
+            try self.ensureStableLocationsForStmtLocals(proc.body);
 
             // Generate the body (control flow statements)
             // Note: .return_stmt emits jumps that are patched to the shared epilogue below
@@ -10335,6 +10882,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.roc_ops_reg = saved_roc_ops_reg;
             self.ret_ptr_slot = saved_ret_ptr_slot;
             self.current_proc_name = saved_current_proc_name;
+            self.current_proc_args = saved_current_proc_args;
+            self.current_stmt_id = saved_current_stmt_id;
             self.symbol_locations.deinit();
             self.symbol_locations = saved_symbol_locations.clone() catch return error.OutOfMemory;
             self.join_points.deinit();
@@ -10358,9 +10907,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// buffer) and the callee writes the result there instead of using return registers.
         fn needsInternalReturnByPointer(self: *Self, ret_layout: layout.Idx) bool {
             const ls = self.layout_store;
-            if (@intFromEnum(ret_layout) < ls.layouts.len()) {
-                const layout_val = ls.getLayout(ret_layout);
-                if (layout_val.tag == .struct_ or layout_val.tag == .tag_union or layout_val.tag == .closure) {
+            const runtime_layout_idx = self.runtimeRepresentationLayoutIdx(ret_layout);
+            if (@intFromEnum(runtime_layout_idx) < ls.layouts.len()) {
+                const layout_val = ls.getLayout(runtime_layout_idx);
+                if (layout_val.tag == .struct_ or layout_val.tag == .tag_union) {
                     return ls.layoutSizeAlign(layout_val).size > max_return_size;
                 }
             }
@@ -10371,15 +10921,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Save the return value from a compiled proc call into a stack-based ValueLocation.
         /// Handles i128/str/list/multi-reg struct/scalar returns.
         fn saveCallReturnValue(self: *Self, ret_layout: layout.Idx, needs_ret_ptr: bool, ret_buffer_offset: i32) Allocator.Error!ValueLocation {
+            const runtime_ret_layout = self.runtimeRepresentationLayoutIdx(ret_layout);
             // If we used return-by-pointer, the callee has written the result
             // to our pre-allocated buffer. No register saving needed.
             if (needs_ret_ptr) {
-                return .{ .stack = .{ .offset = ret_buffer_offset } };
+                return self.stackLocationForLayout(runtime_ret_layout, ret_buffer_offset);
             }
 
             // Float returns come back in the float return register (V0/XMM0),
             // not in the integer return register (X0/RAX).
-            if (ret_layout == .f32) {
+            if (runtime_ret_layout == .f32) {
                 const stack_offset = self.codegen.allocStackSlot(4);
                 if (comptime target.toCpuArch() == .aarch64) {
                     try self.codegen.emit.fcvtFloatFloat(.single, .V0, .double, .V0);
@@ -10394,7 +10945,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 return .{ .stack = .{ .offset = stack_offset, .size = .dword } };
             }
 
-            if (ret_layout == .f64) {
+            if (runtime_ret_layout == .f64) {
                 const stack_offset = self.codegen.allocStackSlot(8);
                 if (comptime target.toCpuArch() == .aarch64) {
                     try self.codegen.emitStoreStackF64(stack_offset, .V0);
@@ -10405,7 +10956,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             // Handle i128/Dec return values (returned in two registers)
-            if (ret_layout == .i128 or ret_layout == .u128 or ret_layout == .dec) {
+            if (runtime_ret_layout == .i128 or runtime_ret_layout == .u128 or runtime_ret_layout == .dec) {
                 const stack_offset = self.codegen.allocStackSlot(16);
                 try self.codegen.emitStoreStack(.w64, stack_offset, ret_reg_0);
                 try self.codegen.emitStoreStack(.w64, stack_offset + 8, ret_reg_1);
@@ -10413,7 +10964,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             // Check if return type is a string (24 bytes)
-            if (ret_layout == .str) {
+            if (runtime_ret_layout == .str) {
                 const stack_offset = self.codegen.allocStackSlot(roc_str_size);
                 try self.emitStore(.w64, frame_ptr, stack_offset, ret_reg_0);
                 try self.emitStore(.w64, frame_ptr, stack_offset + 8, ret_reg_1);
@@ -10424,7 +10975,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Check if return type is a list (24 bytes)
             const is_list_return = blk: {
                 const ls = self.layout_store;
-                const layout_val = ls.getLayout(ret_layout);
+                const layout_val = ls.getLayout(runtime_ret_layout);
                 break :blk layout_val.tag == .list or layout_val.tag == .list_of_zst;
             };
 
@@ -10443,8 +10994,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Check if return type is a multi-register value (record, tag_union, closure, tuple > 8 bytes)
             {
                 const ls = self.layout_store;
-                const layout_val = ls.getLayout(ret_layout);
-                if (layout_val.tag == .struct_ or layout_val.tag == .tag_union or layout_val.tag == .closure) {
+                const layout_val = ls.getLayout(runtime_ret_layout);
+                if (layout_val.tag == .struct_ or layout_val.tag == .tag_union) {
                     const size_align = ls.layoutSizeAlign(layout_val);
                     if (size_align.size > 8) {
                         const stack_offset = self.codegen.allocStackSlot(size_align.size);
@@ -10708,20 +11259,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Calculate the number of registers a parameter needs based on its layout.
         fn calcParamRegCount(self: *Self, layout_idx: layout.Idx) u8 {
+            const runtime_layout_idx = self.runtimeRepresentationLayoutIdx(layout_idx);
             // String parameters need 3 registers (24 bytes)
-            if (layout_idx == .str) return 3;
+            if (runtime_layout_idx == .str) return 3;
             // i128/u128/Dec parameters need 2 registers (16 bytes)
-            if (layout_idx == .i128 or layout_idx == .u128 or layout_idx == .dec) return 2;
+            if (runtime_layout_idx == .i128 or runtime_layout_idx == .u128 or runtime_layout_idx == .dec) return 2;
 
             {
                 const ls = self.layout_store;
-                if (@intFromEnum(layout_idx) < ls.layouts.len()) {
-                    const layout_val = ls.getLayout(layout_idx);
+                if (@intFromEnum(runtime_layout_idx) < ls.layouts.len()) {
+                    const layout_val = ls.getLayout(runtime_layout_idx);
                     if (layout_val.tag == .zst or ls.layoutSizeAlign(layout_val).size == 0) return 0;
                     // List parameters need 3 registers (24 bytes)
                     if (layout_val.tag == .list or layout_val.tag == .list_of_zst) return 3;
                     // Aggregate parameters may need multiple registers
-                    if (layout_val.tag == .struct_ or layout_val.tag == .tag_union or layout_val.tag == .closure) {
+                    if (layout_val.tag == .struct_ or layout_val.tag == .tag_union) {
                         const size = ls.layoutSizeAlign(layout_val).size;
                         if (size > 8) return @intCast((size + 7) / 8);
                     }
@@ -10763,7 +11315,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const nr = param_num_regs[pi];
                 if (nr == 0) continue;
 
-                const is_i128_param = local.layout_idx == .i128 or local.layout_idx == .u128 or local.layout_idx == .dec;
+                const runtime_layout_idx = self.runtimeRepresentationLayoutIdx(local.layout_idx);
+                const is_i128_param = runtime_layout_idx == .i128 or runtime_layout_idx == .u128 or runtime_layout_idx == .dec;
                 if (comptime target.toCpuArch() == .aarch64) {
                     if (is_i128_param and pre_reg_count < max_arg_regs and pre_reg_count % 2 != 0) {
                         pre_reg_count += 1;
@@ -10802,7 +11355,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 for (locals, 0..) |local, pi| {
                     const pnr = param_num_regs[pi];
                     const pbp = param_pass_by_ptr[pi];
-                    const is_i128_param = local.layout_idx == .i128 or local.layout_idx == .u128 or local.layout_idx == .dec;
+                    const runtime_layout_idx = self.runtimeRepresentationLayoutIdx(local.layout_idx);
+                    const is_i128_param = runtime_layout_idx == .i128 or runtime_layout_idx == .u128 or runtime_layout_idx == .dec;
                     if (comptime target.toCpuArch() == .aarch64) {
                         if (!pbp and is_i128_param and pre_reg_count < max_arg_regs and pre_reg_count % 2 != 0) {
                             pre_reg_count += 1;
@@ -10847,7 +11401,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
 
                 if (comptime target.toCpuArch() == .aarch64) {
-                    if (num_regs == 2 and (local.layout_idx == .i128 or local.layout_idx == .u128 or local.layout_idx == .dec) and reg_idx % 2 != 0) {
+                    const runtime_layout_idx = self.runtimeRepresentationLayoutIdx(local.layout_idx);
+                    if (num_regs == 2 and (runtime_layout_idx == .i128 or runtime_layout_idx == .u128 or runtime_layout_idx == .dec) and reg_idx % 2 != 0) {
                         reg_idx += 1;
                     }
                 }
@@ -10894,7 +11449,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (loc == .noreturn) return;
 
             const ls = self.layout_store;
-            const layout_val = ls.getLayout(ret_layout);
+            const runtime_ret_layout = self.runtimeRepresentationLayoutIdx(ret_layout);
+            const layout_val = ls.getLayout(runtime_ret_layout);
 
             if (builtin.mode == .Debug and loc == .stack_str and !(layout_val.tag == .scalar and layout_val.data.scalar.tag == .str) and layout_val.tag != .list and layout_val.tag != .list_of_zst) {
                 std.debug.panic(
@@ -11031,7 +11587,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                 },
                 // Structs and tag unions: size determines register count
-                .struct_, .tag_union, .closure => {
+                .struct_, .tag_union => {
                     const size_align = ls.layoutSizeAlign(layout_val);
                     if (size_align.size == 0) {
                         // Zero-sized — nothing to move
@@ -11064,6 +11620,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .zst => {},
                 // Box: single pointer (1 register)
                 .box, .box_of_zst => try self.moveOneRegToReturn(loc),
+                .closure => {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic(
+                            "LIR/codegen invariant violated: runtimeRepresentationLayoutIdx returned closure for return layout {}",
+                            .{@intFromEnum(ret_layout)},
+                        );
+                    }
+                    unreachable;
+                },
             }
         }
 
@@ -11127,6 +11692,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Generate code for a control flow statement
         fn generateStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
+            const saved_stmt_id = self.current_stmt_id;
+            self.current_stmt_id = stmt_id;
+            defer self.current_stmt_id = saved_stmt_id;
+
             const stmt = self.store.getCFStmt(stmt_id);
 
             switch (stmt) {
@@ -11209,9 +11778,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (!self.join_point_jumps.contains(jp_key)) {
                         try self.join_point_jumps.put(jp_key, std.ArrayList(JumpRecord).empty);
                     }
-
+                    try self.ensureStableLocationsForStmtReads(j.body);
                     try self.generateStmt(j.remainder);
-
                     const join_location = self.codegen.currentOffset();
                     try self.join_points.put(jp_key, join_location);
 
@@ -11264,7 +11832,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
 
                 .borrow_scope => |scope| {
+                    try self.ensureStableLocationsForStmtReads(scope.remainder);
+                    var remainder_env = try self.captureStmtEnv();
+                    defer remainder_env.deinit(self);
                     try self.generateStmt(scope.body);
+                    try self.restoreStmtEnv(&remainder_env);
                     try self.generateStmt(scope.remainder);
                 },
 
@@ -11314,12 +11886,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const locals = self.store.getLocalRefs(params);
             for (locals) |local| {
-                const size: u32 = @max(self.getLayoutSize(local.layout_idx), 8);
-                const stack_offset = self.codegen.allocStackSlot(@intCast(size));
-                try self.symbol_locations.put(
-                    @bitCast(local.symbol),
-                    self.stackLocationForLayout(local.layout_idx, stack_offset),
-                );
+                try self.ensureStableLocationForLocal(local);
             }
 
             try self.join_point_params.put(jp_key, params);
@@ -11355,7 +11922,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const temp_loc = self.coerceImmediateToLayout(loc, local.layout_idx);
                 const size: u8 = @intCast(@max(self.getLayoutSize(local.layout_idx), @as(u32, 8)));
                 const temp_offset = self.codegen.allocStackSlot(size);
-                try self.copyParamValueToStack(temp_loc, temp_offset, size, local.layout_idx == .i128 or local.layout_idx == .u128 or local.layout_idx == .dec);
+                const runtime_layout_idx = self.runtimeRepresentationLayoutIdx(local.layout_idx);
+                try self.copyParamValueToStack(temp_loc, temp_offset, size, runtime_layout_idx == .i128 or runtime_layout_idx == .u128 or runtime_layout_idx == .dec);
 
                 if (self.layout_store.layoutContainsRefcounted(self.layout_store.getLayout(local.layout_idx))) {
                     try self.emitIncrefAtStackOffset(temp_offset, local.layout_idx);
@@ -11963,6 +12531,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const cond_reg = try self.ensureInGeneralReg(cond_loc);
 
             const branches = self.store.getCFSwitchBranches(sw.branches);
+            var switch_env = try self.captureStmtEnv();
+            defer switch_env.deinit(self);
 
             // For single branch (bool switch): compare and branch
             if (branches.len == 1) {
@@ -11981,6 +12551,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.codegen.freeGeneral(cond_reg);
 
                 // Generate branch body (recursively generates statements)
+                try self.restoreStmtEnv(&switch_env);
                 try self.generateStmt(branch.body);
 
                 // Matching a branch must skip the default arm.
@@ -11988,10 +12559,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 // Patch else jump to the start of the default arm.
                 self.codegen.patchJump(else_patch, self.codegen.currentOffset());
+                try self.restoreStmtEnv(&switch_env);
                 try self.generateStmt(sw.default_branch);
 
                 // Patch the taken-branch jump to the end of the switch.
                 self.codegen.patchJump(end_patch, self.codegen.currentOffset());
+                try self.restoreStmtEnv(&switch_env);
             } else {
                 // Multiple branches - generate cascading comparisons
                 var end_patches = std.ArrayList(usize).empty;
@@ -12004,6 +12577,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         const skip_patch = try self.emitJumpIfNotEqual();
 
                         // Generate branch body
+                        try self.restoreStmtEnv(&switch_env);
                         try self.generateStmt(branch.body);
 
                         // Jump to end
@@ -12018,6 +12592,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.emitCmpImm(cond_reg, @intCast(branch.value));
                         const skip_patch = try self.emitJumpIfNotEqual();
 
+                        try self.restoreStmtEnv(&switch_env);
                         try self.generateStmt(branch.body);
 
                         const end_patch = try self.codegen.emitJump();
@@ -12030,6 +12605,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.codegen.freeGeneral(cond_reg);
 
                 // Generate default branch
+                try self.restoreStmtEnv(&switch_env);
                 try self.generateStmt(sw.default_branch);
 
                 // Patch all end jumps
@@ -12037,6 +12613,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 for (end_patches.items) |patch| {
                     self.codegen.patchJump(patch, end_offset);
                 }
+                try self.restoreStmtEnv(&switch_env);
             }
         }
 

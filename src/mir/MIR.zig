@@ -870,6 +870,32 @@ pub const Store = struct {
         return self.procs.items[@intFromEnum(id)];
     }
 
+    /// Count the value parameters a proc receives at call/lowering time.
+    ///
+    /// This includes the hidden captures parameter when the proc represents a
+    /// closure with an environment.
+    pub fn procValueParamCount(self: *const Store, proc: Proc) usize {
+        return self.getPatternSpan(proc.params).len + @intFromBool(!proc.captures_param.isNone());
+    }
+
+    /// Get one proc value parameter in call/lowering order.
+    ///
+    /// Visible params come first, followed by the hidden captures param when
+    /// present.
+    pub fn getProcValueParamPattern(self: *const Store, proc: Proc, index: usize) PatternId {
+        const params = self.getPatternSpan(proc.params);
+        if (index < params.len) return params[index];
+        if (index == params.len and !proc.captures_param.isNone()) return proc.captures_param;
+
+        if (std.debug.runtime_safety) {
+            std.debug.panic(
+                "MIR invariant violated: proc value param index {d} out of bounds (visible={d}, has_captures={any})",
+                .{ index, params.len, !proc.captures_param.isNone() },
+            );
+        }
+        unreachable;
+    }
+
     /// Get a mutable MIR proc by id.
     pub fn getProcPtr(self: *Store, id: ProcId) *Proc {
         return &self.procs.items[@intFromEnum(id)];

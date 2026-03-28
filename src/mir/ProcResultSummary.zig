@@ -7,6 +7,7 @@
 const std = @import("std");
 
 const MIR = @import("MIR.zig");
+const LambdaSet = @import("LambdaSet.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -193,6 +194,7 @@ const LocalOriginMap = std.AutoHashMap(u64, Origin);
 const Analyzer = struct {
     allocator: Allocator,
     mir_store: *const MIR.Store,
+    lambda_sets: *const LambdaSet.Store,
     table: *Table,
     proc_states: ?[]const ProcSummaryState,
     active_value_defs: *std.AutoHashMapUnmanaged(u64, void),
@@ -203,6 +205,17 @@ const Analyzer = struct {
             return states[@intFromEnum(proc_id)];
         }
         return .{ .concrete = self.table.getProcContract(proc_id) };
+    }
+
+    fn resolveCallableProcId(self: *const Analyzer, expr_id: MIR.ExprId) ?MIR.ProcId {
+        if (self.mir_store.resolveCallableProcId(expr_id)) |proc_id| return proc_id;
+
+        const lambda_set_idx = self.lambda_sets.getExprLambdaSet(expr_id) orelse return null;
+        const members = self.lambda_sets.getMembers(self.lambda_sets.getLambdaSet(lambda_set_idx).members);
+        return switch (members.len) {
+            1 => members[0].proc,
+            else => null,
+        };
     }
 
     fn freshScopeRegion(self: *Analyzer) BorrowRegion {
@@ -709,8 +722,8 @@ const Analyzer = struct {
             },
 
             .call => |call| blk: {
-                const proc_id = self.mir_store.resolveCallableProcId(call.func) orelse std.debug.panic(
-                    "ProcResultSummary invariant violated: call callee must be a direct proc-backed MIR value before strongest-form lowering",
+                const proc_id = self.resolveCallableProcId(call.func) orelse std.debug.panic(
+                    "ProcResultSummary invariant violated: call callee must resolve to a unique proc before strongest-form lowering",
                     .{},
                 );
                 const arg_exprs = self.mir_store.getExprSpan(call.args);
@@ -842,25 +855,13 @@ const Analyzer = struct {
         var env = LocalOriginMap.init(self.allocator);
         defer env.deinit();
 
-        const params = self.mir_store.getPatternSpan(proc.params);
-        for (params, 0..) |param_pattern, i| {
-            switch (self.mir_store.getPattern(param_pattern)) {
-                .bind => |symbol| try env.put(symbol.raw(), .{ .alias_of_param = .{
-                    .param_index = @intCast(i),
-                } }),
-                .wildcard => {},
-                .as_pattern => |as_pattern| {
-                    const origin: Origin = .{ .alias_of_param = .{
-                        .param_index = @intCast(i),
-                    } };
-                    try env.put(as_pattern.symbol.raw(), origin);
-                    try self.bindPattern(&env, as_pattern.pattern, origin, .proc);
-                },
-                else => std.debug.panic(
-                    "ProcResultSummary invariant violated: proc param pattern {s} must be lowered before strongest-form summary",
-                    .{@tagName(self.mir_store.getPattern(param_pattern))},
-                ),
-            }
+        const param_count = self.mir_store.procValueParamCount(proc);
+        for (0..param_count) |i| {
+            const param_pattern = self.mir_store.getProcValueParamPattern(proc, i);
+            const origin: Origin = .{ .alias_of_param = .{
+                .param_index = @intCast(i),
+            } };
+            try self.bindPattern(&env, param_pattern, origin, .proc);
         }
 
         var accumulator = ReturnAccumulator{};
@@ -885,6 +886,7 @@ const Analyzer = struct {
 pub fn build(
     allocator: Allocator,
     mir_store: *const MIR.Store,
+    lambda_sets: *const LambdaSet.Store,
     root_expr_ids: []const MIR.ExprId,
 ) Allocator.Error!Table {
     var table = Table.init(allocator);
@@ -903,6 +905,7 @@ pub fn build(
             var analyzer = Analyzer{
                 .allocator = allocator,
                 .mir_store = mir_store,
+                .lambda_sets = lambda_sets,
                 .table = &table,
                 .proc_states = states.items,
                 .active_value_defs = &active_value_defs,
@@ -932,6 +935,7 @@ pub fn build(
         var analyzer = Analyzer{
             .allocator = allocator,
             .mir_store = mir_store,
+            .lambda_sets = lambda_sets,
             .table = &table,
             .proc_states = null,
             .active_value_defs = &active_value_defs,
@@ -951,6 +955,7 @@ pub fn build(
         var analyzer = Analyzer{
             .allocator = allocator,
             .mir_store = mir_store,
+            .lambda_sets = lambda_sets,
             .table = &table,
             .proc_states = null,
             .active_value_defs = &active_value_defs,

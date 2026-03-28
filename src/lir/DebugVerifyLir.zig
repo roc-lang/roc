@@ -25,11 +25,16 @@ const RefProjectionSpan = LIR.RefProjectionSpan;
 
 const LocalResultMap = std.AutoHashMap(u64, LIR.ResultSemantics);
 const JoinMetaMap = std.AutoHashMap(u32, JoinMeta);
+const JoinInputMap = std.AutoHashMap(u64, JoinInput);
 const VisitedMap = std.AutoHashMap(u64, void);
 
 const JoinMeta = struct {
     scopes: []BorrowScopeId,
     params: LocalRefSpan,
+};
+
+const JoinInput = struct {
+    borrow_region: ?LIR.BorrowRegion,
 };
 
 const synthetic_symbol_base: u64 = 0xf000_0000_0000_0000;
@@ -57,6 +62,8 @@ pub fn verifyProc(
 
     var join_scopes = JoinScopes.init(allocator);
     defer join_scopes.deinit();
+    var join_inputs = JoinInputs.init(allocator);
+    defer join_inputs.deinit();
 
     var active_scopes = std.ArrayList(BorrowScopeId).empty;
     defer active_scopes.deinit(allocator);
@@ -64,7 +71,10 @@ pub fn verifyProc(
 
     var env = VerifyEnv.init(allocator);
     defer env.deinit();
-    try verifyStmt(store, &join_scopes, body, &env);
+    for (store.getLocalRefs(params)) |param| {
+        try env.results.put(localKey(param), .fresh);
+    }
+    try verifyStmt(store, &join_scopes, &join_inputs, body, &env, null, null);
 }
 
 const JoinScopes = struct {
@@ -143,6 +153,44 @@ const JoinScopes = struct {
     }
 };
 
+const JoinInputs = struct {
+    allocator: Allocator,
+    map: JoinInputMap,
+
+    fn init(allocator: Allocator) JoinInputs {
+        return .{
+            .allocator = allocator,
+            .map = JoinInputMap.init(allocator),
+        };
+    }
+
+    fn deinit(self: *JoinInputs) void {
+        self.map.deinit();
+    }
+
+    fn record(
+        self: *JoinInputs,
+        param: LocalRef,
+        borrow_region: ?LIR.BorrowRegion,
+    ) Allocator.Error!void {
+        const key = localKey(param);
+        const gop = try self.map.getOrPut(key);
+        if (gop.found_existing) {
+            gop.value_ptr.borrow_region = mergeBorrowRegions(
+                param,
+                gop.value_ptr.borrow_region,
+                borrow_region,
+            );
+        } else {
+            gop.value_ptr.* = .{ .borrow_region = borrow_region };
+        }
+    }
+
+    fn get(self: *const JoinInputs, param: LocalRef) ?JoinInput {
+        return self.map.get(localKey(param));
+    }
+};
+
 const VerifyEnv = struct {
     allocator: Allocator,
     results: LocalResultMap,
@@ -215,111 +263,195 @@ fn collectJoinScopes(
 fn verifyStmt(
     store: *const LirStore,
     join_scopes: *const JoinScopes,
+    join_inputs: *JoinInputs,
     stmt_id: CFStmtId,
     env: *VerifyEnv,
+    current_scope_exit: ?BorrowScopeId,
+    scope_exit_envs: ?*std.ArrayList(VerifyEnv),
 ) Allocator.Error!void {
     switch (store.getCFStmt(stmt_id)) {
         .assign_ref => |assign| {
-            try ensureLocalUsable(env, refOpSource(assign.op));
+            try ensureLocalUsable(store, env, refOpSource(assign.op), stmt_id);
             try env.results.put(localKey(assign.target), assign.result);
-            try verifyStmt(store, join_scopes, assign.next, env);
+            try verifyStmt(store, join_scopes, join_inputs, assign.next, env, current_scope_exit, scope_exit_envs);
         },
         .assign_literal => |assign| {
             try env.results.put(localKey(assign.target), assign.result);
-            try verifyStmt(store, join_scopes, assign.next, env);
+            try verifyStmt(store, join_scopes, join_inputs, assign.next, env, current_scope_exit, scope_exit_envs);
         },
         .assign_call => |assign| {
-            try ensureLocalsUsable(env, store.getLocalRefs(assign.args));
+            try ensureLocalsUsable(store, env, store.getLocalRefs(assign.args), stmt_id);
             try env.results.put(localKey(assign.target), assign.result);
-            try verifyStmt(store, join_scopes, assign.next, env);
+            try verifyStmt(store, join_scopes, join_inputs, assign.next, env, current_scope_exit, scope_exit_envs);
         },
         .assign_low_level => |assign| {
-            try ensureLocalsUsable(env, store.getLocalRefs(assign.args));
+            try ensureLocalsUsable(store, env, store.getLocalRefs(assign.args), stmt_id);
             try env.results.put(localKey(assign.target), assign.result);
-            try verifyStmt(store, join_scopes, assign.next, env);
+            try verifyStmt(store, join_scopes, join_inputs, assign.next, env, current_scope_exit, scope_exit_envs);
         },
         .assign_list => |assign| {
-            try ensureLocalsUsable(env, store.getLocalRefs(assign.elems));
+            try ensureLocalsUsable(store, env, store.getLocalRefs(assign.elems), stmt_id);
             try env.results.put(localKey(assign.target), assign.result);
-            try verifyStmt(store, join_scopes, assign.next, env);
+            try verifyStmt(store, join_scopes, join_inputs, assign.next, env, current_scope_exit, scope_exit_envs);
         },
         .assign_struct => |assign| {
-            try ensureLocalsUsable(env, store.getLocalRefs(assign.fields));
+            try ensureLocalsUsable(store, env, store.getLocalRefs(assign.fields), stmt_id);
             try env.results.put(localKey(assign.target), assign.result);
-            try verifyStmt(store, join_scopes, assign.next, env);
+            try verifyStmt(store, join_scopes, join_inputs, assign.next, env, current_scope_exit, scope_exit_envs);
         },
         .assign_tag => |assign| {
-            try ensureLocalsUsable(env, store.getLocalRefs(assign.args));
+            try ensureLocalsUsable(store, env, store.getLocalRefs(assign.args), stmt_id);
             try env.results.put(localKey(assign.target), assign.result);
-            try verifyStmt(store, join_scopes, assign.next, env);
+            try verifyStmt(store, join_scopes, join_inputs, assign.next, env, current_scope_exit, scope_exit_envs);
         },
         .runtime_error => {},
         .incref => |inc| {
-            try ensureLocalUsable(env, inc.value);
-            try verifyStmt(store, join_scopes, inc.next, env);
+            try ensureLocalUsable(store, env, inc.value, stmt_id);
+            try verifyStmt(store, join_scopes, join_inputs, inc.next, env, current_scope_exit, scope_exit_envs);
         },
         .decref => |dec| {
-            try ensureLocalUsable(env, dec.value);
-            try verifyStmt(store, join_scopes, dec.next, env);
+            try ensureLocalUsable(store, env, dec.value, stmt_id);
+            try verifyStmt(store, join_scopes, join_inputs, dec.next, env, current_scope_exit, scope_exit_envs);
         },
         .free => |free_stmt| {
-            try ensureLocalUsable(env, free_stmt.value);
-            try verifyStmt(store, join_scopes, free_stmt.next, env);
+            try ensureLocalUsable(store, env, free_stmt.value, stmt_id);
+            try verifyStmt(store, join_scopes, join_inputs, free_stmt.next, env, current_scope_exit, scope_exit_envs);
         },
         .switch_stmt => |switch_stmt| {
-            try ensureLocalUsable(env, switch_stmt.cond);
+            try ensureLocalUsable(store, env, switch_stmt.cond, stmt_id);
             try ensureSwitchBranchesWellFormed(store, switch_stmt.branches);
 
             var default_env = try env.clone();
             defer default_env.deinit();
-            try verifyStmt(store, join_scopes, switch_stmt.default_branch, &default_env);
+            try verifyStmt(store, join_scopes, join_inputs, switch_stmt.default_branch, &default_env, current_scope_exit, scope_exit_envs);
 
             for (store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
                 var branch_env = try env.clone();
                 defer branch_env.deinit();
-                try verifyStmt(store, join_scopes, branch.body, &branch_env);
+                try verifyStmt(store, join_scopes, join_inputs, branch.body, &branch_env, current_scope_exit, scope_exit_envs);
             }
         },
         .borrow_scope => |scope| {
-            try env.active_scopes.append(env.allocator, scope.id);
-            try verifyStmt(store, join_scopes, scope.body, env);
-            _ = env.active_scopes.pop();
-            try verifyStmt(store, join_scopes, scope.remainder, env);
-        },
-        .join => |join| {
             var body_env = try env.clone();
             defer body_env.deinit();
-            try verifyStmt(store, join_scopes, join.body, &body_env);
-            try verifyStmt(store, join_scopes, join.remainder, env);
+            try body_env.active_scopes.append(body_env.allocator, scope.id);
+
+            var exit_env_list = std.ArrayList(VerifyEnv).empty;
+            defer {
+                for (exit_env_list.items) |*exit_env| exit_env.deinit();
+                exit_env_list.deinit(env.allocator);
+            }
+
+            try verifyStmt(store, join_scopes, join_inputs, scope.body, &body_env, scope.id, &exit_env_list);
+            if (exit_env_list.items.len == 0) return;
+
+            try mergeScopeExitEnvs(store, env, exit_env_list.items, scope.id);
+            try verifyStmt(store, join_scopes, join_inputs, scope.remainder, env, current_scope_exit, scope_exit_envs);
+        },
+        .join => |join| {
+            try verifyStmt(store, join_scopes, join_inputs, join.remainder, env, current_scope_exit, scope_exit_envs);
+            var body_env = try env.clone();
+            defer body_env.deinit();
+            for (store.getLocalRefs(join.params)) |param| {
+                const input = join_inputs.get(param) orelse std.debug.panic(
+                    "DebugVerifyLir invariant violated: join param {d} has no verified incoming jump semantics",
+                    .{param.symbol.raw()},
+                );
+                const semantics = if (input.borrow_region) |region|
+                    LIR.ResultSemantics{ .borrow_of = .{
+                        .owner = param,
+                        .projections = LIR.RefProjectionSpan.empty(),
+                        .region = region,
+                    } }
+                else
+                    LIR.ResultSemantics.fresh;
+                try body_env.results.put(localKey(param), semantics);
+            }
+            try verifyStmt(store, join_scopes, join_inputs, join.body, &body_env, current_scope_exit, scope_exit_envs);
         },
         .jump => |jump| {
             try ensureJumpArgsMatchTarget(store, join_scopes, jump.target, jump.args);
-            for (store.getLocalRefs(jump.args)) |arg| {
-                try ensureJumpArgUsable(join_scopes, env, arg, jump.target);
+            const args = store.getLocalRefs(jump.args);
+            const params = store.getLocalRefs(join_scopes.params(jump.target));
+            for (args, params) |arg, param| {
+                try ensureJumpArgUsable(store, join_scopes, env, arg, jump.target, stmt_id);
+                try join_inputs.record(param, try resolveBorrowRegion(env.allocator, &env.results, arg, stmt_id));
             }
         },
-        .ret => |ret| try ensureLocalUsable(env, ret.value),
-        .scope_exit, .crash => {},
+        .ret => |ret| try ensureLocalUsable(store, env, ret.value, stmt_id),
+        .scope_exit => {
+            const target_scope = current_scope_exit orelse std.debug.panic(
+                "DebugVerifyLir invariant violated: scope_exit reached without active borrow_scope collector",
+                .{},
+            );
+            if (!scopeIsActive(env.active_scopes.items, target_scope)) {
+                std.debug.panic(
+                    "DebugVerifyLir invariant violated: scope_exit for borrow scope {d} reached outside its active scope stack",
+                    .{@intFromEnum(target_scope)},
+                );
+            }
+            const exit_list = scope_exit_envs orelse std.debug.panic(
+                "DebugVerifyLir invariant violated: scope_exit reached without exit env sink",
+                .{},
+            );
+            try exit_list.append(env.allocator, try env.clone());
+        },
+        .crash => {},
     }
 }
 
-fn ensureLocalsUsable(env: *VerifyEnv, locals: []const LocalRef) Allocator.Error!void {
+fn mergeScopeExitEnvs(
+    store: *const LirStore,
+    base_env: *VerifyEnv,
+    exit_envs: []const VerifyEnv,
+    scope_id: BorrowScopeId,
+) Allocator.Error!void {
+    std.debug.assert(exit_envs.len > 0);
+
+    var it = exit_envs[0].results.iterator();
+    while (it.next()) |entry| {
+        const key = entry.key_ptr.*;
+        const semantics = entry.value_ptr.*;
+        var all_have = true;
+        for (exit_envs[1..]) |exit_env| {
+            const other = exit_env.results.get(key) orelse {
+                all_have = false;
+                break;
+            };
+            if (!resultSemanticsEqual(store, semantics, other)) {
+                std.debug.panic(
+                    "DebugVerifyLir invariant violated: borrow_scope {d} reconverges local key {d} with incompatible result semantics",
+                    .{ @intFromEnum(scope_id), key },
+                );
+            }
+        }
+        if (!all_have) continue;
+        try base_env.results.put(key, semantics);
+    }
+}
+
+fn ensureLocalsUsable(store: *const LirStore, env: *VerifyEnv, locals: []const LocalRef, stmt_id: CFStmtId) Allocator.Error!void {
     for (locals) |local| {
-        try ensureLocalUsable(env, local);
+        try ensureLocalUsable(store, env, local, stmt_id);
     }
 }
 
 fn ensureLocalUsable(
+    store: *const LirStore,
     env: *VerifyEnv,
     local: LocalRef,
+    stmt_id: CFStmtId,
 ) Allocator.Error!void {
-    if (try resolveBorrowRegion(env.allocator, &env.results, local)) |region| {
+    if (!env.results.contains(localKey(local))) {
+        panicMissingLocalSemantics(store, stmt_id, local);
+    }
+    if (try resolveBorrowRegion(env.allocator, &env.results, local, stmt_id)) |region| {
         switch (region) {
             .proc => {},
             .scope => |scope_id| if (!scopeIsActive(env.active_scopes.items, scope_id)) {
                 std.debug.panic(
-                    "DebugVerifyLir invariant violated: borrowed local {d} was used outside borrow scope {d}",
-                    .{ local.symbol.raw(), @intFromEnum(scope_id) },
+                    "DebugVerifyLir invariant violated: borrowed local {d} was used outside borrow scope {d} at stmt {d}",
+                    .{ local.symbol.raw(), @intFromEnum(scope_id), @intFromEnum(stmt_id) },
                 );
             },
         }
@@ -327,19 +459,21 @@ fn ensureLocalUsable(
 }
 
 fn ensureJumpArgUsable(
+    store: *const LirStore,
     join_scopes: *const JoinScopes,
     env: *VerifyEnv,
     local: LocalRef,
     target: JoinPointId,
+    stmt_id: CFStmtId,
 ) Allocator.Error!void {
-    try ensureLocalUsable(env, local);
-    if (try resolveBorrowRegion(env.allocator, &env.results, local)) |region| {
+    try ensureLocalUsable(store, env, local, stmt_id);
+    if (try resolveBorrowRegion(env.allocator, &env.results, local, stmt_id)) |region| {
         switch (region) {
             .proc => {},
             .scope => |scope_id| if (!join_scopes.containsScope(target, scope_id)) {
                 std.debug.panic(
-                    "DebugVerifyLir invariant violated: borrowed local {d} from scope {d} jumps to join point {d} outside that scope",
-                    .{ local.symbol.raw(), @intFromEnum(scope_id), @intFromEnum(target) },
+                    "DebugVerifyLir invariant violated: borrowed local {d} from scope {d} jumps to join point {d} outside that scope at stmt {d}",
+                    .{ local.symbol.raw(), @intFromEnum(scope_id), @intFromEnum(target), @intFromEnum(stmt_id) },
                 );
             },
         }
@@ -419,10 +553,10 @@ fn ensureScopeBodyTerminatesWithScopeExit(
             try ensureScopeBodyTerminatesWithScopeExit(store, join.body);
             try ensureScopeBodyTerminatesWithScopeExit(store, join.remainder);
         },
-        .scope_exit => {},
-        .runtime_error, .jump, .ret, .crash => std.debug.panic(
-            "DebugVerifyLir invariant violated: borrow_scope body must terminate through scope_exit, not {s}",
-            .{@tagName(store.getCFStmt(stmt_id))},
+        .scope_exit, .runtime_error, .ret, .crash => {},
+        .jump => std.debug.panic(
+            "DebugVerifyLir invariant violated: borrow_scope body must terminate through scope_exit or a terminal statement, not jump",
+            .{},
         ),
     }
 }
@@ -431,16 +565,18 @@ fn resolveBorrowRegion(
     allocator: Allocator,
     results: *const LocalResultMap,
     local: LocalRef,
+    stmt_id: CFStmtId,
 ) Allocator.Error!?LIR.BorrowRegion {
     var visited = VisitedMap.init(allocator);
     defer visited.deinit();
-    return resolveBorrowRegionInner(results, local, &visited);
+    return resolveBorrowRegionInner(results, local, &visited, stmt_id);
 }
 
 fn resolveBorrowRegionInner(
     results: *const LocalResultMap,
     local: LocalRef,
     visited: *VisitedMap,
+    stmt_id: CFStmtId,
 ) Allocator.Error!?LIR.BorrowRegion {
     const key = localKey(local);
     const gop = try visited.getOrPut(key);
@@ -451,24 +587,332 @@ fn resolveBorrowRegionInner(
         );
     }
 
-    const semantics = results.get(key) orelse {
-        if (local.symbol.raw() >= synthetic_symbol_base) {
-            std.debug.panic(
-                "DebugVerifyLir invariant violated: missing result semantics for synthetic local {d}",
-                .{local.symbol.raw()},
-            );
-        }
-
-        // Non-synthetic roots such as proc parameters and global lookups are
-        // outside proc-local statement provenance tracking. They can seed alias
-        // chains, but they are not themselves borrowed by local statements.
-        return null;
-    };
+    const semantics = results.get(key) orelse std.debug.panic(
+        "DebugVerifyLir invariant violated: missing result semantics for local {d} at stmt {d}",
+        .{ local.symbol.raw(), @intFromEnum(stmt_id) },
+    );
     return switch (semantics) {
         .fresh => null,
-        .alias_of => |aliased| resolveBorrowRegionInner(results, aliased.owner, visited),
+        .alias_of => |aliased| resolveBorrowRegionInner(results, aliased.owner, visited, stmt_id),
         .borrow_of => |borrowed| borrowed.region,
     };
+}
+
+fn panicMissingLocalSemantics(
+    store: *const LirStore,
+    stmt_id: CFStmtId,
+    local: LocalRef,
+) noreturn {
+    const definition = findSymbolDefinition(store, local.symbol);
+    debugPrintStmtSummary(store, stmt_id);
+    if (definition.kind == .stmt) {
+        debugPrintStmtSummary(store, @enumFromInt(definition.id));
+    }
+    debugPrintSymbolMentions(store, local.symbol);
+    switch (store.getCFStmt(stmt_id)) {
+        .assign_ref => |assign| std.debug.panic(
+            "DebugVerifyLir invariant violated: missing result semantics for local {d} at stmt {d} (assign_ref target={d} source={d} definition_kind={s} definition_id={d})",
+            .{
+                local.symbol.raw(),
+                @intFromEnum(stmt_id),
+                assign.target.symbol.raw(),
+                refOpSource(assign.op).symbol.raw(),
+                @tagName(definition.kind),
+                definition.id,
+            },
+        ),
+        .assign_call => |assign| std.debug.panic(
+            "DebugVerifyLir invariant violated: missing result semantics for local {d} at stmt {d} (assign_call target={d} definition_kind={s} definition_id={d})",
+            .{ local.symbol.raw(), @intFromEnum(stmt_id), assign.target.symbol.raw(), @tagName(definition.kind), definition.id },
+        ),
+        .assign_low_level => |assign| std.debug.panic(
+            "DebugVerifyLir invariant violated: missing result semantics for local {d} at stmt {d} (assign_low_level target={d} op={s} definition_kind={s} definition_id={d})",
+            .{
+                local.symbol.raw(),
+                @intFromEnum(stmt_id),
+                assign.target.symbol.raw(),
+                @tagName(assign.op),
+                @tagName(definition.kind),
+                definition.id,
+            },
+        ),
+        else => std.debug.panic(
+            "DebugVerifyLir invariant violated: missing result semantics for local {d} at stmt {d} ({s} definition_kind={s} definition_id={d})",
+            .{
+                local.symbol.raw(),
+                @intFromEnum(stmt_id),
+                @tagName(store.getCFStmt(stmt_id)),
+                @tagName(definition.kind),
+                definition.id,
+            },
+        ),
+    }
+}
+
+const SymbolDefinition = struct {
+    kind: enum {
+        stmt,
+        join_param,
+        proc_arg,
+        missing,
+    },
+    id: u64,
+};
+
+fn findSymbolDefinition(store: *const LirStore, symbol: LIR.Symbol) SymbolDefinition {
+    for (store.cf_stmts.items, 0..) |stmt, stmt_index| {
+        switch (stmt) {
+            .assign_ref => |assign| if (assign.target.symbol == symbol) return .{ .kind = .stmt, .id = stmt_index },
+            .assign_literal => |assign| if (assign.target.symbol == symbol) return .{ .kind = .stmt, .id = stmt_index },
+            .assign_call => |assign| if (assign.target.symbol == symbol) return .{ .kind = .stmt, .id = stmt_index },
+            .assign_low_level => |assign| if (assign.target.symbol == symbol) return .{ .kind = .stmt, .id = stmt_index },
+            .assign_list => |assign| if (assign.target.symbol == symbol) return .{ .kind = .stmt, .id = stmt_index },
+            .assign_struct => |assign| if (assign.target.symbol == symbol) return .{ .kind = .stmt, .id = stmt_index },
+            .assign_tag => |assign| if (assign.target.symbol == symbol) return .{ .kind = .stmt, .id = stmt_index },
+            .join => |join| {
+                for (store.getLocalRefs(join.params)) |param| {
+                    if (param.symbol == symbol) return .{ .kind = .join_param, .id = stmt_index };
+                }
+            },
+            else => {},
+        }
+    }
+    for (store.proc_specs.items, 0..) |proc_spec, proc_index| {
+        for (store.getLocalRefs(proc_spec.args)) |arg| {
+            if (arg.symbol == symbol) return .{ .kind = .proc_arg, .id = proc_index };
+        }
+    }
+    return .{ .kind = .missing, .id = std.math.maxInt(u64) };
+}
+
+fn debugPrintSymbolMentions(store: *const LirStore, symbol: LIR.Symbol) void {
+    for (store.cf_stmts.items, 0..) |stmt, stmt_index| {
+        switch (stmt) {
+            .assign_ref => |assign| {
+                if (assign.target.symbol == symbol) {
+                    std.debug.print(
+                        "DebugVerifyLir symbol {d}: stmt {d} defines via assign_ref\n",
+                        .{ symbol.raw(), stmt_index },
+                    );
+                }
+                if (refOpSource(assign.op).symbol == symbol) {
+                    std.debug.print(
+                        "DebugVerifyLir symbol {d}: stmt {d} uses via assign_ref\n",
+                        .{ symbol.raw(), stmt_index },
+                    );
+                }
+            },
+            .assign_literal => |assign| if (assign.target.symbol == symbol) {
+                std.debug.print(
+                    "DebugVerifyLir symbol {d}: stmt {d} defines via assign_literal\n",
+                    .{ symbol.raw(), stmt_index },
+                );
+            },
+            .assign_call => |assign| {
+                if (assign.target.symbol == symbol) {
+                    std.debug.print(
+                        "DebugVerifyLir symbol {d}: stmt {d} defines via assign_call\n",
+                        .{ symbol.raw(), stmt_index },
+                    );
+                }
+                for (store.getLocalRefs(assign.args)) |arg| {
+                    if (arg.symbol == symbol) {
+                        std.debug.print(
+                            "DebugVerifyLir symbol {d}: stmt {d} uses via assign_call arg\n",
+                            .{ symbol.raw(), stmt_index },
+                        );
+                    }
+                }
+            },
+            .assign_low_level => |assign| {
+                if (assign.target.symbol == symbol) {
+                    std.debug.print(
+                        "DebugVerifyLir symbol {d}: stmt {d} defines via assign_low_level {s}\n",
+                        .{ symbol.raw(), stmt_index, @tagName(assign.op) },
+                    );
+                }
+                for (store.getLocalRefs(assign.args)) |arg| {
+                    if (arg.symbol == symbol) {
+                        std.debug.print(
+                            "DebugVerifyLir symbol {d}: stmt {d} uses via assign_low_level arg {s}\n",
+                            .{ symbol.raw(), stmt_index, @tagName(assign.op) },
+                        );
+                    }
+                }
+            },
+            .assign_list => |assign| {
+                if (assign.target.symbol == symbol) {
+                    std.debug.print(
+                        "DebugVerifyLir symbol {d}: stmt {d} defines via assign_list\n",
+                        .{ symbol.raw(), stmt_index },
+                    );
+                }
+                for (store.getLocalRefs(assign.elems)) |elem| {
+                    if (elem.symbol == symbol) {
+                        std.debug.print(
+                            "DebugVerifyLir symbol {d}: stmt {d} uses via assign_list elem\n",
+                            .{ symbol.raw(), stmt_index },
+                        );
+                    }
+                }
+            },
+            .assign_struct => |assign| {
+                if (assign.target.symbol == symbol) {
+                    std.debug.print(
+                        "DebugVerifyLir symbol {d}: stmt {d} defines via assign_struct\n",
+                        .{ symbol.raw(), stmt_index },
+                    );
+                }
+                for (store.getLocalRefs(assign.fields)) |field| {
+                    if (field.symbol == symbol) {
+                        std.debug.print(
+                            "DebugVerifyLir symbol {d}: stmt {d} uses via assign_struct field\n",
+                            .{ symbol.raw(), stmt_index },
+                        );
+                    }
+                }
+            },
+            .assign_tag => |assign| {
+                if (assign.target.symbol == symbol) {
+                    std.debug.print(
+                        "DebugVerifyLir symbol {d}: stmt {d} defines via assign_tag\n",
+                        .{ symbol.raw(), stmt_index },
+                    );
+                }
+                for (store.getLocalRefs(assign.args)) |arg| {
+                    if (arg.symbol == symbol) {
+                        std.debug.print(
+                            "DebugVerifyLir symbol {d}: stmt {d} uses via assign_tag arg\n",
+                            .{ symbol.raw(), stmt_index },
+                        );
+                    }
+                }
+            },
+            .incref => |inc| if (inc.value.symbol == symbol) {
+                std.debug.print(
+                    "DebugVerifyLir symbol {d}: stmt {d} uses via incref\n",
+                    .{ symbol.raw(), stmt_index },
+                );
+            },
+            .decref => |dec| if (dec.value.symbol == symbol) {
+                std.debug.print(
+                    "DebugVerifyLir symbol {d}: stmt {d} uses via decref\n",
+                    .{ symbol.raw(), stmt_index },
+                );
+            },
+            .free => |free_stmt| if (free_stmt.value.symbol == symbol) {
+                std.debug.print(
+                    "DebugVerifyLir symbol {d}: stmt {d} uses via free\n",
+                    .{ symbol.raw(), stmt_index },
+                );
+            },
+            .switch_stmt => |switch_stmt| if (switch_stmt.cond.symbol == symbol) {
+                std.debug.print(
+                    "DebugVerifyLir symbol {d}: stmt {d} uses via switch cond\n",
+                    .{ symbol.raw(), stmt_index },
+                );
+            },
+            .jump => |jump| {
+                for (store.getLocalRefs(jump.args)) |arg| {
+                    if (arg.symbol == symbol) {
+                        std.debug.print(
+                            "DebugVerifyLir symbol {d}: stmt {d} uses via jump arg\n",
+                            .{ symbol.raw(), stmt_index },
+                        );
+                    }
+                }
+            },
+            .ret => |ret_stmt| if (ret_stmt.value.symbol == symbol) {
+                std.debug.print(
+                    "DebugVerifyLir symbol {d}: stmt {d} uses via ret\n",
+                    .{ symbol.raw(), stmt_index },
+                );
+            },
+            .join => |join| {
+                for (store.getLocalRefs(join.params)) |param| {
+                    if (param.symbol == symbol) {
+                        std.debug.print(
+                            "DebugVerifyLir symbol {d}: stmt {d} defines via join param\n",
+                            .{ symbol.raw(), stmt_index },
+                        );
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+    for (store.proc_specs.items, 0..) |proc_spec, proc_index| {
+        for (store.getLocalRefs(proc_spec.args)) |arg| {
+            if (arg.symbol == symbol) {
+                std.debug.print(
+                    "DebugVerifyLir symbol {d}: proc {d} defines via proc arg\n",
+                    .{ symbol.raw(), proc_index },
+                );
+            }
+        }
+    }
+}
+
+fn debugPrintStmtSummary(store: *const LirStore, stmt_id: CFStmtId) void {
+    switch (store.getCFStmt(stmt_id)) {
+        .assign_ref => |assign| std.debug.print(
+            "DebugVerifyLir stmt {d}: assign_ref target={d} source={d} next={d}\n",
+            .{
+                @intFromEnum(stmt_id),
+                assign.target.symbol.raw(),
+                refOpSource(assign.op).symbol.raw(),
+                @intFromEnum(assign.next),
+            },
+        ),
+        .assign_literal => |assign| std.debug.print(
+            "DebugVerifyLir stmt {d}: assign_literal target={d} next={d}\n",
+            .{ @intFromEnum(stmt_id), assign.target.symbol.raw(), @intFromEnum(assign.next) },
+        ),
+        .assign_call => |assign| std.debug.print(
+            "DebugVerifyLir stmt {d}: assign_call target={d} next={d}\n",
+            .{ @intFromEnum(stmt_id), assign.target.symbol.raw(), @intFromEnum(assign.next) },
+        ),
+        .assign_low_level => |assign| std.debug.print(
+            "DebugVerifyLir stmt {d}: assign_low_level target={d} op={s} next={d}\n",
+            .{ @intFromEnum(stmt_id), assign.target.symbol.raw(), @tagName(assign.op), @intFromEnum(assign.next) },
+        ),
+        .assign_list => |assign| std.debug.print(
+            "DebugVerifyLir stmt {d}: assign_list target={d} next={d}\n",
+            .{ @intFromEnum(stmt_id), assign.target.symbol.raw(), @intFromEnum(assign.next) },
+        ),
+        .assign_struct => |assign| std.debug.print(
+            "DebugVerifyLir stmt {d}: assign_struct target={d} next={d}\n",
+            .{ @intFromEnum(stmt_id), assign.target.symbol.raw(), @intFromEnum(assign.next) },
+        ),
+        .assign_tag => |assign| std.debug.print(
+            "DebugVerifyLir stmt {d}: assign_tag target={d} next={d}\n",
+            .{ @intFromEnum(stmt_id), assign.target.symbol.raw(), @intFromEnum(assign.next) },
+        ),
+        .switch_stmt => |sw| std.debug.print(
+            "DebugVerifyLir stmt {d}: switch cond={d} default={d}\n",
+            .{ @intFromEnum(stmt_id), sw.cond.symbol.raw(), @intFromEnum(sw.default_branch) },
+        ),
+        .borrow_scope => |scope| std.debug.print(
+            "DebugVerifyLir stmt {d}: borrow_scope id={d} body={d} remainder={d}\n",
+            .{ @intFromEnum(stmt_id), @intFromEnum(scope.id), @intFromEnum(scope.body), @intFromEnum(scope.remainder) },
+        ),
+        .join => |join| std.debug.print(
+            "DebugVerifyLir stmt {d}: join body={d} remainder={d}\n",
+            .{ @intFromEnum(stmt_id), @intFromEnum(join.body), @intFromEnum(join.remainder) },
+        ),
+        .jump => |jump| std.debug.print(
+            "DebugVerifyLir stmt {d}: jump target={d}\n",
+            .{ @intFromEnum(stmt_id), @intFromEnum(jump.target) },
+        ),
+        .ret => |ret_stmt| std.debug.print(
+            "DebugVerifyLir stmt {d}: ret value={d}\n",
+            .{ @intFromEnum(stmt_id), ret_stmt.value.symbol.raw() },
+        ),
+        else => std.debug.print(
+            "DebugVerifyLir stmt {d}: {s}\n",
+            .{ @intFromEnum(stmt_id), @tagName(store.getCFStmt(stmt_id)) },
+        ),
+    }
 }
 
 fn refOpSource(op: LIR.RefOp) LocalRef {
@@ -492,6 +936,31 @@ fn localKey(local: LocalRef) u64 {
     return @bitCast(local.symbol);
 }
 
+fn mergeBorrowRegions(
+    param: LocalRef,
+    left: ?LIR.BorrowRegion,
+    right: ?LIR.BorrowRegion,
+) ?LIR.BorrowRegion {
+    return switch (left orelse return right) {
+        .proc => switch (right orelse return left) {
+            .proc => .proc,
+            .scope => |scope_id| .{ .scope = scope_id },
+        },
+        .scope => |left_scope| switch (right orelse return left) {
+            .proc => .{ .scope = left_scope },
+            .scope => |right_scope| {
+                if (left_scope != right_scope) {
+                    std.debug.panic(
+                        "DebugVerifyLir invariant violated: join param {d} received incoming borrows from incompatible scopes {d} and {d}",
+                        .{ param.symbol.raw(), @intFromEnum(left_scope), @intFromEnum(right_scope) },
+                    );
+                }
+                return .{ .scope = left_scope };
+            },
+        },
+    };
+}
+
 fn procContractsEqual(
     store: *const LirStore,
     a: LIR.ProcResultContract,
@@ -505,6 +974,40 @@ fn procContractsEqual(
         },
         .borrow_of_param => |left| switch (b) {
             .borrow_of_param => |right| left.param_index == right.param_index and projectionSpansEqual(store, left.projections, right.projections),
+            else => false,
+        },
+    };
+}
+
+fn resultSemanticsEqual(
+    store: *const LirStore,
+    a: LIR.ResultSemantics,
+    b: LIR.ResultSemantics,
+) bool {
+    return switch (a) {
+        .fresh => b == .fresh,
+        .alias_of => |left| switch (b) {
+            .alias_of => |right| localRefsEqual(left.owner, right.owner) and projectionSpansEqual(store, left.projections, right.projections),
+            else => false,
+        },
+        .borrow_of => |left| switch (b) {
+            .borrow_of => |right| localRefsEqual(left.owner, right.owner) and
+                projectionSpansEqual(store, left.projections, right.projections) and
+                borrowRegionsEqual(left.region, right.region),
+            else => false,
+        },
+    };
+}
+
+fn localRefsEqual(a: LocalRef, b: LocalRef) bool {
+    return a.symbol == b.symbol and a.layout_idx == b.layout_idx;
+}
+
+fn borrowRegionsEqual(a: LIR.BorrowRegion, b: LIR.BorrowRegion) bool {
+    return switch (a) {
+        .proc => b == .proc,
+        .scope => |left_scope| switch (b) {
+            .scope => |right_scope| left_scope == right_scope,
             else => false,
         },
     };

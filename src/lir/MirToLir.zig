@@ -21,6 +21,7 @@ const LirStore = @import("LirStore.zig");
 const DebugVerifyLir = @import("DebugVerifyLir.zig");
 
 const Allocator = std.mem.Allocator;
+const MirMonotypeIdx = mir_mod.Monotype.Idx;
 
 const CFStmtId = LIR.CFStmtId;
 const JoinPointId = LIR.JoinPointId;
@@ -227,6 +228,10 @@ fn runtimeValueLayoutFromMirExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator
 
 fn runtimeValueLayoutFromMirPattern(self: *Self, pattern_id: MIR.PatternId) Allocator.Error!layout.Idx {
     return self.mir_layout_resolver.resolve(self.mir_store.patternTypeOf(pattern_id), null);
+}
+
+fn runtimeValueLayoutFromMirMonotype(self: *Self, monotype: MirMonotypeIdx) Allocator.Error!layout.Idx {
+    return self.mir_layout_resolver.resolve(monotype, null);
 }
 
 fn singleProjectionSpan(self: *Self, projection: LIR.RefProjection) Allocator.Error!LIR.RefProjectionSpan {
@@ -512,6 +517,82 @@ fn emitAssignUnit(self: *Self, target: LocalRef, next: CFStmtId) Allocator.Error
     } });
 }
 
+fn lowerProcBackedValueInto(
+    self: *Self,
+    mir_expr_id: MIR.ExprId,
+    target: LocalRef,
+    next: CFStmtId,
+) Allocator.Error!CFStmtId {
+    return switch (self.mir_store.getExpr(mir_expr_id)) {
+        .proc_ref => |_| self.emitAssignUnit(target, next),
+        .closure_make => |closure| blk: {
+            const captures_expr = self.mir_store.getExpr(closure.captures);
+            const captures_fields = switch (captures_expr) {
+                .struct_ => |struct_| self.mir_store.getExprSpan(struct_.fields),
+                else => std.debug.panic(
+                    "MirToLir invariant violated: closure captures expr {d} must be a tuple/struct constructor before strongest-form lowering",
+                    .{@intFromEnum(closure.captures)},
+                ),
+            };
+
+            const refs = try self.allocator.alloc(LocalRef, captures_fields.len);
+            defer self.allocator.free(refs);
+            for (captures_fields, 0..) |field_expr, i| {
+                refs[i] = self.freshLocal(try self.runtimeValueLayoutFromMirExpr(field_expr));
+            }
+            const ref_span = try self.lir_store.addLocalRefs(refs);
+            const assign_stmt = try self.lir_store.addCFStmt(.{ .assign_struct = .{
+                .target = target,
+                .result = .fresh,
+                .fields = ref_span,
+                .next = next,
+            } });
+            var entry = assign_stmt;
+            var i = captures_fields.len;
+            while (i > 0) {
+                i -= 1;
+                entry = try self.lowerExprIntoStmt(captures_fields[i], refs[i], entry);
+            }
+            break :blk entry;
+        },
+        .dbg_expr => |dbg_expr| self.lowerProcBackedValueInto(dbg_expr.expr, target, next),
+        .expect => |expect| self.lowerProcBackedValueInto(expect.body, target, next),
+        .return_expr => |ret| self.lowerProcBackedValueInto(ret.expr, target, next),
+        .block => |block| self.lowerBlockInto(block, target, next),
+        else => std.debug.panic(
+            "MirToLir invariant violated: proc-backed value lowering received non-callable MIR expr {s}",
+            .{@tagName(self.mir_store.getExpr(mir_expr_id))},
+        ),
+    };
+}
+
+fn freshHiddenCaptureLocal(self: *Self, mir_proc_id: MIR.ProcId) Allocator.Error!?LocalRef {
+    const mir_proc = self.mir_store.getProc(mir_proc_id);
+    if (mir_proc.captures_param.isNone()) return null;
+    return self.freshLocal(try self.runtimeValueLayoutFromMirPattern(mir_proc.captures_param));
+}
+
+fn lowerHiddenCaptureArg(
+    self: *Self,
+    callee_expr_id: MIR.ExprId,
+    hidden_capture_local: LocalRef,
+    next: CFStmtId,
+) Allocator.Error!CFStmtId {
+    const callable_local = self.freshLocal(try self.runtimeValueLayoutFromMirExpr(callee_expr_id));
+    const bind_capture = try self.emitAssignRef(
+        hidden_capture_local,
+        aliasSemantics(callable_local, LIR.RefProjectionSpan.empty()),
+        .{ .local = callable_local },
+        next,
+    );
+    return self.lowerExprIntoStmt(callee_expr_id, callable_local, bind_capture);
+}
+
+const LoweredCallee = struct {
+    mir_proc_id: MIR.ProcId,
+    lir_proc_id: LirProcSpecId,
+};
+
 fn emitRet(self: *Self, value: LocalRef) Allocator.Error!CFStmtId {
     return self.lir_store.addCFStmt(.{ .ret = .{ .value = value } });
 }
@@ -529,7 +610,6 @@ fn lowerEntrypointBody(
 ) Allocator.Error!CFStmtId {
     var local_symbols = LocalSymbolSet{};
     defer local_symbols.deinit(self.allocator);
-    try self.collectExprLocalSymbols(&local_symbols, mir_expr_id);
 
     const prev_local_symbols = self.current_local_symbols;
     const prev_result_contract = self.current_proc_result_summary;
@@ -551,7 +631,6 @@ fn lowerEntrypointProcBody(
 ) Allocator.Error!LoweredEntrypointProcBody {
     var local_symbols = LocalSymbolSet{};
     defer local_symbols.deinit(self.allocator);
-    try self.collectExprLocalSymbols(&local_symbols, mir_expr_id);
 
     const prev_local_symbols = self.current_local_symbols;
     self.current_local_symbols = &local_symbols;
@@ -800,24 +879,99 @@ fn lowerStmtInto(self: *Self, stmt: MIR.Stmt, next: CFStmtId) Allocator.Error!CF
     };
 }
 
+fn rememberStmtBoundLocals(
+    self: *Self,
+    local_symbols: *LocalSymbolSet,
+    stmt: MIR.Stmt,
+) Allocator.Error!void {
+    switch (stmt) {
+        .decl_const => |binding| try self.collectPatternLocalSymbols(local_symbols, binding.pattern),
+        .decl_var => |binding| try self.collectPatternLocalSymbols(local_symbols, binding.pattern),
+        .mutate_var => {},
+    }
+}
+
+fn removePatternLocalSymbols(
+    self: *Self,
+    local_symbols: *LocalSymbolSet,
+    pattern_id: MIR.PatternId,
+) void {
+    switch (self.mir_store.getPattern(pattern_id)) {
+        .bind => |symbol| _ = local_symbols.remove(symbol.raw()),
+        .wildcard,
+        .int_literal,
+        .str_literal,
+        .dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .runtime_error,
+        => {},
+        .tag => |tag| {
+            for (self.mir_store.getPatternSpan(tag.args)) |arg_pattern| {
+                self.removePatternLocalSymbols(local_symbols, arg_pattern);
+            }
+        },
+        .struct_destructure => |destructure| {
+            for (self.mir_store.getPatternSpan(destructure.fields)) |field_pattern| {
+                self.removePatternLocalSymbols(local_symbols, field_pattern);
+            }
+        },
+        .list_destructure => |destructure| {
+            for (self.mir_store.getPatternSpan(destructure.patterns)) |elem_pattern| {
+                self.removePatternLocalSymbols(local_symbols, elem_pattern);
+            }
+            if (!destructure.rest_pattern.isNone()) {
+                self.removePatternLocalSymbols(local_symbols, destructure.rest_pattern);
+            }
+        },
+        .as_pattern => |as_pattern| {
+            _ = local_symbols.remove(as_pattern.symbol.raw());
+            self.removePatternLocalSymbols(local_symbols, as_pattern.pattern);
+        },
+    }
+}
+
+fn removeStmtBoundLocals(
+    self: *Self,
+    local_symbols: *LocalSymbolSet,
+    stmt: MIR.Stmt,
+) void {
+    switch (stmt) {
+        .decl_const => |binding| self.removePatternLocalSymbols(local_symbols, binding.pattern),
+        .decl_var => |binding| self.removePatternLocalSymbols(local_symbols, binding.pattern),
+        .mutate_var => {},
+    }
+}
+
 fn lowerBlockInto(
     self: *Self,
     block: anytype,
     target: LocalRef,
     next: CFStmtId,
 ) Allocator.Error!CFStmtId {
-    var entry = try self.lowerExprIntoStmt(block.final_expr, target, next);
     const stmts = self.mir_store.getStmts(block.stmts);
+    var block_scope = if (self.current_local_symbols) |locals|
+        try self.cloneLocalSymbolSet(locals)
+    else
+        LocalSymbolSet{};
+    defer block_scope.deinit(self.allocator);
+
+    for (stmts) |stmt| {
+        try self.rememberStmtBoundLocals(&block_scope, stmt);
+    }
+
+    const prev_local_symbols = self.current_local_symbols;
+    self.current_local_symbols = &block_scope;
+    defer self.current_local_symbols = prev_local_symbols;
+
+    var entry = try self.lowerExprIntoStmt(block.final_expr, target, next);
     var i = stmts.len;
     while (i > 0) {
         i -= 1;
+        self.removeStmtBoundLocals(&block_scope, stmts[i]);
         entry = try self.lowerStmtInto(stmts[i], entry);
     }
     return entry;
-}
-
-fn recordLocalSymbol(self: *Self, local_symbols: *LocalSymbolSet, symbol: MIR.Symbol) Allocator.Error!void {
-    try local_symbols.put(self.allocator, symbol.raw(), {});
 }
 
 fn collectPatternLocalSymbols(
@@ -826,7 +980,7 @@ fn collectPatternLocalSymbols(
     pattern_id: MIR.PatternId,
 ) Allocator.Error!void {
     switch (self.mir_store.getPattern(pattern_id)) {
-        .bind => |symbol| try self.recordLocalSymbol(local_symbols, symbol),
+        .bind => |symbol| try local_symbols.put(self.allocator, symbol.raw(), {}),
         .wildcard,
         .int_literal,
         .str_literal,
@@ -854,101 +1008,222 @@ fn collectPatternLocalSymbols(
             }
         },
         .as_pattern => |as_pattern| {
-            try self.recordLocalSymbol(local_symbols, as_pattern.symbol);
+            try local_symbols.put(self.allocator, as_pattern.symbol.raw(), {});
             try self.collectPatternLocalSymbols(local_symbols, as_pattern.pattern);
         },
     }
 }
 
-fn collectStmtLocalSymbols(self: *Self, local_symbols: *LocalSymbolSet, stmt: MIR.Stmt) Allocator.Error!void {
-    const binding = switch (stmt) {
-        .decl_const => |inner| inner,
-        .decl_var => |inner| inner,
-        .mutate_var => |inner| inner,
-    };
-    try self.collectPatternLocalSymbols(local_symbols, binding.pattern);
-    try self.collectExprLocalSymbols(local_symbols, binding.expr);
+fn cloneLocalSymbolSet(self: *Self, source: *const LocalSymbolSet) Allocator.Error!LocalSymbolSet {
+    var clone = LocalSymbolSet{};
+    var it = source.iterator();
+    while (it.next()) |entry| {
+        try clone.put(self.allocator, entry.key_ptr.*, {});
+    }
+    return clone;
 }
 
-fn collectExprLocalSymbols(
-    self: *Self,
-    local_symbols: *LocalSymbolSet,
-    expr_id: MIR.ExprId,
-) Allocator.Error!void {
-    switch (self.mir_store.getExpr(expr_id)) {
-        .int,
-        .frac_f32,
-        .frac_f64,
-        .dec,
-        .str,
-        .lookup,
-        .proc_ref,
-        .runtime_err_can,
-        .runtime_err_type,
-        .runtime_err_ellipsis,
-        .runtime_err_anno_only,
-        .crash,
-        .break_expr,
-        => {},
-        .closure_make => |closure| try self.collectExprLocalSymbols(local_symbols, closure.captures),
-        .list => |list_data| {
-            for (self.mir_store.getExprSpan(list_data.elems)) |elem_expr| {
-                try self.collectExprLocalSymbols(local_symbols, elem_expr);
-            }
-        },
-        .struct_ => |struct_data| {
-            for (self.mir_store.getExprSpan(struct_data.fields)) |field_expr| {
-                try self.collectExprLocalSymbols(local_symbols, field_expr);
-            }
-        },
-        .tag => |tag_expr| {
-            for (self.mir_store.getExprSpan(tag_expr.args)) |arg_expr| {
-                try self.collectExprLocalSymbols(local_symbols, arg_expr);
-            }
-        },
-        .match_expr => |match_expr| {
-            try self.collectExprLocalSymbols(local_symbols, match_expr.cond);
-            for (self.mir_store.getBranches(match_expr.branches)) |branch| {
-                for (self.mir_store.getBranchPatterns(branch.patterns)) |branch_pattern| {
-                    try self.collectPatternLocalSymbols(local_symbols, branch_pattern.pattern);
-                }
-                if (!branch.guard.isNone()) {
-                    try self.collectExprLocalSymbols(local_symbols, branch.guard);
-                }
-                try self.collectExprLocalSymbols(local_symbols, branch.body);
-            }
-        },
-        .call => |call| {
-            try self.collectExprLocalSymbols(local_symbols, call.func);
-            for (self.mir_store.getExprSpan(call.args)) |arg_expr| {
-                try self.collectExprLocalSymbols(local_symbols, arg_expr);
-            }
-        },
-        .block => |block| {
-            for (self.mir_store.getStmts(block.stmts)) |stmt| {
-                try self.collectStmtLocalSymbols(local_symbols, stmt);
-            }
-            try self.collectExprLocalSymbols(local_symbols, block.final_expr);
-        },
-        .borrow_scope => |scope| {
-            for (self.mir_store.getBorrowBindings(scope.bindings)) |binding| {
-                try self.collectPatternLocalSymbols(local_symbols, binding.pattern);
-                try self.collectExprLocalSymbols(local_symbols, binding.expr);
-            }
-            try self.collectExprLocalSymbols(local_symbols, scope.body);
-        },
-        .struct_access => |access| try self.collectExprLocalSymbols(local_symbols, access.struct_),
-        .str_escape_and_quote => |inner| try self.collectExprLocalSymbols(local_symbols, inner),
-        .run_low_level => |ll| {
-            for (self.mir_store.getExprSpan(ll.args)) |arg_expr| {
-                try self.collectExprLocalSymbols(local_symbols, arg_expr);
-            }
-        },
-        .dbg_expr => |dbg_expr| try self.collectExprLocalSymbols(local_symbols, dbg_expr.expr),
-        .expect => |expect| try self.collectExprLocalSymbols(local_symbols, expect.body),
-        .loop => |loop_expr| try self.collectExprLocalSymbols(local_symbols, loop_expr.body),
-        .return_expr => |ret| try self.collectExprLocalSymbols(local_symbols, ret.expr),
+const LoopCarrierCollector = struct {
+    lowerer: *Self,
+    carriers: std.ArrayList(LocalRef),
+    carrier_indices: std.AutoHashMapUnmanaged(u64, usize) = .empty,
+
+    fn init(lowerer: *Self) LoopCarrierCollector {
+        return .{
+            .lowerer = lowerer,
+            .carriers = std.ArrayList(LocalRef).empty,
+        };
     }
+
+    fn deinit(self: *LoopCarrierCollector) void {
+        self.carriers.deinit(self.lowerer.allocator);
+        self.carrier_indices.deinit(self.lowerer.allocator);
+    }
+
+    fn rememberPatternLocals(
+        self: *LoopCarrierCollector,
+        local_scope: *LocalSymbolSet,
+        pattern_id: MIR.PatternId,
+    ) Allocator.Error!void {
+        switch (self.lowerer.mir_store.getPattern(pattern_id)) {
+            .bind => |symbol| try local_scope.put(self.lowerer.allocator, symbol.raw(), {}),
+            .wildcard,
+            .int_literal,
+            .str_literal,
+            .dec_literal,
+            .frac_f32_literal,
+            .frac_f64_literal,
+            .runtime_error,
+            => {},
+            .tag => |tag| {
+                for (self.lowerer.mir_store.getPatternSpan(tag.args)) |arg_pattern| {
+                    try self.rememberPatternLocals(local_scope, arg_pattern);
+                }
+            },
+            .struct_destructure => |destructure| {
+                for (self.lowerer.mir_store.getPatternSpan(destructure.fields)) |field_pattern| {
+                    try self.rememberPatternLocals(local_scope, field_pattern);
+                }
+            },
+            .list_destructure => |destructure| {
+                for (self.lowerer.mir_store.getPatternSpan(destructure.patterns)) |elem_pattern| {
+                    try self.rememberPatternLocals(local_scope, elem_pattern);
+                }
+                if (!destructure.rest_pattern.isNone()) {
+                    try self.rememberPatternLocals(local_scope, destructure.rest_pattern);
+                }
+            },
+            .as_pattern => |as_pattern| {
+                try local_scope.put(self.lowerer.allocator, as_pattern.symbol.raw(), {});
+                try self.rememberPatternLocals(local_scope, as_pattern.pattern);
+            },
+        }
+    }
+
+    fn rememberCarrierSymbol(
+        self: *LoopCarrierCollector,
+        symbol: MIR.Symbol,
+        layout_idx: layout.Idx,
+    ) Allocator.Error!void {
+        const symbol_key = symbol.raw();
+        if (self.carrier_indices.get(symbol_key)) |existing_index| {
+            const existing = self.carriers.items[existing_index];
+            if (existing.layout_idx != layout_idx) {
+                std.debug.panic(
+                    "MirToLir invariant violated: loop-carried symbol {d} was observed with incompatible layouts {d} and {d}",
+                    .{ symbol_key, @intFromEnum(existing.layout_idx), @intFromEnum(layout_idx) },
+                );
+            }
+            return;
+        }
+
+        try self.carrier_indices.put(self.lowerer.allocator, symbol_key, self.carriers.items.len);
+        try self.carriers.append(self.lowerer.allocator, .{
+            .symbol = symbol,
+            .layout_idx = layout_idx,
+        });
+    }
+
+    fn collectStmt(self: *LoopCarrierCollector, stmt: MIR.Stmt, local_scope: *LocalSymbolSet) Allocator.Error!void {
+        switch (stmt) {
+            .decl_const => |binding| {
+                try self.collectExpr(binding.expr, local_scope);
+                try self.rememberPatternLocals(local_scope, binding.pattern);
+            },
+            .decl_var => |binding| {
+                try self.collectExpr(binding.expr, local_scope);
+                try self.rememberPatternLocals(local_scope, binding.pattern);
+            },
+            .mutate_var => |binding| {
+                try self.collectExpr(binding.expr, local_scope);
+            },
+        }
+    }
+
+    fn collectExpr(
+        self: *LoopCarrierCollector,
+        expr_id: MIR.ExprId,
+        local_scope: *LocalSymbolSet,
+    ) Allocator.Error!void {
+        switch (self.lowerer.mir_store.getExpr(expr_id)) {
+            .int,
+            .frac_f32,
+            .frac_f64,
+            .dec,
+            .str,
+            .proc_ref,
+            .runtime_err_can,
+            .runtime_err_type,
+            .runtime_err_ellipsis,
+            .runtime_err_anno_only,
+            .crash,
+            .break_expr,
+            => {},
+            .lookup => |symbol| {
+                if (!local_scope.contains(symbol.raw()) and self.lowerer.mir_store.isSymbolReassignable(symbol)) {
+                    try self.rememberCarrierSymbol(symbol, try self.lowerer.runtimeValueLayoutFromMirExpr(expr_id));
+                }
+            },
+            .closure_make => |closure| try self.collectExpr(closure.captures, local_scope),
+            .list => |list_data| {
+                for (self.lowerer.mir_store.getExprSpan(list_data.elems)) |elem_expr| {
+                    try self.collectExpr(elem_expr, local_scope);
+                }
+            },
+            .struct_ => |struct_data| {
+                for (self.lowerer.mir_store.getExprSpan(struct_data.fields)) |field_expr| {
+                    try self.collectExpr(field_expr, local_scope);
+                }
+            },
+            .tag => |tag_expr| {
+                for (self.lowerer.mir_store.getExprSpan(tag_expr.args)) |arg_expr| {
+                    try self.collectExpr(arg_expr, local_scope);
+                }
+            },
+            .match_expr => |match_expr| {
+                try self.collectExpr(match_expr.cond, local_scope);
+                for (self.lowerer.mir_store.getBranches(match_expr.branches)) |branch| {
+                    var branch_scope = try self.lowerer.cloneLocalSymbolSet(local_scope);
+                    defer branch_scope.deinit(self.lowerer.allocator);
+
+                    for (self.lowerer.mir_store.getBranchPatterns(branch.patterns)) |branch_pattern| {
+                        try self.rememberPatternLocals(&branch_scope, branch_pattern.pattern);
+                    }
+                    if (!branch.guard.isNone()) {
+                        try self.collectExpr(branch.guard, &branch_scope);
+                    }
+                    try self.collectExpr(branch.body, &branch_scope);
+                }
+            },
+            .call => |call| {
+                try self.collectExpr(call.func, local_scope);
+                for (self.lowerer.mir_store.getExprSpan(call.args)) |arg_expr| {
+                    try self.collectExpr(arg_expr, local_scope);
+                }
+            },
+            .block => |block| {
+                var block_scope = try self.lowerer.cloneLocalSymbolSet(local_scope);
+                defer block_scope.deinit(self.lowerer.allocator);
+
+                for (self.lowerer.mir_store.getStmts(block.stmts)) |stmt| {
+                    try self.collectStmt(stmt, &block_scope);
+                }
+                try self.collectExpr(block.final_expr, &block_scope);
+            },
+            .borrow_scope => |scope| {
+                var scope_locals = try self.lowerer.cloneLocalSymbolSet(local_scope);
+                defer scope_locals.deinit(self.lowerer.allocator);
+
+                for (self.lowerer.mir_store.getBorrowBindings(scope.bindings)) |binding| {
+                    try self.collectExpr(binding.expr, &scope_locals);
+                    try self.rememberPatternLocals(&scope_locals, binding.pattern);
+                }
+                try self.collectExpr(scope.body, &scope_locals);
+            },
+            .struct_access => |access| try self.collectExpr(access.struct_, local_scope),
+            .str_escape_and_quote => |inner| try self.collectExpr(inner, local_scope),
+            .run_low_level => |ll| {
+                for (self.lowerer.mir_store.getExprSpan(ll.args)) |arg_expr| {
+                    try self.collectExpr(arg_expr, local_scope);
+                }
+            },
+            .dbg_expr => |dbg_expr| try self.collectExpr(dbg_expr.expr, local_scope),
+            .expect => |expect| try self.collectExpr(expect.body, local_scope),
+            .loop => |loop_expr| try self.collectExpr(loop_expr.body, local_scope),
+            .return_expr => |ret| try self.collectExpr(ret.expr, local_scope),
+        }
+    }
+};
+
+fn collectLoopCarrierLocals(self: *Self, body_expr_id: MIR.ExprId) Allocator.Error!LocalRefSpan {
+    var collector = LoopCarrierCollector.init(self);
+    defer collector.deinit();
+
+    var local_scope = LocalSymbolSet{};
+    defer local_scope.deinit(self.allocator);
+
+    try collector.collectExpr(body_expr_id, &local_scope);
+    return self.lir_store.addLocalRefs(collector.carriers.items);
 }
 
 fn isCurrentLocalSymbol(self: *const Self, symbol: MIR.Symbol) bool {
@@ -997,26 +1272,61 @@ fn mirIntValueAsI128(int_value: @import("can").CIR.IntValue) i128 {
     };
 }
 
-fn tagDiscriminantForPattern(
+fn fieldMonotypeForSource(
     self: *Self,
-    pattern_id: MIR.PatternId,
+    source_mono: MirMonotypeIdx,
+    field_idx: usize,
+) MirMonotypeIdx {
+    return switch (self.mir_store.monotype_store.getMonotype(source_mono)) {
+        .record => |record| self.mir_store.monotype_store.getFields(record.fields)[field_idx].type_idx,
+        .tuple => |tuple| self.mir_store.monotype_store.getIdxSpanItem(tuple.elems, field_idx),
+        else => std.debug.panic(
+            "MirToLir invariant violated: struct destructure source monotype {s} is not record/tuple",
+            .{@tagName(self.mir_store.monotype_store.getMonotype(source_mono))},
+        ),
+    };
+}
+
+const TagVariantInfo = struct {
+    discriminant: u16,
+    payload_mono: ?MirMonotypeIdx,
+};
+
+fn tagVariantInfoForSource(
+    self: *Self,
+    source_mono: MirMonotypeIdx,
     tag_name: base.Ident.Idx,
-) u16 {
-    const mono = self.mir_store.monotype_store.getMonotype(self.mir_store.patternTypeOf(pattern_id));
+) TagVariantInfo {
+    const mono = self.mir_store.monotype_store.getMonotype(source_mono);
     const tags = switch (mono) {
         .tag_union => |tag_union| self.mir_store.monotype_store.getTags(tag_union.tags),
         else => std.debug.panic(
-            "MirToLir invariant violated: tag pattern does not have a tag-union monotype",
-            .{},
+            "MirToLir invariant violated: tag pattern source monotype {s} is not a tag union",
+            .{@tagName(mono)},
         ),
     };
 
     for (tags, 0..) |tag, index| {
-        if (tag.name.ident.eql(tag_name)) return @intCast(index);
+        if (!tag.name.ident.eql(tag_name)) continue;
+
+        const payloads = self.mir_store.monotype_store.getIdxSpan(tag.payloads);
+        const payload_mono = switch (payloads.len) {
+            0 => null,
+            1 => payloads[0],
+            else => std.debug.panic(
+                "MirToLir invariant violated: multi-arg tag payloads must be wrapped before statement-only lowering",
+                .{},
+            ),
+        };
+
+        return .{
+            .discriminant = @intCast(index),
+            .payload_mono = payload_mono,
+        };
     }
 
     std.debug.panic(
-        "MirToLir invariant violated: tag pattern constructor missing from pattern monotype",
+        "MirToLir invariant violated: tag pattern constructor missing from source monotype",
         .{},
     );
 }
@@ -1139,6 +1449,7 @@ fn lowerLiteralPatternInto(
 fn lowerPatternInto(
     self: *Self,
     source: LocalRef,
+    source_mono: MirMonotypeIdx,
     pattern_id: MIR.PatternId,
     on_match: CFStmtId,
     on_fail: CFStmtId,
@@ -1147,7 +1458,7 @@ fn lowerPatternInto(
         .bind => |symbol| self.emitAssignRef(
             .{
                 .symbol = symbol,
-                .layout_idx = try self.runtimeValueLayoutFromMirPattern(pattern_id),
+                .layout_idx = source.layout_idx,
             },
             aliasSemantics(source, LIR.RefProjectionSpan.empty()),
             .{ .local = source },
@@ -1155,11 +1466,11 @@ fn lowerPatternInto(
         ),
         .wildcard => on_match,
         .as_pattern => |as_pattern| blk: {
-            const inner = try self.lowerPatternInto(source, as_pattern.pattern, on_match, on_fail);
+            const inner = try self.lowerPatternInto(source, source_mono, as_pattern.pattern, on_match, on_fail);
             break :blk try self.emitAssignRef(
                 .{
                     .symbol = as_pattern.symbol,
-                    .layout_idx = try self.runtimeValueLayoutFromMirPattern(pattern_id),
+                    .layout_idx = source.layout_idx,
                 },
                 aliasSemantics(source, LIR.RefProjectionSpan.empty()),
                 .{ .local = source },
@@ -1168,7 +1479,7 @@ fn lowerPatternInto(
         },
         .tag => |tag_pattern| blk: {
             const discr_local = self.freshLocal(.u32);
-            const discr_value = self.tagDiscriminantForPattern(pattern_id, tag_pattern.name);
+            const variant = self.tagVariantInfoForSource(source_mono, tag_pattern.name);
             const payload_patterns = self.mir_store.getPatternSpan(tag_pattern.args);
 
             const matched = blk_matched: {
@@ -1179,10 +1490,14 @@ fn lowerPatternInto(
                         .{payload_patterns.len},
                     );
                 }
+                const payload_mono = variant.payload_mono orelse std.debug.panic(
+                    "MirToLir invariant violated: zero-payload tag pattern cannot destructure a payload",
+                    .{},
+                );
 
                 const payload_pattern = payload_patterns[0];
-                const payload_local = self.freshLocal(try self.runtimeValueLayoutFromMirPattern(payload_pattern));
-                const payload_match = try self.lowerPatternInto(payload_local, payload_pattern, on_match, on_fail);
+                const payload_local = self.freshLocal(try self.runtimeValueLayoutFromMirMonotype(payload_mono));
+                const payload_match = try self.lowerPatternInto(payload_local, payload_mono, payload_pattern, on_match, on_fail);
                 break :blk_matched try self.emitAssignRef(
                     payload_local,
                     borrowSemantics(source, try self.singleProjectionSpan(.tag_payload), self.current_borrow_region),
@@ -1191,7 +1506,7 @@ fn lowerPatternInto(
                 );
             };
 
-            const discr_switch = try self.emitSwitchOnValue(discr_local, discr_value, matched, on_fail);
+            const discr_switch = try self.emitSwitchOnValue(discr_local, variant.discriminant, matched, on_fail);
             break :blk try self.emitAssignRef(
                 discr_local,
                 .fresh,
@@ -1206,8 +1521,9 @@ fn lowerPatternInto(
             while (i > 0) {
                 i -= 1;
                 const field_pattern = fields[i];
-                const field_local = self.freshLocal(try self.runtimeValueLayoutFromMirPattern(field_pattern));
-                const field_match = try self.lowerPatternInto(field_local, field_pattern, entry, on_fail);
+                const field_mono = self.fieldMonotypeForSource(source_mono, i);
+                const field_local = self.freshLocal(try self.runtimeValueLayoutFromMirMonotype(field_mono));
+                const field_match = try self.lowerPatternInto(field_local, field_mono, field_pattern, entry, on_fail);
                 entry = try self.emitAssignRef(
                     field_local,
                     borrowSemantics(
@@ -1244,6 +1560,7 @@ fn lowerPatternInto(
 fn lowerMatchBranchAlternative(
     self: *Self,
     source: LocalRef,
+    source_mono: MirMonotypeIdx,
     branch: MIR.Branch,
     pattern_id: MIR.PatternId,
     expr_result_contract: ExprSummaryContract,
@@ -1251,13 +1568,30 @@ fn lowerMatchBranchAlternative(
     next: CFStmtId,
     on_fail: CFStmtId,
 ) Allocator.Error!CFStmtId {
+    var branch_scope = if (self.current_local_symbols) |locals|
+        try self.cloneLocalSymbolSet(locals)
+    else
+        LocalSymbolSet{};
+    defer branch_scope.deinit(self.allocator);
+    try self.collectPatternLocalSymbols(&branch_scope, pattern_id);
+
+    const prev_local_symbols = self.current_local_symbols;
+    self.current_local_symbols = &branch_scope;
+    defer self.current_local_symbols = prev_local_symbols;
+
     var on_match = try self.lowerExprIntoStmtWithContract(branch.body, target, expr_result_contract, next);
     if (!branch.guard.isNone()) {
         const guard_local = self.freshLocal(try self.runtimeValueLayoutFromMirExpr(branch.guard));
         const guard_switch = try self.emitBoolSwitch(guard_local, on_match, on_fail);
         on_match = try self.lowerExprIntoStmt(branch.guard, guard_local, guard_switch);
     }
-    return self.lowerPatternInto(source, pattern_id, on_match, on_fail);
+    return self.lowerPatternInto(
+        source,
+        source_mono,
+        pattern_id,
+        on_match,
+        on_fail,
+    );
 }
 
 fn lowerMatchExprInto(
@@ -1267,6 +1601,7 @@ fn lowerMatchExprInto(
     target: LocalRef,
     next: CFStmtId,
 ) Allocator.Error!CFStmtId {
+    const cond_mono = self.mir_store.typeOf(match_expr.cond);
     const cond_local = self.freshLocal(try self.runtimeValueLayoutFromMirExpr(match_expr.cond));
     var entry = try self.lir_store.addCFStmt(.{ .runtime_error = {} });
     const expr_result_contract: ExprSummaryContract = switch (self.analyses.getExprResultContract(expr_id)) {
@@ -1290,6 +1625,7 @@ fn lowerMatchExprInto(
             pattern_i -= 1;
             branch_entry = try self.lowerMatchBranchAlternative(
                 cond_local,
+                cond_mono,
                 branch,
                 patterns[pattern_i].pattern,
                 expr_result_contract,
@@ -1330,12 +1666,27 @@ fn lowerExprIntoStmt(
             self.current_borrow_region = .{ .scope = scope_id };
             defer self.current_borrow_region = prev_region;
 
-            const scope_exit = try self.lir_store.addCFStmt(.{ .scope_exit = {} });
-            var body = try self.lowerExprIntoStmt(scope.body, target, scope_exit);
+            var scope_locals = if (self.current_local_symbols) |locals|
+                try self.cloneLocalSymbolSet(locals)
+            else
+                LocalSymbolSet{};
+            defer scope_locals.deinit(self.allocator);
+
             const bindings = self.mir_store.getBorrowBindings(scope.bindings);
+            for (bindings) |binding| {
+                try self.collectPatternLocalSymbols(&scope_locals, binding.pattern);
+            }
+
+            const scope_exit = try self.lir_store.addCFStmt(.{ .scope_exit = {} });
+            const prev_local_symbols = self.current_local_symbols;
+            self.current_local_symbols = &scope_locals;
+            defer self.current_local_symbols = prev_local_symbols;
+            var body = try self.lowerExprIntoStmt(scope.body, target, scope_exit);
             var i = bindings.len;
             while (i > 0) {
                 i -= 1;
+                self.removePatternLocalSymbols(&scope_locals, bindings[i].pattern);
+                self.current_local_symbols = &scope_locals;
                 body = try self.lowerBorrowBinding(bindings[i], scope_id, body);
             }
 
@@ -1466,20 +1817,28 @@ fn lowerExprIntoStmt(
             break :blk try self.lowerExprIntoStmt(access.struct_, source, assign_stmt);
         },
         .call => |call| blk: {
-            const proc_id = try self.lowerCalleeToProc(call.func);
+            const callee = try self.lowerCalleeToProc(call.func);
             const args = self.mir_store.getExprSpan(call.args);
-            const refs = try self.allocator.alloc(LocalRef, args.len);
+            const hidden_capture_local = try self.freshHiddenCaptureLocal(callee.mir_proc_id);
+            const hidden_capture_count: usize = @intFromBool(hidden_capture_local != null);
+            const refs = try self.allocator.alloc(LocalRef, args.len + hidden_capture_count);
             defer self.allocator.free(refs);
             for (args, 0..) |arg_expr, i| refs[i] = self.freshLocal(try self.runtimeValueLayoutFromMirExpr(arg_expr));
+            if (hidden_capture_local) |capture_local| {
+                refs[args.len] = capture_local;
+            }
             const ref_span = try self.lir_store.addLocalRefs(refs);
             const assign_stmt = try self.lir_store.addCFStmt(.{ .assign_call = .{
                 .target = target,
-                .result = self.callResultSemantics(proc_id, refs),
-                .proc = proc_id,
+                .result = self.callResultSemantics(callee.lir_proc_id, refs),
+                .proc = callee.lir_proc_id,
                 .args = ref_span,
                 .next = next,
             } });
             var entry = assign_stmt;
+            if (hidden_capture_local) |capture_local| {
+                entry = try self.lowerHiddenCaptureArg(call.func, capture_local, entry);
+            }
             var i = args.len;
             while (i > 0) {
                 i -= 1;
@@ -1502,18 +1861,28 @@ fn lowerExprIntoStmt(
             );
             break :blk try self.lowerExprIntoStmtWithContract(ret.expr, ret_local, .{ .concrete = proc_result_contract }, ret_stmt);
         },
-        .proc_ref, .closure_make => std.debug.panic(
-            "statement-only MirToLir must lower proc-backed values through lowered proc specs before value emission",
-            .{},
-        ),
+        .proc_ref, .closure_make => self.lowerProcBackedValueInto(mir_expr_id, target, next),
         .match_expr => |match_expr| self.lowerMatchExprInto(mir_expr_id, match_expr, target, next),
         .loop => |loop_expr| blk: {
             const exit_join = self.freshJoinPoint();
             const loop_head = self.freshJoinPoint();
+            const carried_args = try self.collectLoopCarrierLocals(loop_expr.body);
+            const initial_carried_values = self.lir_store.getLocalRefs(carried_args);
+            const loop_params = try self.allocator.alloc(LocalRef, initial_carried_values.len);
+            defer self.allocator.free(loop_params);
 
-            const jump_loop = try self.lir_store.addCFStmt(.{ .jump = .{
+            for (initial_carried_values, 0..) |carried, i| {
+                loop_params[i] = self.freshLocal(carried.layout_idx);
+            }
+            const loop_param_span = try self.lir_store.addLocalRefs(loop_params);
+
+            const initial_jump = try self.lir_store.addCFStmt(.{ .jump = .{
                 .target = loop_head,
-                .args = LocalRefSpan.empty(),
+                .args = carried_args,
+            } });
+            const backedge_jump = try self.lir_store.addCFStmt(.{ .jump = .{
+                .target = loop_head,
+                .args = carried_args,
             } });
 
             const exit_body = try self.emitAssignUnit(target, next);
@@ -1522,12 +1891,23 @@ fn lowerExprIntoStmt(
             defer _ = self.break_targets.pop();
 
             const body_result = self.freshLocal(result_layout);
-            const body = try self.lowerExprIntoStmt(loop_expr.body, body_result, jump_loop);
+            var body = try self.lowerExprIntoStmt(loop_expr.body, body_result, backedge_jump);
+            const carried_values = self.lir_store.getLocalRefs(carried_args);
+            var i = loop_params.len;
+            while (i > 0) {
+                i -= 1;
+                body = try self.emitAssignRef(
+                    carried_values[i],
+                    aliasSemantics(loop_params[i], LIR.RefProjectionSpan.empty()),
+                    .{ .local = loop_params[i] },
+                    body,
+                );
+            }
             const loop_join = try self.lir_store.addCFStmt(.{ .join = .{
                 .id = loop_head,
-                .params = LocalRefSpan.empty(),
+                .params = loop_param_span,
                 .body = body,
-                .remainder = jump_loop,
+                .remainder = initial_jump,
             } });
 
             break :blk try self.lir_store.addCFStmt(.{ .join = .{
@@ -1550,28 +1930,15 @@ fn lowerExprIntoStmt(
     };
 }
 
-fn lowerCalleeToProc(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirProcSpecId {
-    switch (self.mir_store.getExpr(mir_expr_id)) {
-        .proc_ref, .closure_make, .lookup => {},
-        .dbg_expr => |dbg_expr| return self.lowerCalleeToProc(dbg_expr.expr),
-        .expect => |expect| return self.lowerCalleeToProc(expect.body),
-        .return_expr => |ret| return self.lowerCalleeToProc(ret.expr),
-        .block => |block| {
-            if (self.mir_store.getStmts(block.stmts).len != 0) {
-                std.debug.panic(
-                    "MirToLir requires call callees to be direct proc-backed values, not statementful blocks",
-                    .{},
-                );
-            }
-            return self.lowerCalleeToProc(block.final_expr);
-        },
-        else => std.debug.panic("MirToLir requires direct proc-backed callees before strongest-form lowering", .{}),
-    }
-    const proc_id = self.mir_store.resolveCallableProcId(mir_expr_id) orelse std.debug.panic(
-        "MirToLir invariant violated: admissible callee form did not resolve to a MIR proc",
+fn lowerCalleeToProc(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LoweredCallee {
+    const mir_proc_id = self.analyses.resolveCallableProcId(self.mir_store, mir_expr_id) orelse std.debug.panic(
+        "MirToLir requires call callees to resolve to a unique MIR proc before strongest-form lowering",
         .{},
     );
-    return self.lowerProc(proc_id);
+    return .{
+        .mir_proc_id = mir_proc_id,
+        .lir_proc_id = try self.lowerProc(mir_proc_id),
+    };
 }
 
 fn lowerProc(self: *Self, proc_id: MIR.ProcId) Allocator.Error!LirProcSpecId {
@@ -1582,27 +1949,20 @@ fn lowerProc(self: *Self, proc_id: MIR.ProcId) Allocator.Error!LirProcSpecId {
 
     const ret_layout = try self.mir_layout_resolver.resolve(proc.ret_monotype, null);
 
-    const arg_patterns = self.mir_store.getPatternSpan(proc.params);
-    const args = try self.allocator.alloc(LocalRef, arg_patterns.len);
+    const arg_count = self.mir_store.procValueParamCount(proc);
+    const args = try self.allocator.alloc(LocalRef, arg_count);
     defer self.allocator.free(args);
 
     var local_symbols = LocalSymbolSet{};
     defer local_symbols.deinit(self.allocator);
-    for (arg_patterns) |arg_pat| {
+    for (0..arg_count) |i| {
+        const arg_pat = self.mir_store.getProcValueParamPattern(proc, i);
         try self.collectPatternLocalSymbols(&local_symbols, arg_pat);
     }
-    try self.collectExprLocalSymbols(&local_symbols, proc.body);
-
-    for (arg_patterns, 0..) |arg_pat, i| {
+    for (0..arg_count) |i| {
+        const arg_pat = self.mir_store.getProcValueParamPattern(proc, i);
         const arg_layout = try self.runtimeValueLayoutFromMirPattern(arg_pat);
-        args[i] = switch (self.mir_store.getPattern(arg_pat)) {
-            .bind => |symbol| .{ .symbol = symbol, .layout_idx = arg_layout },
-            .wildcard => self.freshLocal(arg_layout),
-            else => std.debug.panic(
-                "MirToLir invariant violated: proc arg pattern {s} must be lowered before statement-only LIR",
-                .{@tagName(self.mir_store.getPattern(arg_pat))},
-            ),
-        };
+        args[i] = self.freshLocal(arg_layout);
     }
 
     const arg_span = try self.lir_store.addLocalRefs(args);
@@ -1634,7 +1994,20 @@ fn lowerProc(self: *Self, proc_id: MIR.ProcId) Allocator.Error!LirProcSpecId {
 
     const target = self.freshLocal(ret_layout);
     const ret_stmt = try self.emitRet(target);
-    const body = try self.lowerExprIntoStmtWithContract(proc.body, target, .{ .concrete = summary_result_contract }, ret_stmt);
+    var body = try self.lowerExprIntoStmtWithContract(proc.body, target, .{ .concrete = summary_result_contract }, ret_stmt);
+    const param_fail = try self.lir_store.addCFStmt(.{ .runtime_error = {} });
+    var i = arg_count;
+    while (i > 0) {
+        i -= 1;
+        const arg_pat = self.mir_store.getProcValueParamPattern(proc, i);
+        body = try self.lowerPatternInto(
+            args[i],
+            self.mir_store.patternTypeOf(arg_pat),
+            arg_pat,
+            body,
+            param_fail,
+        );
+    }
 
     if (builtin.mode == .Debug) {
         // This verifier exists only to catch compiler implementation bugs by
