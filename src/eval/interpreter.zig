@@ -321,6 +321,7 @@ pub const Interpreter = struct {
         Crash,
         DivisionByZero,
         EarlyReturn,
+        InvalidForClauseAliasRange,
         IntegerOverflow,
         InvalidMethodReceiver,
         InvalidNumExt,
@@ -843,11 +844,8 @@ pub const Interpreter = struct {
             // Get the type aliases for this required type
             const range_start = @intFromEnum(required_type.type_aliases.start);
             const range_end = range_start + required_type.type_aliases.count;
-            if (builtin.mode == .Debug and range_end > all_aliases.len) {
-                std.debug.panic(
-                    "Interpreter invariant violated: requires-type alias range start={d} count={d} exceeds for-clause alias storage len={d}",
-                    .{ range_start, required_type.type_aliases.count, all_aliases.len },
-                );
+            if (range_end > all_aliases.len) {
+                return error.InvalidForClauseAliasRange;
             }
             const type_aliases_slice = all_aliases[range_start..range_end];
 

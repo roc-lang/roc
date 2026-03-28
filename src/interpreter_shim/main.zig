@@ -835,8 +835,15 @@ fn createInterpreter(env_ptr: *ModuleEnv, app_env: ?*ModuleEnv, builtin_modules:
     };
 
     // Setup for-clause type mappings from platform to app
-    interpreter.setupForClauseTypeMappings(env_ptr) catch {
-        roc_ops.crash("INTERPRETER SHIM: Failed to setup for-clause type mappings");
+    interpreter.setupForClauseTypeMappings(env_ptr) catch |err| {
+        switch (err) {
+            eval.Interpreter.Error.InvalidForClauseAliasRange => {
+                roc_ops.crash("INTERPRETER SHIM: invalid for-clause alias metadata");
+            },
+            else => {
+                roc_ops.crash("INTERPRETER SHIM: failed to setup for-clause type mappings");
+            },
+        }
         return error.InterpreterSetupFailed;
     };
 
