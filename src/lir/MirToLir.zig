@@ -1,10 +1,10 @@
 //! MIR -> strongest-form statement-only LIR lowering.
 //!
-//! This pass targets the statement/control-flow IR directly:
-//! - every MIR value is lowered into an explicit target local
-//! - sequencing is represented only through `next` statement edges
-//! - borrow scopes become first-class `CFStmt.borrow_scope` regions
-//! - proc result contracts are instantiated as explicit result semantics
+//! This pass assumes strongest-form statement MIR:
+//! - all intermediate values live in explicit MIR locals
+//! - control flow is explicit MIR `CFStmt`
+//! - lambdas/closures are still explicit MIR concepts
+//! - patterns still exist and are lowered here into explicit ref/projection flow
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -33,9 +33,9 @@ const LocalRefSpan = LIR.LocalSpan;
 const ResultSemantics = LIR.ResultSemantics;
 const RefOp = LIR.RefOp;
 const SummaryContract = ProcResultSummary.ProcResultContract;
-const ExprSummaryContract = ProcResultSummary.ExprResultContract;
-const LoweredProcMap = std.AutoHashMap(u32, LirProcSpecId);
-const LocalSymbolSet = std.AutoHashMapUnmanaged(u64, void);
+const LoweredLambdaMap = std.AutoHashMap(u32, LirProcSpecId);
+const MirToLirLocalMap = std.AutoHashMap(u32, LocalRef);
+const MirToLirStmtMap = std.AutoHashMap(u32, CFStmtId);
 const dec_literal_scale: i128 = std.math.pow(i128, 10, 18);
 
 const BuilderProcHeader = struct {
@@ -51,6 +51,27 @@ const BuilderProc = union(enum) {
     resolved: LirProcSpec,
 };
 
+const EntrypointCallable = union(enum) {
+    lambda: MIR.LambdaId,
+    closure: struct {
+        lambda: MIR.LambdaId,
+        captures: MIR.LocalId,
+    },
+};
+
+const LinearValueDef = union(enum) {
+    symbol: MIR.Symbol,
+    alias: MIR.LocalId,
+    lambda: MIR.LambdaId,
+    closure: MIR.LambdaId,
+    struct_value: MIR.LocalSpan,
+    field: struct {
+        source: MIR.LocalId,
+        field_idx: u32,
+    },
+    nominal: MIR.LocalId,
+};
+
 const Self = @This();
 
 allocator: Allocator,
@@ -59,19 +80,12 @@ lir_store: *LirStore,
 layout_store: *layout.Store,
 mir_layout_resolver: layout.MirMonotypeLayoutResolver,
 analyses: *const Analyses,
-lowered_procs: LoweredProcMap,
+lowered_lambdas: LoweredLambdaMap,
 builder_procs: std.ArrayList(BuilderProc),
-active_value_defs: LocalSymbolSet,
-proc_runtime_ret_layouts: std.AutoHashMap(u32, layout.Idx),
-resolving_proc_runtime_ret_layouts: std.AutoHashMap(u32, void),
-current_local_symbols: ?*const LocalSymbolSet = null,
-flushed: bool = false,
-current_proc_result_summary: ?SummaryContract = null,
-
-next_borrow_scope: u32 = 0,
+current_local_map: ?*MirToLirLocalMap = null,
+current_stmt_map: ?*MirToLirStmtMap = null,
 current_borrow_region: LIR.BorrowRegion = .proc,
-next_join_point: u32 = 0,
-break_targets: std.ArrayList(JoinPointId) = .empty,
+flushed: bool = false,
 
 /// Initializes MIR-to-LIR lowering state over a finished MIR module.
 pub fn init(
@@ -92,23 +106,15 @@ pub fn init(
             layout_store,
         ),
         .analyses = analyses,
-        .lowered_procs = LoweredProcMap.init(allocator),
+        .lowered_lambdas = LoweredLambdaMap.init(allocator),
         .builder_procs = std.ArrayList(BuilderProc).empty,
-        .active_value_defs = .empty,
-        .proc_runtime_ret_layouts = std.AutoHashMap(u32, layout.Idx).init(allocator),
-        .resolving_proc_runtime_ret_layouts = std.AutoHashMap(u32, void).init(allocator),
-        .break_targets = .empty,
     };
 }
 
 /// Releases temporary lowering state owned by this translator.
 pub fn deinit(self: *Self) void {
-    self.lowered_procs.deinit();
+    self.lowered_lambdas.deinit();
     self.builder_procs.deinit(self.allocator);
-    self.active_value_defs.deinit(self.allocator);
-    self.proc_runtime_ret_layouts.deinit();
-    self.resolving_proc_runtime_ret_layouts.deinit();
-    self.break_targets.deinit(self.allocator);
     self.mir_layout_resolver.deinit();
 }
 
@@ -118,10 +124,10 @@ pub fn lower(self: *Self, root_const_id: MIR.ConstDefId) Allocator.Error!LirProc
 
     const root_const = self.mir_store.getConstDef(root_const_id);
     const ret_layout = try self.runtimeValueLayoutFromMirMonotype(root_const.monotype);
-    const summary_contract = self.analyses.getConstResultContract(root_const_id);
-    const body = try self.lowerEntrypointBody(root_const.body, ret_layout, summary_contract);
-    const args = LocalRefSpan.empty();
-    const result_contract = try self.lowerSummaryProcResultContract(summary_contract);
+    const result_contract = try self.lowerSummaryProcResultContract(
+        self.analyses.getConstResultContract(root_const_id),
+    );
+    const body = try self.lowerRootBody(root_const.body);
 
     if (builtin.mode == .Debug) {
         // This verifier exists only to catch compiler implementation bugs by
@@ -130,7 +136,7 @@ pub fn lower(self: *Self, root_const_id: MIR.ConstDefId) Allocator.Error!LirProc
         try DebugVerifyLir.verifyProc(
             self.allocator,
             self.lir_store,
-            args,
+            LocalRefSpan.empty(),
             result_contract,
             body,
         );
@@ -138,10 +144,11 @@ pub fn lower(self: *Self, root_const_id: MIR.ConstDefId) Allocator.Error!LirProc
 
     const proc = LirProcSpec{
         .name = self.lir_store.freshSyntheticSymbol(),
-        .args = args,
+        .args = LocalRefSpan.empty(),
         .body = body,
         .ret_layout = ret_layout,
         .result_contract = result_contract,
+        .hosted = null,
     };
     const root_proc_id = try self.addResolvedProc(proc);
     try self.flush();
@@ -213,16 +220,6 @@ fn ensureCanLowerMoreProcs(self: *const Self) void {
     }
 }
 
-fn freshBorrowScope(self: *Self) LIR.BorrowScopeId {
-    defer self.next_borrow_scope += 1;
-    return @enumFromInt(self.next_borrow_scope);
-}
-
-fn freshJoinPoint(self: *Self) JoinPointId {
-    defer self.next_join_point += 1;
-    return @enumFromInt(self.next_join_point);
-}
-
 fn freshLocal(self: *Self, layout_idx: layout.Idx) Allocator.Error!LocalRef {
     return self.lir_store.addLocal(.{
         .layout_idx = layout_idx,
@@ -240,52 +237,75 @@ fn runtimeRepresentationLayoutIdx(self: *Self, layout_idx: layout.Idx) layout.Id
     };
 }
 
-fn runtimeProcValueLayout(self: *Self, proc_id: MIR.ProcId) Allocator.Error!layout.Idx {
-    const proc = self.mir_store.getProc(proc_id);
-    if (!proc.captures_param.isNone()) {
-        return self.runtimeValueLayoutFromMirPattern(proc.captures_param);
-    }
-    return self.runtimeRepresentationLayoutIdx(try self.mir_layout_resolver.resolve(proc.fn_monotype, null));
-}
-
-fn runtimeProcReturnLayout(self: *Self, proc_id: MIR.ProcId) Allocator.Error!layout.Idx {
-    const key = @as(u32, @intFromEnum(proc_id));
-    if (self.proc_runtime_ret_layouts.get(key)) |existing| return existing;
-
-    const gop = try self.resolving_proc_runtime_ret_layouts.getOrPut(key);
-    if (gop.found_existing) {
-        std.debug.panic(
-            "MirToLir invariant violated: recursive runtime return-layout resolution for proc {d}",
-            .{key},
-        );
-    }
-    defer _ = self.resolving_proc_runtime_ret_layouts.remove(key);
-
-    const ret_layout = try self.runtimeValueLayoutFromMirExpr(self.mir_store.getProc(proc_id).body);
-    try self.proc_runtime_ret_layouts.put(key, ret_layout);
-    return ret_layout;
-}
-
-fn runtimeValueLayoutFromMirExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!layout.Idx {
-    if (self.mir_store.resolveCallableProcId(mir_expr_id)) |proc_id| {
-        return self.runtimeProcValueLayout(proc_id);
-    }
-
-    return switch (self.mir_store.getExpr(mir_expr_id)) {
-        .call => |call| self.runtimeProcReturnLayout(call.proc),
-        else => self.runtimeRepresentationLayoutIdx(try self.mir_layout_resolver.resolve(self.mir_store.typeOf(mir_expr_id), null)),
-    };
+fn runtimeValueLayoutFromMirMonotype(self: *Self, monotype: MirMonotypeIdx) Allocator.Error!layout.Idx {
+    return self.runtimeRepresentationLayoutIdx(try self.mir_layout_resolver.resolve(monotype, null));
 }
 
 fn runtimeValueLayoutFromMirPattern(self: *Self, pattern_id: MIR.PatternId) Allocator.Error!layout.Idx {
-    if (self.mir_store.resolveCallableProcIdForPattern(pattern_id)) |proc_id| {
-        return self.runtimeProcValueLayout(proc_id);
-    }
-    return self.runtimeRepresentationLayoutIdx(try self.mir_layout_resolver.resolve(self.mir_store.patternTypeOf(pattern_id), null));
+    return self.runtimeValueLayoutFromMirMonotype(self.mir_store.patternTypeOf(pattern_id));
 }
 
-fn runtimeValueLayoutFromMirMonotype(self: *Self, monotype: MirMonotypeIdx) Allocator.Error!layout.Idx {
-    return self.runtimeRepresentationLayoutIdx(try self.mir_layout_resolver.resolve(monotype, null));
+fn runtimeValueLayoutFromMirLocal(self: *Self, local_id: MIR.LocalId) Allocator.Error!layout.Idx {
+    return self.runtimeValueLayoutFromMirMonotype(self.mir_store.getLocal(local_id).monotype);
+}
+
+fn runtimeLambdaValueLayout(self: *Self, lambda_id: MIR.LambdaId) Allocator.Error!layout.Idx {
+    const lambda = self.mir_store.getLambda(lambda_id);
+    if (!lambda.captures_param.isNone()) {
+        return self.runtimeValueLayoutFromMirPattern(lambda.captures_param);
+    }
+    return self.runtimeRepresentationLayoutIdx(try self.mir_layout_resolver.resolve(lambda.fn_monotype, null));
+}
+
+fn runtimeLambdaReturnLayout(self: *Self, lambda_id: MIR.LambdaId) Allocator.Error!layout.Idx {
+    return self.runtimeValueLayoutFromMirMonotype(self.mir_store.getLambda(lambda_id).ret_monotype);
+}
+
+fn translateBorrowScopeId(scope_id: MIR.BorrowScopeId) LIR.BorrowScopeId {
+    return @enumFromInt(@intFromEnum(scope_id));
+}
+
+fn translateJoinPointId(join_id: MIR.JoinPointId) JoinPointId {
+    return @enumFromInt(@intFromEnum(join_id));
+}
+
+fn currentLocalMap(self: *Self) *MirToLirLocalMap {
+    return self.current_local_map orelse std.debug.panic(
+        "MirToLir invariant violated: MIR local lowering requires an active local map",
+        .{},
+    );
+}
+
+fn currentStmtMap(self: *Self) *MirToLirStmtMap {
+    return self.current_stmt_map orelse std.debug.panic(
+        "MirToLir invariant violated: MIR stmt lowering requires an active statement map",
+        .{},
+    );
+}
+
+fn mapMirLocal(self: *Self, mir_local: MIR.LocalId) Allocator.Error!LocalRef {
+    const key = @as(u32, @intFromEnum(mir_local));
+    const map = self.currentLocalMap();
+    if (map.get(key)) |existing| return existing;
+
+    const mir_local_info = self.mir_store.getLocal(mir_local);
+    const lir_local = try self.lir_store.addLocal(.{
+        .layout_idx = try self.runtimeValueLayoutFromMirMonotype(mir_local_info.monotype),
+        .source_symbol = mir_local_info.source_symbol,
+    });
+    try map.put(key, lir_local);
+    return lir_local;
+}
+
+fn mapMirLocalSpan(self: *Self, span: MIR.LocalSpan) Allocator.Error!LocalRefSpan {
+    const mir_locals = self.mir_store.getLocalSpan(span);
+    const lir_locals = try self.allocator.alloc(LocalRef, mir_locals.len);
+    defer self.allocator.free(lir_locals);
+
+    for (mir_locals, 0..) |mir_local, i| {
+        lir_locals[i] = try self.mapMirLocal(mir_local);
+    }
+    return self.lir_store.addLocalSpan(lir_locals);
 }
 
 fn singleProjectionSpan(self: *Self, projection: LIR.RefProjection) Allocator.Error!LIR.RefProjectionSpan {
@@ -349,101 +369,6 @@ fn lowerSummaryProcResultContract(
     };
 }
 
-fn layoutNeedsRc(self: *const Self, layout_idx: layout.Idx) bool {
-    return self.layout_store.layoutContainsRefcounted(self.layout_store.getLayout(layout_idx));
-}
-
-fn summaryContractsEqual(self: *const Self, left: SummaryContract, right: SummaryContract) bool {
-    return switch (left) {
-        .fresh => right == .fresh,
-        .alias_of_param => |left_param| switch (right) {
-            .alias_of_param => |right_param| left_param.param_index == right_param.param_index and self.summaryProjectionSpansEqual(left_param.projections, right_param.projections),
-            else => false,
-        },
-        .borrow_of_param => |left_param| switch (right) {
-            .borrow_of_param => |right_param| left_param.param_index == right_param.param_index and self.summaryProjectionSpansEqual(left_param.projections, right_param.projections),
-            else => false,
-        },
-    };
-}
-
-fn summaryProjectionSpansEqual(
-    self: *const Self,
-    left: ProcResultSummary.RefProjectionSpan,
-    right: ProcResultSummary.RefProjectionSpan,
-) bool {
-    const left_items = self.analyses.getRefProjectionSpan(left);
-    const right_items = self.analyses.getRefProjectionSpan(right);
-    if (left_items.len != right_items.len) return false;
-    for (left_items, right_items) |lhs, rhs| {
-        if (!std.meta.eql(lhs, rhs)) return false;
-    }
-    return true;
-}
-
-fn exprSummaryContractsEqual(self: *const Self, left: ExprSummaryContract, right: ExprSummaryContract) bool {
-    return switch (left) {
-        .no_return => right == .no_return,
-        .borrow_of_fresh => right == .borrow_of_fresh,
-        .concrete => |left_contract| switch (right) {
-            .concrete => |right_contract| self.summaryContractsEqual(left_contract, right_contract),
-            else => false,
-        },
-    };
-}
-
-fn lowerExprIntoStmtWithContract(
-    self: *Self,
-    mir_expr_id: MIR.ExprId,
-    target: LocalRef,
-    desired_contract: ExprSummaryContract,
-    next: CFStmtId,
-) Allocator.Error!CFStmtId {
-    const actual_contract = self.analyses.getExprResultContract(mir_expr_id);
-    if (actual_contract == .no_return) {
-        return self.lowerExprIntoStmt(mir_expr_id, target, next);
-    }
-    if (self.exprSummaryContractsEqual(actual_contract, desired_contract)) {
-        return self.lowerExprIntoStmt(mir_expr_id, target, next);
-    }
-
-    if (desired_contract == .no_return) {
-        std.debug.panic(
-            "MirToLir invariant violated: value-position expr {d} cannot be normalized to no-return",
-            .{@intFromEnum(mir_expr_id)},
-        );
-    }
-
-    switch (desired_contract) {
-        .concrete => |desired_proc_contract| if (desired_proc_contract != .fresh) {
-            std.debug.panic(
-                "MirToLir invariant violated: strongest-form lowering cannot normalize expr {d} from {s} to {s}",
-                .{ @intFromEnum(mir_expr_id), @tagName(actual_contract), @tagName(desired_contract) },
-            );
-        },
-        else => std.debug.panic(
-            "MirToLir invariant violated: strongest-form lowering cannot normalize expr {d} from {s} to {s}",
-            .{ @intFromEnum(mir_expr_id), @tagName(actual_contract), @tagName(desired_contract) },
-        ),
-    }
-
-    const value_local = try self.freshLocal(target.layout_idx);
-    var normalized_next = try self.emitAssignRef(
-        target,
-        .fresh,
-        .{ .local = value_local },
-        next,
-    );
-    if (self.layoutNeedsRc(target.layout_idx)) {
-        normalized_next = try self.lir_store.addCFStmt(.{ .incref = .{
-            .value = value_local,
-            .count = 1,
-            .next = normalized_next,
-        } });
-    }
-    return self.lowerExprIntoStmt(mir_expr_id, value_local, normalized_next);
-}
-
 fn lowLevelResultSemantics(
     _: *Self,
     region: LIR.BorrowRegion,
@@ -465,15 +390,17 @@ fn lowLevelResultSemantics(
             "MirToLir invariant violated: no-return low-level {s} must not be lowered as a value-producing statement",
             .{@tagName(op)},
         ),
-        .requires_explicit_summary => blk: {
-            if (builtin.mode == .Debug) {
-                std.debug.panic(
-                    "MirToLir invariant violated: low-level result {s} must be explicitly classified",
-                    .{@tagName(op)},
-                );
-            }
-            break :blk .fresh;
-        },
+        .requires_explicit_summary => std.debug.panic(
+            "MirToLir invariant violated: low-level result {s} must be explicitly classified",
+            .{@tagName(op)},
+        ),
+    };
+}
+
+fn getProcResultContract(self: *const Self, proc_id: LirProcSpecId) LIR.ProcResultContract {
+    return switch (self.builder_procs.items[@intFromEnum(proc_id)]) {
+        .resolved => |proc| proc.result_contract,
+        .unresolved => |header| header.result_contract,
     };
 }
 
@@ -494,13 +421,6 @@ fn callResultSemantics(self: *Self, proc_id: LirProcSpecId, args: []const LocalR
                 "MirToLir invariant violated: proc {d} borrows param {d}, but call only has {d} args",
                 .{ @intFromEnum(proc_id), param_ref.param_index, args.len },
             ),
-    };
-}
-
-fn getProcResultContract(self: *const Self, proc_id: LirProcSpecId) LIR.ProcResultContract {
-    return switch (self.builder_procs.items[@intFromEnum(proc_id)]) {
-        .resolved => |proc| proc.result_contract,
-        .unresolved => |header| header.result_contract,
     };
 }
 
@@ -547,6 +467,19 @@ fn flushBuilderProcs(self: *Self) Allocator.Error!void {
     }
 }
 
+fn emitAssignSymbol(
+    self: *Self,
+    target: LocalRef,
+    symbol: MIR.Symbol,
+    next: CFStmtId,
+) Allocator.Error!CFStmtId {
+    return self.lir_store.addCFStmt(.{ .assign_symbol = .{
+        .target = target,
+        .symbol = symbol,
+        .next = next,
+    } });
+}
+
 fn emitAssignRef(
     self: *Self,
     target: LocalRef,
@@ -556,32 +489,20 @@ fn emitAssignRef(
 ) Allocator.Error!CFStmtId {
     switch (op) {
         .local => |source| {
-            if (target.symbol == source.symbol and target.layout_idx == source.layout_idx) {
-                switch (result) {
-                    .alias_of => |aliased| {
-                        if (aliased.owner.symbol == source.symbol and
-                            aliased.owner.layout_idx == source.layout_idx and
-                            aliased.projections.start == LIR.RefProjectionSpan.empty().start and
-                            aliased.projections.len == LIR.RefProjectionSpan.empty().len)
-                        {
-                            return next;
-                        }
-                    },
-                    .borrow_of => |borrowed| {
-                        if (borrowed.owner.symbol == source.symbol and
-                            borrowed.owner.layout_idx == source.layout_idx and
-                            borrowed.projections.start == LIR.RefProjectionSpan.empty().start and
-                            borrowed.projections.len == LIR.RefProjectionSpan.empty().len)
-                        {
-                            std.debug.panic(
-                                "MirToLir invariant violated: self-local borrow assign_ref must not be emitted",
-                                .{},
-                            );
-                        }
-                    },
-                    .fresh => {},
-                }
-            }
+            if (target == source) switch (result) {
+                .alias_of => |aliased| {
+                    if (aliased.owner == source and aliased.projections.isEmpty()) return next;
+                },
+                .borrow_of => |borrowed| {
+                    if (borrowed.owner == source and borrowed.projections.isEmpty()) {
+                        std.debug.panic(
+                            "MirToLir invariant violated: self-local borrow assign_ref must not be emitted",
+                            .{},
+                        );
+                    }
+                },
+                .fresh => {},
+            };
         },
         else => {},
     }
@@ -592,16 +513,6 @@ fn emitAssignRef(
         .op = op,
         .next = next,
     } });
-}
-
-fn needsFreshTempForSelfAliasResult(target: LocalRef, result: ResultSemantics) bool {
-    return switch (result) {
-        .alias_of => |aliased| aliased.owner.symbol == target.symbol and
-            aliased.owner.layout_idx == target.layout_idx and
-            aliased.projections.start == LIR.RefProjectionSpan.empty().start and
-            aliased.projections.len == LIR.RefProjectionSpan.empty().len,
-        .fresh, .borrow_of => false,
-    };
 }
 
 fn emitAssignLiteral(
@@ -627,744 +538,8 @@ fn emitAssignUnit(self: *Self, target: LocalRef, next: CFStmtId) Allocator.Error
     } });
 }
 
-fn lowerProcBackedValueInto(
-    self: *Self,
-    mir_expr_id: MIR.ExprId,
-    target: LocalRef,
-    next: CFStmtId,
-) Allocator.Error!CFStmtId {
-    return switch (self.mir_store.getExpr(mir_expr_id)) {
-        .proc_ref => |_| self.emitAssignUnit(target, next),
-        .closure_make => |closure| blk: {
-            const captures_expr = self.mir_store.getExpr(closure.captures);
-            const captures_fields = switch (captures_expr) {
-                .struct_ => |struct_| self.mir_store.getExprSpan(struct_.fields),
-                else => std.debug.panic(
-                    "MirToLir invariant violated: closure captures expr {d} must be a tuple/struct constructor before strongest-form lowering",
-                    .{@intFromEnum(closure.captures)},
-                ),
-            };
-
-            const refs = try self.allocator.alloc(LocalRef, captures_fields.len);
-            defer self.allocator.free(refs);
-            for (captures_fields, 0..) |field_expr, i| {
-                refs[i] = try self.freshLocal(try self.runtimeValueLayoutFromMirExpr(field_expr));
-            }
-            const ref_span = try self.lir_store.addLocalSpan(refs);
-            const assign_stmt = try self.lir_store.addCFStmt(.{ .assign_struct = .{
-                .target = target,
-                .result = .fresh,
-                .fields = ref_span,
-                .next = next,
-            } });
-            var entry = assign_stmt;
-            var i = captures_fields.len;
-            while (i > 0) {
-                i -= 1;
-                entry = try self.lowerExprIntoStmtWithContract(
-                    captures_fields[i],
-                    refs[i],
-                    .{ .concrete = .fresh },
-                    entry,
-                );
-            }
-            break :blk entry;
-        },
-        .dbg_expr => |dbg_expr| self.lowerProcBackedValueInto(dbg_expr.expr, target, next),
-        .expect => |expect| self.lowerProcBackedValueInto(expect.body, target, next),
-        .return_expr => |ret| self.lowerProcBackedValueInto(ret.expr, target, next),
-        .block => |block| self.lowerBlockInto(block, target, next),
-        else => std.debug.panic(
-            "MirToLir invariant violated: proc-backed value lowering received non-callable MIR expr {s}",
-            .{@tagName(self.mir_store.getExpr(mir_expr_id))},
-        ),
-    };
-}
-
-fn freshHiddenCaptureLocal(self: *Self, mir_proc_id: MIR.ProcId) Allocator.Error!?LocalRef {
-    const mir_proc = self.mir_store.getProc(mir_proc_id);
-    if (mir_proc.captures_param.isNone()) return null;
-    return try self.freshLocal(try self.runtimeValueLayoutFromMirPattern(mir_proc.captures_param));
-}
-
-fn lowerHiddenCaptureArg(
-    self: *Self,
-    callee_expr_id: MIR.ExprId,
-    hidden_capture_local: LocalRef,
-    next: CFStmtId,
-) Allocator.Error!CFStmtId {
-    const callable_local = try self.freshLocal(try self.runtimeValueLayoutFromMirExpr(callee_expr_id));
-    const bind_capture = try self.emitAssignRef(
-        hidden_capture_local,
-        aliasSemantics(callable_local, LIR.RefProjectionSpan.empty()),
-        .{ .local = callable_local },
-        next,
-    );
-    return self.lowerExprIntoStmt(callee_expr_id, callable_local, bind_capture);
-}
-
 fn emitRet(self: *Self, value: LocalRef) Allocator.Error!CFStmtId {
     return self.lir_store.addCFStmt(.{ .ret = .{ .value = value } });
-}
-
-const LoweredEntrypointProcBody = struct {
-    body: CFStmtId,
-    result_contract: LIR.ProcResultContract,
-};
-
-fn lowerEntrypointBody(
-    self: *Self,
-    root_body: MIR.CFStmtId,
-    ret_layout: layout.Idx,
-    result_contract: SummaryContract,
-) Allocator.Error!CFStmtId {
-    var local_symbols = LocalSymbolSet{};
-    defer local_symbols.deinit(self.allocator);
-
-    const prev_local_symbols = self.current_local_symbols;
-    const prev_result_contract = self.current_proc_result_summary;
-    self.current_local_symbols = &local_symbols;
-    self.current_proc_result_summary = result_contract;
-    defer self.current_local_symbols = prev_local_symbols;
-    defer self.current_proc_result_summary = prev_result_contract;
-
-    const target = try self.freshLocal(ret_layout);
-    const ret_stmt = try self.emitRet(target);
-    return self.lowerExprIntoStmtWithContract(root_body, target, .{ .concrete = result_contract }, ret_stmt);
-}
-
-fn lowerEntrypointProcBody(
-    self: *Self,
-    root_const_id: MIR.ConstDefId,
-    arg_locals: []const LocalRef,
-    ret_layout: layout.Idx,
-) Allocator.Error!LoweredEntrypointProcBody {
-    var local_symbols = LocalSymbolSet{};
-    defer local_symbols.deinit(self.allocator);
-
-    const prev_local_symbols = self.current_local_symbols;
-    self.current_local_symbols = &local_symbols;
-    defer self.current_local_symbols = prev_local_symbols;
-
-    const root_const = self.mir_store.getConstDef(root_const_id);
-    const mir_mono = self.mir_store.monotype_store.getMonotype(root_const.monotype);
-    const must_call = arg_locals.len != 0 or mir_mono == .func;
-
-    const root_result_contract = self.analyses.getConstResultContract(root_const_id);
-
-    if (!must_call) {
-        return .{
-            .body = try self.lowerEntrypointBody(root_const.body, ret_layout, root_result_contract),
-            .result_contract = try self.lowerSummaryProcResultContract(root_result_contract),
-        };
-    }
-
-    const target = try self.freshLocal(ret_layout);
-    const ret_stmt = try self.emitRet(target);
-    return self.lowerEntrypointCallableInto(root_const.body, arg_locals, target, ret_stmt);
-}
-
-fn loweredProcRetLayout(self: *const Self, proc_id: LirProcSpecId) layout.Idx {
-    return switch (self.builder_procs.items[@intFromEnum(proc_id)]) {
-        .resolved => |proc| proc.ret_layout,
-        .unresolved => |header| header.ret_layout,
-    };
-}
-
-fn lowerEntrypointCallResultContract(
-    self: *Self,
-    proc_id: LirProcSpecId,
-    visible_arg_count: usize,
-) LIR.ProcResultContract {
-    return switch (self.getProcResultContract(proc_id)) {
-        .fresh => .fresh,
-        .alias_of_param => |param_ref| {
-            if (param_ref.param_index >= visible_arg_count) {
-                std.debug.panic(
-                    "MirToLir invariant violated: entrypoint proc result cannot alias hidden closure captures",
-                    .{},
-                );
-            }
-            return .{ .alias_of_param = param_ref };
-        },
-        .borrow_of_param => |param_ref| {
-            if (param_ref.param_index >= visible_arg_count) {
-                std.debug.panic(
-                    "MirToLir invariant violated: entrypoint proc result cannot borrow hidden closure captures",
-                    .{},
-                );
-            }
-            return .{ .borrow_of_param = param_ref };
-        },
-    };
-}
-
-fn emitEntrypointCall(
-    self: *Self,
-    proc_id: LirProcSpecId,
-    visible_args: []const LocalRef,
-    hidden_capture: ?LocalRef,
-    target: LocalRef,
-    next: CFStmtId,
-) Allocator.Error!LoweredEntrypointProcBody {
-    const callee_ret_layout = self.loweredProcRetLayout(proc_id);
-    if (callee_ret_layout != target.layout_idx) {
-        std.debug.panic(
-            "MirToLir invariant violated: entrypoint wrapper result layout does not match callee result layout",
-            .{},
-        );
-    }
-
-    const has_capture = hidden_capture != null;
-    const call_arg_count = visible_args.len + @intFromBool(has_capture);
-    const call_args = try self.allocator.alloc(LocalRef, call_arg_count);
-    defer self.allocator.free(call_args);
-
-    @memcpy(call_args[0..visible_args.len], visible_args);
-    if (hidden_capture) |capture_local| {
-        call_args[visible_args.len] = capture_local;
-    }
-
-    const arg_span = try self.lir_store.addLocalSpan(call_args);
-    return .{
-        .body = try self.lir_store.addCFStmt(.{ .assign_call = .{
-            .target = target,
-            .result = self.callResultSemantics(proc_id, call_args),
-            .proc = proc_id,
-            .args = arg_span,
-            .next = next,
-        } }),
-        .result_contract = self.lowerEntrypointCallResultContract(proc_id, visible_args.len),
-    };
-}
-
-fn lowerEntrypointCallableInto(
-    self: *Self,
-    mir_expr_id: MIR.ExprId,
-    arg_locals: []const LocalRef,
-    target: LocalRef,
-    next: CFStmtId,
-) Allocator.Error!LoweredEntrypointProcBody {
-    return switch (self.mir_store.getExpr(mir_expr_id)) {
-        .proc_ref => |proc_id| self.emitEntrypointCall(
-            try self.lowerProc(proc_id),
-            arg_locals,
-            null,
-            target,
-            next,
-        ),
-        .closure_make => |closure| blk: {
-            const lowered_proc_id = try self.lowerProc(closure.proc);
-            const captures_local = try self.freshLocal(try self.runtimeValueLayoutFromMirExpr(closure.captures));
-            const emitted = try self.emitEntrypointCall(
-                lowered_proc_id,
-                arg_locals,
-                captures_local,
-                target,
-                next,
-            );
-            break :blk .{
-                .body = try self.lowerExprIntoStmt(closure.captures, captures_local, emitted.body),
-                .result_contract = emitted.result_contract,
-            };
-        },
-        .dbg_expr => |dbg_expr| self.lowerEntrypointCallableInto(dbg_expr.expr, arg_locals, target, next),
-        .expect => |expect| self.lowerEntrypointCallableInto(expect.body, arg_locals, target, next),
-        .return_expr => |ret| self.lowerEntrypointCallableInto(ret.expr, arg_locals, target, next),
-        .block => |block| blk: {
-            var lowered = try self.lowerEntrypointCallableInto(block.final_expr, arg_locals, target, next);
-            const stmts = self.mir_store.getStmts(block.stmts);
-            var i = stmts.len;
-            while (i > 0) {
-                i -= 1;
-                lowered.body = try self.lowerStmtInto(stmts[i], lowered.body);
-            }
-            break :blk lowered;
-        },
-        else => std.debug.panic(
-            "MirToLir invariant violated: entrypoint wrapper requires a proc-backed MIR callable",
-            .{},
-        ),
-    };
-}
-
-fn tagDiscriminantForExpr(
-    self: *Self,
-    mir_expr_id: MIR.ExprId,
-    tag_name: mir_mod.Monotype.Name,
-) u16 {
-    const mono = self.mir_store.monotype_store.getMonotype(self.mir_store.typeOf(mir_expr_id));
-    const tags = switch (mono) {
-        .tag_union => |tag_union| self.mir_store.monotype_store.getTags(tag_union.tags),
-        else => std.debug.panic(
-            "MirToLir invariant violated: tag expr does not have a tag-union monotype",
-            .{},
-        ),
-    };
-
-    for (tags, 0..) |tag, index| {
-        if (tag.name.textEqual(self.analyses.all_module_envs, tag_name)) return @intCast(index);
-    }
-
-    std.debug.panic(
-        "MirToLir invariant violated: tag constructor missing from result monotype",
-        .{},
-    );
-}
-
-fn lowerBorrowBindingPattern(
-    self: *Self,
-    pattern_id: MIR.PatternId,
-    source: LocalRef,
-    scope_id: LIR.BorrowScopeId,
-    next: CFStmtId,
-) Allocator.Error!CFStmtId {
-    return switch (self.mir_store.getPattern(pattern_id)) {
-        .bind => |symbol| self.emitAssignRef(
-            .{
-                .symbol = symbol,
-                .layout_idx = try self.runtimeValueLayoutFromMirPattern(pattern_id),
-            },
-            borrowSemantics(source, LIR.RefProjectionSpan.empty(), .{ .scope = scope_id }),
-            .{ .local = source },
-            next,
-        ),
-        .wildcard => next,
-        .as_pattern => |as_pattern| blk: {
-            const inner = try self.lowerBorrowBindingPattern(as_pattern.pattern, source, scope_id, next);
-            break :blk try self.emitAssignRef(
-                .{
-                    .symbol = as_pattern.symbol,
-                    .layout_idx = try self.runtimeValueLayoutFromMirPattern(pattern_id),
-                },
-                borrowSemantics(source, LIR.RefProjectionSpan.empty(), .{ .scope = scope_id }),
-                .{ .local = source },
-                inner,
-            );
-        },
-        else => std.debug.panic(
-            "MirToLir invariant violated: borrow-scope pattern {s} must be lowered before statement-only LIR",
-            .{@tagName(self.mir_store.getPattern(pattern_id))},
-        ),
-    };
-}
-
-fn lowerBorrowBinding(
-    self: *Self,
-    binding: MIR.BorrowBinding,
-    scope_id: LIR.BorrowScopeId,
-    next: CFStmtId,
-) Allocator.Error!CFStmtId {
-    const source = try self.freshLocal(try self.runtimeValueLayoutFromMirExpr(binding.expr));
-    const body = try self.lowerBorrowBindingPattern(binding.pattern, source, scope_id, next);
-    return self.lowerExprIntoStmt(binding.expr, source, body);
-}
-
-fn lowerStmtBinding(self: *Self, binding: MIR.Stmt.Binding, next: CFStmtId) Allocator.Error!CFStmtId {
-    return switch (self.mir_store.getPattern(binding.pattern)) {
-        .bind => |symbol| self.lowerExprIntoStmt(
-            binding.expr,
-            .{
-                .symbol = symbol,
-                .layout_idx = try self.runtimeValueLayoutFromMirPattern(binding.pattern),
-            },
-            next,
-        ),
-        .wildcard => self.lowerExprIntoStmt(
-            binding.expr,
-            try self.freshLocal(try self.runtimeValueLayoutFromMirExpr(binding.expr)),
-            next,
-        ),
-        else => std.debug.panic(
-            "MirToLir invariant violated: block binding pattern {s} must be lowered before statement-only LIR",
-            .{@tagName(self.mir_store.getPattern(binding.pattern))},
-        ),
-    };
-}
-
-fn lowerStmtInto(self: *Self, stmt: MIR.Stmt, next: CFStmtId) Allocator.Error!CFStmtId {
-    return switch (stmt) {
-        .decl_const => |binding| self.lowerStmtBinding(binding, next),
-        .decl_var => |binding| self.lowerStmtBinding(binding, next),
-        .mutate_var => |binding| self.lowerStmtBinding(binding, next),
-    };
-}
-
-fn rememberStmtBoundLocals(
-    self: *Self,
-    local_symbols: *LocalSymbolSet,
-    stmt: MIR.Stmt,
-) Allocator.Error!void {
-    switch (stmt) {
-        .decl_const => |binding| try self.collectPatternLocalSymbols(local_symbols, binding.pattern),
-        .decl_var => |binding| try self.collectPatternLocalSymbols(local_symbols, binding.pattern),
-        .mutate_var => {},
-    }
-}
-
-fn removePatternLocalSymbols(
-    self: *Self,
-    local_symbols: *LocalSymbolSet,
-    pattern_id: MIR.PatternId,
-) void {
-    switch (self.mir_store.getPattern(pattern_id)) {
-        .bind => |symbol| _ = local_symbols.remove(symbol.raw()),
-        .wildcard,
-        .int_literal,
-        .str_literal,
-        .dec_literal,
-        .frac_f32_literal,
-        .frac_f64_literal,
-        .runtime_error,
-        => {},
-        .tag => |tag| {
-            for (self.mir_store.getPatternSpan(tag.args)) |arg_pattern| {
-                self.removePatternLocalSymbols(local_symbols, arg_pattern);
-            }
-        },
-        .struct_destructure => |destructure| {
-            for (self.mir_store.getPatternSpan(destructure.fields)) |field_pattern| {
-                self.removePatternLocalSymbols(local_symbols, field_pattern);
-            }
-        },
-        .list_destructure => |destructure| {
-            for (self.mir_store.getPatternSpan(destructure.patterns)) |elem_pattern| {
-                self.removePatternLocalSymbols(local_symbols, elem_pattern);
-            }
-            if (!destructure.rest_pattern.isNone()) {
-                self.removePatternLocalSymbols(local_symbols, destructure.rest_pattern);
-            }
-        },
-        .as_pattern => |as_pattern| {
-            _ = local_symbols.remove(as_pattern.symbol.raw());
-            self.removePatternLocalSymbols(local_symbols, as_pattern.pattern);
-        },
-    }
-}
-
-fn removeStmtBoundLocals(
-    self: *Self,
-    local_symbols: *LocalSymbolSet,
-    stmt: MIR.Stmt,
-) void {
-    switch (stmt) {
-        .decl_const => |binding| self.removePatternLocalSymbols(local_symbols, binding.pattern),
-        .decl_var => |binding| self.removePatternLocalSymbols(local_symbols, binding.pattern),
-        .mutate_var => {},
-    }
-}
-
-fn lowerBlockInto(
-    self: *Self,
-    block: anytype,
-    target: LocalRef,
-    next: CFStmtId,
-) Allocator.Error!CFStmtId {
-    const stmts = self.mir_store.getStmts(block.stmts);
-    var block_scope = if (self.current_local_symbols) |locals|
-        try self.cloneLocalSymbolSet(locals)
-    else
-        LocalSymbolSet{};
-    defer block_scope.deinit(self.allocator);
-
-    for (stmts) |stmt| {
-        try self.rememberStmtBoundLocals(&block_scope, stmt);
-    }
-
-    const prev_local_symbols = self.current_local_symbols;
-    self.current_local_symbols = &block_scope;
-    defer self.current_local_symbols = prev_local_symbols;
-
-    var entry = try self.lowerExprIntoStmt(block.final_expr, target, next);
-    var i = stmts.len;
-    while (i > 0) {
-        i -= 1;
-        self.removeStmtBoundLocals(&block_scope, stmts[i]);
-        entry = try self.lowerStmtInto(stmts[i], entry);
-    }
-    return entry;
-}
-
-fn collectPatternLocalSymbols(
-    self: *Self,
-    local_symbols: *LocalSymbolSet,
-    pattern_id: MIR.PatternId,
-) Allocator.Error!void {
-    switch (self.mir_store.getPattern(pattern_id)) {
-        .bind => |symbol| try local_symbols.put(self.allocator, symbol.raw(), {}),
-        .wildcard,
-        .int_literal,
-        .str_literal,
-        .dec_literal,
-        .frac_f32_literal,
-        .frac_f64_literal,
-        .runtime_error,
-        => {},
-        .tag => |tag| {
-            for (self.mir_store.getPatternSpan(tag.args)) |arg_pattern| {
-                try self.collectPatternLocalSymbols(local_symbols, arg_pattern);
-            }
-        },
-        .struct_destructure => |destructure| {
-            for (self.mir_store.getPatternSpan(destructure.fields)) |field_pattern| {
-                try self.collectPatternLocalSymbols(local_symbols, field_pattern);
-            }
-        },
-        .list_destructure => |destructure| {
-            for (self.mir_store.getPatternSpan(destructure.patterns)) |elem_pattern| {
-                try self.collectPatternLocalSymbols(local_symbols, elem_pattern);
-            }
-            if (!destructure.rest_pattern.isNone()) {
-                try self.collectPatternLocalSymbols(local_symbols, destructure.rest_pattern);
-            }
-        },
-        .as_pattern => |as_pattern| {
-            try local_symbols.put(self.allocator, as_pattern.symbol.raw(), {});
-            try self.collectPatternLocalSymbols(local_symbols, as_pattern.pattern);
-        },
-    }
-}
-
-fn cloneLocalSymbolSet(self: *Self, source: *const LocalSymbolSet) Allocator.Error!LocalSymbolSet {
-    var clone = LocalSymbolSet{};
-    var it = source.iterator();
-    while (it.next()) |entry| {
-        try clone.put(self.allocator, entry.key_ptr.*, {});
-    }
-    return clone;
-}
-
-const LoopCarrierCollector = struct {
-    lowerer: *Self,
-    carriers: std.ArrayList(LocalRef),
-    carrier_indices: std.AutoHashMapUnmanaged(u64, usize) = .empty,
-
-    fn init(lowerer: *Self) LoopCarrierCollector {
-        return .{
-            .lowerer = lowerer,
-            .carriers = std.ArrayList(LocalRef).empty,
-        };
-    }
-
-    fn deinit(self: *LoopCarrierCollector) void {
-        self.carriers.deinit(self.lowerer.allocator);
-        self.carrier_indices.deinit(self.lowerer.allocator);
-    }
-
-    fn rememberPatternLocals(
-        self: *LoopCarrierCollector,
-        local_scope: *LocalSymbolSet,
-        pattern_id: MIR.PatternId,
-    ) Allocator.Error!void {
-        switch (self.lowerer.mir_store.getPattern(pattern_id)) {
-            .bind => |symbol| try local_scope.put(self.lowerer.allocator, symbol.raw(), {}),
-            .wildcard,
-            .int_literal,
-            .str_literal,
-            .dec_literal,
-            .frac_f32_literal,
-            .frac_f64_literal,
-            .runtime_error,
-            => {},
-            .tag => |tag| {
-                for (self.lowerer.mir_store.getPatternSpan(tag.args)) |arg_pattern| {
-                    try self.rememberPatternLocals(local_scope, arg_pattern);
-                }
-            },
-            .struct_destructure => |destructure| {
-                for (self.lowerer.mir_store.getPatternSpan(destructure.fields)) |field_pattern| {
-                    try self.rememberPatternLocals(local_scope, field_pattern);
-                }
-            },
-            .list_destructure => |destructure| {
-                for (self.lowerer.mir_store.getPatternSpan(destructure.patterns)) |elem_pattern| {
-                    try self.rememberPatternLocals(local_scope, elem_pattern);
-                }
-                if (!destructure.rest_pattern.isNone()) {
-                    try self.rememberPatternLocals(local_scope, destructure.rest_pattern);
-                }
-            },
-            .as_pattern => |as_pattern| {
-                try local_scope.put(self.lowerer.allocator, as_pattern.symbol.raw(), {});
-                try self.rememberPatternLocals(local_scope, as_pattern.pattern);
-            },
-        }
-    }
-
-    fn rememberCarrierSymbol(
-        self: *LoopCarrierCollector,
-        symbol: MIR.Symbol,
-        layout_idx: layout.Idx,
-    ) Allocator.Error!void {
-        const symbol_key = symbol.raw();
-        if (self.carrier_indices.get(symbol_key)) |existing_index| {
-            const existing = self.carriers.items[existing_index];
-            if (existing.layout_idx != layout_idx) {
-                std.debug.panic(
-                    "MirToLir invariant violated: loop-carried symbol {d} was observed with incompatible layouts {d} and {d}",
-                    .{ symbol_key, @intFromEnum(existing.layout_idx), @intFromEnum(layout_idx) },
-                );
-            }
-            return;
-        }
-
-        try self.carrier_indices.put(self.lowerer.allocator, symbol_key, self.carriers.items.len);
-        try self.carriers.append(self.lowerer.allocator, .{
-            .symbol = symbol,
-            .layout_idx = layout_idx,
-        });
-    }
-
-    fn collectStmt(self: *LoopCarrierCollector, stmt: MIR.Stmt, local_scope: *LocalSymbolSet) Allocator.Error!void {
-        switch (stmt) {
-            .decl_const => |binding| {
-                try self.collectExpr(binding.expr, local_scope);
-                try self.rememberPatternLocals(local_scope, binding.pattern);
-            },
-            .decl_var => |binding| {
-                try self.collectExpr(binding.expr, local_scope);
-                try self.rememberPatternLocals(local_scope, binding.pattern);
-            },
-            .mutate_var => |binding| {
-                try self.collectExpr(binding.expr, local_scope);
-            },
-        }
-    }
-
-    fn collectExpr(
-        self: *LoopCarrierCollector,
-        expr_id: MIR.ExprId,
-        local_scope: *LocalSymbolSet,
-    ) Allocator.Error!void {
-        switch (self.lowerer.mir_store.getExpr(expr_id)) {
-            .int,
-            .frac_f32,
-            .frac_f64,
-            .dec,
-            .str,
-            .proc_ref,
-            .runtime_err_can,
-            .runtime_err_type,
-            .runtime_err_ellipsis,
-            .runtime_err_anno_only,
-            .crash,
-            .break_expr,
-            => {},
-            .lookup => |symbol| {
-                if (!local_scope.contains(symbol.raw()) and self.lowerer.mir_store.isSymbolReassignable(symbol)) {
-                    try self.rememberCarrierSymbol(symbol, try self.lowerer.runtimeValueLayoutFromMirExpr(expr_id));
-                }
-            },
-            .closure_make => |closure| try self.collectExpr(closure.captures, local_scope),
-            .list => |list_data| {
-                for (self.lowerer.mir_store.getExprSpan(list_data.elems)) |elem_expr| {
-                    try self.collectExpr(elem_expr, local_scope);
-                }
-            },
-            .struct_ => |struct_data| {
-                for (self.lowerer.mir_store.getExprSpan(struct_data.fields)) |field_expr| {
-                    try self.collectExpr(field_expr, local_scope);
-                }
-            },
-            .tag => |tag_expr| {
-                for (self.lowerer.mir_store.getExprSpan(tag_expr.args)) |arg_expr| {
-                    try self.collectExpr(arg_expr, local_scope);
-                }
-            },
-            .match_expr => |match_expr| {
-                try self.collectExpr(match_expr.cond, local_scope);
-                for (self.lowerer.mir_store.getBranches(match_expr.branches)) |branch| {
-                    var branch_scope = try self.lowerer.cloneLocalSymbolSet(local_scope);
-                    defer branch_scope.deinit(self.lowerer.allocator);
-
-                    for (self.lowerer.mir_store.getBranchPatterns(branch.patterns)) |branch_pattern| {
-                        try self.rememberPatternLocals(&branch_scope, branch_pattern.pattern);
-                    }
-                    if (!branch.guard.isNone()) {
-                        try self.collectExpr(branch.guard, &branch_scope);
-                    }
-                    try self.collectExpr(branch.body, &branch_scope);
-                }
-            },
-            .call => |call| {
-                try self.collectExpr(call.func, local_scope);
-                for (self.lowerer.mir_store.getExprSpan(call.args)) |arg_expr| {
-                    try self.collectExpr(arg_expr, local_scope);
-                }
-            },
-            .block => |block| {
-                var block_scope = try self.lowerer.cloneLocalSymbolSet(local_scope);
-                defer block_scope.deinit(self.lowerer.allocator);
-
-                for (self.lowerer.mir_store.getStmts(block.stmts)) |stmt| {
-                    try self.collectStmt(stmt, &block_scope);
-                }
-                try self.collectExpr(block.final_expr, &block_scope);
-            },
-            .borrow_scope => |scope| {
-                var scope_locals = try self.lowerer.cloneLocalSymbolSet(local_scope);
-                defer scope_locals.deinit(self.lowerer.allocator);
-
-                for (self.lowerer.mir_store.getBorrowBindings(scope.bindings)) |binding| {
-                    try self.collectExpr(binding.expr, &scope_locals);
-                    try self.rememberPatternLocals(&scope_locals, binding.pattern);
-                }
-                try self.collectExpr(scope.body, &scope_locals);
-            },
-            .struct_access => |access| try self.collectExpr(access.struct_, local_scope),
-            .str_escape_and_quote => |inner| try self.collectExpr(inner, local_scope),
-            .run_low_level => |ll| {
-                for (self.lowerer.mir_store.getExprSpan(ll.args)) |arg_expr| {
-                    try self.collectExpr(arg_expr, local_scope);
-                }
-            },
-            .dbg_expr => |dbg_expr| try self.collectExpr(dbg_expr.expr, local_scope),
-            .expect => |expect| try self.collectExpr(expect.body, local_scope),
-            .loop => |loop_expr| try self.collectExpr(loop_expr.body, local_scope),
-            .return_expr => |ret| try self.collectExpr(ret.expr, local_scope),
-        }
-    }
-};
-
-fn collectLoopCarrierLocals(self: *Self, body_expr_id: MIR.ExprId) Allocator.Error!LocalRefSpan {
-    var collector = LoopCarrierCollector.init(self);
-    defer collector.deinit();
-
-    var local_scope = LocalSymbolSet{};
-    defer local_scope.deinit(self.allocator);
-
-    try collector.collectExpr(body_expr_id, &local_scope);
-    return self.lir_store.addLocalSpan(collector.carriers.items);
-}
-
-fn isCurrentLocalSymbol(self: *const Self, symbol: MIR.Symbol) bool {
-    return if (self.current_local_symbols) |locals|
-        locals.contains(symbol.raw())
-    else
-        false;
-}
-
-fn lowerNonLocalLookupInto(
-    self: *Self,
-    symbol: MIR.Symbol,
-    target: LocalRef,
-    next: CFStmtId,
-) Allocator.Error!CFStmtId {
-    const def_expr = self.mir_store.getValueDef(symbol) orelse std.debug.panic(
-        "MirToLir invariant violated: non-local lookup symbol {d} has no MIR value definition",
-        .{symbol.raw()},
-    );
-
-    const gop = try self.active_value_defs.getOrPut(self.allocator, symbol.raw());
-    if (gop.found_existing) {
-        std.debug.panic(
-            "MirToLir invariant violated: cyclic MIR value definition for symbol {d}",
-            .{symbol.raw()},
-        );
-    }
-    defer _ = self.active_value_defs.remove(symbol.raw());
-
-    return self.lowerExprIntoStmt(def_expr, target, next);
 }
 
 fn mirIntValueAsI128(int_value: @import("can").CIR.IntValue) i128 {
@@ -1381,6 +556,47 @@ fn mirIntValueAsI128(int_value: @import("can").CIR.IntValue) i128 {
             break :blk @intCast(unsigned);
         },
     };
+}
+
+fn mirLiteralValue(self: *Self, target_layout: layout.Idx, literal: MIR.LiteralValue) LiteralValue {
+    return switch (literal) {
+        .int => |int_lit| switch (target_layout) {
+            .bool => .{ .bool_literal = mirIntValueAsI128(int_lit) != 0 },
+            .u128, .i128 => .{ .i128_literal = .{
+                .value = @bitCast(int_lit.bytes),
+                .layout_idx = target_layout,
+            } },
+            .dec => blk: {
+                const scaled = @mulWithOverflow(mirIntValueAsI128(int_lit), dec_literal_scale);
+                if (scaled[1] != 0) {
+                    std.debug.panic(
+                        "MirToLir invariant violated: integer literal overflowed Dec representation during strongest-form lowering",
+                        .{},
+                    );
+                }
+                break :blk .{ .dec_literal = scaled[0] };
+            },
+            .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64 => .{ .i64_literal = .{
+                .value = @intCast(mirIntValueAsI128(int_lit)),
+                .layout_idx = target_layout,
+            } },
+            else => std.debug.panic(
+                "MirToLir invariant violated: integer literal lowered to unsupported layout idx {d}",
+                .{@intFromEnum(target_layout)},
+            ),
+        },
+        .frac_f32 => |f| .{ .f32_literal = f },
+        .frac_f64 => |f| .{ .f64_literal = f },
+        .dec => |d| .{ .dec_literal = d.num },
+        .str => |s| .{ .str_literal = self.internMirStringLiteral(s) catch unreachable },
+    };
+}
+
+fn internMirStringLiteral(
+    self: *Self,
+    mir_idx: base.StringLiteral.Idx,
+) Allocator.Error!base.StringLiteral.Idx {
+    return self.lir_store.insertString(self.mir_store.getString(mir_idx));
 }
 
 fn fieldMonotypeForSource(
@@ -1442,6 +658,30 @@ fn tagVariantInfoForSource(
     );
 }
 
+fn tagDiscriminantForMonotypeName(
+    self: *Self,
+    target_mono: MirMonotypeIdx,
+    tag_name: mir_mod.Monotype.Name,
+) u16 {
+    const mono = self.mir_store.monotype_store.getMonotype(target_mono);
+    const tags = switch (mono) {
+        .tag_union => |tag_union| self.mir_store.monotype_store.getTags(tag_union.tags),
+        else => std.debug.panic(
+            "MirToLir invariant violated: tag constructor does not target a tag-union monotype",
+            .{},
+        ),
+    };
+
+    for (tags, 0..) |tag, index| {
+        if (tag.name.textEqual(self.analyses.all_module_envs, tag_name)) return @intCast(index);
+    }
+
+    std.debug.panic(
+        "MirToLir invariant violated: tag constructor missing from target monotype",
+        .{},
+    );
+}
+
 fn emitSwitchOnValue(
     self: *Self,
     cond: LocalRef,
@@ -1469,83 +709,13 @@ fn emitBoolSwitch(
     return self.emitSwitchOnValue(cond, 1, on_true, on_false);
 }
 
-fn mirIntLiteralValue(self: *Self, layout_idx: layout.Idx, int_value: @import("can").CIR.IntValue) LiteralValue {
-    return switch (layout_idx) {
-        .bool => .{ .bool_literal = mirIntValueAsI128(int_value) != 0 },
-        .u128, .i128 => .{ .i128_literal = .{
-            .value = @bitCast(int_value.bytes),
-            .layout_idx = layout_idx,
-        } },
-        .dec => blk: {
-            const scaled = @mulWithOverflow(mirIntValueAsI128(int_value), dec_literal_scale);
-            if (scaled[1] != 0) {
-                std.debug.panic(
-                    "MirToLir invariant violated: integer literal overflowed Dec representation during strongest-form lowering",
-                    .{},
-                );
-            }
-            break :blk .{ .dec_literal = scaled[0] };
-        },
-        .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64 => .{ .i64_literal = .{
-            .value = @intCast(mirIntValueAsI128(int_value)),
-            .layout_idx = layout_idx,
-        } },
-        else => {
-            const raw_idx = @intFromEnum(layout_idx);
-            if (raw_idx < self.layout_store.layouts.len()) {
-                const layout_val = self.layout_store.getLayout(layout_idx);
-                if (layout_val.tag == .zst) {
-                    return .{ .i64_literal = .{
-                        .value = @intCast(mirIntValueAsI128(int_value)),
-                        .layout_idx = layout_idx,
-                    } };
-                }
-                if (layout_val.tag == .tag_union) {
-                    const tu_data = self.layout_store.getTagUnionData(layout_val.data.tag_union.idx);
-                    const variants = self.layout_store.getTagUnionVariants(tu_data);
-                    const all_variants_zst = blk: {
-                        for (0..variants.len) |i| {
-                            if (self.layout_store.getLayout(variants.get(i).payload_layout).tag != .zst) {
-                                break :blk false;
-                            }
-                        }
-                        break :blk true;
-                    };
-                    if (all_variants_zst and tu_data.size <= 8) {
-                        return .{ .i64_literal = .{
-                            .value = @intCast(mirIntValueAsI128(int_value)),
-                            .layout_idx = layout_idx,
-                        } };
-                    }
-                }
-                std.debug.panic(
-                    "MirToLir invariant violated: integer literal lowered to non-integer layout idx {d} with runtime tag {s}",
-                    .{ raw_idx, @tagName(layout_val.tag) },
-                );
-            }
-
-            std.debug.panic(
-                "MirToLir invariant violated: integer literal lowered to unknown layout idx {d}",
-                .{raw_idx},
-            );
-        },
-    };
-}
-
-fn internMirStringLiteral(
-    self: *Self,
-    mir_idx: base.StringLiteral.Idx,
-) Allocator.Error!base.StringLiteral.Idx {
-    return self.lir_store.insertString(self.mir_store.getString(mir_idx));
-}
-
 fn literalPatternValue(
     self: *Self,
     pattern_id: MIR.PatternId,
     target_layout: layout.Idx,
 ) Allocator.Error!LiteralValue {
     return switch (self.mir_store.getPattern(pattern_id)) {
-        .int_literal => |int_lit| mirIntLiteralValue(self, target_layout, int_lit.value),
+        .int_literal => |int_lit| mirLiteralValue(self, target_layout, .{ .int = int_lit.value }),
         .str_literal => |str_idx| .{ .str_literal = try self.internMirStringLiteral(str_idx) },
         .dec_literal => |dec_lit| .{ .dec_literal = dec_lit.num },
         .frac_f32_literal => |frac| .{ .f32_literal = frac },
@@ -1575,7 +745,7 @@ fn lowerLiteralPatternInto(
     on_match: CFStmtId,
     on_fail: CFStmtId,
 ) Allocator.Error!CFStmtId {
-    const literal_local = try self.freshLocal(source.layout_idx);
+    const literal_local = try self.freshLocal(self.lir_store.getLocal(source).layout_idx);
     const eq_local = try self.freshLocal(.bool);
     const eq_args = try self.lir_store.addLocalSpan(&.{ source, literal_local });
     const eq_switch = try self.emitBoolSwitch(eq_local, on_match, on_fail);
@@ -1588,7 +758,7 @@ fn lowerLiteralPatternInto(
     } });
     return self.emitAssignLiteral(
         literal_local,
-        try self.literalPatternValue(pattern_id, source.layout_idx),
+        try self.literalPatternValue(pattern_id, self.lir_store.getLocal(source).layout_idx),
         eq_stmt,
     );
 }
@@ -1602,11 +772,8 @@ fn lowerPatternInto(
     on_fail: CFStmtId,
 ) Allocator.Error!CFStmtId {
     return switch (self.mir_store.getPattern(pattern_id)) {
-        .bind => |symbol| self.emitAssignRef(
-            .{
-                .symbol = symbol,
-                .layout_idx = source.layout_idx,
-            },
+        .bind => |mir_local| self.emitAssignRef(
+            try self.mapMirLocal(mir_local),
             aliasSemantics(source, LIR.RefProjectionSpan.empty()),
             .{ .local = source },
             on_match,
@@ -1615,10 +782,7 @@ fn lowerPatternInto(
         .as_pattern => |as_pattern| blk: {
             const inner = try self.lowerPatternInto(source, source_mono, as_pattern.pattern, on_match, on_fail);
             break :blk try self.emitAssignRef(
-                .{
-                    .symbol = as_pattern.symbol,
-                    .layout_idx = source.layout_idx,
-                },
+                try self.mapMirLocal(as_pattern.local),
                 aliasSemantics(source, LIR.RefProjectionSpan.empty()),
                 .{ .local = source },
                 inner,
@@ -1704,479 +868,915 @@ fn lowerPatternInto(
     };
 }
 
+fn lowerBorrowBindingPattern(
+    self: *Self,
+    pattern_id: MIR.PatternId,
+    source: LocalRef,
+    scope_id: LIR.BorrowScopeId,
+    next: CFStmtId,
+) Allocator.Error!CFStmtId {
+    return switch (self.mir_store.getPattern(pattern_id)) {
+        .bind => |mir_local| self.emitAssignRef(
+            try self.mapMirLocal(mir_local),
+            borrowSemantics(source, LIR.RefProjectionSpan.empty(), .{ .scope = scope_id }),
+            .{ .local = source },
+            next,
+        ),
+        .wildcard => next,
+        .as_pattern => |as_pattern| blk: {
+            const inner = try self.lowerBorrowBindingPattern(as_pattern.pattern, source, scope_id, next);
+            break :blk try self.emitAssignRef(
+                try self.mapMirLocal(as_pattern.local),
+                borrowSemantics(source, LIR.RefProjectionSpan.empty(), .{ .scope = scope_id }),
+                .{ .local = source },
+                inner,
+            );
+        },
+        else => std.debug.panic(
+            "MirToLir invariant violated: borrow-scope pattern {s} must be lowered before statement-only LIR",
+            .{@tagName(self.mir_store.getPattern(pattern_id))},
+        ),
+    };
+}
+
+fn lowerRootBody(self: *Self, root_body: MIR.CFStmtId) Allocator.Error!CFStmtId {
+    var local_map = MirToLirLocalMap.init(self.allocator);
+    defer local_map.deinit();
+    var stmt_map = MirToLirStmtMap.init(self.allocator);
+    defer stmt_map.deinit();
+
+    const prev_local_map = self.current_local_map;
+    const prev_stmt_map = self.current_stmt_map;
+    const prev_region = self.current_borrow_region;
+    self.current_local_map = &local_map;
+    self.current_stmt_map = &stmt_map;
+    self.current_borrow_region = .proc;
+    defer self.current_local_map = prev_local_map;
+    defer self.current_stmt_map = prev_stmt_map;
+    defer self.current_borrow_region = prev_region;
+
+    return self.lowerStmt(root_body);
+}
+
+fn lowerStmt(self: *Self, stmt_id: MIR.CFStmtId) Allocator.Error!CFStmtId {
+    const key = @as(u32, @intFromEnum(stmt_id));
+    const stmt_map = self.currentStmtMap();
+    if (stmt_map.get(key)) |existing| return existing;
+
+    const stmt = self.mir_store.getCFStmt(stmt_id);
+    const lowered = switch (stmt) {
+        .assign_symbol => |assign| try self.emitAssignSymbol(
+            try self.mapMirLocal(assign.target),
+            assign.symbol,
+            try self.lowerStmt(assign.next),
+        ),
+        .assign_alias => |assign| try self.emitAssignRef(
+            try self.mapMirLocal(assign.target),
+            aliasSemantics(try self.mapMirLocal(assign.source), LIR.RefProjectionSpan.empty()),
+            .{ .local = try self.mapMirLocal(assign.source) },
+            try self.lowerStmt(assign.next),
+        ),
+        .assign_literal => |assign| try self.emitAssignLiteral(
+            try self.mapMirLocal(assign.target),
+            self.mirLiteralValue(
+                try self.runtimeValueLayoutFromMirLocal(assign.target),
+                assign.literal,
+            ),
+            try self.lowerStmt(assign.next),
+        ),
+        .assign_lambda => |assign| blk: {
+            _ = try self.lowerLambda(assign.lambda);
+            break :blk try self.emitAssignUnit(
+                try self.mapMirLocal(assign.target),
+                try self.lowerStmt(assign.next),
+            );
+        },
+        .assign_closure => |assign| blk: {
+            _ = try self.lowerLambda(assign.lambda);
+            break :blk try self.lir_store.addCFStmt(.{ .assign_struct = .{
+                .target = try self.mapMirLocal(assign.target),
+                .result = .fresh,
+                .fields = try self.mapMirLocalSpan(assign.captures),
+                .next = try self.lowerStmt(assign.next),
+            } });
+        },
+        .assign_call => |assign| try self.lowerDirectLambdaCall(
+            assign.lambda,
+            null,
+            self.mir_store.getLocalSpan(assign.args),
+            assign.target,
+            try self.lowerStmt(assign.next),
+        ),
+        .assign_closure_call => |assign| try self.lowerDirectLambdaCall(
+            assign.lambda,
+            assign.closure,
+            self.mir_store.getLocalSpan(assign.args),
+            assign.target,
+            try self.lowerStmt(assign.next),
+        ),
+        .assign_low_level => |assign| blk: {
+            const mir_args = self.mir_store.getLocalSpan(assign.args);
+            const lir_args = try self.allocator.alloc(LocalRef, mir_args.len);
+            defer self.allocator.free(lir_args);
+            for (mir_args, 0..) |mir_arg, i| {
+                lir_args[i] = try self.mapMirLocal(mir_arg);
+            }
+            break :blk try self.lir_store.addCFStmt(.{ .assign_low_level = .{
+                .target = try self.mapMirLocal(assign.target),
+                .result = lowLevelResultSemantics(self, self.current_borrow_region, assign.op, lir_args),
+                .op = assign.op,
+                .args = try self.lir_store.addLocalSpan(lir_args),
+                .next = try self.lowerStmt(assign.next),
+            } });
+        },
+        .assign_list => |assign| try self.lir_store.addCFStmt(.{ .assign_list = .{
+            .target = try self.mapMirLocal(assign.target),
+            .result = .fresh,
+            .elems = try self.mapMirLocalSpan(assign.elems),
+            .next = try self.lowerStmt(assign.next),
+        } }),
+        .assign_struct => |assign| try self.lir_store.addCFStmt(.{ .assign_struct = .{
+            .target = try self.mapMirLocal(assign.target),
+            .result = .fresh,
+            .fields = try self.mapMirLocalSpan(assign.fields),
+            .next = try self.lowerStmt(assign.next),
+        } }),
+        .assign_tag => |assign| try self.lir_store.addCFStmt(.{ .assign_tag = .{
+            .target = try self.mapMirLocal(assign.target),
+            .result = .fresh,
+            .discriminant = self.tagDiscriminantForMonotypeName(
+                self.mir_store.getLocal(assign.target).monotype,
+                assign.name,
+            ),
+            .args = try self.mapMirLocalSpan(assign.args),
+            .next = try self.lowerStmt(assign.next),
+        } }),
+        .assign_field => |assign| try self.emitAssignRef(
+            try self.mapMirLocal(assign.target),
+            borrowSemantics(
+                try self.mapMirLocal(assign.source),
+                try self.singleProjectionSpan(.{ .field = @intCast(assign.field_idx) }),
+                self.current_borrow_region,
+            ),
+            .{ .field = .{
+                .source = try self.mapMirLocal(assign.source),
+                .field_idx = @intCast(assign.field_idx),
+            } },
+            try self.lowerStmt(assign.next),
+        ),
+        .assign_tag_payload => |assign| try self.emitAssignRef(
+            try self.mapMirLocal(assign.target),
+            borrowSemantics(
+                try self.mapMirLocal(assign.source),
+                try self.singleProjectionSpan(.tag_payload),
+                self.current_borrow_region,
+            ),
+            .{ .tag_payload = .{
+                .source = try self.mapMirLocal(assign.source),
+            } },
+            try self.lowerStmt(assign.next),
+        ),
+        .assign_nominal => |assign| try self.emitAssignRef(
+            try self.mapMirLocal(assign.target),
+            aliasSemantics(
+                try self.mapMirLocal(assign.backing),
+                try self.singleProjectionSpan(.nominal),
+            ),
+            .{ .nominal = .{
+                .backing_ref = try self.mapMirLocal(assign.backing),
+            } },
+            try self.lowerStmt(assign.next),
+        ),
+        .assign_str_escape_and_quote => |assign| blk: {
+            const source = try self.mapMirLocal(assign.source);
+            break :blk try self.lir_store.addCFStmt(.{ .assign_low_level = .{
+                .target = try self.mapMirLocal(assign.target),
+                .result = .fresh,
+                .op = .str_inspect,
+                .args = try self.lir_store.addLocalSpan(&.{source}),
+                .next = try self.lowerStmt(assign.next),
+            } });
+        },
+        .debug => |debug_stmt| blk: {
+            _ = try self.mapMirLocal(debug_stmt.value);
+            break :blk try self.lowerStmt(debug_stmt.next);
+        },
+        .expect => |expect_stmt| blk: {
+            _ = try self.mapMirLocal(expect_stmt.condition);
+            break :blk try self.lowerStmt(expect_stmt.next);
+        },
+        .runtime_error => try self.lir_store.addCFStmt(.{ .runtime_error = {} }),
+        .match_stmt => |match_stmt| try self.lowerMatchStmt(match_stmt),
+        .borrow_scope => |scope| try self.lowerBorrowScopeStmt(scope),
+        .scope_exit => |scope_exit| try self.lir_store.addCFStmt(.{ .scope_exit = .{
+            .id = translateBorrowScopeId(scope_exit.id),
+        } }),
+        .join => |join_stmt| try self.lowerJoinStmt(join_stmt),
+        .jump => |jump_stmt| try self.lir_store.addCFStmt(.{ .jump = .{
+            .target = translateJoinPointId(jump_stmt.id),
+            .args = try self.mapMirLocalSpan(jump_stmt.args),
+        } }),
+        .ret => |ret_stmt| try self.emitRet(try self.mapMirLocal(ret_stmt.value)),
+        .crash => |msg| try self.lir_store.addCFStmt(.{ .crash = .{
+            .msg = try self.internMirStringLiteral(msg),
+        } }),
+    };
+
+    try stmt_map.put(key, lowered);
+    return lowered;
+}
+
+fn lowerBorrowScopeStmt(
+    self: *Self,
+    scope: std.meta.TagPayload(MIR.CFStmt, .borrow_scope),
+) Allocator.Error!CFStmtId {
+    const prev_region = self.current_borrow_region;
+    self.current_borrow_region = .{ .scope = translateBorrowScopeId(scope.id) };
+    defer self.current_borrow_region = prev_region;
+
+    var body = try self.lowerStmt(scope.body);
+    const bindings = self.mir_store.getBorrowBindings(scope.bindings);
+    var i = bindings.len;
+    while (i > 0) {
+        i -= 1;
+        body = try self.lowerBorrowBindingPattern(
+            bindings[i].pattern,
+            try self.mapMirLocal(bindings[i].source),
+            translateBorrowScopeId(scope.id),
+            body,
+        );
+    }
+
+    return self.lir_store.addCFStmt(.{ .borrow_scope = .{
+        .id = translateBorrowScopeId(scope.id),
+        .body = body,
+        .remainder = try self.lowerStmt(scope.remainder),
+    } });
+}
+
+fn lowerJoinStmt(
+    self: *Self,
+    join_stmt: std.meta.TagPayload(MIR.CFStmt, .join),
+) Allocator.Error!CFStmtId {
+    _ = try self.mapMirLocalSpan(join_stmt.params);
+    return self.lir_store.addCFStmt(.{ .join = .{
+        .id = translateJoinPointId(join_stmt.id),
+        .params = try self.mapMirLocalSpan(join_stmt.params),
+        .body = try self.lowerStmt(join_stmt.body),
+        .remainder = try self.lowerStmt(join_stmt.remainder),
+    } });
+}
+
 fn lowerMatchBranchAlternative(
     self: *Self,
     source: LocalRef,
     source_mono: MirMonotypeIdx,
-    branch: MIR.Branch,
     pattern_id: MIR.PatternId,
-    expr_result_contract: ExprSummaryContract,
-    target: LocalRef,
-    next: CFStmtId,
+    branch_body: CFStmtId,
     on_fail: CFStmtId,
 ) Allocator.Error!CFStmtId {
-    var branch_scope = if (self.current_local_symbols) |locals|
-        try self.cloneLocalSymbolSet(locals)
-    else
-        LocalSymbolSet{};
-    defer branch_scope.deinit(self.allocator);
-    try self.collectPatternLocalSymbols(&branch_scope, pattern_id);
-
-    const prev_local_symbols = self.current_local_symbols;
-    self.current_local_symbols = &branch_scope;
-    defer self.current_local_symbols = prev_local_symbols;
-
-    var on_match = try self.lowerExprIntoStmtWithContract(branch.body, target, expr_result_contract, next);
-    if (!branch.guard.isNone()) {
-        const guard_local = try self.freshLocal(try self.runtimeValueLayoutFromMirExpr(branch.guard));
-        const guard_switch = try self.emitBoolSwitch(guard_local, on_match, on_fail);
-        on_match = try self.lowerExprIntoStmt(branch.guard, guard_local, guard_switch);
-    }
     return self.lowerPatternInto(
         source,
         source_mono,
         pattern_id,
-        on_match,
+        branch_body,
         on_fail,
     );
 }
 
-fn lowerMatchExprInto(
+fn lowerMatchStmt(
     self: *Self,
-    expr_id: MIR.ExprId,
-    match_expr: std.meta.TagPayload(MIR.Expr, .match_expr),
-    target: LocalRef,
-    next: CFStmtId,
+    match_stmt: std.meta.TagPayload(MIR.CFStmt, .match_stmt),
 ) Allocator.Error!CFStmtId {
-    const cond_mono = self.mir_store.typeOf(match_expr.cond);
-    const cond_local = try self.freshLocal(try self.runtimeValueLayoutFromMirExpr(match_expr.cond));
-    const merge_join = self.freshJoinPoint();
-    const merge_params = try self.lir_store.addLocalSpan(&.{target});
-    var entry = try self.lir_store.addCFStmt(.{ .runtime_error = {} });
-    const expr_result_contract: ExprSummaryContract = switch (self.analyses.getExprResultContract(expr_id)) {
-        .borrow_of_fresh => .borrow_of_fresh,
-        .concrete => |contract| .{ .concrete = contract },
-        .no_return => std.debug.panic(
-            "MirToLir invariant violated: value-position match expr {d} cannot have no-return summary",
-            .{@intFromEnum(expr_id)},
-        ),
-    };
+    const cond_local = try self.mapMirLocal(match_stmt.scrutinee);
+    const cond_mono = self.mir_store.getLocal(match_stmt.scrutinee).monotype;
+    const branches = self.mir_store.getMatchBranches(match_stmt.branches);
 
-    const branches = self.mir_store.getBranches(match_expr.branches);
+    var entry = try self.lir_store.addCFStmt(.{ .runtime_error = {} });
     var i = branches.len;
     while (i > 0) {
         i -= 1;
         const branch = branches[i];
-        const patterns = self.mir_store.getBranchPatterns(branch.patterns);
+        const branch_patterns = self.mir_store.getBranchPatterns(branch.patterns);
         var branch_entry = entry;
-        var pattern_i = patterns.len;
+        var pattern_i = branch_patterns.len;
         while (pattern_i > 0) {
             pattern_i -= 1;
-            const branch_result = try self.freshLocal(target.layout_idx);
-            const branch_jump = try self.lir_store.addCFStmt(.{ .jump = .{
-                .target = merge_join,
-                .args = try self.lir_store.addLocalSpan(&.{branch_result}),
-            } });
+            _ = branch_patterns[pattern_i].degenerate;
             branch_entry = try self.lowerMatchBranchAlternative(
                 cond_local,
                 cond_mono,
-                branch,
-                patterns[pattern_i].pattern,
-                expr_result_contract,
-                branch_result,
-                branch_jump,
+                branch_patterns[pattern_i].pattern,
+                try self.lowerStmt(branch.body),
                 branch_entry,
             );
         }
         entry = branch_entry;
     }
 
-    const lowered = try self.lowerExprIntoStmt(match_expr.cond, cond_local, entry);
-    return self.lir_store.addCFStmt(.{ .join = .{
-        .id = merge_join,
-        .params = merge_params,
-        .body = next,
-        .remainder = lowered,
+    return entry;
+}
+
+fn lowerDirectLambdaCall(
+    self: *Self,
+    lambda_id: MIR.LambdaId,
+    hidden_capture_mir: ?MIR.LocalId,
+    visible_args: []const MIR.LocalId,
+    target: MIR.LocalId,
+    next: CFStmtId,
+) Allocator.Error!CFStmtId {
+    const lambda = self.mir_store.getLambda(lambda_id);
+    if (hidden_capture_mir == null and !lambda.captures_param.isNone()) {
+        std.debug.panic(
+            "MirToLir invariant violated: direct MIR lambda call requires a hidden captures argument for captured lambdas",
+            .{},
+        );
+    }
+    if (hidden_capture_mir != null and lambda.captures_param.isNone()) {
+        std.debug.panic(
+            "MirToLir invariant violated: closure call supplied captures to a lambda with no captures param",
+            .{},
+        );
+    }
+
+    const lowered_proc = try self.lowerLambda(lambda_id);
+    const call_arg_count = visible_args.len + @intFromBool(hidden_capture_mir != null);
+    const call_args = try self.allocator.alloc(LocalRef, call_arg_count);
+    defer self.allocator.free(call_args);
+
+    for (visible_args, 0..) |mir_arg, i| {
+        call_args[i] = try self.mapMirLocal(mir_arg);
+    }
+    if (hidden_capture_mir) |capture_local| {
+        call_args[visible_args.len] = try self.mapMirLocal(capture_local);
+    }
+
+    return self.lir_store.addCFStmt(.{ .assign_call = .{
+        .target = try self.mapMirLocal(target),
+        .result = self.callResultSemantics(lowered_proc, call_args),
+        .proc = lowered_proc,
+        .args = try self.lir_store.addLocalSpan(call_args),
+        .next = next,
     } });
 }
 
-fn lowerExprIntoStmt(
+fn loweredProcRetLayout(self: *const Self, proc_id: LirProcSpecId) layout.Idx {
+    return switch (self.builder_procs.items[@intFromEnum(proc_id)]) {
+        .resolved => |proc| proc.ret_layout,
+        .unresolved => |header| header.ret_layout,
+    };
+}
+
+fn lowerEntrypointCallResultContract(
     self: *Self,
-    mir_expr_id: MIR.ExprId,
-    target: LocalRef,
-    next: CFStmtId,
-) Allocator.Error!CFStmtId {
-    const expr = self.mir_store.getExpr(mir_expr_id);
-    const result_layout = try self.runtimeValueLayoutFromMirExpr(mir_expr_id);
-
-    return switch (expr) {
-        .lookup => |symbol| if (self.isCurrentLocalSymbol(symbol)) blk: {
-            const source_local: LocalRef = .{ .symbol = symbol, .layout_idx = result_layout };
-            if (target.symbol == source_local.symbol and target.layout_idx == source_local.layout_idx) {
-                break :blk next;
-            }
-
-            break :blk self.emitAssignRef(
-                target,
-                aliasSemantics(source_local, LIR.RefProjectionSpan.empty()),
-                .{ .local = source_local },
-                next,
-            );
-        } else self.lowerNonLocalLookupInto(symbol, target, next),
-        .block => |block| self.lowerBlockInto(block, target, next),
-        .borrow_scope => |scope| blk: {
-            const prev_region = self.current_borrow_region;
-            const scope_id = self.freshBorrowScope();
-            self.current_borrow_region = .{ .scope = scope_id };
-            defer self.current_borrow_region = prev_region;
-
-            var scope_locals = if (self.current_local_symbols) |locals|
-                try self.cloneLocalSymbolSet(locals)
-            else
-                LocalSymbolSet{};
-            defer scope_locals.deinit(self.allocator);
-
-            const bindings = self.mir_store.getBorrowBindings(scope.bindings);
-            for (bindings) |binding| {
-                try self.collectPatternLocalSymbols(&scope_locals, binding.pattern);
-            }
-
-            const scope_exit = try self.lir_store.addCFStmt(.{ .scope_exit = {} });
-            const prev_local_symbols = self.current_local_symbols;
-            self.current_local_symbols = &scope_locals;
-            defer self.current_local_symbols = prev_local_symbols;
-            var body = try self.lowerExprIntoStmt(scope.body, target, scope_exit);
-            var i = bindings.len;
-            while (i > 0) {
-                i -= 1;
-                self.removePatternLocalSymbols(&scope_locals, bindings[i].pattern);
-                self.current_local_symbols = &scope_locals;
-                body = try self.lowerBorrowBinding(bindings[i], scope_id, body);
-            }
-
-            break :blk try self.lir_store.addCFStmt(.{ .borrow_scope = .{
-                .id = scope_id,
-                .body = body,
-                .remainder = next,
-            } });
-        },
-        .int => |int_lit| {
-            return self.emitAssignLiteral(target, mirIntLiteralValue(self, result_layout, int_lit.value), next);
-        },
-        .dec => |dec_lit| self.emitAssignLiteral(target, .{ .dec_literal = dec_lit.num }, next),
-        .frac_f32 => |f| self.emitAssignLiteral(target, .{ .f32_literal = f }, next),
-        .frac_f64 => |f| self.emitAssignLiteral(target, .{ .f64_literal = f }, next),
-        .str => |s| self.emitAssignLiteral(
-            target,
-            .{ .str_literal = try self.internMirStringLiteral(s) },
-            next,
-        ),
-        .list => |list_data| blk: {
-            const elems = self.mir_store.getExprSpan(list_data.elems);
-            const refs = try self.allocator.alloc(LocalRef, elems.len);
-            defer self.allocator.free(refs);
-            for (elems, 0..) |elem_expr, i| refs[i] = try self.freshLocal(try self.runtimeValueLayoutFromMirExpr(elem_expr));
-            const ref_span = try self.lir_store.addLocalSpan(refs);
-            const assign_stmt = try self.lir_store.addCFStmt(.{ .assign_list = .{
-                .target = target,
-                .result = .fresh,
-                .elems = ref_span,
-                .next = next,
-            } });
-            var entry = assign_stmt;
-            var i = elems.len;
-            while (i > 0) {
-                i -= 1;
-                entry = try self.lowerExprIntoStmtWithContract(
-                    elems[i],
-                    refs[i],
-                    .{ .concrete = .fresh },
-                    entry,
+    proc_id: LirProcSpecId,
+    visible_arg_count: usize,
+) LIR.ProcResultContract {
+    return switch (self.getProcResultContract(proc_id)) {
+        .fresh => .fresh,
+        .alias_of_param => |param_ref| {
+            if (param_ref.param_index >= visible_arg_count) {
+                std.debug.panic(
+                    "MirToLir invariant violated: entrypoint proc result cannot alias hidden closure captures",
+                    .{},
                 );
             }
-            break :blk entry;
+            return .{ .alias_of_param = param_ref };
         },
-        .struct_ => |struct_data| blk: {
-            const fields = self.mir_store.getExprSpan(struct_data.fields);
-            const refs = try self.allocator.alloc(LocalRef, fields.len);
-            defer self.allocator.free(refs);
-            for (fields, 0..) |field_expr, i| refs[i] = try self.freshLocal(try self.runtimeValueLayoutFromMirExpr(field_expr));
-            const ref_span = try self.lir_store.addLocalSpan(refs);
-            const assign_stmt = try self.lir_store.addCFStmt(.{ .assign_struct = .{
-                .target = target,
-                .result = .fresh,
-                .fields = ref_span,
-                .next = next,
-            } });
-            var entry = assign_stmt;
-            var i = fields.len;
-            while (i > 0) {
-                i -= 1;
-                entry = try self.lowerExprIntoStmtWithContract(
-                    fields[i],
-                    refs[i],
-                    .{ .concrete = .fresh },
-                    entry,
+        .borrow_of_param => |param_ref| {
+            if (param_ref.param_index >= visible_arg_count) {
+                std.debug.panic(
+                    "MirToLir invariant violated: entrypoint proc result cannot borrow hidden closure captures",
+                    .{},
                 );
             }
-            break :blk entry;
-        },
-        .tag => |tag_expr| blk: {
-            const args = self.mir_store.getExprSpan(tag_expr.args);
-            const refs = try self.allocator.alloc(LocalRef, args.len);
-            defer self.allocator.free(refs);
-            for (args, 0..) |arg_expr, i| refs[i] = try self.freshLocal(try self.runtimeValueLayoutFromMirExpr(arg_expr));
-            const ref_span = try self.lir_store.addLocalSpan(refs);
-            const assign_stmt = try self.lir_store.addCFStmt(.{ .assign_tag = .{
-                .target = target,
-                .result = .fresh,
-                .discriminant = self.tagDiscriminantForExpr(mir_expr_id, tag_expr.name),
-                .args = ref_span,
-                .next = next,
-            } });
-            var entry = assign_stmt;
-            var i = args.len;
-            while (i > 0) {
-                i -= 1;
-                entry = try self.lowerExprIntoStmtWithContract(
-                    args[i],
-                    refs[i],
-                    .{ .concrete = .fresh },
-                    entry,
-                );
-            }
-            break :blk entry;
-        },
-        .run_low_level => |ll| blk: {
-            const args = self.mir_store.getExprSpan(ll.args);
-            const refs = try self.allocator.alloc(LocalRef, args.len);
-            defer self.allocator.free(refs);
-            for (args, 0..) |arg_expr, i| refs[i] = try self.freshLocal(try self.runtimeValueLayoutFromMirExpr(arg_expr));
-            const ref_span = try self.lir_store.addLocalSpan(refs);
-            const assign_stmt = try self.lir_store.addCFStmt(.{ .assign_low_level = .{
-                .target = target,
-                .result = lowLevelResultSemantics(self, self.current_borrow_region, ll.op, refs),
-                .op = ll.op,
-                .args = ref_span,
-                .next = next,
-            } });
-            var entry = assign_stmt;
-            var i = args.len;
-            while (i > 0) {
-                i -= 1;
-                entry = try self.lowerExprIntoStmt(args[i], refs[i], entry);
-            }
-            break :blk entry;
-        },
-        .str_escape_and_quote => |inner| blk: {
-            const arg = try self.freshLocal(try self.runtimeValueLayoutFromMirExpr(inner));
-            const args = try self.lir_store.addLocalSpan(&.{arg});
-            const assign_stmt = try self.lir_store.addCFStmt(.{ .assign_low_level = .{
-                .target = target,
-                .result = .fresh,
-                .op = .str_inspect,
-                .args = args,
-                .next = next,
-            } });
-            break :blk try self.lowerExprIntoStmt(inner, arg, assign_stmt);
-        },
-        .struct_access => |access| blk: {
-            const source_layout = try self.runtimeValueLayoutFromMirExpr(access.struct_);
-            const source = try self.freshLocal(source_layout);
-            const projection = try self.singleProjectionSpan(.{ .field = @intCast(access.field_idx) });
-            const assign_stmt = try self.emitAssignRef(
-                target,
-                borrowSemantics(source, projection, self.current_borrow_region),
-                .{ .field = .{
-                    .source = source,
-                    .field_idx = @intCast(access.field_idx),
-                } },
-                next,
-            );
-            break :blk try self.lowerExprIntoStmt(access.struct_, source, assign_stmt);
-        },
-        .call => |call| blk: {
-            const lir_proc_id = try self.lowerProc(call.proc);
-            const args = self.mir_store.getExprSpan(call.args);
-            const hidden_capture_local = try self.freshHiddenCaptureLocal(call.proc);
-            const hidden_capture_count: usize = @intFromBool(hidden_capture_local != null);
-            const refs = try self.allocator.alloc(LocalRef, args.len + hidden_capture_count);
-            defer self.allocator.free(refs);
-            for (args, 0..) |arg_expr, i| refs[i] = try self.freshLocal(try self.runtimeValueLayoutFromMirExpr(arg_expr));
-            if (hidden_capture_local) |capture_local| {
-                refs[args.len] = capture_local;
-            }
-            const ref_span = try self.lir_store.addLocalSpan(refs);
-            const result = self.callResultSemantics(lir_proc_id, refs);
-            const call_target = if (needsFreshTempForSelfAliasResult(target, result))
-                try self.freshLocal(target.layout_idx)
-            else
-                target;
-            const assign_stmt = try self.lir_store.addCFStmt(.{ .assign_call = .{
-                .target = call_target,
-                .result = result,
-                .proc = lir_proc_id,
-                .args = ref_span,
-                .next = next,
-            } });
-            var entry = assign_stmt;
-            if (hidden_capture_local) |capture_local| {
-                entry = try self.lowerHiddenCaptureArg(call.func, capture_local, entry);
-            }
-            var i = args.len;
-            while (i > 0) {
-                i -= 1;
-                entry = try self.lowerExprIntoStmt(args[i], refs[i], entry);
-            }
-            break :blk entry;
-        },
-        .dbg_expr => |dbg_expr| self.lowerExprIntoStmt(dbg_expr.expr, target, next),
-        .expect => |expect| self.lowerExprIntoStmt(expect.body, target, next),
-        .runtime_err_can, .runtime_err_type, .runtime_err_ellipsis, .runtime_err_anno_only => self.lir_store.addCFStmt(.{ .runtime_error = {} }),
-        .crash => |msg| self.lir_store.addCFStmt(.{ .crash = .{
-            .msg = try self.internMirStringLiteral(msg),
-        } }),
-        .return_expr => |ret| blk: {
-            const ret_local = try self.freshLocal(try self.runtimeValueLayoutFromMirExpr(ret.expr));
-            const ret_stmt = try self.emitRet(ret_local);
-            const proc_result_contract = self.current_proc_result_summary orelse std.debug.panic(
-                "MirToLir invariant violated: return_expr lowering requires an active proc result contract",
-                .{},
-            );
-            break :blk try self.lowerExprIntoStmtWithContract(ret.expr, ret_local, .{ .concrete = proc_result_contract }, ret_stmt);
-        },
-        .proc_ref, .closure_make => self.lowerProcBackedValueInto(mir_expr_id, target, next),
-        .match_expr => |match_expr| self.lowerMatchExprInto(mir_expr_id, match_expr, target, next),
-        .loop => |loop_expr| blk: {
-            const exit_join = self.freshJoinPoint();
-            const loop_head = self.freshJoinPoint();
-            const carried_args = try self.collectLoopCarrierLocals(loop_expr.body);
-            const initial_carried_values = self.lir_store.getLocalSpan(carried_args);
-            const loop_params = try self.allocator.alloc(LocalRef, initial_carried_values.len);
-            defer self.allocator.free(loop_params);
-
-            for (initial_carried_values, 0..) |carried, i| {
-                loop_params[i] = try self.freshLocal(carried.layout_idx);
-            }
-            const loop_param_span = try self.lir_store.addLocalSpan(loop_params);
-
-            const initial_jump = try self.lir_store.addCFStmt(.{ .jump = .{
-                .target = loop_head,
-                .args = carried_args,
-            } });
-            const backedge_jump = try self.lir_store.addCFStmt(.{ .jump = .{
-                .target = loop_head,
-                .args = carried_args,
-            } });
-
-            const exit_body = try self.emitAssignUnit(target, next);
-
-            try self.break_targets.append(self.allocator, exit_join);
-            defer _ = self.break_targets.pop();
-
-            const body_result = try self.freshLocal(result_layout);
-            var body = try self.lowerExprIntoStmt(loop_expr.body, body_result, backedge_jump);
-            const carried_values = self.lir_store.getLocalSpan(carried_args);
-            var i = loop_params.len;
-            while (i > 0) {
-                i -= 1;
-                body = try self.emitAssignRef(
-                    carried_values[i],
-                    aliasSemantics(loop_params[i], LIR.RefProjectionSpan.empty()),
-                    .{ .local = loop_params[i] },
-                    body,
-                );
-            }
-            const loop_join = try self.lir_store.addCFStmt(.{ .join = .{
-                .id = loop_head,
-                .params = loop_param_span,
-                .body = body,
-                .remainder = initial_jump,
-            } });
-
-            break :blk try self.lir_store.addCFStmt(.{ .join = .{
-                .id = exit_join,
-                .params = LocalRefSpan.empty(),
-                .body = exit_body,
-                .remainder = loop_join,
-            } });
-        },
-        .break_expr => blk: {
-            const exit_join = self.break_targets.getLastOrNull() orelse std.debug.panic(
-                "MirToLir invariant violated: break_expr escaped the nearest loop during strongest-form lowering",
-                .{},
-            );
-            break :blk try self.lir_store.addCFStmt(.{ .jump = .{
-                .target = exit_join,
-                .args = LocalRefSpan.empty(),
-            } });
+            return .{ .borrow_of_param = param_ref };
         },
     };
 }
 
-fn lowerProc(self: *Self, proc_id: MIR.ProcId) Allocator.Error!LirProcSpecId {
-    const proc_key = @as(u32, @intFromEnum(proc_id));
-    if (self.lowered_procs.get(proc_key)) |existing| return existing;
+fn emitEntrypointCall(
+    self: *Self,
+    callable: EntrypointCallable,
+    visible_args: []const LocalRef,
+    target: LocalRef,
+    next: CFStmtId,
+) Allocator.Error!LoweredEntrypointProcBody {
+    const lambda_id: MIR.LambdaId = switch (callable) {
+        .lambda => |lambda_id| lambda_id,
+        .closure => |closure| closure.lambda,
+    };
+    const proc_id = try self.lowerLambda(lambda_id);
+    const callee_ret_layout = self.loweredProcRetLayout(proc_id);
+    const target_layout = self.lir_store.getLocal(target).layout_idx;
+    if (callee_ret_layout != target_layout) {
+        std.debug.panic(
+            "MirToLir invariant violated: entrypoint wrapper result layout does not match callee result layout",
+            .{},
+        );
+    }
 
-    const proc = self.mir_store.getProc(proc_id);
+    const has_capture = switch (callable) {
+        .lambda => false,
+        .closure => true,
+    };
+    const call_arg_count = visible_args.len + @intFromBool(has_capture);
+    const call_args = try self.allocator.alloc(LocalRef, call_arg_count);
+    defer self.allocator.free(call_args);
 
-    const ret_layout = try self.runtimeProcReturnLayout(proc_id);
+    @memcpy(call_args[0..visible_args.len], visible_args);
+    switch (callable) {
+        .lambda => {},
+        .closure => |closure| call_args[visible_args.len] = try self.mapMirLocal(closure.captures),
+    }
 
-    const arg_count = self.mir_store.procValueParamCount(proc);
+    return .{
+        .body = try self.lir_store.addCFStmt(.{ .assign_call = .{
+            .target = target,
+            .result = self.callResultSemantics(proc_id, call_args),
+            .proc = proc_id,
+            .args = try self.lir_store.addLocalSpan(call_args),
+            .next = next,
+        } }),
+        .result_contract = self.lowerEntrypointCallResultContract(proc_id, visible_args.len),
+    };
+}
+
+const LoweredEntrypointProcBody = struct {
+    body: CFStmtId,
+    result_contract: LIR.ProcResultContract,
+};
+
+fn resolveLinearCallableValue(
+    self: *Self,
+    local_id: MIR.LocalId,
+    defs: *std.AutoHashMap(u32, LinearValueDef),
+) Allocator.Error!EntrypointCallable {
+    const def = defs.get(@as(u32, @intFromEnum(local_id))) orelse std.debug.panic(
+        "MirToLir invariant violated: entrypoint callable local {d} has no linear definition",
+        .{@intFromEnum(local_id)},
+    );
+
+    return switch (def) {
+        .lambda => |lambda_id| .{ .lambda = lambda_id },
+        .closure => |lambda_id| .{ .closure = .{
+            .lambda = lambda_id,
+            .captures = local_id,
+        } },
+        .alias => |source| try self.resolveLinearCallableValue(source, defs),
+        .nominal => |backing| try self.resolveLinearCallableValue(backing, defs),
+        .symbol => |symbol| blk: {
+            if (self.mir_store.getFunctionDefForSymbol(symbol)) |function_def_id| {
+                break :blk .{ .lambda = self.mir_store.getFunctionDef(function_def_id).lambda };
+            }
+            if (self.mir_store.getConstDefForSymbol(symbol)) |const_def_id| {
+                break :blk try self.resolveEntrypointCallable(self.mir_store.getConstDef(const_def_id).body);
+            }
+            std.debug.panic(
+                "MirToLir invariant violated: symbol {d} did not resolve to a callable top-level def",
+                .{symbol.raw()},
+            );
+        },
+        .field => |field| blk: {
+            const source_def = defs.get(@as(u32, @intFromEnum(field.source))) orelse std.debug.panic(
+                "MirToLir invariant violated: field source local {d} has no linear definition",
+                .{@intFromEnum(field.source)},
+            );
+            const fields = switch (source_def) {
+                .struct_value => |fields| fields,
+                else => std.debug.panic(
+                    "MirToLir invariant violated: entrypoint callable field resolution requires a struct-producing source local",
+                    .{},
+                ),
+            };
+            const field_locals = self.mir_store.getLocalSpan(fields);
+            if (field.field_idx >= field_locals.len) {
+                std.debug.panic(
+                    "MirToLir invariant violated: entrypoint field index {d} is out of bounds for struct arity {d}",
+                    .{ field.field_idx, field_locals.len },
+                );
+            }
+            break :blk try self.resolveLinearCallableValue(field_locals[field.field_idx], defs);
+        },
+        .struct_value => std.debug.panic(
+            "MirToLir invariant violated: entrypoint callable resolution reached a non-callable struct value",
+            .{},
+        ),
+    };
+}
+
+fn resolveEntrypointCallable(self: *Self, stmt_id: MIR.CFStmtId) Allocator.Error!EntrypointCallable {
+    var defs = std.AutoHashMap(u32, LinearValueDef).init(self.allocator);
+    defer defs.deinit();
+
+    var current = stmt_id;
+    while (true) {
+        switch (self.mir_store.getCFStmt(current)) {
+            .assign_symbol => |assign| {
+                try defs.put(@as(u32, @intFromEnum(assign.target)), .{ .symbol = assign.symbol });
+                current = assign.next;
+            },
+            .assign_alias => |assign| {
+                try defs.put(@as(u32, @intFromEnum(assign.target)), .{ .alias = assign.source });
+                current = assign.next;
+            },
+            .assign_lambda => |assign| {
+                try defs.put(@as(u32, @intFromEnum(assign.target)), .{ .lambda = assign.lambda });
+                current = assign.next;
+            },
+            .assign_closure => |assign| {
+                try defs.put(@as(u32, @intFromEnum(assign.target)), .{ .closure = assign.lambda });
+                current = assign.next;
+            },
+            .assign_struct => |assign| {
+                try defs.put(@as(u32, @intFromEnum(assign.target)), .{ .struct_value = assign.fields });
+                current = assign.next;
+            },
+            .assign_field => |assign| {
+                try defs.put(@as(u32, @intFromEnum(assign.target)), .{ .field = .{
+                    .source = assign.source,
+                    .field_idx = assign.field_idx,
+                } });
+                current = assign.next;
+            },
+            .assign_nominal => |assign| {
+                try defs.put(@as(u32, @intFromEnum(assign.target)), .{ .nominal = assign.backing });
+                current = assign.next;
+            },
+            .assign_literal,
+            => |assign| current = assign.next,
+            .assign_call => |assign| current = assign.next,
+            .assign_closure_call => |assign| current = assign.next,
+            .assign_low_level => |assign| current = assign.next,
+            .assign_list => |assign| current = assign.next,
+            .assign_tag => |assign| current = assign.next,
+            .assign_tag_payload => |assign| current = assign.next,
+            .assign_str_escape_and_quote => |assign| current = assign.next,
+            .debug => |debug_stmt| current = debug_stmt.next,
+            .expect => |expect_stmt| current = expect_stmt.next,
+            .ret => |ret_stmt| return self.resolveLinearCallableValue(ret_stmt.value, &defs),
+            .runtime_error,
+            .match_stmt,
+            .borrow_scope,
+            .scope_exit,
+            .join,
+            .jump,
+            .crash,
+            => std.debug.panic(
+                "MirToLir invariant violated: entrypoint callable resolution currently requires a linear MIR body",
+                .{},
+            ),
+        }
+    }
+}
+
+fn lowerLinearEntrypointCallableBody(
+    self: *Self,
+    stmt_id: MIR.CFStmtId,
+    callable: EntrypointCallable,
+    arg_locals: []const LocalRef,
+    target: LocalRef,
+    next: CFStmtId,
+) Allocator.Error!LoweredEntrypointProcBody {
+    const stmt = self.mir_store.getCFStmt(stmt_id);
+    return switch (stmt) {
+        .assign_symbol => |assign| blk: {
+            const lowered_next = try self.lowerLinearEntrypointCallableBody(assign.next, callable, arg_locals, target, next);
+            break :blk .{
+                .body = try self.emitAssignSymbol(
+                    try self.mapMirLocal(assign.target),
+                    assign.symbol,
+                    lowered_next.body,
+                ),
+                .result_contract = lowered_next.result_contract,
+            };
+        },
+        .assign_alias => |assign| blk: {
+            const lowered_next = try self.lowerLinearEntrypointCallableBody(assign.next, callable, arg_locals, target, next);
+            break :blk .{
+                .body = try self.emitAssignRef(
+                    try self.mapMirLocal(assign.target),
+                    aliasSemantics(try self.mapMirLocal(assign.source), LIR.RefProjectionSpan.empty()),
+                    .{ .local = try self.mapMirLocal(assign.source) },
+                    lowered_next.body,
+                ),
+                .result_contract = lowered_next.result_contract,
+            };
+        },
+        .assign_literal => |assign| blk: {
+            const lowered_next = try self.lowerLinearEntrypointCallableBody(assign.next, callable, arg_locals, target, next);
+            break :blk .{
+                .body = try self.emitAssignLiteral(
+                    try self.mapMirLocal(assign.target),
+                    self.mirLiteralValue(
+                        try self.runtimeValueLayoutFromMirLocal(assign.target),
+                        assign.literal,
+                    ),
+                    lowered_next.body,
+                ),
+                .result_contract = lowered_next.result_contract,
+            };
+        },
+        .assign_lambda => |assign| blk: {
+            _ = try self.lowerLambda(assign.lambda);
+            const lowered_next = try self.lowerLinearEntrypointCallableBody(assign.next, callable, arg_locals, target, next);
+            break :blk .{
+                .body = try self.emitAssignUnit(try self.mapMirLocal(assign.target), lowered_next.body),
+                .result_contract = lowered_next.result_contract,
+            };
+        },
+        .assign_closure => |assign| blk: {
+            _ = try self.lowerLambda(assign.lambda);
+            const lowered_next = try self.lowerLinearEntrypointCallableBody(assign.next, callable, arg_locals, target, next);
+            break :blk .{
+                .body = try self.lir_store.addCFStmt(.{ .assign_struct = .{
+                    .target = try self.mapMirLocal(assign.target),
+                    .result = .fresh,
+                    .fields = try self.mapMirLocalSpan(assign.captures),
+                    .next = lowered_next.body,
+                } }),
+                .result_contract = lowered_next.result_contract,
+            };
+        },
+        .assign_call => |assign| blk: {
+            const lowered_next = try self.lowerLinearEntrypointCallableBody(assign.next, callable, arg_locals, target, next);
+            break :blk .{
+                .body = try self.lowerDirectLambdaCall(
+                    assign.lambda,
+                    null,
+                    self.mir_store.getLocalSpan(assign.args),
+                    assign.target,
+                    lowered_next.body,
+                ),
+                .result_contract = lowered_next.result_contract,
+            };
+        },
+        .assign_closure_call => |assign| blk: {
+            const lowered_next = try self.lowerLinearEntrypointCallableBody(assign.next, callable, arg_locals, target, next);
+            break :blk .{
+                .body = try self.lowerDirectLambdaCall(
+                    assign.lambda,
+                    assign.closure,
+                    self.mir_store.getLocalSpan(assign.args),
+                    assign.target,
+                    lowered_next.body,
+                ),
+                .result_contract = lowered_next.result_contract,
+            };
+        },
+        .assign_low_level => |assign| blk: {
+            const lowered_next = try self.lowerLinearEntrypointCallableBody(assign.next, callable, arg_locals, target, next);
+            const mir_args = self.mir_store.getLocalSpan(assign.args);
+            const lir_args = try self.allocator.alloc(LocalRef, mir_args.len);
+            defer self.allocator.free(lir_args);
+            for (mir_args, 0..) |mir_arg, i| lir_args[i] = try self.mapMirLocal(mir_arg);
+            break :blk .{
+                .body = try self.lir_store.addCFStmt(.{ .assign_low_level = .{
+                    .target = try self.mapMirLocal(assign.target),
+                    .result = lowLevelResultSemantics(self, self.current_borrow_region, assign.op, lir_args),
+                    .op = assign.op,
+                    .args = try self.lir_store.addLocalSpan(lir_args),
+                    .next = lowered_next.body,
+                } }),
+                .result_contract = lowered_next.result_contract,
+            };
+        },
+        .assign_list => |assign| blk: {
+            const lowered_next = try self.lowerLinearEntrypointCallableBody(assign.next, callable, arg_locals, target, next);
+            break :blk .{
+                .body = try self.lir_store.addCFStmt(.{ .assign_list = .{
+                    .target = try self.mapMirLocal(assign.target),
+                    .result = .fresh,
+                    .elems = try self.mapMirLocalSpan(assign.elems),
+                    .next = lowered_next.body,
+                } }),
+                .result_contract = lowered_next.result_contract,
+            };
+        },
+        .assign_struct => |assign| blk: {
+            const lowered_next = try self.lowerLinearEntrypointCallableBody(assign.next, callable, arg_locals, target, next);
+            break :blk .{
+                .body = try self.lir_store.addCFStmt(.{ .assign_struct = .{
+                    .target = try self.mapMirLocal(assign.target),
+                    .result = .fresh,
+                    .fields = try self.mapMirLocalSpan(assign.fields),
+                    .next = lowered_next.body,
+                } }),
+                .result_contract = lowered_next.result_contract,
+            };
+        },
+        .assign_tag => |assign| blk: {
+            const lowered_next = try self.lowerLinearEntrypointCallableBody(assign.next, callable, arg_locals, target, next);
+            break :blk .{
+                .body = try self.lir_store.addCFStmt(.{ .assign_tag = .{
+                    .target = try self.mapMirLocal(assign.target),
+                    .result = .fresh,
+                    .discriminant = self.tagDiscriminantForMonotypeName(
+                        self.mir_store.getLocal(assign.target).monotype,
+                        assign.name,
+                    ),
+                    .args = try self.mapMirLocalSpan(assign.args),
+                    .next = lowered_next.body,
+                } }),
+                .result_contract = lowered_next.result_contract,
+            };
+        },
+        .assign_field => |assign| blk: {
+            const lowered_next = try self.lowerLinearEntrypointCallableBody(assign.next, callable, arg_locals, target, next);
+            break :blk .{
+                .body = try self.emitAssignRef(
+                    try self.mapMirLocal(assign.target),
+                    borrowSemantics(
+                        try self.mapMirLocal(assign.source),
+                        try self.singleProjectionSpan(.{ .field = @intCast(assign.field_idx) }),
+                        self.current_borrow_region,
+                    ),
+                    .{ .field = .{
+                        .source = try self.mapMirLocal(assign.source),
+                        .field_idx = @intCast(assign.field_idx),
+                    } },
+                    lowered_next.body,
+                ),
+                .result_contract = lowered_next.result_contract,
+            };
+        },
+        .assign_tag_payload => |assign| blk: {
+            const lowered_next = try self.lowerLinearEntrypointCallableBody(assign.next, callable, arg_locals, target, next);
+            break :blk .{
+                .body = try self.emitAssignRef(
+                    try self.mapMirLocal(assign.target),
+                    borrowSemantics(
+                        try self.mapMirLocal(assign.source),
+                        try self.singleProjectionSpan(.tag_payload),
+                        self.current_borrow_region,
+                    ),
+                    .{ .tag_payload = .{ .source = try self.mapMirLocal(assign.source) } },
+                    lowered_next.body,
+                ),
+                .result_contract = lowered_next.result_contract,
+            };
+        },
+        .assign_nominal => |assign| blk: {
+            const lowered_next = try self.lowerLinearEntrypointCallableBody(assign.next, callable, arg_locals, target, next);
+            break :blk .{
+                .body = try self.emitAssignRef(
+                    try self.mapMirLocal(assign.target),
+                    aliasSemantics(
+                        try self.mapMirLocal(assign.backing),
+                        try self.singleProjectionSpan(.nominal),
+                    ),
+                    .{ .nominal = .{ .backing_ref = try self.mapMirLocal(assign.backing) } },
+                    lowered_next.body,
+                ),
+                .result_contract = lowered_next.result_contract,
+            };
+        },
+        .assign_str_escape_and_quote => |assign| blk: {
+            const lowered_next = try self.lowerLinearEntrypointCallableBody(assign.next, callable, arg_locals, target, next);
+            const source = try self.mapMirLocal(assign.source);
+            break :blk .{
+                .body = try self.lir_store.addCFStmt(.{ .assign_low_level = .{
+                    .target = try self.mapMirLocal(assign.target),
+                    .result = .fresh,
+                    .op = .str_inspect,
+                    .args = try self.lir_store.addLocalSpan(&.{source}),
+                    .next = lowered_next.body,
+                } }),
+                .result_contract = lowered_next.result_contract,
+            };
+        },
+        .debug => |debug_stmt| self.lowerLinearEntrypointCallableBody(debug_stmt.next, callable, arg_locals, target, next),
+        .expect => |expect_stmt| self.lowerLinearEntrypointCallableBody(expect_stmt.next, callable, arg_locals, target, next),
+        .ret => self.emitEntrypointCall(callable, arg_locals, target, next),
+        .runtime_error,
+        .match_stmt,
+        .borrow_scope,
+        .scope_exit,
+        .join,
+        .jump,
+        .crash,
+        => std.debug.panic(
+            "MirToLir invariant violated: callable entrypoint wrapping currently requires a linear MIR body",
+            .{},
+        ),
+    };
+}
+
+fn lowerEntrypointProcBody(
+    self: *Self,
+    root_const_id: MIR.ConstDefId,
+    arg_locals: []const LocalRef,
+    ret_layout: layout.Idx,
+) Allocator.Error!LoweredEntrypointProcBody {
+    const root_const = self.mir_store.getConstDef(root_const_id);
+    const root_mono = self.mir_store.monotype_store.getMonotype(root_const.monotype);
+    const must_call = arg_locals.len != 0 or root_mono == .func;
+
+    if (!must_call) {
+        return .{
+            .body = try self.lowerRootBody(root_const.body),
+            .result_contract = try self.lowerSummaryProcResultContract(
+                self.analyses.getConstResultContract(root_const_id),
+            ),
+        };
+    }
+
+    const target = try self.freshLocal(ret_layout);
+    const ret_stmt = try self.emitRet(target);
+    const callable = try self.resolveEntrypointCallable(root_const.body);
+
+    var local_map = MirToLirLocalMap.init(self.allocator);
+    defer local_map.deinit();
+    var stmt_map = MirToLirStmtMap.init(self.allocator);
+    defer stmt_map.deinit();
+
+    const prev_local_map = self.current_local_map;
+    const prev_stmt_map = self.current_stmt_map;
+    const prev_region = self.current_borrow_region;
+    self.current_local_map = &local_map;
+    self.current_stmt_map = &stmt_map;
+    self.current_borrow_region = .proc;
+    defer self.current_local_map = prev_local_map;
+    defer self.current_stmt_map = prev_stmt_map;
+    defer self.current_borrow_region = prev_region;
+
+    return try self.lowerLinearEntrypointCallableBody(root_const.body, callable, arg_locals, target, ret_stmt);
+}
+
+fn lowerLambda(self: *Self, lambda_id: MIR.LambdaId) Allocator.Error!LirProcSpecId {
+    const proc_key = @as(u32, @intFromEnum(lambda_id));
+    if (self.lowered_lambdas.get(proc_key)) |existing| return existing;
+
+    const lambda = self.mir_store.getLambda(lambda_id);
+    const ret_layout = try self.runtimeLambdaReturnLayout(lambda_id);
+    const value_params = self.mir_store.getPatternSpan(lambda.params);
+    const arg_count = value_params.len + @intFromBool(!lambda.captures_param.isNone());
     const args = try self.allocator.alloc(LocalRef, arg_count);
     defer self.allocator.free(args);
 
-    var local_symbols = LocalSymbolSet{};
-    defer local_symbols.deinit(self.allocator);
-    for (0..arg_count) |i| {
-        const arg_pat = self.mir_store.getProcValueParamPattern(proc, i);
-        try self.collectPatternLocalSymbols(&local_symbols, arg_pat);
+    for (value_params, 0..) |param_pattern, i| {
+        args[i] = try self.freshLocal(try self.runtimeValueLayoutFromMirPattern(param_pattern));
     }
-    for (0..arg_count) |i| {
-        const arg_pat = self.mir_store.getProcValueParamPattern(proc, i);
-        const arg_layout = try self.runtimeValueLayoutFromMirPattern(arg_pat);
-        args[i] = try self.freshLocal(arg_layout);
+    if (!lambda.captures_param.isNone()) {
+        args[value_params.len] = try self.freshLocal(try self.runtimeValueLayoutFromMirPattern(lambda.captures_param));
     }
 
     const arg_span = try self.lir_store.addLocalSpan(args);
-    const proc_name = if (proc.debug_name.isNone())
+    const result_contract = try self.lowerSummaryProcResultContract(
+        self.analyses.getLambdaResultContract(lambda_id),
+    );
+    const proc_name = if (lambda.debug_name.isNone())
         self.lir_store.freshSyntheticSymbol()
     else
-        proc.debug_name;
-    const summary_result_contract = self.analyses.getProcResultContract(proc_id);
-    const result_contract = try self.lowerSummaryProcResultContract(summary_result_contract);
+        lambda.debug_name;
 
     const lir_proc_id = try self.addUnresolvedProc(.{
         .name = proc_name,
         .args = arg_span,
         .ret_layout = ret_layout,
         .result_contract = result_contract,
-        .hosted = if (proc.hosted) |hosted| .{
+        .hosted = if (lambda.hosted) |hosted| .{
             .symbol_name = hosted.symbol_name,
             .index = hosted.index,
         } else null,
     });
-    try self.lowered_procs.put(proc_key, lir_proc_id);
+    try self.lowered_lambdas.put(proc_key, lir_proc_id);
 
-    const prev_local_symbols = self.current_local_symbols;
-    const prev_result_contract = self.current_proc_result_summary;
-    self.current_local_symbols = &local_symbols;
-    self.current_proc_result_summary = summary_result_contract;
-    defer self.current_local_symbols = prev_local_symbols;
-    defer self.current_proc_result_summary = prev_result_contract;
+    var local_map = MirToLirLocalMap.init(self.allocator);
+    defer local_map.deinit();
+    var stmt_map = MirToLirStmtMap.init(self.allocator);
+    defer stmt_map.deinit();
 
-    const target = try self.freshLocal(ret_layout);
-    const ret_stmt = try self.emitRet(target);
-    var body = try self.lowerExprIntoStmtWithContract(proc.body, target, .{ .concrete = summary_result_contract }, ret_stmt);
+    const prev_local_map = self.current_local_map;
+    const prev_stmt_map = self.current_stmt_map;
+    const prev_region = self.current_borrow_region;
+    self.current_local_map = &local_map;
+    self.current_stmt_map = &stmt_map;
+    self.current_borrow_region = .proc;
+    defer self.current_local_map = prev_local_map;
+    defer self.current_stmt_map = prev_stmt_map;
+    defer self.current_borrow_region = prev_region;
+
+    var body = try self.lowerStmt(lambda.body);
     const param_fail = try self.lir_store.addCFStmt(.{ .runtime_error = {} });
-    var i = arg_count;
+
+    if (!lambda.captures_param.isNone()) {
+        body = try self.lowerPatternInto(
+            args[value_params.len],
+            self.mir_store.patternTypeOf(lambda.captures_param),
+            lambda.captures_param,
+            body,
+            param_fail,
+        );
+    }
+
+    var i = value_params.len;
     while (i > 0) {
         i -= 1;
-        const arg_pat = self.mir_store.getProcValueParamPattern(proc, i);
         body = try self.lowerPatternInto(
             args[i],
-            self.mir_store.patternTypeOf(arg_pat),
-            arg_pat,
+            self.mir_store.patternTypeOf(value_params[i]),
+            value_params[i],
             body,
             param_fail,
         );
@@ -2201,7 +1801,7 @@ fn lowerProc(self: *Self, proc_id: MIR.ProcId) Allocator.Error!LirProcSpecId {
         .body = body,
         .ret_layout = ret_layout,
         .result_contract = result_contract,
-        .hosted = if (proc.hosted) |hosted| .{
+        .hosted = if (lambda.hosted) |hosted| .{
             .symbol_name = hosted.symbol_name,
             .index = hosted.index,
         } else null,

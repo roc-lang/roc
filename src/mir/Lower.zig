@@ -3200,7 +3200,13 @@ fn lowerTrivialRootExprInto(
             const top = self.scratch_local_ids.top();
             defer self.scratch_local_ids.clearFrom(top);
 
-            var lowered_next = next;
+            const assign_stmt = try self.store.addCFStmt(self.allocator, .{ .assign_list = .{
+                .target = target,
+                .elems = MIR.LocalSpan.empty(),
+                .next = next,
+            } });
+
+            var lowered_next = assign_stmt;
             var i: usize = cir_elems.len;
             while (i > 0) {
                 i -= 1;
@@ -3211,11 +3217,8 @@ fn lowerTrivialRootExprInto(
             }
             std.mem.reverse(MIR.LocalId, self.scratch_local_ids.items.items[top..]);
             const elems = try self.store.addLocalSpan(self.allocator, self.scratch_local_ids.sliceFromStart(top));
-            break :blk try self.store.addCFStmt(self.allocator, .{ .assign_list = .{
-                .target = target,
-                .elems = elems,
-                .next = lowered_next,
-            } });
+            self.store.getCFStmtPtr(assign_stmt).assign_list.elems = elems;
+            break :blk lowered_next;
         },
         .e_empty_record => self.store.addCFStmt(self.allocator, .{ .assign_struct = .{
             .target = target,
@@ -3227,7 +3230,13 @@ fn lowerTrivialRootExprInto(
             const top = self.scratch_local_ids.top();
             defer self.scratch_local_ids.clearFrom(top);
 
-            var lowered_next = next;
+            const assign_stmt = try self.store.addCFStmt(self.allocator, .{ .assign_struct = .{
+                .target = target,
+                .fields = MIR.LocalSpan.empty(),
+                .next = next,
+            } });
+
+            var lowered_next = assign_stmt;
             var i: usize = elems.len;
             while (i > 0) {
                 i -= 1;
@@ -3238,11 +3247,8 @@ fn lowerTrivialRootExprInto(
             }
             std.mem.reverse(MIR.LocalId, self.scratch_local_ids.items.items[top..]);
             const fields = try self.store.addLocalSpan(self.allocator, self.scratch_local_ids.sliceFromStart(top));
-            break :blk try self.store.addCFStmt(self.allocator, .{ .assign_struct = .{
-                .target = target,
-                .fields = fields,
-                .next = lowered_next,
-            } });
+            self.store.getCFStmtPtr(assign_stmt).assign_struct.fields = fields;
+            break :blk lowered_next;
         },
         .e_record => |record| blk: {
             if (record.ext != null) {
@@ -3281,7 +3287,13 @@ fn lowerTrivialRootExprInto(
             const top = self.scratch_local_ids.top();
             defer self.scratch_local_ids.clearFrom(top);
 
-            var lowered_next = next;
+            const assign_stmt = try self.store.addCFStmt(self.allocator, .{ .assign_struct = .{
+                .target = target,
+                .fields = MIR.LocalSpan.empty(),
+                .next = next,
+            } });
+
+            var lowered_next = assign_stmt;
             var i: usize = ordered.len;
             while (i > 0) {
                 i -= 1;
@@ -3295,11 +3307,8 @@ fn lowerTrivialRootExprInto(
             }
             std.mem.reverse(MIR.LocalId, self.scratch_local_ids.items.items[top..]);
             const fields = try self.store.addLocalSpan(self.allocator, self.scratch_local_ids.sliceFromStart(top));
-            break :blk try self.store.addCFStmt(self.allocator, .{ .assign_struct = .{
-                .target = target,
-                .fields = fields,
-                .next = lowered_next,
-            } });
+            self.store.getCFStmtPtr(assign_stmt).assign_struct.fields = fields;
+            break :blk lowered_next;
         },
         .e_zero_argument_tag => |tag| self.store.addCFStmt(self.allocator, .{ .assign_tag = .{
             .target = target,
@@ -3312,7 +3321,14 @@ fn lowerTrivialRootExprInto(
             const top = self.scratch_local_ids.top();
             defer self.scratch_local_ids.clearFrom(top);
 
-            var lowered_next = next;
+            const assign_stmt = try self.store.addCFStmt(self.allocator, .{ .assign_tag = .{
+                .target = target,
+                .name = self.resolveTagNameForMonotype(monotype, tag.name),
+                .args = MIR.LocalSpan.empty(),
+                .next = next,
+            } });
+
+            var lowered_next = assign_stmt;
             var i: usize = args.len;
             while (i > 0) {
                 i -= 1;
@@ -3323,12 +3339,8 @@ fn lowerTrivialRootExprInto(
             }
             std.mem.reverse(MIR.LocalId, self.scratch_local_ids.items.items[top..]);
             const arg_span = try self.store.addLocalSpan(self.allocator, self.scratch_local_ids.sliceFromStart(top));
-            break :blk try self.store.addCFStmt(self.allocator, .{ .assign_tag = .{
-                .target = target,
-                .name = self.resolveTagNameForMonotype(monotype, tag.name),
-                .args = arg_span,
-                .next = lowered_next,
-            } });
+            self.store.getCFStmtPtr(assign_stmt).assign_tag.args = arg_span;
+            break :blk lowered_next;
         },
         .e_nominal => |nominal| blk: {
             const backing_local = try self.freshSyntheticLocal(try self.resolveMonotype(nominal.backing_expr), false);
@@ -3347,6 +3359,33 @@ fn lowerTrivialRootExprInto(
                 .next = next,
             } });
             break :blk try self.lowerTrivialRootExprInto(nominal.backing_expr, backing_local, nominal_stmt);
+        },
+        .e_run_low_level => |run_ll| blk: {
+            const cir_args = module_env.store.sliceExpr(run_ll.args);
+            const top = self.scratch_local_ids.top();
+            defer self.scratch_local_ids.clearFrom(top);
+
+            const assign_stmt = try self.store.addCFStmt(self.allocator, .{ .assign_low_level = .{
+                .target = target,
+                .op = run_ll.op,
+                .args = MIR.LocalSpan.empty(),
+                .next = next,
+            } });
+
+            var lowered_next = assign_stmt;
+            var i: usize = cir_args.len;
+            while (i > 0) {
+                i -= 1;
+                const arg_idx = cir_args[i];
+                const arg_local = try self.freshSyntheticLocal(try self.resolveMonotype(arg_idx), false);
+                try self.scratch_local_ids.append(arg_local);
+                lowered_next = try self.lowerTrivialRootExprInto(arg_idx, arg_local, lowered_next);
+            }
+
+            std.mem.reverse(MIR.LocalId, self.scratch_local_ids.items.items[top..]);
+            self.store.getCFStmtPtr(assign_stmt).assign_low_level.args =
+                try self.store.addLocalSpan(self.allocator, self.scratch_local_ids.sliceFromStart(top));
+            break :blk lowered_next;
         },
         .e_runtime_error => |err| self.store.addCFStmt(self.allocator, .{ .runtime_error = .{
             .can_diagnostic = err.diagnostic,

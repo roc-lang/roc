@@ -12,10 +12,9 @@ const layout = @import("layout");
 const lir = @import("lir");
 const LIR = lir.LIR;
 const LirStore = lir.LirStore;
-const LocalRef = LIR.LocalRef;
-const LocalRefSpan = LIR.LocalRefSpan;
+const LocalRef = LIR.LocalId;
+const LocalRefSpan = LIR.LocalSpan;
 const RefOp = LIR.RefOp;
-const Symbol = LIR.Symbol;
 const WasmModule = @import("WasmModule.zig");
 const WasmLayout = @import("WasmLayout.zig");
 const Storage = @import("Storage.zig");
@@ -549,11 +548,12 @@ fn encodeLocalsDecl(self: *Self, func_body: *std.ArrayList(u8), skip_count: u32)
 
 /// Generate wasm instructions for an already-bound local value.
 fn generateExpr(self: *Self, value: LocalRef) Allocator.Error!void {
-    const local_info = self.storage.getLocalInfo(value.symbol) orelse {
+    const local_info = self.storage.getLocalInfo(value) orelse {
+        const local = self.store.getLocal(value);
         if (builtin.mode == .Debug) {
             std.debug.panic(
-                "WASM/codegen invariant violated: missing local binding for symbol {d}",
-                .{value.symbol.raw()},
+                "WASM/codegen invariant violated: missing local binding for LIR local {d} (symbol {d})",
+                .{ @intFromEnum(value), local.source_symbol.raw() },
             );
         }
         unreachable;
@@ -561,7 +561,7 @@ fn generateExpr(self: *Self, value: LocalRef) Allocator.Error!void {
 
     try self.emitLocalGet(local_info.idx);
 
-    const expected_vt = self.resolveValType(value.layout_idx);
+    const expected_vt = self.resolveValType(self.exprLayoutIdx(value));
     if (local_info.val_type != expected_vt) {
         try self.emitConversion(local_info.val_type, expected_vt);
     }
@@ -1193,14 +1193,14 @@ fn isUnsignedLayout(layout_idx: layout.Idx) bool {
     };
 }
 
-fn getOrAllocTypedLocal(self: *Self, symbol: Symbol, val_type: ValType) Allocator.Error!u32 {
-    if (self.storage.getLocalInfo(symbol)) |info| {
+fn getOrAllocTypedLocal(self: *Self, local_id: LocalRef, val_type: ValType) Allocator.Error!u32 {
+    if (self.storage.getLocalInfo(local_id)) |info| {
         if (info.val_type == val_type) {
             return info.idx;
         }
     }
 
-    return self.storage.allocLocal(symbol, val_type);
+    return self.storage.allocLocal(local_id, val_type);
 }
 
 /// Convert a ValType to the corresponding BlockType for structured control flow.
@@ -1213,23 +1213,23 @@ fn popExprControlFrame(self: *Self) void {
     self.expr_control_depth -= 1;
 }
 
-fn exprLayoutIdx(_: *Self, value: LocalRef) layout.Idx {
-    return value.layout_idx;
+fn exprLayoutIdx(self: *Self, value: LocalRef) layout.Idx {
+    return self.store.getLocal(value).layout_idx;
 }
 
 /// Infer the wasm ValType that an explicit local value will push onto the stack.
 fn exprValType(self: *Self, value: LocalRef) ValType {
-    return self.resolveValType(value.layout_idx);
+    return self.resolveValType(self.exprLayoutIdx(value));
 }
 
 /// Get the byte size of the value a local produces.
 fn exprByteSize(self: *Self, value: LocalRef) u32 {
-    return self.layoutByteSize(value.layout_idx);
+    return self.layoutByteSize(self.exprLayoutIdx(value));
 }
 
 /// Check if a local produces a composite value (stored in stack memory).
 fn isCompositeExpr(self: *const Self, value: LocalRef) bool {
-    return self.isCompositeLayout(value.layout_idx);
+    return self.isCompositeLayout(self.store.getLocal(value).layout_idx);
 }
 
 /// Explicit local bindings are already stabilized in the caller's frame.
@@ -3817,7 +3817,7 @@ fn compileProcSpecBody(self: *Self, proc: LirProcSpec) Allocator.Error!void {
     for (args) |arg| {
         const local = self.store.getLocal(arg);
         const vt = self.resolveValType(local.layout_idx);
-        _ = self.storage.allocLocal(local.source_symbol, vt) catch return error.OutOfMemory;
+        _ = self.storage.allocLocal(arg, vt) catch return error.OutOfMemory;
     }
 
     // Pre-allocate frame pointer local (after params, so it doesn't conflict)
@@ -3968,8 +3968,14 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
     const stmt = self.store.getCFStmt(stmt_id);
 
     switch (stmt) {
+        .assign_symbol => |assign| {
+            std.debug.panic(
+                "WasmCodeGen invariant violated: assign_symbol for symbol {d} is not implemented in statement-only wasm codegen yet",
+                .{assign.symbol.raw()},
+            );
+        },
         .assign_ref => |assign| {
-            try self.generateRefOp(assign.op, assign.target.layout_idx);
+            try self.generateRefOp(assign.op, self.exprLayoutIdx(assign.target));
             try self.bindAssignedLocal(assign.target);
             try self.generateCFStmt(assign.next);
         },
@@ -3982,7 +3988,7 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
             try self.generateCall(.{
                 .proc = assign.proc,
                 .args = assign.args,
-                .ret_layout = assign.target.layout_idx,
+                .ret_layout = self.exprLayoutIdx(assign.target),
             });
             try self.bindAssignedLocal(assign.target);
             try self.generateCFStmt(assign.next);
@@ -3991,7 +3997,7 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
             try self.generateLowLevel(.{
                 .op = assign.op,
                 .args = assign.args,
-                .ret_layout = assign.target.layout_idx,
+                .ret_layout = self.exprLayoutIdx(assign.target),
             });
             try self.bindAssignedLocal(assign.target);
             try self.generateCFStmt(assign.next);
@@ -3999,7 +4005,7 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
         .assign_list => |assign| {
             try self.generateList(.{
                 .elems = assign.elems,
-                .elem_layout = self.listElemLayout(assign.target.layout_idx),
+                .elem_layout = self.listElemLayout(self.exprLayoutIdx(assign.target)),
             });
             try self.bindAssignedLocal(assign.target);
             try self.generateCFStmt(assign.next);
@@ -4007,14 +4013,14 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
         .assign_struct => |assign| {
             try self.generateStruct(.{
                 .fields = assign.fields,
-                .struct_layout = assign.target.layout_idx,
+                .struct_layout = self.exprLayoutIdx(assign.target),
             });
             try self.bindAssignedLocal(assign.target);
             try self.generateCFStmt(assign.next);
         },
         .assign_tag => |assign| {
             try self.generateTag(.{
-                .union_layout = assign.target.layout_idx,
+                .union_layout = self.exprLayoutIdx(assign.target),
                 .discriminant = assign.discriminant,
                 .args = assign.args,
             });
@@ -4071,8 +4077,8 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
             var param_locals = self.allocator.alloc(u32, jp_params.len) catch return error.OutOfMemory;
 
             for (jp_params, 0..) |param, i| {
-                const vt = self.resolveValType(param.layout_idx);
-                const local_idx = self.getOrAllocTypedLocal(param.symbol, vt) catch return error.OutOfMemory;
+                const vt = self.exprValType(param);
+                const local_idx = self.getOrAllocTypedLocal(param, vt) catch return error.OutOfMemory;
                 param_locals[i] = local_idx;
             }
             self.join_point_param_locals.put(jp_key, param_locals) catch return error.OutOfMemory;
@@ -4240,8 +4246,8 @@ fn generateI128Literal(self: *Self, value: i128) Allocator.Error!void {
 }
 
 fn bindAssignedLocal(self: *Self, target: LocalRef) Allocator.Error!void {
-    const vt = self.resolveValType(target.layout_idx);
-    const local_idx = self.getOrAllocTypedLocal(target.symbol, vt) catch return error.OutOfMemory;
+    const vt = self.exprValType(target);
+    const local_idx = self.getOrAllocTypedLocal(target, vt) catch return error.OutOfMemory;
     try self.emitLocalSet(local_idx);
 }
 
@@ -4250,7 +4256,7 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
         .local => |local| try self.generateExpr(local),
         .discriminant => |disc| {
             const ls = self.getLayoutStore();
-            const source_layout = ls.getLayout(disc.source.layout_idx);
+            const source_layout = ls.getLayout(self.exprLayoutIdx(disc.source));
             switch (source_layout.tag) {
                 .tag_union => {
                     const tu_data = ls.getTagUnionData(source_layout.data.tag_union.idx);
@@ -4274,7 +4280,7 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
         },
         .field => |field| try self.generateStructAccess(.{
             .struct_expr = field.source,
-            .struct_layout = field.source.layout_idx,
+            .struct_layout = self.exprLayoutIdx(field.source),
             .field_idx = field.field_idx,
             .field_layout = target_layout,
         }),
@@ -4297,7 +4303,7 @@ fn generateRcStmt(
     try self.generateExpr(value);
     const value_local = self.storage.allocAnonymousLocal(self.exprValType(value)) catch return error.OutOfMemory;
     try self.emitLocalSet(value_local);
-    try self.emitRcForValueLocal(kind, value_local, self.exprValType(value), value.layout_idx, inc_count);
+    try self.emitRcForValueLocal(kind, value_local, self.exprValType(value), self.exprLayoutIdx(value), inc_count);
 }
 
 fn listElemLayout(self: *Self, list_layout_idx: layout.Idx) layout.Idx {
@@ -4775,202 +4781,7 @@ fn generateStruct(self: *Self, r: anytype) Allocator.Error!void {
     WasmModule.leb128WriteU32(self.allocator, &self.body, base_local) catch return error.OutOfMemory;
 }
 
-/// Bind a struct destructuring pattern: load each field from a struct pointer
-/// and bind sub-patterns (recursively for nested destructuring).
-/// Fields are in layout order (sorted by alignment).
-fn bindStructPattern(self: *Self, ptr_local: u32, s: anytype) Allocator.Error!void {
-    const ls = self.getLayoutStore();
-    const struct_layout = ls.getLayout(s.struct_layout);
-    std.debug.assert(struct_layout.tag == .struct_);
-
-    const field_patterns = self.store.getPatternSpan(s.fields);
-    for (field_patterns, 0..) |pat_id, i| {
-        const pat = self.store.getPattern(pat_id);
-        const field_idx: u16 = @intCast(i);
-        const field_offset = ls.getStructFieldOffset(struct_layout.data.struct_.idx, field_idx);
-        const field_byte_size = ls.getStructFieldSize(struct_layout.data.struct_.idx, field_idx);
-        const field_layout_idx = ls.getStructFieldLayout(struct_layout.data.struct_.idx, field_idx);
-
-        switch (pat) {
-            .bind => |bind| {
-                const is_composite = self.isCompositeLayout(field_layout_idx);
-                if (is_composite and field_byte_size > 0) {
-                    // Composite field: compute pointer = ptr + offset
-                    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-                    WasmModule.leb128WriteU32(self.allocator, &self.body, ptr_local) catch return error.OutOfMemory;
-                    if (field_offset > 0) {
-                        self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                        WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(field_offset)) catch return error.OutOfMemory;
-                        self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-                    }
-                    const local_idx = self.storage.allocLocal(bind.symbol, .i32) catch return error.OutOfMemory;
-                    self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
-                    WasmModule.leb128WriteU32(self.allocator, &self.body, local_idx) catch return error.OutOfMemory;
-                } else {
-                    // Scalar field: load from memory
-                    const field_vt = WasmLayout.resultValTypeWithStore(field_layout_idx, ls);
-                    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-                    WasmModule.leb128WriteU32(self.allocator, &self.body, ptr_local) catch return error.OutOfMemory;
-                    try self.emitLoadOpSized(field_vt, field_byte_size, field_offset);
-                    const local_idx = self.storage.allocLocal(bind.symbol, field_vt) catch return error.OutOfMemory;
-                    self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
-                    WasmModule.leb128WriteU32(self.allocator, &self.body, local_idx) catch return error.OutOfMemory;
-                }
-            },
-            .wildcard => {},
-            .struct_ => |inner_struct| {
-                // Nested struct destructuring: compute pointer to field
-                self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-                WasmModule.leb128WriteU32(self.allocator, &self.body, ptr_local) catch return error.OutOfMemory;
-                if (field_offset > 0) {
-                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(field_offset)) catch return error.OutOfMemory;
-                    self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-                }
-                const field_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-                self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
-                WasmModule.leb128WriteU32(self.allocator, &self.body, field_ptr) catch return error.OutOfMemory;
-                try self.bindStructPattern(field_ptr, inner_struct);
-            },
-            .tag => |inner_tag| {
-                if (builtin.mode == .Debug and !self.tagPatternIsIrrefutable(inner_tag)) {
-                    std.debug.panic(
-                        "WasmCodeGen invariant violated: nested struct field tag patterns must be irrefutable single-tag unions",
-                        .{},
-                    );
-                }
-                if (self.store.getPatternSpan(inner_tag.args).len == 0) continue;
-
-                self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-                WasmModule.leb128WriteU32(self.allocator, &self.body, ptr_local) catch return error.OutOfMemory;
-                if (field_offset > 0) {
-                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(field_offset)) catch return error.OutOfMemory;
-                    self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-                }
-                const field_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-                self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
-                WasmModule.leb128WriteU32(self.allocator, &self.body, field_ptr) catch return error.OutOfMemory;
-                try self.bindTagPattern(field_ptr, inner_tag);
-            },
-            else => unreachable,
-        }
-    }
-}
-
-fn tagPatternIsIrrefutable(self: *Self, tag: anytype) bool {
-    const ls = self.getLayoutStore();
-    const union_layout = ls.getLayout(tag.union_layout);
-    return switch (union_layout.tag) {
-        .tag_union => blk: {
-            const tu_data = ls.getTagUnionData(union_layout.data.tag_union.idx);
-            break :blk ls.getTagUnionVariants(tu_data).len == 1;
-        },
-        .box => blk: {
-            const inner_layout = ls.getLayout(union_layout.data.box);
-            if (inner_layout.tag != .tag_union) break :blk false;
-            const tu_data = ls.getTagUnionData(inner_layout.data.tag_union.idx);
-            break :blk ls.getTagUnionVariants(tu_data).len == 1;
-        },
-        .scalar, .zst => true,
-        else => false,
-    };
-}
-
-/// Bind a tag union destructuring pattern: extract payload fields from a tag pointer.
-/// `ptr_local` is an i32 local holding a pointer to the tag union in memory.
-fn bindTagPattern(self: *Self, ptr_local: u32, tag: anytype) Allocator.Error!void {
-    const arg_patterns = self.store.getPatternSpan(tag.args);
-    if (arg_patterns.len == 0) return;
-
-    const ls = self.getLayoutStore();
-    const l = ls.getLayout(tag.union_layout);
-
-    if (l.tag != .tag_union) {
-        // Simple enum (discriminant only, no payload) — nothing to extract
-        return;
-    }
-
-    // Extract payload fields at increasing offsets from the tag pointer
-    var payload_offset: u32 = 0;
-    for (arg_patterns) |arg_pat_id| {
-        const arg_pat = self.store.getPattern(arg_pat_id);
-        switch (arg_pat) {
-            .bind => |bind| {
-                const bind_vt = self.resolveValType(bind.layout_idx);
-                const bind_byte_size = self.layoutStorageByteSize(bind.layout_idx);
-                const is_composite = self.isCompositeLayout(bind.layout_idx);
-                if (is_composite and bind_byte_size > 0) {
-                    // Composite field: compute pointer = ptr + offset
-                    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-                    WasmModule.leb128WriteU32(self.allocator, &self.body, ptr_local) catch return error.OutOfMemory;
-                    if (payload_offset > 0) {
-                        self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                        WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(payload_offset)) catch return error.OutOfMemory;
-                        self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-                    }
-                    const local_idx = self.storage.allocLocal(bind.symbol, .i32) catch return error.OutOfMemory;
-                    self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
-                    WasmModule.leb128WriteU32(self.allocator, &self.body, local_idx) catch return error.OutOfMemory;
-                } else {
-                    // Scalar field: load from memory
-                    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-                    WasmModule.leb128WriteU32(self.allocator, &self.body, ptr_local) catch return error.OutOfMemory;
-                    try self.emitLoadOpForLayout(bind.layout_idx, payload_offset);
-                    const local_idx = self.storage.allocLocal(bind.symbol, bind_vt) catch return error.OutOfMemory;
-                    self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
-                    WasmModule.leb128WriteU32(self.allocator, &self.body, local_idx) catch return error.OutOfMemory;
-                }
-                payload_offset += bind_byte_size;
-            },
-            .wildcard => |wc| {
-                payload_offset += self.layoutStorageByteSize(wc.layout_idx);
-            },
-            .struct_ => |inner_struct| {
-                const field_byte_size = self.layoutStorageByteSize(inner_struct.struct_layout);
-                self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-                WasmModule.leb128WriteU32(self.allocator, &self.body, ptr_local) catch return error.OutOfMemory;
-                if (payload_offset > 0) {
-                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(payload_offset)) catch return error.OutOfMemory;
-                    self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-                }
-                const field_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-                self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
-                WasmModule.leb128WriteU32(self.allocator, &self.body, field_ptr) catch return error.OutOfMemory;
-                try self.bindStructPattern(field_ptr, inner_struct);
-                payload_offset += field_byte_size;
-            },
-            .tag => |inner_tag| {
-                if (builtin.mode == .Debug and !self.tagPatternIsIrrefutable(inner_tag)) {
-                    std.debug.panic(
-                        "WasmCodeGen invariant violated: nested tag payload bindings must be irrefutable single-tag unions",
-                        .{},
-                    );
-                }
-                const field_byte_size = self.layoutStorageByteSize(inner_tag.union_layout);
-                if (self.store.getPatternSpan(inner_tag.args).len != 0) {
-                    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-                    WasmModule.leb128WriteU32(self.allocator, &self.body, ptr_local) catch return error.OutOfMemory;
-                    if (payload_offset > 0) {
-                        self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                        WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(payload_offset)) catch return error.OutOfMemory;
-                        self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-                    }
-                    const field_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-                    self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
-                    WasmModule.leb128WriteU32(self.allocator, &self.body, field_ptr) catch return error.OutOfMemory;
-                    try self.bindTagPattern(field_ptr, inner_tag);
-                }
-                payload_offset += field_byte_size;
-            },
-            else => unreachable,
-        }
-    }
-}
-
-/// Bind a list destructuring pattern: extract prefix elements from a list pointer.
-/// `ptr_local` is an i32 local holding a pointer to the RocList struct in memory.
+/// Generate a field access from a struct/tuple pointer value.
 fn generateStructAccess(self: *Self, sa: anytype) Allocator.Error!void {
     const ls = self.getLayoutStore();
 
