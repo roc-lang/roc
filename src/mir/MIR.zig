@@ -381,7 +381,14 @@ pub const CFStmt = union(enum) {
     },
     assign_call: struct {
         target: LocalId,
-        callee: LocalId,
+        lambda: LambdaId,
+        args: LocalSpan,
+        next: CFStmtId,
+    },
+    assign_closure_call: struct {
+        target: LocalId,
+        closure: LocalId,
+        lambda: LambdaId,
         args: LocalSpan,
         next: CFStmtId,
     },

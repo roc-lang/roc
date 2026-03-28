@@ -57,6 +57,11 @@ const PatternBinding = struct {
     pattern_idx: CIR.Pattern.Idx,
 };
 
+const LoweredSymbol = union(enum) {
+    const_def: MIR.ConstDefId,
+    function_def: MIR.FunctionDefId,
+};
+
 // --- Fields ---
 
 allocator: Allocator,
@@ -89,14 +94,9 @@ type_scope: ?*const types.TypeScope,
 type_scope_module_idx: ?u32,
 type_scope_caller_module_idx: ?u32,
 
-/// Map from ((scope_key << 64) | (module_idx << 32 | CIR.Pattern.Idx)) → MIR.Symbol
-/// Used to resolve CIR local lookups to global symbols.
-pattern_symbols: std.AutoHashMap(u128, MIR.Symbol),
-
-/// Concrete monotype for each bound MIR symbol introduced from a lowered pattern.
-/// This is authoritative for local lookups that do not have a symbol_def yet
-/// (lambda params, destructures, closure locals, synthetic temporaries).
-symbol_monotypes: std.AutoHashMap(u64, Monotype.Idx),
+/// Map from ((scope_key << 64) | (module_idx << 32 | CIR.Pattern.Idx)) → MIR.LocalId
+/// Used to resolve CIR local lookups to executable MIR locals.
+pattern_symbols: std.AutoHashMap(u128, MIR.LocalId),
 
 /// Specialization bindings: maps polymorphic type vars to concrete monotypes.
 /// Written by `bindTypeVarMonotypes`, read by `fromTypeVar`.
@@ -109,12 +109,12 @@ nominal_cycle_breakers: std.AutoHashMap(types.Var, Monotype.Idx),
 
 /// Cache for already-lowered symbol definitions (avoids re-lowering).
 /// Key is @bitCast(MIR.Symbol) → u64.
-lowered_symbols: std.AutoHashMap(u64, MIR.ExprId),
+lowered_symbols: std.AutoHashMap(u64, LoweredSymbol),
 
 /// Cache for proc bodies already lowered for proc instances chosen by monomorphization.
-/// The callable value expression itself is rebuilt per use-site scope because
-/// closure captures are context-sensitive.
-lowered_proc_insts: std.AutoHashMap(u32, MIR.ProcId),
+/// The callable value itself is rebuilt per use-site scope because captures are
+/// context-sensitive, but the lowered lambda body is unique per proc inst.
+lowered_proc_insts: std.AutoHashMap(u32, MIR.LambdaId),
 
 /// Metadata for opaque symbol IDs; populated at symbol construction time.
 symbol_metadata: std.AutoHashMap(u64, SymbolMetadata),
@@ -127,22 +127,11 @@ next_synthetic_ident: u29,
 in_progress_defs: std.AutoHashMap(u64, void),
 
 /// Tracks proc instances currently being lowered (recursion guard).
-in_progress_proc_insts: std.AutoHashMap(u32, MIR.ExprId),
+in_progress_proc_insts: std.AutoHashMap(u32, MIR.LambdaId),
 
 /// Reserved proc skeletons for recursive proc-inst groups whose bodies are not
-/// fully lowered yet but already need stable proc ids.
-reserved_proc_insts: std.AutoHashMap(u32, MIR.ProcId),
-
-/// Local proc-backed bindings intentionally skipped as runtime statements.
-/// Lookups of these patterns must reify from proc-inst ownership instead of
-/// expecting a local runtime binding.
-skipped_proc_backed_binding_patterns: std.AutoHashMap(u64, void),
-
-/// Closure-valued MIR expressions that were created before the target proc's
-/// capture-binding schema was finalized. These must be resolved once the proc
-/// body is lowered so lambda-set inference sees the exact closure member, not
-/// only the underlying proc.
-pending_closure_value_members: std.AutoHashMap(u32, std.ArrayListUnmanaged(PendingClosureValueMember)),
+/// fully lowered yet but already need stable lambda ids.
+reserved_proc_insts: std.AutoHashMap(u32, MIR.LambdaId),
 
 /// Proc-inst context for context-sensitive monomorphized lookup/call resolution.
 current_proc_inst_context: Monomorphize.ProcInstId,
@@ -159,13 +148,13 @@ in_progress_symbol_monotypes: std.AutoHashMap(u64, Monotype.Idx),
 /// dispatch resolution data directly.
 resolved_dispatch_targets: std.AutoHashMap(u64, ResolvedDispatchTarget),
 
-scratch_expr_ids: base.Scratch(MIR.ExprId),
+scratch_local_ids: base.Scratch(MIR.LocalId),
 scratch_pattern_ids: base.Scratch(MIR.PatternId),
 scratch_ident_idxs: base.Scratch(Ident.Idx),
-scratch_branches: base.Scratch(MIR.Branch),
+scratch_branches: base.Scratch(MIR.MatchBranch),
 scratch_branch_patterns: base.Scratch(MIR.BranchPattern),
-scratch_stmts: base.Scratch(MIR.Stmt),
-scratch_captures: base.Scratch(MIR.Capture),
+scratch_cf_stmt_ids: base.Scratch(MIR.CFStmtId),
+scratch_capture_locals: base.Scratch(MIR.LocalId),
 scratch_capture_bindings: base.Scratch(MIR.CaptureBinding),
 mono_scratches: Monotype.Store.Scratches,
 
@@ -209,30 +198,27 @@ pub fn init(
         .type_scope = null,
         .type_scope_module_idx = null,
         .type_scope_caller_module_idx = null,
-        .pattern_symbols = std.AutoHashMap(u128, MIR.Symbol).init(allocator),
-        .symbol_monotypes = std.AutoHashMap(u64, Monotype.Idx).init(allocator),
+        .pattern_symbols = std.AutoHashMap(u128, MIR.LocalId).init(allocator),
         .type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(allocator),
         .nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(allocator),
-        .lowered_symbols = std.AutoHashMap(u64, MIR.ExprId).init(allocator),
-        .lowered_proc_insts = std.AutoHashMap(u32, MIR.ProcId).init(allocator),
+        .lowered_symbols = std.AutoHashMap(u64, LoweredSymbol).init(allocator),
+        .lowered_proc_insts = std.AutoHashMap(u32, MIR.LambdaId).init(allocator),
         .symbol_metadata = std.AutoHashMap(u64, SymbolMetadata).init(allocator),
         .next_synthetic_ident = Ident.Idx.NONE.idx - 1,
         .in_progress_defs = std.AutoHashMap(u64, void).init(allocator),
-        .in_progress_proc_insts = std.AutoHashMap(u32, MIR.ExprId).init(allocator),
-        .reserved_proc_insts = std.AutoHashMap(u32, MIR.ProcId).init(allocator),
-        .skipped_proc_backed_binding_patterns = std.AutoHashMap(u64, void).init(allocator),
-        .pending_closure_value_members = std.AutoHashMap(u32, std.ArrayListUnmanaged(PendingClosureValueMember)).init(allocator),
+        .in_progress_proc_insts = std.AutoHashMap(u32, MIR.LambdaId).init(allocator),
+        .reserved_proc_insts = std.AutoHashMap(u32, MIR.LambdaId).init(allocator),
         .current_proc_inst_context = .none,
         .current_root_expr_context = null,
         .in_progress_symbol_monotypes = std.AutoHashMap(u64, Monotype.Idx).init(allocator),
         .resolved_dispatch_targets = resolved_dispatch_targets,
-        .scratch_expr_ids = try base.Scratch(MIR.ExprId).init(allocator),
+        .scratch_local_ids = try base.Scratch(MIR.LocalId).init(allocator),
         .scratch_pattern_ids = try base.Scratch(MIR.PatternId).init(allocator),
         .scratch_ident_idxs = try base.Scratch(Ident.Idx).init(allocator),
-        .scratch_branches = try base.Scratch(MIR.Branch).init(allocator),
+        .scratch_branches = try base.Scratch(MIR.MatchBranch).init(allocator),
         .scratch_branch_patterns = try base.Scratch(MIR.BranchPattern).init(allocator),
-        .scratch_stmts = try base.Scratch(MIR.Stmt).init(allocator),
-        .scratch_captures = try base.Scratch(MIR.Capture).init(allocator),
+        .scratch_cf_stmt_ids = try base.Scratch(MIR.CFStmtId).init(allocator),
+        .scratch_capture_locals = try base.Scratch(MIR.LocalId).init(allocator),
         .scratch_capture_bindings = try base.Scratch(MIR.CaptureBinding).init(allocator),
         .mono_scratches = blk: {
             var ms = try Monotype.Store.Scratches.init(allocator);
@@ -247,7 +233,6 @@ pub fn init(
 
 pub fn deinit(self: *Self) void {
     self.pattern_symbols.deinit();
-    self.symbol_monotypes.deinit();
     self.type_var_seen.deinit();
     self.nominal_cycle_breakers.deinit();
     self.lowered_symbols.deinit();
@@ -256,25 +241,15 @@ pub fn deinit(self: *Self) void {
     self.in_progress_defs.deinit();
     self.in_progress_proc_insts.deinit();
     self.reserved_proc_insts.deinit();
-    self.skipped_proc_backed_binding_patterns.deinit();
-    var pending_it = self.pending_closure_value_members.valueIterator();
-    while (pending_it.next()) |pending_list| pending_list.deinit(self.allocator);
-    if (builtin.mode == .Debug and self.pending_closure_value_members.count() != 0) {
-        std.debug.panic(
-            "MIR Lower invariant: {d} unresolved pending closure-value members remained at deinit",
-            .{self.pending_closure_value_members.count()},
-        );
-    }
-    self.pending_closure_value_members.deinit();
     self.in_progress_symbol_monotypes.deinit();
     self.resolved_dispatch_targets.deinit();
-    self.scratch_expr_ids.deinit();
+    self.scratch_local_ids.deinit();
     self.scratch_pattern_ids.deinit();
     self.scratch_ident_idxs.deinit();
     self.scratch_branches.deinit();
     self.scratch_branch_patterns.deinit();
-    self.scratch_stmts.deinit();
-    self.scratch_captures.deinit();
+    self.scratch_cf_stmt_ids.deinit();
+    self.scratch_capture_locals.deinit();
     self.scratch_capture_bindings.deinit();
     self.mono_scratches.deinit();
 }
@@ -1455,7 +1430,7 @@ fn makeSyntheticBind(
     self: *Self,
     monotype: Monotype.Idx,
     reassignable: bool,
-) Allocator.Error!struct { symbol: MIR.Symbol, pattern: MIR.PatternId } {
+) Allocator.Error!struct { local: MIR.LocalId, pattern: MIR.PatternId } {
     const template: Ident.Idx = .{
         .attributes = .{
             .effectful = false,
@@ -1466,47 +1441,13 @@ fn makeSyntheticBind(
     };
     const sym_ident = self.makeSyntheticIdent(template);
     const symbol = try self.internSymbol(self.current_module_idx, sym_ident);
-    const pattern = try self.store.addPattern(self.allocator, .{ .bind = symbol }, monotype);
-    try self.symbol_monotypes.put(symbol.raw(), monotype);
-    return .{ .symbol = symbol, .pattern = pattern };
-}
-
-fn registerPatternSymbolMonotypes(self: *Self, pattern_id: MIR.PatternId) Allocator.Error!void {
-    const monotype = self.store.patternTypeOf(pattern_id);
-
-    switch (self.store.getPattern(pattern_id)) {
-        .bind => |symbol| try self.symbol_monotypes.put(symbol.raw(), monotype),
-        .as_pattern => |as_pat| {
-            try self.symbol_monotypes.put(as_pat.symbol.raw(), monotype);
-            try self.registerPatternSymbolMonotypes(as_pat.pattern);
-        },
-        .tag => |tag| {
-            for (self.store.getPatternSpan(tag.args)) |arg_pat| {
-                try self.registerPatternSymbolMonotypes(arg_pat);
-            }
-        },
-        .struct_destructure => |destructure| {
-            for (self.store.getPatternSpan(destructure.fields)) |field_pat| {
-                try self.registerPatternSymbolMonotypes(field_pat);
-            }
-        },
-        .list_destructure => |destructure| {
-            for (self.store.getPatternSpan(destructure.patterns)) |elem_pat| {
-                try self.registerPatternSymbolMonotypes(elem_pat);
-            }
-            if (!destructure.rest_pattern.isNone()) {
-                try self.registerPatternSymbolMonotypes(destructure.rest_pattern);
-            }
-        },
-        .wildcard,
-        .int_literal,
-        .str_literal,
-        .dec_literal,
-        .frac_f32_literal,
-        .frac_f64_literal,
-        .runtime_error,
-        => {},
-    }
+    const local = try self.store.addLocal(self.allocator, .{
+        .monotype = monotype,
+        .source_symbol = symbol,
+        .reassignable = reassignable,
+    });
+    const pattern = try self.store.addPattern(self.allocator, .{ .bind = local }, monotype);
+    return .{ .local = local, .pattern = pattern };
 }
 
 fn setPatternSymbolsReassignable(self: *Self, pattern_id: MIR.PatternId, reassignable: bool) Allocator.Error!void {
@@ -3808,7 +3749,7 @@ fn alignAlternativePatternSymbols(
         for (representative_bindings.items) |rep_binding| {
             if (!rep_binding.ident.eql(alt_binding.ident)) continue;
 
-            const rep_symbol = try self.patternToSymbol(rep_binding.pattern_idx);
+            const rep_symbol = try self.patternToLocal(rep_binding.pattern_idx);
             const base_key: u64 = (@as(u64, self.current_module_idx) << 32) | @intFromEnum(alt_binding.pattern_idx);
             const key: u128 = (@as(u128, self.current_pattern_scope) << 64) | @as(u128, base_key);
             try self.pattern_symbols.put(key, rep_symbol);
@@ -3817,8 +3758,8 @@ fn alignAlternativePatternSymbols(
     }
 }
 
-/// Resolve a CIR pattern to a global MIR symbol.
-fn patternToSymbol(self: *Self, pattern_idx: CIR.Pattern.Idx) Allocator.Error!MIR.Symbol {
+/// Resolve a CIR binding pattern to one executable MIR local.
+fn patternToLocal(self: *Self, pattern_idx: CIR.Pattern.Idx) Allocator.Error!MIR.LocalId {
     const base_key: u64 = (@as(u64, self.current_module_idx) << 32) | @intFromEnum(pattern_idx);
     const key: u128 = (@as(u128, self.current_pattern_scope) << 64) | @as(u128, base_key);
 
@@ -3852,25 +3793,36 @@ fn patternToSymbol(self: *Self, pattern_idx: CIR.Pattern.Idx) Allocator.Error!MI
     };
 
     const symbol = try self.internSymbol(self.current_module_idx, ident_idx);
-
-    try self.pattern_symbols.put(key, symbol);
-    return symbol;
+    const monotype = try self.monotypeFromTypeVarWithBindings(
+        self.current_module_idx,
+        self.types_store,
+        ModuleEnv.varFrom(pattern_idx),
+        &self.type_var_seen,
+        &self.nominal_cycle_breakers,
+    );
+    const local = try self.store.addLocal(self.allocator, .{
+        .monotype = monotype,
+        .source_symbol = symbol,
+        .reassignable = ident_idx.attributes.reassignable,
+    });
+    try self.pattern_symbols.put(key, local);
+    return local;
 }
 
-fn lookupExistingPatternSymbol(self: *const Self, pattern_idx: CIR.Pattern.Idx) ?MIR.Symbol {
-    return self.lookupExistingPatternSymbolInScope(
+fn lookupExistingPatternLocal(self: *const Self, pattern_idx: CIR.Pattern.Idx) ?MIR.LocalId {
+    return self.lookupExistingPatternLocalInScope(
         self.current_module_idx,
         self.current_pattern_scope,
         pattern_idx,
     );
 }
 
-fn lookupExistingPatternSymbolInScope(
+fn lookupExistingPatternLocalInScope(
     self: *const Self,
     module_idx: u32,
     pattern_scope: u64,
     pattern_idx: CIR.Pattern.Idx,
-) ?MIR.Symbol {
+) ?MIR.LocalId {
     const base_key: u64 = (@as(u64, module_idx) << 32) | @intFromEnum(pattern_idx);
     const key: u128 = (@as(u128, pattern_scope) << 64) | @as(u128, base_key);
     return self.pattern_symbols.get(key);
@@ -4244,16 +4196,16 @@ fn lowerPattern(self: *Self, module_env: *const ModuleEnv, pattern_idx: CIR.Patt
 
     const lowered = switch (pattern) {
         .assign => blk: {
-            const symbol = try self.patternToSymbol(pattern_idx);
-            break :blk try self.store.addPattern(self.allocator, .{ .bind = symbol }, monotype);
+            const local = try self.patternToLocal(pattern_idx);
+            break :blk try self.store.addPattern(self.allocator, .{ .bind = local }, monotype);
         },
         .underscore => try self.store.addPattern(self.allocator, .wildcard, monotype),
         .as => |a| blk: {
             const inner = try self.lowerPattern(module_env, a.pattern);
-            const symbol = try self.patternToSymbol(pattern_idx);
+            const local = try self.patternToLocal(pattern_idx);
             break :blk try self.store.addPattern(self.allocator, .{ .as_pattern = .{
                 .pattern = inner,
-                .symbol = symbol,
+                .local = local,
             } }, monotype);
         },
         .applied_tag => |tag| blk: {
@@ -4347,7 +4299,6 @@ fn lowerPattern(self: *Self, module_env: *const ModuleEnv, pattern_idx: CIR.Patt
         },
     };
 
-    try self.registerPatternSymbolMonotypes(lowered);
     return lowered;
 }
 
