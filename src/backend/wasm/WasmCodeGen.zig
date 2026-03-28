@@ -4715,7 +4715,8 @@ fn emitZeroInit(self: *Self, base_local: u32, byte_count: u32) Allocator.Error!v
 }
 
 /// Generate a struct construction expression (unified record/tuple/empty_record).
-/// Allocates stack memory, stores each field in layout order, returns pointer.
+/// Allocates stack memory, stores each field by its original semantic index,
+/// and returns a pointer to the result.
 fn generateStruct(self: *Self, r: anytype) Allocator.Error!void {
     const ls = self.getLayoutStore();
     const l = ls.getLayout(self.runtimeRepresentationLayoutIdx(r.struct_layout));
@@ -4756,8 +4757,8 @@ fn generateStruct(self: *Self, r: anytype) Allocator.Error!void {
     defer self.allocator.free(field_val_types);
 
     for (fields, 0..) |field_expr_id, i| {
-        const field_byte_size = ls.getStructFieldSize(l.data.struct_.idx, @intCast(i));
-        const field_layout_idx = ls.getStructFieldLayout(l.data.struct_.idx, @intCast(i));
+        const field_byte_size = ls.getStructFieldSizeByOriginalIndex(l.data.struct_.idx, @intCast(i));
+        const field_layout_idx = ls.getStructFieldLayoutByOriginalIndex(l.data.struct_.idx, @intCast(i));
         const is_composite = self.isCompositeLayout(field_layout_idx);
         const field_vt = WasmLayout.resultValTypeWithStore(field_layout_idx, ls);
 
@@ -4800,9 +4801,9 @@ fn generateStruct(self: *Self, r: anytype) Allocator.Error!void {
 
     // Store each field from pre-computed locals
     for (fields, 0..) |_, i| {
-        const field_offset = ls.getStructFieldOffset(l.data.struct_.idx, @intCast(i));
-        const field_layout_idx = ls.getStructFieldLayout(l.data.struct_.idx, @intCast(i));
-        const field_byte_size = ls.getStructFieldSize(l.data.struct_.idx, @intCast(i));
+        const field_offset = ls.getStructFieldOffsetByOriginalIndex(l.data.struct_.idx, @intCast(i));
+        const field_layout_idx = ls.getStructFieldLayoutByOriginalIndex(l.data.struct_.idx, @intCast(i));
+        const field_byte_size = ls.getStructFieldSizeByOriginalIndex(l.data.struct_.idx, @intCast(i));
         const is_composite = self.isCompositeLayout(field_layout_idx);
 
         if (is_composite and field_byte_size > 0) {
@@ -4834,9 +4835,9 @@ fn generateStructAccess(self: *Self, sa: anytype) Allocator.Error!void {
     const struct_layout = ls.getLayout(sa.struct_layout);
     std.debug.assert(struct_layout.tag == .struct_);
 
-    const field_offset = ls.getStructFieldOffset(struct_layout.data.struct_.idx, sa.field_idx);
-    const field_byte_size = ls.getStructFieldSize(struct_layout.data.struct_.idx, sa.field_idx);
-    const field_layout = ls.getLayout(sa.field_layout);
+    const field_offset = ls.getStructFieldOffsetByOriginalIndex(struct_layout.data.struct_.idx, sa.field_idx);
+    const field_byte_size = ls.getStructFieldSizeByOriginalIndex(struct_layout.data.struct_.idx, sa.field_idx);
+    const field_layout = ls.getLayout(ls.getStructFieldLayoutByOriginalIndex(struct_layout.data.struct_.idx, sa.field_idx));
 
     // Check if the field is a composite type
     if (self.isCompositeLayout(sa.field_layout) and field_byte_size > 0) {
