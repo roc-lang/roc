@@ -15,7 +15,7 @@ const LayoutIdx = layout_mod.Idx;
 
 const CFStmt = LIR.CFStmt;
 const CFStmtId = LIR.CFStmtId;
-const LocalRef = LIR.LocalRef;
+const LocalId = LIR.LocalId;
 const LirProcSpecId = LIR.LirProcSpecId;
 const AssignRefStmt = std.meta.TagPayload(CFStmt, .assign_ref);
 const AssignLiteralStmt = std.meta.TagPayload(CFStmt, .assign_literal);
@@ -68,7 +68,7 @@ pub const RcInsertPass = struct {
         }
     }
 
-    fn localKey(local: LocalRef) u64 {
+    fn localKey(local: LocalId) u64 {
         return @bitCast(local.symbol);
     }
 
@@ -76,18 +76,18 @@ pub const RcInsertPass = struct {
         return self.layout_store.layoutContainsRefcounted(self.layout_store.getLayout(layout_idx));
     }
 
-    fn bumpUse(self: *RcInsertPass, local: LocalRef) Allocator.Error!void {
+    fn bumpUse(self: *RcInsertPass, local: LocalId) Allocator.Error!void {
         if (!self.layoutNeedsRc(local.layout_idx)) return;
         const gop = try self.symbol_use_counts.getOrPut(localKey(local));
         if (!gop.found_existing) gop.value_ptr.* = 0;
         gop.value_ptr.* += 1;
     }
 
-    fn countUsesInLocals(self: *RcInsertPass, locals: []const LocalRef) Allocator.Error!void {
+    fn countUsesInLocals(self: *RcInsertPass, locals: []const LocalId) Allocator.Error!void {
         for (locals) |local| try self.bumpUse(local);
     }
 
-    fn refOpSource(op: LIR.RefOp) LocalRef {
+    fn refOpSource(op: LIR.RefOp) LocalId {
         return switch (op) {
             .local => |local| local,
             .discriminant => |disc| disc.source,
@@ -105,23 +105,23 @@ pub const RcInsertPass = struct {
             },
             .assign_literal => |assign| try self.countUsesInStmt(assign.next),
             .assign_call => |assign| {
-                try self.countUsesInLocals(self.store.getLocalRefs(assign.args));
+                try self.countUsesInLocals(self.store.getLocalSpan(assign.args));
                 try self.countUsesInStmt(assign.next);
             },
             .assign_low_level => |assign| {
-                try self.countUsesInLocals(self.store.getLocalRefs(assign.args));
+                try self.countUsesInLocals(self.store.getLocalSpan(assign.args));
                 try self.countUsesInStmt(assign.next);
             },
             .assign_list => |assign| {
-                try self.countUsesInLocals(self.store.getLocalRefs(assign.elems));
+                try self.countUsesInLocals(self.store.getLocalSpan(assign.elems));
                 try self.countUsesInStmt(assign.next);
             },
             .assign_struct => |assign| {
-                try self.countUsesInLocals(self.store.getLocalRefs(assign.fields));
+                try self.countUsesInLocals(self.store.getLocalSpan(assign.fields));
                 try self.countUsesInStmt(assign.next);
             },
             .assign_tag => |assign| {
-                try self.countUsesInLocals(self.store.getLocalRefs(assign.args));
+                try self.countUsesInLocals(self.store.getLocalSpan(assign.args));
                 try self.countUsesInStmt(assign.next);
             },
             .runtime_error => {},
@@ -153,7 +153,7 @@ pub const RcInsertPass = struct {
                 try self.countUsesInStmt(scope.remainder);
             },
             .scope_exit => {},
-            .jump => |jump| try self.countUsesInLocals(self.store.getLocalRefs(jump.args)),
+            .jump => |jump| try self.countUsesInLocals(self.store.getLocalSpan(jump.args)),
             .ret => |ret| try self.bumpUse(ret.value),
             .crash => {},
         }
@@ -172,7 +172,7 @@ pub const RcInsertPass = struct {
         };
     }
 
-    fn recordAliasSemantics(self: *RcInsertPass, target: LocalRef, semantics: LIR.ResultSemantics) Allocator.Error!void {
+    fn recordAliasSemantics(self: *RcInsertPass, target: LocalId, semantics: LIR.ResultSemantics) Allocator.Error!void {
         const target_key = localKey(target);
         switch (semantics) {
             .fresh => {},
@@ -232,7 +232,7 @@ pub const RcInsertPass = struct {
         };
     }
 
-    fn wrapAssignLike(self: *RcInsertPass, stmt: CFStmt, target: LocalRef, next_raw: CFStmtId) Allocator.Error!CFStmtId {
+    fn wrapAssignLike(self: *RcInsertPass, stmt: CFStmt, target: LocalId, next_raw: CFStmtId) Allocator.Error!CFStmtId {
         const next = try self.processStmt(next_raw);
         const use_count = self.symbol_use_counts.get(localKey(target)) orelse 0;
         const semantics = resultSemantics(stmt);

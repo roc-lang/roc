@@ -63,7 +63,7 @@ pub const Symbol = packed struct(u64) {
 
     /// Reports whether this is the distinguished sentinel symbol.
     pub fn isNone(self: Symbol) bool {
-        return self == .none;
+        return self.id == none.id;
     }
 };
 

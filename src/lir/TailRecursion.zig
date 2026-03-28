@@ -17,7 +17,7 @@ const Allocator = std.mem.Allocator;
 const CFStmt = ir.CFStmt;
 const CFStmtId = ir.CFStmtId;
 const JoinPointId = ir.JoinPointId;
-const LocalRefSpan = ir.LocalRefSpan;
+const LocalSpan = ir.LocalSpan;
 const Symbol = ir.Symbol;
 
 /// Tail-recursion rewrite state for one target proc body.
@@ -163,7 +163,7 @@ pub fn makeTailRecursive(
     proc_symbol: Symbol,
     join_point_id: JoinPointId,
     body: CFStmtId,
-    params: LocalRefSpan,
+    params: LocalSpan,
     allocator: Allocator,
 ) Allocator.Error!?CFStmtId {
     var pass = TailRecursionPass.init(store, proc_symbol, join_point_id, allocator);
@@ -213,7 +213,7 @@ test "TailRecursionPass transforms assign_call/ret into jump" {
 
     const proc_id = try store.addProcSpec(.{
         .name = proc_symbol,
-        .args = LocalRefSpan.empty(),
+        .args = LocalSpan.empty(),
         .body = sentinel_body,
         .ret_layout = i64_layout,
         .result_contract = .fresh,

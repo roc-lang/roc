@@ -258,6 +258,13 @@ pub const ComptimeEvaluator = struct {
             else => false,
         };
 
+        if (!is_lambda and !self.isTrivialLiteralExpr(expr_idx)) {
+            std.debug.panic(
+                "compile-time evaluation of non-literal constants is not implemented yet",
+                .{},
+            );
+        }
+
         // Reset halted flag at the start of each def - crashes only halt within a single def
         self.halted = false;
 
@@ -316,6 +323,32 @@ pub const ComptimeEvaluator = struct {
         // Return the result value so it can be stored in bindings
         // Note: We don't decref here because the value needs to stay alive in bindings
         return EvalResult{ .success = result };
+    }
+
+    fn isTrivialLiteralExpr(self: *ComptimeEvaluator, expr_idx: CIR.Expr.Idx) bool {
+        return switch (self.env.store.getExpr(expr_idx)) {
+            .e_num,
+            .e_frac_f32,
+            .e_frac_f64,
+            .e_dec,
+            .e_dec_small,
+            .e_typed_int,
+            .e_typed_frac,
+            .e_zero_argument_tag,
+            .e_empty_list,
+            .e_empty_record,
+            .e_bytes_literal,
+            => true,
+            .e_str_segment => true,
+            .e_str => |str_expr| blk: {
+                for (self.env.store.sliceExpr(str_expr.span)) |segment_expr_id| {
+                    const segment_expr = self.env.store.getExpr(segment_expr_id);
+                    if (segment_expr != .e_str_segment) break :blk false;
+                }
+                break :blk true;
+            },
+            else => false,
+        };
     }
 
     /// Try to fold a successfully evaluated constant into a constant expression

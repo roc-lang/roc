@@ -523,14 +523,6 @@ fn lookupMonomorphizedDispatchProcInst(self: *const Self, expr_idx: CIR.Expr.Idx
     return null;
 }
 
-fn procInstIdSlicesEqual(lhs: []const Monomorphize.ProcInstId, rhs: []const Monomorphize.ProcInstId) bool {
-    if (lhs.len != rhs.len) return false;
-    for (lhs, rhs) |lhs_id, rhs_id| {
-        if (lhs_id != rhs_id) return false;
-    }
-    return true;
-}
-
 fn procInstIdSliceContainsAll(
     actual: []const Monomorphize.ProcInstId,
     expected: []const Monomorphize.ProcInstId,

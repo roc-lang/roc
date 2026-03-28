@@ -12,7 +12,7 @@ const LirStore = @import("LirStore.zig");
 const Allocator = std.mem.Allocator;
 const CFStmtId = LIR.CFStmtId;
 const LirProcSpecId = LIR.LirProcSpecId;
-const LocalRef = LIR.LocalRef;
+const LocalId = LIR.LocalId;
 const RefProjection = LIR.RefProjection;
 const RefProjectionSpan = LIR.RefProjectionSpan;
 
@@ -58,13 +58,13 @@ pub fn analyzeProc(allocator: Allocator, store: *const LirStore, proc_id: LirPro
 pub fn resultContractForProc(
     allocator: Allocator,
     store: *LirStore,
-    params: LIR.LocalRefSpan,
+    params: LIR.LocalSpan,
     root_stmt: CFStmtId,
 ) Allocator.Error!LIR.ProcResultContract {
     var param_index_by_symbol = ParamIndexMap.init(allocator);
     defer param_index_by_symbol.deinit();
 
-    for (store.getLocalRefs(params), 0..) |param, i| {
+    for (store.getLocalSpan(params), 0..) |param, i| {
         try param_index_by_symbol.put(localKey(param), @intCast(i));
     }
 
@@ -95,7 +95,7 @@ pub fn resultContractForProc(
     return .fresh;
 }
 
-fn localKey(local: LocalRef) u64 {
+fn localKey(local: LocalId) u64 {
     return @bitCast(local.symbol);
 }
 
@@ -249,7 +249,7 @@ fn resolveReturnKind(
     store: *const LirStore,
     param_index_by_symbol: *const ParamIndexMap,
     results: *const LocalResultMap,
-    local: LocalRef,
+    local: LocalId,
     projections: *std.ArrayList(RefProjection),
     visited: *VisitedMap,
 ) Allocator.Error!ResolvedReturnKind {
@@ -425,7 +425,7 @@ fn analyzeStmt(result: *Result, store: *const LirStore, stmt_id: CFStmtId) Alloc
 
 fn recordResultSemantics(
     result: *Result,
-    target: LocalRef,
+    target: LocalId,
     semantics: LIR.ResultSemantics,
 ) Allocator.Error!void {
     switch (semantics) {

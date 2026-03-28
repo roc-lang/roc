@@ -159,17 +159,20 @@ pub const ProcInst = struct {
     callable_param_specs: CallableParamSpecSpan = .empty(),
 };
 
+/// One callable requirement originating from a higher-order parameter.
 pub const CallableParamSpecEntry = struct {
     param_index: u16,
     projections: CallableParamProjectionSpan = .empty(),
     proc_inst_set_id: ProcInstSetId,
 };
 
+/// One structural projection applied before demanding callable proc instantiations.
 pub const CallableParamProjection = union(enum) {
     field: Monotype.Name,
     tuple_elem: u32,
 };
 
+/// Span of callable-parameter projections stored in the monomorphization store.
 pub const CallableParamProjectionSpan = extern struct {
     start: u32,
     len: u16,
@@ -183,6 +186,7 @@ pub const CallableParamProjectionSpan = extern struct {
     }
 };
 
+/// Span of callable-parameter specification entries stored in the monomorphization store.
 pub const CallableParamSpecSpan = extern struct {
     start: u32,
     len: u16,
