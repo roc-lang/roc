@@ -341,13 +341,21 @@ pub const SymInfo = struct {
         return self.kind == .function;
     }
 
-    /// Resolve this symbol's name. For explicitly-named symbols, returns the
-    /// stored name. For implicitly-named imported symbols, looks up the name
-    /// from the import section.
-    pub fn getName(self: SymInfo, imports: []const Import) []const u8 {
+    /// Resolve this symbol's name when one is available.
+    ///
+    /// Explicitly named symbols return their stored name.
+    /// Implicitly named undefined function/global/event/table symbols inherit
+    /// their name from the import section.
+    /// Section symbols and other unnamed non-import symbols return null.
+    pub fn resolveName(self: SymInfo, imports: []const Import) ?[]const u8 {
         if (self.name) |n| return n;
-        // Implicitly named: look up from import section by index
-        return imports[self.index].field_name;
+
+        if (!self.isUndefined()) return null;
+
+        return switch (self.kind) {
+            .function, .global, .event, .table => imports[self.index].field_name,
+            else => null,
+        };
     }
 };
 ```
@@ -435,15 +443,17 @@ pub const LinkingSection = struct {
     segment_info: std.ArrayList(SegmentInfo),
     init_funcs: std.ArrayList(InitFunc),
 
-    /// Find a symbol by name. For implicitly-named symbols, resolves the name
-    /// from the import section. Returns the symbol index, or null.
+    /// Find a symbol by name. For implicitly-named imported symbols, resolves
+    /// the name from the import section. Returns the symbol index, or null.
     pub fn findSymbolByName(
         self: *const LinkingSection,
         name: []const u8,
         imports: []const Import,
     ) ?u32 {
         for (self.symbol_table.items, 0..) |sym, i| {
-            if (std.mem.eql(u8, sym.getName(imports), name)) return @intCast(i);
+            if (sym.resolveName(imports)) |sym_name| {
+                if (std.mem.eql(u8, sym_name, name)) return @intCast(i);
+            }
         }
         return null;
     }
@@ -466,7 +476,7 @@ pub const LinkingSection = struct {
         new_fn_index: u32,
     ) ?u32 {
         for (self.symbol_table.items, 0..) |*sym, i| {
-            if (sym.kind == .function and sym.index == old_fn_index) {
+            if (sym.kind == .function and sym.isUndefined() and sym.index == old_fn_index) {
                 sym.index = new_fn_index;
                 return @intCast(i);
             }
@@ -617,10 +627,12 @@ Add a `preload()` method:
 /// Returns error if the module is not relocatable or is malformed.
 pub fn preload(allocator: Allocator, bytes: []const u8, require_relocatable: bool) !WasmModule {
     // 1. Validate magic ("\0asm") and version (1)
-    // 2. Iterate sections by ID:
+    // 2. Iterate sections in Wasm binary order:
     //    - For each standard section: parse into the appropriate field
-    //    - For custom sections: check name, parse linking/reloc.CODE/reloc.DATA
-    // 3. If require_relocatable: validate symbol table and reloc sections exist
+    //    - Consume optional DataCount if present (used by Zig-built objects)
+    //    - For custom sections: check name, parse linking/reloc.CODE/reloc.DATA,
+    //      skip all other custom sections unchanged
+    // 3. If require_relocatable: validate symbol table and reloc.CODE exist
     // 4. Return populated WasmModule
 }
 ```
@@ -638,9 +650,10 @@ pub fn preload(allocator: Allocator, bytes: []const u8, require_relocatable: boo
 | 7  | Export | Name, kind, index |
 | 8  | Start | Start function index (optional) |
 | 9  | Element | Element segments (function table initialization) |
+| 12 | DataCount | Consume and ignore (present in some relocatable objects, including the shipped wasm builtins) |
 | 10 | Code | **Store raw bytes + record function offsets** |
 | 11 | Data | Data segments with memory offsets |
-| 0  | Custom | Check name: "linking", "reloc.CODE", "reloc.DATA", "name" |
+| 0  | Custom | Check name: "linking", "reloc.CODE", "reloc.DATA", "name"; skip all other custom sections such as debug metadata |
 
 **Code section parsing detail**: Do NOT parse individual instructions. Store the entire section
 body as raw bytes in `code_bytes`. Walk through function entries only to record each function's
@@ -663,7 +676,7 @@ patching, and parsing/re-encoding instructions would lose the padded LEB128 enco
 
 **Validation for relocatable modules**:
 - Symbol table must exist and be non-empty
-- At least one relocation section must exist
+- `reloc.CODE` must exist and be non-empty (`reloc.DATA` remains optional)
 - No internally-defined globals (the `__stack_pointer` global must come from an import,
   because its index needs to be relocatable)
 
@@ -689,6 +702,7 @@ test "preload — records correct function_offsets for code section"
 test "preload — parses linking section symbol table"
 test "preload — parses reloc.CODE section entries"
 test "preload — parses reloc.DATA section entries"
+test "preload — accepts relocatable object with optional DataCount section"
 test "preload — require_relocatable rejects module without linking section"
 test "preload — require_relocatable rejects module without reloc sections"
 test "preload — parsed module has correct function count, import count, symbol count"
@@ -784,8 +798,8 @@ real code section functions. This means:
 
 - Function index `import_count + 0` → first dummy
 - Function index `import_count + dead_import_dummy_count` → first real defined function
-- All original defined functions shift up by `dead_import_dummy_count`, but their relocation
-  entries already point to the correct (original) indices because we patched them.
+- Original defined-function indices remain unchanged overall: the import count goes down by
+  exactly the same amount that dummy functions are inserted at the front of the code section.
 
 ### Rust Reference
 
@@ -916,6 +930,23 @@ The `host.wasm` is a **relocatable WASM object** (produced with `clang --target=
 or equivalent), not a final executable. Despite being listed under `exe`, it's an object file
 that the surgical linker will combine with app code to produce the final executable `.wasm`.
 This matches the pattern used by native targets where hosts provide `.o` files under `exe`.
+
+**Important CLI requirement**: the existing generic `LinkItem.file_path` handling in
+`src/cli/main.zig` cannot treat `host.wasm` as an ordinary linker input. For wasm32
+executable builds, the CLI must resolve one host-module path from the link spec and hand
+its bytes directly to `WasmModule.preload()`. It must NOT append `host.wasm` to
+`platform_files_pre` / `platform_files_post`, and it must NOT pass it through the normal
+`wasm-ld` input collection path.
+
+This can be implemented either by:
+
+1. adding a dedicated `LinkItem.host_wasm`, or
+2. adding a wasm32-specific branch in `src/cli/main.zig` that extracts the first pre-`app`
+   host `.wasm` path from `targets.exe.wasm32`.
+
+The plan does not require one specific encoding in `TargetsConfig`; it does require that the
+resolved host module path be consumed by the surgical-linking pipeline rather than by the
+generic linker-input pipeline.
 
 ### Rust Reference
 
@@ -1776,15 +1807,22 @@ will trap if a dead function is somehow called (which indicates a bug in the DCE
            (Conservative: indirect calls could target any function of that type.)
 
 3. ELIMINATE dead imports:
-   For each import that is NOT live:
-       Remove from imports array.
-       Increment dead_import_dummy_count.
-       Update symbol table to reindex remaining imports.
+   Iterate imports, but only over the FUNCTION-import index space:
+       If a function import is not live:
+           Remove it from imports array.
+           Increment dead_import_dummy_count.
+       If an import is memory/table/global:
+           Keep it. The live set is indexed by function index only.
+   Reindex remaining imported-function symbols and patch their relocations
+   before mutating code_bytes.
 
 4. ELIMINATE dead defined functions:
-   For each defined function that is NOT live:
-       Replace its body in code_bytes with DUMMY_FUNCTION bytes.
-       (Preserve the function length prefix so offsets remain valid.)
+   Rebuild the code section body:
+       For each defined function:
+           If live: copy its serialized body bytes verbatim.
+           If dead: serialize DUMMY_FUNCTION instead.
+   (No attempt to preserve original per-function byte lengths is required
+    after relocation-based import reindexing is complete.)
 ```
 
 ### Rust Reference
@@ -1802,6 +1840,7 @@ test "eliminateDeadCode — exported function and its callees are preserved"
 test "eliminateDeadCode — unreachable function body replaced with unreachable stub"
 test "eliminateDeadCode — function indices unchanged after elimination"
 test "eliminateDeadCode — dead import removed, dead_import_dummy_count incremented"
+test "eliminateDeadCode — non-function imports are preserved"
 test "eliminateDeadCode — indirect call targets (element section) preserved"
 test "eliminateDeadCode — transitive callees preserved (A calls B calls C → all live)"
 test "eliminateDeadCode — init functions preserved"
@@ -1900,9 +1939,11 @@ enable it by providing the complete pipeline from source to `.wasm`.
 
 ```
  1. Load platform's TargetsConfig
-    → Get host .wasm path from targets.exe.wasm32
+    → Resolve `host_wasm_path` from the wasm32 executable link spec
+    → Do NOT feed `host.wasm` into generic linker input lists
 
  2. Parse host module
+    host_bytes = readFile(host_wasm_path)
     host_module = WasmModule.preload(allocator, host_bytes, true)
 
  3. Setup: remove ONLY memory and table imports (Phase 5)
@@ -1966,6 +2007,11 @@ targets: {
 The `host.wasm` file must be a relocatable WASM object (compiled with
 `clang --target=wasm32 -c -o host.wasm host.c` or Zig's `--target=wasm32-freestanding`).
 It must contain `linking` and `reloc.*` custom sections.
+
+The wasm32 `roc build` path must special-case this artifact. Under the current CLI structure,
+the platform link spec is otherwise split into generic `platform_files_pre/post` linker inputs.
+That behavior is correct for native targets and incorrect for surgical linking. The wasm32
+implementation must extract and consume the host module path before that generic split occurs.
 
 ### Eval Integration
 
@@ -2109,6 +2155,7 @@ custom sections:
 │ Global Section (ID=6) [must be empty]│
 │ Export Section (ID=7)                │
 │ Element Section (ID=9) [optional]    │
+│ DataCount Section (ID=12) [optional] │
 │ Code Section (ID=10)                 │
 │ Data Section (ID=11)  [optional]     │
 ├──────────────────────────────────────┤
@@ -2116,8 +2163,16 @@ custom sections:
 │ Custom: "reloc.CODE"                 │
 │ Custom: "reloc.DATA"  [optional]     │
 │ Custom: "name"        [optional]     │
+│ Custom: other/debug   [optional]     │
 └──────────────────────────────────────┘
 ```
+
+Notes:
+- `DataCount` appears in real relocatable objects produced by Zig, including the shipped
+  `src/cli/targets/wasm32/roc_builtins.o`, so the parser must consume it even though we do
+  not use its payload.
+- Additional custom sections such as debug metadata and `reloc..debug_*` may appear and
+  should be skipped unless the parser explicitly needs them.
 
 ### Linking Custom Section Format
 
@@ -2212,21 +2267,16 @@ WASM since padded LEB128 is a valid encoding of any value).
 
 ---
 
-## Appendix C: Open Questions (Resolved)
+## Appendix C: Status and Remaining Open Questions
 
-1. **Builtins `.o` availability**: ~~Is `roc_builtins.o` for wasm32 already built by `build.zig`?~~
-   **Answer:** Yes. `roc_builtins.o` for wasm32 is built by `build.zig` and embedded in the
-   Roc CLI binary at compile time, so it is available at run/link time when building a Roc app.
-   No additional build step is needed.
+1. **Builtins `.o` availability**: Resolved.
+   `roc_builtins.o` for wasm32 is already built by `build.zig` and embedded in the CLI, so
+   Phase 8 can treat it as an existing input rather than a prerequisite build task.
 
-2. **Host module format**: ~~What tool do platform authors use to produce the relocatable host
-   `.wasm`?~~
-   **Answer:** Platform authors build their relocatable WASM modules using systems-level
-   programming languages such as Zig. The exact toolchain details are out of scope for this
-   plan. We already have a WASM test platform at `test/wasm/platform/` that we will use to
-   validate this implementation.
+2. **Host module authoring guidance**: What exact compilation flags do we want to support and
+   document for platform authors producing relocatable `host.wasm` artifacts?
+   We should publish one blessed example, ideally based on the existing WASM test platform.
 
-3. **COMDAT groups**: The linking section can contain COMDAT info (for deduplicating template
-   instantiations in C++). The old Rust compiler parsed but did not use this.
-   **Status:** Needs further investigation before deciding on an approach. For now, parse the
-   COMDAT subsection for correctness but skip processing it, as noted in Phase 1.
+3. **COMDAT groups**: The linking section can contain COMDAT metadata. The old Rust compiler
+   parsed but did not semantically use it. We should preserve that behavior: parse enough to
+   keep symbol-table indices correct, but defer any COMDAT-aware deduplication logic.
