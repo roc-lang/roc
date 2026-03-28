@@ -735,3 +735,133 @@ pub fn leb128WriteI64(gpa: Allocator, output: *std.ArrayList(u8), value: i64) !v
         }
     }
 }
+
+// --- Padded LEB128 utilities for surgical linking ---
+
+/// Overwrite 5 bytes at `buffer[offset..offset+5]` with a u32 in padded LEB128.
+/// The buffer must already have 5 bytes reserved at that position.
+/// This is the core primitive for surgical relocation patching.
+pub fn overwritePaddedU32(buffer: []u8, offset: u32, value: u32) void {
+    var x = value;
+    const off: usize = @intCast(offset);
+    for (0..4) |i| {
+        buffer[off + i] = @as(u8, @truncate(x & 0x7f)) | 0x80;
+        x >>= 7;
+    }
+    buffer[off + 4] = @as(u8, @truncate(x));
+}
+
+/// Overwrite 5 bytes with a signed i32 in padded LEB128.
+/// Used for signed memory address relocations.
+pub fn overwritePaddedI32(buffer: []u8, offset: u32, value: i32) void {
+    var x = value;
+    const off: usize = @intCast(offset);
+    for (0..4) |i| {
+        buffer[off + i] = @as(u8, @truncate(@as(u32, @bitCast(x)) & 0x7f)) | 0x80;
+        x >>= 7;
+    }
+    buffer[off + 4] = @as(u8, @truncate(@as(u32, @bitCast(x)) & 0x7f));
+}
+
+/// Append a u32 as exactly 5 bytes of padded LEB128 to an output buffer.
+/// Used when emitting new relocatable instructions (call, global.get/set).
+pub fn appendPaddedU32(gpa: Allocator, output: *std.ArrayList(u8), value: u32) !void {
+    var x = value;
+    for (0..4) |_| {
+        try output.append(gpa, @as(u8, @truncate(x & 0x7f)) | 0x80);
+        x >>= 7;
+    }
+    try output.append(gpa, @as(u8, @truncate(x)));
+}
+
+// --- Tests for padded LEB128 ---
+
+/// Decode a 5-byte padded unsigned LEB128 value (test helper).
+fn decodePaddedU32(bytes: []const u8) u32 {
+    var result: u32 = 0;
+    for (0..5) |i| {
+        result |= @as(u32, bytes[i] & 0x7f) << @intCast(7 * i);
+    }
+    return result;
+}
+
+/// Decode a 5-byte padded signed LEB128 value (test helper).
+fn decodePaddedI32(bytes: []const u8) i32 {
+    var result: u32 = 0;
+    for (0..5) |i| {
+        result |= @as(u32, bytes[i] & 0x7f) << @intCast(7 * i);
+    }
+    return @bitCast(result);
+}
+
+test "overwritePaddedU32 — value 0 encodes as [0x80, 0x80, 0x80, 0x80, 0x00]" {
+    var buf = [_]u8{0} ** 5;
+    overwritePaddedU32(&buf, 0, 0);
+    try std.testing.expectEqualSlices(u8, &.{ 0x80, 0x80, 0x80, 0x80, 0x00 }, &buf);
+}
+
+test "overwritePaddedU32 — value 1 encodes as [0x81, 0x80, 0x80, 0x80, 0x00]" {
+    var buf = [_]u8{0} ** 5;
+    overwritePaddedU32(&buf, 0, 1);
+    try std.testing.expectEqualSlices(u8, &.{ 0x81, 0x80, 0x80, 0x80, 0x00 }, &buf);
+}
+
+test "overwritePaddedU32 — value 0x7F encodes as [0xFF, 0x80, 0x80, 0x80, 0x00]" {
+    var buf = [_]u8{0} ** 5;
+    overwritePaddedU32(&buf, 0, 0x7F);
+    try std.testing.expectEqualSlices(u8, &.{ 0xFF, 0x80, 0x80, 0x80, 0x00 }, &buf);
+}
+
+test "overwritePaddedU32 — value 128 encodes as [0x80, 0x81, 0x80, 0x80, 0x00]" {
+    var buf = [_]u8{0} ** 5;
+    overwritePaddedU32(&buf, 0, 128);
+    try std.testing.expectEqualSlices(u8, &.{ 0x80, 0x81, 0x80, 0x80, 0x00 }, &buf);
+}
+
+test "overwritePaddedU32 — max u32 (0xFFFFFFFF) encodes correctly" {
+    var buf = [_]u8{0} ** 5;
+    overwritePaddedU32(&buf, 0, 0xFFFFFFFF);
+    try std.testing.expectEqualSlices(u8, &.{ 0xFF, 0xFF, 0xFF, 0xFF, 0x0F }, &buf);
+}
+
+test "overwritePaddedU32 — round-trip: write then decode matches original value" {
+    const test_values = [_]u32{ 0, 1, 127, 128, 255, 256, 16383, 16384, 2097151, 2097152, 0x0FFFFFFF, 0xFFFFFFFF };
+    for (test_values) |val| {
+        var buf = [_]u8{0} ** 5;
+        overwritePaddedU32(&buf, 0, val);
+        try std.testing.expectEqual(val, decodePaddedU32(&buf));
+    }
+}
+
+test "overwritePaddedI32 — negative value (-1) encodes correctly" {
+    var buf = [_]u8{0} ** 5;
+    overwritePaddedI32(&buf, 0, -1);
+    // -1 in signed padded LEB128: all 7-bit groups are 0x7F, last byte keeps sign bit
+    try std.testing.expectEqualSlices(u8, &.{ 0xFF, 0xFF, 0xFF, 0xFF, 0x7F }, &buf);
+}
+
+test "overwritePaddedI32 — positive value round-trips correctly" {
+    const test_values = [_]i32{ 0, 1, -1, 127, -128, 32767, -32768, std.math.maxInt(i32), std.math.minInt(i32) };
+    for (test_values) |val| {
+        var buf = [_]u8{0} ** 5;
+        overwritePaddedI32(&buf, 0, val);
+        try std.testing.expectEqual(val, decodePaddedI32(&buf));
+    }
+}
+
+test "appendPaddedU32 — appends exactly 5 bytes" {
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendPaddedU32(std.testing.allocator, &output, 42);
+    try std.testing.expectEqual(@as(usize, 5), output.items.len);
+}
+
+test "appendPaddedU32 — output is decodable as standard LEB128" {
+    const test_values = [_]u32{ 0, 1, 127, 128, 16384, 0xFFFFFFFF };
+    for (test_values) |val| {
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try appendPaddedU32(std.testing.allocator, &output, val);
+        try std.testing.expectEqual(val, decodePaddedU32(output.items));
+    }
+}
