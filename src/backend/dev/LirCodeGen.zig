@@ -1195,10 +1195,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return self.localMetadata(local).layout_idx;
         }
 
-        fn localSourceSymbol(self: *Self, local: LocalId) Symbol {
-            return self.localMetadata(local).source_symbol;
-        }
-
         fn localKey(local: LocalId) u32 {
             return @intFromEnum(local);
         }
@@ -4139,10 +4135,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             if (std.debug.runtime_safety) {
                 std.debug.panic(
-                    "generateLookup: missing local location for local={d} source_symbol={d} layout={d} current_proc={d} current_stmt={d} current_stmt_tag={s}",
+                    "generateLookup: missing local location for local={d} layout={d} current_proc={d} current_stmt={d} current_stmt_tag={s}",
                     .{
                         @intFromEnum(local),
-                        self.localSourceSymbol(local).raw(),
                         @intFromEnum(layout_idx),
                         if (self.current_proc_name) |sym| sym.raw() else std.math.maxInt(u64),
                         if (self.current_stmt_id) |stmt_id| @intFromEnum(stmt_id) else std.math.maxInt(u32),

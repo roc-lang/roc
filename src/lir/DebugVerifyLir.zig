@@ -623,18 +623,13 @@ fn panicMissingLocalSemantics(
 ) noreturn {
     debugPrintStmtSummary(store, stmt_id);
     std.debug.panic(
-        "DebugVerifyLir invariant violated: missing result semantics for local {d} (source symbol {d}) at stmt {d} ({s})",
+        "DebugVerifyLir invariant violated: missing result semantics for local {d} at stmt {d} ({s})",
         .{
             @intFromEnum(local),
-            localSymbolRaw(store, local),
             @intFromEnum(stmt_id),
             @tagName(store.getCFStmt(stmt_id)),
         },
     );
-}
-
-fn localSymbolRaw(store: *const LirStore, local: LocalId) u64 {
-    return store.getLocal(local).source_symbol.raw();
 }
 
 fn debugPrintStmtSummary(store: *const LirStore, stmt_id: CFStmtId) void {

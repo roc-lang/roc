@@ -5,7 +5,7 @@
 
 const MIR = @import("MIR.zig");
 const Monotype = @import("Monotype.zig");
-const ProcResultSummary = @import("ProcResultSummary.zig");
+const ResultSummary = @import("ResultSummary.zig");
 const ModuleEnv = @import("can").ModuleEnv;
 const Ident = @import("base").Ident;
 const std = @import("std");
@@ -15,7 +15,7 @@ const Allocator = std.mem.Allocator;
 /// Frozen release-path MIR analyses consumed by downstream lowering passes.
 pub const Self = @This();
 
-proc_result_summary: ProcResultSummary.Table,
+result_summary: ResultSummary.Table,
 all_module_envs: []const *const ModuleEnv,
 current_module_idx: u32,
 
@@ -28,7 +28,7 @@ pub fn init(
     root_const_ids: []const MIR.ConstDefId,
 ) Allocator.Error!Self {
     return .{
-        .proc_result_summary = try ProcResultSummary.build(
+        .result_summary = try ResultSummary.build(
             allocator,
             mir_store,
             root_const_ids,
@@ -40,22 +40,22 @@ pub fn init(
 
 /// Releases all storage owned by this analyses bundle.
 pub fn deinit(self: *Self) void {
-    self.proc_result_summary.deinit();
+    self.result_summary.deinit();
 }
 
 /// Returns the precomputed result contract for one MIR lambda.
-pub fn getLambdaResultContract(self: *const Self, lambda_id: MIR.LambdaId) ProcResultSummary.ProcResultContract {
-    return self.proc_result_summary.getLambdaContract(lambda_id);
+pub fn getLambdaResultContract(self: *const Self, lambda_id: MIR.LambdaId) ResultSummary.ResultContract {
+    return self.result_summary.getLambdaContract(lambda_id);
 }
 
 /// Returns the precomputed result contract for one requested MIR root constant.
-pub fn getConstResultContract(self: *const Self, const_id: MIR.ConstDefId) ProcResultSummary.ProcResultContract {
-    return self.proc_result_summary.getConstContract(const_id);
+pub fn getConstResultContract(self: *const Self, const_id: MIR.ConstDefId) ResultSummary.ResultContract {
+    return self.result_summary.getConstContract(const_id);
 }
 
-/// Resolves a stored projection span from proc-result summaries.
-pub fn getRefProjectionSpan(self: *const Self, span: ProcResultSummary.RefProjectionSpan) []const ProcResultSummary.RefProjection {
-    return self.proc_result_summary.getRefProjectionSpan(span);
+/// Resolves a stored projection span from result summaries.
+pub fn getRefProjectionSpan(self: *const Self, span: ResultSummary.RefProjectionSpan) []const ResultSummary.RefProjection {
+    return self.result_summary.getRefProjectionSpan(span);
 }
 
 fn identLastSegment(text: []const u8) []const u8 {

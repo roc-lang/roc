@@ -12,7 +12,7 @@ pub const Analyses = @import("Analyses.zig");
 pub const Monotype = @import("Monotype.zig");
 pub const Monomorphize = @import("Monomorphize.zig");
 pub const Lower = @import("Lower.zig");
-pub const ProcResultSummary = @import("ProcResultSummary.zig");
+pub const ResultSummary = @import("ResultSummary.zig");
 
 /// Re-export of MIR control-flow statement type
 pub const CFStmt = MIR.CFStmt;
@@ -51,5 +51,5 @@ test "mir tests" {
     std.testing.refAllDecls(Analyses);
     std.testing.refAllDecls(Monotype);
     std.testing.refAllDecls(Monomorphize);
-    std.testing.refAllDecls(ProcResultSummary);
+    std.testing.refAllDecls(ResultSummary);
 }

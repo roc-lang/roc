@@ -335,8 +335,6 @@ pub const ComptimeEvaluator = struct {
             .e_typed_int,
             .e_typed_frac,
             .e_zero_argument_tag,
-            .e_empty_list,
-            .e_empty_record,
             .e_bytes_literal,
             => true,
             .e_str_segment => true,

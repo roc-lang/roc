@@ -555,11 +555,10 @@ fn encodeLocalsDecl(self: *Self, func_body: *std.ArrayList(u8), skip_count: u32)
 /// Generate wasm instructions for an already-bound local value.
 fn generateExpr(self: *Self, value: LocalRef) Allocator.Error!void {
     const local_info = self.storage.getLocalInfo(value) orelse {
-        const local = self.store.getLocal(value);
         if (builtin.mode == .Debug) {
             std.debug.panic(
-                "WASM/codegen invariant violated: missing local binding for LIR local {d} (symbol {d})",
-                .{ @intFromEnum(value), local.source_symbol.raw() },
+                "WASM/codegen invariant violated: missing local binding for LIR local {d}",
+                .{@intFromEnum(value)},
             );
         }
         unreachable;

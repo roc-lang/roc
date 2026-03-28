@@ -44,7 +44,7 @@ pub const ParamRefContract = struct {
 };
 
 /// Lambda- or const-level summary of result provenance.
-pub const ProcResultContract = union(enum) {
+pub const ResultContract = union(enum) {
     fresh,
     alias_of_param: ParamRefContract,
     borrow_of_param: ParamRefContract,
@@ -54,16 +54,16 @@ pub const ProcResultContract = union(enum) {
 pub const Table = struct {
     allocator: Allocator,
     ref_projections: std.ArrayList(RefProjection),
-    lambda_contracts: std.ArrayList(ProcResultContract),
-    const_contracts: std.ArrayList(ProcResultContract),
+    lambda_contracts: std.ArrayList(ResultContract),
+    const_contracts: std.ArrayList(ResultContract),
 
     /// Initializes an empty summary table.
     pub fn init(allocator: Allocator) Table {
         return .{
             .allocator = allocator,
             .ref_projections = std.ArrayList(RefProjection).empty,
-            .lambda_contracts = std.ArrayList(ProcResultContract).empty,
-            .const_contracts = std.ArrayList(ProcResultContract).empty,
+            .lambda_contracts = std.ArrayList(ResultContract).empty,
+            .const_contracts = std.ArrayList(ResultContract).empty,
         };
     }
 
@@ -89,7 +89,7 @@ pub const Table = struct {
         const end = @as(u64, span.start) + @as(u64, span.len);
         if (end > self.ref_projections.items.len) {
             std.debug.panic(
-                "ProcResultSummary invariant violated: projection span start={d} len={d} exceeds ref-projection storage len={d}",
+                "ResultSummary invariant violated: projection span start={d} len={d} exceeds ref-projection storage len={d}",
                 .{ span.start, span.len, self.ref_projections.items.len },
             );
         }
@@ -98,18 +98,18 @@ pub const Table = struct {
     }
 
     /// Returns the precomputed result contract for one MIR lambda.
-    pub fn getLambdaContract(self: *const Table, lambda_id: MIR.LambdaId) ProcResultContract {
+    pub fn getLambdaContract(self: *const Table, lambda_id: MIR.LambdaId) ResultContract {
         return self.lambda_contracts.items[@intFromEnum(lambda_id)];
     }
 
     /// Returns the precomputed result contract for one MIR top-level constant.
-    pub fn getConstContract(self: *const Table, const_id: MIR.ConstDefId) ProcResultContract {
+    pub fn getConstContract(self: *const Table, const_id: MIR.ConstDefId) ResultContract {
         return self.const_contracts.items[@intFromEnum(const_id)];
     }
 };
 
 const BorrowRegion = union(enum) {
-    proc,
+    body,
     scope: MIR.BorrowScopeId,
 };
 
@@ -131,13 +131,13 @@ const Origin = union(enum) {
     borrow_of_fresh: BorrowedFreshOrigin,
 };
 
-const ProcSummaryState = union(enum) {
+const CallableSummaryState = union(enum) {
     no_return,
-    concrete: ProcResultContract,
+    concrete: ResultContract,
 };
 
 const ReturnAccumulator = struct {
-    inferred: ?ProcResultContract = null,
+    inferred: ?ResultContract = null,
 };
 
 const LocalOriginMap = std.AutoHashMap(u32, Origin);
@@ -153,10 +153,10 @@ const Analyzer = struct {
     allocator: Allocator,
     mir_store: *const MIR.Store,
     table: *Table,
-    lambda_states: ?[]const ProcSummaryState,
+    lambda_states: ?[]const CallableSummaryState,
     active_joins: *ActiveJoinMap,
 
-    fn lambdaSummary(self: *const Analyzer, lambda_id: MIR.LambdaId) ProcSummaryState {
+    fn lambdaSummary(self: *const Analyzer, lambda_id: MIR.LambdaId) CallableSummaryState {
         if (self.lambda_states) |states| {
             return states[@intFromEnum(lambda_id)];
         }
@@ -242,7 +242,7 @@ const Analyzer = struct {
 
     fn instantiateCallContract(
         self: *Analyzer,
-        contract: ProcResultContract,
+        contract: ResultContract,
         arg_origins: []const Origin,
         region: BorrowRegion,
     ) Allocator.Error!Origin {
@@ -251,7 +251,7 @@ const Analyzer = struct {
             .alias_of_param => |param_ref| blk: {
                 if (param_ref.param_index >= arg_origins.len) {
                     std.debug.panic(
-                        "ProcResultSummary invariant violated: lambda result aliases arg {d}, but call only has {d} args",
+                        "ResultSummary invariant violated: lambda result aliases arg {d}, but call only has {d} args",
                         .{ param_ref.param_index, arg_origins.len },
                     );
                 }
@@ -260,7 +260,7 @@ const Analyzer = struct {
             .borrow_of_param => |param_ref| blk: {
                 if (param_ref.param_index >= arg_origins.len) {
                     std.debug.panic(
-                        "ProcResultSummary invariant violated: lambda result borrows arg {d}, but call only has {d} args",
+                        "ResultSummary invariant violated: lambda result borrows arg {d}, but call only has {d} args",
                         .{ param_ref.param_index, arg_origins.len },
                     );
                 }
@@ -272,7 +272,7 @@ const Analyzer = struct {
     fn mergeReturnContract(
         self: *Analyzer,
         accumulator: *ReturnAccumulator,
-        next: ProcResultContract,
+        next: ResultContract,
     ) void {
         if (accumulator.inferred) |current| {
             accumulator.inferred = mergeContracts(self.table, current, next);
@@ -281,17 +281,17 @@ const Analyzer = struct {
         }
     }
 
-    fn procContractFromOrigin(_: *Analyzer, origin: Origin) ProcResultContract {
+    fn resultContractFromOrigin(_: *Analyzer, origin: Origin) ResultContract {
         return switch (origin) {
             .fresh => .fresh,
             .alias_of_param => |aliased| .{ .alias_of_param = aliased },
             .borrow_of_param => |borrowed| switch (borrowed.region) {
-                .proc => .{ .borrow_of_param = .{
+                .body => .{ .borrow_of_param = .{
                     .param_index = borrowed.param_index,
                     .projections = borrowed.projections,
                 } },
                 .scope => |scope_id| std.debug.panic(
-                    "ProcResultSummary invariant violated: scoped borrow from scope {d} escaped via return",
+                    "ResultSummary invariant violated: scoped borrow from scope {d} escaped via return",
                     .{@intFromEnum(scope_id)},
                 ),
             },
@@ -300,10 +300,10 @@ const Analyzer = struct {
     }
 
     fn mergeReturnedOrigin(self: *Analyzer, accumulator: *ReturnAccumulator, origin: Origin) void {
-        self.mergeReturnContract(accumulator, self.procContractFromOrigin(origin));
+        self.mergeReturnContract(accumulator, self.resultContractFromOrigin(origin));
     }
 
-    fn finishSummaryState(_: *Analyzer, accumulator: *ReturnAccumulator) ProcSummaryState {
+    fn finishSummaryState(_: *Analyzer, accumulator: *ReturnAccumulator) CallableSummaryState {
         if (accumulator.inferred) |contract| {
             return .{ .concrete = contract };
         }
@@ -322,11 +322,11 @@ const Analyzer = struct {
     fn originIsScopedBorrow(origin: Origin) bool {
         return switch (origin) {
             .borrow_of_param => |borrowed| switch (borrowed.region) {
-                .proc => false,
+                .body => false,
                 .scope => true,
             },
             .borrow_of_fresh => |borrowed| switch (borrowed.region) {
-                .proc => false,
+                .body => false,
                 .scope => true,
             },
             else => false,
@@ -360,7 +360,7 @@ const Analyzer = struct {
 
         if (originIsScopedBorrow(left) or originIsScopedBorrow(right)) {
             std.debug.panic(
-                "ProcResultSummary invariant violated: join merged incompatible scoped-borrow origins",
+                "ResultSummary invariant violated: join merged incompatible scoped-borrow origins",
                 .{},
             );
         }
@@ -370,7 +370,7 @@ const Analyzer = struct {
 
     fn originForLocal(_: *Analyzer, env: *const LocalOriginMap, local: MIR.LocalId) Origin {
         return env.get(localKey(local)) orelse std.debug.panic(
-            "ProcResultSummary invariant violated: local {d} had no known origin during summary",
+            "ResultSummary invariant violated: local {d} had no known origin during summary",
             .{@intFromEnum(local)},
         );
     }
@@ -394,7 +394,7 @@ const Analyzer = struct {
                 if (args.len == 0) return;
                 if (args.len != 1) {
                     std.debug.panic(
-                        "ProcResultSummary invariant violated: strongest-form MIR tag patterns must have at most one wrapped payload pattern",
+                        "ResultSummary invariant violated: strongest-form MIR tag patterns must have at most one wrapped payload pattern",
                         .{},
                     );
                 }
@@ -411,7 +411,7 @@ const Analyzer = struct {
                 }
             },
             .list_destructure => std.debug.panic(
-                "ProcResultSummary invariant violated: list destructure is not implemented in strongest-form MIR result summaries",
+                "ResultSummary invariant violated: list destructure is not implemented in strongest-form MIR result summaries",
                 .{},
             ),
             .int_literal,
@@ -444,11 +444,11 @@ const Analyzer = struct {
             const should_remove = switch (entry.value_ptr.*) {
                 .fresh, .alias_of_param => false,
                 .borrow_of_param => |borrowed| switch (borrowed.region) {
-                    .proc => false,
+                    .body => false,
                     .scope => |borrowed_scope| borrowed_scope == scope_id,
                 },
                 .borrow_of_fresh => |borrowed| switch (borrowed.region) {
-                    .proc => false,
+                    .body => false,
                     .scope => |borrowed_scope| borrowed_scope == scope_id,
                 },
             };
@@ -543,7 +543,7 @@ const Analyzer = struct {
                     .borrow_arg => |arg_index| blk: {
                         if (arg_index >= arg_origins.len) {
                             std.debug.panic(
-                                "ProcResultSummary invariant violated: low-level {s} borrows arg {d}, but call only has {d} args",
+                                "ResultSummary invariant violated: low-level {s} borrows arg {d}, but call only has {d} args",
                                 .{ @tagName(assign.op), arg_index, arg_origins.len },
                             );
                         }
@@ -551,7 +551,7 @@ const Analyzer = struct {
                     },
                     .no_return => return false,
                     .requires_explicit_summary => std.debug.panic(
-                        "ProcResultSummary invariant violated: low-level result {s} requires explicit provenance summary",
+                        "ResultSummary invariant violated: low-level result {s} requires explicit provenance summary",
                         .{@tagName(assign.op)},
                     ),
                 };
@@ -642,7 +642,7 @@ const Analyzer = struct {
                 const gop = try self.active_joins.getOrPut(join_key);
                 if (gop.found_existing) {
                     std.debug.panic(
-                        "ProcResultSummary invariant violated: nested/duplicate active join {d}",
+                        "ResultSummary invariant violated: nested/duplicate active join {d}",
                         .{join_key},
                     );
                 }
@@ -658,7 +658,7 @@ const Analyzer = struct {
                 const remainder_continues = try self.analyzeStmt(env, region, accumulator, join.remainder);
                 if (remainder_continues) {
                     std.debug.panic(
-                        "ProcResultSummary invariant violated: join {d} remainder fell through without explicit jump",
+                        "ResultSummary invariant violated: join {d} remainder fell through without explicit jump",
                         .{join_key},
                     );
                 }
@@ -679,7 +679,7 @@ const Analyzer = struct {
                     try body_env.put(
                         localKey(param),
                         incoming orelse std.debug.panic(
-                            "ProcResultSummary invariant violated: join {d} param {d} had no incoming origin",
+                            "ResultSummary invariant violated: join {d} param {d} had no incoming origin",
                             .{ join_key, i },
                         ),
                     );
@@ -689,13 +689,13 @@ const Analyzer = struct {
             },
             .jump => |jump| {
                 const join_state = self.active_joins.getPtr(@intFromEnum(jump.id)) orelse std.debug.panic(
-                    "ProcResultSummary invariant violated: jump to unknown active join {d}",
+                    "ResultSummary invariant violated: jump to unknown active join {d}",
                     .{@intFromEnum(jump.id)},
                 );
                 const args = self.mir_store.getLocalSpan(jump.args);
                 if (args.len != join_state.params.len) {
                     std.debug.panic(
-                        "ProcResultSummary invariant violated: jump to join {d} passed {d} args, expected {d}",
+                        "ResultSummary invariant violated: jump to join {d} passed {d} args, expected {d}",
                         .{ @intFromEnum(jump.id), args.len, join_state.params.len },
                     );
                 }
@@ -718,7 +718,7 @@ const Analyzer = struct {
         }
     }
 
-    fn analyzeLambda(self: *Analyzer, lambda_id: MIR.LambdaId) Allocator.Error!ProcSummaryState {
+    fn analyzeLambda(self: *Analyzer, lambda_id: MIR.LambdaId) Allocator.Error!CallableSummaryState {
         const lambda = self.mir_store.getLambda(lambda_id);
         var env = LocalOriginMap.init(self.allocator);
         defer env.deinit();
@@ -738,22 +738,22 @@ const Analyzer = struct {
             const origin: Origin = .{ .alias_of_param = .{
                 .param_index = @intCast(i),
             } };
-            try self.bindPattern(&env, pattern_id, origin, .proc);
+            try self.bindPattern(&env, pattern_id, origin, .body);
         }
 
         if (!lambda.captures_param.isNone()) {
             const origin: Origin = .{ .alias_of_param = .{
                 .param_index = @intCast(visible_params.len),
             } };
-            try self.bindPattern(&env, lambda.captures_param, origin, .proc);
+            try self.bindPattern(&env, lambda.captures_param, origin, .body);
         }
 
         var accumulator = ReturnAccumulator{};
-        _ = try self.analyzeStmt(&env, .proc, &accumulator, lambda.body);
+        _ = try self.analyzeStmt(&env, .body, &accumulator, lambda.body);
         return self.finishSummaryState(&accumulator);
     }
 
-    fn analyzeConst(self: *Analyzer, const_id: MIR.ConstDefId) Allocator.Error!ProcSummaryState {
+    fn analyzeConst(self: *Analyzer, const_id: MIR.ConstDefId) Allocator.Error!CallableSummaryState {
         const def = self.mir_store.getConstDef(const_id);
         var env = LocalOriginMap.init(self.allocator);
         defer env.deinit();
@@ -769,7 +769,7 @@ const Analyzer = struct {
         self.active_joins = &active_joins;
 
         var accumulator = ReturnAccumulator{};
-        _ = try self.analyzeStmt(&env, .proc, &accumulator, def.body);
+        _ = try self.analyzeStmt(&env, .body, &accumulator, def.body);
         return self.finishSummaryState(&accumulator);
     }
 };
@@ -787,7 +787,7 @@ pub fn build(
         _ = mir_store.getConstDef(const_id);
     }
 
-    var states = std.ArrayList(ProcSummaryState).empty;
+    var states = std.ArrayList(CallableSummaryState).empty;
     defer states.deinit(allocator);
     try states.appendNTimes(allocator, .no_return, mir_store.getLambdas().len);
 
@@ -814,7 +814,7 @@ pub fn build(
     try table.lambda_contracts.ensureTotalCapacityPrecise(allocator, states.items.len);
     for (states.items) |state| {
         const contract = switch (state) {
-            .no_return => ProcResultContract.fresh,
+            .no_return => ResultContract.fresh,
             .concrete => |inner| inner,
         };
         table.lambda_contracts.appendAssumeCapacity(contract);
@@ -832,7 +832,7 @@ pub fn build(
         const const_id: MIR.ConstDefId = @enumFromInt(@as(u32, @intCast(i)));
         const state = try analyzer.analyzeConst(const_id);
         const contract = switch (state) {
-            .no_return => ProcResultContract.fresh,
+            .no_return => ResultContract.fresh,
             .concrete => |inner| inner,
         };
         table.const_contracts.appendAssumeCapacity(contract);
@@ -841,7 +841,7 @@ pub fn build(
     return table;
 }
 
-fn summaryStatesEqual(table: *const Table, left: ProcSummaryState, right: ProcSummaryState) bool {
+fn summaryStatesEqual(table: *const Table, left: CallableSummaryState, right: CallableSummaryState) bool {
     return switch (left) {
         .no_return => right == .no_return,
         .concrete => |left_contract| switch (right) {
@@ -851,14 +851,14 @@ fn summaryStatesEqual(table: *const Table, left: ProcSummaryState, right: ProcSu
     };
 }
 
-fn mergeContracts(table: *const Table, left: ProcResultContract, right: ProcResultContract) ProcResultContract {
+fn mergeContracts(table: *const Table, left: ResultContract, right: ResultContract) ResultContract {
     return if (procContractsEqual(table, left, right))
         left
     else
         .fresh;
 }
 
-fn procContractsEqual(table: *const Table, left: ProcResultContract, right: ProcResultContract) bool {
+fn procContractsEqual(table: *const Table, left: ResultContract, right: ResultContract) bool {
     return switch (left) {
         .fresh => right == .fresh,
         .alias_of_param => |left_param| switch (right) {

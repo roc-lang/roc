@@ -48,7 +48,6 @@ pub const BorrowScopeId = enum(u32) {
 /// One explicitly typed LIR local.
 pub const Local = struct {
     layout_idx: layout.Idx,
-    source_symbol: Symbol,
 };
 
 /// Span into flat local-id storage.

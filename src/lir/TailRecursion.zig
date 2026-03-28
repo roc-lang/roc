@@ -211,8 +211,8 @@ test "TailRecursionPass transforms assign_call/ret into jump" {
     defer store.deinit();
 
     const proc_symbol = Symbol.fromRaw(100);
-    const arg_local = try store.addLocal(.{ .source_symbol = Symbol.fromRaw(101), .layout_idx = i64_layout });
-    const temp_local = try store.addLocal(.{ .source_symbol = Symbol.fromRaw(102), .layout_idx = i64_layout });
+    const arg_local = try store.addLocal(.{ .layout_idx = i64_layout });
+    const temp_local = try store.addLocal(.{ .layout_idx = i64_layout });
     const join_id: JoinPointId = @enumFromInt(7);
     const sentinel_msg = try store.insertString("TailRecursion test unresolved proc body sentinel should never execute");
     const sentinel_body = try store.addCFStmt(.{ .crash = .{ .msg = sentinel_msg } });

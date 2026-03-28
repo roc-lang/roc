@@ -140,7 +140,6 @@ pub const RestIndex = enum(u32) {
 /// One explicitly typed MIR local.
 pub const Local = struct {
     monotype: Monotype.Idx,
-    source_symbol: Symbol,
     reassignable: bool = false,
 };
 

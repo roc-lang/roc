@@ -236,7 +236,7 @@ pub const LlvmEvaluator = struct {
         ) catch return error.OutOfMemory;
         defer mir_lower.deinit();
 
-        const root_const_id = mir_lower.lowerExpr(expr_idx) catch {
+        const root_const_id = mir_lower.lowerRootConst(expr_idx) catch {
             return error.CompilationFailed;
         };
 

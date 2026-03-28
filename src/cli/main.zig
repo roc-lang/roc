@@ -4263,32 +4263,32 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         return error.NoEntrypointsLowered;
     }
 
-    const entrypoint_root_exprs = try ctx.arena.alloc(can.CIR.Expr.Idx, pending_entrypoint_sources.items.len);
+    const entrypoint_source_exprs = try ctx.arena.alloc(can.CIR.Expr.Idx, pending_entrypoint_sources.items.len);
     for (pending_entrypoint_sources.items, 0..) |entrypoint_source, i| {
-        entrypoint_root_exprs[i] = entrypoint_source.expr_idx;
+        entrypoint_source_exprs[i] = entrypoint_source.expr_idx;
     }
 
     var monomorphization = blk: {
         const mono = if (app_module_idx) |resolved_app_module_idx|
-            mir.Monomorphize.runRootsWithTypeScope(
+            mir.Monomorphize.runRootSourceExprsWithTypeScope(
                 ctx.gpa,
                 all_module_envs,
                 platform_types,
                 platform_module_idx,
                 app_module_idx,
-                entrypoint_root_exprs,
+                entrypoint_source_exprs,
                 platform_module_idx,
                 &platform_type_scope,
                 resolved_app_module_idx,
             )
         else
-            mir.Monomorphize.runRoots(
+            mir.Monomorphize.runRootSourceExprs(
                 ctx.gpa,
                 all_module_envs,
                 platform_types,
                 platform_module_idx,
                 app_module_idx,
-                entrypoint_root_exprs,
+                entrypoint_source_exprs,
             );
         break :blk mono catch {
             std.log.err("Failed to monomorphize platform module", .{});
@@ -4312,7 +4312,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     // e.g., provides { main_for_host!: "main" } means we look for main_for_host! in platform
     const PendingEntrypoint = struct {
         ffi_symbol: []const u8,
-        mir_expr_id: MIR.ExprId,
+        root_const_id: MIR.ConstDefId,
         ret_type_var: @import("types").Var,
         arg_layouts: []const layout.Idx,
     };
@@ -4349,14 +4349,14 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         }
 
         // Lower CIR → MIR
-        const mir_expr_id = mir_lower.lowerExpr(expr_idx) catch |err| {
+        const root_const_id = mir_lower.lowerRootConst(expr_idx) catch |err| {
             std.log.err("Failed to lower expression for entrypoint {s} ({s}): {}", .{ entry.roc_ident, entry.ffi_symbol, err });
             continue;
         };
 
         try pending_entrypoints.append(ctx.gpa, .{
             .ffi_symbol = entry.ffi_symbol,
-            .mir_expr_id = mir_expr_id,
+            .root_const_id = root_const_id,
             .ret_type_var = ret_type_var,
             .arg_layouts = arg_layouts,
         });
@@ -4369,13 +4369,13 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         return error.NoEntrypointsLowered;
     }
 
-    const pending_root_exprs = try ctx.gpa.alloc(MIR.ExprId, pending_entrypoints.items.len);
-    defer ctx.gpa.free(pending_root_exprs);
+    const pending_root_consts = try ctx.gpa.alloc(MIR.ConstDefId, pending_entrypoints.items.len);
+    defer ctx.gpa.free(pending_root_consts);
     for (pending_entrypoints.items, 0..) |pending, i| {
-        pending_root_exprs[i] = pending.mir_expr_id;
+        pending_root_consts[i] = pending.root_const_id;
     }
 
-    var mir_analyses = try mir.Analyses.init(ctx.gpa, &mir_store, all_module_envs, platform_module_idx, pending_root_exprs);
+    var mir_analyses = try mir.Analyses.init(ctx.gpa, &mir_store, all_module_envs, platform_module_idx, pending_root_consts);
     defer mir_analyses.deinit();
 
     var lir_store = lir.LirStore.init(ctx.gpa);
@@ -4398,7 +4398,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
             continue;
         };
 
-        const entry_proc = mir_to_lir.lowerEntrypointProc(pending.mir_expr_id, pending.arg_layouts, ret_layout) catch |err| {
+        const entry_proc = mir_to_lir.lowerEntrypointProc(pending.root_const_id, pending.arg_layouts, ret_layout) catch |err| {
             std.log.err("Failed to lower entrypoint proc {s}: {}", .{ pending.ffi_symbol, err });
             continue;
         };

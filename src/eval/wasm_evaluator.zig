@@ -164,7 +164,7 @@ pub const WasmEvaluator = struct {
         var mir_store = MIR.Store.init(self.allocator) catch return error.OutOfMemory;
         defer mir_store.deinit(self.allocator);
 
-        var monomorphization = mir.Monomorphize.runExpr(
+        var monomorphization = mir.Monomorphize.runRootSourceExpr(
             self.allocator,
             all_module_envs,
             &module_env.types,
@@ -185,7 +185,7 @@ pub const WasmEvaluator = struct {
         ) catch return error.OutOfMemory;
         defer mir_lower.deinit();
 
-        const root_const_id = mir_lower.lowerExpr(expr_idx) catch {
+        const root_const_id = mir_lower.lowerRootConst(expr_idx) catch {
             return error.RuntimeError;
         };
 

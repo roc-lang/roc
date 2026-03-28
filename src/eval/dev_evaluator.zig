@@ -756,7 +756,7 @@ pub const DevEvaluator = struct {
         defer mir_store.deinit(self.allocator);
 
         var monomorphization = if (platform_type_scope) |*ts|
-            mir.Monomorphize.runExprWithTypeScope(
+            mir.Monomorphize.runRootSourceExprWithTypeScope(
                 self.allocator,
                 all_module_envs,
                 &module_env.types,
@@ -768,7 +768,7 @@ pub const DevEvaluator = struct {
                 app_module_idx.?,
             ) catch return error.OutOfMemory
         else
-            mir.Monomorphize.runExpr(
+            mir.Monomorphize.runRootSourceExpr(
                 self.allocator,
                 all_module_envs,
                 &module_env.types,
@@ -793,7 +793,7 @@ pub const DevEvaluator = struct {
             mir_lower.setTypeScope(module_idx, ts, app_module_idx.?) catch return error.OutOfMemory;
         }
 
-        const root_const_id = mir_lower.lowerExpr(expr_idx) catch {
+        const root_const_id = mir_lower.lowerRootConst(expr_idx) catch {
             return error.RuntimeError;
         };
 
@@ -917,7 +917,7 @@ pub const DevEvaluator = struct {
         defer mir_store.deinit(self.allocator);
 
         var monomorphization = if (platform_type_scope) |*ts|
-            mir.Monomorphize.runExprWithTypeScope(
+            mir.Monomorphize.runRootSourceExprWithTypeScope(
                 self.allocator,
                 all_module_envs,
                 &module_env.types,
@@ -929,7 +929,7 @@ pub const DevEvaluator = struct {
                 app_module_idx.?,
             ) catch return error.OutOfMemory
         else
-            mir.Monomorphize.runExpr(
+            mir.Monomorphize.runRootSourceExpr(
                 self.allocator,
                 all_module_envs,
                 &module_env.types,
@@ -954,7 +954,7 @@ pub const DevEvaluator = struct {
             mir_lower.setTypeScope(module_idx, ts, app_module_idx.?) catch return error.OutOfMemory;
         }
 
-        const root_const_id = mir_lower.lowerExpr(expr_idx) catch {
+        const root_const_id = mir_lower.lowerRootConst(expr_idx) catch {
             return error.RuntimeError;
         };
 
