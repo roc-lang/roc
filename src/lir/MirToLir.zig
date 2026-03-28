@@ -249,23 +249,24 @@ fn runtimeValueLayoutFromMirPattern(self: *Self, pattern_id: MIR.PatternId) Allo
     return self.runtimeValueLayoutFromMirMonotype(self.mir_store.patternTypeOf(pattern_id));
 }
 
-fn exactCallableSeedForSymbol(self: *const Self, symbol: MIR.Symbol) ?MIR.SeedMember {
-    const members = self.mir_store.getSymbolSeedMembers(symbol) orelse return null;
+fn exactCallableSeedForLocal(self: *const Self, local_id: MIR.LocalId) ?MIR.SeedMember {
+    const members = self.mir_store.getLocalSeedMembers(local_id) orelse return null;
     if (members.len == 0) return null;
     if (members.len != 1) {
         std.debug.panic(
-            "MirToLir invariant violated: symbol {d} has {d} callable seeds where exactly one is required for runtime layout",
-            .{ symbol.raw(), members.len },
+            "MirToLir invariant violated: local {d} has {d} callable seeds where exactly one is required for runtime layout",
+            .{ @intFromEnum(local_id), members.len },
         );
     }
     return members[0];
 }
 
-fn runtimeCallableValueLayoutFromSymbol(self: *Self, symbol: MIR.Symbol) Allocator.Error!?layout.Idx {
-    if (self.mir_store.getFunctionDefForSymbol(symbol)) |function_def_id| {
+fn runtimeCallableValueLayoutFromMirLocal(self: *Self, local_id: MIR.LocalId) Allocator.Error!?layout.Idx {
+    const local = self.mir_store.getLocal(local_id);
+    if (self.mir_store.getFunctionDefForSymbol(local.source_symbol)) |function_def_id| {
         return try self.runtimeLambdaValueLayout(self.mir_store.getFunctionDef(function_def_id).lambda);
     }
-    if (self.exactCallableSeedForSymbol(symbol)) |member| {
+    if (self.exactCallableSeedForLocal(local_id)) |member| {
         return try self.runtimeLambdaValueLayout(member.lambda);
     }
     return null;
@@ -274,7 +275,7 @@ fn runtimeCallableValueLayoutFromSymbol(self: *Self, symbol: MIR.Symbol) Allocat
 fn runtimeValueLayoutFromMirLocal(self: *Self, local_id: MIR.LocalId) Allocator.Error!layout.Idx {
     const local = self.mir_store.getLocal(local_id);
     if (self.mir_store.monotype_store.getMonotype(local.monotype) == .func) {
-        if (try self.runtimeCallableValueLayoutFromSymbol(local.source_symbol)) |layout_idx| {
+        if (try self.runtimeCallableValueLayoutFromMirLocal(local_id)) |layout_idx| {
             return layout_idx;
         }
         std.debug.panic(

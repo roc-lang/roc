@@ -524,6 +524,7 @@ pub const Store = struct {
     monotype_store: Monotype.Store,
     const_defs_by_symbol: std.AutoHashMapUnmanaged(u64, ConstDefId),
     function_defs_by_symbol: std.AutoHashMapUnmanaged(u64, FunctionDefId),
+    local_seed_members: std.AutoHashMapUnmanaged(u32, SeedMemberSpan),
     symbol_seed_members: std.AutoHashMapUnmanaged(u64, SeedMemberSpan),
     strings: StringLiteral.Store,
 
@@ -548,6 +549,7 @@ pub const Store = struct {
             .monotype_store = try Monotype.Store.init(allocator),
             .const_defs_by_symbol = .empty,
             .function_defs_by_symbol = .empty,
+            .local_seed_members = .empty,
             .symbol_seed_members = .empty,
             .strings = .{},
         };
@@ -573,6 +575,7 @@ pub const Store = struct {
         self.monotype_store.deinit(allocator);
         self.const_defs_by_symbol.deinit(allocator);
         self.function_defs_by_symbol.deinit(allocator);
+        self.local_seed_members.deinit(allocator);
         self.symbol_seed_members.deinit(allocator);
         self.strings.deinit(allocator);
     }
@@ -898,6 +901,56 @@ pub const Store = struct {
     /// Resolves exact callable members known for one global symbol, if any.
     pub fn getSymbolSeedMembers(self: *const Store, symbol: Symbol) ?[]const SeedMember {
         const span = self.symbol_seed_members.get(symbol.raw()) orelse return null;
+        return self.getSeedMemberSpan(span);
+    }
+
+    /// Registers exact callable members known for one executable local.
+    pub fn registerLocalSeedMembers(self: *Store, allocator: Allocator, local: LocalId, members: []const SeedMember) Allocator.Error!void {
+        const key = @as(u32, @intFromEnum(local));
+        const gop = try self.local_seed_members.getOrPut(allocator, key);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = try self.addSeedMemberSpan(allocator, members);
+            return;
+        }
+
+        const existing = self.getSeedMemberSpan(gop.value_ptr.*);
+        if (existing.len == members.len) {
+            for (existing, members) |lhs, rhs| {
+                if (!std.meta.eql(lhs, rhs)) break;
+            } else {
+                return;
+            }
+        }
+
+        var merged = std.ArrayList(SeedMember).empty;
+        defer merged.deinit(allocator);
+
+        try merged.appendSlice(allocator, existing);
+        outer: for (members) |member| {
+            for (merged.items) |existing_member| {
+                if (std.meta.eql(existing_member, member)) continue :outer;
+            }
+            try merged.append(allocator, member);
+        }
+
+        std.mem.sortUnstable(
+            SeedMember,
+            merged.items,
+            {},
+            struct {
+                fn lessThan(_: void, lhs: SeedMember, rhs: SeedMember) bool {
+                    if (lhs.lambda != rhs.lambda) return @intFromEnum(lhs.lambda) < @intFromEnum(rhs.lambda);
+                    return @intFromEnum(lhs.closure_member) < @intFromEnum(rhs.closure_member);
+                }
+            }.lessThan,
+        );
+
+        gop.value_ptr.* = try self.addSeedMemberSpan(allocator, merged.items);
+    }
+
+    /// Resolves exact callable members known for one executable local, if any.
+    pub fn getLocalSeedMembers(self: *const Store, local: LocalId) ?[]const SeedMember {
+        const span = self.local_seed_members.get(@as(u32, @intFromEnum(local))) orelse return null;
         return self.getSeedMemberSpan(span);
     }
 };

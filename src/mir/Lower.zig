@@ -3247,6 +3247,13 @@ fn copyExactCallableSeedsFromLocal(
     target: MIR.LocalId,
     source: MIR.LocalId,
 ) Allocator.Error!void {
+    if (self.store.monotype_store.getMonotype(self.store.getLocal(target).monotype) != .func) return;
+
+    if (self.store.getLocalSeedMembers(source)) |members| {
+        try self.registerSeedMembersForLocal(target, members);
+        return;
+    }
+
     try self.copyExactCallableSeedsFromSymbol(target, self.store.getLocal(source).source_symbol);
 }
 
@@ -3837,7 +3844,11 @@ fn lowerTrivialClosureLambda(
 
     for (captures) |capture_idx| {
         const capture = module_env.store.getCapture(capture_idx);
-        try self.scratch_local_ids.append(try self.patternToLocal(capture.pattern_idx));
+        const capture_local = try self.patternToLocal(capture.pattern_idx);
+        if (self.lookupExistingPatternLocalInScope(self.current_module_idx, saved_scope, capture.pattern_idx)) |outer_local| {
+            try self.copyExactCallableSeedsFromLocal(capture_local, outer_local);
+        }
+        try self.scratch_local_ids.append(capture_local);
     }
 
     const captures_tuple_monotype = if (captures.len == 0)
@@ -3933,11 +3944,79 @@ fn registerSeedMembersForLocal(
     members: []const MIR.SeedMember,
 ) Allocator.Error!void {
     if (members.len == 0) return;
-    try self.store.registerSymbolSeedMembers(
-        self.allocator,
-        self.store.getLocal(local).source_symbol,
-        members,
-    );
+    try self.store.registerLocalSeedMembers(self.allocator, local, members);
+}
+
+fn seedCallableLocalFromProcInsts(
+    self: *Self,
+    local: MIR.LocalId,
+    proc_inst_ids: []const Monomorphize.ProcInstId,
+) Allocator.Error!void {
+    if (proc_inst_ids.len == 0) return;
+
+    var seed_members = std.ArrayList(MIR.SeedMember).empty;
+    defer seed_members.deinit(self.allocator);
+
+    for (proc_inst_ids) |proc_inst_id| {
+        const member = try self.lowerTrivialSeedMemberForProcInst(proc_inst_id);
+        var seen = false;
+        for (seed_members.items) |existing_member| {
+            if (existing_member.lambda == member.lambda and existing_member.closure_member == member.closure_member) {
+                seen = true;
+                break;
+            }
+        }
+        if (!seen) {
+            try seed_members.append(self.allocator, member);
+        }
+    }
+
+    if (seed_members.items.len != 0) {
+        std.mem.sortUnstable(
+            MIR.SeedMember,
+            seed_members.items,
+            {},
+            struct {
+                fn lessThan(_: void, lhs: MIR.SeedMember, rhs: MIR.SeedMember) bool {
+                    if (lhs.lambda != rhs.lambda) return @intFromEnum(lhs.lambda) < @intFromEnum(rhs.lambda);
+                    return @intFromEnum(lhs.closure_member) < @intFromEnum(rhs.closure_member);
+                }
+            }.lessThan,
+        );
+        try self.registerSeedMembersForLocal(local, seed_members.items);
+    }
+}
+
+fn seedCallableLocalFromContextPatternProcInsts(
+    self: *Self,
+    local: MIR.LocalId,
+    pattern_idx: CIR.Pattern.Idx,
+) Allocator.Error!void {
+    if (self.store.monotype_store.getMonotype(self.store.getLocal(local).monotype) != .func) return;
+    if (self.exactSeedMemberForLocal(local) != null) return;
+    if (self.current_proc_inst_context.isNone()) return;
+
+    if (self.monomorphization.getContextPatternProcInsts(
+        self.current_proc_inst_context,
+        self.current_module_idx,
+        pattern_idx,
+    )) |proc_inst_ids| {
+        try self.seedCallableLocalFromProcInsts(local, proc_inst_ids);
+        return;
+    }
+
+    const defining_context_proc_inst = self.monomorphization.getProcInst(
+        self.current_proc_inst_context,
+    ).defining_context_proc_inst;
+    if (defining_context_proc_inst.isNone()) return;
+
+    if (self.monomorphization.getContextPatternProcInsts(
+        defining_context_proc_inst,
+        self.current_module_idx,
+        pattern_idx,
+    )) |proc_inst_ids| {
+        try self.seedCallableLocalFromProcInsts(local, proc_inst_ids);
+    }
 }
 
 fn lowerTrivialSeedMemberForProcInst(
@@ -4101,7 +4180,7 @@ fn seedCallableLocalFromExpr(
 ) Allocator.Error!void {
     const target_mono = self.store.getLocal(target).monotype;
     if (self.store.monotype_store.getMonotype(target_mono) != .func) return;
-    if (self.exactSeedMemberForSymbol(self.store.getLocal(target).source_symbol) != null) return;
+    if (self.exactSeedMemberForLocal(target) != null) return;
 
     var members = std.ArrayList(MIR.SeedMember).empty;
     defer members.deinit(self.allocator);
@@ -4321,14 +4400,7 @@ fn collectCallableSeedMembersFromLocal(
     in_progress_lambdas: *std.AutoHashMap(u32, void),
     out: *std.ArrayList(MIR.SeedMember),
 ) Allocator.Error!void {
-    const local = self.store.getLocal(local_id);
-    if (self.store.getFunctionDefForSymbol(local.source_symbol)) |function_def_id| {
-        try self.appendUniqueSeedMember(out, .{
-            .lambda = self.store.getFunctionDef(function_def_id).lambda,
-        });
-        return;
-    }
-    if (self.store.getSymbolSeedMembers(local.source_symbol)) |members| {
+    if (self.store.getLocalSeedMembers(local_id)) |members| {
         try self.appendUniqueSeedMembers(out, members);
         return;
     }
@@ -4390,8 +4462,7 @@ fn collectExactSeedMembersForExpr(
         switch (callable) {
             .direct_lambda => |lambda| try self.appendUniqueSeedMember(out, .{ .lambda = lambda }),
             .closure_local => |closure| {
-                const symbol = self.store.getLocal(closure.closure).source_symbol;
-                const member = self.exactSeedMemberForSymbol(symbol) orelse std.debug.panic(
+                const member = self.exactSeedMemberForLocal(closure.closure) orelse std.debug.panic(
                     "statement-only MIR closure local {d} had no exact callable seed",
                     .{@intFromEnum(closure.closure)},
                 );
@@ -4460,6 +4531,18 @@ fn exactSeedMemberForSymbol(self: *Self, symbol: MIR.Symbol) ?MIR.SeedMember {
     return members[0];
 }
 
+fn exactSeedMemberForLocal(self: *Self, local: MIR.LocalId) ?MIR.SeedMember {
+    const members = self.store.getLocalSeedMembers(local) orelse return null;
+    if (members.len == 0) return null;
+    if (members.len != 1) {
+        std.debug.panic(
+            "statement-only MIR call lowering requires one exact callable seed for local {d}, found {d}",
+            .{ @intFromEnum(local), members.len },
+        );
+    }
+    return members[0];
+}
+
 fn resolveTrivialCallableFromSymbol(
     self: *Self,
     symbol: MIR.Symbol,
@@ -4488,6 +4571,22 @@ fn resolveTrivialCallableFromSymbol(
     } };
 }
 
+fn resolveTrivialCallableFromLocal(self: *Self, local: MIR.LocalId) !TrivialCallable {
+    const member = self.exactSeedMemberForLocal(local) orelse std.debug.panic(
+        "statement-only MIR callable local {d} has no exact callable seed",
+        .{@intFromEnum(local)},
+    );
+
+    if (member.closure_member.isNone()) {
+        return .{ .direct_lambda = member.lambda };
+    }
+
+    return .{ .closure_local = .{
+        .closure = local,
+        .lambda = member.lambda,
+    } };
+}
+
 fn resolveTrivialCallable(
     self: *Self,
     module_env: *const ModuleEnv,
@@ -4498,7 +4597,8 @@ fn resolveTrivialCallable(
         .e_lambda => |lambda| .{ .direct_lambda = try self.lowerTrivialLambda(module_env, expr_idx, lambda, try self.resolveMonotype(expr_idx)) },
         .e_lookup_local => |lookup| blk: {
             if (self.lookupExistingPatternLocal(lookup.pattern_idx)) |local| {
-                break :blk try self.resolveTrivialCallableFromSymbol(self.store.getLocal(local).source_symbol, local);
+                try self.seedCallableLocalFromContextPatternProcInsts(local, lookup.pattern_idx);
+                break :blk try self.resolveTrivialCallableFromLocal(local);
             }
             break :blk try self.resolveTrivialCallableFromSymbol(
                 try self.lookupSymbolForPattern(self.current_module_idx, lookup.pattern_idx),
@@ -4599,7 +4699,7 @@ fn lowerTrivialCallInto(
         const callee_local = try self.freshSyntheticLocal(callee_mono, false);
         try self.seedCallableLocalFromExpr(module_env, callee_local, call.func);
         try self.scratch_local_ids.append(callee_local);
-        break :blk try self.resolveTrivialCallableFromSymbol(self.store.getLocal(callee_local).source_symbol, callee_local);
+        break :blk try self.resolveTrivialCallableFromLocal(callee_local);
     }) {
         .direct_lambda => |lambda_id| try self.store.addCFStmt(self.allocator, .{ .assign_call = .{
             .target = target,
@@ -5081,6 +5181,34 @@ fn lowerTrivialBlockStmtInto(
     };
 }
 
+fn predeclareTrivialBlockStmtPatterns(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    stmt_idx: CIR.Statement.Idx,
+) Allocator.Error!void {
+    switch (module_env.store.getStatement(stmt_idx)) {
+        .s_decl => |decl| {
+            _ = try self.lowerPattern(module_env, decl.pattern);
+            switch (module_env.store.getPattern(decl.pattern)) {
+                .assign, .as => {
+                    try self.seedCallableLocalFromExpr(module_env, try self.patternToLocal(decl.pattern), decl.expr);
+                },
+                else => {},
+            }
+        },
+        .s_var => |var_decl| {
+            _ = try self.lowerPattern(module_env, var_decl.pattern_idx);
+            switch (module_env.store.getPattern(var_decl.pattern_idx)) {
+                .assign, .as => {
+                    try self.seedCallableLocalFromExpr(module_env, try self.patternToLocal(var_decl.pattern_idx), var_decl.expr);
+                },
+                else => {},
+            }
+        },
+        else => {},
+    }
+}
+
 fn lowerTrivialBlockInto(
     self: *Self,
     block: anytype,
@@ -5089,6 +5217,10 @@ fn lowerTrivialBlockInto(
 ) Allocator.Error!MIR.CFStmtId {
     const module_env = self.all_module_envs[self.current_module_idx];
     const stmts = module_env.store.sliceStatements(block.stmts);
+
+    for (stmts) |stmt_idx| {
+        try self.predeclareTrivialBlockStmtPatterns(module_env, stmt_idx);
+    }
 
     var entry = try self.lowerTrivialRootExprInto(block.final_expr, target, next);
     var i = stmts.len;
@@ -5350,8 +5482,7 @@ fn lowerTrivialRootExprInto(
         .e_lookup_external => |lookup| self.lowerTrivialLookupExternalInto(module_env, lookup, target, next),
         .e_lookup_required => |lookup| self.lowerTrivialLookupRequiredInto(module_env, lookup, target, next),
         .e_lambda => |lambda| blk: {
-            const target_symbol = self.store.getLocal(target).source_symbol;
-            const lambda_id = if (self.exactSeedMemberForSymbol(target_symbol)) |member| blk2: {
+            const lambda_id = if (self.exactSeedMemberForLocal(target)) |member| blk2: {
                 if (!member.closure_member.isNone()) {
                     std.debug.panic(
                         "statement-only MIR lambda target local {d} was pre-seeded as a closure",
@@ -5371,8 +5502,7 @@ fn lowerTrivialRootExprInto(
             } });
         },
         .e_closure => |closure| blk: {
-            const target_symbol = self.store.getLocal(target).source_symbol;
-            const closure_member = if (self.exactSeedMemberForSymbol(target_symbol)) |member| member else blk2: {
+            const closure_member = if (self.exactSeedMemberForLocal(target)) |member| member else blk2: {
                 const lowered = try self.lowerTrivialClosureSeedMember(module_env, expr_idx, closure, monotype);
                 try self.registerSeedMembersForLocal(target, &.{lowered});
                 break :blk2 lowered;
