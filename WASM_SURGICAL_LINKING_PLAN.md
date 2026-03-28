@@ -7,7 +7,7 @@
 | 1 | Padded LEB128 Helpers | Done |
 | 2 | Linking Data Structures | Done |
 | 3 | WASM Module Parser | Done |
-| 4 | Surgical Linking — `linkHostToAppCalls()` | Not started |
+| 4 | Surgical Linking — `linkHostToAppCalls()` | Done |
 | 5 | Memory, Table, and Stack Pointer Ownership | Not started |
 | 6 | WASM Function Pointer Representation & RocOps Layout | Not started |
 | 7a | Entrypoint ABI Migration | Not started |

@@ -483,6 +483,92 @@ pub fn addTableElement(self: *Self, func_idx: u32) !u32 {
     return table_idx;
 }
 
+// --- Surgical Linking ---
+
+/// Dummy function body: unreachable + end. Inserted to maintain function index
+/// stability when an import is removed during surgical linking.
+pub const DUMMY_FUNCTION = [3]u8{
+    0x00, // zero local variable declarations
+    Op.@"unreachable", // trap if called (means DCE was wrong)
+    Op.end, // end of function body
+};
+
+/// Entry in the host-to-app linking map: maps an app function name
+/// (which the host imports) to its defined function index.
+pub const HostToAppEntry = struct {
+    name: []const u8,
+    fn_index: u32,
+};
+
+/// Perform surgical linking: for each (app_fn_name, app_fn_index) pair,
+/// remove the host's import for that name and redirect all call sites to
+/// the app-defined function at app_fn_index.
+///
+/// The last function import is swapped into the vacated slot so that only
+/// two symbols need relocation updates. A dummy function is prepended to
+/// func_type_indices to keep the total function count stable.
+pub fn linkHostToAppCalls(self: *Self, host_to_app_map: []const HostToAppEntry) !void {
+    for (host_to_app_map) |entry| {
+        const app_fn_name = entry.name;
+        const app_fn_index = entry.fn_index;
+
+        // 1. Find the host import matching app_fn_name, and the last import (swap candidate).
+        //    Since self.imports only contains function imports, import_index == fn_index.
+        var host_fn_index: ?u32 = null;
+        var last_fn_index: u32 = 0;
+        for (self.imports.items, 0..) |imp, i| {
+            last_fn_index = @intCast(i);
+            if (std.mem.eql(u8, imp.field_name, app_fn_name)) {
+                host_fn_index = @intCast(i);
+            }
+        }
+
+        const host_idx = host_fn_index orelse {
+            // The host doesn't import this function — export the app's definition
+            // so it can be called from JS.
+            try self.exports.append(self.allocator, .{
+                .name = app_fn_name,
+                .kind = .func,
+                .idx = app_fn_index,
+            });
+            continue;
+        };
+
+        // 2. Swap: remove the last import and put it where the host import was.
+        //    This keeps all other import indices stable — only the host and swap
+        //    indices need relocation updates.
+        const swap_import = self.imports.items[last_fn_index];
+        self.imports.items.len -= 1;
+        if (last_fn_index != host_idx) {
+            self.imports.items[host_idx] = swap_import;
+        }
+
+        // 3. Update symbol table and apply relocations for the host function.
+        //    The host import (at host_idx) is now a defined app function at app_fn_index.
+        if (self.linking.findAndReindexImportedFn(host_idx, app_fn_index)) |sym_index| {
+            self.reloc_code.applyRelocsU32(self.code_bytes.items, sym_index, app_fn_index);
+        }
+
+        // 4. Update symbol table and apply relocations for the swapped function.
+        //    The last import (at last_fn_index) moved to host_idx.
+        if (last_fn_index != host_idx) {
+            if (self.linking.findAndReindexImportedFn(last_fn_index, host_idx)) |swap_sym_index| {
+                self.reloc_code.applyRelocsU32(self.code_bytes.items, swap_sym_index, host_idx);
+            }
+        }
+
+        // 5. Insert a dummy function to compensate for the removed import.
+        //    This keeps defined-function indices unchanged: import_count decreases
+        //    by 1, but one dummy is prepended to the code section, so the first
+        //    real defined function stays at the same global index.
+        self.dead_import_dummy_count += 1;
+        try self.func_type_indices.insert(self.allocator, 0, 0); // dummy uses type signature 0
+
+        // 6. Track the decreased import count.
+        self.import_fn_count -= 1;
+    }
+}
+
 // --- Parsing (preload) ---
 
 const wasm_magic = "\x00asm";
@@ -1699,4 +1785,292 @@ test "preload — symbol name resolution from imports" {
     // findSymbolByName should find it
     const found = module.linking.findSymbolByName("roc__main_exposed", module.imports.items);
     try std.testing.expectEqual(@as(?u32, 0), found);
+}
+
+// --- Tests for linkHostToAppCalls ---
+
+/// Build a WasmModule in memory for testing linkHostToAppCalls.
+///
+/// Function index space:
+///   0: js_foo          (import, env)
+///   1: roc__main_exposed (import, env) — the app function to link
+///   2: js_bar          (import, env)
+///   3: defined_0       — body calls roc__main_exposed (fn 1)
+///   4: defined_1       — body calls js_bar (fn 2)
+///
+/// Each function body in code_bytes:
+///   [body_size] [0x00 locals] [Op.call] [padded_leb128 fn_index] [Op.end]
+///   = 1 + 8 = 9 bytes per function (body_size=8, encoded in 1 byte)
+///
+/// Relocation entries (offsets into code_bytes):
+///   fn3 call operand at offset 3  → symbol 1 (roc__main_exposed)
+///   fn4 call operand at offset 12 → symbol 2 (js_bar)
+fn buildLinkingTestModule(allocator: Allocator) !Self {
+    var module = Self.init(allocator);
+    errdefer module.deinit();
+
+    // Type 0: () -> ()
+    _ = try module.addFuncType(&.{}, &.{});
+
+    // 3 function imports
+    _ = try module.addImport("env", "js_foo", 0);
+    _ = try module.addImport("env", "roc__main_exposed", 0);
+    _ = try module.addImport("env", "js_bar", 0);
+    module.import_fn_count = 3;
+
+    // 2 defined functions (type 0)
+    try module.func_type_indices.append(allocator, 0); // defined_0 (global index 3)
+    try module.func_type_indices.append(allocator, 0); // defined_1 (global index 4)
+
+    // Build code_bytes: two function bodies.
+    // fn3 body: call fn 1 (roc__main_exposed)
+    //   offset 0: body_size=8
+    //   offset 1: 0x00 (no locals)
+    //   offset 2: Op.call
+    //   offset 3..7: padded LEB128(1)
+    //   offset 8: Op.end
+    // fn4 body: call fn 2 (js_bar)
+    //   offset 9: body_size=8
+    //   offset 10: 0x00 (no locals)
+    //   offset 11: Op.call
+    //   offset 12..16: padded LEB128(2)
+    //   offset 17: Op.end
+    try module.code_bytes.appendSlice(allocator, &.{0x08}); // body size = 8
+    try module.code_bytes.append(allocator, 0x00); // no locals
+    try module.code_bytes.append(allocator, Op.call);
+    try appendPaddedU32(allocator, &module.code_bytes, 1); // call fn 1
+    try module.code_bytes.append(allocator, Op.end);
+
+    try module.code_bytes.appendSlice(allocator, &.{0x08}); // body size = 8
+    try module.code_bytes.append(allocator, 0x00); // no locals
+    try module.code_bytes.append(allocator, Op.call);
+    try appendPaddedU32(allocator, &module.code_bytes, 2); // call fn 2
+    try module.code_bytes.append(allocator, Op.end);
+
+    try module.function_offsets.append(allocator, 0); // fn3 at offset 0
+    try module.function_offsets.append(allocator, 9); // fn4 at offset 9
+
+    // Symbol table:
+    //   sym 0: undefined function index 0 (js_foo) — implicitly named
+    //   sym 1: undefined function index 1 (roc__main_exposed) — implicitly named
+    //   sym 2: undefined function index 2 (js_bar) — implicitly named
+    //   sym 3: defined function index 3 (defined_0)
+    //   sym 4: defined function index 4 (defined_1)
+    try module.linking.symbol_table.appendSlice(allocator, &.{
+        .{ .kind = .function, .flags = WasmLinking.SymFlag.UNDEFINED, .name = null, .index = 0 },
+        .{ .kind = .function, .flags = WasmLinking.SymFlag.UNDEFINED, .name = null, .index = 1 },
+        .{ .kind = .function, .flags = WasmLinking.SymFlag.UNDEFINED, .name = null, .index = 2 },
+        .{ .kind = .function, .flags = 0, .name = "defined_0", .index = 3 },
+        .{ .kind = .function, .flags = 0, .name = "defined_1", .index = 4 },
+    });
+
+    // Relocation entries for code section:
+    //   fn3's call operand at code_bytes offset 3 → sym 1 (roc__main_exposed)
+    //   fn4's call operand at code_bytes offset 12 → sym 2 (js_bar)
+    try module.reloc_code.entries.appendSlice(allocator, &.{
+        .{ .index = .{ .type_id = .function_index_leb, .offset = 3, .symbol_index = 1 } },
+        .{ .index = .{ .type_id = .function_index_leb, .offset = 12, .symbol_index = 2 } },
+    });
+
+    return module;
+}
+
+test "linkHostToAppCalls — single app function: import removed, dummy inserted" {
+    const allocator = std.testing.allocator;
+    var module = try buildLinkingTestModule(allocator);
+    defer module.deinit();
+
+    // Before: 3 imports, 2 defined, 0 dummies
+    try std.testing.expectEqual(@as(usize, 3), module.imports.items.len);
+    try std.testing.expectEqual(@as(usize, 2), module.func_type_indices.items.len);
+    try std.testing.expectEqual(@as(u32, 0), module.dead_import_dummy_count);
+
+    // Link roc__main_exposed → app function at index 5
+    try module.linkHostToAppCalls(&.{.{ .name = "roc__main_exposed", .fn_index = 5 }});
+
+    // After: 2 imports, 3 func_type_indices (1 dummy + 2 original), 1 dummy
+    try std.testing.expectEqual(@as(usize, 2), module.imports.items.len);
+    try std.testing.expectEqual(@as(usize, 3), module.func_type_indices.items.len);
+    try std.testing.expectEqual(@as(u32, 1), module.dead_import_dummy_count);
+}
+
+test "linkHostToAppCalls — verifies call instruction patched to app function index" {
+    const allocator = std.testing.allocator;
+    var module = try buildLinkingTestModule(allocator);
+    defer module.deinit();
+
+    // Before: fn3 calls fn 1 (roc__main_exposed) — LEB128 at code_bytes[3..8]
+    try std.testing.expectEqual(@as(u32, 1), decodePaddedU32(module.code_bytes.items[3..8]));
+
+    try module.linkHostToAppCalls(&.{.{ .name = "roc__main_exposed", .fn_index = 5 }});
+
+    // After: fn3's call should be patched to fn 5 (the app function)
+    try std.testing.expectEqual(@as(u32, 5), decodePaddedU32(module.code_bytes.items[3..8]));
+}
+
+test "linkHostToAppCalls — last import swapped into vacated slot" {
+    const allocator = std.testing.allocator;
+    var module = try buildLinkingTestModule(allocator);
+    defer module.deinit();
+
+    try module.linkHostToAppCalls(&.{.{ .name = "roc__main_exposed", .fn_index = 5 }});
+
+    // js_bar (was at index 2) should now be at index 1 (the vacated slot)
+    try std.testing.expectEqualStrings("js_foo", module.imports.items[0].field_name);
+    try std.testing.expectEqualStrings("js_bar", module.imports.items[1].field_name);
+}
+
+test "linkHostToAppCalls — swap import's call sites updated to new index" {
+    const allocator = std.testing.allocator;
+    var module = try buildLinkingTestModule(allocator);
+    defer module.deinit();
+
+    // Before: fn4 calls fn 2 (js_bar) — LEB128 at code_bytes[12..17]
+    try std.testing.expectEqual(@as(u32, 2), decodePaddedU32(module.code_bytes.items[12..17]));
+
+    try module.linkHostToAppCalls(&.{.{ .name = "roc__main_exposed", .fn_index = 5 }});
+
+    // After: fn4's call should be patched to fn 1 (js_bar's new position)
+    try std.testing.expectEqual(@as(u32, 1), decodePaddedU32(module.code_bytes.items[12..17]));
+}
+
+test "linkHostToAppCalls — multiple app functions linked in sequence" {
+    const allocator = std.testing.allocator;
+    var module = try buildLinkingTestModule(allocator);
+    defer module.deinit();
+
+    // Link two app functions sequentially
+    try module.linkHostToAppCalls(&.{
+        .{ .name = "roc__main_exposed", .fn_index = 5 },
+        .{ .name = "js_foo", .fn_index = 6 },
+    });
+
+    // 2 imports removed → 1 remaining, 2 dummies
+    try std.testing.expectEqual(@as(usize, 1), module.imports.items.len);
+    try std.testing.expectEqual(@as(u32, 2), module.dead_import_dummy_count);
+    try std.testing.expectEqual(@as(usize, 4), module.func_type_indices.items.len); // 2 dummies + 2 original
+}
+
+test "linkHostToAppCalls — dead_import_dummy_count incremented correctly" {
+    const allocator = std.testing.allocator;
+    var module = try buildLinkingTestModule(allocator);
+    defer module.deinit();
+
+    try std.testing.expectEqual(@as(u32, 0), module.dead_import_dummy_count);
+
+    try module.linkHostToAppCalls(&.{.{ .name = "roc__main_exposed", .fn_index = 5 }});
+    try std.testing.expectEqual(@as(u32, 1), module.dead_import_dummy_count);
+
+    try module.linkHostToAppCalls(&.{.{ .name = "js_foo", .fn_index = 6 }});
+    try std.testing.expectEqual(@as(u32, 2), module.dead_import_dummy_count);
+}
+
+test "linkHostToAppCalls — func_type_indices has dummy signature at position 0" {
+    const allocator = std.testing.allocator;
+    var module = try buildLinkingTestModule(allocator);
+    defer module.deinit();
+
+    // Before: func_type_indices = [0, 0] (two defined functions, both type 0)
+    try std.testing.expectEqual(@as(usize, 2), module.func_type_indices.items.len);
+
+    try module.linkHostToAppCalls(&.{.{ .name = "roc__main_exposed", .fn_index = 5 }});
+
+    // After: func_type_indices = [0, 0, 0] — dummy at position 0
+    try std.testing.expectEqual(@as(usize, 3), module.func_type_indices.items.len);
+    try std.testing.expectEqual(@as(u32, 0), module.func_type_indices.items[0]); // dummy type signature
+}
+
+test "linkHostToAppCalls — total function count unchanged after linking" {
+    const allocator = std.testing.allocator;
+    var module = try buildLinkingTestModule(allocator);
+    defer module.deinit();
+
+    // Before: 3 imports + 2 defined = 5 total
+    const total_before = module.imports.items.len + module.func_type_indices.items.len;
+    try std.testing.expectEqual(@as(usize, 5), total_before);
+
+    try module.linkHostToAppCalls(&.{.{ .name = "roc__main_exposed", .fn_index = 5 }});
+
+    // After: 2 imports + 3 func_type_indices (1 dummy + 2 original) = 5 total
+    const total_after = module.imports.items.len + module.func_type_indices.items.len;
+    try std.testing.expectEqual(@as(usize, 5), total_after);
+}
+
+test "linkHostToAppCalls — unfound import exports app function instead" {
+    const allocator = std.testing.allocator;
+    var module = try buildLinkingTestModule(allocator);
+    defer module.deinit();
+
+    const exports_before = module.exports.items.len;
+
+    // Link a function name that doesn't exist in imports
+    try module.linkHostToAppCalls(&.{.{ .name = "roc__nonexistent", .fn_index = 7 }});
+
+    // No imports removed, but an export was added
+    try std.testing.expectEqual(@as(usize, 3), module.imports.items.len);
+    try std.testing.expectEqual(exports_before + 1, module.exports.items.len);
+    const new_export = module.exports.items[module.exports.items.len - 1];
+    try std.testing.expectEqualStrings("roc__nonexistent", new_export.name);
+    try std.testing.expectEqual(ExportKind.func, new_export.kind);
+    try std.testing.expectEqual(@as(u32, 7), new_export.idx);
+}
+
+test "linkHostToAppCalls — import_fn_count decremented" {
+    const allocator = std.testing.allocator;
+    var module = try buildLinkingTestModule(allocator);
+    defer module.deinit();
+
+    try std.testing.expectEqual(@as(u32, 3), module.import_fn_count);
+
+    try module.linkHostToAppCalls(&.{.{ .name = "roc__main_exposed", .fn_index = 5 }});
+
+    try std.testing.expectEqual(@as(u32, 2), module.import_fn_count);
+}
+
+test "linkHostToAppCalls — symbol table updated for linked function" {
+    const allocator = std.testing.allocator;
+    var module = try buildLinkingTestModule(allocator);
+    defer module.deinit();
+
+    // Before: sym 1 (roc__main_exposed) has index 1
+    try std.testing.expectEqual(@as(u32, 1), module.linking.symbol_table.items[1].index);
+
+    try module.linkHostToAppCalls(&.{.{ .name = "roc__main_exposed", .fn_index = 5 }});
+
+    // After: sym 1 should now point to app function index 5
+    try std.testing.expectEqual(@as(u32, 5), module.linking.symbol_table.items[1].index);
+}
+
+test "linkHostToAppCalls — symbol table updated for swapped function" {
+    const allocator = std.testing.allocator;
+    var module = try buildLinkingTestModule(allocator);
+    defer module.deinit();
+
+    // Before: sym 2 (js_bar) has index 2
+    try std.testing.expectEqual(@as(u32, 2), module.linking.symbol_table.items[2].index);
+
+    try module.linkHostToAppCalls(&.{.{ .name = "roc__main_exposed", .fn_index = 5 }});
+
+    // After: sym 2 (js_bar) should now have index 1 (swapped into roc__main_exposed's slot)
+    try std.testing.expectEqual(@as(u32, 1), module.linking.symbol_table.items[2].index);
+}
+
+test "linkHostToAppCalls — linking last import is a no-op swap" {
+    const allocator = std.testing.allocator;
+    var module = try buildLinkingTestModule(allocator);
+    defer module.deinit();
+
+    // Link js_bar (the last import) — swap_fn_index == host_fn_index, no swap needed
+    try module.linkHostToAppCalls(&.{.{ .name = "js_bar", .fn_index = 5 }});
+
+    // js_bar removed, js_foo and roc__main_exposed remain
+    try std.testing.expectEqual(@as(usize, 2), module.imports.items.len);
+    try std.testing.expectEqualStrings("js_foo", module.imports.items[0].field_name);
+    try std.testing.expectEqualStrings("roc__main_exposed", module.imports.items[1].field_name);
+
+    // fn4's call should be patched from 2 to 5
+    try std.testing.expectEqual(@as(u32, 5), decodePaddedU32(module.code_bytes.items[12..17]));
+
+    // No swap relocation needed — sym 1 (roc__main_exposed) should be unchanged
+    try std.testing.expectEqual(@as(u32, 1), module.linking.symbol_table.items[1].index);
 }
