@@ -635,7 +635,7 @@ fn panicMissingLocalSemantics(
 fn debugPrintStmtSummary(store: *const LirStore, stmt_id: CFStmtId) void {
     switch (store.getCFStmt(stmt_id)) {
         .assign_symbol => |assign| std.debug.print(
-            "DebugVerifyLir stmt {d}: assign_symbol target={d} source_symbol={d} next={d}\n",
+            "DebugVerifyLir stmt {d}: assign_symbol target={d} symbol={d} next={d}\n",
             .{
                 @intFromEnum(stmt_id),
                 @intFromEnum(assign.target),
