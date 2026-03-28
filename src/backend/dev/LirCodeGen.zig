@@ -288,6 +288,7 @@ pub const BuiltinFn = enum {
 // Number-to-string C wrapper functions (explicit output pointer to avoid struct return ABI issues)
 const RocStr = builtins.str.RocStr;
 const RocOps = builtins.host_abi.RocOps;
+const HostedFunctions = builtins.host_abi.HostedFunctions;
 
 // ── C wrapper functions for string/list builtins ──
 // These decompose 24-byte RocStr/RocList structs into individual 8-byte fields
@@ -8767,7 +8768,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Generate code for a direct proc call.
         fn generateCall(self: *Self, call: anytype) Allocator.Error!ValueLocation {
-            const proc = try self.compiledProcForId(call.proc);
+            const proc_spec = self.store.getProcSpec(call.proc);
             const arg_refs = self.store.getLocalRefs(call.args);
             var arg_locs = try self.allocator.alloc(ValueLocation, arg_refs.len);
             defer self.allocator.free(arg_locs);
@@ -8779,7 +8780,72 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 arg_layouts[i] = arg_ref.layout_idx;
             }
 
+            if (proc_spec.hosted) |hosted| {
+                return try self.generateHostedCall(hosted, arg_locs, arg_layouts, call.ret_layout);
+            }
+
+            const proc = try self.compiledProcForId(call.proc);
             return try self.generateCallToCompiledProc(proc, arg_locs, arg_layouts, call.ret_layout);
+        }
+
+        fn generateHostedCall(
+            self: *Self,
+            hosted: lir.LIR.HostedProc,
+            args: []const ValueLocation,
+            arg_layouts: []const layout.Idx,
+            ret_layout: layout.Idx,
+        ) Allocator.Error!ValueLocation {
+            std.debug.assert(args.len == arg_layouts.len);
+
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+            const ret_size = self.getLayoutSize(ret_layout);
+            const ret_slot = self.codegen.allocStackSlot(if (ret_size == 0) 8 else ret_size);
+
+            var total_args_size: u32 = 0;
+            for (arg_layouts) |arg_layout| {
+                const runtime_layout = self.runtimeRepresentationLayoutIdx(arg_layout);
+                const size_align = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(runtime_layout));
+                total_args_size = std.mem.alignForward(u32, total_args_size, @intCast(size_align.alignment.toByteUnits()));
+                total_args_size += size_align.size;
+            }
+
+            const args_slot = self.codegen.allocStackSlot(if (total_args_size == 0) 8 else total_args_size);
+
+            const hosted_target_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X10 else .RAX;
+            const hosted_table_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X11 else .R11;
+
+            var offset: u32 = 0;
+            for (args, arg_layouts) |arg_loc_raw, arg_layout| {
+                const runtime_layout = self.runtimeRepresentationLayoutIdx(arg_layout);
+                const size_align = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(runtime_layout));
+                const arg_size = size_align.size;
+                const arg_align: u32 = @intCast(size_align.alignment.toByteUnits());
+
+                offset = std.mem.alignForward(u32, offset, arg_align);
+                if (arg_size > 0) {
+                    try self.copyBytesToStackOffset(args_slot + @as(i32, @intCast(offset)), arg_loc_raw, arg_size);
+                }
+                offset += arg_size;
+            }
+
+            const hosted_fns_offset: i32 = @intCast(@offsetOf(RocOps, "hosted_fns"));
+            const hosted_fns_ptr_offset: i32 = hosted_fns_offset + @as(i32, @intCast(@offsetOf(HostedFunctions, "fns")));
+            const hosted_entry_offset: i32 = @intCast(@as(usize, hosted.index) * @sizeOf(builtins.host_abi.HostedFn));
+
+            try self.emitLoad(.w64, hosted_table_reg, roc_ops_reg, hosted_fns_ptr_offset);
+            try self.emitLoad(.w64, hosted_target_reg, hosted_table_reg, hosted_entry_offset);
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addRegArg(roc_ops_reg);
+            try builder.addLeaArg(frame_ptr, ret_slot);
+            try builder.addLeaArg(frame_ptr, args_slot);
+            try builder.callReg(hosted_target_reg);
+
+            if (ret_size == 0) {
+                return .{ .immediate_i64 = 0 };
+            }
+
+            return self.stackLocationForLayout(ret_layout, ret_slot);
         }
 
         /// Copy a value location to a stack slot.

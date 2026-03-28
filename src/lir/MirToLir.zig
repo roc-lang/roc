@@ -303,14 +303,28 @@ fn summaryContractsEqual(self: *const Self, left: SummaryContract, right: Summar
     return switch (left) {
         .fresh => right == .fresh,
         .alias_of_param => |left_param| switch (right) {
-            .alias_of_param => |right_param| left_param.param_index == right_param.param_index and std.meta.eql(self.analyses.getRefProjectionSpan(left_param.projections), self.analyses.getRefProjectionSpan(right_param.projections)),
+            .alias_of_param => |right_param| left_param.param_index == right_param.param_index and self.summaryProjectionSpansEqual(left_param.projections, right_param.projections),
             else => false,
         },
         .borrow_of_param => |left_param| switch (right) {
-            .borrow_of_param => |right_param| left_param.param_index == right_param.param_index and std.meta.eql(self.analyses.getRefProjectionSpan(left_param.projections), self.analyses.getRefProjectionSpan(right_param.projections)),
+            .borrow_of_param => |right_param| left_param.param_index == right_param.param_index and self.summaryProjectionSpansEqual(left_param.projections, right_param.projections),
             else => false,
         },
     };
+}
+
+fn summaryProjectionSpansEqual(
+    self: *const Self,
+    left: ProcResultSummary.RefProjectionSpan,
+    right: ProcResultSummary.RefProjectionSpan,
+) bool {
+    const left_items = self.analyses.getRefProjectionSpan(left);
+    const right_items = self.analyses.getRefProjectionSpan(right);
+    if (left_items.len != right_items.len) return false;
+    for (left_items, right_items) |lhs, rhs| {
+        if (!std.meta.eql(lhs, rhs)) return false;
+    }
+    return true;
 }
 
 fn exprSummaryContractsEqual(self: *const Self, left: ExprSummaryContract, right: ExprSummaryContract) bool {
