@@ -974,6 +974,12 @@ pub const Store = struct {
         return switch (self.getExpr(expr_id)) {
             .proc_ref => |proc_id| proc_id,
             .closure_make => |closure| closure.proc,
+            .lookup => |symbol| blk: {
+                if (self.getSymbolSeedProcSet(symbol)) |proc_ids| {
+                    if (proc_ids.len == 1) break :blk proc_ids[0];
+                }
+                break :blk null;
+            },
             .block => |block| self.resolveCallableProcId(block.final_expr),
             .dbg_expr => |dbg_expr| self.resolveCallableProcId(dbg_expr.expr),
             .expect => |expect| self.resolveCallableProcId(expect.body),

@@ -287,23 +287,30 @@ fn lowerRootResultContract(
 }
 
 fn lowLevelResultSemantics(
-    self: *Self,
-    target: LocalRef,
+    _: *Self,
     region: LIR.BorrowRegion,
     op: LIR.LowLevel,
     args: []const LocalRef,
 ) ResultSemantics {
-    return switch (op) {
-        .list_get_unsafe => blk: {
-            if (args.len == 0) {
-                std.debug.panic("MirToLir invariant violated: list_get_unsafe must have a list argument", .{});
-            }
-            break :blk borrowSemantics(args[0], LIR.RefProjectionSpan.empty(), region);
-        },
-        else => blk: {
-            if (builtin.mode == .Debug and self.layout_store.layoutContainsRefcounted(self.layout_store.getLayout(target.layout_idx))) {
+    return switch (op.procResultSemantics()) {
+        .fresh => .fresh,
+        .borrow_arg => |arg_index| blk: {
+            if (arg_index >= args.len) {
                 std.debug.panic(
-                    "MirToLir invariant violated: refcounted low-level result {s} must be explicitly classified",
+                    "MirToLir invariant violated: low-level {s} borrows arg {d}, but call only has {d} args",
+                    .{ @tagName(op), arg_index, args.len },
+                );
+            }
+            break :blk borrowSemantics(args[arg_index], LIR.RefProjectionSpan.empty(), region);
+        },
+        .no_return => std.debug.panic(
+            "MirToLir invariant violated: no-return low-level {s} must not be lowered as a value-producing statement",
+            .{@tagName(op)},
+        ),
+        .requires_explicit_summary => blk: {
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "MirToLir invariant violated: low-level result {s} must be explicitly classified",
                     .{@tagName(op)},
                 );
             }
@@ -819,7 +826,7 @@ fn lowerExprIntoStmt(
             const ref_span = try self.lir_store.addLocalRefs(refs);
             const assign_stmt = try self.lir_store.addCFStmt(.{ .assign_low_level = .{
                 .target = target,
-                .result = lowLevelResultSemantics(self, target, self.current_borrow_region, ll.op, refs),
+                .result = lowLevelResultSemantics(self, self.current_borrow_region, ll.op, refs),
                 .op = ll.op,
                 .args = ref_span,
                 .next = next,

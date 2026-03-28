@@ -266,10 +266,11 @@ fn resolveReturnKind(
         );
     }
 
-    const info = results.get(key) orelse std.debug.panic(
-        "DebugOwnershipSummary invariant violated: missing result semantics for returned local {d}",
-        .{local.symbol.raw()},
-    );
+    // Non-local roots such as globals can flow into returned locals without a
+    // defining assignment in the current proc body. From the proc-contract
+    // perspective they are outside param-relative provenance, so they count as
+    // fresh here rather than as missing local result semantics.
+    const info = results.get(key) orelse return .fresh;
     return switch (info.semantics) {
         .fresh => .fresh,
         .alias_of => |aliased| blk: {

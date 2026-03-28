@@ -165,6 +165,7 @@ const Analyzer = struct {
     mir_store: *const MIR.Store,
     table: *Table,
     proc_states: ?[]const ProcSummaryState,
+    active_value_defs: *std.AutoHashMapUnmanaged(u64, void),
     next_scope_id: u32 = 0,
 
     fn procSummary(self: *const Analyzer, proc_id: MIR.ProcId) ProcSummaryState {
@@ -322,18 +323,52 @@ const Analyzer = struct {
         return clone;
     }
 
-    fn bindPattern(self: *Analyzer, env: *LocalOriginMap, pattern_id: MIR.PatternId, origin: Origin) Allocator.Error!void {
+    fn bindPattern(
+        self: *Analyzer,
+        env: *LocalOriginMap,
+        pattern_id: MIR.PatternId,
+        origin: Origin,
+        region: BorrowRegion,
+    ) Allocator.Error!void {
         switch (self.mir_store.getPattern(pattern_id)) {
             .bind => |symbol| try env.put(symbol.raw(), origin),
             .wildcard => {},
             .as_pattern => |as_pattern| {
                 try env.put(as_pattern.symbol.raw(), origin);
-                try self.bindPattern(env, as_pattern.pattern, origin);
+                try self.bindPattern(env, as_pattern.pattern, origin, region);
             },
-            else => std.debug.panic(
-                "ProcResultSummary invariant violated: pattern {s} must be lowered before proc result summary",
-                .{@tagName(self.mir_store.getPattern(pattern_id))},
+            .tag => |tag| {
+                const args = self.mir_store.getPatternSpan(tag.args);
+                if (args.len == 0) return;
+                if (args.len != 1) {
+                    std.debug.panic(
+                        "ProcResultSummary invariant violated: tag pattern payload arity {d} must be wrapped before strongest-form summary",
+                        .{args.len},
+                    );
+                }
+                const projection = try self.singleProjectionSpan(.tag_payload);
+                const payload_origin = try self.borrowOrigin(origin, region, projection);
+                try self.bindPattern(env, args[0], payload_origin, region);
+            },
+            .struct_destructure => |destructure| {
+                const fields = self.mir_store.getPatternSpan(destructure.fields);
+                for (fields, 0..) |field_pattern, i| {
+                    const projection = try self.singleProjectionSpan(.{ .field = @intCast(i) });
+                    const field_origin = try self.borrowOrigin(origin, region, projection);
+                    try self.bindPattern(env, field_pattern, field_origin, region);
+                }
+            },
+            .list_destructure => std.debug.panic(
+                "ProcResultSummary invariant violated: list destructure must be lowered before strongest-form summary",
+                .{},
             ),
+            .int_literal,
+            .str_literal,
+            .dec_literal,
+            .frac_f32_literal,
+            .frac_f64_literal,
+            .runtime_error,
+            => {},
         }
     }
 
@@ -345,7 +380,94 @@ const Analyzer = struct {
         scope_region: BorrowRegion,
     ) Allocator.Error!void {
         const borrowed = try self.borrowOrigin(source_origin, scope_region, RefProjectionSpan.empty());
-        try self.bindPattern(env, pattern_id, borrowed);
+        try self.bindPattern(env, pattern_id, borrowed, scope_region);
+    }
+
+    fn analyzeNonLocalLookup(
+        self: *Analyzer,
+        accumulator: *ReturnAccumulator,
+        symbol: MIR.Symbol,
+    ) Allocator.Error!ExprOutcome {
+        const def_expr = self.mir_store.getValueDef(symbol) orelse std.debug.panic(
+            "ProcResultSummary invariant violated: non-local lookup symbol {d} has no MIR value definition",
+            .{symbol.raw()},
+        );
+
+        const key = symbol.raw();
+        const gop = try self.active_value_defs.getOrPut(self.allocator, key);
+        if (gop.found_existing) {
+            std.debug.panic(
+                "ProcResultSummary invariant violated: cyclic MIR value definition for symbol {d}",
+                .{key},
+            );
+        }
+        defer _ = self.active_value_defs.remove(key);
+
+        var empty_env = LocalOriginMap.init(self.allocator);
+        defer empty_env.deinit();
+
+        var value_accumulator = ReturnAccumulator{};
+        const outcome = try self.analyzeExpr(&empty_env, .proc, &value_accumulator, def_expr);
+        _ = accumulator;
+
+        return switch (outcome) {
+            .no_return => .no_return,
+            .value => .{ .value = .fresh },
+        };
+    }
+
+    fn analyzeMatchExpr(
+        self: *Analyzer,
+        env: *LocalOriginMap,
+        region: BorrowRegion,
+        accumulator: *ReturnAccumulator,
+        cond_expr: MIR.ExprId,
+        branches: MIR.BranchSpan,
+    ) Allocator.Error!ExprOutcome {
+        const scrutinee = switch (try self.analyzeExpr(env, region, accumulator, cond_expr)) {
+            .no_return => return .no_return,
+            .value => |origin| origin,
+        };
+
+        var merged_origin: ?Origin = null;
+        for (self.mir_store.getBranches(branches)) |branch| {
+            for (self.mir_store.getBranchPatterns(branch.patterns)) |branch_pattern| {
+                _ = branch_pattern.degenerate;
+
+                var branch_env = try self.cloneEnv(env);
+                defer branch_env.deinit();
+
+                try self.bindPattern(&branch_env, branch_pattern.pattern, scrutinee, region);
+
+                if (!branch.guard.isNone()) {
+                    switch (try self.analyzeExpr(&branch_env, region, accumulator, branch.guard)) {
+                        .no_return => continue,
+                        .value => {},
+                    }
+                }
+
+                switch (try self.analyzeExpr(&branch_env, region, accumulator, branch.body)) {
+                    .no_return => {},
+                    .value => |origin| {
+                        if (merged_origin) |existing| {
+                            if (!originEqual(self.table, existing, origin)) {
+                                std.debug.panic(
+                                    "ProcResultSummary invariant violated: match branches disagree on result provenance",
+                                    .{},
+                                );
+                            }
+                        } else {
+                            merged_origin = origin;
+                        }
+                    },
+                }
+            }
+        }
+
+        return if (merged_origin) |origin|
+            .{ .value = origin }
+        else
+            .no_return;
     }
 
     fn analyzeStmt(self: *Analyzer, env: *LocalOriginMap, region: BorrowRegion, accumulator: *ReturnAccumulator, stmt: MIR.Stmt) Allocator.Error!ExprOutcome {
@@ -358,7 +480,7 @@ const Analyzer = struct {
         switch (outcome) {
             .no_return => return .no_return,
             .value => |origin| {
-                try self.bindPattern(env, binding.pattern, origin);
+                try self.bindPattern(env, binding.pattern, origin, region);
                 return .{ .value = .fresh };
             },
         }
@@ -410,10 +532,10 @@ const Analyzer = struct {
             .closure_make,
             => .{ .value = .fresh },
 
-            .lookup => |symbol| .{ .value = env.get(symbol.raw()) orelse std.debug.panic(
-                "ProcResultSummary invariant violated: lookup symbol {d} has no proc-local provenance",
-                .{symbol.raw()},
-            ) },
+            .lookup => |symbol| blk: {
+                if (env.get(symbol.raw())) |origin| break :blk .{ .value = origin };
+                break :blk try self.analyzeNonLocalLookup(accumulator, symbol);
+            },
 
             .list => |list_data| blk: {
                 for (self.mir_store.getExprSpan(list_data.elems)) |elem_expr| {
@@ -605,7 +727,15 @@ const Analyzer = struct {
                 }
             },
 
-            .match_expr, .loop, .break_expr => std.debug.panic(
+            .match_expr => |match_expr| try self.analyzeMatchExpr(
+                env,
+                region,
+                accumulator,
+                match_expr.cond,
+                match_expr.branches,
+            ),
+
+            .loop, .break_expr => std.debug.panic(
                 "ProcResultSummary requires control-flow lowering before strongest-form MIR proc summary for expr tag {s}",
                 .{@tagName(self.mir_store.getExpr(expr_id))},
             ),
@@ -629,7 +759,7 @@ const Analyzer = struct {
                         .param_index = @intCast(i),
                     } };
                     try env.put(as_pattern.symbol.raw(), origin);
-                    try self.bindPattern(&env, as_pattern.pattern, origin);
+                    try self.bindPattern(&env, as_pattern.pattern, origin, .proc);
                 },
                 else => std.debug.panic(
                     "ProcResultSummary invariant violated: proc param pattern {s} must be lowered before strongest-form summary",
@@ -664,6 +794,8 @@ pub fn build(
 ) Allocator.Error!Table {
     var table = Table.init(allocator);
     errdefer table.deinit();
+    var active_value_defs = std.AutoHashMapUnmanaged(u64, void){};
+    defer active_value_defs.deinit(allocator);
 
     var states = std.ArrayList(ProcSummaryState).empty;
     defer states.deinit(allocator);
@@ -678,6 +810,7 @@ pub fn build(
                 .mir_store = mir_store,
                 .table = &table,
                 .proc_states = states.items,
+                .active_value_defs = &active_value_defs,
             };
             const proc_id: MIR.ProcId = @enumFromInt(@as(u32, @intCast(i)));
             const next_state = try analyzer.analyzeProc(proc_id);
@@ -710,6 +843,7 @@ pub fn build(
             .mir_store = mir_store,
             .table = &table,
             .proc_states = null,
+            .active_value_defs = &active_value_defs,
         };
         const contract = try analyzer.analyzeRootExpr(expr_id);
         table.root_contract_entries.appendAssumeCapacity(.{
@@ -754,6 +888,24 @@ fn summaryStatesEqual(table: *const Table, left: ProcSummaryState, right: ProcSu
         .concrete => |left_contract| switch (right) {
             .concrete => |right_contract| contractEqual(table, left_contract, right_contract),
             .no_return => false,
+        },
+    };
+}
+
+fn originEqual(table: *const Table, left: Origin, right: Origin) bool {
+    return switch (left) {
+        .fresh => right == .fresh,
+        .alias_of_param => |left_param| switch (right) {
+            .alias_of_param => |right_param| left_param.param_index == right_param.param_index and projectionSpansEqual(table, left_param.projections, right_param.projections),
+            else => false,
+        },
+        .borrow_of_param => |left_param| switch (right) {
+            .borrow_of_param => |right_param| left_param.param_index == right_param.param_index and std.meta.eql(left_param.region, right_param.region) and projectionSpansEqual(table, left_param.projections, right_param.projections),
+            else => false,
+        },
+        .borrow_of_fresh => |left_fresh| switch (right) {
+            .borrow_of_fresh => |right_fresh| std.meta.eql(left_fresh.region, right_fresh.region) and projectionSpansEqual(table, left_fresh.projections, right_fresh.projections),
+            else => false,
         },
     };
 }
