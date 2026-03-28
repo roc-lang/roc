@@ -2960,7 +2960,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const inner_loc = try self.generateExpr(args[0]);
                     const src_reg = try self.ensureInGeneralReg(inner_loc);
                     const result_reg = try self.allocTempGeneral();
-                    try self.codegen.emitXorImm(.w64, result_reg, src_reg, 1);
+                    try self.emitCmpImm(src_reg, 0);
+                    try self.emitSetCond(result_reg, condEqual());
                     self.codegen.freeGeneral(src_reg);
                     return .{ .general_reg = result_reg };
                 },
@@ -3017,6 +3018,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const value_loc = try self.generateExpr(args[0]);
                     return self.callFloatToStr(value_loc, false);
                 },
+                .str_inspect => {
+                    if (args.len != 1) unreachable;
+                    const str_loc = try self.generateExpr(args[0]);
+                    const str_off = try self.ensureOnStack(str_loc, roc_str_size);
+                    return self.callStr1RocOpsToResult(
+                        str_off,
+                        @intFromPtr(&dev_wrappers.roc_builtins_str_escape_and_quote),
+                        .str_escape_and_quote,
+                        .str,
+                    );
+                },
                 .num_to_str => {
                     const value_loc = try self.generateExpr(args[0]);
                     return switch (self.exprLayout(args[0])) {
@@ -3047,7 +3059,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .num_round,
                 .num_floor,
                 .num_ceiling,
-                .str_inspect,
                 .num_from_numeral,
                 .list_drop_at,
                 .compare,
@@ -11292,8 +11303,26 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Set up storage locations for join point parameters
-        fn setupJoinPointParams(self: *Self, _: JoinPointId, params: LocalRefSpan) Allocator.Error!void {
-            try self.bindProcParams(params, 0);
+        fn setupJoinPointParams(self: *Self, join_point: JoinPointId, params: LocalRefSpan) Allocator.Error!void {
+            const jp_key = @intFromEnum(join_point);
+            if (builtin.mode == .Debug and self.join_point_params.contains(jp_key)) {
+                std.debug.panic(
+                    "LIR/codegen invariant violated: duplicate join-point registration for id {d}",
+                    .{jp_key},
+                );
+            }
+
+            const locals = self.store.getLocalRefs(params);
+            for (locals) |local| {
+                const size: u32 = @max(self.getLayoutSize(local.layout_idx), 8);
+                const stack_offset = self.codegen.allocStackSlot(@intCast(size));
+                try self.symbol_locations.put(
+                    @bitCast(local.symbol),
+                    self.stackLocationForLayout(local.layout_idx, stack_offset),
+                );
+            }
+
+            try self.join_point_params.put(jp_key, params);
         }
 
         /// Rebind join point parameters to new argument values (for jump)
@@ -11954,12 +11983,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // Generate branch body (recursively generates statements)
                 try self.generateStmt(branch.body);
 
-                // Patch else jump to here
-                const else_offset = self.codegen.currentOffset();
-                self.codegen.patchJump(else_patch, else_offset);
+                // Matching a branch must skip the default arm.
+                const end_patch = try self.codegen.emitJump();
 
-                // Generate default branch
+                // Patch else jump to the start of the default arm.
+                self.codegen.patchJump(else_patch, self.codegen.currentOffset());
                 try self.generateStmt(sw.default_branch);
+
+                // Patch the taken-branch jump to the end of the switch.
+                self.codegen.patchJump(end_patch, self.codegen.currentOffset());
             } else {
                 // Multiple branches - generate cascading comparisons
                 var end_patches = std.ArrayList(usize).empty;

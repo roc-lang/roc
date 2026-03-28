@@ -977,14 +977,21 @@ fn mirIntLiteralValue(layout_idx: layout.Idx, int_value: @import("can").CIR.IntV
     };
 }
 
+fn internMirStringLiteral(
+    self: *Self,
+    mir_idx: base.StringLiteral.Idx,
+) Allocator.Error!base.StringLiteral.Idx {
+    return self.lir_store.insertString(self.mir_store.getString(mir_idx));
+}
+
 fn literalPatternValue(
     self: *Self,
     pattern_id: MIR.PatternId,
     target_layout: layout.Idx,
-) LiteralValue {
+) Allocator.Error!LiteralValue {
     return switch (self.mir_store.getPattern(pattern_id)) {
         .int_literal => |int_lit| mirIntLiteralValue(target_layout, int_lit.value),
-        .str_literal => |str_idx| .{ .str_literal = str_idx },
+        .str_literal => |str_idx| .{ .str_literal = try self.internMirStringLiteral(str_idx) },
         .dec_literal => |dec_lit| .{ .dec_literal = dec_lit.num },
         .frac_f32_literal => |frac| .{ .f32_literal = frac },
         .frac_f64_literal => |frac| .{ .f64_literal = frac },
@@ -1026,7 +1033,7 @@ fn lowerLiteralPatternInto(
     } });
     return self.emitAssignLiteral(
         literal_local,
-        self.literalPatternValue(pattern_id, source.layout_idx),
+        try self.literalPatternValue(pattern_id, source.layout_idx),
         eq_stmt,
     );
 }
@@ -1235,7 +1242,11 @@ fn lowerExprIntoStmt(
         .dec => |dec_lit| self.emitAssignLiteral(target, .{ .dec_literal = dec_lit.num }, next),
         .frac_f32 => |f| self.emitAssignLiteral(target, .{ .f32_literal = f }, next),
         .frac_f64 => |f| self.emitAssignLiteral(target, .{ .f64_literal = f }, next),
-        .str => |s| self.emitAssignLiteral(target, .{ .str_literal = s }, next),
+        .str => |s| self.emitAssignLiteral(
+            target,
+            .{ .str_literal = try self.internMirStringLiteral(s) },
+            next,
+        ),
         .list => |list_data| blk: {
             const elems = self.mir_store.getExprSpan(list_data.elems);
             const refs = try self.allocator.alloc(LocalRef, elems.len);
@@ -1370,7 +1381,9 @@ fn lowerExprIntoStmt(
         .dbg_expr => |dbg_expr| self.lowerExprIntoStmt(dbg_expr.expr, target, next),
         .expect => |expect| self.lowerExprIntoStmt(expect.body, target, next),
         .runtime_err_can, .runtime_err_type, .runtime_err_ellipsis, .runtime_err_anno_only => self.lir_store.addCFStmt(.{ .runtime_error = {} }),
-        .crash => |msg| self.lir_store.addCFStmt(.{ .crash = .{ .msg = msg } }),
+        .crash => |msg| self.lir_store.addCFStmt(.{ .crash = .{
+            .msg = try self.internMirStringLiteral(msg),
+        } }),
         .return_expr => |ret| blk: {
             const ret_local = self.freshLocal(try self.runtimeValueLayoutFromMirExpr(ret.expr));
             const ret_stmt = try self.emitRet(ret_local);

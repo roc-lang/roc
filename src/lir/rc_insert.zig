@@ -243,12 +243,12 @@ pub const RcInsertPass = struct {
                 .value = target,
                 .next = next,
             } });
-            const assign_stmt = try self.rebuildAssignStmt(stmt, decref_stmt);
-            return try self.store.addCFStmt(.{ .incref = .{
+            const incref_stmt = try self.store.addCFStmt(.{ .incref = .{
                 .value = target,
                 .count = @intCast(use_count - 1),
-                .next = assign_stmt,
+                .next = decref_stmt,
             } });
+            return try self.rebuildAssignStmt(stmt, incref_stmt);
         }
 
         if (self.layoutNeedsRc(target.layout_idx) and use_count == 0 and resultIsFresh(stmt)) {
