@@ -3282,10 +3282,12 @@ fn lowerTrivialStrInspectLocalInto(
         },
         .unit => self.lowerTrivialStrLiteralInto(target, "{}", next),
         .tag_union => self.lowerBoolInspectLocalInto(source, source_mono, target, next),
-        else => std.debug.panic(
-            "statement-only MIR str_inspect is not implemented yet for monotype kind {s}",
-            .{@tagName(self.store.monotype_store.getMonotype(source_mono))},
-        ),
+        else => self.store.addCFStmt(self.allocator, .{ .assign_low_level = .{
+            .target = target,
+            .op = .str_inspect,
+            .args = try self.store.addLocalSpan(self.allocator, &.{source}),
+            .next = next,
+        } }),
     };
 }
 
@@ -3873,6 +3875,178 @@ fn lowerTrivialIfInto(
     return self.lowerTrivialRootExprInto(branch.cond, cond_local, match_stmt);
 }
 
+fn setPatternLocalsReassignable(
+    self: *Self,
+    pattern_id: MIR.PatternId,
+    reassignable: bool,
+) void {
+    switch (self.store.getPattern(pattern_id)) {
+        .bind => |local| self.store.getLocalPtr(local).reassignable = reassignable,
+        .wildcard,
+        .int_literal,
+        .str_literal,
+        .dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .runtime_error,
+        => {},
+        .as_pattern => |as_pattern| {
+            self.store.getLocalPtr(as_pattern.local).reassignable = reassignable;
+            self.setPatternLocalsReassignable(as_pattern.pattern, reassignable);
+        },
+        .tag => |tag_pattern| {
+            for (self.store.getPatternSpan(tag_pattern.args)) |arg_pattern| {
+                self.setPatternLocalsReassignable(arg_pattern, reassignable);
+            }
+        },
+        .struct_destructure => |destructure| {
+            for (self.store.getPatternSpan(destructure.fields)) |field_pattern| {
+                self.setPatternLocalsReassignable(field_pattern, reassignable);
+            }
+        },
+        .list_destructure => |destructure| {
+            for (self.store.getPatternSpan(destructure.patterns)) |elem_pattern| {
+                self.setPatternLocalsReassignable(elem_pattern, reassignable);
+            }
+            if (!destructure.rest_pattern.isNone()) {
+                self.setPatternLocalsReassignable(destructure.rest_pattern, reassignable);
+            }
+        },
+    }
+}
+
+fn lowerTrivialPatternBindingInto(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    pattern_idx: CIR.Pattern.Idx,
+    expr_idx: CIR.Expr.Idx,
+    mark_reassignable: bool,
+    next: MIR.CFStmtId,
+) Allocator.Error!MIR.CFStmtId {
+    const source_mono = try self.resolveMonotype(expr_idx);
+    const source_local = try self.freshSyntheticLocal(source_mono, false);
+    const pattern = try self.lowerPattern(module_env, pattern_idx);
+    if (mark_reassignable) {
+        self.setPatternLocalsReassignable(pattern, true);
+    }
+
+    const success_patterns = try self.store.addBranchPatterns(self.allocator, &.{.{
+        .pattern = pattern,
+        .degenerate = false,
+    }});
+    const fallback_pattern = try self.store.addPattern(self.allocator, .wildcard, source_mono);
+    const fallback_patterns = try self.store.addBranchPatterns(self.allocator, &.{.{
+        .pattern = fallback_pattern,
+        .degenerate = false,
+    }});
+    const failure = try self.store.addCFStmt(self.allocator, .{ .runtime_error = .type_error });
+    const match_stmt = try self.store.addCFStmt(self.allocator, .{ .match_stmt = .{
+        .scrutinee = source_local,
+        .branches = try self.store.addMatchBranches(self.allocator, &.{
+            .{ .patterns = success_patterns, .body = next },
+            .{ .patterns = fallback_patterns, .body = failure },
+        }),
+    } });
+
+    return self.lowerTrivialRootExprInto(expr_idx, source_local, match_stmt);
+}
+
+fn lowerTrivialBlockStmtInto(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    stmt_idx: CIR.Statement.Idx,
+    next: MIR.CFStmtId,
+) Allocator.Error!MIR.CFStmtId {
+    const stmt = module_env.store.getStatement(stmt_idx);
+
+    return switch (stmt) {
+        .s_decl => |decl| self.lowerTrivialPatternBindingInto(
+            module_env,
+            decl.pattern,
+            decl.expr,
+            false,
+            next,
+        ),
+        .s_var => |var_decl| self.lowerTrivialPatternBindingInto(
+            module_env,
+            var_decl.pattern_idx,
+            var_decl.expr,
+            true,
+            next,
+        ),
+        .s_reassign => |reassign| self.lowerTrivialPatternBindingInto(
+            module_env,
+            reassign.pattern_idx,
+            reassign.expr,
+            false,
+            next,
+        ),
+        .s_expr => |expr_stmt| blk: {
+            const value_local = try self.freshSyntheticLocal(try self.resolveMonotype(expr_stmt.expr), false);
+            break :blk try self.lowerTrivialRootExprInto(expr_stmt.expr, value_local, next);
+        },
+        .s_dbg => |dbg_stmt| blk: {
+            const value_local = try self.freshSyntheticLocal(try self.resolveMonotype(dbg_stmt.expr), false);
+            const debug_stmt = try self.store.addCFStmt(self.allocator, .{ .debug = .{
+                .value = value_local,
+                .next = next,
+            } });
+            break :blk try self.lowerTrivialRootExprInto(dbg_stmt.expr, value_local, debug_stmt);
+        },
+        .s_expect => |expect_stmt| blk: {
+            const cond_local = try self.freshSyntheticLocal(try self.resolveMonotype(expect_stmt.body), false);
+            const mir_expect = try self.store.addCFStmt(self.allocator, .{ .expect = .{
+                .condition = cond_local,
+                .next = next,
+            } });
+            break :blk try self.lowerTrivialRootExprInto(expect_stmt.body, cond_local, mir_expect);
+        },
+        .s_crash => |crash_stmt| blk: {
+            const mir_str = try self.copyStringToMir(module_env, crash_stmt.msg);
+            break :blk self.store.addCFStmt(self.allocator, .{ .crash = mir_str });
+        },
+        .s_return => |return_stmt| blk: {
+            const value_local = try self.freshSyntheticLocal(try self.resolveMonotype(return_stmt.expr), false);
+            const ret_stmt = try self.store.addCFStmt(self.allocator, .{ .ret = .{ .value = value_local } });
+            break :blk try self.lowerTrivialRootExprInto(return_stmt.expr, value_local, ret_stmt);
+        },
+        .s_runtime_error => |runtime_error_stmt| self.store.addCFStmt(self.allocator, .{ .runtime_error = .{
+            .can_diagnostic = runtime_error_stmt.diagnostic,
+        } }),
+        .s_import,
+        .s_alias_decl,
+        .s_nominal_decl,
+        .s_type_anno,
+        .s_type_var_alias,
+        => next,
+        .s_for,
+        .s_while,
+        .s_break,
+        => std.debug.panic(
+            "statement-only MIR block lowering is not implemented yet for CIR statement {s}",
+            .{@tagName(stmt)},
+        ),
+    };
+}
+
+fn lowerTrivialBlockInto(
+    self: *Self,
+    block: anytype,
+    target: MIR.LocalId,
+    next: MIR.CFStmtId,
+) Allocator.Error!MIR.CFStmtId {
+    const module_env = self.all_module_envs[self.current_module_idx];
+    const stmts = module_env.store.sliceStatements(block.stmts);
+
+    var entry = try self.lowerTrivialRootExprInto(block.final_expr, target, next);
+    var i = stmts.len;
+    while (i > 0) {
+        i -= 1;
+        entry = try self.lowerTrivialBlockStmtInto(module_env, stmts[i], entry);
+    }
+    return entry;
+}
+
 fn lowerTrivialRootExprInto(
     self: *Self,
     expr_idx: CIR.Expr.Idx,
@@ -4128,6 +4302,7 @@ fn lowerTrivialRootExprInto(
             .lambda = try self.lowerTrivialLambda(module_env, expr_idx, lambda, monotype),
             .next = next,
         } }),
+        .e_block => |block| self.lowerTrivialBlockInto(block, target, next),
         .e_dot_access => |da| self.lowerTrivialDotAccessInto(da, target, next),
         .e_binop => |binop| self.lowerTrivialBinopInto(binop, target, next),
         .e_unary_minus => |um| self.lowerTrivialUnaryMinusInto(um, target, next),
@@ -4182,7 +4357,10 @@ fn lowerTrivialRootExprInto(
         .e_runtime_error => |err| self.store.addCFStmt(self.allocator, .{ .runtime_error = .{
             .can_diagnostic = err.diagnostic,
         } }),
-        .e_crash => |crash| self.store.addCFStmt(self.allocator, .{ .crash = crash.msg }),
+        .e_crash => |crash| blk: {
+            const mir_str = try self.copyStringToMir(module_env, crash.msg);
+            break :blk self.store.addCFStmt(self.allocator, .{ .crash = mir_str });
+        },
         else => std.debug.panic(
             "statement-only MIR lowerExpr is not implemented yet for CIR expr {d} kind={s}",
             .{ @intFromEnum(expr_idx), @tagName(expr) },
