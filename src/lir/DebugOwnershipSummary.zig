@@ -96,7 +96,7 @@ pub fn resultContractForProc(
 }
 
 fn localKey(local: LocalId) u64 {
-    return @bitCast(local.symbol);
+    return @intFromEnum(local);
 }
 
 fn cloneLocalResultMap(
@@ -121,6 +121,10 @@ fn inferReturnContracts(
     saw_return: *bool,
 ) Allocator.Error!void {
     switch (store.getCFStmt(stmt_id)) {
+        .assign_symbol => |assign| {
+            try results.put(localKey(assign.target), .{ .semantics = .fresh });
+            try inferReturnContracts(allocator, store, param_index_by_symbol, results, assign.next, inferred, saw_return);
+        },
         .assign_ref => |assign| {
             try results.put(localKey(assign.target), .{ .semantics = assign.result });
             try inferReturnContracts(allocator, store, param_index_by_symbol, results, assign.next, inferred, saw_return);
@@ -262,7 +266,7 @@ fn resolveReturnKind(
     if (gop.found_existing) {
         std.debug.panic(
             "DebugOwnershipSummary invariant violated: cyclic return provenance for local {d}",
-            .{local.symbol.raw()},
+            .{@intFromEnum(local)},
         );
     }
 
@@ -288,7 +292,7 @@ fn resolveReturnKind(
             switch (borrowed.region) {
                 .scope => |scope_id| std.debug.panic(
                     "DebugOwnershipSummary invariant violated: scoped borrow from scope {d} escaped via return from local {d}",
-                    .{ @intFromEnum(scope_id), local.symbol.raw() },
+                    .{ @intFromEnum(scope_id), @intFromEnum(local) },
                 ),
                 .proc => {},
             }
@@ -298,7 +302,7 @@ fn resolveReturnKind(
                 .borrow_of_param => |param_index| ResolvedReturnKind{ .borrow_of_param = param_index },
                 .fresh => std.debug.panic(
                     "DebugOwnershipSummary invariant violated: borrowed return local {d} is not rooted in a proc parameter",
-                    .{local.symbol.raw()},
+                    .{@intFromEnum(local)},
                 ),
             };
             switch (borrowed_base) {
@@ -375,6 +379,9 @@ fn mergeProcResultContract(
 
 fn analyzeStmt(result: *Result, store: *const LirStore, stmt_id: CFStmtId) Allocator.Error!void {
     switch (store.getCFStmt(stmt_id)) {
+        .assign_symbol => |assign| {
+            try analyzeStmt(result, store, assign.next);
+        },
         .assign_ref => |assign| {
             try recordResultSemantics(result, assign.target, assign.result);
             try analyzeStmt(result, store, assign.next);

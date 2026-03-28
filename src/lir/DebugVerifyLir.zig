@@ -225,6 +225,7 @@ fn collectJoinScopes(
     active_scopes: *std.ArrayList(BorrowScopeId),
 ) Allocator.Error!void {
     switch (store.getCFStmt(stmt_id)) {
+        .assign_symbol => |assign| try collectJoinScopes(store, join_scopes, assign.next, active_scopes),
         .assign_ref => |assign| try collectJoinScopes(store, join_scopes, assign.next, active_scopes),
         .assign_literal => |assign| try collectJoinScopes(store, join_scopes, assign.next, active_scopes),
         .assign_call => |assign| try collectJoinScopes(store, join_scopes, assign.next, active_scopes),
@@ -268,6 +269,10 @@ fn verifyStmt(
     scope_exit_envs: ?*std.ArrayList(VerifyEnv),
 ) Allocator.Error!void {
     switch (store.getCFStmt(stmt_id)) {
+        .assign_symbol => |assign| {
+            try env.results.put(localKey(assign.target), .fresh);
+            try verifyStmt(store, join_scopes, join_inputs, assign.next, env, current_scope_exit, scope_exit_envs);
+        },
         .assign_ref => |assign| {
             try ensureLocalUsable(store, env, refOpSource(assign.op), stmt_id);
             try env.results.put(localKey(assign.target), assign.result);
@@ -353,7 +358,7 @@ fn verifyStmt(
             for (store.getLocalSpan(join.params)) |param| {
                 const input = join_inputs.get(param) orelse std.debug.panic(
                     "DebugVerifyLir invariant violated: join param {d} has no verified incoming jump semantics",
-                    .{param.symbol.raw()},
+                    .{@intFromEnum(param)},
                 );
                 const semantics = if (input.borrow_region) |region|
                     LIR.ResultSemantics{ .borrow_of = .{
@@ -449,7 +454,7 @@ fn ensureLocalUsable(
             .scope => |scope_id| if (!scopeIsActive(env.active_scopes.items, scope_id)) {
                 std.debug.panic(
                     "DebugVerifyLir invariant violated: borrowed local {d} was used outside borrow scope {d} at stmt {d}",
-                    .{ local.symbol.raw(), @intFromEnum(scope_id), @intFromEnum(stmt_id) },
+                    .{ @intFromEnum(local), @intFromEnum(scope_id), @intFromEnum(stmt_id) },
                 );
             },
         }
@@ -471,7 +476,7 @@ fn ensureJumpArgUsable(
             .scope => |scope_id| if (!join_scopes.containsScope(target, scope_id)) {
                 std.debug.panic(
                     "DebugVerifyLir invariant violated: borrowed local {d} from scope {d} jumps to join point {d} outside that scope at stmt {d}",
-                    .{ local.symbol.raw(), @intFromEnum(scope_id), @intFromEnum(target), @intFromEnum(stmt_id) },
+                    .{ @intFromEnum(local), @intFromEnum(scope_id), @intFromEnum(target), @intFromEnum(stmt_id) },
                 );
             },
         }
@@ -495,10 +500,15 @@ fn ensureJumpArgsMatchTarget(
     }
 
     for (jump_args, params, 0..) |arg, param, i| {
-        if (arg.layout_idx != param.layout_idx) {
+        if (store.getLocal(arg).layout_idx != store.getLocal(param).layout_idx) {
             std.debug.panic(
                 "DebugVerifyLir invariant violated: jump arg {d} to join point {d} has layout {d}, expected {d}",
-                .{ i, @intFromEnum(target), @intFromEnum(arg.layout_idx), @intFromEnum(param.layout_idx) },
+                .{
+                    i,
+                    @intFromEnum(target),
+                    @intFromEnum(store.getLocal(arg).layout_idx),
+                    @intFromEnum(store.getLocal(param).layout_idx),
+                },
             );
         }
     }
@@ -527,6 +537,7 @@ fn ensureScopeBodyTerminatesWithScopeExit(
     stmt_id: CFStmtId,
 ) Allocator.Error!void {
     switch (store.getCFStmt(stmt_id)) {
+        .assign_symbol => |assign| try ensureScopeBodyTerminatesWithScopeExit(store, assign.next),
         .assign_ref => |assign| try ensureScopeBodyTerminatesWithScopeExit(store, assign.next),
         .assign_literal => |assign| try ensureScopeBodyTerminatesWithScopeExit(store, assign.next),
         .assign_call => |assign| try ensureScopeBodyTerminatesWithScopeExit(store, assign.next),
@@ -591,7 +602,7 @@ fn resolveBorrowRegionInner(
 
     const semantics = results.get(key) orelse std.debug.panic(
         "DebugVerifyLir invariant violated: missing result semantics for local {d} at stmt {d}",
-        .{ local.symbol.raw(), @intFromEnum(stmt_id) },
+        .{ @intFromEnum(local), @intFromEnum(stmt_id) },
     );
     return switch (semantics) {
         .fresh => null,
@@ -605,279 +616,54 @@ fn panicMissingLocalSemantics(
     stmt_id: CFStmtId,
     local: LocalId,
 ) noreturn {
-    const definition = findSymbolDefinition(store, local.symbol);
     debugPrintStmtSummary(store, stmt_id);
-    if (definition.kind == .stmt) {
-        debugPrintStmtSummary(store, @enumFromInt(definition.id));
-    }
-    debugPrintSymbolMentions(store, local.symbol);
-    switch (store.getCFStmt(stmt_id)) {
-        .assign_ref => |assign| std.debug.panic(
-            "DebugVerifyLir invariant violated: missing result semantics for local {d} at stmt {d} (assign_ref target={d} source={d} definition_kind={s} definition_id={d})",
-            .{
-                local.symbol.raw(),
-                @intFromEnum(stmt_id),
-                assign.target.symbol.raw(),
-                refOpSource(assign.op).symbol.raw(),
-                @tagName(definition.kind),
-                definition.id,
-            },
-        ),
-        .assign_call => |assign| std.debug.panic(
-            "DebugVerifyLir invariant violated: missing result semantics for local {d} at stmt {d} (assign_call target={d} definition_kind={s} definition_id={d})",
-            .{ local.symbol.raw(), @intFromEnum(stmt_id), assign.target.symbol.raw(), @tagName(definition.kind), definition.id },
-        ),
-        .assign_low_level => |assign| std.debug.panic(
-            "DebugVerifyLir invariant violated: missing result semantics for local {d} at stmt {d} (assign_low_level target={d} op={s} definition_kind={s} definition_id={d})",
-            .{
-                local.symbol.raw(),
-                @intFromEnum(stmt_id),
-                assign.target.symbol.raw(),
-                @tagName(assign.op),
-                @tagName(definition.kind),
-                definition.id,
-            },
-        ),
-        else => std.debug.panic(
-            "DebugVerifyLir invariant violated: missing result semantics for local {d} at stmt {d} ({s} definition_kind={s} definition_id={d})",
-            .{
-                local.symbol.raw(),
-                @intFromEnum(stmt_id),
-                @tagName(store.getCFStmt(stmt_id)),
-                @tagName(definition.kind),
-                definition.id,
-            },
-        ),
-    }
+    std.debug.panic(
+        "DebugVerifyLir invariant violated: missing result semantics for local {d} (source symbol {d}) at stmt {d} ({s})",
+        .{
+            @intFromEnum(local),
+            localSymbolRaw(store, local),
+            @intFromEnum(stmt_id),
+            @tagName(store.getCFStmt(stmt_id)),
+        },
+    );
 }
 
-const SymbolDefinition = struct {
-    kind: enum {
-        stmt,
-        join_param,
-        proc_arg,
-        missing,
-    },
-    id: u64,
-};
-
-fn findSymbolDefinition(store: *const LirStore, symbol: LIR.Symbol) SymbolDefinition {
-    for (store.cf_stmts.items, 0..) |stmt, stmt_index| {
-        switch (stmt) {
-            .assign_ref => |assign| if (assign.target.symbol == symbol) return .{ .kind = .stmt, .id = stmt_index },
-            .assign_literal => |assign| if (assign.target.symbol == symbol) return .{ .kind = .stmt, .id = stmt_index },
-            .assign_call => |assign| if (assign.target.symbol == symbol) return .{ .kind = .stmt, .id = stmt_index },
-            .assign_low_level => |assign| if (assign.target.symbol == symbol) return .{ .kind = .stmt, .id = stmt_index },
-            .assign_list => |assign| if (assign.target.symbol == symbol) return .{ .kind = .stmt, .id = stmt_index },
-            .assign_struct => |assign| if (assign.target.symbol == symbol) return .{ .kind = .stmt, .id = stmt_index },
-            .assign_tag => |assign| if (assign.target.symbol == symbol) return .{ .kind = .stmt, .id = stmt_index },
-            .join => |join| {
-                for (store.getLocalSpan(join.params)) |param| {
-                    if (param.symbol == symbol) return .{ .kind = .join_param, .id = stmt_index };
-                }
-            },
-            else => {},
-        }
-    }
-    for (store.proc_specs.items, 0..) |proc_spec, proc_index| {
-        for (store.getLocalSpan(proc_spec.args)) |arg| {
-            if (arg.symbol == symbol) return .{ .kind = .proc_arg, .id = proc_index };
-        }
-    }
-    return .{ .kind = .missing, .id = std.math.maxInt(u64) };
-}
-
-fn debugPrintSymbolMentions(store: *const LirStore, symbol: LIR.Symbol) void {
-    for (store.cf_stmts.items, 0..) |stmt, stmt_index| {
-        switch (stmt) {
-            .assign_ref => |assign| {
-                if (assign.target.symbol == symbol) {
-                    std.debug.print(
-                        "DebugVerifyLir symbol {d}: stmt {d} defines via assign_ref source={d} result={s}\n",
-                        .{ symbol.raw(), stmt_index, refOpSource(assign.op).symbol.raw(), @tagName(assign.result) },
-                    );
-                }
-                if (refOpSource(assign.op).symbol == symbol) {
-                    std.debug.print(
-                        "DebugVerifyLir symbol {d}: stmt {d} uses via assign_ref target={d} result={s}\n",
-                        .{ symbol.raw(), stmt_index, assign.target.symbol.raw(), @tagName(assign.result) },
-                    );
-                }
-            },
-            .assign_literal => |assign| if (assign.target.symbol == symbol) {
-                std.debug.print(
-                    "DebugVerifyLir symbol {d}: stmt {d} defines via assign_literal\n",
-                    .{ symbol.raw(), stmt_index },
-                );
-            },
-            .assign_call => |assign| {
-                if (assign.target.symbol == symbol) {
-                    std.debug.print(
-                        "DebugVerifyLir symbol {d}: stmt {d} defines via assign_call\n",
-                        .{ symbol.raw(), stmt_index },
-                    );
-                }
-                for (store.getLocalSpan(assign.args)) |arg| {
-                    if (arg.symbol == symbol) {
-                        std.debug.print(
-                            "DebugVerifyLir symbol {d}: stmt {d} uses via assign_call arg\n",
-                            .{ symbol.raw(), stmt_index },
-                        );
-                    }
-                }
-            },
-            .assign_low_level => |assign| {
-                if (assign.target.symbol == symbol) {
-                    std.debug.print(
-                        "DebugVerifyLir symbol {d}: stmt {d} defines via assign_low_level {s}\n",
-                        .{ symbol.raw(), stmt_index, @tagName(assign.op) },
-                    );
-                }
-                for (store.getLocalSpan(assign.args)) |arg| {
-                    if (arg.symbol == symbol) {
-                        std.debug.print(
-                            "DebugVerifyLir symbol {d}: stmt {d} uses via assign_low_level arg {s}\n",
-                            .{ symbol.raw(), stmt_index, @tagName(assign.op) },
-                        );
-                    }
-                }
-            },
-            .assign_list => |assign| {
-                if (assign.target.symbol == symbol) {
-                    std.debug.print(
-                        "DebugVerifyLir symbol {d}: stmt {d} defines via assign_list\n",
-                        .{ symbol.raw(), stmt_index },
-                    );
-                }
-                for (store.getLocalSpan(assign.elems)) |elem| {
-                    if (elem.symbol == symbol) {
-                        std.debug.print(
-                            "DebugVerifyLir symbol {d}: stmt {d} uses via assign_list elem\n",
-                            .{ symbol.raw(), stmt_index },
-                        );
-                    }
-                }
-            },
-            .assign_struct => |assign| {
-                if (assign.target.symbol == symbol) {
-                    std.debug.print(
-                        "DebugVerifyLir symbol {d}: stmt {d} defines via assign_struct\n",
-                        .{ symbol.raw(), stmt_index },
-                    );
-                }
-                for (store.getLocalSpan(assign.fields)) |field| {
-                    if (field.symbol == symbol) {
-                        std.debug.print(
-                            "DebugVerifyLir symbol {d}: stmt {d} uses via assign_struct field\n",
-                            .{ symbol.raw(), stmt_index },
-                        );
-                    }
-                }
-            },
-            .assign_tag => |assign| {
-                if (assign.target.symbol == symbol) {
-                    std.debug.print(
-                        "DebugVerifyLir symbol {d}: stmt {d} defines via assign_tag\n",
-                        .{ symbol.raw(), stmt_index },
-                    );
-                }
-                for (store.getLocalSpan(assign.args)) |arg| {
-                    if (arg.symbol == symbol) {
-                        std.debug.print(
-                            "DebugVerifyLir symbol {d}: stmt {d} uses via assign_tag arg\n",
-                            .{ symbol.raw(), stmt_index },
-                        );
-                    }
-                }
-            },
-            .incref => |inc| if (inc.value.symbol == symbol) {
-                std.debug.print(
-                    "DebugVerifyLir symbol {d}: stmt {d} uses via incref\n",
-                    .{ symbol.raw(), stmt_index },
-                );
-            },
-            .decref => |dec| if (dec.value.symbol == symbol) {
-                std.debug.print(
-                    "DebugVerifyLir symbol {d}: stmt {d} uses via decref\n",
-                    .{ symbol.raw(), stmt_index },
-                );
-            },
-            .free => |free_stmt| if (free_stmt.value.symbol == symbol) {
-                std.debug.print(
-                    "DebugVerifyLir symbol {d}: stmt {d} uses via free\n",
-                    .{ symbol.raw(), stmt_index },
-                );
-            },
-            .switch_stmt => |switch_stmt| if (switch_stmt.cond.symbol == symbol) {
-                std.debug.print(
-                    "DebugVerifyLir symbol {d}: stmt {d} uses via switch cond\n",
-                    .{ symbol.raw(), stmt_index },
-                );
-            },
-            .jump => |jump| {
-                for (store.getLocalSpan(jump.args)) |arg| {
-                    if (arg.symbol == symbol) {
-                        std.debug.print(
-                            "DebugVerifyLir symbol {d}: stmt {d} uses via jump arg\n",
-                            .{ symbol.raw(), stmt_index },
-                        );
-                    }
-                }
-            },
-            .ret => |ret_stmt| if (ret_stmt.value.symbol == symbol) {
-                std.debug.print(
-                    "DebugVerifyLir symbol {d}: stmt {d} uses via ret\n",
-                    .{ symbol.raw(), stmt_index },
-                );
-            },
-            .join => |join| {
-                for (store.getLocalSpan(join.params)) |param| {
-                    if (param.symbol == symbol) {
-                        std.debug.print(
-                            "DebugVerifyLir symbol {d}: stmt {d} defines via join param\n",
-                            .{ symbol.raw(), stmt_index },
-                        );
-                    }
-                }
-            },
-            else => {},
-        }
-    }
-    for (store.proc_specs.items, 0..) |proc_spec, proc_index| {
-        for (store.getLocalSpan(proc_spec.args)) |arg| {
-            if (arg.symbol == symbol) {
-                std.debug.print(
-                    "DebugVerifyLir symbol {d}: proc {d} defines via proc arg\n",
-                    .{ symbol.raw(), proc_index },
-                );
-            }
-        }
-    }
+fn localSymbolRaw(store: *const LirStore, local: LocalId) u64 {
+    return store.getLocal(local).source_symbol.raw();
 }
 
 fn debugPrintStmtSummary(store: *const LirStore, stmt_id: CFStmtId) void {
     switch (store.getCFStmt(stmt_id)) {
+        .assign_symbol => |assign| std.debug.print(
+            "DebugVerifyLir stmt {d}: assign_symbol target={d} source_symbol={d} next={d}\n",
+            .{
+                @intFromEnum(stmt_id),
+                @intFromEnum(assign.target),
+                assign.symbol.raw(),
+                @intFromEnum(assign.next),
+            },
+        ),
         .assign_ref => |assign| std.debug.print(
             "DebugVerifyLir stmt {d}: assign_ref target={d} source={d} result={s} next={d}\n",
             .{
                 @intFromEnum(stmt_id),
-                assign.target.symbol.raw(),
-                refOpSource(assign.op).symbol.raw(),
+                @intFromEnum(assign.target),
+                @intFromEnum(refOpSource(assign.op)),
                 @tagName(assign.result),
                 @intFromEnum(assign.next),
             },
         ),
         .assign_literal => |assign| std.debug.print(
             "DebugVerifyLir stmt {d}: assign_literal target={d} next={d}\n",
-            .{ @intFromEnum(stmt_id), assign.target.symbol.raw(), @intFromEnum(assign.next) },
+            .{ @intFromEnum(stmt_id), @intFromEnum(assign.target), @intFromEnum(assign.next) },
         ),
         .assign_call => |assign| switch (assign.result) {
             .alias_of => |aliased| std.debug.print(
                 "DebugVerifyLir stmt {d}: assign_call target={d} result=alias_of owner={d} args={any} next={d}\n",
                 .{
                     @intFromEnum(stmt_id),
-                    assign.target.symbol.raw(),
-                    aliased.owner.symbol.raw(),
+                    @intFromEnum(assign.target),
+                    @intFromEnum(aliased.owner),
                     store.getLocalSpan(assign.args),
                     @intFromEnum(assign.next),
                 },
@@ -886,8 +672,8 @@ fn debugPrintStmtSummary(store: *const LirStore, stmt_id: CFStmtId) void {
                 "DebugVerifyLir stmt {d}: assign_call target={d} result=borrow_of owner={d} args={any} next={d}\n",
                 .{
                     @intFromEnum(stmt_id),
-                    assign.target.symbol.raw(),
-                    borrowed.owner.symbol.raw(),
+                    @intFromEnum(assign.target),
+                    @intFromEnum(borrowed.owner),
                     store.getLocalSpan(assign.args),
                     @intFromEnum(assign.next),
                 },
@@ -896,7 +682,7 @@ fn debugPrintStmtSummary(store: *const LirStore, stmt_id: CFStmtId) void {
                 "DebugVerifyLir stmt {d}: assign_call target={d} result=fresh args={any} next={d}\n",
                 .{
                     @intFromEnum(stmt_id),
-                    assign.target.symbol.raw(),
+                    @intFromEnum(assign.target),
                     store.getLocalSpan(assign.args),
                     @intFromEnum(assign.next),
                 },
@@ -904,23 +690,23 @@ fn debugPrintStmtSummary(store: *const LirStore, stmt_id: CFStmtId) void {
         },
         .assign_low_level => |assign| std.debug.print(
             "DebugVerifyLir stmt {d}: assign_low_level target={d} op={s} next={d}\n",
-            .{ @intFromEnum(stmt_id), assign.target.symbol.raw(), @tagName(assign.op), @intFromEnum(assign.next) },
+            .{ @intFromEnum(stmt_id), @intFromEnum(assign.target), @tagName(assign.op), @intFromEnum(assign.next) },
         ),
         .assign_list => |assign| std.debug.print(
             "DebugVerifyLir stmt {d}: assign_list target={d} next={d}\n",
-            .{ @intFromEnum(stmt_id), assign.target.symbol.raw(), @intFromEnum(assign.next) },
+            .{ @intFromEnum(stmt_id), @intFromEnum(assign.target), @intFromEnum(assign.next) },
         ),
         .assign_struct => |assign| std.debug.print(
             "DebugVerifyLir stmt {d}: assign_struct target={d} next={d}\n",
-            .{ @intFromEnum(stmt_id), assign.target.symbol.raw(), @intFromEnum(assign.next) },
+            .{ @intFromEnum(stmt_id), @intFromEnum(assign.target), @intFromEnum(assign.next) },
         ),
         .assign_tag => |assign| std.debug.print(
             "DebugVerifyLir stmt {d}: assign_tag target={d} next={d}\n",
-            .{ @intFromEnum(stmt_id), assign.target.symbol.raw(), @intFromEnum(assign.next) },
+            .{ @intFromEnum(stmt_id), @intFromEnum(assign.target), @intFromEnum(assign.next) },
         ),
         .switch_stmt => |sw| std.debug.print(
             "DebugVerifyLir stmt {d}: switch cond={d} default={d}\n",
-            .{ @intFromEnum(stmt_id), sw.cond.symbol.raw(), @intFromEnum(sw.default_branch) },
+            .{ @intFromEnum(stmt_id), @intFromEnum(sw.cond), @intFromEnum(sw.default_branch) },
         ),
         .borrow_scope => |scope| std.debug.print(
             "DebugVerifyLir stmt {d}: borrow_scope id={d} body={d} remainder={d}\n",
@@ -936,7 +722,7 @@ fn debugPrintStmtSummary(store: *const LirStore, stmt_id: CFStmtId) void {
         ),
         .ret => |ret_stmt| std.debug.print(
             "DebugVerifyLir stmt {d}: ret value={d}\n",
-            .{ @intFromEnum(stmt_id), ret_stmt.value.symbol.raw() },
+            .{ @intFromEnum(stmt_id), @intFromEnum(ret_stmt.value) },
         ),
         else => std.debug.print(
             "DebugVerifyLir stmt {d}: {s}\n",
@@ -963,7 +749,7 @@ fn scopeIsActive(active_scopes: []const BorrowScopeId, scope_id: BorrowScopeId) 
 }
 
 fn localKey(local: LocalId) u64 {
-    return @bitCast(local.symbol);
+    return @intFromEnum(local);
 }
 
 fn mergeBorrowRegions(
@@ -982,7 +768,7 @@ fn mergeBorrowRegions(
                 if (left_scope != right_scope) {
                     std.debug.panic(
                         "DebugVerifyLir invariant violated: join param {d} received incoming borrows from incompatible scopes {d} and {d}",
-                        .{ param.symbol.raw(), @intFromEnum(left_scope), @intFromEnum(right_scope) },
+                        .{ @intFromEnum(param), @intFromEnum(left_scope), @intFromEnum(right_scope) },
                     );
                 }
                 return .{ .scope = left_scope };
@@ -1030,7 +816,7 @@ fn resultSemanticsEqual(
 }
 
 fn localRefsEqual(a: LocalId, b: LocalId) bool {
-    return a.symbol == b.symbol and a.layout_idx == b.layout_idx;
+    return a == b;
 }
 
 fn borrowRegionsEqual(a: LIR.BorrowRegion, b: LIR.BorrowRegion) bool {

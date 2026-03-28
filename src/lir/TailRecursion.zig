@@ -96,6 +96,11 @@ pub const TailRecursionPass = struct {
                 .args = assign.args,
                 .next = next,
             } }),
+            .assign_symbol => |assign| self.store.addCFStmt(.{ .assign_symbol = .{
+                .target = assign.target,
+                .symbol = assign.symbol,
+                .next = next,
+            } }),
             else => unreachable,
         };
     }
@@ -107,7 +112,7 @@ pub const TailRecursionPass = struct {
             .assign_call => |assign| blk: {
                 if (self.isTailCallToTarget(assign)) {
                     const next_stmt = self.store.getCFStmt(assign.next);
-                    if (next_stmt == .ret and next_stmt.ret.value.symbol.eql(assign.target.symbol)) {
+                    if (next_stmt == .ret and next_stmt.ret.value == assign.target) {
                         self.found_tail_call = true;
                         break :blk try self.store.addCFStmt(.{ .jump = .{
                             .target = self.join_point_id,
@@ -117,6 +122,7 @@ pub const TailRecursionPass = struct {
                 }
                 break :blk try self.transformAssignLike(stmt, assign.next);
             },
+            .assign_symbol => |assign| try self.transformAssignLike(stmt, assign.next),
             .assign_ref => |assign| try self.transformAssignLike(stmt, assign.next),
             .assign_literal => |assign| try self.transformAssignLike(stmt, assign.next),
             .assign_low_level => |assign| try self.transformAssignLike(stmt, assign.next),
@@ -205,8 +211,8 @@ test "TailRecursionPass transforms assign_call/ret into jump" {
     defer store.deinit();
 
     const proc_symbol = Symbol.fromRaw(100);
-    const arg_symbol = Symbol.fromRaw(101);
-    const temp_symbol = Symbol.fromRaw(102);
+    const arg_local = try store.addLocal(.{ .source_symbol = Symbol.fromRaw(101), .layout_idx = i64_layout });
+    const temp_local = try store.addLocal(.{ .source_symbol = Symbol.fromRaw(102), .layout_idx = i64_layout });
     const join_id: JoinPointId = @enumFromInt(7);
     const sentinel_msg = try store.insertString("TailRecursion test unresolved proc body sentinel should never execute");
     const sentinel_body = try store.addCFStmt(.{ .crash = .{ .msg = sentinel_msg } });
@@ -220,12 +226,12 @@ test "TailRecursionPass transforms assign_call/ret into jump" {
         .hosted = null,
     });
 
-    const args = try store.addLocalRefs(&.{.{ .symbol = arg_symbol, .layout_idx = i64_layout }});
+    const args = try store.addLocalSpan(&.{arg_local});
     const ret_stmt = try store.addCFStmt(.{ .ret = .{
-        .value = .{ .symbol = temp_symbol, .layout_idx = i64_layout },
+        .value = temp_local,
     } });
     const call_stmt = try store.addCFStmt(.{ .assign_call = .{
-        .target = .{ .symbol = temp_symbol, .layout_idx = i64_layout },
+        .target = temp_local,
         .result = .fresh,
         .proc = proc_id,
         .args = args,

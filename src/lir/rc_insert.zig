@@ -69,7 +69,11 @@ pub const RcInsertPass = struct {
     }
 
     fn localKey(local: LocalId) u64 {
-        return @bitCast(local.symbol);
+        return @intFromEnum(local);
+    }
+
+    fn localLayout(self: *const RcInsertPass, local: LocalId) LayoutIdx {
+        return self.store.getLocal(local).layout_idx;
     }
 
     fn layoutNeedsRc(self: *const RcInsertPass, layout_idx: LayoutIdx) bool {
@@ -77,7 +81,7 @@ pub const RcInsertPass = struct {
     }
 
     fn bumpUse(self: *RcInsertPass, local: LocalId) Allocator.Error!void {
-        if (!self.layoutNeedsRc(local.layout_idx)) return;
+        if (!self.layoutNeedsRc(self.localLayout(local))) return;
         const gop = try self.symbol_use_counts.getOrPut(localKey(local));
         if (!gop.found_existing) gop.value_ptr.* = 0;
         gop.value_ptr.* += 1;
@@ -237,9 +241,10 @@ pub const RcInsertPass = struct {
         const use_count = self.symbol_use_counts.get(localKey(target)) orelse 0;
         const semantics = resultSemantics(stmt);
 
-        if (self.layoutNeedsRc(target.layout_idx)) try self.recordAliasSemantics(target, semantics);
+        const target_layout = self.localLayout(target);
+        if (self.layoutNeedsRc(target_layout)) try self.recordAliasSemantics(target, semantics);
 
-        if (self.layoutNeedsRc(target.layout_idx) and use_count > 1 and resultIsFresh(stmt)) {
+        if (self.layoutNeedsRc(target_layout) and use_count > 1 and resultIsFresh(stmt)) {
             const decref_stmt = try self.store.addCFStmt(.{ .decref = .{
                 .value = target,
                 .next = next,
@@ -252,7 +257,7 @@ pub const RcInsertPass = struct {
             return try self.rebuildAssignStmt(stmt, incref_stmt);
         }
 
-        if (self.layoutNeedsRc(target.layout_idx) and use_count == 0 and resultIsFresh(stmt)) {
+        if (self.layoutNeedsRc(target_layout) and use_count == 0 and resultIsFresh(stmt)) {
             const free_stmt = try self.store.addCFStmt(.{ .free = .{
                 .value = target,
                 .next = next,
