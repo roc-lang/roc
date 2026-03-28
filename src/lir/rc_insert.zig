@@ -90,6 +90,7 @@ pub const RcInsertPass = struct {
     fn refOpSource(op: LIR.RefOp) LocalRef {
         return switch (op) {
             .local => |local| local,
+            .discriminant => |disc| disc.source,
             .field => |field| field.source,
             .tag_payload => |payload| payload.source,
             .nominal => |nominal| nominal.backing_ref,

@@ -32,6 +32,8 @@ const JoinMeta = struct {
     params: LocalRefSpan,
 };
 
+const synthetic_symbol_base: u64 = 0xf000_0000_0000_0000;
+
 /// Re-derives and checks debug-only invariants for one lowered proc body.
 pub fn verifyProc(
     allocator: Allocator,
@@ -449,10 +451,19 @@ fn resolveBorrowRegionInner(
         );
     }
 
-    const semantics = results.get(key) orelse std.debug.panic(
-        "DebugVerifyLir invariant violated: missing result semantics for local {d}",
-        .{local.symbol.raw()},
-    );
+    const semantics = results.get(key) orelse {
+        if (local.symbol.raw() >= synthetic_symbol_base) {
+            std.debug.panic(
+                "DebugVerifyLir invariant violated: missing result semantics for synthetic local {d}",
+                .{local.symbol.raw()},
+            );
+        }
+
+        // Non-synthetic roots such as proc parameters and global lookups are
+        // outside proc-local statement provenance tracking. They can seed alias
+        // chains, but they are not themselves borrowed by local statements.
+        return null;
+    };
     return switch (semantics) {
         .fresh => null,
         .alias_of => |aliased| resolveBorrowRegionInner(results, aliased.owner, visited),
@@ -463,6 +474,7 @@ fn resolveBorrowRegionInner(
 fn refOpSource(op: LIR.RefOp) LocalRef {
     return switch (op) {
         .local => |local| local,
+        .discriminant => |disc| disc.source,
         .field => |field| field.source,
         .tag_payload => |payload| payload.source,
         .nominal => |nominal| nominal.backing_ref,

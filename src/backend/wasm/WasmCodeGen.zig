@@ -4231,6 +4231,30 @@ fn bindAssignedLocal(self: *Self, target: LocalRef) Allocator.Error!void {
 fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Error!void {
     switch (op) {
         .local => |local| try self.generateExpr(local),
+        .discriminant => |disc| {
+            const ls = self.getLayoutStore();
+            const source_layout = ls.getLayout(disc.source.layout_idx);
+            switch (source_layout.tag) {
+                .tag_union => {
+                    const tu_data = ls.getTagUnionData(source_layout.data.tag_union.idx);
+                    try self.generateExpr(disc.source);
+                    try self.emitLoadBySize(tu_data.discriminant_size, @intCast(tu_data.discriminant_offset));
+                },
+                .box => {
+                    const inner_layout = ls.getLayout(source_layout.data.box);
+                    if (inner_layout.tag != .tag_union) {
+                        std.debug.panic(
+                            "WasmCodeGen invariant violated: discriminant access on boxed non-tag-union layout {s}",
+                            .{@tagName(inner_layout.tag)},
+                        );
+                    }
+                    const tu_data = ls.getTagUnionData(inner_layout.data.tag_union.idx);
+                    try self.generateExpr(disc.source);
+                    try self.emitLoadBySize(tu_data.discriminant_size, @intCast(tu_data.discriminant_offset));
+                },
+                else => try self.generateExpr(disc.source),
+            }
+        },
         .field => |field| try self.generateStructAccess(.{
             .struct_expr = field.source,
             .struct_layout = field.source.layout_idx,

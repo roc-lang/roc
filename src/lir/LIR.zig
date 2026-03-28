@@ -133,6 +133,9 @@ pub const RefProjection = union(enum) {
 /// Reference-producing operation lowered by `assign_ref`.
 pub const RefOp = union(enum) {
     local: LocalRef,
+    discriminant: struct {
+        source: LocalRef,
+    },
     field: struct {
         source: LocalRef,
         field_idx: u16,

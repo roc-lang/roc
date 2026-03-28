@@ -4105,6 +4105,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn generateRefOp(self: *Self, op: lir.RefOp, target_layout: layout.Idx) Allocator.Error!ValueLocation {
             return switch (op) {
                 .local => |local| try self.generateExpr(local),
+                .discriminant => |disc| try self.generateDiscriminantAccess(.{
+                    .source = disc.source,
+                    .target_layout = target_layout,
+                }),
                 .field => |field| try self.generateStructAccess(.{
                     .source = field.source,
                     .field_idx = field.field_idx,
@@ -7806,6 +7810,56 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             } else {
                 unreachable;
             }
+        }
+
+        /// Generate code for explicit tag-discriminant access.
+        fn generateDiscriminantAccess(self: *Self, disc: anytype) Allocator.Error!ValueLocation {
+            const ls = self.layout_store;
+            const raw_value_loc = try self.generateExpr(disc.source);
+            const source_layout = ls.getLayout(disc.source.layout_idx);
+
+            if (source_layout.tag == .tag_union) {
+                const stable_value_loc = try self.materializeValueToStackForLayout(raw_value_loc, disc.source.layout_idx);
+                const tu_data = ls.getTagUnionData(source_layout.data.tag_union.idx);
+                const disc_reg = try self.loadAndMaskDiscriminant(
+                    stable_value_loc,
+                    disc.target_layout != .u64,
+                    @intCast(tu_data.discriminant_offset),
+                    tu_data.discriminant_size,
+                );
+                return .{ .general_reg = disc_reg };
+            }
+
+            if (source_layout.tag == .box) {
+                const inner_layout = ls.getLayout(source_layout.data.box);
+                if (inner_layout.tag == .tag_union) {
+                    const tu_data = ls.getTagUnionData(inner_layout.data.tag_union.idx);
+                    const box_ptr_reg = try self.ensureInGeneralReg(raw_value_loc);
+                    const disc_reg = try self.allocTempGeneral();
+                    if (disc.target_layout != .u64) {
+                        try self.emitLoad(.w32, disc_reg, box_ptr_reg, @intCast(tu_data.discriminant_offset));
+                    } else {
+                        try self.emitLoad(.w64, disc_reg, box_ptr_reg, @intCast(tu_data.discriminant_offset));
+                    }
+                    self.codegen.freeGeneral(box_ptr_reg);
+
+                    if (tu_data.discriminant_size != 0 and tu_data.discriminant_size < 4) {
+                        const mask: i32 = (@as(i32, 1) << @as(u5, @intCast(tu_data.discriminant_size * 8))) - 1;
+                        if (comptime target.toCpuArch() == .aarch64) {
+                            const mask_reg = try self.allocTempGeneral();
+                            try self.codegen.emitLoadImm(mask_reg, mask);
+                            try self.codegen.emit.andRegRegReg(.w32, disc_reg, disc_reg, mask_reg);
+                            self.codegen.freeGeneral(mask_reg);
+                        } else {
+                            try self.codegen.emit.andRegImm32(disc_reg, mask);
+                        }
+                    }
+
+                    return .{ .general_reg = disc_reg };
+                }
+            }
+
+            return raw_value_loc;
         }
 
         fn generateList(self: *Self, list: anytype) Allocator.Error!ValueLocation {

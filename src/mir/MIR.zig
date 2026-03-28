@@ -971,6 +971,17 @@ pub const Store = struct {
     /// such as whether statementful wrapper nodes are admissible at a given
     /// lowering boundary.
     pub fn resolveCallableProcId(self: *const Store, expr_id: ExprId) ?ProcId {
+        var visited_symbols: [64]u64 = undefined;
+        var visited_len: usize = 0;
+        return self.resolveCallableProcIdInner(expr_id, &visited_symbols, &visited_len);
+    }
+
+    fn resolveCallableProcIdInner(
+        self: *const Store,
+        expr_id: ExprId,
+        visited_symbols: *[64]u64,
+        visited_len: *usize,
+    ) ?ProcId {
         return switch (self.getExpr(expr_id)) {
             .proc_ref => |proc_id| proc_id,
             .closure_make => |closure| closure.proc,
@@ -978,12 +989,37 @@ pub const Store = struct {
                 if (self.getSymbolSeedProcSet(symbol)) |proc_ids| {
                     if (proc_ids.len == 1) break :blk proc_ids[0];
                 }
+
+                if (self.getValueDef(symbol)) |def_expr| {
+                    for (visited_symbols[0..visited_len.*]) |visited| {
+                        if (visited == symbol.raw()) {
+                            std.debug.panic(
+                                "MIR invariant violated: cyclic proc-backed callable lookup for symbol {d}",
+                                .{symbol.raw()},
+                            );
+                        }
+                    }
+
+                    if (visited_len.* >= visited_symbols.len) {
+                        std.debug.panic(
+                            "MIR invariant violated: callable lookup depth exceeded fixed recursion budget while resolving symbol {d}",
+                            .{symbol.raw()},
+                        );
+                    }
+
+                    visited_symbols[visited_len.*] = symbol.raw();
+                    visited_len.* += 1;
+                    defer visited_len.* -= 1;
+
+                    break :blk self.resolveCallableProcIdInner(def_expr, visited_symbols, visited_len);
+                }
+
                 break :blk null;
             },
-            .block => |block| self.resolveCallableProcId(block.final_expr),
-            .dbg_expr => |dbg_expr| self.resolveCallableProcId(dbg_expr.expr),
-            .expect => |expect| self.resolveCallableProcId(expect.body),
-            .return_expr => |ret| self.resolveCallableProcId(ret.expr),
+            .block => |block| self.resolveCallableProcIdInner(block.final_expr, visited_symbols, visited_len),
+            .dbg_expr => |dbg_expr| self.resolveCallableProcIdInner(dbg_expr.expr, visited_symbols, visited_len),
+            .expect => |expect| self.resolveCallableProcIdInner(expect.body, visited_symbols, visited_len),
+            .return_expr => |ret| self.resolveCallableProcIdInner(ret.expr, visited_symbols, visited_len),
             else => null,
         };
     }
