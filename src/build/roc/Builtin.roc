@@ -368,7 +368,7 @@ Builtin :: [].{
 				match List.first(list) {
 					Ok(pivot) => {
 						rest = List.drop_first(list, 1)
-						less_or_equal =
+						less_or_equal = 
 							List.keep_if(
 								rest,
 								|item|
@@ -378,7 +378,7 @@ Builtin :: [].{
 										GT => False
 									},
 							)
-						greater =
+						greater = 
 							List.keep_if(
 								rest,
 								|item|

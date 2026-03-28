@@ -87,6 +87,7 @@ const LocalRef = lir.LocalRef;
 const LocalRefSpan = lir.LocalRefSpan;
 // Layout store for accessing struct/tag field offsets
 const LayoutStore = layout.Store;
+const RcOp = layout.RcOp;
 const RcHelperResolver = layout.RcHelperResolver;
 const RcHelperKey = layout.RcHelperKey;
 
@@ -496,6 +497,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
     // Size of a RocStr struct: ptr + length + capacity = 3 × pointer size (24 bytes on 64-bit)
     const roc_str_size: u32 = 3 * target_ptr_size;
+    const small_str_max_len: u32 = roc_str_size - 1;
 
     // Size of a RocList struct: ptr + length + capacity = 3 × pointer size (24 bytes on 64-bit)
     const roc_list_size: u32 = 3 * target_ptr_size;
@@ -1021,7 +1023,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.codegen.callee_saved_available &= ~(@as(u32, 1) << @intFromEnum(x86_64.GeneralReg.RBX));
             }
 
-            const root_proc = try self.procCodeOffsetWithOptions(root_proc_id, .{});
+            const root_proc = try self.compiledProcForId(root_proc_id);
             const final_result = try self.generateCallToCompiledProc(root_proc, &.{}, &.{}, result_layout);
             const actual_ret_layout = result_layout;
 
@@ -7064,6 +7066,62 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitCallToOffset(code_offset);
         }
 
+        fn emitRcHelperCallAtStackOffset(
+            self: *Self,
+            op: RcOp,
+            base_offset: i32,
+            layout_idx: layout.Idx,
+            count: u16,
+        ) Allocator.Error!void {
+            const helper_key = RcHelperKey{ .op = op, .layout_idx = layout_idx };
+            const resolver = RcHelperResolver.init(self.layout_store);
+            if (resolver.plan(helper_key) == .noop) return;
+
+            const ptr_slot = self.codegen.allocStackSlot(8);
+            const roc_ops_slot = self.codegen.allocStackSlot(8);
+            const ptr_reg = try self.allocTempGeneral();
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+
+            try self.emitMovRegReg(ptr_reg, frame_ptr);
+            if (base_offset != 0) {
+                try self.emitAddPtrImmAny(ptr_reg, ptr_reg, base_offset);
+            }
+            try self.emitStore(.w64, frame_ptr, ptr_slot, ptr_reg);
+            try self.emitStore(.w64, frame_ptr, roc_ops_slot, roc_ops_reg);
+            self.codegen.freeGeneral(ptr_reg);
+
+            switch (op) {
+                .incref => {
+                    const count_slot = self.codegen.allocStackSlot(8);
+                    const count_reg = try self.allocTempGeneral();
+                    try self.codegen.emitLoadImm(count_reg, count);
+                    try self.emitStore(.w64, frame_ptr, count_slot, count_reg);
+                    self.codegen.freeGeneral(count_reg);
+                    try self.emitCallRcHelperFromStackSlots(helper_key, ptr_slot, count_slot, roc_ops_slot);
+                },
+                .decref, .free => {
+                    try self.emitCallRcHelperFromStackSlots(helper_key, ptr_slot, null, roc_ops_slot);
+                },
+            }
+        }
+
+        fn emitRcHelperCallForValue(
+            self: *Self,
+            op: RcOp,
+            value_loc: ValueLocation,
+            layout_idx: layout.Idx,
+            count: u16,
+        ) Allocator.Error!void {
+            const l = self.layout_store.getLayout(layout_idx);
+            if (!self.layout_store.layoutContainsRefcounted(l)) return;
+
+            const value_size = self.layout_store.layoutSizeAlign(l).size;
+            if (value_size == 0) return;
+
+            const base_offset = try self.ensureValueOnStackForRc(value_loc, value_size);
+            try self.emitRcHelperCallAtStackOffset(op, base_offset, layout_idx, count);
+        }
+
         fn emitRcHelperCallFromPtrReg(
             self: *Self,
             helper_key: RcHelperKey,
@@ -7627,10 +7685,361 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return final_offset;
         }
 
-        fn procCodeOffsetWithOptions(
+        /// Given a field's stack base offset, size, and layout index, return the appropriate ValueLocation.
+        fn fieldLocationFromLayout(self: *Self, field_base: i32, field_size: u32, field_layout_idx: layout.Idx) ValueLocation {
+            if (field_layout_idx == .str) {
+                return .{ .stack_str = field_base };
+            }
+            if (field_layout_idx == .i128 or field_layout_idx == .u128 or field_layout_idx == .dec) {
+                return .{ .stack_i128 = field_base };
+            }
+            {
+                const ls = self.layout_store;
+                if (@intFromEnum(field_layout_idx) < ls.layouts.len()) {
+                    const field_layout = ls.getLayout(field_layout_idx);
+                    if (field_layout.tag == .list or field_layout.tag == .list_of_zst) {
+                        return .{ .list_stack = .{
+                            .struct_offset = field_base,
+                            .data_offset = 0,
+                            .num_elements = 0,
+                        } };
+                    }
+                }
+            }
+            return .{ .stack = .{ .offset = field_base, .size = ValueSize.fromByteCount(field_size) } };
+        }
+
+        /// Generate code for struct field access (records and tuples).
+        fn generateStructAccess(self: *Self, access: anytype) Allocator.Error!ValueLocation {
+            const ls = self.layout_store;
+            const struct_loc = try self.generateExpr(access.source);
+
+            const struct_layout = ls.getLayout(access.source.layout_idx);
+            if (struct_layout.tag != .struct_) {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "LIR/codegen invariant violated: struct_access expected struct_ layout, got {s} (field_idx={d})",
+                        .{ @tagName(struct_layout.tag), access.field_idx },
+                    );
+                }
+                unreachable;
+            }
+
+            const field_offset = ls.getStructFieldOffset(struct_layout.data.struct_.idx, access.field_idx);
+            const field_size = ls.getStructFieldSize(struct_layout.data.struct_.idx, access.field_idx);
+            const field_layout_idx = access.target_layout;
+
+            return switch (struct_loc) {
+                .stack_str => |sv| blk: {
+                    const field_base = sv + @as(i32, @intCast(field_offset));
+                    break :blk self.fieldLocationFromLayout(field_base, field_size, field_layout_idx);
+                },
+                .stack => |sv| blk: {
+                    const field_base = sv.offset + @as(i32, @intCast(field_offset));
+                    break :blk self.fieldLocationFromLayout(field_base, field_size, field_layout_idx);
+                },
+                .stack_i128 => |sv| blk: {
+                    const field_base = sv + @as(i32, @intCast(field_offset));
+                    break :blk self.fieldLocationFromLayout(field_base, field_size, field_layout_idx);
+                },
+                .general_reg => |reg| blk: {
+                    if (field_size > 8) unreachable;
+                    if (field_offset == 0) {
+                        break :blk .{ .general_reg = reg };
+                    } else {
+                        const result_reg = try self.allocTempGeneral();
+                        try self.emitLsrImm(.w64, result_reg, reg, @intCast(field_offset * 8));
+                        self.codegen.freeGeneral(reg);
+                        break :blk .{ .general_reg = result_reg };
+                    }
+                },
+                .immediate_i64 => |val| blk: {
+                    if (field_size > 8) unreachable;
+                    if (field_offset == 0) {
+                        break :blk .{ .immediate_i64 = val };
+                    }
+                    const shifted = val >> @intCast(field_offset * 8);
+                    break :blk .{ .immediate_i64 = shifted };
+                },
+                else => unreachable,
+            };
+        }
+
+        /// Generate code for tag payload access.
+        fn generateTagPayloadAccess(self: *Self, tpa: anytype) Allocator.Error!ValueLocation {
+            const ls = self.layout_store;
+            const raw_value_loc = try self.generateExpr(tpa.source);
+
+            const union_layout = ls.getLayout(tpa.source.layout_idx);
+            const payload_layout = ls.getLayout(tpa.target_layout);
+            const payload_size = ls.layoutSizeAlign(payload_layout).size;
+
+            if (union_layout.tag == .tag_union) {
+                const value_loc = try self.materializeValueToStackForLayout(raw_value_loc, tpa.source.layout_idx);
+                const base_offset: i32 = switch (value_loc) {
+                    .stack => |s| s.offset,
+                    .stack_i128 => |off| off,
+                    .stack_str => |off| off,
+                    .list_stack => |ls_info| ls_info.struct_offset,
+                    else => unreachable,
+                };
+                return self.fieldLocationFromLayout(base_offset, payload_size, tpa.target_layout);
+            } else if (union_layout.tag == .box) {
+                const inner_layout = ls.getLayout(union_layout.data.box);
+                if (inner_layout.tag == .tag_union) {
+                    const box_ptr_reg = try self.ensureInGeneralReg(raw_value_loc);
+                    const dest_offset = self.codegen.allocStackSlot(payload_size);
+                    var copied: u32 = 0;
+                    while (copied < payload_size) : (copied += 8) {
+                        const temp_reg = try self.allocTempGeneral();
+                        try self.emitLoad(.w64, temp_reg, box_ptr_reg, @intCast(copied));
+                        try self.emitStore(.w64, frame_ptr, dest_offset + @as(i32, @intCast(copied)), temp_reg);
+                        self.codegen.freeGeneral(temp_reg);
+                    }
+                    self.codegen.freeGeneral(box_ptr_reg);
+                    return self.fieldLocationFromLayout(dest_offset, payload_size, tpa.target_layout);
+                } else {
+                    return raw_value_loc;
+                }
+            } else if (union_layout.tag == .scalar or union_layout.tag == .zst) {
+                return raw_value_loc;
+            } else {
+                unreachable;
+            }
+        }
+
+        fn generateList(self: *Self, list: anytype) Allocator.Error!ValueLocation {
+            const elems = self.store.getLocalRefs(list.elems);
+            if (elems.len == 0) {
+                const list_struct_offset: i32 = self.codegen.allocStackSlot(roc_list_size);
+                const zero_reg = try self.allocTempGeneral();
+                try self.codegen.emitLoadImm(zero_reg, 0);
+
+                try self.emitStore(.w64, frame_ptr, list_struct_offset, zero_reg);
+                try self.emitStore(.w64, frame_ptr, list_struct_offset + 8, zero_reg);
+                try self.emitStore(.w64, frame_ptr, list_struct_offset + 16, zero_reg);
+                self.codegen.freeGeneral(zero_reg);
+
+                return .{ .list_stack = .{
+                    .struct_offset = list_struct_offset,
+                    .data_offset = 0,
+                    .num_elements = 0,
+                } };
+            }
+
+            const ls = self.layout_store;
+            const list_layout_data = ls.getLayout(list.target_layout);
+            const elem_layout_idx: layout.Idx = switch (list_layout_data.tag) {
+                .list => list_layout_data.data.list,
+                .list_of_zst => .zst,
+                else => unreachable,
+            };
+            const elem_layout_data = ls.getLayout(elem_layout_idx);
+            const elem_size_align = ls.layoutSizeAlign(elem_layout_data);
+            const elem_size: u32 = elem_size_align.size;
+            const elem_alignment: u32 = @intCast(elem_size_align.alignment.toByteUnits());
+            const num_elems: u32 = @intCast(elems.len);
+            const total_data_bytes: usize = @as(usize, elem_size) * @as(usize, num_elems);
+            const elements_refcounted: bool = ls.layoutContainsRefcounted(elem_layout_data);
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+            const heap_ptr_slot: i32 = self.codegen.allocStackSlot(8);
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addImmArg(@intCast(total_data_bytes));
+            try builder.addImmArg(@intCast(elem_alignment));
+            try builder.addImmArg(if (elements_refcounted) 1 else 0);
+            try builder.addRegArg(roc_ops_reg);
+            try self.callBuiltin(&builder, @intFromPtr(&allocateWithRefcountC), .allocate_with_refcount);
+
+            try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
+
+            for (elems, 0..) |elem_id, i| {
+                const elem_loc = try self.generateExpr(elem_id);
+                const elem_heap_offset: i32 = @intCast(@as(usize, i) * @as(usize, elem_size));
+
+                if (elem_size == 0) continue;
+
+                const elem_stack_offset = try self.ensureOnStack(elem_loc, elem_size);
+                const heap_ptr = try self.allocTempGeneral();
+                try self.emitLoad(.w64, heap_ptr, frame_ptr, heap_ptr_slot);
+
+                const temp_reg = try self.allocTempGeneral();
+                try self.copyChunked(temp_reg, frame_ptr, elem_stack_offset, heap_ptr, elem_heap_offset, elem_size);
+                self.codegen.freeGeneral(temp_reg);
+                self.codegen.freeGeneral(heap_ptr);
+            }
+
+            const list_struct_offset: i32 = self.codegen.allocStackSlot(roc_list_size);
+            const ptr_reg = try self.allocTempGeneral();
+            const len_reg = try self.allocTempGeneral();
+
+            try self.emitLoad(.w64, ptr_reg, frame_ptr, heap_ptr_slot);
+            try self.codegen.emitLoadImm(len_reg, @intCast(num_elems));
+
+            try self.emitStore(.w64, frame_ptr, list_struct_offset, ptr_reg);
+            try self.emitStore(.w64, frame_ptr, list_struct_offset + 8, len_reg);
+            try self.emitStore(.w64, frame_ptr, list_struct_offset + 16, len_reg);
+
+            self.codegen.freeGeneral(ptr_reg);
+            self.codegen.freeGeneral(len_reg);
+
+            return .{
+                .list_stack = .{
+                    .struct_offset = list_struct_offset,
+                    .data_offset = heap_ptr_slot,
+                    .num_elements = num_elems,
+                },
+            };
+        }
+
+        fn generateStruct(self: *Self, s: anytype) Allocator.Error!ValueLocation {
+            const ls = self.layout_store;
+            const struct_layout = ls.getLayout(s.target_layout);
+            if (struct_layout.tag != .struct_) {
+                return .{ .immediate_i64 = 0 };
+            }
+
+            const struct_data = ls.getStructData(struct_layout.data.struct_.idx);
+            const stack_size = struct_data.size;
+            if (stack_size == 0) {
+                return .{ .immediate_i64 = 0 };
+            }
+
+            const base_offset = self.codegen.allocStackSlot(stack_size);
+            const field_exprs = self.store.getLocalRefs(s.fields);
+
+            for (field_exprs, 0..) |field_expr_id, i| {
+                const field_offset = ls.getStructFieldOffset(struct_layout.data.struct_.idx, @intCast(i));
+                const field_size = ls.getStructFieldSize(struct_layout.data.struct_.idx, @intCast(i));
+                const field_loc = try self.generateExpr(field_expr_id);
+                const field_base = base_offset + @as(i32, @intCast(field_offset));
+                try self.copyBytesToStackOffset(field_base, field_loc, field_size);
+            }
+
+            return .{ .stack = .{ .offset = base_offset, .size = ValueSize.fromByteCount(@min(stack_size, 8)) } };
+        }
+
+        fn valueSizeFromLoc(_: *Self, loc: ValueLocation) u32 {
+            return switch (loc) {
+                .stack_str => roc_str_size,
+                .list_stack => roc_list_size,
+                .stack_i128, .immediate_i128 => 16,
+                .immediate_i64, .general_reg, .stack, .float_reg, .immediate_f64 => 8,
+                else => {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic(
+                            "LIR/codegen invariant violated: valueSizeFromLoc unsupported location {s}",
+                            .{@tagName(loc)},
+                        );
+                    }
+                    unreachable;
+                },
+            };
+        }
+
+        fn generateZeroArgTag(self: *Self, tag: anytype) Allocator.Error!ValueLocation {
+            const ls = self.layout_store;
+            const union_layout = ls.getLayout(tag.target_layout);
+
+            if (union_layout.tag == .scalar or union_layout.tag == .zst) {
+                return .{ .immediate_i64 = tag.discriminant };
+            }
+
+            if (union_layout.tag != .tag_union) {
+                return .{ .immediate_i64 = tag.discriminant };
+            }
+
+            const tu_data = ls.getTagUnionData(union_layout.data.tag_union.idx);
+            const stack_size = tu_data.size;
+            if (stack_size <= 8) {
+                return .{ .immediate_i64 = tag.discriminant };
+            }
+
+            const base_offset = self.codegen.allocStackSlot(stack_size);
+            try self.zeroStackArea(base_offset, stack_size);
+
+            const disc_offset = tu_data.discriminant_offset;
+            const disc_size = tu_data.discriminant_size;
+            try self.storeDiscriminant(base_offset + @as(i32, @intCast(disc_offset)), tag.discriminant, disc_size);
+
+            return .{ .stack = .{ .offset = base_offset } };
+        }
+
+        fn generateTag(self: *Self, tag: anytype) Allocator.Error!ValueLocation {
+            const ls = self.layout_store;
+            const union_layout = ls.getLayout(tag.target_layout);
+            if (union_layout.tag == .scalar or union_layout.tag == .zst) {
+                const arg_exprs = self.store.getLocalRefs(tag.args);
+                for (arg_exprs) |arg_expr_id| {
+                    _ = try self.generateExpr(arg_expr_id);
+                }
+                return .{ .immediate_i64 = tag.discriminant };
+            }
+            if (union_layout.tag != .tag_union) {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "LIR/codegen invariant violated: generateTag expected tag_union/scalar/zst layout, got {s}",
+                        .{@tagName(union_layout.tag)},
+                    );
+                }
+                unreachable;
+            }
+
+            const tu_data = ls.getTagUnionData(union_layout.data.tag_union.idx);
+            const stack_size = tu_data.size;
+            const base_offset = self.codegen.allocStackSlot(stack_size);
+            try self.zeroStackArea(base_offset, stack_size);
+
+            const variants = ls.getTagUnionVariants(tu_data);
+            const variant_payload_layout: ?layout.Idx = if (tag.discriminant < variants.len)
+                variants.get(tag.discriminant).payload_layout
+            else
+                null;
+
+            const arg_exprs = self.store.getLocalRefs(tag.args);
+            if (arg_exprs.len == 0) {
+                return try self.generateZeroArgTag(.{
+                    .target_layout = tag.target_layout,
+                    .discriminant = tag.discriminant,
+                });
+            } else if (arg_exprs.len == 1) {
+                const arg_loc = try self.generateExpr(arg_exprs[0]);
+                const payload_size: u32 = if (variant_payload_layout) |pl| blk: {
+                    const pl_val = ls.getLayout(pl);
+                    break :blk ls.layoutSizeAlign(pl_val).size;
+                } else valueSizeFromLoc(self, arg_loc);
+                try self.copyBytesToStackOffset(base_offset, arg_loc, payload_size);
+            } else {
+                const payload_tuple = if (variant_payload_layout) |pl| blk: {
+                    const pl_val = ls.getLayout(pl);
+                    break :blk if (pl_val.tag == .struct_) pl_val.data.struct_.idx else null;
+                } else null;
+
+                for (arg_exprs, 0..) |arg_expr_id, arg_i| {
+                    const arg_loc = try self.generateExpr(arg_expr_id);
+                    const elem_offset: i32 = if (payload_tuple) |tuple_idx|
+                        @intCast(ls.getStructFieldOffsetByOriginalIndex(tuple_idx, @intCast(arg_i)))
+                    else
+                        @as(i32, @intCast(arg_i)) * 8;
+                    const elem_size: u32 = if (payload_tuple) |tuple_idx| blk: {
+                        const elem_layout = ls.getStructFieldLayoutByOriginalIndex(tuple_idx, @intCast(arg_i));
+                        const elem_layout_val = ls.getLayout(elem_layout);
+                        break :blk ls.layoutSizeAlign(elem_layout_val).size;
+                    } else valueSizeFromLoc(self, arg_loc);
+                    try self.copyBytesToStackOffset(base_offset + elem_offset, arg_loc, elem_size);
+                }
+            }
+
+            const disc_offset = tu_data.discriminant_offset;
+            const disc_size = tu_data.discriminant_size;
+            try self.storeDiscriminant(base_offset + @as(i32, @intCast(disc_offset)), tag.discriminant, disc_size);
+
+            return .{ .stack = .{ .offset = base_offset } };
+        }
+
+        fn compiledProcForId(
             self: *Self,
             proc_id: lir.LIR.LirProcSpecId,
-            _: LambdaProcOptions,
         ) Allocator.Error!CompiledProc {
             const proc = self.store.getProcSpec(proc_id);
             if (self.proc_registry.get(@intFromEnum(proc_id))) |compiled| return compiled;
@@ -7644,7 +8053,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Generate code for a direct proc call.
         fn generateCall(self: *Self, call: anytype) Allocator.Error!ValueLocation {
-            const proc = try self.procCodeOffsetWithOptions(call.proc, .{});
+            const proc = try self.compiledProcForId(call.proc);
             const arg_refs = self.store.getLocalRefs(call.args);
             var arg_locs = try self.allocator.alloc(ValueLocation, arg_refs.len);
             defer self.allocator.free(arg_locs);
@@ -8042,6 +8451,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Get the size in bytes for a layout index.
+        fn getLayoutSize(self: *Self, layout_idx: layout.Idx) u32 {
+            const ls = self.layout_store;
+            const layout_val = ls.getLayout(layout_idx);
+            return ls.layoutSizeAlign(layout_val).size;
+        }
+
         /// Allocate a general register with a unique temporary local ID.
         /// Use this for temporary registers that don't correspond to real local variables.
         /// This prevents register ownership conflicts that can corrupt spill tracking.
@@ -8252,6 +8667,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     else => loc,
                 },
                 else => loc,
+            };
+        }
+
+        fn coerceImmediateForStackCopy(self: *Self, loc: ValueLocation) Allocator.Error!ValueLocation {
+            return switch (loc) {
+                .general_reg, .float_reg => loc,
+                .immediate_f64 => .{ .float_reg = try self.ensureInFloatReg(loc) },
+                .immediate_i64,
+                .immediate_i128,
+                .stack,
+                .stack_i128,
+                .stack_str,
+                .list_stack,
+                => .{ .general_reg = try self.ensureInGeneralReg(loc) },
+                .noreturn => unreachable,
             };
         }
 
@@ -8733,6 +9163,533 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
+        /// Copy a specific number of bytes from a value location to a stack offset.
+        fn copyBytesToStackOffset(self: *Self, dest_offset: i32, loc: ValueLocation, size: u32) Allocator.Error!void {
+            if (size == 0) return;
+
+            switch (loc) {
+                .immediate_i64 => |val| {
+                    const reg = try self.allocTempGeneral();
+                    try self.codegen.emitLoadImm(reg, val);
+                    switch (size) {
+                        1 => try self.emitStoreStackW8(dest_offset, reg),
+                        2 => try self.emitStoreStackW16(dest_offset, reg),
+                        4 => try self.codegen.emitStoreStack(.w32, dest_offset, reg),
+                        8 => try self.codegen.emitStoreStack(.w64, dest_offset, reg),
+                        16 => {
+                            try self.codegen.emitStoreStack(.w64, dest_offset, reg);
+                            const high: i64 = if (val < 0) -1 else 0;
+                            try self.codegen.emitLoadImm(reg, high);
+                            try self.codegen.emitStoreStack(.w64, dest_offset + 8, reg);
+                        },
+                        roc_list_size => {
+                            std.debug.assert(val == 0);
+                            try self.codegen.emitStoreStack(.w64, dest_offset, reg);
+                            try self.codegen.emitStoreStack(.w64, dest_offset + target_ptr_size, reg);
+                            try self.codegen.emitStoreStack(.w64, dest_offset + 2 * target_ptr_size, reg);
+                        },
+                        else => unreachable,
+                    }
+                    self.codegen.freeGeneral(reg);
+                    return;
+                },
+                .immediate_i128 => |val| {
+                    const low: u64 = @truncate(@as(u128, @bitCast(val)));
+                    const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
+                    const reg = try self.allocTempGeneral();
+                    defer self.codegen.freeGeneral(reg);
+
+                    switch (size) {
+                        16 => {
+                            try self.codegen.emitLoadImm(reg, @bitCast(low));
+                            try self.codegen.emitStoreStack(.w64, dest_offset, reg);
+                            try self.codegen.emitLoadImm(reg, @bitCast(high));
+                            try self.codegen.emitStoreStack(.w64, dest_offset + 8, reg);
+                        },
+                        8 => {
+                            try self.codegen.emitLoadImm(reg, @bitCast(low));
+                            try self.codegen.emitStoreStack(.w64, dest_offset, reg);
+                        },
+                        4 => {
+                            try self.codegen.emitLoadImm(reg, @intCast(@as(u32, @truncate(low))));
+                            try self.codegen.emitStoreStack(.w32, dest_offset, reg);
+                        },
+                        else => unreachable,
+                    }
+                    return;
+                },
+                .stack_i128 => |src_offset| {
+                    const temp_reg = try self.allocTempGeneral();
+                    defer self.codegen.freeGeneral(temp_reg);
+                    try self.copyChunked(temp_reg, frame_ptr, src_offset, frame_ptr, dest_offset, size);
+                    return;
+                },
+                .stack_str => |src_offset| {
+                    const temp_reg = try self.allocTempGeneral();
+                    defer self.codegen.freeGeneral(temp_reg);
+                    try self.copyChunked(temp_reg, frame_ptr, src_offset, frame_ptr, dest_offset, size);
+                    return;
+                },
+                .stack => |stack_loc| {
+                    const temp_reg = try self.allocTempGeneral();
+                    defer self.codegen.freeGeneral(temp_reg);
+                    try self.copyChunked(temp_reg, frame_ptr, stack_loc.offset, frame_ptr, dest_offset, size);
+                    return;
+                },
+                .list_stack => |info| {
+                    const temp_reg = try self.allocTempGeneral();
+                    defer self.codegen.freeGeneral(temp_reg);
+                    try self.copyChunked(temp_reg, frame_ptr, info.struct_offset, frame_ptr, dest_offset, size);
+                    return;
+                },
+                else => {},
+            }
+
+            const normalized_value_loc = try self.coerceImmediateForStackCopy(loc);
+            switch (normalized_value_loc) {
+                .general_reg => |reg| {
+                    switch (size) {
+                        1 => try self.emitStoreStackW8(dest_offset, reg),
+                        2 => try self.emitStoreStackW16(dest_offset, reg),
+                        4 => try self.codegen.emitStoreStack(.w32, dest_offset, reg),
+                        8 => try self.codegen.emitStoreStack(.w64, dest_offset, reg),
+                        else => unreachable,
+                    }
+                    self.codegen.freeGeneral(reg);
+                },
+                .float_reg => |freg| {
+                    switch (size) {
+                        4 => {
+                            if (comptime target.toCpuArch() == .aarch64) {
+                                try self.codegen.emit.fcvtFloatFloat(.single, freg, .double, freg);
+                                try self.codegen.emitStoreStackF32(dest_offset, freg);
+                            } else {
+                                try self.codegen.emit.cvtsd2ssRegReg(freg, freg);
+                                try self.codegen.emit.movssMemReg(frame_ptr, dest_offset, freg);
+                            }
+                            self.codegen.freeFloat(freg);
+                        },
+                        8 => {
+                            if (comptime target.toCpuArch() == .aarch64) {
+                                try self.codegen.emitStoreStackF64(dest_offset, freg);
+                            } else {
+                                try self.codegen.emit.movsdMemReg(frame_ptr, dest_offset, freg);
+                            }
+                            self.codegen.freeFloat(freg);
+                        },
+                        else => unreachable,
+                    }
+                },
+                else => unreachable,
+            }
+        }
+
+        fn emitLoad(self: *Self, comptime width: anytype, dst: GeneralReg, base_reg: GeneralReg, offset: i32) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.ldrRegMemSoff(width, dst, base_reg, offset);
+            } else {
+                try self.codegen.emit.movRegMem(width, dst, base_reg, offset);
+            }
+        }
+
+        fn emitStore(self: *Self, comptime width: anytype, base_reg: GeneralReg, offset: i32, src: GeneralReg) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.strRegMemSoff(width, src, base_reg, offset);
+            } else {
+                try self.codegen.emit.movMemReg(width, base_reg, offset, src);
+            }
+        }
+
+        fn emitLoadW8(self: *Self, dst: GeneralReg, base_reg: GeneralReg, offset: i32) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                if (offset >= -256 and offset <= 255) {
+                    try self.codegen.emit.ldurbRegMem(dst, base_reg, @intCast(offset));
+                } else {
+                    const addr_reg: GeneralReg = if (base_reg == .IP0 or dst == .IP0) .IP1 else .IP0;
+                    try self.codegen.emit.movRegImm64(addr_reg, @bitCast(@as(i64, offset)));
+                    try self.codegen.emit.addRegRegReg(.w64, addr_reg, base_reg, addr_reg);
+                    try self.codegen.emit.ldrbRegMem(dst, addr_reg, 0);
+                }
+            } else {
+                try self.codegen.emit.movzxBRegMem(dst, base_reg, offset);
+            }
+        }
+
+        fn emitLoadW16(self: *Self, dst: GeneralReg, base_reg: GeneralReg, offset: i32) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                if (offset >= -256 and offset <= 255) {
+                    try self.codegen.emit.ldurhRegMem(dst, base_reg, @intCast(offset));
+                } else {
+                    const addr_reg: GeneralReg = if (base_reg == .IP0 or dst == .IP0) .IP1 else .IP0;
+                    try self.codegen.emit.movRegImm64(addr_reg, @bitCast(@as(i64, offset)));
+                    try self.codegen.emit.addRegRegReg(.w64, addr_reg, base_reg, addr_reg);
+                    try self.codegen.emit.ldrhRegMem(dst, addr_reg, 0);
+                }
+            } else {
+                try self.codegen.emit.movzxWRegMem(dst, base_reg, offset);
+            }
+        }
+
+        fn emitStoreW8(self: *Self, base_reg: GeneralReg, offset: i32, src: GeneralReg) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                if (offset >= -256 and offset <= 255) {
+                    try self.codegen.emit.sturbRegMem(src, base_reg, @intCast(offset));
+                } else {
+                    const addr_reg: GeneralReg = if (base_reg == .IP0 or src == .IP0) .IP1 else .IP0;
+                    try self.codegen.emit.movRegImm64(addr_reg, @bitCast(@as(i64, offset)));
+                    try self.codegen.emit.addRegRegReg(.w64, addr_reg, base_reg, addr_reg);
+                    try self.codegen.emit.strbRegMem(src, addr_reg, 0);
+                }
+            } else {
+                try self.codegen.emit.movMemReg(.w8, base_reg, offset, src);
+            }
+        }
+
+        fn emitStoreW16(self: *Self, base_reg: GeneralReg, offset: i32, src: GeneralReg) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                if (offset >= -256 and offset <= 255) {
+                    try self.codegen.emit.sturhRegMem(src, base_reg, @intCast(offset));
+                } else {
+                    const addr_reg: GeneralReg = if (base_reg == .IP0 or src == .IP0) .IP1 else .IP0;
+                    try self.codegen.emit.movRegImm64(addr_reg, @bitCast(@as(i64, offset)));
+                    try self.codegen.emit.addRegRegReg(.w64, addr_reg, base_reg, addr_reg);
+                    try self.codegen.emit.strhRegMem(src, addr_reg, 0);
+                }
+            } else {
+                try self.codegen.emit.movMemReg(.w16, base_reg, offset, src);
+            }
+        }
+
+        fn emitAddRegs(self: *Self, comptime width: anytype, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+            std.debug.assert(arch == .aarch64 or arch == .aarch64_be or dst == src1);
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.addRegRegReg(width, dst, src1, src2);
+            } else {
+                try self.codegen.emit.addRegReg(width, dst, src2);
+            }
+        }
+
+        fn emitMulRegs(self: *Self, comptime width: anytype, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+            std.debug.assert(arch == .aarch64 or arch == .aarch64_be or dst == src1);
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.mulRegRegReg(width, dst, src1, src2);
+            } else {
+                try self.codegen.emit.imulRegReg(width, dst, src2);
+            }
+        }
+
+        fn emitSubRegs(self: *Self, comptime width: anytype, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+            std.debug.assert(arch == .aarch64 or arch == .aarch64_be or dst == src1);
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.subRegRegReg(width, dst, src1, src2);
+            } else {
+                try self.codegen.emit.subRegReg(width, dst, src2);
+            }
+        }
+
+        fn emitAndRegs(self: *Self, comptime width: anytype, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+            std.debug.assert(arch == .aarch64 or arch == .aarch64_be or dst == src1);
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.andRegRegReg(width, dst, src1, src2);
+            } else {
+                try self.codegen.emit.andRegReg(width, dst, src2);
+            }
+        }
+
+        fn emitLoadStackW8(self: *Self, dst: GeneralReg, offset: i32) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emitLoadStackByte(dst, offset);
+            } else {
+                try self.codegen.emit.movzxBRegMem(dst, frame_ptr, offset);
+            }
+        }
+
+        fn emitLoadStackW16(self: *Self, dst: GeneralReg, offset: i32) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emitLoadStackHalfword(dst, offset);
+            } else {
+                try self.codegen.emit.movzxWRegMem(dst, frame_ptr, offset);
+            }
+        }
+
+        fn emitShlImm(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, amount: u8) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.lslRegRegImm(width, dst, src, @intCast(amount));
+            } else {
+                if (dst != src) try self.codegen.emit.movRegReg(width, dst, src);
+                try self.codegen.emit.shlRegImm8(width, dst, amount);
+            }
+        }
+
+        fn emitLsrImm(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, amount: u8) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.lsrRegRegImm(width, dst, src, @intCast(amount));
+            } else {
+                if (dst != src) try self.codegen.emit.movRegReg(width, dst, src);
+                try self.codegen.emit.shrRegImm8(width, dst, amount);
+            }
+        }
+
+        fn emitAsrImm(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, amount: u8) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.asrRegRegImm(width, dst, src, @intCast(amount));
+            } else {
+                if (dst != src) try self.codegen.emit.movRegReg(width, dst, src);
+                try self.codegen.emit.sarRegImm8(width, dst, amount);
+            }
+        }
+
+        fn emitShlReg(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, amount: GeneralReg) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.lslRegReg(width, dst, src, amount);
+            } else {
+                try self.emitShiftRegX86(width, dst, src, amount, .shl);
+            }
+        }
+
+        fn emitLsrReg(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, amount: GeneralReg) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.lsrRegReg(width, dst, src, amount);
+            } else {
+                try self.emitShiftRegX86(width, dst, src, amount, .shr);
+            }
+        }
+
+        fn emitAsrReg(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, amount: GeneralReg) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.asrRegReg(width, dst, src, amount);
+            } else {
+                try self.emitShiftRegX86(width, dst, src, amount, .sar);
+            }
+        }
+
+        const ShiftOp = enum { shl, shr, sar };
+
+        fn emitShiftRegX86(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, amount: GeneralReg, comptime op: ShiftOp) !void {
+            if (dst == .RCX) {
+                if (src == .RCX and amount == .R11) {
+                    try self.codegen.emit.xchgRegReg(.w64, .RCX, .R11);
+                } else if (amount == .R11) {
+                    try self.codegen.emit.movRegReg(.w64, .RCX, amount);
+                    if (src != .R11) try self.codegen.emit.movRegReg(width, .R11, src);
+                } else {
+                    if (src != .R11) try self.codegen.emit.movRegReg(width, .R11, src);
+                    if (amount != .RCX) try self.codegen.emit.movRegReg(.w64, .RCX, amount);
+                }
+                switch (op) {
+                    .shl => try self.codegen.emit.shlRegCl(width, .R11),
+                    .shr => try self.codegen.emit.shrRegCl(width, .R11),
+                    .sar => try self.codegen.emit.sarRegCl(width, .R11),
+                }
+                try self.codegen.emit.movRegReg(width, .RCX, .R11);
+            } else {
+                if (dst != src) try self.codegen.emit.movRegReg(width, dst, src);
+                if (amount != .RCX) try self.codegen.emit.movRegReg(.w64, .RCX, amount);
+                switch (op) {
+                    .shl => try self.codegen.emit.shlRegCl(width, dst),
+                    .shr => try self.codegen.emit.shrRegCl(width, dst),
+                    .sar => try self.codegen.emit.sarRegCl(width, dst),
+                }
+            }
+        }
+
+        fn emitSaturatingSub(self: *Self, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.cmpRegReg(.w64, a, b);
+                try self.codegen.emit.subRegRegReg(.w64, dst, a, b);
+                try self.codegen.emit.csel(.w64, dst, dst, .ZRSP, .cs);
+            } else {
+                if (dst != a) try self.codegen.emit.movRegReg(.w64, dst, a);
+                try self.codegen.emit.subRegReg(.w64, dst, b);
+                const patch_loc = try self.codegen.emitCondJump(.above_or_equal);
+                try self.codegen.emit.xorRegReg(.w64, dst, dst);
+                self.codegen.patchJump(patch_loc, self.codegen.currentOffset());
+            }
+        }
+
+        fn emitAddImm(self: *Self, dst: GeneralReg, src: GeneralReg, imm: i32) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.addRegRegImm12(.w64, dst, src, @intCast(imm));
+            } else {
+                if (dst != src) try self.codegen.emit.movRegReg(.w64, dst, src);
+                try self.codegen.emit.addImm(dst, imm);
+            }
+        }
+
+        fn emitAddPtrImmAny(self: *Self, dst: GeneralReg, src: GeneralReg, imm: i32) !void {
+            if (imm == 0) {
+                if (dst != src) try self.codegen.emit.movRegReg(.w64, dst, src);
+                return;
+            }
+
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                if (imm > 0 and imm <= 4095) {
+                    try self.codegen.emit.addRegRegImm12(.w64, dst, src, @intCast(imm));
+                    return;
+                }
+
+                const scratch = try self.allocTempGeneral();
+                defer self.codegen.freeGeneral(scratch);
+                try self.codegen.emit.movRegImm64(scratch, @bitCast(@as(i64, imm)));
+                try self.codegen.emit.addRegRegReg(.w64, dst, src, scratch);
+                return;
+            }
+
+            try self.emitAddImm(dst, src, imm);
+        }
+
+        fn emitSubImm(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, imm: i32) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.subRegRegImm12(width, dst, src, @intCast(imm));
+            } else {
+                if (dst != src) try self.codegen.emit.movRegReg(width, dst, src);
+                try self.codegen.emit.subRegImm32(width, dst, imm);
+            }
+        }
+
+        fn emitXorImm(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, imm: u8) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.eorRegRegImm(width, dst, src, @as(u64, imm));
+            } else {
+                if (dst != src) try self.codegen.emit.movRegReg(width, dst, src);
+                try self.codegen.emit.xorRegImm8(width, dst, @intCast(imm));
+            }
+        }
+
+        fn emitSetCond(self: *Self, dst: GeneralReg, cond: Condition) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.cset(.w64, dst, cond);
+            } else {
+                try self.codegen.emit.setcc(cond, dst);
+                try self.codegen.emit.andRegImm32(dst, 0xFF);
+            }
+        }
+
+        fn emitLeaStack(self: *Self, dst: GeneralReg, offset: i32) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                if (offset >= 0 and offset <= 4095) {
+                    try self.codegen.emit.addRegRegImm12(.w64, dst, frame_ptr, @intCast(offset));
+                } else {
+                    try self.codegen.emitLoadImm(dst, @intCast(offset));
+                    try self.codegen.emit.addRegRegReg(.w64, dst, frame_ptr, dst);
+                }
+            } else {
+                try self.codegen.emit.leaRegMem(dst, frame_ptr, offset);
+            }
+        }
+
+        fn emitAddStackPtr(self: *Self, imm: i32) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.addRegRegImm12(.w64, stack_ptr, stack_ptr, @intCast(imm));
+            } else {
+                try self.codegen.emit.addRegImm32(.w64, stack_ptr, imm);
+            }
+        }
+
+        fn copyChunked(self: *Self, temp_reg: GeneralReg, src_base: GeneralReg, src_offset: i32, dst_base: GeneralReg, dst_offset: i32, size: u32) Allocator.Error!void {
+            std.debug.assert(size > 0);
+            if (size == 8) {
+                try self.emitLoad(.w64, temp_reg, src_base, src_offset);
+                try self.emitStore(.w64, dst_base, dst_offset, temp_reg);
+                return;
+            }
+            if (size < 8) {
+                var remaining = size;
+                var off: i32 = 0;
+                if (remaining >= 4) {
+                    try self.emitLoad(.w32, temp_reg, src_base, src_offset + off);
+                    try self.emitStore(.w32, dst_base, dst_offset + off, temp_reg);
+                    remaining -= 4;
+                    off += 4;
+                }
+                if (remaining >= 2) {
+                    try self.emitLoadW16(temp_reg, src_base, src_offset + off);
+                    try self.emitStoreW16(dst_base, dst_offset + off, temp_reg);
+                    remaining -= 2;
+                    off += 2;
+                }
+                if (remaining >= 1) {
+                    try self.emitLoadW8(temp_reg, src_base, src_offset + off);
+                    try self.emitStoreW8(dst_base, dst_offset + off, temp_reg);
+                }
+                return;
+            }
+
+            var copied: u32 = 0;
+            while (copied + 8 <= size) : (copied += 8) {
+                const s = src_offset + @as(i32, @intCast(copied));
+                const d = dst_offset + @as(i32, @intCast(copied));
+                try self.emitLoad(.w64, temp_reg, src_base, s);
+                try self.emitStore(.w64, dst_base, d, temp_reg);
+            }
+
+            if (copied < size) {
+                const tail = @as(i32, @intCast(size - 8));
+                const s = src_offset + tail;
+                const d = dst_offset + tail;
+                try self.emitLoad(.w64, temp_reg, src_base, s);
+                try self.emitStore(.w64, dst_base, d, temp_reg);
+            }
+        }
+
+        fn zeroStackArea(self: *Self, offset: i32, size: u32) Allocator.Error!void {
+            const reg = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(reg);
+            try self.codegen.emitLoadImm(reg, 0);
+
+            var remaining = size;
+            var current_offset = offset;
+            while (remaining >= 8) {
+                try self.codegen.emitStoreStack(.w64, current_offset, reg);
+                current_offset += 8;
+                remaining -= 8;
+            }
+            if (remaining >= 4) {
+                try self.codegen.emitStoreStack(.w32, current_offset, reg);
+                current_offset += 4;
+                remaining -= 4;
+            }
+            if (remaining >= 2) {
+                try self.emitStoreStackW16(current_offset, reg);
+                current_offset += 2;
+                remaining -= 2;
+            }
+            if (remaining >= 1) {
+                try self.emitStoreStackW8(current_offset, reg);
+            }
+        }
+
+        fn emitStoreToPtr(self: *Self, comptime width: anytype, src: GeneralReg, ptr_reg: GeneralReg, byte_offset: i32) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                const shift = comptime switch (width) {
+                    .w64 => @as(u5, 3),
+                    .w32 => @as(u5, 2),
+                    else => @compileError("Use strhRegMem/strbRegMem for .w16/.w8"),
+                };
+                const unsigned_offset: u32 = @intCast(byte_offset);
+                std.debug.assert(@rem(unsigned_offset, @as(u32, 1) << shift) == 0);
+                try self.codegen.emit.strRegMemUoff(width, src, ptr_reg, @intCast(unsigned_offset >> shift));
+            } else {
+                try self.codegen.emit.movMemReg(width, ptr_reg, byte_offset, src);
+            }
+        }
+
+        fn emitStoreStackW8(self: *Self, offset: i32, src: GeneralReg) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emitStoreStackByte(offset, src);
+            } else {
+                try self.codegen.emitStoreStack(.w8, offset, src);
+            }
+        }
+
+        fn emitStoreStackW16(self: *Self, offset: i32, src: GeneralReg) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emitStoreStackHalfword(offset, src);
+            } else {
+                try self.codegen.emitStoreStack(.w16, offset, src);
+            }
+        }
+
         /// Store general register to memory at [ptr_reg] (architecture-specific)
         fn emitStoreToMem(self: *Self, ptr_reg: anytype, src_reg: GeneralReg) !void {
             try self.emitStoreToPtr(.w64, src_reg, ptr_reg, 0);
@@ -8744,6 +9701,135 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.codegen.emit.fstrRegMemUoff(.double, src_reg, ptr_reg, 0);
             } else {
                 try self.codegen.emit.movsdMemReg(ptr_reg, 0, src_reg);
+            }
+        }
+
+        fn generateRcOperandValue(self: *Self, local: LocalRef, _: layout.Idx) Allocator.Error!ValueLocation {
+            return self.generateExpr(local);
+        }
+
+        /// Generate code for incref operation.
+        fn generateIncref(self: *Self, rc_op: anytype) Allocator.Error!ValueLocation {
+            const value_loc = try self.generateRcOperandValue(rc_op.value, rc_op.layout_idx);
+            const ls = self.layout_store;
+            const layout_val = ls.getLayout(rc_op.layout_idx);
+            if (!ls.layoutContainsRefcounted(layout_val)) return value_loc;
+
+            switch (layout_val.tag) {
+                .closure => {
+                    try self.emitRcHelperCallForValue(.incref, value_loc, layout_val.data.closure.captures_layout_idx, rc_op.count);
+                },
+                else => {
+                    try self.emitRcHelperCallForValue(.incref, value_loc, rc_op.layout_idx, rc_op.count);
+                },
+            }
+
+            return value_loc;
+        }
+
+        /// Generate code for decref operation.
+        fn generateDecref(self: *Self, rc_op: anytype) Allocator.Error!ValueLocation {
+            const value_loc = try self.generateRcOperandValue(rc_op.value, rc_op.layout_idx);
+            const ls = self.layout_store;
+            const layout_val = ls.getLayout(rc_op.layout_idx);
+            if (!ls.layoutContainsRefcounted(layout_val)) return value_loc;
+
+            if (layout_val.tag == .closure) {
+                try self.emitRcHelperCallForValue(.decref, value_loc, layout_val.data.closure.captures_layout_idx, 1);
+            } else {
+                try self.emitRcHelperCallForValue(.decref, value_loc, rc_op.layout_idx, 1);
+            }
+
+            return value_loc;
+        }
+
+        fn ensureValueOnStackForRc(self: *Self, value_loc: ValueLocation, value_size: u32) Allocator.Error!i32 {
+            return switch (value_loc) {
+                .stack => |s| s.offset,
+                .stack_i128 => |off| off,
+                .stack_str => |off| off,
+                .list_stack => |info| info.struct_offset,
+                .general_reg => |reg| blk: {
+                    std.debug.assert(value_size <= 8);
+                    const slot = self.codegen.allocStackSlot(@intCast(@max(value_size, @as(u32, 8))));
+                    try self.emitStore(.w64, frame_ptr, slot, reg);
+                    break :blk slot;
+                },
+                .immediate_i64 => |imm| blk: {
+                    std.debug.assert(value_size <= 8);
+                    const slot = self.codegen.allocStackSlot(@intCast(@max(value_size, @as(u32, 8))));
+                    const tmp = try self.allocTempGeneral();
+                    try self.codegen.emitLoadImm(tmp, imm);
+                    try self.emitStore(.w64, frame_ptr, slot, tmp);
+                    self.codegen.freeGeneral(tmp);
+                    break :blk slot;
+                },
+                else => unreachable,
+            };
+        }
+
+        fn emitIncrefAtStackOffset(self: *Self, base_offset: i32, layout_idx: layout.Idx) Allocator.Error!void {
+            const ls = self.layout_store;
+            const layout_val = ls.getLayout(layout_idx);
+            if (!ls.layoutContainsRefcounted(layout_val)) return;
+
+            switch (layout_val.tag) {
+                .closure => {
+                    try self.emitIncrefAtStackOffset(base_offset, layout_val.data.closure.captures_layout_idx);
+                },
+                else => {
+                    try self.emitRcHelperCallAtStackOffset(.incref, base_offset, layout_idx, 1);
+                },
+            }
+        }
+
+        fn emitDecrefAtStackOffset(self: *Self, base_offset: i32, layout_idx: layout.Idx) Allocator.Error!void {
+            const ls = self.layout_store;
+            const layout_val = ls.getLayout(layout_idx);
+            if (!ls.layoutContainsRefcounted(layout_val)) return;
+
+            switch (layout_val.tag) {
+                .closure => {
+                    try self.emitDecrefAtStackOffset(base_offset, layout_val.data.closure.captures_layout_idx);
+                },
+                else => {
+                    try self.emitRcHelperCallAtStackOffset(.decref, base_offset, layout_idx, 1);
+                },
+            }
+        }
+
+        /// Generate code for free operation.
+        fn generateFree(self: *Self, rc_op: anytype) Allocator.Error!ValueLocation {
+            const value_loc = try self.generateRcOperandValue(rc_op.value, rc_op.layout_idx);
+            const ls = self.layout_store;
+            const layout_val = ls.getLayout(rc_op.layout_idx);
+            if (!ls.layoutContainsRefcounted(layout_val)) return value_loc;
+
+            switch (layout_val.tag) {
+                .closure => try self.emitRcHelperCallForValue(.decref, value_loc, layout_val.data.closure.captures_layout_idx, 1),
+                else => try self.emitRcHelperCallForValue(.free, value_loc, rc_op.layout_idx, 1),
+            }
+
+            return value_loc;
+        }
+
+        pub fn patchPendingCalls(self: *Self) Allocator.Error!void {
+            for (self.pending_calls.items) |pending| {
+                const proc = self.proc_registry.get(@intFromEnum(pending.target_proc)) orelse unreachable;
+                self.patchCallTarget(pending.call_site, proc.code_start);
+            }
+            self.pending_calls.clearRetainingCapacity();
+        }
+
+        fn patchCallTarget(self: *Self, call_site: usize, target_offset: usize) void {
+            const rel_offset: i32 = @intCast(@as(i64, @intCast(target_offset)) - @as(i64, @intCast(call_site)));
+
+            if (comptime target.toCpuArch() == .aarch64) {
+                const instr_offset = @divTrunc(rel_offset, 4);
+                self.codegen.patchBL(call_site, instr_offset);
+            } else {
+                const call_rel = rel_offset - 5;
+                self.codegen.patchCall(call_site, call_rel);
             }
         }
 
@@ -10124,6 +11210,503 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
+        /// Generate code for a string literal.
+        fn generateStrLiteral(self: *Self, str_idx: base.StringLiteral.Idx) Allocator.Error!ValueLocation {
+            const str_bytes = self.store.getString(str_idx);
+            const base_offset = self.codegen.allocStackSlot(roc_str_size);
+
+            if (str_bytes.len < roc_str_size) {
+                var bytes: [roc_str_size]u8 = .{0} ** roc_str_size;
+                @memcpy(bytes[0..str_bytes.len], str_bytes);
+                bytes[small_str_max_len] = @intCast(str_bytes.len | 0x80);
+
+                const reg = try self.allocTempGeneral();
+                defer self.codegen.freeGeneral(reg);
+
+                const chunk0: u64 = @bitCast(bytes[0..target_ptr_size].*);
+                try self.codegen.emitLoadImm(reg, @bitCast(chunk0));
+                try self.codegen.emitStoreStack(.w64, base_offset, reg);
+
+                const chunk1: u64 = @bitCast(bytes[target_ptr_size .. 2 * target_ptr_size].*);
+                try self.codegen.emitLoadImm(reg, @bitCast(chunk1));
+                try self.codegen.emitStoreStack(.w64, base_offset + target_ptr_size, reg);
+
+                const chunk2: u64 = @bitCast(bytes[2 * target_ptr_size .. 3 * target_ptr_size].*);
+                try self.codegen.emitLoadImm(reg, @bitCast(chunk2));
+                try self.codegen.emitStoreStack(.w64, base_offset + 2 * target_ptr_size, reg);
+            } else {
+                if (self.generation_mode == .native_execution and self.static_interner != null) {
+                    const interner = self.static_interner.?;
+                    const interned = try interner.internString(str_bytes);
+                    const ptr_reg = try self.allocTempGeneral();
+                    defer self.codegen.freeGeneral(ptr_reg);
+
+                    try self.codegen.emitLoadImm(ptr_reg, @intCast(@intFromPtr(interned.ptr)));
+                    try self.codegen.emitStoreStack(.w64, base_offset, ptr_reg);
+
+                    try self.codegen.emitLoadImm(ptr_reg, @intCast(interned.len));
+                    try self.codegen.emitStoreStack(.w64, base_offset + 8, ptr_reg);
+                    try self.codegen.emitStoreStack(.w64, base_offset + 16, ptr_reg);
+                } else {
+                    const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+                    const fn_addr: usize = @intFromPtr(&allocateWithRefcountC);
+                    const heap_ptr_slot: i32 = self.codegen.allocStackSlot(8);
+
+                    const alloc_size = std.mem.alignForward(usize, str_bytes.len, 8);
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    try builder.addImmArg(@intCast(alloc_size));
+                    try builder.addImmArg(1);
+                    try builder.addImmArg(0);
+                    try builder.addRegArg(roc_ops_reg);
+                    try self.callBuiltin(&builder, fn_addr, .allocate_with_refcount);
+
+                    try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
+
+                    const heap_ptr = try self.allocTempGeneral();
+                    try self.emitLoad(.w64, heap_ptr, frame_ptr, heap_ptr_slot);
+
+                    var remaining: usize = str_bytes.len;
+                    var str_offset: usize = 0;
+                    const temp_reg = try self.allocTempGeneral();
+
+                    while (remaining >= 8) {
+                        const chunk: u64 = @bitCast(str_bytes[str_offset..][0..8].*);
+                        try self.codegen.emitLoadImm(temp_reg, @bitCast(chunk));
+                        try self.emitStore(.w64, heap_ptr, @intCast(str_offset), temp_reg);
+                        str_offset += 8;
+                        remaining -= 8;
+                    }
+
+                    if (remaining > 0) {
+                        var last_chunk: u64 = 0;
+                        for (0..remaining) |j| {
+                            last_chunk |= @as(u64, str_bytes[str_offset + j]) << @intCast(j * 8);
+                        }
+                        try self.codegen.emitLoadImm(temp_reg, @bitCast(last_chunk));
+                        try self.emitStore(.w64, heap_ptr, @intCast(str_offset), temp_reg);
+                    }
+
+                    self.codegen.freeGeneral(temp_reg);
+                    self.codegen.freeGeneral(heap_ptr);
+
+                    const ptr_reg = try self.allocTempGeneral();
+                    defer self.codegen.freeGeneral(ptr_reg);
+                    try self.emitLoad(.w64, ptr_reg, frame_ptr, heap_ptr_slot);
+
+                    try self.codegen.emitStoreStack(.w64, base_offset, ptr_reg);
+                    try self.codegen.emitLoadImm(ptr_reg, @intCast(str_bytes.len));
+                    try self.codegen.emitStoreStack(.w64, base_offset + 8, ptr_reg);
+                    try self.codegen.emitStoreStack(.w64, base_offset + 16, ptr_reg);
+                }
+            }
+
+            return .{ .stack_str = base_offset };
+        }
+
+        /// Emit a roc_crashed call via RocOps with a static message.
+        fn emitRocCrash(self: *Self, msg: []const u8) Allocator.Error!void {
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+
+            const msg_aligned_size: u32 = std.mem.alignForward(u32, @intCast(msg.len), 8);
+            const msg_slot = self.codegen.allocStackSlot(if (msg_aligned_size == 0) 8 else msg_aligned_size);
+            const crashed_slot = self.codegen.allocStackSlot(16);
+
+            const base_reg = frame_ptr;
+            const tmp = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(tmp);
+
+            var offset: u32 = 0;
+            while (offset < msg.len) : (offset += 8) {
+                const remaining = msg.len - offset;
+                if (remaining >= 8) {
+                    const chunk: u64 = @bitCast(msg[offset..][0..8].*);
+                    try self.codegen.emitLoadImm(tmp, @bitCast(chunk));
+                    try self.emitStore(.w64, base_reg, msg_slot + @as(i32, @intCast(offset)), tmp);
+                } else {
+                    var padded: [8]u8 = .{0} ** 8;
+                    @memcpy(padded[0..remaining], msg[offset..][0..remaining]);
+                    const chunk: u64 = @bitCast(padded);
+                    try self.codegen.emitLoadImm(tmp, @bitCast(chunk));
+                    try self.emitStore(.w64, base_reg, msg_slot + @as(i32, @intCast(offset)), tmp);
+                }
+            }
+
+            try self.emitLeaStack(tmp, msg_slot);
+            if (comptime target.toCpuArch() == .aarch64) {
+                try self.codegen.emit.strRegMemSoff(.w64, tmp, base_reg, crashed_slot);
+            } else {
+                try self.codegen.emit.movMemReg(.w64, base_reg, crashed_slot, tmp);
+            }
+
+            const msg_len_val: i64 = @bitCast(@as(u64, msg.len));
+            if (comptime target.toCpuArch() == .aarch64) {
+                try self.codegen.emitLoadImm(tmp, msg_len_val);
+                try self.codegen.emit.strRegMemSoff(.w64, tmp, base_reg, crashed_slot + 8);
+            } else {
+                try self.codegen.emit.movRegImm64(tmp, @bitCast(@as(u64, msg.len)));
+                try self.codegen.emit.movMemReg(.w64, base_reg, crashed_slot + 8, tmp);
+            }
+
+            const fn_ptr_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X10 else .RAX;
+            try self.emitLoad(.w64, fn_ptr_reg, roc_ops_reg, 48);
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(base_reg, crashed_slot);
+            try builder.addMemArg(roc_ops_reg, 0);
+            try builder.callReg(fn_ptr_reg);
+        }
+
+        fn emitTrap(self: *Self) Allocator.Error!void {
+            if (comptime target.toCpuArch() == .aarch64) {
+                try self.codegen.emit.brk();
+            } else {
+                try self.codegen.emit.ud2();
+            }
+        }
+
+        /// Generate an ABI-compliant entrypoint wrapper for calling a compiled Roc proc.
+        ///
+        /// The wrapper:
+        /// 1. Receives `(roc_ops, ret_ptr, args_ptr)` in the platform C ABI
+        /// 2. Saves the incoming pointers in callee-saved registers
+        /// 3. Unpacks argument bytes from `args_ptr` according to Roc layout alignment
+        /// 4. Calls the already-compiled Roc proc body
+        /// 5. Stores the result into `ret_ptr`
+        /// 6. Returns `void`
+        pub fn generateEntrypointWrapper(
+            self: *Self,
+            name: []const u8,
+            entry_proc: lir.LIR.LirProcSpecId,
+            arg_layouts: []const layout.Idx,
+            ret_layout: layout.Idx,
+        ) Allocator.Error!ExportedSymbol {
+            _ = name;
+
+            const func_start = self.codegen.currentOffset();
+            var prologue_size: u8 = 0;
+            var stack_alloc: u32 = 0;
+
+            self.symbol_locations.clearRetainingCapacity();
+            self.codegen.callee_saved_used = 0;
+
+            if (arch == .aarch64 or arch == .aarch64_be) {
+                const saved_callee_saved_used = self.codegen.callee_saved_used;
+                const saved_callee_saved_available = self.codegen.callee_saved_available;
+                const saved_roc_ops_reg = self.roc_ops_reg;
+                const saved_early_return_patches_len = self.early_return_patches.items.len;
+
+                const x19_bit = @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X19);
+                const x20_bit = @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X20);
+                const x21_bit = @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X21);
+                self.codegen.callee_saved_used = x19_bit | x20_bit | x21_bit;
+                self.codegen.callee_saved_available &= ~(x19_bit | x20_bit | x21_bit);
+                self.codegen.stack_offset = 16 + CodeGen.CALLEE_SAVED_AREA_SIZE;
+
+                const body_start = self.codegen.currentOffset();
+                const relocs_before = self.codegen.relocations.items.len;
+
+                try self.codegen.emit.movRegReg(.w64, .X19, .X0);
+                try self.codegen.emit.movRegReg(.w64, .X20, .X1);
+                try self.codegen.emit.movRegReg(.w64, .X21, .X2);
+
+                self.roc_ops_reg = .X19;
+
+                try self.generateEntrypointProcCall(entry_proc, arg_layouts, ret_layout, .X20, .X21);
+
+                const body_epilogue_offset = self.codegen.currentOffset();
+                const actual_locals: u32 = @intCast(self.codegen.stack_offset - 16 - CodeGen.CALLEE_SAVED_AREA_SIZE);
+                {
+                    var builder = CodeGen.DeferredFrameBuilder.init();
+                    builder.setCalleeSavedMask(self.codegen.callee_saved_used);
+                    builder.setStackSize(actual_locals);
+                    try builder.emitEpilogue(&self.codegen.emit);
+                }
+
+                const body_end = self.codegen.currentOffset();
+                const body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return error.OutOfMemory;
+                defer self.allocator.free(body_bytes);
+
+                self.codegen.emit.buf.shrinkRetainingCapacity(body_start);
+
+                const prologue_start = self.codegen.currentOffset();
+                {
+                    var frame_builder = CodeGen.DeferredFrameBuilder.init();
+                    frame_builder.setCalleeSavedMask(self.codegen.callee_saved_used);
+                    frame_builder.setStackSize(actual_locals);
+                    _ = try frame_builder.emitPrologue(&self.codegen.emit);
+                }
+                const prologue_size_val = self.codegen.currentOffset() - prologue_start;
+
+                self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return error.OutOfMemory;
+
+                for (self.codegen.relocations.items[relocs_before..]) |*reloc| {
+                    reloc.adjustOffset(prologue_size_val);
+                }
+
+                self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size_val, std.math.maxInt(u64));
+                self.shiftPendingCalls(body_start, body_end, prologue_size_val);
+                self.repatchInternalCalls(body_start, body_end, prologue_size_val, body_start);
+                self.repatchInternalAddrPatches(body_start, body_end, prologue_size_val, body_start);
+
+                for (self.early_return_patches.items[saved_early_return_patches_len..]) |*patch| {
+                    patch.* += prologue_size_val;
+                }
+                const final_epilogue = body_epilogue_offset - body_start + prologue_size_val + prologue_start;
+                for (self.early_return_patches.items[saved_early_return_patches_len..]) |patch| {
+                    self.codegen.patchJump(patch, final_epilogue);
+                }
+                self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
+
+                self.codegen.callee_saved_used = saved_callee_saved_used;
+                self.codegen.callee_saved_available = saved_callee_saved_available;
+                self.roc_ops_reg = saved_roc_ops_reg;
+            } else {
+                const saved_callee_saved_used = self.codegen.callee_saved_used;
+                const saved_callee_saved_available = self.codegen.callee_saved_available;
+                const saved_roc_ops_reg = self.roc_ops_reg;
+                const saved_early_return_patches_len = self.early_return_patches.items.len;
+
+                const rbx_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.RBX);
+                const r12_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.R12);
+                const r13_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.R13);
+                self.codegen.callee_saved_used = rbx_bit | r12_bit | r13_bit;
+                self.codegen.callee_saved_available &= ~(rbx_bit | r12_bit | r13_bit);
+                self.codegen.stack_offset = -CodeGen.CALLEE_SAVED_AREA_SIZE;
+
+                const body_start = self.codegen.currentOffset();
+                const relocs_before = self.codegen.relocations.items.len;
+
+                if (target.isWindows()) {
+                    try self.codegen.emit.movRegReg(.w64, .R12, .RCX);
+                    try self.codegen.emit.movRegReg(.w64, .RBX, .RDX);
+                    try self.codegen.emit.movRegReg(.w64, .R13, .R8);
+                } else {
+                    try self.codegen.emit.movRegReg(.w64, .R12, .RDI);
+                    try self.codegen.emit.movRegReg(.w64, .RBX, .RSI);
+                    try self.codegen.emit.movRegReg(.w64, .R13, .RDX);
+                }
+
+                self.roc_ops_reg = .R12;
+
+                try self.generateEntrypointProcCall(entry_proc, arg_layouts, ret_layout, .RBX, .R13);
+
+                const body_epilogue_offset = self.codegen.currentOffset();
+                const actual_locals_x86: u32 = @intCast(-self.codegen.stack_offset - CodeGen.CALLEE_SAVED_AREA_SIZE);
+                {
+                    var builder = CodeGen.DeferredFrameBuilder.init();
+                    builder.setCalleeSavedMask(self.codegen.callee_saved_used);
+                    builder.setStackSize(actual_locals_x86);
+                    try builder.emitEpilogue(&self.codegen.emit);
+                }
+
+                const body_end = self.codegen.currentOffset();
+                const body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return error.OutOfMemory;
+                defer self.allocator.free(body_bytes);
+
+                self.codegen.emit.buf.shrinkRetainingCapacity(body_start);
+
+                const prologue_start_x86 = self.codegen.currentOffset();
+                try self.codegen.emitPrologueWithAlloc(actual_locals_x86);
+                const prologue_size_x86 = self.codegen.currentOffset() - prologue_start_x86;
+
+                prologue_size = @intCast(prologue_size_x86);
+                stack_alloc = actual_locals_x86;
+
+                self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return error.OutOfMemory;
+
+                for (self.codegen.relocations.items[relocs_before..]) |*reloc| {
+                    reloc.adjustOffset(prologue_size_x86);
+                }
+
+                self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size_x86, std.math.maxInt(u64));
+                self.shiftPendingCalls(body_start, body_end, prologue_size_x86);
+                self.repatchInternalCalls(body_start, body_end, prologue_size_x86, body_start);
+                self.repatchInternalAddrPatches(body_start, body_end, prologue_size_x86, body_start);
+
+                for (self.early_return_patches.items[saved_early_return_patches_len..]) |*patch| {
+                    patch.* += prologue_size_x86;
+                }
+                const final_epilogue = body_epilogue_offset - body_start + prologue_size_x86 + prologue_start_x86;
+                for (self.early_return_patches.items[saved_early_return_patches_len..]) |patch| {
+                    self.codegen.patchJump(patch, final_epilogue);
+                }
+                self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
+
+                self.codegen.callee_saved_used = saved_callee_saved_used;
+                self.codegen.callee_saved_available = saved_callee_saved_available;
+                self.roc_ops_reg = saved_roc_ops_reg;
+            }
+
+            const func_end = self.codegen.currentOffset();
+
+            return ExportedSymbol{
+                .name = "",
+                .offset = func_start,
+                .size = func_end - func_start,
+                .prologue_size = prologue_size,
+                .stack_alloc = stack_alloc,
+                .uses_frame_pointer = true,
+            };
+        }
+
+        const EntrypointArgOrder = struct {
+            index: usize,
+            alignment: u32,
+            size: u32,
+        };
+
+        fn computeEntrypointArgOffsets(self: *Self, arg_layouts: []const layout.Idx, offsets: []u32) Allocator.Error!void {
+            std.debug.assert(arg_layouts.len == offsets.len);
+
+            var ordered = try self.allocator.alloc(EntrypointArgOrder, arg_layouts.len);
+            defer self.allocator.free(ordered);
+
+            for (arg_layouts, 0..) |arg_layout, i| {
+                const size_align = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(arg_layout));
+                ordered[i] = .{
+                    .index = i,
+                    .alignment = @intCast(size_align.alignment.toByteUnits()),
+                    .size = size_align.size,
+                };
+            }
+
+            const SortCtx = struct {
+                fn lessThan(_: void, lhs: EntrypointArgOrder, rhs: EntrypointArgOrder) bool {
+                    if (lhs.alignment != rhs.alignment) return lhs.alignment > rhs.alignment;
+                    return lhs.index < rhs.index;
+                }
+            };
+
+            std.mem.sort(EntrypointArgOrder, ordered, {}, SortCtx.lessThan);
+
+            var current_offset: u32 = 0;
+            for (ordered) |arg| {
+                current_offset = std.mem.alignForward(u32, current_offset, arg.alignment);
+                offsets[arg.index] = current_offset;
+                current_offset += arg.size;
+            }
+        }
+
+        fn entrypointParamSlotSize(self: *Self, layout_idx: layout.Idx) u32 {
+            const size = self.getLayoutSize(layout_idx);
+            if (size == 0) return 0;
+
+            const abi_size = @as(u32, self.calcParamRegCount(layout_idx)) * 8;
+            return @max(size, abi_size);
+        }
+
+        fn copyBytesFromMemToStackOffset(
+            self: *Self,
+            src_base: GeneralReg,
+            src_offset: i32,
+            dest_offset: i32,
+            copy_size: u32,
+            slot_size: u32,
+        ) Allocator.Error!void {
+            if (slot_size == 0) return;
+
+            if (slot_size > copy_size) {
+                try self.zeroStackArea(dest_offset, slot_size);
+            }
+
+            if (copy_size == 0) return;
+
+            const temp_reg = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(temp_reg);
+
+            try self.copyChunked(temp_reg, src_base, src_offset, frame_ptr, dest_offset, copy_size);
+        }
+
+        fn materializeEntrypointArgInfos(
+            self: *Self,
+            arg_layouts: []const layout.Idx,
+            args_ptr_reg: GeneralReg,
+        ) Allocator.Error![]const ArgInfo {
+            const arg_infos_start = self.scratch_arg_infos.top();
+
+            const arg_offsets = try self.allocator.alloc(u32, arg_layouts.len);
+            defer self.allocator.free(arg_offsets);
+            try self.computeEntrypointArgOffsets(arg_layouts, arg_offsets);
+
+            for (arg_layouts, 0..) |arg_layout, i| {
+                const slot_size = self.entrypointParamSlotSize(arg_layout);
+                if (slot_size == 0) {
+                    try self.scratch_arg_infos.append(.{
+                        .loc = .{ .immediate_i64 = 0 },
+                        .layout_idx = arg_layout,
+                        .num_regs = 0,
+                    });
+                    continue;
+                }
+
+                const slot_offset = self.codegen.allocStackSlot(@intCast(slot_size));
+                try self.copyBytesFromMemToStackOffset(
+                    args_ptr_reg,
+                    @intCast(arg_offsets[i]),
+                    slot_offset,
+                    self.getLayoutSize(arg_layout),
+                    slot_size,
+                );
+
+                const loc = self.stackLocationForLayout(arg_layout, slot_offset);
+                try self.scratch_arg_infos.append(.{
+                    .loc = loc,
+                    .layout_idx = arg_layout,
+                    .num_regs = self.calcArgRegCount(loc, arg_layout),
+                });
+            }
+
+            return self.scratch_arg_infos.sliceFromStart(arg_infos_start);
+        }
+
+        fn callCompiledOffsetWithArgInfos(
+            self: *Self,
+            code_offset: usize,
+            arg_infos: []const ArgInfo,
+            ret_layout: layout.Idx,
+        ) Allocator.Error!ValueLocation {
+            const pbp_plan = try self.computePassByPtrPlan(arg_infos, 0, true);
+            defer self.scratch_pass_by_ptr.clearFrom(pbp_plan.start);
+
+            const stack_spill_size = try self.placeCallArguments(arg_infos, .{
+                .pass_by_ptr = pbp_plan.slice,
+                .emit_roc_ops = true,
+            });
+            try self.emitCallToOffset(code_offset);
+
+            if (stack_spill_size > 0) {
+                try self.emitAddStackPtr(stack_spill_size);
+            }
+
+            return self.saveCallReturnValue(ret_layout, false, 0);
+        }
+
+        fn generateEntrypointProcCall(
+            self: *Self,
+            entry_proc: lir.LIR.LirProcSpecId,
+            arg_layouts: []const layout.Idx,
+            ret_layout: layout.Idx,
+            ret_ptr_reg: GeneralReg,
+            args_ptr_reg: GeneralReg,
+        ) Allocator.Error!void {
+            const compiled = try self.compiledProcForId(entry_proc);
+            if (compiled.code_start == unresolved_proc_code_start) {
+                if (std.debug.runtime_safety) {
+                    std.debug.panic(
+                        "entrypoint proc {d} was not compiled before wrapper generation",
+                        .{@intFromEnum(entry_proc)},
+                    );
+                }
+                unreachable;
+            }
+
+            const arg_infos = try self.materializeEntrypointArgInfos(arg_layouts, args_ptr_reg);
+            const result_loc = try self.callCompiledOffsetWithArgInfos(compiled.code_start, arg_infos, ret_layout);
+            if (self.getLayoutSize(ret_layout) > 0) {
+                try self.storeResultToSavedPtr(result_loc, ret_layout, ret_ptr_reg, 1);
+            }
+        }
+
         /// Emit a jump placeholder (will be patched later).
         /// Returns the patch location for use with patchJump.
         fn emitJumpPlaceholder(self: *Self) Allocator.Error!usize {
@@ -10217,6 +11800,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     self.codegen.patchJump(patch, end_offset);
                 }
             }
+        }
+
+        /// Get the generated code buffer for object-file emission.
+        pub fn getGeneratedCode(self: *Self) []const u8 {
+            return self.codegen.getCode();
+        }
+
+        /// Get relocations for the generated code buffer.
+        pub fn getRelocations(self: *Self) []const Relocation {
+            return self.codegen.relocations.items;
         }
     };
 }
