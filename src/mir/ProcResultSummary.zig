@@ -385,7 +385,6 @@ const Analyzer = struct {
 
     fn analyzeNonLocalLookup(
         self: *Analyzer,
-        accumulator: *ReturnAccumulator,
         symbol: MIR.Symbol,
     ) Allocator.Error!ExprOutcome {
         const def_expr = self.mir_store.getValueDef(symbol) orelse std.debug.panic(
@@ -408,7 +407,6 @@ const Analyzer = struct {
 
         var value_accumulator = ReturnAccumulator{};
         const outcome = try self.analyzeExpr(&empty_env, .proc, &value_accumulator, def_expr);
-        _ = accumulator;
 
         return switch (outcome) {
             .no_return => .no_return,
@@ -432,8 +430,6 @@ const Analyzer = struct {
         var merged_origin: ?Origin = null;
         for (self.mir_store.getBranches(branches)) |branch| {
             for (self.mir_store.getBranchPatterns(branch.patterns)) |branch_pattern| {
-                _ = branch_pattern.degenerate;
-
                 var branch_env = try self.cloneEnv(env);
                 defer branch_env.deinit();
 
@@ -534,7 +530,7 @@ const Analyzer = struct {
 
             .lookup => |symbol| blk: {
                 if (env.get(symbol.raw())) |origin| break :blk .{ .value = origin };
-                break :blk try self.analyzeNonLocalLookup(accumulator, symbol);
+                break :blk try self.analyzeNonLocalLookup(symbol);
             },
 
             .list => |list_data| blk: {

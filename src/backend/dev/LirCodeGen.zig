@@ -2965,6 +2965,81 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     return .{ .general_reg = result_reg };
                 },
 
+                .u8_to_str => {
+                    const value_loc = try self.generateExpr(args[0]);
+                    return self.callIntToStr(value_loc, 1, false);
+                },
+                .i8_to_str => {
+                    const value_loc = try self.generateExpr(args[0]);
+                    return self.callIntToStr(value_loc, 1, true);
+                },
+                .u16_to_str => {
+                    const value_loc = try self.generateExpr(args[0]);
+                    return self.callIntToStr(value_loc, 2, false);
+                },
+                .i16_to_str => {
+                    const value_loc = try self.generateExpr(args[0]);
+                    return self.callIntToStr(value_loc, 2, true);
+                },
+                .u32_to_str => {
+                    const value_loc = try self.generateExpr(args[0]);
+                    return self.callIntToStr(value_loc, 4, false);
+                },
+                .i32_to_str => {
+                    const value_loc = try self.generateExpr(args[0]);
+                    return self.callIntToStr(value_loc, 4, true);
+                },
+                .u64_to_str => {
+                    const value_loc = try self.generateExpr(args[0]);
+                    return self.callIntToStr(value_loc, 8, false);
+                },
+                .i64_to_str => {
+                    const value_loc = try self.generateExpr(args[0]);
+                    return self.callIntToStr(value_loc, 8, true);
+                },
+                .u128_to_str => {
+                    const value_loc = try self.generateExpr(args[0]);
+                    return self.callIntToStr(value_loc, 16, false);
+                },
+                .i128_to_str => {
+                    const value_loc = try self.generateExpr(args[0]);
+                    return self.callIntToStr(value_loc, 16, true);
+                },
+                .dec_to_str => {
+                    const value_loc = try self.generateExpr(args[0]);
+                    return self.callDecToStr(value_loc);
+                },
+                .f32_to_str => {
+                    const value_loc = try self.generateExpr(args[0]);
+                    return self.callFloatToStr(value_loc, true);
+                },
+                .f64_to_str => {
+                    const value_loc = try self.generateExpr(args[0]);
+                    return self.callFloatToStr(value_loc, false);
+                },
+                .num_to_str => {
+                    const value_loc = try self.generateExpr(args[0]);
+                    return switch (self.exprLayout(args[0])) {
+                        .u8 => self.callIntToStr(value_loc, 1, false),
+                        .i8 => self.callIntToStr(value_loc, 1, true),
+                        .u16 => self.callIntToStr(value_loc, 2, false),
+                        .i16 => self.callIntToStr(value_loc, 2, true),
+                        .u32 => self.callIntToStr(value_loc, 4, false),
+                        .i32 => self.callIntToStr(value_loc, 4, true),
+                        .u64 => self.callIntToStr(value_loc, 8, false),
+                        .i64 => self.callIntToStr(value_loc, 8, true),
+                        .u128 => self.callIntToStr(value_loc, 16, false),
+                        .i128 => self.callIntToStr(value_loc, 16, true),
+                        .dec => self.callDecToStr(value_loc),
+                        .f32 => self.callFloatToStr(value_loc, true),
+                        .f64 => self.callFloatToStr(value_loc, false),
+                        else => std.debug.panic(
+                            "LirCodeGen invariant violated: num_to_str received non-numeric layout {s}",
+                            .{@tagName(self.exprLayout(args[0]))},
+                        ),
+                    };
+                },
+
                 // Unimplemented ops
                 .num_pow,
                 .num_sqrt,
@@ -2972,21 +3047,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .num_round,
                 .num_floor,
                 .num_ceiling,
-                .num_to_str,
                 .str_inspect,
-                .u8_to_str,
-                .i8_to_str,
-                .u16_to_str,
-                .i16_to_str,
-                .u32_to_str,
-                .i32_to_str,
-                .u64_to_str,
-                .i64_to_str,
-                .u128_to_str,
-                .i128_to_str,
-                .dec_to_str,
-                .f32_to_str,
-                .f64_to_str,
                 .num_from_numeral,
                 .list_drop_at,
                 .compare,
@@ -3224,6 +3285,99 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addMemArg(base_ptr, u64_off);
             try builder.addRegArg(roc_ops_reg);
             try self.callBuiltin(&builder, fn_addr, builtin_fn);
+
+            return .{ .stack_str = result_offset };
+        }
+
+        fn normalizeIntegerWidthInReg(self: *Self, reg: GeneralReg, int_width_bytes: u8, is_signed: bool) Allocator.Error!void {
+            const shift_amount: u6 = switch (int_width_bytes) {
+                1 => 56,
+                2 => 48,
+                4 => 32,
+                8, 16 => 0,
+                else => unreachable,
+            };
+            if (shift_amount == 0) return;
+
+            try self.emitShlImm(.w64, reg, reg, shift_amount);
+            if (is_signed) {
+                try self.emitAsrImm(.w64, reg, reg, shift_amount);
+            } else {
+                try self.emitLsrImm(.w64, reg, reg, shift_amount);
+            }
+        }
+
+        fn callIntToStr(self: *Self, value_loc: ValueLocation, int_width_bytes: u8, is_signed: bool) Allocator.Error!ValueLocation {
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+            const result_offset = self.codegen.allocStackSlot(roc_str_size);
+            const builtin_fn: BuiltinFn = .int_to_str;
+            const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_int_to_str);
+            const base_reg = frame_ptr;
+
+            const signedness: std.builtin.Signedness = if (is_signed) .signed else .unsigned;
+            const low_reg, const high_reg = blk: {
+                if (int_width_bytes == 16) {
+                    const parts = try self.getI128Parts(value_loc, signedness);
+                    break :blk .{ parts.low, parts.high };
+                }
+
+                const low = try self.ensureInGeneralReg(value_loc);
+                try self.normalizeIntegerWidthInReg(low, int_width_bytes, is_signed);
+                const high = try self.allocTempGeneral();
+                try self.emitSignExtendHighReg(high, low, signedness);
+                break :blk .{ low, high };
+            };
+            defer self.codegen.freeGeneral(low_reg);
+            defer self.codegen.freeGeneral(high_reg);
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(base_reg, result_offset);
+            try builder.addRegArg(low_reg);
+            try builder.addRegArg(high_reg);
+            try builder.addImmArg(int_width_bytes);
+            try builder.addImmArg(if (is_signed) @as(u8, 1) else @as(u8, 0));
+            try builder.addRegArg(roc_ops_reg);
+            try self.callBuiltin(&builder, fn_addr, builtin_fn);
+
+            return .{ .stack_str = result_offset };
+        }
+
+        fn callDecToStr(self: *Self, value_loc: ValueLocation) Allocator.Error!ValueLocation {
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+            const result_offset = self.codegen.allocStackSlot(roc_str_size);
+            const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_dec_to_str);
+            const base_reg = frame_ptr;
+            const parts = try self.getI128Parts(value_loc, .signed);
+            defer self.codegen.freeGeneral(parts.low);
+            defer self.codegen.freeGeneral(parts.high);
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(base_reg, result_offset);
+            try builder.addRegArg(parts.low);
+            try builder.addRegArg(parts.high);
+            try builder.addRegArg(roc_ops_reg);
+            try self.callBuiltin(&builder, fn_addr, .dec_to_str);
+
+            return .{ .stack_str = result_offset };
+        }
+
+        fn callFloatToStr(self: *Self, value_loc: ValueLocation, is_f32: bool) Allocator.Error!ValueLocation {
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+            const result_offset = self.codegen.allocStackSlot(roc_str_size);
+            const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_float_to_str);
+            const base_reg = frame_ptr;
+            const bits_reg = if (is_f32)
+                try self.materializeF32BitsInGeneralReg(value_loc)
+            else
+                try self.ensureInGeneralReg(value_loc);
+            defer self.codegen.freeGeneral(bits_reg);
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(base_reg, result_offset);
+            try builder.addRegArg(bits_reg);
+            try builder.addImmArg(if (is_f32) @as(u8, 1) else @as(u8, 0));
+            try builder.addRegArg(roc_ops_reg);
+            try self.callBuiltin(&builder, fn_addr, .float_to_str);
 
             return .{ .stack_str = result_offset };
         }
@@ -11429,13 +11583,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// 6. Returns `void`
         pub fn generateEntrypointWrapper(
             self: *Self,
-            name: []const u8,
+            _: []const u8,
             entry_proc: lir.LIR.LirProcSpecId,
             arg_layouts: []const layout.Idx,
             ret_layout: layout.Idx,
         ) Allocator.Error!ExportedSymbol {
-            _ = name;
-
             const func_start = self.codegen.currentOffset();
             var prologue_size: u8 = 0;
             var stack_alloc: u32 = 0;
