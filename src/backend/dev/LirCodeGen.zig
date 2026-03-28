@@ -8379,8 +8379,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 unreachable;
             }
 
-            const field_offset = ls.getStructFieldOffset(struct_layout.data.struct_.idx, access.field_idx);
-            const field_size = ls.getStructFieldSize(struct_layout.data.struct_.idx, access.field_idx);
+            const field_offset = ls.getStructFieldOffsetByOriginalIndex(struct_layout.data.struct_.idx, access.field_idx);
+            const field_size = ls.getStructFieldSizeByOriginalIndex(struct_layout.data.struct_.idx, access.field_idx);
             const field_layout_idx = access.target_layout;
 
             return switch (struct_loc) {
@@ -8623,8 +8623,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const field_exprs = self.store.getLocalRefs(s.fields);
 
             for (field_exprs, 0..) |field_expr_id, i| {
-                const field_offset = ls.getStructFieldOffset(struct_layout.data.struct_.idx, @intCast(i));
-                const field_size = ls.getStructFieldSize(struct_layout.data.struct_.idx, @intCast(i));
+                const field_offset = ls.getStructFieldOffsetByOriginalIndex(struct_layout.data.struct_.idx, @intCast(i));
+                const field_size = ls.getStructFieldSizeByOriginalIndex(struct_layout.data.struct_.idx, @intCast(i));
                 const field_loc = try self.generateExpr(field_expr_id);
                 const field_base = base_offset + @as(i32, @intCast(field_offset));
                 try self.copyBytesToStackOffset(field_base, field_loc, field_size);
