@@ -58,6 +58,7 @@ const can = @import("can");
 const check = @import("check");
 const compiled_builtins = @import("compiled_builtins");
 const eval_mod = @import("eval");
+const builtins = @import("builtins");
 
 /// When true (set via `zig build coverage-eval`), the runner:
 /// - Only builds/runs the interpreter backend (dev/wasm are DCE'd)
@@ -169,6 +170,40 @@ pub const TestCase = struct {
             };
             return allocator.dupe(u8, slice) catch null;
         }
+
+        /// Check whether the actual Str.inspect output matches this expected value.
+        /// Uses type-appropriate comparison (numeric tolerance, quote stripping, etc.).
+        pub fn matchesInspectOutput(self: Expected, actual: []const u8) bool {
+            return switch (self) {
+                .inspect_str => |v| std.mem.eql(u8, v, actual),
+                .bool_val => |v| blk: {
+                    const es = if (v) "True" else "False";
+                    break :blk std.mem.eql(u8, actual, es) or boolStrEquiv(actual, es);
+                },
+                .str_val => |v| strInspectMatches(actual, v),
+                .dec_val => |v| blk: {
+                    const dec = builtins.dec.RocDec{ .num = v };
+                    var buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
+                    const es = dec.format_to_buf(&buf);
+                    break :blk numStrEq(actual, es);
+                },
+                .f32_val => |v| blk: {
+                    const parsed = std.fmt.parseFloat(f32, actual) catch break :blk false;
+                    break :blk @abs(parsed - v) <= 0.0001;
+                },
+                .f64_val => |v| blk: {
+                    const parsed = std.fmt.parseFloat(f64, actual) catch break :blk false;
+                    break :blk @abs(parsed - v) <= 0.000000001;
+                },
+                .problem => true, // handled by runTestProblem, not runValueTest
+                // All remaining types are integers
+                inline else => |v| blk: {
+                    var int_buf: [64]u8 = undefined;
+                    const es = std.fmt.bufPrint(&int_buf, "{d}", .{v}) catch break :blk false;
+                    break :blk numStrEq(actual, es);
+                },
+            };
+        }
     };
 
     pub const Skip = packed struct {
@@ -178,6 +213,50 @@ pub const TestCase = struct {
         llvm: bool = false,
     };
 };
+
+/// Compare two numeric strings, treating "1" and "1.0" as equal.
+fn numStrEq(a: []const u8, b: []const u8) bool {
+    if (std.mem.eql(u8, a, b)) return true;
+    if (a.len + 2 == b.len and std.mem.endsWith(u8, b, ".0") and std.mem.startsWith(u8, b, a)) return true;
+    if (b.len + 2 == a.len and std.mem.endsWith(u8, a, ".0") and std.mem.startsWith(u8, a, b)) return true;
+    return false;
+}
+
+/// Treat "True"/"1" and "False"/"0" as equivalent boolean representations.
+fn boolStrEquiv(a: []const u8, b: []const u8) bool {
+    return (std.mem.eql(u8, a, "True") and std.mem.eql(u8, b, "1")) or
+        (std.mem.eql(u8, a, "False") and std.mem.eql(u8, b, "0")) or
+        (std.mem.eql(u8, a, "1") and std.mem.eql(u8, b, "True")) or
+        (std.mem.eql(u8, a, "0") and std.mem.eql(u8, b, "False"));
+}
+
+/// Check whether an actual Str.inspect output matches an expected string value.
+/// Str.inspect wraps strings in quotes and escapes inner quotes/backslashes.
+fn strInspectMatches(actual: []const u8, expected: []const u8) bool {
+    if (actual.len < 2 or actual[0] != '"' or actual[actual.len - 1] != '"') return false;
+    const inner = actual[1 .. actual.len - 1];
+    // Walk both strings, unescaping the actual inspect output on the fly.
+    var ai: usize = 0;
+    var ei: usize = 0;
+    while (ai < inner.len and ei < expected.len) {
+        if (inner[ai] == '\\' and ai + 1 < inner.len) {
+            if (inner[ai + 1] == '"' or inner[ai + 1] == '\\') {
+                if (expected[ei] != inner[ai + 1]) return false;
+                ai += 2;
+                ei += 1;
+            } else {
+                if (expected[ei] != inner[ai]) return false;
+                ai += 1;
+                ei += 1;
+            }
+        } else {
+            if (expected[ei] != inner[ai]) return false;
+            ai += 1;
+            ei += 1;
+        }
+    }
+    return ai == inner.len and ei == expected.len;
+}
 
 //
 // Test outcome
@@ -600,9 +679,6 @@ fn runValueTest(allocator: std.mem.Allocator, src: []const u8, expected: TestCas
         return .{ .status = .fail, .message = "failed to wrap in Str.inspect", .timings = timings };
     };
 
-    // For inspect_str tests, the raw string is used for value comparison.
-    // The formatted string (with type annotation) is used for display only.
-    const raw_expected: ?[]const u8 = if (expected == .inspect_str) expected.inspect_str else null;
     const display_expected: ?[]const u8 = expected.format(allocator);
     // In coverage mode, only run the interpreter — dev/wasm are DCE'd at comptime
     // and never built, giving faster compilation and cleaner kcov output.
@@ -635,8 +711,8 @@ fn runValueTest(allocator: std.mem.Allocator, src: []const u8, expected: TestCas
 
         switch (fork_result) {
             .success => |str| {
-                // Check against expected string (only for inspect_str tests)
-                const value_ok = if (raw_expected) |es| std.mem.eql(u8, es, str) else true;
+                // Check against expected value
+                const value_ok = expected.matchesInspectOutput(str);
                 // Check cross-backend agreement
                 const agreement_ok = if (first_ok) |fok| std.mem.eql(u8, fok, str) else true;
 
