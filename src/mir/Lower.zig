@@ -57,11 +57,6 @@ const PatternBinding = struct {
     pattern_idx: CIR.Pattern.Idx,
 };
 
-const LoweredSymbol = union(enum) {
-    const_def: MIR.ConstDefId,
-    function_def: MIR.FunctionDefId,
-};
-
 const LoopContext = struct {
     exit_id: MIR.JoinPointId,
     carried_locals: MIR.LocalSpan,
@@ -112,10 +107,6 @@ type_var_seen: std.AutoHashMap(types.Var, Monotype.Idx),
 /// specialization bindings so monotype construction never pollutes them.
 nominal_cycle_breakers: std.AutoHashMap(types.Var, Monotype.Idx),
 
-/// Cache for already-lowered symbol definitions (avoids re-lowering).
-/// Key is @bitCast(MIR.Symbol) → u64.
-lowered_symbols: std.AutoHashMap(u64, LoweredSymbol),
-
 /// Cache for proc bodies already lowered for proc instances chosen by monomorphization.
 /// The callable value itself is rebuilt per use-site scope because captures are
 /// context-sensitive, but the lowered lambda body is unique per proc inst.
@@ -146,9 +137,6 @@ next_join_point_id: u32,
 /// First local index that belongs to the currently lowered root/lambda body.
 current_body_local_floor: usize,
 
-/// Tracks symbols currently being lowered (recursion guard).
-in_progress_defs: std.AutoHashMap(u64, void),
-
 /// Tracks proc instances currently being lowered (recursion guard).
 in_progress_proc_insts: std.AutoHashMap(u32, MIR.LambdaId),
 
@@ -161,10 +149,6 @@ current_proc_inst_context: Monomorphize.ProcInstId,
 
 /// Root expression currently being lowered when no proc-inst context is active.
 current_root_expr_context: ?CIR.Expr.Idx,
-
-/// Monotype currently being lowered for each in-progress symbol.
-/// Used to detect in-progress calls that need a distinct specialization symbol.
-in_progress_symbol_monotypes: std.AutoHashMap(u64, Monotype.Idx),
 
 /// Pre-resolved static dispatch targets keyed by (module_idx, expr_idx).
 /// Filled from type-checker constraints so MIR lowering uses authoritative
@@ -225,7 +209,6 @@ pub fn init(
         .pattern_symbols = std.AutoHashMap(u128, MIR.LocalId).init(allocator),
         .type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(allocator),
         .nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(allocator),
-        .lowered_symbols = std.AutoHashMap(u64, LoweredSymbol).init(allocator),
         .lowered_proc_insts = std.AutoHashMap(u32, MIR.LambdaId).init(allocator),
         .lowered_proc_inst_seed_members = std.AutoHashMap(u32, MIR.SeedMember).init(allocator),
         .lowered_trivial_lambdas = std.AutoHashMap(u128, MIR.LambdaId).init(allocator),
@@ -235,12 +218,10 @@ pub fn init(
         .next_statement_pattern_scope = 1,
         .next_join_point_id = 0,
         .current_body_local_floor = 0,
-        .in_progress_defs = std.AutoHashMap(u64, void).init(allocator),
         .in_progress_proc_insts = std.AutoHashMap(u32, MIR.LambdaId).init(allocator),
         .reserved_proc_insts = std.AutoHashMap(u32, MIR.LambdaId).init(allocator),
         .current_proc_inst_context = .none,
         .current_root_expr_context = null,
-        .in_progress_symbol_monotypes = std.AutoHashMap(u64, Monotype.Idx).init(allocator),
         .resolved_dispatch_targets = resolved_dispatch_targets,
         .scratch_local_ids = try base.Scratch(MIR.LocalId).init(allocator),
         .scratch_pattern_ids = try base.Scratch(MIR.PatternId).init(allocator),
@@ -266,16 +247,13 @@ pub fn deinit(self: *Self) void {
     self.pattern_symbols.deinit();
     self.type_var_seen.deinit();
     self.nominal_cycle_breakers.deinit();
-    self.lowered_symbols.deinit();
     self.lowered_proc_insts.deinit();
     self.lowered_proc_inst_seed_members.deinit();
     self.lowered_trivial_lambdas.deinit();
     self.lowered_trivial_closure_seeds.deinit();
     self.symbol_metadata.deinit();
-    self.in_progress_defs.deinit();
     self.in_progress_proc_insts.deinit();
     self.reserved_proc_insts.deinit();
-    self.in_progress_symbol_monotypes.deinit();
     self.resolved_dispatch_targets.deinit();
     self.scratch_local_ids.deinit();
     self.scratch_pattern_ids.deinit();
@@ -1498,9 +1476,9 @@ fn makeSyntheticBind(
 
 fn setPatternSymbolsReassignable(self: *Self, pattern_id: MIR.PatternId, reassignable: bool) Allocator.Error!void {
     switch (self.store.getPattern(pattern_id)) {
-        .bind => |symbol| try self.store.setSymbolReassignable(self.allocator, symbol, reassignable),
+        .bind => |local| self.store.getLocalPtr(local).reassignable = reassignable,
         .as_pattern => |as_pat| {
-            try self.store.setSymbolReassignable(self.allocator, as_pat.symbol, reassignable);
+            self.store.getLocalPtr(as_pat.local).reassignable = reassignable;
             try self.setPatternSymbolsReassignable(as_pat.pattern, reassignable);
         },
         .tag => |tag| {
@@ -1529,15 +1507,6 @@ fn setPatternSymbolsReassignable(self: *Self, pattern_id: MIR.PatternId, reassig
         .frac_f64_literal,
         .runtime_error,
         => {},
-    }
-}
-
-fn registerBoundSymbolDefIfNeeded(self: *Self, pattern: MIR.PatternId, expr: MIR.ExprId) Allocator.Error!void {
-    try self.registerPatternSymbolMonotypes(pattern);
-    if (self.patternBoundSymbol(pattern)) |symbol| {
-        if (self.store.getValueDef(symbol) == null) {
-            try self.store.registerValueDef(self.allocator, symbol, expr);
-        }
     }
 }
 
@@ -1619,10 +1588,6 @@ fn lowerListForLoopToWhile(
         .{ .decl_const = .{ .pattern = while_wildcard, .expr = while_expr } },
     });
 
-    try self.registerBoundSymbolDefIfNeeded(list_bind.pattern, list_expr);
-    try self.registerBoundSymbolDefIfNeeded(len_bind.pattern, len_expr);
-    try self.registerBoundSymbolDefIfNeeded(index_bind.pattern, zero);
-
     return try self.store.addExpr(self.allocator, .{ .block = .{
         .stmts = outer_stmts,
         .final_expr = unit_expr,
@@ -1678,8 +1643,6 @@ fn lowerStrInspect(self: *Self, module_env: *const ModuleEnv, run_ll: anytype, r
     const arg_bind = try self.makeSyntheticBind(arg_mono, false);
     const arg_lookup = try self.emitMirLookup(arg_bind.symbol, arg_mono, region);
     const inspected = try self.lowerStrInspectExpr(module_env, arg_lookup, arg_type_var, region);
-    try self.registerBoundSymbolDefIfNeeded(arg_bind.pattern, lowered_arg);
-
     const stmts = try self.store.addStmts(self.allocator, &.{MIR.Stmt{
         .decl_const = .{ .pattern = arg_bind.pattern, .expr = lowered_arg },
     }});
@@ -3089,7 +3052,6 @@ fn lowerStrInspectListByMonotype(
 // --- Public API ---
 
 /// Create a symbol using MIR lowering's current opaque ID encoding.
-/// Intended for callers that need to invoke APIs like `lowerExternalDef`.
 pub fn makeSymbol(self: *Self, module_idx: u32, ident_idx: Ident.Idx) Allocator.Error!MIR.Symbol {
     return self.internSymbol(module_idx, ident_idx);
 }
@@ -3275,6 +3237,8 @@ fn copyExactCallableSeedsFromSymbol(
 ) Allocator.Error!void {
     if (self.store.monotype_store.getMonotype(self.store.getLocal(target).monotype) != .func) return;
 
+    try self.ensureCallableSymbolLowered(symbol);
+
     if (self.store.getFunctionDefForSymbol(symbol)) |function_def_id| {
         const lambda = self.store.getFunctionDef(function_def_id).lambda;
         try self.registerSeedMembersForLocal(target, &.{.{ .lambda = lambda }});
@@ -3299,6 +3263,52 @@ fn copyExactCallableSeedsFromLocal(
     }
 
     try self.copyExactCallableSeedsFromSymbol(target, self.store.getLocal(source).source_symbol);
+}
+
+fn ensureCallableSymbolLowered(self: *Self, symbol: MIR.Symbol) Allocator.Error!void {
+    if (self.store.getFunctionDefForSymbol(symbol) != null) return;
+    if (self.store.getSymbolSeedMembers(symbol) != null) return;
+
+    switch (self.getSymbolMetadata(symbol)) {
+        .external_def => |ext| {
+            const target_env = self.all_module_envs[ext.module_idx];
+            const def_idx: CIR.Def.Idx = @enumFromInt(ext.def_node_idx);
+            const def_expr = target_env.store.getDef(def_idx).expr;
+
+            var seed_members = std.ArrayList(MIR.SeedMember).empty;
+            defer seed_members.deinit(self.allocator);
+
+            if (self.monomorphization.getExprProcInsts(.none, null, ext.module_idx, def_expr)) |proc_inst_ids| {
+                for (proc_inst_ids) |proc_inst_id| {
+                    try self.appendUniqueSeedMember(&seed_members, try self.lowerTrivialSeedMemberForProcInst(proc_inst_id));
+                }
+            } else if (self.monomorphization.getExprProcInst(.none, null, ext.module_idx, def_expr)) |proc_inst_id| {
+                try self.appendUniqueSeedMember(&seed_members, try self.lowerTrivialSeedMemberForProcInst(proc_inst_id));
+            } else if (self.monomorphization.getLookupExprProcInsts(.none, null, ext.module_idx, def_expr)) |proc_inst_ids| {
+                for (proc_inst_ids) |proc_inst_id| {
+                    try self.appendUniqueSeedMember(&seed_members, try self.lowerTrivialSeedMemberForProcInst(proc_inst_id));
+                }
+            } else if (self.monomorphization.getLookupExprProcInst(.none, null, ext.module_idx, def_expr)) |proc_inst_id| {
+                try self.appendUniqueSeedMember(&seed_members, try self.lowerTrivialSeedMemberForProcInst(proc_inst_id));
+            }
+
+            if (seed_members.items.len != 0) {
+                std.mem.sortUnstable(
+                    MIR.SeedMember,
+                    seed_members.items,
+                    {},
+                    struct {
+                        fn lessThan(_: void, lhs: MIR.SeedMember, rhs: MIR.SeedMember) bool {
+                            if (lhs.lambda != rhs.lambda) return @intFromEnum(lhs.lambda) < @intFromEnum(rhs.lambda);
+                            return @intFromEnum(lhs.closure_member) < @intFromEnum(rhs.closure_member);
+                        }
+                    }.lessThan,
+                );
+                try self.store.registerSymbolSeedMembers(self.allocator, symbol, seed_members.items);
+            }
+        },
+        .local_ident => {},
+    }
 }
 
 fn lowerTrivialConcatLocalsInto(
@@ -4756,6 +4766,7 @@ fn collectCallableSeedMembersFromLocal(
 
     switch (def) {
         .symbol => |symbol| {
+            try self.ensureCallableSymbolLowered(symbol);
             if (self.store.getFunctionDefForSymbol(symbol)) |function_def_id| {
                 try self.appendUniqueSeedMember(out, .{
                     .lambda = self.store.getFunctionDef(function_def_id).lambda,
@@ -4882,6 +4893,8 @@ fn resolveTrivialCallableFromSymbol(
     symbol: MIR.Symbol,
     closure_local: ?MIR.LocalId,
 ) !TrivialCallable {
+    try self.ensureCallableSymbolLowered(symbol);
+
     if (self.store.getFunctionDefForSymbol(symbol)) |function_def_id| {
         return .{ .direct_lambda = self.store.getFunctionDef(function_def_id).lambda };
     }
@@ -4940,6 +4953,16 @@ fn resolveTrivialCallable(
             );
         },
         .e_lookup_external => |lookup| blk: {
+            if (self.lookupMonomorphizedValueExprProcInst(expr_idx)) |proc_inst_id| {
+                const member = try self.lowerTrivialSeedMemberForProcInst(proc_inst_id);
+                if (!member.closure_member.isNone()) {
+                    std.debug.panic(
+                        "statement-only MIR external lookup {d} resolved to closure seed member {d}",
+                        .{ @intFromEnum(expr_idx), @intFromEnum(member.closure_member) },
+                    );
+                }
+                break :blk .{ .direct_lambda = member.lambda };
+            }
             const target_module_idx = self.resolveImportedModuleIdx(module_env, lookup.module_idx) orelse unreachable;
             break :blk try self.resolveTrivialCallableFromSymbol(
                 try self.internExternalDefSymbol(target_module_idx, lookup.target_node_idx),
@@ -4947,6 +4970,16 @@ fn resolveTrivialCallable(
             );
         },
         .e_lookup_required => |lookup| blk: {
+            if (self.lookupMonomorphizedValueExprProcInst(expr_idx)) |proc_inst_id| {
+                const member = try self.lowerTrivialSeedMemberForProcInst(proc_inst_id);
+                if (!member.closure_member.isNone()) {
+                    std.debug.panic(
+                        "statement-only MIR required lookup {d} resolved to closure seed member {d}",
+                        .{ @intFromEnum(expr_idx), @intFromEnum(member.closure_member) },
+                    );
+                }
+                break :blk .{ .direct_lambda = member.lambda };
+            }
             const app_idx = self.app_module_idx orelse std.debug.panic(
                 "statement-only MIR required call encountered without app module",
                 .{},
@@ -6583,41 +6616,6 @@ fn lowerExprWithMonotypeOverride(
             }
 
             const symbol = try self.patternToSymbol(lookup.pattern_idx);
-            const symbol_key: u64 = @bitCast(symbol);
-
-            // Ensure the local definition is lowered if it's a top-level def.
-            // This is needed so that cross-module lowering (via lowerExternalDef)
-            // properly registers all transitively-referenced definitions.
-            if (!self.lowered_symbols.contains(symbol_key) and !self.in_progress_defs.contains(symbol_key)) {
-                // Find the CIR def for this pattern in the current module
-                const defs = module_env.store.sliceDefs(module_env.all_defs);
-                for (defs) |def_idx| {
-                    const def = module_env.store.getDef(def_idx);
-                    if (def.pattern == lookup.pattern_idx) {
-                        // Resolve the canonical (unscoped) symbol for this
-                        // top-level def, not the potentially-scoped capture
-                        // alias from lowerClosure. Inside a closure body,
-                        // patternToSymbol returns a capture-local symbol due
-                        // to lowerClosure Step 5's override, but the function
-                        // def must be lowered under its canonical identity so
-                        // it can be shared across all call sites.
-                        const saved_scope = self.current_pattern_scope;
-                        self.current_pattern_scope = 0;
-                        const def_symbol = try self.patternToSymbol(lookup.pattern_idx);
-                        self.current_pattern_scope = saved_scope;
-                        const def_key: u64 = @bitCast(def_symbol);
-
-                        if (!self.lowered_symbols.contains(def_key) and !self.in_progress_defs.contains(def_key)) {
-                            if (!cirExprIsProcBacked(module_env, def.expr)) {
-                                _ = try self.lowerExternalDefWithType(def_symbol, def.expr, null);
-                            }
-                        }
-
-                        break;
-                    }
-                }
-            }
-
             const lookup_var = ModuleEnv.varFrom(lookup.pattern_idx);
             if (self.symbol_monotypes.get(symbol.raw())) |bound_monotype| {
                 return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, bound_monotype, region);
@@ -6634,17 +6632,6 @@ fn lowerExprWithMonotypeOverride(
             }
             if (self.monotypeIsUnit(monotype) and !self.monotypeIsUnit(pattern_monotype)) {
                 return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, pattern_monotype, region);
-            }
-
-            if (self.lowered_symbols.get(symbol_key)) |cached_expr| {
-                const cached_monotype = self.store.typeOf(cached_expr);
-                const monotype_matches_cached = try self.monotypesStructurallyEqual(cached_monotype, monotype);
-                if (monotype_matches_cached) {
-                    return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, cached_monotype, region);
-                }
-                if (self.monotypeIsUnit(monotype) and !self.monotypeIsUnit(cached_monotype)) {
-                    return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, cached_monotype, region);
-                }
             }
 
             return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, monotype, region);
@@ -6673,44 +6660,10 @@ fn lowerExprWithMonotypeOverride(
             const def = target_env.store.getDef(def_idx);
 
             if (cirExprIsProcBacked(target_env, def.expr)) {
-                return try self.lowerExternalDefWithType(
-                    symbol,
-                    def.expr,
-                    if (self.monotypeIsWellFormed(monotype))
-                        .{ .idx = monotype, .module_idx = self.current_module_idx }
-                    else
-                        null,
-                );
-            }
-
-            // Ensure the external definition is lowered.
-            const symbol_key: u64 = @bitCast(symbol);
-            if (!self.lowered_symbols.contains(symbol_key) and !self.in_progress_defs.contains(symbol_key)) {
-                _ = try self.lowerExternalDefWithType(
-                    symbol,
-                    def.expr,
-                    if (self.monotypeIsWellFormed(monotype))
-                        .{ .idx = monotype, .module_idx = self.current_module_idx }
-                    else
-                        null,
-                );
-                if (self.lowered_symbols.get(symbol_key)) |cached_expr| {
-                    const cached_monotype = self.store.typeOf(cached_expr);
-                    if (self.monotypeIsUnit(monotype) and !self.monotypeIsUnit(cached_monotype)) {
-                        return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, cached_monotype, region);
-                    }
-                }
-                return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, monotype, region);
-            }
-
-            if (self.lowered_symbols.get(symbol_key)) |cached_expr| {
-                const cached_monotype = self.store.typeOf(cached_expr);
-                if (try self.monotypesStructurallyEqual(cached_monotype, monotype)) {
-                    return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, cached_monotype, region);
-                }
-                if (self.monotypeIsUnit(monotype) and !self.monotypeIsUnit(cached_monotype)) {
-                    return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, cached_monotype, region);
-                }
+                return try self.lowerProcInst(self.lookupMonomorphizedValueExprProcInst(expr_idx) orelse std.debug.panic(
+                    "statement-only MIR expected proc-backed external lookup to have a monomorphized proc inst",
+                    .{},
+                ));
             }
 
             return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, monotype, region);
@@ -6776,23 +6729,11 @@ fn lowerExprWithMonotypeOverride(
                 ModuleEnv.varFrom(required_type.type_anno),
             );
             if (cirExprIsProcBacked(app_env, def.expr)) {
-                return try self.lowerExternalDefWithType(
-                    symbol,
-                    def.expr,
-                    if (self.monotypeIsWellFormed(required_lookup_monotype))
-                        .{ .idx = required_lookup_monotype, .module_idx = self.current_module_idx }
-                    else
-                        null,
-                );
+                return try self.lowerProcInst(self.lookupMonomorphizedValueExprProcInst(expr_idx) orelse std.debug.panic(
+                    "statement-only MIR expected proc-backed required lookup to have a monomorphized proc inst",
+                    .{},
+                ));
             }
-            _ = try self.lowerExternalDefWithType(
-                symbol,
-                def.expr,
-                if (self.monotypeIsWellFormed(required_lookup_monotype))
-                    .{ .idx = required_lookup_monotype, .module_idx = self.current_module_idx }
-                else
-                    null,
-            );
             return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, required_lookup_monotype, region);
         },
 
@@ -6907,11 +6848,10 @@ fn topLevelProcBackedDefExpr(module_env: *const ModuleEnv, pattern_idx: CIR.Patt
     return null;
 }
 
-fn patternBoundSymbol(self: *Self, pattern_id: MIR.PatternId) ?MIR.Symbol {
-    const pattern = self.store.getPattern(pattern_id);
-    return switch (pattern) {
-        .bind => |sym| sym,
-        .as_pattern => |as_pat| as_pat.symbol,
+fn patternBoundLocal(self: *Self, pattern_id: MIR.PatternId) ?MIR.LocalId {
+    return switch (self.store.getPattern(pattern_id)) {
+        .bind => |local| local,
+        .as_pattern => |as_pat| as_pat.local,
         .wildcard,
         .tag,
         .int_literal,
@@ -6947,30 +6887,16 @@ fn seedCallableParamSymbols(
             self.current_module_idx,
             original_pattern_idx,
         ) orelse continue;
-        const symbol = self.patternBoundSymbol(lowered_pattern_id) orelse continue;
+        const local = self.patternBoundLocal(lowered_pattern_id) orelse continue;
 
         var seed_members = std.ArrayList(MIR.SeedMember).empty;
         defer seed_members.deinit(self.allocator);
         for (proc_inst_ids) |proc_inst_id| {
-            const proc_expr = try self.lowerProcInst(proc_inst_id);
-            const resolved = self.store.resolveCallableProcId(proc_expr) orelse {
-                if (builtin.mode == .Debug) {
-                    std.debug.panic(
-                        "MIR Lower invariant: callable param pattern {d} lowered proc inst {d} to non-callable expr {}",
-                        .{
-                            @intFromEnum(original_pattern_idx),
-                            @intFromEnum(proc_inst_id),
-                            @intFromEnum(proc_expr),
-                        },
-                    );
-                }
-                unreachable;
-            };
-            const member = MIR.SeedMember{ .proc = resolved };
+            const member = try self.lowerTrivialSeedMemberForProcInst(proc_inst_id);
 
             var seen = false;
             for (seed_members.items) |existing_member| {
-                if (existing_member.proc == member.proc and existing_member.closure_member == member.closure_member) {
+                if (existing_member.lambda == member.lambda and existing_member.closure_member == member.closure_member) {
                     seen = true;
                     break;
                 }
@@ -6987,12 +6913,12 @@ fn seedCallableParamSymbols(
                 {},
                 struct {
                     fn lessThan(_: void, lhs: MIR.SeedMember, rhs: MIR.SeedMember) bool {
-                        if (lhs.proc != rhs.proc) return @intFromEnum(lhs.proc) < @intFromEnum(rhs.proc);
+                        if (lhs.lambda != rhs.lambda) return @intFromEnum(lhs.lambda) < @intFromEnum(rhs.lambda);
                         return @intFromEnum(lhs.closure_member) < @intFromEnum(rhs.closure_member);
                     }
                 }.lessThan,
             );
-            try self.store.registerSymbolSeedMembers(self.allocator, symbol, seed_members.items);
+            try self.registerSeedMembersForLocal(local, seed_members.items);
         }
     }
 }
@@ -8108,20 +8034,11 @@ fn seedCallableSymbolFromProcInsts(
     defer seed_members.deinit(self.allocator);
 
     for (proc_inst_ids) |proc_inst_id| {
-        const proc_expr = try self.lowerProcInst(proc_inst_id);
-        const member = if (self.store.getExprClosureMember(proc_expr)) |closure_member_id|
-            MIR.SeedMember{
-                .proc = self.store.getClosureMember(closure_member_id).proc,
-                .closure_member = closure_member_id,
-            }
-        else blk: {
-            const proc_id = self.store.resolveCallableProcId(proc_expr) orelse unreachable;
-            break :blk MIR.SeedMember{ .proc = proc_id };
-        };
+        const member = try self.lowerTrivialSeedMemberForProcInst(proc_inst_id);
 
         var seen = false;
         for (seed_members.items) |existing_member| {
-            if (existing_member.proc == member.proc and existing_member.closure_member == member.closure_member) {
+            if (existing_member.lambda == member.lambda and existing_member.closure_member == member.closure_member) {
                 seen = true;
                 break;
             }
@@ -8138,7 +8055,7 @@ fn seedCallableSymbolFromProcInsts(
             {},
             struct {
                 fn lessThan(_: void, lhs: MIR.SeedMember, rhs: MIR.SeedMember) bool {
-                    if (lhs.proc != rhs.proc) return @intFromEnum(lhs.proc) < @intFromEnum(rhs.proc);
+                    if (lhs.lambda != rhs.lambda) return @intFromEnum(lhs.lambda) < @intFromEnum(rhs.lambda);
                     return @intFromEnum(lhs.closure_member) < @intFromEnum(rhs.closure_member);
                 }
             }.lessThan,
@@ -8991,7 +8908,6 @@ fn lowerClosureProcBodyForSeed(
         );
 
         const bind_pat = try self.store.addPattern(self.allocator, .{ .bind = local_symbol }, cap_monotype);
-        try self.registerBoundSymbolDefIfNeeded(bind_pat, tuple_access_expr);
         try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = bind_pat, .expr = tuple_access_expr } });
     }
 
@@ -9010,7 +8926,6 @@ fn lowerClosureProcBodyForSeed(
             );
 
         const recursive_bind_pat = try self.store.addPattern(self.allocator, .{ .bind = local_symbol }, member_monotype);
-        try self.registerBoundSymbolDefIfNeeded(recursive_bind_pat, recursive_expr);
         try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = recursive_bind_pat, .expr = recursive_expr } });
     }
 
@@ -9239,7 +9154,6 @@ fn lowerClosureSpecialized(
 
         // let local_sym = tuple_access_expr
         const bind_pat = try self.store.addPattern(self.allocator, .{ .bind = local_symbol }, cap_monotype);
-        try self.registerBoundSymbolDefIfNeeded(bind_pat, tuple_access_expr);
         try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = bind_pat, .expr = tuple_access_expr } });
     }
 
@@ -9264,7 +9178,6 @@ fn lowerClosureSpecialized(
         };
 
         const recursive_bind_pat = try self.store.addPattern(self.allocator, .{ .bind = local_symbol }, member_monotype);
-        try self.registerBoundSymbolDefIfNeeded(recursive_bind_pat, recursive_expr);
         try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = recursive_bind_pat, .expr = recursive_expr } });
     }
 
@@ -10018,7 +9931,6 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
                 }
                 const pat = try self.lowerPattern(module_env, decl.pattern);
                 const expr = try self.lowerExpr(decl.expr);
-                try self.registerBoundSymbolDefIfNeeded(pat, expr);
                 try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = pat, .expr = expr } });
             },
             .s_var => |var_decl| {
@@ -10031,7 +9943,6 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
                 const pat = try self.lowerPattern(module_env, var_decl.pattern_idx);
                 try self.setPatternSymbolsReassignable(pat, true);
                 const expr = try self.lowerExpr(var_decl.expr);
-                try self.registerBoundSymbolDefIfNeeded(pat, expr);
                 try self.scratch_stmts.append(.{ .decl_var = .{ .pattern = pat, .expr = expr } });
             },
             .s_reassign => |reassign| {
@@ -10764,8 +10675,6 @@ fn lowerListEquality(
         .{ .decl_var = .{ .pattern = i_bind.pattern, .expr = zero } },
         .{ .decl_const = .{ .pattern = while_wildcard, .expr = while_expr } },
     });
-    try self.registerBoundSymbolDefIfNeeded(result_bind.pattern, true_init);
-    try self.registerBoundSymbolDefIfNeeded(i_bind.pattern, zero);
     const true_branch = try self.store.addExpr(self.allocator, .{ .block = .{
         .stmts = true_branch_stmts,
         .final_expr = result_lookup,
@@ -10779,7 +10688,6 @@ fn lowerListEquality(
     const outer_stmts = try self.store.addStmts(self.allocator, &.{
         .{ .decl_const = .{ .pattern = len_bind.pattern, .expr = len_lhs } },
     });
-    try self.registerBoundSymbolDefIfNeeded(len_bind.pattern, len_lhs);
     return try self.store.addExpr(self.allocator, .{ .block = .{
         .stmts = outer_stmts,
         .final_expr = len_match,
@@ -11013,7 +10921,6 @@ fn lowerRecord(self: *Self, module_env: *const ModuleEnv, record: anytype, monot
     const record_expr = try self.emitMirStructExprFromSpan(fields_span, monotype, region);
 
     if (extension_binding) |ext| {
-        try self.registerBoundSymbolDefIfNeeded(ext.pattern, ext.expr);
         const stmts = try self.store.addStmts(self.allocator, &.{MIR.Stmt{
             .decl_const = .{
                 .pattern = ext.pattern,
@@ -11099,209 +11006,6 @@ fn monotypeFromTypeVarInStore(
         &local_seen,
         &local_cycles,
     );
-}
-
-/// Lower an external definition by symbol, caching the result.
-pub fn lowerExternalDef(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId {
-    const saved_root_expr_context = self.current_root_expr_context;
-    if (self.current_proc_inst_context.isNone() and self.current_root_expr_context == null) {
-        self.current_root_expr_context = cir_expr_idx;
-    }
-    defer self.current_root_expr_context = saved_root_expr_context;
-    return self.lowerExternalDefWithType(symbol, cir_expr_idx, null);
-}
-
-/// Lower an external definition by its own declared identity.
-fn lowerExternalDefWithType(
-    self: *Self,
-    symbol: MIR.Symbol,
-    cir_expr_idx: CIR.Expr.Idx,
-    requested_monotype: ?struct {
-        idx: Monotype.Idx,
-        module_idx: u32,
-    },
-) Allocator.Error!MIR.ExprId {
-    const symbol_key: u64 = @bitCast(symbol);
-    const symbol_meta = self.getSymbolMetadata(symbol);
-    const symbol_module_idx = symbolMetadataModuleIdx(symbol_meta);
-    if (builtin.mode == .Debug) {
-        switch (symbol_meta) {
-            .external_def => |ext| {
-                const target_env = self.all_module_envs[ext.module_idx];
-                std.debug.assert(target_env.store.isDefNode(ext.def_node_idx));
-                const def_idx: CIR.Def.Idx = @enumFromInt(ext.def_node_idx);
-                const expected_expr = target_env.store.getDef(def_idx).expr;
-                if (expected_expr != cir_expr_idx) {
-                    std.debug.panic(
-                        "lowerExternalDefWithType: CIR expr mismatch for external symbol (module={d}, node={d}): expected expr={d}, got expr={d}",
-                        .{ ext.module_idx, ext.def_node_idx, @intFromEnum(expected_expr), @intFromEnum(cir_expr_idx) },
-                    );
-                }
-            },
-            .local_ident => {},
-        }
-    }
-    const target_type_var: types.Var = switch (symbol_meta) {
-        .external_def => |ext| @enumFromInt(ext.def_node_idx),
-        .local_ident => ModuleEnv.varFrom(cir_expr_idx),
-    };
-
-    // Check cache
-    if (self.lowered_symbols.get(symbol_key)) |cached| {
-        return cached;
-    }
-
-    // Recursion guard
-    if (self.in_progress_defs.contains(symbol_key)) {
-        const recursive_lookup_monotype = blk: {
-            if (self.in_progress_symbol_monotypes.get(symbol_key)) |active| {
-                if (!active.isNone()) break :blk active;
-            }
-
-            const derived = try self.monotypeFromTypeVarWithBindings(
-                self.current_module_idx,
-                self.types_store,
-                target_type_var,
-                &self.type_var_seen,
-                &self.nominal_cycle_breakers,
-            );
-            if (!derived.isNone()) break :blk derived;
-
-            if (std.debug.runtime_safety) {
-                std.debug.panic(
-                    "MIR Lower invariant: recursive external def lookup monotype unresolved for symbol={d}",
-                    .{symbol.raw()},
-                );
-            }
-            unreachable;
-        };
-        return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, recursive_lookup_monotype, Region.zero());
-    }
-
-    try self.in_progress_defs.put(symbol_key, {});
-    try self.in_progress_symbol_monotypes.put(symbol_key, Monotype.Idx.none);
-    errdefer _ = self.in_progress_symbol_monotypes.remove(symbol_key);
-
-    // Switch module context if needed.
-    const switching_module = symbol_module_idx != self.current_module_idx;
-    const saved_module_idx = self.current_module_idx;
-    const saved_pattern_scope = self.current_pattern_scope;
-    const saved_types_store = self.types_store;
-    const saved_type_var_seen = self.type_var_seen;
-    const saved_nominal_cycle_breakers = self.nominal_cycle_breakers;
-    const saved_ident_store = self.mono_scratches.ident_store;
-    const saved_module_env = self.mono_scratches.module_env;
-    const saved_mono_module_idx = self.mono_scratches.module_idx;
-    // Lower external defs in canonical module scope. A def-lowering context is
-    // not a lexical scope, and reusing current_pattern_scope here causes local
-    // sibling bindings to be resolved to synthetic per-def symbols instead of
-    // their canonical block-local/module-local identities.
-    self.current_pattern_scope = 0;
-    if (switching_module) {
-        self.current_module_idx = symbol_module_idx;
-        self.types_store = &self.all_module_envs[symbol_module_idx].types;
-        self.mono_scratches.ident_store = self.all_module_envs[symbol_module_idx].getIdentStoreConst();
-        self.mono_scratches.module_env = self.all_module_envs[symbol_module_idx];
-        self.mono_scratches.module_idx = symbol_module_idx;
-    }
-
-    // Always isolate type_var_seen per external definition lowering.
-    // Reusing a shared cache across polymorphic specializations can pin flex
-    // and rigid vars to an earlier specialization.
-    self.type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
-    self.nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
-
-    try self.seedTypeScopeBindingsInStore(
-        self.current_module_idx,
-        self.types_store,
-        &self.type_var_seen,
-    );
-
-    defer {
-        self.type_var_seen.deinit();
-        self.type_var_seen = saved_type_var_seen;
-        self.nominal_cycle_breakers.deinit();
-        self.nominal_cycle_breakers = saved_nominal_cycle_breakers;
-        self.current_pattern_scope = saved_pattern_scope;
-        if (switching_module) {
-            self.types_store = saved_types_store;
-            self.current_module_idx = saved_module_idx;
-            self.mono_scratches.ident_store = saved_ident_store;
-            self.mono_scratches.module_env = saved_module_env;
-            self.mono_scratches.module_idx = saved_mono_module_idx;
-        }
-    }
-
-    const current_env = self.all_module_envs[self.current_module_idx];
-    const result = if (cirExprIsProcBacked(current_env, cir_expr_idx)) blk: {
-        const template_id = self.monomorphization.getExprProcTemplate(self.current_module_idx, cir_expr_idx) orelse {
-            if (builtin.mode == .Debug) {
-                const module_name = current_env.getIdent(current_env.qualified_module_ident);
-                std.debug.panic(
-                    "MIR Lower invariant: callable def symbol={d} expr={d} tag={s} in module {d} ('{s}') has no proc template",
-                    .{
-                        symbol.raw(),
-                        @intFromEnum(cir_expr_idx),
-                        @tagName(current_env.store.getExpr(cir_expr_idx)),
-                        self.current_module_idx,
-                        module_name,
-                    },
-                );
-            }
-            unreachable;
-        };
-        const proc_inst_id = proc_inst_blk: {
-            if (requested_monotype) |req| {
-                if (self.monotypeIsWellFormed(req.idx) and self.store.monotype_store.getMonotype(req.idx) == .func) {
-                    break :proc_inst_blk try self.lookupMonomorphizedProcInst(template_id, req.idx, req.module_idx);
-                }
-            }
-
-            break :proc_inst_blk self.lookupMonomorphizedExprProcInst(cir_expr_idx) orelse {
-                if (builtin.mode == .Debug) {
-                    const binding_name = switch (symbol_meta) {
-                        .external_def => |ext| ext_blk: {
-                            const target_env = self.all_module_envs[ext.module_idx];
-                            const def_idx: CIR.Def.Idx = @enumFromInt(ext.def_node_idx);
-                            const def = target_env.store.getDef(def_idx);
-                            break :ext_blk switch (target_env.store.getPattern(def.pattern)) {
-                                .assign => |assign_pat| target_env.getIdent(assign_pat.ident),
-                                else => "<non-assign>",
-                            };
-                        },
-                        .local_ident => "<local-ident>",
-                    };
-                    std.debug.panic(
-                        "MIR Lower invariant: callable def '{s}' symbol={d} expr={d} in module {d} template={d} has no monomorphized proc inst in context {d} root_expr={d} current_proc_template={d} current_proc_expr={d} requested_monotype={d} requested_monotype_module={d}",
-                        .{
-                            binding_name,
-                            symbol.raw(),
-                            @intFromEnum(cir_expr_idx),
-                            self.current_module_idx,
-                            @intFromEnum(template_id),
-                            @intFromEnum(self.current_proc_inst_context),
-                            if (self.current_root_expr_context) |root_expr_idx| @intFromEnum(root_expr_idx) else std.math.maxInt(u32),
-                            if (!self.current_proc_inst_context.isNone()) @intFromEnum(self.monomorphization.getProcInst(self.current_proc_inst_context).template) else std.math.maxInt(u32),
-                            if (!self.current_proc_inst_context.isNone()) @intFromEnum(self.monomorphization.getProcTemplate(self.monomorphization.getProcInst(self.current_proc_inst_context).template).cir_expr) else std.math.maxInt(u32),
-                            if (requested_monotype) |req| @intFromEnum(req.idx) else std.math.maxInt(u32),
-                            if (requested_monotype) |req| req.module_idx else std.math.maxInt(u32),
-                        },
-                    );
-                }
-                unreachable;
-            };
-        };
-        break :blk try self.lowerProcInst(proc_inst_id);
-    } else try self.lowerExpr(cir_expr_idx);
-
-    // Cache the result and register the symbol definition
-    try self.lowered_symbols.put(symbol_key, result);
-    try self.store.registerValueDef(self.allocator, symbol, result);
-
-    _ = self.in_progress_defs.remove(symbol_key);
-    _ = self.in_progress_symbol_monotypes.remove(symbol_key);
-
-    return result;
 }
 
 fn typeBindingInvariant(comptime fmt: []const u8, args: anytype) noreturn {

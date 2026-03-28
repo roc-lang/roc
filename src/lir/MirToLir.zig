@@ -732,8 +732,29 @@ fn fieldMonotypeForSource(
 
 const TagVariantInfo = struct {
     discriminant: u16,
-    payload_mono: ?MirMonotypeIdx,
+    payloads: mir_mod.Monotype.Span,
 };
+
+fn syntheticTupleLayoutFromPayloadMonotypes(
+    self: *Self,
+    payload_monos: []const MirMonotypeIdx,
+) Allocator.Error!layout.Idx {
+    if (payload_monos.len == 0) {
+        return self.layout_store.ensureEmptyRecordLayout();
+    }
+
+    const fields = try self.allocator.alloc(layout.StructField, payload_monos.len);
+    defer self.allocator.free(fields);
+
+    for (payload_monos, 0..) |payload_mono, i| {
+        fields[i] = .{
+            .index = @intCast(i),
+            .layout = try self.runtimeValueLayoutFromMirMonotype(payload_mono),
+        };
+    }
+
+    return self.layout_store.putStructFields(fields);
+}
 
 fn tagVariantInfoForSource(
     self: *Self,
@@ -752,19 +773,9 @@ fn tagVariantInfoForSource(
     for (tags, 0..) |tag, index| {
         if (!tag.name.textEqual(self.analyses.all_module_envs, tag_name)) continue;
 
-        const payloads = self.mir_store.monotype_store.getIdxSpan(tag.payloads);
-        const payload_mono = switch (payloads.len) {
-            0 => null,
-            1 => payloads[0],
-            else => std.debug.panic(
-                "MirToLir invariant violated: multi-arg tag payloads must be wrapped before statement-only lowering",
-                .{},
-            ),
-        };
-
         return .{
             .discriminant = @intCast(index),
-            .payload_mono = payload_mono,
+            .payloads = tag.payloads,
         };
     }
 
@@ -908,23 +919,63 @@ fn lowerPatternInto(
             const discr_local = try self.freshLocal(.u32);
             const variant = self.tagVariantInfoForSource(source_mono, tag_pattern.name);
             const payload_patterns = self.mir_store.getPatternSpan(tag_pattern.args);
+            const payload_monos = self.mir_store.monotype_store.getIdxSpan(variant.payloads);
 
             const matched = blk_matched: {
                 if (payload_patterns.len == 0) break :blk_matched on_match;
-                if (payload_patterns.len != 1) {
+                if (payload_patterns.len != payload_monos.len) {
                     std.debug.panic(
-                        "MirToLir invariant violated: tag pattern payload arity {d} must be wrapped before statement-only lowering",
-                        .{payload_patterns.len},
+                        "MirToLir invariant violated: tag pattern payload arity {d} does not match source variant arity {d}",
+                        .{ payload_patterns.len, payload_monos.len },
                     );
                 }
-                const payload_mono = variant.payload_mono orelse std.debug.panic(
+                if (payload_monos.len == 1) {
+                    const payload_mono = payload_monos[0];
+                    const payload_pattern = payload_patterns[0];
+                    const payload_local = try self.freshLocal(try self.runtimeValueLayoutFromMirMonotype(payload_mono));
+                    const payload_match = try self.lowerPatternInto(payload_local, payload_mono, payload_pattern, on_match, on_fail);
+                    break :blk_matched try self.emitAssignRef(
+                        payload_local,
+                        borrowSemantics(source, try self.singleProjectionSpan(.tag_payload), self.current_borrow_region),
+                        .{ .tag_payload = .{ .source = source } },
+                        payload_match,
+                    );
+                }
+
+                if (payload_monos.len == 0) std.debug.panic(
                     "MirToLir invariant violated: zero-payload tag pattern cannot destructure a payload",
                     .{},
                 );
 
-                const payload_pattern = payload_patterns[0];
-                const payload_local = try self.freshLocal(try self.runtimeValueLayoutFromMirMonotype(payload_mono));
-                const payload_match = try self.lowerPatternInto(payload_local, payload_mono, payload_pattern, on_match, on_fail);
+                const payload_local = try self.freshLocal(try self.syntheticTupleLayoutFromPayloadMonotypes(payload_monos));
+                var payload_match = on_match;
+                var i = payload_patterns.len;
+                while (i > 0) {
+                    i -= 1;
+                    const field_local = try self.freshLocal(try self.runtimeValueLayoutFromMirMonotype(payload_monos[i]));
+                    const field_pattern = payload_patterns[i];
+                    const lowered_field = try self.lowerPatternInto(
+                        field_local,
+                        payload_monos[i],
+                        field_pattern,
+                        payload_match,
+                        on_fail,
+                    );
+                    payload_match = try self.emitAssignRef(
+                        field_local,
+                        borrowSemantics(
+                            payload_local,
+                            try self.singleProjectionSpan(.{ .field = @intCast(i) }),
+                            self.current_borrow_region,
+                        ),
+                        .{ .field = .{
+                            .source = payload_local,
+                            .field_idx = @intCast(i),
+                        } },
+                        lowered_field,
+                    );
+                }
+
                 break :blk_matched try self.emitAssignRef(
                     payload_local,
                     borrowSemantics(source, try self.singleProjectionSpan(.tag_payload), self.current_borrow_region),
