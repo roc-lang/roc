@@ -296,12 +296,26 @@ pub const SymKind = enum(u8) {
     table = 5,
 };
 
-/// A symbol table entry. Each symbol has a kind, flags, a name, and an index
+/// A symbol table entry. Each symbol has a kind, flags, and an index
 /// into the relevant index space (function index, global index, etc.).
+///
+/// Function/global symbols can be **explicitly named** (name stored in the linking
+/// section) or **implicitly named** (undefined symbols that inherit their name from
+/// the import section entry they reference). The old Rust parser distinguishes these
+/// as `ExplicitlyNamed` vs `ImplicitlyNamed` variants (`crates/wasm_module/src/linking.rs`
+/// lines 354–385). We model this with an optional name field.
+///
+/// Parsing rule: a function/global symbol gets a name from the linking section if
+/// `(flags & WASM_SYM_EXPLICIT_NAME) != 0` OR `(flags & WASM_SYM_UNDEFINED) == 0`
+/// (i.e. defined symbols always have names). Undefined symbols without EXPLICIT_NAME
+/// have `name = null` — their name must be looked up from the import section at the
+/// symbol's `index`.
 pub const SymInfo = struct {
     kind: SymKind,
     flags: u32,
-    name: []const u8,
+    /// Explicit name from the linking section, or null for implicitly-named
+    /// imported symbols (whose name comes from the import section).
+    name: ?[]const u8,
     /// For function symbols: the function index (import or defined).
     /// For global symbols: the global index.
     /// For data symbols: segment index (stored here, offset/size stored separately).
@@ -315,12 +329,25 @@ pub const SymInfo = struct {
         return (self.flags & SymFlag.UNDEFINED) != 0;
     }
 
+    pub fn isImplicitlyNamed(self: SymInfo) bool {
+        return self.name == null;
+    }
+
     pub fn isLocal(self: SymInfo) bool {
         return (self.flags & SymFlag.BINDING_LOCAL) != 0;
     }
 
     pub fn isFunction(self: SymInfo) bool {
         return self.kind == .function;
+    }
+
+    /// Resolve this symbol's name. For explicitly-named symbols, returns the
+    /// stored name. For implicitly-named imported symbols, looks up the name
+    /// from the import section.
+    pub fn getName(self: SymInfo, imports: []const Import) []const u8 {
+        if (self.name) |n| return n;
+        // Implicitly named: look up from import section by index
+        return imports[self.index].field_name;
     }
 };
 ```
@@ -408,10 +435,15 @@ pub const LinkingSection = struct {
     segment_info: std.ArrayList(SegmentInfo),
     init_funcs: std.ArrayList(InitFunc),
 
-    /// Find a symbol by name. Returns the symbol index, or null.
-    pub fn findSymbolByName(self: *const LinkingSection, name: []const u8) ?u32 {
+    /// Find a symbol by name. For implicitly-named symbols, resolves the name
+    /// from the import section. Returns the symbol index, or null.
+    pub fn findSymbolByName(
+        self: *const LinkingSection,
+        name: []const u8,
+        imports: []const Import,
+    ) ?u32 {
         for (self.symbol_table.items, 0..) |sym, i| {
-            if (std.mem.eql(u8, sym.name, name)) return @intCast(i);
+            if (std.mem.eql(u8, sym.getName(imports), name)) return @intCast(i);
         }
         return null;
     }
@@ -659,12 +691,13 @@ test "preload — parses reloc.CODE section entries"
 test "preload — parses reloc.DATA section entries"
 test "preload — require_relocatable rejects module without linking section"
 test "preload — require_relocatable rejects module without reloc sections"
-test "preload — round-trip: preload then serialize produces identical bytes"
+test "preload — parsed module has correct function count, import count, symbol count"
 ```
 
-The round-trip test is particularly important: parse a known-good relocatable `.wasm`, serialize
-it back, and verify byte-for-byte equality. This validates that the parser and serializer are
-consistent.
+Note: there is **no round-trip requirement**. The parser reads relocatable objects; the
+serializer emits final (non-relocatable) modules with linking sections stripped. These are
+different formats by design. To validate the parser independently, check that parsed field
+counts and symbol names match expected values from known test fixtures.
 
 **Test fixture**: Use `clang --target=wasm32 -c -o test.o test.c` to produce a minimal
 relocatable WASM object file with known symbols and relocations. Alternatively, hand-craft
@@ -814,25 +847,38 @@ at lines 296–304 (memory layout and table sizing).
 **During host module setup** (after `preload()`, before code generation):
 
 ```
-1. REMOVE memory and table imports from the host module's import section:
+1. REMOVE only Memory and Table imports from the host module's import section:
    host_module.imports.retain(|imp| imp is not Memory and not Table)
    Update import_fn_count if any non-function imports were before function imports.
+   KEEP the __stack_pointer global import — it is needed during code generation
+   and linking because relocation entries reference it by its global index.
+```
 
-2. DEFINE memory:
+**During finalization** (after all code generation and surgical linking, before serialization):
+
+```
+2. REPLACE __stack_pointer global import with a defined global:
+   Remove the __stack_pointer import from the import section.
+   Define it as: type=i32, mutable=true, init=i32.const(stack_pointer_init)
+   stack_pointer_init = memory_pages * 65536  (top of memory)
+   The old Rust compiler does this in set_memory_layout() at
+   crates/compiler/gen_wasm/src/backend.rs lines 151–174.
+
+3. DEFINE memory:
    host_module.has_memory = true
    host_module.memory_min_pages = calculated from stack_bytes and data size
    Memory is exported as "memory" for host access.
 
-3. DEFINE table:
+4. DEFINE table:
    host_module.has_table = true
    Table size = 1 + max element index (computed after all functions are registered)
    Table type = funcref, limits = MinMax(size, size)
-
-4. DEFINE __stack_pointer global:
-   host_module.has_stack_pointer = true
-   host_module.stack_pointer_init = memory_pages * 65536  (top of memory)
-   The global is: type=i32, mutable=true, init=i32.const(stack_pointer_init)
 ```
+
+**Important**: The split between setup (step 1) and finalization (steps 2–4) is critical.
+During the linking phase, `__stack_pointer` references are resolved via its global import
+index and relocation entries. Only after all linking is complete can we replace the import
+with a defined global at the correct initial value.
 
 **Memory layout**:
 
@@ -1006,34 +1052,103 @@ i32.load                     ;; Load table index of hosted fn N
 call_indirect (type $roc_call) 0
 ```
 
-### All Indirect Calls Use RocCall Signature
+### Two Distinct Indirect Call ABIs
 
-All function pointers stored in RocOps — both the 6 built-in ops and the hosted functions
-— are called with the same signature on WASM:
+There are **two different `call_indirect` type signatures** in use, and they must not
+be conflated:
+
+**1. RocOps core callbacks** — 2-argument ABI: `(i32 args_struct_ptr, i32 env_ptr) → void`
+
+The 6 core RocOps callbacks (`roc_alloc`, `roc_dealloc`, `roc_realloc`, `roc_dbg`,
+`roc_expect_failed`, `roc_crashed`) each take a pointer to a **specific args struct**
+and the host `env` pointer. This matches `host_abi.zig` lines 88–106 where each field
+has signature `fn(*SpecificStruct, *anyopaque) callconv(.c) void`.
+
+```wasm
+(type $roc_ops_callback (func (param i32 i32)))  ;; (args_struct_ptr, env_ptr) -> void
+```
+
+This is what the current WASM backend registers at `WasmCodeGen.zig` line 215 and what
+builtins depend on when calling `roc_ops.alloc()` (`dev_wrappers.zig` line 405). The args
+struct is laid out in linear memory (e.g. `RocAlloc` at lines 186–190: alignment, length,
+answer), the callback reads inputs and writes its answer into the struct, and the caller
+reads the answer back.
+
+Example — `roc_alloc` call:
+```wasm
+;; Write RocAlloc struct to stack slot
+local.get $fp
+local.get $alignment
+i32.store offset=0              ;; RocAlloc.alignment
+local.get $fp
+local.get $length
+i32.store offset=4              ;; RocAlloc.length
+
+;; Push args: (alloc_struct_ptr, env_ptr)
+local.get $fp                   ;; args_struct_ptr
+local.get $roc_ops_ptr
+i32.load offset=0               ;; env_ptr (RocOps offset 0)
+
+;; Load table index, dispatch
+local.get $roc_ops_ptr
+i32.load offset=4               ;; roc_alloc table index
+call_indirect (type $roc_ops_callback) 0
+
+;; Read result
+local.get $fp
+i32.load offset=8               ;; RocAlloc.answer
+```
+
+**2. Hosted functions** — 3-argument RocCall ABI: `(i32 roc_ops_ptr, i32 ret_ptr, i32 args_ptr) → void`
+
+Hosted functions (platform-provided) use the `RocCall` ABI from `host_abi.zig` line 15.
+This is a different signature — 3 arguments, not 2.
 
 ```wasm
 (type $roc_call (func (param i32 i32 i32)))  ;; (roc_ops, ret_ptr, args_ptr) -> void
 ```
 
-This matches the `RocCall` ABI from `host_abi.zig` line 15. The args/return structs are
-passed by pointer, not by value. Each caller is responsible for marshalling arguments into
-a contiguous stack buffer and providing a return slot.
+Both type signatures must be registered in the module's type section, and callers must
+use the correct one. Using the wrong type in `call_indirect` will trap at runtime
+(WASM validates the type signature of indirect calls).
 
-### Rust Reference
+### Codegen Must Register Both Types
 
-- `src/backend/wasm/WasmCodeGen.zig` lines 214–240: current table index registration
-- `src/backend/wasm/WasmCodeGen.zig` lines 428–452: current RocOps struct initialization
-- `src/backend/wasm/WasmCodeGen.zig` lines 4886–4902: current `call_indirect` emission
-- `src/builtins/host_abi.zig` lines 88–179: native `RocOps` struct definition
-- `src/builtins/host_abi.zig` lines 15–30: `RocCall` ABI definition
-- `src/builtins/host_abi.zig` lines 67–84: `HostedFunctions` struct
+```zig
+// Register the 2-arg RocOps callback type: (args_struct_ptr, env_ptr) → void
+self.roc_ops_callback_type_idx = try self.module.addFuncType(&.{ .i32, .i32 }, &.{});
+
+// Register the 3-arg RocCall type: (roc_ops, ret_ptr, args_ptr) → void
+self.roc_call_type_idx = try self.module.addFuncType(&.{ .i32, .i32, .i32 }, &.{});
+```
+
+| Call target | Type signature | Type index field |
+|-------------|---------------|-----------------|
+| `roc_alloc` | `(i32, i32) → void` | `roc_ops_callback_type_idx` |
+| `roc_dealloc` | `(i32, i32) → void` | `roc_ops_callback_type_idx` |
+| `roc_realloc` | `(i32, i32) → void` | `roc_ops_callback_type_idx` |
+| `roc_dbg` | `(i32, i32) → void` | `roc_ops_callback_type_idx` |
+| `roc_expect_failed` | `(i32, i32) → void` | `roc_ops_callback_type_idx` |
+| `roc_crashed` | `(i32, i32) → void` | `roc_ops_callback_type_idx` |
+| Hosted function N | `(i32, i32, i32) → void` | `roc_call_type_idx` |
+
+### Reference
+
+- `src/builtins/host_abi.zig` lines 88–106: RocOps callback field signatures (2-arg)
+- `src/builtins/host_abi.zig` lines 186–242: RocAlloc/RocDealloc/etc. argument structs
+- `src/builtins/host_abi.zig` lines 15–30: RocCall signature (3-arg, for hosted fns)
+- `src/builtins/host_abi.zig` lines 37–44: HostedFn type definition
+- `src/builtins/dev_wrappers.zig` lines 147–162: `alloc()` wrapper calling `self.roc_alloc(&args, self.env)`
+- `src/backend/wasm/WasmCodeGen.zig` lines 215–219: current 2-arg type registration
+- `src/backend/wasm/WasmCodeGen.zig` lines 4886–4908: current `call_indirect` for roc_alloc
 
 ### Tests
 
 ```
 test "RocOps struct — correct field offsets for wasm32 (36 bytes total)"
-test "call_indirect — roc_alloc dispatches correctly via table index at offset 4"
-test "call_indirect — hosted function dispatches via hosted_fns array lookup"
+test "call_indirect — roc_alloc uses 2-arg callback type, not RocCall type"
+test "call_indirect — hosted function uses 3-arg RocCall type"
+test "call_indirect — mismatched type index would trap (validate type separation)"
 test "function table — all RocOps functions have valid table entries after linking"
 test "function table — hosted functions added to table with correct indices"
 ```
@@ -1389,6 +1504,7 @@ Every place WasmCodeGen currently emits a host import call must be rewritten to:
 | **i128 binop** | `(lhs_ptr, rhs_ptr, result_ptr)` | `(result_ptr, lhs_lo, lhs_hi, rhs_lo, rhs_hi)` | i128_div_s, u128_div, dec_mul |
 | **Dec to str** | `(dec_ptr, buf_ptr) → i32` | `(result: *RocStr, lo: u64, hi: u64, roc_ops: *RocOps)` | dec_to_str |
 | **List ops** | `(list_ptr, ...)` | `(result_ptr, bytes, len, cap, ..., roc_ops)` | list_append, list_reverse |
+| **Callback-bearing** | `(list_ptr, cmp_fn, cmp_data, ...)` | `(result_ptr, bytes, len, cap, cmp_fn_ptr, cmp_data, alignment, elem_width, roc_ops)` | list_sort_with |
 
 **Example rewrite** — `str_trim`:
 
@@ -1406,6 +1522,36 @@ try self.emitI32Load(str_ptr_local, 8);   // arg 3: capacity (offset 8)
 try self.emitLocalGet(self.roc_ops_local); // arg 4: roc_ops pointer
 try self.code_builder.emitRelocatableCall(self.builtin_syms.str_trim);
 ```
+
+**Callback-bearing builtins** require special treatment. `list_sort_with` is the primary
+example. Its wrapper signature (`dev_wrappers.zig` lines 382–424):
+
+```zig
+pub fn roc_builtins_list_sort_with(
+    out: *RocList,
+    list_bytes: ?[*]u8, list_len: usize, list_cap: usize,
+    cmp_fn_ptr: ?*const anyopaque,  // comparator function pointer
+    cmp_data: ?[*]u8,               // comparator closure data
+    alignment: u32,
+    element_width: usize,
+    roc_ops: *RocOps,
+) callconv(.c) void
+```
+
+On WASM, function pointers don't exist in linear memory. The `cmp_fn_ptr` parameter must
+be a **function table index** (a `u32` that indexes into the `funcref` table). The current
+WASM backend already handles this: `WasmCodeGen.zig` line 11994 compiles the comparator
+as a separate procedure and passes its function index. The dev backend does the equivalent
+via PC-relative addressing (`LirCodeGen.zig` line 3366).
+
+The call-site rewrite for `list_sort_with` must:
+1. Compile the comparator procedure and get its `func_idx` (already done by `compileAllProcSpecs`)
+2. Pass `func_idx` as `cmp_fn_ptr` (it will be interpreted as a table index by the builtin)
+3. Pass the closure data pointer as `cmp_data`
+4. Decompose the list struct and pass remaining args in the new ABI
+
+Any future callback-bearing builtins (e.g. `list_map`, `list_keep_if`) will follow the
+same pattern: compile the callback as a proc, pass its table index.
 
 ### Sub-phase 8d: Remove Legacy Imports
 
@@ -1461,7 +1607,6 @@ test "mergeModule — function indices remapped correctly"
 test "mergeModule — code bytes appended at correct offset"
 test "mergeModule — undefined symbol in builtins resolved to host's roc_alloc import"
 test "mergeModule — relocation offsets shifted by base_code_offset"
-test "mergeModule — round-trip: merge then serialize produces valid WASM"
 test "BuiltinSymbols — all symbols found after merge"
 test "str_trim ABI — decomposed args match roc_builtins_str_trim signature"
 test "dec_mul ABI — decomposed i128 args match roc_builtins_dec_mul_saturated"
@@ -1735,7 +1880,6 @@ test "encode — code section function count includes dummies"
 test "encode — linking section NOT present in output"
 test "encode — reloc.CODE section NOT present in output"
 test "encode — output is valid WASM (magic, version, section ordering)"
-test "encode — round-trip with preload produces consistent output"
 ```
 
 ---
@@ -1761,9 +1905,10 @@ enable it by providing the complete pipeline from source to `.wasm`.
  2. Parse host module
     host_module = WasmModule.preload(allocator, host_bytes, true)
 
- 3. Setup: remove memory/table imports, configure ownership (Phase 5)
-    host_module.removeNonFunctionImports()
-    host_module.has_memory = true  // will be configured in finalize
+ 3. Setup: remove ONLY memory and table imports (Phase 5)
+    host_module.removeMemoryAndTableImports()
+    // NOTE: __stack_pointer global import is kept — the linker needs it
+    // until finalization when it becomes a defined global.
 
  4. Parse and merge builtins (Phase 8a)
     builtins_module = WasmModule.preload(allocator, builtins_bytes, true)
