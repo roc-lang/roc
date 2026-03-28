@@ -72,6 +72,37 @@ pub const RelocationEntry = union(enum) {
             .offset => |o| o.offset,
         };
     }
+
+    /// Parse a single relocation entry from bytes at cursor position.
+    pub fn parse(bytes: []const u8, cursor: *usize) WasmModule.ParseError!RelocationEntry {
+        if (cursor.* >= bytes.len) return error.UnexpectedEnd;
+        const type_byte = bytes[cursor.*];
+        cursor.* += 1;
+        const offset = try WasmModule.readU32(bytes, cursor);
+        const symbol_index = try WasmModule.readU32(bytes, cursor);
+
+        // Try index relocation types first (no addend)
+        if (std.meta.intToEnum(IndexRelocType, type_byte)) |type_id| {
+            return .{ .index = .{
+                .type_id = type_id,
+                .offset = offset,
+                .symbol_index = symbol_index,
+            } };
+        } else |_| {}
+
+        // Try offset relocation types (with addend)
+        if (std.meta.intToEnum(OffsetRelocType, type_byte)) |type_id| {
+            const addend = try WasmModule.readI32(bytes, cursor);
+            return .{ .offset = .{
+                .type_id = type_id,
+                .offset = offset,
+                .symbol_index = symbol_index,
+                .addend = addend,
+            } };
+        } else |_| {}
+
+        return error.InvalidSection;
+    }
 };
 
 // --- Symbol Info ---
@@ -140,6 +171,51 @@ pub const SymInfo = struct {
         return self.kind == .function;
     }
 
+    /// Parse a single symbol table entry from the linking section.
+    pub fn parse(bytes: []const u8, cursor: *usize) WasmModule.ParseError!SymInfo {
+        if (cursor.* >= bytes.len) return error.UnexpectedEnd;
+        const kind_byte = bytes[cursor.*];
+        cursor.* += 1;
+        const kind = std.meta.intToEnum(SymKind, kind_byte) catch return error.InvalidSection;
+        const flags = try WasmModule.readU32(bytes, cursor);
+
+        switch (kind) {
+            .function, .global, .event, .table => {
+                const index = try WasmModule.readU32(bytes, cursor);
+                const is_import = (flags & SymFlag.UNDEFINED) != 0;
+                const has_explicit_name = (flags & SymFlag.EXPLICIT_NAME) != 0;
+                // Defined symbols always have names; undefined ones only if EXPLICIT_NAME is set
+                const name: ?[]const u8 = if (!is_import or has_explicit_name)
+                    try WasmModule.readString(bytes, cursor)
+                else
+                    null;
+                return .{ .kind = kind, .flags = flags, .name = name, .index = index };
+            },
+            .data => {
+                const name = try WasmModule.readString(bytes, cursor);
+                if ((flags & SymFlag.UNDEFINED) != 0) {
+                    // Imported data symbol — no segment info
+                    return .{ .kind = kind, .flags = flags, .name = name, .index = 0 };
+                }
+                const segment_index = try WasmModule.readU32(bytes, cursor);
+                const data_offset = try WasmModule.readU32(bytes, cursor);
+                const data_size = try WasmModule.readU32(bytes, cursor);
+                return .{
+                    .kind = kind,
+                    .flags = flags,
+                    .name = name,
+                    .index = segment_index,
+                    .data_offset = data_offset,
+                    .data_size = data_size,
+                };
+            },
+            .section => {
+                const index = try WasmModule.readU32(bytes, cursor);
+                return .{ .kind = kind, .flags = flags, .name = null, .index = index };
+            },
+        }
+    }
+
     /// Resolve this symbol's name when one is available.
     ///
     /// Explicitly named symbols return their stored name.
@@ -168,6 +244,35 @@ pub const RelocationSection = struct {
     target_section_index: u32,
     /// The relocation entries, sorted by offset.
     entries: std.ArrayList(RelocationEntry),
+
+    /// Parse a relocation section from its body bytes (after the section name has
+    /// been consumed). `name` is the section name (e.g. "reloc.CODE").
+    pub fn parse(
+        allocator: std.mem.Allocator,
+        name: []const u8,
+        bytes: []const u8,
+        cursor: *usize,
+        section_end: usize,
+    ) WasmModule.ParseError!RelocationSection {
+        const target_section_index = try WasmModule.readU32(bytes, cursor);
+        const count = try WasmModule.readU32(bytes, cursor);
+
+        var entries: std.ArrayList(RelocationEntry) = .empty;
+        errdefer entries.deinit(allocator);
+        try entries.ensureTotalCapacity(allocator, count);
+
+        for (0..count) |_| {
+            if (cursor.* > section_end) return error.UnexpectedEnd;
+            const entry = try RelocationEntry.parse(bytes, cursor);
+            entries.appendAssumeCapacity(entry);
+        }
+
+        return .{
+            .name = name,
+            .target_section_index = target_section_index,
+            .entries = entries,
+        };
+    }
 
     /// Patch all sites in `section_bytes` that reference `sym_index` with `value`.
     /// This is the core surgical linking primitive.
@@ -244,6 +349,75 @@ pub const LinkingSection = struct {
     symbol_table: std.ArrayList(SymInfo),
     segment_info: std.ArrayList(SegmentInfo),
     init_funcs: std.ArrayList(InitFunc),
+
+    /// Parse a linking section body (after the "linking" name has been consumed).
+    pub fn parse(
+        allocator: std.mem.Allocator,
+        bytes: []const u8,
+        cursor: *usize,
+        section_end: usize,
+    ) WasmModule.ParseError!LinkingSection {
+        // Version must be 2
+        if (cursor.* >= bytes.len) return error.UnexpectedEnd;
+        const version = bytes[cursor.*];
+        cursor.* += 1;
+        if (version != LINKING_VERSION) return error.InvalidLinkingVersion;
+
+        var symbol_table: std.ArrayList(SymInfo) = .empty;
+        errdefer symbol_table.deinit(allocator);
+        var segment_info: std.ArrayList(SegmentInfo) = .empty;
+        errdefer segment_info.deinit(allocator);
+        var init_funcs: std.ArrayList(InitFunc) = .empty;
+        errdefer init_funcs.deinit(allocator);
+
+        while (cursor.* < section_end) {
+            if (cursor.* >= bytes.len) return error.UnexpectedEnd;
+            const subsection_id = bytes[cursor.*];
+            cursor.* += 1;
+            const subsection_len = try WasmModule.readU32(bytes, cursor);
+            const subsection_end = cursor.* + subsection_len;
+
+            if (std.meta.intToEnum(LinkingSubsection, subsection_id)) |sub| {
+                switch (sub) {
+                    .symbol_table => {
+                        const count = try WasmModule.readU32(bytes, cursor);
+                        try symbol_table.ensureTotalCapacity(allocator, count);
+                        for (0..count) |_| {
+                            const sym = try SymInfo.parse(bytes, cursor);
+                            symbol_table.appendAssumeCapacity(sym);
+                        }
+                    },
+                    .segment_info => {
+                        const count = try WasmModule.readU32(bytes, cursor);
+                        try segment_info.ensureTotalCapacity(allocator, count);
+                        for (0..count) |_| {
+                            const name = try WasmModule.readString(bytes, cursor);
+                            const alignment = try WasmModule.readU32(bytes, cursor);
+                            const flags = try WasmModule.readU32(bytes, cursor);
+                            segment_info.appendAssumeCapacity(.{
+                                .name = name,
+                                .alignment = alignment,
+                                .flags = flags,
+                            });
+                        }
+                    },
+                    .init_funcs, .comdat_info => {
+                        // Skip these subsections for now
+                        cursor.* = subsection_end;
+                    },
+                }
+            } else |_| {
+                // Unknown subsection, skip
+                cursor.* = subsection_end;
+            }
+        }
+
+        return .{
+            .symbol_table = symbol_table,
+            .segment_info = segment_info,
+            .init_funcs = init_funcs,
+        };
+    }
 
     /// Find a symbol by name. For implicitly-named imported symbols, resolves
     /// the name from the import section. Returns the symbol index, or null.
@@ -560,4 +734,101 @@ test "LinkingSection.findAndReindexImportedFn — updates index and returns sym 
     try testing.expectEqual(@as(u32, 10), section.symbol_table.items[0].index);
     // Old index should no longer be found
     try testing.expectEqual(@as(?u32, null), section.findAndReindexImportedFn(3, 20));
+}
+
+// --- Parsing tests ---
+
+test "RelocationEntry.parse — parses index relocation (function_index_leb)" {
+    // type=0 (function_index_leb), offset=5, symbol_index=2
+    var bytes: [3]u8 = .{ 0x00, 0x05, 0x02 };
+    var cursor: usize = 0;
+    const entry = try RelocationEntry.parse(&bytes, &cursor);
+    try testing.expectEqual(@as(usize, 3), cursor);
+    switch (entry) {
+        .index => |idx| {
+            try testing.expectEqual(IndexRelocType.function_index_leb, idx.type_id);
+            try testing.expectEqual(@as(u32, 5), idx.offset);
+            try testing.expectEqual(@as(u32, 2), idx.symbol_index);
+        },
+        .offset => unreachable,
+    }
+}
+
+test "RelocationEntry.parse — parses offset relocation (memory_addr_leb) with addend" {
+    // type=3 (memory_addr_leb), offset=10, symbol_index=1, addend=16
+    var bytes: [4]u8 = .{ 0x03, 0x0A, 0x01, 0x10 };
+    var cursor: usize = 0;
+    const entry = try RelocationEntry.parse(&bytes, &cursor);
+    try testing.expectEqual(@as(usize, 4), cursor);
+    switch (entry) {
+        .offset => |off| {
+            try testing.expectEqual(OffsetRelocType.memory_addr_leb, off.type_id);
+            try testing.expectEqual(@as(u32, 10), off.offset);
+            try testing.expectEqual(@as(u32, 1), off.symbol_index);
+            try testing.expectEqual(@as(i32, 16), off.addend);
+        },
+        .index => unreachable,
+    }
+}
+
+test "SymInfo.parse — parses undefined function symbol (implicitly named)" {
+    // kind=0 (function), flags=0x10 (UNDEFINED), index=3
+    var bytes: [3]u8 = .{ 0x00, 0x10, 0x03 };
+    var cursor: usize = 0;
+    const sym = try SymInfo.parse(&bytes, &cursor);
+    try testing.expectEqual(SymKind.function, sym.kind);
+    try testing.expect(sym.isUndefined());
+    try testing.expect(sym.isImplicitlyNamed());
+    try testing.expectEqual(@as(u32, 3), sym.index);
+}
+
+test "SymInfo.parse — parses defined function symbol (explicitly named)" {
+    // kind=0 (function), flags=0 (defined), index=1, name="my_func" (7 bytes)
+    const bytes = [_]u8{ 0x00, 0x00, 0x01, 0x07 } ++ "my_func".*;
+    var cursor: usize = 0;
+    const sym = try SymInfo.parse(&bytes, &cursor);
+    try testing.expectEqual(SymKind.function, sym.kind);
+    try testing.expect(!sym.isUndefined());
+    try testing.expectEqualStrings("my_func", sym.name.?);
+    try testing.expectEqual(@as(u32, 1), sym.index);
+}
+
+test "SymInfo.parse — parses data symbol with segment info" {
+    // kind=1 (data), flags=0 (defined), name="data_sym" (8 bytes),
+    // segment_index=0, data_offset=16, data_size=4
+    const bytes = [_]u8{ 0x01, 0x00, 0x08 } ++ "data_sym".* ++ [_]u8{ 0x00, 0x10, 0x04 };
+    var cursor: usize = 0;
+    const sym = try SymInfo.parse(&bytes, &cursor);
+    try testing.expectEqual(SymKind.data, sym.kind);
+    try testing.expectEqualStrings("data_sym", sym.name.?);
+    try testing.expectEqual(@as(u32, 0), sym.index); // segment index
+    try testing.expectEqual(@as(u32, 16), sym.data_offset);
+    try testing.expectEqual(@as(u32, 4), sym.data_size);
+}
+
+test "RelocationSection.parse — parses section with multiple entries" {
+    // Build reloc section body: target_section=10, count=2, then 2 index relocs
+    var bytes_list: std.ArrayList(u8) = .empty;
+    defer bytes_list.deinit(testing.allocator);
+    try WasmModule.leb128WriteU32(testing.allocator, &bytes_list, 10); // target section
+    try WasmModule.leb128WriteU32(testing.allocator, &bytes_list, 2); // count
+    // Entry 1: function_index_leb, offset=5, sym=0
+    try bytes_list.appendSlice(testing.allocator, &.{ 0x00, 0x05, 0x00 });
+    // Entry 2: global_index_leb, offset=12, sym=1
+    try bytes_list.appendSlice(testing.allocator, &.{ 0x07, 0x0C, 0x01 });
+
+    var cursor: usize = 0;
+    var reloc = try RelocationSection.parse(
+        testing.allocator,
+        "reloc.CODE",
+        bytes_list.items,
+        &cursor,
+        bytes_list.items.len,
+    );
+    defer reloc.entries.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(u32, 10), reloc.target_section_index);
+    try testing.expectEqual(@as(usize, 2), reloc.entries.items.len);
+    try testing.expectEqual(@as(u32, 5), reloc.entries.items[0].getOffset());
+    try testing.expectEqual(@as(u32, 12), reloc.entries.items[1].getOffset());
 }
