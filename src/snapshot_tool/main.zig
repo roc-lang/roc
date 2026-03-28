@@ -4182,33 +4182,33 @@ fn processDevObjectSnapshot(
         return false;
     }
 
-    const entrypoint_root_exprs = allocator.alloc(can.CIR.Expr.Idx, pending_entrypoint_sources.items.len) catch return false;
-    defer allocator.free(entrypoint_root_exprs);
+    const entrypoint_source_exprs = allocator.alloc(can.CIR.Expr.Idx, pending_entrypoint_sources.items.len) catch return false;
+    defer allocator.free(entrypoint_source_exprs);
     for (pending_entrypoint_sources.items, 0..) |entrypoint_source, i| {
-        entrypoint_root_exprs[i] = entrypoint_source.expr_idx;
+        entrypoint_source_exprs[i] = entrypoint_source.expr_idx;
     }
 
     var monomorphization = blk: {
         const mono = if (app_module_idx) |resolved_app_module_idx|
-            mir_mod.Monomorphize.runRootsWithTypeScope(
+            mir_mod.Monomorphize.runRootSourceExprsWithTypeScope(
                 allocator,
                 all_module_envs,
                 platform_types,
                 platform_module_idx,
                 app_module_idx,
-                entrypoint_root_exprs,
+                entrypoint_source_exprs,
                 platform_module_idx,
                 &platform_type_scope,
                 resolved_app_module_idx,
             )
         else
-            mir_mod.Monomorphize.runRoots(
+            mir_mod.Monomorphize.runRootSourceExprs(
                 allocator,
                 all_module_envs,
                 platform_types,
                 platform_module_idx,
                 app_module_idx,
-                entrypoint_root_exprs,
+                entrypoint_source_exprs,
             );
         break :blk mono catch {
             std.log.err("Failed to monomorphize platform module", .{});
@@ -4239,7 +4239,7 @@ fn processDevObjectSnapshot(
 
     const PendingEntrypoint = struct {
         ffi_symbol: []const u8,
-        mir_expr_id: MIR.ExprId,
+        root_const_id: MIR.ConstDefId,
         ret_layout: layout_mod.Idx,
     };
     var pending_entrypoints = std.ArrayList(PendingEntrypoint).empty;
@@ -4250,7 +4250,7 @@ fn processDevObjectSnapshot(
 
     // Match provides entries to platform defs and lower them
     for (pending_entrypoint_sources.items) |entry| {
-        const mir_expr_id = mir_lower.lowerExpr(entry.expr_idx) catch continue;
+        const root_const_id = mir_lower.lowerRootConst(entry.expr_idx) catch continue;
 
         const type_var = can.ModuleEnv.varFrom(entry.expr_idx);
         const ret_layout = type_layout_resolver.resolve(
@@ -4262,7 +4262,7 @@ fn processDevObjectSnapshot(
 
         pending_entrypoints.append(allocator, .{
             .ffi_symbol = entry.ffi_symbol,
-            .mir_expr_id = mir_expr_id,
+            .root_const_id = root_const_id,
             .ret_layout = ret_layout,
         }) catch continue;
     }
@@ -4274,13 +4274,13 @@ fn processDevObjectSnapshot(
 
     const mir_module = @import("mir");
 
-    const pending_root_exprs = try allocator.alloc(MIR.ExprId, pending_entrypoints.items.len);
-    defer allocator.free(pending_root_exprs);
+    const pending_root_consts = try allocator.alloc(MIR.ConstDefId, pending_entrypoints.items.len);
+    defer allocator.free(pending_root_consts);
     for (pending_entrypoints.items, 0..) |pending, i| {
-        pending_root_exprs[i] = pending.mir_expr_id;
+        pending_root_consts[i] = pending.root_const_id;
     }
 
-    var mir_analyses = try mir_module.Analyses.init(allocator, &mir_store, all_module_envs, platform_module_idx, pending_root_exprs);
+    var mir_analyses = try mir_module.Analyses.init(allocator, &mir_store, all_module_envs, platform_module_idx, pending_root_consts);
     defer mir_analyses.deinit();
 
     var lir_store = lir_mod.LirStore.init(allocator);
@@ -4296,7 +4296,7 @@ fn processDevObjectSnapshot(
     defer mir_to_lir.deinit();
 
     for (pending_entrypoints.items) |pending| {
-        const entry_proc = mir_to_lir.lowerEntrypointProc(pending.mir_expr_id, &[_]layout_mod.Idx{}, pending.ret_layout) catch continue;
+        const entry_proc = mir_to_lir.lowerEntrypointProc(pending.root_const_id, &[_]layout_mod.Idx{}, pending.ret_layout) catch continue;
         const symbol_name = std.fmt.allocPrint(allocator, "roc__{s}", .{pending.ffi_symbol}) catch continue;
         entrypoints.append(allocator, .{
             .symbol_name = symbol_name,
