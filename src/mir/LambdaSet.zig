@@ -260,7 +260,7 @@ fn seedCompositeSymbolSourcesFromExpr(
             for (payloads, 0..) |payload_expr, payload_idx| {
                 try store.symbol_tag_payload_exprs.put(
                     allocator,
-                    tagPayloadKey(symbol, tag_expr.name, @intCast(payload_idx)),
+                    tagPayloadKey(symbol, tag_expr.name.ident, @intCast(payload_idx)),
                     payload_expr,
                 );
             }
@@ -625,7 +625,7 @@ fn propagatePatternBindingsFromExpr(
         .tag => |tag_pat| {
             const arg_patterns = mir_store.getPatternSpan(tag_pat.args);
             for (arg_patterns, 0..) |arg_pattern_id, arg_index| {
-                const payload_expr = resolveTagPayloadExpr(mir_store, store, source_expr, tag_pat.name, @intCast(arg_index)) orelse continue;
+                const payload_expr = resolveTagPayloadExpr(mir_store, store, source_expr, tag_pat.name.ident, @intCast(arg_index)) orelse continue;
                 changed = (try propagatePatternBindingsFromExpr(
                     allocator,
                     mir_store,
@@ -788,7 +788,7 @@ fn resolveTagPayloadExpr(
     const expr = mir_store.getExpr(expr_id);
     return switch (expr) {
         .tag => |tag_expr| blk: {
-            if (!tag_expr.name.eql(tag_name)) break :blk null;
+            if (!tag_expr.name.ident.eql(tag_name)) break :blk null;
             const args = mir_store.getExprSpan(tag_expr.args);
             if (payload_idx >= args.len) break :blk null;
             break :blk args[payload_idx];

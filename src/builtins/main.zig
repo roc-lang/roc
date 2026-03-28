@@ -78,7 +78,6 @@ comptime {
     exportListFn(list.listReserve, "reserve");
     exportListFn(list.listPrepend, "prepend");
     exportListFn(list.listWithCapacity, "with_capacity");
-    exportListFn(list.listSortWith, "sort_with");
     exportListFn(list.listConcat, "concat");
     exportListFn(list.listSublist, "sublist");
     exportListFn(list.listDropAt, "drop_at");

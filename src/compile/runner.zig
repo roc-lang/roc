@@ -51,7 +51,12 @@ pub fn runViaInterpreter(
     ) catch return error.CompilationFailed;
     defer interpreter.deinitAndFreeOtherEnvs();
 
-    interpreter.setupForClauseTypeMappings(platform_env) catch {};
+    interpreter.setupForClauseTypeMappings(platform_env) catch |err| {
+        if (comptime !@import("threading.zig").is_freestanding) {
+            std.debug.print("Interpreter setup error: {}\n", .{err});
+        }
+        return error.InterpreterFailed;
+    };
 
     interpreter.evaluateExpression(
         entrypoint_expr,

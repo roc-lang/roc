@@ -375,7 +375,7 @@ pub const Expr = union(enum) {
 
     /// Tag application (zero-arg tag is just len=0 args)
     tag: struct {
-        name: Ident.Idx,
+        name: Monotype.Name,
         args: ExprSpan,
     },
 
@@ -476,16 +476,8 @@ pub const Expr = union(enum) {
 
     // --- Control flow (imperative) ---
 
-    /// For loop over a list
-    for_loop: struct {
-        list: ExprId,
-        elem_pattern: PatternId,
-        body: ExprId,
-    },
-
-    /// While loop
-    while_loop: struct {
-        cond: ExprId,
+    /// Infinite loop
+    loop: struct {
         body: ExprId,
     },
 
@@ -510,7 +502,7 @@ pub const Pattern = union(enum) {
 
     /// Match a specific tag and optionally destructure payload
     tag: struct {
-        name: Ident.Idx,
+        name: Monotype.Name,
         args: PatternSpan,
     },
 
@@ -694,6 +686,11 @@ pub const Store = struct {
         return self.exprs.items[@intFromEnum(id)];
     }
 
+    /// Returns the number of stored MIR expressions.
+    pub fn exprCount(self: *const Store) usize {
+        return self.exprs.items.len;
+    }
+
     /// Get the region of an expression.
     pub fn getRegion(self: *const Store, id: ExprId) Region {
         return self.expr_regions.items[@intFromEnum(id)];
@@ -873,6 +870,32 @@ pub const Store = struct {
         return self.procs.items[@intFromEnum(id)];
     }
 
+    /// Count the value parameters a proc receives at call/lowering time.
+    ///
+    /// This includes the hidden captures parameter when the proc represents a
+    /// closure with an environment.
+    pub fn procValueParamCount(self: *const Store, proc: Proc) usize {
+        return self.getPatternSpan(proc.params).len + @intFromBool(!proc.captures_param.isNone());
+    }
+
+    /// Get one proc value parameter in call/lowering order.
+    ///
+    /// Visible params come first, followed by the hidden captures param when
+    /// present.
+    pub fn getProcValueParamPattern(self: *const Store, proc: Proc, index: usize) PatternId {
+        const params = self.getPatternSpan(proc.params);
+        if (index < params.len) return params[index];
+        if (index == params.len and !proc.captures_param.isNone()) return proc.captures_param;
+
+        if (std.debug.runtime_safety) {
+            std.debug.panic(
+                "MIR invariant violated: proc value param index {d} out of bounds (visible={d}, has_captures={any})",
+                .{ index, params.len, !proc.captures_param.isNone() },
+            );
+        }
+        unreachable;
+    }
+
     /// Get a mutable MIR proc by id.
     pub fn getProcPtr(self: *Store, id: ProcId) *Proc {
         return &self.procs.items[@intFromEnum(id)];
@@ -949,6 +972,28 @@ pub const Store = struct {
         return self.getProcSpan(span);
     }
 
+    /// Resolve one monomorphic callable expression to the unique proc whose
+    /// function monotype matches the expression's monotype.
+    pub fn resolveUniqueProcByFnMonotype(
+        self: *const Store,
+        expr_id: ExprId,
+        proc_ids: []const ProcId,
+    ) ?ProcId {
+        const expected_fn_monotype = self.typeOf(expr_id);
+        var resolved: ?ProcId = null;
+
+        for (proc_ids) |proc_id| {
+            if (self.getProc(proc_id).fn_monotype != expected_fn_monotype) continue;
+            if (resolved) |existing| {
+                if (existing != proc_id) return null;
+            } else {
+                resolved = proc_id;
+            }
+        }
+
+        return resolved;
+    }
+
     /// Register a value definition.
     pub fn registerValueDef(self: *Store, allocator: Allocator, symbol: Symbol, expr_id: ExprId) !void {
         const key: u64 = @bitCast(symbol);
@@ -970,6 +1015,67 @@ pub const Store = struct {
     /// Look up a value definition.
     pub fn getValueDef(self: *const Store, symbol: Symbol) ?ExprId {
         return self.value_defs.get(@bitCast(symbol));
+    }
+
+    /// Resolve a proc-backed callable identity through transparent MIR wrappers.
+    ///
+    /// This is a semantic MIR helper. It answers "which proc does this callable
+    /// value represent?" and does not enforce later lowering-stage restrictions
+    /// such as whether statementful wrapper nodes are admissible at a given
+    /// lowering boundary.
+    pub fn resolveCallableProcId(self: *const Store, expr_id: ExprId) ?ProcId {
+        var visited_symbols: [64]u64 = undefined;
+        var visited_len: usize = 0;
+        return self.resolveCallableProcIdInner(expr_id, &visited_symbols, &visited_len);
+    }
+
+    fn resolveCallableProcIdInner(
+        self: *const Store,
+        expr_id: ExprId,
+        visited_symbols: *[64]u64,
+        visited_len: *usize,
+    ) ?ProcId {
+        return switch (self.getExpr(expr_id)) {
+            .proc_ref => |proc_id| proc_id,
+            .closure_make => |closure| closure.proc,
+            .lookup => |symbol| blk: {
+                if (self.getSymbolSeedProcSet(symbol)) |proc_ids| {
+                    if (proc_ids.len == 1) break :blk proc_ids[0];
+                    if (self.resolveUniqueProcByFnMonotype(expr_id, proc_ids)) |proc_id| break :blk proc_id;
+                }
+
+                if (self.getValueDef(symbol)) |def_expr| {
+                    for (visited_symbols[0..visited_len.*]) |visited| {
+                        if (visited == symbol.raw()) {
+                            std.debug.panic(
+                                "MIR invariant violated: cyclic proc-backed callable lookup for symbol {d}",
+                                .{symbol.raw()},
+                            );
+                        }
+                    }
+
+                    if (visited_len.* >= visited_symbols.len) {
+                        std.debug.panic(
+                            "MIR invariant violated: callable lookup depth exceeded fixed recursion budget while resolving symbol {d}",
+                            .{symbol.raw()},
+                        );
+                    }
+
+                    visited_symbols[visited_len.*] = symbol.raw();
+                    visited_len.* += 1;
+                    defer visited_len.* -= 1;
+
+                    break :blk self.resolveCallableProcIdInner(def_expr, visited_symbols, visited_len);
+                }
+
+                break :blk null;
+            },
+            .block => |block| self.resolveCallableProcIdInner(block.final_expr, visited_symbols, visited_len),
+            .dbg_expr => |dbg_expr| self.resolveCallableProcIdInner(dbg_expr.expr, visited_symbols, visited_len),
+            .expect => |expect| self.resolveCallableProcIdInner(expect.body, visited_symbols, visited_len),
+            .return_expr => |ret| self.resolveCallableProcIdInner(ret.expr, visited_symbols, visited_len),
+            else => null,
+        };
     }
 
     /// Register mutability metadata for a symbol.

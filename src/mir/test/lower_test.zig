@@ -115,15 +115,9 @@ fn dumpMirExpr(mir_store: *const MIR.Store, expr_id: MIR.ExprId, depth: usize) v
             std.debug.print("\n", .{});
             for (mir_store.getExprSpan(struct_.fields)) |field| dumpMirExpr(mir_store, field, depth + 1);
         },
-        .for_loop => |for_loop| {
+        .loop => |loop_expr| {
             std.debug.print("\n", .{});
-            dumpMirExpr(mir_store, for_loop.list, depth + 1);
-            dumpMirExpr(mir_store, for_loop.body, depth + 1);
-        },
-        .while_loop => |while_loop| {
-            std.debug.print("\n", .{});
-            dumpMirExpr(mir_store, while_loop.cond, depth + 1);
-            dumpMirExpr(mir_store, while_loop.body, depth + 1);
+            dumpMirExpr(mir_store, loop_expr.body, depth + 1);
         },
         .match_expr => |match_expr| {
             std.debug.print("\n", .{});
@@ -242,13 +236,8 @@ fn firstForeignParamLookup(
         },
         .dbg_expr => |dbg_expr| return firstForeignParamLookup(mir_store, dbg_expr.expr, proc_id, all_param_symbols),
         .expect => |expect| return firstForeignParamLookup(mir_store, expect.body, proc_id, all_param_symbols),
-        .for_loop => |for_loop| {
-            if (firstForeignParamLookup(mir_store, for_loop.list, proc_id, all_param_symbols)) |found| return found;
-            return firstForeignParamLookup(mir_store, for_loop.body, proc_id, all_param_symbols);
-        },
-        .while_loop => |while_loop| {
-            if (firstForeignParamLookup(mir_store, while_loop.cond, proc_id, all_param_symbols)) |found| return found;
-            return firstForeignParamLookup(mir_store, while_loop.body, proc_id, all_param_symbols);
+        .loop => |loop_expr| {
+            return firstForeignParamLookup(mir_store, loop_expr.body, proc_id, all_param_symbols);
         },
         .return_expr => |ret| return firstForeignParamLookup(mir_store, ret.expr, proc_id, all_param_symbols),
     }
@@ -332,13 +321,8 @@ fn firstReachableMissingFunctionLookup(
         },
         .dbg_expr => |dbg_expr| return firstReachableMissingFunctionLookup(mir_store, ls_store, dbg_expr.expr),
         .expect => |expect| return firstReachableMissingFunctionLookup(mir_store, ls_store, expect.body),
-        .for_loop => |for_loop| {
-            if (firstReachableMissingFunctionLookup(mir_store, ls_store, for_loop.list)) |found| return found;
-            return firstReachableMissingFunctionLookup(mir_store, ls_store, for_loop.body);
-        },
-        .while_loop => |while_loop| {
-            if (firstReachableMissingFunctionLookup(mir_store, ls_store, while_loop.cond)) |found| return found;
-            return firstReachableMissingFunctionLookup(mir_store, ls_store, while_loop.body);
+        .loop => |loop_expr| {
+            return firstReachableMissingFunctionLookup(mir_store, ls_store, loop_expr.body);
         },
         .return_expr => |ret| return firstReachableMissingFunctionLookup(mir_store, ls_store, ret.expr),
         .proc_ref,
@@ -354,6 +338,65 @@ fn firstReachableMissingFunctionLookup(
         .crash,
         .break_expr,
         => return null,
+    }
+}
+
+fn findLoopItemPattern(mir_store: *const MIR.Store, expr_id: MIR.ExprId) ?MIR.PatternId {
+    switch (mir_store.getExpr(expr_id)) {
+        .block => |block| {
+            for (mir_store.getStmts(block.stmts)) |stmt| {
+                const stmt_expr_id = switch (stmt) {
+                    .decl_const => |binding| blk: {
+                        const binding_expr = mir_store.getExpr(binding.expr);
+                        if (binding_expr == .run_low_level and binding_expr.run_low_level.op == .list_get_unsafe) {
+                            return binding.pattern;
+                        }
+                        break :blk binding.expr;
+                    },
+                    .decl_var => |binding| binding.expr,
+                    .mutate_var => |binding| binding.expr,
+                };
+                if (findLoopItemPattern(mir_store, stmt_expr_id)) |pattern| return pattern;
+            }
+            return findLoopItemPattern(mir_store, block.final_expr);
+        },
+        .loop => |loop_expr| return findLoopItemPattern(mir_store, loop_expr.body),
+        .match_expr => |match_expr| {
+            if (findLoopItemPattern(mir_store, match_expr.cond)) |pattern| return pattern;
+            for (mir_store.getBranches(match_expr.branches)) |branch| {
+                if (!branch.guard.isNone()) {
+                    if (findLoopItemPattern(mir_store, branch.guard)) |pattern| return pattern;
+                }
+                if (findLoopItemPattern(mir_store, branch.body)) |pattern| return pattern;
+            }
+            return null;
+        },
+        .call => |call| {
+            if (findLoopItemPattern(mir_store, call.func)) |pattern| return pattern;
+            for (mir_store.getExprSpan(call.args)) |arg| {
+                if (findLoopItemPattern(mir_store, arg)) |pattern| return pattern;
+            }
+            return null;
+        },
+        .borrow_scope => |borrow_scope| {
+            for (mir_store.getBorrowBindings(borrow_scope.bindings)) |binding| {
+                if (findLoopItemPattern(mir_store, binding.expr)) |pattern| return pattern;
+            }
+            return findLoopItemPattern(mir_store, borrow_scope.body);
+        },
+        .closure_make => |closure| return findLoopItemPattern(mir_store, closure.captures),
+        .struct_access => |access| return findLoopItemPattern(mir_store, access.struct_),
+        .str_escape_and_quote => |inner| return findLoopItemPattern(mir_store, inner),
+        .run_low_level => |low_level| {
+            for (mir_store.getExprSpan(low_level.args)) |arg| {
+                if (findLoopItemPattern(mir_store, arg)) |pattern| return pattern;
+            }
+            return null;
+        },
+        .dbg_expr => |dbg_expr| return findLoopItemPattern(mir_store, dbg_expr.expr),
+        .expect => |expect| return findLoopItemPattern(mir_store, expect.body),
+        .return_expr => |ret| return findLoopItemPattern(mir_store, ret.expr),
+        else => return null,
     }
 }
 
@@ -1387,35 +1430,9 @@ test "lambda set: imported List.any receives predicate lambda set" {
     try testing.expect(predicate_pat == .bind);
     const predicate_sym = predicate_pat.bind;
 
-    var body_expr = lambda_body;
-    var loop_item_pat: ?MIR.PatternId = null;
-    while (true) {
-        switch (env.mir_store.getExpr(body_expr)) {
-            .block => |block| {
-                const stmts = env.mir_store.getStmts(block.stmts);
-                if (stmts.len > 0) {
-                    const stmt_expr_id = switch (stmts[0]) {
-                        .decl_const => |binding| binding.expr,
-                        .decl_var => |binding| binding.expr,
-                        .mutate_var => |binding| binding.expr,
-                    };
-                    const stmt_expr = env.mir_store.getExpr(stmt_expr_id);
-                    if (stmt_expr == .for_loop) {
-                        loop_item_pat = stmt_expr.for_loop.elem_pattern;
-                        break;
-                    }
-                }
-                body_expr = block.final_expr;
-            },
-            .for_loop => |loop| {
-                loop_item_pat = loop.elem_pattern;
-                break;
-            },
-            else => return error.TestUnexpectedResult,
-        }
-    }
+    const loop_item_pat = findLoopItemPattern(env.mir_store, lambda_body) orelse return error.TestUnexpectedResult;
 
-    const loop_item_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.patternTypeOf(loop_item_pat.?));
+    const loop_item_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.patternTypeOf(loop_item_pat));
     try testing.expect(loop_item_mono == .prim);
     try testing.expectEqual(Monotype.Prim.i64, loop_item_mono.prim);
 
@@ -1902,19 +1919,29 @@ test "lowerExpr: for loop" {
     const expr = try env.lowerFirstDef();
     const result = env.mir_store.getExpr(expr);
     try testing.expect(result == .block);
-    // The block should contain a for_loop in its statements
+    // The block should contain a synthesized loop in its statements
     // (expression stmts are lowered as `_ = expr`, i.e. decl_const with wildcard)
     const stmts = env.mir_store.getStmts(result.block.stmts);
-    var found_for = false;
+    var found_loop = false;
     for (stmts) |stmt| {
         switch (stmt) {
             .decl_const => |dc| {
-                if (env.mir_store.getExpr(dc.expr) == .for_loop) found_for = true;
+                const stmt_expr = env.mir_store.getExpr(dc.expr);
+                if (stmt_expr == .block) {
+                    for (env.mir_store.getStmts(stmt_expr.block.stmts)) |inner_stmt| {
+                        switch (inner_stmt) {
+                            .decl_const => |inner_dc| {
+                                if (env.mir_store.getExpr(inner_dc.expr) == .loop) found_loop = true;
+                            },
+                            else => {},
+                        }
+                    }
+                }
             },
             else => {},
         }
     }
-    try testing.expect(found_for);
+    try testing.expect(found_loop);
 }
 
 test "lowerExpr: multi-segment string interpolation produces str_concat" {
@@ -3103,7 +3130,7 @@ test "Bool diagnostic MIR: Bool.True lowers to tag with tag_union" {
     try testing.expect(result == .tag);
     try testing.expectEqual(@as(u16, 0), result.tag.args.len);
     // Check the tag name is "True"
-    const tag_name = env.module_env.getIdent(result.tag.name);
+    const tag_name = result.tag.name.text(env.lower.all_module_envs);
     try testing.expectEqualStrings("True", tag_name);
     // Monotype should be tag_union
     const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
@@ -3117,7 +3144,7 @@ test "Bool diagnostic MIR: Bool.False lowers to tag with tag_union" {
     const result = env.mir_store.getExpr(expr);
     try testing.expect(result == .tag);
     try testing.expectEqual(@as(u16, 0), result.tag.args.len);
-    const tag_name = env.module_env.getIdent(result.tag.name);
+    const tag_name = result.tag.name.text(env.lower.all_module_envs);
     try testing.expectEqualStrings("False", tag_name);
     const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
     try testing.expect(monotype == .tag_union);
@@ -3222,7 +3249,7 @@ test "Bool.not MIR: !Bool.True match has True pattern -> False body, wildcard ->
     // Check the condition is a tag expression (Bool.True)
     const cond = env.mir_store.getExpr(result.match_expr.cond);
     try testing.expect(cond == .tag);
-    const cond_tag_name = env.module_env.getIdent(cond.tag.name);
+    const cond_tag_name = cond.tag.name.text(env.lower.all_module_envs);
     try testing.expectEqualStrings("True", cond_tag_name);
 
     // Check condition monotype is tag_union
@@ -3238,7 +3265,7 @@ test "Bool.not MIR: !Bool.True match has True pattern -> False body, wildcard ->
     try testing.expectEqual(@as(usize, 1), bp0.len);
     const pat0 = env.mir_store.getPattern(bp0[0].pattern);
     try testing.expect(pat0 == .tag);
-    const pat0_name = env.module_env.getIdent(pat0.tag.name);
+    const pat0_name = pat0.tag.name.text(env.lower.all_module_envs);
     try testing.expectEqualStrings("True", pat0_name);
     // Pattern monotype should be tag_union
     const pat0_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.patternTypeOf(bp0[0].pattern));
@@ -3246,7 +3273,7 @@ test "Bool.not MIR: !Bool.True match has True pattern -> False body, wildcard ->
     // Body should be False tag
     const body0 = env.mir_store.getExpr(branches[0].body);
     try testing.expect(body0 == .tag);
-    const body0_name = env.module_env.getIdent(body0.tag.name);
+    const body0_name = body0.tag.name.text(env.lower.all_module_envs);
     try testing.expectEqualStrings("False", body0_name);
 
     // Branch 1: _ => True
@@ -3257,7 +3284,7 @@ test "Bool.not MIR: !Bool.True match has True pattern -> False body, wildcard ->
     // Body should be True tag
     const body1 = env.mir_store.getExpr(branches[1].body);
     try testing.expect(body1 == .tag);
-    const body1_name = env.module_env.getIdent(body1.tag.name);
+    const body1_name = body1.tag.name.text(env.lower.all_module_envs);
     try testing.expectEqualStrings("True", body1_name);
 }
 
@@ -3274,7 +3301,7 @@ test "Bool.not MIR: !Bool.False match has True pattern -> False body, wildcard -
     // Condition should be Bool.False
     const cond = env.mir_store.getExpr(result.match_expr.cond);
     try testing.expect(cond == .tag);
-    const cond_tag_name = env.module_env.getIdent(cond.tag.name);
+    const cond_tag_name = cond.tag.name.text(env.lower.all_module_envs);
     try testing.expectEqualStrings("False", cond_tag_name);
     const cond_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(result.match_expr.cond));
     try testing.expect(cond_mono == .tag_union);
@@ -3286,17 +3313,17 @@ test "Bool.not MIR: !Bool.False match has True pattern -> False body, wildcard -
     const bp0 = env.mir_store.getBranchPatterns(branches[0].patterns);
     const pat0 = env.mir_store.getPattern(bp0[0].pattern);
     try testing.expect(pat0 == .tag);
-    try testing.expectEqualStrings("True", env.module_env.getIdent(pat0.tag.name));
+    try testing.expectEqualStrings("True", pat0.tag.name.text(env.lower.all_module_envs));
     const body0 = env.mir_store.getExpr(branches[0].body);
     try testing.expect(body0 == .tag);
-    try testing.expectEqualStrings("False", env.module_env.getIdent(body0.tag.name));
+    try testing.expectEqualStrings("False", body0.tag.name.text(env.lower.all_module_envs));
 
     const bp1 = env.mir_store.getBranchPatterns(branches[1].patterns);
     const pat1 = env.mir_store.getPattern(bp1[0].pattern);
     try testing.expect(pat1 == .wildcard);
     const body1 = env.mir_store.getExpr(branches[1].body);
     try testing.expect(body1 == .tag);
-    try testing.expectEqualStrings("True", env.module_env.getIdent(body1.tag.name));
+    try testing.expectEqualStrings("True", body1.tag.name.text(env.lower.all_module_envs));
 }
 
 test "Bool.not MIR: Bool.not(True) is a call with tag_union return type" {
@@ -3314,7 +3341,7 @@ test "Bool.not MIR: Bool.not(True) is a call with tag_union return type" {
     try testing.expectEqual(@as(usize, 1), args.len);
     const arg = env.mir_store.getExpr(args[0]);
     try testing.expect(arg == .tag);
-    try testing.expectEqualStrings("True", env.module_env.getIdent(arg.tag.name));
+    try testing.expectEqualStrings("True", arg.tag.name.text(env.lower.all_module_envs));
     const arg_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(args[0]));
     try testing.expect(arg_mono == .tag_union);
 }
@@ -3331,7 +3358,7 @@ test "Bool.not MIR: Bool.not(False) is a call with tag_union return type" {
     try testing.expectEqual(@as(usize, 1), args.len);
     const arg = env.mir_store.getExpr(args[0]);
     try testing.expect(arg == .tag);
-    try testing.expectEqualStrings("False", env.module_env.getIdent(arg.tag.name));
+    try testing.expectEqualStrings("False", arg.tag.name.text(env.lower.all_module_envs));
     const arg_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(args[0]));
     try testing.expect(arg_mono == .tag_union);
 }
@@ -3597,7 +3624,7 @@ test "structural equality: empty record == is True" {
     const result = env.mir_store.getExpr(expr);
     // Empty record equality is always True (a tag)
     try testing.expect(result == .tag);
-    try testing.expectEqualStrings("True", env.module_env.getIdent(result.tag.name));
+    try testing.expectEqualStrings("True", result.tag.name.text(env.lower.all_module_envs));
 }
 
 test "structural equality: tuple == produces match_expr" {

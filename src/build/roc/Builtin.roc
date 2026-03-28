@@ -359,6 +359,46 @@ Builtin :: [].{
 		with_capacity : U64 -> List(item)
 		## Sort with a custom comparison function
 		sort_with : List(item), (item, item -> [LT, EQ, GT]) -> List(item)
+		sort_with = |list, order| {
+			list_len = List.len(list)
+
+			if list_len < 2 {
+				list
+			} else {
+				match List.first(list) {
+					Ok(pivot) => {
+						rest = List.drop_first(list, 1)
+						less_or_equal = 
+							List.keep_if(
+								rest,
+								|item|
+									match order(item, pivot) {
+										LT => True
+										EQ => True
+										GT => False
+									},
+							)
+						greater = 
+							List.keep_if(
+								rest,
+								|item|
+									match order(item, pivot) {
+										LT => False
+										EQ => False
+										GT => True
+									},
+							)
+
+						List.concat(
+							List.sort_with(less_or_equal, order),
+							List.concat(List.single(pivot), List.sort_with(greater, order)),
+						)
+					}
+
+					Err(_) => list
+				}
+			}
+		}
 
 		is_eq : List(item), List(item) -> Bool
 			where [item.is_eq : item, item -> Bool]

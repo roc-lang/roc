@@ -45,11 +45,14 @@ fn stderrWriter() *std.Io.Writer {
 // Use the canonical BuiltinIndices from CIR
 const BuiltinIndices = CIR.BuiltinIndices;
 
-/// Replace specific e_anno_only expressions with e_lambda + e_run_low_level operations.
-/// This transforms standalone annotations into lambda operations wrapping low-level builtins
-/// that will be recognized by the compiler backend.
+/// Replace specific `e_anno_only` builtin declarations with `e_lambda` wrappers
+/// around `e_run_low_level` operations.
+///
+/// This keeps compiler-provided builtins in one uniform shape so later MIR
+/// lowering can recognize them generically instead of carrying per-builtin
+/// exceptions.
 /// Returns a list of new def indices created.
-fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
+fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     const gpa = env.gpa;
     var new_def_indices = std.ArrayList(CIR.Def.Idx).empty;
 
@@ -144,6 +147,12 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     if (env.common.findIdent("Builtin.Str.inspect")) |str_inspect_ident| {
         try low_level_map.put(str_inspect_ident, .str_inspect);
     }
+    if (env.common.findIdent("Builtin.Box.box")) |box_box_ident| {
+        try low_level_map.put(box_box_ident, .box_box);
+    }
+    if (env.common.findIdent("Builtin.Box.unbox")) |box_unbox_ident| {
+        try low_level_map.put(box_unbox_ident, .box_unbox);
+    }
     if (env.common.findIdent("Builtin.List.len")) |list_len_ident| {
         try low_level_map.put(list_len_ident, .list_len);
     }
@@ -152,9 +161,6 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     }
     if (env.common.findIdent("Builtin.List.with_capacity")) |list_with_capacity_ident| {
         try low_level_map.put(list_with_capacity_ident, .list_with_capacity);
-    }
-    if (env.common.findIdent("Builtin.List.sort_with")) |list_sort_with_ident| {
-        try low_level_map.put(list_sort_with_ident, .list_sort_with);
     }
     if (env.common.findIdent("list_get_unsafe")) |list_get_unsafe_ident| {
         try low_level_map.put(list_get_unsafe_ident, .list_get_unsafe);
@@ -1639,7 +1645,7 @@ fn compileModule(
     // For the Builtin module, transform annotation-only defs into low-level operations
     if (std.mem.eql(u8, module_name, "Builtin")) {
         // Transform annotation-only defs and get the list of new def indices
-        var new_def_indices = try replaceStrIsEmptyWithLowLevel(module_env);
+        var new_def_indices = try replaceProvidedByCompilerLowLevels(module_env);
         defer new_def_indices.deinit(gpa);
 
         if (new_def_indices.items.len > 0) {

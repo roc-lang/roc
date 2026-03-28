@@ -53,7 +53,6 @@ pub const LowLevel = enum {
     list_append_unsafe,
     list_concat,
     list_with_capacity,
-    list_sort_with,
     list_drop_at,
     list_sublist,
     list_set,
@@ -396,6 +395,13 @@ pub const LowLevel = enum {
         consume,
     };
 
+    pub const ProcResultSemantics = union(enum) {
+        fresh,
+        borrow_arg: usize,
+        no_return,
+        requires_explicit_summary,
+    };
+
     /// Some borrow-mode low-levels still need the source owner to remain live
     /// until the result has been fully materialized. This is separate from
     /// argument ownership: the source is still borrowed, but RC insertion must
@@ -431,7 +437,6 @@ pub const LowLevel = enum {
             .list_get_unsafe, .list_contains => &.{ .borrow, .borrow },
             .list_concat => &.{ .consume, .consume },
             .list_with_capacity => &.{.borrow},
-            .list_sort_with => &.{ .consume, .borrow },
             .list_append_unsafe => &.{ .consume, .consume },
             .list_drop_at, .list_sublist, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_reserve => &.{ .consume, .borrow },
             .list_set => &.{ .consume, .borrow, .borrow },
@@ -695,6 +700,23 @@ pub const LowLevel = enum {
 
             .box_box, .box_unbox, .crash => &.{.consume},
             .compare => &.{ .borrow, .borrow },
+        };
+    }
+
+    pub fn procResultSemantics(self: LowLevel) ProcResultSemantics {
+        return switch (self) {
+            .crash => .no_return,
+            .list_get_unsafe => .{ .borrow_arg = 0 },
+
+            // These produce container results whose payload provenance needs a more
+            // precise summary than strongest-form MIR currently computes.
+            .list_first,
+            .list_last,
+            .list_split_first,
+            .list_split_last,
+            => .requires_explicit_summary,
+
+            else => .fresh,
         };
     }
 };

@@ -20,7 +20,7 @@ const lir = @import("lir");
 
 const LlvmBuilder = @import("Builder.zig");
 
-const LirExprStore = lir.LirExprStore;
+const LirStore = lir.LirStore;
 const LirExprId = lir.LirExprId;
 const LirPatternId = lir.LirPatternId;
 const Symbol = lir.Symbol;
@@ -98,7 +98,7 @@ pub const MonoLlvmCodeGen = struct {
     allocator: Allocator,
 
     /// The LIR store containing expressions to compile
-    store: *const LirExprStore,
+    store: *const LirStore,
 
     /// Map from Symbol to LLVM value
     symbol_values: std.AutoHashMap(u64, LlvmBuilder.Value),
@@ -154,7 +154,7 @@ pub const MonoLlvmCodeGen = struct {
     result_layout: ?layout.Idx = null,
 
     /// Allocas for mutable variables inside loop bodies.
-    /// When a symbol is reassigned inside a for_loop or while_loop body,
+    /// When a symbol is reassigned inside a loop body,
     /// its value is stored to an alloca so that post-loop code can load
     /// the final value (avoiding SSA domination issues).
     /// Stores both the alloca pointer and the element type for correct loads.
@@ -244,7 +244,7 @@ pub const MonoLlvmCodeGen = struct {
     /// Initialize the code generator
     pub fn init(
         allocator: Allocator,
-        store: *const LirExprStore,
+        store: *const LirStore,
     ) MonoLlvmCodeGen {
         return .{
             .allocator = allocator,
@@ -1018,8 +1018,7 @@ pub const MonoLlvmCodeGen = struct {
             },
 
             // Loops
-            .while_loop => |wl| self.generateWhileLoop(wl),
-            .for_loop => |fl| self.generateForLoop(fl),
+            .loop => |loop_expr| self.generateLoop(loop_expr),
             .break_expr => self.generateBreakExpr(),
 
             // These should never reach LLVM codegen:
@@ -1770,9 +1769,9 @@ pub const MonoLlvmCodeGen = struct {
     /// Conditional patterns (int_literal, tag) compare and branch.
     // Loop generation-------
 
-    /// Generate a while loop: header checks condition, body executes, then loops back.
+    /// Generate an infinite loop. The body is responsible for breaking out.
     /// Returns unit (i8 0).
-    fn generateWhileLoop(self: *MonoLlvmCodeGen, wl: anytype) Error!LlvmBuilder.Value {
+    fn generateLoop(self: *MonoLlvmCodeGen, loop_expr: anytype) Error!LlvmBuilder.Value {
         const wip = self.wip orelse return error.CompilationFailed;
         const builder = self.builder orelse return error.CompilationFailed;
 
@@ -1783,8 +1782,8 @@ pub const MonoLlvmCodeGen = struct {
 
         const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
 
-        // Promote existing symbol bindings to allocas for SSA correctness
-        // (same as for_loop — loop body mutations must be visible after exit)
+        // Promote existing symbol bindings to allocas for SSA correctness so
+        // loop body mutations remain visible after exit.
         var promoted_keys: std.ArrayList(u64) = .{};
         defer promoted_keys.deinit(self.allocator);
         {
@@ -1801,40 +1800,15 @@ pub const MonoLlvmCodeGen = struct {
             }
         }
 
-        // Create blocks: cond has 2 incoming (entry + back-edge), body/exit have 1 each
-        const cond_block = wip.block(2, "while_cond") catch return error.OutOfMemory;
-        const body_block = wip.block(1, "while_body") catch return error.OutOfMemory;
-        const exit_incoming = 1 + self.countBreakEdges(wl.body);
-        const exit_block = wip.block(exit_incoming, "while_exit") catch return error.OutOfMemory;
+        const body_block = wip.block(1, "loop_body") catch return error.OutOfMemory;
+        const exit_incoming = @max(1, self.countBreakEdges(loop_expr.body));
+        const exit_block = wip.block(exit_incoming, "loop_exit") catch return error.OutOfMemory;
         self.loop_exit_blocks.append(self.allocator, exit_block) catch return error.OutOfMemory;
         defer _ = self.loop_exit_blocks.pop();
 
-        // Branch to condition check
-        _ = wip.br(cond_block) catch return error.CompilationFailed;
+        _ = wip.br(body_block) catch return error.CompilationFailed;
 
-        // Condition block: load loop-carried variables before evaluating condition
-        wip.cursor = .{ .block = cond_block };
-        for (promoted_keys.items) |key| {
-            if (self.loop_var_allocas.get(key)) |lva| {
-                const loaded = wip.load(.normal, lva.elem_type, lva.alloca_ptr, alignment, "") catch return error.CompilationFailed;
-                self.symbol_values.put(key, loaded) catch return error.OutOfMemory;
-            }
-        }
-        {
-            var cell_it = self.cell_allocas.iterator();
-            while (cell_it.next()) |entry| {
-                const cell_alignment = LlvmBuilder.Alignment.fromByteUnits(@intCast(@max(llvmTypeByteSize(entry.value_ptr.elem_type), 1)));
-                const loaded = wip.load(.normal, entry.value_ptr.elem_type, entry.value_ptr.alloca_ptr, cell_alignment, "") catch return error.CompilationFailed;
-                self.symbol_values.put(entry.key_ptr.*, loaded) catch return error.OutOfMemory;
-            }
-        }
-        var cond_val = try self.generateExpr(wl.cond);
-        if (cond_val.typeOfWip(wip) != .i1) {
-            cond_val = wip.cast(.trunc, cond_val, .i1, "") catch return error.CompilationFailed;
-        }
-        _ = wip.brCond(cond_val, body_block, exit_block, .none) catch return error.CompilationFailed;
-
-        // Body block: load loop-carried variables, execute body
+        // Load loop-carried variables before executing the body.
         wip.cursor = .{ .block = body_block };
         for (promoted_keys.items) |key| {
             if (self.loop_var_allocas.get(key)) |lva| {
@@ -1850,8 +1824,8 @@ pub const MonoLlvmCodeGen = struct {
                 self.symbol_values.put(entry.key_ptr.*, loaded) catch return error.OutOfMemory;
             }
         }
-        _ = try self.generateExpr(wl.body);
-        _ = wip.br(cond_block) catch return error.CompilationFailed;
+        _ = try self.generateExpr(loop_expr.body);
+        _ = wip.br(body_block) catch return error.CompilationFailed;
 
         // Exit block: load final values from allocas
         wip.cursor = .{ .block = exit_block };
@@ -1871,130 +1845,6 @@ pub const MonoLlvmCodeGen = struct {
         }
 
         // Clean up loop variable allocas
-        for (promoted_keys.items) |key| {
-            _ = self.loop_var_allocas.remove(key);
-        }
-
-        return builder.intValue(.i8, 0) catch return error.OutOfMemory;
-    }
-
-    /// Generate a for loop over a list: iterate elements, bind pattern, execute body.
-    /// Returns unit (i8 0).
-    fn generateForLoop(self: *MonoLlvmCodeGen, fl: anytype) Error!LlvmBuilder.Value {
-        const wip = self.wip orelse return error.CompilationFailed;
-        const builder = self.builder orelse return error.CompilationFailed;
-        const ls = self.layout_store orelse unreachable;
-
-        // Get element size for pointer arithmetic
-        const elem_layout_data = ls.getLayout(fl.elem_layout);
-        const elem_sa = ls.layoutSizeAlign(elem_layout_data);
-        const elem_size: u32 = elem_sa.size;
-
-        // Materialize the list as a pointer so we can read ptr/len
-        const list_ptr = try self.materializeAsPtr(fl.list_expr, 24);
-
-        // Load list data pointer (offset 0) and length (offset 8)
-        const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
-        const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
-        const data_ptr = wip.load(.normal, ptr_type, list_ptr, alignment, "") catch return error.CompilationFailed;
-
-        const len_off = builder.intValue(.i32, 8) catch return error.OutOfMemory;
-        const len_ptr = wip.gep(.inbounds, .i8, list_ptr, &.{len_off}, "") catch return error.CompilationFailed;
-        const list_len = wip.load(.normal, .i64, len_ptr, alignment, "") catch return error.CompilationFailed;
-
-        // Clear out_ptr for loop body
-        const saved_out_ptr = self.out_ptr;
-        self.out_ptr = null;
-        defer self.out_ptr = saved_out_ptr;
-
-        // Promote existing symbol bindings to allocas so that loop body
-        // mutations are visible after the loop exit (SSA domination fix).
-        // The loop body may rebind variables via let_stmts; without allocas,
-        // the new SSA values from the body block don't dominate the exit block.
-        var promoted_keys: std.ArrayList(u64) = .{};
-        defer promoted_keys.deinit(self.allocator);
-        {
-            var sym_it = self.symbol_values.iterator();
-            while (sym_it.next()) |entry| {
-                const key = entry.key_ptr.*;
-                const val = entry.value_ptr.*;
-                // Skip if already promoted (nested loops)
-                if (self.loop_var_allocas.contains(key)) continue;
-                const val_type = val.typeOfWip(wip);
-                const alloca_val = wip.alloca(.normal, val_type, .none, alignment, .default, "lv") catch return error.CompilationFailed;
-                _ = wip.store(.normal, val, alloca_val, alignment) catch return error.CompilationFailed;
-                self.loop_var_allocas.put(key, .{ .alloca_ptr = alloca_val, .elem_type = val_type }) catch return error.OutOfMemory;
-                promoted_keys.append(self.allocator, key) catch return error.OutOfMemory;
-            }
-        }
-
-        // Create blocks: header (phi for index), body, exit
-        const header_block = wip.block(2, "for_header") catch return error.OutOfMemory;
-        const body_block = wip.block(1, "for_body") catch return error.OutOfMemory;
-        const exit_incoming = 1 + self.countBreakEdges(fl.body);
-        const exit_block = wip.block(exit_incoming, "for_exit") catch return error.OutOfMemory;
-        self.loop_exit_blocks.append(self.allocator, exit_block) catch return error.OutOfMemory;
-        defer _ = self.loop_exit_blocks.pop();
-
-        // Entry → header
-        const zero = builder.intValue(.i64, 0) catch return error.OutOfMemory;
-        const entry_block = wip.cursor.block;
-        _ = wip.br(header_block) catch return error.CompilationFailed;
-
-        // Header: phi for loop index, compare with length
-        wip.cursor = .{ .block = header_block };
-        const idx_phi = wip.phi(.i64, "idx") catch return error.CompilationFailed;
-        const idx_val = idx_phi.toValue();
-        const cond = wip.icmp(.ult, idx_val, list_len, "") catch return error.OutOfMemory;
-        _ = wip.brCond(cond, body_block, exit_block, .none) catch return error.CompilationFailed;
-
-        // Body: load element, bind pattern, execute body, increment index
-        wip.cursor = .{ .block = body_block };
-
-        // Load loop-carried variables from allocas at the start of the body
-        // so lookups within the body see the latest values.
-        for (promoted_keys.items) |key| {
-            if (self.loop_var_allocas.get(key)) |lva| {
-                const loaded = wip.load(.normal, lva.elem_type, lva.alloca_ptr, alignment, "") catch return error.CompilationFailed;
-                self.symbol_values.put(key, loaded) catch return error.OutOfMemory;
-            }
-        }
-
-        // Load element from data_ptr + idx * elem_size
-        const size_const = builder.intValue(.i64, elem_size) catch return error.OutOfMemory;
-        const byte_offset = wip.bin(.mul, idx_val, size_const, "") catch return error.CompilationFailed;
-        const elem_ptr = wip.gep(.inbounds, .i8, data_ptr, &.{byte_offset}, "") catch return error.CompilationFailed;
-        const elem_val = try self.loadValueFromPtr(elem_ptr, fl.elem_layout);
-
-        // Bind the element to the pattern
-        try self.bindPattern(fl.elem_pattern, elem_val);
-
-        // Execute the body
-        _ = try self.generateExpr(fl.body);
-
-        // Increment index and loop back
-        const one = builder.intValue(.i64, 1) catch return error.OutOfMemory;
-        const next_idx = wip.bin(.add, idx_val, one, "") catch return error.CompilationFailed;
-        const body_end_block = wip.cursor.block;
-        _ = wip.br(header_block) catch return error.CompilationFailed;
-
-        // Finish phi: entry→0, body_end→next_idx
-        idx_phi.finish(
-            &.{ zero, next_idx },
-            &.{ entry_block, body_end_block },
-            wip,
-        );
-
-        // Exit block: load final values from allocas into symbol_values
-        wip.cursor = .{ .block = exit_block };
-        for (promoted_keys.items) |key| {
-            if (self.loop_var_allocas.get(key)) |lva| {
-                const final_val = wip.load(.normal, lva.elem_type, lva.alloca_ptr, alignment, "") catch return error.CompilationFailed;
-                self.symbol_values.put(key, final_val) catch return error.OutOfMemory;
-            }
-        }
-
-        // Clean up loop variable allocas (un-promote for this loop level)
         for (promoted_keys.items) |key| {
             _ = self.loop_var_allocas.remove(key);
         }
@@ -3927,11 +3777,6 @@ pub const MonoLlvmCodeGen = struct {
                 return .none;
             },
 
-            .list_sort_with => {
-                std.debug.assert(args.len >= 2);
-                return try self.generateListSortWith(args[0], args[1], ll.ret_layout);
-            },
-
             .list_first => {
                 // list_first(list) -> element at index 0
                 std.debug.assert(args.len >= 1);
@@ -5406,7 +5251,7 @@ pub const MonoLlvmCodeGen = struct {
             .dbg => |d| self.countBreakEdges(d.expr),
             .expect => |e| self.countBreakEdges(e.body),
             .nominal => |nom| self.countBreakEdges(nom.backing_expr),
-            .lambda, .while_loop, .for_loop => 0,
+            .lambda, .loop => 0,
             else => 0,
         };
     }
@@ -6176,11 +6021,6 @@ pub const MonoLlvmCodeGen = struct {
         elements_refcounted: bool,
     };
 
-    const SortComparatorThunk = struct {
-        fn_ptr: LlvmBuilder.Value,
-        cmp_data: LlvmBuilder.Value,
-    };
-
     fn getListElementInfo(self: *MonoLlvmCodeGen, list_layout_idx: layout.Idx) Error!ListElementInfo {
         const ls = self.layout_store orelse return error.CompilationFailed;
         const list_layout = ls.getLayout(list_layout_idx);
@@ -6197,176 +6037,6 @@ pub const MonoLlvmCodeGen = struct {
             .elem_align = @intCast(elem_sa.alignment.toByteUnits()),
             .elements_refcounted = ls.layoutContainsRefcounted(elem_layout),
         };
-    }
-
-    fn generateListSortWith(self: *MonoLlvmCodeGen, list_expr_id: LirExprId, cmp_expr_id: LirExprId, ret_layout: layout.Idx) Error!LlvmBuilder.Value {
-        const wip = self.wip orelse return error.CompilationFailed;
-        const builder = self.builder orelse return error.CompilationFailed;
-        const dest_ptr = self.out_ptr orelse return error.CompilationFailed;
-        const roc_ops = self.roc_ops_arg orelse return error.CompilationFailed;
-        const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
-        const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
-
-        const list_ptr = try self.materializeAsPtr(list_expr_id, 24);
-        const list_bytes = wip.load(.normal, ptr_type, list_ptr, alignment, "") catch return error.CompilationFailed;
-        const off8 = builder.intValue(.i32, 8) catch return error.OutOfMemory;
-        const off16 = builder.intValue(.i32, 16) catch return error.OutOfMemory;
-        const len_ptr = wip.gep(.inbounds, .i8, list_ptr, &.{off8}, "") catch return error.CompilationFailed;
-        const list_len = wip.load(.normal, .i64, len_ptr, alignment, "") catch return error.CompilationFailed;
-        const cap_ptr = wip.gep(.inbounds, .i8, list_ptr, &.{off16}, "") catch return error.CompilationFailed;
-        const list_cap = wip.load(.normal, .i64, cap_ptr, alignment, "") catch return error.CompilationFailed;
-
-        const elem_info = try self.getListElementInfo(ret_layout);
-        if (elem_info.elem_size == 0) {
-            const list_size_val = builder.intValue(.i32, 24) catch return error.OutOfMemory;
-            _ = wip.callMemCpy(dest_ptr, alignment, list_ptr, alignment, list_size_val, .normal, false) catch return error.CompilationFailed;
-            return .none;
-        }
-
-        const cmp_thunk = try self.buildListSortComparatorThunk(cmp_expr_id, elem_info);
-        const align_val = builder.intValue(.i32, elem_info.elem_align) catch return error.OutOfMemory;
-        const width_val = builder.intValue(.i64, elem_info.elem_size) catch return error.OutOfMemory;
-
-        _ = try self.callBuiltin("roc_builtins_list_sort_with", .void, &.{
-            ptr_type, ptr_type, .i64, .i64, ptr_type, ptr_type, .i32, .i64, ptr_type,
-        }, &.{
-            dest_ptr, list_bytes, list_len, list_cap, cmp_thunk.fn_ptr, cmp_thunk.cmp_data, align_val, width_val, roc_ops,
-        });
-
-        return .none;
-    }
-
-    fn buildListSortComparatorThunk(self: *MonoLlvmCodeGen, cmp_expr_id: LirExprId, elem_info: ListElementInfo) Error!SortComparatorThunk {
-        const builder = self.builder orelse return error.CompilationFailed;
-        const wip = self.wip orelse return error.CompilationFailed;
-        const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
-
-        const meta = self.resolveToClosureMeta(cmp_expr_id) orelse return error.CompilationFailed;
-        switch (meta.representation) {
-            .direct_call => {},
-            else => return error.CompilationFailed,
-        }
-        if (self.store.getCaptures(meta.captures).len != 0) {
-            return error.CompilationFailed;
-        }
-
-        const lambda_expr = self.store.getExpr(meta.lambda);
-        if (lambda_expr != .lambda) return error.CompilationFailed;
-        const lambda = lambda_expr.lambda;
-
-        const func_idx = try self.compileLambdaAsFunc(meta.lambda, lambda, lambda.ret_layout, null);
-        const thunk_idx = try self.compileListSortComparatorThunk(meta.lambda, lambda, func_idx, elem_info);
-        var fn_ptr = thunk_idx.toValue(builder);
-        if (fn_ptr.typeOfWip(wip) != ptr_type) {
-            fn_ptr = wip.cast(.bitcast, fn_ptr, ptr_type, "") catch return error.CompilationFailed;
-        }
-
-        return .{
-            .fn_ptr = fn_ptr,
-            .cmp_data = self.roc_ops_arg orelse return error.CompilationFailed,
-        };
-    }
-
-    fn compileListSortComparatorThunk(
-        self: *MonoLlvmCodeGen,
-        lambda_expr_id: LirExprId,
-        lambda: anytype,
-        func_idx: LlvmBuilder.Function.Index,
-        elem_info: ListElementInfo,
-    ) Error!LlvmBuilder.Function.Index {
-        const builder = self.builder orelse return error.CompilationFailed;
-        const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
-
-        const fn_type = builder.fnType(.i8, &.{ ptr_type, ptr_type, ptr_type }, .normal) catch return error.OutOfMemory;
-        var name_buf: [96]u8 = undefined;
-        const name_str = std.fmt.bufPrint(&name_buf, "roc_sort_cmp_{d}_{d}", .{
-            @intFromEnum(lambda_expr_id),
-            @intFromEnum(elem_info.elem_layout_idx),
-        }) catch return error.OutOfMemory;
-        const fn_name = builder.strtabString(name_str) catch return error.OutOfMemory;
-        const thunk_fn = builder.addFunction(fn_type, fn_name, .default) catch return error.OutOfMemory;
-
-        const outer_wip = self.wip;
-        defer self.wip = outer_wip;
-        const outer_roc_ops = self.roc_ops_arg;
-        defer self.roc_ops_arg = outer_roc_ops;
-        const outer_out_ptr = self.out_ptr;
-        defer self.out_ptr = outer_out_ptr;
-        const outer_fn_out_ptr = self.fn_out_ptr;
-        defer self.fn_out_ptr = outer_fn_out_ptr;
-        self.out_ptr = null;
-        self.fn_out_ptr = null;
-
-        const outer_symbols = self.symbol_values;
-        self.symbol_values = std.AutoHashMap(u64, LlvmBuilder.Value).init(self.allocator);
-        defer {
-            self.symbol_values.deinit();
-            self.symbol_values = outer_symbols;
-        }
-
-        const outer_loop_var_allocas = self.loop_var_allocas;
-        self.loop_var_allocas = std.AutoHashMap(u64, LoopVarAlloca).init(self.allocator);
-        defer {
-            self.loop_var_allocas.deinit();
-            self.loop_var_allocas = outer_loop_var_allocas;
-        }
-
-        const outer_loop_exit_blocks = self.loop_exit_blocks;
-        self.loop_exit_blocks = .empty;
-        defer {
-            self.loop_exit_blocks.deinit(self.allocator);
-            self.loop_exit_blocks = outer_loop_exit_blocks;
-        }
-
-        const outer_cell_allocas = self.cell_allocas;
-        self.cell_allocas = std.AutoHashMap(u64, LoopVarAlloca).init(self.allocator);
-        defer {
-            self.cell_allocas.deinit();
-            self.cell_allocas = outer_cell_allocas;
-        }
-
-        const outer_closure_bindings = self.closure_bindings;
-        self.closure_bindings = std.AutoHashMap(u64, ClosureMeta).init(self.allocator);
-        defer {
-            self.closure_bindings.deinit();
-            self.closure_bindings = outer_closure_bindings;
-        }
-
-        var thunk_wip = LlvmBuilder.WipFunction.init(builder, .{
-            .function = thunk_fn,
-            .strip = true,
-        }) catch return error.OutOfMemory;
-        defer thunk_wip.deinit();
-
-        self.wip = &thunk_wip;
-
-        const entry_block = thunk_wip.block(0, "entry") catch return error.OutOfMemory;
-        thunk_wip.cursor = .{ .block = entry_block };
-
-        const cmp_data = thunk_wip.arg(0);
-        const a_ptr = thunk_wip.arg(1);
-        const b_ptr = thunk_wip.arg(2);
-        self.roc_ops_arg = cmp_data;
-
-        const params = self.store.getPatternSpan(lambda.params);
-        if (params.len != 2) return error.CompilationFailed;
-
-        const elem_alignment = LlvmBuilder.Alignment.fromByteUnits(@max(@as(u64, elem_info.elem_align), 1));
-        const param0_layout = self.getPatternLayoutIdx(params[0]) orelse return error.CompilationFailed;
-        const param1_layout = self.getPatternLayoutIdx(params[1]) orelse return error.CompilationFailed;
-        const param0_type = try self.layoutToLlvmTypeFull(param0_layout);
-        const param1_type = try self.layoutToLlvmTypeFull(param1_layout);
-        const lhs = thunk_wip.load(.normal, param0_type, a_ptr, elem_alignment, "") catch return error.CompilationFailed;
-        const rhs = thunk_wip.load(.normal, param1_type, b_ptr, elem_alignment, "") catch return error.CompilationFailed;
-
-        const lambda_fn_type = try self.buildLambdaFunctionType(lambda, null);
-        const callee = func_idx.toValue(builder);
-        const cmp_result = thunk_wip.call(.normal, .ccc, .none, lambda_fn_type, callee, &.{ lhs, rhs, cmp_data }, "") catch return error.CompilationFailed;
-        const coerced = try self.coerceValueToType(cmp_result, .i8, lambda.ret_layout);
-        _ = thunk_wip.ret(coerced) catch return error.CompilationFailed;
-        thunk_wip.finish() catch return error.CompilationFailed;
-
-        return thunk_fn;
     }
 
     /// Convert a layout index to an LLVM type suitable for memory loads.
