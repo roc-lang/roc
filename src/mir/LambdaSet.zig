@@ -342,18 +342,18 @@ fn seedExactSymbolProcSets(
     mir_store: *const MIR.Store,
     store: *Store,
 ) Allocator.Error!void {
-    var it = mir_store.symbol_seed_proc_sets.iterator();
+    var it = mir_store.symbol_seed_members.iterator();
     while (it.next()) |entry| {
         const symbol = MIR.Symbol.fromRaw(entry.key_ptr.*);
-        const proc_ids = mir_store.getProcSpan(entry.value_ptr.*);
+        const seed_members = mir_store.getSeedMemberSpan(entry.value_ptr.*);
 
         var members = std.ArrayListUnmanaged(Member){};
         defer members.deinit(allocator);
-        for (proc_ids) |proc_id| {
-            const member = if (mir_store.getClosureMemberForProc(proc_id)) |closure_member_id|
-                memberFromClosureMember(mir_store, closure_member_id)
+        for (seed_members) |seed_member| {
+            const member = if (!seed_member.closure_member.isNone())
+                memberFromClosureMember(mir_store, seed_member.closure_member)
             else
-                plainProcMember(proc_id);
+                plainProcMember(seed_member.proc);
             try appendMembersDedup(allocator, &members, &.{member});
         }
 
@@ -858,6 +858,11 @@ fn internLambdaSet(allocator: Allocator, store: *Store, members: []const Member)
 
 fn appendMembersDedup(allocator: Allocator, dest: *std.ArrayListUnmanaged(Member), src: []const Member) Allocator.Error!void {
     for (src) |candidate| {
+        if (candidate.closure_member.isNone()) {
+            if (containsExactClosureMemberForProc(dest.items, candidate.proc)) continue;
+        } else {
+            removePlainProcMember(dest, candidate.proc);
+        }
         if (containsMember(dest.items, candidate)) continue;
         try dest.append(allocator, candidate);
     }
@@ -865,9 +870,28 @@ fn appendMembersDedup(allocator: Allocator, dest: *std.ArrayListUnmanaged(Member
 
 fn containsMember(existing: []const Member, candidate: Member) bool {
     for (existing) |member| {
-        if (member.proc == candidate.proc) return true;
+        if (member.proc == candidate.proc and member.closure_member == candidate.closure_member) return true;
     }
     return false;
+}
+
+fn containsExactClosureMemberForProc(existing: []const Member, proc: MIR.ProcId) bool {
+    for (existing) |member| {
+        if (member.proc == proc and !member.closure_member.isNone()) return true;
+    }
+    return false;
+}
+
+fn removePlainProcMember(existing: *std.ArrayListUnmanaged(Member), proc: MIR.ProcId) void {
+    var i: usize = 0;
+    while (i < existing.items.len) {
+        const member = existing.items[i];
+        if (member.proc == proc and member.closure_member.isNone()) {
+            _ = existing.orderedRemove(i);
+            continue;
+        }
+        i += 1;
+    }
 }
 
 fn mergeIntoSymbol(allocator: Allocator, store: *Store, symbol: MIR.Symbol, new_ls_idx: Idx) Allocator.Error!bool {

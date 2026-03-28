@@ -2591,11 +2591,13 @@ pub const MonoLlvmCodeGen = struct {
             },
             .num_abs => {
                 std.debug.assert(args.len >= 1);
-                const operand = try self.generateExpr(args[0]);
-                const is_float = isFloatLayout(ll.ret_layout);
+                const operand_layout = self.getExprResultLayout(args[0]) orelse ll.ret_layout;
+                var operand = try self.generateExpr(args[0]);
+                operand = try self.coerceValueToLayout(operand, operand_layout);
+                const is_float = isFloatLayout(operand_layout);
                 if (is_float) {
                     // abs(x) = x < 0.0 ? -x : x
-                    const zero = if (ll.ret_layout == .f32)
+                    const zero = if (operand_layout == .f32)
                         (builder.floatConst(0.0) catch return error.OutOfMemory).toValue()
                     else
                         (builder.doubleConst(0.0) catch return error.OutOfMemory).toValue();
@@ -4035,94 +4037,6 @@ pub const MonoLlvmCodeGen = struct {
                     dest_ptr, list_bytes, list_len, list_cap, align_val, width_val, roc_ops,
                 });
                 return .none;
-            },
-
-            .list_contains => {
-                // list_contains(list, needle) -> Bool
-                // Inline loop: iterate through list, compare each element
-                std.debug.assert(args.len >= 2);
-                const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
-                const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
-
-                // Generate needle value first to determine element type
-                const saved = self.out_ptr;
-                self.out_ptr = null;
-                const needle = try self.generateExpr(args[1]);
-                self.out_ptr = saved;
-
-                const elem_type = needle.typeOfWip(wip);
-                const elem_size: u64 = llvmTypeByteSize(elem_type);
-                std.debug.assert(elem_size != 0);
-                const elem_align = LlvmBuilder.Alignment.fromByteUnits(@intCast(elem_size));
-                const is_float = (elem_type == .float or elem_type == .double);
-
-                // Materialize list
-                const list_ptr = try self.materializeAsPtr(args[0], 24);
-                const data_ptr = wip.load(.normal, ptr_type, list_ptr, alignment, "") catch return error.CompilationFailed;
-                const off8 = builder.intValue(.i32, 8) catch return error.OutOfMemory;
-                const len_ptr_val = wip.gep(.inbounds, .i8, list_ptr, &.{off8}, "") catch return error.CompilationFailed;
-                const list_len = wip.load(.normal, .i64, len_ptr_val, alignment, "") catch return error.CompilationFailed;
-
-                // Build loop: header -> body -> exit
-                const header_block = wip.block(2, "contains_hdr") catch return error.OutOfMemory;
-                const body_block = wip.block(1, "contains_body") catch return error.OutOfMemory;
-                const found_block = wip.block(1, "contains_found") catch return error.OutOfMemory;
-                const exit_block = wip.block(3, "contains_exit") catch return error.OutOfMemory;
-
-                const zero_i64 = builder.intValue(.i64, 0) catch return error.OutOfMemory;
-                const one_i64 = builder.intValue(.i64, 1) catch return error.OutOfMemory;
-                const false_val = builder.intValue(.i1, 0) catch return error.OutOfMemory;
-                const true_val = builder.intValue(.i1, 1) catch return error.OutOfMemory;
-
-                const entry_block = wip.cursor.block;
-                _ = wip.br(header_block) catch return error.CompilationFailed;
-
-                // Header: phi for counter, compare with len
-                wip.cursor = .{ .block = header_block };
-                const counter_phi = wip.phi(.i64, "ctr") catch return error.CompilationFailed;
-                const ctr_val = counter_phi.toValue();
-                const cond = wip.icmp(.ult, ctr_val, list_len, "") catch return error.OutOfMemory;
-                _ = wip.brCond(cond, body_block, exit_block, .none) catch return error.CompilationFailed;
-
-                // Body: load element, compare with needle
-                wip.cursor = .{ .block = body_block };
-                const size_const = builder.intValue(.i64, elem_size) catch return error.OutOfMemory;
-                const byte_offset = wip.bin(.mul, ctr_val, size_const, "") catch return error.CompilationFailed;
-                const elem_ptr_val = wip.gep(.inbounds, .i8, data_ptr, &.{byte_offset}, "") catch return error.CompilationFailed;
-                const elem_val = wip.load(.normal, elem_type, elem_ptr_val, elem_align, "") catch return error.CompilationFailed;
-
-                // Compare based on type (integer or float)
-                const is_equal = if (is_float)
-                    wip.fcmp(.normal, .oeq, elem_val, needle, "") catch return error.OutOfMemory
-                else
-                    wip.icmp(.eq, elem_val, needle, "") catch return error.OutOfMemory;
-
-                _ = wip.brCond(is_equal, found_block, header_block, .none) catch return error.CompilationFailed;
-
-                // Increment counter for back-edge
-                const next_ctr = wip.bin(.add, ctr_val, one_i64, "") catch return error.CompilationFailed;
-                const body_end_block = wip.cursor.block;
-
-                // Found block
-                wip.cursor = .{ .block = found_block };
-                _ = wip.br(exit_block) catch return error.CompilationFailed;
-
-                // Finish counter phi: entry->0, body_end->next_ctr
-                counter_phi.finish(
-                    &.{ zero_i64, next_ctr },
-                    &.{ entry_block, body_end_block },
-                    wip,
-                );
-
-                // Exit block: phi for result (false from header, true from found)
-                wip.cursor = .{ .block = exit_block };
-                const result_phi = wip.phi(.i1, "result") catch return error.CompilationFailed;
-                result_phi.finish(
-                    &.{ false_val, true_val },
-                    &.{ header_block, found_block },
-                    wip,
-                );
-                return result_phi.toValue();
             },
 
             .box_box => {

@@ -138,6 +138,12 @@ reserved_proc_insts: std.AutoHashMap(u32, MIR.ProcId),
 /// expecting a local runtime binding.
 skipped_proc_backed_binding_patterns: std.AutoHashMap(u64, void),
 
+/// Closure-valued MIR expressions that were created before the target proc's
+/// capture-binding schema was finalized. These must be resolved once the proc
+/// body is lowered so lambda-set inference sees the exact closure member, not
+/// only the underlying proc.
+pending_closure_value_members: std.AutoHashMap(u32, std.ArrayListUnmanaged(PendingClosureValueMember)),
+
 /// Proc-inst context for context-sensitive monomorphized lookup/call resolution.
 current_proc_inst_context: Monomorphize.ProcInstId,
 
@@ -215,6 +221,7 @@ pub fn init(
         .in_progress_proc_insts = std.AutoHashMap(u32, MIR.ExprId).init(allocator),
         .reserved_proc_insts = std.AutoHashMap(u32, MIR.ProcId).init(allocator),
         .skipped_proc_backed_binding_patterns = std.AutoHashMap(u64, void).init(allocator),
+        .pending_closure_value_members = std.AutoHashMap(u32, std.ArrayListUnmanaged(PendingClosureValueMember)).init(allocator),
         .current_proc_inst_context = .none,
         .current_root_expr_context = null,
         .in_progress_symbol_monotypes = std.AutoHashMap(u64, Monotype.Idx).init(allocator),
@@ -250,6 +257,15 @@ pub fn deinit(self: *Self) void {
     self.in_progress_proc_insts.deinit();
     self.reserved_proc_insts.deinit();
     self.skipped_proc_backed_binding_patterns.deinit();
+    var pending_it = self.pending_closure_value_members.valueIterator();
+    while (pending_it.next()) |pending_list| pending_list.deinit(self.allocator);
+    if (builtin.mode == .Debug and self.pending_closure_value_members.count() != 0) {
+        std.debug.panic(
+            "MIR Lower invariant: {d} unresolved pending closure-value members remained at deinit",
+            .{self.pending_closure_value_members.count()},
+        );
+    }
+    self.pending_closure_value_members.deinit();
     self.in_progress_symbol_monotypes.deinit();
     self.resolved_dispatch_targets.deinit();
     self.scratch_expr_ids.deinit();
@@ -357,6 +373,22 @@ fn lookupMonomorphizedExprProcInst(self: *const Self, expr_idx: CIR.Expr.Idx) ?M
     return null;
 }
 
+fn lookupMonomorphizedExprProcInsts(self: *const Self, expr_idx: CIR.Expr.Idx) ?[]const Monomorphize.ProcInstId {
+    const rooted = self.monomorphization.getExprProcInsts(
+        self.current_proc_inst_context,
+        self.monomorphizationRootExprContext(self.current_proc_inst_context),
+        self.current_module_idx,
+        expr_idx,
+    );
+    if (rooted != null) return rooted;
+
+    if (self.current_proc_inst_context.isNone()) {
+        return self.monomorphization.getExprProcInsts(.none, null, self.current_module_idx, expr_idx);
+    }
+
+    return null;
+}
+
 fn lookupMonomorphizedLookupProcInst(self: *const Self, expr_idx: CIR.Expr.Idx) ?Monomorphize.ProcInstId {
     const rooted = self.monomorphization.getLookupExprProcInst(
         self.current_proc_inst_context,
@@ -373,9 +405,106 @@ fn lookupMonomorphizedLookupProcInst(self: *const Self, expr_idx: CIR.Expr.Idx) 
     return null;
 }
 
+fn lookupMonomorphizedLookupProcInsts(self: *const Self, expr_idx: CIR.Expr.Idx) ?[]const Monomorphize.ProcInstId {
+    const rooted = self.monomorphization.getLookupExprProcInsts(
+        self.current_proc_inst_context,
+        self.monomorphizationRootExprContext(self.current_proc_inst_context),
+        self.current_module_idx,
+        expr_idx,
+    );
+    if (rooted != null) return rooted;
+
+    if (self.current_proc_inst_context.isNone()) {
+        return self.monomorphization.getLookupExprProcInsts(.none, null, self.current_module_idx, expr_idx);
+    }
+
+    return null;
+}
+
 fn lookupMonomorphizedValueExprProcInst(self: *const Self, expr_idx: CIR.Expr.Idx) ?Monomorphize.ProcInstId {
     if (self.lookupMonomorphizedExprProcInst(expr_idx)) |proc_inst_id| return proc_inst_id;
     return self.lookupMonomorphizedLookupProcInst(expr_idx);
+}
+
+fn procInstMatchesFnMonotype(
+    self: *Self,
+    proc_inst_id: Monomorphize.ProcInstId,
+    fn_monotype: Monotype.Idx,
+    fn_monotype_module_idx: u32,
+) Allocator.Error!bool {
+    const proc_inst = self.monomorphization.getProcInst(proc_inst_id);
+    const imported_proc_mono = try self.importMonotypeFromStore(
+        &self.monomorphization.monotype_store,
+        proc_inst.fn_monotype,
+        proc_inst.fn_monotype_module_idx,
+        fn_monotype_module_idx,
+    );
+    return self.monotypesStructurallyEqual(imported_proc_mono, fn_monotype);
+}
+
+fn selectProcInstForFnMonotype(
+    self: *Self,
+    proc_inst_ids: []const Monomorphize.ProcInstId,
+    fn_monotype: Monotype.Idx,
+    fn_monotype_module_idx: u32,
+) Allocator.Error!?Monomorphize.ProcInstId {
+    var resolved: ?Monomorphize.ProcInstId = null;
+    for (proc_inst_ids) |proc_inst_id| {
+        if (!try self.procInstMatchesFnMonotype(proc_inst_id, fn_monotype, fn_monotype_module_idx)) continue;
+        if (resolved) |existing| {
+            if (existing != proc_inst_id) return null;
+        } else {
+            resolved = proc_inst_id;
+        }
+    }
+    return resolved;
+}
+
+fn lookupMonomorphizedValueExprProcInstForMonotype(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    fn_monotype: Monotype.Idx,
+    fn_monotype_module_idx: u32,
+) Allocator.Error!?Monomorphize.ProcInstId {
+    if (self.lookupMonomorphizedValueExprProcInsts(expr_idx)) |proc_inst_ids| {
+        if (try self.selectProcInstForFnMonotype(proc_inst_ids, fn_monotype, fn_monotype_module_idx)) |proc_inst_id| {
+            return proc_inst_id;
+        }
+    }
+
+    if (self.lookupMonomorphizedValueExprProcInst(expr_idx)) |proc_inst_id| {
+        if (try self.procInstMatchesFnMonotype(proc_inst_id, fn_monotype, fn_monotype_module_idx)) {
+            return proc_inst_id;
+        }
+    }
+
+    return null;
+}
+
+fn lookupMonomorphizedValueExprProcInsts(self: *const Self, expr_idx: CIR.Expr.Idx) ?[]const Monomorphize.ProcInstId {
+    const module_env = self.all_module_envs[self.current_module_idx];
+    switch (module_env.store.getExpr(expr_idx)) {
+        .e_lookup_local => |lookup| {
+            const rooted = self.monomorphization.getContextPatternProcInsts(
+                self.current_proc_inst_context,
+                self.current_module_idx,
+                lookup.pattern_idx,
+            );
+            if (rooted != null) return rooted;
+
+            if (self.current_proc_inst_context.isNone()) {
+                return self.monomorphization.getContextPatternProcInsts(
+                    .none,
+                    self.current_module_idx,
+                    lookup.pattern_idx,
+                );
+            }
+        },
+        else => {},
+    }
+
+    if (self.lookupMonomorphizedExprProcInsts(expr_idx)) |proc_inst_ids| return proc_inst_ids;
+    return self.lookupMonomorphizedLookupProcInsts(expr_idx);
 }
 
 fn lookupMonomorphizedDispatchProcInst(self: *const Self, expr_idx: CIR.Expr.Idx) ?Monomorphize.ProcInstId {
@@ -392,6 +521,135 @@ fn lookupMonomorphizedDispatchProcInst(self: *const Self, expr_idx: CIR.Expr.Idx
     }
 
     return null;
+}
+
+fn procInstIdSlicesEqual(lhs: []const Monomorphize.ProcInstId, rhs: []const Monomorphize.ProcInstId) bool {
+    if (lhs.len != rhs.len) return false;
+    for (lhs, rhs) |lhs_id, rhs_id| {
+        if (lhs_id != rhs_id) return false;
+    }
+    return true;
+}
+
+fn procInstIdSliceContainsAll(
+    actual: []const Monomorphize.ProcInstId,
+    expected: []const Monomorphize.ProcInstId,
+) bool {
+    for (expected) |expected_id| {
+        var found = false;
+        for (actual) |actual_id| {
+            if (actual_id == expected_id) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) return false;
+    }
+    return true;
+}
+
+fn resolveDirectCallFnMonotype(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    call_expr: anytype,
+    ret_monotype: Monotype.Idx,
+) Allocator.Error!Monotype.Idx {
+    if (ret_monotype.isNone()) return .none;
+
+    const effectful = if (resolveFuncTypeInStore(&module_env.types, ModuleEnv.varFrom(call_expr.func))) |func_info|
+        func_info.effectful
+    else
+        false;
+
+    const arg_exprs = module_env.store.sliceExpr(call_expr.args);
+    var arg_monotypes = std.ArrayListUnmanaged(Monotype.Idx).empty;
+    defer arg_monotypes.deinit(self.allocator);
+
+    for (arg_exprs) |arg_expr_idx| {
+        const arg_monotype = try self.resolveMonotype(arg_expr_idx);
+        if (arg_monotype.isNone()) return .none;
+        try arg_monotypes.append(self.allocator, arg_monotype);
+    }
+
+    const arg_span = try self.store.monotype_store.addIdxSpan(
+        self.allocator,
+        arg_monotypes.items,
+    );
+    return self.store.monotype_store.addMonotype(self.allocator, .{ .func = .{
+        .args = arg_span,
+        .ret = ret_monotype,
+        .effectful = effectful,
+    } });
+}
+
+fn selectMatchingCallSiteProcInst(
+    self: *Self,
+    call_arg_exprs: []const CIR.Expr.Idx,
+    proc_inst_ids: []const Monomorphize.ProcInstId,
+    fn_monotype: Monotype.Idx,
+    fn_monotype_module_idx: u32,
+) Allocator.Error!?Monomorphize.ProcInstId {
+    var actual_callable_arg_count: usize = 0;
+    for (call_arg_exprs) |arg_expr_idx| {
+        if (self.lookupMonomorphizedValueExprProcInsts(arg_expr_idx) != null or
+            self.lookupMonomorphizedValueExprProcInst(arg_expr_idx) != null)
+        {
+            actual_callable_arg_count += 1;
+        }
+    }
+
+    var resolved: ?Monomorphize.ProcInstId = null;
+    for (proc_inst_ids) |proc_inst_id| {
+        if (!try self.procInstMatchesFnMonotype(proc_inst_id, fn_monotype, fn_monotype_module_idx)) continue;
+
+        const proc_inst = self.monomorphization.getProcInst(proc_inst_id);
+        const callable_param_specs = self.monomorphization.getCallableParamSpecEntries(
+            proc_inst.callable_param_specs,
+        );
+        if (callable_param_specs.len != actual_callable_arg_count) continue;
+
+        var matches = true;
+        for (callable_param_specs) |spec| {
+            if (spec.param_index >= call_arg_exprs.len) {
+                matches = false;
+                break;
+            }
+
+            const arg_expr_idx = call_arg_exprs[spec.param_index];
+            const arg_fn_monotype = try self.resolveMonotype(arg_expr_idx);
+            const actual_proc_inst_ids = if (!arg_fn_monotype.isNone())
+                if (try self.lookupMonomorphizedValueExprProcInstForMonotype(
+                    arg_expr_idx,
+                    arg_fn_monotype,
+                    fn_monotype_module_idx,
+                )) |single|
+                    &.{single}
+                else
+                    null
+            else
+                null;
+            const resolved_actual_proc_inst_ids = actual_proc_inst_ids orelse {
+                matches = false;
+                break;
+            };
+            const expected_proc_inst_ids = self.monomorphization.getProcInstSetMembers(
+                self.monomorphization.getProcInstSet(spec.proc_inst_set_id).members,
+            );
+            if (!procInstIdSliceContainsAll(resolved_actual_proc_inst_ids, expected_proc_inst_ids)) {
+                matches = false;
+                break;
+            }
+        }
+
+        if (!matches) continue;
+        if (resolved) |existing| {
+            if (existing != proc_inst_id) return null;
+        } else {
+            resolved = proc_inst_id;
+        }
+    }
+
+    return resolved;
 }
 
 fn patternScopeForProcInst(proc_inst_id: Monomorphize.ProcInstId) u64 {
@@ -2148,10 +2406,14 @@ fn lowerStrInspectNominal(
             method_func_mono,
             method_info.module_idx,
         );
+        const proc_id = self.store.resolveCallableProcId(func_expr) orelse std.debug.panic(
+            "MIR Lower invariant: lowered str_inspect helper callee must resolve to a unique proc",
+            .{},
+        );
         const call_args = try self.store.addExprSpan(self.allocator, &.{value_expr});
         const call_expr = try self.store.addExpr(
             self.allocator,
-            .{ .call = .{ .func = func_expr, .args = call_args } },
+            .{ .call = .{ .proc = proc_id, .func = func_expr, .args = call_args } },
             method_func.ret,
             region,
         );
@@ -3012,6 +3274,30 @@ fn lowerExprWithMonotypeOverride(
                     return try self.lowerProcInst(proc_inst_id);
                 }
             }
+            if (scoped_symbol) |symbol| {
+                if (!self.current_proc_inst_context.isNone()) {
+                    if (self.monomorphization.getContextPatternProcInsts(
+                        self.current_proc_inst_context,
+                        self.current_module_idx,
+                        lookup.pattern_idx,
+                    )) |proc_inst_ids| {
+                        try self.seedCallableSymbolFromProcInsts(symbol, proc_inst_ids);
+                    } else {
+                        const defining_context_proc_inst = self.monomorphization.getProcInst(
+                            self.current_proc_inst_context,
+                        ).defining_context_proc_inst;
+                        if (!defining_context_proc_inst.isNone()) {
+                            if (self.monomorphization.getContextPatternProcInsts(
+                                defining_context_proc_inst,
+                                self.current_module_idx,
+                                lookup.pattern_idx,
+                            )) |proc_inst_ids| {
+                                try self.seedCallableSymbolFromProcInsts(symbol, proc_inst_ids);
+                            }
+                        }
+                    }
+                }
+            }
             const skipped_proc_backed_binding = self.isSkippedProcBackedBindingPattern(
                 self.current_module_idx,
                 lookup.pattern_idx,
@@ -3407,56 +3693,50 @@ fn seedCallableParamSymbols(
         ) orelse continue;
         const symbol = self.patternBoundSymbol(lowered_pattern_id) orelse continue;
 
-        var proc_ids = std.ArrayList(MIR.ProcId).empty;
-        defer proc_ids.deinit(self.allocator);
+        var seed_members = std.ArrayList(MIR.SeedMember).empty;
+        defer seed_members.deinit(self.allocator);
         for (proc_inst_ids) |proc_inst_id| {
-            const proc_inst = self.monomorphization.getProcInst(proc_inst_id);
-            const template = self.monomorphization.getProcTemplate(proc_inst.template);
-            const proc_id = switch (template.kind) {
-                .closure => try self.ensureClosureProcInstLoweredForSeed(proc_inst_id),
-                else => blk: {
-                    const proc_expr = try self.lowerProcInst(proc_inst_id);
-                    const resolved = self.store.resolveCallableProcId(proc_expr) orelse {
-                        if (builtin.mode == .Debug) {
-                            std.debug.panic(
-                                "MIR Lower invariant: callable param pattern {d} lowered proc inst {d} to non-callable expr {}",
-                                .{
-                                    @intFromEnum(original_pattern_idx),
-                                    @intFromEnum(proc_inst_id),
-                                    @intFromEnum(proc_expr),
-                                },
-                            );
-                        }
-                        unreachable;
-                    };
-                    break :blk resolved;
-                },
+            const proc_expr = try self.lowerProcInst(proc_inst_id);
+            const resolved = self.store.resolveCallableProcId(proc_expr) orelse {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "MIR Lower invariant: callable param pattern {d} lowered proc inst {d} to non-callable expr {}",
+                        .{
+                            @intFromEnum(original_pattern_idx),
+                            @intFromEnum(proc_inst_id),
+                            @intFromEnum(proc_expr),
+                        },
+                    );
+                }
+                unreachable;
             };
+            const member = MIR.SeedMember{ .proc = resolved };
 
             var seen = false;
-            for (proc_ids.items) |existing_proc_id| {
-                if (existing_proc_id == proc_id) {
+            for (seed_members.items) |existing_member| {
+                if (existing_member.proc == member.proc and existing_member.closure_member == member.closure_member) {
                     seen = true;
                     break;
                 }
             }
             if (!seen) {
-                try proc_ids.append(self.allocator, proc_id);
+                try seed_members.append(self.allocator, member);
             }
         }
 
-        if (proc_ids.items.len != 0) {
+        if (seed_members.items.len != 0) {
             std.mem.sortUnstable(
-                MIR.ProcId,
-                proc_ids.items,
+                MIR.SeedMember,
+                seed_members.items,
                 {},
                 struct {
-                    fn lessThan(_: void, lhs: MIR.ProcId, rhs: MIR.ProcId) bool {
-                        return @intFromEnum(lhs) < @intFromEnum(rhs);
+                    fn lessThan(_: void, lhs: MIR.SeedMember, rhs: MIR.SeedMember) bool {
+                        if (lhs.proc != rhs.proc) return @intFromEnum(lhs.proc) < @intFromEnum(rhs.proc);
+                        return @intFromEnum(lhs.closure_member) < @intFromEnum(rhs.closure_member);
                     }
                 }.lessThan,
             );
-            try self.store.registerSymbolSeedProcSet(self.allocator, symbol, proc_ids.items);
+            try self.store.registerSymbolSeedMembers(self.allocator, symbol, seed_members.items);
         }
     }
 }
@@ -4155,9 +4435,16 @@ fn lowerMatch(self: *Self, module_env: *const ModuleEnv, match_expr: CIR.Expr.Ma
 fn lowerExprProcInst(
     self: *Self,
     expr_idx: CIR.Expr.Idx,
-    _: Monotype.Idx,
+    monotype: Monotype.Idx,
 ) Allocator.Error!MIR.ExprId {
-    const proc_inst_id = self.lookupMonomorphizedExprProcInst(expr_idx) orelse {
+    const proc_inst_id = (if (!monotype.isNone())
+        try self.lookupMonomorphizedValueExprProcInstForMonotype(
+            expr_idx,
+            monotype,
+            self.current_module_idx,
+        )
+    else
+        null) orelse self.lookupMonomorphizedExprProcInst(expr_idx) orelse {
         if (builtin.mode == .Debug) {
             const module_env = self.all_module_envs[self.current_module_idx];
             const expr = module_env.store.getExpr(expr_idx);
@@ -4308,6 +4595,13 @@ const BuiltClosureValue = struct {
     captures_tuple_monotype: Monotype.Idx,
 };
 
+const PendingClosureValueMember = struct {
+    expr_id: MIR.ExprId,
+    semantic_capture_exprs: MIR.ExprSpan,
+    value_capture_exprs: MIR.ExprSpan,
+    capture_monotypes: Monotype.Span,
+};
+
 const CaptureRequest = struct {
     module_idx: u32,
     closure_expr_idx: CIR.Expr.Idx,
@@ -4315,6 +4609,162 @@ const CaptureRequest = struct {
     pattern_idx: CIR.Pattern.Idx,
     name: Ident.Idx,
 };
+
+fn registerClosureValueMember(
+    self: *Self,
+    proc_id: MIR.ProcId,
+    expr_id: MIR.ExprId,
+    semantic_capture_exprs: []const MIR.ExprId,
+    value_capture_exprs: []const MIR.ExprId,
+    capture_monotypes: []const Monotype.Idx,
+) Allocator.Error!void {
+    if (semantic_capture_exprs.len == 0) return;
+
+    const proc = self.store.getProc(proc_id);
+    const proc_capture_bindings = self.store.getCaptureBindings(proc.capture_bindings);
+    if (builtin.mode == .Debug and
+        (proc_capture_bindings.len != semantic_capture_exprs.len or
+            proc_capture_bindings.len != value_capture_exprs.len or
+            proc_capture_bindings.len != capture_monotypes.len))
+    {
+        std.debug.panic(
+            "MIR Lower invariant: closure member registration arity mismatch for proc {d} (schema={d}, semantic={d}, value={d}, monos={d})",
+            .{
+                @intFromEnum(proc_id),
+                proc_capture_bindings.len,
+                semantic_capture_exprs.len,
+                value_capture_exprs.len,
+                capture_monotypes.len,
+            },
+        );
+    }
+
+    const binding_top = self.scratch_capture_bindings.top();
+    defer self.scratch_capture_bindings.clearFrom(binding_top);
+
+    for (proc_capture_bindings, semantic_capture_exprs, value_capture_exprs, capture_monotypes) |binding, source_expr, value_expr, monotype| {
+        try self.scratch_capture_bindings.append(.{
+            .local_symbol = binding.local_symbol,
+            .source_expr = source_expr,
+            .value_expr = value_expr,
+            .monotype = monotype,
+        });
+    }
+
+    const capture_binding_span = try self.store.addCaptureBindings(
+        self.allocator,
+        self.scratch_capture_bindings.sliceFromStart(binding_top),
+    );
+    const member_id = try self.store.addClosureMember(self.allocator, .{
+        .proc = proc_id,
+        .capture_bindings = capture_binding_span,
+    });
+    try self.store.registerExprClosureMember(self.allocator, expr_id, member_id);
+}
+
+fn registerClosureValueMemberFromPending(
+    self: *Self,
+    proc_id: MIR.ProcId,
+    pending: PendingClosureValueMember,
+) Allocator.Error!void {
+    return self.registerClosureValueMember(
+        proc_id,
+        pending.expr_id,
+        self.store.getExprSpan(pending.semantic_capture_exprs),
+        self.store.getExprSpan(pending.value_capture_exprs),
+        self.store.monotype_store.getIdxSpan(pending.capture_monotypes),
+    );
+}
+
+fn queuePendingClosureValueMember(
+    self: *Self,
+    proc_id: MIR.ProcId,
+    expr_id: MIR.ExprId,
+    semantic_capture_exprs: []const MIR.ExprId,
+    value_capture_exprs: []const MIR.ExprId,
+    capture_monotypes: []const Monotype.Idx,
+) Allocator.Error!void {
+    if (builtin.mode == .Debug and
+        (semantic_capture_exprs.len == 0 or
+            semantic_capture_exprs.len != value_capture_exprs.len or
+            semantic_capture_exprs.len != capture_monotypes.len))
+    {
+        std.debug.panic(
+            "MIR Lower invariant: invalid pending closure-member payload for proc {d} expr {d} (semantic={d}, value={d}, monos={d})",
+            .{
+                @intFromEnum(proc_id),
+                @intFromEnum(expr_id),
+                semantic_capture_exprs.len,
+                value_capture_exprs.len,
+                capture_monotypes.len,
+            },
+        );
+    }
+
+    const semantic_capture_span = try self.store.addExprSpan(self.allocator, semantic_capture_exprs);
+    const value_capture_span = try self.store.addExprSpan(self.allocator, value_capture_exprs);
+    const capture_monotype_span = try self.store.monotype_store.addIdxSpan(self.allocator, capture_monotypes);
+
+    const gop = try self.pending_closure_value_members.getOrPut(@intFromEnum(proc_id));
+    if (!gop.found_existing) gop.value_ptr.* = .empty;
+    try gop.value_ptr.append(self.allocator, .{
+        .expr_id = expr_id,
+        .semantic_capture_exprs = semantic_capture_span,
+        .value_capture_exprs = value_capture_span,
+        .capture_monotypes = capture_monotype_span,
+    });
+}
+
+fn maybeRegisterOrQueueClosureValueMember(
+    self: *Self,
+    proc_id: MIR.ProcId,
+    expr_id: MIR.ExprId,
+    semantic_capture_exprs: []const MIR.ExprId,
+    value_capture_exprs: []const MIR.ExprId,
+    capture_monotypes: []const Monotype.Idx,
+) Allocator.Error!void {
+    if (semantic_capture_exprs.len == 0) return;
+
+    const proc = self.store.getProc(proc_id);
+    if (!proc.capture_bindings.isEmpty()) {
+        return self.registerClosureValueMember(
+            proc_id,
+            expr_id,
+            semantic_capture_exprs,
+            value_capture_exprs,
+            capture_monotypes,
+        );
+    }
+
+    try self.queuePendingClosureValueMember(
+        proc_id,
+        expr_id,
+        semantic_capture_exprs,
+        value_capture_exprs,
+        capture_monotypes,
+    );
+}
+
+fn resolvePendingClosureValueMembers(self: *Self, proc_id: MIR.ProcId) Allocator.Error!void {
+    const proc_key = @intFromEnum(proc_id);
+    const entry = self.pending_closure_value_members.fetchRemove(proc_key) orelse return;
+    defer {
+        var pending = entry.value;
+        pending.deinit(self.allocator);
+    }
+
+    const proc = self.store.getProc(proc_id);
+    if (builtin.mode == .Debug and proc.capture_bindings.isEmpty()) {
+        std.debug.panic(
+            "MIR Lower invariant: proc {d} resolved pending closure members without capture bindings",
+            .{@intFromEnum(proc_id)},
+        );
+    }
+
+    for (entry.value.items) |pending| {
+        try self.registerClosureValueMemberFromPending(proc_id, pending);
+    }
+}
 
 const RecursiveGroupMember = struct {
     proc_inst_id: Monomorphize.ProcInstId,
@@ -4373,6 +4823,56 @@ fn reserveProcInstSkeleton(self: *Self, proc_inst_id: Monomorphize.ProcInstId) A
     });
     try self.reserved_proc_insts.put(proc_inst_key, proc_id);
     return proc_id;
+}
+
+fn seedCallableSymbolFromProcInsts(
+    self: *Self,
+    symbol: MIR.Symbol,
+    proc_inst_ids: []const Monomorphize.ProcInstId,
+) Allocator.Error!void {
+    if (proc_inst_ids.len == 0) return;
+
+    var seed_members = std.ArrayList(MIR.SeedMember).empty;
+    defer seed_members.deinit(self.allocator);
+
+    for (proc_inst_ids) |proc_inst_id| {
+        const proc_expr = try self.lowerProcInst(proc_inst_id);
+        const member = if (self.store.getExprClosureMember(proc_expr)) |closure_member_id|
+            MIR.SeedMember{
+                .proc = self.store.getClosureMember(closure_member_id).proc,
+                .closure_member = closure_member_id,
+            }
+        else blk: {
+            const proc_id = self.store.resolveCallableProcId(proc_expr) orelse unreachable;
+            break :blk MIR.SeedMember{ .proc = proc_id };
+        };
+
+        var seen = false;
+        for (seed_members.items) |existing_member| {
+            if (existing_member.proc == member.proc and existing_member.closure_member == member.closure_member) {
+                seen = true;
+                break;
+            }
+        }
+        if (!seen) {
+            try seed_members.append(self.allocator, member);
+        }
+    }
+
+    if (seed_members.items.len != 0) {
+        std.mem.sortUnstable(
+            MIR.SeedMember,
+            seed_members.items,
+            {},
+            struct {
+                fn lessThan(_: void, lhs: MIR.SeedMember, rhs: MIR.SeedMember) bool {
+                    if (lhs.proc != rhs.proc) return @intFromEnum(lhs.proc) < @intFromEnum(rhs.proc);
+                    return @intFromEnum(lhs.closure_member) < @intFromEnum(rhs.closure_member);
+                }
+            }.lessThan,
+        );
+        try self.store.registerSymbolSeedMembers(self.allocator, symbol, seed_members.items);
+    }
 }
 
 fn procTemplateBindingName(
@@ -4618,6 +5118,7 @@ fn buildClosureValueFromCaptureRequests(
     region: Region,
     proc_id: MIR.ProcId,
     capture_requests: []const CaptureRequest,
+    register_or_queue_member: bool,
     capture_monotypes_snapshot: ?*std.ArrayList(Monotype.Idx),
     capture_source_exprs_snapshot: ?*std.ArrayList(MIR.ExprId),
     capture_value_exprs_snapshot: ?*std.ArrayList(MIR.ExprId),
@@ -4633,6 +5134,8 @@ fn buildClosureValueFromCaptureRequests(
     defer self.mono_scratches.idxs.clearFrom(idxs_top);
     const value_expr_top = self.scratch_expr_ids.top();
     defer self.scratch_expr_ids.clearFrom(value_expr_top);
+    var semantic_capture_exprs = std.ArrayList(MIR.ExprId).empty;
+    defer semantic_capture_exprs.deinit(self.allocator);
 
     for (capture_requests) |request| {
         const resolved_cap_monotype = self.monomorphization.getClosureCaptureMonotype(
@@ -4708,6 +5211,7 @@ fn buildClosureValueFromCaptureRequests(
             proc_backed_capture_expr
         else
             runtime_lookup_expr;
+        try semantic_capture_exprs.append(self.allocator, semantic_capture_expr);
         if (capture_source_exprs_snapshot) |snapshot| {
             try snapshot.append(self.allocator, semantic_capture_expr);
         }
@@ -4729,11 +5233,21 @@ fn buildClosureValueFromCaptureRequests(
 
     const captures_tuple_span = try self.store.addExprSpan(self.allocator, capture_value_exprs);
     const captures_tuple_expr = try self.emitMirStructExprFromSpan(captures_tuple_span, captures_tuple_monotype, region);
+    const proc_expr = try self.store.addExpr(self.allocator, .{ .closure_make = .{
+        .proc = proc_id,
+        .captures = captures_tuple_expr,
+    } }, monotype, region);
+    if (register_or_queue_member) {
+        try self.maybeRegisterOrQueueClosureValueMember(
+            proc_id,
+            proc_expr,
+            semantic_capture_exprs.items,
+            capture_value_exprs,
+            capture_monotypes,
+        );
+    }
     return .{
-        .proc_expr = try self.store.addExpr(self.allocator, .{ .closure_make = .{
-            .proc = proc_id,
-            .captures = captures_tuple_expr,
-        } }, monotype, region),
+        .proc_expr = proc_expr,
         .captures_tuple_monotype = captures_tuple_monotype,
     };
 }
@@ -4838,6 +5352,7 @@ fn buildSpecializedClosureValue(
         region,
         proc_id,
         plan.capture_requests.items,
+        true,
         capture_monotypes_snapshot,
         capture_source_exprs_snapshot,
         capture_value_exprs_snapshot,
@@ -4852,6 +5367,7 @@ fn buildClosureValueFromLocalCaptures(
     capture_local_symbols: []const MIR.Symbol,
     capture_monotypes: []const Monotype.Idx,
     captures_tuple_monotype: Monotype.Idx,
+    register_or_queue_member: bool,
 ) Allocator.Error!MIR.ExprId {
     if (capture_local_symbols.len == 0) {
         return self.store.addExpr(self.allocator, .{ .proc_ref = proc_id }, monotype, region);
@@ -4882,10 +5398,21 @@ fn buildClosureValueFromLocalCaptures(
         self.scratch_expr_ids.sliceFromStart(captures_top),
     );
     const captures_tuple = try self.emitMirStructExprFromSpan(captures_span, captures_tuple_monotype, region);
-    return self.store.addExpr(self.allocator, .{ .closure_make = .{
+    const proc_expr = try self.store.addExpr(self.allocator, .{ .closure_make = .{
         .proc = proc_id,
         .captures = captures_tuple,
     } }, monotype, region);
+    if (register_or_queue_member) {
+        const capture_exprs = self.scratch_expr_ids.sliceFromStart(captures_top);
+        try self.maybeRegisterOrQueueClosureValueMember(
+            proc_id,
+            proc_expr,
+            capture_exprs,
+            capture_exprs,
+            capture_monotypes,
+        );
+    }
+    return proc_expr;
 }
 
 fn ensureClosureProcInstLoweredForSeed(
@@ -5073,13 +5600,10 @@ fn lowerClosureProcBodyForSeed(
     const orig_monotype = self.store.monotype_store.getMonotype(monotype);
     const orig_func = orig_monotype.func;
     const proc_id = try self.reserveProcInstSkeleton(closure_proc_inst_id);
-    const captures_tuple_monotype = if (capture_monotypes_snapshot.items.len == 0)
-        Monotype.Idx.none
-    else blk: {
-        const captures_tuple_elems = try self.store.monotype_store.addIdxSpan(
-            self.allocator,
-            capture_monotypes_snapshot.items,
-        );
+    const captures_tuple_monotype = if (capture_monotypes_snapshot.items.len == 0) blk: {
+        break :blk Monotype.Idx.none;
+    } else blk: {
+        const captures_tuple_elems = try self.store.monotype_store.addIdxSpan(self.allocator, capture_monotypes_snapshot.items);
         break :blk try self.store.monotype_store.addMonotype(self.allocator, .{ .tuple = .{
             .elems = captures_tuple_elems,
         } });
@@ -5112,17 +5636,26 @@ fn lowerClosureProcBodyForSeed(
             request.closure_expr_idx,
             request.pattern_idx,
         )) |capture_proc_inst_id| {
-            const capture_template = self.monomorphization.getProcTemplate(
-                self.monomorphization.getProcInst(capture_proc_inst_id).template,
-            );
-            const capture_proc_id = switch (capture_template.kind) {
-                .closure => try self.ensureClosureProcInstLoweredForSeed(capture_proc_inst_id),
-                else => blk: {
-                    const capture_expr = try self.lowerProcInst(capture_proc_inst_id);
-                    break :blk self.store.resolveCallableProcId(capture_expr) orelse unreachable;
-                },
-            };
-            try self.store.registerSymbolSeedProcSet(self.allocator, local_symbol, &.{capture_proc_id});
+            try self.seedCallableSymbolFromProcInsts(local_symbol, &.{capture_proc_inst_id});
+        } else {
+            const defining_context_proc_inst = self.monomorphization.getProcInst(
+                request.closure_proc_inst_id,
+            ).defining_context_proc_inst;
+            if (self.monomorphization.getContextPatternProcInsts(
+                request.closure_proc_inst_id,
+                request.module_idx,
+                request.pattern_idx,
+            )) |proc_inst_ids| {
+                try self.seedCallableSymbolFromProcInsts(local_symbol, proc_inst_ids);
+            } else if (!defining_context_proc_inst.isNone()) {
+                if (self.monomorphization.getContextPatternProcInsts(
+                    defining_context_proc_inst,
+                    request.module_idx,
+                    request.pattern_idx,
+                )) |proc_inst_ids| {
+                    try self.seedCallableSymbolFromProcInsts(local_symbol, proc_inst_ids);
+                }
+            }
         }
         try capture_local_symbols.append(self.allocator, local_symbol);
     }
@@ -5156,6 +5689,7 @@ fn lowerClosureProcBodyForSeed(
             capture_local_symbols.items,
             capture_monotypes_snapshot.items,
             captures_tuple_monotype,
+            false,
         );
     try self.in_progress_proc_insts.put(proc_inst_key, in_progress_expr);
     errdefer _ = self.in_progress_proc_insts.remove(proc_inst_key);
@@ -5200,6 +5734,7 @@ fn lowerClosureProcBodyForSeed(
                 capture_local_symbols.items,
                 capture_monotypes_snapshot.items,
                 captures_tuple_monotype,
+                true,
             );
 
         const recursive_bind_pat = try self.store.addPattern(self.allocator, .{ .bind = local_symbol }, member_monotype);
@@ -5340,6 +5875,7 @@ fn lowerClosureSpecialized(
             region,
             proc_id,
             lower_plan.capture_requests.items,
+            false,
             &capture_monotypes_snapshot,
             &capture_source_exprs_snapshot,
             &capture_value_exprs_snapshot,
@@ -5509,6 +6045,7 @@ fn lowerClosureSpecialized(
         });
 
         try self.store.registerExprClosureMember(self.allocator, proc_expr, member_id);
+        try self.resolvePendingClosureValueMembers(proc_id);
     }
 
     for (lower_plan.recursive_members.items) |member| {
@@ -5916,20 +6453,54 @@ fn lowerCall(
     region: Region,
 ) Allocator.Error!MIR.ExprId {
     const callee_expr = module_env.store.getExpr(call.func);
+    const call_arg_exprs = module_env.store.sliceExpr(call.args);
     const call_low_level_op = self.getCallLowLevelOp(module_env, callee_expr);
-    const call_site_proc_inst = self.monomorphization.getCallSiteProcInst(
+    const callee_fn_monotype = try self.resolveMonotype(call.func);
+    const direct_call_fn_monotype = try self.resolveDirectCallFnMonotype(module_env, call, monotype);
+    const callee_value_proc_inst = if (!callee_fn_monotype.isNone())
+        try self.lookupMonomorphizedValueExprProcInstForMonotype(
+            call.func,
+            callee_fn_monotype,
+            self.current_module_idx,
+        )
+    else
+        self.lookupMonomorphizedValueExprProcInst(call.func);
+    const exact_call_site_proc_inst = self.monomorphization.getCallSiteProcInst(
         self.current_proc_inst_context,
         self.monomorphizationRootExprContext(self.current_proc_inst_context),
         self.current_module_idx,
         call_expr_idx,
     );
-    if (call_site_proc_inst == null and builtin.mode == .Debug) {
-        const call_site_proc_insts = self.monomorphization.getCallSiteProcInsts(
+    const call_site_proc_insts = if (exact_call_site_proc_inst == null)
+        self.monomorphization.getCallSiteProcInsts(
             self.current_proc_inst_context,
             self.monomorphizationRootExprContext(self.current_proc_inst_context),
             self.current_module_idx,
             call_expr_idx,
-        );
+        )
+    else
+        null;
+    const call_site_proc_inst = if (exact_call_site_proc_inst) |proc_inst_id|
+        if (!direct_call_fn_monotype.isNone() and
+            try self.procInstMatchesFnMonotype(proc_inst_id, direct_call_fn_monotype, self.current_module_idx))
+            proc_inst_id
+        else if (direct_call_fn_monotype.isNone())
+            proc_inst_id
+        else
+            null
+    else if (call_site_proc_insts) |proc_inst_ids|
+        if (!direct_call_fn_monotype.isNone())
+            try self.selectMatchingCallSiteProcInst(
+                call_arg_exprs,
+                proc_inst_ids,
+                direct_call_fn_monotype,
+                self.current_module_idx,
+            )
+        else
+            null
+    else
+        null;
+    if (call_site_proc_inst == null and builtin.mode == .Debug) {
         const callee_template_id = self.monomorphization.getExprProcTemplate(self.current_module_idx, call.func);
         if (call_low_level_op == null and callee_expr == .e_lookup_external and callee_template_id != null) {
             const rooted_lookup = self.monomorphization.getCallSiteProcInst(
@@ -5966,18 +6537,17 @@ fn lowerCall(
 
     if (call_low_level_op) |ll_op| {
         if (ll_op == .list_append_unsafe) {
-            const arg_exprs = module_env.store.sliceExpr(call.args);
-            if (arg_exprs.len == 2) {
-                const lowered_list = try self.lowerExpr(arg_exprs[0]);
+            if (call_arg_exprs.len == 2) {
+                const lowered_list = try self.lowerExpr(call_arg_exprs[0]);
                 const list_mono_idx = self.store.typeOf(lowered_list);
                 const elem_monotype = switch (self.store.monotype_store.getMonotype(list_mono_idx)) {
                     .list => |list_mono| list_mono.elem,
                     else => Monotype.Idx.none,
                 };
                 const lowered_elem = if (!elem_monotype.isNone() and self.monotypeIsWellFormed(elem_monotype))
-                    try self.lowerExprWithMonotypeOverride(arg_exprs[1], elem_monotype)
+                    try self.lowerExprWithMonotypeOverride(call_arg_exprs[1], elem_monotype)
                 else
-                    try self.lowerExpr(arg_exprs[1]);
+                    try self.lowerExpr(call_arg_exprs[1]);
                 const args = try self.store.addExprSpan(self.allocator, &.{ lowered_list, lowered_elem });
                 return try self.store.addExpr(self.allocator, .{ .run_low_level = .{
                     .op = ll_op,
@@ -6010,9 +6580,30 @@ fn lowerCall(
         }
     else
         try self.lowerExpr(call.func);
+
+    const resolved_proc = if (call_site_proc_inst) |proc_inst_id|
+        try self.reserveProcInstSkeleton(proc_inst_id)
+    else if (callee_value_proc_inst) |proc_inst_id|
+        try self.reserveProcInstSkeleton(proc_inst_id)
+    else if (self.store.resolveCallableProcId(lowered_func)) |proc_id|
+        proc_id
+    else {
+        std.debug.panic(
+            "MIR Lower invariant: call callee expr {d} in module {d} ({s}) has no unique proc identity before strongest-form MIR (context={d}, root_expr={d}, lowered_func={d})",
+            .{
+                @intFromEnum(call.func),
+                self.current_module_idx,
+                @tagName(callee_expr),
+                @intFromEnum(self.current_proc_inst_context),
+                if (self.current_root_expr_context) |root_expr_idx| @intFromEnum(root_expr_idx) else std.math.maxInt(u32),
+                @intFromEnum(lowered_func),
+            },
+        );
+    };
     return self.lowerCallWithLoweredFunc(
+        resolved_proc,
         lowered_func,
-        module_env.store.sliceExpr(call.args),
+        call_arg_exprs,
         call_result_monotype,
         region,
     );
@@ -6020,6 +6611,7 @@ fn lowerCall(
 
 fn lowerCallWithLoweredFunc(
     self: *Self,
+    resolved_proc: MIR.ProcId,
     lowered_func_input: MIR.ExprId,
     call_arg_exprs: []const CIR.Expr.Idx,
     monotype: Monotype.Idx,
@@ -6052,6 +6644,7 @@ fn lowerCallWithLoweredFunc(
     const args = try self.store.addExprSpan(self.allocator, lowered_call_args);
 
     return try self.store.addExpr(self.allocator, .{ .call = .{
+        .proc = resolved_proc,
         .func = lowered_func,
         .args = args,
     } }, call_result_monotype, region);
@@ -6342,9 +6935,14 @@ fn lowerBinop(self: *Self, expr_idx: CIR.Expr.Idx, binop: CIR.Expr.Binop, monoty
 
             // Use checker-resolved target for static dispatch.
             const func_expr = try self.lowerDispatchProcInstForExpr(expr_idx);
+            const proc_id = self.store.resolveCallableProcId(func_expr) orelse std.debug.panic(
+                "MIR Lower invariant: lowered binary-op dispatch callee must resolve to a unique proc",
+                .{},
+            );
 
             const args = try self.store.addExprSpan(self.allocator, &.{ lhs, rhs });
             const result = try self.store.addExpr(self.allocator, .{ .call = .{
+                .proc = proc_id,
                 .func = func_expr,
                 .args = args,
             } }, monotype, region);
@@ -6364,8 +6962,13 @@ fn lowerUnaryMinus(self: *Self, expr_idx: CIR.Expr.Idx, um: CIR.Expr.UnaryMinus,
     const inner = try self.lowerExpr(um.expr);
 
     const func_expr = try self.lowerDispatchProcInstForExpr(expr_idx);
+    const proc_id = self.store.resolveCallableProcId(func_expr) orelse std.debug.panic(
+        "MIR Lower invariant: lowered unary-minus callee must resolve to a unique proc",
+        .{},
+    );
     const args = try self.store.addExprSpan(self.allocator, &.{inner});
     return try self.store.addExpr(self.allocator, .{ .call = .{
+        .proc = proc_id,
         .func = func_expr,
         .args = args,
     } }, monotype, region);
@@ -6924,28 +7527,6 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
     if (da.args) |args_span| {
         const uses_runtime_receiver = dotCallUsesRuntimeReceiver(module_env, da.receiver);
 
-        if (uses_runtime_receiver and std.mem.eql(u8, module_env.getIdent(da.field_name), "contains")) {
-            const explicit_args = module_env.store.sliceExpr(args_span);
-            if (explicit_args.len == 1) {
-                const receiver_monotype = try self.resolveMonotype(da.receiver);
-                if (!receiver_monotype.isNone()) switch (self.store.monotype_store.getMonotype(receiver_monotype)) {
-                    .list => |list_mono| {
-                        const receiver = try self.lowerExpr(da.receiver);
-                        const lowered_arg = if (!list_mono.elem.isNone() and self.monotypeIsWellFormed(list_mono.elem))
-                            try self.lowerExprWithMonotypeOverride(explicit_args[0], list_mono.elem)
-                        else
-                            try self.lowerExpr(explicit_args[0]);
-                        const args = try self.store.addExprSpan(self.allocator, &.{ receiver, lowered_arg });
-                        return try self.store.addExpr(self.allocator, .{ .run_low_level = .{
-                            .op = .list_contains,
-                            .args = args,
-                        } }, monotype, region);
-                    },
-                    else => {},
-                };
-            }
-        }
-
         // Structural types: .is_eq() is decomposed field-by-field in MIR.
         structural_eq: {
             if (!uses_runtime_receiver) break :structural_eq;
@@ -7024,8 +7605,13 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
         const call_result_monotype = monotype;
 
         const args = try self.store.addExprSpan(self.allocator, lowered_call_args);
+        const proc_id = self.store.resolveCallableProcId(func_expr) orelse std.debug.panic(
+            "MIR Lower invariant: lowered dot-call callee must resolve to a unique proc",
+            .{},
+        );
 
         return try self.store.addExpr(self.allocator, .{ .call = .{
+            .proc = proc_id,
             .func = func_expr,
             .args = args,
         } }, call_result_monotype, region);
@@ -7178,8 +7764,13 @@ fn lowerRecord(self: *Self, module_env: *const ModuleEnv, record: anytype, monot
 fn lowerTypeVarDispatch(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.Idx, tvd: anytype, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
     const args = try self.lowerExprSpan(module_env, tvd.args);
     const func_expr = try self.lowerDispatchProcInstForExpr(expr_idx);
+    const proc_id = self.store.resolveCallableProcId(func_expr) orelse std.debug.panic(
+        "MIR Lower invariant: lowered type-var dispatch callee must resolve to a unique proc",
+        .{},
+    );
 
     return try self.store.addExpr(self.allocator, .{ .call = .{
+        .proc = proc_id,
         .func = func_expr,
         .args = args,
     } }, monotype, region);

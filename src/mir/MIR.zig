@@ -14,6 +14,7 @@
 //! No nominal/opaque/structural distinction — just records, tag unions, and tuples.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const builtins = @import("builtins");
 const Monotype = @import("Monotype.zig");
@@ -155,6 +156,26 @@ pub const ProcSpan = extern struct {
     }
 
     pub fn isEmpty(self: ProcSpan) bool {
+        return self.len == 0;
+    }
+};
+
+/// One exact callable member associated with a symbol seed.
+pub const SeedMember = struct {
+    proc: ProcId,
+    closure_member: ClosureMemberId = .none,
+};
+
+/// Span of SeedMember values stored in Store.seed_members.
+pub const SeedMemberSpan = extern struct {
+    start: u32,
+    len: u16,
+
+    pub fn empty() SeedMemberSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+
+    pub fn isEmpty(self: SeedMemberSpan) bool {
         return self.len == 0;
     }
 };
@@ -406,6 +427,7 @@ pub const Expr = union(enum) {
 
     /// Function call (fully resolved — no static dispatch, no dot-call syntax)
     call: struct {
+        proc: ProcId,
         func: ExprId,
         args: ExprSpan,
     },
@@ -603,11 +625,9 @@ pub const Store = struct {
     /// Maps a closure-valued ExprId to its lifted closure member.
     expr_closure_members: std.AutoHashMapUnmanaged(u32, ClosureMemberId),
 
-    /// Maps a MIR proc to its closure member.
-    proc_closure_members: std.AutoHashMapUnmanaged(u32, ClosureMemberId),
-
-    /// Exact proc-backed callable members known for lowered MIR symbols.
-    symbol_seed_proc_sets: std.AutoHashMapUnmanaged(u64, ProcSpan),
+    /// Exact callable members known for lowered MIR symbols.
+    seed_members: std.ArrayListUnmanaged(SeedMember),
+    symbol_seed_members: std.AutoHashMapUnmanaged(u64, SeedMemberSpan),
 
     /// String literals copied from CIR during lowering.
     /// MIR owns its own string data so downstream passes (LIR, codegen)
@@ -632,8 +652,8 @@ pub const Store = struct {
             .monotype_store = try Monotype.Store.init(allocator),
             .closure_members = .empty,
             .expr_closure_members = .empty,
-            .proc_closure_members = .empty,
-            .symbol_seed_proc_sets = .empty,
+            .seed_members = .empty,
+            .symbol_seed_members = .empty,
             .value_defs = .empty,
             .symbol_reassignable = .empty,
             .strings = .{},
@@ -657,8 +677,8 @@ pub const Store = struct {
         self.monotype_store.deinit(allocator);
         self.closure_members.deinit(allocator);
         self.expr_closure_members.deinit(allocator);
-        self.proc_closure_members.deinit(allocator);
-        self.symbol_seed_proc_sets.deinit(allocator);
+        self.seed_members.deinit(allocator);
+        self.symbol_seed_members.deinit(allocator);
         self.value_defs.deinit(allocator);
         self.symbol_reassignable.deinit(allocator);
         self.strings.deinit(allocator);
@@ -913,11 +933,29 @@ pub const Store = struct {
 
     /// Register a lifted closure member.
     pub fn addClosureMember(self: *Store, allocator: Allocator, member: ClosureMember) !ClosureMemberId {
+        const candidate_bindings = self.getCaptureBindings(member.capture_bindings);
+        for (self.closure_members.items, 0..) |existing, idx| {
+            if (existing.proc != member.proc) continue;
+
+            const existing_bindings = self.getCaptureBindings(existing.capture_bindings);
+            if (existing_bindings.len != candidate_bindings.len) continue;
+
+            for (existing_bindings, candidate_bindings) |lhs, rhs| {
+                if (lhs.local_symbol != rhs.local_symbol or
+                    lhs.source_expr != rhs.source_expr or
+                    lhs.value_expr != rhs.value_expr or
+                    lhs.monotype != rhs.monotype)
+                {
+                    break;
+                }
+            } else {
+                return @enumFromInt(idx);
+            }
+        }
+
         const idx: u32 = @intCast(self.closure_members.items.len);
         try self.closure_members.append(allocator, member);
-        const member_id: ClosureMemberId = @enumFromInt(idx);
-        try self.proc_closure_members.put(allocator, @intFromEnum(member.proc), member_id);
-        return member_id;
+        return @enumFromInt(idx);
     }
 
     /// Get a closure member by ID.
@@ -925,9 +963,18 @@ pub const Store = struct {
         return self.closure_members.items[@intFromEnum(id)];
     }
 
-    /// Look up a lifted closure member by its proc id.
-    pub fn getClosureMemberForProc(self: *const Store, proc: ProcId) ?ClosureMemberId {
-        return self.proc_closure_members.get(@intFromEnum(proc));
+    /// Store SeedMember values and return a SeedMemberSpan.
+    pub fn addSeedMemberSpan(self: *Store, allocator: Allocator, members: []const SeedMember) !SeedMemberSpan {
+        if (members.len == 0) return SeedMemberSpan.empty();
+        const start: u32 = @intCast(self.seed_members.items.len);
+        try self.seed_members.appendSlice(allocator, members);
+        return .{ .start = start, .len = @intCast(members.len) };
+    }
+
+    /// Retrieve SeedMember values from a SeedMemberSpan.
+    pub fn getSeedMemberSpan(self: *const Store, span: SeedMemberSpan) []const SeedMember {
+        if (span.len == 0) return &.{};
+        return self.seed_members.items[span.start..][0..span.len];
     }
 
     /// Register a closure-valued expression's member identity.
@@ -940,36 +987,57 @@ pub const Store = struct {
         return self.expr_closure_members.get(@intFromEnum(expr_id));
     }
 
-    pub fn registerSymbolSeedProcSet(self: *Store, allocator: Allocator, symbol: Symbol, proc_ids: []const ProcId) !void {
+    pub fn registerSymbolSeedMembers(self: *Store, allocator: Allocator, symbol: Symbol, members: []const SeedMember) !void {
         const key = symbol.raw();
-        const gop = try self.symbol_seed_proc_sets.getOrPut(allocator, key);
+        const gop = try self.symbol_seed_members.getOrPut(allocator, key);
         if (!gop.found_existing) {
-            const span = try self.addProcSpan(allocator, proc_ids);
+            const span = try self.addSeedMemberSpan(allocator, members);
             gop.value_ptr.* = span;
             return;
         }
 
-        const existing = self.getProcSpan(gop.value_ptr.*);
-        if (existing.len == proc_ids.len) {
-            for (existing, proc_ids) |lhs, rhs| {
-                if (lhs != rhs) break;
+        const existing = self.getSeedMemberSpan(gop.value_ptr.*);
+        if (existing.len == members.len) {
+            for (existing, members) |lhs, rhs| {
+                if (lhs.proc != rhs.proc or lhs.closure_member != rhs.closure_member) break;
             } else {
                 return;
             }
         }
 
-        if (std.debug.runtime_safety) {
-            std.debug.panic(
-                "MIR conflicting seed proc set for symbol key {d}",
-                .{key},
-            );
+        var merged = std.ArrayList(SeedMember).empty;
+        defer merged.deinit(allocator);
+
+        try merged.appendSlice(allocator, existing);
+        outer: for (members) |member| {
+            for (merged.items) |existing_member| {
+                if (existing_member.proc == member.proc and
+                    existing_member.closure_member == member.closure_member)
+                {
+                    continue :outer;
+                }
+            }
+            try merged.append(allocator, member);
         }
-        unreachable;
+
+        std.mem.sortUnstable(
+            SeedMember,
+            merged.items,
+            {},
+            struct {
+                fn lessThan(_: void, lhs: SeedMember, rhs: SeedMember) bool {
+                    if (lhs.proc != rhs.proc) return @intFromEnum(lhs.proc) < @intFromEnum(rhs.proc);
+                    return @intFromEnum(lhs.closure_member) < @intFromEnum(rhs.closure_member);
+                }
+            }.lessThan,
+        );
+
+        gop.value_ptr.* = try self.addSeedMemberSpan(allocator, merged.items);
     }
 
-    pub fn getSymbolSeedProcSet(self: *const Store, symbol: Symbol) ?[]const ProcId {
-        const span = self.symbol_seed_proc_sets.get(symbol.raw()) orelse return null;
-        return self.getProcSpan(span);
+    pub fn getSymbolSeedMembers(self: *const Store, symbol: Symbol) ?[]const SeedMember {
+        const span = self.symbol_seed_members.get(symbol.raw()) orelse return null;
+        return self.getSeedMemberSpan(span);
     }
 
     /// Resolve one monomorphic callable expression to the unique proc whose
@@ -1029,6 +1097,52 @@ pub const Store = struct {
         return self.resolveCallableProcIdInner(expr_id, &visited_symbols, &visited_len);
     }
 
+    /// Resolve the proc-backed callable identity represented by a pattern.
+    ///
+    /// This handles callable parameters seeded by monomorphization as well as
+    /// local bindings whose value definition is a proc-backed expression.
+    pub fn resolveCallableProcIdForPattern(self: *const Store, pattern_id: PatternId) ?ProcId {
+        return switch (self.getPattern(pattern_id)) {
+            .bind => |symbol| blk: {
+                if (self.getSymbolSeedMembers(symbol)) |seed_members| {
+                    if (seed_members.len == 1) break :blk seed_members[0].proc;
+
+                    const expected_fn_monotype = self.patternTypeOf(pattern_id);
+                    var resolved: ?ProcId = null;
+                    for (seed_members) |seed_member| {
+                        const proc_id = seed_member.proc;
+                        if (self.getProc(proc_id).fn_monotype != expected_fn_monotype) continue;
+                        if (resolved) |existing| {
+                            if (existing != proc_id) return null;
+                        } else {
+                            resolved = proc_id;
+                        }
+                    }
+                    if (resolved) |proc_id| break :blk proc_id;
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic(
+                            "MIR invariant violated: callable pattern {d} for symbol {d} has seeded callable members {any} but none match fn monotype {d}",
+                            .{
+                                @intFromEnum(pattern_id),
+                                symbol.raw(),
+                                seed_members,
+                                @intFromEnum(expected_fn_monotype),
+                            },
+                        );
+                    }
+                }
+
+                if (self.getValueDef(symbol)) |expr_id| {
+                    break :blk self.resolveCallableProcId(expr_id);
+                }
+
+                break :blk null;
+            },
+            .as_pattern => |as_pattern| self.resolveCallableProcIdForPattern(as_pattern.pattern),
+            else => null,
+        };
+    }
+
     fn resolveCallableProcIdInner(
         self: *const Store,
         expr_id: ExprId,
@@ -1039,9 +1153,20 @@ pub const Store = struct {
             .proc_ref => |proc_id| proc_id,
             .closure_make => |closure| closure.proc,
             .lookup => |symbol| blk: {
-                if (self.getSymbolSeedProcSet(symbol)) |proc_ids| {
-                    if (proc_ids.len == 1) break :blk proc_ids[0];
-                    if (self.resolveUniqueProcByFnMonotype(expr_id, proc_ids)) |proc_id| break :blk proc_id;
+                if (self.getSymbolSeedMembers(symbol)) |seed_members| {
+                    if (seed_members.len == 1) break :blk seed_members[0].proc;
+                    const expected_fn_monotype = self.typeOf(expr_id);
+                    var resolved: ?ProcId = null;
+                    for (seed_members) |seed_member| {
+                        const proc_id = seed_member.proc;
+                        if (self.getProc(proc_id).fn_monotype != expected_fn_monotype) continue;
+                        if (resolved) |existing| {
+                            if (existing != proc_id) return null;
+                        } else {
+                            resolved = proc_id;
+                        }
+                    }
+                    if (resolved) |proc_id| break :blk proc_id;
                 }
 
                 if (self.getValueDef(symbol)) |def_expr| {

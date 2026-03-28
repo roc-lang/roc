@@ -3800,12 +3800,10 @@ test "Str.join_with" {
     , "hello world", .no_trace);
 }
 
-// Note: List.contains is implemented as List.any(list, |x| x == needle) in the builtins,
-// which goes through closure + higher-order function paths rather than the list_contains
-// low-level. The DevEvaluator doesn't currently support List.any with variable-capturing
-// closures, so List.contains tests are not included here. The list_contains low-level
-// codegen fix (H4) is tested via the LirCodeGen unit tests and will be exercised when
-// the full compilation pipeline (CIR -> MIR -> LIR -> codegen) is used.
+test "List.contains" {
+    try runExpectBool("List.contains([1, 2, 3], 3)", true, .no_trace);
+    try runExpectBool("List.contains([1, 2, 3], 4)", false, .no_trace);
+}
 
 // Note: Str.from_utf8 returns a Result which requires match support in all evaluators.
 // It is tested indirectly via the encode/decode tests. The wasm codegen for it is implemented

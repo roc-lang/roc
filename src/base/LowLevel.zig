@@ -63,7 +63,6 @@ pub const LowLevel = enum {
     list_drop_last,
     list_take_first,
     list_take_last,
-    list_contains,
     list_reverse,
     list_reserve,
     list_release_excess_capacity,
@@ -434,7 +433,7 @@ pub const LowLevel = enum {
             .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str => &.{.borrow},
 
             .list_len, .list_first, .list_last, .list_split_first, .list_split_last => &.{.borrow},
-            .list_get_unsafe, .list_contains => &.{ .borrow, .borrow },
+            .list_get_unsafe => &.{ .borrow, .borrow },
             .list_concat => &.{ .consume, .consume },
             .list_with_capacity => &.{.borrow},
             .list_append_unsafe => &.{ .consume, .consume },

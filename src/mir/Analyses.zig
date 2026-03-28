@@ -41,7 +41,6 @@ pub fn init(
         .proc_result_summary = try ProcResultSummary.build(
             allocator,
             mir_store,
-            &lambda_sets,
             root_expr_ids,
         ),
         .all_module_envs = all_module_envs,

@@ -8,7 +8,6 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const MIR = @import("MIR.zig");
-const LambdaSet = @import("LambdaSet.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -204,7 +203,6 @@ const LocalOriginMap = std.AutoHashMap(u64, Origin);
 const Analyzer = struct {
     allocator: Allocator,
     mir_store: *const MIR.Store,
-    lambda_sets: *const LambdaSet.Store,
     table: *Table,
     proc_states: ?[]const ProcSummaryState,
     active_value_defs: *std.AutoHashMapUnmanaged(u64, void),
@@ -215,73 +213,6 @@ const Analyzer = struct {
             return states[@intFromEnum(proc_id)];
         }
         return .{ .concrete = self.table.getProcContract(proc_id) };
-    }
-
-    fn resolveCallableProcId(self: *const Analyzer, expr_id: MIR.ExprId) ?MIR.ProcId {
-        if (self.mir_store.resolveCallableProcId(expr_id)) |proc_id| return proc_id;
-
-        const lambda_set_idx = self.lambda_sets.getExprLambdaSet(expr_id) orelse return null;
-        const members = self.lambda_sets.getMembers(self.lambda_sets.getLambdaSet(lambda_set_idx).members);
-        if (members.len == 1) return members[0].proc;
-
-        const expected_fn_monotype = self.mir_store.typeOf(expr_id);
-        var resolved: ?MIR.ProcId = null;
-        for (members) |member| {
-            if (self.mir_store.getProc(member.proc).fn_monotype != expected_fn_monotype) continue;
-            if (resolved) |existing| {
-                if (existing != member.proc) return null;
-            } else {
-                resolved = member.proc;
-            }
-        }
-
-        return resolved;
-    }
-
-    fn panicUnresolvedCallable(self: *const Analyzer, expr_id: MIR.ExprId) noreturn {
-        const expr = self.mir_store.getExpr(expr_id);
-        std.debug.print(
-            "ProcResultSummary unresolved callable: expr={d} tag={s} fn_monotype={d}\n",
-            .{ @intFromEnum(expr_id), @tagName(expr), @intFromEnum(self.mir_store.typeOf(expr_id)) },
-        );
-
-        switch (expr) {
-            .lookup => |symbol| {
-                std.debug.print("  lookup symbol={d}\n", .{symbol.raw()});
-                if (self.mir_store.getSymbolSeedProcSet(symbol)) |proc_ids| {
-                    std.debug.print("  seed procs:", .{});
-                    for (proc_ids) |proc_id| {
-                        std.debug.print(
-                            " {d}(fn_mono={d})",
-                            .{ @intFromEnum(proc_id), @intFromEnum(self.mir_store.getProc(proc_id).fn_monotype) },
-                        );
-                    }
-                    std.debug.print("\n", .{});
-                } else {
-                    std.debug.print("  seed procs: none\n", .{});
-                }
-            },
-            else => {},
-        }
-
-        if (self.lambda_sets.getExprLambdaSet(expr_id)) |lambda_set_idx| {
-            const members = self.lambda_sets.getMembers(self.lambda_sets.getLambdaSet(lambda_set_idx).members);
-            std.debug.print("  lambda members:", .{});
-            for (members) |member| {
-                std.debug.print(
-                    " {d}(fn_mono={d})",
-                    .{ @intFromEnum(member.proc), @intFromEnum(self.mir_store.getProc(member.proc).fn_monotype) },
-                );
-            }
-            std.debug.print("\n", .{});
-        } else {
-            std.debug.print("  lambda members: none\n", .{});
-        }
-
-        std.debug.panic(
-            "ProcResultSummary invariant violated: call callee must resolve to a unique proc before strongest-form lowering",
-            .{},
-        );
     }
 
     fn freshScopeRegion(self: *Analyzer) BorrowRegion {
@@ -670,8 +601,15 @@ const Analyzer = struct {
             .dec,
             .str,
             .proc_ref,
-            .closure_make,
             => ExprOutcome.fromValue(.fresh),
+
+            .closure_make => |closure| blk: {
+                const captures_outcome = try self.analyzeExpr(env, region, accumulator, closure.captures, loop_depth);
+                if (!captures_outcome.hasNormalValue()) {
+                    break :blk ExprOutcome{ .breaks = captures_outcome.breaks };
+                }
+                break :blk ExprOutcome{ .value = .fresh, .breaks = captures_outcome.breaks };
+            },
 
             .lookup => |symbol| blk: {
                 if (env.get(symbol.raw())) |origin| break :blk ExprOutcome.fromValue(origin);
@@ -788,9 +726,11 @@ const Analyzer = struct {
             },
 
             .call => |call| blk: {
-                const proc_id = self.resolveCallableProcId(call.func) orelse self.panicUnresolvedCallable(call.func);
+                const proc_id = call.proc;
+                const callee_proc = self.mir_store.getProc(proc_id);
                 const arg_exprs = self.mir_store.getExprSpan(call.args);
-                const arg_origins = try self.allocator.alloc(Origin, arg_exprs.len);
+                const hidden_capture_count: usize = @intFromBool(!callee_proc.captures_param.isNone());
+                const arg_origins = try self.allocator.alloc(Origin, arg_exprs.len + hidden_capture_count);
                 defer self.allocator.free(arg_origins);
                 var breaks = false;
 
@@ -799,6 +739,13 @@ const Analyzer = struct {
                     breaks = breaks or arg_outcome.breaks;
                     const origin = arg_outcome.value orelse break :blk ExprOutcome{ .breaks = breaks };
                     arg_origins[i] = origin;
+                }
+
+                if (!callee_proc.captures_param.isNone()) {
+                    const capture_outcome = try self.analyzeExpr(env, region, accumulator, call.func, loop_depth);
+                    breaks = breaks or capture_outcome.breaks;
+                    const capture_origin = capture_outcome.value orelse break :blk ExprOutcome{ .breaks = breaks };
+                    arg_origins[arg_exprs.len] = capture_origin;
                 }
 
                 const callee_summary = self.procSummary(proc_id);
@@ -947,7 +894,6 @@ const Analyzer = struct {
 pub fn build(
     allocator: Allocator,
     mir_store: *const MIR.Store,
-    lambda_sets: *const LambdaSet.Store,
     root_expr_ids: []const MIR.ExprId,
 ) Allocator.Error!Table {
     var table = Table.init(allocator);
@@ -966,7 +912,6 @@ pub fn build(
             var analyzer = Analyzer{
                 .allocator = allocator,
                 .mir_store = mir_store,
-                .lambda_sets = lambda_sets,
                 .table = &table,
                 .proc_states = states.items,
                 .active_value_defs = &active_value_defs,
@@ -996,7 +941,6 @@ pub fn build(
         var analyzer = Analyzer{
             .allocator = allocator,
             .mir_store = mir_store,
-            .lambda_sets = lambda_sets,
             .table = &table,
             .proc_states = null,
             .active_value_defs = &active_value_defs,
@@ -1016,7 +960,6 @@ pub fn build(
         var analyzer = Analyzer{
             .allocator = allocator,
             .mir_store = mir_store,
-            .lambda_sets = lambda_sets,
             .table = &table,
             .proc_states = null,
             .active_value_defs = &active_value_defs,

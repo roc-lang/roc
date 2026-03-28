@@ -62,6 +62,8 @@ analyses: *const Analyses,
 lowered_procs: LoweredProcMap,
 builder_procs: std.ArrayList(BuilderProc),
 active_value_defs: LocalSymbolSet,
+proc_runtime_ret_layouts: std.AutoHashMap(u32, layout.Idx),
+resolving_proc_runtime_ret_layouts: std.AutoHashMap(u32, void),
 current_local_symbols: ?*const LocalSymbolSet = null,
 flushed: bool = false,
 current_proc_result_summary: ?SummaryContract = null,
@@ -93,6 +95,8 @@ pub fn init(
         .lowered_procs = LoweredProcMap.init(allocator),
         .builder_procs = std.ArrayList(BuilderProc).empty,
         .active_value_defs = .empty,
+        .proc_runtime_ret_layouts = std.AutoHashMap(u32, layout.Idx).init(allocator),
+        .resolving_proc_runtime_ret_layouts = std.AutoHashMap(u32, void).init(allocator),
         .break_targets = .empty,
     };
 }
@@ -102,6 +106,8 @@ pub fn deinit(self: *Self) void {
     self.lowered_procs.deinit();
     self.builder_procs.deinit(self.allocator);
     self.active_value_defs.deinit(self.allocator);
+    self.proc_runtime_ret_layouts.deinit();
+    self.resolving_proc_runtime_ret_layouts.deinit();
     self.break_targets.deinit(self.allocator);
     self.mir_layout_resolver.deinit();
 }
@@ -173,14 +179,15 @@ pub fn lowerEntrypointProc(
         );
     }
 
-    return self.addResolvedProc(.{
+    const proc = LirProcSpec{
         .name = self.lir_store.freshSyntheticSymbol(),
         .args = arg_span,
         .body = lowered.body,
         .ret_layout = ret_layout,
         .result_contract = lowered.result_contract,
         .hosted = null,
-    });
+    };
+    return self.addResolvedProc(proc);
 }
 
 /// Finalizes all builder-owned procs into the destination `LirStore`.
@@ -222,16 +229,62 @@ fn freshLocal(self: *Self, layout_idx: layout.Idx) LocalRef {
     };
 }
 
+fn runtimeRepresentationLayoutIdx(self: *Self, layout_idx: layout.Idx) layout.Idx {
+    if (@intFromEnum(layout_idx) >= self.layout_store.layouts.len()) return layout_idx;
+
+    const layout_val = self.layout_store.getLayout(layout_idx);
+    return switch (layout_val.tag) {
+        .closure => self.runtimeRepresentationLayoutIdx(layout_val.data.closure.captures_layout_idx),
+        else => layout_idx,
+    };
+}
+
+fn runtimeProcValueLayout(self: *Self, proc_id: MIR.ProcId) Allocator.Error!layout.Idx {
+    const proc = self.mir_store.getProc(proc_id);
+    if (!proc.captures_param.isNone()) {
+        return self.runtimeValueLayoutFromMirPattern(proc.captures_param);
+    }
+    return self.runtimeRepresentationLayoutIdx(try self.mir_layout_resolver.resolve(proc.fn_monotype, null));
+}
+
+fn runtimeProcReturnLayout(self: *Self, proc_id: MIR.ProcId) Allocator.Error!layout.Idx {
+    const key = @as(u32, @intFromEnum(proc_id));
+    if (self.proc_runtime_ret_layouts.get(key)) |existing| return existing;
+
+    const gop = try self.resolving_proc_runtime_ret_layouts.getOrPut(key);
+    if (gop.found_existing) {
+        std.debug.panic(
+            "MirToLir invariant violated: recursive runtime return-layout resolution for proc {d}",
+            .{key},
+        );
+    }
+    defer _ = self.resolving_proc_runtime_ret_layouts.remove(key);
+
+    const ret_layout = try self.runtimeValueLayoutFromMirExpr(self.mir_store.getProc(proc_id).body);
+    try self.proc_runtime_ret_layouts.put(key, ret_layout);
+    return ret_layout;
+}
+
 fn runtimeValueLayoutFromMirExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!layout.Idx {
-    return self.mir_layout_resolver.resolve(self.mir_store.typeOf(mir_expr_id), null);
+    if (self.mir_store.resolveCallableProcId(mir_expr_id)) |proc_id| {
+        return self.runtimeProcValueLayout(proc_id);
+    }
+
+    return switch (self.mir_store.getExpr(mir_expr_id)) {
+        .call => |call| self.runtimeProcReturnLayout(call.proc),
+        else => self.runtimeRepresentationLayoutIdx(try self.mir_layout_resolver.resolve(self.mir_store.typeOf(mir_expr_id), null)),
+    };
 }
 
 fn runtimeValueLayoutFromMirPattern(self: *Self, pattern_id: MIR.PatternId) Allocator.Error!layout.Idx {
-    return self.mir_layout_resolver.resolve(self.mir_store.patternTypeOf(pattern_id), null);
+    if (self.mir_store.resolveCallableProcIdForPattern(pattern_id)) |proc_id| {
+        return self.runtimeProcValueLayout(proc_id);
+    }
+    return self.runtimeRepresentationLayoutIdx(try self.mir_layout_resolver.resolve(self.mir_store.patternTypeOf(pattern_id), null));
 }
 
 fn runtimeValueLayoutFromMirMonotype(self: *Self, monotype: MirMonotypeIdx) Allocator.Error!layout.Idx {
-    return self.mir_layout_resolver.resolve(monotype, null);
+    return self.runtimeRepresentationLayoutIdx(try self.mir_layout_resolver.resolve(monotype, null));
 }
 
 fn singleProjectionSpan(self: *Self, projection: LIR.RefProjection) Allocator.Error!LIR.RefProjectionSpan {
@@ -607,7 +660,12 @@ fn lowerProcBackedValueInto(
             var i = captures_fields.len;
             while (i > 0) {
                 i -= 1;
-                entry = try self.lowerExprIntoStmt(captures_fields[i], refs[i], entry);
+                entry = try self.lowerExprIntoStmtWithContract(
+                    captures_fields[i],
+                    refs[i],
+                    .{ .concrete = .fresh },
+                    entry,
+                );
             }
             break :blk entry;
         },
@@ -643,11 +701,6 @@ fn lowerHiddenCaptureArg(
     );
     return self.lowerExprIntoStmt(callee_expr_id, callable_local, bind_capture);
 }
-
-const LoweredCallee = struct {
-    mir_proc_id: MIR.ProcId,
-    lir_proc_id: LirProcSpecId,
-};
 
 fn emitRet(self: *Self, value: LocalRef) Allocator.Error!CFStmtId {
     return self.lir_store.addCFStmt(.{ .ret = .{ .value = value } });
@@ -1832,7 +1885,12 @@ fn lowerExprIntoStmt(
             var i = elems.len;
             while (i > 0) {
                 i -= 1;
-                entry = try self.lowerExprIntoStmt(elems[i], refs[i], entry);
+                entry = try self.lowerExprIntoStmtWithContract(
+                    elems[i],
+                    refs[i],
+                    .{ .concrete = .fresh },
+                    entry,
+                );
             }
             break :blk entry;
         },
@@ -1852,7 +1910,12 @@ fn lowerExprIntoStmt(
             var i = fields.len;
             while (i > 0) {
                 i -= 1;
-                entry = try self.lowerExprIntoStmt(fields[i], refs[i], entry);
+                entry = try self.lowerExprIntoStmtWithContract(
+                    fields[i],
+                    refs[i],
+                    .{ .concrete = .fresh },
+                    entry,
+                );
             }
             break :blk entry;
         },
@@ -1873,7 +1936,12 @@ fn lowerExprIntoStmt(
             var i = args.len;
             while (i > 0) {
                 i -= 1;
-                entry = try self.lowerExprIntoStmt(args[i], refs[i], entry);
+                entry = try self.lowerExprIntoStmtWithContract(
+                    args[i],
+                    refs[i],
+                    .{ .concrete = .fresh },
+                    entry,
+                );
             }
             break :blk entry;
         },
@@ -1926,9 +1994,9 @@ fn lowerExprIntoStmt(
             break :blk try self.lowerExprIntoStmt(access.struct_, source, assign_stmt);
         },
         .call => |call| blk: {
-            const callee = try self.lowerCalleeToProc(call.func);
+            const lir_proc_id = try self.lowerProc(call.proc);
             const args = self.mir_store.getExprSpan(call.args);
-            const hidden_capture_local = try self.freshHiddenCaptureLocal(callee.mir_proc_id);
+            const hidden_capture_local = try self.freshHiddenCaptureLocal(call.proc);
             const hidden_capture_count: usize = @intFromBool(hidden_capture_local != null);
             const refs = try self.allocator.alloc(LocalRef, args.len + hidden_capture_count);
             defer self.allocator.free(refs);
@@ -1937,7 +2005,7 @@ fn lowerExprIntoStmt(
                 refs[args.len] = capture_local;
             }
             const ref_span = try self.lir_store.addLocalRefs(refs);
-            const result = self.callResultSemantics(callee.lir_proc_id, refs);
+            const result = self.callResultSemantics(lir_proc_id, refs);
             const call_target = if (needsFreshTempForSelfAliasResult(target, result))
                 self.freshLocal(target.layout_idx)
             else
@@ -1945,7 +2013,7 @@ fn lowerExprIntoStmt(
             const assign_stmt = try self.lir_store.addCFStmt(.{ .assign_call = .{
                 .target = call_target,
                 .result = result,
-                .proc = callee.lir_proc_id,
+                .proc = lir_proc_id,
                 .args = ref_span,
                 .next = next,
             } });
@@ -2044,24 +2112,13 @@ fn lowerExprIntoStmt(
     };
 }
 
-fn lowerCalleeToProc(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LoweredCallee {
-    const mir_proc_id = self.analyses.resolveCallableProcId(self.mir_store, mir_expr_id) orelse std.debug.panic(
-        "MirToLir requires call callees to resolve to a unique MIR proc before strongest-form lowering",
-        .{},
-    );
-    return .{
-        .mir_proc_id = mir_proc_id,
-        .lir_proc_id = try self.lowerProc(mir_proc_id),
-    };
-}
-
 fn lowerProc(self: *Self, proc_id: MIR.ProcId) Allocator.Error!LirProcSpecId {
     const proc_key = @as(u32, @intFromEnum(proc_id));
     if (self.lowered_procs.get(proc_key)) |existing| return existing;
 
     const proc = self.mir_store.getProc(proc_id);
 
-    const ret_layout = try self.mir_layout_resolver.resolve(proc.ret_monotype, null);
+    const ret_layout = try self.runtimeProcReturnLayout(proc_id);
 
     const arg_count = self.mir_store.procValueParamCount(proc);
     const args = try self.allocator.alloc(LocalRef, arg_count);
