@@ -10,6 +10,7 @@
 //! - release compiler builds must not pay for bug-detection passes
 
 const std = @import("std");
+const layout = @import("layout");
 
 const LIR = @import("LIR.zig");
 const LirStore = @import("LirStore.zig");
@@ -41,21 +42,25 @@ const JoinInput = struct {
 pub fn verifyProc(
     allocator: Allocator,
     store: *LirStore,
+    layout_store: *const layout.Store,
+    ret_layout: layout.Idx,
     params: LIR.LocalSpan,
     declared_contract: LIR.ProcResultContract,
     body: CFStmtId,
 ) Allocator.Error!void {
-    const inferred_contract = try DebugOwnershipSummary.resultContractForProc(
-        allocator,
-        store,
-        params,
-        body,
-    );
-    if (!procContractsEqual(store, declared_contract, inferred_contract)) {
-        std.debug.panic(
-            "DebugVerifyLir invariant violated: proc result contract does not match inferred return provenance",
-            .{},
+    if (layout_store.layoutContainsRefcounted(layout_store.getLayout(ret_layout))) {
+        const inferred_contract = try DebugOwnershipSummary.resultContractForProc(
+            allocator,
+            store,
+            params,
+            body,
         );
+        if (!procContractsEqual(store, declared_contract, inferred_contract)) {
+            std.debug.panic(
+                "DebugVerifyLir invariant violated: proc result contract does not match inferred return provenance",
+                .{},
+            );
+        }
     }
 
     var join_scopes = JoinScopes.init(allocator);

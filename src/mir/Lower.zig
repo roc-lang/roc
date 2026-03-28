@@ -123,6 +123,9 @@ symbol_metadata: std.AutoHashMap(u64, SymbolMetadata),
 /// Counts down from NONE - 1 to avoid collision with real idents.
 next_synthetic_ident: u29,
 
+/// Counter for assigning unique local-pattern scopes to statement-lowered lambdas.
+next_statement_pattern_scope: u64,
+
 /// Tracks symbols currently being lowered (recursion guard).
 in_progress_defs: std.AutoHashMap(u64, void),
 
@@ -205,6 +208,7 @@ pub fn init(
         .lowered_proc_insts = std.AutoHashMap(u32, MIR.LambdaId).init(allocator),
         .symbol_metadata = std.AutoHashMap(u64, SymbolMetadata).init(allocator),
         .next_synthetic_ident = Ident.Idx.NONE.idx - 1,
+        .next_statement_pattern_scope = 1,
         .in_progress_defs = std.AutoHashMap(u64, void).init(allocator),
         .in_progress_proc_insts = std.AutoHashMap(u32, MIR.LambdaId).init(allocator),
         .reserved_proc_insts = std.AutoHashMap(u32, MIR.LambdaId).init(allocator),
@@ -3064,10 +3068,24 @@ fn freshSyntheticLocal(self: *Self, monotype: Monotype.Idx, reassignable: bool) 
     });
 }
 
+fn rootResultMonotype(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!Monotype.Idx {
+    const module_env = self.all_module_envs[self.current_module_idx];
+    const expr = module_env.store.getExpr(expr_idx);
+
+    if (expr == .e_run_low_level and expr.e_run_low_level.op == .str_inspect) {
+        // Test/repl helpers synthesize Str.inspect directly in CIR without threading a
+        // resolved type var through canonicalization. Strongest-form MIR must still
+        // force the root result to Str so later layout/codegen stages see the real ABI.
+        return self.store.monotype_store.primIdx(.str);
+    }
+
+    return self.resolveMonotype(expr_idx);
+}
+
 fn lowerRootConstDef(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ConstDefId {
     const module_env = self.all_module_envs[self.current_module_idx];
     const region = module_env.store.getExprRegion(expr_idx);
-    const monotype = try self.resolveMonotype(expr_idx);
+    const monotype = try self.rootResultMonotype(expr_idx);
     const result_local = try self.freshSyntheticLocal(monotype, false);
     const ret_stmt = try self.store.addCFStmt(self.allocator, .{ .ret = .{ .value = result_local } });
     const body = try self.lowerTrivialRootExprInto(expr_idx, result_local, ret_stmt);
@@ -3123,6 +3141,26 @@ fn lowerTrivialStrLiteralInto(
     return self.store.addCFStmt(self.allocator, .{ .assign_literal = .{
         .target = target,
         .literal = .{ .str = mir_str },
+        .next = next,
+    } });
+}
+
+fn lowerTrivialBoolLiteralInto(
+    self: *Self,
+    target: MIR.LocalId,
+    bool_mono: Monotype.Idx,
+    value: bool,
+    next: MIR.CFStmtId,
+) Allocator.Error!MIR.CFStmtId {
+    const tag_names = boolTagNamesForMonotype(self, bool_mono) orelse std.debug.panic(
+        "statement-only MIR expected Bool monotype for local {d}",
+        .{@intFromEnum(target)},
+    );
+
+    return self.store.addCFStmt(self.allocator, .{ .assign_tag = .{
+        .target = target,
+        .name = if (value) tag_names.true_name else tag_names.false_name,
+        .args = MIR.LocalSpan.empty(),
         .next = next,
     } });
 }
@@ -3249,6 +3287,543 @@ fn lowerTrivialStrInspectLocalInto(
             .{@tagName(self.store.monotype_store.getMonotype(source_mono))},
         ),
     };
+}
+
+fn lookupSymbolForPattern(
+    self: *Self,
+    module_idx: u32,
+    pattern_idx: CIR.Pattern.Idx,
+) Allocator.Error!MIR.Symbol {
+    const module_env = self.all_module_envs[module_idx];
+    const pattern = module_env.store.getPattern(pattern_idx);
+    const ident_idx: Ident.Idx = switch (pattern) {
+        .assign => |assign| assign.ident,
+        .as => |as_pattern| as_pattern.ident,
+        else => std.debug.panic(
+            "statement-only MIR lookup symbol expected assign/as pattern for pattern {d}",
+            .{@intFromEnum(pattern_idx)},
+        ),
+    };
+    return self.internSymbol(module_idx, ident_idx);
+}
+
+fn lowerTrivialLookupLocalInto(
+    self: *Self,
+    lookup: anytype,
+    target: MIR.LocalId,
+    next: MIR.CFStmtId,
+) Allocator.Error!MIR.CFStmtId {
+    if (self.lookupExistingPatternLocal(lookup.pattern_idx)) |source| {
+        return self.store.addCFStmt(self.allocator, .{ .assign_alias = .{
+            .target = target,
+            .source = source,
+            .next = next,
+        } });
+    }
+
+    return self.store.addCFStmt(self.allocator, .{ .assign_symbol = .{
+        .target = target,
+        .symbol = try self.lookupSymbolForPattern(self.current_module_idx, lookup.pattern_idx),
+        .next = next,
+    } });
+}
+
+fn lowerTrivialLookupExternalInto(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    lookup: anytype,
+    target: MIR.LocalId,
+    next: MIR.CFStmtId,
+) Allocator.Error!MIR.CFStmtId {
+    const target_module_idx = self.resolveImportedModuleIdx(module_env, lookup.module_idx) orelse unreachable;
+    return self.store.addCFStmt(self.allocator, .{ .assign_symbol = .{
+        .target = target,
+        .symbol = try self.internExternalDefSymbol(target_module_idx, lookup.target_node_idx),
+        .next = next,
+    } });
+}
+
+fn lowerTrivialLookupRequiredInto(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    lookup: anytype,
+    target: MIR.LocalId,
+    next: MIR.CFStmtId,
+) Allocator.Error!MIR.CFStmtId {
+    const app_idx = self.app_module_idx orelse std.debug.panic(
+        "statement-only MIR required lookup encountered without app module",
+        .{},
+    );
+    const required_type = module_env.requires_types.get(lookup.requires_idx);
+    const required_name = module_env.getIdent(required_type.ident);
+
+    const app_env = self.all_module_envs[app_idx];
+    const app_ident = app_env.common.findIdent(required_name) orelse std.debug.panic(
+        "statement-only MIR required lookup was not translated into app ident space: {s}",
+        .{required_name},
+    );
+
+    return self.store.addCFStmt(self.allocator, .{ .assign_symbol = .{
+        .target = target,
+        .symbol = try self.internSymbol(app_idx, app_ident),
+        .next = next,
+    } });
+}
+
+fn lowerTrivialLambda(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    expr_idx: CIR.Expr.Idx,
+    lambda: CIR.Expr.Lambda,
+    fn_monotype: Monotype.Idx,
+) Allocator.Error!MIR.LambdaId {
+    const ret_monotype = switch (self.store.monotype_store.getMonotype(fn_monotype)) {
+        .func => |func| func.ret,
+        else => std.debug.panic(
+            "statement-only MIR lambda expected function monotype for expr {d}",
+            .{@intFromEnum(expr_idx)},
+        ),
+    };
+
+    const saved_scope = self.current_pattern_scope;
+    self.current_pattern_scope = self.freshStatementPatternScope();
+    defer self.current_pattern_scope = saved_scope;
+
+    const params = try self.lowerPatternSpan(module_env, lambda.args);
+    const result_local = try self.freshSyntheticLocal(ret_monotype, false);
+    const ret_stmt = try self.store.addCFStmt(self.allocator, .{ .ret = .{ .value = result_local } });
+    const body = try self.lowerTrivialRootExprInto(lambda.body, result_local, ret_stmt);
+
+    return self.store.addLambda(self.allocator, .{
+        .fn_monotype = fn_monotype,
+        .params = params,
+        .body = body,
+        .ret_monotype = ret_monotype,
+        .debug_name = .none,
+        .source_region = module_env.store.getExprRegion(expr_idx),
+        .capture_bindings = MIR.CaptureBindingSpan.empty(),
+        .captures_param = .none,
+        .recursion = .not_recursive,
+        .hosted = null,
+    });
+}
+
+const TrivialCallable = union(enum) {
+    direct_lambda: MIR.LambdaId,
+    closure_local: struct {
+        closure: MIR.LocalId,
+        lambda: MIR.LambdaId,
+    },
+};
+
+fn exactSeedMemberForSymbol(self: *Self, symbol: MIR.Symbol) ?MIR.SeedMember {
+    const members = self.store.getSymbolSeedMembers(symbol) orelse return null;
+    if (members.len == 0) return null;
+    if (members.len != 1) {
+        std.debug.panic(
+            "statement-only MIR call lowering requires one exact callable seed for symbol {d}, found {d}",
+            .{ symbol.raw(), members.len },
+        );
+    }
+    return members[0];
+}
+
+fn resolveTrivialCallableFromSymbol(
+    self: *Self,
+    symbol: MIR.Symbol,
+    closure_local: ?MIR.LocalId,
+) !TrivialCallable {
+    if (self.store.getFunctionDefForSymbol(symbol)) |function_def_id| {
+        return .{ .direct_lambda = self.store.getFunctionDef(function_def_id).lambda };
+    }
+
+    const member = self.exactSeedMemberForSymbol(symbol) orelse std.debug.panic(
+        "statement-only MIR callable symbol {d} has no exact callable seed",
+        .{symbol.raw()},
+    );
+
+    if (member.closure_member.isNone()) {
+        return .{ .direct_lambda = member.lambda };
+    }
+
+    const closure = closure_local orelse std.debug.panic(
+        "statement-only MIR callable symbol {d} resolved to a closure member without a closure local",
+        .{symbol.raw()},
+    );
+    return .{ .closure_local = .{
+        .closure = closure,
+        .lambda = member.lambda,
+    } };
+}
+
+fn resolveTrivialCallable(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    expr_idx: CIR.Expr.Idx,
+) Allocator.Error!TrivialCallable {
+    const expr = module_env.store.getExpr(expr_idx);
+    return switch (expr) {
+        .e_lambda => |lambda| .{ .direct_lambda = try self.lowerTrivialLambda(module_env, expr_idx, lambda, try self.resolveMonotype(expr_idx)) },
+        .e_lookup_local => |lookup| blk: {
+            if (self.lookupExistingPatternLocal(lookup.pattern_idx)) |local| {
+                break :blk try self.resolveTrivialCallableFromSymbol(self.store.getLocal(local).source_symbol, local);
+            }
+            break :blk try self.resolveTrivialCallableFromSymbol(
+                try self.lookupSymbolForPattern(self.current_module_idx, lookup.pattern_idx),
+                null,
+            );
+        },
+        .e_lookup_external => |lookup| blk: {
+            const target_module_idx = self.resolveImportedModuleIdx(module_env, lookup.module_idx) orelse unreachable;
+            break :blk try self.resolveTrivialCallableFromSymbol(
+                try self.internExternalDefSymbol(target_module_idx, lookup.target_node_idx),
+                null,
+            );
+        },
+        .e_lookup_required => |lookup| blk: {
+            const app_idx = self.app_module_idx orelse std.debug.panic(
+                "statement-only MIR required call encountered without app module",
+                .{},
+            );
+            const required_type = module_env.requires_types.get(lookup.requires_idx);
+            const required_name = module_env.getIdent(required_type.ident);
+            const app_env = self.all_module_envs[app_idx];
+            const app_ident = app_env.common.findIdent(required_name) orelse std.debug.panic(
+                "statement-only MIR required call was not translated into app ident space: {s}",
+                .{required_name},
+            );
+            break :blk try self.resolveTrivialCallableFromSymbol(
+                try self.internSymbol(app_idx, app_ident),
+                null,
+            );
+        },
+        .e_nominal => |nominal| try self.resolveTrivialCallable(module_env, nominal.backing_expr),
+        .e_nominal_external => |nominal| try self.resolveTrivialCallable(module_env, nominal.backing_expr),
+        else => std.debug.panic(
+            "statement-only MIR direct-call lowering is not implemented yet for callee expr {d} kind={s}",
+            .{ @intFromEnum(expr_idx), @tagName(expr) },
+        ),
+    };
+}
+
+fn lowerTrivialCallInto(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    call: anytype,
+    target: MIR.LocalId,
+    next: MIR.CFStmtId,
+) Allocator.Error!MIR.CFStmtId {
+    const callee_expr = module_env.store.getExpr(call.func);
+    if (self.getCallLowLevelOp(module_env, callee_expr)) |ll_op| {
+        const cir_args = module_env.store.sliceExpr(call.args);
+        if (ll_op == .str_inspect) {
+            if (cir_args.len != 1) {
+                std.debug.panic(
+                    "statement-only MIR str_inspect call expected 1 arg, got {d}",
+                    .{cir_args.len},
+                );
+            }
+
+            const source_mono = try self.resolveMonotype(cir_args[0]);
+            const source_local = try self.freshSyntheticLocal(source_mono, false);
+            const inspect_stmt = try self.lowerTrivialStrInspectLocalInto(source_local, source_mono, target, next);
+            return self.lowerTrivialRootExprInto(cir_args[0], source_local, inspect_stmt);
+        }
+
+        const top = self.scratch_local_ids.top();
+        defer self.scratch_local_ids.clearFrom(top);
+
+        const assign_stmt = try self.store.addCFStmt(self.allocator, .{ .assign_low_level = .{
+            .target = target,
+            .op = ll_op,
+            .args = MIR.LocalSpan.empty(),
+            .next = next,
+        } });
+
+        var lowered_next = assign_stmt;
+        var i: usize = cir_args.len;
+        while (i > 0) {
+            i -= 1;
+            const arg_idx = cir_args[i];
+            const arg_local = try self.freshSyntheticLocal(try self.resolveMonotype(arg_idx), false);
+            try self.scratch_local_ids.append(arg_local);
+            lowered_next = try self.lowerTrivialRootExprInto(arg_idx, arg_local, lowered_next);
+        }
+
+        std.mem.reverse(MIR.LocalId, self.scratch_local_ids.items.items[top..]);
+        self.store.getCFStmtPtr(assign_stmt).assign_low_level.args =
+            try self.store.addLocalSpan(self.allocator, self.scratch_local_ids.sliceFromStart(top));
+        return lowered_next;
+    }
+
+    const callable = try self.resolveTrivialCallable(module_env, call.func);
+    const cir_args = module_env.store.sliceExpr(call.args);
+    const top = self.scratch_local_ids.top();
+    defer self.scratch_local_ids.clearFrom(top);
+
+    const call_stmt = switch (callable) {
+        .direct_lambda => |lambda_id| try self.store.addCFStmt(self.allocator, .{ .assign_call = .{
+            .target = target,
+            .lambda = lambda_id,
+            .args = MIR.LocalSpan.empty(),
+            .next = next,
+        } }),
+        .closure_local => |closure_call| try self.store.addCFStmt(self.allocator, .{ .assign_closure_call = .{
+            .target = target,
+            .closure = closure_call.closure,
+            .lambda = closure_call.lambda,
+            .args = MIR.LocalSpan.empty(),
+            .next = next,
+        } }),
+    };
+
+    var lowered_next = call_stmt;
+    var i: usize = cir_args.len;
+    while (i > 0) {
+        i -= 1;
+        const arg_idx = cir_args[i];
+        const arg_local = try self.freshSyntheticLocal(try self.resolveMonotype(arg_idx), false);
+        try self.scratch_local_ids.append(arg_local);
+        lowered_next = try self.lowerTrivialRootExprInto(arg_idx, arg_local, lowered_next);
+    }
+
+    std.mem.reverse(MIR.LocalId, self.scratch_local_ids.items.items[top..]);
+    switch (self.store.getCFStmtPtr(call_stmt).*) {
+        .assign_call => |*assign| assign.args = try self.store.addLocalSpan(self.allocator, self.scratch_local_ids.sliceFromStart(top)),
+        .assign_closure_call => |*assign| assign.args = try self.store.addLocalSpan(self.allocator, self.scratch_local_ids.sliceFromStart(top)),
+        else => unreachable,
+    }
+    return lowered_next;
+}
+
+fn trivialBinopLowLevel(self: *Self, op: CIR.Expr.Binop.Op, lhs_mono: Monotype.Idx) ?CIR.Expr.LowLevel {
+    const mono = self.store.monotype_store.getMonotype(lhs_mono);
+    return switch (op) {
+        .add => .num_plus,
+        .sub => .num_minus,
+        .mul => .num_times,
+        .div => .num_div_by,
+        .div_trunc => .num_div_trunc_by,
+        .rem => .num_rem_by,
+        .lt => .num_is_lt,
+        .le => .num_is_lte,
+        .gt => .num_is_gt,
+        .ge => .num_is_gte,
+        .eq, .ne => switch (mono) {
+            .prim => |prim| switch (prim) {
+                .str => .str_is_eq,
+                else => .num_is_eq,
+            },
+            else => null,
+        },
+        .@"and", .@"or" => null,
+    };
+}
+
+fn lowerTrivialPrimitiveBinopInto(
+    self: *Self,
+    lhs_expr: CIR.Expr.Idx,
+    rhs_expr: CIR.Expr.Idx,
+    target: MIR.LocalId,
+    op: CIR.Expr.LowLevel,
+    next: MIR.CFStmtId,
+) Allocator.Error!MIR.CFStmtId {
+    const top = self.scratch_local_ids.top();
+    defer self.scratch_local_ids.clearFrom(top);
+
+    const lhs_local = try self.freshSyntheticLocal(try self.resolveMonotype(lhs_expr), false);
+    try self.scratch_local_ids.append(lhs_local);
+    const rhs_local = try self.freshSyntheticLocal(try self.resolveMonotype(rhs_expr), false);
+    try self.scratch_local_ids.append(rhs_local);
+
+    const assign_stmt = try self.store.addCFStmt(self.allocator, .{ .assign_low_level = .{
+        .target = target,
+        .op = op,
+        .args = MIR.LocalSpan.empty(),
+        .next = next,
+    } });
+
+    var lowered_next = assign_stmt;
+    lowered_next = try self.lowerTrivialRootExprInto(rhs_expr, rhs_local, lowered_next);
+    lowered_next = try self.lowerTrivialRootExprInto(lhs_expr, lhs_local, lowered_next);
+
+    self.store.getCFStmtPtr(assign_stmt).assign_low_level.args =
+        try self.store.addLocalSpan(self.allocator, self.scratch_local_ids.sliceFromStart(top));
+    return lowered_next;
+}
+
+fn lowerTrivialUnaryMinusInto(
+    self: *Self,
+    um: CIR.Expr.UnaryMinus,
+    target: MIR.LocalId,
+    next: MIR.CFStmtId,
+) Allocator.Error!MIR.CFStmtId {
+    const operand_mono = try self.resolveMonotype(um.expr);
+    switch (self.store.monotype_store.getMonotype(operand_mono)) {
+        .prim => |prim| switch (prim) {
+            .u8, .u16, .u32, .u64, .u128 => std.debug.panic(
+                "statement-only MIR unary minus is not defined for unsigned primitive {s}",
+                .{@tagName(prim)},
+            ),
+            .i8, .i16, .i32, .i64, .i128, .f32, .f64, .dec => {},
+            else => std.debug.panic(
+                "statement-only MIR unary minus is not implemented yet for primitive {s}",
+                .{@tagName(prim)},
+            ),
+        },
+        else => std.debug.panic(
+            "statement-only MIR unary minus is not implemented yet for monotype kind {s}",
+            .{@tagName(self.store.monotype_store.getMonotype(operand_mono))},
+        ),
+    }
+
+    const source_local = try self.freshSyntheticLocal(operand_mono, false);
+    const negate_stmt = try self.lowerUnaryLowLevelInto(target, .num_negate, source_local, next);
+    return self.lowerTrivialRootExprInto(um.expr, source_local, negate_stmt);
+}
+
+fn lowerTrivialBinopInto(
+    self: *Self,
+    binop: CIR.Expr.Binop,
+    target: MIR.LocalId,
+    next: MIR.CFStmtId,
+) Allocator.Error!MIR.CFStmtId {
+    const result_mono = self.store.getLocal(target).monotype;
+
+    switch (binop.op) {
+        .@"and" => {
+            const cond_mono = try self.resolveMonotype(binop.lhs);
+            const cond_local = try self.freshSyntheticLocal(cond_mono, false);
+            const else_body = try self.lowerTrivialBoolLiteralInto(target, result_mono, false, next);
+            const then_body = try self.lowerTrivialRootExprInto(binop.rhs, target, next);
+            const tag_names = boolTagNamesForMonotype(self, cond_mono) orelse std.debug.panic(
+                "statement-only MIR and expected Bool condition monotype for expr {d}",
+                .{@intFromEnum(binop.lhs)},
+            );
+
+            const true_pattern = try self.store.addPattern(self.allocator, .{ .tag = .{
+                .name = tag_names.true_name,
+                .args = MIR.PatternSpan.empty(),
+            } }, cond_mono);
+            const wildcard_pattern = try self.store.addPattern(self.allocator, .wildcard, cond_mono);
+            const true_branch_patterns = try self.store.addBranchPatterns(self.allocator, &.{MIR.BranchPattern{
+                .pattern = true_pattern,
+                .degenerate = false,
+            }});
+            const else_branch_patterns = try self.store.addBranchPatterns(self.allocator, &.{MIR.BranchPattern{
+                .pattern = wildcard_pattern,
+                .degenerate = false,
+            }});
+            const match_stmt = try self.store.addCFStmt(self.allocator, .{ .match_stmt = .{
+                .scrutinee = cond_local,
+                .branches = try self.store.addMatchBranches(self.allocator, &.{
+                    .{ .patterns = true_branch_patterns, .body = then_body },
+                    .{ .patterns = else_branch_patterns, .body = else_body },
+                }),
+            } });
+
+            return self.lowerTrivialRootExprInto(binop.lhs, cond_local, match_stmt);
+        },
+        .@"or" => {
+            const cond_mono = try self.resolveMonotype(binop.lhs);
+            const cond_local = try self.freshSyntheticLocal(cond_mono, false);
+            const then_body = try self.lowerTrivialBoolLiteralInto(target, result_mono, true, next);
+            const else_body = try self.lowerTrivialRootExprInto(binop.rhs, target, next);
+            const tag_names = boolTagNamesForMonotype(self, cond_mono) orelse std.debug.panic(
+                "statement-only MIR or expected Bool condition monotype for expr {d}",
+                .{@intFromEnum(binop.lhs)},
+            );
+
+            const true_pattern = try self.store.addPattern(self.allocator, .{ .tag = .{
+                .name = tag_names.true_name,
+                .args = MIR.PatternSpan.empty(),
+            } }, cond_mono);
+            const wildcard_pattern = try self.store.addPattern(self.allocator, .wildcard, cond_mono);
+            const true_branch_patterns = try self.store.addBranchPatterns(self.allocator, &.{MIR.BranchPattern{
+                .pattern = true_pattern,
+                .degenerate = false,
+            }});
+            const else_branch_patterns = try self.store.addBranchPatterns(self.allocator, &.{MIR.BranchPattern{
+                .pattern = wildcard_pattern,
+                .degenerate = false,
+            }});
+            const match_stmt = try self.store.addCFStmt(self.allocator, .{ .match_stmt = .{
+                .scrutinee = cond_local,
+                .branches = try self.store.addMatchBranches(self.allocator, &.{
+                    .{ .patterns = true_branch_patterns, .body = then_body },
+                    .{ .patterns = else_branch_patterns, .body = else_body },
+                }),
+            } });
+
+            return self.lowerTrivialRootExprInto(binop.lhs, cond_local, match_stmt);
+        },
+        .eq, .ne => {
+            const lhs_mono = try self.resolveMonotype(binop.lhs);
+            if (self.store.monotype_store.getMonotype(lhs_mono) == .unit) {
+                return self.lowerTrivialBoolLiteralInto(target, result_mono, binop.op == .eq, next);
+            }
+
+            const eq_op = trivialBinopLowLevel(self, .eq, lhs_mono) orelse std.debug.panic(
+                "statement-only MIR trivial binop {s} is not implemented yet for monotype kind {s}",
+                .{ @tagName(binop.op), @tagName(self.store.monotype_store.getMonotype(lhs_mono)) },
+            );
+
+            if (binop.op == .eq) {
+                return self.lowerTrivialPrimitiveBinopInto(binop.lhs, binop.rhs, target, eq_op, next);
+            }
+
+            const eq_local = try self.freshSyntheticLocal(result_mono, false);
+            const not_stmt = try self.lowerUnaryLowLevelInto(target, .bool_not, eq_local, next);
+            return self.lowerTrivialPrimitiveBinopInto(binop.lhs, binop.rhs, eq_local, eq_op, not_stmt);
+        },
+        else => {
+            const lhs_mono = try self.resolveMonotype(binop.lhs);
+            const ll = trivialBinopLowLevel(self, binop.op, lhs_mono) orelse std.debug.panic(
+                "statement-only MIR trivial binop {s} is not implemented yet for monotype kind {s}",
+                .{ @tagName(binop.op), @tagName(self.store.monotype_store.getMonotype(lhs_mono)) },
+            );
+            return self.lowerTrivialPrimitiveBinopInto(binop.lhs, binop.rhs, target, ll, next);
+        },
+    }
+}
+
+fn lowerTrivialDotAccessInto(
+    self: *Self,
+    da: anytype,
+    target: MIR.LocalId,
+    next: MIR.CFStmtId,
+) Allocator.Error!MIR.CFStmtId {
+    const module_env = self.all_module_envs[self.current_module_idx];
+
+    if (da.args != null) {
+        std.debug.panic(
+            "statement-only MIR trivial dot-call is not implemented yet for field '{s}'",
+            .{module_env.getIdent(da.field_name)},
+        );
+    }
+
+    const receiver_mono = try self.resolveMonotype(da.receiver);
+    const receiver_record = switch (self.store.monotype_store.getMonotype(receiver_mono)) {
+        .record => |record| record,
+        else => typeBindingInvariant(
+            "lowerTrivialDotAccessInto: field access receiver is not a record monotype (field='{s}', monotype='{s}')",
+            .{ module_env.getIdent(da.field_name), @tagName(self.store.monotype_store.getMonotype(receiver_mono)) },
+        ),
+    };
+
+    const field_idx = self.recordFieldIndexByName(
+        da.field_name,
+        self.store.monotype_store.getFields(receiver_record.fields),
+    );
+    const receiver_local = try self.freshSyntheticLocal(receiver_mono, false);
+    const field_stmt = try self.store.addCFStmt(self.allocator, .{ .assign_field = .{
+        .target = target,
+        .source = receiver_local,
+        .field_idx = field_idx,
+        .next = next,
+    } });
+
+    return self.lowerTrivialRootExprInto(da.receiver, receiver_local, field_stmt);
 }
 
 fn lowerTrivialIfInto(
@@ -3545,6 +4120,18 @@ fn lowerTrivialRootExprInto(
             } });
             break :blk try self.lowerTrivialRootExprInto(nominal.backing_expr, backing_local, nominal_stmt);
         },
+        .e_lookup_local => |lookup| self.lowerTrivialLookupLocalInto(lookup, target, next),
+        .e_lookup_external => |lookup| self.lowerTrivialLookupExternalInto(module_env, lookup, target, next),
+        .e_lookup_required => |lookup| self.lowerTrivialLookupRequiredInto(module_env, lookup, target, next),
+        .e_lambda => |lambda| self.store.addCFStmt(self.allocator, .{ .assign_lambda = .{
+            .target = target,
+            .lambda = try self.lowerTrivialLambda(module_env, expr_idx, lambda, monotype),
+            .next = next,
+        } }),
+        .e_dot_access => |da| self.lowerTrivialDotAccessInto(da, target, next),
+        .e_binop => |binop| self.lowerTrivialBinopInto(binop, target, next),
+        .e_unary_minus => |um| self.lowerTrivialUnaryMinusInto(um, target, next),
+        .e_call => |call| self.lowerTrivialCallInto(module_env, call, target, next),
         .e_if => |if_expr| self.lowerTrivialIfInto(
             module_env.store.sliceIfBranches(if_expr.branches),
             if_expr.final_else,
@@ -4380,6 +4967,12 @@ fn makeSyntheticIdent(self: *Self, original_ident: Ident.Idx) Ident.Idx {
         .attributes = original_ident.attributes,
         .idx = idx,
     };
+}
+
+fn freshStatementPatternScope(self: *Self) u64 {
+    const scope = self.next_statement_pattern_scope;
+    self.next_statement_pattern_scope += 1;
+    return scope;
 }
 
 /// Function values are already proc-backed, so no extra identity stabilization is needed.

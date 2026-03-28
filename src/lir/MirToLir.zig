@@ -136,6 +136,8 @@ pub fn lower(self: *Self, root_const_id: MIR.ConstDefId) Allocator.Error!LirProc
         try DebugVerifyLir.verifyProc(
             self.allocator,
             self.lir_store,
+            self.layout_store,
+            ret_layout,
             LocalRefSpan.empty(),
             result_contract,
             body,
@@ -181,6 +183,8 @@ pub fn lowerEntrypointProc(
         try DebugVerifyLir.verifyProc(
             self.allocator,
             self.lir_store,
+            self.layout_store,
+            ret_layout,
             arg_span,
             lowered.result_contract,
             lowered.body,
@@ -1789,6 +1793,8 @@ fn lowerLambda(self: *Self, lambda_id: MIR.LambdaId) Allocator.Error!LirProcSpec
         try DebugVerifyLir.verifyProc(
             self.allocator,
             self.lir_store,
+            self.layout_store,
+            ret_layout,
             arg_span,
             result_contract,
             body,
