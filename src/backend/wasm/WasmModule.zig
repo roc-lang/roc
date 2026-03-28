@@ -271,7 +271,7 @@ const DataSegment = struct {
 };
 
 /// An imported function
-const Import = struct {
+pub const Import = struct {
     module_name: []const u8,
     field_name: []const u8,
     type_idx: u32,

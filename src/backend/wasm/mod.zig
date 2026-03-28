@@ -7,4 +7,5 @@
 pub const WasmModule = @import("WasmModule.zig");
 pub const WasmCodeGen = @import("WasmCodeGen.zig");
 pub const WasmLayout = @import("WasmLayout.zig");
+pub const WasmLinking = @import("WasmLinking.zig");
 pub const Storage = @import("Storage.zig");

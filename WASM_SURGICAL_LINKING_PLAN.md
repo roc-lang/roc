@@ -1,5 +1,23 @@
 # WASM Surgical Linking Plan
 
+## Status
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| 1 | Padded LEB128 Helpers | Done |
+| 2 | Linking Data Structures | Done |
+| 3 | WASM Module Parser | Not started |
+| 4 | Surgical Linking — `linkHostToAppCalls()` | Not started |
+| 5 | Memory, Table, and Stack Pointer Ownership | Not started |
+| 6 | WASM Function Pointer Representation & RocOps Layout | Not started |
+| 7a | Entrypoint ABI Migration | Not started |
+| 7b | CodeBuilder & WasmCodeGen Refactor | Not started |
+| 8 | Builtins Migration | Not started |
+| 9 | Hosted Call Lowering | Not started |
+| 10 | Dead Code Elimination | Not started |
+| 11 | Serialization Updates | Not started |
+| 12 | CLI Integration — `roc build --target=wasm32` | Not started |
+
 ## Overview
 
 This document specifies the design and implementation plan for surgical linking of WebAssembly
