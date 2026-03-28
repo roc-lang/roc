@@ -3905,6 +3905,234 @@ fn lowerTrivialClosureLambda(
     return lowered;
 }
 
+fn recursiveProcInstForPattern(
+    recursive_members: []const RecursiveGroupMember,
+    pattern_idx: CIR.Pattern.Idx,
+) ?Monomorphize.ProcInstId {
+    for (recursive_members) |member| {
+        if (member.binding_pattern == pattern_idx) return member.proc_inst_id;
+    }
+    return null;
+}
+
+fn trivialClosureRuntimeCaptureCount(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    expr_idx: CIR.Expr.Idx,
+    closure: CIR.Expr.Closure,
+    proc_inst_id: ?Monomorphize.ProcInstId,
+) Allocator.Error!usize {
+    if (proc_inst_id) |id| {
+        var lower_plan = try self.planClosureLowering(module_env, expr_idx, closure, id);
+        defer lower_plan.deinit(self.allocator);
+
+        var count: usize = 0;
+        for (module_env.store.sliceCaptures(closure.captures)) |capture_idx| {
+            const capture = module_env.store.getCapture(capture_idx);
+            if (recursiveProcInstForPattern(lower_plan.recursive_members.items, capture.pattern_idx) != null) continue;
+            count += 1;
+        }
+        return count;
+    }
+
+    return module_env.store.sliceCaptures(closure.captures).len;
+}
+
+fn reserveTrivialProcInstClosureLambda(
+    self: *Self,
+    proc_inst_id: Monomorphize.ProcInstId,
+    fn_monotype: Monotype.Idx,
+    source_region: Region,
+) Allocator.Error!MIR.LambdaId {
+    const proc_inst_key = @intFromEnum(proc_inst_id);
+    if (self.lowered_proc_insts.get(proc_inst_key)) |existing| return existing;
+    if (self.reserved_proc_insts.get(proc_inst_key)) |existing| return existing;
+
+    const ret_monotype = switch (self.store.monotype_store.getMonotype(fn_monotype)) {
+        .func => |func| func.ret,
+        else => std.debug.panic(
+            "statement-only MIR reserved closure lambda expected function monotype for proc inst {d}",
+            .{@intFromEnum(proc_inst_id)},
+        ),
+    };
+
+    const unresolved_body = try self.store.addCFStmt(self.allocator, .{ .runtime_error = .type_error });
+    const reserved = try self.store.addLambda(self.allocator, .{
+        .fn_monotype = fn_monotype,
+        .params = MIR.PatternSpan.empty(),
+        .body = unresolved_body,
+        .ret_monotype = ret_monotype,
+        .debug_name = .none,
+        .source_region = source_region,
+        .capture_bindings = MIR.CaptureBindingSpan.empty(),
+        .captures_param = .none,
+        .recursion = .not_recursive,
+        .hosted = null,
+    });
+    try self.reserved_proc_insts.put(proc_inst_key, reserved);
+    return reserved;
+}
+
+fn lowerReservedTrivialClosureLambda(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    expr_idx: CIR.Expr.Idx,
+    closure: CIR.Expr.Closure,
+    fn_monotype: Monotype.Idx,
+    proc_inst_id: Monomorphize.ProcInstId,
+    reserved_lambda: MIR.LambdaId,
+) Allocator.Error!MIR.LambdaId {
+    const cache_key = self.packTrivialCallableCacheKey(expr_idx, fn_monotype);
+    if (self.lowered_trivial_lambdas.get(cache_key)) |cached| {
+        if (cached == reserved_lambda) {
+            if (self.in_progress_proc_insts.get(@intFromEnum(proc_inst_id)) != null) return cached;
+            if (self.reserved_proc_insts.get(@intFromEnum(proc_inst_id)) == null) return cached;
+        } else {
+            return cached;
+        }
+    }
+    try self.lowered_trivial_lambdas.put(cache_key, reserved_lambda);
+
+    const lambda_expr = module_env.store.getExpr(closure.lambda_idx);
+    if (lambda_expr != .e_lambda) {
+        std.debug.panic(
+            "statement-only MIR reserved closure expected lambda body expr for {d}, found {s}",
+            .{ @intFromEnum(expr_idx), @tagName(lambda_expr) },
+        );
+    }
+
+    const ret_monotype = switch (self.store.monotype_store.getMonotype(fn_monotype)) {
+        .func => |func| func.ret,
+        else => std.debug.panic(
+            "statement-only MIR reserved closure expected function monotype for expr {d}",
+            .{@intFromEnum(expr_idx)},
+        ),
+    };
+
+    var lower_plan = try self.planClosureLowering(module_env, expr_idx, closure, proc_inst_id);
+    defer lower_plan.deinit(self.allocator);
+
+    const proc_inst_key = @intFromEnum(proc_inst_id);
+    const already_in_progress = self.in_progress_proc_insts.get(proc_inst_key) != null;
+    if (!already_in_progress) {
+        try self.in_progress_proc_insts.put(proc_inst_key, reserved_lambda);
+    }
+    defer {
+        if (!already_in_progress) {
+            _ = self.in_progress_proc_insts.remove(proc_inst_key);
+        }
+    }
+
+    const captures = module_env.store.sliceCaptures(closure.captures);
+    const saved_scope = self.current_pattern_scope;
+    self.current_pattern_scope = self.freshStatementPatternScope();
+    defer self.current_pattern_scope = saved_scope;
+
+    const params = try self.lowerPatternSpan(module_env, lambda_expr.e_lambda.args);
+
+    const capture_top = self.scratch_local_ids.top();
+    defer self.scratch_local_ids.clearFrom(capture_top);
+    var recursive_captures = std.ArrayList(struct {
+        local: MIR.LocalId,
+        proc_inst_id: Monomorphize.ProcInstId,
+    }).empty;
+    defer recursive_captures.deinit(self.allocator);
+
+    for (captures) |capture_idx| {
+        const capture = module_env.store.getCapture(capture_idx);
+        const capture_local = try self.patternToLocal(capture.pattern_idx);
+        if (recursiveProcInstForPattern(lower_plan.recursive_members.items, capture.pattern_idx)) |member_proc_inst_id| {
+            const member = try self.lowerTrivialSeedMemberForProcInst(member_proc_inst_id);
+            try self.registerSeedMembersForLocal(capture_local, &.{member});
+            try recursive_captures.append(self.allocator, .{
+                .local = capture_local,
+                .proc_inst_id = member_proc_inst_id,
+            });
+            continue;
+        }
+
+        if (self.lookupExistingPatternLocalInScope(self.current_module_idx, saved_scope, capture.pattern_idx)) |outer_local| {
+            try self.copyExactCallableSeedsFromLocal(capture_local, outer_local);
+        }
+        try self.scratch_local_ids.append(capture_local);
+    }
+
+    const nonrecursive_capture_locals = self.scratch_local_ids.sliceFromStart(capture_top);
+    const captures_tuple_monotype = if (nonrecursive_capture_locals.len == 0)
+        Monotype.Idx.none
+    else blk: {
+        var capture_monotypes = try std.ArrayList(Monotype.Idx).initCapacity(self.allocator, nonrecursive_capture_locals.len);
+        defer capture_monotypes.deinit(self.allocator);
+        for (nonrecursive_capture_locals) |capture_local| {
+            capture_monotypes.appendAssumeCapacity(self.store.getLocal(capture_local).monotype);
+        }
+        break :blk try self.tupleMonotypeForFields(capture_monotypes.items);
+    };
+
+    const captures_param_local = if (nonrecursive_capture_locals.len == 0)
+        null
+    else
+        try self.freshSyntheticLocal(captures_tuple_monotype, false);
+    const captures_param_pattern = if (captures_param_local) |local|
+        try self.store.addPattern(self.allocator, .{ .bind = local }, captures_tuple_monotype)
+    else
+        MIR.PatternId.none;
+
+    const result_local = try self.freshSyntheticLocal(ret_monotype, false);
+    const ret_stmt = try self.store.addCFStmt(self.allocator, .{ .ret = .{ .value = result_local } });
+    var body = try self.lowerTrivialRootExprInto(lambda_expr.e_lambda.body, result_local, ret_stmt);
+
+    const nonrecursive_capture_span = try self.store.addLocalSpan(self.allocator, nonrecursive_capture_locals);
+
+    var recursive_i = recursive_captures.items.len;
+    while (recursive_i > 0) {
+        recursive_i -= 1;
+        const recursive_capture = recursive_captures.items[recursive_i];
+        const member = try self.lowerTrivialSeedMemberForProcInst(recursive_capture.proc_inst_id);
+        body = if (member.closure_member.isNone())
+            try self.store.addCFStmt(self.allocator, .{ .assign_lambda = .{
+                .target = recursive_capture.local,
+                .lambda = member.lambda,
+                .next = body,
+            } })
+        else
+            try self.store.addCFStmt(self.allocator, .{ .assign_closure = .{
+                .target = recursive_capture.local,
+                .lambda = member.lambda,
+                .captures = nonrecursive_capture_span,
+                .next = body,
+            } });
+    }
+
+    if (captures_param_local) |local| {
+        var i = nonrecursive_capture_locals.len;
+        while (i > 0) {
+            i -= 1;
+            body = try self.store.addCFStmt(self.allocator, .{ .assign_field = .{
+                .target = nonrecursive_capture_locals[i],
+                .source = local,
+                .field_idx = @intCast(i),
+                .next = body,
+            } });
+        }
+    }
+
+    self.store.getLambdaPtr(reserved_lambda).* = .{
+        .fn_monotype = fn_monotype,
+        .params = params,
+        .body = body,
+        .ret_monotype = ret_monotype,
+        .debug_name = .none,
+        .source_region = module_env.store.getExprRegion(expr_idx),
+        .capture_bindings = MIR.CaptureBindingSpan.empty(),
+        .captures_param = captures_param_pattern,
+        .recursion = if (recursive_captures.items.len != 0) .recursive else .not_recursive,
+        .hosted = null,
+    };
+
+    return reserved_lambda;
+}
+
 fn lowerTrivialClosureSeedMember(
     self: *Self,
     module_env: *const ModuleEnv,
@@ -3927,13 +4155,21 @@ fn lowerTrivialClosureSeedMember(
     if (self.lowered_trivial_closure_seeds.get(cache_key)) |cached| return cached;
 
     const lambda = try self.lowerTrivialClosureLambda(module_env, expr_idx, closure, fn_monotype);
-    const member: MIR.SeedMember = .{
-        .lambda = lambda,
-        .closure_member = try self.store.addClosureMember(self.allocator, .{
+    const member: MIR.SeedMember = if ((try self.trivialClosureRuntimeCaptureCount(
+        module_env,
+        expr_idx,
+        closure,
+        null,
+    )) == 0)
+        .{ .lambda = lambda }
+    else
+        .{
             .lambda = lambda,
-            .capture_bindings = MIR.CaptureBindingSpan.empty(),
-        }),
-    };
+            .closure_member = try self.store.addClosureMember(self.allocator, .{
+                .lambda = lambda,
+                .capture_bindings = MIR.CaptureBindingSpan.empty(),
+            }),
+        };
     try self.lowered_trivial_closure_seeds.put(cache_key, member);
     return member;
 }
@@ -4028,10 +4264,42 @@ fn lowerTrivialSeedMemberForProcInst(
 
     const proc_inst = self.monomorphization.getProcInst(proc_inst_id);
     const template = self.monomorphization.getProcTemplate(proc_inst.template);
+    const module_env = self.all_module_envs[template.module_idx];
+    const template_expr = module_env.store.getExpr(template.cir_expr);
+    const closure_has_runtime_captures = switch (template_expr) {
+        .e_closure => |closure| (try self.trivialClosureRuntimeCaptureCount(
+            module_env,
+            template.cir_expr,
+            closure,
+            proc_inst_id,
+        )) != 0,
+        else => false,
+    };
+    if (self.reserved_proc_insts.get(proc_inst_key)) |reserved_lambda| {
+        const reserved_member: MIR.SeedMember = switch (template.kind) {
+            .closure => if (!closure_has_runtime_captures)
+                .{ .lambda = reserved_lambda }
+            else .{
+                .lambda = reserved_lambda,
+                .closure_member = try self.store.addClosureMember(self.allocator, .{
+                    .lambda = reserved_lambda,
+                    .capture_bindings = MIR.CaptureBindingSpan.empty(),
+                }),
+            },
+            .lambda, .top_level_def, .hosted_lambda => .{
+                .lambda = reserved_lambda,
+            },
+        };
+        try self.lowered_proc_inst_seed_members.put(proc_inst_key, reserved_member);
+        return reserved_member;
+    }
+
     const lambda = try self.lowerTrivialProcInstLambda(proc_inst_id);
 
     const member: MIR.SeedMember = switch (template.kind) {
-        .closure => .{
+        .closure => if (!closure_has_runtime_captures)
+            .{ .lambda = lambda }
+        else .{
             .lambda = lambda,
             .closure_member = try self.store.addClosureMember(self.allocator, .{
                 .lambda = lambda,
@@ -4052,6 +4320,7 @@ fn lowerTrivialProcInstLambda(
 ) Allocator.Error!MIR.LambdaId {
     const proc_inst_key = @intFromEnum(proc_inst_id);
     if (self.lowered_proc_insts.get(proc_inst_key)) |cached| return cached;
+    if (self.reserved_proc_insts.get(proc_inst_key)) |reserved| return reserved;
 
     if (self.in_progress_proc_insts.get(proc_inst_key)) |_| {
         std.debug.panic(
@@ -4071,6 +4340,10 @@ fn lowerTrivialProcInstLambda(
         proc_inst.fn_monotype_module_idx,
         module_idx,
     );
+    const reserved_lambda = if (template.kind == .closure)
+        try self.reserveTrivialProcInstClosureLambda(proc_inst_id, fn_monotype, template.source_region)
+    else
+        null;
 
     const switching_module = module_idx != self.current_module_idx;
     const saved_module_idx = self.current_module_idx;
@@ -4139,7 +4412,14 @@ fn lowerTrivialProcInstLambda(
 
     const lambda_id = switch (template_expr) {
         .e_lambda => |lambda| try self.lowerTrivialLambda(module_env, template.cir_expr, lambda, fn_monotype),
-        .e_closure => |closure| try self.lowerTrivialClosureLambda(module_env, template.cir_expr, closure, fn_monotype),
+        .e_closure => |closure| try self.lowerReservedTrivialClosureLambda(
+            module_env,
+            template.cir_expr,
+            closure,
+            fn_monotype,
+            proc_inst_id,
+            reserved_lambda orelse unreachable,
+        ),
         .e_hosted_lambda => |hosted| try self.lowerTrivialLambda(module_env, template.cir_expr, .{
             .args = hosted.args,
             .body = hosted.body,
@@ -4150,6 +4430,7 @@ fn lowerTrivialProcInstLambda(
         ),
     };
 
+    _ = self.reserved_proc_insts.remove(proc_inst_key);
     try self.lowered_proc_insts.put(proc_inst_key, lambda_id);
     return lambda_id;
 }
@@ -5509,10 +5790,27 @@ fn lowerTrivialRootExprInto(
             };
             const lambda_id = closure_member.lambda;
 
+            const closure_proc_inst_id = (try self.lookupMonomorphizedValueExprProcInstForMonotype(
+                expr_idx,
+                monotype,
+                self.current_module_idx,
+            )) orelse self.lookupMonomorphizedValueExprProcInst(expr_idx);
+            var lower_plan_storage: ?ClosureLowerPlan = null;
+            defer {
+                if (lower_plan_storage != null) {
+                    lower_plan_storage.?.deinit(self.allocator);
+                }
+            }
+            const recursive_members = if (closure_proc_inst_id) |proc_inst_id| blk2: {
+                lower_plan_storage = try self.planClosureLowering(module_env, expr_idx, closure, proc_inst_id);
+                break :blk2 lower_plan_storage.?.recursive_members.items;
+            } else &.{};
+
             const capture_top = self.scratch_local_ids.top();
             defer self.scratch_local_ids.clearFrom(capture_top);
             for (module_env.store.sliceCaptures(closure.captures)) |capture_idx| {
                 const capture = module_env.store.getCapture(capture_idx);
+                if (recursiveProcInstForPattern(recursive_members, capture.pattern_idx) != null) continue;
                 const capture_local = self.lookupExistingPatternLocal(capture.pattern_idx) orelse std.debug.panic(
                     "statement-only MIR closure capture pattern {d} was not in scope",
                     .{@intFromEnum(capture.pattern_idx)},
@@ -5520,10 +5818,19 @@ fn lowerTrivialRootExprInto(
                 try self.scratch_local_ids.append(capture_local);
             }
 
+            const runtime_captures = self.scratch_local_ids.sliceFromStart(capture_top);
+            if (runtime_captures.len == 0) {
+                break :blk self.store.addCFStmt(self.allocator, .{ .assign_lambda = .{
+                    .target = target,
+                    .lambda = lambda_id,
+                    .next = next,
+                } });
+            }
+
             break :blk self.store.addCFStmt(self.allocator, .{ .assign_closure = .{
                 .target = target,
                 .lambda = lambda_id,
-                .captures = try self.store.addLocalSpan(self.allocator, self.scratch_local_ids.sliceFromStart(capture_top)),
+                .captures = try self.store.addLocalSpan(self.allocator, runtime_captures),
                 .next = next,
             } });
         },
