@@ -43,6 +43,11 @@ pub fn getRootResultContract(self: *const Self, expr_id: MIR.ExprId) ProcResultS
     return self.proc_result_summary.getRootContract(expr_id);
 }
 
+/// Returns the precomputed result contract for one MIR expression.
+pub fn getExprResultContract(self: *const Self, expr_id: MIR.ExprId) ProcResultSummary.ExprResultContract {
+    return self.proc_result_summary.getExprContract(expr_id);
+}
+
 /// Resolves a stored projection span from proc-result summaries.
 pub fn getRefProjectionSpan(self: *const Self, span: ProcResultSummary.RefProjectionSpan) []const ProcResultSummary.RefProjection {
     return self.proc_result_summary.getRefProjectionSpan(span);

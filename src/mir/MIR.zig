@@ -686,6 +686,11 @@ pub const Store = struct {
         return self.exprs.items[@intFromEnum(id)];
     }
 
+    /// Returns the number of stored MIR expressions.
+    pub fn exprCount(self: *const Store) usize {
+        return self.exprs.items.len;
+    }
+
     /// Get the region of an expression.
     pub fn getRegion(self: *const Store, id: ExprId) Region {
         return self.expr_regions.items[@intFromEnum(id)];

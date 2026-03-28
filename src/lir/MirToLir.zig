@@ -23,12 +23,16 @@ const DebugVerifyLir = @import("DebugVerifyLir.zig");
 const Allocator = std.mem.Allocator;
 
 const CFStmtId = LIR.CFStmtId;
+const JoinPointId = LIR.JoinPointId;
 const LirProcSpec = LIR.LirProcSpec;
 const LirProcSpecId = LIR.LirProcSpecId;
 const LiteralValue = LIR.LiteralValue;
 const LocalRef = LIR.LocalRef;
+const LocalRefSpan = LIR.LocalRefSpan;
 const ResultSemantics = LIR.ResultSemantics;
 const RefOp = LIR.RefOp;
+const SummaryContract = ProcResultSummary.ProcResultContract;
+const ExprSummaryContract = ProcResultSummary.ExprResultContract;
 const LoweredProcMap = std.AutoHashMap(u32, LirProcSpecId);
 const LocalSymbolSet = std.AutoHashMapUnmanaged(u64, void);
 const dec_literal_scale: i128 = std.math.pow(i128, 10, 18);
@@ -59,9 +63,12 @@ builder_procs: std.ArrayList(BuilderProc),
 active_value_defs: LocalSymbolSet,
 current_local_symbols: ?*const LocalSymbolSet = null,
 flushed: bool = false,
+current_proc_result_summary: ?SummaryContract = null,
 
 next_borrow_scope: u32 = 0,
 current_borrow_region: LIR.BorrowRegion = .proc,
+next_join_point: u32 = 0,
+break_targets: std.ArrayList(JoinPointId) = .empty,
 
 /// Initializes MIR-to-LIR lowering state over a finished MIR module.
 pub fn init(
@@ -85,6 +92,7 @@ pub fn init(
         .lowered_procs = LoweredProcMap.init(allocator),
         .builder_procs = std.ArrayList(BuilderProc).empty,
         .active_value_defs = .empty,
+        .break_targets = .empty,
     };
 }
 
@@ -93,6 +101,7 @@ pub fn deinit(self: *Self) void {
     self.lowered_procs.deinit();
     self.builder_procs.deinit(self.allocator);
     self.active_value_defs.deinit(self.allocator);
+    self.break_targets.deinit(self.allocator);
     self.mir_layout_resolver.deinit();
 }
 
@@ -101,9 +110,10 @@ pub fn lower(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirProcSpecId
     self.ensureCanLowerMoreProcs();
 
     const ret_layout = try self.runtimeValueLayoutFromMirExpr(mir_expr_id);
-    const body = try self.lowerEntrypointBody(mir_expr_id, ret_layout);
+    const summary_contract = self.analyses.getRootResultContract(mir_expr_id);
+    const body = try self.lowerEntrypointBody(mir_expr_id, ret_layout, summary_contract);
     const args = LIR.LocalRefSpan.empty();
-    const result_contract = try self.lowerRootResultContract(mir_expr_id);
+    const result_contract = try self.lowerSummaryProcResultContract(summary_contract);
 
     if (builtin.mode == .Debug) {
         // This verifier exists only to catch compiler implementation bugs by
@@ -199,6 +209,11 @@ fn freshBorrowScope(self: *Self) LIR.BorrowScopeId {
     return @enumFromInt(self.next_borrow_scope);
 }
 
+fn freshJoinPoint(self: *Self) JoinPointId {
+    defer self.next_join_point += 1;
+    return @enumFromInt(self.next_join_point);
+}
+
 fn freshLocal(self: *Self, layout_idx: layout.Idx) LocalRef {
     return .{
         .symbol = self.lir_store.freshSyntheticSymbol(),
@@ -275,21 +290,85 @@ fn lowerSummaryProcResultContract(
     };
 }
 
-fn lowerProcResultContractForMirProc(
-    self: *Self,
-    proc_id: MIR.ProcId,
-) Allocator.Error!LIR.ProcResultContract {
-    return self.lowerSummaryProcResultContract(
-        self.analyses.getProcResultContract(proc_id),
-    );
+fn layoutNeedsRc(self: *const Self, layout_idx: layout.Idx) bool {
+    return self.layout_store.layoutContainsRefcounted(self.layout_store.getLayout(layout_idx));
 }
 
-fn lowerRootResultContract(
+fn summaryContractsEqual(self: *const Self, left: SummaryContract, right: SummaryContract) bool {
+    return switch (left) {
+        .fresh => right == .fresh,
+        .alias_of_param => |left_param| switch (right) {
+            .alias_of_param => |right_param| left_param.param_index == right_param.param_index and std.meta.eql(self.analyses.getRefProjectionSpan(left_param.projections), self.analyses.getRefProjectionSpan(right_param.projections)),
+            else => false,
+        },
+        .borrow_of_param => |left_param| switch (right) {
+            .borrow_of_param => |right_param| left_param.param_index == right_param.param_index and std.meta.eql(self.analyses.getRefProjectionSpan(left_param.projections), self.analyses.getRefProjectionSpan(right_param.projections)),
+            else => false,
+        },
+    };
+}
+
+fn exprSummaryContractsEqual(self: *const Self, left: ExprSummaryContract, right: ExprSummaryContract) bool {
+    return switch (left) {
+        .no_return => right == .no_return,
+        .borrow_of_fresh => right == .borrow_of_fresh,
+        .concrete => |left_contract| switch (right) {
+            .concrete => |right_contract| self.summaryContractsEqual(left_contract, right_contract),
+            else => false,
+        },
+    };
+}
+
+fn lowerExprIntoStmtWithContract(
     self: *Self,
     mir_expr_id: MIR.ExprId,
-) Allocator.Error!LIR.ProcResultContract {
-    const summary_contract = self.analyses.getRootResultContract(mir_expr_id);
-    return self.lowerSummaryProcResultContract(summary_contract);
+    target: LocalRef,
+    desired_contract: ExprSummaryContract,
+    next: CFStmtId,
+) Allocator.Error!CFStmtId {
+    const actual_contract = self.analyses.getExprResultContract(mir_expr_id);
+    if (actual_contract == .no_return) {
+        return self.lowerExprIntoStmt(mir_expr_id, target, next);
+    }
+    if (self.exprSummaryContractsEqual(actual_contract, desired_contract)) {
+        return self.lowerExprIntoStmt(mir_expr_id, target, next);
+    }
+
+    if (desired_contract == .no_return) {
+        std.debug.panic(
+            "MirToLir invariant violated: value-position expr {d} cannot be normalized to no-return",
+            .{@intFromEnum(mir_expr_id)},
+        );
+    }
+
+    switch (desired_contract) {
+        .concrete => |desired_proc_contract| if (desired_proc_contract != .fresh) {
+            std.debug.panic(
+                "MirToLir invariant violated: strongest-form lowering cannot normalize expr {d} from {s} to {s}",
+                .{ @intFromEnum(mir_expr_id), @tagName(actual_contract), @tagName(desired_contract) },
+            );
+        },
+        else => std.debug.panic(
+            "MirToLir invariant violated: strongest-form lowering cannot normalize expr {d} from {s} to {s}",
+            .{ @intFromEnum(mir_expr_id), @tagName(actual_contract), @tagName(desired_contract) },
+        ),
+    }
+
+    const value_local = self.freshLocal(target.layout_idx);
+    var normalized_next = try self.emitAssignRef(
+        target,
+        .fresh,
+        .{ .local = value_local },
+        next,
+    );
+    if (self.layoutNeedsRc(target.layout_idx)) {
+        normalized_next = try self.lir_store.addCFStmt(.{ .incref = .{
+            .value = value_local,
+            .count = 1,
+            .next = normalized_next,
+        } });
+    }
+    return self.lowerExprIntoStmt(mir_expr_id, value_local, normalized_next);
 }
 
 fn lowLevelResultSemantics(
@@ -424,6 +503,15 @@ fn emitAssignLiteral(
     } });
 }
 
+fn emitAssignUnit(self: *Self, target: LocalRef, next: CFStmtId) Allocator.Error!CFStmtId {
+    return self.lir_store.addCFStmt(.{ .assign_struct = .{
+        .target = target,
+        .result = .fresh,
+        .fields = LocalRefSpan.empty(),
+        .next = next,
+    } });
+}
+
 fn emitRet(self: *Self, value: LocalRef) Allocator.Error!CFStmtId {
     return self.lir_store.addCFStmt(.{ .ret = .{ .value = value } });
 }
@@ -433,18 +521,26 @@ const LoweredEntrypointProcBody = struct {
     result_contract: LIR.ProcResultContract,
 };
 
-fn lowerEntrypointBody(self: *Self, mir_expr_id: MIR.ExprId, ret_layout: layout.Idx) Allocator.Error!CFStmtId {
+fn lowerEntrypointBody(
+    self: *Self,
+    mir_expr_id: MIR.ExprId,
+    ret_layout: layout.Idx,
+    result_contract: SummaryContract,
+) Allocator.Error!CFStmtId {
     var local_symbols = LocalSymbolSet{};
     defer local_symbols.deinit(self.allocator);
     try self.collectExprLocalSymbols(&local_symbols, mir_expr_id);
 
     const prev_local_symbols = self.current_local_symbols;
+    const prev_result_contract = self.current_proc_result_summary;
     self.current_local_symbols = &local_symbols;
+    self.current_proc_result_summary = result_contract;
     defer self.current_local_symbols = prev_local_symbols;
+    defer self.current_proc_result_summary = prev_result_contract;
 
     const target = self.freshLocal(ret_layout);
     const ret_stmt = try self.emitRet(target);
-    return self.lowerExprIntoStmt(mir_expr_id, target, ret_stmt);
+    return self.lowerExprIntoStmtWithContract(mir_expr_id, target, .{ .concrete = result_contract }, ret_stmt);
 }
 
 fn lowerEntrypointProcBody(
@@ -464,10 +560,12 @@ fn lowerEntrypointProcBody(
     const mir_mono = self.mir_store.monotype_store.getMonotype(self.mir_store.typeOf(mir_expr_id));
     const must_call = arg_locals.len != 0 or mir_mono == .func;
 
+    const root_result_contract = self.analyses.getRootResultContract(mir_expr_id);
+
     if (!must_call) {
         return .{
-            .body = try self.lowerEntrypointBody(mir_expr_id, ret_layout),
-            .result_contract = try self.lowerRootResultContract(mir_expr_id),
+            .body = try self.lowerEntrypointBody(mir_expr_id, ret_layout, root_result_contract),
+            .result_contract = try self.lowerSummaryProcResultContract(root_result_contract),
         };
     }
 
@@ -1148,11 +1246,12 @@ fn lowerMatchBranchAlternative(
     source: LocalRef,
     branch: MIR.Branch,
     pattern_id: MIR.PatternId,
+    expr_result_contract: ExprSummaryContract,
     target: LocalRef,
     next: CFStmtId,
     on_fail: CFStmtId,
 ) Allocator.Error!CFStmtId {
-    var on_match = try self.lowerExprIntoStmt(branch.body, target, next);
+    var on_match = try self.lowerExprIntoStmtWithContract(branch.body, target, expr_result_contract, next);
     if (!branch.guard.isNone()) {
         const guard_local = self.freshLocal(try self.runtimeValueLayoutFromMirExpr(branch.guard));
         const guard_switch = try self.emitBoolSwitch(guard_local, on_match, on_fail);
@@ -1163,12 +1262,21 @@ fn lowerMatchBranchAlternative(
 
 fn lowerMatchExprInto(
     self: *Self,
+    expr_id: MIR.ExprId,
     match_expr: std.meta.TagPayload(MIR.Expr, .match_expr),
     target: LocalRef,
     next: CFStmtId,
 ) Allocator.Error!CFStmtId {
     const cond_local = self.freshLocal(try self.runtimeValueLayoutFromMirExpr(match_expr.cond));
     var entry = try self.lir_store.addCFStmt(.{ .runtime_error = {} });
+    const expr_result_contract: ExprSummaryContract = switch (self.analyses.getExprResultContract(expr_id)) {
+        .borrow_of_fresh => .borrow_of_fresh,
+        .concrete => |contract| .{ .concrete = contract },
+        .no_return => std.debug.panic(
+            "MirToLir invariant violated: value-position match expr {d} cannot have no-return summary",
+            .{@intFromEnum(expr_id)},
+        ),
+    };
 
     const branches = self.mir_store.getBranches(match_expr.branches);
     var i = branches.len;
@@ -1184,6 +1292,7 @@ fn lowerMatchExprInto(
                 cond_local,
                 branch,
                 patterns[pattern_i].pattern,
+                expr_result_contract,
                 target,
                 next,
                 branch_entry,
@@ -1387,17 +1496,57 @@ fn lowerExprIntoStmt(
         .return_expr => |ret| blk: {
             const ret_local = self.freshLocal(try self.runtimeValueLayoutFromMirExpr(ret.expr));
             const ret_stmt = try self.emitRet(ret_local);
-            break :blk try self.lowerExprIntoStmt(ret.expr, ret_local, ret_stmt);
+            const proc_result_contract = self.current_proc_result_summary orelse std.debug.panic(
+                "MirToLir invariant violated: return_expr lowering requires an active proc result contract",
+                .{},
+            );
+            break :blk try self.lowerExprIntoStmtWithContract(ret.expr, ret_local, .{ .concrete = proc_result_contract }, ret_stmt);
         },
         .proc_ref, .closure_make => std.debug.panic(
             "statement-only MirToLir must lower proc-backed values through lowered proc specs before value emission",
             .{},
         ),
-        .match_expr => |match_expr| self.lowerMatchExprInto(match_expr, target, next),
-        .loop, .break_expr => std.debug.panic(
-            "strongest-form MirToLir requires control-flow and destructuring lowering before value lowering for MIR expr tag {s}",
-            .{@tagName(expr)},
-        ),
+        .match_expr => |match_expr| self.lowerMatchExprInto(mir_expr_id, match_expr, target, next),
+        .loop => |loop_expr| blk: {
+            const exit_join = self.freshJoinPoint();
+            const loop_head = self.freshJoinPoint();
+
+            const jump_loop = try self.lir_store.addCFStmt(.{ .jump = .{
+                .target = loop_head,
+                .args = LocalRefSpan.empty(),
+            } });
+
+            const exit_body = try self.emitAssignUnit(target, next);
+
+            try self.break_targets.append(self.allocator, exit_join);
+            defer _ = self.break_targets.pop();
+
+            const body_result = self.freshLocal(result_layout);
+            const body = try self.lowerExprIntoStmt(loop_expr.body, body_result, jump_loop);
+            const loop_join = try self.lir_store.addCFStmt(.{ .join = .{
+                .id = loop_head,
+                .params = LocalRefSpan.empty(),
+                .body = body,
+                .remainder = jump_loop,
+            } });
+
+            break :blk try self.lir_store.addCFStmt(.{ .join = .{
+                .id = exit_join,
+                .params = LocalRefSpan.empty(),
+                .body = exit_body,
+                .remainder = loop_join,
+            } });
+        },
+        .break_expr => blk: {
+            const exit_join = self.break_targets.getLastOrNull() orelse std.debug.panic(
+                "MirToLir invariant violated: break_expr escaped the nearest loop during strongest-form lowering",
+                .{},
+            );
+            break :blk try self.lir_store.addCFStmt(.{ .jump = .{
+                .target = exit_join,
+                .args = LocalRefSpan.empty(),
+            } });
+        },
     };
 }
 
@@ -1461,7 +1610,8 @@ fn lowerProc(self: *Self, proc_id: MIR.ProcId) Allocator.Error!LirProcSpecId {
         self.lir_store.freshSyntheticSymbol()
     else
         proc.debug_name;
-    const result_contract = try self.lowerProcResultContractForMirProc(proc_id);
+    const summary_result_contract = self.analyses.getProcResultContract(proc_id);
+    const result_contract = try self.lowerSummaryProcResultContract(summary_result_contract);
 
     const lir_proc_id = try self.addUnresolvedProc(.{
         .name = proc_name,
@@ -1476,12 +1626,15 @@ fn lowerProc(self: *Self, proc_id: MIR.ProcId) Allocator.Error!LirProcSpecId {
     try self.lowered_procs.put(proc_key, lir_proc_id);
 
     const prev_local_symbols = self.current_local_symbols;
+    const prev_result_contract = self.current_proc_result_summary;
     self.current_local_symbols = &local_symbols;
+    self.current_proc_result_summary = summary_result_contract;
     defer self.current_local_symbols = prev_local_symbols;
+    defer self.current_proc_result_summary = prev_result_contract;
 
     const target = self.freshLocal(ret_layout);
     const ret_stmt = try self.emitRet(target);
-    const body = try self.lowerExprIntoStmt(proc.body, target, ret_stmt);
+    const body = try self.lowerExprIntoStmtWithContract(proc.body, target, .{ .concrete = summary_result_contract }, ret_stmt);
 
     if (builtin.mode == .Debug) {
         // This verifier exists only to catch compiler implementation bugs by

@@ -46,6 +46,13 @@ pub const ProcResultContract = union(enum) {
     borrow_of_param: ParamRefContract,
 };
 
+/// Expression-level summary of whether a MIR expression produces a normal value.
+pub const ExprResultContract = union(enum) {
+    no_return,
+    concrete: ProcResultContract,
+    borrow_of_fresh,
+};
+
 /// Immutable root-expression summary entry.
 pub const RootContractEntry = struct {
     expr_id: MIR.ExprId,
@@ -57,6 +64,7 @@ pub const Table = struct {
     allocator: Allocator,
     ref_projections: std.ArrayList(RefProjection),
     proc_contracts: std.ArrayList(ProcResultContract),
+    expr_contracts: std.ArrayList(?ExprResultContract),
     root_contract_entries: std.ArrayList(RootContractEntry),
 
     /// Initializes an empty summary table.
@@ -65,6 +73,7 @@ pub const Table = struct {
             .allocator = allocator,
             .ref_projections = std.ArrayList(RefProjection).empty,
             .proc_contracts = std.ArrayList(ProcResultContract).empty,
+            .expr_contracts = std.ArrayList(?ExprResultContract).empty,
             .root_contract_entries = std.ArrayList(RootContractEntry).empty,
         };
     }
@@ -73,6 +82,7 @@ pub const Table = struct {
     pub fn deinit(self: *Table) void {
         self.ref_projections.deinit(self.allocator);
         self.proc_contracts.deinit(self.allocator);
+        self.expr_contracts.deinit(self.allocator);
         self.root_contract_entries.deinit(self.allocator);
     }
 
@@ -119,6 +129,14 @@ pub const Table = struct {
             .{@intFromEnum(expr_id)},
         );
     }
+
+    /// Returns the precomputed result contract for one MIR expression.
+    pub fn getExprContract(self: *const Table, expr_id: MIR.ExprId) ExprResultContract {
+        return self.expr_contracts.items[@intFromEnum(expr_id)] orelse std.debug.panic(
+            "ProcResultSummary invariant violated: expr {d} was not precomputed in MIR analyses",
+            .{@intFromEnum(expr_id)},
+        );
+    }
 };
 
 const BorrowRegion = union(enum) {
@@ -144,9 +162,21 @@ const Origin = union(enum) {
     borrow_of_fresh: BorrowedFreshOrigin,
 };
 
-const ExprOutcome = union(enum) {
-    no_return,
-    value: Origin,
+const ExprOutcome = struct {
+    value: ?Origin = null,
+    breaks: bool = false,
+
+    fn noReturn() ExprOutcome {
+        return .{};
+    }
+
+    fn fromValue(origin: Origin) ExprOutcome {
+        return .{ .value = origin };
+    }
+
+    fn hasNormalValue(self: ExprOutcome) bool {
+        return self.value != null;
+    }
 };
 
 const ProcSummaryState = union(enum) {
@@ -259,18 +289,13 @@ const Analyzer = struct {
         next: ProcResultContract,
     ) void {
         if (accumulator.inferred) |current| {
-            if (!contractEqual(self.table, current, next)) {
-                std.debug.panic(
-                    "ProcResultSummary invariant violated: proc returns disagree on result provenance",
-                    .{},
-                );
-            }
+            accumulator.inferred = mergeContracts(self.table, current, next);
         } else {
             accumulator.inferred = next;
         }
     }
 
-    fn contractFromOrigin(_: *Analyzer, origin: Origin) ProcResultContract {
+    fn procContractFromOrigin(_: *Analyzer, origin: Origin) ProcResultContract {
         return switch (origin) {
             .fresh => .fresh,
             .alias_of_param => |aliased| .{ .alias_of_param = aliased },
@@ -284,15 +309,52 @@ const Analyzer = struct {
                     .{scope_id},
                 ),
             },
-            .borrow_of_fresh => std.debug.panic(
-                "ProcResultSummary invariant violated: borrowed return is not rooted in a proc parameter",
-                .{},
-            ),
+            .borrow_of_fresh => .fresh,
         };
     }
 
     fn mergeReturnedOrigin(self: *Analyzer, accumulator: *ReturnAccumulator, origin: Origin) void {
-        self.mergeReturnContract(accumulator, self.contractFromOrigin(origin));
+        self.mergeReturnContract(accumulator, self.procContractFromOrigin(origin));
+    }
+
+    fn exprResultFromOutcome(_: *Analyzer, outcome: ExprOutcome) ExprResultContract {
+        return if (outcome.value) |origin|
+            switch (origin) {
+                .fresh => .{ .concrete = .fresh },
+                .alias_of_param => |aliased| .{ .concrete = .{ .alias_of_param = aliased } },
+                .borrow_of_param => |borrowed| switch (borrowed.region) {
+                    .proc => .{ .concrete = .{ .borrow_of_param = .{
+                        .param_index = borrowed.param_index,
+                        .projections = borrowed.projections,
+                    } } },
+                    .scope => |scope_id| std.debug.panic(
+                        "ProcResultSummary invariant violated: scoped param borrow from scope {d} escaped via expr summary",
+                        .{scope_id},
+                    ),
+                },
+                .borrow_of_fresh => .borrow_of_fresh,
+            }
+        else
+            .no_return;
+    }
+
+    fn recordExprContract(
+        self: *Analyzer,
+        expr_id: MIR.ExprId,
+        contract: ExprResultContract,
+    ) void {
+        if (self.table.expr_contracts.items.len == 0) return;
+        const slot = &self.table.expr_contracts.items[@intFromEnum(expr_id)];
+        if (slot.*) |existing| {
+            if (!exprContractsEqual(self.table, existing, contract)) {
+                std.debug.panic(
+                    "ProcResultSummary invariant violated: expr {d} was summarized with incompatible contracts",
+                    .{@intFromEnum(expr_id)},
+                );
+            }
+        } else {
+            slot.* = contract;
+        }
     }
 
     fn finishProcOutcome(
@@ -300,18 +362,22 @@ const Analyzer = struct {
         accumulator: *ReturnAccumulator,
         outcome: ExprOutcome,
     ) ProcSummaryState {
-        switch (outcome) {
-            .no_return => {
-                if (accumulator.inferred) |contract| {
-                    return .{ .concrete = contract };
-                }
-                return .no_return;
-            },
-            .value => |origin| {
-                self.mergeReturnedOrigin(accumulator, origin);
-                return .{ .concrete = accumulator.inferred.? };
-            },
+        if (outcome.breaks) {
+            std.debug.panic(
+                "ProcResultSummary invariant violated: break escaped the nearest loop while summarizing proc/root result",
+                .{},
+            );
         }
+
+        if (outcome.value) |origin| {
+            self.mergeReturnedOrigin(accumulator, origin);
+            return .{ .concrete = accumulator.inferred.? };
+        }
+
+        if (accumulator.inferred) |contract| {
+            return .{ .concrete = contract };
+        }
+        return .no_return;
     }
 
     fn cloneEnv(self: *Analyzer, source: *const LocalOriginMap) Allocator.Error!LocalOriginMap {
@@ -406,12 +472,12 @@ const Analyzer = struct {
         defer empty_env.deinit();
 
         var value_accumulator = ReturnAccumulator{};
-        const outcome = try self.analyzeExpr(&empty_env, .proc, &value_accumulator, def_expr);
+        const outcome = try self.analyzeExpr(&empty_env, .proc, &value_accumulator, def_expr, 0);
 
-        return switch (outcome) {
-            .no_return => .no_return,
-            .value => .{ .value = .fresh },
-        };
+        return if (outcome.value != null)
+            ExprOutcome{ .value = .fresh, .breaks = outcome.breaks }
+        else
+            ExprOutcome{ .breaks = outcome.breaks };
     }
 
     fn analyzeMatchExpr(
@@ -421,13 +487,13 @@ const Analyzer = struct {
         accumulator: *ReturnAccumulator,
         cond_expr: MIR.ExprId,
         branches: MIR.BranchSpan,
+        loop_depth: u32,
     ) Allocator.Error!ExprOutcome {
-        const scrutinee = switch (try self.analyzeExpr(env, region, accumulator, cond_expr)) {
-            .no_return => return .no_return,
-            .value => |origin| origin,
-        };
+        const cond_outcome = try self.analyzeExpr(env, region, accumulator, cond_expr, loop_depth);
+        const scrutinee = cond_outcome.value orelse return ExprOutcome{ .breaks = cond_outcome.breaks };
 
         var merged_origin: ?Origin = null;
+        var breaks = cond_outcome.breaks;
         for (self.mir_store.getBranches(branches)) |branch| {
             for (self.mir_store.getBranchPatterns(branch.patterns)) |branch_pattern| {
                 var branch_env = try self.cloneEnv(env);
@@ -436,50 +502,49 @@ const Analyzer = struct {
                 try self.bindPattern(&branch_env, branch_pattern.pattern, scrutinee, region);
 
                 if (!branch.guard.isNone()) {
-                    switch (try self.analyzeExpr(&branch_env, region, accumulator, branch.guard)) {
-                        .no_return => continue,
-                        .value => {},
+                    const guard_outcome = try self.analyzeExpr(&branch_env, region, accumulator, branch.guard, loop_depth);
+                    breaks = breaks or guard_outcome.breaks;
+                    if (!guard_outcome.hasNormalValue()) {
+                        continue;
                     }
                 }
 
-                switch (try self.analyzeExpr(&branch_env, region, accumulator, branch.body)) {
-                    .no_return => {},
-                    .value => |origin| {
-                        if (merged_origin) |existing| {
-                            if (!originEqual(self.table, existing, origin)) {
-                                std.debug.panic(
-                                    "ProcResultSummary invariant violated: match branches disagree on result provenance",
-                                    .{},
-                                );
-                            }
-                        } else {
-                            merged_origin = origin;
-                        }
-                    },
+                const body_outcome = try self.analyzeExpr(&branch_env, region, accumulator, branch.body, loop_depth);
+                breaks = breaks or body_outcome.breaks;
+                if (body_outcome.value) |origin| {
+                    merged_origin = if (merged_origin) |existing|
+                        mergeOrigins(self.table, existing, origin)
+                    else
+                        origin;
                 }
             }
         }
 
-        return if (merged_origin) |origin|
-            .{ .value = origin }
-        else
-            .no_return;
+        return ExprOutcome{
+            .value = merged_origin,
+            .breaks = breaks,
+        };
     }
 
-    fn analyzeStmt(self: *Analyzer, env: *LocalOriginMap, region: BorrowRegion, accumulator: *ReturnAccumulator, stmt: MIR.Stmt) Allocator.Error!ExprOutcome {
+    fn analyzeStmt(
+        self: *Analyzer,
+        env: *LocalOriginMap,
+        region: BorrowRegion,
+        accumulator: *ReturnAccumulator,
+        stmt: MIR.Stmt,
+        loop_depth: u32,
+    ) Allocator.Error!ExprOutcome {
         const binding = switch (stmt) {
             .decl_const => |inner| inner,
             .decl_var => |inner| inner,
             .mutate_var => |inner| inner,
         };
-        const outcome = try self.analyzeExpr(env, region, accumulator, binding.expr);
-        switch (outcome) {
-            .no_return => return .no_return,
-            .value => |origin| {
-                try self.bindPattern(env, binding.pattern, origin, region);
-                return .{ .value = .fresh };
-            },
+        const outcome = try self.analyzeExpr(env, region, accumulator, binding.expr, loop_depth);
+        if (outcome.value) |origin| {
+            try self.bindPattern(env, binding.pattern, origin, region);
+            return ExprOutcome{ .value = .fresh, .breaks = outcome.breaks };
         }
+        return ExprOutcome{ .breaks = outcome.breaks };
     }
 
     fn instantiateCallContract(
@@ -517,8 +582,9 @@ const Analyzer = struct {
         region: BorrowRegion,
         accumulator: *ReturnAccumulator,
         expr_id: MIR.ExprId,
+        loop_depth: u32,
     ) Allocator.Error!ExprOutcome {
-        return switch (self.mir_store.getExpr(expr_id)) {
+        const outcome = try switch (self.mir_store.getExpr(expr_id)) {
             .int,
             .frac_f32,
             .frac_f64,
@@ -526,69 +592,76 @@ const Analyzer = struct {
             .str,
             .proc_ref,
             .closure_make,
-            => .{ .value = .fresh },
+            => ExprOutcome.fromValue(.fresh),
 
             .lookup => |symbol| blk: {
-                if (env.get(symbol.raw())) |origin| break :blk .{ .value = origin };
+                if (env.get(symbol.raw())) |origin| break :blk ExprOutcome.fromValue(origin);
                 break :blk try self.analyzeNonLocalLookup(symbol);
             },
 
             .list => |list_data| blk: {
+                var breaks = false;
                 for (self.mir_store.getExprSpan(list_data.elems)) |elem_expr| {
-                    switch (try self.analyzeExpr(env, region, accumulator, elem_expr)) {
-                        .no_return => break :blk .no_return,
-                        .value => {},
+                    const elem_outcome = try self.analyzeExpr(env, region, accumulator, elem_expr, loop_depth);
+                    breaks = breaks or elem_outcome.breaks;
+                    if (!elem_outcome.hasNormalValue()) {
+                        break :blk ExprOutcome{ .breaks = breaks };
                     }
                 }
-                break :blk .{ .value = .fresh };
+                break :blk ExprOutcome{ .value = .fresh, .breaks = breaks };
             },
 
             .struct_ => |struct_data| blk: {
+                var breaks = false;
                 for (self.mir_store.getExprSpan(struct_data.fields)) |field_expr| {
-                    switch (try self.analyzeExpr(env, region, accumulator, field_expr)) {
-                        .no_return => break :blk .no_return,
-                        .value => {},
+                    const field_outcome = try self.analyzeExpr(env, region, accumulator, field_expr, loop_depth);
+                    breaks = breaks or field_outcome.breaks;
+                    if (!field_outcome.hasNormalValue()) {
+                        break :blk ExprOutcome{ .breaks = breaks };
                     }
                 }
-                break :blk .{ .value = .fresh };
+                break :blk ExprOutcome{ .value = .fresh, .breaks = breaks };
             },
 
             .tag => |tag_data| blk: {
+                var breaks = false;
                 for (self.mir_store.getExprSpan(tag_data.args)) |arg_expr| {
-                    switch (try self.analyzeExpr(env, region, accumulator, arg_expr)) {
-                        .no_return => break :blk .no_return,
-                        .value => {},
+                    const arg_outcome = try self.analyzeExpr(env, region, accumulator, arg_expr, loop_depth);
+                    breaks = breaks or arg_outcome.breaks;
+                    if (!arg_outcome.hasNormalValue()) {
+                        break :blk ExprOutcome{ .breaks = breaks };
                     }
                 }
-                break :blk .{ .value = .fresh };
+                break :blk ExprOutcome{ .value = .fresh, .breaks = breaks };
             },
 
             .str_escape_and_quote => |inner| blk: {
-                switch (try self.analyzeExpr(env, region, accumulator, inner)) {
-                    .no_return => break :blk .no_return,
-                    .value => break :blk .{ .value = .fresh },
-                }
+                const inner_outcome = try self.analyzeExpr(env, region, accumulator, inner, loop_depth);
+                if (!inner_outcome.hasNormalValue()) break :blk ExprOutcome{ .breaks = inner_outcome.breaks };
+                break :blk ExprOutcome{ .value = .fresh, .breaks = inner_outcome.breaks };
             },
 
             .struct_access => |access| blk: {
-                const source = switch (try self.analyzeExpr(env, region, accumulator, access.struct_)) {
-                    .no_return => break :blk .no_return,
-                    .value => |origin| origin,
-                };
+                const source_outcome = try self.analyzeExpr(env, region, accumulator, access.struct_, loop_depth);
+                const source = source_outcome.value orelse break :blk ExprOutcome{ .breaks = source_outcome.breaks };
                 const projection = try self.singleProjectionSpan(.{ .field = @intCast(access.field_idx) });
-                break :blk .{ .value = try self.borrowOrigin(source, region, projection) };
+                break :blk ExprOutcome{
+                    .value = try self.borrowOrigin(source, region, projection),
+                    .breaks = source_outcome.breaks,
+                };
             },
 
             .run_low_level => |ll| blk: {
                 const arg_exprs = self.mir_store.getExprSpan(ll.args);
                 const arg_origins = try self.allocator.alloc(Origin, arg_exprs.len);
                 defer self.allocator.free(arg_origins);
+                var breaks = false;
 
                 for (arg_exprs, 0..) |arg_expr, i| {
-                    switch (try self.analyzeExpr(env, region, accumulator, arg_expr)) {
-                        .no_return => break :blk .no_return,
-                        .value => |origin| arg_origins[i] = origin,
-                    }
+                    const arg_outcome = try self.analyzeExpr(env, region, accumulator, arg_expr, loop_depth);
+                    breaks = breaks or arg_outcome.breaks;
+                    const origin = arg_outcome.value orelse break :blk ExprOutcome{ .breaks = breaks };
+                    arg_origins[i] = origin;
                 }
 
                 switch (ll.op) {
@@ -599,14 +672,17 @@ const Analyzer = struct {
                                 .{},
                             );
                         }
-                        break :blk .{ .value = try self.borrowOrigin(
-                            arg_origins[0],
-                            region,
-                            RefProjectionSpan.empty(),
-                        ) };
+                        break :blk ExprOutcome{
+                            .value = try self.borrowOrigin(
+                                arg_origins[0],
+                                region,
+                                RefProjectionSpan.empty(),
+                            ),
+                            .breaks = breaks,
+                        };
                     },
                     else => break :blk switch (ll.op.procResultSemantics()) {
-                        .fresh => .{ .value = .fresh },
+                        .fresh => ExprOutcome{ .value = .fresh, .breaks = breaks },
                         .borrow_arg => |arg_index| blk_inner: {
                             if (arg_index >= arg_origins.len) {
                                 std.debug.panic(
@@ -614,13 +690,16 @@ const Analyzer = struct {
                                     .{ @tagName(ll.op), arg_index, arg_origins.len },
                                 );
                             }
-                            break :blk_inner .{ .value = try self.borrowOrigin(
-                                arg_origins[arg_index],
-                                region,
-                                RefProjectionSpan.empty(),
-                            ) };
+                            break :blk_inner ExprOutcome{
+                                .value = try self.borrowOrigin(
+                                    arg_origins[arg_index],
+                                    region,
+                                    RefProjectionSpan.empty(),
+                                ),
+                                .breaks = breaks,
+                            };
                         },
-                        .no_return => .no_return,
+                        .no_return => ExprOutcome{ .breaks = breaks },
                         .requires_explicit_summary => std.debug.panic(
                             "ProcResultSummary invariant violated: low-level result {s} requires explicit provenance summary",
                             .{@tagName(ll.op)},
@@ -637,33 +716,43 @@ const Analyzer = struct {
                 const arg_exprs = self.mir_store.getExprSpan(call.args);
                 const arg_origins = try self.allocator.alloc(Origin, arg_exprs.len);
                 defer self.allocator.free(arg_origins);
+                var breaks = false;
 
                 for (arg_exprs, 0..) |arg_expr, i| {
-                    switch (try self.analyzeExpr(env, region, accumulator, arg_expr)) {
-                        .no_return => break :blk .no_return,
-                        .value => |origin| arg_origins[i] = origin,
-                    }
+                    const arg_outcome = try self.analyzeExpr(env, region, accumulator, arg_expr, loop_depth);
+                    breaks = breaks or arg_outcome.breaks;
+                    const origin = arg_outcome.value orelse break :blk ExprOutcome{ .breaks = breaks };
+                    arg_origins[i] = origin;
                 }
 
                 const callee_summary = self.procSummary(proc_id);
                 break :blk switch (callee_summary) {
-                    .no_return => .no_return,
-                    .concrete => |contract| .{ .value = try self.instantiateCallContract(contract, arg_origins, region) },
+                    .no_return => ExprOutcome{ .breaks = breaks },
+                    .concrete => |contract| ExprOutcome{
+                        .value = try self.instantiateCallContract(contract, arg_origins, region),
+                        .breaks = breaks,
+                    },
                 };
             },
 
             .block => |block| blk: {
                 var block_env = try self.cloneEnv(env);
                 defer block_env.deinit();
+                var breaks = false;
 
                 for (self.mir_store.getStmts(block.stmts)) |stmt| {
-                    switch (try self.analyzeStmt(&block_env, region, accumulator, stmt)) {
-                        .no_return => break :blk .no_return,
-                        .value => {},
+                    const stmt_outcome = try self.analyzeStmt(&block_env, region, accumulator, stmt, loop_depth);
+                    breaks = breaks or stmt_outcome.breaks;
+                    if (!stmt_outcome.hasNormalValue()) {
+                        break :blk ExprOutcome{ .breaks = breaks };
                     }
                 }
 
-                break :blk try self.analyzeExpr(&block_env, region, accumulator, block.final_expr);
+                const final_outcome = try self.analyzeExpr(&block_env, region, accumulator, block.final_expr, loop_depth);
+                break :blk ExprOutcome{
+                    .value = final_outcome.value,
+                    .breaks = breaks or final_outcome.breaks,
+                };
             },
 
             .borrow_scope => |scope| blk: {
@@ -672,55 +761,49 @@ const Analyzer = struct {
                 defer scope_env.deinit();
 
                 for (self.mir_store.getBorrowBindings(scope.bindings)) |binding| {
-                    const source = switch (try self.analyzeExpr(&scope_env, scope_region, accumulator, binding.expr)) {
-                        .no_return => break :blk .no_return,
-                        .value => |origin| origin,
-                    };
+                    const source_outcome = try self.analyzeExpr(&scope_env, scope_region, accumulator, binding.expr, loop_depth);
+                    const source = source_outcome.value orelse break :blk ExprOutcome{ .breaks = source_outcome.breaks };
                     try self.bindBorrowPattern(&scope_env, binding.pattern, source, scope_region);
                 }
 
-                const body_outcome = try self.analyzeExpr(&scope_env, scope_region, accumulator, scope.body);
-                break :blk switch (body_outcome) {
-                    .no_return => .no_return,
-                    .value => |origin| switch (origin) {
+                const body_outcome = try self.analyzeExpr(&scope_env, scope_region, accumulator, scope.body, loop_depth);
+                break :blk if (body_outcome.value) |origin| switch (origin) {
                         .borrow_of_param => |borrowed| switch (borrowed.region) {
-                            .proc => .{ .value = origin },
+                            .proc => ExprOutcome{ .value = origin, .breaks = body_outcome.breaks },
                             .scope => |scope_id| std.debug.panic(
                                 "ProcResultSummary invariant violated: borrow scope result escaped local scope {d}",
                                 .{scope_id},
                             ),
                         },
                         .borrow_of_fresh => |borrowed| switch (borrowed.region) {
-                            .proc => .{ .value = origin },
+                            .proc => ExprOutcome{ .value = origin, .breaks = body_outcome.breaks },
                             .scope => |scope_id| std.debug.panic(
                                 "ProcResultSummary invariant violated: borrow scope result escaped local scope {d}",
                                 .{scope_id},
                             ),
                         },
-                        else => .{ .value = origin },
-                    },
-                };
+                        else => ExprOutcome{ .value = origin, .breaks = body_outcome.breaks },
+                    }
+                else
+                    ExprOutcome{ .breaks = body_outcome.breaks };
             },
 
-            .dbg_expr => |dbg_expr| self.analyzeExpr(env, region, accumulator, dbg_expr.expr),
-            .expect => |expect| self.analyzeExpr(env, region, accumulator, expect.body),
+            .dbg_expr => |dbg_expr| self.analyzeExpr(env, region, accumulator, dbg_expr.expr, loop_depth),
+            .expect => |expect| self.analyzeExpr(env, region, accumulator, expect.body, loop_depth),
 
             .runtime_err_can,
             .runtime_err_type,
             .runtime_err_ellipsis,
             .runtime_err_anno_only,
             .crash,
-            => .no_return,
+            => ExprOutcome.noReturn(),
 
             .return_expr => |ret| blk: {
-                const outcome = try self.analyzeExpr(env, region, accumulator, ret.expr);
-                switch (outcome) {
-                    .no_return => break :blk .no_return,
-                    .value => |origin| {
-                        self.mergeReturnedOrigin(accumulator, origin);
-                        break :blk .no_return;
-                    },
+                const outcome = try self.analyzeExpr(env, region, accumulator, ret.expr, loop_depth);
+                if (outcome.value) |origin| {
+                    self.mergeReturnedOrigin(accumulator, origin);
                 }
+                break :blk ExprOutcome{ .breaks = outcome.breaks };
             },
 
             .match_expr => |match_expr| try self.analyzeMatchExpr(
@@ -729,13 +812,29 @@ const Analyzer = struct {
                 accumulator,
                 match_expr.cond,
                 match_expr.branches,
+                loop_depth,
             ),
 
-            .loop, .break_expr => std.debug.panic(
-                "ProcResultSummary requires control-flow lowering before strongest-form MIR proc summary for expr tag {s}",
-                .{@tagName(self.mir_store.getExpr(expr_id))},
-            ),
+            .loop => |loop_expr| blk: {
+                const body_outcome = try self.analyzeExpr(env, region, accumulator, loop_expr.body, loop_depth + 1);
+                break :blk if (body_outcome.breaks)
+                    ExprOutcome.fromValue(.fresh)
+                else
+                    ExprOutcome.noReturn();
+            },
+            .break_expr => blk: {
+                if (loop_depth == 0) {
+                    std.debug.panic(
+                        "ProcResultSummary invariant violated: break_expr escaped the nearest loop during strongest-form summary",
+                        .{},
+                    );
+                }
+                break :blk ExprOutcome{ .breaks = true };
+            },
         };
+
+        self.recordExprContract(expr_id, self.exprResultFromOutcome(outcome));
+        return outcome;
     }
 
     fn analyzeProc(self: *Analyzer, proc_id: MIR.ProcId) Allocator.Error!ProcSummaryState {
@@ -765,7 +864,7 @@ const Analyzer = struct {
         }
 
         var accumulator = ReturnAccumulator{};
-        const outcome = try self.analyzeExpr(&env, .proc, &accumulator, proc.body);
+        const outcome = try self.analyzeExpr(&env, .proc, &accumulator, proc.body, 0);
         return self.finishProcOutcome(&accumulator, outcome);
     }
 
@@ -774,7 +873,7 @@ const Analyzer = struct {
         defer env.deinit();
 
         var accumulator = ReturnAccumulator{};
-        const outcome = try self.analyzeExpr(&env, .proc, &accumulator, expr_id);
+        const outcome = try self.analyzeExpr(&env, .proc, &accumulator, expr_id, 0);
         return switch (self.finishProcOutcome(&accumulator, outcome)) {
             .no_return => .fresh,
             .concrete => |contract| contract,
@@ -824,6 +923,21 @@ pub fn build(
             .concrete => |inner| inner,
         };
         table.proc_contracts.appendAssumeCapacity(contract);
+    }
+
+    try table.expr_contracts.ensureTotalCapacityPrecise(allocator, mir_store.exprCount());
+    try table.expr_contracts.appendNTimes(allocator, null, mir_store.exprCount());
+
+    for (mir_store.getProcs(), 0..) |_, i| {
+        var analyzer = Analyzer{
+            .allocator = allocator,
+            .mir_store = mir_store,
+            .table = &table,
+            .proc_states = null,
+            .active_value_defs = &active_value_defs,
+        };
+        const proc_id: MIR.ProcId = @enumFromInt(@as(u32, @intCast(i)));
+        _ = try analyzer.analyzeProc(proc_id);
     }
 
     var seen_root_exprs = std.AutoHashMap(u32, void).init(allocator);
@@ -878,6 +992,24 @@ fn contractEqual(table: *const Table, left: ProcResultContract, right: ProcResul
     };
 }
 
+fn mergeContracts(table: *const Table, left: ProcResultContract, right: ProcResultContract) ProcResultContract {
+    return if (contractEqual(table, left, right))
+        left
+    else
+        .fresh;
+}
+
+fn exprContractsEqual(table: *const Table, left: ExprResultContract, right: ExprResultContract) bool {
+    return switch (left) {
+        .no_return => right == .no_return,
+        .borrow_of_fresh => right == .borrow_of_fresh,
+        .concrete => |left_contract| switch (right) {
+            .concrete => |right_contract| contractEqual(table, left_contract, right_contract),
+            else => false,
+        },
+    };
+}
+
 fn summaryStatesEqual(table: *const Table, left: ProcSummaryState, right: ProcSummaryState) bool {
     return switch (left) {
         .no_return => right == .no_return,
@@ -904,6 +1036,13 @@ fn originEqual(table: *const Table, left: Origin, right: Origin) bool {
             else => false,
         },
     };
+}
+
+fn mergeOrigins(table: *const Table, left: Origin, right: Origin) Origin {
+    return if (originEqual(table, left, right))
+        left
+    else
+        .fresh;
 }
 
 fn projectionSpansEqual(table: *const Table, left: RefProjectionSpan, right: RefProjectionSpan) bool {
