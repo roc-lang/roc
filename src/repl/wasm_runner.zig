@@ -73,6 +73,7 @@ pub fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, ex
         env_imports.addHostFunction("roc_i128_to_str", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostI128ToStr, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_u128_to_str", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostU128ToStr, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_float_to_str", &[_]bytebox.ValType{ .I64, .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostFloatToStr, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_int_to_str", &[_]bytebox.ValType{ .I64, .I64, .I32, .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostIntToStr, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_u128_to_dec", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostU128ToDec, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_i128_to_dec", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostI128ToDec, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_dec_to_i128", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostDecToI128, null) catch return error.WasmExecFailed;
@@ -89,6 +90,7 @@ pub fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, ex
             .{ "roc_str_with_ascii_uppercased", hostStrWithAsciiUppercased },
             .{ "roc_str_release_excess_capacity", hostStrReleaseExcessCapacity },
             .{ "roc_str_with_capacity", hostStrWithCapacity },
+            .{ "roc_str_escape_and_quote", hostStrEscapeAndQuote },
         }) |entry| {
             env_imports.addHostFunction(entry[0], &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, entry[1], null) catch return error.WasmExecFailed;
         }
@@ -344,7 +346,7 @@ fn hostFloatToStr(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
     const is_f32 = params[1].I32 != 0;
     const buf_ptr: usize = @intCast(params[2].I32);
 
-    if (buf_ptr + 48 > buffer.len) {
+    if (buf_ptr + 400 > buffer.len) {
         results[0] = .{ .I32 = 0 };
         return;
     }
@@ -356,6 +358,46 @@ fn hostFloatToStr(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
     } else blk: {
         const f64_val: f64 = @bitCast(val_bits);
         break :blk i128h.f64_to_str(&fmt_buf, f64_val);
+    };
+
+    @memcpy(buffer[buf_ptr..][0..formatted.len], formatted);
+    results[0] = .{ .I32 = @intCast(formatted.len) };
+}
+
+fn hostIntToStr(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    const buffer = module.store.getMemory(0).buffer();
+    const low: u64 = @bitCast(params[0].I64);
+    const high: u64 = @bitCast(params[1].I64);
+    const int_width: u8 = @intCast(params[2].I32);
+    const is_signed = params[3].I32 != 0;
+    const buf_ptr: usize = @intCast(params[4].I32);
+
+    if (buf_ptr + 48 > buffer.len) {
+        results[0] = .{ .I32 = 0 };
+        return;
+    }
+
+    const signed_value: i128 = @bitCast((@as(u128, high) << 64) | @as(u128, low));
+    const unsigned_value: u128 = (@as(u128, high) << 64) | @as(u128, low);
+
+    var fmt_buf: [48]u8 = undefined;
+    const formatted = (if (is_signed) switch (int_width) {
+        1 => std.fmt.bufPrint(&fmt_buf, "{d}", .{@as(i8, @intCast(signed_value))}),
+        2 => std.fmt.bufPrint(&fmt_buf, "{d}", .{@as(i16, @intCast(signed_value))}),
+        4 => std.fmt.bufPrint(&fmt_buf, "{d}", .{@as(i32, @intCast(signed_value))}),
+        8 => std.fmt.bufPrint(&fmt_buf, "{d}", .{@as(i64, @intCast(signed_value))}),
+        16 => std.fmt.bufPrint(&fmt_buf, "{d}", .{signed_value}),
+        else => unreachable,
+    } else switch (int_width) {
+        1 => std.fmt.bufPrint(&fmt_buf, "{d}", .{@as(u8, @intCast(unsigned_value))}),
+        2 => std.fmt.bufPrint(&fmt_buf, "{d}", .{@as(u16, @intCast(unsigned_value))}),
+        4 => std.fmt.bufPrint(&fmt_buf, "{d}", .{@as(u32, @intCast(unsigned_value))}),
+        8 => std.fmt.bufPrint(&fmt_buf, "{d}", .{@as(u64, @intCast(unsigned_value))}),
+        16 => std.fmt.bufPrint(&fmt_buf, "{d}", .{unsigned_value}),
+        else => unreachable,
+    }) catch {
+        results[0] = .{ .I32 = 0 };
+        return;
     };
 
     @memcpy(buffer[buf_ptr..][0..formatted.len], formatted);
@@ -713,6 +755,51 @@ fn hostStrConcat(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]con
         @memcpy(buffer[dest_start + lhs.len ..][0..rhs.len], rhs.data[0..rhs.len]);
     }
     writeWasmStr(buffer, @intCast(params[2].I32), buffer[dest_start..].ptr, total_len);
+}
+
+fn hostStrEscapeAndQuote(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const buffer = module.store.getMemory(0).buffer();
+    const str = readWasmStr(buffer, @intCast(params[0].I32));
+    const slice = str.data[0..str.len];
+    const result_ptr: usize = @intCast(params[1].I32);
+
+    var extra: usize = 0;
+    for (slice) |ch| {
+        if (ch == '\\' or ch == '"') extra += 1;
+    }
+
+    const result_len = slice.len + extra + 2;
+    if (result_len < 12) {
+        var small: [12]u8 = .{0} ** 12;
+        small[0] = '"';
+        var pos: usize = 1;
+        for (slice) |ch| {
+            if (ch == '\\' or ch == '"') {
+                small[pos] = '\\';
+                pos += 1;
+            }
+            small[pos] = ch;
+            pos += 1;
+        }
+        small[pos] = '"';
+        writeWasmStr(buffer, result_ptr, small[0..].ptr, result_len);
+        return;
+    }
+
+    const dest_start = wasm_heap_ptr;
+    wasm_heap_ptr += @intCast(result_len);
+    buffer[dest_start] = '"';
+    var pos: usize = dest_start + 1;
+    for (slice) |ch| {
+        if (ch == '\\' or ch == '"') {
+            buffer[pos] = '\\';
+            pos += 1;
+        }
+        buffer[pos] = ch;
+        pos += 1;
+    }
+    buffer[pos] = '"';
+    writeWasmStr(buffer, result_ptr, buffer[dest_start..].ptr, result_len);
 }
 
 fn hostStrRepeat(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
