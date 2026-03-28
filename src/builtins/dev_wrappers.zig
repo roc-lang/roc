@@ -607,13 +607,32 @@ pub fn roc_builtins_free_data_ptr(ptr: [*]u8, alignment: u32, elements_refcounte
 // Numeric Wrappers
 // ═══════════════════════════════════════════════════════════════════════════
 
+fn writeRocStrFromSlice(out: *RocStr, slice: []const u8, roc_ops: *RocOps) void {
+    const small_string_size = @sizeOf(RocStr);
+
+    if (slice.len < small_string_size) {
+        var buf: [small_string_size]u8 = .{0} ** small_string_size;
+        @memcpy(buf[0..slice.len], slice);
+        buf[small_string_size - 1] = @intCast(slice.len | 0x80);
+        out.* = @bitCast(buf);
+    } else {
+        const heap_ptr = allocateWithRefcountC(slice.len, 1, false, roc_ops);
+        @memcpy(heap_ptr[0..slice.len], slice);
+        out.* = .{
+            .bytes = heap_ptr,
+            .length = slice.len,
+            .capacity_or_alloc_ptr = slice.len,
+        };
+    }
+}
+
 /// Wrapper: decToStrC (decomposed i128)
 pub fn roc_builtins_dec_to_str(out: *RocStr, value_low: u64, value_high: u64, roc_ops: *RocOps) callconv(.c) void {
     const value: i128 = @bitCast(i128h.from_u64_pair(value_low, value_high));
     const d = dec.RocDec{ .num = value };
     var buf: [dec.RocDec.max_str_length]u8 = undefined;
     const slice = d.format_to_buf(&buf);
-    out.* = RocStr.init(&buf, slice.len, roc_ops);
+    writeRocStrFromSlice(out, slice, roc_ops);
 }
 
 // ── Numeric conversion wrappers ──
@@ -1031,7 +1050,7 @@ pub fn roc_builtins_int_to_str(out: *RocStr, val_low: u64, val_high: u64, int_wi
         },
         else => unreachable,
     };
-    out.* = RocStr.init(&buf, result.len, roc_ops);
+    writeRocStrFromSlice(out, result, roc_ops);
 }
 
 /// Unified float-to-string wrapper: dispatches on is_f32.
@@ -1047,7 +1066,7 @@ pub fn roc_builtins_float_to_str(out: *RocStr, val_bits: u64, is_f32: bool, roc_
         const f64_val: f64 = @bitCast(val_bits);
         break :blk i128h.f64_to_str(&buf, f64_val);
     };
-    out.* = RocStr.init(&buf, result.len, roc_ops);
+    writeRocStrFromSlice(out, result, roc_ops);
 }
 
 // ── Numeric-from-string wrappers ──

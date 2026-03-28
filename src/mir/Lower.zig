@@ -3113,6 +3113,191 @@ fn lowerTrivialStringConcatInto(
     return self.lowerTrivialStringConcatInto(segments[0 .. segments.len - 1], lhs_local, rhs_entry);
 }
 
+fn lowerTrivialStrLiteralInto(
+    self: *Self,
+    target: MIR.LocalId,
+    text: []const u8,
+    next: MIR.CFStmtId,
+) Allocator.Error!MIR.CFStmtId {
+    const mir_str = try self.store.insertString(self.allocator, text);
+    return self.store.addCFStmt(self.allocator, .{ .assign_literal = .{
+        .target = target,
+        .literal = .{ .str = mir_str },
+        .next = next,
+    } });
+}
+
+fn lowerUnaryLowLevelInto(
+    self: *Self,
+    target: MIR.LocalId,
+    op: CIR.Expr.LowLevel,
+    source: MIR.LocalId,
+    next: MIR.CFStmtId,
+) Allocator.Error!MIR.CFStmtId {
+    return self.store.addCFStmt(self.allocator, .{ .assign_low_level = .{
+        .target = target,
+        .op = op,
+        .args = try self.store.addLocalSpan(self.allocator, &.{source}),
+        .next = next,
+    } });
+}
+
+fn boolTagNamesForMonotype(
+    self: *Self,
+    mono_idx: Monotype.Idx,
+) ?struct { true_name: Monotype.Name, false_name: Monotype.Name } {
+    const mono = self.store.monotype_store.getMonotype(mono_idx);
+    const module_env = self.all_module_envs[self.current_module_idx];
+    const tags = switch (mono) {
+        .tag_union => |tu| self.store.monotype_store.getTags(tu.tags),
+        else => return null,
+    };
+
+    if (tags.len != 2) return null;
+
+    var true_name: ?Monotype.Name = null;
+    var false_name: ?Monotype.Name = null;
+    for (tags) |tag| {
+        if (self.store.monotype_store.getIdxSpan(tag.payloads).len != 0) return null;
+        if (self.identsTagNameEquivalent(tag.name, module_env.idents.true_tag)) {
+            true_name = tag.name;
+        } else if (self.identsTagNameEquivalent(tag.name, module_env.idents.false_tag)) {
+            false_name = tag.name;
+        } else {
+            return null;
+        }
+    }
+
+    return .{
+        .true_name = true_name orelse return null,
+        .false_name = false_name orelse return null,
+    };
+}
+
+fn lowerBoolInspectLocalInto(
+    self: *Self,
+    source: MIR.LocalId,
+    bool_mono: Monotype.Idx,
+    target: MIR.LocalId,
+    next: MIR.CFStmtId,
+) Allocator.Error!MIR.CFStmtId {
+    const tag_names = boolTagNamesForMonotype(self, bool_mono) orelse std.debug.panic(
+        "statement-only MIR str_inspect expected Bool monotype for local {d}",
+        .{@intFromEnum(source)},
+    );
+
+    const true_pattern = try self.store.addPattern(self.allocator, .{ .tag = .{
+        .name = tag_names.true_name,
+        .args = MIR.PatternSpan.empty(),
+    } }, bool_mono);
+    const wildcard_pattern = try self.store.addPattern(self.allocator, .wildcard, bool_mono);
+
+    const true_body = try self.lowerTrivialStrLiteralInto(target, "True", next);
+    const false_body = try self.lowerTrivialStrLiteralInto(target, "False", next);
+
+    const true_branch_patterns = try self.store.addBranchPatterns(self.allocator, &.{MIR.BranchPattern{
+        .pattern = true_pattern,
+        .degenerate = false,
+    }});
+    const false_branch_patterns = try self.store.addBranchPatterns(self.allocator, &.{MIR.BranchPattern{
+        .pattern = wildcard_pattern,
+        .degenerate = false,
+    }});
+    const branches = try self.store.addMatchBranches(self.allocator, &.{
+        .{ .patterns = true_branch_patterns, .body = true_body },
+        .{ .patterns = false_branch_patterns, .body = false_body },
+    });
+
+    return self.store.addCFStmt(self.allocator, .{ .match_stmt = .{
+        .scrutinee = source,
+        .branches = branches,
+    } });
+}
+
+fn lowerTrivialStrInspectLocalInto(
+    self: *Self,
+    source: MIR.LocalId,
+    source_mono: Monotype.Idx,
+    target: MIR.LocalId,
+    next: MIR.CFStmtId,
+) Allocator.Error!MIR.CFStmtId {
+    if (self.store.monotype_store.isOpaque(source_mono)) {
+        return self.lowerTrivialStrLiteralInto(target, "<opaque>", next);
+    }
+
+    return switch (self.store.monotype_store.getMonotype(source_mono)) {
+        .prim => |prim| switch (prim) {
+            .str => self.store.addCFStmt(self.allocator, .{ .assign_str_escape_and_quote = .{
+                .target = target,
+                .source = source,
+                .next = next,
+            } }),
+            else => |p| self.lowerUnaryLowLevelInto(
+                target,
+                toStrLowLevelForPrim(p) orelse std.debug.panic(
+                    "statement-only MIR str_inspect has no primitive renderer for {s}",
+                    .{@tagName(p)},
+                ),
+                source,
+                next,
+            ),
+        },
+        .unit => self.lowerTrivialStrLiteralInto(target, "{}", next),
+        .tag_union => self.lowerBoolInspectLocalInto(source, source_mono, target, next),
+        else => std.debug.panic(
+            "statement-only MIR str_inspect is not implemented yet for monotype kind {s}",
+            .{@tagName(self.store.monotype_store.getMonotype(source_mono))},
+        ),
+    };
+}
+
+fn lowerTrivialIfInto(
+    self: *Self,
+    branches: []const CIR.Expr.IfBranch.Idx,
+    final_else: CIR.Expr.Idx,
+    target: MIR.LocalId,
+    next: MIR.CFStmtId,
+) Allocator.Error!MIR.CFStmtId {
+    const module_env = self.all_module_envs[self.current_module_idx];
+
+    if (branches.len == 0) {
+        return self.lowerTrivialRootExprInto(final_else, target, next);
+    }
+
+    const branch = module_env.store.getIfBranch(branches[0]);
+    const cond_mono = try self.resolveMonotype(branch.cond);
+    const cond_local = try self.freshSyntheticLocal(cond_mono, false);
+    const else_body = try self.lowerTrivialIfInto(branches[1..], final_else, target, next);
+    const then_body = try self.lowerTrivialRootExprInto(branch.body, target, next);
+    const tag_names = boolTagNamesForMonotype(self, cond_mono) orelse std.debug.panic(
+        "statement-only MIR if expected Bool condition monotype for expr {d}",
+        .{@intFromEnum(branch.cond)},
+    );
+
+    const true_pattern = try self.store.addPattern(self.allocator, .{ .tag = .{
+        .name = tag_names.true_name,
+        .args = MIR.PatternSpan.empty(),
+    } }, cond_mono);
+    const wildcard_pattern = try self.store.addPattern(self.allocator, .wildcard, cond_mono);
+    const true_branch_patterns = try self.store.addBranchPatterns(self.allocator, &.{MIR.BranchPattern{
+        .pattern = true_pattern,
+        .degenerate = false,
+    }});
+    const else_branch_patterns = try self.store.addBranchPatterns(self.allocator, &.{MIR.BranchPattern{
+        .pattern = wildcard_pattern,
+        .degenerate = false,
+    }});
+    const match_stmt = try self.store.addCFStmt(self.allocator, .{ .match_stmt = .{
+        .scrutinee = cond_local,
+        .branches = try self.store.addMatchBranches(self.allocator, &.{
+            .{ .patterns = true_branch_patterns, .body = then_body },
+            .{ .patterns = else_branch_patterns, .body = else_body },
+        }),
+    } });
+
+    return self.lowerTrivialRootExprInto(branch.cond, cond_local, match_stmt);
+}
+
 fn lowerTrivialRootExprInto(
     self: *Self,
     expr_idx: CIR.Expr.Idx,
@@ -3360,8 +3545,28 @@ fn lowerTrivialRootExprInto(
             } });
             break :blk try self.lowerTrivialRootExprInto(nominal.backing_expr, backing_local, nominal_stmt);
         },
+        .e_if => |if_expr| self.lowerTrivialIfInto(
+            module_env.store.sliceIfBranches(if_expr.branches),
+            if_expr.final_else,
+            target,
+            next,
+        ),
         .e_run_low_level => |run_ll| blk: {
             const cir_args = module_env.store.sliceExpr(run_ll.args);
+            if (run_ll.op == .str_inspect) {
+                if (cir_args.len != 1) {
+                    std.debug.panic(
+                        "statement-only MIR str_inspect expected 1 arg, got {d}",
+                        .{cir_args.len},
+                    );
+                }
+
+                const source_mono = try self.resolveMonotype(cir_args[0]);
+                const source_local = try self.freshSyntheticLocal(source_mono, false);
+                const inspect_stmt = try self.lowerTrivialStrInspectLocalInto(source_local, source_mono, target, next);
+                break :blk try self.lowerTrivialRootExprInto(cir_args[0], source_local, inspect_stmt);
+            }
+
             const top = self.scratch_local_ids.top();
             defer self.scratch_local_ids.clearFrom(top);
 
