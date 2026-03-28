@@ -57,6 +57,8 @@ roc_crashed_table_idx: u32 = 0,
 /// In main(), this is a local storing the constant 0 (struct at memory offset 0).
 /// In compiled functions, this is parameter 0.
 roc_ops_local: u32 = 0,
+/// Local index used to hold the current proc's return value until epilogue time.
+proc_return_local: u32 = 0,
 /// CFStmt block nesting depth (for br targets in proc compilation).
 cf_depth: u32 = 0,
 /// Expression-level structured control depth (for break_expr branch depths).
@@ -67,6 +69,8 @@ in_proc: bool = false,
 join_point_depths: std.AutoHashMap(u32, u32),
 /// Map from JoinPointId → param local indices.
 join_point_param_locals: std.AutoHashMap(u32, []u32),
+/// Map from JoinPointId → state local selecting remainder or join body.
+join_point_state_locals: std.AutoHashMap(u32, u32),
 /// Stack of expression-level loop exit label depths for lowering break_expr.
 loop_break_target_depths: std.ArrayList(u32),
 /// Wasm function index for imported roc_dec_mul host function.
@@ -156,6 +160,7 @@ pub fn init(allocator: Allocator, store: *const LirStore, layout_store: *const L
         .registered_procs = std.AutoHashMap(u64, u32).init(allocator),
         .join_point_depths = std.AutoHashMap(u32, u32).init(allocator),
         .join_point_param_locals = std.AutoHashMap(u32, []u32).init(allocator),
+        .join_point_state_locals = std.AutoHashMap(u32, u32).init(allocator),
         .loop_break_target_depths = .empty,
     };
 }
@@ -172,6 +177,7 @@ pub fn deinit(self: *Self) void {
         self.allocator.free(entry.value_ptr.*);
     }
     self.join_point_param_locals.deinit();
+    self.join_point_state_locals.deinit();
     self.loop_break_target_depths.deinit(self.allocator);
 }
 
@@ -3807,6 +3813,7 @@ fn compileProcSpecBody(self: *Self, proc: LirProcSpec) Allocator.Error!void {
     self.stack_frame_size = 0;
     self.uses_stack_memory = false;
     self.fp_local = 0;
+    self.proc_return_local = 0;
     self.cf_depth = 0;
     self.in_proc = true;
 
@@ -3822,10 +3829,11 @@ fn compileProcSpecBody(self: *Self, proc: LirProcSpec) Allocator.Error!void {
 
     // Pre-allocate frame pointer local (after params, so it doesn't conflict)
     self.fp_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    self.proc_return_local = self.storage.allocAnonymousLocal(ret_vt) catch return error.OutOfMemory;
 
-    // Emit proc body block (ret targets this block)
+    // Emit proc body block (ret branches to this block after storing the return local)
     self.body.append(self.allocator, Op.block) catch return error.OutOfMemory;
-    self.body.append(self.allocator, @intFromEnum(ret_vt)) catch return error.OutOfMemory;
+    self.body.append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
     self.cf_depth = 1; // inside the ret block
 
     // Generate CFStmt body
@@ -3840,12 +3848,6 @@ fn compileProcSpecBody(self: *Self, proc: LirProcSpec) Allocator.Error!void {
     // Build function body
     var func_body: std.ArrayList(u8) = .empty;
     defer func_body.deinit(self.allocator);
-
-    // Pre-allocate result_tmp BEFORE encoding locals (so it's included in the declaration)
-    const result_tmp = if (self.uses_stack_memory)
-        self.storage.allocAnonymousLocal(ret_vt) catch return error.OutOfMemory
-    else
-        0;
 
     // Locals declaration (beyond parameters: 1 roc_ops_ptr + params)
     try self.encodeLocalsDecl(&func_body, @intCast(1 + args.len));
@@ -3873,8 +3875,6 @@ fn compileProcSpecBody(self: *Self, proc: LirProcSpec) Allocator.Error!void {
 
     if (self.uses_stack_memory) {
         // Epilogue: restore stack pointer
-        func_body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
-        WasmModule.leb128WriteU32(self.allocator, &func_body, result_tmp) catch return error.OutOfMemory;
         // local.get $fp
         func_body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
         WasmModule.leb128WriteU32(self.allocator, &func_body, self.fp_local) catch return error.OutOfMemory;
@@ -3886,10 +3886,11 @@ fn compileProcSpecBody(self: *Self, proc: LirProcSpec) Allocator.Error!void {
         // global.set $__stack_pointer
         func_body.append(self.allocator, Op.global_set) catch return error.OutOfMemory;
         WasmModule.leb128WriteU32(self.allocator, &func_body, 0) catch return error.OutOfMemory;
-        // Push result back
-        func_body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-        WasmModule.leb128WriteU32(self.allocator, &func_body, result_tmp) catch return error.OutOfMemory;
     }
+
+    // Push the stored proc return value as the function result.
+    func_body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &func_body, self.proc_return_local) catch return error.OutOfMemory;
 
     // End opcode
     func_body.append(self.allocator, Op.end) catch return error.OutOfMemory;
@@ -3920,6 +3921,7 @@ const SavedState = struct {
     uses_stack_memory: bool,
     fp_local: u32,
     roc_ops_local: u32,
+    proc_return_local: u32,
     cf_depth: u32,
     in_proc: bool,
 };
@@ -3937,6 +3939,7 @@ fn saveState(self: *Self) Allocator.Error!SavedState {
         .uses_stack_memory = self.uses_stack_memory,
         .fp_local = self.fp_local,
         .roc_ops_local = self.roc_ops_local,
+        .proc_return_local = self.proc_return_local,
         .cf_depth = self.cf_depth,
         .in_proc = self.in_proc,
     };
@@ -3959,6 +3962,7 @@ fn restoreState(self: *Self, saved: SavedState) void {
     self.uses_stack_memory = saved.uses_stack_memory;
     self.fp_local = saved.fp_local;
     self.roc_ops_local = saved.roc_ops_local;
+    self.proc_return_local = saved.proc_return_local;
     self.cf_depth = saved.cf_depth;
     self.in_proc = saved.in_proc;
 }
@@ -4029,6 +4033,7 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
         },
         .ret => |r| {
             try self.generateExpr(r.value);
+            try self.emitLocalSet(self.proc_return_local);
             self.body.append(self.allocator, Op.br) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, self.cf_depth - 1) catch return error.OutOfMemory;
         },
@@ -4082,8 +4087,16 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
                 param_locals[i] = local_idx;
             }
             self.join_point_param_locals.put(jp_key, param_locals) catch return error.OutOfMemory;
+            const state_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            self.join_point_state_locals.put(jp_key, state_local) catch return error.OutOfMemory;
 
-            try self.generateCFStmt(j.remainder);
+            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+            try self.emitLocalSet(state_local);
+
+            self.body.append(self.allocator, Op.block) catch return error.OutOfMemory;
+            self.body.append(self.allocator, 0x40) catch return error.OutOfMemory;
+            self.cf_depth += 1;
 
             self.body.append(self.allocator, Op.loop_) catch return error.OutOfMemory;
             self.body.append(self.allocator, 0x40) catch return error.OutOfMemory; // void block type
@@ -4091,8 +4104,22 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
 
             self.join_point_depths.put(jp_key, self.cf_depth) catch return error.OutOfMemory;
 
+            try self.emitLocalGet(state_local);
+            self.body.append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+            self.body.append(self.allocator, 0x40) catch return error.OutOfMemory;
+            self.cf_depth += 1;
+
             try self.generateCFStmt(j.body);
 
+            self.body.append(self.allocator, Op.@"else") catch return error.OutOfMemory;
+
+            try self.generateCFStmt(j.remainder);
+
+            self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
+            self.cf_depth -= 1;
+
+            self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
+            self.cf_depth -= 1;
             self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
             self.cf_depth -= 1;
         },
@@ -4127,11 +4154,18 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
                 try self.emitLocalSet(param_locals[i]);
             }
 
-            if (self.join_point_depths.get(jp_key)) |loop_depth| {
-                const br_target = self.cf_depth - loop_depth;
-                self.body.append(self.allocator, Op.br) catch return error.OutOfMemory;
-                WasmModule.leb128WriteU32(self.allocator, &self.body, br_target) catch return error.OutOfMemory;
-            }
+            const state_local = self.join_point_state_locals.get(jp_key) orelse unreachable;
+            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI32(self.allocator, &self.body, 1) catch return error.OutOfMemory;
+            try self.emitLocalSet(state_local);
+
+            const loop_depth = self.join_point_depths.get(jp_key) orelse std.debug.panic(
+                "WASM/codegen invariant violated: jump target {d} has no active join-point depth",
+                .{jp_key},
+            );
+            const br_target = self.cf_depth - loop_depth;
+            self.body.append(self.allocator, Op.br) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, br_target) catch return error.OutOfMemory;
         },
         .borrow_scope => |scope| {
             try self.generateCFStmt(scope.body);
@@ -4256,12 +4290,18 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
         .local => |local| try self.generateExpr(local),
         .discriminant => |disc| {
             const ls = self.getLayoutStore();
-            const source_layout = ls.getLayout(self.exprLayoutIdx(disc.source));
+            const source_layout_idx = self.exprLayoutIdx(disc.source);
+            const source_layout = ls.getLayout(source_layout_idx);
             switch (source_layout.tag) {
                 .tag_union => {
                     const tu_data = ls.getTagUnionData(source_layout.data.tag_union.idx);
-                    try self.generateExpr(disc.source);
-                    try self.emitLoadBySize(tu_data.discriminant_size, @intCast(tu_data.discriminant_offset));
+                    const tu_size = ls.layoutSize(source_layout);
+                    if (tu_size <= 4 and tu_data.discriminant_offset == 0) {
+                        try self.generateExpr(disc.source);
+                    } else {
+                        try self.generateExpr(disc.source);
+                        try self.emitLoadBySize(tu_data.discriminant_size, @intCast(tu_data.discriminant_offset));
+                    }
                 },
                 .box => {
                     const inner_layout = ls.getLayout(source_layout.data.box);

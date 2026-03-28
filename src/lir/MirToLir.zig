@@ -249,20 +249,131 @@ fn runtimeValueLayoutFromMirPattern(self: *Self, pattern_id: MIR.PatternId) Allo
     return self.runtimeValueLayoutFromMirMonotype(self.mir_store.patternTypeOf(pattern_id));
 }
 
+fn exactCallableSeedForSymbol(self: *const Self, symbol: MIR.Symbol) ?MIR.SeedMember {
+    const members = self.mir_store.getSymbolSeedMembers(symbol) orelse return null;
+    if (members.len == 0) return null;
+    if (members.len != 1) {
+        std.debug.panic(
+            "MirToLir invariant violated: symbol {d} has {d} callable seeds where exactly one is required for runtime layout",
+            .{ symbol.raw(), members.len },
+        );
+    }
+    return members[0];
+}
+
+fn runtimeCallableValueLayoutFromSymbol(self: *Self, symbol: MIR.Symbol) Allocator.Error!?layout.Idx {
+    if (self.mir_store.getFunctionDefForSymbol(symbol)) |function_def_id| {
+        return try self.runtimeLambdaValueLayout(self.mir_store.getFunctionDef(function_def_id).lambda);
+    }
+    if (self.exactCallableSeedForSymbol(symbol)) |member| {
+        return try self.runtimeLambdaValueLayout(member.lambda);
+    }
+    return null;
+}
+
 fn runtimeValueLayoutFromMirLocal(self: *Self, local_id: MIR.LocalId) Allocator.Error!layout.Idx {
-    return self.runtimeValueLayoutFromMirMonotype(self.mir_store.getLocal(local_id).monotype);
+    const local = self.mir_store.getLocal(local_id);
+    if (self.mir_store.monotype_store.getMonotype(local.monotype) == .func) {
+        if (try self.runtimeCallableValueLayoutFromSymbol(local.source_symbol)) |layout_idx| {
+            return layout_idx;
+        }
+        std.debug.panic(
+            "MirToLir invariant violated: function-valued local {d} has no exact callable layout source",
+            .{@intFromEnum(local_id)},
+        );
+    }
+    return self.runtimeValueLayoutFromMirMonotype(local.monotype);
 }
 
 fn runtimeLambdaValueLayout(self: *Self, lambda_id: MIR.LambdaId) Allocator.Error!layout.Idx {
     const lambda = self.mir_store.getLambda(lambda_id);
     if (!lambda.captures_param.isNone()) {
-        return self.runtimeValueLayoutFromMirPattern(lambda.captures_param);
+        const layout_idx = try self.runtimeValueLayoutFromMirPattern(lambda.captures_param);
+        return layout_idx;
     }
     return self.runtimeRepresentationLayoutIdx(try self.mir_layout_resolver.resolve(lambda.fn_monotype, null));
 }
 
 fn runtimeLambdaReturnLayout(self: *Self, lambda_id: MIR.LambdaId) Allocator.Error!layout.Idx {
-    return self.runtimeValueLayoutFromMirMonotype(self.mir_store.getLambda(lambda_id).ret_monotype);
+    const lambda = self.mir_store.getLambda(lambda_id);
+    if (self.mir_store.monotype_store.getMonotype(lambda.ret_monotype) != .func) {
+        return self.runtimeValueLayoutFromMirMonotype(lambda.ret_monotype);
+    }
+
+    var visited = std.AutoHashMap(u32, void).init(self.allocator);
+    defer visited.deinit();
+    var returned_locals = std.ArrayList(MIR.LocalId).empty;
+    defer returned_locals.deinit(self.allocator);
+
+    try self.collectReturnedMirLocals(lambda.body, &visited, &returned_locals);
+    if (returned_locals.items.len == 0) {
+        std.debug.panic(
+            "MirToLir invariant violated: function-returning lambda {d} has no reachable return",
+            .{@intFromEnum(lambda_id)},
+        );
+    }
+
+    const first_layout = try self.runtimeValueLayoutFromMirLocal(returned_locals.items[0]);
+    for (returned_locals.items[1..]) |returned_local| {
+        const other_layout = try self.runtimeValueLayoutFromMirLocal(returned_local);
+        if (other_layout != first_layout) {
+            std.debug.panic(
+                "MirToLir invariant violated: lambda {d} returns callable values with inconsistent runtime layouts",
+                .{@intFromEnum(lambda_id)},
+            );
+        }
+    }
+    return first_layout;
+}
+
+fn collectReturnedMirLocals(
+    self: *Self,
+    stmt_id: MIR.CFStmtId,
+    visited: *std.AutoHashMap(u32, void),
+    out: *std.ArrayList(MIR.LocalId),
+) Allocator.Error!void {
+    const key = @as(u32, @intFromEnum(stmt_id));
+    const gop = try visited.getOrPut(key);
+    if (gop.found_existing) return;
+
+    switch (self.mir_store.getCFStmt(stmt_id)) {
+        .assign_symbol => |assign| try self.collectReturnedMirLocals(assign.next, visited, out),
+        .assign_alias => |assign| try self.collectReturnedMirLocals(assign.next, visited, out),
+        .assign_literal => |assign| try self.collectReturnedMirLocals(assign.next, visited, out),
+        .assign_lambda => |assign| try self.collectReturnedMirLocals(assign.next, visited, out),
+        .assign_closure => |assign| try self.collectReturnedMirLocals(assign.next, visited, out),
+        .assign_call => |assign| try self.collectReturnedMirLocals(assign.next, visited, out),
+        .assign_closure_call => |assign| try self.collectReturnedMirLocals(assign.next, visited, out),
+        .assign_low_level => |assign| try self.collectReturnedMirLocals(assign.next, visited, out),
+        .assign_list => |assign| try self.collectReturnedMirLocals(assign.next, visited, out),
+        .assign_struct => |assign| try self.collectReturnedMirLocals(assign.next, visited, out),
+        .assign_tag => |assign| try self.collectReturnedMirLocals(assign.next, visited, out),
+        .assign_field => |assign| try self.collectReturnedMirLocals(assign.next, visited, out),
+        .assign_tag_payload => |assign| try self.collectReturnedMirLocals(assign.next, visited, out),
+        .assign_nominal => |assign| try self.collectReturnedMirLocals(assign.next, visited, out),
+        .assign_str_escape_and_quote => |assign| try self.collectReturnedMirLocals(assign.next, visited, out),
+        .debug => |debug_stmt| try self.collectReturnedMirLocals(debug_stmt.next, visited, out),
+        .expect => |expect_stmt| try self.collectReturnedMirLocals(expect_stmt.next, visited, out),
+        .match_stmt => |match_stmt| {
+            for (self.mir_store.getMatchBranches(match_stmt.branches)) |branch| {
+                try self.collectReturnedMirLocals(branch.body, visited, out);
+            }
+        },
+        .borrow_scope => |scope_stmt| {
+            try self.collectReturnedMirLocals(scope_stmt.body, visited, out);
+            try self.collectReturnedMirLocals(scope_stmt.remainder, visited, out);
+        },
+        .join => |join_stmt| {
+            try self.collectReturnedMirLocals(join_stmt.body, visited, out);
+            try self.collectReturnedMirLocals(join_stmt.remainder, visited, out);
+        },
+        .ret => |ret_stmt| try out.append(self.allocator, ret_stmt.value),
+        .runtime_error,
+        .scope_exit,
+        .jump,
+        .crash,
+        => {},
+    }
 }
 
 fn translateBorrowScopeId(scope_id: MIR.BorrowScopeId) LIR.BorrowScopeId {
@@ -294,7 +405,7 @@ fn mapMirLocal(self: *Self, mir_local: MIR.LocalId) Allocator.Error!LocalRef {
 
     const mir_local_info = self.mir_store.getLocal(mir_local);
     const lir_local = try self.lir_store.addLocal(.{
-        .layout_idx = try self.runtimeValueLayoutFromMirMonotype(mir_local_info.monotype),
+        .layout_idx = try self.runtimeValueLayoutFromMirLocal(mir_local),
         .source_symbol = mir_local_info.source_symbol,
     });
     try map.put(key, lir_local);
@@ -1214,7 +1325,6 @@ fn lowerDirectLambdaCall(
     if (hidden_capture_mir) |capture_local| {
         call_args[visible_args.len] = try self.mapMirLocal(capture_local);
     }
-
     return self.lir_store.addCFStmt(.{ .assign_call = .{
         .target = try self.mapMirLocal(target),
         .result = self.callResultSemantics(lowered_proc, call_args),
