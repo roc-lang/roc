@@ -43,6 +43,8 @@ const WasmResponse = struct {
     repl_info: ?ReplInfo = null,
     /// Present after "REPL_STEP" with REPL evaluation details.
     result: ?ReplResult = null,
+    /// Whether the loaded module is runnable (i.e., a default_app module).
+    is_runnable: ?bool = null,
     /// An optional error code, corresponding to the `WasmError` enum from the playground.
     code: ?u8 = null,
 
