@@ -8,7 +8,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const WasmModule = @import("WasmModule.zig");
-const WasmLinking = @import("WasmLinking.zig");
 
 const Self = @This();
 
@@ -20,6 +19,7 @@ preamble: std.ArrayList(u8),
 /// code_pos is relative to the start of self.code, NOT the module's code section.
 import_relocations: std.ArrayList(Relocation),
 
+/// A relocation entry recording a call site that needs patching during linking.
 pub const Relocation = struct {
     /// Byte position of the 5-byte padded LEB128 placeholder, relative to start of `code`.
     code_pos: u32,
@@ -92,37 +92,35 @@ pub fn insertIntoModule(self: *const Self, allocator: Allocator, module: *WasmMo
 }
 
 /// Prepend bytes to the code buffer and shift all relocation offsets accordingly.
-    ///
-    /// Used for stack prologues and other code that must appear before the main
-    /// instruction bytes but whose content isn't known until after code generation
-    /// (e.g. because the stack frame size depends on what instructions were emitted).
-    pub fn prependToCode(self: *Self, allocator: Allocator, prefix: []const u8) !void {
-        if (prefix.len == 0) return;
-        const prefix_len: u32 = @intCast(prefix.len);
-        // Adjust relocation offsets to account for the prefix
-        for (self.import_relocations.items) |*reloc| {
-            reloc.code_pos += prefix_len;
-        }
-        // Grow capacity if needed
-        try self.code.ensureTotalCapacity(allocator, self.code.items.len + prefix.len);
-        // Shift existing bytes right
-        const old_len = self.code.items.len;
-        self.code.items.len += prefix.len;
-        std.mem.copyBackwards(u8, self.code.items[prefix.len..], self.code.items[0..old_len]);
-        // Copy prefix into the beginning
-        @memcpy(self.code.items[0..prefix.len], prefix);
+///
+/// Used for stack prologues and other code that must appear before the main
+/// instruction bytes but whose content isn't known until after code generation
+/// (e.g. because the stack frame size depends on what instructions were emitted).
+pub fn prependToCode(self: *Self, allocator: Allocator, prefix: []const u8) !void {
+    if (prefix.len == 0) return;
+    const prefix_len: u32 = @intCast(prefix.len);
+    // Adjust relocation offsets to account for the prefix
+    for (self.import_relocations.items) |*reloc| {
+        reloc.code_pos += prefix_len;
     }
+    // Grow capacity if needed
+    try self.code.ensureTotalCapacity(allocator, self.code.items.len + prefix.len);
+    // Shift existing bytes right
+    const old_len = self.code.items.len;
+    self.code.items.len += prefix.len;
+    std.mem.copyBackwards(u8, self.code.items[prefix.len..], self.code.items[0..old_len]);
+    // Copy prefix into the beginning
+    @memcpy(self.code.items[0..prefix.len], prefix);
+}
 
-    /// Reset the builder for the next function without deallocating memory.
-    pub fn clear(self: *Self) void {
+/// Reset the builder for the next function without deallocating memory.
+pub fn clear(self: *Self) void {
     self.code.clearRetainingCapacity();
     self.preamble.clearRetainingCapacity();
     self.import_relocations.clearRetainingCapacity();
 }
 
-// =============================================================================
 // Tests
-// =============================================================================
 
 const testing = std.testing;
 
@@ -318,7 +316,7 @@ test "CodeBuilder — clear resets state for next function without leaking reloc
 
     // Populate with some data
     try cb.code.appendSlice(testing.allocator, &.{ 0x01, 0x02, 0x03 });
-    try cb.preamble.appendSlice(testing.allocator, &.{ 0x00 });
+    try cb.preamble.appendSlice(testing.allocator, &.{0x00});
     try cb.import_relocations.append(testing.allocator, .{ .code_pos = 0, .symbol_index = 5 });
 
     cb.clear();

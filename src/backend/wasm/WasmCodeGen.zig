@@ -196,9 +196,7 @@ pub fn generateModule(self: *Self, expr_id: LirExprId, result_layout: layout.Idx
         .stack_memory => |size| size,
     };
 
-    // =========================================================================
     // RocCall function: (i32 roc_ops_ptr, i32 ret_ptr, i32 args_ptr) → void
-    // =========================================================================
     const roc_call_type_idx = self.module.addFuncType(&.{ .i32, .i32, .i32 }, &.{}) catch return error.OutOfMemory;
     const roc_call_func_idx = self.module.addFunction(roc_call_type_idx) catch return error.OutOfMemory;
 
@@ -255,11 +253,9 @@ pub fn generateModule(self: *Self, expr_id: LirExprId, result_layout: layout.Idx
     self.module.setFunctionBody(roc_call_func_idx, roc_call_body.items) catch return error.OutOfMemory;
     self.module.addExport(entrypoint_name, .func, roc_call_func_idx) catch return error.OutOfMemory;
 
-    // =========================================================================
     // Eval wrapper: (i32 env_ptr) → result_vt
     // Builds RocOps struct at memory offset 0, allocates a return buffer on
     // the stack, calls the RocCall function, and returns the result.
-    // =========================================================================
     const eval_type_idx = self.module.addFuncType(&.{.i32}, &.{result_vt}) catch return error.OutOfMemory;
     const eval_func_idx = self.module.addFunction(eval_type_idx) catch return error.OutOfMemory;
 
@@ -3239,95 +3235,6 @@ fn resolvePendingRelocations(self: *Self) void {
         WasmModule.overwritePaddedU32(self.code_builder.code.items, reloc.code_pos, sym.index);
     }
     self.code_builder.import_relocations.clearRetainingCapacity();
-}
-
-/// Emit a call to a builtin function via relocatable call.
-fn emitBuiltinCall(self: *Self, sym_idx: u32) Allocator.Error!void {
-    self.code_builder.emitRelocatableCall(self.allocator, sym_idx) catch return error.OutOfMemory;
-}
-
-/// Emit a direct call to a function by its function index (for non-builtin calls).
-fn emitDirectCall(self: *Self, func_idx: u32) Allocator.Error!void {
-    self.code_builder.code.append(self.allocator, Op.call) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, &self.code_builder.code, func_idx) catch return error.OutOfMemory;
-}
-
-/// Push the 3 fields of a RocStr/RocList (12 bytes) from memory.
-fn emitDecomposeRocStr(self: *Self, str_local: u32) Allocator.Error!void {
-    try self.emitLocalGet(str_local);
-    try self.emitLoadOp(.i32, 0);
-    try self.emitLocalGet(str_local);
-    try self.emitLoadOp(.i32, 4);
-    try self.emitLocalGet(str_local);
-    try self.emitLoadOp(.i32, 8);
-}
-
-/// Push the 2 halves of an i128/u128 from memory as i64 pair.
-fn emitDecomposeI128(self: *Self, val_local: u32) Allocator.Error!void {
-    try self.emitLocalGet(val_local);
-    try self.emitLoadOp(.i64, 0);
-    try self.emitLocalGet(val_local);
-    try self.emitLoadOp(.i64, 8);
-}
-
-/// Emit local.get for the roc_ops pointer.
-fn emitRocOpsArg(self: *Self) Allocator.Error!void {
-    try self.emitLocalGet(self.roc_ops_local);
-}
-
-/// Str unary: (result_ptr, bytes, len, cap, roc_ops) → void
-fn emitStrUnaryBuiltin(self: *Self, str_local: u32, result_offset: u32, sym_idx: u32) Allocator.Error!void {
-    try self.emitFpOffset(result_offset);
-    try self.emitDecomposeRocStr(str_local);
-    try self.emitRocOpsArg();
-    try self.emitBuiltinCall(sym_idx);
-}
-
-/// Str binary: (result_ptr, a_bytes, a_len, a_cap, b_bytes, b_len, b_cap, roc_ops) → void
-fn emitStrBinaryBuiltin(self: *Self, a_local: u32, b_local: u32, result_offset: u32, sym_idx: u32) Allocator.Error!void {
-    try self.emitFpOffset(result_offset);
-    try self.emitDecomposeRocStr(a_local);
-    try self.emitDecomposeRocStr(b_local);
-    try self.emitRocOpsArg();
-    try self.emitBuiltinCall(sym_idx);
-}
-
-/// Str equality: (a_bytes, a_len, a_cap, b_bytes, b_len, b_cap) → i32
-fn emitStrEqualityBuiltin(self: *Self, a_local: u32, b_local: u32, sym_idx: u32) Allocator.Error!void {
-    try self.emitDecomposeRocStr(a_local);
-    try self.emitDecomposeRocStr(b_local);
-    try self.emitBuiltinCall(sym_idx);
-}
-
-/// i128 binary op: (out_low_ptr, out_high_ptr, a_lo, a_hi, b_lo, b_hi, [roc_ops]) → void
-fn emitI128BinOpBuiltin(self: *Self, lhs_local: u32, rhs_local: u32, sym_idx: u32, needs_roc_ops: bool) Allocator.Error!void {
-    const result_offset = try self.allocStackMemory(16, 8);
-    const result_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitFpOffset(result_offset);
-    try self.emitLocalSet(result_local);
-    try self.emitLocalGet(result_local); // out_low_ptr
-    try self.emitLocalGet(result_local); // out_high_ptr = result + 8
-    self.code_builder.code.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-    WasmModule.leb128WriteI32(self.allocator, &self.code_builder.code, 8) catch return error.OutOfMemory;
-    self.code_builder.code.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-    try self.emitDecomposeI128(lhs_local);
-    try self.emitDecomposeI128(rhs_local);
-    if (needs_roc_ops) try self.emitRocOpsArg();
-    try self.emitBuiltinCall(sym_idx);
-    try self.emitLocalGet(result_local);
-}
-
-/// Compute a pointer local adjusted by field_offset.
-fn emitAdjustedPtr(self: *Self, base_local: u32, field_offset: u32) Allocator.Error!u32 {
-    const adj = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalGet(base_local);
-    if (field_offset > 0) {
-        self.code_builder.code.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-        WasmModule.leb128WriteI32(self.allocator, &self.code_builder.code, @intCast(field_offset)) catch return error.OutOfMemory;
-        self.code_builder.code.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-    }
-    try self.emitLocalSet(adj);
-    return adj;
 }
 
 fn emitI128HostBinOp(self: *Self, lhs_local: u32, rhs_local: u32, import_idx: u32) Allocator.Error!void {
