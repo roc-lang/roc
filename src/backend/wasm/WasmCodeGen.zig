@@ -78,77 +78,14 @@ join_point_depths: std.AutoHashMap(u32, u32),
 join_point_param_locals: std.AutoHashMap(u32, []u32),
 /// Stack of expression-level loop exit label depths for lowering break_expr.
 loop_break_target_depths: std.ArrayList(u32),
-/// Wasm function index for imported roc_dec_mul host function.
-dec_mul_import: ?u32 = null,
-/// Wasm function index for imported roc_dec_to_str host function.
-dec_to_str_import: ?u32 = null,
-/// Wasm function index for imported roc_str_eq host function.
-str_eq_import: ?u32 = null,
-/// Wasm function index for imported roc_list_eq host function.
-list_eq_import: ?u32 = null,
-/// Wasm function index for imported roc_i128_div_s host function.
-i128_div_s_import: ?u32 = null,
-/// Wasm function index for imported roc_i128_mod_s host function.
-i128_mod_s_import: ?u32 = null,
-/// Wasm function index for imported roc_i32_mod_by host function.
-i32_mod_by_import: ?u32 = null,
-/// Wasm function index for imported roc_i64_mod_by host function.
-i64_mod_by_import: ?u32 = null,
-/// Wasm function index for imported roc_u128_div host function.
-u128_div_import: ?u32 = null,
-/// Wasm function index for imported roc_u128_mod host function.
-u128_mod_import: ?u32 = null,
-/// Wasm function index for imported roc_dec_div host function.
-dec_div_import: ?u32 = null,
-/// Wasm function index for imported roc_dec_div_trunc host function.
-dec_div_trunc_import: ?u32 = null,
-/// Wasm function index for imported roc_i128_to_str host function.
-i128_to_str_import: ?u32 = null,
-/// Wasm function index for imported roc_u128_to_str host function.
-u128_to_str_import: ?u32 = null,
-/// Wasm function index for imported roc_float_to_str host function.
-float_to_str_import: ?u32 = null,
-/// Wasm function index for imported roc_u128_to_dec host function.
-u128_to_dec_import: ?u32 = null,
-/// Wasm function index for imported roc_i128_to_dec host function.
-i128_to_dec_import: ?u32 = null,
-/// Wasm function index for imported roc_dec_to_i128 host function.
-dec_to_i128_import: ?u32 = null,
-/// Wasm function index for imported roc_dec_to_u128 host function.
-dec_to_u128_import: ?u32 = null,
-/// Wasm function index for imported roc_dec_to_f32 host function.
-dec_to_f32_import: ?u32 = null,
-/// Wasm function index for imported roc_list_str_eq host function.
-list_str_eq_import: ?u32 = null,
-/// Wasm function index for imported roc_list_list_eq host function.
-list_list_eq_import: ?u32 = null,
-str_repeat_import: ?u32 = null,
-str_concat_import: ?u32 = null,
-str_trim_import: ?u32 = null,
-str_trim_start_import: ?u32 = null,
-str_trim_end_import: ?u32 = null,
-str_split_import: ?u32 = null,
-str_join_with_import: ?u32 = null,
-str_reserve_import: ?u32 = null,
-str_release_excess_capacity_import: ?u32 = null,
-str_with_capacity_import: ?u32 = null,
-str_drop_prefix_import: ?u32 = null,
-str_drop_suffix_import: ?u32 = null,
-str_with_ascii_lowercased_import: ?u32 = null,
-str_with_ascii_uppercased_import: ?u32 = null,
-str_caseless_ascii_equals_import: ?u32 = null,
-str_from_utf8_import: ?u32 = null,
-int_from_str_import: ?u32 = null,
-dec_from_str_import: ?u32 = null,
-float_from_str_import: ?u32 = null,
-list_append_unsafe_import: ?u32 = null,
-list_sort_with_import: ?u32 = null,
-list_reverse_import: ?u32 = null,
+/// Builtin symbol indices for emitting relocatable calls to roc_builtins functions.
+/// Populated via mergeModule + BuiltinSymbols.populate() before code generation.
+builtin_syms: WasmModule.BuiltinSymbols,
 /// Configurable wasm stack size in bytes (default 1MB).
 wasm_stack_bytes: u32 = 1024 * 1024,
 /// Configurable wasm memory pages (0 = auto-compute from stack size).
 wasm_memory_pages: u32 = 0,
-pub fn init(allocator: Allocator, store: *const LirExprStore, layout_store: *const LayoutStore) Self {
+pub fn init(allocator: Allocator, store: *const LirExprStore, layout_store: *const LayoutStore, builtin_syms: WasmModule.BuiltinSymbols) Self {
     return .{
         .allocator = allocator,
         .store = store,
@@ -163,6 +100,7 @@ pub fn init(allocator: Allocator, store: *const LirExprStore, layout_store: *con
         .join_point_depths = std.AutoHashMap(u32, u32).init(allocator),
         .join_point_param_locals = std.AutoHashMap(u32, []u32).init(allocator),
         .loop_break_target_depths = .empty,
+        .builtin_syms = builtin_syms,
     };
 }
 
@@ -181,52 +119,17 @@ pub fn deinit(self: *Self) void {
     self.loop_break_target_depths.deinit(self.allocator);
 }
 
-/// Register host function imports. Must be called before any addFunction calls
-/// because wasm imports must come before locally-defined functions.
-fn registerHostImports(self: *Self) !void {
-    // roc_dec_mul: (i32 lhs_ptr, i32 rhs_ptr, i32 result_ptr) -> void
-    // Takes pointers to 16-byte Dec values in linear memory,
-    // stores the result at result_ptr.
-    const dec_mul_type = try self.module.addFuncType(
-        &.{ .i32, .i32, .i32 },
-        &.{},
-    );
-    self.dec_mul_import = try self.module.addImport("env", "roc_dec_mul", dec_mul_type);
-
-    // roc_dec_to_str: (i32 dec_ptr, i32 buf_ptr) -> i32 str_len
-    // Reads 16-byte Dec value from dec_ptr, formats it as a string,
-    // writes the string bytes to buf_ptr, returns the length.
-    const dec_to_str_type = try self.module.addFuncType(
-        &.{ .i32, .i32 },
-        &.{.i32},
-    );
-    self.dec_to_str_import = try self.module.addImport("env", "roc_dec_to_str", dec_to_str_type);
-
-    // roc_str_eq: (i32 str_a_ptr, i32 str_b_ptr) -> i32 (0 or 1)
-    // Compares two 12-byte RocStr structs for content equality.
-    const str_eq_type = try self.module.addFuncType(
-        &.{ .i32, .i32 },
-        &.{.i32},
-    );
-    self.str_eq_import = try self.module.addImport("env", "roc_str_eq", str_eq_type);
-
-    // roc_list_eq: (i32 list_a_ptr, i32 list_b_ptr, i32 elem_size) -> i32
-    // Compares two 12-byte RocList structs for content equality (byte-wise comparison of elements).
-    const list_eq_type = try self.module.addFuncType(
-        &.{ .i32, .i32, .i32 },
-        &.{.i32},
-    );
-    self.list_eq_import = try self.module.addImport("env", "roc_list_eq", list_eq_type);
-
+/// Register the 6 RocOps callback imports (roc_alloc, roc_dealloc, etc.)
+/// and set up the funcref table. These are the only remaining imports —
+/// all builtin operations are now provided via merged roc_builtins.o.
+fn registerRocOpsImports(self: *Self) !void {
     // RocOps callback type: (i32 args_struct_ptr, i32 env_ptr) -> void
-    // Used by roc_alloc, roc_dealloc, roc_realloc, roc_dbg, roc_expect_failed, roc_crashed.
     self.roc_ops_type_idx = try self.module.addFuncType(
         &.{ .i32, .i32 },
         &.{},
     );
 
     // RocCall (hosted function) type: (i32 roc_ops_ptr, i32 ret_ptr, i32 args_ptr) -> void
-    // Used by platform-provided hosted functions via call_indirect.
     self.roc_call_type_idx = try self.module.addFuncType(
         &.{ .i32, .i32, .i32 },
         &.{},
@@ -252,114 +155,6 @@ fn registerHostImports(self: *Self) !void {
 
     const roc_crashed_idx = try self.module.addImport("env", "roc_crashed", self.roc_ops_type_idx);
     self.roc_crashed_table_idx = try self.module.addTableElement(roc_crashed_idx);
-
-    // i128/u128 division and modulo host functions
-    // All take (lhs_ptr, rhs_ptr, result_ptr) -> void
-    const i128_binop_type = try self.module.addFuncType(
-        &.{ .i32, .i32, .i32 },
-        &.{},
-    );
-    self.i128_div_s_import = try self.module.addImport("env", "roc_i128_div_s", i128_binop_type);
-    self.i128_mod_s_import = try self.module.addImport("env", "roc_i128_mod_s", i128_binop_type);
-    self.u128_div_import = try self.module.addImport("env", "roc_u128_div", i128_binop_type);
-    self.u128_mod_import = try self.module.addImport("env", "roc_u128_mod", i128_binop_type);
-    self.dec_div_import = try self.module.addImport("env", "roc_dec_div", i128_binop_type);
-    self.dec_div_trunc_import = try self.module.addImport("env", "roc_dec_div_trunc", i128_binop_type);
-
-    const i32_mod_by_type = try self.module.addFuncType(&.{ .i32, .i32 }, &.{.i32});
-    self.i32_mod_by_import = try self.module.addImport("env", "roc_i32_mod_by", i32_mod_by_type);
-
-    const i64_mod_by_type = try self.module.addFuncType(&.{ .i64, .i64 }, &.{.i64});
-    self.i64_mod_by_import = try self.module.addImport("env", "roc_i64_mod_by", i64_mod_by_type);
-
-    // i128/u128 to string: (val_ptr, buf_ptr) -> i32 str_len
-    const i128_to_str_type = try self.module.addFuncType(
-        &.{ .i32, .i32 },
-        &.{.i32},
-    );
-    self.i128_to_str_import = try self.module.addImport("env", "roc_i128_to_str", i128_to_str_type);
-    self.u128_to_str_import = try self.module.addImport("env", "roc_u128_to_str", i128_to_str_type);
-
-    const float_to_str_type = try self.module.addFuncType(
-        &.{ .i64, .i32, .i32 },
-        &.{.i32},
-    );
-    self.float_to_str_import = try self.module.addImport("env", "roc_float_to_str", float_to_str_type);
-
-    // 128-bit ↔ Dec conversions: (val_ptr, result_ptr) -> i32 (success flag)
-    const i128_dec_conv_type = try self.module.addFuncType(
-        &.{ .i32, .i32 },
-        &.{.i32},
-    );
-    self.u128_to_dec_import = try self.module.addImport("env", "roc_u128_to_dec", i128_dec_conv_type);
-    self.i128_to_dec_import = try self.module.addImport("env", "roc_i128_to_dec", i128_dec_conv_type);
-    self.dec_to_i128_import = try self.module.addImport("env", "roc_dec_to_i128", i128_dec_conv_type);
-    self.dec_to_u128_import = try self.module.addImport("env", "roc_dec_to_u128", i128_dec_conv_type);
-
-    // Dec to f32: (val_ptr) -> f32
-    const dec_to_f32_type = try self.module.addFuncType(
-        &.{.i32},
-        &.{.f32},
-    );
-    self.dec_to_f32_import = try self.module.addImport("env", "roc_dec_to_f32", dec_to_f32_type);
-
-    // List of strings equality: (list_a_ptr, list_b_ptr) -> i32
-    const list_str_eq_type = try self.module.addFuncType(
-        &.{ .i32, .i32 },
-        &.{.i32},
-    );
-    self.list_str_eq_import = try self.module.addImport("env", "roc_list_str_eq", list_str_eq_type);
-
-    // List of lists equality: (list_a_ptr, list_b_ptr, inner_elem_size) -> i32
-    const list_list_eq_type = try self.module.addFuncType(
-        &.{ .i32, .i32, .i32 },
-        &.{.i32},
-    );
-    self.list_list_eq_import = try self.module.addImport("env", "roc_list_list_eq", list_list_eq_type);
-
-    // String ops: (str_ptr, result_ptr) -> void
-    const str_unary_type = try self.module.addFuncType(&.{ .i32, .i32 }, &.{});
-    self.str_trim_import = try self.module.addImport("env", "roc_str_trim", str_unary_type);
-    self.str_trim_start_import = try self.module.addImport("env", "roc_str_trim_start", str_unary_type);
-    self.str_trim_end_import = try self.module.addImport("env", "roc_str_trim_end", str_unary_type);
-    self.str_with_ascii_lowercased_import = try self.module.addImport("env", "roc_str_with_ascii_lowercased", str_unary_type);
-    self.str_with_ascii_uppercased_import = try self.module.addImport("env", "roc_str_with_ascii_uppercased", str_unary_type);
-    self.str_release_excess_capacity_import = try self.module.addImport("env", "roc_str_release_excess_capacity", str_unary_type);
-    self.str_with_capacity_import = try self.module.addImport("env", "roc_str_with_capacity", str_unary_type);
-
-    const str_from_utf8_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i32 }, &.{});
-    self.str_from_utf8_import = try self.module.addImport("env", "roc_str_from_utf8", str_from_utf8_type);
-
-    const int_from_str_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i32, .i32 }, &.{});
-    self.int_from_str_import = try self.module.addImport("env", "roc_int_from_str", int_from_str_type);
-
-    const dec_from_str_type = try self.module.addFuncType(&.{ .i32, .i32, .i32 }, &.{});
-    self.dec_from_str_import = try self.module.addImport("env", "roc_dec_from_str", dec_from_str_type);
-
-    const float_from_str_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i32 }, &.{});
-    self.float_from_str_import = try self.module.addImport("env", "roc_float_from_str", float_from_str_type);
-
-    const list_append_unsafe_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i32, .i32 }, &.{});
-    self.list_append_unsafe_import = try self.module.addImport("env", "roc_list_append_unsafe", list_append_unsafe_type);
-
-    const list_sort_with_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i32, .i32 }, &.{});
-    self.list_sort_with_import = try self.module.addImport("env", "roc_list_sort_with", list_sort_with_type);
-
-    const list_reverse_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i32 }, &.{});
-    self.list_reverse_import = try self.module.addImport("env", "roc_list_reverse", list_reverse_type);
-
-    // String ops: (arg1, arg2, result_ptr) -> void
-    const str_binary_type = try self.module.addFuncType(&.{ .i32, .i32, .i32 }, &.{});
-    self.str_drop_prefix_import = try self.module.addImport("env", "roc_str_drop_prefix", str_binary_type);
-    self.str_drop_suffix_import = try self.module.addImport("env", "roc_str_drop_suffix", str_binary_type);
-    self.str_split_import = try self.module.addImport("env", "roc_str_split", str_binary_type);
-    self.str_join_with_import = try self.module.addImport("env", "roc_str_join_with", str_binary_type);
-    self.str_concat_import = try self.module.addImport("env", "roc_str_concat", str_binary_type);
-    self.str_repeat_import = try self.module.addImport("env", "roc_str_repeat", str_binary_type);
-    self.str_reserve_import = try self.module.addImport("env", "roc_str_reserve", str_binary_type);
-
-    // Caseless equals: (str_a, str_b) -> i32
-    self.str_caseless_ascii_equals_import = try self.module.addImport("env", "roc_str_caseless_ascii_equals", str_eq_type);
 }
 
 /// Result of generating a wasm module
@@ -380,8 +175,9 @@ pub const GenerateResult = struct {
 ///   Backward-compatible shim for the eval/REPL pipeline. Builds a RocOps struct, calls
 ///   the RocCall function, and returns the result on the wasm stack.
 pub fn generateModule(self: *Self, expr_id: LirExprId, result_layout: layout.Idx, entrypoint_name: []const u8) Allocator.Error!GenerateResult {
-    // Register host function imports (must be done before addFunction calls)
-    self.registerHostImports() catch return error.OutOfMemory;
+    // Register RocOps callback imports (roc_alloc, etc.) — these stay as imports
+    // because they come from the host platform, not from builtins.
+    self.registerRocOpsImports() catch return error.OutOfMemory;
 
     // Compile any procedures (recursive functions) before the main expression
     const proc_specs = self.store.getProcSpecs();
@@ -443,6 +239,9 @@ pub fn generateModule(self: *Self, expr_id: LirExprId, result_layout: layout.Idx
 
     // Prologue: allocate stack frame
     try self.emitStackPrologue(&roc_call_body);
+
+    // Resolve deferred relocatable calls before copying instructions
+    self.resolvePendingRelocations();
 
     // Main body instructions
     roc_call_body.appendSlice(self.allocator, self.code_builder.code.items) catch return error.OutOfMemory;
@@ -2209,7 +2008,7 @@ fn generateMatchBranches(self: *Self, branches: []const LIR.LirMatchBranch, valu
         },
         .str_literal => |str_idx| {
             // String literal comparison in match branch
-            const import_idx = self.str_eq_import orelse unreachable;
+            const import_idx = self.builtin_syms.str_equal;
 
             // Generate the pattern string as a RocStr
             try self.generateStrLiteral(str_idx);
@@ -2861,7 +2660,7 @@ fn compareFieldByLayout(
 ) Allocator.Error!void {
     if (field_layout_idx == .str) {
         // String: call roc_str_eq(lhs_ptr + offset, rhs_ptr + offset)
-        const import_idx = self.str_eq_import orelse unreachable;
+        const import_idx = self.builtin_syms.str_equal;
         try self.emitLocalGet(lhs_local);
         if (field_offset > 0) {
             self.code_builder.code.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
@@ -2887,7 +2686,7 @@ fn compareFieldByLayout(
             // List: call roc_list_eq or roc_list_str_eq
             const elem_layout = field_layout.data.list;
             if (elem_layout == .str) {
-                const import_idx = self.list_str_eq_import orelse unreachable;
+                const import_idx = self.builtin_syms.list_str_eq;
                 try self.emitLocalGet(lhs_local);
                 if (field_offset > 0) {
                     self.code_builder.code.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
@@ -2906,7 +2705,7 @@ fn compareFieldByLayout(
                 // List of lists - use specialized host function with inner element size
                 const inner_elem_layout = ls.getLayout(elem_layout).data.list;
                 const inner_elem_size = self.layoutByteSize(inner_elem_layout);
-                const import_idx = self.list_list_eq_import orelse unreachable;
+                const import_idx = self.builtin_syms.list_list_eq;
                 try self.emitLocalGet(lhs_local);
                 if (field_offset > 0) {
                     self.code_builder.code.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
@@ -2949,7 +2748,7 @@ fn compareFieldByLayout(
                 try self.emitListEqLoop(lhs_list_local, rhs_list_local, elem_layout, elem_size);
             } else {
                 // Simple scalar elements: bytewise comparison via host function
-                const import_idx = self.list_eq_import orelse unreachable;
+                const import_idx = self.builtin_syms.list_eq;
                 const elem_size = self.layoutByteSize(elem_layout);
                 try self.emitLocalGet(lhs_local);
                 if (field_offset > 0) {
@@ -3347,7 +3146,7 @@ fn generateCompositeNumericOp(self: *Self, op: anytype, args: []const LirExprId,
             .num_minus => try self.emitI128Sub(lhs_local, rhs_local),
             .num_times => {
                 if (operand_layout == .dec) {
-                    const import_idx = self.dec_mul_import orelse unreachable;
+                    const import_idx = self.builtin_syms.dec_mul;
                     const result_offset = try self.allocStackMemory(16, 8);
                     const result_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
                     try self.emitFpOffset(result_offset);
@@ -3369,33 +3168,33 @@ fn generateCompositeNumericOp(self: *Self, op: anytype, args: []const LirExprId,
             },
             .num_div_by => {
                 if (operand_layout == .dec) {
-                    const import_idx = self.dec_div_import orelse unreachable;
+                    const import_idx = self.builtin_syms.dec_div;
                     try self.emitI128HostBinOp(lhs_local, rhs_local, import_idx);
                 } else {
                     const is_signed = operand_layout == .i128;
-                    const import_idx = if (is_signed) self.i128_div_s_import else self.u128_div_import;
-                    try self.emitI128HostBinOp(lhs_local, rhs_local, import_idx orelse unreachable);
+                    const import_idx = if (is_signed) self.builtin_syms.i128_div_s else self.builtin_syms.u128_div;
+                    try self.emitI128HostBinOp(lhs_local, rhs_local, import_idx);
                 }
             },
             .num_div_trunc_by => {
                 if (operand_layout == .dec) {
-                    const import_idx = self.dec_div_trunc_import orelse unreachable;
+                    const import_idx = self.builtin_syms.dec_div_trunc;
                     try self.emitI128HostBinOp(lhs_local, rhs_local, import_idx);
                 } else {
                     const is_signed = operand_layout == .i128;
-                    const import_idx = if (is_signed) self.i128_div_s_import else self.u128_div_import;
-                    try self.emitI128HostBinOp(lhs_local, rhs_local, import_idx orelse unreachable);
+                    const import_idx = if (is_signed) self.builtin_syms.i128_div_s else self.builtin_syms.u128_div;
+                    try self.emitI128HostBinOp(lhs_local, rhs_local, import_idx);
                 }
             },
             .num_rem_by => {
                 const is_signed = operand_layout == .i128 or operand_layout == .dec;
-                const import_idx = if (is_signed) self.i128_mod_s_import else self.u128_mod_import;
-                try self.emitI128HostBinOp(lhs_local, rhs_local, import_idx orelse unreachable);
+                const import_idx = if (is_signed) self.builtin_syms.i128_mod_s else self.builtin_syms.u128_mod;
+                try self.emitI128HostBinOp(lhs_local, rhs_local, import_idx);
             },
             .num_mod_by => {
                 const is_signed = operand_layout == .i128 or operand_layout == .dec;
-                const import_idx = if (is_signed) self.i128_mod_s_import else self.u128_mod_import;
-                try self.emitI128HostBinOp(lhs_local, rhs_local, import_idx orelse unreachable);
+                const import_idx = if (is_signed) self.builtin_syms.i128_mod_s else self.builtin_syms.u128_mod;
+                try self.emitI128HostBinOp(lhs_local, rhs_local, import_idx);
             },
             .num_is_gt => try self.emitI128Compare(lhs_local, rhs_local, .gt),
             .num_is_gte => try self.emitI128Compare(lhs_local, rhs_local, .gte),
@@ -3432,6 +3231,106 @@ fn generateCompositeNumericOp(self: *Self, op: anytype, args: []const LirExprId,
 /// Emit an i128 binary operation via host function call.
 /// The host function takes (lhs_ptr, rhs_ptr, result_ptr) and returns void.
 /// Pushes an i32 pointer to the 16-byte result on the wasm stack.
+// --- Phase 8c: Builtin Call Helpers ---
+
+/// Resolve any pending relocatable call placeholders in code_builder.
+fn resolvePendingRelocations(self: *Self) void {
+    for (self.code_builder.import_relocations.items) |reloc| {
+        const sym = self.module.linking.symbol_table.items[reloc.symbol_index];
+        WasmModule.overwritePaddedU32(self.code_builder.code.items, reloc.code_pos, sym.index);
+    }
+    self.code_builder.import_relocations.clearRetainingCapacity();
+}
+
+/// Emit a call to a builtin function via relocatable call.
+fn emitBuiltinCall(self: *Self, sym_idx: u32) Allocator.Error!void {
+    self.code_builder.emitRelocatableCall(self.allocator, sym_idx) catch return error.OutOfMemory;
+}
+
+/// Emit a direct call to a function by its function index (for non-builtin calls).
+fn emitDirectCall(self: *Self, func_idx: u32) Allocator.Error!void {
+    self.code_builder.code.append(self.allocator, Op.call) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.code_builder.code, func_idx) catch return error.OutOfMemory;
+}
+
+/// Push the 3 fields of a RocStr/RocList (12 bytes) from memory.
+fn emitDecomposeRocStr(self: *Self, str_local: u32) Allocator.Error!void {
+    try self.emitLocalGet(str_local);
+    try self.emitLoadOp(.i32, 0);
+    try self.emitLocalGet(str_local);
+    try self.emitLoadOp(.i32, 4);
+    try self.emitLocalGet(str_local);
+    try self.emitLoadOp(.i32, 8);
+}
+
+/// Push the 2 halves of an i128/u128 from memory as i64 pair.
+fn emitDecomposeI128(self: *Self, val_local: u32) Allocator.Error!void {
+    try self.emitLocalGet(val_local);
+    try self.emitLoadOp(.i64, 0);
+    try self.emitLocalGet(val_local);
+    try self.emitLoadOp(.i64, 8);
+}
+
+/// Emit local.get for the roc_ops pointer.
+fn emitRocOpsArg(self: *Self) Allocator.Error!void {
+    try self.emitLocalGet(self.roc_ops_local);
+}
+
+/// Str unary: (result_ptr, bytes, len, cap, roc_ops) → void
+fn emitStrUnaryBuiltin(self: *Self, str_local: u32, result_offset: u32, sym_idx: u32) Allocator.Error!void {
+    try self.emitFpOffset(result_offset);
+    try self.emitDecomposeRocStr(str_local);
+    try self.emitRocOpsArg();
+    try self.emitBuiltinCall(sym_idx);
+}
+
+/// Str binary: (result_ptr, a_bytes, a_len, a_cap, b_bytes, b_len, b_cap, roc_ops) → void
+fn emitStrBinaryBuiltin(self: *Self, a_local: u32, b_local: u32, result_offset: u32, sym_idx: u32) Allocator.Error!void {
+    try self.emitFpOffset(result_offset);
+    try self.emitDecomposeRocStr(a_local);
+    try self.emitDecomposeRocStr(b_local);
+    try self.emitRocOpsArg();
+    try self.emitBuiltinCall(sym_idx);
+}
+
+/// Str equality: (a_bytes, a_len, a_cap, b_bytes, b_len, b_cap) → i32
+fn emitStrEqualityBuiltin(self: *Self, a_local: u32, b_local: u32, sym_idx: u32) Allocator.Error!void {
+    try self.emitDecomposeRocStr(a_local);
+    try self.emitDecomposeRocStr(b_local);
+    try self.emitBuiltinCall(sym_idx);
+}
+
+/// i128 binary op: (out_low_ptr, out_high_ptr, a_lo, a_hi, b_lo, b_hi, [roc_ops]) → void
+fn emitI128BinOpBuiltin(self: *Self, lhs_local: u32, rhs_local: u32, sym_idx: u32, needs_roc_ops: bool) Allocator.Error!void {
+    const result_offset = try self.allocStackMemory(16, 8);
+    const result_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitFpOffset(result_offset);
+    try self.emitLocalSet(result_local);
+    try self.emitLocalGet(result_local); // out_low_ptr
+    try self.emitLocalGet(result_local); // out_high_ptr = result + 8
+    self.code_builder.code.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+    WasmModule.leb128WriteI32(self.allocator, &self.code_builder.code, 8) catch return error.OutOfMemory;
+    self.code_builder.code.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+    try self.emitDecomposeI128(lhs_local);
+    try self.emitDecomposeI128(rhs_local);
+    if (needs_roc_ops) try self.emitRocOpsArg();
+    try self.emitBuiltinCall(sym_idx);
+    try self.emitLocalGet(result_local);
+}
+
+/// Compute a pointer local adjusted by field_offset.
+fn emitAdjustedPtr(self: *Self, base_local: u32, field_offset: u32) Allocator.Error!u32 {
+    const adj = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalGet(base_local);
+    if (field_offset > 0) {
+        self.code_builder.code.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+        WasmModule.leb128WriteI32(self.allocator, &self.code_builder.code, @intCast(field_offset)) catch return error.OutOfMemory;
+        self.code_builder.code.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+    }
+    try self.emitLocalSet(adj);
+    return adj;
+}
+
 fn emitI128HostBinOp(self: *Self, lhs_local: u32, rhs_local: u32, import_idx: u32) Allocator.Error!void {
     const result_offset = try self.allocStackMemory(16, 8);
     const result_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -5409,6 +5308,9 @@ fn compileProcSpecBody(self: *Self, proc: LirProcSpec) Allocator.Error!void {
         func_body.append(self.allocator, Op.global_set) catch return error.OutOfMemory;
         WasmModule.leb128WriteU32(self.allocator, &func_body, 0) catch return error.OutOfMemory;
     }
+
+    // Resolve deferred relocatable calls before copying instructions
+    self.resolvePendingRelocations();
 
     // Body instructions
     func_body.appendSlice(self.allocator, self.code_builder.code.items) catch return error.OutOfMemory;
@@ -8376,7 +8278,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
 
         .str_is_eq => {
             // String equality via host function (handles both SSO and heap strings)
-            const import_idx = self.str_eq_import orelse unreachable;
+            const import_idx = self.builtin_syms.str_equal;
             try self.generateExpr(args[0]);
             const a = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalSet(a);
@@ -8455,12 +8357,12 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .str_release_excess_capacity,
         => {
             const import_idx = switch (ll.op) {
-                .str_trim => self.str_trim_import orelse unreachable,
-                .str_trim_start => self.str_trim_start_import orelse unreachable,
-                .str_trim_end => self.str_trim_end_import orelse unreachable,
-                .str_with_ascii_lowercased => self.str_with_ascii_lowercased_import orelse unreachable,
-                .str_with_ascii_uppercased => self.str_with_ascii_uppercased_import orelse unreachable,
-                .str_release_excess_capacity => self.str_release_excess_capacity_import orelse unreachable,
+                .str_trim => self.builtin_syms.str_trim,
+                .str_trim_start => self.builtin_syms.str_trim_start,
+                .str_trim_end => self.builtin_syms.str_trim_end,
+                .str_with_ascii_lowercased => self.builtin_syms.str_with_ascii_lowercased,
+                .str_with_ascii_uppercased => self.builtin_syms.str_with_ascii_uppercased,
+                .str_release_excess_capacity => self.builtin_syms.str_release_excess_capacity,
                 else => unreachable,
             };
             try self.generateExpr(args[0]);
@@ -8475,8 +8377,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         .str_drop_prefix, .str_drop_suffix => {
             const import_idx = switch (ll.op) {
-                .str_drop_prefix => self.str_drop_prefix_import orelse unreachable,
-                .str_drop_suffix => self.str_drop_suffix_import orelse unreachable,
+                .str_drop_prefix => self.builtin_syms.str_drop_prefix,
+                .str_drop_suffix => self.builtin_syms.str_drop_suffix,
                 else => unreachable,
             };
             try self.generateExpr(args[0]);
@@ -8495,8 +8397,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         .str_split_on, .str_join_with => {
             const import_idx = switch (ll.op) {
-                .str_split_on => self.str_split_import orelse unreachable,
-                .str_join_with => self.str_join_with_import orelse unreachable,
+                .str_split_on => self.builtin_syms.str_split,
+                .str_join_with => self.builtin_syms.str_join_with,
                 else => unreachable,
             };
             try self.generateExpr(args[0]);
@@ -8515,8 +8417,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         .str_repeat, .str_reserve => {
             const import_idx = switch (ll.op) {
-                .str_repeat => self.str_repeat_import orelse unreachable,
-                .str_reserve => self.str_reserve_import orelse unreachable,
+                .str_repeat => self.builtin_syms.str_repeat,
+                .str_reserve => self.builtin_syms.str_reserve,
                 else => unreachable,
             };
             try self.generateExpr(args[0]);
@@ -8538,7 +8440,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitFpOffset(result_offset);
         },
         .str_with_capacity => {
-            const import_idx = self.str_with_capacity_import orelse unreachable;
+            const import_idx = self.builtin_syms.str_with_capacity;
             try self.generateExpr(args[0]);
             const int_vt = self.exprValType(args[0]);
             if (int_vt == .i64) {
@@ -8554,7 +8456,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitFpOffset(result_offset);
         },
         .str_caseless_ascii_equals => {
-            const import_idx = self.str_caseless_ascii_equals_import orelse unreachable;
+            const import_idx = self.builtin_syms.str_caseless_ascii_equals;
             try self.generateExpr(args[0]);
             const a = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalSet(a);
@@ -8571,7 +8473,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const ret_layout_val = ls.getLayout(ll.ret_layout);
             if (ret_layout_val.tag != .tag_union) unreachable;
             const tu_data = ls.getTagUnionData(ret_layout_val.data.tag_union.idx);
-            const import_idx = self.str_from_utf8_import orelse unreachable;
+            const import_idx = self.builtin_syms.str_from_utf8;
             try self.generateExpr(args[0]);
             const input = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalSet(input);
@@ -8626,7 +8528,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitLocalSet(input);
 
             if (ok_payload == .dec) {
-                const import_idx = self.dec_from_str_import orelse unreachable;
+                const import_idx = self.builtin_syms.dec_from_str;
                 try self.emitLocalGet(input);
                 try self.emitFpOffset(result_offset);
                 self.code_builder.code.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
@@ -8634,7 +8536,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 self.code_builder.code.append(self.allocator, Op.call) catch return error.OutOfMemory;
                 WasmModule.leb128WriteU32(self.allocator, &self.code_builder.code, import_idx) catch return error.OutOfMemory;
             } else if (ok_payload == .f32 or ok_payload == .f64) {
-                const import_idx = self.float_from_str_import orelse unreachable;
+                const import_idx = self.builtin_syms.float_from_str;
                 const float_width: i32 = if (ok_payload == .f32) 4 else 8;
                 try self.emitLocalGet(input);
                 try self.emitFpOffset(result_offset);
@@ -8645,7 +8547,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 self.code_builder.code.append(self.allocator, Op.call) catch return error.OutOfMemory;
                 WasmModule.leb128WriteU32(self.allocator, &self.code_builder.code, import_idx) catch return error.OutOfMemory;
             } else {
-                const import_idx = self.int_from_str_import orelse unreachable;
+                const import_idx = self.builtin_syms.int_from_str;
                 const int_width: i32 = switch (ok_payload) {
                     .u8, .i8 => 1,
                     .u16, .i16 => 2,
@@ -9728,7 +9630,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         // 128-bit → Dec conversions: multiply by 10^18, check overflow
         .u128_to_dec_try_unsafe, .i128_to_dec_try_unsafe => {
             const is_signed = ll.op == .i128_to_dec_try_unsafe;
-            const import_idx = if (is_signed) self.i128_to_dec_import else self.u128_to_dec_import;
+            const import_idx = if (is_signed) self.builtin_syms.i128_to_dec else self.builtin_syms.u128_to_dec;
 
             // Generate the 128-bit value (pointer to 16 bytes in stack memory)
             try self.generateExpr(args[0]);
@@ -9746,7 +9648,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitLocalGet(val_ptr);
             try self.emitLocalGet(result_local);
             self.code_builder.code.append(self.allocator, Op.call) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, &self.code_builder.code, import_idx orelse unreachable) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.code_builder.code, import_idx) catch return error.OutOfMemory;
 
             // Store success flag at offset 16
             const success_flag = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -9841,7 +9743,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitStoreOp(.i64, 8);
 
             // Call roc_i128_div_s(dec_ptr, divisor_ptr, result_ptr)
-            try self.emitI128HostBinOp(dec_local, divisor_local, self.i128_div_s_import orelse unreachable);
+            try self.emitI128HostBinOp(dec_local, divisor_local, self.builtin_syms.i128_div_s);
             // Result is an i32 pointer to the 16-byte quotient; load low i64
             try self.emitLoadOp(.i64, 0);
 
@@ -9885,7 +9787,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             WasmModule.leb128WriteI64(self.allocator, &self.code_builder.code, 0) catch return error.OutOfMemory;
             try self.emitStoreOp(.i64, 8);
 
-            try self.emitI128HostBinOp(dec_local, divisor_local, self.i128_div_s_import orelse unreachable);
+            try self.emitI128HostBinOp(dec_local, divisor_local, self.builtin_syms.i128_div_s);
         },
         .dec_to_f64 => {
             // Dec → f64: load i128 as i64 (low word), convert to f64, divide by 10^18.0
@@ -10027,8 +9929,9 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         // Dec → i128/u128: divide by 10^18
         .dec_to_i128_try_unsafe, .dec_to_u128_try_unsafe => {
-            const is_signed = ll.op == .dec_to_i128_try_unsafe;
-            const import_idx = if (is_signed) self.dec_to_i128_import else self.dec_to_u128_import;
+            // TODO: pass is_signed to the unified dec_to_int_try_unsafe builtin
+            _ = ll.op == .dec_to_i128_try_unsafe;
+            const import_idx = self.builtin_syms.dec_to_int_try_unsafe;
 
             // Generate the Dec value (pointer to 16 bytes in stack memory)
             try self.generateExpr(args[0]);
@@ -10045,7 +9948,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitLocalGet(val_ptr);
             try self.emitLocalGet(result_local);
             self.code_builder.code.append(self.allocator, Op.call) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, &self.code_builder.code, import_idx orelse unreachable) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.code_builder.code, import_idx) catch return error.OutOfMemory;
 
             // Store success flag at offset 16
             const success_flag = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -10061,7 +9964,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         // Dec → f32: convert Dec to floating point
         .dec_to_f32_try_unsafe => {
-            const import_idx = self.dec_to_f32_import orelse unreachable;
+            const import_idx = self.builtin_syms.dec_to_f32;
 
             // Generate the Dec value (pointer to 16 bytes in stack memory)
             try self.generateExpr(args[0]);
@@ -10473,12 +10376,12 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LirExprId, re
             try self.generateExpr(args[1]);
             switch (vt) {
                 .i32 => {
-                    const import_idx = self.i32_mod_by_import orelse unreachable;
+                    const import_idx = self.builtin_syms.i32_mod_by;
                     self.code_builder.code.append(self.allocator, Op.call) catch return error.OutOfMemory;
                     WasmModule.leb128WriteU32(self.allocator, &self.code_builder.code, import_idx) catch return error.OutOfMemory;
                 },
                 .i64 => {
-                    const import_idx = self.i64_mod_by_import orelse unreachable;
+                    const import_idx = self.builtin_syms.i64_mod_by;
                     self.code_builder.code.append(self.allocator, Op.call) catch return error.OutOfMemory;
                     WasmModule.leb128WriteU32(self.allocator, &self.code_builder.code, import_idx) catch return error.OutOfMemory;
                 },
@@ -10604,7 +10507,7 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LirExprId, re
 /// Generate string equality comparison using roc_str_eq host function.
 /// Both lhs and rhs should produce i32 pointers to 12-byte RocStr values.
 fn generateStrEq(self: *Self, lhs: LirExprId, rhs: LirExprId, negate: bool) Allocator.Error!void {
-    const import_idx = self.str_eq_import orelse unreachable;
+    const import_idx = self.builtin_syms.str_equal;
 
     // Generate both string expressions, store to locals
     try self.generateExpr(lhs);
@@ -10652,7 +10555,7 @@ fn generateListEqWithElemLayout(self: *Self, lhs: LirExprId, rhs: LirExprId, ele
     // Determine which comparison to use based on element type
     if (elem_layout == .str) {
         // List of strings - use specialized host function
-        const import_idx = self.list_str_eq_import orelse unreachable;
+        const import_idx = self.builtin_syms.list_str_eq;
         try self.emitLocalGet(lhs_local);
         try self.emitLocalGet(rhs_local);
         self.code_builder.code.append(self.allocator, Op.call) catch return error.OutOfMemory;
@@ -10664,7 +10567,7 @@ fn generateListEqWithElemLayout(self: *Self, lhs: LirExprId, rhs: LirExprId, ele
             // List of lists - use specialized host function with inner element size
             const inner_elem_layout = elem_l.data.list;
             const inner_elem_size = self.layoutByteSize(inner_elem_layout);
-            const import_idx = self.list_list_eq_import orelse unreachable;
+            const import_idx = self.builtin_syms.list_list_eq;
             try self.emitLocalGet(lhs_local);
             try self.emitLocalGet(rhs_local);
             self.code_builder.code.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
@@ -10677,7 +10580,7 @@ fn generateListEqWithElemLayout(self: *Self, lhs: LirExprId, rhs: LirExprId, ele
             try self.emitListEqLoop(lhs_local, rhs_local, elem_layout, elem_size);
         } else {
             // Simple scalar elements - byte-wise comparison
-            const import_idx = self.list_eq_import orelse unreachable;
+            const import_idx = self.builtin_syms.list_eq;
             const elem_size = self.layoutByteSize(elem_layout);
             try self.emitLocalGet(lhs_local);
             try self.emitLocalGet(rhs_local);
@@ -10786,7 +10689,7 @@ fn generateStrLiteral(self: *Self, str_idx: anytype) Allocator.Error!void {
 /// Each sub-expression produces a RocStr pointer (12 bytes: ptr/bytes, len/bytes, cap/bytes).
 fn generateStrConcat(self: *Self, span: anytype) Allocator.Error!void {
     const expr_ids = self.store.getExprSpan(span);
-    const import_idx = self.str_concat_import orelse unreachable;
+    const import_idx = self.builtin_syms.str_concat;
 
     if (expr_ids.len == 0) {
         try self.generateEmptyStr();
@@ -11366,7 +11269,7 @@ fn generateIntToStr(self: *Self, its: anytype) Allocator.Error!void {
 /// Generate float_to_str: convert a float to its string representation.
 /// Uses the same host-side formatter as the native backends to keep output stable.
 fn generateFloatToStr(self: *Self, fts: anytype) Allocator.Error!void {
-    const import_idx = self.float_to_str_import orelse unreachable;
+    const import_idx = self.builtin_syms.float_to_str;
     const is_f32 = fts.float_precision == .f32;
 
     std.debug.assert(fts.float_precision != .dec);
@@ -11402,9 +11305,9 @@ fn generateFloatToStr(self: *Self, fts: anytype) Allocator.Error!void {
 /// Uses a host function import since wasm has no native 128-bit division.
 fn generateI128ToStr(self: *Self, value_expr: anytype, is_signed: bool) Allocator.Error!void {
     const import_idx = if (is_signed)
-        self.i128_to_str_import orelse unreachable
+        self.builtin_syms.int_to_str
     else
-        self.u128_to_str_import orelse unreachable;
+        self.builtin_syms.int_to_str;
 
     // Generate the 128-bit value expression → pointer to 16-byte value in stack memory
     try self.generateExpr(value_expr);
@@ -11434,7 +11337,7 @@ fn generateI128ToStr(self: *Self, value_expr: anytype, is_signed: bool) Allocato
 /// Generate dec_to_str: convert a RocDec (i128 scaled by 10^18) to string.
 /// Uses a host function import to perform the formatting.
 fn generateDecToStr(self: *Self, dec_expr: anytype) Allocator.Error!void {
-    const import_idx = self.dec_to_str_import orelse unreachable;
+    const import_idx = self.builtin_syms.dec_to_str;
 
     // Generate the Dec expression → pointer to 16-byte Dec value in stack memory
     try self.generateExpr(dec_expr);
@@ -11944,7 +11847,7 @@ fn generateLLListAppend(self: *Self, args: anytype, ret_layout: layout.Idx) Allo
         .list_of_zst => layout.Idx.zst,
         else => unreachable,
     };
-    const import_idx = self.list_append_unsafe_import orelse unreachable;
+    const import_idx = self.builtin_syms.list_append_unsafe;
 
     try self.generateExpr(args[0]);
     const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -12185,7 +12088,7 @@ fn generateLLListReverse(self: *Self, args: anytype, ret_layout: layout.Idx) All
         return;
     }
 
-    const import_idx = self.list_reverse_import orelse unreachable;
+    const import_idx = self.builtin_syms.list_reverse;
     const elem_align = self.getListElemAlign(ret_layout);
 
     try self.generateExpr(args[0]);

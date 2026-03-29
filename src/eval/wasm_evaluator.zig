@@ -280,7 +280,10 @@ pub const WasmEvaluator = struct {
             1;
 
         // Generate wasm module
-        var codegen = WasmCodeGen.init(self.allocator, &lir_store, layout_store_ptr);
+        // TODO(Phase 12): Merge roc_builtins.o and populate real BuiltinSymbols.
+        // For now, use undefined — eval tests need builtins merged before this works.
+        const builtin_syms: backend.wasm.WasmModule.BuiltinSymbols = undefined;
+        var codegen = WasmCodeGen.init(self.allocator, &lir_store, layout_store_ptr, builtin_syms);
         codegen.wasm_stack_bytes = self.wasm_stack_bytes;
         defer codegen.deinit();
 
