@@ -29,6 +29,8 @@ const RcOpKind = enum { incref, decref, free };
 
 const LayoutStore = layout.Store;
 
+const WasmRocOps = WasmModule.WasmRocOps;
+
 const Self = @This();
 
 allocator: Allocator,
@@ -45,8 +47,13 @@ uses_stack_memory: bool = false,
 fp_local: u32 = 0,
 /// Map from proc symbol key → compiled wasm function index (for LirProcSpec compilation).
 registered_procs: std.AutoHashMap(u64, u32),
-/// Type index for the RocOps function signature: (i32, i32) -> void.
+/// Type index for the RocOps callback signature: (i32 args_struct_ptr, i32 env_ptr) -> void.
+/// Used with call_indirect for roc_alloc, roc_dealloc, roc_realloc, roc_dbg,
+/// roc_expect_failed, and roc_crashed.
 roc_ops_type_idx: u32 = 0,
+/// Type index for the RocCall (hosted function) signature: (i32 roc_ops_ptr, i32 ret_ptr, i32 args_ptr) -> void.
+/// Used with call_indirect for platform-provided hosted functions.
+roc_call_type_idx: u32 = 0,
 /// Table indices for RocOps functions (used with call_indirect).
 roc_alloc_table_idx: u32 = 0,
 roc_dealloc_table_idx: u32 = 0,
@@ -210,33 +217,39 @@ fn registerHostImports(self: *Self) !void {
     );
     self.list_eq_import = try self.module.addImport("env", "roc_list_eq", list_eq_type);
 
-    // RocOps function imports: all have signature (i32 args_ptr, i32 env_ptr) -> void
-    // These are called via call_indirect through the funcref table.
-    const roc_ops_type = try self.module.addFuncType(
+    // RocOps callback type: (i32 args_struct_ptr, i32 env_ptr) -> void
+    // Used by roc_alloc, roc_dealloc, roc_realloc, roc_dbg, roc_expect_failed, roc_crashed.
+    self.roc_ops_type_idx = try self.module.addFuncType(
         &.{ .i32, .i32 },
         &.{},
     );
-    self.roc_ops_type_idx = roc_ops_type;
+
+    // RocCall (hosted function) type: (i32 roc_ops_ptr, i32 ret_ptr, i32 args_ptr) -> void
+    // Used by platform-provided hosted functions via call_indirect.
+    self.roc_call_type_idx = try self.module.addFuncType(
+        &.{ .i32, .i32, .i32 },
+        &.{},
+    );
 
     // Enable table and add each RocOps function as a table element
     self.module.enableTable();
 
-    const roc_alloc_idx = try self.module.addImport("env", "roc_alloc", roc_ops_type);
+    const roc_alloc_idx = try self.module.addImport("env", "roc_alloc", self.roc_ops_type_idx);
     self.roc_alloc_table_idx = try self.module.addTableElement(roc_alloc_idx);
 
-    const roc_dealloc_idx = try self.module.addImport("env", "roc_dealloc", roc_ops_type);
+    const roc_dealloc_idx = try self.module.addImport("env", "roc_dealloc", self.roc_ops_type_idx);
     self.roc_dealloc_table_idx = try self.module.addTableElement(roc_dealloc_idx);
 
-    const roc_realloc_idx = try self.module.addImport("env", "roc_realloc", roc_ops_type);
+    const roc_realloc_idx = try self.module.addImport("env", "roc_realloc", self.roc_ops_type_idx);
     self.roc_realloc_table_idx = try self.module.addTableElement(roc_realloc_idx);
 
-    const roc_dbg_idx = try self.module.addImport("env", "roc_dbg", roc_ops_type);
+    const roc_dbg_idx = try self.module.addImport("env", "roc_dbg", self.roc_ops_type_idx);
     self.roc_dbg_table_idx = try self.module.addTableElement(roc_dbg_idx);
 
-    const roc_expect_failed_idx = try self.module.addImport("env", "roc_expect_failed", roc_ops_type);
+    const roc_expect_failed_idx = try self.module.addImport("env", "roc_expect_failed", self.roc_ops_type_idx);
     self.roc_expect_failed_table_idx = try self.module.addTableElement(roc_expect_failed_idx);
 
-    const roc_crashed_idx = try self.module.addImport("env", "roc_crashed", roc_ops_type);
+    const roc_crashed_idx = try self.module.addImport("env", "roc_crashed", self.roc_ops_type_idx);
     self.roc_crashed_table_idx = try self.module.addTableElement(roc_crashed_idx);
 
     // i128/u128 division and modulo host functions
@@ -432,24 +445,18 @@ pub fn generateModule(self: *Self, expr_id: LirExprId, result_layout: layout.Idx
     func_body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
     WasmModule.leb128WriteU32(self.allocator, &func_body, self.roc_ops_local) catch return error.OutOfMemory;
 
-    // Write env pointer (offset 0)
-    try self.emitI32StoreToBody(&func_body, 0, env_ptr_local, null);
-    // Write roc_alloc table index (offset 4)
-    try self.emitI32StoreConstToBody(&func_body, 4, self.roc_alloc_table_idx);
-    // Write roc_dealloc table index (offset 8)
-    try self.emitI32StoreConstToBody(&func_body, 8, self.roc_dealloc_table_idx);
-    // Write roc_realloc table index (offset 12)
-    try self.emitI32StoreConstToBody(&func_body, 12, self.roc_realloc_table_idx);
-    // Write roc_dbg table index (offset 16)
-    try self.emitI32StoreConstToBody(&func_body, 16, self.roc_dbg_table_idx);
-    // Write roc_expect_failed table index (offset 20)
-    try self.emitI32StoreConstToBody(&func_body, 20, self.roc_expect_failed_table_idx);
-    // Write roc_crashed table index (offset 24)
-    try self.emitI32StoreConstToBody(&func_body, 24, self.roc_crashed_table_idx);
-    // Write hosted_fns.count = 0 (offset 28)
-    try self.emitI32StoreConstToBody(&func_body, 28, 0);
-    // Write hosted_fns.fns = 0 (offset 32)
-    try self.emitI32StoreConstToBody(&func_body, 32, 0);
+    // Write env pointer
+    try self.emitI32StoreToBody(&func_body, WasmRocOps.env_ptr, env_ptr_local, null);
+    // Write RocOps callback table indices
+    try self.emitI32StoreConstToBody(&func_body, WasmRocOps.roc_alloc_table_idx, self.roc_alloc_table_idx);
+    try self.emitI32StoreConstToBody(&func_body, WasmRocOps.roc_dealloc_table_idx, self.roc_dealloc_table_idx);
+    try self.emitI32StoreConstToBody(&func_body, WasmRocOps.roc_realloc_table_idx, self.roc_realloc_table_idx);
+    try self.emitI32StoreConstToBody(&func_body, WasmRocOps.roc_dbg_table_idx, self.roc_dbg_table_idx);
+    try self.emitI32StoreConstToBody(&func_body, WasmRocOps.roc_expect_failed_table_idx, self.roc_expect_failed_table_idx);
+    try self.emitI32StoreConstToBody(&func_body, WasmRocOps.roc_crashed_table_idx, self.roc_crashed_table_idx);
+    // Write hosted_fns (no hosted functions in standalone eval mode)
+    try self.emitI32StoreConstToBody(&func_body, WasmRocOps.hosted_fns_count, 0);
+    try self.emitI32StoreConstToBody(&func_body, WasmRocOps.hosted_fns_ptr, 0);
 
     // Main body instructions
     func_body.appendSlice(self.allocator, self.body.items) catch return error.OutOfMemory;
@@ -918,15 +925,11 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
             // Push call_indirect args: (crashed_args_ptr, env_ptr)
             try self.emitFpOffset(crashed_slot);
             try self.emitLocalGet(self.roc_ops_local);
-            self.body.append(self.allocator, Op.i32_load) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, &self.body, 2) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+            try self.emitLoadOp(.i32, WasmRocOps.env_ptr);
 
-            // Load roc_crashed table index from roc_ops_ptr offset 24
+            // Load roc_crashed table index from RocOps struct
             try self.emitLocalGet(self.roc_ops_local);
-            self.body.append(self.allocator, Op.i32_load) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, &self.body, 2) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, &self.body, 24) catch return error.OutOfMemory;
+            try self.emitLoadOp(.i32, WasmRocOps.roc_crashed_table_idx);
 
             // call_indirect
             self.body.append(self.allocator, Op.call_indirect) catch return error.OutOfMemory;
@@ -1326,10 +1329,10 @@ fn emitCallRocDealloc(self: *Self, ptr_local: u32, alignment: u32) Allocator.Err
 
     try self.emitFpOffset(dealloc_slot);
     try self.emitLocalGet(self.roc_ops_local);
-    try self.emitLoadOp(.i32, 0); // env ptr
+    try self.emitLoadOp(.i32, WasmRocOps.env_ptr);
 
     try self.emitLocalGet(self.roc_ops_local);
-    try self.emitLoadOp(.i32, 8); // roc_dealloc table idx
+    try self.emitLoadOp(.i32, WasmRocOps.roc_dealloc_table_idx);
 
     self.body.append(self.allocator, Op.call_indirect) catch return error.OutOfMemory;
     WasmModule.leb128WriteU32(self.allocator, &self.body, self.roc_ops_type_idx) catch return error.OutOfMemory;
@@ -4884,17 +4887,13 @@ fn emitHeapAlloc(self: *Self, size_local: u32, alignment: u32) Allocator.Error!v
     WasmModule.leb128WriteU32(self.allocator, &self.body, 4) catch return error.OutOfMemory;
 
     // Push call_indirect args: (alloc_args_ptr, env_ptr)
-    try self.emitFpOffset(alloc_slot); // args_ptr
-    try self.emitLocalGet(self.roc_ops_local); // load roc_ops_ptr
-    self.body.append(self.allocator, Op.i32_load) catch return error.OutOfMemory; // load env from offset 0
-    WasmModule.leb128WriteU32(self.allocator, &self.body, 2) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
-
-    // Load roc_alloc table index from roc_ops_ptr offset 4
+    try self.emitFpOffset(alloc_slot);
     try self.emitLocalGet(self.roc_ops_local);
-    self.body.append(self.allocator, Op.i32_load) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, &self.body, 2) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, &self.body, 4) catch return error.OutOfMemory;
+    try self.emitLoadOp(.i32, WasmRocOps.env_ptr);
+
+    // Load roc_alloc table index from RocOps struct
+    try self.emitLocalGet(self.roc_ops_local);
+    try self.emitLoadOp(.i32, WasmRocOps.roc_alloc_table_idx);
 
     // call_indirect with RocOps function type, table 0
     self.body.append(self.allocator, Op.call_indirect) catch return error.OutOfMemory;

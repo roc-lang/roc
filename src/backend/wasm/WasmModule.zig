@@ -284,6 +284,44 @@ pub const Import = struct {
 /// Wasm reference type for funcref tables
 const funcref: u8 = 0x70;
 
+/// WASM32 layout of the RocOps struct in linear memory.
+///
+/// On native 64-bit targets, RocOps is 72 bytes with 8-byte pointers and function
+/// pointers. On wasm32, function pointers don't exist in linear memory — instead,
+/// functions are referenced by u32 table indices for use with `call_indirect`.
+/// This makes the WASM layout 36 bytes with all fields being i32.
+///
+/// Two distinct `call_indirect` type signatures are used:
+/// - RocOps callbacks (roc_alloc, etc.): 2-arg `(i32 args_struct_ptr, i32 env_ptr) → void`
+/// - Hosted functions (RocCall ABI):     3-arg `(i32 roc_ops_ptr, i32 ret_ptr, i32 args_ptr) → void`
+pub const WasmRocOps = struct {
+    /// Host environment pointer (passed as second arg to all RocOps callbacks).
+    pub const env_ptr: u32 = 0;
+    /// Table index for roc_alloc: (args_ptr, env_ptr) → void.
+    pub const roc_alloc_table_idx: u32 = 4;
+    /// Table index for roc_dealloc: (args_ptr, env_ptr) → void.
+    pub const roc_dealloc_table_idx: u32 = 8;
+    /// Table index for roc_realloc: (args_ptr, env_ptr) → void.
+    pub const roc_realloc_table_idx: u32 = 12;
+    /// Table index for roc_dbg: (args_ptr, env_ptr) → void.
+    pub const roc_dbg_table_idx: u32 = 16;
+    /// Table index for roc_expect_failed: (args_ptr, env_ptr) → void.
+    pub const roc_expect_failed_table_idx: u32 = 20;
+    /// Table index for roc_crashed: (args_ptr, env_ptr) → void.
+    pub const roc_crashed_table_idx: u32 = 24;
+    /// Number of hosted functions provided by the platform.
+    pub const hosted_fns_count: u32 = 28;
+    /// Pointer to array of u32 table indices for hosted functions in linear memory.
+    pub const hosted_fns_ptr: u32 = 32;
+    /// Total size of the WasmRocOps struct in bytes.
+    pub const total_size: u32 = 36;
+
+    comptime {
+        // Verify layout consistency: last field offset + field size = total size.
+        std.debug.assert(hosted_fns_ptr + 4 == total_size);
+    }
+};
+
 /// Module state
 allocator: Allocator,
 func_types: std.ArrayList(FuncType),
@@ -485,6 +523,18 @@ pub fn addTableElement(self: *Self, func_idx: u32) !u32 {
     const table_idx: u32 = @intCast(self.table_func_indices.items.len);
     try self.table_func_indices.append(self.allocator, func_idx);
     return table_idx;
+}
+
+/// Import a hosted function and add it to the funcref table.
+///
+/// Hosted functions use the RocCall ABI: (i32 roc_ops_ptr, i32 ret_ptr, i32 args_ptr) → void.
+/// The caller must provide the type index for this 3-arg signature (registered separately
+/// from the 2-arg RocOps callback type).
+///
+/// Returns the table index that can be used with `call_indirect` to invoke the function.
+pub fn addHostedFunctionToTable(self: *Self, module_name: []const u8, fn_name: []const u8, roc_call_type_idx: u32) !u32 {
+    const func_idx = try self.addImport(module_name, fn_name, roc_call_type_idx);
+    return try self.addTableElement(func_idx);
 }
 
 // --- Surgical Linking ---
@@ -2471,4 +2521,188 @@ test "phase5 — real host module: full setup and finalization produces valid WA
         }
     }
     try std.testing.expect(found_memory_export);
+}
+
+// --- Phase 6 tests: WASM Function Pointer Representation & RocOps Layout ---
+
+test "RocOps struct — correct field offsets for wasm32 (36 bytes total)" {
+    const W = Self.WasmRocOps;
+    try std.testing.expectEqual(@as(u32, 0), W.env_ptr);
+    try std.testing.expectEqual(@as(u32, 4), W.roc_alloc_table_idx);
+    try std.testing.expectEqual(@as(u32, 8), W.roc_dealloc_table_idx);
+    try std.testing.expectEqual(@as(u32, 12), W.roc_realloc_table_idx);
+    try std.testing.expectEqual(@as(u32, 16), W.roc_dbg_table_idx);
+    try std.testing.expectEqual(@as(u32, 20), W.roc_expect_failed_table_idx);
+    try std.testing.expectEqual(@as(u32, 24), W.roc_crashed_table_idx);
+    try std.testing.expectEqual(@as(u32, 28), W.hosted_fns_count);
+    try std.testing.expectEqual(@as(u32, 32), W.hosted_fns_ptr);
+    try std.testing.expectEqual(@as(u32, 36), W.total_size);
+    // Each field is 4 bytes (i32 on wasm32), 9 fields total
+    try std.testing.expectEqual(@as(u32, 9 * 4), W.total_size);
+}
+
+test "call_indirect — roc_alloc uses 2-arg callback type, not RocCall type" {
+    const allocator = std.testing.allocator;
+    var module = Self.init(allocator);
+    defer module.deinit();
+
+    // Register the 2-arg RocOps callback type: (i32, i32) -> void
+    const roc_ops_type = try module.addFuncType(&.{ .i32, .i32 }, &.{});
+    // Register the 3-arg RocCall type: (i32, i32, i32) -> void
+    const roc_call_type = try module.addFuncType(&.{ .i32, .i32, .i32 }, &.{});
+
+    // They must be distinct type indices
+    try std.testing.expect(roc_ops_type != roc_call_type);
+
+    // Import roc_alloc with the 2-arg type
+    module.enableTable();
+    const roc_alloc_idx = try module.addImport("env", "roc_alloc", roc_ops_type);
+
+    // Verify the import's type index is the 2-arg type, not the 3-arg type
+    try std.testing.expectEqual(roc_ops_type, module.imports.items[roc_alloc_idx].type_idx);
+    try std.testing.expect(module.imports.items[roc_alloc_idx].type_idx != roc_call_type);
+}
+
+test "call_indirect — hosted function uses 3-arg RocCall type" {
+    const allocator = std.testing.allocator;
+    var module = Self.init(allocator);
+    defer module.deinit();
+
+    // Register both type signatures
+    const roc_ops_type = try module.addFuncType(&.{ .i32, .i32 }, &.{});
+    const roc_call_type = try module.addFuncType(&.{ .i32, .i32, .i32 }, &.{});
+
+    module.enableTable();
+
+    // Add a hosted function using the convenience method
+    const table_idx = try module.addHostedFunctionToTable("env", "hosted_fn_0", roc_call_type);
+
+    // The hosted function import should use the 3-arg type
+    try std.testing.expectEqual(roc_call_type, module.imports.items[0].type_idx);
+    try std.testing.expect(module.imports.items[0].type_idx != roc_ops_type);
+
+    // It should have a valid table entry
+    try std.testing.expectEqual(@as(u32, 0), table_idx);
+    try std.testing.expectEqual(@as(u32, 0), module.table_func_indices.items[0]);
+}
+
+test "call_indirect — mismatched type index would trap (validate type separation)" {
+    const allocator = std.testing.allocator;
+    var module = Self.init(allocator);
+    defer module.deinit();
+
+    // Register both type signatures
+    const roc_ops_type = try module.addFuncType(&.{ .i32, .i32 }, &.{});
+    const roc_call_type = try module.addFuncType(&.{ .i32, .i32, .i32 }, &.{});
+
+    // Verify they are stored as distinct entries in func_types
+    try std.testing.expectEqual(@as(usize, 2), module.func_types.items.len);
+    try std.testing.expect(roc_ops_type != roc_call_type);
+
+    // The 2-arg type has 2 params
+    try std.testing.expectEqual(@as(usize, 2), module.func_types.items[roc_ops_type].params.len);
+    try std.testing.expectEqual(ValType.i32, module.func_types.items[roc_ops_type].params[0]);
+    try std.testing.expectEqual(ValType.i32, module.func_types.items[roc_ops_type].params[1]);
+
+    // The 3-arg type has 3 params
+    try std.testing.expectEqual(@as(usize, 3), module.func_types.items[roc_call_type].params.len);
+    try std.testing.expectEqual(ValType.i32, module.func_types.items[roc_call_type].params[0]);
+    try std.testing.expectEqual(ValType.i32, module.func_types.items[roc_call_type].params[1]);
+    try std.testing.expectEqual(ValType.i32, module.func_types.items[roc_call_type].params[2]);
+
+    // Both return void (no result)
+    try std.testing.expectEqual(@as(?ValType, null), module.func_type_results.items[roc_ops_type]);
+    try std.testing.expectEqual(@as(?ValType, null), module.func_type_results.items[roc_call_type]);
+}
+
+test "function table — all RocOps functions have valid table entries after linking" {
+    const allocator = std.testing.allocator;
+    var module = Self.init(allocator);
+    defer module.deinit();
+
+    const roc_ops_type = try module.addFuncType(&.{ .i32, .i32 }, &.{});
+    module.enableTable();
+
+    // Import all 6 RocOps callbacks and add them to the table
+    const roc_alloc_idx = try module.addImport("env", "roc_alloc", roc_ops_type);
+    const roc_alloc_table = try module.addTableElement(roc_alloc_idx);
+
+    const roc_dealloc_idx = try module.addImport("env", "roc_dealloc", roc_ops_type);
+    const roc_dealloc_table = try module.addTableElement(roc_dealloc_idx);
+
+    const roc_realloc_idx = try module.addImport("env", "roc_realloc", roc_ops_type);
+    const roc_realloc_table = try module.addTableElement(roc_realloc_idx);
+
+    const roc_dbg_idx = try module.addImport("env", "roc_dbg", roc_ops_type);
+    const roc_dbg_table = try module.addTableElement(roc_dbg_idx);
+
+    const roc_expect_failed_idx = try module.addImport("env", "roc_expect_failed", roc_ops_type);
+    const roc_expect_failed_table = try module.addTableElement(roc_expect_failed_idx);
+
+    const roc_crashed_idx = try module.addImport("env", "roc_crashed", roc_ops_type);
+    const roc_crashed_table = try module.addTableElement(roc_crashed_idx);
+
+    // Verify all 6 have sequential table indices
+    try std.testing.expectEqual(@as(u32, 0), roc_alloc_table);
+    try std.testing.expectEqual(@as(u32, 1), roc_dealloc_table);
+    try std.testing.expectEqual(@as(u32, 2), roc_realloc_table);
+    try std.testing.expectEqual(@as(u32, 3), roc_dbg_table);
+    try std.testing.expectEqual(@as(u32, 4), roc_expect_failed_table);
+    try std.testing.expectEqual(@as(u32, 5), roc_crashed_table);
+
+    // Verify table_func_indices maps back to the correct function indices
+    try std.testing.expectEqual(@as(usize, 6), module.table_func_indices.items.len);
+    try std.testing.expectEqual(roc_alloc_idx, module.table_func_indices.items[0]);
+    try std.testing.expectEqual(roc_dealloc_idx, module.table_func_indices.items[1]);
+    try std.testing.expectEqual(roc_realloc_idx, module.table_func_indices.items[2]);
+    try std.testing.expectEqual(roc_dbg_idx, module.table_func_indices.items[3]);
+    try std.testing.expectEqual(roc_expect_failed_idx, module.table_func_indices.items[4]);
+    try std.testing.expectEqual(roc_crashed_idx, module.table_func_indices.items[5]);
+
+    // All imports should use the 2-arg type
+    for (module.imports.items) |import| {
+        try std.testing.expectEqual(roc_ops_type, import.type_idx);
+    }
+}
+
+test "function table — hosted functions added to table with correct indices" {
+    const allocator = std.testing.allocator;
+    var module = Self.init(allocator);
+    defer module.deinit();
+
+    const roc_ops_type = try module.addFuncType(&.{ .i32, .i32 }, &.{});
+    const roc_call_type = try module.addFuncType(&.{ .i32, .i32, .i32 }, &.{});
+    module.enableTable();
+
+    // Add RocOps callbacks first (as the codegen does)
+    const roc_alloc_idx = try module.addImport("env", "roc_alloc", roc_ops_type);
+    _ = try module.addTableElement(roc_alloc_idx);
+    const roc_dealloc_idx = try module.addImport("env", "roc_dealloc", roc_ops_type);
+    _ = try module.addTableElement(roc_dealloc_idx);
+
+    // Now add hosted functions — they follow the RocOps entries in the table
+    const hosted_0_table = try module.addHostedFunctionToTable("env", "hosted_fn_0", roc_call_type);
+    const hosted_1_table = try module.addHostedFunctionToTable("env", "hosted_fn_1", roc_call_type);
+    const hosted_2_table = try module.addHostedFunctionToTable("env", "hosted_fn_2", roc_call_type);
+
+    // Hosted functions follow RocOps entries (indices 0, 1 are alloc/dealloc)
+    try std.testing.expectEqual(@as(u32, 2), hosted_0_table);
+    try std.testing.expectEqual(@as(u32, 3), hosted_1_table);
+    try std.testing.expectEqual(@as(u32, 4), hosted_2_table);
+
+    // Total table size: 2 RocOps + 3 hosted = 5
+    try std.testing.expectEqual(@as(usize, 5), module.table_func_indices.items.len);
+
+    // Verify hosted function imports use the 3-arg type
+    // Imports: [roc_alloc, roc_dealloc, hosted_fn_0, hosted_fn_1, hosted_fn_2]
+    try std.testing.expectEqual(roc_ops_type, module.imports.items[0].type_idx);
+    try std.testing.expectEqual(roc_ops_type, module.imports.items[1].type_idx);
+    try std.testing.expectEqual(roc_call_type, module.imports.items[2].type_idx);
+    try std.testing.expectEqual(roc_call_type, module.imports.items[3].type_idx);
+    try std.testing.expectEqual(roc_call_type, module.imports.items[4].type_idx);
+
+    // Verify table entries point to correct function indices
+    try std.testing.expectEqual(@as(u32, 2), module.table_func_indices.items[2]); // hosted_fn_0
+    try std.testing.expectEqual(@as(u32, 3), module.table_func_indices.items[3]); // hosted_fn_1
+    try std.testing.expectEqual(@as(u32, 4), module.table_func_indices.items[4]); // hosted_fn_2
 }
