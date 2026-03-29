@@ -8,7 +8,7 @@
 | 2 | Linking Data Structures | Done |
 | 3 | WASM Module Parser | Done |
 | 4 | Surgical Linking — `linkHostToAppCalls()` | Done |
-| 5 | Memory, Table, and Stack Pointer Ownership | Not started |
+| 5 | Memory, Table, and Stack Pointer Ownership | Done |
 | 6 | WASM Function Pointer Representation & RocOps Layout | Not started |
 | 7a | Entrypoint ABI Migration | Not started |
 | 7b | CodeBuilder & WasmCodeGen Refactor | Not started |
