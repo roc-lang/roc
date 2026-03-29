@@ -7018,7 +7018,6 @@ test "parse diagnostic reporting crashes if module name is uninitialized" {
     }
 }
 
-// =========================================================================
 // Phase 7a: Entrypoint ABI Migration — Structural Tests
 //
 // These verify the generated wasm module has the correct exports and
@@ -7028,7 +7027,6 @@ test "parse diagnostic reporting crashes if module name is uninitialized" {
 // Full integration tests (calling roc__main_for_host_1_exposed from a
 // surgically-linked host) will be added in Phase 12 when the eval
 // pipeline switches to surgical linking.
-// =========================================================================
 
 const WasmModule = backend.wasm.WasmModule;
 const ExportKind = WasmModule.ExportKind;

@@ -404,8 +404,20 @@ pub const LinkingSection = struct {
                             });
                         }
                     },
-                    .init_funcs, .comdat_info => {
-                        // Skip these subsections for now
+                    .init_funcs => {
+                        const count = try WasmModule.readU32(bytes, cursor);
+                        try init_funcs.ensureTotalCapacity(allocator, count);
+                        for (0..count) |_| {
+                            const priority = try WasmModule.readU32(bytes, cursor);
+                            const symbol_index = try WasmModule.readU32(bytes, cursor);
+                            init_funcs.appendAssumeCapacity(.{
+                                .priority = priority,
+                                .symbol_index = symbol_index,
+                            });
+                        }
+                    },
+                    .comdat_info => {
+                        // Skip comdat info for now
                         cursor.* = subsection_end;
                     },
                 }

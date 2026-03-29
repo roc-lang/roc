@@ -2334,6 +2334,18 @@ WASM since padded LEB128 is a valid encoding of any value).
    hosted function count to WASM backend. Will be exercisable after CLI integration
    (Phase 12) connects the full pipeline.
 
+1d. **Phase 10 completed** (2026-03-29):
+   Implemented `eliminateDeadCode()` and `traceLiveFunctions()` in `WasmModule.zig`:
+   - Iterative call graph tracing from exports, init funcs, element section entries, and called_fns
+   - Dead JS imports removed (not just stubbed), `dead_import_dummy_count` incremented
+   - Remaining import call sites reindexed via relocation patching
+   - Dead defined-function bodies replaced with 3-byte `unreachable; end` stubs
+   - Function indices preserved (stubs maintain index stability)
+   - Conservative indirect call handling: `type_index_leb` relocs mark all
+     element-section functions with matching type signature as live
+   Also fixed `init_funcs` parsing in `WasmLinking.zig` (was previously skipped).
+   All 9 planned tests passing.
+
 2. **Host module authoring guidance**: What exact compilation flags do we want to support and
    document for platform authors producing relocatable `host.wasm` artifacts?
    We should publish one blessed example, ideally based on the existing WASM test platform.
