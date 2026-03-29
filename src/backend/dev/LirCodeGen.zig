@@ -78,6 +78,7 @@ const strFromUtf8C = builtins.str.fromUtf8C;
 const FromUtf8Try = builtins.str.FromUtf8Try;
 
 const Relocation = @import("Relocation.zig").Relocation;
+
 const StaticDataInterner = @import("StaticDataInterner.zig");
 
 const LirStore = lir.LirStore;

@@ -18,12 +18,17 @@ const RefProjectionSpan = LIR.RefProjectionSpan;
 
 const ParamIndexMap = std.AutoHashMap(u64, u8);
 const LocalResultMap = std.AutoHashMap(u64, LocalResultInfo);
-const JoinParamMap = std.AutoHashMap(u32, LIR.LocalSpan);
+const JoinParamMap = std.AutoHashMap(u32, JoinParamInfo);
 const JoinInputMap = std.AutoHashMap(u64, LocalResultInfo);
 const VisitedMap = std.AutoHashMap(u64, void);
 
 const LocalResultInfo = struct {
     semantics: LIR.ResultSemantics,
+};
+
+const JoinParamInfo = struct {
+    params: LIR.LocalSpan,
+    saw_incoming: bool,
 };
 
 const ResolvedReturnKind = union(enum) {
@@ -202,9 +207,15 @@ fn inferReturnContracts(
         },
         .join => |join| {
             try inferReturnContracts(allocator, store, join_params, join_inputs, param_index_by_symbol, results, join.remainder, inferred, saw_return);
+            const join_info = join_params.get(@intFromEnum(join.id)) orelse std.debug.panic(
+                "DebugOwnershipSummary invariant violated: join {d} had no recorded parameter metadata",
+                .{@intFromEnum(join.id)},
+            );
+            if (!join_info.saw_incoming) return;
+
             var body_results = try cloneLocalResultMap(allocator, results);
             defer body_results.deinit();
-            for (store.getLocalSpan(join.params)) |param| {
+            for (store.getLocalSpan(join_info.params)) |param| {
                 const info = join_inputs.get(localKey(param)) orelse std.debug.panic(
                     "DebugOwnershipSummary invariant violated: join param {d} had no inferred incoming jump semantics",
                     .{@intFromEnum(param)},
@@ -222,10 +233,12 @@ fn inferReturnContracts(
         },
         .scope_exit => {},
         .jump => |jump| {
-            const params = store.getLocalSpan(join_params.get(@intFromEnum(jump.target)) orelse std.debug.panic(
+            const join_info = join_params.getPtr(@intFromEnum(jump.target)) orelse std.debug.panic(
                 "DebugOwnershipSummary invariant violated: jump target {d} had no recorded join parameters",
                 .{@intFromEnum(jump.target)},
-            ));
+            );
+            join_info.saw_incoming = true;
+            const params = store.getLocalSpan(join_info.params);
             const args = store.getLocalSpan(jump.args);
             if (args.len != params.len) {
                 std.debug.panic(
@@ -292,14 +305,17 @@ fn collectJoinParams(
         .join => |join| {
             const gop = try join_params.getOrPut(@intFromEnum(join.id));
             if (gop.found_existing) {
-                if (gop.value_ptr.start != join.params.start or gop.value_ptr.len != join.params.len) {
+                if (gop.value_ptr.params.start != join.params.start or gop.value_ptr.params.len != join.params.len) {
                     std.debug.panic(
                         "DebugOwnershipSummary invariant violated: join {d} was recorded with incompatible parameter signatures",
                         .{@intFromEnum(join.id)},
                     );
                 }
             } else {
-                gop.value_ptr.* = join.params;
+                gop.value_ptr.* = .{
+                    .params = join.params,
+                    .saw_incoming = false,
+                };
             }
             try collectJoinParams(store, join.body, join_params);
             try collectJoinParams(store, join.remainder, join_params);

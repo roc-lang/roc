@@ -46,8 +46,8 @@ stack_frame_size: u32 = 0,
 uses_stack_memory: bool = false,
 /// Local index of the frame pointer ($fp) - only valid when uses_stack_memory is true.
 fp_local: u32 = 0,
-/// Map from proc symbol key → compiled wasm function index (for LirProcSpec compilation).
-registered_procs: std.AutoHashMap(u64, u32),
+/// Map from proc spec id → compiled wasm function index.
+registered_procs: std.AutoHashMap(u32, u32),
 /// Type index for the RocOps function signature: (i32, i32) -> void.
 roc_ops_type_idx: u32 = 0,
 /// Table indices for RocOps functions (used with call_indirect).
@@ -161,7 +161,7 @@ pub fn init(allocator: Allocator, store: *const LirStore, layout_store: *const L
         .stack_frame_size = 0,
         .uses_stack_memory = false,
         .fp_local = 0,
-        .registered_procs = std.AutoHashMap(u64, u32).init(allocator),
+        .registered_procs = std.AutoHashMap(u32, u32).init(allocator),
         .join_point_depths = std.AutoHashMap(u32, u32).init(allocator),
         .join_point_param_locals = std.AutoHashMap(u32, []u32).init(allocator),
         .join_point_state_locals = std.AutoHashMap(u32, u32).init(allocator),
@@ -399,7 +399,7 @@ pub fn generateModule(self: *Self, root_proc_id: LIR.LirProcSpecId, result_layou
         unreachable;
     }
 
-    const root_key: u64 = @bitCast(root_proc.name);
+    const root_key: u32 = @intFromEnum(root_proc_id);
     const root_func_idx = self.registered_procs.get(root_key) orelse {
         if (builtin.mode == .Debug) {
             std.debug.panic("WASM/codegen invariant violated: missing compiled root proc {d}", .{@intFromEnum(root_proc_id)});
@@ -3980,18 +3980,18 @@ pub fn compileAllProcSpecs(self: *Self, proc_specs: []const LirProcSpec) Allocat
     // Pass 1: Register ALL proc_specs (create function types, get func_idx).
     // This ensures that when compiling any proc body, all sibling proc_specs
     // are already known and can be called without triggering recursive compilation.
-    for (proc_specs) |proc| {
-        try self.registerProcSpec(proc);
+    for (proc_specs, 0..) |proc, i| {
+        try self.registerProcSpec(@enumFromInt(@as(u32, @intCast(i))), proc);
     }
     // Pass 2: Compile proc bodies.
-    for (proc_specs) |proc| {
-        try self.compileProcSpecBody(proc);
+    for (proc_specs, 0..) |proc, i| {
+        try self.compileProcSpecBody(@enumFromInt(@as(u32, @intCast(i))), proc);
     }
 }
 
 /// Compile a single LirProcSpec as a wasm function.
 /// Does NOT compile the body — that's done by compileProcSpecBody.
-fn registerProcSpec(self: *Self, proc: LirProcSpec) Allocator.Error!void {
+fn registerProcSpec(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpec) Allocator.Error!void {
     if (proc.hosted != null) {
         if (builtin.mode == .Debug) {
             std.debug.panic(
@@ -4002,7 +4002,7 @@ fn registerProcSpec(self: *Self, proc: LirProcSpec) Allocator.Error!void {
         unreachable;
     }
 
-    const key: u64 = @bitCast(proc.name);
+    const key: u32 = @intFromEnum(proc_id);
 
     // Build parameter types: roc_ops_ptr first, then explicit proc args.
     const args = self.store.getLocalSpan(proc.args);
@@ -4023,8 +4023,8 @@ fn registerProcSpec(self: *Self, proc: LirProcSpec) Allocator.Error!void {
 }
 
 /// Compile a proc body. The proc must already be registered via registerProcSpec.
-fn compileProcSpecBody(self: *Self, proc: LirProcSpec) Allocator.Error!void {
-    const key: u64 = @bitCast(proc.name);
+fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpec) Allocator.Error!void {
+    const key: u32 = @intFromEnum(proc_id);
 
     // Get the pre-registered func_idx (must exist — registerProcSpec runs in pass 1)
     const func_idx = self.registered_procs.get(key) orelse unreachable;
@@ -4738,8 +4738,7 @@ fn runtimeRepresentationLayoutIdx(self: *const Self, layout_idx: layout.Idx) lay
 /// just handles explicit direct-call symbols plus the residual runtime
 /// function-value expression path. No closure-specific dispatch.
 fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
-    const proc = self.store.getProcSpec(c.proc);
-    const proc_key: u64 = @bitCast(proc.name);
+    const proc_key: u32 = @intFromEnum(c.proc);
     const func_idx = self.registered_procs.get(proc_key) orelse {
         if (std.debug.runtime_safety) {
             std.debug.panic("generateCall: unresolved proc call target {d}", .{@intFromEnum(c.proc)});
@@ -4750,6 +4749,12 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
     try self.emitLocalGet(self.roc_ops_local);
     try self.generateCallArgs(c.args);
     try self.emitCall(func_idx);
+
+    if (self.isCompositeLayout(c.ret_layout)) {
+        const result_size = self.layoutByteSize(self.runtimeRepresentationLayoutIdx(c.ret_layout));
+        const stable_local = try self.stabilizeCompositeResult(result_size);
+        try self.emitLocalGet(stable_local);
+    }
 }
 
 /// Emit a call instruction.

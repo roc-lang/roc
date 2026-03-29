@@ -257,7 +257,8 @@ fn runtimeRepresentationLayoutIdx(self: *Self, layout_idx: layout.Idx) layout.Id
 }
 
 fn runtimeValueLayoutFromMirMonotype(self: *Self, monotype: MirMonotypeIdx) Allocator.Error!layout.Idx {
-    return self.runtimeRepresentationLayoutIdx(try self.mir_layout_resolver.resolve(monotype, null));
+    const resolved = try self.mir_layout_resolver.resolve(monotype, null);
+    return self.runtimeRepresentationLayoutIdx(resolved);
 }
 
 fn runtimeCallableValueLayoutFromMirLocal(self: *Self, local_id: MIR.LocalId) Allocator.Error!?layout.Idx {
@@ -689,15 +690,79 @@ fn resolveCallableValuePath(
                 },
             };
         },
-        .struct_value => std.debug.panic(
+        .struct_value => |fields| try self.resolveCallableFromStructValue(fields, value_local, reversed_path),
+        .tag_value => |args| try self.resolveCallableFromTagValue(args, value_local, reversed_path),
+    };
+}
+
+fn resolveCallableFromStructValue(
+    self: *Self,
+    fields: MIR.LocalSpan,
+    value_local: MIR.LocalId,
+    reversed_path: *std.ArrayList(MIR.CallableProjection),
+) Allocator.Error!ResolvedCallable {
+    if (reversed_path.items.len == 0) {
+        std.debug.panic(
             "MirToLir invariant violated: callable resolution reached a non-callable struct value",
             .{},
-        ),
-        .tag_value => std.debug.panic(
-            "MirToLir invariant violated: callable resolution reached a non-callable tag value",
-            .{},
+        );
+    }
+
+    const next_projection = reversed_path.items[reversed_path.items.len - 1];
+    const field_idx = switch (next_projection) {
+        .field => |idx| idx,
+        else => std.debug.panic(
+            "MirToLir invariant violated: callable struct resolution expected a field projection, found {s}",
+            .{@tagName(next_projection)},
         ),
     };
+
+    const field_locals = self.mir_store.getLocalSpan(fields);
+    if (field_idx >= field_locals.len) {
+        std.debug.panic(
+            "MirToLir invariant violated: callable field index {d} exceeds struct arity {d}",
+            .{ field_idx, field_locals.len },
+        );
+    }
+
+    reversed_path.items.len -= 1;
+    defer reversed_path.items.len += 1;
+    return self.resolveCallableValuePath(field_locals[field_idx], value_local, reversed_path);
+}
+
+fn resolveCallableFromTagValue(
+    self: *Self,
+    args: MIR.LocalSpan,
+    value_local: MIR.LocalId,
+    reversed_path: *std.ArrayList(MIR.CallableProjection),
+) Allocator.Error!ResolvedCallable {
+    if (reversed_path.items.len == 0) {
+        std.debug.panic(
+            "MirToLir invariant violated: callable resolution reached a non-callable tag value",
+            .{},
+        );
+    }
+
+    const next_projection = reversed_path.items[reversed_path.items.len - 1];
+    const payload_idx = switch (next_projection) {
+        .tag_payload => |idx| idx,
+        else => std.debug.panic(
+            "MirToLir invariant violated: callable tag resolution expected a payload projection, found {s}",
+            .{@tagName(next_projection)},
+        ),
+    };
+
+    const payload_locals = self.mir_store.getLocalSpan(args);
+    if (payload_idx >= payload_locals.len) {
+        std.debug.panic(
+            "MirToLir invariant violated: callable payload index {d} exceeds tag arity {d}",
+            .{ payload_idx, payload_locals.len },
+        );
+    }
+
+    reversed_path.items.len -= 1;
+    defer reversed_path.items.len += 1;
+    return self.resolveCallableValuePath(payload_locals[payload_idx], value_local, reversed_path);
 }
 
 fn resolveCallableValue(self: *Self, local_id: MIR.LocalId) Allocator.Error!ResolvedCallable {
@@ -1013,7 +1078,9 @@ fn emitAssignRef(
         .local => |source| {
             if (target == source) switch (result) {
                 .alias_of => |aliased| {
-                    if (aliased.owner == source and aliased.projections.isEmpty()) return next;
+                    if (aliased.owner == source and aliased.projections.isEmpty()) {
+                        return next;
+                    }
                 },
                 .borrow_of => |borrowed| {
                     if (borrowed.owner == source and borrowed.projections.isEmpty()) {
@@ -1213,12 +1280,15 @@ fn lowerStmt(self: *Self, stmt_id: MIR.CFStmtId) Allocator.Error!CFStmtId {
             const lowered_target = try self.mapMirLocal(assign.target);
             const lowered_next = try self.lowerStmt(assign.next);
             break :blk switch (assign.op) {
-                .local => |source| try self.emitAssignRef(
-                    lowered_target,
-                    aliasSemantics(try self.mapMirLocal(source), LIR.RefProjectionSpan.empty()),
-                    .{ .local = try self.mapMirLocal(source) },
-                    lowered_next,
-                ),
+                .local => |source| blk_local: {
+                    const lowered_source = try self.mapMirLocal(source);
+                    break :blk_local try self.emitAssignRef(
+                        lowered_target,
+                        aliasSemantics(lowered_source, LIR.RefProjectionSpan.empty()),
+                        .{ .local = lowered_source },
+                        lowered_next,
+                    );
+                },
                 .discriminant => |discriminant| try self.emitAssignRef(
                     lowered_target,
                     .fresh,
@@ -1378,11 +1448,38 @@ fn lowerJoinStmt(
     self: *Self,
     join_stmt: std.meta.TagPayload(MIR.CFStmt, .join),
 ) Allocator.Error!CFStmtId {
-    _ = try self.mapMirLocalSpan(join_stmt.params);
+    const join_params = self.mir_store.getLocalSpan(join_stmt.params);
+    const join_param_locals = try self.allocator.alloc(LirLocalId, join_params.len);
+    defer self.allocator.free(join_param_locals);
+
+    const local_map = self.currentLocalMap();
+    const previous_bindings = try self.allocator.alloc(?LirLocalId, join_params.len);
+    defer self.allocator.free(previous_bindings);
+
+    for (join_params, 0..) |param_local, i| {
+        const key = @as(u32, @intFromEnum(param_local));
+        previous_bindings[i] = local_map.get(key);
+        join_param_locals[i] = try self.lir_store.addLocal(.{
+            .layout_idx = try self.runtimeValueLayoutFromMirLocal(param_local),
+        });
+        try local_map.put(key, join_param_locals[i]);
+    }
+
+    const lowered_body = try self.lowerStmt(join_stmt.body);
+
+    for (join_params, 0..) |param_local, i| {
+        const key = @as(u32, @intFromEnum(param_local));
+        if (previous_bindings[i]) |previous| {
+            try local_map.put(key, previous);
+        } else {
+            _ = local_map.remove(key);
+        }
+    }
+
     return self.lir_store.addCFStmt(.{ .join = .{
         .id = translateJoinPointId(join_stmt.id),
-        .params = try self.mapMirLocalSpan(join_stmt.params),
-        .body = try self.lowerStmt(join_stmt.body),
+        .params = try self.lir_store.addLocalSpan(join_param_locals),
+        .body = lowered_body,
         .remainder = try self.lowerStmt(join_stmt.remainder),
     } });
 }
@@ -1410,6 +1507,22 @@ fn lowerDirectLambdaCall(
     }
 
     const lowered_proc = try self.lowerLambda(resolved.lambda);
+    const callee_ret_layout = self.loweredProcRetLayout(lowered_proc);
+    const lowered_target = try self.mapMirLocal(target);
+    const target_layout = self.lir_store.getLocal(lowered_target).layout_idx;
+    if (callee_ret_layout != target_layout) {
+        std.debug.panic(
+            "MirToLir invariant violated: direct call result layout mismatch target_local={d} target_mono={d} target_layout={d} callee_local={d} lambda={d} callee_ret_layout={d}",
+            .{
+                @intFromEnum(target),
+                @intFromEnum(self.mir_store.getLocal(target).monotype),
+                @intFromEnum(target_layout),
+                @intFromEnum(callee_mir),
+                @intFromEnum(resolved.lambda),
+                @intFromEnum(callee_ret_layout),
+            },
+        );
+    }
     const call_arg_count = visible_args.len + @intFromBool(resolved.captures_local != null);
     const call_args = try self.allocator.alloc(LirLocalId, call_arg_count);
     defer self.allocator.free(call_args);
@@ -1421,7 +1534,7 @@ fn lowerDirectLambdaCall(
         call_args[visible_args.len] = try self.mapMirLocal(capture_local);
     }
     return self.lir_store.addCFStmt(.{ .assign_call = .{
-        .target = try self.mapMirLocal(target),
+        .target = lowered_target,
         .result = self.callResultSemantics(lowered_proc, call_args),
         .proc = lowered_proc,
         .args = try self.lir_store.addLocalSpan(call_args),
@@ -1773,13 +1886,39 @@ fn lowerEntrypointCallableStmt(
             .result_contract = .no_return,
         },
         .join => |join_stmt| blk: {
-            _ = try self.mapMirLocalSpan(join_stmt.params);
+            const join_params = self.mir_store.getLocalSpan(join_stmt.params);
+            const join_param_locals = try self.allocator.alloc(LirLocalId, join_params.len);
+            defer self.allocator.free(join_param_locals);
+
+            const local_map = self.currentLocalMap();
+            const previous_bindings = try self.allocator.alloc(?LirLocalId, join_params.len);
+            defer self.allocator.free(previous_bindings);
+
+            for (join_params, 0..) |param_local, i| {
+                const key = @as(u32, @intFromEnum(param_local));
+                previous_bindings[i] = local_map.get(key);
+                join_param_locals[i] = try self.lir_store.addLocal(.{
+                    .layout_idx = try self.runtimeValueLayoutFromMirLocal(param_local),
+                });
+                try local_map.put(key, join_param_locals[i]);
+            }
+
             const lowered_body = try self.lowerEntrypointCallableStmt(join_stmt.body, arg_locals, target, next);
+
+            for (join_params, 0..) |param_local, i| {
+                const key = @as(u32, @intFromEnum(param_local));
+                if (previous_bindings[i]) |previous| {
+                    try local_map.put(key, previous);
+                } else {
+                    _ = local_map.remove(key);
+                }
+            }
+
             const lowered_remainder = try self.lowerEntrypointCallableStmt(join_stmt.remainder, arg_locals, target, next);
             break :blk .{
                 .body = try self.lir_store.addCFStmt(.{ .join = .{
                     .id = translateJoinPointId(join_stmt.id),
-                    .params = try self.mapMirLocalSpan(join_stmt.params),
+                    .params = try self.lir_store.addLocalSpan(join_param_locals),
                     .body = lowered_body.body,
                     .remainder = lowered_remainder.body,
                 } }),

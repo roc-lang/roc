@@ -5,7 +5,6 @@
 
 const std = @import("std");
 const base = @import("base");
-const build_options = @import("build_options");
 const can = @import("can");
 const layout = @import("layout");
 const lir = @import("lir");
@@ -19,17 +18,6 @@ const CIR = can.CIR;
 const LirStore = lir.LirStore;
 const LirProcSpecId = lir.LirProcSpecId;
 const MIR = mir.MIR;
-
-/// Comptime-gated tracing for the shared lowering pipeline.
-const trace = struct {
-    const enabled = if (@hasDecl(build_options, "trace_eval")) build_options.trace_eval else false;
-
-    fn log(comptime fmt: []const u8, args: anytype) void {
-        if (comptime enabled) {
-            std.debug.print("[lower] " ++ fmt ++ "\n", args);
-        }
-    }
-};
 
 /// Find the index of a module environment in the all-module-env slice.
 pub fn findModuleEnvIdx(all_module_envs: []const *ModuleEnv, module_env: *ModuleEnv) ?u32 {
@@ -249,8 +237,6 @@ pub const LirProgram = struct {
         layout_store_ptr: *layout.Store,
         maybe_type_scope: ?*const types.TypeScope,
     ) Error!LowerResult {
-        trace.log("lowerExpr: expr={any} module={d}", .{ expr_idx, module_idx });
-
         var mir_store = MIR.Store.init(self.allocator) catch return error.OutOfMemory;
         errdefer mir_store.deinit(self.allocator);
 
@@ -343,8 +329,6 @@ pub const LirProgram = struct {
         ret_layout: layout.Idx,
         type_scope: ?*const types.TypeScope,
     ) Error!LowerResult {
-        trace.log("lowerEntrypointExpr: expr={any} module={d}", .{ expr_idx, module_idx });
-
         var mir_store = MIR.Store.init(self.allocator) catch return error.OutOfMemory;
         errdefer mir_store.deinit(self.allocator);
 

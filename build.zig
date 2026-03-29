@@ -3151,6 +3151,9 @@ pub fn build(b: *std.Build) void {
                 });
                 eval_coverage_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
                 eval_coverage_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
+                eval_coverage_exe.root_module.addImport("test_harness", b.createModule(.{
+                    .root_source_file = b.path("src/build/test_harness.zig"),
+                }));
                 eval_coverage_exe.step.dependOn(&write_compiled_builtins.step);
                 eval_coverage_exe.step.dependOn(&copy_builtins_bc.step);
                 try addLlvmSupportToStep(

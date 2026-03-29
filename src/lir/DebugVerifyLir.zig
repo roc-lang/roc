@@ -57,8 +57,8 @@ pub fn verifyProc(
         );
         if (!procContractsEqual(store, declared_contract, inferred_contract)) {
             std.debug.panic(
-                "DebugVerifyLir invariant violated: proc result contract does not match inferred return provenance",
-                .{},
+                "DebugVerifyLir invariant violated: proc result contract does not match inferred return provenance; declared={any} inferred={any}",
+                .{ declared_contract, inferred_contract },
             );
         }
     }

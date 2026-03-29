@@ -456,6 +456,15 @@ pub const Interpreter = struct {
             return self.callHostedProc(hosted, args, arg_layouts, proc_spec.ret_layout);
         }
 
+        trace.log(
+            "enter proc={d} name={d} depth={d} args={d}",
+            .{
+                @intFromEnum(proc_id),
+                proc_spec.name.raw(),
+                self.call_depth,
+                args.len,
+            },
+        );
         self.call_depth += 1;
         defer self.call_depth -= 1;
 
@@ -476,7 +485,13 @@ pub const Interpreter = struct {
 
         const outcome = try self.execStmtChain(&frame, proc_spec.body, null);
         return switch (outcome) {
-            .returned => |value| value,
+            .returned => |value| blk: {
+                trace.log(
+                    "return proc={d} name={d} depth={d}",
+                    .{ @intFromEnum(proc_id), proc_spec.name.raw(), self.call_depth },
+                );
+                break :blk value;
+            },
             .scope_exit => std.debug.panic(
                 "LIR/interpreter invariant violated: proc {d} terminated via scope_exit",
                 .{proc_spec.name.raw()},
@@ -682,11 +697,6 @@ pub const Interpreter = struct {
         for (locals, 0..) |local_id, i| {
             const slot = frame.locals[@intFromEnum(local_id)];
             if (!slot.assigned) {
-                std.debug.print(
-                    "LIR/interpreter debug dump: local {d} was used before assignment in proc {d}\n",
-                    .{ @intFromEnum(local_id), @intFromEnum(frame.proc_id) },
-                );
-                self.debugDumpProc(frame.proc_id);
                 std.debug.panic(
                     "LIR/interpreter invariant violated: local {d} was used before assignment in proc {d}",
                     .{ @intFromEnum(local_id), @intFromEnum(frame.proc_id) },
@@ -695,176 +705,6 @@ pub const Interpreter = struct {
             values[i] = slot.val;
         }
         return values;
-    }
-
-    fn debugDumpProc(self: *const LirInterpreter, proc_id: LirProcSpecId) void {
-        const proc_spec = self.store.getProcSpec(proc_id);
-        std.debug.print(
-            "  proc {d} body={d} ret_layout={d}\n",
-            .{ @intFromEnum(proc_id), @intFromEnum(proc_spec.body), @intFromEnum(proc_spec.ret_layout) },
-        );
-        std.debug.print("  proc args:", .{});
-        for (self.store.getLocalSpan(proc_spec.args)) |arg| {
-            std.debug.print(
-                " {d}(layout={d})",
-                .{ @intFromEnum(arg), @intFromEnum(self.store.getLocal(arg).layout_idx) },
-            );
-        }
-        std.debug.print("\n", .{});
-        self.debugDumpStmtTree(proc_spec.body, 1);
-    }
-
-    fn debugDumpStmtTree(self: *const LirInterpreter, stmt_id: CFStmtId, depth: usize) void {
-        for (0..depth) |_| std.debug.print("  ", .{});
-        const stmt = self.store.getCFStmt(stmt_id);
-        switch (stmt) {
-            .assign_symbol => |assign| {
-                std.debug.print("stmt {d}: assign_symbol target={d} next={d}\n", .{ @intFromEnum(stmt_id), @intFromEnum(assign.target), @intFromEnum(assign.next) });
-                self.debugDumpStmtTree(assign.next, depth);
-            },
-            .assign_ref => |assign| {
-                std.debug.print(
-                    "stmt {d}: assign_ref target={d}(layout={d}) result={s} op=",
-                    .{
-                        @intFromEnum(stmt_id),
-                        @intFromEnum(assign.target),
-                        @intFromEnum(self.store.getLocal(assign.target).layout_idx),
-                        @tagName(assign.result),
-                    },
-                );
-                switch (assign.op) {
-                    .local => |source| std.debug.print(
-                        "local({d}, layout={d})",
-                        .{ @intFromEnum(source), @intFromEnum(self.store.getLocal(source).layout_idx) },
-                    ),
-                    .discriminant => |discriminant| std.debug.print(
-                        "discriminant(source={d}, layout={d})",
-                        .{
-                            @intFromEnum(discriminant.source),
-                            @intFromEnum(self.store.getLocal(discriminant.source).layout_idx),
-                        },
-                    ),
-                    .field => |field| std.debug.print(
-                        "field(source={d}, layout={d}, field_idx={d})",
-                        .{
-                            @intFromEnum(field.source),
-                            @intFromEnum(self.store.getLocal(field.source).layout_idx),
-                            field.field_idx,
-                        },
-                    ),
-                    .tag_payload => |payload| std.debug.print(
-                        "tag_payload(source={d}, layout={d})",
-                        .{
-                            @intFromEnum(payload.source),
-                            @intFromEnum(self.store.getLocal(payload.source).layout_idx),
-                        },
-                    ),
-                    .nominal => |nominal| std.debug.print(
-                        "nominal(backing_ref={d}, layout={d})",
-                        .{
-                            @intFromEnum(nominal.backing_ref),
-                            @intFromEnum(self.store.getLocal(nominal.backing_ref).layout_idx),
-                        },
-                    ),
-                }
-                std.debug.print(" next={d}\n", .{@intFromEnum(assign.next)});
-                self.debugDumpStmtTree(assign.next, depth);
-            },
-            .assign_literal => |assign| {
-                std.debug.print("stmt {d}: assign_literal target={d} next={d}\n", .{ @intFromEnum(stmt_id), @intFromEnum(assign.target), @intFromEnum(assign.next) });
-                self.debugDumpStmtTree(assign.next, depth);
-            },
-            .assign_call => |assign| {
-                std.debug.print("stmt {d}: assign_call target={d} proc={d} args=", .{ @intFromEnum(stmt_id), @intFromEnum(assign.target), @intFromEnum(assign.proc) });
-                for (self.store.getLocalSpan(assign.args)) |arg| {
-                    std.debug.print("{d} ", .{@intFromEnum(arg)});
-                }
-                std.debug.print("next={d}\n", .{@intFromEnum(assign.next)});
-                self.debugDumpStmtTree(assign.next, depth);
-            },
-            .assign_low_level => |assign| {
-                std.debug.print("stmt {d}: assign_low_level target={d} op={s} args=", .{ @intFromEnum(stmt_id), @intFromEnum(assign.target), @tagName(assign.op) });
-                for (self.store.getLocalSpan(assign.args)) |arg| {
-                    std.debug.print("{d} ", .{@intFromEnum(arg)});
-                }
-                std.debug.print("next={d}\n", .{@intFromEnum(assign.next)});
-                self.debugDumpStmtTree(assign.next, depth);
-            },
-            .assign_list => |assign| {
-                std.debug.print("stmt {d}: assign_list target={d} elems=", .{ @intFromEnum(stmt_id), @intFromEnum(assign.target) });
-                for (self.store.getLocalSpan(assign.elems)) |elem| {
-                    std.debug.print("{d} ", .{@intFromEnum(elem)});
-                }
-                std.debug.print("next={d}\n", .{@intFromEnum(assign.next)});
-                self.debugDumpStmtTree(assign.next, depth);
-            },
-            .assign_struct => |assign| {
-                std.debug.print("stmt {d}: assign_struct target={d} next={d}\n", .{ @intFromEnum(stmt_id), @intFromEnum(assign.target), @intFromEnum(assign.next) });
-                self.debugDumpStmtTree(assign.next, depth);
-            },
-            .assign_tag => |assign| {
-                std.debug.print("stmt {d}: assign_tag target={d} next={d}\n", .{ @intFromEnum(stmt_id), @intFromEnum(assign.target), @intFromEnum(assign.next) });
-                self.debugDumpStmtTree(assign.next, depth);
-            },
-            .debug => |debug_stmt| {
-                std.debug.print("stmt {d}: debug next={d}\n", .{ @intFromEnum(stmt_id), @intFromEnum(debug_stmt.next) });
-                self.debugDumpStmtTree(debug_stmt.next, depth);
-            },
-            .expect => |expect_stmt| {
-                std.debug.print("stmt {d}: expect next={d}\n", .{ @intFromEnum(stmt_id), @intFromEnum(expect_stmt.next) });
-                self.debugDumpStmtTree(expect_stmt.next, depth);
-            },
-            .switch_stmt => |switch_stmt| {
-                std.debug.print("stmt {d}: switch cond={d} default={d}\n", .{ @intFromEnum(stmt_id), @intFromEnum(switch_stmt.cond), @intFromEnum(switch_stmt.default_branch) });
-                for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
-                    for (0..depth + 1) |_| std.debug.print("  ", .{});
-                    std.debug.print("branch value={d}\n", .{branch.value});
-                    self.debugDumpStmtTree(branch.body, depth + 2);
-                }
-                for (0..depth + 1) |_| std.debug.print("  ", .{});
-                std.debug.print("default\n", .{});
-                self.debugDumpStmtTree(switch_stmt.default_branch, depth + 2);
-            },
-            .borrow_scope => |scope| {
-                std.debug.print("stmt {d}: borrow_scope id={d} body={d} remainder={d}\n", .{ @intFromEnum(stmt_id), @intFromEnum(scope.id), @intFromEnum(scope.body), @intFromEnum(scope.remainder) });
-                self.debugDumpStmtTree(scope.body, depth + 1);
-                self.debugDumpStmtTree(scope.remainder, depth + 1);
-            },
-            .scope_exit => |scope_exit| {
-                std.debug.print("stmt {d}: scope_exit id={d}\n", .{ @intFromEnum(stmt_id), @intFromEnum(scope_exit.id) });
-            },
-            .join => |join_stmt| {
-                std.debug.print("stmt {d}: join id={d} params=", .{ @intFromEnum(stmt_id), @intFromEnum(join_stmt.id) });
-                for (self.store.getLocalSpan(join_stmt.params)) |param| {
-                    std.debug.print("{d} ", .{@intFromEnum(param)});
-                }
-                std.debug.print("body={d} remainder={d}\n", .{ @intFromEnum(join_stmt.body), @intFromEnum(join_stmt.remainder) });
-                self.debugDumpStmtTree(join_stmt.body, depth + 1);
-                self.debugDumpStmtTree(join_stmt.remainder, depth + 1);
-            },
-            .jump => |jump_stmt| {
-                std.debug.print("stmt {d}: jump target={d} args=", .{ @intFromEnum(stmt_id), @intFromEnum(jump_stmt.target) });
-                for (self.store.getLocalSpan(jump_stmt.args)) |arg| {
-                    std.debug.print("{d} ", .{@intFromEnum(arg)});
-                }
-                std.debug.print("\n", .{});
-            },
-            .ret => |ret_stmt| std.debug.print("stmt {d}: ret value={d}\n", .{ @intFromEnum(stmt_id), @intFromEnum(ret_stmt.value) }),
-            .runtime_error => std.debug.print("stmt {d}: runtime_error\n", .{@intFromEnum(stmt_id)}),
-            .incref => |inc| {
-                std.debug.print("stmt {d}: incref value={d} next={d}\n", .{ @intFromEnum(stmt_id), @intFromEnum(inc.value), @intFromEnum(inc.next) });
-                self.debugDumpStmtTree(inc.next, depth);
-            },
-            .decref => |dec| {
-                std.debug.print("stmt {d}: decref value={d} next={d}\n", .{ @intFromEnum(stmt_id), @intFromEnum(dec.value), @intFromEnum(dec.next) });
-                self.debugDumpStmtTree(dec.next, depth);
-            },
-            .free => |free_stmt| {
-                std.debug.print("stmt {d}: free value={d} next={d}\n", .{ @intFromEnum(stmt_id), @intFromEnum(free_stmt.value), @intFromEnum(free_stmt.next) });
-                self.debugDumpStmtTree(free_stmt.next, depth);
-            },
-            .crash => |crash_stmt| std.debug.print("stmt {d}: crash msg={d}\n", .{ @intFromEnum(stmt_id), @intFromEnum(crash_stmt.msg) }),
-        }
     }
 
     fn localLayouts(self: *LirInterpreter, locals: []const LocalId) Error![]layout_mod.Idx {
@@ -961,7 +801,8 @@ pub const Interpreter = struct {
             const field_size = self.helper.sizeOf(field_layout);
             if (field_size == 0) continue;
             const field_offset = self.helper.structFieldOffset(struct_layout, @intCast(i));
-            struct_val.offset(field_offset).copyFrom(frame.getLocal(field_local), field_size);
+            const field_value = frame.getLocal(field_local);
+            struct_val.offset(field_offset).copyFrom(field_value, field_size);
         }
         return struct_val;
     }
@@ -1048,6 +889,13 @@ pub const Interpreter = struct {
         const elem_layout = self.listElemLayout(list_layout);
         const elem_size = self.helper.sizeOf(elem_layout);
         const elem_locals = self.store.getLocalSpan(elems);
+        if (elem_locals.len == 0) {
+            return self.rocListToValue(.{
+                .bytes = null,
+                .length = 0,
+                .capacity_or_alloc_ptr = 0,
+            }, list_layout);
+        }
         if (elem_size == 0) {
             return self.rocListToValue(.{
                 .bytes = null,
@@ -1163,7 +1011,7 @@ pub const Interpreter = struct {
 
     fn evalStrLiteral(self: *LirInterpreter, idx: base.StringLiteral.Idx) Error!Value {
         const str_bytes = self.store.getString(idx);
-        return self.makeRocStr(str_bytes);
+        return self.makeStaticRocStrLiteral(str_bytes);
     }
 
     fn evalBoolLiteral(self: *LirInterpreter, b: bool) Error!Value {
@@ -1173,6 +1021,36 @@ pub const Interpreter = struct {
     }
 
     // String helpers (RocStr construction)
+
+    fn makeStaticRocStrLiteral(self: *LirInterpreter, bytes: []const u8) Error!Value {
+        if (RocStr.fitsInSmallStr(bytes.len)) {
+            const small = RocStr.fromSliceSmall(bytes);
+            return self.rocStrToValue(small, .str);
+        }
+
+        const total_bytes = @sizeOf(usize) + bytes.len;
+        const storage = switch (@alignOf(usize)) {
+            1 => self.arena.allocator().alignedAlloc(u8, .@"1", total_bytes),
+            2 => self.arena.allocator().alignedAlloc(u8, .@"2", total_bytes),
+            4 => self.arena.allocator().alignedAlloc(u8, .@"4", total_bytes),
+            8 => self.arena.allocator().alignedAlloc(u8, .@"8", total_bytes),
+            16 => self.arena.allocator().alignedAlloc(u8, .@"16", total_bytes),
+            else => @compileError("unsupported usize alignment for static string literal allocation"),
+        } catch return error.OutOfMemory;
+
+        const refcount_ptr: *isize = @ptrCast(@alignCast(storage.ptr));
+        refcount_ptr.* = builtins.utils.REFCOUNT_STATIC_DATA;
+
+        const data_slice = storage[@sizeOf(usize)..];
+        @memcpy(data_slice[0..bytes.len], bytes);
+
+        const rs = RocStr{
+            .bytes = @ptrCast(data_slice.ptr),
+            .length = bytes.len,
+            .capacity_or_alloc_ptr = bytes.len,
+        };
+        return self.rocStrToValue(rs, .str);
+    }
 
     fn makeRocStr(self: *LirInterpreter, bytes: []const u8) Error!Value {
         const rs = builtins.str.RocStr.fromSlice(bytes, &self.roc_ops);
@@ -1811,12 +1689,13 @@ pub const Interpreter = struct {
                 const start_field_off = self.layout_store.getStructFieldOffsetByOriginalIndex(record_idx, 1);
                 const start = args[1].offset(start_field_off).read(u64);
                 const len = args[1].offset(len_field_off).read(u64);
+                const source_list = valueToRocList(args[0]);
 
                 self.roc_env.resetCrash();
                 const sj = setjmp(&self.roc_env.jmp_buf);
                 if (sj != 0) return error.Crash;
                 const result = builtins.list.listSublist(
-                    valueToRocList(args[0]),
+                    source_list,
                     info.alignment,
                     info.width,
                     info.rc,

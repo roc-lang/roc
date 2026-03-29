@@ -830,6 +830,21 @@ pub const Pass = struct {
         );
     }
 
+    fn getCallSiteCallableInstsInContext(
+        self: *const Pass,
+        result: *const Result,
+        context_callable_inst: CallableInstId,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) ?[]const CallableInstId {
+        return result.getCallSiteCallableInsts(
+            context_callable_inst,
+            self.rootSourceExprContext(context_callable_inst),
+            module_idx,
+            expr_idx,
+        );
+    }
+
     fn getLookupExprCallableInstsInContext(
         self: *const Pass,
         result: *const Result,
@@ -2547,6 +2562,12 @@ pub const Pass = struct {
         const saved_callable_inst_context = self.active_callable_inst_context;
         self.active_callable_inst_context = callable_inst_id;
         defer self.active_callable_inst_context = saved_callable_inst_context;
+        const saved_template_context = self.active_template_context;
+        self.active_template_context = if (callable_inst_id.isNone())
+            .none
+        else
+            result.getCallableInst(callable_inst_id).template;
+        defer self.active_template_context = saved_template_context;
 
         return self.resolveTypeVarMonotypeIfMonomorphizableResolved(
             result,
@@ -2577,6 +2598,12 @@ pub const Pass = struct {
         const saved_callable_inst_context = self.active_callable_inst_context;
         self.active_callable_inst_context = callable_inst_id;
         defer self.active_callable_inst_context = saved_callable_inst_context;
+        const saved_template_context = self.active_template_context;
+        self.active_template_context = if (callable_inst_id.isNone())
+            .none
+        else
+            result.getCallableInst(callable_inst_id).template;
+        defer self.active_template_context = saved_template_context;
 
         return self.resolveExprMonotypeIfExactResolved(result, module_idx, expr_idx);
     }
@@ -2593,6 +2620,12 @@ pub const Pass = struct {
         const saved_callable_inst_context = self.active_callable_inst_context;
         self.active_callable_inst_context = source_context_callable_inst;
         defer self.active_callable_inst_context = saved_callable_inst_context;
+        const saved_template_context = self.active_template_context;
+        self.active_template_context = if (source_context_callable_inst.isNone())
+            .none
+        else
+            result.getCallableInst(source_context_callable_inst).template;
+        defer self.active_template_context = saved_template_context;
 
         const current_template = if (!source_context_callable_inst.isNone())
             result.getCallableTemplate(result.getCallableInst(source_context_callable_inst).template).*
@@ -3031,7 +3064,13 @@ pub const Pass = struct {
         const arg_exprs = module_env.store.sliceExpr(call_expr.args);
         try self.prepareCallableArgsForCallableInst(result, module_idx, arg_exprs, callable_inst_id);
         try self.scanCallableInst(result, callable_inst_id);
-        try self.recordCallResultCallableInstsFromCallableInst(result, module_idx, call_expr_idx, callable_inst_id);
+        try self.recordCallResultCallableInstsFromCallableInst(
+            result,
+            self.active_callable_inst_context,
+            module_idx,
+            call_expr_idx,
+            callable_inst_id,
+        );
         try self.ensureCallableArgCallableInstsScanned(result, module_idx, call_expr.args);
         try self.recordCurrentExprMonotype(
             result,
@@ -3652,6 +3691,31 @@ pub const Pass = struct {
     ) Allocator.Error!bool {
         switch (result.monotype_store.getMonotype(monotype)) {
             .func => {
+                if (self.getValueExprCallableInstsInContext(result, context_callable_inst, module_idx, expr_idx)) |callable_inst_ids| {
+                    const callable_inst_set_id = try self.internCallableInstSet(result, callable_inst_ids);
+                    try self.appendCallableParamSpecEntry(result, out, .{
+                        .param_index = param_index,
+                        .projections = try self.addCallableParamProjectionEntries(result, projections.items),
+                        .callable_inst_set_id = callable_inst_set_id,
+                    });
+                    return true;
+                }
+
+                if (self.getValueExprCallableInstInContext(result, context_callable_inst, module_idx, expr_idx)) |callable_inst_id| {
+                    const callable_inst_set_id = try self.internCallableInstSet(result, &.{callable_inst_id});
+                    try self.appendCallableParamSpecEntry(result, out, .{
+                        .param_index = param_index,
+                        .projections = try self.addCallableParamProjectionEntries(result, projections.items),
+                        .callable_inst_set_id = callable_inst_set_id,
+                    });
+                    return true;
+                }
+
+                // Function-valued arguments must be scanned/materialized through the same
+                // value-expression pipeline the rest of monomorphization uses before we
+                // conclude their exact callable identity is unavailable.
+                try self.scanCirValueExpr(result, module_idx, expr_idx);
+
                 if (self.getValueExprCallableInstsInContext(result, context_callable_inst, module_idx, expr_idx)) |callable_inst_ids| {
                     const callable_inst_set_id = try self.internCallableInstSet(result, callable_inst_ids);
                     try self.appendCallableParamSpecEntry(result, out, .{
@@ -4695,6 +4759,7 @@ pub const Pass = struct {
     fn recordCallResultCallableInstsFromCallableInst(
         self: *Pass,
         result: *Result,
+        context_callable_inst: CallableInstId,
         module_idx: u32,
         call_expr_idx: CIR.Expr.Idx,
         callee_callable_inst_id: CallableInstId,
@@ -4721,7 +4786,7 @@ pub const Pass = struct {
         if (callable_inst_ids.items.len == 1) {
             try self.recordExprCallableInst(
                 result,
-                self.active_callable_inst_context,
+                context_callable_inst,
                 module_idx,
                 call_expr_idx,
                 callable_inst_ids.items[0],
@@ -4731,7 +4796,7 @@ pub const Pass = struct {
 
         try self.recordExprCallableInstSet(
             result,
-            self.active_callable_inst_context,
+            context_callable_inst,
             module_idx,
             call_expr_idx,
             callable_inst_ids.items,
@@ -4858,6 +4923,67 @@ pub const Pass = struct {
                     out,
                 );
             },
+            .e_call => |call_expr| {
+                if (self.getCallLowLevelOp(module_env, call_expr.func) != null) return;
+
+                if (self.getCallSiteCallableInstInContext(result, context_callable_inst, module_idx, expr_idx) == null and
+                    self.getCallSiteCallableInstsInContext(result, context_callable_inst, module_idx, expr_idx) == null)
+                {
+                    const saved_callable_inst_context = self.active_callable_inst_context;
+                    self.active_callable_inst_context = context_callable_inst;
+                    defer self.active_callable_inst_context = saved_callable_inst_context;
+                    const saved_template_context = self.active_template_context;
+                    self.active_template_context = if (context_callable_inst.isNone())
+                        .none
+                    else
+                        result.getCallableInst(context_callable_inst).template;
+                    defer self.active_template_context = saved_template_context;
+                    try self.resolveDirectCallSite(result, module_idx, expr_idx, call_expr);
+                }
+
+                if (self.getCallSiteCallableInstsInContext(result, context_callable_inst, module_idx, expr_idx)) |callee_callable_inst_ids| {
+                    for (callee_callable_inst_ids) |callee_callable_inst_id| {
+                        try self.recordCallResultCallableInstsFromCallableInst(
+                            result,
+                            context_callable_inst,
+                            module_idx,
+                            expr_idx,
+                            callee_callable_inst_id,
+                        );
+                    }
+                } else if (self.getCallSiteCallableInstInContext(result, context_callable_inst, module_idx, expr_idx)) |callee_callable_inst_id| {
+                    try self.recordCallResultCallableInstsFromCallableInst(
+                        result,
+                        context_callable_inst,
+                        module_idx,
+                        expr_idx,
+                        callee_callable_inst_id,
+                    );
+                } else {
+                    return;
+                }
+
+                if (self.getValueExprCallableInstsInContext(result, context_callable_inst, module_idx, expr_idx)) |callable_inst_ids| {
+                    for (callable_inst_ids) |callable_inst_id| {
+                        var seen = false;
+                        for (out.items) |existing| {
+                            if (existing == callable_inst_id) {
+                                seen = true;
+                                break;
+                            }
+                        }
+                        if (!seen) try out.append(self.allocator, callable_inst_id);
+                    }
+                    return;
+                }
+
+                if (self.getValueExprCallableInstInContext(result, context_callable_inst, module_idx, expr_idx)) |callable_inst_id| {
+                    for (out.items) |existing| {
+                        if (existing == callable_inst_id) return;
+                    }
+                    try out.append(self.allocator, callable_inst_id);
+                }
+            },
             else => {},
         }
     }
@@ -4877,6 +5003,12 @@ pub const Pass = struct {
         const saved_callable_inst_context = self.active_callable_inst_context;
         self.active_callable_inst_context = context_callable_inst;
         defer self.active_callable_inst_context = saved_callable_inst_context;
+        const saved_template_context = self.active_template_context;
+        self.active_template_context = if (context_callable_inst.isNone())
+            .none
+        else
+            result.getCallableInst(context_callable_inst).template;
+        defer self.active_template_context = saved_template_context;
 
         const fn_monotype = try self.resolveExprMonotypeIfExactResolved(result, module_idx, expr_idx);
         if (fn_monotype.isNone()) return null;
@@ -6511,7 +6643,7 @@ pub const Pass = struct {
         var i: usize = 0;
         while (i < merged.items.len) {
             const existing_callable_inst_id = merged.items[i];
-            if (procInstsShareSemanticFamily(result, existing_callable_inst_id, callable_inst_id)) {
+            if (try self.callableInstsShareSemanticFamily(result, existing_callable_inst_id, callable_inst_id)) {
                 if (existing_callable_inst_id == callable_inst_id) return;
                 if (@intFromEnum(existing_callable_inst_id) > @intFromEnum(callable_inst_id)) return;
                 _ = merged.swapRemove(i);
@@ -6575,7 +6707,7 @@ pub const Pass = struct {
         var i: usize = 0;
         while (i < merged.items.len) {
             const existing_callable_inst_id = merged.items[i];
-            if (procInstsShareSemanticFamily(result, existing_callable_inst_id, callable_inst_id)) {
+            if (try self.callableInstsShareSemanticFamily(result, existing_callable_inst_id, callable_inst_id)) {
                 if (existing_callable_inst_id == callable_inst_id) return;
                 if (@intFromEnum(existing_callable_inst_id) > @intFromEnum(callable_inst_id)) return;
                 _ = merged.swapRemove(i);
@@ -6620,7 +6752,7 @@ pub const Pass = struct {
         var i: usize = 0;
         while (i < merged.items.len) {
             const existing_callable_inst_id = merged.items[i];
-            if (procInstsShareSemanticFamily(result, existing_callable_inst_id, callable_inst_id)) {
+            if (try self.callableInstsShareSemanticFamily(result, existing_callable_inst_id, callable_inst_id)) {
                 if (existing_callable_inst_id == callable_inst_id) return;
                 if (@intFromEnum(existing_callable_inst_id) > @intFromEnum(callable_inst_id)) return;
                 _ = merged.swapRemove(i);
@@ -6665,7 +6797,7 @@ pub const Pass = struct {
         var i: usize = 0;
         while (i < merged.items.len) {
             const existing_callable_inst_id = merged.items[i];
-            if (procInstsShareSemanticFamily(result, existing_callable_inst_id, callable_inst_id)) {
+            if (try self.callableInstsShareSemanticFamily(result, existing_callable_inst_id, callable_inst_id)) {
                 if (existing_callable_inst_id == callable_inst_id) return;
                 if (@intFromEnum(existing_callable_inst_id) > @intFromEnum(callable_inst_id)) return;
                 _ = merged.swapRemove(i);
@@ -6713,11 +6845,12 @@ pub const Pass = struct {
         }
     }
 
-    fn procInstsShareSemanticFamily(
+    fn callableInstsShareSemanticFamily(
+        self: *Pass,
         result: *const Result,
         lhs_id: CallableInstId,
         rhs_id: CallableInstId,
-    ) bool {
+    ) Allocator.Error!bool {
         if (lhs_id == rhs_id) return true;
 
         const lhs = result.getCallableInst(lhs_id);
@@ -6725,9 +6858,23 @@ pub const Pass = struct {
         // Callable insts are interned monotonically as fixed-point scans discover
         // stricter specializations. For the same template under the same
         // defining callable context, later callable-inst ids represent the current
-        // specialization state and older ids are stale approximations.
+        // specialization state and older ids are stale approximations. Higher-order
+        // callable parameter requirements are part of that semantic identity and
+        // must not be collapsed across distinct exact callable sets.
         return lhs.template == rhs.template and
-            lhs.defining_context_callable_inst == rhs.defining_context_callable_inst;
+            lhs.defining_context_callable_inst == rhs.defining_context_callable_inst and
+            try self.monotypesStructurallyEqualAcrossModules(
+                result,
+                lhs.fn_monotype,
+                lhs.fn_monotype_module_idx,
+                rhs.fn_monotype,
+                rhs.fn_monotype_module_idx,
+            ) and
+            callableParamSpecsEqual(
+                result,
+                result.getCallableParamSpecEntries(lhs.callable_param_specs),
+                result.getCallableParamSpecEntries(rhs.callable_param_specs),
+            );
     }
 
     fn recordCallSiteCallableInst(
@@ -8368,6 +8515,12 @@ pub const Pass = struct {
                     const saved_callable_inst_context = self.active_callable_inst_context;
                     self.active_callable_inst_context = context_callable_inst;
                     defer self.active_callable_inst_context = saved_callable_inst_context;
+                    const saved_template_context = self.active_template_context;
+                    self.active_template_context = if (context_callable_inst.isNone())
+                        .none
+                    else
+                        result.getCallableInst(context_callable_inst).template;
+                    defer self.active_template_context = saved_template_context;
                     try self.resolveDirectCallSite(result, module_idx, expr_idx, call_expr);
                 }
 
@@ -8463,6 +8616,12 @@ pub const Pass = struct {
                     const saved_callable_inst_context = self.active_callable_inst_context;
                     self.active_callable_inst_context = context_callable_inst;
                     defer self.active_callable_inst_context = saved_callable_inst_context;
+                    const saved_template_context = self.active_template_context;
+                    self.active_template_context = if (context_callable_inst.isNone())
+                        .none
+                    else
+                        result.getCallableInst(context_callable_inst).template;
+                    defer self.active_template_context = saved_template_context;
                     try self.resolveDirectCallSite(result, module_idx, expr_idx, call_expr);
                 }
 
@@ -8497,7 +8656,6 @@ pub const Pass = struct {
 
         if (self.getCallableParamSpecCallableInstsInContext(result, self.active_callable_inst_context, module_idx, expr_idx)) |callable_inst_ids| {
             if (uniqueTemplateFromCallableInsts(result, callable_inst_ids)) |template_id| {
-                try self.aliasCallableTemplateSource(result, packExprSourceKey(module_idx, expr_idx), template_id);
                 return template_id;
             }
         }
@@ -8570,9 +8728,6 @@ pub const Pass = struct {
             },
             else => null,
         };
-        if (resolved) |template_id| {
-            try self.aliasCallableTemplateSource(result, packExprSourceKey(module_idx, expr_idx), template_id);
-        }
         return resolved;
     }
 
@@ -8871,6 +9026,76 @@ pub const Pass = struct {
             .e_nominal_external => |nominal_expr| {
                 try self.recordDemandedValueExprCallableInsts(result, module_idx, expr_idx, callable_inst_ids);
                 try self.propagateDemandedCallableInstsToValueExpr(result, module_idx, nominal_expr.backing_expr, callable_inst_ids, visiting);
+            },
+            .e_call => |call_expr| {
+                if (self.getCallLowLevelOp(module_env, call_expr.func) != null) return;
+
+                try self.recordDemandedValueExprCallableInsts(result, module_idx, expr_idx, callable_inst_ids);
+
+                if (self.getCallSiteCallableInstInContext(result, self.active_callable_inst_context, module_idx, expr_idx) == null and
+                    self.getCallSiteCallableInstsInContext(result, self.active_callable_inst_context, module_idx, expr_idx) == null)
+                {
+                    try self.resolveDirectCallSite(result, module_idx, expr_idx, call_expr);
+                }
+
+                if (self.getCallSiteCallableInstsInContext(result, self.active_callable_inst_context, module_idx, expr_idx)) |callee_callable_inst_ids| {
+                    for (callee_callable_inst_ids) |callee_callable_inst_id| {
+                        try self.recordCallResultCallableInstsFromCallableInst(
+                            result,
+                            self.active_callable_inst_context,
+                            module_idx,
+                            expr_idx,
+                            callee_callable_inst_id,
+                        );
+                        const callee_callable_inst = result.getCallableInst(callee_callable_inst_id);
+                        const callee_template = result.getCallableTemplate(callee_callable_inst.template);
+                        const boundary = self.callableBoundaryInfo(callee_template.module_idx, callee_template.cir_expr) orelse continue;
+                        {
+                            const saved_callable_inst_context = self.active_callable_inst_context;
+                            self.active_callable_inst_context = callee_callable_inst_id;
+                            defer self.active_callable_inst_context = saved_callable_inst_context;
+                            const saved_template_context = self.active_template_context;
+                            self.active_template_context = result.getCallableInst(callee_callable_inst_id).template;
+                            defer self.active_template_context = saved_template_context;
+                            try self.propagateDemandedCallableInstsToValueExpr(
+                                result,
+                                callee_template.module_idx,
+                                boundary.body_expr,
+                                callable_inst_ids,
+                                visiting,
+                            );
+                        }
+                    }
+                    return;
+                }
+
+                if (self.getCallSiteCallableInstInContext(result, self.active_callable_inst_context, module_idx, expr_idx)) |callee_callable_inst_id| {
+                    try self.recordCallResultCallableInstsFromCallableInst(
+                        result,
+                        self.active_callable_inst_context,
+                        module_idx,
+                        expr_idx,
+                        callee_callable_inst_id,
+                    );
+                    const callee_callable_inst = result.getCallableInst(callee_callable_inst_id);
+                    const callee_template = result.getCallableTemplate(callee_callable_inst.template);
+                    const boundary = self.callableBoundaryInfo(callee_template.module_idx, callee_template.cir_expr) orelse return;
+                    {
+                        const saved_callable_inst_context = self.active_callable_inst_context;
+                        self.active_callable_inst_context = callee_callable_inst_id;
+                        defer self.active_callable_inst_context = saved_callable_inst_context;
+                        const saved_template_context = self.active_template_context;
+                        self.active_template_context = result.getCallableInst(callee_callable_inst_id).template;
+                        defer self.active_template_context = saved_template_context;
+                        try self.propagateDemandedCallableInstsToValueExpr(
+                            result,
+                            callee_template.module_idx,
+                            boundary.body_expr,
+                            callable_inst_ids,
+                            visiting,
+                        );
+                    }
+                }
             },
             .e_dot_access => |dot_expr| {
                 if (dot_expr.args != null) return;
