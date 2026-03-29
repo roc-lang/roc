@@ -114,7 +114,9 @@ pub const WasmEvaluator = struct {
         defer lower_result.deinit();
 
         // Generate wasm module
-        var codegen = WasmCodeGen.init(self.allocator, &lower_result.lir_store, lower_result.layout_store);
+        // TODO(Phase 12): Merge roc_builtins.o and populate real BuiltinSymbols.
+        // For now, use undefined — eval tests need builtins merged before this works.
+        var codegen = WasmCodeGen.init(self.allocator, &lower_result.lir_store, lower_result.layout_store, undefined);
         codegen.wasm_stack_bytes = self.wasm_stack_bytes;
         defer codegen.deinit();
 

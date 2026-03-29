@@ -660,6 +660,7 @@ pub const BuiltinSymbols = struct {
     // --- Numeric conversions ---
     i128_to_dec: u32, // roc_builtins_i128_to_dec_try_unsafe
     u128_to_dec: u32, // roc_builtins_u128_to_dec_try_unsafe
+    dec_to_int_try_unsafe: u32, // roc_builtins_dec_to_int_try_unsafe
     dec_to_f32: u32, // roc_builtins_dec_to_f32_try_unsafe
     float_to_str: u32, // roc_builtins_float_to_str
     int_to_str: u32, // roc_builtins_int_to_str
@@ -710,6 +711,7 @@ pub const BuiltinSymbols = struct {
         .{ "roc_builtins_num_rem_trunc_u128", "u128_mod" },
         .{ "roc_builtins_i128_to_dec_try_unsafe", "i128_to_dec" },
         .{ "roc_builtins_u128_to_dec_try_unsafe", "u128_to_dec" },
+        .{ "roc_builtins_dec_to_int_try_unsafe", "dec_to_int_try_unsafe" },
         .{ "roc_builtins_dec_to_f32_try_unsafe", "dec_to_f32" },
         .{ "roc_builtins_float_to_str", "float_to_str" },
         .{ "roc_builtins_int_to_str", "int_to_str" },
@@ -3549,7 +3551,7 @@ test "BuiltinSymbols — all symbols found after merge" {
 
     // Spot check a few fields
     try std.testing.expectEqual(@as(u32, 0), syms.dec_mul); // sym index 0 → roc_builtins_dec_mul_saturated
-    try std.testing.expectEqual(@as(u32, 19), syms.str_trim); // sym index 19
+    try std.testing.expectEqual(@as(u32, 20), syms.str_trim); // sym index 20
 }
 
 test "BuiltinSymbols — fails when symbol missing" {
