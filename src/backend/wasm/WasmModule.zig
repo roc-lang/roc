@@ -537,6 +537,17 @@ pub fn addHostedFunctionToTable(self: *Self, module_name: []const u8, fn_name: [
     return try self.addTableElement(func_idx);
 }
 
+/// Find an imported function's index by module and field name.
+/// Returns null if no matching import exists.
+pub fn findImportFuncIdx(self: *const Self, module_name: []const u8, field_name: []const u8) ?u32 {
+    for (self.imports.items, 0..) |imp, i| {
+        if (std.mem.eql(u8, imp.module_name, module_name) and std.mem.eql(u8, imp.field_name, field_name)) {
+            return @intCast(i);
+        }
+    }
+    return null;
+}
+
 // --- Surgical Linking ---
 
 /// Dummy function body: unreachable + end. Inserted to maintain function index
@@ -748,16 +759,18 @@ pub const BuiltinSymbols = struct {
     pub const PopulateError = error{MissingBuiltinSymbol};
 
     /// Populate this struct by looking up each builtin symbol name in the
-    /// module's merged symbol table.
+    /// module's merged symbol table. Returns the actual function index for
+    /// each builtin (from sym.index), not the symbol table index.
     pub fn populate(module: *const Self) PopulateError!BuiltinSymbols {
         var result: BuiltinSymbols = undefined;
         inline for (mapping) |entry| {
             const sym_name = entry[0];
             const field_name = entry[1];
-            @field(result, field_name) = module.linking.findSymbolByName(
+            const sym_table_idx = module.linking.findSymbolByName(
                 sym_name,
                 module.imports.items,
             ) orelse return error.MissingBuiltinSymbol;
+            @field(result, field_name) = module.linking.symbol_table.items[sym_table_idx].index;
         }
         return result;
     }
@@ -1083,6 +1096,33 @@ pub fn resolveCodeRelocations(self: *Self) void {
                 }
             },
         }
+    }
+}
+
+/// Transfer function bodies added via setFunctionBody into the code_bytes
+/// representation. This makes app-generated functions compatible with
+/// linkHostToAppCalls, resolveCodeRelocations, eliminateDeadCode, and
+/// materializeFuncBodies.
+///
+/// Must be called after all addFunction/setFunctionBody calls are complete
+/// and before linkHostToAppCalls.
+pub fn transferAppFunctions(self: *Self) !void {
+    const host_defined_count = self.function_offsets.items.len;
+    const total_defined_count = self.func_type_indices.items.len;
+
+    if (total_defined_count <= host_defined_count) return;
+
+    for (host_defined_count..total_defined_count) |i| {
+        if (i >= self.func_bodies.items.len) break;
+        const body = self.func_bodies.items[i].body;
+        if (body.len == 0) continue;
+
+        const fn_offset: u32 = @intCast(self.code_bytes.items.len);
+        try self.function_offsets.append(self.allocator, fn_offset);
+
+        // Write body length + body to code_bytes
+        try leb128WriteU32(self.allocator, &self.code_bytes, @intCast(body.len));
+        try self.code_bytes.appendSlice(self.allocator, body);
     }
 }
 
