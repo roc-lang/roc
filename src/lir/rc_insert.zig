@@ -26,6 +26,15 @@ const AssignLowLevelStmt = std.meta.TagPayload(CFStmt, .assign_low_level);
 const AssignListStmt = std.meta.TagPayload(CFStmt, .assign_list);
 const AssignStructStmt = std.meta.TagPayload(CFStmt, .assign_struct);
 const AssignTagStmt = std.meta.TagPayload(CFStmt, .assign_tag);
+const UseKind = enum {
+    borrow,
+    consume,
+};
+
+const UseSummary = struct {
+    has_borrow: bool = false,
+    has_consume: bool = false,
+};
 
 /// Inserts explicit reference-count statements into statement-only LIR.
 pub const RcInsertPass = struct {
@@ -34,6 +43,7 @@ pub const RcInsertPass = struct {
     layout_store: *const layout_mod.Store,
 
     symbol_use_counts: std.AutoHashMap(u64, u32),
+    symbol_use_summaries: std.AutoHashMap(u64, UseSummary),
     symbol_alias_sources: std.AutoHashMap(u64, u64),
     active_join_params: std.AutoHashMap(u32, LIR.LocalSpan),
 
@@ -44,6 +54,7 @@ pub const RcInsertPass = struct {
             .store = store,
             .layout_store = layout_store,
             .symbol_use_counts = std.AutoHashMap(u64, u32).init(allocator),
+            .symbol_use_summaries = std.AutoHashMap(u64, UseSummary).init(allocator),
             .symbol_alias_sources = std.AutoHashMap(u64, u64).init(allocator),
             .active_join_params = std.AutoHashMap(u32, LIR.LocalSpan).init(allocator),
         };
@@ -52,6 +63,7 @@ pub const RcInsertPass = struct {
     /// Releases all temporary analysis state owned by this pass.
     pub fn deinit(self: *RcInsertPass) void {
         self.symbol_use_counts.deinit();
+        self.symbol_use_summaries.deinit();
         self.symbol_alias_sources.deinit();
         self.active_join_params.deinit();
     }
@@ -59,6 +71,7 @@ pub const RcInsertPass = struct {
     /// Inserts RC statements for one proc body.
     pub fn insertRcOpsForProc(self: *RcInsertPass, proc_id: LirProcSpecId) Allocator.Error!void {
         self.symbol_use_counts.clearRetainingCapacity();
+        self.symbol_use_summaries.clearRetainingCapacity();
         self.symbol_alias_sources.clearRetainingCapacity();
         self.active_join_params.clearRetainingCapacity();
 
@@ -97,6 +110,29 @@ pub const RcInsertPass = struct {
         for (locals) |local| try self.bumpUse(local);
     }
 
+    fn mergeUseSummary(self: *RcInsertPass, local: LocalId, summary: UseSummary) Allocator.Error!void {
+        if (!self.layoutNeedsRc(self.localLayout(local))) return;
+        const gop = try self.symbol_use_summaries.getOrPut(localKey(local));
+        if (!gop.found_existing) gop.value_ptr.* = .{};
+        gop.value_ptr.has_borrow = gop.value_ptr.has_borrow or summary.has_borrow;
+        gop.value_ptr.has_consume = gop.value_ptr.has_consume or summary.has_consume;
+    }
+
+    fn markUse(self: *RcInsertPass, local: LocalId, kind: UseKind) Allocator.Error!void {
+        if (!self.layoutNeedsRc(self.localLayout(local))) return;
+        try self.bumpUse(local);
+        const gop = try self.symbol_use_summaries.getOrPut(localKey(local));
+        if (!gop.found_existing) gop.value_ptr.* = .{};
+        switch (kind) {
+            .borrow => gop.value_ptr.has_borrow = true,
+            .consume => gop.value_ptr.has_consume = true,
+        }
+    }
+
+    fn useSummary(self: *const RcInsertPass, local: LocalId) UseSummary {
+        return self.symbol_use_summaries.get(localKey(local)) orelse .{};
+    }
+
     fn refOpSource(op: LIR.RefOp) LocalId {
         return switch (op) {
             .local => |local| local,
@@ -107,59 +143,90 @@ pub const RcInsertPass = struct {
         };
     }
 
+    fn propagateResultUses(self: *RcInsertPass, target: LocalId, semantics: LIR.ResultSemantics) Allocator.Error!void {
+        const target_use_count = self.symbol_use_counts.get(localKey(target)) orelse 0;
+        if (target_use_count == 0) return;
+        const target_summary = self.useSummary(target);
+
+        switch (semantics) {
+            .fresh => {},
+            .alias_of => |aliased| {
+                try self.bumpUse(aliased.owner);
+                try self.mergeUseSummary(aliased.owner, target_summary);
+            },
+            .borrow_of => |borrowed| {
+                try self.bumpUse(borrowed.owner);
+                try self.mergeUseSummary(borrowed.owner, target_summary);
+            },
+        }
+    }
+
     fn countUsesInStmt(self: *RcInsertPass, stmt_id: CFStmtId) Allocator.Error!void {
         switch (self.store.getCFStmt(stmt_id)) {
             .assign_symbol => |assign| try self.countUsesInStmt(assign.next),
             .assign_ref => |assign| {
                 try self.countUsesInStmt(assign.next);
-                const target_use_count = self.symbol_use_counts.get(localKey(assign.target)) orelse 0;
-                if (target_use_count == 0) return;
-                switch (assign.result) {
-                    .fresh => {},
-                    .alias_of, .borrow_of => try self.bumpUse(refOpSource(assign.op)),
-                }
+                try self.propagateResultUses(assign.target, assign.result);
             },
             .assign_literal => |assign| try self.countUsesInStmt(assign.next),
             .assign_call => |assign| {
+                for (self.store.getLocalSpan(assign.args)) |arg| try self.markUse(arg, .consume);
                 try self.countUsesInStmt(assign.next);
+                try self.propagateResultUses(assign.target, assign.result);
             },
             .assign_low_level => |assign| {
+                const args = self.store.getLocalSpan(assign.args);
+                const arg_ownership = assign.op.getArgOwnership();
+                if (builtin.mode == .Debug and args.len != arg_ownership.len) {
+                    std.debug.panic(
+                        "RcInsertPass invariant violated: low-level {s} passed {d} args but ownership table expects {d}",
+                        .{ @tagName(assign.op), args.len, arg_ownership.len },
+                    );
+                }
+                for (args, arg_ownership) |arg, ownership| {
+                    try self.markUse(arg, switch (ownership) {
+                        .borrow => .borrow,
+                        .consume => .consume,
+                    });
+                }
                 try self.countUsesInStmt(assign.next);
+                try self.propagateResultUses(assign.target, assign.result);
             },
             .assign_list => |assign| {
-                try self.countUsesInLocals(self.store.getLocalSpan(assign.elems));
+                for (self.store.getLocalSpan(assign.elems)) |elem| try self.markUse(elem, .consume);
                 try self.countUsesInStmt(assign.next);
             },
             .assign_struct => |assign| {
-                try self.countUsesInLocals(self.store.getLocalSpan(assign.fields));
+                for (self.store.getLocalSpan(assign.fields)) |field| try self.markUse(field, .consume);
                 try self.countUsesInStmt(assign.next);
             },
             .assign_tag => |assign| {
-                try self.countUsesInLocals(self.store.getLocalSpan(assign.args));
+                for (self.store.getLocalSpan(assign.args)) |arg| try self.markUse(arg, .consume);
                 try self.countUsesInStmt(assign.next);
             },
             .debug => |stmt| {
-                try self.bumpUse(stmt.message);
+                try self.markUse(stmt.message, .borrow);
                 try self.countUsesInStmt(stmt.next);
             },
             .expect => |stmt| {
-                try self.bumpUse(stmt.condition);
+                try self.markUse(stmt.condition, .borrow);
                 try self.countUsesInStmt(stmt.next);
             },
             .runtime_error => {},
             .incref => |inc| {
-                try self.bumpUse(inc.value);
+                try self.markUse(inc.value, .borrow);
                 try self.countUsesInStmt(inc.next);
             },
             .decref => |dec| {
-                try self.bumpUse(dec.value);
+                try self.markUse(dec.value, .borrow);
                 try self.countUsesInStmt(dec.next);
             },
             .free => |free_stmt| {
-                try self.bumpUse(free_stmt.value);
+                try self.markUse(free_stmt.value, .borrow);
                 try self.countUsesInStmt(free_stmt.next);
             },
             .switch_stmt => |switch_stmt| {
+                try self.markUse(switch_stmt.cond, .borrow);
                 for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
                     try self.countUsesInStmt(branch.body);
                 }
@@ -200,10 +267,10 @@ pub const RcInsertPass = struct {
                 }
                 for (args, param_locals) |arg, param| {
                     if (arg == param) continue;
-                    try self.bumpUse(arg);
+                    try self.markUse(arg, .consume);
                 }
             },
-            .ret => |ret| try self.bumpUse(ret.value),
+            .ret => |ret| try self.markUse(ret.value, .consume),
             .crash => {},
         }
     }
@@ -235,6 +302,120 @@ pub const RcInsertPass = struct {
         return switch (resultSemantics(stmt)) {
             .fresh => true,
             else => false,
+        };
+    }
+
+    fn appendDecrefToTerminalPaths(self: *RcInsertPass, value: LocalId, stmt_id: CFStmtId) Allocator.Error!CFStmtId {
+        const stmt = self.store.getCFStmt(stmt_id);
+        return switch (stmt) {
+            .assign_symbol => |assign| try self.store.addCFStmt(.{ .assign_symbol = .{
+                .target = assign.target,
+                .symbol = assign.symbol,
+                .next = try self.appendDecrefToTerminalPaths(value, assign.next),
+            } }),
+            .assign_ref => |assign| try self.store.addCFStmt(.{ .assign_ref = .{
+                .target = assign.target,
+                .result = assign.result,
+                .op = assign.op,
+                .next = try self.appendDecrefToTerminalPaths(value, assign.next),
+            } }),
+            .assign_literal => |assign| try self.store.addCFStmt(.{ .assign_literal = .{
+                .target = assign.target,
+                .result = assign.result,
+                .value = assign.value,
+                .next = try self.appendDecrefToTerminalPaths(value, assign.next),
+            } }),
+            .assign_call => |assign| try self.store.addCFStmt(.{ .assign_call = .{
+                .target = assign.target,
+                .result = assign.result,
+                .proc = assign.proc,
+                .args = assign.args,
+                .next = try self.appendDecrefToTerminalPaths(value, assign.next),
+            } }),
+            .assign_low_level => |assign| try self.store.addCFStmt(.{ .assign_low_level = .{
+                .target = assign.target,
+                .result = assign.result,
+                .op = assign.op,
+                .args = assign.args,
+                .next = try self.appendDecrefToTerminalPaths(value, assign.next),
+            } }),
+            .assign_list => |assign| try self.store.addCFStmt(.{ .assign_list = .{
+                .target = assign.target,
+                .result = assign.result,
+                .elems = assign.elems,
+                .next = try self.appendDecrefToTerminalPaths(value, assign.next),
+            } }),
+            .assign_struct => |assign| try self.store.addCFStmt(.{ .assign_struct = .{
+                .target = assign.target,
+                .result = assign.result,
+                .fields = assign.fields,
+                .next = try self.appendDecrefToTerminalPaths(value, assign.next),
+            } }),
+            .assign_tag => |assign| try self.store.addCFStmt(.{ .assign_tag = .{
+                .target = assign.target,
+                .result = assign.result,
+                .discriminant = assign.discriminant,
+                .args = assign.args,
+                .next = try self.appendDecrefToTerminalPaths(value, assign.next),
+            } }),
+            .debug => |stmt_debug| try self.store.addCFStmt(.{ .debug = .{
+                .message = stmt_debug.message,
+                .next = try self.appendDecrefToTerminalPaths(value, stmt_debug.next),
+            } }),
+            .expect => |stmt_expect| try self.store.addCFStmt(.{ .expect = .{
+                .condition = stmt_expect.condition,
+                .next = try self.appendDecrefToTerminalPaths(value, stmt_expect.next),
+            } }),
+            .incref => |inc| try self.store.addCFStmt(.{ .incref = .{
+                .value = inc.value,
+                .count = inc.count,
+                .next = try self.appendDecrefToTerminalPaths(value, inc.next),
+            } }),
+            .decref => |dec| try self.store.addCFStmt(.{ .decref = .{
+                .value = dec.value,
+                .next = try self.appendDecrefToTerminalPaths(value, dec.next),
+            } }),
+            .free => |free_stmt| try self.store.addCFStmt(.{ .free = .{
+                .value = free_stmt.value,
+                .next = try self.appendDecrefToTerminalPaths(value, free_stmt.next),
+            } }),
+            .switch_stmt => |switch_stmt| blk: {
+                var rewritten_branches: std.ArrayListUnmanaged(LIR.CFSwitchBranch) = .empty;
+                defer rewritten_branches.deinit(self.allocator);
+
+                for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
+                    try rewritten_branches.append(self.allocator, .{
+                        .value = branch.value,
+                        .body = try self.appendDecrefToTerminalPaths(value, branch.body),
+                    });
+                }
+
+                break :blk try self.store.addCFStmt(.{ .switch_stmt = .{
+                    .cond = switch_stmt.cond,
+                    .branches = try self.store.addCFSwitchBranches(rewritten_branches.items),
+                    .default_branch = try self.appendDecrefToTerminalPaths(value, switch_stmt.default_branch),
+                } });
+            },
+            .borrow_scope => |scope| try self.store.addCFStmt(.{ .borrow_scope = .{
+                .id = scope.id,
+                .body = try self.appendDecrefToTerminalPaths(value, scope.body),
+                .remainder = try self.appendDecrefToTerminalPaths(value, scope.remainder),
+            } }),
+            .join => |join| try self.store.addCFStmt(.{ .join = .{
+                .id = join.id,
+                .params = join.params,
+                .body = try self.appendDecrefToTerminalPaths(value, join.body),
+                .remainder = try self.appendDecrefToTerminalPaths(value, join.remainder),
+            } }),
+            .ret => |ret_stmt| try self.store.addCFStmt(.{ .decref = .{
+                .value = value,
+                .next = try self.store.addCFStmt(.{ .ret = ret_stmt }),
+            } }),
+            .runtime_error, .crash => try self.store.addCFStmt(.{ .decref = .{
+                .value = value,
+                .next = stmt_id,
+            } }),
+            .scope_exit, .jump => stmt_id,
         };
     }
 
@@ -292,12 +473,20 @@ pub const RcInsertPass = struct {
     }
 
     fn wrapAssignLike(self: *RcInsertPass, stmt: CFStmt, target: LocalId, next_raw: CFStmtId) Allocator.Error!CFStmtId {
-        const next = try self.processStmt(next_raw);
         const use_count = self.symbol_use_counts.get(localKey(target)) orelse 0;
         const semantics = resultSemantics(stmt);
+        var next = try self.processStmt(next_raw);
 
         const target_layout = self.localLayout(target);
         if (self.layoutNeedsRc(target_layout)) try self.recordAliasSemantics(target, semantics);
+
+        if (self.layoutNeedsRc(target_layout) and resultIsFresh(stmt)) {
+            const summary = self.useSummary(target);
+            if (use_count > 0 and summary.has_borrow and !summary.has_consume) {
+                next = try self.appendDecrefToTerminalPaths(target, next);
+                return try self.rebuildAssignStmt(stmt, next);
+            }
+        }
 
         if (self.layoutNeedsRc(target_layout) and use_count > 1 and resultIsFresh(stmt)) {
             const decref_stmt = try self.store.addCFStmt(.{ .decref = .{

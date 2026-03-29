@@ -1212,6 +1212,132 @@ fn getOrAllocTypedLocal(self: *Self, local_id: LocalRef, val_type: ValType) Allo
     return self.storage.allocLocal(local_id, val_type);
 }
 
+fn recordProcLocal(locals: *std.AutoHashMap(u64, void), local: LocalRef) Allocator.Error!void {
+    _ = try locals.getOrPut(@intFromEnum(local));
+}
+
+fn recordRefOpLocals(locals: *std.AutoHashMap(u64, void), op: RefOp) Allocator.Error!void {
+    switch (op) {
+        .local => |local| try recordProcLocal(locals, local),
+        .discriminant => |disc| try recordProcLocal(locals, disc.source),
+        .field => |field| try recordProcLocal(locals, field.source),
+        .tag_payload => |payload| try recordProcLocal(locals, payload.source),
+        .nominal => |nominal| try recordProcLocal(locals, nominal.backing_ref),
+    }
+}
+
+fn collectProcLocals(
+    self: *Self,
+    stmt_id: CFStmtId,
+    locals: *std.AutoHashMap(u64, void),
+    visited: *std.AutoHashMap(u32, void),
+) Allocator.Error!void {
+    const gop = try visited.getOrPut(@intFromEnum(stmt_id));
+    if (gop.found_existing) return;
+
+    switch (self.store.getCFStmt(stmt_id)) {
+        .assign_symbol => |assign| {
+            try recordProcLocal(locals, assign.target);
+            try self.collectProcLocals(assign.next, locals, visited);
+        },
+        .assign_ref => |assign| {
+            try recordProcLocal(locals, assign.target);
+            try recordRefOpLocals(locals, assign.op);
+            try self.collectProcLocals(assign.next, locals, visited);
+        },
+        .assign_literal => |assign| {
+            try recordProcLocal(locals, assign.target);
+            try self.collectProcLocals(assign.next, locals, visited);
+        },
+        .assign_call => |assign| {
+            try recordProcLocal(locals, assign.target);
+            for (self.store.getLocalSpan(assign.args)) |arg| try recordProcLocal(locals, arg);
+            try self.collectProcLocals(assign.next, locals, visited);
+        },
+        .assign_low_level => |assign| {
+            try recordProcLocal(locals, assign.target);
+            for (self.store.getLocalSpan(assign.args)) |arg| try recordProcLocal(locals, arg);
+            try self.collectProcLocals(assign.next, locals, visited);
+        },
+        .assign_list => |assign| {
+            try recordProcLocal(locals, assign.target);
+            for (self.store.getLocalSpan(assign.elems)) |elem| try recordProcLocal(locals, elem);
+            try self.collectProcLocals(assign.next, locals, visited);
+        },
+        .assign_struct => |assign| {
+            try recordProcLocal(locals, assign.target);
+            for (self.store.getLocalSpan(assign.fields)) |field| try recordProcLocal(locals, field);
+            try self.collectProcLocals(assign.next, locals, visited);
+        },
+        .assign_tag => |assign| {
+            try recordProcLocal(locals, assign.target);
+            for (self.store.getLocalSpan(assign.args)) |arg| try recordProcLocal(locals, arg);
+            try self.collectProcLocals(assign.next, locals, visited);
+        },
+        .debug => |debug_stmt| {
+            try recordProcLocal(locals, debug_stmt.message);
+            try self.collectProcLocals(debug_stmt.next, locals, visited);
+        },
+        .expect => |expect_stmt| {
+            try recordProcLocal(locals, expect_stmt.condition);
+            try self.collectProcLocals(expect_stmt.next, locals, visited);
+        },
+        .runtime_error => {},
+        .switch_stmt => |switch_stmt| {
+            try recordProcLocal(locals, switch_stmt.cond);
+            for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
+                try self.collectProcLocals(branch.body, locals, visited);
+            }
+            try self.collectProcLocals(switch_stmt.default_branch, locals, visited);
+        },
+        .borrow_scope => |scope| {
+            try self.collectProcLocals(scope.body, locals, visited);
+            try self.collectProcLocals(scope.remainder, locals, visited);
+        },
+        .scope_exit => {},
+        .join => |join_stmt| {
+            for (self.store.getLocalSpan(join_stmt.params)) |param| try recordProcLocal(locals, param);
+            try self.collectProcLocals(join_stmt.body, locals, visited);
+            try self.collectProcLocals(join_stmt.remainder, locals, visited);
+        },
+        .jump => |jump_stmt| {
+            for (self.store.getLocalSpan(jump_stmt.args)) |arg| try recordProcLocal(locals, arg);
+        },
+        .ret => |ret_stmt| try recordProcLocal(locals, ret_stmt.value),
+        .incref => |inc| {
+            try recordProcLocal(locals, inc.value);
+            try self.collectProcLocals(inc.next, locals, visited);
+        },
+        .decref => |dec| {
+            try recordProcLocal(locals, dec.value);
+            try self.collectProcLocals(dec.next, locals, visited);
+        },
+        .free => |free_stmt| {
+            try recordProcLocal(locals, free_stmt.value);
+            try self.collectProcLocals(free_stmt.next, locals, visited);
+        },
+        .crash => {},
+    }
+}
+
+fn prebindProcLocals(self: *Self, proc: LirProcSpec) Allocator.Error!void {
+    var locals = std.AutoHashMap(u64, void).init(self.allocator);
+    defer locals.deinit();
+    var visited = std.AutoHashMap(u32, void).init(self.allocator);
+    defer visited.deinit();
+
+    for (self.store.getLocalSpan(proc.args)) |arg| try recordProcLocal(&locals, arg);
+    try self.collectProcLocals(proc.body, &locals, &visited);
+
+    var it = locals.iterator();
+    while (it.next()) |entry| {
+        const local_id: LocalRef = @enumFromInt(@as(u32, @intCast(entry.key_ptr.*)));
+        if (self.storage.getLocal(local_id) != null) continue;
+        const vt = self.exprValType(local_id);
+        _ = try self.storage.allocLocal(local_id, vt);
+    }
+}
+
 /// Convert a ValType to the corresponding BlockType for structured control flow.
 fn pushExprControlFrame(self: *Self) void {
     self.expr_control_depth += 1;
@@ -3934,6 +4060,8 @@ fn compileProcSpecBody(self: *Self, proc: LirProcSpec) Allocator.Error!void {
         _ = self.storage.allocLocal(arg, vt) catch return error.OutOfMemory;
     }
 
+    try self.prebindProcLocals(proc);
+
     // Pre-allocate frame pointer local (after params, so it doesn't conflict)
     self.fp_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     self.proc_return_local = self.storage.allocAnonymousLocal(ret_vt) catch return error.OutOfMemory;
@@ -4501,18 +4629,21 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
             const ls = self.getLayoutStore();
             const source_layout_idx = self.exprLayoutIdx(disc.source);
             const source_layout = ls.getLayout(source_layout_idx);
-            switch (source_layout.tag) {
-                .tag_union => {
+            const target_vt = self.resolveValType(target_layout);
+            const source_vt: ValType = switch (source_layout.tag) {
+                .tag_union => blk: {
                     const tu_data = ls.getTagUnionData(source_layout.data.tag_union.idx);
                     const tu_size = ls.layoutSize(source_layout);
                     if (tu_size <= 4 and tu_data.discriminant_offset == 0) {
                         try self.generateExpr(disc.source);
+                        break :blk self.exprValType(disc.source);
                     } else {
                         try self.generateExpr(disc.source);
                         try self.emitLoadBySize(tu_data.discriminant_size, @intCast(tu_data.discriminant_offset));
+                        break :blk .i32;
                     }
                 },
-                .box => {
+                .box => blk: {
                     const inner_layout = ls.getLayout(source_layout.data.box);
                     if (inner_layout.tag != .tag_union) {
                         std.debug.panic(
@@ -4523,8 +4654,35 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
                     const tu_data = ls.getTagUnionData(inner_layout.data.tag_union.idx);
                     try self.generateExpr(disc.source);
                     try self.emitLoadBySize(tu_data.discriminant_size, @intCast(tu_data.discriminant_offset));
+                    break :blk .i32;
                 },
-                else => try self.generateExpr(disc.source),
+                else => blk: {
+                    try self.generateExpr(disc.source);
+                    break :blk self.exprValType(disc.source);
+                },
+            };
+
+            switch (source_vt) {
+                .i32 => switch (target_vt) {
+                    .i32 => {},
+                    .i64 => self.body.append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory,
+                    else => std.debug.panic(
+                        "WasmCodeGen invariant violated: discriminant target layout lowered to non-integer value type {s}",
+                        .{@tagName(target_vt)},
+                    ),
+                },
+                .i64 => switch (target_vt) {
+                    .i32 => self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory,
+                    .i64 => {},
+                    else => std.debug.panic(
+                        "WasmCodeGen invariant violated: discriminant target layout lowered to non-integer value type {s}",
+                        .{@tagName(target_vt)},
+                    ),
+                },
+                else => std.debug.panic(
+                    "WasmCodeGen invariant violated: discriminant source layout lowered to non-integer value type {s}",
+                    .{@tagName(source_vt)},
+                ),
             }
         },
         .field => |field| try self.generateStructAccess(.{

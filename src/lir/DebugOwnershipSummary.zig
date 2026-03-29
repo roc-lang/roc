@@ -18,6 +18,8 @@ const RefProjectionSpan = LIR.RefProjectionSpan;
 
 const ParamIndexMap = std.AutoHashMap(u64, u8);
 const LocalResultMap = std.AutoHashMap(u64, LocalResultInfo);
+const JoinParamMap = std.AutoHashMap(u32, LIR.LocalSpan);
+const JoinInputMap = std.AutoHashMap(u64, LocalResultInfo);
 const VisitedMap = std.AutoHashMap(u64, void);
 
 const LocalResultInfo = struct {
@@ -70,12 +72,20 @@ pub fn resultContractForProc(
 
     var results = LocalResultMap.init(allocator);
     defer results.deinit();
+    var join_params = JoinParamMap.init(allocator);
+    defer join_params.deinit();
+    try collectJoinParams(store, root_stmt, &join_params);
+
+    var join_inputs = JoinInputMap.init(allocator);
+    defer join_inputs.deinit();
 
     var inferred: ?LIR.ProcResultContract = null;
     var saw_return = false;
     try inferReturnContracts(
         allocator,
         store,
+        &join_params,
+        &join_inputs,
         &param_index_by_symbol,
         &results,
         root_stmt,
@@ -112,6 +122,8 @@ fn cloneLocalResultMap(
 fn inferReturnContracts(
     allocator: Allocator,
     store: *LirStore,
+    join_params: *const JoinParamMap,
+    join_inputs: *JoinInputMap,
     param_index_by_symbol: *const ParamIndexMap,
     results: *LocalResultMap,
     stmt_id: CFStmtId,
@@ -121,48 +133,50 @@ fn inferReturnContracts(
     switch (store.getCFStmt(stmt_id)) {
         .assign_symbol => |assign| {
             try results.put(localKey(assign.target), .{ .semantics = .fresh });
-            try inferReturnContracts(allocator, store, param_index_by_symbol, results, assign.next, inferred, saw_return);
+            try inferReturnContracts(allocator, store, join_params, join_inputs, param_index_by_symbol, results, assign.next, inferred, saw_return);
         },
         .assign_ref => |assign| {
             try results.put(localKey(assign.target), .{ .semantics = assign.result });
-            try inferReturnContracts(allocator, store, param_index_by_symbol, results, assign.next, inferred, saw_return);
+            try inferReturnContracts(allocator, store, join_params, join_inputs, param_index_by_symbol, results, assign.next, inferred, saw_return);
         },
         .assign_literal => |assign| {
             try results.put(localKey(assign.target), .{ .semantics = assign.result });
-            try inferReturnContracts(allocator, store, param_index_by_symbol, results, assign.next, inferred, saw_return);
+            try inferReturnContracts(allocator, store, join_params, join_inputs, param_index_by_symbol, results, assign.next, inferred, saw_return);
         },
         .assign_call => |assign| {
             try results.put(localKey(assign.target), .{ .semantics = assign.result });
-            try inferReturnContracts(allocator, store, param_index_by_symbol, results, assign.next, inferred, saw_return);
+            try inferReturnContracts(allocator, store, join_params, join_inputs, param_index_by_symbol, results, assign.next, inferred, saw_return);
         },
         .assign_low_level => |assign| {
             try results.put(localKey(assign.target), .{ .semantics = assign.result });
-            try inferReturnContracts(allocator, store, param_index_by_symbol, results, assign.next, inferred, saw_return);
+            try inferReturnContracts(allocator, store, join_params, join_inputs, param_index_by_symbol, results, assign.next, inferred, saw_return);
         },
         .assign_list => |assign| {
             try results.put(localKey(assign.target), .{ .semantics = assign.result });
-            try inferReturnContracts(allocator, store, param_index_by_symbol, results, assign.next, inferred, saw_return);
+            try inferReturnContracts(allocator, store, join_params, join_inputs, param_index_by_symbol, results, assign.next, inferred, saw_return);
         },
         .assign_struct => |assign| {
             try results.put(localKey(assign.target), .{ .semantics = assign.result });
-            try inferReturnContracts(allocator, store, param_index_by_symbol, results, assign.next, inferred, saw_return);
+            try inferReturnContracts(allocator, store, join_params, join_inputs, param_index_by_symbol, results, assign.next, inferred, saw_return);
         },
         .assign_tag => |assign| {
             try results.put(localKey(assign.target), .{ .semantics = assign.result });
-            try inferReturnContracts(allocator, store, param_index_by_symbol, results, assign.next, inferred, saw_return);
+            try inferReturnContracts(allocator, store, join_params, join_inputs, param_index_by_symbol, results, assign.next, inferred, saw_return);
         },
-        .debug => |stmt| try inferReturnContracts(allocator, store, param_index_by_symbol, results, stmt.next, inferred, saw_return),
-        .expect => |stmt| try inferReturnContracts(allocator, store, param_index_by_symbol, results, stmt.next, inferred, saw_return),
+        .debug => |stmt| try inferReturnContracts(allocator, store, join_params, join_inputs, param_index_by_symbol, results, stmt.next, inferred, saw_return),
+        .expect => |stmt| try inferReturnContracts(allocator, store, join_params, join_inputs, param_index_by_symbol, results, stmt.next, inferred, saw_return),
         .runtime_error => {},
-        .incref => |inc| try inferReturnContracts(allocator, store, param_index_by_symbol, results, inc.next, inferred, saw_return),
-        .decref => |dec| try inferReturnContracts(allocator, store, param_index_by_symbol, results, dec.next, inferred, saw_return),
-        .free => |free_stmt| try inferReturnContracts(allocator, store, param_index_by_symbol, results, free_stmt.next, inferred, saw_return),
+        .incref => |inc| try inferReturnContracts(allocator, store, join_params, join_inputs, param_index_by_symbol, results, inc.next, inferred, saw_return),
+        .decref => |dec| try inferReturnContracts(allocator, store, join_params, join_inputs, param_index_by_symbol, results, dec.next, inferred, saw_return),
+        .free => |free_stmt| try inferReturnContracts(allocator, store, join_params, join_inputs, param_index_by_symbol, results, free_stmt.next, inferred, saw_return),
         .switch_stmt => |switch_stmt| {
             var default_results = try cloneLocalResultMap(allocator, results);
             defer default_results.deinit();
             try inferReturnContracts(
                 allocator,
                 store,
+                join_params,
+                join_inputs,
                 param_index_by_symbol,
                 &default_results,
                 switch_stmt.default_branch,
@@ -176,6 +190,8 @@ fn inferReturnContracts(
                 try inferReturnContracts(
                     allocator,
                     store,
+                    join_params,
+                    join_inputs,
                     param_index_by_symbol,
                     &branch_results,
                     branch.body,
@@ -185,19 +201,44 @@ fn inferReturnContracts(
             }
         },
         .join => |join| {
+            try inferReturnContracts(allocator, store, join_params, join_inputs, param_index_by_symbol, results, join.remainder, inferred, saw_return);
             var body_results = try cloneLocalResultMap(allocator, results);
             defer body_results.deinit();
-            try inferReturnContracts(allocator, store, param_index_by_symbol, &body_results, join.body, inferred, saw_return);
-            try inferReturnContracts(allocator, store, param_index_by_symbol, results, join.remainder, inferred, saw_return);
+            for (store.getLocalSpan(join.params)) |param| {
+                const info = join_inputs.get(localKey(param)) orelse std.debug.panic(
+                    "DebugOwnershipSummary invariant violated: join param {d} had no inferred incoming jump semantics",
+                    .{@intFromEnum(param)},
+                );
+                try body_results.put(localKey(param), info);
+            }
+            try inferReturnContracts(allocator, store, join_params, join_inputs, param_index_by_symbol, &body_results, join.body, inferred, saw_return);
         },
         .borrow_scope => |scope| {
             var body_results = try cloneLocalResultMap(allocator, results);
             defer body_results.deinit();
-            try inferReturnContracts(allocator, store, param_index_by_symbol, &body_results, scope.body, inferred, saw_return);
+            try inferReturnContracts(allocator, store, join_params, join_inputs, param_index_by_symbol, &body_results, scope.body, inferred, saw_return);
             try discardScopeBoundResults(allocator, &body_results, scope.id);
-            try inferReturnContracts(allocator, store, param_index_by_symbol, &body_results, scope.remainder, inferred, saw_return);
+            try inferReturnContracts(allocator, store, join_params, join_inputs, param_index_by_symbol, &body_results, scope.remainder, inferred, saw_return);
         },
-        .scope_exit, .jump => {},
+        .scope_exit => {},
+        .jump => |jump| {
+            const params = store.getLocalSpan(join_params.get(@intFromEnum(jump.target)) orelse std.debug.panic(
+                "DebugOwnershipSummary invariant violated: jump target {d} had no recorded join parameters",
+                .{@intFromEnum(jump.target)},
+            ));
+            const args = store.getLocalSpan(jump.args);
+            if (args.len != params.len) {
+                std.debug.panic(
+                    "DebugOwnershipSummary invariant violated: jump target {d} received {d} args for {d} params",
+                    .{ @intFromEnum(jump.target), args.len, params.len },
+                );
+            }
+
+            for (args, params) |arg, param| {
+                const arg_info = try resolveJumpArgInfo(param_index_by_symbol, results, arg);
+                try mergeJoinInputInfo(store, join_inputs, param, arg_info);
+            }
+        },
         .ret => |ret| {
             saw_return.* = true;
             var projections = std.ArrayList(RefProjection).empty;
@@ -220,6 +261,115 @@ fn inferReturnContracts(
         },
         .crash => {},
     }
+}
+
+fn collectJoinParams(
+    store: *const LirStore,
+    stmt_id: CFStmtId,
+    join_params: *JoinParamMap,
+) Allocator.Error!void {
+    switch (store.getCFStmt(stmt_id)) {
+        .assign_symbol => |assign| try collectJoinParams(store, assign.next, join_params),
+        .assign_ref => |assign| try collectJoinParams(store, assign.next, join_params),
+        .assign_literal => |assign| try collectJoinParams(store, assign.next, join_params),
+        .assign_call => |assign| try collectJoinParams(store, assign.next, join_params),
+        .assign_low_level => |assign| try collectJoinParams(store, assign.next, join_params),
+        .assign_list => |assign| try collectJoinParams(store, assign.next, join_params),
+        .assign_struct => |assign| try collectJoinParams(store, assign.next, join_params),
+        .assign_tag => |assign| try collectJoinParams(store, assign.next, join_params),
+        .debug => |stmt| try collectJoinParams(store, stmt.next, join_params),
+        .expect => |stmt| try collectJoinParams(store, stmt.next, join_params),
+        .runtime_error => {},
+        .incref => |inc| try collectJoinParams(store, inc.next, join_params),
+        .decref => |dec| try collectJoinParams(store, dec.next, join_params),
+        .free => |free_stmt| try collectJoinParams(store, free_stmt.next, join_params),
+        .switch_stmt => |switch_stmt| {
+            for (store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
+                try collectJoinParams(store, branch.body, join_params);
+            }
+            try collectJoinParams(store, switch_stmt.default_branch, join_params);
+        },
+        .join => |join| {
+            const gop = try join_params.getOrPut(@intFromEnum(join.id));
+            if (gop.found_existing) {
+                if (gop.value_ptr.start != join.params.start or gop.value_ptr.len != join.params.len) {
+                    std.debug.panic(
+                        "DebugOwnershipSummary invariant violated: join {d} was recorded with incompatible parameter signatures",
+                        .{@intFromEnum(join.id)},
+                    );
+                }
+            } else {
+                gop.value_ptr.* = join.params;
+            }
+            try collectJoinParams(store, join.body, join_params);
+            try collectJoinParams(store, join.remainder, join_params);
+        },
+        .borrow_scope => |scope| {
+            try collectJoinParams(store, scope.body, join_params);
+            try collectJoinParams(store, scope.remainder, join_params);
+        },
+        .scope_exit, .jump, .ret, .crash => {},
+    }
+}
+
+fn resolveJumpArgInfo(
+    param_index_by_symbol: *const ParamIndexMap,
+    results: *const LocalResultMap,
+    arg: LocalId,
+) Allocator.Error!LocalResultInfo {
+    if (param_index_by_symbol.contains(localKey(arg))) {
+        return .{ .semantics = .{ .alias_of = .{
+            .owner = arg,
+            .projections = RefProjectionSpan.empty(),
+        } } };
+    }
+
+    return results.get(localKey(arg)) orelse std.debug.panic(
+        "DebugOwnershipSummary invariant violated: jump arg local {d} had no known result semantics",
+        .{@intFromEnum(arg)},
+    );
+}
+
+fn mergeJoinInputInfo(
+    store: *const LirStore,
+    join_inputs: *JoinInputMap,
+    param: LocalId,
+    incoming: LocalResultInfo,
+) Allocator.Error!void {
+    const gop = try join_inputs.getOrPut(localKey(param));
+    if (gop.found_existing) {
+        gop.value_ptr.semantics = mergeJoinInputSemantics(store, param, gop.value_ptr.semantics, incoming.semantics);
+    } else {
+        gop.value_ptr.* = incoming;
+    }
+}
+
+fn resultSemanticsIsScopedBorrow(semantics: LIR.ResultSemantics) bool {
+    return switch (semantics) {
+        .borrow_of => |borrowed| switch (borrowed.region) {
+            .scope => true,
+            .proc => false,
+        },
+        else => false,
+    };
+}
+
+fn mergeJoinInputSemantics(
+    store: *const LirStore,
+    param: LocalId,
+    current: LIR.ResultSemantics,
+    incoming: LIR.ResultSemantics,
+) LIR.ResultSemantics {
+    if (resultSemanticsEqual(store, current, incoming)) return current;
+
+    if (resultSemanticsIsScopedBorrow(current) or resultSemanticsIsScopedBorrow(incoming)) {
+        std.debug.panic(
+            "DebugOwnershipSummary invariant violated: join param {d} merged incompatible scoped-borrow semantics",
+            .{@intFromEnum(param)},
+        );
+    }
+
+    return .fresh;
 }
 
 fn discardScopeBoundResults(
@@ -332,6 +482,22 @@ fn contractFromResolvedKind(
             .param_index = param_index,
             .projections = projection_span,
         } },
+    };
+}
+
+fn resultSemanticsEqual(store: *const LirStore, a: LIR.ResultSemantics, b: LIR.ResultSemantics) bool {
+    return switch (a) {
+        .fresh => b == .fresh,
+        .alias_of => |left| switch (b) {
+            .alias_of => |right| left.owner == right.owner and projectionSpansEqual(store, left.projections, right.projections),
+            else => false,
+        },
+        .borrow_of => |left| switch (b) {
+            .borrow_of => |right| left.owner == right.owner and
+                projectionSpansEqual(store, left.projections, right.projections) and
+                std.meta.eql(left.region, right.region),
+            else => false,
+        },
     };
 }
 

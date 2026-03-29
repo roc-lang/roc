@@ -381,11 +381,13 @@ fn collectReturnedMirLocals(
 }
 
 fn recordValueDef(
-    _: *Self,
+    self: *Self,
     defs: *ValueDefMap,
     local_id: MIR.LocalId,
     def: ValueDef,
 ) Allocator.Error!void {
+    if (!self.localMayContainCallable(local_id)) return;
+
     const key = @as(u32, @intFromEnum(local_id));
     const gop = try defs.getOrPut(key);
     if (gop.found_existing) {
@@ -395,6 +397,45 @@ fn recordValueDef(
         );
     }
     gop.value_ptr.* = def;
+}
+
+fn monotypeMayContainCallable(self: *const Self, mono_idx: MirMonotypeIdx) bool {
+    return switch (self.mir_store.monotype_store.getMonotype(mono_idx)) {
+        .func => true,
+        .record => |record| blk: {
+            for (self.mir_store.monotype_store.getFields(record.fields)) |field| {
+                if (self.monotypeMayContainCallable(field.type_idx)) break :blk true;
+            }
+            break :blk false;
+        },
+        .tuple => |tuple_data| blk: {
+            for (self.mir_store.monotype_store.getIdxSpan(tuple_data.elems)) |elem| {
+                if (self.monotypeMayContainCallable(elem)) break :blk true;
+            }
+            break :blk false;
+        },
+        .tag_union => |tag_union| blk: {
+            for (self.mir_store.monotype_store.getTags(tag_union.tags)) |tag| {
+                for (self.mir_store.monotype_store.getIdxSpan(tag.payloads)) |payload| {
+                    if (self.monotypeMayContainCallable(payload)) break :blk true;
+                }
+            }
+            break :blk false;
+        },
+        .box => |box_data| self.monotypeMayContainCallable(box_data.inner),
+        .list,
+        .prim,
+        .unit,
+        => false,
+        .recursive_placeholder => std.debug.panic(
+            "MirToLir invariant violated: recursive_placeholder survived monotype construction",
+            .{},
+        ),
+    };
+}
+
+fn localMayContainCallable(self: *const Self, local_id: MIR.LocalId) bool {
+    return self.monotypeMayContainCallable(self.mir_store.getLocal(local_id).monotype);
 }
 
 fn collectValueDefs(

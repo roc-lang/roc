@@ -11,6 +11,7 @@
 const std = @import("std");
 
 const MIR = @import("MIR.zig");
+const Monotype = @import("Monotype.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -106,6 +107,45 @@ const Analyzer = struct {
         return self.mir_store.monotype_store.getMonotype(self.mir_store.getLocal(local_id).monotype) == .func;
     }
 
+    fn monotypeMayContainCallable(self: *const Analyzer, mono_idx: Monotype.Idx) bool {
+        return switch (self.mir_store.monotype_store.getMonotype(mono_idx)) {
+            .func => true,
+            .record => |record| blk: {
+                for (self.mir_store.monotype_store.getFields(record.fields)) |field| {
+                    if (self.monotypeMayContainCallable(field.type_idx)) break :blk true;
+                }
+                break :blk false;
+            },
+            .tuple => |tuple_data| blk: {
+                for (self.mir_store.monotype_store.getIdxSpan(tuple_data.elems)) |elem| {
+                    if (self.monotypeMayContainCallable(elem)) break :blk true;
+                }
+                break :blk false;
+            },
+            .tag_union => |tag_union| blk: {
+                for (self.mir_store.monotype_store.getTags(tag_union.tags)) |tag| {
+                    for (self.mir_store.monotype_store.getIdxSpan(tag.payloads)) |payload| {
+                        if (self.monotypeMayContainCallable(payload)) break :blk true;
+                    }
+                }
+                break :blk false;
+            },
+            .box => |box_data| self.monotypeMayContainCallable(box_data.inner),
+            .list,
+            .prim,
+            .unit,
+            => false,
+            .recursive_placeholder => std.debug.panic(
+                "CallableSummary invariant violated: recursive_placeholder survived monotype construction",
+                .{},
+            ),
+        };
+    }
+
+    fn localMayContainCallable(self: *const Analyzer, local_id: MIR.LocalId) bool {
+        return self.monotypeMayContainCallable(self.mir_store.getLocal(local_id).monotype);
+    }
+
     fn contractsEqual(left: Contract, right: Contract) bool {
         return switch (left) {
             .no_return => right == .no_return,
@@ -141,7 +181,7 @@ const Analyzer = struct {
         local_id: MIR.LocalId,
         def: CallableValueDef,
     ) Allocator.Error!void {
-        _ = self;
+        if (!self.localMayContainCallable(local_id)) return;
 
         const key = localKey(local_id);
         const gop = try defs.getOrPut(key);
