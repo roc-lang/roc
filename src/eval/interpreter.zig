@@ -2833,7 +2833,7 @@ pub const Interpreter = struct {
                     rc.decContext(),
                     rc.decCallback(),
                     @ptrCast(prev_field_ptr),
-                    @ptrCast(copy_fn),
+                    copy_fn,
                     roc_ops,
                 );
 

@@ -13,11 +13,11 @@ type=repl
 » List.subscript(List.with_capacity(10), 5)
 ~~~
 # OUTPUT
-Ok(1)
+Ok(1.0)
 ---
 Ok("world")
 ---
-Ok(10)
+Ok(10.0)
 ---
 Err(OutOfBounds)
 ---

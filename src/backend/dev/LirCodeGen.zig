@@ -528,7 +528,7 @@ fn wrapListPrepend(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap:
 /// Wrapper: listReplace for list_set
 fn wrapListReplace(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, index: u64, element: ?[*]u8, element_width: usize, out_element: ?[*]u8, roc_ops: *RocOps) callconv(.c) void {
     const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-    out.* = listReplace(list, alignment, index, element, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), out_element, @ptrCast(&copy_fallback), roc_ops);
+    out.* = listReplace(list, alignment, index, element, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), out_element, &copy_fallback, roc_ops);
 }
 
 /// Wrapper: listReserve
