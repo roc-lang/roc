@@ -416,6 +416,21 @@ Builtin :: [].{
 			Try.Err(OutOfBounds)
 		}
 
+		## Replaces the element at the given index with a new item.
+		##
+		## Returns `Ok` with the new list, or `Err(OutOfBounds)` if the index is out of bounds.
+		## ```roc
+		## List.set(["a", "b", "c"], 1, "B") == Ok(["a", "B", "c"])
+		## List.set(["a", "b", "c"], 9, "B") == Err(OutOfBounds)
+		## ```
+		##
+		## If you also need the replaced value, use [List.replace] instead.
+		set : List(item), U64, item -> Try(List(item), [OutOfBounds, ..])
+		set = |original_list, index, element| {
+			replace_res = List.replace(original_list, index, element)?
+			Ok(replace_res.list)
+		}
+
 		## Returns the reversed list.
 		## ```roc
 		## expect List.rev([1, 2, 3]) == [3, 2, 1]

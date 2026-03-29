@@ -3133,3 +3133,14 @@ test "low_level - List.replace with ZST" {
     defer test_allocator.free(value);
     try testing.expectEqualStrings("Ok({ list: [{}, {}, {}], prev: {} })", value);
 }
+
+test "low_level - List.set" {
+    const src =
+        \\list = [10u8, 20u8, 30u8]
+        \\new = List.set(list, 1, 99u8)
+    ;
+
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("Ok([10, 99, 30])", value);
+}
