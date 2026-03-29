@@ -101,6 +101,14 @@ pub const TailRecursionPass = struct {
                 .symbol = assign.symbol,
                 .next = next,
             } }),
+            .debug => |debug_stmt| self.store.addCFStmt(.{ .debug = .{
+                .message = debug_stmt.message,
+                .next = next,
+            } }),
+            .expect => |expect_stmt| self.store.addCFStmt(.{ .expect = .{
+                .condition = expect_stmt.condition,
+                .next = next,
+            } }),
             else => unreachable,
         };
     }
@@ -129,6 +137,8 @@ pub const TailRecursionPass = struct {
             .assign_list => |assign| try self.transformAssignLike(stmt, assign.next),
             .assign_struct => |assign| try self.transformAssignLike(stmt, assign.next),
             .assign_tag => |assign| try self.transformAssignLike(stmt, assign.next),
+            .debug => |debug_stmt| try self.transformAssignLike(.{ .debug = debug_stmt }, debug_stmt.next),
+            .expect => |expect_stmt| try self.transformAssignLike(.{ .expect = expect_stmt }, expect_stmt.next),
             .incref, .decref, .free, .scope_exit, .jump, .ret, .crash, .runtime_error => stmt_id,
             .switch_stmt => |switch_stmt| blk: {
                 var rewritten_branches: std.ArrayListUnmanaged(ir.CFSwitchBranch) = .empty;

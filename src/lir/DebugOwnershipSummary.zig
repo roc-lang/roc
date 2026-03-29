@@ -151,6 +151,8 @@ fn inferReturnContracts(
             try results.put(localKey(assign.target), .{ .semantics = assign.result });
             try inferReturnContracts(allocator, store, param_index_by_symbol, results, assign.next, inferred, saw_return);
         },
+        .debug => |stmt| try inferReturnContracts(allocator, store, param_index_by_symbol, results, stmt.next, inferred, saw_return),
+        .expect => |stmt| try inferReturnContracts(allocator, store, param_index_by_symbol, results, stmt.next, inferred, saw_return),
         .runtime_error => {},
         .incref => |inc| try inferReturnContracts(allocator, store, param_index_by_symbol, results, inc.next, inferred, saw_return),
         .decref => |dec| try inferReturnContracts(allocator, store, param_index_by_symbol, results, dec.next, inferred, saw_return),
@@ -408,6 +410,8 @@ fn analyzeStmt(result: *Result, store: *const LirStore, stmt_id: CFStmtId) Alloc
             try recordResultSemantics(result, assign.target, assign.result);
             try analyzeStmt(result, store, assign.next);
         },
+        .debug => |stmt| try analyzeStmt(result, store, stmt.next),
+        .expect => |stmt| try analyzeStmt(result, store, stmt.next),
         .runtime_error => {},
         .incref => |inc| try analyzeStmt(result, store, inc.next),
         .decref => |dec| try analyzeStmt(result, store, dec.next),

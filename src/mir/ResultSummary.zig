@@ -482,14 +482,8 @@ const Analyzer = struct {
                 try self.recordCallableDef(defs, assign.target, .{ .tag_value = assign.args });
                 try self.collectCallableDefs(assign.next, defs, visited);
             },
-            .debug => std.debug.panic(
-                "ResultSummary TODO: MIR debug statements are not implemented in result-summary analysis yet",
-                .{},
-            ),
-            .expect => std.debug.panic(
-                "ResultSummary TODO: MIR expect statements are not implemented in result-summary analysis yet",
-                .{},
-            ),
+            .debug => |stmt| try self.collectCallableDefs(stmt.next, defs, visited),
+            .expect => |stmt| try self.collectCallableDefs(stmt.next, defs, visited),
             .runtime_error, .scope_exit, .jump, .ret, .crash => {},
             .switch_stmt => |switch_stmt| {
                 for (self.mir_store.getSwitchBranches(switch_stmt.branches)) |branch| {
@@ -696,14 +690,8 @@ const Analyzer = struct {
             .assign_list => |stmt| try self.collectReturnedCallable(stmt.next, defs, out),
             .assign_struct => |stmt| try self.collectReturnedCallable(stmt.next, defs, out),
             .assign_tag => |stmt| try self.collectReturnedCallable(stmt.next, defs, out),
-            .debug => std.debug.panic(
-                "ResultSummary TODO: MIR debug statements are not implemented in callable-return analysis yet",
-                .{},
-            ),
-            .expect => std.debug.panic(
-                "ResultSummary TODO: MIR expect statements are not implemented in callable-return analysis yet",
-                .{},
-            ),
+            .debug => |stmt| try self.collectReturnedCallable(stmt.next, defs, out),
+            .expect => |stmt| try self.collectReturnedCallable(stmt.next, defs, out),
             .runtime_error, .scope_exit, .jump, .crash => {},
             .switch_stmt => |switch_stmt| {
                 for (self.mir_store.getSwitchBranches(switch_stmt.branches)) |branch| {
@@ -878,14 +866,8 @@ const Analyzer = struct {
                 try env.put(localKey(assign.target), .fresh);
                 return self.analyzeStmt(env, region, accumulator, assign.next);
             },
-            .debug => std.debug.panic(
-                "ResultSummary TODO: MIR debug statements are not implemented in provenance analysis yet",
-                .{},
-            ),
-            .expect => std.debug.panic(
-                "ResultSummary TODO: MIR expect statements are not implemented in provenance analysis yet",
-                .{},
-            ),
+            .debug => |stmt| return self.analyzeStmt(env, region, accumulator, stmt.next),
+            .expect => |stmt| return self.analyzeStmt(env, region, accumulator, stmt.next),
             .runtime_error => return false,
             .switch_stmt => |switch_stmt| {
                 for (self.mir_store.getSwitchBranches(switch_stmt.branches)) |branch| {

@@ -238,6 +238,8 @@ fn collectJoinScopes(
         .assign_list => |assign| try collectJoinScopes(store, join_scopes, assign.next, active_scopes),
         .assign_struct => |assign| try collectJoinScopes(store, join_scopes, assign.next, active_scopes),
         .assign_tag => |assign| try collectJoinScopes(store, join_scopes, assign.next, active_scopes),
+        .debug => |stmt| try collectJoinScopes(store, join_scopes, stmt.next, active_scopes),
+        .expect => |stmt| try collectJoinScopes(store, join_scopes, stmt.next, active_scopes),
         .runtime_error => {},
         .incref => |inc| try collectJoinScopes(store, join_scopes, inc.next, active_scopes),
         .decref => |dec| try collectJoinScopes(store, join_scopes, dec.next, active_scopes),
@@ -311,6 +313,14 @@ fn verifyStmt(
             try ensureLocalsUsable(store, env, store.getLocalSpan(assign.args), stmt_id);
             try env.results.put(localKey(assign.target), assign.result);
             try verifyStmt(store, join_scopes, join_inputs, assign.next, env, current_scope_exit, scope_exit_envs);
+        },
+        .debug => |stmt| {
+            try ensureLocalUsable(store, env, stmt.message, stmt_id);
+            try verifyStmt(store, join_scopes, join_inputs, stmt.next, env, current_scope_exit, scope_exit_envs);
+        },
+        .expect => |stmt| {
+            try ensureLocalUsable(store, env, stmt.condition, stmt_id);
+            try verifyStmt(store, join_scopes, join_inputs, stmt.next, env, current_scope_exit, scope_exit_envs);
         },
         .runtime_error => {},
         .incref => |inc| {
@@ -550,6 +560,8 @@ fn ensureScopeBodyTerminatesWithScopeExit(
         .assign_list => |assign| try ensureScopeBodyTerminatesWithScopeExit(store, assign.next),
         .assign_struct => |assign| try ensureScopeBodyTerminatesWithScopeExit(store, assign.next),
         .assign_tag => |assign| try ensureScopeBodyTerminatesWithScopeExit(store, assign.next),
+        .debug => |stmt| try ensureScopeBodyTerminatesWithScopeExit(store, stmt.next),
+        .expect => |stmt| try ensureScopeBodyTerminatesWithScopeExit(store, stmt.next),
         .incref => |inc| try ensureScopeBodyTerminatesWithScopeExit(store, inc.next),
         .decref => |dec| try ensureScopeBodyTerminatesWithScopeExit(store, dec.next),
         .free => |free_stmt| try ensureScopeBodyTerminatesWithScopeExit(store, free_stmt.next),
@@ -703,6 +715,14 @@ fn debugPrintStmtSummary(store: *const LirStore, stmt_id: CFStmtId) void {
         .assign_tag => |assign| std.debug.print(
             "DebugVerifyLir stmt {d}: assign_tag target={d} next={d}\n",
             .{ @intFromEnum(stmt_id), @intFromEnum(assign.target), @intFromEnum(assign.next) },
+        ),
+        .debug => |stmt| std.debug.print(
+            "DebugVerifyLir stmt {d}: debug message={d} next={d}\n",
+            .{ @intFromEnum(stmt_id), @intFromEnum(stmt.message), @intFromEnum(stmt.next) },
+        ),
+        .expect => |stmt| std.debug.print(
+            "DebugVerifyLir stmt {d}: expect condition={d} next={d}\n",
+            .{ @intFromEnum(stmt_id), @intFromEnum(stmt.condition), @intFromEnum(stmt.next) },
         ),
         .switch_stmt => |sw| std.debug.print(
             "DebugVerifyLir stmt {d}: switch cond={d} default={d}\n",

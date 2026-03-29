@@ -27,6 +27,10 @@ const CFStmtId = LIR.CFStmtId;
 const RcOpKind = enum { incref, decref, free };
 
 const LayoutStore = layout.Store;
+const wasm_roc_ops_env_offset: u32 = 0;
+const wasm_roc_ops_dbg_offset: u32 = 16;
+const wasm_roc_ops_expect_failed_offset: u32 = 20;
+const wasm_roc_ops_crashed_offset: u32 = 24;
 
 const Self = @This();
 
@@ -4134,6 +4138,37 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
             try self.bindAssignedLocal(assign.target);
             try self.generateCFStmt(assign.next);
         },
+        .debug => |debug_stmt| {
+            try self.emitRocDbg(debug_stmt.message);
+            try self.generateCFStmt(debug_stmt.next);
+        },
+        .expect => |expect_stmt| {
+            const condition_vt = self.exprValType(expect_stmt.condition);
+            try self.generateExpr(expect_stmt.condition);
+            switch (condition_vt) {
+                .i32 => {},
+                .i64 => {
+                    self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI64(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i64_ne) catch return error.OutOfMemory;
+                },
+                .f32, .f64 => std.debug.panic(
+                    "WasmCodeGen invariant violated: expect condition local {d} had non-integer value type {s}",
+                    .{ @intFromEnum(expect_stmt.condition), @tagName(condition_vt) },
+                ),
+            }
+            self.body.append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+            self.body.append(self.allocator, 0x40) catch return error.OutOfMemory;
+            self.cf_depth += 1;
+
+            try self.emitRocStaticStringCall(wasm_roc_ops_expect_failed_offset, "expect failed");
+
+            self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
+            self.cf_depth -= 1;
+
+            try self.generateCFStmt(expect_stmt.next);
+        },
         .ret => |r| {
             try self.generateExpr(r.value);
             try self.emitLocalSet(self.proc_return_local);
@@ -4360,6 +4395,77 @@ fn generateLiteral(self: *Self, value: LIR.LiteralValue) Allocator.Error!void {
             WasmModule.leb128WriteI32(self.allocator, &self.body, if (lit) 1 else 0) catch return error.OutOfMemory;
         },
     }
+}
+
+fn emitRocOpsCall(self: *Self, args_slot: u32, table_offset: u32) Allocator.Error!void {
+    try self.emitFpOffset(args_slot);
+
+    try self.emitLocalGet(self.roc_ops_local);
+    self.body.append(self.allocator, Op.i32_load) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.body, 2) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.body, wasm_roc_ops_env_offset) catch return error.OutOfMemory;
+
+    try self.emitLocalGet(self.roc_ops_local);
+    self.body.append(self.allocator, Op.i32_load) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.body, 2) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.body, table_offset) catch return error.OutOfMemory;
+
+    self.body.append(self.allocator, Op.call_indirect) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.body, self.roc_ops_type_idx) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+}
+
+fn emitRocStaticStringCall(self: *Self, table_offset: u32, msg: []const u8) Allocator.Error!void {
+    const data_offset = self.module.addDataSegment(msg, 1) catch return error.OutOfMemory;
+    const args_slot = try self.allocStackMemory(8, 4);
+
+    try self.emitFpOffset(args_slot);
+    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(data_offset)) catch return error.OutOfMemory;
+    self.body.append(self.allocator, Op.i32_store) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.body, 2) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+
+    try self.emitFpOffset(args_slot);
+    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(msg.len)) catch return error.OutOfMemory;
+    self.body.append(self.allocator, Op.i32_store) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.body, 2) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.body, 4) catch return error.OutOfMemory;
+
+    try self.emitRocOpsCall(args_slot, table_offset);
+}
+
+fn emitRocDbg(self: *Self, message: LocalRef) Allocator.Error!void {
+    if (self.exprLayoutIdx(message) != .str) {
+        std.debug.panic(
+            "WasmCodeGen invariant violated: debug local {d} did not have Str layout",
+            .{@intFromEnum(message)},
+        );
+    }
+
+    try self.generateExpr(message);
+    const str_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalSet(str_local);
+
+    const ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    const len_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitExtractStrPtrLen(str_local, ptr_local, len_local);
+
+    const args_slot = try self.allocStackMemory(8, 4);
+    try self.emitFpOffset(args_slot);
+    try self.emitLocalGet(ptr_local);
+    self.body.append(self.allocator, Op.i32_store) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.body, 2) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+
+    try self.emitFpOffset(args_slot);
+    try self.emitLocalGet(len_local);
+    self.body.append(self.allocator, Op.i32_store) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.body, 2) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.body, 4) catch return error.OutOfMemory;
+
+    try self.emitRocOpsCall(args_slot, wasm_roc_ops_dbg_offset);
 }
 
 fn generateI128Literal(self: *Self, value: i128) Allocator.Error!void {

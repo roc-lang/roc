@@ -156,14 +156,12 @@ pub const TestRunner = struct {
         defer interp.deinit();
 
         const eval_result = interp.eval(.{
-            .expr_id = lower_result.final_expr_id,
+            .proc_id = lower_result.root_proc_id,
         }) catch |err| {
             return err;
         };
         const value = switch (eval_result) {
             .value => |v| v,
-            .early_return => |v| v,
-            .break_expr => return error.RuntimeError,
         };
 
         // Read result before dropping the value.

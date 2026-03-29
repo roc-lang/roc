@@ -882,7 +882,7 @@ pub const Repl = struct {
         defer interp.deinit();
 
         const eval_result = interp.eval(.{
-            .expr_id = lower_result.final_expr_id,
+            .proc_id = lower_result.root_proc_id,
         }) catch |err| switch (err) {
             error.Crash => {
                 const msg = interp.getCrashMessage() orelse "crash during evaluation";
@@ -898,8 +898,6 @@ pub const Repl = struct {
         // The result is a Str from Str.inspect — read it from the Value pointer
         const result_value = switch (eval_result) {
             .value => |v| v,
-            .early_return => |v| v,
-            .break_expr => unreachable,
         };
         const roc_str = result_value.read(RocStr);
         defer roc_str.decref(&interp.roc_ops);

@@ -456,7 +456,7 @@ pub const ComptimeEvaluator = struct {
         defer interp.deinit();
 
         const eval_result = interp.eval(.{
-            .expr_id = lower_result.final_expr_id,
+            .proc_id = lower_result.root_proc_id,
         }) catch |err| {
             switch (err) {
                 error.Crash => {
@@ -493,8 +493,6 @@ pub const ComptimeEvaluator = struct {
         // Extract the value from the eval result
         const result_value = switch (eval_result) {
             .value => |v| v,
-            .early_return => |v| v,
-            .break_expr => return EvalResult{ .success = {} },
         };
 
         // Try to fold the result to a constant expression
@@ -1089,7 +1087,7 @@ pub const ComptimeEvaluator = struct {
 
         const arg_layouts = [_]layout_mod.Idx{param_layout_idx};
         _ = interp.eval(.{
-            .expr_id = lower_result.final_expr_id,
+            .proc_id = lower_result.root_proc_id,
             .arg_layouts = &arg_layouts,
             .ret_layout = ret_layout_idx,
             .arg_ptr = @ptrCast(arg_buf.ptr),
@@ -1417,41 +1415,10 @@ pub const ComptimeEvaluator = struct {
 
         if (evaluable_defs.items.len < 2) return;
 
-        // Batch-lower all defs through one shared pipeline
-        var batch_result = self.lir_program.lowerModuleDefs(
-            self.env,
-            evaluable_defs.items,
-            self.all_module_envs,
-        ) catch return;
-        defer batch_result.deinit();
-
-        // Evaluate the synthetic block (all defs chained with decl_const statements)
-        var interp = try Interpreter.init(
-            self.allocator,
-            &batch_result.lir_store,
-            batch_result.layout_store,
-            self.get_ops(),
+        std.debug.panic(
+            "TODO implement compile-time batch constant evaluation in the statement-only interpreter architecture",
+            .{},
         );
-        interp.detect_infinite_while_loops = true;
-        defer interp.deinit();
-
-        _ = interp.eval(.{
-            .expr_id = batch_result.block_expr_id,
-        }) catch return;
-
-        // Extract per-def values from bindings and fold to CIR.
-        // Already-folded defs (from per-def pass) are skipped by tryFoldExprFromValue.
-        for (batch_result.def_lir_exprs) |def_entry| {
-            const binding = interp.lookupBinding(def_entry.symbol.raw()) orelse
-                (interp.top_level_cache.get(def_entry.symbol.raw()) orelse continue);
-
-            self.tryFoldExprFromValue(
-                def_entry.expr_idx,
-                binding.val,
-                def_entry.result_layout,
-                batch_result.layout_store,
-            ) catch {};
-        }
     }
 
     /// Evaluate and fold a standalone expression (not part of a def).
@@ -1473,12 +1440,10 @@ pub const ComptimeEvaluator = struct {
         defer interp.deinit();
 
         const eval_result = interp.eval(.{
-            .expr_id = lower_result.final_expr_id,
+            .proc_id = lower_result.root_proc_id,
         }) catch return false;
         const result_value = switch (eval_result) {
             .value => |v| v,
-            .early_return => |v| v,
-            .break_expr => return false,
         };
 
         // Fold the result into a constant

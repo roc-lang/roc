@@ -244,6 +244,14 @@ pub const CFStmt = union(enum) {
         args: LocalSpan,
         next: CFStmtId,
     },
+    debug: struct {
+        message: LocalId,
+        next: CFStmtId,
+    },
+    expect: struct {
+        condition: LocalId,
+        next: CFStmtId,
+    },
     /// Compiler-generated impossible execution path. This is terminal.
     runtime_error: void,
     incref: struct {

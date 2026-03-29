@@ -1,25 +1,15 @@
-//! Expression Interpreter
+//! Statement-only LIR interpreter.
 //!
-//! Evaluates post-RC LIR expressions directly, producing concrete runtime values.
-//! Consumes the same lowered IR used by the dev and wasm code generators.
-//!
-//! Design principles:
-//! - Stack-safe iterative evaluation via WorkStack + ValueStack
-//! - Values are raw (pointer, layout) pairs — no runtime type variables
-//! - RC ops (incref/decref/free) are executed literally from LIR
-//! - Symbol-based environment with flat ArrayList bindings
-//! - Follow the LIR control flow exactly
+//! Evaluates proc-root, post-RC LIR directly, producing concrete runtime values.
+//! All evaluation follows explicit `CFStmt` control flow and explicit RC ops.
 
 const std = @import("std");
 const base = @import("base");
 const layout_mod = @import("layout");
 const lir = @import("lir");
 const lir_value = @import("value.zig");
-const lir_program_mod = @import("cir_to_lir.zig");
 const builtins = @import("builtins");
 const sljmp = @import("sljmp");
-const work_stack = @import("work_stack.zig");
-const FlatBinding = work_stack.FlatBinding;
 const build_options = @import("build_options");
 
 /// Comptime-gated tracing for the interpreter eval loop.
@@ -47,12 +37,12 @@ const trace_rc = struct {
 };
 
 const Allocator = std.mem.Allocator;
-const LirExprStore = lir.LirExprStore;
-const LirExprId = lir.LirExprId;
-const LirPatternId = lir.LirPatternId;
+const LirStore = lir.LirStore;
 const LirProcSpecId = lir.LirProcSpecId;
 const LirProcSpec = lir.LirProcSpec;
 const CFStmtId = lir.CFStmtId;
+const LocalId = lir.LocalId;
+const LocalSpan = lir.LocalSpan;
 const Symbol = lir.Symbol;
 const Layout = layout_mod.Layout;
 const Value = lir_value.Value;
@@ -172,95 +162,39 @@ const InterpreterRocEnv = struct {
     }
 };
 
-/// Interprets LIR expressions by walking the expression tree and evaluating directly.
+/// Interprets statement-only LIR procs directly.
 pub const Interpreter = struct {
     const LirInterpreter = @This();
     const max_call_depth: usize = 1024;
     const stack_overflow_message =
         "This Roc program overflowed its stack memory. This usually means there is very deep or infinite recursion somewhere in the code.";
-    const infinite_while_loop_message =
-        "This while loop's condition evaluated to True at compile time, " ++
-        "and the loop body has no break or return statement, " ++
-        "which would cause an infinite loop. " ++
-        "Use a mutable variable for the condition, or add a break/return.";
     const division_by_zero_message = "Division by zero";
 
     allocator: Allocator,
-    store: *const LirExprStore,
+    store: *const LirStore,
     layout_store: *const layout_mod.Store,
     helper: LayoutHelper,
-
-    /// Symbol → (value pointer, size) bindings.
-    /// Flat list scanned from end; save-length/trim replaces HashMap clone on calls.
-    bindings: FlatBindingList,
-
-    /// Mutable cells: symbol → pointer to current value.
-    cells: std.AutoHashMap(u64, Binding),
-
-    /// Top-level def cache: symbol → evaluated value.
-    top_level_cache: std.AutoHashMap(u64, Binding),
-
-    /// Set of symbols currently being evaluated (cycle detection).
-    evaluating: std.AutoHashMap(u64, void),
-
     /// Arena for interpreter-allocated memory (temporaries, copies).
     arena: std.heap.ArenaAllocator,
-
     /// RocOps environment for builtin dispatch.
     roc_env: *InterpreterRocEnv,
     roc_ops: RocOps,
-
-    /// Guard to reset transient eval state only once per top-level eval.
-    eval_active: bool = false,
-
     /// When executing an entrypoint in `roc run --allow-errors`, tolerate
     /// compile-placeholder runtime_error nodes by materializing zero/default values
     /// instead of aborting the whole program immediately.
     recover_runtime_placeholders: bool = false,
-
     /// Bound recursive function-call depth so the interpreter reports a Roc crash
     /// instead of overflowing the native stack.
     call_depth: usize = 0,
-
-    /// Comptime evaluation enables this to reject statically-infinite while loops.
+    /// Kept for compatibility with existing callers; strongest-form LIR has no while loops.
     detect_infinite_while_loops: bool = false,
-
-    /// Current lambda params — used by evalHostedCall to collect implicit args
-    /// when the hosted_call has 0 explicit args (same pattern as dev backend).
-    current_lambda_params: ?lir.LirPatternSpan = null,
-
-    /// Join point registry for tail-recursive CF statement evaluation.
-    join_points: JoinPointMap = .{},
-
-    // ── Stack-safe eval engine fields ──
-
-    /// Work stack for the stack-safe eval engine (LIFO queue of pending work).
-    work_stack: WorkStack = .empty,
-
-    /// Value stack for the stack-safe eval engine (LIFO results from evaluated expressions).
-    value_stack: ValueStack = .empty,
-
-    /// Non-local control flow state for the stack-safe eval engine.
-    unwinding: Unwinding = .none,
-
-    const Unwinding = union(enum) {
-        none,
-        early_return: Value,
-        break_expr,
-    };
-
-    const WorkStack = std.ArrayListUnmanaged(work_stack.WorkItem);
-    const ValueStack = std.ArrayListUnmanaged(Value);
 
     const JoinPointMap = std.AutoHashMapUnmanaged(u32, JoinPointInfo);
 
     const JoinPointInfo = struct {
-        params: lir.LirPatternSpan,
-        param_layouts: lir.LayoutIdxSpan,
+        params: LocalSpan,
         body: CFStmtId,
     };
-
-    const FlatBindingList = std.array_list.AlignedManaged(FlatBinding, null);
 
     pub const Error = error{
         OutOfMemory,
@@ -269,34 +203,53 @@ pub const Interpreter = struct {
         Crash,
     };
 
-    const Binding = struct {
+    const LocalSlot = struct {
+        assigned: bool = false,
         val: Value,
-        size: u32,
     };
 
-    /// Look up a binding by symbol, scanning from the end of the flat list.
-    /// Most-recent binding (closest to end) wins, providing correct scoping.
-    pub fn lookupBinding(self: *const LirInterpreter, symbol: u64) ?Binding {
-        var i = self.bindings.items.len;
-        while (i > 0) {
-            i -= 1;
-            if (self.bindings.items[i].symbol == symbol) {
-                return .{ .val = self.bindings.items[i].val, .size = self.bindings.items[i].size };
-            }
-        }
-        return null;
-    }
+    const Frame = struct {
+        proc_id: LirProcSpecId,
+        ret_layout: layout_mod.Idx,
+        locals: []LocalSlot,
+        join_points: JoinPointMap = .{},
 
-    /// Result of evaluating an expression.
-    /// Normal evaluation produces a value. Control flow is signaled as variants.
+        fn deinit(self: *Frame, allocator: Allocator) void {
+            self.join_points.deinit(allocator);
+            allocator.free(self.locals);
+        }
+
+        fn setLocal(self: *Frame, local_id: LocalId, value: Value) void {
+            const slot = &self.locals[@intFromEnum(local_id)];
+            slot.* = .{
+                .assigned = true,
+                .val = value,
+            };
+        }
+
+        fn getLocal(self: *const Frame, local_id: LocalId) Value {
+            const slot = self.locals[@intFromEnum(local_id)];
+            if (!slot.assigned) {
+                std.debug.panic(
+                    "LIR/interpreter invariant violated: local {d} was used before assignment in proc {d}",
+                    .{ @intFromEnum(local_id), @intFromEnum(self.proc_id) },
+                );
+            }
+            return slot.val;
+        }
+    };
+
+    const ExecOutcome = union(enum) {
+        returned: Value,
+        scope_exit,
+    };
+
     pub const EvalResult = union(enum) {
         value: Value,
-        early_return: Value,
-        break_expr: void,
     };
 
     pub const EvalRequest = struct {
-        expr_id: LirExprId,
+        proc_id: LirProcSpecId,
         arg_layouts: []const layout_mod.Idx = &.{},
         ret_layout: ?layout_mod.Idx = null,
         arg_ptr: ?*anyopaque = null,
@@ -306,7 +259,7 @@ pub const Interpreter = struct {
 
     pub fn init(
         allocator: Allocator,
-        store: *const LirExprStore,
+        store: *const LirStore,
         layout_store: *const layout_mod.Store,
         caller_roc_ops: *RocOps,
     ) Allocator.Error!LirInterpreter {
@@ -318,10 +271,6 @@ pub const Interpreter = struct {
             .store = store,
             .layout_store = layout_store,
             .helper = LayoutHelper.init(layout_store),
-            .bindings = FlatBindingList.init(allocator),
-            .cells = std.AutoHashMap(u64, Binding).init(allocator),
-            .top_level_cache = std.AutoHashMap(u64, Binding).init(allocator),
-            .evaluating = std.AutoHashMap(u64, void).init(allocator),
             .arena = std.heap.ArenaAllocator.init(allocator),
             .roc_env = roc_env,
             .roc_ops = RocOps{
@@ -341,13 +290,6 @@ pub const Interpreter = struct {
         self.roc_env.deinit();
         self.allocator.destroy(self.roc_env);
         self.arena.deinit();
-        self.evaluating.deinit();
-        self.top_level_cache.deinit();
-        self.cells.deinit();
-        self.bindings.deinit();
-        self.join_points.deinit(self.allocator);
-        self.work_stack.deinit(self.allocator);
-        self.value_stack.deinit(self.allocator);
     }
 
     /// Get the crash message from the last evaluation (if any).
@@ -425,306 +367,574 @@ pub const Interpreter = struct {
         return builtins.utils.allocateWithRefcount(data_bytes, element_alignment, elements_refcounted, &self.roc_ops);
     }
 
-    fn evalWithEntrypointAbi(self: *LirInterpreter, request: EvalRequest) Error!EvalResult {
-        const final_expr = self.store.getExpr(request.expr_id);
-        if (final_expr != .proc_call) {
-            return self.evalExpr(request.expr_id);
+    fn marshalAbiArgs(self: *LirInterpreter, arg_ptr: ?*anyopaque, arg_layouts: []const layout_mod.Idx) Error![]Value {
+        const arg_count = arg_layouts.len;
+        if (arg_count == 0) return &.{};
+
+        const args_buf = try self.arena.allocator().alloc(Value, arg_count);
+        if (arg_ptr == null) {
+            for (args_buf, arg_layouts) |*slot, arg_layout| {
+                slot.* = if (self.helper.sizeOf(arg_layout) == 0)
+                    Value.zst
+                else
+                    try self.alloc(arg_layout);
+            }
+            return args_buf;
         }
 
-        const pc = final_expr.proc_call;
-        const proc_spec = self.store.getProcSpec(pc.proc);
+        const arg_bytes = @as([*]u8, @ptrCast(arg_ptr.?));
+        var sorted_indices = try self.arena.allocator().alloc(usize, arg_count);
+        for (0..arg_count) |i| sorted_indices[i] = i;
 
-        // The host packs args as a struct sorted by alignment (descending),
-        // then by original index (ascending), matching the Roc ABI.
-        var args_buf: [16]Value = undefined;
-        const arg_count = request.arg_layouts.len;
-        if (request.arg_ptr) |aptr| {
-            const arg_bytes = @as([*]u8, @ptrCast(aptr));
-
-            var sorted_indices: [16]usize = undefined;
-            for (0..arg_count) |i| sorted_indices[i] = i;
-            for (0..arg_count) |i| {
-                for (i + 1..arg_count) |j| {
-                    const i_al = self.helper.sizeAlignOf(request.arg_layouts[sorted_indices[i]]).alignment.toByteUnits();
-                    const j_al = self.helper.sizeAlignOf(request.arg_layouts[sorted_indices[j]]).alignment.toByteUnits();
-                    if (j_al > i_al or (j_al == i_al and sorted_indices[j] < sorted_indices[i])) {
-                        const tmp = sorted_indices[i];
-                        sorted_indices[i] = sorted_indices[j];
-                        sorted_indices[j] = tmp;
-                    }
-                }
-            }
-
-            var arg_offsets: [16]usize = undefined;
-            var byte_offset: usize = 0;
-            for (sorted_indices[0..arg_count]) |orig_idx| {
-                const sa = self.helper.sizeAlignOf(request.arg_layouts[orig_idx]);
-                const al = sa.alignment.toByteUnits();
-                byte_offset = std.mem.alignForward(usize, byte_offset, al);
-                arg_offsets[orig_idx] = byte_offset;
-                byte_offset += sa.size;
-            }
-
-            for (0..arg_count) |i| {
-                const sa = self.helper.sizeAlignOf(request.arg_layouts[i]);
-                if (sa.size > 0) {
-                    const copy = try self.allocBytes(sa.size);
-                    @memcpy(copy.ptr[0..sa.size], arg_bytes[arg_offsets[i] .. arg_offsets[i] + sa.size]);
-                    args_buf[i] = copy;
-                } else {
-                    args_buf[i] = Value.zst;
+        for (0..arg_count) |i| {
+            for (i + 1..arg_count) |j| {
+                const i_align = self.helper.sizeAlignOf(arg_layouts[sorted_indices[i]]).alignment.toByteUnits();
+                const j_align = self.helper.sizeAlignOf(arg_layouts[sorted_indices[j]]).alignment.toByteUnits();
+                if (j_align > i_align or (j_align == i_align and sorted_indices[j] < sorted_indices[i])) {
+                    std.mem.swap(usize, &sorted_indices[i], &sorted_indices[j]);
                 }
             }
         }
 
-        return self.evalProcStackSafe(proc_spec, args_buf[0..arg_count]);
+        var arg_offsets = try self.arena.allocator().alloc(usize, arg_count);
+        var byte_offset: usize = 0;
+        for (sorted_indices) |orig_idx| {
+            const sa = self.helper.sizeAlignOf(arg_layouts[orig_idx]);
+            const byte_align = sa.alignment.toByteUnits();
+            byte_offset = std.mem.alignForward(usize, byte_offset, byte_align);
+            arg_offsets[orig_idx] = byte_offset;
+            byte_offset += sa.size;
+        }
+
+        for (0..arg_count) |i| {
+            const sa = self.helper.sizeAlignOf(arg_layouts[i]);
+            if (sa.size == 0) {
+                args_buf[i] = Value.zst;
+                continue;
+            }
+
+            const copy = try self.allocBytes(sa.size);
+            @memcpy(copy.ptr[0..sa.size], arg_bytes[arg_offsets[i] .. arg_offsets[i] + sa.size]);
+            args_buf[i] = copy;
+        }
+        return args_buf;
     }
 
-    // Expression evaluation
-
-    /// Evaluate a LIR program using the RocOps bound at initialization time.
-    ///
-    /// Direct expression evaluation uses `.expr_id`.
-    /// Host ABI entrypoint evaluation additionally passes `.arg_layouts`,
-    /// `.arg_ptr`, and optional `.ret_ptr` / `.ret_layout`.
+    /// Evaluate a proc-root LIR program using the RocOps bound at initialization time.
     pub fn eval(self: *LirInterpreter, request: EvalRequest) Error!EvalResult {
-        const started_eval = !self.eval_active;
-        if (started_eval) {
-            self.roc_env.resetForEval();
-            self.eval_active = true;
-        }
+        self.roc_env.resetForEval();
 
         const prev_recover_runtime_placeholders = self.recover_runtime_placeholders;
         self.recover_runtime_placeholders = request.recover_runtime_placeholders;
-        defer {
-            self.recover_runtime_placeholders = prev_recover_runtime_placeholders;
-            if (started_eval) self.eval_active = false;
-        }
+        defer self.recover_runtime_placeholders = prev_recover_runtime_placeholders;
 
-        const use_entrypoint_abi = request.arg_ptr != null or request.ret_ptr != null or request.arg_layouts.len > 0 or request.recover_runtime_placeholders;
-        const result = if (use_entrypoint_abi)
-            try self.evalWithEntrypointAbi(request)
-        else
-            try self.evalExpr(request.expr_id);
+        const args = try self.marshalAbiArgs(request.arg_ptr, request.arg_layouts);
+        const result_value = try self.evalProcById(request.proc_id, args);
 
         if (request.ret_ptr) |ret_ptr| {
-            const ret_layout = request.ret_layout orelse self.exprLayout(request.expr_id);
-            const ret_val = switch (result) {
-                .value => |v| v,
-                .early_return => |v| v,
-                .break_expr => return error.RuntimeError,
-            };
+            const ret_layout = request.ret_layout orelse self.store.getProcSpec(request.proc_id).ret_layout;
             const ret_size = self.helper.sizeOf(ret_layout);
-            if (ret_size > 0 and !ret_val.isZst()) {
-                @memcpy(@as([*]u8, @ptrCast(ret_ptr))[0..ret_size], ret_val.readBytes(ret_size));
+            if (ret_size > 0 and !result_value.isZst()) {
+                @memcpy(@as([*]u8, @ptrCast(ret_ptr))[0..ret_size], result_value.readBytes(ret_size));
             }
         }
 
-        return result;
+        return .{ .value = result_value };
     }
 
-    /// Evaluate a LIR expression, returning its value.
-    fn evalExpr(self: *LirInterpreter, initial_expr_id: LirExprId) Error!EvalResult {
-        if (!self.eval_active) {
-            self.roc_env.resetForEval();
-            self.eval_active = true;
+    fn evalProcById(self: *LirInterpreter, proc_id: LirProcSpecId, args: []const Value) Error!Value {
+        return self.evalProcSpec(proc_id, self.store.getProcSpec(proc_id), args);
+    }
+
+    fn evalProcSpec(self: *LirInterpreter, proc_id: LirProcSpecId, proc_spec: LirProcSpec, args: []const Value) Error!Value {
+        if (self.call_depth >= max_call_depth) {
+            return self.triggerCrash(stack_overflow_message);
         }
-        return self.evalStackSafe(initial_expr_id);
-    }
 
-    /// Evaluate an expression, expecting a normal value (not control flow).
-    fn evalValue(self: *LirInterpreter, expr_id: LirExprId) Error!Value {
-        const result = try self.evalExpr(expr_id);
-        return switch (result) {
-            .value => |v| v,
-            .early_return => |v| v,
-            .break_expr => error.RuntimeError,
+        if (proc_spec.hosted) |hosted| {
+            const arg_layouts = self.localLayoutsFromSpan(proc_spec.args);
+            return self.callHostedProc(hosted, args, arg_layouts, proc_spec.ret_layout);
+        }
+
+        self.call_depth += 1;
+        defer self.call_depth -= 1;
+
+        var frame = try self.initFrame(proc_id, proc_spec);
+        defer frame.deinit(self.allocator);
+
+        const params = self.store.getLocalSpan(proc_spec.args);
+        if (params.len != args.len) {
+            std.debug.panic(
+                "LIR/interpreter invariant violated: proc {d} expected {d} args but got {d}",
+                .{ proc_spec.name.raw(), params.len, args.len },
+            );
+        }
+
+        for (params, args) |param, arg| {
+            frame.setLocal(param, arg);
+        }
+
+        const outcome = try self.execStmtChain(&frame, proc_spec.body, null);
+        return switch (outcome) {
+            .returned => |value| value,
+            .scope_exit => std.debug.panic(
+                "LIR/interpreter invariant violated: proc {d} terminated via scope_exit",
+                .{proc_spec.name.raw()},
+            ),
         };
     }
 
-    fn exprInvolvesMutableCell(self: *const LirInterpreter, expr_id: LirExprId) bool {
-        const expr = self.store.getExpr(expr_id);
-        return switch (expr) {
-            .cell_load => true,
-            .block => |block| blk: {
-                for (self.store.getStmts(block.stmts)) |stmt| {
-                    switch (stmt) {
-                        .decl, .mutate => |binding| if (self.exprInvolvesMutableCell(binding.expr)) break :blk true,
-                        .cell_init, .cell_store => |binding| if (self.exprInvolvesMutableCell(binding.expr)) break :blk true,
-                        .cell_drop => {},
+    fn initFrame(self: *LirInterpreter, proc_id: LirProcSpecId, proc_spec: LirProcSpec) Error!Frame {
+        const locals = try self.allocator.alloc(LocalSlot, self.store.locals.items.len);
+        @memset(locals, .{ .assigned = false, .val = Value.zst });
+
+        var frame = Frame{
+            .proc_id = proc_id,
+            .ret_layout = proc_spec.ret_layout,
+            .locals = locals,
+        };
+        try self.collectJoinPoints(&frame.join_points, proc_spec.body);
+        return frame;
+    }
+
+    fn collectJoinPoints(self: *LirInterpreter, join_points: *JoinPointMap, stmt_id: CFStmtId) Error!void {
+        const stmt = self.store.getCFStmt(stmt_id);
+        switch (stmt) {
+            .assign_symbol => |assign| try self.collectJoinPoints(join_points, assign.next),
+            .assign_ref => |assign| try self.collectJoinPoints(join_points, assign.next),
+            .assign_literal => |assign| try self.collectJoinPoints(join_points, assign.next),
+            .assign_call => |assign| try self.collectJoinPoints(join_points, assign.next),
+            .assign_low_level => |assign| try self.collectJoinPoints(join_points, assign.next),
+            .assign_list => |assign| try self.collectJoinPoints(join_points, assign.next),
+            .assign_struct => |assign| try self.collectJoinPoints(join_points, assign.next),
+            .assign_tag => |assign| try self.collectJoinPoints(join_points, assign.next),
+            .debug => |debug_stmt| try self.collectJoinPoints(join_points, debug_stmt.next),
+            .expect => |expect_stmt| try self.collectJoinPoints(join_points, expect_stmt.next),
+            .incref => |inc| try self.collectJoinPoints(join_points, inc.next),
+            .decref => |dec| try self.collectJoinPoints(join_points, dec.next),
+            .free => |free_stmt| try self.collectJoinPoints(join_points, free_stmt.next),
+            .switch_stmt => |switch_stmt| {
+                for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
+                    try self.collectJoinPoints(join_points, branch.body);
+                }
+                try self.collectJoinPoints(join_points, switch_stmt.default_branch);
+            },
+            .borrow_scope => |scope_stmt| {
+                try self.collectJoinPoints(join_points, scope_stmt.body);
+                try self.collectJoinPoints(join_points, scope_stmt.remainder);
+            },
+            .join => |join_stmt| {
+                try join_points.put(self.allocator, @intFromEnum(join_stmt.id), .{
+                    .params = join_stmt.params,
+                    .body = join_stmt.body,
+                });
+                try self.collectJoinPoints(join_points, join_stmt.body);
+                try self.collectJoinPoints(join_points, join_stmt.remainder);
+            },
+            .runtime_error,
+            .scope_exit,
+            .jump,
+            .ret,
+            .crash,
+            => {},
+        }
+    }
+
+    fn execStmtChain(
+        self: *LirInterpreter,
+        frame: *Frame,
+        start_stmt: CFStmtId,
+        stop_scope: ?lir.BorrowScopeId,
+    ) Error!ExecOutcome {
+        var current = start_stmt;
+        while (true) {
+            const stmt = self.store.getCFStmt(current);
+            switch (stmt) {
+                .assign_symbol => |assign| {
+                    frame.setLocal(assign.target, try self.evalAssignSymbol(assign.symbol, self.store.getLocal(assign.target).layout_idx));
+                    current = assign.next;
+                },
+                .assign_ref => |assign| {
+                    frame.setLocal(assign.target, try self.evalAssignRef(frame, assign.op, self.store.getLocal(assign.target).layout_idx));
+                    current = assign.next;
+                },
+                .assign_literal => |assign| {
+                    frame.setLocal(assign.target, try self.evalLiteral(assign.value));
+                    current = assign.next;
+                },
+                .assign_call => |assign| {
+                    const arg_locals = self.store.getLocalSpan(assign.args);
+                    const arg_values = try self.collectLocalValues(frame, arg_locals);
+                    frame.setLocal(assign.target, try self.evalProcById(assign.proc, arg_values));
+                    current = assign.next;
+                },
+                .assign_low_level => |assign| {
+                    const arg_locals = self.store.getLocalSpan(assign.args);
+                    const arg_values = try self.collectLocalValues(frame, arg_locals);
+                    const arg_layouts = try self.localLayouts(arg_locals);
+                    frame.setLocal(assign.target, try self.evalLowLevel(.{
+                        .op = assign.op,
+                        .args = arg_values,
+                        .arg_layouts = arg_layouts,
+                        .ret_layout = self.store.getLocal(assign.target).layout_idx,
+                        .callable_proc = null,
+                    }));
+                    current = assign.next;
+                },
+                .assign_list => |assign| {
+                    frame.setLocal(assign.target, try self.evalListLiteral(frame, assign.elems, self.store.getLocal(assign.target).layout_idx));
+                    current = assign.next;
+                },
+                .assign_struct => |assign| {
+                    frame.setLocal(assign.target, try self.evalStructLiteral(frame, assign.fields, self.store.getLocal(assign.target).layout_idx));
+                    current = assign.next;
+                },
+                .assign_tag => |assign| {
+                    frame.setLocal(assign.target, try self.evalTagLiteral(frame, assign.discriminant, assign.args, self.store.getLocal(assign.target).layout_idx));
+                    current = assign.next;
+                },
+                .debug => |debug_stmt| {
+                    self.roc_ops.dbg(self.readRocStr(frame.getLocal(debug_stmt.message)));
+                    current = debug_stmt.next;
+                },
+                .expect => |expect_stmt| {
+                    const cond_local = expect_stmt.condition;
+                    const cond_value = self.readSwitchValue(frame.getLocal(cond_local), self.store.getLocal(cond_local).layout_idx);
+                    if (cond_value == 0) {
+                        self.roc_ops.expectFailed("expect failed");
                     }
-                }
-                break :blk self.exprInvolvesMutableCell(block.final_expr);
-            },
-            .if_then_else => |ite| blk: {
-                for (self.store.getIfBranches(ite.branches)) |branch| {
-                    if (self.exprInvolvesMutableCell(branch.cond) or self.exprInvolvesMutableCell(branch.body)) break :blk true;
-                }
-                break :blk self.exprInvolvesMutableCell(ite.final_else);
-            },
-            .match_expr => |match_expr| blk: {
-                if (self.exprInvolvesMutableCell(match_expr.value)) break :blk true;
-                for (self.store.getMatchBranches(match_expr.branches)) |branch| {
-                    if ((!branch.guard.isNone() and self.exprInvolvesMutableCell(branch.guard)) or self.exprInvolvesMutableCell(branch.body)) break :blk true;
-                }
-                break :blk false;
-            },
-            .for_loop => |loop| self.exprInvolvesMutableCell(loop.list_expr) or self.exprInvolvesMutableCell(loop.body),
-            .while_loop => |loop| self.exprInvolvesMutableCell(loop.cond) or self.exprInvolvesMutableCell(loop.body),
-            .proc_call => |pc| blk: {
-                for (self.store.getExprSpan(pc.args)) |arg| {
-                    if (self.exprInvolvesMutableCell(arg)) break :blk true;
-                }
-                break :blk false;
-            },
-            .low_level => |ll| blk: {
-                for (self.store.getExprSpan(ll.args)) |arg| {
-                    if (self.exprInvolvesMutableCell(arg)) break :blk true;
-                }
-                break :blk false;
-            },
-            .list => |list_expr| blk: {
-                for (self.store.getExprSpan(list_expr.elems)) |elem| {
-                    if (self.exprInvolvesMutableCell(elem)) break :blk true;
-                }
-                break :blk false;
-            },
-            .struct_ => |s| blk: {
-                for (self.store.getExprSpan(s.fields)) |field| {
-                    if (self.exprInvolvesMutableCell(field)) break :blk true;
-                }
-                break :blk false;
-            },
-            .tag => |t| blk: {
-                for (self.store.getExprSpan(t.args)) |arg| {
-                    if (self.exprInvolvesMutableCell(arg)) break :blk true;
-                }
-                break :blk false;
-            },
-            .expect => |e| self.exprInvolvesMutableCell(e.cond) or self.exprInvolvesMutableCell(e.body),
-            .dbg => |d| self.exprInvolvesMutableCell(d.expr),
-            .nominal => |n| self.exprInvolvesMutableCell(n.backing_expr),
-            .str_concat => |parts| blk: {
-                for (self.store.getExprSpan(parts)) |part| {
-                    if (self.exprInvolvesMutableCell(part)) break :blk true;
-                }
-                break :blk false;
-            },
-            .int_to_str => |its| self.exprInvolvesMutableCell(its.value),
-            .float_to_str => |fts| self.exprInvolvesMutableCell(fts.value),
-            .dec_to_str => |arg| self.exprInvolvesMutableCell(arg),
-            .str_escape_and_quote => |arg| self.exprInvolvesMutableCell(arg),
-            .discriminant_switch => |ds| blk: {
-                if (self.exprInvolvesMutableCell(ds.value)) break :blk true;
-                for (self.store.getExprSpan(ds.branches)) |branch| {
-                    if (self.exprInvolvesMutableCell(branch)) break :blk true;
-                }
-                break :blk false;
-            },
-            .tag_payload_access => |tpa| self.exprInvolvesMutableCell(tpa.value),
-            .hosted_call => |hc| blk: {
-                for (self.store.getExprSpan(hc.args)) |arg| {
-                    if (self.exprInvolvesMutableCell(arg)) break :blk true;
-                }
-                break :blk false;
-            },
-            .incref => |rc| self.exprInvolvesMutableCell(rc.value),
-            .decref => |rc| self.exprInvolvesMutableCell(rc.value),
-            .free => |rc| self.exprInvolvesMutableCell(rc.value),
-            else => false,
+                    current = expect_stmt.next;
+                },
+                .runtime_error => {
+                    if (self.recover_runtime_placeholders) {
+                        return .{ .returned = try self.placeholderValueForLayout(frame.ret_layout) };
+                    }
+                    return self.runtimeError("RuntimeError");
+                },
+                .incref => |inc| {
+                    self.performRc(.incref, frame.getLocal(inc.value), self.store.getLocal(inc.value).layout_idx, inc.count);
+                    current = inc.next;
+                },
+                .decref => |dec| {
+                    self.performRc(.decref, frame.getLocal(dec.value), self.store.getLocal(dec.value).layout_idx, 0);
+                    current = dec.next;
+                },
+                .free => |free_stmt| {
+                    self.performRc(.free, frame.getLocal(free_stmt.value), self.store.getLocal(free_stmt.value).layout_idx, 0);
+                    current = free_stmt.next;
+                },
+                .switch_stmt => |switch_stmt| {
+                    const cond_value = self.readSwitchValue(frame.getLocal(switch_stmt.cond), self.store.getLocal(switch_stmt.cond).layout_idx);
+                    const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
+                    var target = switch_stmt.default_branch;
+                    for (branches) |branch| {
+                        if (branch.value == cond_value) {
+                            target = branch.body;
+                            break;
+                        }
+                    }
+                    return try self.execStmtChain(frame, target, stop_scope);
+                },
+                .borrow_scope => |scope_stmt| {
+                    const outcome = try self.execStmtChain(frame, scope_stmt.body, scope_stmt.id);
+                    switch (outcome) {
+                        .returned => |value| return .{ .returned = value },
+                        .scope_exit => current = scope_stmt.remainder,
+                    }
+                },
+                .scope_exit => |scope_stmt| {
+                    if (stop_scope == null or stop_scope.? != scope_stmt.id) {
+                        std.debug.panic(
+                            "LIR/interpreter invariant violated: unexpected scope_exit {d} in proc {d}",
+                            .{ @intFromEnum(scope_stmt.id), @intFromEnum(frame.proc_id) },
+                        );
+                    }
+                    return .scope_exit;
+                },
+                .join => |join_stmt| {
+                    current = join_stmt.remainder;
+                },
+                .jump => |jump_stmt| {
+                    const join_info = frame.join_points.get(@intFromEnum(jump_stmt.target)) orelse std.debug.panic(
+                        "LIR/interpreter invariant violated: missing join point {d} in proc {d}",
+                        .{ @intFromEnum(jump_stmt.target), @intFromEnum(frame.proc_id) },
+                    );
+                    const arg_values = try self.collectLocalValues(frame, self.store.getLocalSpan(jump_stmt.args));
+                    const params = self.store.getLocalSpan(join_info.params);
+                    if (params.len != arg_values.len) {
+                        std.debug.panic(
+                            "LIR/interpreter invariant violated: jump to join point {d} passed {d} args but target expects {d}",
+                            .{ @intFromEnum(jump_stmt.target), arg_values.len, params.len },
+                        );
+                    }
+                    for (params, arg_values) |param, arg| frame.setLocal(param, arg);
+                    current = join_info.body;
+                },
+                .ret => |ret_stmt| return .{ .returned = frame.getLocal(ret_stmt.value) },
+                .crash => |crash_stmt| return self.triggerCrash(self.store.getString(crash_stmt.msg)),
+            }
+        }
+    }
+
+    fn collectLocalValues(self: *LirInterpreter, frame: *const Frame, locals: []const LocalId) Error![]Value {
+        if (locals.len == 0) return &.{};
+        const values = try self.arena.allocator().alloc(Value, locals.len);
+        for (locals, 0..) |local_id, i| values[i] = frame.getLocal(local_id);
+        return values;
+    }
+
+    fn localLayouts(self: *LirInterpreter, locals: []const LocalId) Error![]layout_mod.Idx {
+        if (locals.len == 0) return &.{};
+        const layouts = try self.arena.allocator().alloc(layout_mod.Idx, locals.len);
+        for (locals, 0..) |local_id, i| layouts[i] = self.store.getLocal(local_id).layout_idx;
+        return layouts;
+    }
+
+    fn localLayoutsFromSpan(self: *LirInterpreter, locals: LocalSpan) []const layout_mod.Idx {
+        const local_ids = self.store.getLocalSpan(locals);
+        const layouts = self.arena.allocator().alloc(layout_mod.Idx, local_ids.len) catch @panic("OOM");
+        for (local_ids, 0..) |local_id, i| layouts[i] = self.store.getLocal(local_id).layout_idx;
+        return layouts;
+    }
+
+    fn readSwitchValue(self: *LirInterpreter, value: Value, layout_idx: layout_mod.Idx) u64 {
+        return switch (self.helper.sizeOf(layout_idx)) {
+            0 => 0,
+            1 => value.read(u8),
+            2 => value.read(u16),
+            4 => value.read(u32),
+            8 => value.read(u64),
+            else => std.debug.panic(
+                "LIR/interpreter invariant violated: switch condition layout {d} is not a supported scalar width",
+                .{@intFromEnum(layout_idx)},
+            ),
         };
     }
 
-    fn exprHasLoopExit(self: *const LirInterpreter, expr_id: LirExprId) bool {
-        const expr = self.store.getExpr(expr_id);
-        return switch (expr) {
-            .early_return, .break_expr => true,
-            .for_loop, .while_loop => false,
-            .block => |block| blk: {
-                for (self.store.getStmts(block.stmts)) |stmt| {
-                    switch (stmt) {
-                        .decl, .mutate => |binding| if (self.exprHasLoopExit(binding.expr)) break :blk true,
-                        .cell_init, .cell_store => |binding| if (self.exprHasLoopExit(binding.expr)) break :blk true,
-                        .cell_drop => {},
-                    }
-                }
-                break :blk self.exprHasLoopExit(block.final_expr);
+    fn evalAssignSymbol(_: *LirInterpreter, symbol: Symbol, _: layout_mod.Idx) Error!Value {
+        std.debug.panic(
+            "LIR/interpreter TODO: assign_symbol for symbol {d} is not implemented yet",
+            .{symbol.raw()},
+        );
+    }
+
+    fn evalAssignRef(self: *LirInterpreter, frame: *const Frame, op: lir.RefOp, target_layout: layout_mod.Idx) Error!Value {
+        return switch (op) {
+            .local => |source| frame.getLocal(source),
+            .field => |field| blk: {
+                const source_val = frame.getLocal(field.source);
+                const source_layout = self.store.getLocal(field.source).layout_idx;
+                const field_offset = self.helper.structFieldOffset(source_layout, field.field_idx);
+                break :blk source_val.offset(field_offset);
             },
-            .if_then_else => |ite| blk: {
-                for (self.store.getIfBranches(ite.branches)) |branch| {
-                    if (self.exprHasLoopExit(branch.cond) or self.exprHasLoopExit(branch.body)) break :blk true;
-                }
-                break :blk self.exprHasLoopExit(ite.final_else);
+            .tag_payload => |payload| blk: {
+                const source_val = frame.getLocal(payload.source);
+                const source_layout = self.store.getLocal(payload.source).layout_idx;
+                const tag_base = self.resolveTagUnionBaseValue(source_val, source_layout);
+                const disc = self.helper.readTagDiscriminant(tag_base.value, tag_base.layout);
+                const actual_payload_layout = self.tagPayloadLayout(source_layout, disc);
+                break :blk self.normalizeValueToLayout(tag_base.value, actual_payload_layout, target_layout);
             },
-            .match_expr => |match_expr| blk: {
-                if (self.exprHasLoopExit(match_expr.value)) break :blk true;
-                for (self.store.getMatchBranches(match_expr.branches)) |branch| {
-                    if ((!branch.guard.isNone() and self.exprHasLoopExit(branch.guard)) or self.exprHasLoopExit(branch.body)) break :blk true;
+            .nominal => |nominal| frame.getLocal(nominal.backing_ref),
+            .discriminant => |discriminant| blk: {
+                const source_val = frame.getLocal(discriminant.source);
+                const source_layout = self.store.getLocal(discriminant.source).layout_idx;
+                const tag_base = self.resolveTagUnionBaseValue(source_val, source_layout);
+                const disc = self.helper.readTagDiscriminant(tag_base.value, tag_base.layout);
+                const result = try self.alloc(target_layout);
+                switch (self.helper.sizeOf(target_layout)) {
+                    1 => result.write(u8, @intCast(disc)),
+                    2 => result.write(u16, disc),
+                    4 => result.write(u32, disc),
+                    8 => result.write(u64, disc),
+                    else => std.debug.panic(
+                        "LIR/interpreter invariant violated: discriminant local has unsupported layout {d}",
+                        .{@intFromEnum(target_layout)},
+                    ),
                 }
-                break :blk false;
+                break :blk result;
             },
-            .proc_call => |pc| blk: {
-                for (self.store.getExprSpan(pc.args)) |arg| {
-                    if (self.exprHasLoopExit(arg)) break :blk true;
-                }
-                break :blk false;
-            },
-            .low_level => |ll| blk: {
-                for (self.store.getExprSpan(ll.args)) |arg| {
-                    if (self.exprHasLoopExit(arg)) break :blk true;
-                }
-                break :blk false;
-            },
-            .list => |list_expr| blk: {
-                for (self.store.getExprSpan(list_expr.elems)) |elem| {
-                    if (self.exprHasLoopExit(elem)) break :blk true;
-                }
-                break :blk false;
-            },
-            .struct_ => |s| blk: {
-                for (self.store.getExprSpan(s.fields)) |field| {
-                    if (self.exprHasLoopExit(field)) break :blk true;
-                }
-                break :blk false;
-            },
-            .tag => |t| blk: {
-                for (self.store.getExprSpan(t.args)) |arg| {
-                    if (self.exprHasLoopExit(arg)) break :blk true;
-                }
-                break :blk false;
-            },
-            .expect => |e| self.exprHasLoopExit(e.cond) or self.exprHasLoopExit(e.body),
-            .dbg => |d| self.exprHasLoopExit(d.expr),
-            .nominal => |n| self.exprHasLoopExit(n.backing_expr),
-            .str_concat => |parts| blk: {
-                for (self.store.getExprSpan(parts)) |part| {
-                    if (self.exprHasLoopExit(part)) break :blk true;
-                }
-                break :blk false;
-            },
-            .int_to_str => |its| self.exprHasLoopExit(its.value),
-            .float_to_str => |fts| self.exprHasLoopExit(fts.value),
-            .dec_to_str => |arg| self.exprHasLoopExit(arg),
-            .str_escape_and_quote => |arg| self.exprHasLoopExit(arg),
-            .discriminant_switch => |ds| blk: {
-                if (self.exprHasLoopExit(ds.value)) break :blk true;
-                for (self.store.getExprSpan(ds.branches)) |branch| {
-                    if (self.exprHasLoopExit(branch)) break :blk true;
-                }
-                break :blk false;
-            },
-            .tag_payload_access => |tpa| self.exprHasLoopExit(tpa.value),
-            .hosted_call => |hc| blk: {
-                for (self.store.getExprSpan(hc.args)) |arg| {
-                    if (self.exprHasLoopExit(arg)) break :blk true;
-                }
-                break :blk false;
-            },
-            .incref => |rc| self.exprHasLoopExit(rc.value),
-            .decref => |rc| self.exprHasLoopExit(rc.value),
-            .free => |rc| self.exprHasLoopExit(rc.value),
-            else => false,
         };
+    }
+
+    fn evalLiteral(self: *LirInterpreter, literal: lir.LiteralValue) Error!Value {
+        return switch (literal) {
+            .i64_literal => |lit| self.evalI64Literal(lit.value, lit.layout_idx),
+            .i128_literal => |lit| self.evalI128Literal(lit.value, lit.layout_idx),
+            .f64_literal => |value| self.evalF64Literal(value),
+            .f32_literal => |value| self.evalF32Literal(value),
+            .dec_literal => |value| self.evalDecLiteral(value),
+            .str_literal => |idx| self.evalStrLiteral(idx),
+            .bool_literal => |value| self.evalBoolLiteral(value),
+        };
+    }
+
+    fn evalStructLiteral(self: *LirInterpreter, frame: *const Frame, fields: LocalSpan, struct_layout: layout_mod.Idx) Error!Value {
+        const field_locals = self.store.getLocalSpan(fields);
+        const struct_val = try self.alloc(struct_layout);
+        for (field_locals, 0..) |field_local, i| {
+            const field_layout = self.store.getLocal(field_local).layout_idx;
+            const field_size = self.helper.sizeOf(field_layout);
+            if (field_size == 0) continue;
+            const field_offset = self.helper.structFieldOffset(struct_layout, @intCast(i));
+            struct_val.offset(field_offset).copyFrom(frame.getLocal(field_local), field_size);
+        }
+        return struct_val;
+    }
+
+    const AllocatedTag = struct {
+        outer: Value,
+        base: Value,
+        base_layout: layout_mod.Idx,
+    };
+
+    fn allocTagValue(self: *LirInterpreter, union_layout: layout_mod.Idx) Error!AllocatedTag {
+        const union_layout_val = self.layout_store.getLayout(union_layout);
+        if (union_layout_val.tag == .box) {
+            const box_info = self.layout_store.getBoxInfo(union_layout_val);
+            const data_ptr = try self.allocRocDataWithRc(
+                box_info.elem_size,
+                box_info.elem_alignment,
+                box_info.contains_refcounted,
+            );
+            @memset(data_ptr[0..box_info.elem_size], 0);
+            const boxed = try self.alloc(union_layout);
+            if (self.layout_store.targetUsize().size() == 8) {
+                boxed.write(usize, @intFromPtr(data_ptr));
+            } else {
+                boxed.write(u32, @intCast(@intFromPtr(data_ptr)));
+            }
+            return .{
+                .outer = boxed,
+                .base = .{ .ptr = data_ptr },
+                .base_layout = union_layout_val.data.box,
+            };
+        }
+
+        const outer = try self.alloc(union_layout);
+        return .{
+            .outer = outer,
+            .base = outer,
+            .base_layout = union_layout,
+        };
+    }
+
+    fn evalTagLiteral(
+        self: *LirInterpreter,
+        frame: *const Frame,
+        discriminant: u16,
+        args: LocalSpan,
+        union_layout: layout_mod.Idx,
+    ) Error!Value {
+        const allocated = try self.allocTagValue(union_layout);
+        self.helper.writeTagDiscriminant(allocated.base, allocated.base_layout, discriminant);
+
+        const payload_layout = self.tagPayloadLayout(union_layout, discriminant);
+        const payload_layout_val = self.layout_store.getLayout(payload_layout);
+        const arg_locals = self.store.getLocalSpan(args);
+
+        if (payload_layout_val.tag != .struct_) {
+            if (arg_locals.len == 1) {
+                const payload_size = self.helper.sizeOf(payload_layout);
+                if (payload_size > 0) {
+                    allocated.base.copyFrom(frame.getLocal(arg_locals[0]), payload_size);
+                }
+            }
+            return allocated.outer;
+        }
+
+        for (arg_locals, 0..) |arg_local, i| {
+            const field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(
+                payload_layout_val.data.struct_.idx,
+                @intCast(i),
+            );
+            const field_size = self.helper.sizeOf(field_layout);
+            if (field_size == 0) continue;
+            const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(
+                payload_layout_val.data.struct_.idx,
+                @intCast(i),
+            );
+            allocated.base.offset(field_offset).copyFrom(frame.getLocal(arg_local), field_size);
+        }
+
+        return allocated.outer;
+    }
+
+    fn evalListLiteral(self: *LirInterpreter, frame: *const Frame, elems: LocalSpan, list_layout: layout_mod.Idx) Error!Value {
+        const elem_layout = self.listElemLayout(list_layout);
+        const elem_size = self.helper.sizeOf(elem_layout);
+        const elem_locals = self.store.getLocalSpan(elems);
+        if (elem_size == 0) {
+            return self.rocListToValue(.{
+                .bytes = null,
+                .length = elem_locals.len,
+                .capacity_or_alloc_ptr = elem_locals.len,
+            }, list_layout);
+        }
+
+        const total_elem_bytes = elem_size * elem_locals.len;
+        const sa = self.helper.sizeAlignOf(elem_layout);
+        const elem_alignment: u32 = @intCast(sa.alignment.toByteUnits());
+        const elems_rc = self.helper.containsRefcounted(elem_layout);
+        const elem_data = try self.allocRocDataWithRc(total_elem_bytes, elem_alignment, elems_rc);
+        for (elem_locals, 0..) |elem_local, i| {
+            const offset = i * elem_size;
+            @memcpy(elem_data[offset..][0..elem_size], frame.getLocal(elem_local).readBytes(elem_size));
+        }
+
+        return self.rocListToValue(.{
+            .bytes = elem_data,
+            .length = elem_locals.len,
+            .capacity_or_alloc_ptr = elem_locals.len,
+        }, list_layout);
+    }
+
+    fn callHostedProc(
+        self: *LirInterpreter,
+        hosted: lir.HostedProc,
+        args: []const Value,
+        arg_layouts: []const layout_mod.Idx,
+        ret_layout: layout_mod.Idx,
+    ) Error!Value {
+        var total_args_size: usize = 0;
+        for (arg_layouts) |arg_layout| {
+            const sa = self.helper.sizeAlignOf(arg_layout);
+            total_args_size = std.mem.alignForward(usize, total_args_size, sa.alignment.toByteUnits());
+            total_args_size += sa.size;
+        }
+
+        const args_buf_size = @max(total_args_size, 8);
+        const args_buf = try self.arena.allocator().alloc(u8, args_buf_size);
+        @memset(args_buf, 0);
+
+        var offset: usize = 0;
+        for (args, arg_layouts) |arg, arg_layout| {
+            const sa = self.helper.sizeAlignOf(arg_layout);
+            offset = std.mem.alignForward(usize, offset, sa.alignment.toByteUnits());
+            if (sa.size > 0 and !arg.isZst()) {
+                @memcpy(args_buf[offset .. offset + sa.size], arg.readBytes(sa.size));
+            }
+            offset += sa.size;
+        }
+
+        const ret_size = self.helper.sizeOf(ret_layout);
+        const ret_buf = try self.arena.allocator().alloc(u8, @max(ret_size, 1));
+        @memset(ret_buf, 0);
+
+        self.roc_env.resetCrash();
+        const sj = setjmp(&self.roc_env.jmp_buf);
+        if (sj != 0) return error.Crash;
+
+        const hosted_fn = self.roc_ops.hosted_fns.fns[hosted.index];
+        const ops_for_host = self.currentRocOps();
+        hosted_fn(@ptrCast(ops_for_host), @ptrCast(ret_buf.ptr), @ptrCast(args_buf.ptr));
+
+        if (self.roc_env.crashed) return error.Crash;
+        if (ret_size == 0) return Value.zst;
+
+        const result = try self.alloc(ret_layout);
+        @memcpy(result.ptr[0..ret_size], ret_buf[0..ret_size]);
+        return result;
     }
 
     // Literals
@@ -797,217 +1007,6 @@ pub const Interpreter = struct {
             return val.ptr[0..rs.len()];
         }
         return rs.asSlice();
-    }
-
-    // Lookup
-
-    fn evalLookup(self: *LirInterpreter, symbol: Symbol, layout_idx: layout_mod.Idx) Error!Value {
-        // Check local bindings first
-        if (self.lookupBinding(symbol.raw())) |binding| {
-            return binding.val;
-        }
-
-        // Check top-level cache
-        if (self.top_level_cache.get(symbol.raw())) |binding| {
-            return binding.val;
-        }
-
-        // Try evaluating as a top-level def
-        if (self.store.getSymbolDef(symbol)) |def_expr_id| {
-            // Cycle detection
-            if (self.evaluating.contains(symbol.raw())) {
-                return error.RuntimeError;
-            }
-            self.evaluating.put(symbol.raw(), {}) catch return error.OutOfMemory;
-            defer _ = self.evaluating.remove(symbol.raw());
-
-            const result = try self.evalExpr(def_expr_id);
-            const val = switch (result) {
-                .value => |v| v,
-                else => return error.RuntimeError,
-            };
-
-            const size = self.helper.sizeOf(layout_idx);
-            self.top_level_cache.put(symbol.raw(), .{ .val = val, .size = size }) catch return error.OutOfMemory;
-            return val;
-        }
-        return error.RuntimeError;
-    }
-
-    fn evalCellLoad(self: *LirInterpreter, symbol: Symbol, layout_idx: layout_mod.Idx) Error!Value {
-        if (self.cells.get(symbol.raw())) |binding| {
-            // Copy the cell's current value
-            const size = self.helper.sizeOf(layout_idx);
-            const copy = try self.allocBytes(size);
-            copy.copyFrom(binding.val, size);
-            return copy;
-        }
-        return error.RuntimeError;
-    }
-
-    // Pattern binding
-
-    fn bindPattern(self: *LirInterpreter, pattern_id: LirPatternId, val: Value) Error!void {
-        const pat = self.store.getPattern(pattern_id);
-        switch (pat) {
-            .bind => |b| {
-                const size = self.helper.sizeOf(b.layout_idx);
-                self.bindings.append(.{ .symbol = b.symbol.raw(), .val = val, .size = size }) catch return error.OutOfMemory;
-            },
-            .wildcard => {}, // Nothing to bind
-            .struct_ => |s| {
-                const fields = self.store.getPatternSpan(s.fields);
-                for (fields, 0..) |field_pat_id, i| {
-                    const field_offset = self.helper.structFieldOffset(s.struct_layout, @intCast(i));
-                    const field_val = val.offset(field_offset);
-                    try self.bindPattern(field_pat_id, field_val);
-                }
-            },
-            .tag => |t| {
-                const args = self.store.getPatternSpan(t.args);
-                for (args, 0..) |arg_pat_id, i| {
-                    const arg_val = self.tagPayloadArgValueForPattern(
-                        val,
-                        t.union_layout,
-                        t.discriminant,
-                        @intCast(i),
-                        arg_pat_id,
-                    );
-                    try self.bindPattern(arg_pat_id, arg_val);
-                }
-            },
-            .as_pattern => |ap| {
-                // Bind the name
-                const size = self.helper.sizeOf(ap.layout_idx);
-                self.bindings.append(.{ .symbol = ap.symbol.raw(), .val = val, .size = size }) catch return error.OutOfMemory;
-                // Also bind the inner pattern
-                try self.bindPattern(ap.inner, val);
-            },
-            .int_literal, .float_literal, .str_literal => {}, // Literal patterns don't bind
-            .list => |list_pat| {
-                const prefix = self.store.getPatternSpan(list_pat.prefix);
-                const suffix = self.store.getPatternSpan(list_pat.suffix);
-                const total_len = valueToRocList(val).len();
-                const fixed_len = prefix.len + suffix.len;
-
-                if (list_pat.rest.isNone()) {
-                    if (total_len != fixed_len) return error.RuntimeError;
-                } else if (total_len < fixed_len) {
-                    return error.RuntimeError;
-                }
-
-                for (prefix, 0..) |elem_pat_id, i| {
-                    const elem_val = try self.listElementValue(val, list_pat.list_layout, list_pat.elem_layout, i);
-                    try self.bindPattern(elem_pat_id, elem_val);
-                }
-
-                for (suffix, 0..) |elem_pat_id, i| {
-                    const elem_idx = total_len - suffix.len + i;
-                    const elem_val = try self.listElementValue(val, list_pat.list_layout, list_pat.elem_layout, elem_idx);
-                    try self.bindPattern(elem_pat_id, elem_val);
-                }
-
-                if (!list_pat.rest.isNone()) {
-                    const rest_len = total_len - fixed_len;
-                    const rest_val = try self.listSliceValueNoIncref(val, list_pat.list_layout, prefix.len, rest_len);
-                    try self.bindPattern(list_pat.rest, rest_val);
-                }
-            },
-        }
-    }
-
-    /// Check if a value matches a pattern.
-    fn matchPattern(self: *LirInterpreter, pattern_id: LirPatternId, val: Value) Error!bool {
-        const pat = self.store.getPattern(pattern_id);
-        return switch (pat) {
-            .bind, .wildcard, .as_pattern => true,
-            .int_literal => |lit| blk: {
-                const size = self.helper.sizeOf(lit.layout_idx);
-                break :blk switch (size) {
-                    1 => val.read(i8) == @as(i8, @intCast(lit.value)),
-                    2 => val.read(i16) == @as(i16, @intCast(lit.value)),
-                    4 => val.read(i32) == @as(i32, @intCast(lit.value)),
-                    8 => val.read(i64) == @as(i64, @intCast(lit.value)),
-                    16 => val.read(i128) == lit.value,
-                    else => false,
-                };
-            },
-            .float_literal => |lit| val.read(f64) == lit.value,
-            .str_literal => |idx| blk: {
-                const expected = self.store.getString(idx);
-                const actual = self.readRocStr(val);
-                break :blk rocStrEqualSlices(actual, expected);
-            },
-            .tag => |t| blk: {
-                const tag_base = self.resolveTagUnionBaseValue(val, t.union_layout);
-                const disc = self.helper.readTagDiscriminant(tag_base.value, tag_base.layout);
-                if (disc != t.discriminant) break :blk false;
-                // Check payload patterns
-                const args = self.store.getPatternSpan(t.args);
-                for (args, 0..) |arg_pat_id, i| {
-                    const arg_val = self.tagPayloadArgValueForPattern(
-                        val,
-                        t.union_layout,
-                        t.discriminant,
-                        @intCast(i),
-                        arg_pat_id,
-                    );
-                    if (!try self.matchPattern(arg_pat_id, arg_val)) break :blk false;
-                }
-                break :blk true;
-            },
-            .struct_ => |s| blk: {
-                const fields = self.store.getPatternSpan(s.fields);
-                for (fields, 0..) |field_pat_id, i| {
-                    const field_offset = self.helper.structFieldOffset(s.struct_layout, @intCast(i));
-                    const field_val = val.offset(field_offset);
-                    if (!try self.matchPattern(field_pat_id, field_val)) break :blk false;
-                }
-                break :blk true;
-            },
-            .list => |list_pat| blk: {
-                const prefix = self.store.getPatternSpan(list_pat.prefix);
-                const suffix = self.store.getPatternSpan(list_pat.suffix);
-                const total_len = valueToRocList(val).len();
-                const fixed_len = prefix.len + suffix.len;
-
-                if (list_pat.rest.isNone()) {
-                    if (total_len != fixed_len) break :blk false;
-                } else if (total_len < fixed_len) {
-                    break :blk false;
-                }
-
-                for (prefix, 0..) |elem_pat_id, i| {
-                    const elem_val = try self.listElementValue(val, list_pat.list_layout, list_pat.elem_layout, i);
-                    if (!try self.matchPattern(elem_pat_id, elem_val)) break :blk false;
-                }
-
-                for (suffix, 0..) |elem_pat_id, i| {
-                    const elem_idx = total_len - suffix.len + i;
-                    const elem_val = try self.listElementValue(val, list_pat.list_layout, list_pat.elem_layout, elem_idx);
-                    if (!try self.matchPattern(elem_pat_id, elem_val)) break :blk false;
-                }
-
-                // Rest pattern: no need to create an actual slice for matching —
-                // the length check above already validates the rest is present.
-                // Creating a slice here would incref the list without a corresponding decref.
-
-                break :blk true;
-            },
-        };
-    }
-
-    // Aggregates
-
-    fn evalZeroArgTag(self: *LirInterpreter, z: anytype) Error!Value {
-        const val = try self.alloc(z.union_layout);
-        self.helper.writeTagDiscriminant(val, z.union_layout, z.discriminant);
-        return val;
-    }
-
-    fn evalEmptyList(self: *LirInterpreter, l: anytype) Error!Value {
-        // RocList with all zeros = empty list
-        return self.alloc(l.list_layout);
     }
 
     // Function calls — all go through the stack-safe engine via enterFunction/evalProcStackSafe.
@@ -1169,206 +1168,6 @@ pub const Interpreter = struct {
         }
     }
 
-    // Crash / dbg / expect
-
-    fn renderExpectExpr(self: *LirInterpreter, expr_id: LirExprId) Error![]const u8 {
-        const arena = self.arena.allocator();
-        const expr = self.store.getExpr(expr_id);
-
-        return switch (expr) {
-            .block => |block| try self.renderExpectExpr(block.final_expr),
-            .i64_literal => |lit| std.fmt.allocPrint(arena, "{d}", .{lit.value}) catch return error.OutOfMemory,
-            .i128_literal => |lit| std.fmt.allocPrint(arena, "{d}", .{lit.value}) catch return error.OutOfMemory,
-            .f64_literal => |lit| try self.renderCompactFloat(@as(f64, lit)),
-            .f32_literal => |lit| try self.renderCompactFloat(@as(f64, lit)),
-            .dec_literal => |lit| blk: {
-                const dec = RocDec{ .num = lit };
-                if (@rem(lit, RocDec.one_point_zero_i128) == 0) {
-                    break :blk std.fmt.allocPrint(arena, "{d}", .{dec.toWholeInt()}) catch return error.OutOfMemory;
-                }
-                var buf: [RocDec.max_str_length]u8 = undefined;
-                break :blk std.fmt.allocPrint(arena, "{s}", .{dec.format_to_buf(&buf)}) catch return error.OutOfMemory;
-            },
-            .bool_literal => |lit| if (lit) "True" else "False",
-            .str_literal => |idx| std.fmt.allocPrint(arena, "\"{s}\"", .{self.store.getString(idx)}) catch return error.OutOfMemory,
-            .lookup => |lookup| blk: {
-                if (self.lookupBinding(lookup.symbol.raw())) |binding| {
-                    break :blk try self.renderExpectValue(binding.val, lookup.layout_idx);
-                }
-                if (self.top_level_cache.get(lookup.symbol.raw())) |binding| {
-                    break :blk try self.renderExpectValue(binding.val, lookup.layout_idx);
-                }
-                break :blk std.fmt.allocPrint(arena, "sym#{d}", .{lookup.symbol.raw()}) catch return error.OutOfMemory;
-            },
-            .nominal => |nom| try self.renderExpectExpr(nom.backing_expr),
-            .low_level => |ll| blk: {
-                const op_text = switch (ll.op) {
-                    .num_is_eq => "==",
-                    .num_is_gt => ">",
-                    .num_is_gte => ">=",
-                    .num_is_lt => "<",
-                    .num_is_lte => "<=",
-                    .num_plus => "+",
-                    .num_minus => "-",
-                    .num_times => "*",
-                    else => break :blk std.fmt.allocPrint(arena, "{s}", .{@tagName(ll.op)}) catch return error.OutOfMemory,
-                };
-
-                const args = self.store.getExprSpan(ll.args);
-                if (args.len != 2) {
-                    break :blk std.fmt.allocPrint(arena, "{s}", .{@tagName(ll.op)}) catch return error.OutOfMemory;
-                }
-
-                const lhs = try self.renderExpectExpr(args[0]);
-                const rhs = try self.renderExpectExpr(args[1]);
-                break :blk std.fmt.allocPrint(arena, "{s} {s} {s}", .{ lhs, op_text, rhs }) catch return error.OutOfMemory;
-            },
-            else => "expect failed",
-        };
-    }
-
-    fn renderExpectValue(self: *LirInterpreter, value: Value, layout_idx: layout_mod.Idx) Error![]const u8 {
-        const arena = self.arena.allocator();
-        if (layout_idx == .bool) {
-            return if (value.read(u8) != 0) "True" else "False";
-        }
-
-        const layout_val = self.layout_store.getLayout(layout_idx);
-
-        return switch (layout_val.tag) {
-            .scalar => switch (layout_val.data.scalar.tag) {
-                .int => switch (self.helper.sizeOf(layout_idx)) {
-                    1 => std.fmt.allocPrint(arena, "{d}", .{value.read(i8)}) catch return error.OutOfMemory,
-                    2 => std.fmt.allocPrint(arena, "{d}", .{value.read(i16)}) catch return error.OutOfMemory,
-                    4 => std.fmt.allocPrint(arena, "{d}", .{value.read(i32)}) catch return error.OutOfMemory,
-                    8 => std.fmt.allocPrint(arena, "{d}", .{value.read(i64)}) catch return error.OutOfMemory,
-                    16 => std.fmt.allocPrint(arena, "{d}", .{value.read(i128)}) catch return error.OutOfMemory,
-                    else => "expect failed",
-                },
-                .str => std.fmt.allocPrint(arena, "\"{s}\"", .{self.readRocStr(value)}) catch return error.OutOfMemory,
-                .frac => switch (self.helper.sizeOf(layout_idx)) {
-                    4 => try self.renderCompactFloat(@as(f64, value.read(f32))),
-                    8 => try self.renderCompactFloat(value.read(f64)),
-                    16 => blk: {
-                        const dec = RocDec{ .num = value.read(i128) };
-                        if (@rem(dec.num, RocDec.one_point_zero_i128) == 0) {
-                            break :blk std.fmt.allocPrint(arena, "{d}", .{dec.toWholeInt()}) catch return error.OutOfMemory;
-                        }
-                        var buf: [RocDec.max_str_length]u8 = undefined;
-                        break :blk std.fmt.allocPrint(arena, "{s}", .{dec.format_to_buf(&buf)}) catch return error.OutOfMemory;
-                    },
-                    else => "expect failed",
-                },
-            },
-            else => "expect failed",
-        };
-    }
-
-    fn renderCompactFloat(self: *LirInterpreter, value: f64) Error![]const u8 {
-        var buf: [400]u8 = undefined;
-        const slice = i128h.f64_to_str(&buf, value);
-        return self.arena.allocator().dupe(u8, slice) catch error.OutOfMemory;
-    }
-
-    fn isRecoverableStringPlaceholder(self: *LirInterpreter, expr_id: LirExprId) bool {
-        return switch (self.store.getExpr(expr_id)) {
-            .runtime_error => true,
-            .block => |block| self.isRecoverableStringPlaceholder(block.final_expr),
-            .nominal => |nom| self.isRecoverableStringPlaceholder(nom.backing_expr),
-            .dbg => |dbg_expr| self.isRecoverableStringPlaceholder(dbg_expr.expr),
-            else => false,
-        };
-    }
-
-    // Hosted function calls
-
-    fn evalHostedCall(self: *LirInterpreter, hc: anytype) Error!Value {
-        const args_exprs = self.store.getExprSpan(hc.args);
-
-        // Collect argument values and layouts.
-        // When explicit args are empty, fall back to the enclosing lambda's bound
-        // parameters (same pattern as the dev backend's collectImplicitHostedCallArgs).
-        const ArgInfo = struct { val: Value, layout: layout_mod.Idx };
-        var collected_args = std.ArrayList(ArgInfo).empty;
-        defer collected_args.deinit(self.allocator);
-
-        if (args_exprs.len > 0) {
-            // Explicit args: evaluate each one
-            for (args_exprs) |arg_id| {
-                const arg_val = try self.evalValue(arg_id);
-                const arg_layout = lir_program_mod.lirExprResultLayout(self.store, arg_id);
-                collected_args.append(self.allocator, .{ .val = arg_val, .layout = arg_layout }) catch return error.OutOfMemory;
-            }
-        } else if (self.current_lambda_params) |lambda_params| {
-            // Implicit args: read from enclosing lambda's bound parameters
-            for (self.store.getPatternSpan(lambda_params)) |pat_id| {
-                const pat = self.store.getPattern(pat_id);
-                switch (pat) {
-                    .bind => |bind| {
-                        if (self.lookupBinding(bind.symbol.raw())) |binding| {
-                            collected_args.append(self.allocator, .{
-                                .val = binding.val,
-                                .layout = bind.layout_idx,
-                            }) catch return error.OutOfMemory;
-                        }
-                    },
-                    .wildcard => {},
-                    else => {},
-                }
-            }
-        }
-
-        // Marshal arguments into a contiguous buffer
-        var total_args_size: usize = 0;
-        for (collected_args.items) |arg| {
-            const sa = self.helper.sizeAlignOf(arg.layout);
-            total_args_size = std.mem.alignForward(usize, total_args_size, sa.alignment.toByteUnits());
-            total_args_size += sa.size;
-        }
-
-        const args_buf_size = @max(total_args_size, 8);
-        const args_buf = self.arena.allocator().alloc(u8, args_buf_size) catch return error.OutOfMemory;
-        @memset(args_buf, 0);
-
-        var offset: usize = 0;
-        for (collected_args.items) |arg| {
-            const sa = self.helper.sizeAlignOf(arg.layout);
-            offset = std.mem.alignForward(usize, offset, sa.alignment.toByteUnits());
-            if (sa.size > 0 and !arg.val.isZst()) {
-                @memcpy(args_buf[offset .. offset + sa.size], arg.val.readBytes(sa.size));
-            }
-            offset += sa.size;
-        }
-
-        // Allocate return buffer
-        const ret_size = self.helper.sizeOf(hc.ret_layout);
-        var ret_buf: [64]u8 align(16) = undefined;
-        @memset(ret_buf[0..@max(ret_size, 1)], 0);
-
-        // Call: hosted_fn(roc_ops, ret_ptr, args_ptr)
-        // Pass the caller's RocOps so the hosted function gets the platform's env
-        // (the host casts ops.env to its own HostEnv type).
-        const hosted_fn = self.roc_ops.hosted_fns.fns[hc.index];
-        self.roc_env.resetCrash();
-        const ops_for_host = self.currentRocOps();
-        hosted_fn(@ptrCast(ops_for_host), @ptrCast(&ret_buf), @ptrCast(args_buf.ptr));
-
-        if (self.roc_env.crashed) return error.Crash;
-
-        // Copy result into interpreter value
-        if (ret_size == 0) return Value.zst;
-        const result = try self.alloc(hc.ret_layout);
-        @memcpy(result.ptr[0..ret_size], ret_buf[0..ret_size]);
-        return result;
-    }
-
-    // Low-level operations — direct builtin dispatch
-
-    /// Resolve the result layout of a LIR expression.
-    fn exprLayout(self: *LirInterpreter, expr_id: LirExprId) layout_mod.Idx {
-        return lir_program_mod.lirExprResultLayout(self.store, expr_id);
-    }
-
     // ── Value ↔ RocStr/RocList marshaling ──
 
     fn valueToRocStr(val: Value) RocStr {
@@ -1436,72 +1235,6 @@ pub const Interpreter = struct {
         return .{ .ptr = bytes + index * info.width };
     }
 
-    fn listSliceValue(
-        self: *LirInterpreter,
-        list_val: Value,
-        list_layout: layout_mod.Idx,
-        start: usize,
-        len: usize,
-    ) Error!Value {
-        return self.listSliceValueImpl(list_val, list_layout, start, len, true);
-    }
-
-    /// Like listSliceValue but without incrementing the refcount.
-    /// Used by bindPattern where the LIR manages refcounts through explicit RC expressions.
-    fn listSliceValueNoIncref(
-        self: *LirInterpreter,
-        list_val: Value,
-        list_layout: layout_mod.Idx,
-        start: usize,
-        len: usize,
-    ) Error!Value {
-        return self.listSliceValueImpl(list_val, list_layout, start, len, false);
-    }
-
-    fn listSliceValueImpl(
-        self: *LirInterpreter,
-        list_val: Value,
-        list_layout: layout_mod.Idx,
-        start: usize,
-        len: usize,
-        do_incref: bool,
-    ) Error!Value {
-        const rl = valueToRocList(list_val);
-        if (len == 0 or start >= rl.len()) {
-            return self.rocListToValue(RocList.empty(), list_layout);
-        }
-
-        const keep_len = @min(len, rl.len() - start);
-        const info = self.listElemInfo(list_layout);
-
-        if (info.width == 0) {
-            return self.rocListToValue(.{
-                .bytes = rl.bytes,
-                .length = keep_len,
-                .capacity_or_alloc_ptr = keep_len,
-            }, list_layout);
-        }
-
-        if (start == 0 and keep_len == rl.len()) {
-            if (do_incref) rl.incref(1, info.rc, &self.roc_ops);
-            return self.rocListToValue(rl, list_layout);
-        }
-
-        const source_ptr = rl.bytes orelse return error.RuntimeError;
-        if (do_incref) rl.incref(1, info.rc, &self.roc_ops);
-
-        const list_alloc_ptr = (@intFromPtr(source_ptr) >> 1) | builtins.list.SEAMLESS_SLICE_BIT;
-        const slice_alloc_ptr = rl.capacity_or_alloc_ptr;
-        const slice_mask = rl.seamlessSliceMask();
-        const alloc_ptr = (list_alloc_ptr & ~slice_mask) | (slice_alloc_ptr & slice_mask);
-
-        return self.rocListToValue(.{
-            .bytes = source_ptr + start * info.width,
-            .length = keep_len,
-            .capacity_or_alloc_ptr = alloc_ptr,
-        }, list_layout);
-    }
-
     // ── Builtin call with crash recovery ──
 
     fn callBuiltinStr1(self: *LirInterpreter, comptime func: anytype, a: RocStr, ret_layout: layout_mod.Idx) Error!Value {
@@ -1533,17 +1266,20 @@ pub const Interpreter = struct {
         return field.layout;
     }
 
-    fn evalLowLevel(self: *LirInterpreter, ll: anytype) Error!Value {
-        const arg_exprs = self.store.getExprSpan(ll.args);
-        var args: [8]Value = undefined;
-        const n = @min(arg_exprs.len, 8);
-        for (0..n) |i| {
-            args[i] = try self.evalValue(arg_exprs[i]);
-        }
+    const LowLevelEvalInput = struct {
+        op: lir.LowLevel,
+        args: []const Value,
+        arg_layouts: []const layout_mod.Idx,
+        ret_layout: layout_mod.Idx,
+        callable_proc: ?LirProcSpecId = null,
+    };
+
+    fn evalLowLevel(self: *LirInterpreter, ll: LowLevelEvalInput) Error!Value {
+        const args = ll.args;
 
         // Determine argument layout for numeric ops (operand type, not return type)
-        const arg_layout: layout_mod.Idx = if (arg_exprs.len > 0)
-            self.exprLayout(arg_exprs[0])
+        const arg_layout: layout_mod.Idx = if (ll.arg_layouts.len > 0)
+            ll.arg_layouts[0]
         else
             ll.ret_layout;
 
@@ -1715,8 +1451,19 @@ pub const Interpreter = struct {
                 break :blk self.rocStrToValue(result, ll.ret_layout);
             },
             .str_inspect => blk: {
-                // str_inspect is identity on strings (already formatted)
-                break :blk args[0];
+                self.roc_env.resetCrash();
+                const sj = setjmp(&self.roc_env.jmp_buf);
+                if (sj != 0) return error.Crash;
+                var result: RocStr = undefined;
+                const roc_str = valueToRocStr(args[0]);
+                dev_wrappers.roc_builtins_str_escape_and_quote(
+                    &result,
+                    roc_str.bytes,
+                    roc_str.length,
+                    roc_str.capacity_or_alloc_ptr,
+                    &self.roc_ops,
+                );
+                break :blk self.rocStrToValue(result, ll.ret_layout);
             },
 
             // ── Numeric to_str ops ──
@@ -1864,12 +1611,12 @@ pub const Interpreter = struct {
                 break :blk self.rocListToValue(result, ll.ret_layout);
             },
             .list_sublist => blk: {
-                if (arg_exprs.len != 2) {
+                if (args.len != 2 or ll.arg_layouts.len != 2) {
                     return self.runtimeError("list_sublist expected 2 arguments");
                 }
 
                 const info = self.listElemInfo(arg_layout);
-                const record_layout = self.exprLayout(arg_exprs[1]);
+                const record_layout = ll.arg_layouts[1];
                 const record_layout_val = self.layout_store.getLayout(record_layout);
                 if (record_layout_val.tag != .struct_) {
                     return self.runtimeError("list_sublist expected a { start, len } record");
@@ -2008,11 +1755,7 @@ pub const Interpreter = struct {
             .list_drop_last => self.evalListDropLast(args[0], arg_layout, ll.ret_layout),
             .list_take_first => self.evalListTakeFirst(args[0], args[1], arg_layout, ll.ret_layout),
             .list_take_last => self.evalListTakeLast(args[0], args[1], arg_layout, ll.ret_layout),
-            .list_contains => self.evalListContains(args[0], args[1], arg_layout, ll.ret_layout),
             .list_reverse => self.evalListReverse(args[0], arg_layout, ll.ret_layout),
-            .list_sort_with => blk: {
-                break :blk try self.evalListSortWith(args[0], arg_layout, ll.ret_layout, ll.callable_proc);
-            },
             .list_split_first => self.evalListSplitFirst(args[0], arg_layout, ll.ret_layout),
             .list_split_last => self.evalListSplitLast(args[0], arg_layout, ll.ret_layout),
 
@@ -2984,24 +2727,6 @@ pub const Interpreter = struct {
         return self.rocListToValue(result, ret_layout);
     }
 
-    fn evalListContains(self: *LirInterpreter, list_arg: Value, elem_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx) Error!Value {
-        const rl = valueToRocList(list_arg);
-        const info = self.listElemInfo(list_layout);
-        const val = try self.alloc(ret_layout);
-        var found = false;
-        if (rl.bytes != null and info.width > 0) {
-            for (0..rl.len()) |i| {
-                const elem_ptr = rl.bytes.? + i * info.width;
-                if (rawBytesEqual(elem_ptr[0..info.width], elem_arg.ptr[0..info.width])) {
-                    found = true;
-                    break;
-                }
-            }
-        }
-        val.write(u8, if (found) 1 else 0);
-        return val;
-    }
-
     fn evalListReverse(self: *LirInterpreter, list_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx) Error!Value {
         const rl = valueToRocList(list_arg);
         const info = self.listElemInfo(list_layout);
@@ -3025,75 +2750,6 @@ pub const Interpreter = struct {
             }
         }
         return self.rocListToValue(new_list, ret_layout);
-    }
-
-    fn evalListSortWith(self: *LirInterpreter, list_val: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx, comparator_proc_id: LirProcSpecId) Error!Value {
-        const rl = valueToRocList(list_val);
-        const info = self.listElemInfo(list_layout);
-        const list_len = rl.len();
-
-        if (list_len < 2 or rl.bytes == null or info.width == 0)
-            return self.rocListToValue(rl, ret_layout);
-
-        if (comparator_proc_id.isNone()) return error.RuntimeError;
-
-        // Look up the comparator proc spec
-        const comparator = self.store.getProcSpec(comparator_proc_id);
-
-        // Clone the list data for in-place sorting
-        self.roc_env.resetCrash();
-        const sj = setjmp(&self.roc_env.jmp_buf);
-        if (sj != 0) return error.Crash;
-        const new_list = builtins.list.shallowClone(rl, rl.len(), info.width, info.alignment, info.rc, &self.roc_ops);
-        const sorted_bytes = new_list.bytes orelse return self.rocListToValue(new_list, ret_layout);
-        const result_val = try self.rocListToValue(new_list, ret_layout);
-        errdefer self.performRc(.decref, result_val, ret_layout, 0);
-
-        if (info.rc) {
-            const elem_layout = self.listElemLayout(list_layout);
-            for (0..list_len) |idx| {
-                const elem_val = Value{ .ptr = sorted_bytes + idx * info.width };
-                self.performRc(.incref, elem_val, elem_layout, 1);
-            }
-        }
-
-        defer self.performRc(.decref, list_val, list_layout, 0);
-
-        // Insertion sort using the comparator proc
-        const tmp = self.arena.allocator().alloc(u8, info.width) catch return error.OutOfMemory;
-
-        var i: usize = 1;
-        while (i < list_len) : (i += 1) {
-            // Save element[i] to temp
-            @memcpy(tmp, sorted_bytes[i * info.width ..][0..info.width]);
-            const temp_val = Value{ .ptr = tmp.ptr };
-
-            // Shift elements right until we find the insertion point
-            var j: usize = i;
-            while (j > 0) {
-                const elem_prev = Value{ .ptr = sorted_bytes + (j - 1) * info.width };
-
-                // Call comparator(temp, elem[j-1])
-                const call_args = [2]Value{ temp_val, elem_prev };
-                const result = try self.evalProcStackSafe(comparator, &call_args);
-                const cmp_val = switch (result) {
-                    .value => |v| v,
-                    else => return error.RuntimeError,
-                };
-
-                // Tag discriminants (alphabetical): EQ=0, GT=1, LT=2
-                const disc = cmp_val.read(u8);
-                if (disc != 2) break; // not LT, stop shifting
-
-                // Shift element[j-1] to element[j]
-                @memcpy(sorted_bytes[j * info.width ..][0..info.width], sorted_bytes[(j - 1) * info.width ..][0..info.width]);
-                j -= 1;
-            }
-            // Insert temp at position j
-            @memcpy(sorted_bytes[j * info.width ..][0..info.width], tmp);
-        }
-
-        return result_val;
     }
 
     fn evalListSplitFirst(self: *LirInterpreter, list_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx) Error!Value {
@@ -3314,18 +2970,6 @@ pub const Interpreter = struct {
 
     // Layout helpers
 
-    /// Get the layout of the i-th field in a struct layout.
-    fn fieldLayoutOf(self: *LirInterpreter, struct_layout: layout_mod.Idx, field_idx: u32) layout_mod.Idx {
-        const l = self.layout_store.getLayout(struct_layout);
-        if (l.tag != .struct_) return .zst;
-        const sd = self.layout_store.getStructData(l.data.struct_.idx);
-        const fields = self.layout_store.struct_fields.sliceRange(sd.getFields());
-        if (field_idx < fields.len) {
-            return fields.get(field_idx).layout;
-        }
-        return .zst;
-    }
-
     fn readBoxedDataPointer(self: *const LirInterpreter, boxed: Value) ?[*]u8 {
         const target_usize = self.layout_store.targetUsize();
         const raw_ptr: usize = if (target_usize.size() == 8)
@@ -3413,117 +3057,6 @@ pub const Interpreter = struct {
             .value = tag_base.value,
             .layout = payload_layout,
         };
-    }
-
-    fn tagPayloadArgValueForPattern(
-        self: *LirInterpreter,
-        union_val: Value,
-        union_layout: layout_mod.Idx,
-        discriminant: u16,
-        arg_index: u32,
-        pattern_id: LirPatternId,
-    ) Value {
-        const payload = self.tagPayloadArgValue(union_val, union_layout, discriminant, arg_index);
-        const expected_layout = self.patternLayout(pattern_id) orelse return payload.value;
-        return self.normalizeValueToLayout(payload.value, payload.layout, expected_layout);
-    }
-
-    fn patternLayout(self: *const LirInterpreter, pattern_id: LirPatternId) ?layout_mod.Idx {
-        const pat = self.store.getPattern(pattern_id);
-        return switch (pat) {
-            .bind => |b| b.layout_idx,
-            .wildcard => |w| w.layout_idx,
-            .int_literal => |lit| lit.layout_idx,
-            .float_literal => |lit| lit.layout_idx,
-            .str_literal => .str,
-            .tag => |t| t.union_layout,
-            .struct_ => |s| s.struct_layout,
-            .list => |l| l.list_layout,
-            .as_pattern => |ap| ap.layout_idx,
-        };
-    }
-
-    fn patternHasBindings(self: *const LirInterpreter, pattern_id: LirPatternId) bool {
-        const pat = self.store.getPattern(pattern_id);
-        return switch (pat) {
-            .bind, .as_pattern => true,
-            .wildcard, .int_literal, .float_literal, .str_literal => false,
-            .struct_ => |s| blk: {
-                for (self.store.getPatternSpan(s.fields)) |field_pat_id| {
-                    if (self.patternHasBindings(field_pat_id)) break :blk true;
-                }
-                break :blk false;
-            },
-            .tag => |t| blk: {
-                for (self.store.getPatternSpan(t.args)) |arg_pat_id| {
-                    if (self.patternHasBindings(arg_pat_id)) break :blk true;
-                }
-                break :blk false;
-            },
-            .list => |l| blk: {
-                for (self.store.getPatternSpan(l.prefix)) |elem_pat_id| {
-                    if (self.patternHasBindings(elem_pat_id)) break :blk true;
-                }
-                for (self.store.getPatternSpan(l.suffix)) |elem_pat_id| {
-                    if (self.patternHasBindings(elem_pat_id)) break :blk true;
-                }
-                if (!l.rest.isNone() and self.patternHasBindings(l.rest)) break :blk true;
-                break :blk false;
-            },
-        };
-    }
-
-    fn dropOwnedPatternValue(self: *LirInterpreter, pattern_id: LirPatternId, val: Value) Error!void {
-        const pat = self.store.getPattern(pattern_id);
-        switch (pat) {
-            .bind, .as_pattern => unreachable,
-            .wildcard => |w| self.performRc(.decref, val, w.layout_idx, 0),
-            .int_literal, .float_literal => {},
-            .str_literal => self.performRc(.decref, val, .str, 0),
-            .struct_ => |s| {
-                const fields = self.store.getPatternSpan(s.fields);
-                for (fields, 0..) |field_pat_id, i| {
-                    const field_offset = self.helper.structFieldOffset(s.struct_layout, @intCast(i));
-                    try self.dropOwnedPatternValue(field_pat_id, val.offset(field_offset));
-                }
-            },
-            .tag => |t| {
-                const args = self.store.getPatternSpan(t.args);
-                for (args, 0..) |arg_pat_id, i| {
-                    const arg_val = self.tagPayloadArgValueForPattern(
-                        val,
-                        t.union_layout,
-                        t.discriminant,
-                        @intCast(i),
-                        arg_pat_id,
-                    );
-                    try self.dropOwnedPatternValue(arg_pat_id, arg_val);
-                }
-            },
-            .list => |list_pat| {
-                const prefix = self.store.getPatternSpan(list_pat.prefix);
-                const suffix = self.store.getPatternSpan(list_pat.suffix);
-                const total_len = valueToRocList(val).len();
-                const fixed_len = prefix.len + suffix.len;
-
-                for (prefix, 0..) |elem_pat_id, i| {
-                    const elem_val = try self.listElementValue(val, list_pat.list_layout, list_pat.elem_layout, i);
-                    try self.dropOwnedPatternValue(elem_pat_id, elem_val);
-                }
-
-                for (suffix, 0..) |elem_pat_id, i| {
-                    const elem_idx = total_len - suffix.len + i;
-                    const elem_val = try self.listElementValue(val, list_pat.list_layout, list_pat.elem_layout, elem_idx);
-                    try self.dropOwnedPatternValue(elem_pat_id, elem_val);
-                }
-
-                if (!list_pat.rest.isNone()) {
-                    const rest_len = total_len - fixed_len;
-                    const rest_val = try self.listSliceValue(val, list_pat.list_layout, prefix.len, rest_len);
-                    try self.dropOwnedPatternValue(list_pat.rest, rest_val);
-                }
-            },
-        }
     }
 
     fn normalizeValueToLayout(
@@ -3614,1177 +3147,4 @@ pub const Interpreter = struct {
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    //  Stack-safe eval engine
-    //
-    //  All evaluation goes through an explicit work_stack + value_stack.
-    //  Entry points:
-    //    evalStackSafe     — evaluate an expression
-    //    evalProcStackSafe — call a proc (used by evalEntrypoint, sort)
-    //  Both seed the work stack then delegate to runWorkLoop.
-    // ═══════════════════════════════════════════════════════════════════
-
-    const Continuation = work_stack.Continuation;
-    const WorkItem = work_stack.WorkItem;
-
-    // ── Stack helpers ──
-
-    fn pushWork(self: *LirInterpreter, item: WorkItem) Error!void {
-        self.work_stack.append(self.allocator, item) catch return error.OutOfMemory;
-    }
-
-    fn pushValue(self: *LirInterpreter, val: Value) Error!void {
-        self.value_stack.append(self.allocator, val) catch return error.OutOfMemory;
-    }
-
-    fn popValue(self: *LirInterpreter) Value {
-        return self.value_stack.pop().?;
-    }
-
-    fn popValues(self: *LirInterpreter, count: usize) Error![]Value {
-        if (count == 0) return &[_]Value{};
-        const buf = self.arena.allocator().alloc(Value, count) catch return error.OutOfMemory;
-        var i: usize = count;
-        while (i > 0) {
-            i -= 1;
-            buf[i] = self.value_stack.pop().?;
-        }
-        return buf;
-    }
-
-    /// Schedule: push continuation first (bottom), then eval_expr (top).
-    /// eval_expr fires first, pushes result to value_stack,
-    /// then continuation fires and reads the result.
-    fn scheduleEvalThen(self: *LirInterpreter, cont: Continuation, expr_id: LirExprId) Error!void {
-        try self.pushWork(.{ .apply_continuation = cont });
-        try self.pushWork(.{ .eval_expr = expr_id });
-    }
-
-    // ── Main loop ──
-
-    /// Stack-safe expression evaluator.
-    /// Pushes work items onto an explicit stack instead of recursing.
-    pub fn evalStackSafe(self: *LirInterpreter, initial_expr_id: LirExprId) Error!EvalResult {
-        // Save outer stack depths to support re-entrancy (e.g., evalLowLevel calling
-        // self.eval() for simple args while the stack-safe engine is active).
-        const outer_work_len = self.work_stack.items.len;
-        _ = self.value_stack.items.len; // outer_value_len reserved for future assertions
-        const saved_unwinding = self.unwinding;
-        self.unwinding = .none;
-
-        // Seed: return_result continuation (bottom), then the initial expression (top)
-        try self.pushWork(.{ .apply_continuation = .return_result });
-        try self.pushWork(.{ .eval_expr = initial_expr_id });
-
-        return self.runWorkLoop(outer_work_len, saved_unwinding);
-    }
-
-    /// Core work loop: pops and dispatches work items until the stack returns
-    /// to `outer_work_len` (i.e. the `return_result` sentinel fires).
-    /// Shared by `evalStackSafe` (expression entry) and `evalProcStackSafe`
-    /// (function-call entry).
-    fn runWorkLoop(self: *LirInterpreter, outer_work_len: usize, saved_unwinding: Unwinding) Error!EvalResult {
-        while (self.work_stack.items.len > outer_work_len) {
-            const item = self.work_stack.pop().?;
-
-            // Unwinding mode: skip non-boundary items until we hit a frame boundary
-            switch (self.unwinding) {
-                .none => {},
-                .early_return => |ret_val| {
-                    switch (item) {
-                        .apply_continuation => |cont| switch (cont) {
-                            .call_cleanup => |cleanup| {
-                                self.bindings.shrinkRetainingCapacity(cleanup.saved_bindings_len);
-                                self.current_lambda_params = cleanup.saved_lambda_params;
-                                self.value_stack.shrinkRetainingCapacity(cleanup.saved_value_stack_len);
-                                self.call_depth -= 1;
-                                try self.pushValue(ret_val);
-                                self.unwinding = .none;
-                                continue; // skip normal dispatch
-                            },
-                            .return_result => {
-                                self.unwinding = saved_unwinding;
-                                return .{ .early_return = ret_val };
-                            },
-                            else => continue,
-                        },
-                        else => continue,
-                    }
-                },
-                .break_expr => {
-                    switch (item) {
-                        .apply_continuation => |cont| switch (cont) {
-                            .for_loop_body_done => |fl| {
-                                self.value_stack.shrinkRetainingCapacity(fl.saved_value_stack_len);
-                                try self.pushValue(Value.zst);
-                                self.unwinding = .none;
-                                continue; // skip normal dispatch
-                            },
-                            .while_loop_body_done => |wl| {
-                                self.value_stack.shrinkRetainingCapacity(wl.saved_value_stack_len);
-                                try self.pushValue(Value.zst);
-                                self.unwinding = .none;
-                                continue; // skip normal dispatch
-                            },
-                            .call_cleanup => |cleanup| {
-                                self.bindings.shrinkRetainingCapacity(cleanup.saved_bindings_len);
-                                self.current_lambda_params = cleanup.saved_lambda_params;
-                                self.value_stack.shrinkRetainingCapacity(cleanup.saved_value_stack_len);
-                                self.call_depth -= 1;
-                                try self.pushValue(Value.zst);
-                                self.unwinding = .none;
-                                continue; // skip normal dispatch
-                            },
-                            .return_result => {
-                                self.unwinding = saved_unwinding;
-                                return .{ .break_expr = {} };
-                            },
-                            else => continue,
-                        },
-                        else => continue,
-                    }
-                },
-            }
-
-            // Normal dispatch
-            switch (item) {
-                .eval_expr => |expr_id| {
-                    if (comptime trace.enabled) {
-                        const expr = self.store.getExpr(expr_id);
-                        trace.log("eval_expr {any}: {s}", .{ expr_id, @tagName(expr) });
-                    }
-                    try self.scheduleExprEval(expr_id);
-                },
-                .eval_cf_stmt => |stmt_id| try self.scheduleCFStmtEval(stmt_id),
-                .apply_continuation => |cont| {
-                    trace.log("apply_continuation: {s}", .{@tagName(cont)});
-                    if (try self.applyContinuation(cont)) |result| {
-                        self.unwinding = saved_unwinding;
-                        return result;
-                    }
-                },
-            }
-        }
-
-        // Should not reach here — return_result should have fired
-        self.unwinding = saved_unwinding;
-        return error.RuntimeError;
-    }
-
-    // ── Expression scheduling ──
-
-    /// Schedule evaluation of a LIR expression.
-    /// Pushes work items to evaluate the expression and its sub-expressions.
-    fn scheduleExprEval(self: *LirInterpreter, expr_id: LirExprId) Error!void {
-        const expr = self.store.getExpr(expr_id);
-        switch (expr) {
-            // ── Immediate (push value directly) ──
-
-            .i64_literal => |lit| try self.pushValue(try self.evalI64Literal(lit.value, lit.layout_idx)),
-            .i128_literal => |lit| try self.pushValue(try self.evalI128Literal(lit.value, lit.layout_idx)),
-            .f64_literal => |v| try self.pushValue(try self.evalF64Literal(v)),
-            .f32_literal => |v| try self.pushValue(try self.evalF32Literal(v)),
-            .dec_literal => |v| try self.pushValue(try self.evalDecLiteral(v)),
-            .str_literal => |idx| try self.pushValue(try self.evalStrLiteral(idx)),
-            .bool_literal => |b| try self.pushValue(try self.evalBoolLiteral(b)),
-            .lookup => |l| try self.pushValue(try self.evalLookup(l.symbol, l.layout_idx)),
-            .cell_load => |l| try self.pushValue(try self.evalCellLoad(l.cell, l.layout_idx)),
-            .zero_arg_tag => |z| try self.pushValue(try self.evalZeroArgTag(z)),
-            .empty_list => |l| try self.pushValue(try self.evalEmptyList(l)),
-
-            // ── Nominal (tail-unwrap) ──
-            .nominal => |n| try self.pushWork(.{ .eval_expr = n.backing_expr }),
-
-            // ── Unary sub-expression (push unary_then + eval_expr) ──
-
-            .struct_access => |sa| {
-                try self.scheduleEvalThen(.{ .unary_then = .{ .struct_access = .{
-                    .struct_layout = sa.struct_layout,
-                    .field_layout = sa.field_layout,
-                    .field_idx = sa.field_idx,
-                } } }, sa.struct_expr);
-            },
-            .tag_payload_access => |tpa| {
-                try self.scheduleEvalThen(.{ .unary_then = .{ .tag_payload_access = .{
-                    .union_layout = tpa.union_layout,
-                    .payload_layout = tpa.payload_layout,
-                } } }, tpa.value);
-            },
-            .dbg => |d| {
-                try self.scheduleEvalThen(.{ .unary_then = .{ .dbg_stmt = .{
-                    .result_layout = d.result_layout,
-                } } }, d.expr);
-            },
-            .expect => |e| {
-                try self.scheduleEvalThen(.{ .unary_then = .{ .expect_cond = .{
-                    .cond_expr_id = e.cond,
-                    .result_layout = e.result_layout,
-                } } }, e.cond);
-            },
-            .incref => |ir| {
-                try self.scheduleEvalThen(.{ .unary_then = .{ .incref = .{
-                    .layout_idx = ir.layout_idx,
-                    .count = ir.count,
-                } } }, ir.value);
-            },
-            .decref => |dr| {
-                try self.scheduleEvalThen(.{ .unary_then = .{ .decref = .{
-                    .layout_idx = dr.layout_idx,
-                } } }, dr.value);
-            },
-            .free => |f| {
-                try self.scheduleEvalThen(.{ .unary_then = .{ .free = .{
-                    .layout_idx = f.layout_idx,
-                } } }, f.value);
-            },
-            .int_to_str => |its| {
-                try self.scheduleEvalThen(.{ .unary_then = .{ .int_to_str = .{
-                    .int_precision = its.int_precision,
-                } } }, its.value);
-            },
-            .float_to_str => |fts| {
-                try self.scheduleEvalThen(.{ .unary_then = .{ .float_to_str = .{
-                    .float_precision = fts.float_precision,
-                } } }, fts.value);
-            },
-            .dec_to_str => |dts| {
-                try self.scheduleEvalThen(.{ .unary_then = .dec_to_str }, dts);
-            },
-            .str_escape_and_quote => |seq| {
-                try self.scheduleEvalThen(.{ .unary_then = .str_escape_and_quote }, seq);
-            },
-
-            // ── Multi-arg collect ──
-
-            .proc_call => |pc| {
-                const arg_exprs = self.store.getExprSpan(pc.args);
-                if (arg_exprs.len == 0) {
-                    // Zero-arg call: enter function directly
-                    const proc_spec = self.store.getProcSpec(pc.proc);
-                    try self.enterFunction(proc_spec, &[_]Value{});
-                } else {
-                    try self.scheduleEvalThen(.{ .call_collect_args = .{
-                        .proc = pc.proc,
-                        .args = pc.args,
-                        .next_arg_idx = 0,
-                    } }, arg_exprs[0]);
-                }
-            },
-            .struct_ => |s| {
-                const field_exprs = self.store.getExprSpan(s.fields);
-                if (field_exprs.len == 0) {
-                    try self.pushValue(try self.alloc(s.struct_layout));
-                } else {
-                    try self.scheduleEvalThen(.{ .struct_collect = .{
-                        .struct_layout = s.struct_layout,
-                        .fields = s.fields,
-                        .next_field_idx = 0,
-                    } }, field_exprs[0]);
-                }
-            },
-            .tag => |t| {
-                const arg_exprs = self.store.getExprSpan(t.args);
-                if (arg_exprs.len == 0) {
-                    try self.pushValue(try self.evalZeroArgTag(.{
-                        .discriminant = t.discriminant,
-                        .union_layout = t.union_layout,
-                    }));
-                } else {
-                    try self.scheduleEvalThen(.{ .tag_collect = .{
-                        .discriminant = t.discriminant,
-                        .union_layout = t.union_layout,
-                        .args = t.args,
-                        .next_arg_idx = 0,
-                    } }, arg_exprs[0]);
-                }
-            },
-            .list => |l| {
-                const elem_exprs = self.store.getExprSpan(l.elems);
-                if (elem_exprs.len == 0) {
-                    try self.pushValue(try self.evalEmptyList(.{
-                        .list_layout = l.list_layout,
-                        .elem_layout = l.elem_layout,
-                    }));
-                } else {
-                    try self.scheduleEvalThen(.{ .list_collect = .{
-                        .list_layout = l.list_layout,
-                        .elem_layout = l.elem_layout,
-                        .elems = l.elems,
-                        .next_elem_idx = 0,
-                    } }, elem_exprs[0]);
-                }
-            },
-            .str_concat => |sc| {
-                const parts = self.store.getExprSpan(sc);
-                if (parts.len == 0) {
-                    try self.pushValue(try self.makeRocStr(""));
-                } else {
-                    try self.scheduleEvalThen(.{ .str_concat_collect = .{
-                        .parts = sc,
-                        .next_part_idx = 0,
-                    } }, parts[0]);
-                }
-            },
-            .low_level => |ll| {
-                // Low-level ops evaluate their own args (always simple lookups/literals,
-                // bounded depth). Call existing helper directly.
-                const value = self.evalLowLevel(ll) catch |err| switch (err) {
-                    error.RuntimeError => {
-                        if (self.getRuntimeErrorMessage() == null) {
-                            const msg = std.fmt.allocPrint(
-                                self.arena.allocator(),
-                                "RuntimeError in low-level op {s}",
-                                .{@tagName(ll.op)},
-                            ) catch return error.OutOfMemory;
-                            return self.runtimeError(msg);
-                        }
-                        return error.RuntimeError;
-                    },
-                    else => return err,
-                };
-                try self.pushValue(value);
-            },
-            .hosted_call => |hc| {
-                // Hosted calls use complex arg marshaling — call existing helper directly.
-                // The helper only calls self.eval() for arg sub-expressions which are simple
-                // lookups/literals, so recursion depth is bounded.
-                const value = try self.evalHostedCall(hc);
-                try self.pushValue(value);
-            },
-
-            // ── Control flow ──
-
-            .if_then_else => |ite| {
-                const branches = self.store.getIfBranches(ite.branches);
-                if (branches.len == 0) {
-                    try self.pushWork(.{ .eval_expr = ite.final_else });
-                } else {
-                    try self.scheduleEvalThen(.{ .if_branch = .{
-                        .branches = ite.branches,
-                        .current_branch_idx = 0,
-                        .final_else = ite.final_else,
-                        .result_layout = ite.result_layout,
-                    } }, branches[0].cond);
-                }
-            },
-            .match_expr => |m| {
-                try self.scheduleEvalThen(.{ .match_dispatch = .{
-                    .value_layout = m.value_layout,
-                    .branches = m.branches,
-                    .result_layout = m.result_layout,
-                } }, m.value);
-            },
-            .discriminant_switch => |ds| {
-                try self.scheduleEvalThen(.{ .discriminant_switch_dispatch = .{
-                    .union_layout = ds.union_layout,
-                    .branches = ds.branches,
-                    .result_layout = ds.result_layout,
-                } }, ds.value);
-            },
-            .block => |b| {
-                const stmts = self.store.getStmts(b.stmts);
-                // Find first non-cell_drop statement to schedule
-                const first_real_idx = self.findFirstRealStmt(stmts, 0);
-                if (first_real_idx) |idx| {
-                    const stmt_expr_id = self.stmtExprId(stmts[idx]);
-                    try self.scheduleEvalThen(.{ .block_stmt = .{
-                        .stmts = b.stmts,
-                        .current_stmt_idx = @intCast(idx),
-                        .final_expr = b.final_expr,
-                    } }, stmt_expr_id);
-                } else {
-                    // No real statements, just evaluate the final expression
-                    try self.pushWork(.{ .eval_expr = b.final_expr });
-                }
-            },
-            .for_loop => |fl| {
-                try self.scheduleEvalThen(.{ .for_loop_eval_list = .{
-                    .elem_layout = fl.elem_layout,
-                    .elem_pattern = fl.elem_pattern,
-                    .body = fl.body,
-                } }, fl.list_expr);
-            },
-            .while_loop => |wl| {
-                const check_infinite = self.detect_infinite_while_loops and
-                    !self.exprInvolvesMutableCell(wl.cond) and
-                    !self.exprHasLoopExit(wl.body);
-                try self.scheduleEvalThen(.{ .while_loop_check = .{
-                    .cond = wl.cond,
-                    .body = wl.body,
-                    .infinite_loop_check = check_infinite,
-                } }, wl.cond);
-            },
-
-            // ── Inline ──
-
-            .early_return => |er| {
-                try self.scheduleEvalThen(.early_return_wrap, er.expr);
-            },
-            .break_expr => {
-                self.unwinding = .break_expr;
-                try self.pushValue(Value.zst);
-            },
-            .crash => |c| {
-                const msg = self.store.getString(c.msg);
-                return self.triggerCrash(msg);
-            },
-            .runtime_error => |runtime_error_expr| {
-                if (self.recover_runtime_placeholders) {
-                    try self.pushValue(try self.placeholderValueForLayout(runtime_error_expr.ret_layout));
-                } else {
-                    return self.triggerCrash("RuntimeError");
-                }
-            },
-        }
-    }
-
-    // ── CF statement scheduling ──
-
-    /// Schedule evaluation of a CF statement chain.
-    fn scheduleCFStmtEval(self: *LirInterpreter, stmt_id: CFStmtId) Error!void {
-        if (stmt_id.isNone()) {
-            try self.pushValue(Value.zst);
-            return;
-        }
-        const stmt = self.store.getCFStmt(stmt_id);
-        switch (stmt) {
-            .let_stmt => |ls| {
-                try self.scheduleEvalThen(.{ .cf_let_bind = .{
-                    .pattern = ls.pattern,
-                    .next = ls.next,
-                } }, ls.value);
-            },
-            .ret => |r| {
-                // Result stays on value_stack for call_cleanup to pick up
-                try self.pushWork(.{ .eval_expr = r.value });
-            },
-            .join => |j| {
-                // Register the join point body, then schedule the remainder
-                self.join_points.put(self.allocator, @intFromEnum(j.id), .{
-                    .params = j.params,
-                    .param_layouts = j.param_layouts,
-                    .body = j.body,
-                }) catch return error.OutOfMemory;
-                try self.scheduleCFStmtEval(j.remainder);
-            },
-            .jump => |j| {
-                const jump_args = self.store.getExprSpan(j.args);
-                if (jump_args.len == 0) {
-                    // No args: just schedule the join point body
-                    const jp = self.join_points.get(@intFromEnum(j.target)) orelse return error.RuntimeError;
-                    try self.pushWork(.{ .eval_cf_stmt = jp.body });
-                } else {
-                    try self.scheduleEvalThen(.{ .cf_jump_collect_args = .{
-                        .target = j.target,
-                        .args = j.args,
-                        .next_arg_idx = 0,
-                    } }, jump_args[0]);
-                }
-            },
-            .expr_stmt => |es| {
-                try self.scheduleEvalThen(.{ .cf_expr_stmt_next = .{
-                    .next = es.next,
-                } }, es.value);
-            },
-            .switch_stmt => |ss| {
-                try self.scheduleEvalThen(.{ .cf_switch_dispatch = .{
-                    .cond_layout = ss.cond_layout,
-                    .branches = ss.branches,
-                    .default_branch = ss.default_branch,
-                    .ret_layout = ss.ret_layout,
-                } }, ss.cond);
-            },
-            .match_stmt => |ms| {
-                try self.scheduleEvalThen(.{ .cf_match_dispatch = .{
-                    .value_layout = ms.value_layout,
-                    .branches = ms.branches,
-                    .ret_layout = ms.ret_layout,
-                } }, ms.value);
-            },
-        }
-    }
-
-    // ── Continuation application ──
-
-    /// Apply a continuation. Returns non-null to stop the main loop.
-    fn applyContinuation(self: *LirInterpreter, cont: Continuation) Error!?EvalResult {
-        switch (cont) {
-            .return_result => {
-                const val = self.popValue();
-                return .{ .value = val };
-            },
-
-            // ── Function calls ──
-
-            .call_collect_args => |cca| {
-                const arg_exprs = self.store.getExprSpan(cca.args);
-                const next_idx = cca.next_arg_idx + 1;
-                if (next_idx < arg_exprs.len) {
-                    // More args to evaluate
-                    try self.scheduleEvalThen(.{ .call_collect_args = .{
-                        .proc = cca.proc,
-                        .args = cca.args,
-                        .next_arg_idx = next_idx,
-                    } }, arg_exprs[next_idx]);
-                } else {
-                    // All args collected — pop them and enter function
-                    const args = try self.popValues(arg_exprs.len);
-                    const proc_spec = self.store.getProcSpec(cca.proc);
-                    try self.enterFunction(proc_spec, args);
-                }
-                return null;
-            },
-            .call_cleanup => |cleanup| {
-                // Pop result value
-                const result = self.popValue();
-                // Restore bindings and lambda params
-                self.bindings.shrinkRetainingCapacity(cleanup.saved_bindings_len);
-                self.current_lambda_params = cleanup.saved_lambda_params;
-                self.call_depth -= 1;
-                // Push result back
-                try self.pushValue(result);
-                return null;
-            },
-
-            // ── Aggregate construction ──
-
-            .struct_collect => |sc| {
-                const field_exprs = self.store.getExprSpan(sc.fields);
-                const next_idx = sc.next_field_idx + 1;
-                if (next_idx < field_exprs.len) {
-                    // More fields to evaluate
-                    try self.scheduleEvalThen(.{ .struct_collect = .{
-                        .struct_layout = sc.struct_layout,
-                        .fields = sc.fields,
-                        .next_field_idx = next_idx,
-                    } }, field_exprs[next_idx]);
-                } else {
-                    // All fields collected — build struct
-                    const vals = try self.popValues(field_exprs.len);
-                    const struct_val = try self.alloc(sc.struct_layout);
-                    for (vals, 0..) |field_val, i| {
-                        const field_offset = self.helper.structFieldOffset(sc.struct_layout, @intCast(i));
-                        const field_layout = self.fieldLayoutOf(sc.struct_layout, @intCast(i));
-                        const field_size = self.helper.sizeOf(field_layout);
-                        if (field_size > 0) {
-                            struct_val.offset(field_offset).copyFrom(field_val, field_size);
-                        }
-                    }
-                    try self.pushValue(struct_val);
-                }
-                return null;
-            },
-            .tag_collect => |tc| {
-                const arg_exprs = self.store.getExprSpan(tc.args);
-                const next_idx = tc.next_arg_idx + 1;
-                if (next_idx < arg_exprs.len) {
-                    // More args to evaluate
-                    try self.scheduleEvalThen(.{ .tag_collect = .{
-                        .discriminant = tc.discriminant,
-                        .union_layout = tc.union_layout,
-                        .args = tc.args,
-                        .next_arg_idx = next_idx,
-                    } }, arg_exprs[next_idx]);
-                } else {
-                    // All args collected — build tag
-                    const vals = try self.popValues(arg_exprs.len);
-                    const tag_val = try self.alloc(tc.union_layout);
-                    self.helper.writeTagDiscriminant(tag_val, tc.union_layout, tc.discriminant);
-
-                    const payload_layout = self.tagPayloadLayout(tc.union_layout, tc.discriminant);
-                    const payload_layout_val = self.layout_store.getLayout(payload_layout);
-
-                    if (payload_layout_val.tag != .struct_) {
-                        // Single-field payload
-                        if (vals.len == 1) {
-                            const payload_size = self.helper.sizeOf(payload_layout);
-                            if (payload_size > 0) {
-                                tag_val.copyFrom(vals[0], payload_size);
-                            }
-                        }
-                    } else {
-                        // Multi-field struct payload
-                        for (vals, 0..) |arg_val, i| {
-                            const field_layout_idx = self.layout_store.getStructFieldLayoutByOriginalIndex(
-                                payload_layout_val.data.struct_.idx,
-                                @intCast(i),
-                            );
-                            const field_size = self.helper.sizeOf(field_layout_idx);
-                            const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(
-                                payload_layout_val.data.struct_.idx,
-                                @intCast(i),
-                            );
-                            if (field_size > 0) {
-                                tag_val.offset(field_offset).copyFrom(arg_val, field_size);
-                            }
-                        }
-                    }
-                    try self.pushValue(tag_val);
-                }
-                return null;
-            },
-            .list_collect => |lc| {
-                const elem_exprs = self.store.getExprSpan(lc.elems);
-                const next_idx = lc.next_elem_idx + 1;
-                if (next_idx < elem_exprs.len) {
-                    // More elements to evaluate
-                    try self.scheduleEvalThen(.{ .list_collect = .{
-                        .list_layout = lc.list_layout,
-                        .elem_layout = lc.elem_layout,
-                        .elems = lc.elems,
-                        .next_elem_idx = next_idx,
-                    } }, elem_exprs[next_idx]);
-                } else {
-                    // All elements collected — build list
-                    const vals = try self.popValues(elem_exprs.len);
-                    const elem_size = self.helper.sizeOf(lc.elem_layout);
-                    const count = elem_exprs.len;
-
-                    if (elem_size == 0) {
-                        // ZST list
-                        try self.pushValue(try self.rocListToValue(.{
-                            .bytes = null,
-                            .length = count,
-                            .capacity_or_alloc_ptr = count,
-                        }, lc.list_layout));
-                    } else {
-                        // Allocate element storage through roc_ops
-                        const total_elem_bytes = elem_size * count;
-                        const sa = self.helper.sizeAlignOf(lc.elem_layout);
-                        const elem_alignment: u32 = @intCast(sa.alignment.toByteUnits());
-                        const elems_rc = self.helper.containsRefcounted(lc.elem_layout);
-                        const elem_data = try self.allocRocDataWithRc(total_elem_bytes, elem_alignment, elems_rc);
-                        const elem_mem = elem_data[0..total_elem_bytes];
-                        @memset(elem_mem, 0);
-
-                        for (vals, 0..) |elem_val, i| {
-                            const dest_offset = i * elem_size;
-                            @memcpy(elem_mem[dest_offset..][0..elem_size], elem_val.ptr[0..elem_size]);
-                        }
-
-                        try self.pushValue(try self.rocListToValue(.{
-                            .bytes = elem_mem.ptr,
-                            .length = count,
-                            .capacity_or_alloc_ptr = count,
-                        }, lc.list_layout));
-                    }
-                }
-                return null;
-            },
-            .str_concat_collect => |scc| {
-                const parts = self.store.getExprSpan(scc.parts);
-                const next_idx = scc.next_part_idx + 1;
-                if (next_idx < parts.len) {
-                    // More parts to evaluate
-                    try self.scheduleEvalThen(.{ .str_concat_collect = .{
-                        .parts = scc.parts,
-                        .next_part_idx = next_idx,
-                    } }, parts[next_idx]);
-                } else {
-                    // All parts collected — concatenate
-                    const vals = try self.popValues(parts.len);
-                    var total_len: usize = 0;
-                    for (vals) |part_val| {
-                        total_len += self.readRocStr(part_val).len;
-                    }
-                    const buf = self.arena.allocator().alloc(u8, total_len) catch return error.OutOfMemory;
-                    var offset: usize = 0;
-                    for (vals) |part_val| {
-                        const s = self.readRocStr(part_val);
-                        @memcpy(buf[offset..][0..s.len], s);
-                        offset += s.len;
-                    }
-                    const result = try self.makeRocStr(buf);
-                    try self.pushValue(result);
-                }
-                return null;
-            },
-
-            // ── Expression-level control flow ──
-
-            .if_branch => |ib| {
-                const branches = self.store.getIfBranches(ib.branches);
-                const cond_val = self.popValue();
-                if (cond_val.read(u8) != 0) {
-                    // Condition is true: evaluate the branch body
-                    try self.pushWork(.{ .eval_expr = branches[ib.current_branch_idx].body });
-                } else {
-                    // Condition is false: try next branch or final else
-                    const next_branch = ib.current_branch_idx + 1;
-                    if (next_branch < branches.len) {
-                        try self.scheduleEvalThen(.{ .if_branch = .{
-                            .branches = ib.branches,
-                            .current_branch_idx = next_branch,
-                            .final_else = ib.final_else,
-                            .result_layout = ib.result_layout,
-                        } }, branches[next_branch].cond);
-                    } else {
-                        try self.pushWork(.{ .eval_expr = ib.final_else });
-                    }
-                }
-                return null;
-            },
-            .match_dispatch => |md| {
-                const match_val = self.popValue();
-                const match_branches = self.store.getMatchBranches(md.branches);
-                for (match_branches, 0..) |branch, idx| {
-                    const matched = try self.matchPattern(branch.pattern, match_val);
-                    if (matched) {
-                        try self.bindPattern(branch.pattern, match_val);
-                        if (!branch.guard.isNone()) {
-                            // Has a guard: evaluate it
-                            try self.scheduleEvalThen(.{ .match_guard_check = .{
-                                .match_val = match_val,
-                                .value_layout = md.value_layout,
-                                .branches = md.branches,
-                                .current_branch_idx = @intCast(idx),
-                                .result_layout = md.result_layout,
-                            } }, branch.guard);
-                            return null;
-                        }
-                        try self.pushWork(.{ .eval_expr = branch.body });
-                        return null;
-                    }
-                }
-                return error.RuntimeError;
-            },
-            .match_guard_check => |mgc| {
-                const guard_val = self.popValue();
-                if (guard_val.read(u8) != 0) {
-                    // Guard passed: evaluate branch body
-                    const match_branches = self.store.getMatchBranches(mgc.branches);
-                    try self.pushWork(.{ .eval_expr = match_branches[mgc.current_branch_idx].body });
-                } else {
-                    // Guard failed: try remaining branches
-                    const match_branches = self.store.getMatchBranches(mgc.branches);
-                    const start = mgc.current_branch_idx + 1;
-                    var i: u16 = start;
-                    while (i < match_branches.len) : (i += 1) {
-                        const branch = match_branches[i];
-                        const matched = try self.matchPattern(branch.pattern, mgc.match_val);
-                        if (matched) {
-                            try self.bindPattern(branch.pattern, mgc.match_val);
-                            if (!branch.guard.isNone()) {
-                                try self.scheduleEvalThen(.{ .match_guard_check = .{
-                                    .match_val = mgc.match_val,
-                                    .value_layout = mgc.value_layout,
-                                    .branches = mgc.branches,
-                                    .current_branch_idx = i,
-                                    .result_layout = mgc.result_layout,
-                                } }, branch.guard);
-                                return null;
-                            }
-                            try self.pushWork(.{ .eval_expr = branch.body });
-                            return null;
-                        }
-                    }
-                    return error.RuntimeError;
-                }
-                return null;
-            },
-            .discriminant_switch_dispatch => |dsd| {
-                const switch_val = self.popValue();
-                const disc = self.helper.readTagDiscriminant(switch_val, dsd.union_layout);
-                const disc_branches = self.store.getExprSpan(dsd.branches);
-                if (disc < disc_branches.len) {
-                    try self.pushWork(.{ .eval_expr = disc_branches[disc] });
-                } else {
-                    return error.RuntimeError;
-                }
-                return null;
-            },
-            .block_stmt => |bs| {
-                const stmts = self.store.getStmts(bs.stmts);
-                const stmt = stmts[bs.current_stmt_idx];
-                const stmt_val = self.popValue();
-
-                // Apply the statement's binding effect
-                switch (stmt) {
-                    .decl, .mutate => |binding| try self.bindPattern(binding.pattern, stmt_val),
-                    .cell_init => |cb| {
-                        const size = self.helper.sizeOf(cb.layout_idx);
-                        self.cells.put(cb.cell.raw(), .{ .val = stmt_val, .size = size }) catch return error.OutOfMemory;
-                    },
-                    .cell_store => |cb| {
-                        const size = self.helper.sizeOf(cb.layout_idx);
-                        if (self.cells.getPtr(cb.cell.raw())) |entry| {
-                            entry.val = stmt_val;
-                            entry.size = size;
-                        } else {
-                            self.cells.put(cb.cell.raw(), .{ .val = stmt_val, .size = size }) catch return error.OutOfMemory;
-                        }
-                    },
-                    .cell_drop => {},
-                }
-
-                // Find the next real statement to schedule
-                const next_real_idx = self.findFirstRealStmt(stmts, bs.current_stmt_idx + 1);
-                if (next_real_idx) |next_idx| {
-                    const next_expr_id = self.stmtExprId(stmts[next_idx]);
-                    try self.scheduleEvalThen(.{ .block_stmt = .{
-                        .stmts = bs.stmts,
-                        .current_stmt_idx = @intCast(next_idx),
-                        .final_expr = bs.final_expr,
-                    } }, next_expr_id);
-                } else {
-                    // No more statements: evaluate the final expression
-                    try self.pushWork(.{ .eval_expr = bs.final_expr });
-                }
-                return null;
-            },
-            .early_return_wrap => {
-                const val = self.popValue();
-                self.unwinding = .{ .early_return = val };
-                return null;
-            },
-
-            // ── Loops ──
-
-            .for_loop_eval_list => |fl| {
-                const list_val = self.popValue();
-                const elem_size = self.helper.sizeOf(fl.elem_layout);
-                const rl = valueToRocList(list_val);
-                const count = rl.len();
-
-                if (count == 0) {
-                    try self.pushValue(Value.zst);
-                } else {
-                    const data: [*]u8 = @ptrCast(rl.bytes orelse {
-                        try self.pushValue(Value.zst);
-                        return null;
-                    });
-                    // Bind first element
-                    const elem_val = if (elem_size > 0)
-                        Value{ .ptr = data }
-                    else
-                        Value.zst;
-                    try self.bindPattern(fl.elem_pattern, elem_val);
-                    // Schedule body + continuation
-                    try self.scheduleEvalThen(.{ .for_loop_body_done = .{
-                        .list_val = list_val,
-                        .elem_layout = fl.elem_layout,
-                        .elem_pattern = fl.elem_pattern,
-                        .body = fl.body,
-                        .current_idx = 0,
-                        .count = @intCast(count),
-                        .saved_value_stack_len = @intCast(self.value_stack.items.len),
-                    } }, fl.body);
-                }
-                return null;
-            },
-            .for_loop_body_done => |fl| {
-                // Discard body result
-                _ = self.popValue();
-                const next_idx = fl.current_idx + 1;
-                if (next_idx < fl.count) {
-                    // More iterations
-                    const elem_size = self.helper.sizeOf(fl.elem_layout);
-                    const rl = valueToRocList(fl.list_val);
-                    const data: [*]u8 = @ptrCast(rl.bytes orelse {
-                        try self.pushValue(Value.zst);
-                        return null;
-                    });
-                    const elem_val = if (elem_size > 0)
-                        Value{ .ptr = data + next_idx * elem_size }
-                    else
-                        Value.zst;
-                    try self.bindPattern(fl.elem_pattern, elem_val);
-                    try self.scheduleEvalThen(.{ .for_loop_body_done = .{
-                        .list_val = fl.list_val,
-                        .elem_layout = fl.elem_layout,
-                        .elem_pattern = fl.elem_pattern,
-                        .body = fl.body,
-                        .current_idx = next_idx,
-                        .count = fl.count,
-                        .saved_value_stack_len = fl.saved_value_stack_len,
-                    } }, fl.body);
-                } else {
-                    // Done iterating
-                    try self.pushValue(Value.zst);
-                }
-                return null;
-            },
-            .while_loop_check => |wlc| {
-                const cond_val = self.popValue();
-                const cond_is_true = cond_val.read(u8) != 0;
-                if (wlc.infinite_loop_check and cond_is_true) {
-                    return self.triggerCrash(infinite_while_loop_message);
-                }
-                if (!cond_is_true) {
-                    try self.pushValue(Value.zst);
-                } else {
-                    try self.scheduleEvalThen(.{ .while_loop_body_done = .{
-                        .cond = wlc.cond,
-                        .body = wlc.body,
-                        .infinite_loop_check = wlc.infinite_loop_check,
-                        .saved_value_stack_len = @intCast(self.value_stack.items.len),
-                    } }, wlc.body);
-                }
-                return null;
-            },
-            .while_loop_body_done => |wlbd| {
-                // Discard body result, re-check condition
-                _ = self.popValue();
-                try self.scheduleEvalThen(.{ .while_loop_check = .{
-                    .cond = wlbd.cond,
-                    .body = wlbd.body,
-                    .infinite_loop_check = wlbd.infinite_loop_check,
-                } }, wlbd.cond);
-                return null;
-            },
-
-            // ── Unary ──
-
-            .unary_then => |ut| {
-                const val = self.popValue();
-                switch (ut) {
-                    .struct_access => |sa| {
-                        const field_offset = self.helper.structFieldOffset(sa.struct_layout, sa.field_idx);
-                        try self.pushValue(val.offset(field_offset));
-                    },
-                    .tag_payload_access => |tpa| {
-                        const tag_base = self.resolveTagUnionBaseValue(val, tpa.union_layout);
-                        const disc = self.helper.readTagDiscriminant(tag_base.value, tag_base.layout);
-                        const actual_payload_layout = self.tagPayloadLayout(tpa.union_layout, disc);
-                        try self.pushValue(self.normalizeValueToLayout(tag_base.value, actual_payload_layout, tpa.payload_layout));
-                    },
-                    .dbg_stmt => |ds| {
-                        const dbg_msg = if (ds.result_layout == .str)
-                            self.readRocStr(val)
-                        else
-                            try self.renderExpectValue(val, ds.result_layout);
-                        self.roc_ops.dbg(dbg_msg);
-                        try self.pushValue(val);
-                    },
-                    .expect_cond => |ec| {
-                        if (val.read(u8) == 0) {
-                            const msg = try self.renderExpectExpr(ec.cond_expr_id);
-                            self.roc_ops.expectFailed(msg);
-                        }
-                        try self.pushValue(Value.zst);
-                    },
-                    .incref => |ir| {
-                        self.performRc(.incref, val, ir.layout_idx, ir.count);
-                        try self.pushValue(Value.zst);
-                    },
-                    .decref => |dr| {
-                        self.performRc(.decref, val, dr.layout_idx, 0);
-                        try self.pushValue(Value.zst);
-                    },
-                    .free => |f| {
-                        self.performRc(.free, val, f.layout_idx, 0);
-                        try self.pushValue(Value.zst);
-                    },
-                    .int_to_str => |its| {
-                        const arena = self.arena.allocator();
-                        const formatted: []const u8 = switch (its.int_precision) {
-                            .u8 => std.fmt.allocPrint(arena, "{d}", .{val.read(u8)}) catch return error.OutOfMemory,
-                            .i8 => std.fmt.allocPrint(arena, "{d}", .{val.read(i8)}) catch return error.OutOfMemory,
-                            .u16 => std.fmt.allocPrint(arena, "{d}", .{val.read(u16)}) catch return error.OutOfMemory,
-                            .i16 => std.fmt.allocPrint(arena, "{d}", .{val.read(i16)}) catch return error.OutOfMemory,
-                            .u32 => std.fmt.allocPrint(arena, "{d}", .{val.read(u32)}) catch return error.OutOfMemory,
-                            .i32 => std.fmt.allocPrint(arena, "{d}", .{val.read(i32)}) catch return error.OutOfMemory,
-                            .u64 => std.fmt.allocPrint(arena, "{d}", .{val.read(u64)}) catch return error.OutOfMemory,
-                            .i64 => std.fmt.allocPrint(arena, "{d}", .{val.read(i64)}) catch return error.OutOfMemory,
-                            .u128 => std.fmt.allocPrint(arena, "{d}", .{val.read(u128)}) catch return error.OutOfMemory,
-                            .i128 => std.fmt.allocPrint(arena, "{d}", .{val.read(i128)}) catch return error.OutOfMemory,
-                        };
-                        try self.pushValue(try self.makeRocStr(formatted));
-                    },
-                    .float_to_str => |fts| {
-                        var buf: [400]u8 = undefined;
-                        const slice: []const u8 = switch (fts.float_precision) {
-                            .f32 => i128h.f64_to_str(&buf, @as(f64, val.read(f32))),
-                            .f64 => i128h.f64_to_str(&buf, val.read(f64)),
-                            .dec => blk: {
-                                const dec = RocDec{ .num = val.read(i128) };
-                                var dec_buf: [RocDec.max_str_length]u8 = undefined;
-                                break :blk dec.format_to_buf(&dec_buf);
-                            },
-                        };
-                        try self.pushValue(try self.makeRocStr(slice));
-                    },
-                    .dec_to_str => {
-                        const dec = RocDec{ .num = val.read(i128) };
-                        var buf: [RocDec.max_str_length]u8 = undefined;
-                        const slice = dec.format_to_buf(&buf);
-                        try self.pushValue(try self.makeRocStr(slice));
-                    },
-                    .str_escape_and_quote => {
-                        const s = self.readRocStr(val);
-                        var escaped = std.ArrayListUnmanaged(u8){};
-                        escaped.append(self.allocator, '"') catch return error.OutOfMemory;
-                        for (s) |ch| {
-                            switch (ch) {
-                                '\\' => escaped.appendSlice(self.allocator, "\\\\") catch return error.OutOfMemory,
-                                '"' => escaped.appendSlice(self.allocator, "\\\"") catch return error.OutOfMemory,
-                                else => escaped.append(self.allocator, ch) catch return error.OutOfMemory,
-                            }
-                        }
-                        escaped.append(self.allocator, '"') catch return error.OutOfMemory;
-                        const result = try self.makeRocStr(escaped.items);
-                        escaped.deinit(self.allocator);
-                        try self.pushValue(result);
-                    },
-                }
-                return null;
-            },
-
-            // ── Multi-arg builtins ──
-
-            .low_level_collect_args => {
-                // Low-level ops are evaluated inline in scheduleExprEval
-                unreachable;
-            },
-            .hosted_call_collect_args => {
-                // Hosted calls are evaluated inline in scheduleExprEval
-                unreachable;
-            },
-
-            // ── CF statement continuations ──
-
-            .cf_let_bind => |clb| {
-                const val = self.popValue();
-                try self.bindPattern(clb.pattern, val);
-                try self.scheduleCFStmtEval(clb.next);
-                return null;
-            },
-            .cf_expr_stmt_next => |cesn| {
-                // Discard the expression value
-                _ = self.popValue();
-                try self.scheduleCFStmtEval(cesn.next);
-                return null;
-            },
-            .cf_switch_dispatch => |csd| {
-                const cond_val = self.popValue();
-                const disc = self.helper.readTagDiscriminant(cond_val, csd.cond_layout);
-                const branches = self.store.getCFSwitchBranches(csd.branches);
-                var found = false;
-                for (branches) |branch| {
-                    if (branch.value == disc) {
-                        try self.scheduleCFStmtEval(branch.body);
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) {
-                    try self.scheduleCFStmtEval(csd.default_branch);
-                }
-                return null;
-            },
-            .cf_match_dispatch => |cmd| {
-                const match_val = self.popValue();
-                const match_branches = self.store.getCFMatchBranches(cmd.branches);
-                var matched = false;
-                for (match_branches) |branch| {
-                    if (try self.matchPattern(branch.pattern, match_val)) {
-                        try self.bindPattern(branch.pattern, match_val);
-                        try self.scheduleCFStmtEval(branch.body);
-                        matched = true;
-                        break;
-                    }
-                }
-                if (!matched) {
-                    return error.RuntimeError;
-                }
-                return null;
-            },
-            .cf_jump_collect_args => |cjca| {
-                const jump_args = self.store.getExprSpan(cjca.args);
-                const next_idx = cjca.next_arg_idx + 1;
-                if (next_idx < jump_args.len) {
-                    try self.scheduleEvalThen(.{ .cf_jump_collect_args = .{
-                        .target = cjca.target,
-                        .args = cjca.args,
-                        .next_arg_idx = next_idx,
-                    } }, jump_args[next_idx]);
-                } else {
-                    // All args collected — bind to join point params and schedule body
-                    const vals = try self.popValues(jump_args.len);
-                    const jp = self.join_points.get(@intFromEnum(cjca.target)) orelse return error.RuntimeError;
-                    const jp_params = self.store.getPatternSpan(jp.params);
-                    const count = @min(jp_params.len, vals.len);
-                    for (0..count) |i| {
-                        try self.bindPattern(jp_params[i], vals[i]);
-                    }
-                    try self.pushWork(.{ .eval_cf_stmt = jp.body });
-                }
-                return null;
-            },
-
-            // ── Sort (placeholder) ──
-
-            .sort_compare_step => {
-                // TODO: wire up sort in a later phase
-                return error.RuntimeError;
-            },
-        }
-    }
-
-    // ── Internal helpers for the stack-safe engine ──
-
-    /// Enter a function call: push call_cleanup, bind params, schedule body.
-    /// Does not run the body — the caller's work loop processes the scheduled items.
-    fn enterFunction(self: *LirInterpreter, proc_spec: lir.LirProcSpec, args: []const Value) Error!void {
-        if (self.call_depth >= max_call_depth) {
-            return self.triggerCrash(stack_overflow_message);
-        }
-
-        const params = self.store.getPatternSpan(proc_spec.args);
-        self.call_depth += 1;
-
-        // Save state
-        const saved_bindings_len: u32 = @intCast(self.bindings.items.len);
-        const saved_lambda_params = self.current_lambda_params;
-        self.current_lambda_params = proc_spec.args;
-
-        // Push call_cleanup continuation (will fire after the body completes)
-        try self.pushWork(.{ .apply_continuation = .{ .call_cleanup = .{
-            .saved_bindings_len = saved_bindings_len,
-            .saved_lambda_params = saved_lambda_params,
-            .saved_value_stack_len = @intCast(self.value_stack.items.len),
-        } } });
-
-        // Bind parameters
-        const param_count = @min(params.len, args.len);
-        for (0..param_count) |i| {
-            try self.bindPattern(params[i], args[i]);
-        }
-
-        // Schedule the CF statement body
-        try self.pushWork(.{ .eval_cf_stmt = proc_spec.body });
-    }
-
-    /// Call a proc and run to completion, returning the result.
-    /// Used by host-ABI entry evaluation and evalListSortWith (sort comparator).
-    fn evalProcStackSafe(self: *LirInterpreter, proc_spec: lir.LirProcSpec, args: []const Value) Error!EvalResult {
-        const outer_work_len = self.work_stack.items.len;
-        const saved_unwinding = self.unwinding;
-        self.unwinding = .none;
-
-        try self.pushWork(.{ .apply_continuation = .return_result });
-        try self.enterFunction(proc_spec, args);
-
-        return self.runWorkLoop(outer_work_len, saved_unwinding);
-    }
-
-    /// Find the index of the first non-cell_drop statement at or after `start`.
-    fn findFirstRealStmt(_: *const LirInterpreter, stmts: []const lir.LIR.LirStmt, start: usize) ?usize {
-        var i = start;
-        while (i < stmts.len) : (i += 1) {
-            switch (stmts[i]) {
-                .cell_drop => continue,
-                else => return i,
-            }
-        }
-        return null;
-    }
-
-    /// Get the expression ID from a statement (for scheduling).
-    fn stmtExprId(_: *const LirInterpreter, stmt: lir.LIR.LirStmt) LirExprId {
-        return switch (stmt) {
-            .decl, .mutate => |binding| binding.expr,
-            .cell_init, .cell_store => |cb| cb.expr,
-            .cell_drop => unreachable, // findFirstRealStmt skips these
-        };
-    }
 };

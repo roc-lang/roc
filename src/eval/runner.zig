@@ -283,7 +283,7 @@ fn runViaInterpreter(
     defer interp.deinit();
 
     _ = interp.eval(.{
-        .expr_id = lower_result.final_expr_id,
+        .proc_id = lower_result.root_proc_id,
         .arg_layouts = arg_layouts,
         .ret_layout = ret_layout,
         .arg_ptr = args_ptr,

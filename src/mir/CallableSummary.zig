@@ -210,14 +210,8 @@ const Analyzer = struct {
                 try self.recordCallableDef(defs, assign.target, .{ .tag_value = assign.args });
                 try self.collectCallableDefs(assign.next, defs, visited);
             },
-            .debug => std.debug.panic(
-                "CallableSummary TODO: MIR debug statements are not implemented in callable analysis yet",
-                .{},
-            ),
-            .expect => std.debug.panic(
-                "CallableSummary TODO: MIR expect statements are not implemented in callable analysis yet",
-                .{},
-            ),
+            .debug => |stmt| try self.collectCallableDefs(stmt.next, defs, visited),
+            .expect => |stmt| try self.collectCallableDefs(stmt.next, defs, visited),
             .runtime_error, .scope_exit, .jump, .ret, .crash => {},
             .switch_stmt => |switch_stmt| {
                 for (self.mir_store.getSwitchBranches(switch_stmt.branches)) |branch| {
@@ -429,14 +423,8 @@ const Analyzer = struct {
             .assign_list => |stmt| try self.collectReturnedCallable(stmt.next, out),
             .assign_struct => |stmt| try self.collectReturnedCallable(stmt.next, out),
             .assign_tag => |stmt| try self.collectReturnedCallable(stmt.next, out),
-            .debug => std.debug.panic(
-                "CallableSummary TODO: MIR debug statements are not implemented in callable-return analysis yet",
-                .{},
-            ),
-            .expect => std.debug.panic(
-                "CallableSummary TODO: MIR expect statements are not implemented in callable-return analysis yet",
-                .{},
-            ),
+            .debug => |stmt| try self.collectReturnedCallable(stmt.next, out),
+            .expect => |stmt| try self.collectReturnedCallable(stmt.next, out),
             .runtime_error, .scope_exit, .jump, .crash => {},
             .switch_stmt => |switch_stmt| {
                 for (self.mir_store.getSwitchBranches(switch_stmt.branches)) |branch| {

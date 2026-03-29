@@ -355,14 +355,8 @@ fn collectReturnedMirLocals(
         .assign_list => |assign| try self.collectReturnedMirLocals(assign.next, visited, out),
         .assign_struct => |assign| try self.collectReturnedMirLocals(assign.next, visited, out),
         .assign_tag => |assign| try self.collectReturnedMirLocals(assign.next, visited, out),
-        .debug => std.debug.panic(
-            "MirToLir TODO: MIR debug statements are not implemented in LIR lowering yet",
-            .{},
-        ),
-        .expect => std.debug.panic(
-            "MirToLir TODO: MIR expect statements are not implemented in LIR lowering yet",
-            .{},
-        ),
+        .debug => |stmt| try self.collectReturnedMirLocals(stmt.next, visited, out),
+        .expect => |stmt| try self.collectReturnedMirLocals(stmt.next, visited, out),
         .switch_stmt => |switch_stmt| {
             for (self.mir_store.getSwitchBranches(switch_stmt.branches)) |branch| {
                 try self.collectReturnedMirLocals(branch.body, visited, out);
@@ -462,14 +456,8 @@ fn collectValueDefs(
             try self.recordValueDef(defs, assign.target, .{ .tag_value = assign.args });
             try self.collectValueDefs(assign.next, defs, visited);
         },
-        .debug => std.debug.panic(
-            "MirToLir TODO: MIR debug statements are not implemented in value-def collection yet",
-            .{},
-        ),
-        .expect => std.debug.panic(
-            "MirToLir TODO: MIR expect statements are not implemented in value-def collection yet",
-            .{},
-        ),
+        .debug => |stmt| try self.collectValueDefs(stmt.next, defs, visited),
+        .expect => |stmt| try self.collectValueDefs(stmt.next, defs, visited),
         .runtime_error, .scope_exit, .jump, .ret, .crash => {},
         .switch_stmt => |switch_stmt| {
             for (self.mir_store.getSwitchBranches(switch_stmt.branches)) |branch| {
@@ -1301,14 +1289,14 @@ fn lowerStmt(self: *Self, stmt_id: MIR.CFStmtId) Allocator.Error!CFStmtId {
             .args = try self.mapMirLocalSpan(assign.args),
             .next = try self.lowerStmt(assign.next),
         } }),
-        .debug => std.debug.panic(
-            "MirToLir TODO: MIR debug statements are not implemented in LIR lowering yet",
-            .{},
-        ),
-        .expect => std.debug.panic(
-            "MirToLir TODO: MIR expect statements are not implemented in LIR lowering yet",
-            .{},
-        ),
+        .debug => |debug_stmt| try self.lir_store.addCFStmt(.{ .debug = .{
+            .message = try self.mapMirLocal(debug_stmt.value),
+            .next = try self.lowerStmt(debug_stmt.next),
+        } }),
+        .expect => |expect_stmt| try self.lir_store.addCFStmt(.{ .expect = .{
+            .condition = try self.mapMirLocal(expect_stmt.condition),
+            .next = try self.lowerStmt(expect_stmt.next),
+        } }),
         .runtime_error => try self.lir_store.addCFStmt(.{ .runtime_error = {} }),
         .switch_stmt => |switch_stmt| try self.lowerSwitchStmt(switch_stmt),
         .borrow_scope => |scope| try self.lowerBorrowScopeStmt(scope),
@@ -1667,14 +1655,26 @@ fn lowerEntrypointCallableStmt(
                 .result_contract = lowered_next.result_contract,
             };
         },
-        .debug => std.debug.panic(
-            "MirToLir TODO: MIR debug statements are not implemented in LIR entrypoint callable lowering yet",
-            .{},
-        ),
-        .expect => std.debug.panic(
-            "MirToLir TODO: MIR expect statements are not implemented in LIR entrypoint callable lowering yet",
-            .{},
-        ),
+        .debug => |debug_stmt| blk: {
+            const lowered_next = try self.lowerEntrypointCallableStmt(debug_stmt.next, arg_locals, target, next);
+            break :blk .{
+                .body = try self.lir_store.addCFStmt(.{ .debug = .{
+                    .message = try self.mapMirLocal(debug_stmt.value),
+                    .next = lowered_next.body,
+                } }),
+                .result_contract = lowered_next.result_contract,
+            };
+        },
+        .expect => |expect_stmt| blk: {
+            const lowered_next = try self.lowerEntrypointCallableStmt(expect_stmt.next, arg_locals, target, next);
+            break :blk .{
+                .body = try self.lir_store.addCFStmt(.{ .expect = .{
+                    .condition = try self.mapMirLocal(expect_stmt.condition),
+                    .next = lowered_next.body,
+                } }),
+                .result_contract = lowered_next.result_contract,
+            };
+        },
         .runtime_error => .{
             .body = try self.lir_store.addCFStmt(.{ .runtime_error = {} }),
             .result_contract = .no_return,

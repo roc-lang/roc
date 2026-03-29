@@ -74,6 +74,11 @@ const LoopContext = struct {
     carried_locals: MIR.LocalSpan,
 };
 
+const RequiredLookupTarget = struct {
+    module_idx: u32,
+    def_idx: CIR.Def.Idx,
+};
+
 // --- Fields ---
 
 allocator: Allocator,
@@ -126,6 +131,9 @@ lowered_callable_insts: std.AutoHashMap(u32, MIR.LambdaId),
 
 /// Cache for direct statement-lowered lambda expressions keyed by lowering context.
 lowered_callable_lambdas: std.AutoHashMap(u128, MIR.LambdaId),
+
+/// Recursion guard for named top-level constants lowered on demand.
+in_progress_const_defs: std.AutoHashMap(u64, void),
 
 /// Metadata for opaque symbol IDs; populated at symbol construction time.
 symbol_metadata: std.AutoHashMap(u64, SymbolMetadata),
@@ -217,6 +225,7 @@ pub fn init(
         .nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(allocator),
         .lowered_callable_insts = std.AutoHashMap(u32, MIR.LambdaId).init(allocator),
         .lowered_callable_lambdas = std.AutoHashMap(u128, MIR.LambdaId).init(allocator),
+        .in_progress_const_defs = std.AutoHashMap(u64, void).init(allocator),
         .symbol_metadata = std.AutoHashMap(u64, SymbolMetadata).init(allocator),
         .next_synthetic_ident = Ident.Idx.NONE.idx - 1,
         .next_statement_pattern_scope = 1,
@@ -250,6 +259,7 @@ pub fn deinit(self: *Self) void {
     self.nominal_cycle_breakers.deinit();
     self.lowered_callable_insts.deinit();
     self.lowered_callable_lambdas.deinit();
+    self.in_progress_const_defs.deinit();
     self.symbol_metadata.deinit();
     self.in_progress_callable_insts.deinit();
     self.reserved_callable_insts.deinit();
@@ -533,15 +543,20 @@ fn getCallLowLevelOp(self: *Self, caller_env: *const ModuleEnv, func_expr_idx: C
 }
 
 fn getLocalLowLevelOp(module_env: *const ModuleEnv, pattern_idx: CIR.Pattern.Idx) ?CIR.Expr.LowLevel {
+    const def_idx = findDefByPattern(module_env, pattern_idx) orelse return null;
+    const def = module_env.store.getDef(def_idx);
+    const def_expr = module_env.store.getExpr(def.expr);
+    if (def_expr == .e_lambda) {
+        const body_expr = module_env.store.getExpr(def_expr.e_lambda.body);
+        if (body_expr == .e_run_low_level) return body_expr.e_run_low_level.op;
+    }
+    return null;
+}
+
+fn findDefByPattern(module_env: *const ModuleEnv, pattern_idx: CIR.Pattern.Idx) ?CIR.Def.Idx {
     for (module_env.store.sliceDefs(module_env.all_defs)) |def_idx| {
         const def = module_env.store.getDef(def_idx);
-        if (def.pattern != pattern_idx) continue;
-        const def_expr = module_env.store.getExpr(def.expr);
-        if (def_expr == .e_lambda) {
-            const body_expr = module_env.store.getExpr(def_expr.e_lambda.body);
-            if (body_expr == .e_run_low_level) return body_expr.e_run_low_level.op;
-        }
-        return null;
+        if (def.pattern == pattern_idx) return def_idx;
     }
     return null;
 }
@@ -561,6 +576,32 @@ fn getExternalLowLevelOp(
         const body_expr = ext_env.store.getExpr(def_expr.e_lambda.body);
         if (body_expr == .e_run_low_level) return body_expr.e_run_low_level.op;
     }
+    return null;
+}
+
+fn resolveRequiredLookupTarget(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    lookup: @TypeOf(@as(CIR.Expr, undefined).e_lookup_required),
+) ?RequiredLookupTarget {
+    const app_idx = self.app_module_idx orelse return null;
+    const required_type = module_env.requires_types.get(lookup.requires_idx);
+    const required_name = module_env.getIdent(required_type.ident);
+
+    const app_env = self.all_module_envs[app_idx];
+    const app_ident = app_env.common.findIdent(required_name) orelse return null;
+    const app_exports = app_env.store.sliceDefs(app_env.exports);
+    for (app_exports) |def_idx| {
+        const def = app_env.store.getDef(def_idx);
+        const pat = app_env.store.getPattern(def.pattern);
+        if (pat == .assign and pat.assign.ident.eql(app_ident)) {
+            return .{
+                .module_idx = app_idx,
+                .def_idx = def_idx,
+            };
+        }
+    }
+
     return null;
 }
 
@@ -1733,6 +1774,29 @@ pub fn lowerRootConst(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.C
     return self.lowerConstDefFromSourceExpr(expr_idx);
 }
 
+fn lowerNamedConstDefFromSourceExpr(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    symbol: MIR.Symbol,
+) Allocator.Error!MIR.ConstDefId {
+    const module_env = self.all_module_envs[self.current_module_idx];
+    const region = module_env.store.getExprRegion(expr_idx);
+    const monotype = try self.sourceExprResultMonotype(expr_idx);
+    const saved_body_local_floor = self.current_body_local_floor;
+    self.current_body_local_floor = self.store.locals.items.len;
+    defer self.current_body_local_floor = saved_body_local_floor;
+    const result_local = try self.freshSyntheticLocal(monotype, false);
+    const ret_stmt = try self.store.addCFStmt(self.allocator, .{ .ret = .{ .value = result_local } });
+    const body = try self.lowerCirExprInto(expr_idx, result_local, ret_stmt);
+
+    return self.store.registerConstDef(self.allocator, .{
+        .symbol = symbol,
+        .body = body,
+        .monotype = monotype,
+        .source_region = region,
+    });
+}
+
 fn freshSyntheticLocal(self: *Self, monotype: Monotype.Idx, reassignable: bool) Allocator.Error!MIR.LocalId {
     return self.store.addLocal(self.allocator, .{
         .monotype = monotype,
@@ -1780,26 +1844,11 @@ fn sourceExprResultMonotype(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error
 }
 
 fn lowerConstDefFromSourceExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ConstDefId {
-    const module_env = self.all_module_envs[self.current_module_idx];
-    const region = module_env.store.getExprRegion(expr_idx);
-    const monotype = try self.sourceExprResultMonotype(expr_idx);
-    const saved_body_local_floor = self.current_body_local_floor;
-    self.current_body_local_floor = self.store.locals.items.len;
-    defer self.current_body_local_floor = saved_body_local_floor;
-    const result_local = try self.freshSyntheticLocal(monotype, false);
-    const ret_stmt = try self.store.addCFStmt(self.allocator, .{ .ret = .{ .value = result_local } });
-    const body = try self.lowerCirExprInto(expr_idx, result_local, ret_stmt);
     const symbol = try self.internSymbol(
         self.current_module_idx,
         self.makeSyntheticIdent(Ident.Idx.NONE),
     );
-
-    return self.store.registerConstDef(self.allocator, .{
-        .symbol = symbol,
-        .body = body,
-        .monotype = monotype,
-        .source_region = region,
-    });
+    return self.lowerNamedConstDefFromSourceExpr(expr_idx, symbol);
 }
 
 fn lowerStringConcatInto(
@@ -2084,19 +2133,108 @@ fn lowerTagUnionInspectLocalInto(
     self: *Self,
     source: MIR.LocalId,
     source_mono: Monotype.Idx,
-    _: anytype,
+    tag_union: anytype,
     target: MIR.LocalId,
     next: MIR.CFStmtId,
 ) Allocator.Error!MIR.CFStmtId {
-    _ = self;
-    _ = source;
     _ = source_mono;
-    _ = target;
-    _ = next;
-    std.debug.panic(
-        "statement-only MIR TODO: tag-union str_inspect lowering must be rewritten against switch_stmt and explicit ref ops",
-        .{},
-    );
+
+    const tags = self.store.monotype_store.getTags(tag_union.tags);
+    if (tags.len == 0) {
+        std.debug.panic(
+            "statement-only MIR str_inspect encountered an empty tag union",
+            .{},
+        );
+    }
+
+    const str_mono = self.store.monotype_store.primIdx(.str);
+    const discrim_local = try self.freshSyntheticLocal(self.store.monotype_store.primIdx(.u64), false);
+    const lowered_branches = try self.allocator.alloc(MIR.SwitchBranch, tags.len);
+    defer self.allocator.free(lowered_branches);
+
+    for (tags, 0..) |tag, i| {
+        const tag_text = tag.name.text(self.all_module_envs);
+        const payload_monos = self.store.monotype_store.getIdxSpan(tag.payloads);
+        const branch_body = if (payload_monos.len == 0) blk: {
+            break :blk try self.lowerStrLiteralInto(target, tag_text, next);
+        } else blk: {
+            const scratch_top = self.scratch_local_ids.top();
+            defer self.scratch_local_ids.clearFrom(scratch_top);
+
+            const name_local = try self.freshSyntheticLocal(str_mono, false);
+            const open_local = try self.freshSyntheticLocal(str_mono, false);
+            const close_local = try self.freshSyntheticLocal(str_mono, false);
+            const comma_local = if (payload_monos.len > 1)
+                try self.freshSyntheticLocal(str_mono, false)
+            else
+                open_local;
+
+            const payload_pair_top = self.scratch_local_ids.top();
+            for (payload_monos) |payload_mono| {
+                try self.scratch_local_ids.append(try self.freshSyntheticLocal(payload_mono, false));
+                try self.scratch_local_ids.append(try self.freshSyntheticLocal(str_mono, false));
+            }
+
+            const segment_top = self.scratch_local_ids.top();
+            try self.scratch_local_ids.append(name_local);
+            try self.scratch_local_ids.append(open_local);
+            for (payload_monos, 0..) |_, payload_idx| {
+                const payload_str_local = self.scratch_local_ids.items.items[payload_pair_top + (payload_idx * 2) + 1];
+                try self.scratch_local_ids.append(payload_str_local);
+                if (payload_idx + 1 < payload_monos.len) {
+                    try self.scratch_local_ids.append(comma_local);
+                }
+            }
+            try self.scratch_local_ids.append(close_local);
+
+            var current = try self.lowerConcatLocalsInto(
+                self.scratch_local_ids.sliceFromStart(segment_top),
+                target,
+                next,
+            );
+
+            var payload_idx = payload_monos.len;
+            while (payload_idx > 0) {
+                payload_idx -= 1;
+                const payload_local = self.scratch_local_ids.items.items[payload_pair_top + (payload_idx * 2)];
+                const payload_str_local = self.scratch_local_ids.items.items[payload_pair_top + (payload_idx * 2) + 1];
+                current = try self.lowerStrInspectLocalInto(
+                    payload_local,
+                    payload_monos[payload_idx],
+                    payload_str_local,
+                    current,
+                );
+                current = try self.lowerRefInto(payload_local, .{ .tag_payload = .{
+                    .source = source,
+                    .payload_idx = @intCast(payload_idx),
+                } }, current);
+            }
+
+            current = try self.lowerStrLiteralInto(close_local, ")", current);
+            if (payload_monos.len > 1) {
+                current = try self.lowerStrLiteralInto(comma_local, ", ", current);
+            }
+            current = try self.lowerStrLiteralInto(open_local, "(", current);
+            current = try self.lowerStrLiteralInto(name_local, tag_text, current);
+            break :blk current;
+        };
+
+        lowered_branches[i] = .{
+            .value = @intCast(i),
+            .body = branch_body,
+        };
+    }
+
+    const impossible_default = try self.store.addCFStmt(self.allocator, .{ .crash = try self.store.insertString(
+        self.allocator,
+        "statement-only MIR invariant violated: unreachable tag discriminant during str_inspect",
+    ) });
+    const switch_stmt = try self.store.addCFStmt(self.allocator, .{ .switch_stmt = .{
+        .scrutinee = discrim_local,
+        .branches = try self.store.addSwitchBranches(self.allocator, lowered_branches),
+        .default_branch = impossible_default,
+    } });
+    return self.lowerRefInto(discrim_local, .{ .discriminant = .{ .source = source } }, switch_stmt);
 }
 
 fn boolTagNamesForMonotype(
@@ -2306,12 +2444,12 @@ fn lowerLookupLocalInto(
         return lowered;
     }
 
+    const def_idx = findDefByPattern(self.all_module_envs[self.current_module_idx], lookup.pattern_idx) orelse std.debug.panic(
+        "statement-only MIR invariant violated: local lookup pattern {d} had no in-scope local or top-level def",
+        .{@intFromEnum(lookup.pattern_idx)},
+    );
     const symbol = try self.lookupSymbolForPattern(self.current_module_idx, lookup.pattern_idx);
-    return self.store.addCFStmt(self.allocator, .{ .assign_symbol = .{
-        .target = target,
-        .symbol = symbol,
-        .next = next,
-    } });
+    return self.materializeTopLevelDefInto(self.current_module_idx, def_idx, symbol, target, next);
 }
 
 fn lowerLookupExternalInto(
@@ -2327,12 +2465,15 @@ fn lowerLookupExternalInto(
     }
 
     const target_module_idx = self.resolveImportedModuleIdx(module_env, lookup.module_idx) orelse unreachable;
+    if (!self.all_module_envs[target_module_idx].store.isDefNode(lookup.target_node_idx)) {
+        std.debug.panic(
+            "statement-only MIR TODO: external lookup node {d} in module {d} does not lower to a def-backed value yet",
+            .{ lookup.target_node_idx, target_module_idx },
+        );
+    }
+    const def_idx: CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
     const symbol = try self.internExternalDefSymbol(target_module_idx, lookup.target_node_idx);
-    return self.store.addCFStmt(self.allocator, .{ .assign_symbol = .{
-        .target = target,
-        .symbol = symbol,
-        .next = next,
-    } });
+    return self.materializeTopLevelDefInto(target_module_idx, def_idx, symbol, target, next);
 }
 
 fn lowerLookupRequiredInto(
@@ -2347,19 +2488,107 @@ fn lowerLookupRequiredInto(
         return lowered;
     }
 
-    const app_idx = self.app_module_idx orelse std.debug.panic(
-        "statement-only MIR required lookup encountered without app module",
+    const target_lookup = self.resolveRequiredLookupTarget(module_env, lookup) orelse std.debug.panic(
+        "statement-only MIR TODO: required lookup could not be resolved to an app export",
         .{},
     );
-    const required_type = module_env.requires_types.get(lookup.requires_idx);
-    const required_name = module_env.getIdent(required_type.ident);
+    const def = self.all_module_envs[target_lookup.module_idx].store.getDef(target_lookup.def_idx);
+    const symbol = try self.lookupSymbolForPattern(target_lookup.module_idx, def.pattern);
+    return self.materializeTopLevelDefInto(target_lookup.module_idx, target_lookup.def_idx, symbol, target, next);
+}
 
-    const app_env = self.all_module_envs[app_idx];
-    const app_ident = app_env.common.findIdent(required_name) orelse std.debug.panic(
-        "statement-only MIR required lookup was not translated into app ident space: {s}",
-        .{required_name},
-    );
-    const symbol = try self.internSymbol(app_idx, app_ident);
+fn ensureNamedConstDefRegistered(
+    self: *Self,
+    module_idx: u32,
+    def_idx: CIR.Def.Idx,
+    symbol: MIR.Symbol,
+) Allocator.Error!void {
+    if (self.store.getConstDefForSymbol(symbol)) |_| return;
+
+    const key = symbol.raw();
+    const gop = try self.in_progress_const_defs.getOrPut(key);
+    if (gop.found_existing) {
+        std.debug.panic(
+            "statement-only MIR TODO: recursive named constant lowering for symbol {d} is not implemented yet",
+            .{key},
+        );
+    }
+    defer _ = self.in_progress_const_defs.remove(key);
+
+    const saved_module_idx = self.current_module_idx;
+    const saved_pattern_scope = self.current_pattern_scope;
+    const saved_callable_context = self.current_callable_inst_context;
+    const saved_root_context = self.current_root_source_expr_context;
+    const saved_ident_store = self.mono_scratches.ident_store;
+    const saved_module_env = self.mono_scratches.module_env;
+    const saved_scratches_module_idx = self.mono_scratches.module_idx;
+
+    const target_env = self.all_module_envs[module_idx];
+    const def = target_env.store.getDef(def_idx);
+
+    self.current_module_idx = module_idx;
+    self.current_pattern_scope = 0;
+    self.current_callable_inst_context = .none;
+    self.current_root_source_expr_context = def.expr;
+    self.mono_scratches.ident_store = target_env.getIdentStoreConst();
+    self.mono_scratches.module_env = target_env;
+    self.mono_scratches.module_idx = module_idx;
+
+    defer self.current_module_idx = saved_module_idx;
+    defer self.current_pattern_scope = saved_pattern_scope;
+    defer self.current_callable_inst_context = saved_callable_context;
+    defer self.current_root_source_expr_context = saved_root_context;
+    defer self.mono_scratches.ident_store = saved_ident_store;
+    defer self.mono_scratches.module_env = saved_module_env;
+    defer self.mono_scratches.module_idx = saved_scratches_module_idx;
+
+    _ = try self.lowerNamedConstDefFromSourceExpr(def.expr, symbol);
+}
+
+fn materializeTopLevelDefInto(
+    self: *Self,
+    module_idx: u32,
+    def_idx: CIR.Def.Idx,
+    symbol: MIR.Symbol,
+    target: MIR.LocalId,
+    next: MIR.CFStmtId,
+) Allocator.Error!MIR.CFStmtId {
+    const target_monotype = self.store.getLocal(target).monotype;
+    if (self.store.monotype_store.getMonotype(target_monotype) == .func) {
+        const saved_module_idx = self.current_module_idx;
+        const saved_pattern_scope = self.current_pattern_scope;
+        const saved_callable_context = self.current_callable_inst_context;
+        const saved_root_context = self.current_root_source_expr_context;
+        const saved_ident_store = self.mono_scratches.ident_store;
+        const saved_module_env = self.mono_scratches.module_env;
+        const saved_scratches_module_idx = self.mono_scratches.module_idx;
+
+        const target_env = self.all_module_envs[module_idx];
+        const def = target_env.store.getDef(def_idx);
+
+        self.current_module_idx = module_idx;
+        self.current_pattern_scope = 0;
+        self.current_callable_inst_context = .none;
+        self.current_root_source_expr_context = def.expr;
+        self.mono_scratches.ident_store = target_env.getIdentStoreConst();
+        self.mono_scratches.module_env = target_env;
+        self.mono_scratches.module_idx = module_idx;
+
+        defer self.current_module_idx = saved_module_idx;
+        defer self.current_pattern_scope = saved_pattern_scope;
+        defer self.current_callable_inst_context = saved_callable_context;
+        defer self.current_root_source_expr_context = saved_root_context;
+        defer self.mono_scratches.ident_store = saved_ident_store;
+        defer self.mono_scratches.module_env = saved_module_env;
+        defer self.mono_scratches.module_idx = saved_scratches_module_idx;
+
+        return (try self.lowerExactCallableLookupInto(def.expr, target, next)) orelse std.debug.panic(
+            "statement-only MIR invariant violated: function-valued top-level def {d} did not lower to an exact callable",
+            .{@intFromEnum(def_idx)},
+        );
+    }
+
+    try self.ensureNamedConstDefRegistered(module_idx, def_idx, symbol);
     return self.store.addCFStmt(self.allocator, .{ .assign_symbol = .{
         .target = target,
         .symbol = symbol,
@@ -2395,6 +2624,9 @@ fn lowerLambda(
     const param_patterns = module_env.store.slicePatterns(lambda.args);
     const params = try self.lowerLambdaParamLocals(module_env, lambda.args);
     const param_locals = self.store.getLocalSpan(params);
+    for (param_patterns) |pattern_idx| {
+        try self.predeclarePatternLocals(module_env, pattern_idx);
+    }
     const result_local = try self.freshSyntheticLocal(ret_monotype, false);
     const ret_stmt = try self.store.addCFStmt(self.allocator, .{ .ret = .{ .value = result_local } });
     var body = try self.lowerCirExprInto(lambda.body, result_local, ret_stmt);
@@ -2614,6 +2846,9 @@ fn lowerClosureLambda(
     const param_patterns = module_env.store.slicePatterns(lambda_expr.e_lambda.args);
     const params = try self.lowerLambdaParamLocals(module_env, lambda_expr.e_lambda.args);
     const param_locals = self.store.getLocalSpan(params);
+    for (param_patterns) |pattern_idx| {
+        try self.predeclarePatternLocals(module_env, pattern_idx);
+    }
 
     const capture_top = self.scratch_local_ids.top();
     defer self.scratch_local_ids.clearFrom(capture_top);
@@ -2858,6 +3093,9 @@ fn lowerReservedTrivialClosureLambda(
     const param_patterns = module_env.store.slicePatterns(lambda_expr.e_lambda.args);
     const params = try self.lowerLambdaParamLocals(module_env, lambda_expr.e_lambda.args);
     const param_locals = self.store.getLocalSpan(params);
+    for (param_patterns) |pattern_idx| {
+        try self.predeclarePatternLocals(module_env, pattern_idx);
+    }
 
     const capture_top = self.scratch_local_ids.top();
     defer self.scratch_local_ids.clearFrom(capture_top);
@@ -4087,12 +4325,15 @@ fn lowerBlockStmtInto(
             break :blk try self.lowerCirExprInto(expr_stmt.expr, value_local, next);
         },
         .s_dbg => |dbg_stmt| blk: {
-            const value_local = try self.freshSyntheticLocal(try self.resolveMonotype(dbg_stmt.expr), false);
+            const value_mono = try self.resolveMonotype(dbg_stmt.expr);
+            const value_local = try self.freshSyntheticLocal(value_mono, false);
+            const message_local = try self.freshSyntheticLocal(self.store.monotype_store.primIdx(.str), false);
             const debug_stmt = try self.store.addCFStmt(self.allocator, .{ .debug = .{
-                .value = value_local,
+                .value = message_local,
                 .next = next,
             } });
-            break :blk try self.lowerCirExprInto(dbg_stmt.expr, value_local, debug_stmt);
+            const inspect_stmt = try self.lowerStrInspectLocalInto(value_local, value_mono, message_local, debug_stmt);
+            break :blk try self.lowerCirExprInto(dbg_stmt.expr, value_local, inspect_stmt);
         },
         .s_expect => |expect_stmt| blk: {
             const cond_local = try self.freshSyntheticLocal(try self.resolveMonotype(expect_stmt.body), false);
@@ -4460,31 +4701,74 @@ fn lowerCirExprInto(
 
             const capture_top = self.scratch_local_ids.top();
             defer self.scratch_local_ids.clearFrom(capture_top);
+            var top_level_capture_materializations = std.ArrayList(struct {
+                local: MIR.LocalId,
+                def_idx: CIR.Def.Idx,
+                symbol: MIR.Symbol,
+            }).empty;
+            defer top_level_capture_materializations.deinit(self.allocator);
             for (module_env.store.sliceCaptures(closure.captures)) |capture_idx| {
                 const capture = module_env.store.getCapture(capture_idx);
                 if (recursiveCallableInstForPattern(recursive_members, capture.pattern_idx) != null) continue;
-                const capture_local = self.lookupExistingPatternLocal(capture.pattern_idx) orelse std.debug.panic(
-                    "statement-only MIR closure capture pattern {d} was not in scope",
-                    .{@intFromEnum(capture.pattern_idx)},
-                );
+                const capture_local = if (self.lookupExistingPatternLocal(capture.pattern_idx)) |existing|
+                    existing
+                else blk2: {
+                    const def_idx = findDefByPattern(module_env, capture.pattern_idx) orelse std.debug.panic(
+                        "statement-only MIR closure capture pattern {d} was not in scope and was not a top-level def",
+                        .{@intFromEnum(capture.pattern_idx)},
+                    );
+                    const local = try self.patternToLocal(capture.pattern_idx);
+                    try top_level_capture_materializations.append(self.allocator, .{
+                        .local = local,
+                        .def_idx = def_idx,
+                        .symbol = try self.lookupSymbolForPattern(self.current_module_idx, capture.pattern_idx),
+                    });
+                    break :blk2 local;
+                };
                 try self.scratch_local_ids.append(capture_local);
             }
 
             const runtime_captures = self.scratch_local_ids.sliceFromStart(capture_top);
             if (runtime_captures.len == 0) {
-                break :blk self.store.addCFStmt(self.allocator, .{ .assign_lambda = .{
+                var current = try self.store.addCFStmt(self.allocator, .{ .assign_lambda = .{
                     .target = target,
                     .lambda = lambda_id,
                     .next = next,
                 } });
+                var i = top_level_capture_materializations.items.len;
+                while (i > 0) {
+                    i -= 1;
+                    const materialization = top_level_capture_materializations.items[i];
+                    current = try self.materializeTopLevelDefInto(
+                        self.current_module_idx,
+                        materialization.def_idx,
+                        materialization.symbol,
+                        materialization.local,
+                        current,
+                    );
+                }
+                break :blk current;
             }
 
-            break :blk self.store.addCFStmt(self.allocator, .{ .assign_closure = .{
+            var current = try self.store.addCFStmt(self.allocator, .{ .assign_closure = .{
                 .target = target,
                 .lambda = lambda_id,
                 .captures = try self.store.addLocalSpan(self.allocator, runtime_captures),
                 .next = next,
             } });
+            var i = top_level_capture_materializations.items.len;
+            while (i > 0) {
+                i -= 1;
+                const materialization = top_level_capture_materializations.items[i];
+                current = try self.materializeTopLevelDefInto(
+                    self.current_module_idx,
+                    materialization.def_idx,
+                    materialization.symbol,
+                    materialization.local,
+                    current,
+                );
+            }
+            break :blk current;
         },
         .e_block => |block| self.lowerBlockInto(block, target, next),
         .e_dot_access => |da| self.lowerDotAccessInto(da, target, next),

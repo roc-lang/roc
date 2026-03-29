@@ -4244,6 +4244,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                     try self.collectStmtReadLocals(assign.next, locals, visited);
                 },
+                .debug => |debug_stmt| {
+                    try locals.put(localKey(debug_stmt.message), debug_stmt.message);
+                    try self.collectStmtReadLocals(debug_stmt.next, locals, visited);
+                },
+                .expect => |expect_stmt| {
+                    try locals.put(localKey(expect_stmt.condition), expect_stmt.condition);
+                    try self.collectStmtReadLocals(expect_stmt.next, locals, visited);
+                },
                 .runtime_error => {},
                 .incref => |inc| {
                     try locals.put(localKey(inc.value), inc.value);
@@ -4340,6 +4348,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try locals.put(localKey(arg), arg);
                     }
                     try self.collectStmtLocals(assign.next, locals, visited);
+                },
+                .debug => |debug_stmt| {
+                    try locals.put(localKey(debug_stmt.message), debug_stmt.message);
+                    try self.collectStmtLocals(debug_stmt.next, locals, visited);
+                },
+                .expect => |expect_stmt| {
+                    try locals.put(localKey(expect_stmt.condition), expect_stmt.condition);
+                    try self.collectStmtLocals(expect_stmt.next, locals, visited);
                 },
                 .runtime_error => {},
                 .incref => |inc| {
@@ -11396,6 +11412,29 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.generateStmt(assign.next);
                 },
 
+                .debug => |debug_stmt| {
+                    const msg_loc = try self.generateExpr(debug_stmt.message);
+                    const msg_offset = switch (msg_loc) {
+                        .stack_str => |offset| offset,
+                        else => std.debug.panic(
+                            "Dev/codegen invariant violated: debug message local {d} did not lower to a RocStr stack value",
+                            .{@intFromEnum(debug_stmt.message)},
+                        ),
+                    };
+                    try self.emitRocDbgFromStackStr(msg_offset);
+                    try self.generateStmt(debug_stmt.next);
+                },
+
+                .expect => |expect_stmt| {
+                    const cond_loc = try self.generateExpr(expect_stmt.condition);
+                    const cond_reg = try self.ensureInGeneralReg(cond_loc);
+                    try self.emitCmpImm(cond_reg, 0);
+                    const skip_patch = try self.emitJumpIfNotEqual();
+                    try self.emitRocExpectFailed();
+                    self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
+                    try self.generateStmt(expect_stmt.next);
+                },
+
                 .runtime_error => {
                     try self.emitRocCrash("hit a runtime error");
                     try self.emitTrap();
@@ -11739,13 +11778,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .stack_str = base_offset };
         }
 
-        /// Emit a roc_crashed call via RocOps with a static message.
-        fn emitRocCrash(self: *Self, msg: []const u8) Allocator.Error!void {
+        fn emitRocStaticMessageCall(self: *Self, field_offset: i32, msg: []const u8) Allocator.Error!void {
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
 
             const msg_aligned_size: u32 = std.mem.alignForward(u32, @intCast(msg.len), 8);
             const msg_slot = self.codegen.allocStackSlot(if (msg_aligned_size == 0) 8 else msg_aligned_size);
-            const crashed_slot = self.codegen.allocStackSlot(16);
+            const args_slot = self.codegen.allocStackSlot(16);
 
             const base_reg = frame_ptr;
             const tmp = try self.allocTempGeneral();
@@ -11769,27 +11807,66 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             try self.emitLeaStack(tmp, msg_slot);
             if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.strRegMemSoff(.w64, tmp, base_reg, crashed_slot);
+                try self.codegen.emit.strRegMemSoff(.w64, tmp, base_reg, args_slot);
             } else {
-                try self.codegen.emit.movMemReg(.w64, base_reg, crashed_slot, tmp);
+                try self.codegen.emit.movMemReg(.w64, base_reg, args_slot, tmp);
             }
 
             const msg_len_val: i64 = @bitCast(@as(u64, msg.len));
             if (comptime target.toCpuArch() == .aarch64) {
                 try self.codegen.emitLoadImm(tmp, msg_len_val);
-                try self.codegen.emit.strRegMemSoff(.w64, tmp, base_reg, crashed_slot + 8);
+                try self.codegen.emit.strRegMemSoff(.w64, tmp, base_reg, args_slot + 8);
             } else {
                 try self.codegen.emit.movRegImm64(tmp, @bitCast(@as(u64, msg.len)));
-                try self.codegen.emit.movMemReg(.w64, base_reg, crashed_slot + 8, tmp);
+                try self.codegen.emit.movMemReg(.w64, base_reg, args_slot + 8, tmp);
             }
 
             const fn_ptr_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X10 else .RAX;
-            try self.emitLoad(.w64, fn_ptr_reg, roc_ops_reg, 48);
+            try self.emitLoad(.w64, fn_ptr_reg, roc_ops_reg, field_offset);
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-            try builder.addLeaArg(base_reg, crashed_slot);
+            try builder.addLeaArg(base_reg, args_slot);
             try builder.addMemArg(roc_ops_reg, 0);
             try builder.callReg(fn_ptr_reg);
+        }
+
+        fn emitRocDbgFromStackStr(self: *Self, str_offset: i32) Allocator.Error!void {
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+            const base_reg = frame_ptr;
+            const args_slot = self.codegen.allocStackSlot(16);
+            const tmp = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(tmp);
+
+            try self.emitLoad(.w64, tmp, base_reg, str_offset);
+            if (comptime target.toCpuArch() == .aarch64) {
+                try self.codegen.emit.strRegMemSoff(.w64, tmp, base_reg, args_slot);
+            } else {
+                try self.codegen.emit.movMemReg(.w64, base_reg, args_slot, tmp);
+            }
+
+            try self.emitLoad(.w64, tmp, base_reg, str_offset + 8);
+            if (comptime target.toCpuArch() == .aarch64) {
+                try self.codegen.emit.strRegMemSoff(.w64, tmp, base_reg, args_slot + 8);
+            } else {
+                try self.codegen.emit.movMemReg(.w64, base_reg, args_slot + 8, tmp);
+            }
+
+            const fn_ptr_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X10 else .RAX;
+            try self.emitLoad(.w64, fn_ptr_reg, roc_ops_reg, @offsetOf(RocOps, "roc_dbg"));
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(base_reg, args_slot);
+            try builder.addMemArg(roc_ops_reg, 0);
+            try builder.callReg(fn_ptr_reg);
+        }
+
+        fn emitRocExpectFailed(self: *Self) Allocator.Error!void {
+            try self.emitRocStaticMessageCall(@offsetOf(RocOps, "roc_expect_failed"), "expect failed");
+        }
+
+        /// Emit a roc_crashed call via RocOps with a static message.
+        fn emitRocCrash(self: *Self, msg: []const u8) Allocator.Error!void {
+            try self.emitRocStaticMessageCall(@offsetOf(RocOps, "roc_crashed"), msg);
         }
 
         fn emitTrap(self: *Self) Allocator.Error!void {

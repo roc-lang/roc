@@ -138,6 +138,14 @@ pub const RcInsertPass = struct {
                 try self.countUsesInLocals(self.store.getLocalSpan(assign.args));
                 try self.countUsesInStmt(assign.next);
             },
+            .debug => |stmt| {
+                try self.bumpUse(stmt.message);
+                try self.countUsesInStmt(stmt.next);
+            },
+            .expect => |stmt| {
+                try self.bumpUse(stmt.condition);
+                try self.countUsesInStmt(stmt.next);
+            },
             .runtime_error => {},
             .incref => |inc| {
                 try self.bumpUse(inc.value);
@@ -241,6 +249,14 @@ pub const RcInsertPass = struct {
             .assign_list => |assign| try self.processAssignList(assign),
             .assign_struct => |assign| try self.processAssignStruct(assign),
             .assign_tag => |assign| try self.processAssignTag(assign),
+            .debug => |debug_stmt| try self.store.addCFStmt(.{ .debug = .{
+                .message = debug_stmt.message,
+                .next = try self.processStmt(debug_stmt.next),
+            } }),
+            .expect => |expect_stmt| try self.store.addCFStmt(.{ .expect = .{
+                .condition = expect_stmt.condition,
+                .next = try self.processStmt(expect_stmt.next),
+            } }),
             .incref, .decref, .free, .runtime_error => stmt_id,
             .switch_stmt => |switch_stmt| blk: {
                 var rewritten_branches: std.ArrayListUnmanaged(LIR.CFSwitchBranch) = .empty;

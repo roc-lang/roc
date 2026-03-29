@@ -501,13 +501,11 @@ pub fn lirInterpreterEval(allocator: std.mem.Allocator, module_env: *ModuleEnv, 
     defer interp.deinit();
 
     const eval_result = try interp.eval(.{
-        .expr_id = lower_result.final_expr_id,
+        .proc_id = lower_result.root_proc_id,
     });
 
     const value = switch (eval_result) {
         .value => |v| v,
-        .early_return => |v| v,
-        .break_expr => return error.RuntimeError,
     };
 
     if (interp.getExpectMessage() != null) {
@@ -597,13 +595,11 @@ pub fn lirInterpreterInspectedStr(allocator: std.mem.Allocator, module_env: *Mod
     defer interp.deinit();
 
     const eval_result = try interp.eval(.{
-        .expr_id = lower_result.final_expr_id,
+        .proc_id = lower_result.root_proc_id,
     });
 
     const value = switch (eval_result) {
         .value => |v| v,
-        .early_return => |v| v,
-        .break_expr => return error.RuntimeError,
     };
 
     // Check for failed expect assertions (they set the message but don't error)
