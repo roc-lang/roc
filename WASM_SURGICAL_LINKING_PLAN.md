@@ -12,7 +12,7 @@
 | 6 | WASM Function Pointer Representation & RocOps Layout | Done |
 | 7a | Entrypoint ABI Migration | Done |
 | 7b | CodeBuilder & WasmCodeGen Refactor | Done |
-| 8 | Builtins Migration | Not started |
+| 8 | Builtins Migration | Done |
 | 9 | Hosted Call Lowering | Not started |
 | 10 | Dead Code Elimination | Not started |
 | 11 | Serialization Updates | Not started |
@@ -2311,6 +2311,16 @@ WASM since padded LEB128 is a valid encoding of any value).
 1. **Builtins `.o` availability**: Resolved.
    `roc_builtins.o` for wasm32 is already built by `build.zig` and embedded in the CLI, so
    Phase 8 can treat it as an existing input rather than a prerequisite build task.
+
+1b. **Phase 8 completed** (2026-03-29):
+   All sub-phases implemented:
+   - 8a: `mergeModule()` — type dedup, function/code/data/symbol/reloc merging
+   - 8b: `BuiltinSymbols` — 45 builtin ops mapped to symbol indices via `populate()`
+   - 8c: All call sites rewritten to use `builtin_syms` directly (no legacy imports)
+   - 8d: All ~40 legacy import fields removed; `registerHostImports` → `registerRocOpsImports`
+   - 8e: `verifyNoBuiltinImports()`, `resolveCodeRelocations()`, `materializeFuncBodies()`
+   Missing builtins added to `dev_wrappers.zig`: list_eq, list_str_eq, list_list_eq,
+   list_reverse, i32_mod_by, i64_mod_by.
 
 2. **Host module authoring guidance**: What exact compilation flags do we want to support and
    document for platform authors producing relocatable `host.wasm` artifacts?
