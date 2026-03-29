@@ -11,7 +11,7 @@
 | 5 | Memory, Table, and Stack Pointer Ownership | Done |
 | 6 | WASM Function Pointer Representation & RocOps Layout | Done |
 | 7a | Entrypoint ABI Migration | Done |
-| 7b | CodeBuilder & WasmCodeGen Refactor | Not started |
+| 7b | CodeBuilder & WasmCodeGen Refactor | Done |
 | 8 | Builtins Migration | Not started |
 | 9 | Hosted Call Lowering | Not started |
 | 10 | Dead Code Elimination | Not started |
