@@ -4246,3 +4246,264 @@ test "eliminateDeadCode — function indices unchanged after elimination" {
         @as(u32, @intCast(module.func_type_indices.items.len)),
     );
 }
+
+// --- Phase 11: Serialization Tests ---
+
+/// Build a module simulating the post-surgical-linking state:
+/// - Has code_bytes and function_offsets (from preload)
+/// - Has dead_import_dummy_count > 0 (from linkHostToAppCalls)
+/// - Has linking and reloc sections (from preload, should NOT appear in output)
+/// - Has memory, exports, and data segments
+fn buildEncodeTestModule(allocator: Allocator) !Self {
+    var module = Self.init(allocator);
+    errdefer module.deinit();
+
+    // Type 0: () -> ()
+    _ = try module.addFuncType(&.{}, &.{});
+    // Type 1: (i32) -> i32
+    _ = try module.addFuncType(&.{.i32}, &.{.i32});
+
+    // One remaining import (e.g. roc_alloc)
+    _ = try module.addImport("env", "roc_alloc", 0);
+    module.import_fn_count = 1;
+
+    // Simulate dead_import_dummy_count = 1 (one import was removed during linking)
+    module.dead_import_dummy_count = 1;
+
+    // Two defined functions: dummy type + real type
+    // func_type_indices[0] = type 0 (dummy placeholder)
+    // func_type_indices[1] = type 0 (real func: main)
+    // func_type_indices[2] = type 1 (real func: helper)
+    try module.func_type_indices.append(allocator, 0); // dummy
+    try module.func_type_indices.append(allocator, 0); // main
+    try module.func_type_indices.append(allocator, 1); // helper
+
+    // Build code_bytes with two real function bodies (LEB128 size prefix + body).
+    // Function 0 (main): body = [0x00 (no locals), Op.nop, Op.end] → size = 3
+    try module.function_offsets.append(allocator, @intCast(module.code_bytes.items.len));
+    try module.code_bytes.append(allocator, 0x03); // LEB128 body size = 3
+    try module.code_bytes.append(allocator, 0x00); // no locals
+    try module.code_bytes.append(allocator, Op.nop);
+    try module.code_bytes.append(allocator, Op.end);
+
+    // Function 1 (helper): body = [0x00 (no locals), Op.nop, Op.nop, Op.end] → size = 4
+    try module.function_offsets.append(allocator, @intCast(module.code_bytes.items.len));
+    try module.code_bytes.append(allocator, 0x04); // LEB128 body size = 4
+    try module.code_bytes.append(allocator, 0x00); // no locals
+    try module.code_bytes.append(allocator, Op.nop);
+    try module.code_bytes.append(allocator, Op.nop);
+    try module.code_bytes.append(allocator, Op.end);
+
+    // Memory and stack pointer
+    module.enableMemory(2);
+    module.enableStackPointer(131072);
+
+    // Export: memory and main function
+    try module.addExport("memory", .memory, 0);
+    try module.addExport("_start", .func, 2); // func idx 2 = import(1) + dummy(0) + main(local 1)
+
+    // Data segment
+    const data = try allocator.dupe(u8, "test data");
+    try module.data_segments.append(allocator, .{ .offset = 1024, .data = data });
+
+    // Linking section (should NOT appear in output)
+    try module.linking.symbol_table.appendSlice(allocator, &.{
+        .{ .kind = .function, .flags = WasmLinking.SymFlag.UNDEFINED, .name = null, .index = 0 },
+        .{ .kind = .function, .flags = 0, .name = "main", .index = 2 },
+        .{ .kind = .function, .flags = 0, .name = "helper", .index = 3 },
+    });
+
+    // Reloc.CODE section (should NOT appear in output)
+    try module.reloc_code.entries.append(allocator, .{
+        .index = .{ .type_id = .function_index_leb, .offset = 1, .symbol_index = 1 },
+    });
+
+    return module;
+}
+
+test "encode — output is valid WASM (magic, version, section ordering)" {
+    const allocator = std.testing.allocator;
+    var module = try buildEncodeTestModule(allocator);
+    defer module.deinit();
+
+    try module.materializeFuncBodies();
+    const output = try module.encode(allocator);
+    defer allocator.free(output);
+
+    // Check magic number: \0asm
+    try std.testing.expectEqualSlices(u8, &.{ 0x00, 0x61, 0x73, 0x6D }, output[0..4]);
+    // Check version: 1
+    try std.testing.expectEqualSlices(u8, &.{ 0x01, 0x00, 0x00, 0x00 }, output[4..8]);
+
+    // Walk through sections and verify ordering
+    var pos: usize = 8;
+    var prev_section_id: u8 = 0;
+    while (pos < output.len) {
+        const section_id = output[pos];
+        pos += 1;
+
+        // Custom sections (id=0) can appear anywhere; standard sections must be ordered
+        if (section_id != 0) {
+            try std.testing.expect(section_id > prev_section_id);
+            prev_section_id = section_id;
+        }
+
+        // Read section size (LEB128)
+        var cursor: usize = pos;
+        const section_size = readU32(output, &cursor) catch unreachable;
+        pos = cursor + section_size;
+    }
+
+    // Should have consumed exactly all bytes
+    try std.testing.expectEqual(output.len, pos);
+}
+
+test "encode — code section function count includes dummies" {
+    const allocator = std.testing.allocator;
+    var module = try buildEncodeTestModule(allocator);
+    defer module.deinit();
+
+    try module.materializeFuncBodies();
+    const output = try module.encode(allocator);
+    defer allocator.free(output);
+
+    // Find code section (id = 10)
+    var pos: usize = 8;
+    var code_section_start: ?usize = null;
+    while (pos < output.len) {
+        const section_id = output[pos];
+        pos += 1;
+        var cursor: usize = pos;
+        const section_size = readU32(output, &cursor) catch unreachable;
+        if (section_id == @intFromEnum(SectionId.code_section)) {
+            code_section_start = cursor;
+            break;
+        }
+        pos = cursor + section_size;
+    }
+
+    try std.testing.expect(code_section_start != null);
+
+    // Read function count from the code section
+    var cursor = code_section_start.?;
+    const func_count = readU32(output, &cursor) catch unreachable;
+
+    // Should be dummies (1) + real functions (2) = 3
+    try std.testing.expectEqual(@as(u32, 3), func_count);
+}
+
+test "encode — dummy functions prepended before real functions in code section" {
+    const allocator = std.testing.allocator;
+    var module = try buildEncodeTestModule(allocator);
+    defer module.deinit();
+
+    try module.materializeFuncBodies();
+    const output = try module.encode(allocator);
+    defer allocator.free(output);
+
+    // Find code section
+    var pos: usize = 8;
+    var code_body_start: ?usize = null;
+    while (pos < output.len) {
+        const section_id = output[pos];
+        pos += 1;
+        var cursor: usize = pos;
+        const section_size = readU32(output, &cursor) catch unreachable;
+        if (section_id == @intFromEnum(SectionId.code_section)) {
+            // Skip the function count
+            _ = readU32(output, &cursor) catch unreachable;
+            code_body_start = cursor;
+            break;
+        }
+        pos = cursor + section_size;
+    }
+
+    try std.testing.expect(code_body_start != null);
+    var cursor = code_body_start.?;
+
+    // First function should be the dummy: body size = 3, body = DUMMY_FUNCTION
+    const dummy_size = readU32(output, &cursor) catch unreachable;
+    try std.testing.expectEqual(@as(u32, DUMMY_FUNCTION.len), dummy_size);
+    try std.testing.expectEqualSlices(u8, &DUMMY_FUNCTION, output[cursor .. cursor + dummy_size]);
+    cursor += dummy_size;
+
+    // Second function (main): body size = 3, body = [0x00, nop, end]
+    const main_size = readU32(output, &cursor) catch unreachable;
+    try std.testing.expectEqual(@as(u32, 3), main_size);
+    try std.testing.expectEqual(@as(u8, 0x00), output[cursor]); // no locals
+    try std.testing.expectEqual(Op.nop, output[cursor + 1]);
+    try std.testing.expectEqual(Op.end, output[cursor + 2]);
+    cursor += main_size;
+
+    // Third function (helper): body size = 4, body = [0x00, nop, nop, end]
+    const helper_size = readU32(output, &cursor) catch unreachable;
+    try std.testing.expectEqual(@as(u32, 4), helper_size);
+    try std.testing.expectEqual(@as(u8, 0x00), output[cursor]); // no locals
+    try std.testing.expectEqual(Op.nop, output[cursor + 1]);
+    try std.testing.expectEqual(Op.nop, output[cursor + 2]);
+    try std.testing.expectEqual(Op.end, output[cursor + 3]);
+}
+
+test "encode — linking section NOT present in output" {
+    const allocator = std.testing.allocator;
+    var module = try buildEncodeTestModule(allocator);
+    defer module.deinit();
+
+    // Verify the module actually has linking data (precondition)
+    try std.testing.expect(module.linking.symbol_table.items.len > 0);
+
+    try module.materializeFuncBodies();
+    const output = try module.encode(allocator);
+    defer allocator.free(output);
+
+    // Scan all sections — no custom section should have name "linking"
+    var pos: usize = 8;
+    while (pos < output.len) {
+        const section_id = output[pos];
+        pos += 1;
+        var cursor: usize = pos;
+        const section_size = readU32(output, &cursor) catch unreachable;
+        const section_end = cursor + section_size;
+
+        if (section_id == @intFromEnum(SectionId.custom_section)) {
+            // Read custom section name
+            const name_len = readU32(output, &cursor) catch unreachable;
+            const name = output[cursor .. cursor + name_len];
+            try std.testing.expect(!std.mem.eql(u8, name, "linking"));
+        }
+
+        pos = section_end;
+    }
+}
+
+test "encode — reloc.CODE section NOT present in output" {
+    const allocator = std.testing.allocator;
+    var module = try buildEncodeTestModule(allocator);
+    defer module.deinit();
+
+    // Verify the module actually has reloc data (precondition)
+    try std.testing.expect(module.reloc_code.entries.items.len > 0);
+
+    try module.materializeFuncBodies();
+    const output = try module.encode(allocator);
+    defer allocator.free(output);
+
+    // Scan all sections — no custom section should have name "reloc.CODE"
+    var pos: usize = 8;
+    while (pos < output.len) {
+        const section_id = output[pos];
+        pos += 1;
+        var cursor: usize = pos;
+        const section_size = readU32(output, &cursor) catch unreachable;
+        const section_end = cursor + section_size;
+
+        if (section_id == @intFromEnum(SectionId.custom_section)) {
+            // Read custom section name
+            const name_len = readU32(output, &cursor) catch unreachable;
+            const name = output[cursor .. cursor + name_len];
+            try std.testing.expect(!std.mem.eql(u8, name, "reloc.CODE"));
+        }
+
+        pos = section_end;
+    }
+}
