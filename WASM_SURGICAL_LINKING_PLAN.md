@@ -10,7 +10,7 @@
 | 4 | Surgical Linking — `linkHostToAppCalls()` | Done |
 | 5 | Memory, Table, and Stack Pointer Ownership | Done |
 | 6 | WASM Function Pointer Representation & RocOps Layout | Done |
-| 7a | Entrypoint ABI Migration | Not started |
+| 7a | Entrypoint ABI Migration | Done |
 | 7b | CodeBuilder & WasmCodeGen Refactor | Not started |
 | 8 | Builtins Migration | Not started |
 | 9 | Hosted Call Lowering | Not started |
@@ -1299,13 +1299,34 @@ Option 1 is preferred. The eval host shim would be ~50 lines of WAT that:
 ### Tests
 
 ```
-test "app entrypoint — signature is (i32, i32, i32) → void"
-test "app entrypoint — reads arguments from args_ptr parameter"
-test "app entrypoint — writes return value to ret_ptr parameter"
-test "app entrypoint — uses roc_ops_ptr from parameter, not synthesized struct"
-test "app entrypoint — host import for roc__main matches RocCall signature"
-test "eval shim — wraps RocCall app in standalone (i32 env_ptr) → result"
+test "app entrypoint — exports both roc__main_for_host_1_exposed and main"
+test "app entrypoint — roc__main_for_host_1_exposed has RocCall type (i32, i32, i32) → void"
+test "app entrypoint — main (eval wrapper) returns a value, not void"
+test "app entrypoint — roc__main and main are distinct functions"
 ```
+
+Structural tests parse the encoded wasm bytes with `WasmModule.preload` — no bytebox
+execution needed. Behavioral correctness is validated by 1289 eval tests that exercise
+the eval wrapper end-to-end. Full integration tests (calling `roc__main_for_host_1_exposed`
+from a surgically-linked host) will be added in Phase 12.
+
+### Implementation Notes (Done)
+
+`generateModule()` now produces two exported functions in the same module:
+
+1. **`<entrypoint_name>`** — RocCall ABI `(i32, i32, i32) → void`.
+   The export name is passed as a parameter to `generateModule()`, derived from the
+   platform's `provides` section (e.g. `roc__main_for_host_1_exposed`). Parameter 0
+   is `roc_ops_ptr` (provided by host, not synthesized). The expression body runs and
+   the result is written to `ret_ptr` via `emitStoreResultToRetPtr()`, which handles
+   both primitives (scalar store) and composites (unrolled 4-byte copy).
+
+2. **`main`** — Eval wrapper `(i32 env_ptr) → result_vt`. Built by `emitEvalWrapper()`.
+   Allocates its own stack frame for a return buffer, constructs the RocOps struct at
+   memory offset 0 (same as before), calls the RocCall function via `call`, loads the
+   result from the return buffer, and returns it on the wasm stack.
+
+Helper methods extracted: `emitStackPrologue()`, `emitStackEpilogue()`.
 
 ---
 

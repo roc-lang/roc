@@ -86,12 +86,19 @@ pub const WasmEvaluator = struct {
         self.builtin_module.deinit();
     }
 
+    /// The default entrypoint name used by the eval/REPL pipeline.
+    /// Real builds derive this from the platform's `provides` section.
+    pub const default_entrypoint_name = "roc__main_for_host_1_exposed";
+
     /// Generate wasm bytes for a CIR expression.
+    /// `entrypoint_name` is the RocCall export name, derived from the platform's
+    /// `provides` section. Use `default_entrypoint_name` for eval/REPL.
     pub fn generateWasm(
         self: *WasmEvaluator,
         module_env: *ModuleEnv,
         expr_idx: CIR.Expr.Idx,
         all_module_envs: []const *ModuleEnv,
+        entrypoint_name: []const u8,
     ) Error!WasmCodeResult {
         // Lower CIR → MIR → LIR → RC via shared pipeline
         var lower_result = self.lir_program.lowerExpr(
@@ -111,7 +118,7 @@ pub const WasmEvaluator = struct {
         codegen.wasm_stack_bytes = self.wasm_stack_bytes;
         defer codegen.deinit();
 
-        const gen_result = codegen.generateModule(lower_result.final_expr_id, lower_result.result_layout) catch {
+        const gen_result = codegen.generateModule(lower_result.final_expr_id, lower_result.result_layout, entrypoint_name) catch {
             return error.RuntimeError;
         };
 

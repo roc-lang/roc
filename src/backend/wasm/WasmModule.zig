@@ -252,12 +252,12 @@ pub const BlockType = enum(u8) {
 };
 
 /// A function type (signature)
-const FuncType = struct {
+pub const FuncType = struct {
     params: []const ValType,
 };
 
 /// An export entry
-const Export = struct {
+pub const Export = struct {
     name: []const u8,
     kind: ExportKind,
     idx: u32,
