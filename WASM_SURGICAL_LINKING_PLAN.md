@@ -2322,6 +2322,18 @@ WASM since padded LEB128 is a valid encoding of any value).
    Missing builtins added to `dev_wrappers.zig`: list_eq, list_str_eq, list_list_eq,
    list_reverse, i32_mod_by, i64_mod_by.
 
+1c. **Phase 9 completed** (2026-03-29):
+   Implemented `generateHostedCall()` in `WasmCodeGen.zig` (~100 lines):
+   - Generates arg expressions, stabilizes composites into locals
+   - Marshals args into contiguous stack buffer with alignment
+   - Loads table index from `RocOps.hosted_fns_ptr + (index * 4)` in linear memory
+   - Emits `call_indirect` with `roc_call_type_idx` (3-arg RocCall ABI)
+   - Loads return value (primitive, composite pointer, or ZST)
+   Not yet testable end-to-end: eval wrapper still hardcodes `hosted_fns_count=0`,
+   test platform provides no hosted functions, and build system doesn't thread
+   hosted function count to WASM backend. Will be exercisable after CLI integration
+   (Phase 12) connects the full pipeline.
+
 2. **Host module authoring guidance**: What exact compilation flags do we want to support and
    document for platform authors producing relocatable `host.wasm` artifacts?
    We should publish one blessed example, ideally based on the existing WASM test platform.

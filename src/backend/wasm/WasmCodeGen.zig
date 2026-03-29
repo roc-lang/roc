@@ -1011,9 +1011,8 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
                 try self.emitLoadOpForLayout(tpa.payload_layout, 0);
             }
         },
-        .hosted_call => {
-            // TODO: Implement hosted_call expression lowering for wasm.
-            @panic("TODO: wasm hosted_call expression path is not implemented");
+        .hosted_call => |hc| {
+            try self.generateHostedCall(hc);
         },
         .break_expr => {
             const target_depth = self.currentLoopBreakDepth();
@@ -5879,6 +5878,148 @@ fn generateCallArgs(self: *Self, args: LIR.LirExprSpan) Allocator.Error!void {
                 .primitive => {},
             }
         }
+    }
+}
+
+/// Generate a hosted function call via `call_indirect` through RocOps.hosted_fns.
+/// Hosted functions follow the RocCall ABI: fn(roc_ops_ptr, ret_ptr, args_ptr) -> void.
+/// The table index is loaded from linear memory at hosted_fns_ptr + (index * 4).
+fn generateHostedCall(self: *Self, hc: anytype) Allocator.Error!void {
+    const ls = self.getLayoutStore();
+    const arg_exprs = self.store.getExprSpan(hc.args);
+
+    // 1. Generate all argument expressions and stabilize composite results.
+    //    We collect locals holding each arg value (primitive on wasm stack → save to local,
+    //    composite → pointer in local).
+    const ArgInfo = struct { local: u32, layout_idx: layout.Idx, is_composite: bool, byte_size: u32 };
+    var arg_infos: std.ArrayList(ArgInfo) = .empty;
+    defer arg_infos.deinit(self.allocator);
+
+    for (arg_exprs) |arg_id| {
+        try self.generateExpr(arg_id);
+        const layout_idx = self.exprLayoutIdx(arg_id);
+        const repr = WasmLayout.wasmReprWithStore(layout_idx, ls);
+        const is_composite = switch (repr) {
+            .stack_memory => |sz| sz > 0,
+            .primitive => false,
+        };
+        const byte_size: u32 = switch (repr) {
+            .stack_memory => |sz| sz,
+            .primitive => |vt| switch (vt) {
+                .i32, .f32 => @as(u32, 4),
+                .i64, .f64 => @as(u32, 8),
+            },
+        };
+        // Save value to a local so it survives subsequent arg generation.
+        if (is_composite) {
+            const stabilized = try self.stabilizeCompositeResult(byte_size);
+            arg_infos.append(self.allocator, .{ .local = stabilized, .layout_idx = layout_idx, .is_composite = true, .byte_size = byte_size }) catch return error.OutOfMemory;
+        } else {
+            const vt = self.resolveValType(layout_idx);
+            const tmp = self.storage.allocAnonymousLocal(vt) catch return error.OutOfMemory;
+            try self.emitLocalSet(tmp);
+            arg_infos.append(self.allocator, .{ .local = tmp, .layout_idx = layout_idx, .is_composite = false, .byte_size = byte_size }) catch return error.OutOfMemory;
+        }
+    }
+
+    // 2. Allocate return slot on stack frame.
+    const ret_repr = WasmLayout.wasmReprWithStore(hc.ret_layout, ls);
+    const ret_size: u32 = switch (ret_repr) {
+        .stack_memory => |sz| sz,
+        .primitive => |vt| switch (vt) {
+            .i32, .f32 => @as(u32, 4),
+            .i64, .f64 => @as(u32, 8),
+        },
+    };
+    const ret_align: u32 = if (ret_size >= 8) 8 else if (ret_size >= 4) 4 else if (ret_size >= 2) 2 else 1;
+    const ret_slot = if (ret_size > 0)
+        try self.allocStackMemory(@max(ret_size, 4), @max(ret_align, 4))
+    else
+        try self.allocStackMemory(4, 4); // Minimum slot for ZST (need valid pointer)
+
+    // 3. Marshal arguments into a contiguous buffer on stack.
+    var total_args_size: u32 = 0;
+    for (arg_infos.items) |arg| {
+        const arg_align: u32 = self.layoutByteAlign(arg.layout_idx);
+        total_args_size = std.mem.alignForward(u32, total_args_size, @max(arg_align, 1));
+        total_args_size += arg.byte_size;
+    }
+
+    const args_slot = if (total_args_size > 0)
+        try self.allocStackMemory(total_args_size, 4)
+    else
+        try self.allocStackMemory(4, 4); // Minimum slot for empty args
+
+    // Copy each argument into the args buffer.
+    var offset: u32 = 0;
+    for (arg_infos.items) |arg| {
+        const arg_align: u32 = self.layoutByteAlign(arg.layout_idx);
+        offset = std.mem.alignForward(u32, offset, @max(arg_align, 1));
+
+        if (arg.byte_size > 0) {
+            if (arg.is_composite) {
+                // Composite: arg.local is a pointer to the data. Copy bytes.
+                // Destination: fp + args_slot + offset
+                const dst_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                try self.emitFpOffset(args_slot + offset);
+                try self.emitLocalSet(dst_local);
+                try self.emitMemCopy(dst_local, 0, arg.local, arg.byte_size);
+            } else {
+                // Primitive: arg.local holds the scalar value. Store it.
+                try self.emitFpOffset(args_slot + offset);
+                const vt = self.resolveValType(arg.layout_idx);
+                try self.emitLocalGet(arg.local);
+                try self.emitStoreOp(vt, 0);
+            }
+        }
+        offset += arg.byte_size;
+    }
+
+    // 4. Load hosted function's table index from RocOps:
+    //    roc_ops_ptr → i32.load offset=32 (hosted_fns_ptr)
+    //                → i32.load offset=(index * 4) (table index)
+    try self.emitLocalGet(self.roc_ops_local);
+    try self.emitLoadOp(.i32, WasmRocOps.hosted_fns_ptr);
+    try self.emitLoadOp(.i32, hc.index * 4);
+
+    // Save table index to temp local (call_indirect expects it last on stack).
+    const table_idx_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalSet(table_idx_local);
+
+    // 5. Push RocCall args: (roc_ops_ptr, ret_ptr, args_ptr), then table index.
+    try self.emitLocalGet(self.roc_ops_local); // arg 0: roc_ops
+    try self.emitFpOffset(ret_slot); // arg 1: ret_ptr
+    try self.emitFpOffset(args_slot); // arg 2: args_ptr
+    try self.emitLocalGet(table_idx_local); // table index (consumed by call_indirect)
+
+    // 6. call_indirect with RocCall type signature, table 0.
+    self.code_builder.code.append(self.allocator, Op.call_indirect) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.code_builder.code, self.roc_call_type_idx) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.code_builder.code, 0) catch return error.OutOfMemory;
+
+    // 7. Load result from ret_slot.
+    switch (ret_repr) {
+        .primitive => |vt| {
+            if (ret_size == 0) {
+                // ZST — push unit value
+                self.code_builder.code.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                WasmModule.leb128WriteI32(self.allocator, &self.code_builder.code, 0) catch return error.OutOfMemory;
+            } else {
+                // Load scalar from ret_slot
+                try self.emitFpOffset(ret_slot);
+                try self.emitLoadOp(vt, 0);
+            }
+        },
+        .stack_memory => |sz| {
+            if (sz == 0) {
+                // ZST — push dummy pointer
+                self.code_builder.code.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                WasmModule.leb128WriteI32(self.allocator, &self.code_builder.code, 0) catch return error.OutOfMemory;
+            } else {
+                // Composite: push pointer to ret_slot
+                try self.emitFpOffset(ret_slot);
+            }
+        },
     }
 }
 
