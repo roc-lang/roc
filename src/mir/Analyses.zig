@@ -4,6 +4,7 @@
 //! and then consumed by downstream lowering passes like MIR -> LIR.
 
 const MIR = @import("MIR.zig");
+const CallableSummary = @import("CallableSummary.zig");
 const Monotype = @import("Monotype.zig");
 const ResultSummary = @import("ResultSummary.zig");
 const ModuleEnv = @import("can").ModuleEnv;
@@ -15,6 +16,7 @@ const Allocator = std.mem.Allocator;
 /// Frozen release-path MIR analyses consumed by downstream lowering passes.
 pub const Self = @This();
 
+callable_summary: CallableSummary.Table,
 result_summary: ResultSummary.Table,
 all_module_envs: []const *const ModuleEnv,
 current_module_idx: u32,
@@ -27,11 +29,20 @@ pub fn init(
     current_module_idx: u32,
     root_const_ids: []const MIR.ConstDefId,
 ) Allocator.Error!Self {
+    var callable_summary = try CallableSummary.build(
+        allocator,
+        mir_store,
+        root_const_ids,
+    );
+    errdefer callable_summary.deinit();
+
     return .{
+        .callable_summary = callable_summary,
         .result_summary = try ResultSummary.build(
             allocator,
             mir_store,
             root_const_ids,
+            &callable_summary,
         ),
         .all_module_envs = all_module_envs,
         .current_module_idx = current_module_idx,
@@ -40,7 +51,18 @@ pub fn init(
 
 /// Releases all storage owned by this analyses bundle.
 pub fn deinit(self: *Self) void {
+    self.callable_summary.deinit();
     self.result_summary.deinit();
+}
+
+/// Returns the precomputed exact-callable contract for one MIR lambda.
+pub fn getLambdaCallableContract(self: *const Self, lambda_id: MIR.LambdaId) CallableSummary.Contract {
+    return self.callable_summary.getLambdaContract(lambda_id);
+}
+
+/// Returns the precomputed exact-callable contract for one MIR top-level constant.
+pub fn getConstCallableContract(self: *const Self, const_id: MIR.ConstDefId) CallableSummary.Contract {
+    return self.callable_summary.getConstContract(const_id);
 }
 
 /// Returns the precomputed result contract for one MIR lambda.

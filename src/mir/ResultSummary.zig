@@ -10,6 +10,7 @@
 
 const std = @import("std");
 
+const CallableSummary = @import("CallableSummary.zig");
 const MIR = @import("MIR.zig");
 
 const Allocator = std.mem.Allocator;
@@ -45,6 +46,7 @@ pub const ParamRefContract = struct {
 
 /// Lambda- or const-level summary of result provenance.
 pub const ResultContract = union(enum) {
+    no_return,
     fresh,
     alias_of_param: ParamRefContract,
     borrow_of_param: ParamRefContract,
@@ -131,11 +133,6 @@ const Origin = union(enum) {
     borrow_of_fresh: BorrowedFreshOrigin,
 };
 
-const CallableSummaryState = union(enum) {
-    no_return,
-    concrete: ResultContract,
-};
-
 const ReturnAccumulator = struct {
     inferred: ?ResultContract = null,
 };
@@ -149,18 +146,47 @@ const JoinOriginState = struct {
 
 const ActiveJoinMap = std.AutoHashMap(u32, JoinOriginState);
 
+const CallableValueDef = union(enum) {
+    symbol: MIR.Symbol,
+    lambda: MIR.LambdaId,
+    closure: MIR.LambdaId,
+    alias: MIR.LocalId,
+    nominal: MIR.LocalId,
+    field: struct {
+        source: MIR.LocalId,
+        field_idx: u32,
+    },
+    tag_payload: struct {
+        source: MIR.LocalId,
+        payload_idx: u32,
+    },
+    struct_value: MIR.LocalSpan,
+    tag_value: MIR.LocalSpan,
+    call_result: struct {
+        callee: MIR.LocalId,
+    },
+};
+
+const CallableResolution = struct {
+    lambda: MIR.LambdaId,
+    requires_hidden_capture: bool,
+};
+
 const Analyzer = struct {
     allocator: Allocator,
     mir_store: *const MIR.Store,
     table: *Table,
-    lambda_states: ?[]const CallableSummaryState,
+    callable_summary: *const CallableSummary.Table,
+    lambda_states: ?[]const ResultContract,
     active_joins: *ActiveJoinMap,
+    current_lambda: ?MIR.LambdaId,
+    callable_defs: *const std.AutoHashMap(u32, CallableValueDef),
 
-    fn lambdaSummary(self: *const Analyzer, lambda_id: MIR.LambdaId) CallableSummaryState {
+    fn lambdaSummary(self: *const Analyzer, lambda_id: MIR.LambdaId) ResultContract {
         if (self.lambda_states) |states| {
             return states[@intFromEnum(lambda_id)];
         }
-        return .{ .concrete = self.table.getLambdaContract(lambda_id) };
+        return self.table.getLambdaContract(lambda_id);
     }
 
     fn localKey(local: MIR.LocalId) u32 {
@@ -247,6 +273,10 @@ const Analyzer = struct {
         region: BorrowRegion,
     ) Allocator.Error!Origin {
         return switch (contract) {
+            .no_return => std.debug.panic(
+                "ResultSummary invariant violated: no-return callable must not be instantiated as a value-producing call result",
+                .{},
+            ),
             .fresh => .fresh,
             .alias_of_param => |param_ref| blk: {
                 if (param_ref.param_index >= arg_origins.len) {
@@ -303,9 +333,9 @@ const Analyzer = struct {
         self.mergeReturnContract(accumulator, self.resultContractFromOrigin(origin));
     }
 
-    fn finishSummaryState(_: *Analyzer, accumulator: *ReturnAccumulator) CallableSummaryState {
+    fn finishSummaryState(_: *Analyzer, accumulator: *ReturnAccumulator) ResultContract {
         if (accumulator.inferred) |contract| {
-            return .{ .concrete = contract };
+            return contract;
         }
         return .no_return;
     }
@@ -375,64 +405,335 @@ const Analyzer = struct {
         );
     }
 
-    fn bindPattern(
+    fn localMonotypeIsFunc(self: *const Analyzer, local_id: MIR.LocalId) bool {
+        return self.mir_store.monotype_store.getMonotype(self.mir_store.getLocal(local_id).monotype) == .func;
+    }
+
+    fn recordCallableDef(
         self: *Analyzer,
-        env: *LocalOriginMap,
-        pattern_id: MIR.PatternId,
-        origin: Origin,
-        region: BorrowRegion,
+        defs: *std.AutoHashMap(u32, CallableValueDef),
+        local_id: MIR.LocalId,
+        def: CallableValueDef,
     ) Allocator.Error!void {
-        switch (self.mir_store.getPattern(pattern_id)) {
-            .bind => |local| try env.put(localKey(local), origin),
-            .wildcard => {},
-            .as_pattern => |as_pattern| {
-                try env.put(localKey(as_pattern.local), origin);
-                try self.bindPattern(env, as_pattern.pattern, origin, region);
+        const key = localKey(local_id);
+        const gop = try defs.getOrPut(key);
+        if (gop.found_existing) {
+            std.debug.panic(
+                "ResultSummary invariant violated: function-valued local {d} had multiple reaching defs",
+                .{@intFromEnum(local_id)},
+            );
+        }
+        gop.value_ptr.* = def;
+    }
+
+    fn collectCallableDefs(
+        self: *Analyzer,
+        stmt_id: MIR.CFStmtId,
+        defs: *std.AutoHashMap(u32, CallableValueDef),
+        visited: *std.AutoHashMap(u32, void),
+    ) Allocator.Error!void {
+        const key = @as(u32, @intFromEnum(stmt_id));
+        const gop = try visited.getOrPut(key);
+        if (gop.found_existing) return;
+
+        switch (self.mir_store.getCFStmt(stmt_id)) {
+            .assign_symbol => |assign| {
+                try self.recordCallableDef(defs, assign.target, .{ .symbol = assign.symbol });
+                try self.collectCallableDefs(assign.next, defs, visited);
             },
-            .tag => |tag| {
-                const args = self.mir_store.getPatternSpan(tag.args);
-                if (args.len == 0) return;
-                if (args.len != 1) {
-                    std.debug.panic(
-                        "ResultSummary invariant violated: strongest-form MIR tag patterns must have at most one wrapped payload pattern",
-                        .{},
-                    );
+            .assign_ref => |assign| {
+                switch (assign.op) {
+                    .local => |source| try self.recordCallableDef(defs, assign.target, .{ .alias = source }),
+                    .nominal => |nominal| try self.recordCallableDef(defs, assign.target, .{ .nominal = nominal.backing }),
+                    .field => |field| try self.recordCallableDef(defs, assign.target, .{ .field = .{
+                        .source = field.source,
+                        .field_idx = field.field_idx,
+                    } }),
+                    .tag_payload => |payload| try self.recordCallableDef(defs, assign.target, .{ .tag_payload = .{
+                        .source = payload.source,
+                        .payload_idx = payload.payload_idx,
+                    } }),
+                    .discriminant => {},
                 }
-                const projection = try self.singleProjectionSpan(.tag_payload);
-                const payload_origin = try self.borrowOrigin(origin, region, projection);
-                try self.bindPattern(env, args[0], payload_origin, region);
+                try self.collectCallableDefs(assign.next, defs, visited);
             },
-            .struct_destructure => |destructure| {
-                const fields = self.mir_store.getPatternSpan(destructure.fields);
-                for (fields, 0..) |field_pattern, i| {
-                    const projection = try self.singleProjectionSpan(.{ .field = @intCast(i) });
-                    const field_origin = try self.borrowOrigin(origin, region, projection);
-                    try self.bindPattern(env, field_pattern, field_origin, region);
-                }
+            .assign_literal => |assign| try self.collectCallableDefs(assign.next, defs, visited),
+            .assign_lambda => |assign| {
+                try self.recordCallableDef(defs, assign.target, .{ .lambda = assign.lambda });
+                try self.collectCallableDefs(assign.next, defs, visited);
             },
-            .list_destructure => std.debug.panic(
-                "ResultSummary invariant violated: list destructure is not implemented in strongest-form MIR result summaries",
+            .assign_closure => |assign| {
+                try self.recordCallableDef(defs, assign.target, .{ .closure = assign.lambda });
+                try self.collectCallableDefs(assign.next, defs, visited);
+            },
+            .assign_call => |assign| {
+                try self.recordCallableDef(defs, assign.target, .{ .call_result = .{
+                    .callee = assign.callee,
+                } });
+                try self.collectCallableDefs(assign.next, defs, visited);
+            },
+            .assign_low_level => |assign| try self.collectCallableDefs(assign.next, defs, visited),
+            .assign_list => |assign| try self.collectCallableDefs(assign.next, defs, visited),
+            .assign_struct => |assign| {
+                try self.recordCallableDef(defs, assign.target, .{ .struct_value = assign.fields });
+                try self.collectCallableDefs(assign.next, defs, visited);
+            },
+            .assign_tag => |assign| {
+                try self.recordCallableDef(defs, assign.target, .{ .tag_value = assign.args });
+                try self.collectCallableDefs(assign.next, defs, visited);
+            },
+            .debug => std.debug.panic(
+                "ResultSummary TODO: MIR debug statements are not implemented in result-summary analysis yet",
                 .{},
             ),
-            .int_literal,
-            .str_literal,
-            .dec_literal,
-            .frac_f32_literal,
-            .frac_f64_literal,
-            .runtime_error,
-            => {},
+            .expect => std.debug.panic(
+                "ResultSummary TODO: MIR expect statements are not implemented in result-summary analysis yet",
+                .{},
+            ),
+            .runtime_error, .scope_exit, .jump, .ret, .crash => {},
+            .switch_stmt => |switch_stmt| {
+                for (self.mir_store.getSwitchBranches(switch_stmt.branches)) |branch| {
+                    try self.collectCallableDefs(branch.body, defs, visited);
+                }
+                try self.collectCallableDefs(switch_stmt.default_branch, defs, visited);
+            },
+            .borrow_scope => |scope_stmt| {
+                try self.collectCallableDefs(scope_stmt.body, defs, visited);
+                try self.collectCallableDefs(scope_stmt.remainder, defs, visited);
+            },
+            .join => |join_stmt| {
+                try self.collectCallableDefs(join_stmt.body, defs, visited);
+                try self.collectCallableDefs(join_stmt.remainder, defs, visited);
+            },
         }
     }
 
-    fn bindBorrowPattern(
+    fn callableProjectionPathMatches(
+        self: *const Analyzer,
+        binding_span: MIR.CallableProjectionSpan,
+        reversed_path: []const MIR.CallableProjection,
+    ) bool {
+        const binding = self.mir_store.getCallableProjectionSpan(binding_span);
+        if (binding.len != reversed_path.len) return false;
+
+        var i: usize = 0;
+        while (i < binding.len) : (i += 1) {
+            const binding_proj = binding[i];
+            const path_proj = reversed_path[reversed_path.len - 1 - i];
+            switch (binding_proj) {
+                .field => |binding_idx| switch (path_proj) {
+                    .field => |path_idx| if (binding_idx != path_idx) return false,
+                    else => return false,
+                },
+                .tag_payload => |binding_idx| switch (path_proj) {
+                    .tag_payload => |path_idx| if (binding_idx != path_idx) return false,
+                    else => return false,
+                },
+                .nominal => switch (path_proj) {
+                    .nominal => {},
+                    else => return false,
+                },
+            }
+        }
+
+        return true;
+    }
+
+    fn resolveCallableForParamProjection(
         self: *Analyzer,
-        env: *LocalOriginMap,
-        pattern_id: MIR.PatternId,
-        source_origin: Origin,
-        scope_region: BorrowRegion,
+        source_param: MIR.LocalId,
+        reversed_path: []const MIR.CallableProjection,
+    ) CallableResolution {
+        const lambda_id = self.current_lambda orelse std.debug.panic(
+            "ResultSummary TODO: exact callable resolution for function-valued params outside lambda bodies is not implemented yet",
+            .{},
+        );
+        const lambda = self.mir_store.getLambda(lambda_id);
+
+        for (self.mir_store.getCallableBindings(lambda.callable_bindings)) |binding| {
+            if (binding.source_param != source_param) continue;
+            if (!self.callableProjectionPathMatches(binding.projections, reversed_path)) continue;
+            return .{
+                .lambda = binding.lambda,
+                .requires_hidden_capture = binding.requires_hidden_capture,
+            };
+        }
+
+        std.debug.panic(
+            "ResultSummary TODO: missing exact callable binding for parameter local {d}",
+            .{@intFromEnum(source_param)},
+        );
+    }
+
+    fn resolveCallableForLocal(
+        self: *Analyzer,
+        defs: *const std.AutoHashMap(u32, CallableValueDef),
+        local_id: MIR.LocalId,
+        reversed_path: *std.ArrayList(MIR.CallableProjection),
+    ) Allocator.Error!CallableResolution {
+        const def = defs.get(localKey(local_id)) orelse {
+            return self.resolveCallableForParamProjection(local_id, reversed_path.items);
+        };
+
+        return switch (def) {
+            .symbol => |symbol| std.debug.panic(
+                "ResultSummary invariant violated: function-valued symbol {d} survived strongest-form MIR callable lowering",
+                .{symbol.raw()},
+            ),
+            .lambda => |lambda_id| .{
+                .lambda = lambda_id,
+                .requires_hidden_capture = false,
+            },
+            .closure => |lambda_id| .{
+                .lambda = lambda_id,
+                .requires_hidden_capture = true,
+            },
+            .alias => |source| blk: {
+                const resolved = try self.resolveCallableForLocal(defs, source, reversed_path);
+                break :blk .{
+                    .lambda = resolved.lambda,
+                    .requires_hidden_capture = resolved.requires_hidden_capture,
+                };
+            },
+            .nominal => |backing| blk: {
+                const resolved = try self.resolveCallableForLocal(defs, backing, reversed_path);
+                break :blk .{
+                    .lambda = resolved.lambda,
+                    .requires_hidden_capture = resolved.requires_hidden_capture,
+                };
+            },
+            .field => |field| blk: {
+                if (defs.get(localKey(field.source))) |source_def| switch (source_def) {
+                    .struct_value => |fields| {
+                        const field_locals = self.mir_store.getLocalSpan(fields);
+                        if (field.field_idx >= field_locals.len) {
+                            std.debug.panic(
+                                "ResultSummary invariant violated: callable field index {d} is out of bounds for arity {d}",
+                                .{ field.field_idx, field_locals.len },
+                            );
+                        }
+                        break :blk try self.resolveCallableForLocal(defs, field_locals[field.field_idx], reversed_path);
+                    },
+                    .symbol, .call_result => {},
+                    else => {},
+                };
+
+                try reversed_path.append(self.allocator, .{ .field = field.field_idx });
+                defer _ = reversed_path.pop();
+                break :blk try self.resolveCallableForLocal(defs, field.source, reversed_path);
+            },
+            .tag_payload => |payload| blk: {
+                if (defs.get(localKey(payload.source))) |source_def| switch (source_def) {
+                    .tag_value => |args| {
+                        const payload_locals = self.mir_store.getLocalSpan(args);
+                        if (payload.payload_idx >= payload_locals.len) {
+                            std.debug.panic(
+                                "ResultSummary invariant violated: callable payload index {d} is out of bounds for arity {d}",
+                                .{ payload.payload_idx, payload_locals.len },
+                            );
+                        }
+                        break :blk try self.resolveCallableForLocal(defs, payload_locals[payload.payload_idx], reversed_path);
+                    },
+                    .symbol, .call_result => {},
+                    else => {},
+                }
+
+                try reversed_path.append(self.allocator, .{ .tag_payload = payload.payload_idx });
+                defer _ = reversed_path.pop();
+                break :blk try self.resolveCallableForLocal(defs, payload.source, reversed_path);
+            },
+            .struct_value => std.debug.panic(
+                "ResultSummary invariant violated: callable resolution reached a non-callable struct value",
+                .{},
+            ),
+            .tag_value => std.debug.panic(
+                "ResultSummary invariant violated: callable resolution reached a non-callable tag value",
+                .{},
+            ),
+            .call_result => |call_result| {
+                if (reversed_path.items.len != 0) {
+                    std.debug.panic(
+                        "ResultSummary TODO: exact callable resolution through projected call results is not implemented yet",
+                        .{},
+                    );
+                }
+
+                const callee = try self.resolveCallableForLocal(defs, call_result.callee, reversed_path);
+                return switch (self.callable_summary.getLambdaContract(callee.lambda)) {
+                    .no_return => std.debug.panic(
+                        "ResultSummary invariant violated: call-result callable resolution reached a no-return lambda",
+                        .{@intFromEnum(callee.lambda)},
+                    ),
+                    .exact_lambda => |lambda_id| .{
+                        .lambda = lambda_id,
+                        .requires_hidden_capture = false,
+                    },
+                    .exact_closure => |lambda_id| .{
+                        .lambda = lambda_id,
+                        .requires_hidden_capture = true,
+                    },
+                };
+            },
+        };
+    }
+
+    fn collectReturnedCallable(
+        self: *Analyzer,
+        stmt_id: MIR.CFStmtId,
+        defs: *const std.AutoHashMap(u32, CallableValueDef),
+        out: *?CallableResolution,
     ) Allocator.Error!void {
-        const borrowed = try self.borrowOrigin(source_origin, scope_region, RefProjectionSpan.empty());
-        try self.bindPattern(env, pattern_id, borrowed, scope_region);
+        switch (self.mir_store.getCFStmt(stmt_id)) {
+            .assign_symbol => |stmt| try self.collectReturnedCallable(stmt.next, defs, out),
+            .assign_ref => |stmt| try self.collectReturnedCallable(stmt.next, defs, out),
+            .assign_literal => |stmt| try self.collectReturnedCallable(stmt.next, defs, out),
+            .assign_lambda => |stmt| try self.collectReturnedCallable(stmt.next, defs, out),
+            .assign_closure => |stmt| try self.collectReturnedCallable(stmt.next, defs, out),
+            .assign_call => |stmt| try self.collectReturnedCallable(stmt.next, defs, out),
+            .assign_low_level => |stmt| try self.collectReturnedCallable(stmt.next, defs, out),
+            .assign_list => |stmt| try self.collectReturnedCallable(stmt.next, defs, out),
+            .assign_struct => |stmt| try self.collectReturnedCallable(stmt.next, defs, out),
+            .assign_tag => |stmt| try self.collectReturnedCallable(stmt.next, defs, out),
+            .debug => std.debug.panic(
+                "ResultSummary TODO: MIR debug statements are not implemented in callable-return analysis yet",
+                .{},
+            ),
+            .expect => std.debug.panic(
+                "ResultSummary TODO: MIR expect statements are not implemented in callable-return analysis yet",
+                .{},
+            ),
+            .runtime_error, .scope_exit, .jump, .crash => {},
+            .switch_stmt => |switch_stmt| {
+                for (self.mir_store.getSwitchBranches(switch_stmt.branches)) |branch| {
+                    try self.collectReturnedCallable(branch.body, defs, out);
+                }
+                try self.collectReturnedCallable(switch_stmt.default_branch, defs, out);
+            },
+            .borrow_scope => |scope_stmt| {
+                try self.collectReturnedCallable(scope_stmt.body, defs, out);
+                try self.collectReturnedCallable(scope_stmt.remainder, defs, out);
+            },
+            .join => |join_stmt| {
+                try self.collectReturnedCallable(join_stmt.body, defs, out);
+                try self.collectReturnedCallable(join_stmt.remainder, defs, out);
+            },
+            .ret => |ret_stmt| {
+                if (!self.localMonotypeIsFunc(ret_stmt.value)) return;
+                var reversed_path = std.ArrayList(MIR.CallableProjection).empty;
+                defer reversed_path.deinit(self.allocator);
+                const resolved = try self.resolveCallableForLocal(defs, ret_stmt.value, &reversed_path);
+                if (out.*) |current| {
+                    if (current.lambda != resolved.lambda or current.requires_hidden_capture != resolved.requires_hidden_capture) {
+                        std.debug.panic(
+                            "ResultSummary invariant violated: callable body returned incompatible callable identities",
+                            .{},
+                        );
+                    }
+                } else {
+                    out.* = resolved;
+                }
+            },
+        }
     }
 
     fn discardScopeBoundResults(self: *Analyzer, env: *LocalOriginMap, scope_id: MIR.BorrowScopeId) void {
@@ -474,8 +775,26 @@ const Analyzer = struct {
                 try env.put(localKey(assign.target), .fresh);
                 return self.analyzeStmt(env, region, accumulator, assign.next);
             },
-            .assign_alias => |assign| {
-                try env.put(localKey(assign.target), self.originForLocal(env, assign.source));
+            .assign_ref => |assign| {
+                const origin = switch (assign.op) {
+                    .local => |source| self.originForLocal(env, source),
+                    .discriminant => .fresh,
+                    .field => |field| try self.borrowOrigin(
+                        self.originForLocal(env, field.source),
+                        region,
+                        try self.singleProjectionSpan(.{ .field = @intCast(field.field_idx) }),
+                    ),
+                    .tag_payload => |payload| try self.borrowOrigin(
+                        self.originForLocal(env, payload.source),
+                        region,
+                        try self.singleProjectionSpan(.tag_payload),
+                    ),
+                    .nominal => |nominal| try self.aliasOrigin(
+                        self.originForLocal(env, nominal.backing),
+                        try self.singleProjectionSpan(.nominal),
+                    ),
+                };
+                try env.put(localKey(assign.target), origin);
                 return self.analyzeStmt(env, region, accumulator, assign.next);
             },
             .assign_literal => |assign| {
@@ -491,40 +810,26 @@ const Analyzer = struct {
                 return self.analyzeStmt(env, region, accumulator, assign.next);
             },
             .assign_call => |assign| {
+                var reversed_path = std.ArrayList(MIR.CallableProjection).empty;
+                defer reversed_path.deinit(self.allocator);
+                const callee = try self.resolveCallableForLocal(self.callable_defs, assign.callee, &reversed_path);
+
                 const args = self.mir_store.getLocalSpan(assign.args);
-                const arg_origins = try self.allocator.alloc(Origin, args.len);
+                const arg_origins = try self.allocator.alloc(Origin, args.len + @intFromBool(callee.requires_hidden_capture));
                 defer self.allocator.free(arg_origins);
 
                 for (args, 0..) |arg, i| {
                     arg_origins[i] = self.originForLocal(env, arg);
                 }
-
-                const summary = self.lambdaSummary(assign.lambda);
-                switch (summary) {
-                    .no_return => return false,
-                    .concrete => |contract| try env.put(
-                        localKey(assign.target),
-                        try self.instantiateCallContract(contract, arg_origins, region),
-                    ),
+                if (callee.requires_hidden_capture) {
+                    arg_origins[args.len] = self.originForLocal(env, assign.callee);
                 }
-                return self.analyzeStmt(env, region, accumulator, assign.next);
-            },
-            .assign_closure_call => |assign| {
-                const args = self.mir_store.getLocalSpan(assign.args);
-                const arg_origins = try self.allocator.alloc(Origin, args.len + 1);
-                defer self.allocator.free(arg_origins);
 
-                for (args, 0..) |arg, i| {
-                    arg_origins[i] = self.originForLocal(env, arg);
-                }
-                arg_origins[args.len] = self.originForLocal(env, assign.closure);
-
-                const summary = self.lambdaSummary(assign.lambda);
-                switch (summary) {
+                switch (self.lambdaSummary(callee.lambda)) {
                     .no_return => return false,
-                    .concrete => |contract| try env.put(
+                    else => try env.put(
                         localKey(assign.target),
-                        try self.instantiateCallContract(contract, arg_origins, region),
+                        try self.instantiateCallContract(self.lambdaSummary(callee.lambda), arg_origins, region),
                     ),
                 }
                 return self.analyzeStmt(env, region, accumulator, assign.next);
@@ -571,50 +876,24 @@ const Analyzer = struct {
                 try env.put(localKey(assign.target), .fresh);
                 return self.analyzeStmt(env, region, accumulator, assign.next);
             },
-            .assign_field => |assign| {
-                const source = self.originForLocal(env, assign.source);
-                const projection = try self.singleProjectionSpan(.{ .field = @intCast(assign.field_idx) });
-                try env.put(localKey(assign.target), try self.borrowOrigin(source, region, projection));
-                return self.analyzeStmt(env, region, accumulator, assign.next);
-            },
-            .assign_tag_payload => |assign| {
-                _ = assign.payload_idx;
-                const source = self.originForLocal(env, assign.source);
-                const projection = try self.singleProjectionSpan(.tag_payload);
-                try env.put(localKey(assign.target), try self.borrowOrigin(source, region, projection));
-                return self.analyzeStmt(env, region, accumulator, assign.next);
-            },
-            .assign_nominal => |assign| {
-                const source = self.originForLocal(env, assign.backing);
-                const projection = try self.singleProjectionSpan(.nominal);
-                try env.put(localKey(assign.target), try self.aliasOrigin(source, projection));
-                return self.analyzeStmt(env, region, accumulator, assign.next);
-            },
-            .assign_str_escape_and_quote => |assign| {
-                try env.put(localKey(assign.target), .fresh);
-                return self.analyzeStmt(env, region, accumulator, assign.next);
-            },
-            .debug => |debug_stmt| {
-                _ = debug_stmt.value;
-                return self.analyzeStmt(env, region, accumulator, debug_stmt.next);
-            },
-            .expect => |expect_stmt| {
-                _ = expect_stmt.condition;
-                return self.analyzeStmt(env, region, accumulator, expect_stmt.next);
-            },
+            .debug => std.debug.panic(
+                "ResultSummary TODO: MIR debug statements are not implemented in provenance analysis yet",
+                .{},
+            ),
+            .expect => std.debug.panic(
+                "ResultSummary TODO: MIR expect statements are not implemented in provenance analysis yet",
+                .{},
+            ),
             .runtime_error => return false,
-            .match_stmt => |match_stmt| {
-                const scrutinee = self.originForLocal(env, match_stmt.scrutinee);
-                for (self.mir_store.getMatchBranches(match_stmt.branches)) |branch| {
-                    for (self.mir_store.getBranchPatterns(branch.patterns)) |branch_pattern| {
-                        _ = branch_pattern.degenerate;
-                        var branch_env = try self.cloneEnv(env);
-                        defer branch_env.deinit();
-
-                        try self.bindPattern(&branch_env, branch_pattern.pattern, scrutinee, region);
-                        _ = try self.analyzeStmt(&branch_env, region, accumulator, branch.body);
-                    }
+            .switch_stmt => |switch_stmt| {
+                for (self.mir_store.getSwitchBranches(switch_stmt.branches)) |branch| {
+                    var branch_env = try self.cloneEnv(env);
+                    defer branch_env.deinit();
+                    _ = try self.analyzeStmt(&branch_env, region, accumulator, branch.body);
                 }
+                var default_env = try self.cloneEnv(env);
+                defer default_env.deinit();
+                _ = try self.analyzeStmt(&default_env, region, accumulator, switch_stmt.default_branch);
                 return false;
             },
             .borrow_scope => |scope| {
@@ -622,11 +901,6 @@ const Analyzer = struct {
                 defer scope_env.deinit();
 
                 const scope_region: BorrowRegion = .{ .scope = scope.id };
-                for (self.mir_store.getBorrowBindings(scope.bindings)) |binding| {
-                    const source_origin = self.originForLocal(&scope_env, binding.source);
-                    try self.bindBorrowPattern(&scope_env, binding.pattern, source_origin, scope_region);
-                }
-
                 _ = try self.analyzeStmt(&scope_env, scope_region, accumulator, scope.body);
                 self.discardScopeBoundResults(&scope_env, scope.id);
                 return self.analyzeStmt(&scope_env, region, accumulator, scope.remainder);
@@ -718,8 +992,16 @@ const Analyzer = struct {
         }
     }
 
-    fn analyzeLambda(self: *Analyzer, lambda_id: MIR.LambdaId) Allocator.Error!CallableSummaryState {
+    fn analyzeLambda(self: *Analyzer, lambda_id: MIR.LambdaId) Allocator.Error!ResultContract {
         const lambda = self.mir_store.getLambda(lambda_id);
+        var callable_defs = std.AutoHashMap(u32, CallableValueDef).init(self.allocator);
+        defer callable_defs.deinit();
+        var callable_visited = std.AutoHashMap(u32, void).init(self.allocator);
+        defer callable_visited.deinit();
+        try self.collectCallableDefs(lambda.body, &callable_defs, &callable_visited);
+
+        self.callable_defs = &callable_defs;
+        self.current_lambda = lambda_id;
         var env = LocalOriginMap.init(self.allocator);
         defer env.deinit();
         var active_joins = ActiveJoinMap.init(self.allocator);
@@ -733,19 +1015,17 @@ const Analyzer = struct {
 
         self.active_joins = &active_joins;
 
-        const visible_params = self.mir_store.getPatternSpan(lambda.params);
-        for (visible_params, 0..) |pattern_id, i| {
-            const origin: Origin = .{ .alias_of_param = .{
+        const visible_params = self.mir_store.getLocalSpan(lambda.params);
+        for (visible_params, 0..) |param_local, i| {
+            try env.put(localKey(param_local), .{ .alias_of_param = .{
                 .param_index = @intCast(i),
-            } };
-            try self.bindPattern(&env, pattern_id, origin, .body);
+            } });
         }
 
-        if (!lambda.captures_param.isNone()) {
-            const origin: Origin = .{ .alias_of_param = .{
+        if (lambda.captures_param) |captures_param| {
+            try env.put(localKey(captures_param), .{ .alias_of_param = .{
                 .param_index = @intCast(visible_params.len),
-            } };
-            try self.bindPattern(&env, lambda.captures_param, origin, .body);
+            } });
         }
 
         var accumulator = ReturnAccumulator{};
@@ -753,8 +1033,16 @@ const Analyzer = struct {
         return self.finishSummaryState(&accumulator);
     }
 
-    fn analyzeConst(self: *Analyzer, const_id: MIR.ConstDefId) Allocator.Error!CallableSummaryState {
+    fn analyzeConst(self: *Analyzer, const_id: MIR.ConstDefId) Allocator.Error!ResultContract {
         const def = self.mir_store.getConstDef(const_id);
+        var callable_defs = std.AutoHashMap(u32, CallableValueDef).init(self.allocator);
+        defer callable_defs.deinit();
+        var callable_visited = std.AutoHashMap(u32, void).init(self.allocator);
+        defer callable_visited.deinit();
+        try self.collectCallableDefs(def.body, &callable_defs, &callable_visited);
+
+        self.callable_defs = &callable_defs;
+        self.current_lambda = null;
         var env = LocalOriginMap.init(self.allocator);
         defer env.deinit();
         var active_joins = ActiveJoinMap.init(self.allocator);
@@ -779,6 +1067,7 @@ pub fn build(
     allocator: Allocator,
     mir_store: *const MIR.Store,
     requested_root_consts: []const MIR.ConstDefId,
+    callable_summary: *const CallableSummary.Table,
 ) Allocator.Error!Table {
     var table = Table.init(allocator);
     errdefer table.deinit();
@@ -787,7 +1076,7 @@ pub fn build(
         _ = mir_store.getConstDef(const_id);
     }
 
-    var states = std.ArrayList(CallableSummaryState).empty;
+    var states = std.ArrayList(ResultContract).empty;
     defer states.deinit(allocator);
     try states.appendNTimes(allocator, .no_return, mir_store.getLambdas().len);
 
@@ -799,12 +1088,16 @@ pub fn build(
                 .allocator = allocator,
                 .mir_store = mir_store,
                 .table = &table,
+                .callable_summary = callable_summary,
                 .lambda_states = states.items,
                 .active_joins = undefined,
+                .current_lambda = null,
+                .callable_defs = undefined,
             };
+
             const lambda_id: MIR.LambdaId = @enumFromInt(@as(u32, @intCast(i)));
             const next_state = try analyzer.analyzeLambda(lambda_id);
-            if (!summaryStatesEqual(&table, states.items[i], next_state)) {
+            if (!procContractsEqual(&table, states.items[i], next_state)) {
                 states.items[i] = next_state;
                 changed = true;
             }
@@ -813,11 +1106,7 @@ pub fn build(
 
     try table.lambda_contracts.ensureTotalCapacityPrecise(allocator, states.items.len);
     for (states.items) |state| {
-        const contract = switch (state) {
-            .no_return => ResultContract.fresh,
-            .concrete => |inner| inner,
-        };
-        table.lambda_contracts.appendAssumeCapacity(contract);
+        table.lambda_contracts.appendAssumeCapacity(state);
     }
 
     try table.const_contracts.ensureTotalCapacityPrecise(allocator, mir_store.const_defs.items.len);
@@ -826,29 +1115,18 @@ pub fn build(
             .allocator = allocator,
             .mir_store = mir_store,
             .table = &table,
+            .callable_summary = callable_summary,
             .lambda_states = null,
             .active_joins = undefined,
+            .current_lambda = null,
+            .callable_defs = undefined,
         };
         const const_id: MIR.ConstDefId = @enumFromInt(@as(u32, @intCast(i)));
-        const state = try analyzer.analyzeConst(const_id);
-        const contract = switch (state) {
-            .no_return => ResultContract.fresh,
-            .concrete => |inner| inner,
-        };
+        const contract = try analyzer.analyzeConst(const_id);
         table.const_contracts.appendAssumeCapacity(contract);
     }
 
     return table;
-}
-
-fn summaryStatesEqual(table: *const Table, left: CallableSummaryState, right: CallableSummaryState) bool {
-    return switch (left) {
-        .no_return => right == .no_return,
-        .concrete => |left_contract| switch (right) {
-            .concrete => |right_contract| procContractsEqual(table, left_contract, right_contract),
-            else => false,
-        },
-    };
 }
 
 fn mergeContracts(table: *const Table, left: ResultContract, right: ResultContract) ResultContract {
@@ -860,6 +1138,7 @@ fn mergeContracts(table: *const Table, left: ResultContract, right: ResultContra
 
 fn procContractsEqual(table: *const Table, left: ResultContract, right: ResultContract) bool {
     return switch (left) {
+        .no_return => right == .no_return,
         .fresh => right == .fresh,
         .alias_of_param => |left_param| switch (right) {
             .alias_of_param => |right_param| left_param.param_index == right_param.param_index and projectionSpansEqual(table, left_param.projections, right_param.projections),
