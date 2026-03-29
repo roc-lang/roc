@@ -623,6 +623,516 @@ pub fn linkHostToAppCalls(self: *Self, host_to_app_map: []const HostToAppEntry) 
     }
 }
 
+// --- Phase 8a: Module Merging (Builtins) ---
+
+/// Result of mergeModule: maps from the source module's symbol indices
+/// to the merged module's symbol indices.
+pub const MergeResult = struct {
+    /// Maps source module symbol index → merged module symbol index.
+    /// Length equals source module's symbol_table.items.len.
+    symbol_remap: []u32,
+    allocator: Allocator,
+
+    pub fn deinit(self: *MergeResult) void {
+        self.allocator.free(self.symbol_remap);
+    }
+};
+
+// --- Phase 8b: Builtin Symbol Lookup ---
+
+/// Maps builtin operations to their symbol indices in the merged module.
+///
+/// After `mergeModule` incorporates `roc_builtins.o`, this struct is populated
+/// by looking up each `roc_builtins_*` symbol name in the merged module's
+/// symbol table. WasmCodeGen uses these symbol indices with
+/// `emitRelocatableCall` to emit calls to builtins.
+pub const BuiltinSymbols = struct {
+    // --- Decimal / i128 arithmetic ---
+    dec_mul: u32, // roc_builtins_dec_mul_saturated
+    dec_div: u32, // roc_builtins_dec_div
+    dec_div_trunc: u32, // roc_builtins_dec_div_trunc
+    dec_to_str: u32, // roc_builtins_dec_to_str
+    i128_div_s: u32, // roc_builtins_num_div_trunc_i128
+    i128_mod_s: u32, // roc_builtins_num_rem_trunc_i128
+    u128_div: u32, // roc_builtins_num_div_trunc_u128
+    u128_mod: u32, // roc_builtins_num_rem_trunc_u128
+
+    // --- Numeric conversions ---
+    i128_to_dec: u32, // roc_builtins_i128_to_dec_try_unsafe
+    u128_to_dec: u32, // roc_builtins_u128_to_dec_try_unsafe
+    dec_to_f32: u32, // roc_builtins_dec_to_f32_try_unsafe
+    float_to_str: u32, // roc_builtins_float_to_str
+    int_to_str: u32, // roc_builtins_int_to_str
+    int_from_str: u32, // roc_builtins_int_from_str
+    dec_from_str: u32, // roc_builtins_dec_from_str
+    float_from_str: u32, // roc_builtins_float_from_str
+
+    // --- String operations ---
+    str_equal: u32, // roc_builtins_str_equal
+    str_concat: u32, // roc_builtins_str_concat
+    str_repeat: u32, // roc_builtins_str_repeat
+    str_trim: u32, // roc_builtins_str_trim
+    str_trim_start: u32, // roc_builtins_str_trim_start
+    str_trim_end: u32, // roc_builtins_str_trim_end
+    str_split: u32, // roc_builtins_str_split
+    str_join_with: u32, // roc_builtins_str_join_with
+    str_reserve: u32, // roc_builtins_str_reserve
+    str_release_excess_capacity: u32, // roc_builtins_str_release_excess_capacity
+    str_with_capacity: u32, // roc_builtins_str_with_capacity
+    str_drop_prefix: u32, // roc_builtins_str_drop_prefix
+    str_drop_suffix: u32, // roc_builtins_str_drop_suffix
+    str_with_ascii_lowercased: u32, // roc_builtins_str_with_ascii_lowercased
+    str_with_ascii_uppercased: u32, // roc_builtins_str_with_ascii_uppercased
+    str_caseless_ascii_equals: u32, // roc_builtins_str_caseless_ascii_equals
+    str_from_utf8: u32, // roc_builtins_str_from_utf8
+
+    // --- List operations ---
+    list_append_unsafe: u32, // roc_builtins_list_append_unsafe
+    list_sort_with: u32, // roc_builtins_list_sort_with
+
+    /// Name → field mapping used by `populate` to fill this struct.
+    const mapping = .{
+        .{ "roc_builtins_dec_mul_saturated", "dec_mul" },
+        .{ "roc_builtins_dec_div", "dec_div" },
+        .{ "roc_builtins_dec_div_trunc", "dec_div_trunc" },
+        .{ "roc_builtins_dec_to_str", "dec_to_str" },
+        .{ "roc_builtins_num_div_trunc_i128", "i128_div_s" },
+        .{ "roc_builtins_num_rem_trunc_i128", "i128_mod_s" },
+        .{ "roc_builtins_num_div_trunc_u128", "u128_div" },
+        .{ "roc_builtins_num_rem_trunc_u128", "u128_mod" },
+        .{ "roc_builtins_i128_to_dec_try_unsafe", "i128_to_dec" },
+        .{ "roc_builtins_u128_to_dec_try_unsafe", "u128_to_dec" },
+        .{ "roc_builtins_dec_to_f32_try_unsafe", "dec_to_f32" },
+        .{ "roc_builtins_float_to_str", "float_to_str" },
+        .{ "roc_builtins_int_to_str", "int_to_str" },
+        .{ "roc_builtins_int_from_str", "int_from_str" },
+        .{ "roc_builtins_dec_from_str", "dec_from_str" },
+        .{ "roc_builtins_float_from_str", "float_from_str" },
+        .{ "roc_builtins_str_equal", "str_equal" },
+        .{ "roc_builtins_str_concat", "str_concat" },
+        .{ "roc_builtins_str_repeat", "str_repeat" },
+        .{ "roc_builtins_str_trim", "str_trim" },
+        .{ "roc_builtins_str_trim_start", "str_trim_start" },
+        .{ "roc_builtins_str_trim_end", "str_trim_end" },
+        .{ "roc_builtins_str_split", "str_split" },
+        .{ "roc_builtins_str_join_with", "str_join_with" },
+        .{ "roc_builtins_str_reserve", "str_reserve" },
+        .{ "roc_builtins_str_release_excess_capacity", "str_release_excess_capacity" },
+        .{ "roc_builtins_str_with_capacity", "str_with_capacity" },
+        .{ "roc_builtins_str_drop_prefix", "str_drop_prefix" },
+        .{ "roc_builtins_str_drop_suffix", "str_drop_suffix" },
+        .{ "roc_builtins_str_with_ascii_lowercased", "str_with_ascii_lowercased" },
+        .{ "roc_builtins_str_with_ascii_uppercased", "str_with_ascii_uppercased" },
+        .{ "roc_builtins_str_caseless_ascii_equals", "str_caseless_ascii_equals" },
+        .{ "roc_builtins_str_from_utf8", "str_from_utf8" },
+        .{ "roc_builtins_list_append_unsafe", "list_append_unsafe" },
+        .{ "roc_builtins_list_sort_with", "list_sort_with" },
+    };
+
+    pub const PopulateError = error{MissingBuiltinSymbol};
+
+    /// Populate this struct by looking up each builtin symbol name in the
+    /// module's merged symbol table.
+    pub fn populate(module: *const Self) PopulateError!BuiltinSymbols {
+        var result: BuiltinSymbols = undefined;
+        inline for (mapping) |entry| {
+            const sym_name = entry[0];
+            const field_name = entry[1];
+            @field(result, field_name) = module.linking.findSymbolByName(
+                sym_name,
+                module.imports.items,
+            ) orelse return error.MissingBuiltinSymbol;
+        }
+        return result;
+    }
+};
+
+/// Merge a relocatable module (e.g. roc_builtins.o) into this module.
+///
+/// This appends the source module's functions, code, data, symbols, and
+/// relocations into self, resolving shared symbols (like roc_alloc) against
+/// this module's existing imports.
+///
+/// After merging, the source module's defined functions become defined
+/// functions in self, and all relocation entries are remapped so that
+/// the merged symbol table is consistent.
+///
+/// Returns a MergeResult with the symbol index mapping, which callers
+/// use to look up merged builtins by their original symbol indices.
+pub fn mergeModule(self: *Self, source: *const Self) !MergeResult {
+    const gpa = self.allocator;
+
+    // --- 1. Merge type section (with deduplication) ---
+    // Maps source type index → self type index.
+    const type_remap = try gpa.alloc(u32, source.func_types.items.len);
+    defer gpa.free(type_remap);
+
+    for (source.func_types.items, source.func_type_results.items, 0..) |src_ft, src_result, src_idx| {
+        // Check if self already has an identical type signature.
+        var found: ?u32 = null;
+        for (self.func_types.items, self.func_type_results.items, 0..) |dst_ft, dst_result, dst_idx| {
+            if (src_result != dst_result) continue;
+            if (src_ft.params.len != dst_ft.params.len) continue;
+            if (std.mem.eql(ValType, src_ft.params, dst_ft.params)) {
+                found = @intCast(dst_idx);
+                break;
+            }
+        }
+        if (found) |idx| {
+            type_remap[src_idx] = idx;
+        } else {
+            // Add new type to self.
+            type_remap[src_idx] = try self.addFuncType(src_ft.params, if (src_result) |r| &.{r} else &.{});
+        }
+    }
+
+    // --- 2. Compute function index mapping ---
+    // Source defined functions start at source.import_fn_count in source's index space.
+    // In self, they'll be appended after existing defined functions.
+    const self_defined_base = self.importCount() + @as(u32, @intCast(self.func_type_indices.items.len));
+    const source_defined_count: u32 = @intCast(source.func_type_indices.items.len);
+
+    // func_remap: maps source global function index → self global function index.
+    // For source imports, we resolve them against self's imports by name.
+    // For source defined functions, they get sequential indices after self's existing functions.
+    const total_source_fns = source.import_fn_count + source_defined_count;
+    const func_remap = try gpa.alloc(u32, total_source_fns);
+    defer gpa.free(func_remap);
+
+    // Remap source imports → self imports (by name match).
+    for (source.imports.items, 0..) |src_imp, src_idx| {
+        // Find matching import in self by field_name.
+        var matched: ?u32 = null;
+        for (self.imports.items, 0..) |self_imp, self_idx| {
+            if (std.mem.eql(u8, self_imp.field_name, src_imp.field_name)) {
+                matched = @intCast(self_idx);
+                break;
+            }
+        }
+        func_remap[src_idx] = matched orelse {
+            // Source imports a function self doesn't have — add it as a new import.
+            const remapped_type = type_remap[src_imp.type_idx];
+            func_remap[src_idx] = try self.addImport(src_imp.module_name, src_imp.field_name, remapped_type);
+            continue;
+        };
+    }
+
+    // Remap source defined functions → new indices in self.
+    for (0..source_defined_count) |i| {
+        func_remap[source.import_fn_count + i] = self_defined_base + @as(u32, @intCast(i));
+    }
+
+    // --- 3. Merge function section (remap type indices) ---
+    for (source.func_type_indices.items) |src_type_idx| {
+        try self.func_type_indices.append(gpa, type_remap[src_type_idx]);
+    }
+
+    // --- 4. Merge code section (append bytes, track offsets) ---
+    const base_code_offset: u32 = @intCast(self.code_bytes.items.len);
+
+    try self.code_bytes.appendSlice(gpa, source.code_bytes.items);
+
+    for (source.function_offsets.items) |src_offset| {
+        try self.function_offsets.append(gpa, base_code_offset + src_offset);
+    }
+
+    // --- 5. Merge data section (adjust memory offsets) ---
+    // data_remap: maps source segment index → new data base address.
+    const data_remap = try gpa.alloc(u32, source.data_segments.items.len);
+    defer gpa.free(data_remap);
+
+    for (source.data_segments.items, 0..) |src_ds, i| {
+        // Find alignment from segment info if available, default to 1.
+        const alignment: u32 = if (i < source.linking.segment_info.items.len)
+            @as(u32, 1) << @intCast(source.linking.segment_info.items[i].alignment)
+        else
+            1;
+        const new_offset = try self.addDataSegment(src_ds.data, alignment);
+        data_remap[i] = new_offset;
+    }
+
+    // --- 6. Merge symbol table ---
+    // symbol_remap: maps source symbol index → self symbol index.
+    const source_sym_count = source.linking.symbol_table.items.len;
+    const symbol_remap = try gpa.alloc(u32, source_sym_count);
+    errdefer gpa.free(symbol_remap);
+
+    // Track which __stack_pointer global we resolved to.
+    const self_stack_pointer_sym = self.linking.findSymbolByName("__stack_pointer", self.imports.items);
+
+    for (source.linking.symbol_table.items, 0..) |src_sym, src_sym_idx| {
+        const src_name = src_sym.resolveName(source.imports.items);
+
+        switch (src_sym.kind) {
+            .function => {
+                if (src_sym.isUndefined()) {
+                    // Undefined function in source — resolve against self's symbol table.
+                    if (src_name) |name| {
+                        if (self.linking.findSymbolByName(name, self.imports.items)) |existing| {
+                            symbol_remap[src_sym_idx] = existing;
+                            continue;
+                        }
+                    }
+                    // Not found — add as new undefined symbol referencing the (possibly new) import.
+                    const new_sym_idx: u32 = @intCast(self.linking.symbol_table.items.len);
+                    try self.linking.symbol_table.append(gpa, .{
+                        .kind = .function,
+                        .flags = src_sym.flags,
+                        .name = src_name,
+                        .index = func_remap[src_sym.index],
+                    });
+                    symbol_remap[src_sym_idx] = new_sym_idx;
+                } else {
+                    // Defined function in source — add as defined in self.
+                    const new_sym_idx: u32 = @intCast(self.linking.symbol_table.items.len);
+                    try self.linking.symbol_table.append(gpa, .{
+                        .kind = .function,
+                        .flags = src_sym.flags,
+                        .name = src_sym.name,
+                        .index = func_remap[src_sym.index],
+                    });
+                    symbol_remap[src_sym_idx] = new_sym_idx;
+                }
+            },
+            .data => {
+                if (src_sym.isUndefined()) {
+                    // Undefined data — resolve against self.
+                    if (src_name) |name| {
+                        if (self.linking.findSymbolByName(name, self.imports.items)) |existing| {
+                            symbol_remap[src_sym_idx] = existing;
+                            continue;
+                        }
+                    }
+                    // Add as-is (undefined).
+                    const new_sym_idx: u32 = @intCast(self.linking.symbol_table.items.len);
+                    try self.linking.symbol_table.append(gpa, src_sym);
+                    symbol_remap[src_sym_idx] = new_sym_idx;
+                } else {
+                    // Defined data — remap segment offset.
+                    const new_sym_idx: u32 = @intCast(self.linking.symbol_table.items.len);
+                    const new_offset = if (src_sym.index < data_remap.len)
+                        data_remap[src_sym.index] + src_sym.data_offset
+                    else
+                        src_sym.data_offset;
+                    try self.linking.symbol_table.append(gpa, .{
+                        .kind = .data,
+                        .flags = src_sym.flags,
+                        .name = src_sym.name,
+                        .index = src_sym.index, // segment index (not remapped — data_offset is absolute)
+                        .data_offset = new_offset,
+                        .data_size = src_sym.data_size,
+                    });
+                    symbol_remap[src_sym_idx] = new_sym_idx;
+                }
+            },
+            .global => {
+                // Resolve globals (like __stack_pointer) against self.
+                if (src_sym.isUndefined()) {
+                    if (src_name) |name| {
+                        if (self.linking.findSymbolByName(name, self.imports.items)) |existing| {
+                            symbol_remap[src_sym_idx] = existing;
+                            continue;
+                        }
+                    }
+                }
+                // Add as-is if not resolved.
+                const new_sym_idx: u32 = @intCast(self.linking.symbol_table.items.len);
+                try self.linking.symbol_table.append(gpa, src_sym);
+                symbol_remap[src_sym_idx] = new_sym_idx;
+            },
+            .section, .event, .table => {
+                // Carry over as-is.
+                const new_sym_idx: u32 = @intCast(self.linking.symbol_table.items.len);
+                try self.linking.symbol_table.append(gpa, src_sym);
+                symbol_remap[src_sym_idx] = new_sym_idx;
+            },
+        }
+    }
+
+    // --- 7. Merge relocation entries (remap symbol indices and offsets) ---
+    // Code relocations.
+    for (source.reloc_code.entries.items) |src_entry| {
+        switch (src_entry) {
+            .index => |idx| {
+                try self.reloc_code.entries.append(gpa, .{ .index = .{
+                    .type_id = idx.type_id,
+                    .offset = base_code_offset + idx.offset,
+                    .symbol_index = symbol_remap[idx.symbol_index],
+                } });
+            },
+            .offset => |off| {
+                try self.reloc_code.entries.append(gpa, .{ .offset = .{
+                    .type_id = off.type_id,
+                    .offset = base_code_offset + off.offset,
+                    .symbol_index = symbol_remap[off.symbol_index],
+                    .addend = off.addend,
+                } });
+            },
+        }
+    }
+
+    // Data relocations.
+    for (source.reloc_data.entries.items) |src_entry| {
+        switch (src_entry) {
+            .index => |idx| {
+                try self.reloc_data.entries.append(gpa, .{ .index = .{
+                    .type_id = idx.type_id,
+                    .offset = idx.offset, // data offsets are segment-relative
+                    .symbol_index = symbol_remap[idx.symbol_index],
+                } });
+            },
+            .offset => |off| {
+                try self.reloc_data.entries.append(gpa, .{ .offset = .{
+                    .type_id = off.type_id,
+                    .offset = off.offset,
+                    .symbol_index = symbol_remap[off.symbol_index],
+                    .addend = off.addend,
+                } });
+            },
+        }
+    }
+
+    // Suppress unused local warning.
+    _ = self_stack_pointer_sym;
+
+    return .{
+        .symbol_remap = symbol_remap,
+        .allocator = gpa,
+    };
+}
+
+/// Resolve all code relocations in place.
+///
+/// For each relocation entry in `reloc_code`, look up the symbol's resolved
+/// value (function index, global index, or memory address) and patch the
+/// corresponding site in `code_bytes`.
+///
+/// This must be called after all merging and linking is complete, before
+/// converting code_bytes into func_bodies for encoding.
+pub fn resolveCodeRelocations(self: *Self) void {
+    for (self.reloc_code.entries.items) |entry| {
+        const sym = self.linking.symbol_table.items[entry.getSymbolIndex()];
+        switch (entry) {
+            .index => |idx| {
+                // The resolved value is the symbol's index (function index, type index, etc.).
+                const value = sym.index;
+                switch (idx.type_id) {
+                    .function_index_leb,
+                    .type_index_leb,
+                    .global_index_leb,
+                    .event_index_leb,
+                    .table_number_leb,
+                    => overwritePaddedU32(self.code_bytes.items, idx.offset, value),
+                    .table_index_sleb => overwritePaddedI32(
+                        self.code_bytes.items,
+                        idx.offset,
+                        @intCast(value),
+                    ),
+                    .table_index_i32, .global_index_i32 => {
+                        const off: usize = @intCast(idx.offset);
+                        std.mem.writeInt(u32, self.code_bytes.items[off..][0..4], value, .little);
+                    },
+                }
+            },
+            .offset => |off| {
+                // For data symbols, the resolved address is the data_offset.
+                // For others, use the symbol's index as the base address.
+                const base: i64 = if (sym.kind == .data)
+                    @intCast(sym.data_offset)
+                else
+                    @intCast(sym.index);
+                const patched = base + @as(i64, off.addend);
+                switch (off.type_id) {
+                    .memory_addr_leb => overwritePaddedU32(
+                        self.code_bytes.items,
+                        off.offset,
+                        @intCast(patched),
+                    ),
+                    .memory_addr_sleb,
+                    .memory_addr_rel_sleb,
+                    => overwritePaddedI32(
+                        self.code_bytes.items,
+                        off.offset,
+                        @intCast(patched),
+                    ),
+                    .memory_addr_i32,
+                    .function_offset_i32,
+                    .section_offset_i32,
+                    => {
+                        const o: usize = @intCast(off.offset);
+                        std.mem.writeInt(u32, self.code_bytes.items[o..][0..4], @intCast(patched), .little);
+                    },
+                }
+            },
+        }
+    }
+}
+
+/// Convert code_bytes + function_offsets into func_bodies for encoding.
+///
+/// After `resolveCodeRelocations()` has patched all call sites, this method
+/// splits the contiguous code_bytes buffer into individual function bodies
+/// (skipping dummy functions from dead_import_dummy_count) and populates
+/// func_bodies so that `encode()` can emit them.
+pub fn materializeFuncBodies(self: *Self) !void {
+    const gpa = self.allocator;
+    const defined_count = self.func_type_indices.items.len;
+
+    // Clear existing func_bodies.
+    for (self.func_bodies.items) |fb| {
+        if (fb.body.len > 0) gpa.free(fb.body);
+    }
+    self.func_bodies.clearRetainingCapacity();
+
+    // First dead_import_dummy_count entries in func_type_indices are dummies.
+    for (0..self.dead_import_dummy_count) |_| {
+        const body_copy = try gpa.dupe(u8, &DUMMY_FUNCTION);
+        try self.func_bodies.append(gpa, .{ .body = body_copy });
+    }
+
+    // The real functions follow the dummies.
+    const real_count = defined_count - self.dead_import_dummy_count;
+    for (0..real_count) |i| {
+        const fn_offset = self.function_offsets.items[i];
+
+        // Parse the body length from the code_bytes (LEB128 encoded at fn_offset).
+        var cursor: usize = @intCast(fn_offset);
+        const body_len = readU32(self.code_bytes.items, &cursor) catch unreachable;
+        const body_start: usize = cursor;
+        const body_end: usize = body_start + body_len;
+
+        const body_copy = try gpa.dupe(u8, self.code_bytes.items[body_start..body_end]);
+        try self.func_bodies.append(gpa, .{ .body = body_copy });
+    }
+}
+
+// --- Phase 8e: Verification ---
+
+/// Verify that no stale builtin roc_* imports remain in the final module.
+/// After Phase 8 rewrite, only the 6 RocOps callback functions should be imported.
+pub fn verifyNoBuiltinImports(self: *const Self) !void {
+    const allowed = [_][]const u8{
+        "roc_alloc",
+        "roc_dealloc",
+        "roc_realloc",
+        "roc_dbg",
+        "roc_expect_failed",
+        "roc_crashed",
+    };
+    for (self.imports.items) |imp| {
+        var is_allowed = false;
+        for (allowed) |name| {
+            if (std.mem.eql(u8, imp.field_name, name)) {
+                is_allowed = true;
+                break;
+            }
+        }
+        if (!is_allowed and std.mem.startsWith(u8, imp.field_name, "roc_")) {
+            return error.UnresolvedBuiltinImport;
+        }
+    }
+}
+
 // --- Phase 5: Memory, Table, and Stack Pointer Ownership ---
 
 /// Setup step (called after preload, before code generation):
@@ -2705,4 +3215,429 @@ test "function table — hosted functions added to table with correct indices" {
     try std.testing.expectEqual(@as(u32, 2), module.table_func_indices.items[2]); // hosted_fn_0
     try std.testing.expectEqual(@as(u32, 3), module.table_func_indices.items[3]); // hosted_fn_1
     try std.testing.expectEqual(@as(u32, 4), module.table_func_indices.items[4]); // hosted_fn_2
+}
+
+// --- mergeModule tests ---
+
+/// Build a "host" module for merge testing.
+///
+/// Function index space:
+///   0: roc_alloc       (import, env)
+///   1: roc_dealloc     (import, env)
+///   2: host_fn_0       (defined) — body calls roc_alloc (fn 0)
+///
+/// Types:
+///   0: (i32, i32) → void   (roc_alloc signature)
+///   1: () → void            (simple void function)
+///
+/// Symbol table:
+///   sym 0: undefined function index 0 (roc_alloc) — implicitly named
+///   sym 1: undefined function index 1 (roc_dealloc) — implicitly named
+///   sym 2: defined function index 2 (host_fn_0)
+fn buildMergeHostModule(allocator: Allocator) !Self {
+    var module = Self.init(allocator);
+    errdefer module.deinit();
+
+    // Type 0: (i32, i32) -> void
+    _ = try module.addFuncType(&.{ .i32, .i32 }, &.{});
+    // Type 1: () -> void
+    _ = try module.addFuncType(&.{}, &.{});
+
+    // 2 imports
+    _ = try module.addImport("env", "roc_alloc", 0);
+    _ = try module.addImport("env", "roc_dealloc", 0);
+    module.import_fn_count = 2;
+
+    // 1 defined function (type 1: () -> void)
+    try module.func_type_indices.append(allocator, 1); // host_fn_0 (global index 2)
+
+    // Code: host_fn_0 calls roc_alloc (fn 0)
+    //   offset 0: body_size=8
+    //   offset 1: 0x00 (no locals)
+    //   offset 2: Op.call
+    //   offset 3..7: padded LEB128(0)
+    //   offset 8: Op.end
+    try module.code_bytes.appendSlice(allocator, &.{0x08}); // body size = 8
+    try module.code_bytes.append(allocator, 0x00); // no locals
+    try module.code_bytes.append(allocator, Op.call);
+    try appendPaddedU32(allocator, &module.code_bytes, 0); // call fn 0 (roc_alloc)
+    try module.code_bytes.append(allocator, Op.end);
+
+    try module.function_offsets.append(allocator, 0); // host_fn_0 at offset 0
+
+    // Symbol table
+    try module.linking.symbol_table.appendSlice(allocator, &.{
+        .{ .kind = .function, .flags = WasmLinking.SymFlag.UNDEFINED, .name = null, .index = 0 },
+        .{ .kind = .function, .flags = WasmLinking.SymFlag.UNDEFINED, .name = null, .index = 1 },
+        .{ .kind = .function, .flags = 0, .name = "host_fn_0", .index = 2 },
+    });
+
+    // Relocation: host_fn_0's call at offset 3 → sym 0 (roc_alloc)
+    try module.reloc_code.entries.append(allocator, .{ .index = .{
+        .type_id = .function_index_leb,
+        .offset = 3,
+        .symbol_index = 0,
+    } });
+
+    return module;
+}
+
+/// Build a "builtins" module for merge testing.
+///
+/// Function index space:
+///   0: roc_alloc       (import, env) — shared with host
+///   1: builtin_fn_0    (defined) — body calls roc_alloc (fn 0)
+///   2: builtin_fn_1    (defined) — body is just Op.end
+///
+/// Types:
+///   0: (i32, i32) → void   (roc_alloc — same as host type 0)
+///   1: (i32) → i32          (new type, not in host)
+///
+/// Data segment:
+///   Segment 0: 4 bytes "DATA" at offset 0
+///
+/// Symbol table:
+///   sym 0: undefined function index 0 (roc_alloc) — implicitly named
+///   sym 1: defined function index 1 (roc_builtins_str_trim)
+///   sym 2: defined function index 2 (roc_builtins_str_concat)
+///   sym 3: defined data segment 0, offset 0, size 4
+fn buildMergeBuiltinsModule(allocator: Allocator) !Self {
+    var module = Self.init(allocator);
+    errdefer module.deinit();
+    module.data_offset = 0; // builtins start data at 0
+
+    // Type 0: (i32, i32) -> void (same as host type 0)
+    _ = try module.addFuncType(&.{ .i32, .i32 }, &.{});
+    // Type 1: (i32) -> i32 (new type)
+    _ = try module.addFuncType(&.{.i32}, &.{.i32});
+
+    // 1 import (roc_alloc — shared with host)
+    _ = try module.addImport("env", "roc_alloc", 0);
+    module.import_fn_count = 1;
+
+    // 2 defined functions
+    try module.func_type_indices.append(allocator, 0); // builtin_fn_0 uses type 0
+    try module.func_type_indices.append(allocator, 1); // builtin_fn_1 uses type 1
+
+    // Code: builtin_fn_0 calls roc_alloc (fn 0)
+    //   offset 0: body_size=8
+    //   offset 1: 0x00
+    //   offset 2: Op.call
+    //   offset 3..7: padded LEB128(0)
+    //   offset 8: Op.end
+    try module.code_bytes.appendSlice(allocator, &.{0x08});
+    try module.code_bytes.append(allocator, 0x00);
+    try module.code_bytes.append(allocator, Op.call);
+    try appendPaddedU32(allocator, &module.code_bytes, 0); // call fn 0
+    try module.code_bytes.append(allocator, Op.end);
+
+    // Code: builtin_fn_1 (no calls, just return)
+    //   offset 9: body_size=2
+    //   offset 10: 0x00
+    //   offset 11: Op.end
+    try module.code_bytes.appendSlice(allocator, &.{0x02});
+    try module.code_bytes.append(allocator, 0x00);
+    try module.code_bytes.append(allocator, Op.end);
+
+    try module.function_offsets.append(allocator, 0); // builtin_fn_0 at offset 0
+    try module.function_offsets.append(allocator, 9); // builtin_fn_1 at offset 9
+
+    // Data segment: 4 bytes "DATA"
+    _ = try module.addDataSegment("DATA", 4);
+
+    // Symbol table
+    try module.linking.symbol_table.appendSlice(allocator, &.{
+        .{ .kind = .function, .flags = WasmLinking.SymFlag.UNDEFINED, .name = null, .index = 0 },
+        .{ .kind = .function, .flags = 0, .name = "roc_builtins_str_trim", .index = 1 },
+        .{ .kind = .function, .flags = 0, .name = "roc_builtins_str_concat", .index = 2 },
+        .{ .kind = .data, .flags = 0, .name = ".rodata", .index = 0, .data_offset = 0, .data_size = 4 },
+    });
+
+    // Relocation: builtin_fn_0's call at offset 3 → sym 0 (roc_alloc)
+    try module.reloc_code.entries.append(allocator, .{ .index = .{
+        .type_id = .function_index_leb,
+        .offset = 3,
+        .symbol_index = 0,
+    } });
+
+    return module;
+}
+
+test "mergeModule — type deduplication: identical signatures share index" {
+    const allocator = std.testing.allocator;
+    var host = try buildMergeHostModule(allocator);
+    defer host.deinit();
+    const builtins = try buildMergeBuiltinsModule(allocator);
+    defer @constCast(&builtins).deinit();
+
+    const host_types_before = host.func_types.items.len;
+
+    var result = try host.mergeModule(&builtins);
+    defer result.deinit();
+
+    // Host had 2 types: (i32,i32)->void, ()->void
+    // Builtins had 2 types: (i32,i32)->void (dup), (i32)->i32 (new)
+    // After merge: 3 types total (one deduplicated)
+    try std.testing.expectEqual(host_types_before + 1, host.func_types.items.len);
+}
+
+test "mergeModule — function indices remapped correctly" {
+    const allocator = std.testing.allocator;
+    var host = try buildMergeHostModule(allocator);
+    defer host.deinit();
+    const builtins = try buildMergeBuiltinsModule(allocator);
+    defer @constCast(&builtins).deinit();
+
+    // Host has: 2 imports + 1 defined = 3 total functions
+    // After merge: 2 imports + 1 host_defined + 2 builtins_defined = 5 total
+    var result = try host.mergeModule(&builtins);
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 3), host.func_type_indices.items.len); // 1 host + 2 builtins
+    // Builtins defined functions should start at global index 3 (2 imports + 1 host_defined)
+    // Check symbol for roc_builtins_str_trim (was source global index 1)
+    const trim_sym_idx = result.symbol_remap[1]; // src sym 1 → host sym
+    const trim_sym = host.linking.symbol_table.items[trim_sym_idx];
+    try std.testing.expectEqual(@as(u32, 3), trim_sym.index); // global fn index 3
+    try std.testing.expectEqualStrings("roc_builtins_str_trim", trim_sym.name.?);
+
+    // Check roc_builtins_str_concat (was source global index 2)
+    const concat_sym_idx = result.symbol_remap[2];
+    const concat_sym = host.linking.symbol_table.items[concat_sym_idx];
+    try std.testing.expectEqual(@as(u32, 4), concat_sym.index); // global fn index 4
+    try std.testing.expectEqualStrings("roc_builtins_str_concat", concat_sym.name.?);
+}
+
+test "mergeModule — code bytes appended at correct offset" {
+    const allocator = std.testing.allocator;
+    var host = try buildMergeHostModule(allocator);
+    defer host.deinit();
+    const builtins = try buildMergeBuiltinsModule(allocator);
+    defer @constCast(&builtins).deinit();
+
+    const host_code_len = host.code_bytes.items.len;
+    const builtins_code_len = builtins.code_bytes.items.len;
+
+    var result = try host.mergeModule(&builtins);
+    defer result.deinit();
+
+    // Code bytes should be concatenated
+    try std.testing.expectEqual(host_code_len + builtins_code_len, host.code_bytes.items.len);
+
+    // Function offsets for builtins should be shifted by host's code length
+    // Host had 1 function_offset at 0. Builtins had 2 at 0, 9.
+    // After merge: offsets [0, host_code_len+0, host_code_len+9]
+    try std.testing.expectEqual(@as(usize, 3), host.function_offsets.items.len);
+    try std.testing.expectEqual(@as(u32, 0), host.function_offsets.items[0]); // host_fn_0
+    try std.testing.expectEqual(@as(u32, @intCast(host_code_len)), host.function_offsets.items[1]); // builtin_fn_0
+    try std.testing.expectEqual(@as(u32, @intCast(host_code_len + 9)), host.function_offsets.items[2]); // builtin_fn_1
+}
+
+test "mergeModule — undefined symbol in builtins resolved to host's roc_alloc import" {
+    const allocator = std.testing.allocator;
+    var host = try buildMergeHostModule(allocator);
+    defer host.deinit();
+    const builtins = try buildMergeBuiltinsModule(allocator);
+    defer @constCast(&builtins).deinit();
+
+    var result = try host.mergeModule(&builtins);
+    defer result.deinit();
+
+    // Builtins sym 0 was undefined roc_alloc. It should resolve to host sym 0.
+    try std.testing.expectEqual(@as(u32, 0), result.symbol_remap[0]);
+
+    // No new import should be added (roc_alloc already exists in host)
+    try std.testing.expectEqual(@as(usize, 2), host.imports.items.len);
+}
+
+test "mergeModule — relocation offsets shifted by base_code_offset" {
+    const allocator = std.testing.allocator;
+    var host = try buildMergeHostModule(allocator);
+    defer host.deinit();
+    const builtins = try buildMergeBuiltinsModule(allocator);
+    defer @constCast(&builtins).deinit();
+
+    const host_code_len: u32 = @intCast(host.code_bytes.items.len);
+    const host_reloc_count = host.reloc_code.entries.items.len;
+
+    var result = try host.mergeModule(&builtins);
+    defer result.deinit();
+
+    // Host had 1 relocation, builtins had 1 → total 2
+    try std.testing.expectEqual(host_reloc_count + 1, host.reloc_code.entries.items.len);
+
+    // Host's original relocation at offset 3 should be unchanged
+    try std.testing.expectEqual(@as(u32, 3), host.reloc_code.entries.items[0].getOffset());
+
+    // Builtins' relocation was at offset 3, should now be at host_code_len + 3
+    try std.testing.expectEqual(host_code_len + 3, host.reloc_code.entries.items[1].getOffset());
+
+    // The builtins relocation's symbol should be remapped to host's roc_alloc symbol
+    try std.testing.expectEqual(@as(u32, 0), host.reloc_code.entries.items[1].getSymbolIndex());
+}
+
+test "mergeModule — data segment merged with adjusted offset" {
+    const allocator = std.testing.allocator;
+    var host = try buildMergeHostModule(allocator);
+    defer host.deinit();
+    const builtins = try buildMergeBuiltinsModule(allocator);
+    defer @constCast(&builtins).deinit();
+
+    const host_data_count = host.data_segments.items.len;
+
+    var result = try host.mergeModule(&builtins);
+    defer result.deinit();
+
+    // Builtins had 1 data segment
+    try std.testing.expectEqual(host_data_count + 1, host.data_segments.items.len);
+
+    // The new data segment should have the "DATA" content
+    const new_ds = host.data_segments.items[host.data_segments.items.len - 1];
+    try std.testing.expectEqualStrings("DATA", new_ds.data);
+
+    // Offset should be >= host's data_offset (1024 default)
+    try std.testing.expect(new_ds.offset >= 1024);
+}
+
+test "BuiltinSymbols — all symbols found after merge" {
+    const allocator = std.testing.allocator;
+    var module = Self.init(allocator);
+    defer module.deinit();
+
+    // Type 0: () -> void
+    _ = try module.addFuncType(&.{}, &.{});
+    // 1 import (roc_alloc)
+    _ = try module.addImport("env", "roc_alloc", 0);
+    module.import_fn_count = 1;
+
+    // Add a defined function symbol for each builtin that BuiltinSymbols expects.
+    const names = comptime blk: {
+        var result: [BuiltinSymbols.mapping.len][]const u8 = undefined;
+        for (BuiltinSymbols.mapping, 0..) |entry, i| {
+            result[i] = entry[0];
+        }
+        break :blk result;
+    };
+
+    for (names, 0..) |name, i| {
+        try module.linking.symbol_table.append(allocator, .{
+            .kind = .function,
+            .flags = 0,
+            .name = name,
+            .index = @as(u32, @intCast(i)) + 1, // function index after imports
+        });
+    }
+
+    const syms = BuiltinSymbols.populate(&module) catch |err| {
+        std.debug.print("populate failed: {}\n", .{err});
+        return err;
+    };
+
+    // Spot check a few fields
+    try std.testing.expectEqual(@as(u32, 0), syms.dec_mul); // sym index 0 → roc_builtins_dec_mul_saturated
+    try std.testing.expectEqual(@as(u32, 19), syms.str_trim); // sym index 19
+}
+
+test "BuiltinSymbols — fails when symbol missing" {
+    const allocator = std.testing.allocator;
+    var module = Self.init(allocator);
+    defer module.deinit();
+
+    // Empty symbol table — should fail
+    const result = BuiltinSymbols.populate(&module);
+    try std.testing.expectError(error.MissingBuiltinSymbol, result);
+}
+
+test "resolveCodeRelocations — patches function call in code_bytes" {
+    const allocator = std.testing.allocator;
+    var module = try buildMergeHostModule(allocator);
+    defer module.deinit();
+
+    // Before resolution, the call operand at offset 3 is padded LEB128(0).
+    // Symbol 0 is roc_alloc at function index 0.
+    // After resolution it should still be 0 — but let's change the symbol's index
+    // to verify the patch actually happens.
+
+    // Change roc_alloc's symbol to point to function index 42.
+    module.linking.symbol_table.items[0].index = 42;
+
+    module.resolveCodeRelocations();
+
+    // Read the patched value at offset 3 (5-byte padded LEB128).
+    var expected = [_]u8{0} ** 5;
+    overwritePaddedU32(&expected, 0, 42);
+    try std.testing.expectEqualSlices(u8, &expected, module.code_bytes.items[3..8]);
+}
+
+test "materializeFuncBodies — produces correct function bodies from code_bytes" {
+    const allocator = std.testing.allocator;
+    var module = try buildMergeHostModule(allocator);
+    defer module.deinit();
+
+    try module.materializeFuncBodies();
+
+    // Host has 1 defined function, no dummies.
+    try std.testing.expectEqual(@as(usize, 1), module.func_bodies.items.len);
+
+    // The body should be 8 bytes: [0x00 (locals), Op.call, 5 bytes LEB128, Op.end]
+    try std.testing.expectEqual(@as(usize, 8), module.func_bodies.items[0].body.len);
+}
+
+test "materializeFuncBodies — includes dummy functions for dead imports" {
+    const allocator = std.testing.allocator;
+    var module = try buildLinkingTestModule(allocator);
+    defer module.deinit();
+
+    // Simulate one dead import dummy
+    module.dead_import_dummy_count = 1;
+    try module.func_type_indices.insert(allocator, 0, 0);
+
+    try module.materializeFuncBodies();
+
+    // Should have 1 dummy + 2 real = 3 func bodies
+    try std.testing.expectEqual(@as(usize, 3), module.func_bodies.items.len);
+
+    // First should be the dummy (unreachable + end)
+    try std.testing.expectEqualSlices(u8, &DUMMY_FUNCTION, module.func_bodies.items[0].body);
+}
+
+test "verifyNoBuiltinImports — passes when only RocOps imports remain" {
+    const allocator = std.testing.allocator;
+    var module = Self.init(allocator);
+    defer module.deinit();
+
+    _ = try module.addFuncType(&.{ .i32, .i32 }, &.{});
+    _ = try module.addImport("env", "roc_alloc", 0);
+    _ = try module.addImport("env", "roc_dealloc", 0);
+    _ = try module.addImport("env", "roc_realloc", 0);
+    _ = try module.addImport("env", "roc_dbg", 0);
+    _ = try module.addImport("env", "roc_expect_failed", 0);
+    _ = try module.addImport("env", "roc_crashed", 0);
+
+    try module.verifyNoBuiltinImports();
+}
+
+test "verifyNoBuiltinImports — fails if roc_str_trim import still present" {
+    const allocator = std.testing.allocator;
+    var module = Self.init(allocator);
+    defer module.deinit();
+
+    _ = try module.addFuncType(&.{ .i32, .i32 }, &.{});
+    _ = try module.addImport("env", "roc_alloc", 0);
+    _ = try module.addImport("env", "roc_str_trim", 0); // stale builtin import
+
+    const result = module.verifyNoBuiltinImports();
+    try std.testing.expectError(error.UnresolvedBuiltinImport, result);
+}
+
+test "verifyNoBuiltinImports — allows non-roc imports" {
+    const allocator = std.testing.allocator;
+    var module = Self.init(allocator);
+    defer module.deinit();
+
+    _ = try module.addFuncType(&.{ .i32, .i32 }, &.{});
+    _ = try module.addImport("env", "roc_alloc", 0);
+    _ = try module.addImport("env", "custom_platform_fn", 0); // non-roc import is fine
+
+    try module.verifyNoBuiltinImports();
 }
