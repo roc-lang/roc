@@ -1843,6 +1843,38 @@ fn buildAndCopyTestPlatformHostLib(
     return &copy_step.step;
 }
 
+/// Build the wasm test platform host as a relocatable .wasm object (not an archive).
+/// Surgical linking operates on a single relocatable object with linking/reloc sections.
+fn buildAndCopyWasmHostObject(
+    b: *std.Build,
+    target: ResolvedTarget,
+    optimize: OptimizeMode,
+    roc_modules: modules.RocModules,
+    strip: bool,
+    omit_frame_pointer: ?bool,
+) *Step {
+    const obj = b.addObject(.{
+        .name = "host",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test/wasm/platform/host.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = strip,
+            .omit_frame_pointer = omit_frame_pointer,
+            .pic = true,
+        }),
+    });
+    configureBackend(obj, target);
+    obj.root_module.addImport("builtins", roc_modules.builtins);
+    obj.root_module.addImport("build_options", roc_modules.build_options);
+
+    const dest_path = "test/wasm/platform/targets/wasm32/host.wasm";
+    const copy_step = b.addUpdateSourceFiles();
+    copy_step.addCopyFileToSource(obj.getEmittedBin(), dest_path);
+
+    return &copy_step.step;
+}
+
 // Workaround for Zig bug https://codeberg.org/ziglang/zig/issues/30572
 const FixArchivePaddingStep = struct {
     step: Step,
@@ -2048,7 +2080,7 @@ fn setupTestPlatforms(
     strip: bool,
     omit_frame_pointer: ?bool,
     platform_filter: ?[]const u8,
-) void {
+) *Step {
     // Clear the Roc cache when test platforms are rebuilt to ensure stale cached hosts aren't used
     const clear_cache_step = createClearCacheStep(b);
     const native_target_name = roc_target.RocTarget.fromStdTarget(target.result).toName();
@@ -2115,24 +2147,22 @@ fn setupTestPlatforms(
         }
     }
 
-    // Build the wasm test platform host for wasm32-freestanding
-    {
-        const wasm_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding, .abi = .none });
-        const copy_step = buildAndCopyTestPlatformHostLib(
-            b,
-            "wasm",
-            wasm_target,
-            "wasm32",
-            optimize,
-            roc_modules,
-            strip,
-            omit_frame_pointer,
-        );
-        clear_cache_step.dependOn(copy_step);
-    }
+    // Build the wasm test platform host as a relocatable .wasm object for surgical linking
+    const wasm_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding, .abi = .none });
+    const wasm_host_step = buildAndCopyWasmHostObject(
+        b,
+        wasm_target,
+        optimize,
+        roc_modules,
+        strip,
+        omit_frame_pointer,
+    );
+    clear_cache_step.dependOn(wasm_host_step);
 
     b.getInstallStep().dependOn(clear_cache_step);
     build_test_hosts_step.dependOn(clear_cache_step);
+
+    return wasm_host_step;
 }
 
 pub fn build(b: *std.Build) void {
@@ -2333,7 +2363,7 @@ pub fn build(b: *std.Build) void {
     roc_modules.lsp.addImport("compiled_builtins", compiled_builtins_module);
 
     // Setup test platform host libraries
-    setupTestPlatforms(b, target, optimize, roc_modules, build_test_hosts_step, strip, omit_frame_pointer, platform_filter);
+    const wasm_host_step = setupTestPlatforms(b, target, optimize, roc_modules, build_test_hosts_step, strip, omit_frame_pointer, platform_filter);
 
     const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, omit_frame_pointer, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins, flag_enable_tracy) orelse return;
     roc_modules.addAll(roc_exe);
@@ -2861,6 +2891,11 @@ pub fn build(b: *std.Build) void {
 
         if (std.mem.eql(u8, module_test.test_step.name, "repl")) {
             module_test.test_step.root_module.addImport("bytebox", bytebox.module("bytebox"));
+        }
+
+        // Backend tests need the wasm host object built (for real-module parsing tests)
+        if (std.mem.eql(u8, module_test.test_step.name, "backend")) {
+            module_test.test_step.step.dependOn(wasm_host_step);
         }
 
         if (std.mem.eql(u8, module_test.test_step.name, "repl")) {
