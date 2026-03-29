@@ -471,31 +471,16 @@ pub const Store = struct {
                 }
                 if (hasNumeralConstraint(types_store, flex.constraints))
                     return self.primIdx(.dec);
-                // MIR must remain monomorphic. By the time we are manufacturing a
-                // MIR-visible type, the only surviving unresolved non-numeric vars
-                // should come from roots whose runtime representation is provably
-                // zero-sized already: empty-list element vars, phantom-only
-                // top-level constants, or larger shapes composed entirely of such
-                // ZST pieces.
-                //
-                // In those cases, collapsing to `unit` is representation-preserving:
-                // there is no runtime data to carry, and later layout lowering can
-                // still produce `.zst`, `.list_of_zst`, or `.box_of_zst` as needed.
-                //
-                // If an earlier compiler bug lets a representationful unresolved
-                // var reach MIR here, this branch will still collapse it to `unit`.
-                // That is not ideal, but carrying polymorphism into MIR is worse:
-                // MIR is explicitly required to be monomorphic. Unfortunately this
-                // branch is also hit by legitimate ZST cases, so there is no useful
-                // debug assert we can place here without rejecting correct programs.
+                // Strongest-form MIR is monomorphic, but unresolved non-numeric
+                // vars can still legitimately reach this layer for zero-sized
+                // defaults such as `[]`. Collapsing those to `unit` preserves
+                // the runtime representation while keeping MIR monomorphic.
                 return self.unit_idx;
             },
             .rigid => |rigid| {
                 if (lookupNamedSpecialization(scratches, rigid.name)) |specialized| return specialized;
                 if (hasNumeralConstraint(types_store, rigid.constraints))
                     return self.primIdx(.dec);
-                // See the unresolved flex branch above. The same monomorphic-MIR
-                // invariant applies to unresolved rigid vars.
                 return self.unit_idx;
             },
             .alias => |alias| {
@@ -506,12 +491,10 @@ pub const Store = struct {
             .structure => |flat_type| {
                 return try self.fromFlatType(allocator, types_store, resolved.var_, flat_type, common_idents, specializations, nominal_cycle_breakers, scratches);
             },
-            // Error types can appear nested inside function types (as argument
-            // or return types) when --allow-errors is used. The guard in
-            // lowerExpr only catches top-level error types, so we need to handle
-            // them here too. Return unit as a safe placeholder so lowering can
-            // continue and the runtime-error path is hit at runtime.
-            .err => return self.unit_idx,
+            .err => std.debug.panic(
+                "Monotype invariant violated: nested error type reached strongest-form MIR monotype construction",
+                .{},
+            ),
         };
     }
 
@@ -820,7 +803,10 @@ pub const Store = struct {
                     const elem_type = try self.fromTypeVar(allocator, types_store, type_args[0], common_idents, specializations, nominal_cycle_breakers, scratches);
                     return try self.addMonotype(allocator, .{ .list = .{ .elem = elem_type } });
                 }
-                return self.unit_idx;
+                std.debug.panic(
+                    "Monotype invariant violated: Builtin.List nominal reached strongest-form MIR without an element type",
+                    .{},
+                );
             }
 
             // Box: unqualified ident from mkBoxContent
@@ -830,7 +816,10 @@ pub const Store = struct {
                     const inner_type = try self.fromTypeVar(allocator, types_store, type_args[0], common_idents, specializations, nominal_cycle_breakers, scratches);
                     return try self.addMonotype(allocator, .{ .box = .{ .inner = inner_type } });
                 }
-                return self.unit_idx;
+                std.debug.panic(
+                    "Monotype invariant violated: Builtin.Box nominal reached strongest-form MIR without an inner type",
+                    .{},
+                );
             }
 
             // Numeric types: qualified idents from mkNumberTypeContent (e.g. "Builtin.Num.I64")

@@ -169,6 +169,7 @@ pub const HostedProc = struct {
 
 /// Proc-level summary of how a proc's result relates to its parameters.
 pub const ProcResultContract = union(enum) {
+    no_return,
     fresh,
     alias_of_param: ParamRefContract,
     borrow_of_param: ParamRefContract,

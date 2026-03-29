@@ -783,6 +783,7 @@ fn procContractsEqual(
     b: LIR.ProcResultContract,
 ) bool {
     return switch (a) {
+        .no_return => b == .no_return,
         .fresh => b == .fresh,
         .alias_of_param => |left| switch (b) {
             .alias_of_param => |right| left.param_index == right.param_index and projectionSpansEqual(store, left.projections, right.projections),

@@ -5,13 +5,10 @@
 //! 2. Canonicalizing to CIR
 //! 3. Type checking
 //! 4. Lowering to MIR (monomorphized intermediate representation)
-//! 5. Lowering MIR to LIR (low-level IR with globally unique symbols)
+//! 5. Lowering MIR to statement-only LIR
 //! 6. Reference counting insertion
 //! 7. Generating native machine code (x86_64/aarch64)
 //! 8. Executing the generated code
-//!
-//! Code generation uses LIR with globally unique Symbol references,
-//! eliminating cross-module index collisions.
 
 const std = @import("std");
 const builtin = @import("builtin");

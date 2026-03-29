@@ -90,9 +90,7 @@ pub fn resultContractForProc(
         );
     }
 
-    // A proc with no reachable `ret` cannot return an aliased or borrowed value,
-    // so its result contract is explicitly fresh.
-    return .fresh;
+    return .no_return;
 }
 
 fn localKey(local: LocalId) u64 {
@@ -270,11 +268,10 @@ fn resolveReturnKind(
         );
     }
 
-    // Non-local roots such as globals can flow into returned locals without a
-    // defining assignment in the current proc body. From the proc-contract
-    // perspective they are outside param-relative provenance, so they count as
-    // fresh here rather than as missing local result semantics.
-    const info = results.get(key) orelse return .fresh;
+    const info = results.get(key) orelse std.debug.panic(
+        "DebugOwnershipSummary invariant violated: missing result semantics for local {d} in return provenance",
+        .{@intFromEnum(local)},
+    );
     return switch (info.semantics) {
         .fresh => .fresh,
         .alias_of => |aliased| blk: {
@@ -338,6 +335,7 @@ fn contractFromResolvedKind(
 
 fn procContractsEqual(store: *const LirStore, a: LIR.ProcResultContract, b: LIR.ProcResultContract) bool {
     return switch (a) {
+        .no_return => b == .no_return,
         .fresh => b == .fresh,
         .alias_of_param => |left| switch (b) {
             .alias_of_param => |right| left.param_index == right.param_index and projectionSpansEqual(store, left.projections, right.projections),
