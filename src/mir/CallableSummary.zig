@@ -389,8 +389,8 @@ const Analyzer = struct {
                 );
                 return switch (self.lambdaContract(callee.lambda)) {
                     .no_return => std.debug.panic(
-                        "CallableSummary invariant violated: call-result callable resolution reached a no-return lambda",
-                        .{@intFromEnum(callee.lambda)},
+                        "CallableSummary invariant violated: call-result callable resolution reached no-return lambda {d}",
+                        .{ @intFromEnum(callee.lambda) },
                     ),
                     .exact_lambda => |lambda_id| .{
                         .lambda = lambda_id,

@@ -410,7 +410,7 @@ const Analyzer = struct {
     }
 
     fn recordCallableDef(
-        self: *Analyzer,
+        _: *Analyzer,
         defs: *std.AutoHashMap(u32, CallableValueDef),
         local_id: MIR.LocalId,
         def: CallableValueDef,
@@ -623,19 +623,21 @@ const Analyzer = struct {
                 break :blk try self.resolveCallableForLocal(defs, field.source, reversed_path);
             },
             .tag_payload => |payload| blk: {
-                if (defs.get(localKey(payload.source))) |source_def| switch (source_def) {
-                    .tag_value => |args| {
-                        const payload_locals = self.mir_store.getLocalSpan(args);
-                        if (payload.payload_idx >= payload_locals.len) {
-                            std.debug.panic(
-                                "ResultSummary invariant violated: callable payload index {d} is out of bounds for arity {d}",
-                                .{ payload.payload_idx, payload_locals.len },
-                            );
-                        }
-                        break :blk try self.resolveCallableForLocal(defs, payload_locals[payload.payload_idx], reversed_path);
-                    },
-                    .symbol, .call_result => {},
-                    else => {},
+                if (defs.get(localKey(payload.source))) |source_def| {
+                    switch (source_def) {
+                        .tag_value => |args| {
+                            const payload_locals = self.mir_store.getLocalSpan(args);
+                            if (payload.payload_idx >= payload_locals.len) {
+                                std.debug.panic(
+                                    "ResultSummary invariant violated: callable payload index {d} is out of bounds for arity {d}",
+                                    .{ payload.payload_idx, payload_locals.len },
+                                );
+                            }
+                            break :blk try self.resolveCallableForLocal(defs, payload_locals[payload.payload_idx], reversed_path);
+                        },
+                        .symbol, .call_result => {},
+                        else => {},
+                    }
                 }
 
                 try reversed_path.append(self.allocator, .{ .tag_payload = payload.payload_idx });
@@ -661,8 +663,8 @@ const Analyzer = struct {
                 const callee = try self.resolveCallableForLocal(defs, call_result.callee, reversed_path);
                 return switch (self.callable_summary.getLambdaContract(callee.lambda)) {
                     .no_return => std.debug.panic(
-                        "ResultSummary invariant violated: call-result callable resolution reached a no-return lambda",
-                        .{@intFromEnum(callee.lambda)},
+                        "ResultSummary invariant violated: call-result callable resolution reached no-return lambda {d}",
+                        .{ @intFromEnum(callee.lambda) },
                     ),
                     .exact_lambda => |lambda_id| .{
                         .lambda = lambda_id,

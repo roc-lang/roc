@@ -2278,7 +2278,7 @@ fn emitI128Sub(self: *Self, lhs_local: u32, rhs_local: u32) Allocator.Error!void
 /// Emit i128/u128 shift operation. LHS is composite (16 bytes), RHS is U8 (i32 on wasm stack).
 /// Uses wasm structured if/else to handle shift amounts >= 64.
 /// Pushes an i32 pointer to the 16-byte result on the wasm stack.
-fn generateI128Shift(self: *Self, op: anytype, args: []const LirExprId) Allocator.Error!void {
+fn generateI128Shift(self: *Self, op: anytype, args: []const LocalRef) Allocator.Error!void {
     const result_offset = try self.allocStackMemory(16, 8);
     const result_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitFpOffset(result_offset);

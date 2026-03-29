@@ -56,6 +56,19 @@ const PatternBinding = struct {
     pattern_idx: CIR.Pattern.Idx,
 };
 
+const RecursiveGroupMember = struct {
+    binding_pattern: CIR.Pattern.Idx,
+    callable_inst_id: Monomorphize.CallableInstId,
+};
+
+const ClosureLowerPlan = struct {
+    recursive_members: std.ArrayList(RecursiveGroupMember),
+
+    fn deinit(self: *ClosureLowerPlan, allocator: Allocator) void {
+        self.recursive_members.deinit(allocator);
+    }
+};
+
 const LoopContext = struct {
     exit_id: MIR.JoinPointId,
     carried_locals: MIR.LocalSpan,
@@ -137,6 +150,10 @@ in_progress_callable_insts: std.AutoHashMap(u32, MIR.LambdaId),
 /// fully lowered yet but already need stable lambda ids.
 reserved_callable_insts: std.AutoHashMap(u32, MIR.LambdaId),
 
+/// Binding patterns whose callable identity is satisfied by explicit callable bindings
+/// rather than ordinary value binding locals.
+skipped_callable_backed_binding_patterns: std.AutoHashMap(u64, void),
+
 /// Callable-inst context for context-sensitive monomorphized lookup/call resolution.
 current_callable_inst_context: Monomorphize.CallableInstId,
 
@@ -207,6 +224,7 @@ pub fn init(
         .current_body_local_floor = 0,
         .in_progress_callable_insts = std.AutoHashMap(u32, MIR.LambdaId).init(allocator),
         .reserved_callable_insts = std.AutoHashMap(u32, MIR.LambdaId).init(allocator),
+        .skipped_callable_backed_binding_patterns = std.AutoHashMap(u64, void).init(allocator),
         .current_callable_inst_context = .none,
         .current_root_source_expr_context = null,
         .resolved_dispatch_targets = resolved_dispatch_targets,
@@ -235,6 +253,7 @@ pub fn deinit(self: *Self) void {
     self.symbol_metadata.deinit();
     self.in_progress_callable_insts.deinit();
     self.reserved_callable_insts.deinit();
+    self.skipped_callable_backed_binding_patterns.deinit();
     self.resolved_dispatch_targets.deinit();
     self.scratch_local_ids.deinit();
     self.scratch_ident_idxs.deinit();
@@ -304,6 +323,410 @@ fn getOwnedIdentText(env: *const ModuleEnv, ident: Ident.Idx) []const u8 {
 
 fn monomorphizationRootSourceExprContext(self: *const Self, context_callable_inst: Monomorphize.CallableInstId) ?CIR.Expr.Idx {
     return if (context_callable_inst.isNone()) self.current_root_source_expr_context else null;
+}
+
+fn resolveFuncTypeInStore(types_store: *const types.Store, type_var: types.Var) ?struct { func: types.Func, effectful: bool } {
+    var resolved = types_store.resolveVar(type_var);
+    while (resolved.desc.content == .alias) {
+        resolved = types_store.resolveVar(types_store.getAliasBackingVar(resolved.desc.content.alias));
+    }
+
+    if (resolved.desc.content != .structure) return null;
+    return switch (resolved.desc.content.structure) {
+        .fn_pure => |func| .{ .func = func, .effectful = false },
+        .fn_effectful => |func| .{ .func = func, .effectful = true },
+        .fn_unbound => |func| .{ .func = func, .effectful = false },
+        else => null,
+    };
+}
+
+fn flatRecordRepresentsEmpty(store_types: *const types.Store, record: types.Record) bool {
+    var current_row = record;
+
+    rows: while (true) {
+        if (store_types.getRecordFieldsSlice(current_row.fields).len != 0) return false;
+
+        var ext_var = current_row.ext;
+        while (true) {
+            const ext_resolved = store_types.resolveVar(ext_var);
+            switch (ext_resolved.desc.content) {
+                .alias => |alias| {
+                    ext_var = store_types.getAliasBackingVar(alias);
+                    continue;
+                },
+                .structure => |ext_flat| switch (ext_flat) {
+                    .record => |next_row| {
+                        current_row = next_row;
+                        continue :rows;
+                    },
+                    else => return false,
+                },
+                .flex, .rigid => return false,
+                .err => return false,
+            }
+        }
+    }
+}
+
+fn isTopLevelPattern(module_env: *const ModuleEnv, pattern_idx: CIR.Pattern.Idx) bool {
+    for (module_env.store.sliceDefs(module_env.all_defs)) |def_idx| {
+        const def = module_env.store.getDef(def_idx);
+        if (def.pattern == pattern_idx) return true;
+    }
+    return false;
+}
+
+fn typeBindingInvariant(comptime fmt: []const u8, args: anytype) noreturn {
+    std.debug.panic("statement-only MIR type-binding invariant violated: " ++ fmt, args);
+}
+
+fn toStrLowLevelForPrim(prim: Monotype.Prim) ?CIR.Expr.LowLevel {
+    return switch (prim) {
+        .str => null,
+        .u8 => .u8_to_str,
+        .i8 => .i8_to_str,
+        .u16 => .u16_to_str,
+        .i16 => .i16_to_str,
+        .u32 => .u32_to_str,
+        .i32 => .i32_to_str,
+        .u64 => .u64_to_str,
+        .i64 => .i64_to_str,
+        .u128 => .u128_to_str,
+        .i128 => .i128_to_str,
+        .f32 => .f32_to_str,
+        .f64 => .f64_to_str,
+        .dec => .dec_to_str,
+    };
+}
+
+fn builtinPrimForNominal(ident: Ident.Idx, common: ModuleEnv.CommonIdents) ?Monotype.Prim {
+    if (ident.eql(common.str)) return .str;
+    if (ident.eql(common.u8_type)) return .u8;
+    if (ident.eql(common.i8_type)) return .i8;
+    if (ident.eql(common.u16_type)) return .u16;
+    if (ident.eql(common.i16_type)) return .i16;
+    if (ident.eql(common.u32_type)) return .u32;
+    if (ident.eql(common.i32_type)) return .i32;
+    if (ident.eql(common.u64_type)) return .u64;
+    if (ident.eql(common.i64_type)) return .i64;
+    if (ident.eql(common.u128_type)) return .u128;
+    if (ident.eql(common.i128_type)) return .i128;
+    if (ident.eql(common.f32_type)) return .f32;
+    if (ident.eql(common.f64_type)) return .f64;
+    if (ident.eql(common.dec_type)) return .dec;
+    return null;
+}
+
+fn seedTypeScopeBindingsInStore(
+    self: *Self,
+    module_idx: u32,
+    store_types: *const types.Store,
+    bindings: *std.AutoHashMap(types.Var, Monotype.Idx),
+) Allocator.Error!void {
+    const type_scope = self.type_scope orelse return;
+    const type_scope_module_idx = self.type_scope_module_idx orelse return;
+    const caller_module_idx = self.type_scope_caller_module_idx orelse return;
+
+    if (module_idx != type_scope_module_idx) return;
+
+    for (type_scope.scopes.items) |*scope| {
+        var it = scope.iterator();
+        while (it.next()) |entry| {
+            const platform_var = entry.key_ptr.*;
+            const caller_var = entry.value_ptr.*;
+            const caller_mono = try self.monotypeFromTypeVarWithBindings(
+                caller_module_idx,
+                &self.all_module_envs[caller_module_idx].types,
+                caller_var,
+                bindings,
+            );
+            if (caller_mono.isNone()) continue;
+
+            const normalized_mono = if (caller_module_idx == module_idx)
+                caller_mono
+            else
+                try self.remapMonotypeBetweenModules(caller_mono, caller_module_idx, module_idx);
+
+            const saved_bindings = self.type_var_seen;
+            self.type_var_seen = bindings.*;
+            defer self.type_var_seen = saved_bindings;
+            try self.bindTypeVarMonotypes(platform_var, normalized_mono);
+            bindings.* = self.type_var_seen;
+        }
+    }
+
+    _ = store_types;
+}
+
+fn monotypeFromTypeVarWithBindings(
+    self: *Self,
+    module_idx: u32,
+    store_types: *const types.Store,
+    var_: types.Var,
+    bindings: *std.AutoHashMap(types.Var, Monotype.Idx),
+) Allocator.Error!Monotype.Idx {
+    var nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+    defer nominal_cycle_breakers.deinit();
+
+    const saved_bindings = self.type_var_seen;
+    const saved_breakers = self.nominal_cycle_breakers;
+    const saved_ident_store = self.mono_scratches.ident_store;
+    const saved_module_env = self.mono_scratches.module_env;
+    const saved_module_idx = self.mono_scratches.module_idx;
+    const saved_all_module_envs = self.mono_scratches.all_module_envs;
+    self.type_var_seen = bindings.*;
+    self.nominal_cycle_breakers = nominal_cycle_breakers;
+    self.mono_scratches.ident_store = self.all_module_envs[module_idx].getIdentStoreConst();
+    self.mono_scratches.module_env = self.all_module_envs[module_idx];
+    self.mono_scratches.module_idx = module_idx;
+    self.mono_scratches.all_module_envs = self.all_module_envs;
+    defer {
+        bindings.* = self.type_var_seen;
+        self.type_var_seen = saved_bindings;
+        self.nominal_cycle_breakers = saved_breakers;
+        self.mono_scratches.ident_store = saved_ident_store;
+        self.mono_scratches.module_env = saved_module_env;
+        self.mono_scratches.module_idx = saved_module_idx;
+        self.mono_scratches.all_module_envs = saved_all_module_envs;
+    }
+
+    return self.store.monotype_store.fromTypeVar(
+        self.allocator,
+        store_types,
+        var_,
+        self.all_module_envs[module_idx].idents,
+        &self.type_var_seen,
+        &self.nominal_cycle_breakers,
+        &self.mono_scratches,
+    );
+}
+
+fn resolveImportedModuleIdx(self: *Self, caller_env: *const ModuleEnv, import_idx: CIR.Import.Idx) ?u32 {
+    if (caller_env.imports.getResolvedModule(import_idx)) |module_idx| {
+        if (module_idx < self.all_module_envs.len) return module_idx;
+    }
+
+    const import_pos = @intFromEnum(import_idx);
+    if (import_pos >= caller_env.imports.imports.len()) return null;
+
+    const import_name = caller_env.common.getString(caller_env.imports.imports.items.items[import_pos]);
+    const base_name = identLastSegment(import_name);
+
+    for (self.all_module_envs, 0..) |candidate_env, module_idx| {
+        if (std.mem.eql(u8, candidate_env.module_name, import_name) or
+            std.mem.eql(u8, candidate_env.module_name, base_name))
+        {
+            @constCast(&caller_env.imports).setResolvedModule(import_idx, @intCast(module_idx));
+            return @intCast(module_idx);
+        }
+    }
+
+    return null;
+}
+
+fn getCallLowLevelOp(self: *Self, caller_env: *const ModuleEnv, func_expr_idx: CIR.Expr.Idx) ?CIR.Expr.LowLevel {
+    return switch (caller_env.store.getExpr(func_expr_idx)) {
+        .e_lookup_external => |lookup| self.getExternalLowLevelOp(caller_env, lookup),
+        .e_lookup_local => |lookup| getLocalLowLevelOp(caller_env, lookup.pattern_idx),
+        else => null,
+    };
+}
+
+fn getLocalLowLevelOp(module_env: *const ModuleEnv, pattern_idx: CIR.Pattern.Idx) ?CIR.Expr.LowLevel {
+    for (module_env.store.sliceDefs(module_env.all_defs)) |def_idx| {
+        const def = module_env.store.getDef(def_idx);
+        if (def.pattern != pattern_idx) continue;
+        const def_expr = module_env.store.getExpr(def.expr);
+        if (def_expr == .e_lambda) {
+            const body_expr = module_env.store.getExpr(def_expr.e_lambda.body);
+            if (body_expr == .e_run_low_level) return body_expr.e_run_low_level.op;
+        }
+        return null;
+    }
+    return null;
+}
+
+fn getExternalLowLevelOp(
+    self: *Self,
+    caller_env: *const ModuleEnv,
+    lookup: @TypeOf(@as(CIR.Expr, undefined).e_lookup_external),
+) ?CIR.Expr.LowLevel {
+    const ext_module_idx = self.resolveImportedModuleIdx(caller_env, lookup.module_idx) orelse return null;
+    const ext_env = self.all_module_envs[ext_module_idx];
+    if (!ext_env.store.isDefNode(lookup.target_node_idx)) return null;
+    const def_idx: CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
+    const def = ext_env.store.getDef(def_idx);
+    const def_expr = ext_env.store.getExpr(def.expr);
+    if (def_expr == .e_lambda) {
+        const body_expr = ext_env.store.getExpr(def_expr.e_lambda.body);
+        if (body_expr == .e_run_low_level) return body_expr.e_run_low_level.op;
+    }
+    return null;
+}
+
+fn recordFieldIndexByName(
+    self: *Self,
+    field_name: Ident.Idx,
+    mono_fields: []const Monotype.Field,
+) u32 {
+    for (mono_fields, 0..) |mono_field, field_idx| {
+        if (self.identsStructurallyEqual(field_name, mono_field.name)) {
+            return @intCast(field_idx);
+        }
+    }
+
+    std.debug.panic(
+        "statement-only MIR invariant violated: record field '{s}' missing from monotype",
+        .{self.all_module_envs[self.current_module_idx].getIdent(field_name)},
+    );
+}
+
+fn tagIndexByName(
+    self: *Self,
+    tag_name: Ident.Idx,
+    mono_tags: []const Monotype.Tag,
+) u32 {
+    for (mono_tags, 0..) |mono_tag, tag_idx| {
+        if (self.identsStructurallyEqual(tag_name, mono_tag.name)) {
+            return @intCast(tag_idx);
+        }
+    }
+
+    std.debug.panic(
+        "statement-only MIR invariant violated: tag '{s}' missing from monotype",
+        .{self.all_module_envs[self.current_module_idx].getIdent(tag_name)},
+    );
+}
+
+fn collectPatternBindings(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    pattern_idx: CIR.Pattern.Idx,
+    out: *std.ArrayList(PatternBinding),
+) Allocator.Error!void {
+    const pattern = module_env.store.getPattern(pattern_idx);
+    switch (pattern) {
+        .assign => |assign| try out.append(self.allocator, .{ .ident = assign.ident, .pattern_idx = pattern_idx }),
+        .as => |as_pat| {
+            try out.append(self.allocator, .{ .ident = as_pat.ident, .pattern_idx = pattern_idx });
+            try self.collectPatternBindings(module_env, as_pat.pattern, out);
+        },
+        .tuple => |tuple| {
+            for (module_env.store.slicePatterns(tuple.patterns)) |elem_pattern_idx| {
+                try self.collectPatternBindings(module_env, elem_pattern_idx, out);
+            }
+        },
+        .applied_tag => |tag| {
+            for (module_env.store.slicePatterns(tag.args)) |arg_pattern_idx| {
+                try self.collectPatternBindings(module_env, arg_pattern_idx, out);
+            }
+        },
+        .record_destructure => |destructure| {
+            for (module_env.store.sliceRecordDestructs(destructure.destructs)) |destruct_idx| {
+                const destruct = module_env.store.getRecordDestruct(destruct_idx);
+                switch (destruct.kind) {
+                    .Required => |sub_pattern_idx| try self.collectPatternBindings(module_env, sub_pattern_idx, out),
+                    .SubPattern => |sub_pattern_idx| try self.collectPatternBindings(module_env, sub_pattern_idx, out),
+                    .Rest => |sub_pattern_idx| try self.collectPatternBindings(module_env, sub_pattern_idx, out),
+                }
+            }
+        },
+        .list => |list| {
+            for (module_env.store.slicePatterns(list.patterns)) |elem_pattern_idx| {
+                try self.collectPatternBindings(module_env, elem_pattern_idx, out);
+            }
+            if (list.rest_info) |rest| {
+                if (rest.pattern) |rest_pattern_idx| {
+                    try self.collectPatternBindings(module_env, rest_pattern_idx, out);
+                }
+            }
+        },
+        .nominal => |nom| try self.collectPatternBindings(module_env, nom.backing_pattern, out),
+        .nominal_external => |nom| try self.collectPatternBindings(module_env, nom.backing_pattern, out),
+        .num_literal,
+        .small_dec_literal,
+        .dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .str_literal,
+        .underscore,
+        .runtime_error,
+        => {},
+    }
+}
+
+fn seenIndex(seen_indices: []const u32, idx: u32) bool {
+    for (seen_indices) |seen_idx| {
+        if (seen_idx == idx) return true;
+    }
+    return false;
+}
+
+fn appendSeenIndex(
+    allocator: Allocator,
+    seen_indices: *std.ArrayListUnmanaged(u32),
+    idx: u32,
+) Allocator.Error!void {
+    if (seenIndex(seen_indices.items, idx)) return;
+    try seen_indices.append(allocator, idx);
+}
+
+fn remainingRecordTailMonotype(
+    self: *Self,
+    mono_fields: []const Monotype.Field,
+    seen_indices: []const u32,
+) Allocator.Error!Monotype.Idx {
+    var remaining_fields: std.ArrayListUnmanaged(Monotype.Field) = .empty;
+    defer remaining_fields.deinit(self.allocator);
+
+    for (mono_fields, 0..) |field, field_idx| {
+        if (seenIndex(seen_indices, @intCast(field_idx))) continue;
+        try remaining_fields.append(self.allocator, field);
+    }
+
+    if (remaining_fields.items.len == 0) {
+        return self.store.monotype_store.unit_idx;
+    }
+
+    const field_span = try self.store.monotype_store.addFields(self.allocator, remaining_fields.items);
+    return try self.store.monotype_store.addMonotype(self.allocator, .{ .record = .{ .fields = field_span } });
+}
+
+fn remainingTagUnionTailMonotype(
+    self: *Self,
+    mono_tags: []const Monotype.Tag,
+    seen_indices: []const u32,
+) Allocator.Error!Monotype.Idx {
+    var remaining_tags: std.ArrayListUnmanaged(Monotype.Tag) = .empty;
+    defer remaining_tags.deinit(self.allocator);
+
+    for (mono_tags, 0..) |tag, tag_idx| {
+        if (seenIndex(seen_indices, @intCast(tag_idx))) continue;
+        try remaining_tags.append(self.allocator, tag);
+    }
+
+    const tag_span = try self.store.monotype_store.addTags(self.allocator, remaining_tags.items);
+    return try self.store.monotype_store.addMonotype(self.allocator, .{ .tag_union = .{ .tags = tag_span } });
+}
+
+fn bindRecordRowTail(
+    self: *Self,
+    ext_var: types.Var,
+    mono_fields: []const Monotype.Field,
+    seen_indices: []const u32,
+) Allocator.Error!void {
+    const tail_mono = try self.remainingRecordTailMonotype(mono_fields, seen_indices);
+    try self.bindTypeVarMonotypes(ext_var, tail_mono);
+}
+
+fn bindTagUnionRowTail(
+    self: *Self,
+    ext_var: types.Var,
+    mono_tags: []const Monotype.Tag,
+    seen_indices: []const u32,
+) Allocator.Error!void {
+    const tail_mono = try self.remainingTagUnionTailMonotype(mono_tags, seen_indices);
+    try self.bindTypeVarMonotypes(ext_var, tail_mono);
 }
 
 fn packCallableCacheKey(
@@ -1861,11 +2284,11 @@ fn lowerExactCallableLookupInto(
     }
 
     const lambda_id = try self.lowerResolvedCallableInstLambda(callable_inst_id);
-    return self.store.addCFStmt(self.allocator, .{ .assign_lambda = .{
+    return @as(?MIR.CFStmtId, try self.store.addCFStmt(self.allocator, .{ .assign_lambda = .{
         .target = target,
         .lambda = lambda_id,
         .next = next,
-    } });
+    } }));
 }
 
 fn lowerLookupLocalInto(
@@ -2015,7 +2438,6 @@ fn lowerLambdaParamLocals(
             self.types_store,
             ModuleEnv.varFrom(pattern_idx),
             &self.type_var_seen,
-            &self.nominal_cycle_breakers,
         );
         try self.bindPatternMonotypes(module_env, pattern_idx, monotype);
         try self.scratch_local_ids.append(try self.freshSyntheticLocal(monotype, false));
@@ -2263,6 +2685,58 @@ fn recursiveCallableInstForPattern(
         if (member.binding_pattern == pattern_idx) return member.callable_inst_id;
     }
     return null;
+}
+
+fn planClosureLowering(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    expr_idx: CIR.Expr.Idx,
+    closure: CIR.Expr.Closure,
+    callable_inst_id: Monomorphize.CallableInstId,
+) Allocator.Error!ClosureLowerPlan {
+    var recursive_members = std.ArrayList(RecursiveGroupMember).empty;
+    errdefer recursive_members.deinit(self.allocator);
+
+    const current_callable_inst = self.monomorphization.getCallableInst(callable_inst_id);
+    for (module_env.store.sliceCaptures(closure.captures)) |capture_idx| {
+        const capture = module_env.store.getCapture(capture_idx);
+        const capture_callable_inst_id = self.monomorphization.getClosureCaptureCallableInst(
+            callable_inst_id,
+            self.current_module_idx,
+            expr_idx,
+            capture.pattern_idx,
+        ) orelse continue;
+
+        const capture_template = self.monomorphization.getCallableTemplate(
+            self.monomorphization.getCallableInst(capture_callable_inst_id).template,
+        );
+        const binding_pattern = capture_template.binding_pattern orelse continue;
+        if (binding_pattern != capture.pattern_idx) continue;
+
+        const shares_recursive_environment =
+            capture_callable_inst_id == callable_inst_id or
+            capture_callable_inst_id == current_callable_inst.defining_context_callable_inst or
+            (!current_callable_inst.defining_context_callable_inst.isNone() and
+                self.monomorphization.getCallableInst(capture_callable_inst_id).defining_context_callable_inst ==
+                    current_callable_inst.defining_context_callable_inst);
+        if (!shares_recursive_environment) continue;
+
+        var exists = false;
+        for (recursive_members.items) |existing| {
+            if (existing.binding_pattern == binding_pattern and existing.callable_inst_id == capture_callable_inst_id) {
+                exists = true;
+                break;
+            }
+        }
+        if (exists) continue;
+
+        try recursive_members.append(self.allocator, .{
+            .binding_pattern = binding_pattern,
+            .callable_inst_id = capture_callable_inst_id,
+        });
+    }
+
+    return .{ .recursive_members = recursive_members };
 }
 
 fn closureRuntimeCaptureCount(
@@ -2638,8 +3112,7 @@ fn lowerCallInto(
     target: MIR.LocalId,
     next: MIR.CFStmtId,
 ) Allocator.Error!MIR.CFStmtId {
-    const callee_expr = module_env.store.getExpr(call.func);
-    if (self.getCallLowLevelOp(module_env, callee_expr)) |ll_op| {
+    if (self.getCallLowLevelOp(module_env, call.func)) |ll_op| {
         const cir_args = module_env.store.sliceExpr(call.args);
         if (ll_op == .str_inspect) {
             if (cir_args.len != 1) {
@@ -4147,7 +4620,6 @@ fn patternToLocal(self: *Self, pattern_idx: CIR.Pattern.Idx) Allocator.Error!MIR
         self.types_store,
         ModuleEnv.varFrom(pattern_idx),
         &self.type_var_seen,
-        &self.nominal_cycle_breakers,
     );
     const local = try self.store.addLocal(self.allocator, .{
         .monotype = monotype,
@@ -4358,7 +4830,6 @@ fn resolveMonotype(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!Monotype
         self.types_store,
         type_var,
         &self.type_var_seen,
-        &self.nominal_cycle_breakers,
     );
 }
 
@@ -4565,6 +5036,25 @@ fn bindTagPayloadsByName(
     typeBindingInvariant(
         "bindFlatTypeMonotypes(tag_union): tag '{s}' missing from monotype",
         .{module_env.getIdent(tag_name)},
+    );
+}
+
+fn bindRecordFieldByName(
+    self: *Self,
+    field_name: Ident.Idx,
+    field_var: types.Var,
+    mono_fields: []const Monotype.Field,
+) Allocator.Error!void {
+    for (mono_fields) |mono_field| {
+        if (!self.identsStructurallyEqual(field_name, mono_field.name)) continue;
+        try self.bindTypeVarMonotypes(field_var, mono_field.type_idx);
+        return;
+    }
+
+    const module_env = self.all_module_envs[self.current_module_idx];
+    typeBindingInvariant(
+        "bindFlatTypeMonotypes(record_unbound): field '{s}' missing from monotype",
+        .{module_env.getIdent(field_name)},
     );
 }
 

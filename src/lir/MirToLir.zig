@@ -387,7 +387,7 @@ fn collectReturnedMirLocals(
 }
 
 fn recordValueDef(
-    self: *Self,
+    _: *Self,
     defs: *ValueDefMap,
     local_id: MIR.LocalId,
     def: ValueDef,
@@ -647,8 +647,8 @@ fn resolveCallableValuePath(
             const callee = try self.resolveCallableValuePath(call_result.callee, call_result.callee, reversed_path);
             return switch (self.analyses.getLambdaCallableContract(callee.lambda)) {
                 .no_return => std.debug.panic(
-                    "MirToLir invariant violated: call-result callable resolution reached a no-return lambda",
-                    .{@intFromEnum(callee.lambda)},
+                    "MirToLir invariant violated: call-result callable resolution reached no-return lambda {d}",
+                    .{ @intFromEnum(callee.lambda) },
                 ),
                 .exact_lambda => |lambda_id| .{
                     .lambda = lambda_id,
@@ -1896,7 +1896,7 @@ fn lowerLambda(self: *Self, lambda_id: MIR.LambdaId) Allocator.Error!LirProcSpec
         try local_map.put(@as(u32, @intFromEnum(captures_param)), args[value_params.len]);
     }
 
-    var body = try self.lowerStmt(lambda.body);
+    const body = try self.lowerStmt(lambda.body);
 
     if (builtin.mode == .Debug) {
         // This verifier exists only to catch compiler implementation bugs by
