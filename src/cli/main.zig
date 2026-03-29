@@ -26,7 +26,7 @@ const std = @import("std");
 /// This prevents debug logs from polluting stderr which should only contain
 /// actual program output (like Stderr.line! calls).
 pub const std_options: std.Options = .{
-    .log_level = .debug,
+    .log_level = .warn,
 };
 const build_options = @import("build_options");
 const builtin = @import("builtin");

@@ -444,7 +444,7 @@ Builtin :: [].{
 		}
 
 		## Alias to [List.get], which enables the use of the subscript operator.
-		## Return an element from a list at the given index.
+		## Returns an element from a list at the given index.
 		## > Note: The subscript operator is not yet implemented,
 		## > so this function is just an alias to [List.get] for now
 		##
