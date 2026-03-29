@@ -1192,3 +1192,92 @@ pub fn roc_builtins_float_from_str(
         else => unreachable,
     }
 }
+
+// ── List equality and reverse wrappers ──
+
+/// Compare two lists of flat (non-refcounted) elements for equality.
+/// Elements are compared byte-by-byte using the element width.
+pub fn roc_builtins_list_eq(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, elem_width: usize) callconv(.c) bool {
+    _ = a_cap;
+    _ = b_cap;
+    if (a_len != b_len) return false;
+    if (a_len == 0) return true;
+    if (a_bytes == b_bytes) return true;
+    const a = a_bytes orelse return b_bytes == null;
+    const b = b_bytes orelse return false;
+    return std.mem.eql(u8, a[0 .. a_len * elem_width], b[0 .. b_len * elem_width]);
+}
+
+/// Compare two lists of strings for equality.
+pub fn roc_builtins_list_str_eq(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize) callconv(.c) bool {
+    _ = a_cap;
+    _ = b_cap;
+    if (a_len != b_len) return false;
+    if (a_len == 0) return true;
+    if (a_bytes == b_bytes) return true;
+    const a = a_bytes orelse return b_bytes == null;
+    const b = b_bytes orelse return false;
+    const str_size = @sizeOf(RocStr);
+    for (0..a_len) |i| {
+        const a_str: *const RocStr = @ptrCast(@alignCast(a + i * str_size));
+        const b_str: *const RocStr = @ptrCast(@alignCast(b + i * str_size));
+        if (!strEqual(a_str.*, b_str.*)) return false;
+    }
+    return true;
+}
+
+/// Compare two lists of lists for equality (inner elements are flat).
+pub fn roc_builtins_list_list_eq(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, inner_elem_width: usize) callconv(.c) bool {
+    _ = a_cap;
+    _ = b_cap;
+    if (a_len != b_len) return false;
+    if (a_len == 0) return true;
+    if (a_bytes == b_bytes) return true;
+    const a = a_bytes orelse return b_bytes == null;
+    const b = b_bytes orelse return false;
+    const list_size = @sizeOf(RocList);
+    for (0..a_len) |i| {
+        const a_list: *const RocList = @ptrCast(@alignCast(a + i * list_size));
+        const b_list: *const RocList = @ptrCast(@alignCast(b + i * list_size));
+        if (a_list.length != b_list.length) return false;
+        if (a_list.length == 0) continue;
+        if (a_list.bytes == b_list.bytes) continue;
+        const ab = a_list.bytes orelse return b_list.bytes == null;
+        const bb = b_list.bytes orelse return false;
+        if (!std.mem.eql(u8, ab[0 .. a_list.length * inner_elem_width], bb[0 .. b_list.length * inner_elem_width])) return false;
+    }
+    return true;
+}
+
+/// Reverse a list of flat elements.
+pub fn roc_builtins_list_reverse(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, elem_width: usize, alignment: u32, roc_ops: *RocOps) callconv(.c) void {
+    _ = list_cap;
+    if (list_len == 0 or elem_width == 0) {
+        out.* = RocList{ .bytes = null, .length = 0, .capacity_or_alloc_ptr = 0 };
+        return;
+    }
+    const src = list_bytes orelse {
+        out.* = RocList{ .bytes = null, .length = 0, .capacity_or_alloc_ptr = 0 };
+        return;
+    };
+    const total_bytes = list_len * elem_width;
+    const dest = allocateWithRefcountC(total_bytes, alignment, false, roc_ops);
+    // Copy elements in reverse order
+    var i: usize = 0;
+    while (i < list_len) : (i += 1) {
+        const src_offset = (list_len - 1 - i) * elem_width;
+        const dst_offset = i * elem_width;
+        @memcpy(dest[dst_offset .. dst_offset + elem_width], src[src_offset .. src_offset + elem_width]);
+    }
+    out.* = RocList{ .bytes = dest, .length = list_len, .capacity_or_alloc_ptr = list_len };
+}
+
+/// i32 modulo (floored division mod, not truncated remainder)
+pub fn roc_builtins_i32_mod_by(a: i32, b: i32) callconv(.c) i32 {
+    return @mod(a, b);
+}
+
+/// i64 modulo (floored division mod, not truncated remainder)
+pub fn roc_builtins_i64_mod_by(a: i64, b: i64) callconv(.c) i64 {
+    return @mod(a, b);
+}
