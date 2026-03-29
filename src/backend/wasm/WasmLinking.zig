@@ -35,6 +35,7 @@ pub const OffsetRelocType = enum(u8) {
     memory_addr_i32 = 5, // R_WASM_MEMORY_ADDR_I32 — raw u32 addr in data segment
     function_offset_i32 = 8, // R_WASM_FUNCTION_OFFSET_I32
     section_offset_i32 = 9, // R_WASM_SECTION_OFFSET_I32
+    memory_addr_rel_sleb = 11, // R_WASM_MEMORY_ADDR_REL_SLEB — PIC relative signed addr
 };
 
 // --- Relocation Entry ---
@@ -312,7 +313,9 @@ pub const RelocationSection = struct {
                             off.offset,
                             @intCast(patched),
                         ),
-                        .memory_addr_sleb => WasmModule.overwritePaddedI32(
+                        .memory_addr_sleb,
+                        .memory_addr_rel_sleb,
+                        => WasmModule.overwritePaddedI32(
                             section_bytes,
                             off.offset,
                             @intCast(patched),

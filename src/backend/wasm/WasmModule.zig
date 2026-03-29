@@ -838,9 +838,10 @@ fn parseDataSection_(self: *Self, bytes: []const u8, cursor: *usize) ParseError!
             const data_len = try readU32(bytes, cursor);
             const data_start = cursor.*;
             try skipBytes(bytes, cursor, data_len);
+            const data_copy = try self.allocator.dupe(u8, bytes[data_start .. data_start + data_len]);
             try self.data_segments.append(self.allocator, .{
                 .offset = 0,
-                .data = bytes[data_start .. data_start + data_len],
+                .data = data_copy,
             });
         } else {
             // Active segment — parse init expression: i32.const <offset> end
@@ -852,9 +853,10 @@ fn parseDataSection_(self: *Self, bytes: []const u8, cursor: *usize) ParseError!
             const data_len = try readU32(bytes, cursor);
             const data_start = cursor.*;
             try skipBytes(bytes, cursor, data_len);
+            const data_copy = try self.allocator.dupe(u8, bytes[data_start .. data_start + data_len]);
             try self.data_segments.append(self.allocator, .{
                 .offset = offset,
-                .data = bytes[data_start .. data_start + data_len],
+                .data = data_copy,
             });
             if (offset + data_len > self.data_offset) {
                 self.data_offset = offset + data_len;
@@ -2073,4 +2075,50 @@ test "linkHostToAppCalls — linking last import is a no-op swap" {
 
     // No swap relocation needed — sym 1 (roc__main_exposed) should be unchanged
     try std.testing.expectEqual(@as(u32, 1), module.linking.symbol_table.items[1].index);
+}
+
+// --- Tests for loading a real relocatable host module ---
+
+test "preload — parses real Zig-compiled wasm host object" {
+    const allocator = std.testing.allocator;
+    const host_bytes = try std.fs.cwd().readFileAlloc(
+        allocator,
+        "test/wasm/platform/targets/wasm32/host.wasm",
+        10 * 1024 * 1024, // 10 MB max
+    );
+    defer allocator.free(host_bytes);
+
+    var module = try preload(allocator, host_bytes, true);
+    defer module.deinit();
+
+    // The host should have function imports (extern fn declarations in host.zig)
+    try std.testing.expect(module.imports.items.len > 0);
+    try std.testing.expect(module.import_fn_count > 0);
+
+    // Should have locally-defined functions
+    try std.testing.expect(module.func_type_indices.items.len > 0);
+
+    // Should have code bytes and matching function offsets
+    try std.testing.expect(module.code_bytes.items.len > 0);
+    try std.testing.expectEqual(module.func_type_indices.items.len, module.function_offsets.items.len);
+
+    // Should have a populated symbol table
+    try std.testing.expect(module.linking.symbol_table.items.len > 0);
+
+    // Should have relocation entries for code
+    try std.testing.expect(module.reloc_code.entries.items.len > 0);
+
+    // The host imports roc__main — verify we can find it by name
+    var found_roc_main = false;
+    for (module.imports.items) |imp| {
+        if (std.mem.eql(u8, imp.field_name, "roc__main")) {
+            found_roc_main = true;
+            break;
+        }
+    }
+    try std.testing.expect(found_roc_main);
+
+    // Verify total function count is consistent
+    const total_fns = @as(usize, module.import_fn_count) + module.func_type_indices.items.len;
+    try std.testing.expect(total_fns > 3); // at least imports + a few defined functions
 }
