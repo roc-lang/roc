@@ -44,7 +44,7 @@ main_for_host = main
     (entry
       (name "x")
       (kind value)
-      (type (type-ref (name "Dec")))
+      (type (type-ref (module "Num") (name "Dec")))
       (doc "A number.")
     )
     (entry

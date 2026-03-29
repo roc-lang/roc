@@ -44,6 +44,20 @@ pub const RocEnv = struct {
         self.allocations.deinit(self.allocator);
     }
 
+    pub fn leakCount(self: *const RocEnv) usize {
+        return self.allocations.count();
+    }
+
+    pub fn reportLeaks(self: *const RocEnv) void {
+        var iterator = self.allocations.iterator();
+        while (iterator.next()) |entry| {
+            std.debug.print(
+                "RocEnv leak: ptr=0x{x} len={d} align={d}\n",
+                .{ entry.key_ptr.*, entry.value_ptr.len, entry.value_ptr.alignment },
+            );
+        }
+    }
+
     /// Allocation function for RocOps.
     pub fn rocAllocFn(roc_alloc: *RocAlloc, env: *anyopaque) callconv(.c) void {
         const self: *RocEnv = @ptrCast(@alignCast(env));

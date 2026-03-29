@@ -226,9 +226,22 @@ pub const LlvmEvaluator = struct {
         var mir_store = MIR.Store.init(self.allocator) catch return error.OutOfMemory;
         defer mir_store.deinit(self.allocator);
 
+        // TODO: LlvmEvaluator has bitrotted — see LLVM_EVAL_ISSUE.md.
+        // The monomorphization step and several LIR/codegen APIs need updating.
+        var monomorphization = mir.Monomorphize.runExpr(
+            self.allocator,
+            all_module_envs,
+            &module_env.types,
+            module_idx,
+            null, // app_module_idx - not used for JIT evaluation
+            expr_idx,
+        ) catch return error.OutOfMemory;
+        defer monomorphization.deinit(self.allocator);
+
         var mir_lower = mir.Lower.init(
             self.allocator,
             &mir_store,
+            &monomorphization,
             all_module_envs,
             &module_env.types,
             module_idx,

@@ -975,6 +975,35 @@ pub fn roc_builtins_num_rem_trunc_i128(out_low: *u64, out_high: *u64, a_low: u64
     out_high.* = i128h.hi64(@as(u128, @bitCast(result)));
 }
 
+// ── i128/u128 shift wrappers (decomposed) ──
+
+/// u128 shift left (decomposed): out = a << shift_amount
+pub fn roc_builtins_num_shl_u128(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, shift_amount: u8) callconv(.c) void {
+    const a: u128 = i128h.from_u64_pair(a_low, a_high);
+    const s: u7 = @intCast(shift_amount & 127);
+    const result = i128h.shl(a, s);
+    out_low.* = @truncate(result);
+    out_high.* = i128h.hi64(result);
+}
+
+/// i128 arithmetic shift right (decomposed): out = a >> shift_amount (sign-extending)
+pub fn roc_builtins_num_shr_i128(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, shift_amount: u8) callconv(.c) void {
+    const a: i128 = @bitCast(i128h.from_u64_pair(a_low, a_high));
+    const s: u7 = @intCast(shift_amount & 127);
+    const result: u128 = @bitCast(i128h.shr_i128(a, s));
+    out_low.* = @truncate(result);
+    out_high.* = i128h.hi64(result);
+}
+
+/// u128 logical shift right (decomposed): out = a >> shift_amount (zero-fill)
+pub fn roc_builtins_num_shr_u128(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, shift_amount: u8) callconv(.c) void {
+    const a: u128 = i128h.from_u64_pair(a_low, a_high);
+    const s: u7 = @intCast(shift_amount & 127);
+    const result = i128h.shr(a, s);
+    out_low.* = @truncate(result);
+    out_high.* = i128h.hi64(result);
+}
+
 // ── List append safe wrapper ──
 
 /// List append safe (simplified - copy=copy_fallback)

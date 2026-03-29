@@ -1,6 +1,7 @@
 //! Evaluation module for the Roc compiler.
 //!
-//! Provides native code generation and execution for Roc expressions.
+//! Provides expression evaluation via interpreter, native code generation,
+//! and WebAssembly execution for Roc expressions.
 
 const std = @import("std");
 
@@ -14,9 +15,6 @@ const backend = @import("backend");
 pub const ExecutableMemory = backend.ExecutableMemory;
 /// Layout module (re-exported for result type information)
 pub const layout = @import("layout");
-/// Interpreter-specific layout module, forked to keep runtime evaluation isolated
-/// from future dev-backend layout changes.
-pub const interpreter_layout = @import("interpreter_layout");
 /// Utilities for loading compiled builtin modules
 pub const builtin_loading = @import("builtin_loading.zig");
 /// Centralized loading and management of builtin modules
@@ -29,28 +27,51 @@ pub const CrashContext = crash_context.CrashContext;
 pub const CrashState = crash_context.CrashState;
 /// Compile-time expression evaluator for constant folding
 pub const ComptimeEvaluator = @import("comptime_evaluator.zig").ComptimeEvaluator;
-/// Interpreter for running CIR expressions
-pub const Interpreter = @import("interpreter.zig").Interpreter;
-/// Stack value representation for interpreter
-pub const StackValue = @import("StackValue.zig");
-/// Render helpers for outputting values
-pub const render_helpers = @import("render_helpers.zig");
-/// Stack memory allocator for evaluating Roc IR
-const stack_mod = @import("stack.zig");
-pub const Stack = stack_mod.Stack;
-pub const StackOverflow = stack_mod.StackOverflow;
-/// Eval error type alias
-pub const EvalError = Interpreter.Error;
-/// Test runner for expect expressions
+
+// --- Interpreter (primary) ---
+/// Shared CIR → MIR → LIR → RC lowering pipeline
+pub const cir_to_lir = @import("cir_to_lir.zig");
+pub const LirProgram = cir_to_lir.LirProgram;
+/// Concrete runtime value for the interpreter
+pub const value = @import("value.zig");
+pub const Value = value.Value;
+/// LIR expression interpreter
+pub const interpreter = @import("interpreter.zig");
+pub const Interpreter = interpreter.Interpreter;
+/// Stack-safe eval engine types (WorkItem, Continuation, FlatBinding)
+pub const work_stack = @import("work_stack.zig");
+/// Backend selection for expression evaluation
+pub const EvalBackend = enum {
+    interpreter,
+    dev,
+    llvm,
+    wasm,
+
+    pub fn fromString(s: []const u8) ?EvalBackend {
+        return std.meta.stringToEnum(EvalBackend, s);
+    }
+};
+
+/// Unified evaluation runner for all backends
+pub const runner = @import("runner.zig");
+
+/// Test runner for expect expressions (uses interpreter)
 pub const TestRunner = @import("test_runner.zig").TestRunner;
 /// LLVM-based evaluator for optimized code generation
 pub const LlvmEvaluator = @import("llvm_evaluator.zig").LlvmEvaluator;
 /// WebAssembly-based evaluator for wasm code generation
 const wasm_evaluator_mod = @import("wasm_evaluator.zig");
 pub const WasmEvaluator = wasm_evaluator_mod.WasmEvaluator;
+/// Test helpers with backend evaluator functions (re-exported for the parallel test runner,
+/// which cannot import helpers.zig directly since Zig requires each file to belong to
+/// exactly one module).
+pub const test_helpers = @import("test/helpers.zig");
+/// Test environment providing RocOps with allocation tracking.
+pub const TestEnv = @import("test/TestEnv.zig");
 
 test "eval tests" {
     std.testing.refAllDecls(@This());
+    std.testing.refAllDecls(@import("runner.zig"));
 
     std.testing.refAllDecls(@import("dev_evaluator.zig"));
     std.testing.refAllDecls(@import("comptime_value.zig"));
@@ -58,35 +79,24 @@ test "eval tests" {
     std.testing.refAllDecls(@import("builtins.zig"));
     std.testing.refAllDecls(@import("crash_context.zig"));
     std.testing.refAllDecls(@import("comptime_evaluator.zig"));
-    std.testing.refAllDecls(@import("interpreter.zig"));
-    std.testing.refAllDecls(@import("StackValue.zig"));
-    std.testing.refAllDecls(@import("render_helpers.zig"));
     std.testing.refAllDecls(@import("llvm_evaluator.zig"));
+    std.testing.refAllDecls(@import("cir_to_lir.zig"));
+    std.testing.refAllDecls(@import("value.zig"));
+    std.testing.refAllDecls(@import("interpreter.zig"));
+    std.testing.refAllDecls(@import("fold_type.zig"));
+    std.testing.refAllDecls(@import("value_to_cir.zig"));
+
+    std.testing.refAllDecls(@import("work_stack.zig"));
     std.testing.refAllDecls(@import("wasm_evaluator.zig"));
     std.testing.refAllDecls(@import("stack.zig"));
     std.testing.refAllDecls(@import("test/TestEnv.zig"));
 
     // Test files that compare interpreter output with dev backend
     std.testing.refAllDecls(@import("test/helpers.zig"));
-    std.testing.refAllDecls(@import("test/eval_test.zig"));
-    std.testing.refAllDecls(@import("test/list_refcount_basic.zig"));
-    std.testing.refAllDecls(@import("test/list_refcount_simple.zig"));
-    std.testing.refAllDecls(@import("test/list_refcount_nested.zig"));
-    std.testing.refAllDecls(@import("test/list_refcount_pattern.zig"));
-    std.testing.refAllDecls(@import("test/list_refcount_alias.zig"));
-    std.testing.refAllDecls(@import("test/list_refcount_complex.zig"));
-    std.testing.refAllDecls(@import("test/list_refcount_conditional.zig"));
-    std.testing.refAllDecls(@import("test/list_refcount_containers.zig"));
-    std.testing.refAllDecls(@import("test/list_refcount_function.zig"));
-    std.testing.refAllDecls(@import("test/list_refcount_builtins.zig"));
-    std.testing.refAllDecls(@import("test/list_refcount_strings.zig"));
-    std.testing.refAllDecls(@import("test/arithmetic_comprehensive_test.zig"));
     std.testing.refAllDecls(@import("test/anno_only_interp_test.zig"));
     std.testing.refAllDecls(@import("test/comptime_eval_test.zig"));
-    std.testing.refAllDecls(@import("test/interpreter_polymorphism_test.zig"));
-    std.testing.refAllDecls(@import("test/interpreter_style_test.zig"));
     std.testing.refAllDecls(@import("test/low_level_interp_test.zig"));
     std.testing.refAllDecls(@import("test/mono_emit_test.zig"));
-    std.testing.refAllDecls(@import("test/closure_test.zig"));
+
     std.testing.refAllDecls(@import("test/stack_test.zig"));
 }

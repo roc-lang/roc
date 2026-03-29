@@ -417,7 +417,7 @@ fn createWasmRocOps(crash_ctx: *CrashContext) !*RocOps {
         .roc_dbg = wasmRocDbg,
         .roc_expect_failed = wasmRocExpectFailed,
         .roc_crashed = wasmRocCrashed,
-        .hosted_fns = .{ .count = 0, .fns = undefined }, // Not used in playground
+        .hosted_fns = builtins.host_abi.emptyHostedFunctions(),
     };
     return roc_ops;
 }
@@ -1601,20 +1601,10 @@ fn writeEvaluateTestsResponse(response_buffer: []u8, data: CompilerStageData) Re
     var local_arena = std.heap.ArenaAllocator.init(allocator);
     defer local_arena.deinit();
 
-    // Check if builtin_types is available
-    const builtin_types_for_tests = data.builtin_types orelse {
-        try writeErrorResponse(response_buffer, .ERROR, "Builtin types not available for test evaluation.");
-        return;
-    };
-
     // Create interpreter infrastructure for test evaluation
     const empty_modules: []const *const ModuleEnv = &.{};
     const builtin_module_env: ?*const ModuleEnv = if (data.builtin_module) |bm| bm.env else null;
-    const solver = data.solver orelse {
-        try writeErrorResponse(response_buffer, .ERROR, "Type checker not available for test evaluation.");
-        return;
-    };
-    var test_runner = TestRunner.init(local_arena.allocator(), env, builtin_types_for_tests, empty_modules, builtin_module_env, &solver.import_mapping) catch {
+    var test_runner = TestRunner.init(local_arena.allocator(), env, empty_modules, builtin_module_env) catch {
         try writeErrorResponse(response_buffer, .ERROR, "Failed to initialize test runner.");
         return;
     };

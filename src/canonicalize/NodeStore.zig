@@ -2860,6 +2860,13 @@ pub fn isDefNode(store: *const NodeStore, node_idx: u16) bool {
     return node.tag == .def;
 }
 
+/// Initialize scratch buffers if they are null (e.g. after deserialization).
+pub fn ensureScratch(store: *NodeStore) Allocator.Error!void {
+    if (store.scratch == null) {
+        store.scratch = try Scratch.init(store.gpa);
+    }
+}
+
 /// Generic function to get the top of any scratch buffer
 pub fn scratchTop(store: *NodeStore, comptime field_name: []const u8) u32 {
     return @field(store.scratch.?, field_name).top();

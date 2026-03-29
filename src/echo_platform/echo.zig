@@ -402,7 +402,6 @@ fn compileAndRunInner(source: []const u8) !u8 {
         &roc_ops,
         @ptrCast(&cli_args_list),
         @ptrCast(&result_buf),
-        target,
     ) catch {
         return error.InterpreterFailed;
     };

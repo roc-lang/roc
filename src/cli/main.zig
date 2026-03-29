@@ -910,7 +910,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
 
     switch (args.opt.toBackend()) {
         .dev, .llvm => return rocRunDevShim(ctx, args),
-        .interpreter => {},
+        .interpreter, .wasm => {},
     }
 
     // Initialize cache - used to store our shim, and linked interpreter executables in cache
@@ -1815,40 +1815,21 @@ fn rocRunDefaultApp(ctx: *CliContext, args: cli_args.RunArgs, original_source: [
     var cli_args_list = echo_platform.buildCliArgs(args.app_args, &roc_ops);
     var result_buf: [16]u8 align(16) = undefined;
 
-    switch (args.opt.toBackend()) {
-        .dev, .llvm => {
-            runViaDev(
-                ctx.gpa,
-                entry.platform_env,
-                resolved.all_module_envs,
-                entry.app_module_env,
-                entry.entrypoint_expr,
-                &roc_ops,
-                @ptrCast(&cli_args_list),
-                @ptrCast(&result_buf),
-            ) catch |err| {
-                std.debug.print("Dev backend execution error: {}\n", .{err});
-                std.process.exit(1);
-            };
-        },
-        .interpreter => {
-            compile.runner.runViaInterpreter(
-                ctx.gpa,
-                entry.platform_env,
-                build_env.builtin_modules,
-                resolved.all_module_envs,
-                entry.app_module_env,
-                entry.entrypoint_expr,
-                &roc_ops,
-                @ptrCast(&cli_args_list),
-                @ptrCast(&result_buf),
-                target,
-            ) catch |err| {
-                std.debug.print("Execution error: {}\n", .{err});
-                std.process.exit(1);
-            };
-        },
-    }
+    eval.runner.runtimeRun(
+        args.opt.toBackend(),
+        ctx.gpa,
+        entry.platform_env,
+        build_env.builtin_modules,
+        resolved.all_module_envs,
+        entry.app_module_env,
+        entry.entrypoint_expr,
+        &roc_ops,
+        @ptrCast(&cli_args_list),
+        @ptrCast(&result_buf),
+    ) catch |err| {
+        std.debug.print("Execution error: {}\n", .{err});
+        std.process.exit(1);
+    };
 
     // Platform returns I8; bit-identical to u8 for std.process.exit
     const exit_code = result_buf[0];
@@ -2900,7 +2881,7 @@ fn checkPlatformRequirementsFromCoordinator(
     // Now finalize numeric defaults for the app module. This must happen AFTER
     // checkPlatformRequirements so that numeric literals can be constrained by
     // platform types (e.g., I64) before defaulting to Dec.
-    try checker.finalizeNumericDefaults();
+    try checker.verifyNumericDefaults();
 
     // If there are type problems, convert them to reports and add to app module
     if (checker.problems.problems.items.len > 0) {
@@ -3919,7 +3900,7 @@ fn rocBuild(ctx: *CliContext, args: cli_args.BuildArgs) !void {
             // Use native code generation backend
             try rocBuildNative(ctx, args);
         },
-        .interpreter => {
+        .interpreter, .wasm => {
             // Use embedded interpreter build approach
             // This compiles the Roc app, serializes the ModuleEnv, and embeds it in the binary
             try rocBuildEmbedded(ctx, args);
@@ -4073,11 +4054,24 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     const target_arch = target.toCpuArch();
     const target_os = target.toOsTag();
     switch (target_arch) {
-        .x86_64, .aarch64, .wasm32 => {}, // Supported
+        .x86_64, .aarch64 => {}, // Supported
+        .wasm32 => {
+            // TODO: wasm32 builds require linking app code with roc_builtins.o via wasm-ld.
+            // The WasmCodeGen currently produces a final linked module with host function imports
+            // rather than a relocatable object with symbol references. To support `roc build`
+            // for wasm32, WasmCodeGen needs to emit relocatable .o files that wasm-ld can link
+            // with the builtins and platform host. See TODO_RELOC_WASM_OBJ_BUILTIN.md for the
+            // full implementation plan.
+            const stderr = ctx.io.stderr();
+            try stderr.print("Error: `roc build` for wasm32 is not yet supported.\n\n", .{});
+            try stderr.print("The wasm32 backend can currently only be used for evaluation (e.g. eval tests),\n", .{});
+            try stderr.print("not for producing standalone .wasm binaries.\n", .{});
+            return error.UnsupportedTarget;
+        },
         else => {
             const stderr = ctx.io.stderr();
             try stderr.print("Error: The dev backend does not support the '{s}' architecture.\n\n", .{@tagName(target_arch)});
-            try stderr.print("Supported architectures: x86_64, aarch64, wasm32\n", .{});
+            try stderr.print("Supported architectures: x86_64, aarch64\n", .{});
             return error.UnsupportedTarget;
         },
     }
@@ -5551,7 +5545,6 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
         builtin_types,
         builtin_module_env,
         &import_mapping,
-        RocTarget.detectNative(),
         null,
     ) catch |err| {
         try stderr.print("Failed to create compile-time evaluator: {}\n", .{err});
@@ -5813,7 +5806,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
                 }
             }
         },
-        .interpreter => {
+        .interpreter, .wasm => {
             // Run tests using interpreter backend (TestRunner)
 
             // Run tests in the root module
@@ -5821,10 +5814,8 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
                 var test_runner = TestRunner.init(
                     ctx.gpa,
                     @constCast(root_env),
-                    builtin_types,
                     other_modules,
                     builtin_module_env,
-                    &import_mapping,
                 ) catch |err| {
                     try stderr.print("Failed to create test runner for root module: {}\n", .{err});
                     comptime_evaluator.deinit();
@@ -5880,10 +5871,8 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
                 var test_runner = TestRunner.init(
                     ctx.gpa,
                     @constCast(mod_env),
-                    builtin_types,
                     other_modules,
                     builtin_module_env,
-                    &mod_import_mapping,
                 ) catch continue;
                 defer test_runner.deinit();
 
@@ -6052,91 +6041,7 @@ fn rocGlue(ctx: *CliContext, args: cli_args.GlueArgs) glue.GlueError!void {
     }, temp_dir);
 }
 
-/// Run a compiled Roc entrypoint through the dev backend (native code generation).
-/// Resolves entrypoint layouts, JIT-compiles CIR to native code via DevEvaluator,
-/// and executes via the RocCall ABI.
-fn runViaDev(
-    gpa: std.mem.Allocator,
-    platform_env: *ModuleEnv,
-    all_module_envs: []*ModuleEnv,
-    app_module_env: ?*ModuleEnv,
-    entrypoint_expr: can.CIR.Expr.Idx,
-    roc_ops: *echo_platform.host_abi.RocOps,
-    args_ptr: ?*anyopaque,
-    result_ptr: *anyopaque,
-) !void {
-    const types = @import("types");
-    const DevEvaluator = eval.DevEvaluator;
-    const ExecutableMemory = eval.ExecutableMemory;
-
-    var dev_eval = DevEvaluator.init(gpa, null) catch {
-        return error.DevEvaluatorFailed;
-    };
-    defer dev_eval.deinit();
-
-    // Resolve entrypoint layouts from the CIR expression's type
-    const layout_store_ptr = try dev_eval.ensureGlobalLayoutStore(all_module_envs);
-    const module_idx: u32 = for (all_module_envs, 0..) |env, i| {
-        if (env == platform_env) break @intCast(i);
-    } else return error.DevEvaluatorFailed;
-
-    const expr_type_var = ModuleEnv.varFrom(entrypoint_expr);
-    const resolved_type = platform_env.types.resolveVar(expr_type_var);
-    const maybe_func = resolved_type.desc.content.unwrapFunc();
-
-    var arg_layouts_buf: [16]layout.Idx = undefined;
-    var arg_layouts_len: usize = 0;
-    var ret_layout: layout.Idx = undefined;
-
-    if (maybe_func) |func| {
-        const arg_vars = platform_env.types.sliceVars(func.args);
-        var type_scope = types.TypeScope.init(gpa);
-        defer type_scope.deinit();
-        for (arg_vars, 0..) |arg_var, i| {
-            arg_layouts_buf[i] = layout_store_ptr.fromTypeVar(module_idx, arg_var, &type_scope, null) catch return error.DevEvaluatorFailed;
-        }
-        arg_layouts_len = arg_vars.len;
-        ret_layout = layout_store_ptr.fromTypeVar(module_idx, func.ret, &type_scope, null) catch return error.DevEvaluatorFailed;
-    } else {
-        var type_scope = types.TypeScope.init(gpa);
-        defer type_scope.deinit();
-        ret_layout = layout_store_ptr.fromTypeVar(module_idx, expr_type_var, &type_scope, null) catch return error.DevEvaluatorFailed;
-    }
-
-    const arg_layouts: []const layout.Idx = arg_layouts_buf[0..arg_layouts_len];
-
-    // Generate native code using the RocCall ABI entrypoint wrapper
-    var code_result = dev_eval.generateEntrypointCode(
-        platform_env,
-        entrypoint_expr,
-        all_module_envs,
-        app_module_env,
-        arg_layouts,
-        ret_layout,
-    ) catch {
-        return error.DevEvaluatorFailed;
-    };
-    defer code_result.deinit();
-
-    if (code_result.code.len == 0) {
-        return error.DevEvaluatorFailed;
-    }
-
-    // Make the generated code executable and run it
-    var executable = ExecutableMemory.initWithEntryOffset(code_result.code, code_result.entry_offset) catch {
-        return error.DevEvaluatorFailed;
-    };
-    defer executable.deinit();
-
-    // Use the DevEvaluator's RocOps (with setjmp/longjmp crash protection)
-    // so roc_crashed returns an error rather than calling std.process.exit(1).
-    dev_eval.roc_ops.hosted_fns = roc_ops.hosted_fns;
-
-    dev_eval.callRocABIWithCrashProtection(&executable, result_ptr, args_ptr) catch |err| switch (err) {
-        error.RocCrashed => return error.DevEvaluatorFailed,
-        error.Segfault => return error.DevEvaluatorFailed,
-    };
-}
+// runViaDev was consolidated into eval.runner.run(.dev, ...)
 
 /// Reads, parses, formats, and overwrites all Roc files at the given paths.
 /// Recurses into directories to search for Roc files.

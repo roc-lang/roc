@@ -762,3 +762,33 @@ pub fn pow10_i128(exp: u6) i128 {
     };
     return table[exp];
 }
+
+// ── compiler-rt symbol replacements ──
+//
+// On wasm32, Zig's codegen emits calls to __multi3 and __muloti4 for native
+// i128 multiply operations. Rather than depending on compiler-rt, we provide
+// these symbols ourselves using our decomposed 64-bit implementations.
+// This makes the builtins module fully self-contained with zero external deps.
+
+// __multi3 / __muloti4: compiler-rt i128 multiply symbols.
+// On wasm32, Zig codegen emits calls to these for native i128 multiply ops.
+// We provide them ourselves so the builtins module is fully self-contained.
+comptime {
+    if (is_wasm) {
+        @export(&wasm_multi3, .{ .name = "__multi3", .linkage = .strong });
+        @export(&wasm_muloti4, .{ .name = "__muloti4", .linkage = .strong });
+    }
+}
+
+fn wasm_multi3(a: i128, b: i128) callconv(.c) i128 {
+    return mul_i128(a, b);
+}
+
+/// __muloti4: i128 multiply with overflow detection (compiler-rt symbol).
+/// Called by Zig codegen for `@mulWithOverflow(a, b)` on i128.
+fn wasm_muloti4(a: i128, b: i128, overflow: *c_int) callconv(.c) i128 {
+    const result = mul_i128(a, b);
+    // Check overflow: if b != 0 and result / b != a, overflow occurred
+    overflow.* = if (b != 0 and divTrunc_i128(result, b) != a) 1 else 0;
+    return result;
+}

@@ -2275,6 +2275,171 @@ fn emitI128Sub(self: *Self, lhs_local: u32, rhs_local: u32) Allocator.Error!void
 /// Emit i128 × i128 → i128 truncating multiply.
 /// Takes two i32 pointers to 16-byte i128 values in linear memory.
 /// Pushes an i32 pointer to the 16-byte result.
+/// Emit i128/u128 shift operation. LHS is composite (16 bytes), RHS is U8 (i32 on wasm stack).
+/// Uses wasm structured if/else to handle shift amounts >= 64.
+/// Pushes an i32 pointer to the 16-byte result on the wasm stack.
+fn generateI128Shift(self: *Self, op: anytype, args: []const LirExprId) Allocator.Error!void {
+    const result_offset = try self.allocStackMemory(16, 8);
+    const result_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitFpOffset(result_offset);
+    try self.emitLocalSet(result_local);
+
+    // Load LHS low and high words into locals
+    try self.generateExpr(args[0]);
+    const lhs_local = try self.stabilizeCompositeResult(16);
+
+    const a_low = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
+    try self.emitLocalGet(lhs_local);
+    try self.emitLoadOp(.i64, 0);
+    try self.emitLocalSet(a_low);
+
+    const a_high = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
+    try self.emitLocalGet(lhs_local);
+    try self.emitLoadOp(.i64, 8);
+    try self.emitLocalSet(a_high);
+
+    // Load shift amount (U8 -> i32 on wasm stack) and extend to i64
+    try self.generateExpr(args[1]);
+    const shift_local = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
+    self.body.append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
+    try self.emitLocalSet(shift_local);
+
+    // Locals for result
+    const r_low = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
+    const r_high = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
+
+    // Branch: if shift >= 64
+    try self.emitLocalGet(shift_local);
+    self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+    WasmModule.leb128WriteI64(self.allocator, &self.body, 64) catch return error.OutOfMemory;
+    self.body.append(self.allocator, Op.i64_ge_u) catch return error.OutOfMemory;
+
+    self.body.append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+    self.body.append(self.allocator, @intFromEnum(WasmModule.BlockType.void)) catch return error.OutOfMemory;
+
+    // === shift >= 64 path ===
+    switch (op) {
+        .num_shift_left_by => {
+            // r_low = 0, r_high = a_low << (shift - 64)
+            self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI64(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+            try self.emitLocalSet(r_low);
+            try self.emitLocalGet(a_low);
+            try self.emitLocalGet(shift_local);
+            self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI64(self.allocator, &self.body, 64) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i64_sub) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i64_shl) catch return error.OutOfMemory;
+            try self.emitLocalSet(r_high);
+        },
+        .num_shift_right_by => {
+            // r_high = a_high >> 63 (sign extend), r_low = a_high >> (shift - 64)  [arithmetic]
+            try self.emitLocalGet(a_high);
+            self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI64(self.allocator, &self.body, 63) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i64_shr_s) catch return error.OutOfMemory;
+            try self.emitLocalSet(r_high);
+            try self.emitLocalGet(a_high);
+            try self.emitLocalGet(shift_local);
+            self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI64(self.allocator, &self.body, 64) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i64_sub) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i64_shr_s) catch return error.OutOfMemory;
+            try self.emitLocalSet(r_low);
+        },
+        .num_shift_right_zf_by => {
+            // r_high = 0, r_low = a_high >> (shift - 64)  [logical]
+            self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI64(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+            try self.emitLocalSet(r_high);
+            try self.emitLocalGet(a_high);
+            try self.emitLocalGet(shift_local);
+            self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI64(self.allocator, &self.body, 64) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i64_sub) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i64_shr_u) catch return error.OutOfMemory;
+            try self.emitLocalSet(r_low);
+        },
+        else => unreachable,
+    }
+
+    self.body.append(self.allocator, Op.@"else") catch return error.OutOfMemory;
+
+    // === shift < 64 path ===
+    // inv = 64 - shift
+    const inv_local = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
+    self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+    WasmModule.leb128WriteI64(self.allocator, &self.body, 64) catch return error.OutOfMemory;
+    try self.emitLocalGet(shift_local);
+    self.body.append(self.allocator, Op.i64_sub) catch return error.OutOfMemory;
+    try self.emitLocalSet(inv_local);
+
+    switch (op) {
+        .num_shift_left_by => {
+            // r_low = a_low << shift
+            try self.emitLocalGet(a_low);
+            try self.emitLocalGet(shift_local);
+            self.body.append(self.allocator, Op.i64_shl) catch return error.OutOfMemory;
+            try self.emitLocalSet(r_low);
+            // r_high = (a_high << shift) | (a_low >> inv)
+            try self.emitLocalGet(a_high);
+            try self.emitLocalGet(shift_local);
+            self.body.append(self.allocator, Op.i64_shl) catch return error.OutOfMemory;
+            try self.emitLocalGet(a_low);
+            try self.emitLocalGet(inv_local);
+            self.body.append(self.allocator, Op.i64_shr_u) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i64_or) catch return error.OutOfMemory;
+            try self.emitLocalSet(r_high);
+        },
+        .num_shift_right_by => {
+            // r_high = a_high >> shift  [arithmetic]
+            try self.emitLocalGet(a_high);
+            try self.emitLocalGet(shift_local);
+            self.body.append(self.allocator, Op.i64_shr_s) catch return error.OutOfMemory;
+            try self.emitLocalSet(r_high);
+            // r_low = (a_low >> shift) | (a_high << inv)
+            try self.emitLocalGet(a_low);
+            try self.emitLocalGet(shift_local);
+            self.body.append(self.allocator, Op.i64_shr_u) catch return error.OutOfMemory;
+            try self.emitLocalGet(a_high);
+            try self.emitLocalGet(inv_local);
+            self.body.append(self.allocator, Op.i64_shl) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i64_or) catch return error.OutOfMemory;
+            try self.emitLocalSet(r_low);
+        },
+        .num_shift_right_zf_by => {
+            // r_high = a_high >> shift  [logical]
+            try self.emitLocalGet(a_high);
+            try self.emitLocalGet(shift_local);
+            self.body.append(self.allocator, Op.i64_shr_u) catch return error.OutOfMemory;
+            try self.emitLocalSet(r_high);
+            // r_low = (a_low >> shift) | (a_high << inv)
+            try self.emitLocalGet(a_low);
+            try self.emitLocalGet(shift_local);
+            self.body.append(self.allocator, Op.i64_shr_u) catch return error.OutOfMemory;
+            try self.emitLocalGet(a_high);
+            try self.emitLocalGet(inv_local);
+            self.body.append(self.allocator, Op.i64_shl) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i64_or) catch return error.OutOfMemory;
+            try self.emitLocalSet(r_low);
+        },
+        else => unreachable,
+    }
+
+    self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
+
+    // Store results
+    try self.emitLocalGet(result_local);
+    try self.emitLocalGet(r_low);
+    try self.emitStoreOp(.i64, 0);
+    try self.emitLocalGet(result_local);
+    try self.emitLocalGet(r_high);
+    try self.emitStoreOp(.i64, 8);
+
+    // Push result pointer
+    try self.emitLocalGet(result_local);
+}
+
 ///
 /// Algorithm:
 ///   a = (a_hi, a_lo), b = (b_hi, b_lo)  (each hi/lo is i64)
@@ -2826,67 +2991,6 @@ fn emitI64MulToI128(self: *Self, a_local: u32, b_local: u32) Allocator.Error!voi
 
 /// Emit i128 signed division: result = a / b (truncating).
 /// Takes two i32 pointers to 16-byte i128 values.
-/// For Dec→int conversions, we only need division by a constant (10^18).
-/// This implementation handles the general case for positive divisors.
-fn emitI128DivByConst(self: *Self, numerator_local: u32, divisor_val: i64) Allocator.Error!void {
-    // For Dec→int: we divide by 10^18 (positive constant).
-    // Strategy: use signed division.
-    // For simplicity, handle only the case where the numerator fits in i64
-    // after division (which is always true for Dec→i64 and smaller).
-    //
-    // result = (i128 as i64-pair) / divisor
-    // Since divisor fits in i64 and result fits in i64, we can compute:
-    //   result = ((high * 2^64) + low) / divisor
-    //
-    // For signed division when high == 0 or high == -1 (sign extension),
-    // the value fits in i64 and we can do i64.div_s directly.
-    //
-    // General approach: extract the full i128, then truncate to i64 and divide.
-    // This works because the result of Dec→int always fits in i64.
-
-    const result_offset = try self.allocStackMemory(16, 8);
-    const result_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitFpOffset(result_offset);
-    self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, &self.body, result_local) catch return error.OutOfMemory;
-
-    // Load the low i64 from the numerator
-    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, &self.body, numerator_local) catch return error.OutOfMemory;
-    try self.emitLoadOp(.i64, 0);
-
-    // Divide by divisor
-    self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
-    WasmModule.leb128WriteI64(self.allocator, &self.body, divisor_val) catch return error.OutOfMemory;
-    self.body.append(self.allocator, Op.i64_div_s) catch return error.OutOfMemory;
-
-    // Store as i128 (sign-extend to high word)
-    const quotient = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
-    self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, &self.body, quotient) catch return error.OutOfMemory;
-
-    // Store low word
-    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, &self.body, result_local) catch return error.OutOfMemory;
-    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, &self.body, quotient) catch return error.OutOfMemory;
-    try self.emitStoreOp(.i64, 0);
-
-    // Store high word (sign extension)
-    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, &self.body, result_local) catch return error.OutOfMemory;
-    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, &self.body, quotient) catch return error.OutOfMemory;
-    self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
-    WasmModule.leb128WriteI64(self.allocator, &self.body, 63) catch return error.OutOfMemory;
-    self.body.append(self.allocator, Op.i64_shr_s) catch return error.OutOfMemory;
-    try self.emitStoreOp(.i64, 8);
-
-    // Push result pointer
-    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, &self.body, result_local) catch return error.OutOfMemory;
-}
-
 /// Convert an i64 value on the wasm stack to a 16-byte i128 in stack memory.
 /// The caller must ensure the value is i64 (extend i32 first if needed).
 /// If `signed` is true, sign-extends the high word; otherwise zero-extends.
@@ -7507,82 +7611,84 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitI64MulToI128(val, dec_factor);
         },
 
-        // Dec → integer truncating conversions (divide by 10^18, truncate)
-        .dec_to_i64_trunc => {
-            // Dec → i64: load low i64, divide by 10^18
+        // Dec → integer truncating conversions (divide i128 by 10^18, truncate)
+        // Uses roc_i128_div_s host function for correct 128-bit division.
+        .dec_to_i64_trunc,
+        .dec_to_i32_trunc,
+        .dec_to_i16_trunc,
+        .dec_to_i8_trunc,
+        .dec_to_u64_trunc,
+        .dec_to_u32_trunc,
+        .dec_to_u16_trunc,
+        .dec_to_u8_trunc,
+        => {
+            // Get pointer to Dec value (i128)
             try self.generateExpr(args[0]);
-            // The Dec value is a pointer to 16-byte i128
-            // For values that fit in i64, low word / 10^18 gives the result
-            // (with sign from high word already encoded in the i128 representation)
-            const src = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, &self.body, src) catch return error.OutOfMemory;
-            // Load full i128 as two i64 parts, reconstruct the signed value,
-            // then divide. For most Dec values (< 2^63), the low word suffices.
-            // We use the simpler approach: load low word, signed divide.
-            // This works for Dec values representing integers that fit in i64.
-            self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, &self.body, src) catch return error.OutOfMemory;
-            try self.emitLoadOp(.i64, 0);
+            const dec_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalSet(dec_local);
+
+            // Store 10^18 as i128 constant in stack memory
+            const divisor_offset = try self.allocStackMemory(16, 8);
+            const divisor_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitFpOffset(divisor_offset);
+            try self.emitLocalSet(divisor_local);
+            // low word = 10^18
+            try self.emitLocalGet(divisor_local);
             self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
             WasmModule.leb128WriteI64(self.allocator, &self.body, 1_000_000_000_000_000_000) catch return error.OutOfMemory;
-            self.body.append(self.allocator, Op.i64_div_s) catch return error.OutOfMemory;
-        },
-        .dec_to_i32_trunc => {
-            try self.generateExpr(args[0]);
-            try self.emitLoadOp(.i64, 0);
+            try self.emitStoreOp(.i64, 0);
+            // high word = 0
+            try self.emitLocalGet(divisor_local);
             self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI64(self.allocator, &self.body, 1_000_000_000_000_000_000) catch return error.OutOfMemory;
-            self.body.append(self.allocator, Op.i64_div_s) catch return error.OutOfMemory;
-            self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-        },
-        .dec_to_i16_trunc, .dec_to_i8_trunc => {
-            try self.generateExpr(args[0]);
+            WasmModule.leb128WriteI64(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+            try self.emitStoreOp(.i64, 8);
+
+            // Call roc_i128_div_s(dec_ptr, divisor_ptr, result_ptr)
+            try self.emitI128HostBinOp(dec_local, divisor_local, self.i128_div_s_import orelse unreachable);
+            // Result is an i32 pointer to the 16-byte quotient; load low i64
             try self.emitLoadOp(.i64, 0);
-            self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI64(self.allocator, &self.body, 1_000_000_000_000_000_000) catch return error.OutOfMemory;
-            self.body.append(self.allocator, Op.i64_div_s) catch return error.OutOfMemory;
-            self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-            // Mask to target size
-            const mask: i32 = if (ll.op == .dec_to_i8_trunc) 0xFF else 0xFFFF;
-            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI32(self.allocator, &self.body, mask) catch return error.OutOfMemory;
-            self.body.append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
-        },
-        .dec_to_u64_trunc => {
-            try self.generateExpr(args[0]);
-            try self.emitLoadOp(.i64, 0);
-            self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI64(self.allocator, &self.body, 1_000_000_000_000_000_000) catch return error.OutOfMemory;
-            self.body.append(self.allocator, Op.i64_div_s) catch return error.OutOfMemory;
-        },
-        .dec_to_u32_trunc => {
-            try self.generateExpr(args[0]);
-            try self.emitLoadOp(.i64, 0);
-            self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI64(self.allocator, &self.body, 1_000_000_000_000_000_000) catch return error.OutOfMemory;
-            self.body.append(self.allocator, Op.i64_div_s) catch return error.OutOfMemory;
-            self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-        },
-        .dec_to_u16_trunc, .dec_to_u8_trunc => {
-            try self.generateExpr(args[0]);
-            try self.emitLoadOp(.i64, 0);
-            self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI64(self.allocator, &self.body, 1_000_000_000_000_000_000) catch return error.OutOfMemory;
-            self.body.append(self.allocator, Op.i64_div_s) catch return error.OutOfMemory;
-            self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-            const mask: i32 = if (ll.op == .dec_to_u8_trunc) 0xFF else 0xFFFF;
-            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI32(self.allocator, &self.body, mask) catch return error.OutOfMemory;
-            self.body.append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+
+            // Truncate to target size
+            switch (ll.op) {
+                .dec_to_i64_trunc, .dec_to_u64_trunc => {},
+                .dec_to_i32_trunc, .dec_to_u32_trunc => {
+                    self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
+                },
+                .dec_to_i16_trunc, .dec_to_i8_trunc, .dec_to_u16_trunc, .dec_to_u8_trunc => {
+                    self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
+                    const mask: i32 = switch (ll.op) {
+                        .dec_to_i8_trunc, .dec_to_u8_trunc => 0xFF,
+                        .dec_to_i16_trunc, .dec_to_u16_trunc => 0xFFFF,
+                        else => unreachable,
+                    };
+                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI32(self.allocator, &self.body, mask) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+                },
+                else => unreachable,
+            }
         },
         .dec_to_i128_trunc, .dec_to_u128_trunc => {
-            // Dec → i128/u128: divide i128 by 10^18
+            // Dec → i128/u128: divide i128 by 10^18 using host function
             try self.generateExpr(args[0]);
-            const src = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, &self.body, src) catch return error.OutOfMemory;
-            try self.emitI128DivByConst(src, 1_000_000_000_000_000_000);
+            const dec_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalSet(dec_local);
+
+            // Store 10^18 as i128 constant in stack memory
+            const divisor_offset = try self.allocStackMemory(16, 8);
+            const divisor_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitFpOffset(divisor_offset);
+            try self.emitLocalSet(divisor_local);
+            try self.emitLocalGet(divisor_local);
+            self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI64(self.allocator, &self.body, 1_000_000_000_000_000_000) catch return error.OutOfMemory;
+            try self.emitStoreOp(.i64, 0);
+            try self.emitLocalGet(divisor_local);
+            self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI64(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+            try self.emitStoreOp(.i64, 8);
+
+            try self.emitI128HostBinOp(dec_local, divisor_local, self.i128_div_s_import orelse unreachable);
         },
         .dec_to_f64 => {
             // Dec → f64: load i128 as i64 (low word), convert to f64, divide by 10^18.0
@@ -7947,8 +8053,13 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LocalRef, ret
 
     // Check for composite types (i128/Dec)
     const check_layout = if (use_operand_layout) self.exprLayoutIdx(args[0]) else ret_layout;
-    if (self.isCompositeExpr(args[0]) or self.isCompositeLayout(check_layout)) {
+    const is_shift = op == .num_shift_left_by or op == .num_shift_right_by or op == .num_shift_right_zf_by;
+    if (!is_shift and (self.isCompositeExpr(args[0]) or self.isCompositeLayout(check_layout))) {
         return self.generateCompositeNumericOp(op, args, ret_layout, check_layout);
+    }
+    // I128/U128 shifts: LHS is composite but RHS is U8 — needs dedicated handling.
+    if (is_shift and (self.isCompositeExpr(args[0]) or self.isCompositeLayout(check_layout))) {
+        return self.generateI128Shift(op, args);
     }
 
     // For neg, also check composite via ret_layout
@@ -8262,6 +8373,9 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LocalRef, ret
         .num_shift_left_by => {
             try self.generateExpr(args[0]);
             try self.generateExpr(args[1]);
+            // WASM shift instructions require both operands to have the same type.
+            // The shift amount (args[1]) is always U8 (i32), so extend it for i64 shifts.
+            if (vt == .i64) self.body.append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
             const wasm_op: u8 = switch (vt) {
                 .i32 => Op.i32_shl,
                 .i64 => Op.i64_shl,
@@ -8272,6 +8386,7 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LocalRef, ret
         .num_shift_right_by => {
             try self.generateExpr(args[0]);
             try self.generateExpr(args[1]);
+            if (vt == .i64) self.body.append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
             const wasm_op: u8 = switch (vt) {
                 .i32 => Op.i32_shr_s,
                 .i64 => Op.i64_shr_s,
@@ -8282,6 +8397,7 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LocalRef, ret
         .num_shift_right_zf_by => {
             try self.generateExpr(args[0]);
             try self.generateExpr(args[1]);
+            if (vt == .i64) self.body.append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
             const wasm_op: u8 = switch (vt) {
                 .i32 => Op.i32_shr_u,
                 .i64 => Op.i64_shr_u,

@@ -59,7 +59,7 @@ main_for_host = main
     (entry
       (name "numbers")
       (kind value)
-      (type (apply (type-ref (name "List")) (type-ref (name "Dec"))))
+      (type (apply (type-ref (name "List")) (type-ref (module "Num") (name "Dec"))))
       (doc "A list of numbers.")
     )
     (entry
