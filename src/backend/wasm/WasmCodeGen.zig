@@ -104,6 +104,33 @@ pub fn init(allocator: Allocator, store: *const LirExprStore, layout_store: *con
     };
 }
 
+/// Initialize a WasmCodeGen backed by an existing host module (for surgical linking).
+/// Takes ownership of `host_module`. The caller should NOT deinit it separately.
+pub fn initWithHostModule(
+    allocator: Allocator,
+    store: *const LirExprStore,
+    layout_store: *const LayoutStore,
+    host_module: WasmModule,
+    builtin_syms: WasmModule.BuiltinSymbols,
+) Self {
+    return .{
+        .allocator = allocator,
+        .store = store,
+        .layout_store = layout_store,
+        .module = host_module,
+        .code_builder = CodeBuilder.init(),
+        .storage = Storage.init(allocator),
+        .stack_frame_size = 0,
+        .uses_stack_memory = false,
+        .fp_local = 0,
+        .registered_procs = std.AutoHashMap(u64, u32).init(allocator),
+        .join_point_depths = std.AutoHashMap(u32, u32).init(allocator),
+        .join_point_param_locals = std.AutoHashMap(u32, []u32).init(allocator),
+        .loop_break_target_depths = .empty,
+        .builtin_syms = builtin_syms,
+    };
+}
+
 pub fn deinit(self: *Self) void {
     self.module.deinit();
     self.code_builder.deinit(self.allocator);
@@ -155,6 +182,39 @@ fn registerRocOpsImports(self: *Self) !void {
 
     const roc_crashed_idx = try self.module.addImport("env", "roc_crashed", self.roc_ops_type_idx);
     self.roc_crashed_table_idx = try self.module.addTableElement(roc_crashed_idx);
+}
+
+/// Find existing RocOps callback imports in the host module (after builtins merge)
+/// and register them in the funcref table for call_indirect.
+/// Used with `initWithHostModule` when the module already has roc_* imports.
+pub fn registerRocOpsFromModule(self: *Self) !void {
+    // Register type indices for call_indirect type checking
+    self.roc_ops_type_idx = try self.module.addFuncType(
+        &.{ .i32, .i32 },
+        &.{},
+    );
+    self.roc_call_type_idx = try self.module.addFuncType(
+        &.{ .i32, .i32, .i32 },
+        &.{},
+    );
+
+    self.module.enableTable();
+
+    // For each RocOps callback, find the existing import or add a new one.
+    const names = [_]struct { name: []const u8, field: *u32 }{
+        .{ .name = "roc_alloc", .field = &self.roc_alloc_table_idx },
+        .{ .name = "roc_dealloc", .field = &self.roc_dealloc_table_idx },
+        .{ .name = "roc_realloc", .field = &self.roc_realloc_table_idx },
+        .{ .name = "roc_dbg", .field = &self.roc_dbg_table_idx },
+        .{ .name = "roc_expect_failed", .field = &self.roc_expect_failed_table_idx },
+        .{ .name = "roc_crashed", .field = &self.roc_crashed_table_idx },
+    };
+
+    for (names) |entry| {
+        const func_idx = self.module.findImportFuncIdx("env", entry.name) orelse
+            try self.module.addImport("env", entry.name, self.roc_ops_type_idx);
+        entry.field.* = try self.module.addTableElement(func_idx);
+    }
 }
 
 /// Result of generating a wasm module
@@ -5027,6 +5087,128 @@ pub fn compileAllProcSpecs(self: *Self, proc_specs: []const LirProcSpec) Allocat
     for (proc_specs) |proc| {
         try self.compileProcSpecBody(proc);
     }
+}
+
+/// Generate a RocCall ABI entrypoint wrapper for a compiled proc.
+///
+/// Creates a function with signature `(i32 roc_ops_ptr, i32 ret_ptr, i32 args_ptr) → void`
+/// that reads arguments from `args_ptr`, calls the compiled proc, and stores the result
+/// to `ret_ptr`. The function is exported with the given `entrypoint_name`.
+///
+/// The proc must already be compiled via `compileAllProcSpecs`.
+/// Returns the global function index of the wrapper.
+pub fn generateEntrypointWrapper(
+    self: *Self,
+    proc: LirProcSpec,
+    entrypoint_name: []const u8,
+    arg_layouts: []const layout.Idx,
+    ret_layout: layout.Idx,
+) Allocator.Error!u32 {
+    const ret_vt = self.resolveValType(ret_layout);
+    const ret_repr = WasmLayout.wasmReprWithStore(ret_layout, self.getLayoutStore());
+    const ret_byte_size: u32 = switch (ret_repr) {
+        .primitive => |vt| switch (vt) {
+            .i32, .f32 => 4,
+            .i64, .f64 => 8,
+        },
+        .stack_memory => |size| size,
+    };
+
+    // Create the RocCall function: (i32 roc_ops_ptr, i32 ret_ptr, i32 args_ptr) → void
+    const roc_call_type_idx = try self.module.addFuncType(&.{ .i32, .i32, .i32 }, &.{});
+    const func_idx = try self.module.addFunction(roc_call_type_idx);
+
+    // Save and reset codegen state
+    const saved = try self.saveState();
+
+    self.code_builder.code = .empty;
+    self.code_builder.preamble = .empty;
+    self.code_builder.import_relocations = .empty;
+    self.storage.locals = std.AutoHashMap(u64, Storage.LocalInfo).init(self.allocator);
+    self.storage.next_local_idx = 0;
+    self.storage.local_types = .empty;
+    self.stack_frame_size = 0;
+    self.uses_stack_memory = false;
+    self.fp_local = 0;
+    self.cf_depth = 0;
+    self.in_proc = false;
+
+    // Allocate wrapper parameters
+    const roc_ops_local = try self.storage.allocAnonymousLocal(.i32); // param 0: roc_ops_ptr
+    const ret_ptr_local = try self.storage.allocAnonymousLocal(.i32); // param 1: ret_ptr
+    const args_ptr_local = try self.storage.allocAnonymousLocal(.i32); // param 2: args_ptr
+
+    // --- Build the call to the compiled proc ---
+
+    // Push roc_ops_ptr (first arg to the proc)
+    try self.emitLocalGet(roc_ops_local);
+
+    // Load each argument from the args struct at args_ptr
+    var args_offset: u32 = 0;
+    for (arg_layouts) |arg_layout| {
+        const arg_repr = WasmLayout.wasmReprWithStore(arg_layout, self.getLayoutStore());
+        switch (arg_repr) {
+            .primitive => |vt| {
+                // Load the value from args_ptr + offset
+                try self.emitLocalGet(args_ptr_local);
+                try self.emitLoadOp(vt, args_offset);
+                const size: u32 = switch (vt) {
+                    .i32, .f32 => 4,
+                    .i64, .f64 => 8,
+                };
+                args_offset += size;
+            },
+            .stack_memory => |size| {
+                // Pass pointer to the data: args_ptr + offset
+                try self.emitLocalGet(args_ptr_local);
+                if (args_offset > 0) {
+                    self.code_builder.code.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI32(self.allocator, &self.code_builder.code, @intCast(args_offset)) catch return error.OutOfMemory;
+                    self.code_builder.code.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+                }
+                // Align to 4 bytes for the next arg
+                const aligned_size = (size + 3) & ~@as(u32, 3);
+                args_offset += aligned_size;
+            },
+        }
+    }
+
+    // Call the compiled proc
+    const proc_key: u64 = @bitCast(proc.name);
+    const proc_func_idx = self.registered_procs.get(proc_key) orelse return error.OutOfMemory;
+    try self.emitCall(proc_func_idx);
+
+    // Store the return value to ret_ptr
+    if (ret_byte_size == 0) {
+        // Zero-sized type — drop the return value, nothing to store
+        self.code_builder.code.append(self.allocator, Op.drop) catch return error.OutOfMemory;
+    } else {
+        try self.emitStoreResultToRetPtr(ret_ptr_local, ret_vt, ret_repr);
+    }
+
+    // Build function body (wrapper doesn't use stack memory — no prologue/epilogue)
+    var wrapper_body: std.ArrayList(u8) = .empty;
+    defer wrapper_body.deinit(self.allocator);
+
+    // Locals declaration (skip 3 for the RocCall parameters)
+    try self.encodeLocalsDecl(&wrapper_body, 3);
+
+    // Resolve deferred relocatable calls
+    self.resolvePendingRelocations();
+
+    // Body instructions
+    try wrapper_body.appendSlice(self.allocator, self.code_builder.code.items);
+
+    // End opcode
+    try wrapper_body.append(self.allocator, Op.end);
+
+    try self.module.setFunctionBody(func_idx, wrapper_body.items);
+    try self.module.addExport(entrypoint_name, .func, func_idx);
+
+    // Restore state
+    self.restoreState(saved);
+
+    return func_idx;
 }
 
 /// Compile a single LirProcSpec as a wasm function.
