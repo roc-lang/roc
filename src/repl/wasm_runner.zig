@@ -31,7 +31,7 @@ pub fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, ex
     defer wasm_eval.deinit();
 
     const all_module_envs = [_]*ModuleEnv{ @constCast(builtin_module_env), module_env };
-    var wasm_result = wasm_eval.generateWasm(module_env, expr_idx, &all_module_envs) catch return error.WasmGenerateCodeFailed;
+    var wasm_result = wasm_eval.generateWasm(module_env, expr_idx, &all_module_envs, WasmEvaluator.default_entrypoint_name) catch return error.WasmGenerateCodeFailed;
     defer wasm_result.deinit();
 
     if (wasm_result.wasm_bytes.len == 0) return error.WasmGenerateCodeFailed;
