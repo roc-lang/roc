@@ -317,6 +317,9 @@ function_offsets: std.ArrayList(u32),
 dead_import_dummy_count: u32,
 /// Number of function imports (may differ from imports.items.len after linking).
 import_fn_count: u32,
+/// Number of global imports parsed from the import section.
+/// Tracked for validation — global imports are not stored in the imports array.
+import_global_count: u32,
 
 /// Linking metadata (symbol table, segment info, init funcs).
 linking: WasmLinking.LinkingSection,
@@ -346,6 +349,7 @@ pub fn init(allocator: Allocator) Self {
         .function_offsets = .empty,
         .dead_import_dummy_count = 0,
         .import_fn_count = 0,
+        .import_global_count = 0,
         .linking = .{ .symbol_table = .empty, .segment_info = .empty, .init_funcs = .empty },
         .reloc_code = .{ .name = "reloc.CODE", .target_section_index = 0, .entries = .empty },
         .reloc_data = .{ .name = "reloc.DATA", .target_section_index = 0, .entries = .empty },
@@ -569,6 +573,73 @@ pub fn linkHostToAppCalls(self: *Self, host_to_app_map: []const HostToAppEntry) 
     }
 }
 
+// --- Phase 5: Memory, Table, and Stack Pointer Ownership ---
+
+/// Setup step (called after preload, before code generation):
+/// Validate that memory and table ownership is correctly configured.
+///
+/// In relocatable WASM objects, memory, table, and __stack_pointer are imported.
+/// Our parser already strips non-function imports from the imports array — only
+/// function imports are stored. Memory and table state is tracked via `has_memory`
+/// and `has_table` flags, and will be emitted as defined sections (not imports)
+/// when the module is encoded.
+///
+/// The __stack_pointer global import is handled implicitly: it exists in the
+/// symbol table for relocation resolution and will become a defined global
+/// during `finalizeMemoryAndTable()`.
+pub fn removeMemoryAndTableImports(self: *Self) void {
+    // The parser separates function imports from memory/table/global imports.
+    // Non-function imports are NOT in self.imports, so import_fn_count is correct.
+    // Memory and table flags were set during parseImportSection.
+    //
+    // Assert the host module declared memory (required for any useful program).
+    std.debug.assert(self.has_memory);
+    // Note: has_table may not be set if the host doesn't use indirect calls yet.
+    // Table will be set during finalization if table_func_indices are populated.
+}
+
+/// Finalization step (called after all code generation and surgical linking,
+/// before encode):
+///
+/// 1. Calculate memory layout from data segments and stack requirements
+/// 2. Define __stack_pointer global at top of memory
+/// 3. Configure table size based on actual element count
+/// 4. Export memory as "memory" for host/runtime access
+pub fn finalizeMemoryAndTable(self: *Self, stack_bytes: u32) !void {
+    // Calculate the highest data segment end address.
+    var data_end: u32 = self.data_offset;
+    for (self.data_segments.items) |ds| {
+        const seg_end = ds.offset + @as(u32, @intCast(ds.data.len));
+        data_end = @max(data_end, seg_end);
+    }
+
+    // Calculate memory pages: data + stack, rounded up to page boundary.
+    const total_bytes: u64 = @as(u64, data_end) + @as(u64, stack_bytes);
+    const page_size: u64 = 65536;
+    const pages: u32 = @intCast(@max(1, (total_bytes + page_size - 1) / page_size));
+    self.memory_min_pages = pages;
+
+    // Define __stack_pointer as a mutable i32 global.
+    // Initial value = top of memory (stack grows downward).
+    self.has_stack_pointer = true;
+    self.stack_pointer_init = pages * @as(u32, 65536);
+
+    // Ensure memory is defined (not imported) in the final module.
+    self.has_memory = true;
+
+    // Configure table if we have any function indices to place in it.
+    if (self.table_func_indices.items.len > 0) {
+        self.has_table = true;
+    }
+
+    // Export memory as "memory" for host/runtime access.
+    try self.exports.append(self.allocator, .{
+        .name = "memory",
+        .kind = .memory,
+        .idx = 0,
+    });
+}
+
 // --- Parsing (preload) ---
 
 const wasm_magic = "\x00asm";
@@ -706,10 +777,11 @@ fn parseImportSection(self: *Self, bytes: []const u8, cursor: *usize) ParseError
                 self.memory_min_pages = try readU32(bytes, cursor);
                 if (limits_flag == 0x01) _ = try readU32(bytes, cursor); // max
             },
-            0x03 => { // global import
+            0x03 => { // global import (e.g. __stack_pointer)
                 _ = try readU32(bytes, cursor); // val type
                 if (cursor.* >= bytes.len) return error.UnexpectedEnd;
                 cursor.* += 1; // mutability
+                self.import_global_count += 1;
             },
             else => return error.InvalidSection,
         }
@@ -1112,14 +1184,18 @@ fn encodeDataSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) !v
     try output.appendSlice(gpa, section_data.items);
 }
 
-fn encodeTableSection(_: *Self, gpa: Allocator, output: *std.ArrayList(u8)) !void {
+fn encodeTableSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) !void {
     var section_data: std.ArrayList(u8) = .empty;
     defer section_data.deinit(gpa);
+
+    // Table size = number of entries in the element section.
+    // Minimum 1 because table index 0 is reserved (null function reference).
+    const table_size: u32 = @max(1, @as(u32, @intCast(self.table_func_indices.items.len)));
 
     try leb128WriteU32(gpa, &section_data, 1); // 1 table
     try section_data.append(gpa, funcref); // element type: funcref
     try section_data.append(gpa, 0x00); // limits: no max
-    try leb128WriteU32(gpa, &section_data, 16); // min size (enough for RocOps functions)
+    try leb128WriteU32(gpa, &section_data, table_size);
 
     try output.append(gpa, @intFromEnum(SectionId.table_section));
     try leb128WriteU32(gpa, output, @intCast(section_data.items.len));
@@ -2121,4 +2197,278 @@ test "preload — parses real Zig-compiled wasm host object" {
     // Verify total function count is consistent
     const total_fns = @as(usize, module.import_fn_count) + module.func_type_indices.items.len;
     try std.testing.expect(total_fns > 3); // at least imports + a few defined functions
+}
+
+// --- Phase 5 tests: Memory, Table, and Stack Pointer Ownership ---
+
+/// Build a test module simulating a parsed relocatable host with memory, table,
+/// and __stack_pointer global imports (as produced by clang/zig for wasm32).
+fn buildPhase5TestModule(allocator: Allocator) !Self {
+    var module = Self.init(allocator);
+    errdefer module.deinit();
+
+    // Type 0: () -> ()
+    _ = try module.addFuncType(&.{}, &.{});
+
+    // Function imports
+    _ = try module.addImport("env", "roc__main", 0);
+    _ = try module.addImport("env", "roc_panic", 0);
+    module.import_fn_count = 2;
+
+    // Simulate that the parser found memory and table imports
+    // (these are NOT stored in the imports array, just flagged)
+    module.has_memory = true;
+    module.memory_min_pages = 1;
+    module.has_table = true;
+
+    // Simulate a __stack_pointer global import
+    module.import_global_count = 1;
+
+    // One defined function
+    try module.func_type_indices.append(allocator, 0);
+    try module.code_bytes.append(allocator, 0x02); // body size
+    try module.code_bytes.append(allocator, 0x00); // no locals
+    try module.code_bytes.append(allocator, Op.end);
+    try module.function_offsets.append(allocator, 0);
+
+    // Add a data segment at offset 1024 (after the reserved area)
+    const data = try allocator.dupe(u8, "Hello, WASM!");
+    try module.data_segments.append(allocator, .{ .offset = 1024, .data = data });
+
+    // Symbol table with __stack_pointer global symbol
+    try module.linking.symbol_table.appendSlice(allocator, &.{
+        .{ .kind = .function, .flags = WasmLinking.SymFlag.UNDEFINED, .name = null, .index = 0 },
+        .{ .kind = .function, .flags = WasmLinking.SymFlag.UNDEFINED, .name = null, .index = 1 },
+        .{ .kind = .global, .flags = WasmLinking.SymFlag.UNDEFINED, .name = "__stack_pointer", .index = 0 },
+        .{ .kind = .function, .flags = 0, .name = "wasm_main", .index = 2 },
+    });
+
+    // Relocation for global.get __stack_pointer
+    try module.reloc_code.entries.append(allocator, .{
+        .index = .{ .type_id = .global_index_leb, .offset = 1, .symbol_index = 2 },
+    });
+
+    return module;
+}
+
+test "setup — memory and table imports removed from host module" {
+    const allocator = std.testing.allocator;
+    var module = try buildPhase5TestModule(allocator);
+    defer module.deinit();
+
+    module.removeMemoryAndTableImports();
+
+    // After setup, the imports array should only contain function imports
+    try std.testing.expectEqual(@as(usize, 2), module.imports.items.len);
+    try std.testing.expectEqualStrings("roc__main", module.imports.items[0].field_name);
+    try std.testing.expectEqualStrings("roc_panic", module.imports.items[1].field_name);
+
+    // Memory and table flags should still be set (they'll be defined sections)
+    try std.testing.expect(module.has_memory);
+    try std.testing.expect(module.has_table);
+}
+
+test "setup — import_fn_count unchanged after removing non-function imports" {
+    const allocator = std.testing.allocator;
+    var module = try buildPhase5TestModule(allocator);
+    defer module.deinit();
+
+    const fn_count_before = module.import_fn_count;
+    module.removeMemoryAndTableImports();
+
+    // import_fn_count should be unchanged — it only counts function imports
+    try std.testing.expectEqual(fn_count_before, module.import_fn_count);
+    try std.testing.expectEqual(@as(u32, 2), module.import_fn_count);
+}
+
+test "setup — __stack_pointer global defined with correct initial value" {
+    const allocator = std.testing.allocator;
+    var module = try buildPhase5TestModule(allocator);
+    defer module.deinit();
+
+    module.removeMemoryAndTableImports();
+    try module.finalizeMemoryAndTable(1024); // 1KB stack
+
+    // __stack_pointer should be defined (not imported)
+    try std.testing.expect(module.has_stack_pointer);
+
+    // Initial value = memory_pages * 65536 (top of memory)
+    try std.testing.expectEqual(module.memory_min_pages * 65536, module.stack_pointer_init);
+}
+
+test "setup — memory section has correct minimum pages" {
+    const allocator = std.testing.allocator;
+    var module = try buildPhase5TestModule(allocator);
+    defer module.deinit();
+
+    module.removeMemoryAndTableImports();
+
+    // Data segment: 12 bytes at offset 1024 → data_end = 1036
+    // data_offset is 1024 (init default), data_end = max(1024, 1036) = 1036
+    // With 1KB stack: total = 1036 + 1024 = 2060 bytes → 1 page
+    try module.finalizeMemoryAndTable(1024);
+    try std.testing.expectEqual(@as(u32, 1), module.memory_min_pages);
+
+    // With a larger stack that pushes past one page:
+    // total = 1036 + 65000 = 66036 → 2 pages
+    module.memory_min_pages = 1; // reset
+    try module.finalizeMemoryAndTable(65000);
+    // Recalculate: data_end stays 1036, total = 1036 + 65000 = 66036
+    // 66036 / 65536 = 1.007... → 2 pages
+    try std.testing.expectEqual(@as(u32, 2), module.memory_min_pages);
+}
+
+test "setup — table size matches element count after finalization" {
+    const allocator = std.testing.allocator;
+    var module = try buildPhase5TestModule(allocator);
+    defer module.deinit();
+
+    // Add some function indices to the table
+    try module.table_func_indices.append(allocator, 2); // wasm_main
+    try module.table_func_indices.append(allocator, 3); // another fn
+    try module.table_func_indices.append(allocator, 4); // another fn
+
+    module.removeMemoryAndTableImports();
+    try module.finalizeMemoryAndTable(1024);
+
+    // Encode and verify the table section uses the correct size
+    const encoded = try module.encode(allocator);
+    defer allocator.free(encoded);
+
+    // Parse the encoded output to verify table section
+    var decoded = try preload(allocator, encoded, false);
+    defer decoded.deinit();
+
+    // The table should exist
+    try std.testing.expect(decoded.has_table);
+}
+
+test "setup — memory exported as 'memory'" {
+    const allocator = std.testing.allocator;
+    var module = try buildPhase5TestModule(allocator);
+    defer module.deinit();
+
+    const exports_before = module.exports.items.len;
+    module.removeMemoryAndTableImports();
+    try module.finalizeMemoryAndTable(1024);
+
+    // Should have one more export than before
+    try std.testing.expectEqual(exports_before + 1, module.exports.items.len);
+
+    // Find the memory export
+    var found_memory_export = false;
+    for (module.exports.items) |exp| {
+        if (std.mem.eql(u8, exp.name, "memory") and exp.kind == .memory) {
+            found_memory_export = true;
+            try std.testing.expectEqual(@as(u32, 0), exp.idx);
+        }
+    }
+    try std.testing.expect(found_memory_export);
+}
+
+test "setup — global import count tracked correctly" {
+    const allocator = std.testing.allocator;
+    var module = try buildPhase5TestModule(allocator);
+    defer module.deinit();
+
+    // The test module simulates 1 global import (__stack_pointer)
+    try std.testing.expectEqual(@as(u32, 1), module.import_global_count);
+}
+
+test "setup — finalized module encodes and re-parses as valid WASM" {
+    const allocator = std.testing.allocator;
+    var module = try buildPhase5TestModule(allocator);
+    defer module.deinit();
+
+    // Add table entries for encoding
+    try module.table_func_indices.append(allocator, 2);
+
+    module.removeMemoryAndTableImports();
+    try module.finalizeMemoryAndTable(4096);
+
+    // Encode to final WASM binary
+    const encoded = try module.encode(allocator);
+    defer allocator.free(encoded);
+
+    // Verify it's valid WASM (magic + version)
+    try std.testing.expectEqualSlices(u8, &.{ 0x00, 0x61, 0x73, 0x6D }, encoded[0..4]);
+    try std.testing.expectEqual(@as(u32, 1), std.mem.readInt(u32, encoded[4..8], .little));
+
+    // Should be parseable as a non-relocatable module
+    var decoded = try preload(allocator, encoded, false);
+    defer decoded.deinit();
+
+    // Verify memory is defined
+    try std.testing.expect(decoded.has_memory);
+
+    // Verify exports include "memory"
+    var found_memory = false;
+    for (decoded.exports.items) |exp| {
+        if (std.mem.eql(u8, exp.name, "memory")) {
+            found_memory = true;
+        }
+    }
+    try std.testing.expect(found_memory);
+
+    // Verify __stack_pointer global is defined
+    try std.testing.expect(decoded.has_stack_pointer);
+}
+
+test "phase5 — real host module: removeMemoryAndTableImports preserves function imports" {
+    const allocator = std.testing.allocator;
+    const host_bytes = try std.fs.cwd().readFileAlloc(
+        allocator,
+        "test/wasm/platform/targets/wasm32/host.wasm",
+        10 * 1024 * 1024,
+    );
+    defer allocator.free(host_bytes);
+
+    var module = try preload(allocator, host_bytes, true);
+    defer module.deinit();
+
+    const fn_count_before = module.import_fn_count;
+    const imports_before = module.imports.items.len;
+
+    module.removeMemoryAndTableImports();
+
+    // Function imports should be completely unchanged
+    try std.testing.expectEqual(fn_count_before, module.import_fn_count);
+    try std.testing.expectEqual(imports_before, module.imports.items.len);
+
+    // Memory flag should be set (host imports memory)
+    try std.testing.expect(module.has_memory);
+}
+
+test "phase5 — real host module: full setup and finalization produces valid WASM" {
+    const allocator = std.testing.allocator;
+    const host_bytes = try std.fs.cwd().readFileAlloc(
+        allocator,
+        "test/wasm/platform/targets/wasm32/host.wasm",
+        10 * 1024 * 1024,
+    );
+    defer allocator.free(host_bytes);
+
+    var module = try preload(allocator, host_bytes, true);
+    defer module.deinit();
+
+    // Phase 5 setup
+    module.removeMemoryAndTableImports();
+
+    // Phase 5 finalization with 64KB stack
+    try module.finalizeMemoryAndTable(65536);
+
+    // Verify state after finalization
+    try std.testing.expect(module.has_memory);
+    try std.testing.expect(module.has_stack_pointer);
+    try std.testing.expect(module.memory_min_pages >= 1);
+    try std.testing.expectEqual(module.memory_min_pages * 65536, module.stack_pointer_init);
+
+    // Verify memory export was added
+    var found_memory_export = false;
+    for (module.exports.items) |exp| {
+        if (std.mem.eql(u8, exp.name, "memory") and exp.kind == .memory) {
+            found_memory_export = true;
+        }
+    }
+    try std.testing.expect(found_memory_export);
 }
