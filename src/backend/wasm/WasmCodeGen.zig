@@ -7235,12 +7235,25 @@ fn generateList(self: *Self, l: anytype) Allocator.Error!void {
     const elem_size: u32 = self.layoutStorageByteSize(l.elem_layout);
     const elem_align: u32 = self.layoutStorageByteAlign(l.elem_layout);
 
-    // Allocate space for all elements on the heap so list literals remain valid
-    // when returned from functions (callee stack frames are reclaimed on return).
+    // Allocate space for all elements on the heap with a refcount header,
+    // so list builtins (append, reserve, etc.) can manage the allocation.
     const total_data_size = elem_size * @as(u32, @intCast(elems.len));
+    const elements_refcounted: bool = if (ls.getLayout(l.elem_layout).tag != .list_of_zst)
+        ls.layoutContainsRefcounted(ls.getLayout(l.elem_layout))
+    else
+        false;
     const data_base = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     if (total_data_size > 0) {
-        try self.emitHeapAllocConst(total_data_size, elem_align);
+        // Call roc_builtins_allocate_with_refcount(data_bytes, alignment, elements_refcounted, roc_ops)
+        // Returns pointer to data (after refcount header)
+        self.code_builder.code.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+        WasmModule.leb128WriteI32(self.allocator, &self.code_builder.code, @intCast(total_data_size)) catch return error.OutOfMemory;
+        self.code_builder.code.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+        WasmModule.leb128WriteI32(self.allocator, &self.code_builder.code, @intCast(elem_align)) catch return error.OutOfMemory;
+        self.code_builder.code.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+        WasmModule.leb128WriteI32(self.allocator, &self.code_builder.code, if (elements_refcounted) 1 else 0) catch return error.OutOfMemory;
+        try self.emitLocalGet(self.roc_ops_local);
+        try self.emitCallBuiltin(self.builtin_syms.allocate_with_refcount);
         self.code_builder.code.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
         WasmModule.leb128WriteU32(self.allocator, &self.code_builder.code, data_base) catch return error.OutOfMemory;
 
@@ -11999,15 +12012,18 @@ fn emitBytewiseCompare(self: *Self, ptr_a: u32, ptr_b: u32, len: u32, result_loc
 }
 
 /// Generate LowLevel list_append: create new list with one element appended.
+/// For ZST elements, uses the unsafe version (no allocation needed).
+/// For non-ZST elements, uses the safe version which reserves capacity.
 fn generateLLListAppend(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
+    const ls = self.getLayoutStore();
+    const ret_layout_val = ls.getLayout(ret_layout);
     const elem_size = self.getListElemSize(ret_layout);
     const elem_align = self.getListElemAlign(ret_layout);
-    const elem_layout_idx = switch (self.getLayoutStore().getLayout(ret_layout).tag) {
-        .list => self.getLayoutStore().getLayout(ret_layout).data.list,
+    const elem_layout_idx = switch (ret_layout_val.tag) {
+        .list => ret_layout_val.data.list,
         .list_of_zst => layout.Idx.zst,
         else => unreachable,
     };
-    const import_idx = self.builtin_syms.list_append_unsafe;
 
     try self.generateExpr(args[0]);
     const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -12054,10 +12070,31 @@ fn generateLLListAppend(self: *Self, args: anytype, ret_layout: layout.Idx) Allo
     try self.emitLocalGet(result_local);
     try self.emitPtrLenCapArgs(list_ptr);
     try self.emitLocalGet(elem_ptr);
-    self.code_builder.code.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-    WasmModule.leb128WriteI32(self.allocator, &self.code_builder.code, @intCast(elem_size)) catch return error.OutOfMemory;
-    try self.emitLocalGet(self.roc_ops_local);
-    try self.emitCallBuiltin(import_idx);
+
+    if (elem_size == 0) {
+        // ZST: use unsafe version (no capacity reservation needed)
+        // roc_builtins_list_append_unsafe(out, list_bytes, list_len, list_cap, element, element_width, roc_ops)
+        self.code_builder.code.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+        WasmModule.leb128WriteI32(self.allocator, &self.code_builder.code, 0) catch return error.OutOfMemory;
+        try self.emitLocalGet(self.roc_ops_local);
+        try self.emitCallBuiltin(self.builtin_syms.list_append_unsafe);
+    } else {
+        // Non-ZST: use safe version which reserves capacity
+        // roc_builtins_list_append_safe(out, list_bytes, list_len, list_cap, element, alignment, element_width, elements_refcounted, roc_ops)
+        self.code_builder.code.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+        WasmModule.leb128WriteI32(self.allocator, &self.code_builder.code, @intCast(elem_align)) catch return error.OutOfMemory;
+        self.code_builder.code.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+        WasmModule.leb128WriteI32(self.allocator, &self.code_builder.code, @intCast(elem_size)) catch return error.OutOfMemory;
+        // elements_refcounted: bool (i32 0 or 1)
+        const elements_refcounted: bool = if (ret_layout_val.tag == .list)
+            ls.layoutContainsRefcounted(ls.getLayout(ret_layout_val.data.list))
+        else
+            false;
+        self.code_builder.code.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+        WasmModule.leb128WriteI32(self.allocator, &self.code_builder.code, if (elements_refcounted) 1 else 0) catch return error.OutOfMemory;
+        try self.emitLocalGet(self.roc_ops_local);
+        try self.emitCallBuiltin(self.builtin_syms.list_append_safe);
+    }
     try self.emitLocalGet(result_local);
 }
 

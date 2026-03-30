@@ -3727,6 +3727,14 @@ test "Str.join_with" {
     , "hello world", .no_trace);
 }
 
+test "list of strings length" {
+    try runExpectI64("[\"hello\", \"world\"].len()", 2, .no_trace);
+}
+
+test "Str.join_with empty list" {
+    try runExpectStr("Str.join_with([], \",\")", "", .no_trace);
+}
+
 // Note: List.contains is implemented as List.any(list, |x| x == needle) in the builtins,
 // which goes through closure + higher-order function paths rather than the list_contains
 // low-level. The DevEvaluator doesn't currently support List.any with variable-capturing

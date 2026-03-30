@@ -2131,8 +2131,8 @@ import reimplementations.
 
 ### Status
 
-**1281 of 1305 eval tests passing** (8 remaining failures in list_append, str_split,
-str_join_with, str_from_utf8 — all wasm-only ABI mismatches in specific builtin call sites).
+**1286 of 1306 eval tests passing** (4 remaining failures in str_split, str_join_with,
+str_from_utf8 — all crash with TrapUnreachable inside merged builtins).
 
 ### Root Causes Fixed
 
@@ -2183,14 +2183,32 @@ numeric conversions, list operations).
 - **generateModule**: Uses `registerRocOpsFromModule` (finds existing imports) when
   the module already has imports, instead of `registerRocOpsImports` (adds new ones).
 
+### Root Causes Fixed (continued)
+
+**list_append must use safe version**: The LIR op `list_append_unsafe` is a misnomer —
+the dev backend actually calls `roc_builtins_list_append_safe` (which handles capacity
+reservation). The wasm codegen was calling the unsafe version (no allocation), causing
+wrong values or crashes. Fix: use `list_append_safe` for non-ZST elements, passing
+alignment, element_width, and elements_refcounted.
+
+**List literal allocation needs refcount headers**: List literals were allocated via
+`emitHeapAllocConst` (raw roc_alloc), but builtins expect data pointers with refcount
+headers (for isUnique checks, reallocation, etc.). Fix: call
+`roc_builtins_allocate_with_refcount` from `generateList` instead of raw heap alloc.
+
 ### Remaining Work
 
-8 eval tests still fail with wasm-only ABI mismatches in:
-- `list_append_unsafe` — element value appears to be read as 64-bit
-- `str_split`, `str_join_with` — WasmExecFailed (likely ptr/len decomposition issue)
-- `str_from_utf8` — WasmExecFailed
+4 eval tests still fail with TrapUnreachable inside merged builtins:
+- `str_split`, `str_join_with` — crash in `strJoinWithC` or `strSplitOn`
+- `str_from_utf8` — crash in `roc_builtins_str_from_utf8`
 
-These need the same ABI fix pattern applied to the remaining builtin call sites.
+Root cause hypothesis: the host `roc_alloc` returns a pointer with an 8-byte header
+(length + refcount), but `allocateWithRefcount` in the builtins also adds its own
+header (extra_bytes). This double-header causes the builtins to compute incorrect
+data offsets. The inline codegen allocations (emitHeapAlloc) rely on the host's header,
+so simply making `roc_alloc` raw breaks them. Fixing this requires either making ALL
+allocations go through `allocateWithRefcount`, or adjusting the host allocator to
+account for the builtins' header expectations.
 
 ---
 

@@ -770,11 +770,15 @@ pub const BuiltinSymbols = struct {
 
     // --- List operations ---
     list_append_unsafe: u32, // roc_builtins_list_append_unsafe
+    list_append_safe: u32, // roc_builtins_list_append_safe
     list_sort_with: u32, // roc_builtins_list_sort_with
     list_eq: u32, // roc_builtins_list_eq
     list_str_eq: u32, // roc_builtins_list_str_eq
     list_list_eq: u32, // roc_builtins_list_list_eq
     list_reverse: u32, // roc_builtins_list_reverse
+
+    // --- Memory management ---
+    allocate_with_refcount: u32, // roc_builtins_allocate_with_refcount
 
     // --- Integer modulo ---
     i32_mod_by: u32, // roc_builtins_i32_mod_by
@@ -817,11 +821,13 @@ pub const BuiltinSymbols = struct {
         .{ "roc_builtins_str_caseless_ascii_equals", "str_caseless_ascii_equals" },
         .{ "roc_builtins_str_from_utf8", "str_from_utf8" },
         .{ "roc_builtins_list_append_unsafe", "list_append_unsafe" },
+        .{ "roc_builtins_list_append_safe", "list_append_safe" },
         .{ "roc_builtins_list_sort_with", "list_sort_with" },
         .{ "roc_builtins_list_eq", "list_eq" },
         .{ "roc_builtins_list_str_eq", "list_str_eq" },
         .{ "roc_builtins_list_list_eq", "list_list_eq" },
         .{ "roc_builtins_list_reverse", "list_reverse" },
+        .{ "roc_builtins_allocate_with_refcount", "allocate_with_refcount" },
         .{ "roc_builtins_i32_mod_by", "i32_mod_by" },
         .{ "roc_builtins_i64_mod_by", "i64_mod_by" },
     };
